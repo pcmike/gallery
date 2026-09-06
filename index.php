@@ -1,15 +1,15 @@
 <?php
 /**
- * DROP-IN PHOTO GALLERY — v1.0.0
+ * DROP-IN PHOTO GALLERY — v1.0.1
  * Single PHP file, no dependencies, no build step. Drop into any folder
  * of photos and it renders a gallery for that folder.
  *
  * Full documentation (grouping, Markdown notes, {color}/{sold}/{reserved}
- * directives, view stats, deep linking, image caching, etc.) lives on the
- * "?about" page this script serves itself — open any deployed gallery and
- * click "about" in the footer, or visit "?about" directly. That page also
- * has the download link for this file. Source: github.com/pcmike (once
- * published there).
+ * directives, view stats, deep linking, image caching, etc.) lives in the
+ * repo's README: github.com/pcmike/gallery. The "?about" page this script
+ * serves itself (open any deployed gallery and click "about" in the
+ * footer, or visit "?about" directly) is a short in-app pitch that links
+ * back there, plus the download link for this file.
  *
  * Quick reference for anyone editing this file directly:
  *   - GALLERY_VERSION / TRACK_VIEWS constants are just below.
@@ -19,7 +19,7 @@
  */
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '1.0.0');
+define('GALLERY_VERSION', '1.0.1');
 
 // Turn photo/group/page view tracking on or off. See the "?about" page
 // (linked in the footer) for full documentation.

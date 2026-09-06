@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [1.0.1] - 2026-09-06
+
+### Fixed
+- Thumbnail cache (`.gallery-cache`) is now garbage-collected on normal page loads — entries for photos that have been renamed, deleted, or re-edited no longer accumulate indefinitely
+- Group-name matching (auto-linked thumbnails, mention-order detection) now correctly handles group keys that start or end with punctuation, e.g. `+model`, instead of relying on `\b` word boundaries
+- Open Graph description text could, in rare cases, silently drop everything between a stray `{` inside a code block and an unrelated `}` later in the note; code content is now stripped before `{directive}` parsing
+
+### Changed
+- `?about` is now a short in-app pitch (feature list + download button) linking to the GitHub repo for full documentation, instead of duplicating the README
+
 ## [1.0.0] - 2026-09-06
 
 Initial release.
