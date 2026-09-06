@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [1.0.2] - 2026-09-06
+
+### Fixed
+- `?about` page: the divider line before every section header was missing above the first one ("What it does"), leaving an unexplained gap below the download button
+- Removed the `?about` page's closing footer line (name/version/attribution) — redundant with the "Full documentation & source" link directly above it
+
 ## [1.0.1] - 2026-09-06
 
 ### Fixed

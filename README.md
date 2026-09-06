@@ -54,7 +54,7 @@ This README is the full reference. A deployed gallery's `?about` page (the "gall
 Everything is a constant near the top of `index.php`:
 
 ```php
-define('GALLERY_VERSION', '1.0.1');
+define('GALLERY_VERSION', '1.0.2');
 define('TRACK_VIEWS', true);   // set false to disable all view tracking
 ```
 
