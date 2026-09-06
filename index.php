@@ -559,9 +559,12 @@ function inline_markdown($text) {
 
 /** Strips Markdown syntax and {directives} down to plain text, for the OG description. */
 function markdown_to_plaintext($text, $maxLen = 160) {
-    $text = preg_replace('/\{[^}]*\}/', '', $text);
+    // Code content is stripped/unwrapped before the {directive} pass below,
+    // so a stray { or } inside a code block or inline code span can never
+    // pair up with an unrelated brace outside it and eat text between them.
     $text = preg_replace('/```.*?```/s', ' ', $text);
     $text = preg_replace('/`([^`]+)`/', '$1', $text);
+    $text = preg_replace('/\{[^}]*\}/', '', $text);
     $text = preg_replace('/\[([^\]]+)\]\([^\)]+\)/', '$1', $text);
     $text = preg_replace('/[*_~#>]/', '', $text);
     $text = preg_replace('/^\(\d+\)\s*/m', '', $text);
