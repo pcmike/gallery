@@ -957,8 +957,6 @@ function render_about_page() {
   .version-tag { color: var(--muted); font-size: 0.8rem; }
   h1 { font-size: 1.5rem; margin: 0 0 6px; }
   .subtitle { color: var(--muted); margin: 0 0 24px; }
-  .cta-line { margin: -14px 0 24px; font-size: 0.95rem; }
-  .cta-line a { font-weight: 600; }
   .download-btn {
     display: inline-block; background: var(--accent); color: #fff;
     text-decoration: none; font-weight: 600; padding: 12px 20px;
@@ -986,7 +984,6 @@ function render_about_page() {
 
   <h1>Drop-in Photo Gallery</h1>
   <p class="subtitle">A single PHP file, no dependencies, no build step. Drop it into any folder of photos.</p>
-  <p class="cta-line"><a href="./">See it in action &rarr;</a></p>
   <a class="download-btn" href="?download">&#11015; Download index.php</a>
 
   <h2>What it does</h2>
