@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [1.0.5] - 2026-09-06
+
+### Fixed
+- Main gallery footer: the "gallery" link and the "· N views" text now share one consistent color and font-size, instead of the link being dimmed while the count text stayed full-brightness
+
 ## [1.0.4] - 2026-09-06
 
 ### Changed
