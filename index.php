@@ -1332,6 +1332,8 @@ if ($requestedPhoto) {
   footer {
     text-align: center;
     padding: 0 24px 40px;
+    color: var(--muted);
+    font-size: 0.85rem;
   }
   footer a {
     color: var(--muted);
