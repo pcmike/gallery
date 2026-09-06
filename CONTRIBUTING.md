@@ -11,7 +11,7 @@ php -S localhost:8000 -t /path/to/test-folder
 ```
 
 Then visit `http://localhost:8000/`. Useful endpoints while testing:
-- `/?about` — full documentation page
+- `/?about` — short in-app pitch/feature overview, links to the README for full docs
 - `/?download` — downloads the script itself
 - `/?img=somefile.jpg&size=thumb` — the resize/cache endpoint directly
 - `/?track=somefile.jpg` — the view-tracking ping (returns JSON)
