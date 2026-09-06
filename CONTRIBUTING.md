@@ -18,6 +18,28 @@ Then visit `http://localhost:8000/`. Useful endpoints while testing:
 
 Always run `php -l index.php` before committing — it catches syntax errors instantly.
 
+## Automated tests
+
+`tests/run.php` is a black-box test suite: it builds a throwaway fixture folder (synthetic JPEGs + a `.md` file), runs PHP's built-in server against it, and exercises the gallery through real HTTP requests — the same way this project has always been tested by hand. It's a single script, not a framework, and it isn't part of what gets deployed (`tests/` never ships alongside `index.php`).
+
+```
+php tests/run.php
+```
+
+Requires the GD extension (to synthesize fixture images) — that's it, no other dependencies. It cleans up its own fixture folders and server processes on exit, including on failure. If you interrupt it mid-run (Ctrl-C), check for and kill any stray `php -S` process it may have left running.
+
+It covers:
+- photo grouping (including the `iphone15.jpg` vs `iphone-15.jpg` suffix-stripping distinction) and gallery/note-box rendering
+- Markdown directives (`{color:}`, `{sold}`, `{reserved}`, `{sold}`+`{reserved}` precedence) and auto-linked thumbnails, including group keys with leading punctuation (e.g. `+model`)
+- the OG description's code-fence handling
+- `?about`, `?download`, `?img` (including cache creation and path-traversal rejection), and `?track` (including bot exclusion and path-traversal rejection)
+- thumbnail cache garbage collection when a photo is deleted
+- the `TRACK_VIEWS` toggle actually disabling tracking and stats-file creation
+
+It does **not** cover things that need a real browser (lightbox JS, swipe gestures, live-updating badges) — that's still manual testing.
+
+Run both `php -l index.php` and `php tests/run.php` before committing, and add a case to `tests/run.php` for any bug fix so it can't silently regress.
+
 ## Code style / constraints
 
 - **Single file, no dependencies.** The whole point is drop-in simplicity — avoid introducing a required external library or build step.
