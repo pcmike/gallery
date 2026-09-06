@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [1.0.4] - 2026-09-06
+
+### Changed
+- `?about` page: removed the "See it in action" link, which duplicated the top-bar "Back to gallery" link (both pointed to the same place)
+
 ## [1.0.3] - 2026-09-06
 
 ### Fixed
