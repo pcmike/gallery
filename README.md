@@ -23,7 +23,7 @@ The folder needs to be writable by the web server for view stats and the thumbna
 ## Features
 
 **Gallery**
-- Auto-groups photos by filename (`dp104_01.jpg`, `dp104_02.jpg` → grouped under "dp104")
+- Auto-groups photos by filename (`dp104_01.jpg`, `dp104_02.jpg` → grouped under "dp104") — only strips a trailing `_01`/`-02` suffix when there's an explicit separator before the digits, so `iphone-15.jpg` groups as "iphone" but `iphone15.jpg` keeps its full name
 - Full-screen lightbox: keyboard nav, mobile swipe gestures (left/right/down)
 - Gallery order mirrors the order groups are mentioned in a `.md` file, if one exists
 
@@ -41,13 +41,13 @@ The folder needs to be writable by the web server for view stats and the thumbna
 **Deep linking & sharing**
 - `?photo=filename.jpg` — opens straight to that photo, with a context-aware Open Graph preview
 - `#group-name` / `#item-name` — anchors to a gallery group or a specific `.md` item, each with a one-click copy-link button
-- `?download` serves the script itself; `?about` renders full in-app documentation
+- `?download` serves the script itself; `?about` renders an in-app overview + download button, linking back here for full docs
 
 **Images**
 - On-the-fly thumbnail generation + caching (Imagick or GD)
 - HEIC/HEIF conversion for both grid and lightbox (Imagick only)
 
-Full documentation ships inside the script itself — deploy it and visit `?about` for the complete reference (this is also what the "gallery" link in the footer points to).
+This README is the full reference. A deployed gallery's `?about` page (the "gallery" link in the footer) gives visitors a short pitch, the feature list, and a download button, then points back here for anything more detailed.
 
 ## Configuration
 

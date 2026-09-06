@@ -922,6 +922,7 @@ function current_base_url() {
 function render_about_page() {
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $aboutUrl = htmlspecialchars(current_base_url() . '/?about', ENT_QUOTES, 'UTF-8');
+    $repoUrl = 'https://github.com/pcmike/gallery';
     $aboutDescription = 'A single-file, drop-in PHP photo gallery with Markdown notes, sold/reserved markers, view stats, and deep links.';
 ?>
 <!DOCTYPE html>
@@ -973,11 +974,6 @@ function render_about_page() {
     background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 4px;
     font-size: 0.88em; color: #eaeaea;
   }
-  pre {
-    background: rgba(255,255,255,0.08); padding: 14px 16px; border-radius: 8px;
-    overflow-x: auto; font-size: 0.85rem; color: #d5d5d8;
-  }
-  pre code { background: none; padding: 0; }
   a { color: #8ab4ff; }
   footer { margin-top: 48px; color: var(--muted); font-size: 0.8rem; }
 </style>
@@ -995,60 +991,18 @@ function render_about_page() {
   <p class="cta-line"><a href="./">See it in action &rarr;</a></p>
   <a class="download-btn" href="?download">&#11015; Download index.php</a>
 
-  <h2>What this does</h2>
-  <p>Put this file (<code>index.php</code>) in any folder alongside some photos and a PHP server renders a clean gallery for that folder — nothing to configure, it just reads its own directory at request time.</p>
-  <pre><code>your-folder/
-  index.php   &lt;- this file
-  photo1.jpg
-  photo2.png
-  forsale.md  &lt;- optional, see "Markdown notes" below</code></pre>
-  <p>Supported image types: jpg, jpeg, png, gif, webp, bmp — plus heic/heif (iPhone photos) if PHP's Imagick extension is available on the server. Clicking any photo opens a full-screen lightbox with prev/next arrows, keyboard support, and (on touch devices) swipe left/right to navigate and swipe down to close.</p>
-
-  <h2>Photo grouping</h2>
-  <p>Photos whose filenames share a prefix and end in a <code>_01</code> / <code>-02</code> style numeric suffix are automatically grouped into their own labeled box:</p>
+  <h2>What it does</h2>
   <ul>
-    <li><code>dp104_01.jpg, dp104_02.jpg, dp104_03.jpg</code> &rarr; grouped under "dp104"</li>
-    <li><code>neo98_01.jpg, neo98_02.jpg</code> &rarr; grouped under "neo98"</li>
+    <li>Auto-groups photos by filename (<code>dp104_01.jpg</code>, <code>dp104_02.jpg</code> &rarr; "dp104")</li>
+    <li>Full-screen lightbox with keyboard nav and mobile swipe</li>
+    <li>Optional <code>.md</code> notes box — auto-linked thumbnails, <code>{color}</code>/<code>{sold}</code>/<code>{reserved}</code> directives</li>
+    <li>Live view stats per photo, per group, and total (SQLite or JSON, no setup)</li>
+    <li>Thumbnail generation/caching, with HEIC/HEIF conversion (Imagick or GD)</li>
+    <li>Deep links (<code>?photo=</code>, <code>#group-name</code>, <code>#item-name</code>) with correct Open Graph previews when shared</li>
   </ul>
-  <p>A photo with no such suffix (e.g. <code>case.jpg</code>) stays standalone in a plain row rather than getting its own box. Without a <code>.md</code> file, groups and standalone photos appear in natural filename sort order. With one, the gallery instead mirrors the order groups are first mentioned in the note — any group not mentioned there keeps its normal filename-sort position, appended after the mentioned ones.</p>
 
-  <h2>Markdown notes</h2>
-  <p>Any <code>.md</code> file in the folder renders as a note box above the gallery — handy for a Discord-style "for sale" post. Supported formatting is intentionally small: headers, <strong>bold</strong>/<em>italic</em>/<u>underline</u>/<del>strikethrough</del>, inline code and code blocks, links, lists, and blockquotes.</p>
-  <p>A blank line starts a new paragraph. A line starting with <code>(1)</code>, <code>(2)</code>, etc. also always starts a new paragraph, even with no blank line before it — matching how people naturally write numbered listings.</p>
-  <p>If the very first line of the first <code>.md</code> file is a <code>#</code> heading, it becomes the page title instead of the folder name.</p>
-
-  <h2>Auto-linked photos</h2>
-  <p>No tagging needed — if a paragraph mentions a photo group's name (e.g. "DP104", any case), a thumbnail strip, view count, and jump link are automatically attached under it, since filenames and listing text naturally share the product name.</p>
-
-  <h2>Directives</h2>
-  <p>Three optional inline tags, placed anywhere in an item's paragraph — the tag text itself is never shown on the page:</p>
-  <ul>
-    <li><code>{color: value}</code> — gives that group's gallery box a custom accent color. Value can be a hex code (<code>#5865f2</code>) or a plain color word (<code>gold</code>).</li>
-    <li><code>{sold}</code> — marks the item sold: dims and strikes through the text, grayscales that group's photos, and adds a red "SOLD" ribbon.</li>
-    <li><code>{reserved}</code> (or <code>{held}</code>) — marks the item reserved/on hold: an orange "RESERVED" tag and ribbon, but photos stay in full color since a reserved item can still fall through and go back on the market. If both <code>{sold}</code> and <code>{reserved}</code> somehow appear, sold wins.</li>
-  </ul>
-  <p>If a paragraph mentions more than one group, a directive in it applies to all of them — so it's best to keep one item per paragraph, which the <code>(1)/(2)/(3)</code> paragraph-break rule above is built for.</p>
-
-  <h2>Deep linking</h2>
-  <p>Three ways to link directly into a gallery instead of just its top:</p>
-  <ul>
-    <li><code>?photo=filename.jpg</code> — opens straight to that exact photo in the lightbox on load. The lightbox has a small &#128279; button next to the photo's caption that copies this link for whichever photo is open.</li>
-    <li><code>#group-name</code> — scrolls straight to a group's box in the gallery (a normal browser anchor, same as each "View N photos" jump link).</li>
-    <li><code>#item-name</code> — scrolls straight to a specific item's paragraph in the note box, for any paragraph that mentions a photo group's name. Each gets its own &#128279; copy-link button, and briefly highlights on arrival. A paragraph with no product name in it (shipping terms, a contact line, etc.) gets no anchor — this is only for linking straight to a specific listed item.</li>
-  </ul>
-  <p>Link previews only reflect the <code>?photo=</code> kind — a <code>#</code> fragment is stripped off by the browser before the request even reaches the server, so it can never change what a shared link previews as. That's just how URLs work, not a limitation of this script.</p>
-
-  <h2>Link previews</h2>
-  <p>Every page includes Open Graph / Twitter Card meta tags (title, description pulled from the <code>.md</code> file, and an image), so pasting the gallery's link into Discord, Reddit, iMessage, etc. shows an actual preview card. A <code>?photo=</code> link customizes the preview to that specific photo.</p>
-
-  <h2>View stats</h2>
-  <p>Controlled by the <code>TRACK_VIEWS</code> constant near the top of the file (defaults on). When on: total page loads (footer), a view badge on every photo, and a total next to each group's label — shown both in the gallery and next to that group's note-box thumbnails, updating live with no refresh needed. A photo counts as "viewed" the moment it's actually displayed in the lightbox, however it got there. Known link-preview bots/crawlers are excluded from counts. Storage auto-picks SQLite if PHP supports it, otherwise a lock-protected JSON file — either way the folder needs to be writable, or counts silently stay at 0.</p>
-
-  <h2>Images, thumbnails &amp; HEIC</h2>
-  <p>Grid and note thumbnails load through a built-in <code>?img=</code> endpoint that resizes and caches a JPEG on first request (into a <code>.gallery-cache</code> folder), using Imagick or GD. The lightbox opens full-resolution originals directly — except HEIC/HEIF, which get converted to JPEG for both views, since most browsers can't render HEIC at all. Without Imagick or GD, thumbnails just fall back to originals (slower, still works); without Imagick specifically, HEIC files are left out of the gallery entirely rather than shown broken.</p>
-
-  <h2>Safety</h2>
-  <p>Everything from a <code>.md</code> file is HTML-escaped before Markdown formatting is applied, so raw HTML/scripts in a note file are never executed. Color directive values are validated before use, so they can't inject CSS. The <code>?track</code> and <code>?img</code> endpoints only ever act on a filename that already exists in the folder.</p>
+  <h2>Full documentation &amp; source</h2>
+  <p>This page is just the pitch — setup, configuration, directive syntax, and every feature in depth are documented on GitHub: <a href="<?= htmlspecialchars($repoUrl) ?>" target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($repoUrl) ?></a>.</p>
 
   <footer>Drop-in Photo Gallery v<?= $version ?> — created by github.com/pcmike</footer>
 
