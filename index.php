@@ -131,6 +131,36 @@ function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
     return $cacheDir . '/' . $hash . '.jpg';
 }
 
+/**
+ * Deletes cached thumbnails that no longer correspond to any current
+ * photo. A cache entry is keyed by filename+variant+mtime (see
+ * image_cache_path), so a renamed/deleted/edited photo just orphans its
+ * old cache file rather than overwriting it — this sweeps those away,
+ * so a folder whose photos get swapped out over time doesn't
+ * accumulate stale thumbnails forever. Only runs on normal gallery page
+ * loads (never on ?img/?track), so it doesn't add overhead to the
+ * requests that actually serve images.
+ */
+function gc_image_cache($dir, $cacheDir, $files, $imagickAvailable) {
+    if (!is_dir($cacheDir)) return;
+    $valid = [];
+    foreach ($files as $file) {
+        $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+        $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
+        $variants = $isHeic ? ['thumb', 'share', 'full'] : ['thumb', 'share'];
+        $mtime = @filemtime($dir . '/' . $file);
+        foreach ($variants as $variant) {
+            $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
+        }
+    }
+    foreach (scandir($cacheDir) as $entry) {
+        if ($entry === '.' || $entry === '..') continue;
+        if (!isset($valid[$entry])) {
+            @unlink($cacheDir . '/' . $entry);
+        }
+    }
+}
+
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
  *  available, otherwise GD. Returns true on success. */
 function generate_resized_jpeg($srcPath, $destPath, $maxDim) {
@@ -406,6 +436,8 @@ if (TRACK_VIEWS) {
     }
     $photoViews = stats_get_photo_views();
 }
+
+gc_image_cache($dir, $cacheDir, $files, $imagickAvailable);
 
 // Find any .md files in the same folder to show as a note/announcement box.
 $mdFiles = array_filter(scandir($dir), function ($file) use ($dir) {
