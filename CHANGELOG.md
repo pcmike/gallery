@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [1.0.3] - 2026-09-06
+
+### Fixed
+- `?about` page: removed the download button's own bottom margin, which was stacking with the following section header's top margin and doubling the gap before the first divider line compared to every other section on the page
+
 ## [1.0.2] - 2026-09-06
 
 ### Fixed
