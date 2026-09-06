@@ -966,7 +966,6 @@ function render_about_page() {
   }
   .download-btn:hover { opacity: 0.9; }
   h2 { font-size: 1.15rem; margin: 32px 0 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 24px; }
-  h2:first-of-type { border-top: none; padding-top: 0; }
   p, li { color: #d5d5d8; font-size: 0.95rem; }
   ul { padding-left: 22px; }
   li { margin-bottom: 6px; }
@@ -975,7 +974,6 @@ function render_about_page() {
     font-size: 0.88em; color: #eaeaea;
   }
   a { color: #8ab4ff; }
-  footer { margin-top: 48px; color: var(--muted); font-size: 0.8rem; }
 </style>
 </head>
 <body>
@@ -1003,8 +1001,6 @@ function render_about_page() {
 
   <h2>Full documentation &amp; source</h2>
   <p>This page is just the pitch — setup, configuration, directive syntax, and every feature in depth are documented on GitHub: <a href="<?= htmlspecialchars($repoUrl) ?>" target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($repoUrl) ?></a>.</p>
-
-  <footer>Drop-in Photo Gallery v<?= $version ?> — created by github.com/pcmike</footer>
 
 </div>
 </body>
