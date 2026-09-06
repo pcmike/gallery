@@ -66,6 +66,17 @@ function group_key($filename) {
     return $key === '' ? $base : $key;
 }
 
+/**
+ * Builds a whole-word, case-insensitive match pattern for a group key
+ * appearing in free text. Uses explicit alnum/underscore lookarounds
+ * instead of \b — \b only checks for a \w/\W transition, so it doesn't
+ * treat a key starting or ending in punctuation (e.g. "+model") as a
+ * distinct token and can match inside an unrelated word.
+ */
+function group_mention_pattern($key) {
+    return '/(?<![\p{L}\p{N}_])' . preg_quote($key, '/') . '(?![\p{L}\p{N}_])/iu';
+}
+
 function slugify($text) {
     $text = strtolower($text);
     $text = preg_replace('/[^a-z0-9]+/', '-', $text);
@@ -485,7 +496,7 @@ function detect_group_mention_order($mdContents, $groups) {
     foreach ($mdContents as $content) {
         foreach ($groups as $key => $groupFiles) {
             if (isset($earliestPos[$key])) continue;
-            if (preg_match('/\b' . preg_quote($key, '/') . '\b/i', $content, $m, PREG_OFFSET_CAPTURE)) {
+            if (preg_match(group_mention_pattern($key), $content, $m, PREG_OFFSET_CAPTURE)) {
                 $earliestPos[$key] = $offset + $m[0][1];
             }
         }
@@ -676,7 +687,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
         // text, with nothing to link to.
         $matchedKeys = [];
         foreach ($groups as $key => $groupFiles) {
-            if (preg_match('/\b' . preg_quote($key, '/') . '\b/i', $rawText)) {
+            if (preg_match(group_mention_pattern($key), $rawText)) {
                 $matchedKeys[] = $key;
             }
         }
