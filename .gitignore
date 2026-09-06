@@ -1,0 +1,16 @@
+# Generated at runtime by index.php — never commit these
+.gallery-cache/
+.gallery-stats.json
+.gallery-stats.sqlite
+.gallery-stats.sqlite-wal
+.gallery-stats.sqlite-shm
+
+# Local sample/test photos, if you keep a folder for manual testing
+/test-photos/
+/sandbox/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*~
