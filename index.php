@@ -962,7 +962,7 @@ function render_about_page() {
   .download-btn {
     display: inline-block; background: var(--accent); color: #fff;
     text-decoration: none; font-weight: 600; padding: 12px 20px;
-    border-radius: 8px; margin-bottom: 32px;
+    border-radius: 8px;
   }
   .download-btn:hover { opacity: 0.9; }
   h2 { font-size: 1.15rem; margin: 32px 0 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 24px; }
