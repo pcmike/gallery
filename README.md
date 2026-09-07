@@ -35,8 +35,9 @@ Both view tracking and thumbnail caching are **off by default** — this script 
   - **Auto-grouping** by filename (`dp104_01.jpg`, `dp104_02.jpg` → grouped under "dp104") — off by default, turn on with `AUTO_GROUP_BY_FILENAME` if your photos actually use that naming convention. Only strips a trailing `_01`/`-02` suffix when there's an explicit separator before the digits, so `iphone-15.jpg` groups as "iphone" but `iphone15.jpg` keeps its full name.
   - **Explicit groups** via `{group: Name}` + `{photos: a.jpg, b.jpg}` in a `.md` file — works regardless of filename, for a folder of photos with no naming convention at all. See [Directive syntax](#directive-syntax).
 - Full-screen lightbox: keyboard nav, mobile swipe gestures (left/right/down)
-- Gallery order mirrors the order groups/items are mentioned or defined in a `.md` file, if one exists
-- `PHOTO_SORT_ORDER` controls the base ordering before any of that: `filename` (default) or `mtime`
+- **Layout is two zones**: every group box (auto-detected or explicit) always renders first, stacked as full-width rows; every standalone single and unboxed `{photos:}` cluster follows below, as one continuous grid. A box is a full-width grid item, so this guarantees the wall of singles below it always starts on a fresh row instead of a box interrupting a partially-filled one.
+- **Ordering within each zone**: an item with prose (a classic mention, or a directive whose paragraph has other text) sorts earliest-first, by where that text sits in the `.md` — mirroring the order a reader encounters the descriptions. An item with no prose (a textless directive, or anything never mentioned/claimed) falls back to natural order (`PHOTO_SORT_ORDER`) instead of jumping the queue just because its directive happens to sit early in the file.
+- For a textless multi-file group/cluster, its position is anchored on whichever file is listed **first** in its `{photos:}` directive — not its lowest-sorting member — with the rest of its files following immediately after, in the exact order listed. Directives are never silently re-sorted.
 
 **Markdown notes** (optional `.md` file, first line must be `{gallery}`)
 - Small, deliberate subset of Markdown (headers, bold/italic/underline/strikethrough, code, links, lists, blockquotes)
@@ -116,10 +117,10 @@ Place these anywhere in an item's paragraph in a `.md` file:
 
 | Directive(s) in paragraph | Gallery box? | Aggregate view count? | Positional clustering? | Notes-box output |
 |---|---|---|---|---|
-| `{group:}` + `{photos:}`, no other text | Yes, labeled | Yes | Yes | Nothing — the box's own anchor is the only link |
-| `{group:}` + `{photos:}`, with text | Yes, labeled | Yes | Yes | Text + thumbnails + permalink |
-| `{photos:}` alone, no text | No | No | Yes — files move adjacent to each other in the gallery, wherever this directive sits in the `.md` | Nothing |
-| `{photos:}` alone, with text | No | No | Yes | Text + thumbnails + permalink (anchored on the first listed file) |
+| `{group:}` + `{photos:}`, no other text | Yes, labeled | Yes | Yes — natural order, anchored on the first-listed file | Nothing — the box's own anchor is the only link |
+| `{group:}` + `{photos:}`, with text | Yes, labeled | Yes | Yes — early, by where the text sits in the `.md` | Text + thumbnails + permalink |
+| `{photos:}` alone, no text | No | No | Yes — natural order, anchored on the first-listed file | Nothing |
+| `{photos:}` alone, with text | No | No | Yes — early, by where the text sits in the `.md` | Text + thumbnails + permalink (anchored on the first listed file) |
 | `{group:}` alone, no `{photos:}` | Only if the text also matches an auto-detected group | Inherited from that group | N/A | Renames that group's label |
 
 A file explicitly claimed by `{photos:}` always takes priority over filename-based auto-detection, and is removed from that pool entirely. If the same file is referenced by two different `{photos:}` directives, the first one (in file order) wins — the second is silently dropped, but noted in the troubleshooting HTML comment described above.
