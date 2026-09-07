@@ -202,6 +202,13 @@ foreach ($images1 as $i => $name) {
 // filename, not the extension-stripped base).
 make_jpeg("$fx1/collide.jpg", 200, 150, 200, 30, 30);
 make_jpeg("$fx1/collide.png", 200, 150, 30, 200, 30);
+// Regression: fixing the collision above by keying standalone singles
+// on their full filename broke classic mention-based auto-linking (a
+// paragraph mentioning "zebra" could no longer match "zebra.jpg", since
+// the key became "zebra.jpg" and prose never includes the extension).
+// This file's mention must still auto-link and reorder it ahead of
+// every unmentioned file below.
+make_jpeg("$fx1/zebra.jpg", 200, 150, 90, 60, 10);
 
 $notes1 = <<<'MD'
 {gallery}
@@ -214,6 +221,8 @@ brace test { unmatched
 ```
 
 Contact line stays intact after the code block. }
+
+(0) ZEBRA is mentioned here with no directive at all — classic auto-linking.
 
 (1) DP104 pair should stay separate cards, no auto-grouping. {color: gold}
 
@@ -272,6 +281,17 @@ check(
 );
 count_occurrences($body, 'alt="collide.jpg"', 1, 'collide.jpg appears once, as its own standalone card');
 count_occurrences($body, 'alt="collide.png"', 1, 'collide.png appears once, as its own standalone card');
+
+check(
+    'a standalone single (no directive) is still classic-auto-linked by mention, keyed by its extension-stripped name',
+    (bool) preg_match('/id="item-zebra"/', $body)
+);
+preg_match_all('/onclick="openLightbox\((\d+)\)"><img src="\?img=([^&]+)&/', $body, $orderMatches);
+$displayOrder = array_combine($orderMatches[2], array_map('intval', $orderMatches[1]));
+check(
+    'the mentioned zebra.jpg sorts ahead of unmentioned files (mention-order, not group-vs-single)',
+    isset($displayOrder['zebra.jpg']) && $displayOrder['zebra.jpg'] === 0
+);
 
 check(
     '"buy+model" does not falsely match the "+model"-style token (word-boundary regression)',

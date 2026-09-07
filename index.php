@@ -115,19 +115,19 @@ $files = array_values($files);
  * "-02" style numeric suffix. Only strips when there's an explicit
  * separator before the digits, so a standalone file like "iphone15.jpg"
  * keeps its full name rather than losing the "15". A no-op entirely
- * when AUTO_GROUP_BY_FILENAME is off — every file is then keyed by its
- * own full filename (including extension), so it's always its own key.
- * The extension matters here: two unrelated files that happen to share
- * a base name but differ only in extension (e.g. "topology.jpg" and
- * "topology.png") must not collide onto the same key just because the
- * extension-stripped name matches — that's exactly the kind of
- * accidental merge turning auto-grouping off is meant to prevent.
+ * when AUTO_GROUP_BY_FILENAME is off — the key is then just the
+ * extension-stripped filename, same as always, which is what lets
+ * prose mention an item by name (e.g. "the zebra print blanket") and
+ * auto-link a standalone "zebra.jpg". This can still coincidentally
+ * collide two unrelated files that share a base name but differ only
+ * in extension (e.g. "topology.jpg" and "topology.png") — see the
+ * disambiguation pass right after $groups is built, further down.
  */
 function group_key($filename) {
-    if (!AUTO_GROUP_BY_FILENAME) {
-        return $filename;
-    }
     $base = pathinfo($filename, PATHINFO_FILENAME);
+    if (!AUTO_GROUP_BY_FILENAME) {
+        return $base;
+    }
     $key = preg_replace('/[_\-]\d+$/', '', $base);
     return $key === '' ? $base : $key;
 }
@@ -460,6 +460,37 @@ foreach ($files as $file) {
     if (isset($explicitClaims[$file])) continue;
     $groups[group_key($file)][] = $file;
 }
+
+// A key shared by 2+ files is either a real, intended multi-angle group
+// (members' pre-extension names differ and only converge after suffix-
+// stripping, e.g. "dp104_01"/"dp104_02" -> "dp104") or a coincidence:
+// files whose pre-extension names were already identical before any
+// stripping happened at all (e.g. "topology.jpg" and "topology.png",
+// both already "topology" — nothing was stripped for either). Only the
+// first case is an intentional grouping signal; split the second case
+// back into individually-keyed standalone singles instead of merging
+// files that just happen to share a name.
+foreach ($groups as $key => $groupFiles) {
+    if (count($groupFiles) < 2) continue;
+    $rawBases = array_map(function ($f) { return pathinfo($f, PATHINFO_FILENAME); }, $groupFiles);
+    $counts = array_count_values($rawBases);
+    $keep = [];
+    foreach ($groupFiles as $i => $f) {
+        if ($counts[$rawBases[$i]] > 1) {
+            $groups[$f] = [$f];
+        } else {
+            $keep[] = $f;
+        }
+    }
+    if (count($keep) !== count($groupFiles)) {
+        if (empty($keep)) {
+            unset($groups[$key]);
+        } else {
+            $groups[$key] = $keep;
+        }
+    }
+}
+
 foreach ($explicitClaims as $file => $claimed) {
     $inNamedGroup = false;
     foreach ($explicitGroups as $g) {
