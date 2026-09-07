@@ -19,6 +19,10 @@ Reasoning for all three defaults: this script writes nothing to a folder's disk,
 - `PHOTO_SORT_ORDER` constant: `'filename'` (default, natural sort) or `'mtime'` (file modification time, oldest first).
 - A troubleshooting HTML comment near the top of the page source (never shown to a normal visitor) listing anything that didn't resolve cleanly: a `.md` file missing its `{gallery}` marker, an unknown filename referenced in `{photos:}`, or a duplicate `{group:}`/`{photos:}` claim.
 
+### Fixed
+- `group_key()`'s fallback (used whenever `AUTO_GROUP_BY_FILENAME` is off) keyed by the filename with its extension stripped, so two unrelated files sharing a base name but differing only in extension (e.g. `topology.jpg` and `topology.png`) could silently merge into a box — exactly the kind of accidental grouping turning auto-grouping off is meant to prevent. Now keys by the full filename.
+- The gallery grid no longer splits into separate fragments around a group box. Previously, standalone single photos were batched into their own `<div class="grid">` blocks that broke every time a box appeared between them, so a short run of singles right before a box rendered as a sparse, incomplete-looking row. The whole gallery is now one continuous grid; a box is simply a grid item spanning the full row width.
+
 ## [1.0.5] - 2026-09-06
 
 ### Fixed

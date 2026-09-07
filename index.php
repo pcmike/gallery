@@ -1254,17 +1254,6 @@ function status_accent_color($status, $customColor) {
 function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = []) {
     $html = '';
     $flatIndex = 0;
-    $pendingSingles = [];
-
-    $flushSingles = function () use (&$html, &$pendingSingles, $photoViews) {
-        if (empty($pendingSingles)) return;
-        $html .= '<div class="grid">';
-        foreach ($pendingSingles as $s) {
-            $html .= render_card($s['file'], $s['index'], $photoViews, $s['status'], $s['color']);
-        }
-        $html .= '</div>';
-        $pendingSingles = [];
-    };
 
     foreach ($groups as $key => $groupFiles) {
         $status = $groupStatus[$key] ?? '';
@@ -1272,15 +1261,16 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // An auto-detected single (one file, no explicit {group:} naming
         // it) never gets its own box. An explicitly named group always
         // does, even with just one photo — that's the point of naming it.
+        // Singles render straight into the shared outer grid (no
+        // separate wrapper) so a box appearing between them doesn't
+        // split the wall of cards into a short, sparse leftover row —
+        // see .gallery's CSS: the box is just a grid item that spans
+        // the full row width.
         if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key])) {
-            $pendingSingles[] = [
-                'file' => $groupFiles[0], 'index' => $flatIndex, 'status' => $status,
-                'color' => $accentColor,
-            ];
+            $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor);
             $flatIndex++;
             continue;
         }
-        $flushSingles();
         $slug = slugify($key);
         $label = $groupLabels[$key] ?? $key;
 
@@ -1309,7 +1299,6 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         }
         $html .= '</div></div>';
     }
-    $flushSingles();
     return $html;
 }
 
@@ -1655,11 +1644,13 @@ gallery notices (visible here only, never to visitors):
     max-width: 1400px;
     margin: 0 auto;
     padding: 16px 24px 48px;
-    display: flex;
-    flex-direction: column;
-    gap: 22px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
   }
   .group-box {
+    grid-column: 1 / -1;
+    margin: 6px 0;
     background: var(--card);
     border: 1px solid rgba(255,255,255,0.08);
     border-left: 4px solid rgba(255,255,255,0.18);
@@ -1711,7 +1702,7 @@ gallery notices (visible here only, never to visitors):
     font-size: 0.8rem;
     color: var(--muted);
   }
-  .group-grid, .grid {
+  .group-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 10px;
