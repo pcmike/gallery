@@ -196,6 +196,12 @@ $images1 = [
 foreach ($images1 as $i => $name) {
     make_jpeg("$fx1/$name", 200, 150, 10 + $i * 15, 40, 90);
 }
+// Regression: two unrelated files sharing a base name but differing
+// only in extension must not collide onto the same fallback key when
+// AUTO_GROUP_BY_FILENAME is off (group_key() must key by the full
+// filename, not the extension-stripped base).
+make_jpeg("$fx1/collide.jpg", 200, 150, 200, 30, 30);
+make_jpeg("$fx1/collide.png", 200, 150, 30, 200, 30);
 
 $notes1 = <<<'MD'
 {gallery}
@@ -261,6 +267,13 @@ check(
 count_occurrences($body, 'alt="dp104_01.jpg"', 1, 'dp104_01.jpg appears once, as a plain standalone card');
 
 check(
+    'collide.jpg and collide.png (same base, different extension) do not merge into a box',
+    !str_contains($body, 'id="group-collide"')
+);
+count_occurrences($body, 'alt="collide.jpg"', 1, 'collide.jpg appears once, as its own standalone card');
+count_occurrences($body, 'alt="collide.png"', 1, 'collide.png appears once, as its own standalone card');
+
+check(
     '"buy+model" does not falsely match the "+model"-style token (word-boundary regression)',
     str_contains($body, '<p>(2) This is buy+model, not a real mention.</p>')
 );
@@ -287,7 +300,7 @@ check('GIZMO never got a reserved badge', !str_contains($body, '<span class="res
 
 check(
     'bare {photos:}+text (no {group:}) gets a thumbnail strip with a permalink, no jump link',
-    (bool) preg_match('/id="item-scatter-a"/', $body) && str_contains($body, 'linked-photos plain')
+    (bool) preg_match('/id="item-scatter-a-jpg"/', $body) && str_contains($body, 'linked-photos plain')
 );
 check('...but no aggregate view-count span for that cluster', !str_contains($body, 'data-group="scatter-a"'));
 $idxA = null; $idxZ = null;

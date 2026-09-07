@@ -115,14 +115,19 @@ $files = array_values($files);
  * "-02" style numeric suffix. Only strips when there's an explicit
  * separator before the digits, so a standalone file like "iphone15.jpg"
  * keeps its full name rather than losing the "15". A no-op entirely
- * when AUTO_GROUP_BY_FILENAME is off — every file is then its own key,
- * i.e. nothing gets auto-grouped by filename at all.
+ * when AUTO_GROUP_BY_FILENAME is off — every file is then keyed by its
+ * own full filename (including extension), so it's always its own key.
+ * The extension matters here: two unrelated files that happen to share
+ * a base name but differ only in extension (e.g. "topology.jpg" and
+ * "topology.png") must not collide onto the same key just because the
+ * extension-stripped name matches — that's exactly the kind of
+ * accidental merge turning auto-grouping off is meant to prevent.
  */
 function group_key($filename) {
-    $base = pathinfo($filename, PATHINFO_FILENAME);
     if (!AUTO_GROUP_BY_FILENAME) {
-        return $base;
+        return $filename;
     }
+    $base = pathinfo($filename, PATHINFO_FILENAME);
     $key = preg_replace('/[_\-]\d+$/', '', $base);
     return $key === '' ? $base : $key;
 }
@@ -461,7 +466,10 @@ foreach ($explicitClaims as $file => $claimed) {
         if (in_array($file, $g['files'], true)) { $inNamedGroup = true; break; }
     }
     if (!$inNamedGroup) {
-        $groups[pathinfo($file, PATHINFO_FILENAME)][] = $file;
+        // Keyed by the file's own full filename (with extension) — see
+        // group_key()'s docblock for why the extension-stripped base
+        // isn't safe to use as a per-file key.
+        $groups[$file][] = $file;
     }
 }
 foreach ($explicitGroups as $slug => $g) {
@@ -502,8 +510,7 @@ function compute_display_order($mdContents, $groups, $explicitGroups, $positiona
     foreach ($positionalClusters as $cluster) {
         $keys = [];
         foreach ($cluster['files'] as $f) {
-            $k = pathinfo($f, PATHINFO_FILENAME);
-            if (isset($groups[$k])) $keys[] = $k;
+            if (isset($groups[$f])) $keys[] = $f;
         }
         if (!empty($keys)) {
             $blocks[] = ['position' => $cluster['position'], 'keys' => $keys];
@@ -1076,9 +1083,10 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
             $itemId = 'item-' . slugify($matchedKeys[0]);
         } elseif (!empty($explicitPhotos)) {
             // No box, no name — the closest thing to a stable identity
-            // here is the first listed file, so that's what the
-            // permalink anchors on.
-            $itemId = 'item-' . slugify(pathinfo($explicitPhotos[0], PATHINFO_FILENAME));
+            // here is the first listed file (full filename, extension
+            // included, to stay unique — see group_key()), so that's
+            // what the permalink anchors on.
+            $itemId = 'item-' . slugify($explicitPhotos[0]);
         }
         $idAttr = $itemId ? (' id="' . htmlspecialchars($itemId, ENT_QUOTES, 'UTF-8') . '"') : '';
 
@@ -1109,9 +1117,12 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
         } elseif (!empty($explicitPhotos)) {
             $html .= render_photo_thumbs_plain($explicitPhotos, $files, render_item_permalink($itemId));
             foreach ($explicitPhotos as $pf) {
-                $singleKey = pathinfo($pf, PATHINFO_FILENAME);
-                if ($colorValue !== null) $groupColors[$singleKey] = $colorValue;
-                if ($status) $groupStatus[$singleKey] = $status;
+                // Must match the key these standalone singles were
+                // stored under in $groups (see GROUPING above): the
+                // file's own full filename, not its extension-stripped
+                // base.
+                if ($colorValue !== null) $groupColors[$pf] = $colorValue;
+                if ($status) $groupStatus[$pf] = $status;
             }
         }
         $paraLines = [];
