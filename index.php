@@ -110,6 +110,15 @@ if (PHOTO_SORT_ORDER === 'mtime') {
 }
 $files = array_values($files);
 
+// Snapshot of each file's position in this base sort, before any .md-
+// driven repositioning happens — used as the "natural order" anchor for
+// a group/cluster that has no prose to derive an early position from
+// (see GROUPING and compute_zone_order() below).
+$naturalRank = [];
+foreach ($files as $i => $f) {
+    $naturalRank[$f] = $i;
+}
+
 /**
  * Derive a group key from a filename by stripping a trailing "_01" /
  * "-02" style numeric suffix. Only strips when there's an explicit
@@ -441,10 +450,10 @@ foreach ($mdContents as $content) {
                 continue;
             }
             foreach ($validPhotos as $p) { $explicitClaims[$p] = true; }
-            $explicitGroups[$slug] = ['name' => $rec['groupName'], 'files' => $validPhotos, 'position' => $position];
+            $explicitGroups[$slug] = ['name' => $rec['groupName'], 'files' => $validPhotos, 'position' => $position, 'hasProse' => $rec['hasProse']];
         } else {
             foreach ($validPhotos as $p) { $explicitClaims[$p] = true; }
-            $positionalClusters[] = ['files' => $validPhotos, 'position' => $position];
+            $positionalClusters[] = ['files' => $validPhotos, 'position' => $position, 'hasProse' => $rec['hasProse']];
         }
     }
     $offset += strlen($content) + 1;
@@ -507,84 +516,147 @@ foreach ($explicitGroups as $slug => $g) {
     $groups[$slug] = $g['files'];
 }
 
+// Explicit group slugs, so the renderer knows to box these even with
+// just a single photo — an auto-detected single never gets a box, but
+// an explicitly named one always does; that's the point of naming it.
+// Computed here (not just once, further down) because zone membership
+// during ordering depends on it too.
+$explicitGroupKeys = array_fill_keys(array_keys($explicitGroups), true);
+
 /**
- * Determines display order by merging three position sources: earliest
- * text-mention of an auto-detected group's name, an explicit named
- * group's own {group:}+{photos:} directive position, and a positional
- * {photos:}-only cluster's directive position (whose member files are
- * kept adjacent to each other, in the order listed, wherever the
- * cluster lands). Anything with no position at all keeps its normal
- * filename/mtime-sort position, appended after everything ordered.
+ * Determines display order within a single zone (either "boxes" or
+ * "singles+clusters" — see compute_zone_order() below, which calls this
+ * once per zone). Two tiers, in order:
+ *
+ *  1. Anything with prose in its paragraph — a classic text-mention (an
+ *     auto-detected group's name found in the .md), or an explicit
+ *     {group:}/{photos:} directive whose paragraph has other text —
+ *     sorted earliest-first by where that prose sits in the .md. This
+ *     mirrors the narrative: a reader sees a description, then its
+ *     photos, in the order they were written about.
+ *  2. Anything without prose (a textless directive, or never
+ *     mentioned/claimed at all) falls back to natural order
+ *     ($naturalRank). A textless multi-file group/cluster is anchored
+ *     on whichever file was listed *first* in its {photos:} directive —
+ *     never re-sorted — with its other members following immediately
+ *     after, in the exact order listed.
+ *
+ * $keysInZone restricts consideration to keys belonging to this zone;
+ * every key in $keysInZone appears exactly once in the result.
  */
-function compute_display_order($mdContents, $groups, $explicitGroups, $positionalClusters) {
-    $blocks = []; // ['position' => N, 'keys' => [key, ...]]
+function order_within_zone($keysInZone, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank) {
+    $inZone = array_fill_keys($keysInZone, true);
+    $handled = [];
+    $positioned = []; // ['position' => N, 'keys' => [...]]
+    $natural = [];    // ['rank' => N, 'keys' => [...]]
 
     $offset = 0;
     $mentionPos = [];
     foreach ($mdContents as $content) {
-        foreach ($groups as $key => $groupFiles) {
+        // Search prose only — a filename sitting inside some *other*
+        // paragraph's {photos: a.jpg, b.jpg} list must never count as a
+        // mention of that name (masking preserves offsets exactly, so
+        // this stays comparable to the raw-content-based positions
+        // computed during extraction, further up).
+        $maskedContent = mask_directives($content);
+        foreach ($keysInZone as $key) {
             if (isset($mentionPos[$key]) || isset($explicitGroups[$key])) continue;
-            if (preg_match(group_mention_pattern($key), $content, $m, PREG_OFFSET_CAPTURE)) {
+            if (preg_match(group_mention_pattern($key), $maskedContent, $m, PREG_OFFSET_CAPTURE)) {
                 $mentionPos[$key] = $offset + $m[0][1];
             }
         }
         $offset += strlen($content) + 1;
     }
     foreach ($mentionPos as $key => $pos) {
-        $blocks[] = ['position' => $pos, 'keys' => [$key]];
+        $positioned[] = ['position' => $pos, 'keys' => [$key]];
+        $handled[$key] = true;
     }
+
     foreach ($explicitGroups as $slug => $g) {
-        if (isset($groups[$slug])) {
-            $blocks[] = ['position' => $g['position'], 'keys' => [$slug]];
+        if (!isset($inZone[$slug]) || isset($handled[$slug])) continue;
+        if ($g['hasProse']) {
+            $positioned[] = ['position' => $g['position'], 'keys' => [$slug]];
+        } else {
+            $natural[] = ['rank' => $naturalRank[$g['files'][0]] ?? PHP_INT_MAX, 'keys' => [$slug]];
         }
+        $handled[$slug] = true;
     }
+
     foreach ($positionalClusters as $cluster) {
         $keys = [];
         foreach ($cluster['files'] as $f) {
-            if (isset($groups[$f])) $keys[] = $f;
+            if (isset($inZone[$f]) && !isset($handled[$f])) $keys[] = $f;
         }
-        if (!empty($keys)) {
-            $blocks[] = ['position' => $cluster['position'], 'keys' => $keys];
+        if (empty($keys)) continue;
+        if ($cluster['hasProse']) {
+            $positioned[] = ['position' => $cluster['position'], 'keys' => $keys];
+        } else {
+            $natural[] = ['rank' => $naturalRank[$cluster['files'][0]] ?? PHP_INT_MAX, 'keys' => $keys];
         }
+        foreach ($keys as $k) $handled[$k] = true;
     }
 
-    usort($blocks, function ($a, $b) { return $a['position'] <=> $b['position']; });
+    foreach ($keysInZone as $key) {
+        if (isset($handled[$key])) continue;
+        $natural[] = ['rank' => $naturalRank[$groups[$key][0]] ?? PHP_INT_MAX, 'keys' => [$key]];
+        $handled[$key] = true;
+    }
+
+    usort($positioned, function ($a, $b) { return $a['position'] <=> $b['position']; });
+    usort($natural, function ($a, $b) { return $a['rank'] <=> $b['rank']; });
 
     $order = [];
-    foreach ($blocks as $block) {
-        foreach ($block['keys'] as $k) {
-            $order[] = $k;
-        }
+    foreach ($positioned as $block) {
+        foreach ($block['keys'] as $k) $order[] = $k;
+    }
+    foreach ($natural as $block) {
+        foreach ($block['keys'] as $k) $order[] = $k;
     }
     return $order;
 }
 
-// Mirrors the order groups/clusters are first mentioned/defined in the
-// .md (mentioned/defined items first, in that order; anything else
-// keeps its normal filename/mtime-sort position, appended after them).
-$groupOrder = compute_display_order($mdContents, $groups, $explicitGroups, $positionalClusters);
-if (!empty($groupOrder)) {
-    $orderedGroups = [];
-    foreach ($groupOrder as $key) {
-        if (isset($groups[$key]) && !isset($orderedGroups[$key])) {
-            $orderedGroups[$key] = $groups[$key];
-        }
-    }
+/**
+ * Splits $groups into two zones and orders each independently — see
+ * order_within_zone() above. Boxes (2+ files, or an explicitly named
+ * group even with just one photo) always render before every single
+ * and unboxed {photos:} cluster; a box is a full-width grid item, so
+ * putting all of them first guarantees the singles wall that follows
+ * always starts on a fresh row, instead of a box interrupting a
+ * partially-filled row of cards.
+ */
+function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank) {
+    $boxKeys = [];
+    $singleKeys = [];
     foreach ($groups as $key => $groupFiles) {
-        if (!isset($orderedGroups[$key])) {
-            $orderedGroups[$key] = $groupFiles;
+        if (count($groupFiles) >= 2 || isset($explicitGroupKeys[$key])) {
+            $boxKeys[] = $key;
+        } else {
+            $singleKeys[] = $key;
         }
     }
-    $groups = $orderedGroups;
+    $boxOrder = order_within_zone($boxKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank);
+    $singleOrder = order_within_zone($singleKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank);
+    return array_merge($boxOrder, $singleOrder);
+}
 
-    // Rebuild the flat photo list to match, so the lightbox's index
-    // numbering (shared by both the note thumbnails and the gallery
-    // cards) stays consistent with the new display order.
-    $files = [];
-    foreach ($groups as $groupFiles) {
-        foreach ($groupFiles as $f) {
-            $files[] = $f;
-        }
+// Reorders $groups per compute_zone_order() (boxes first, singles+
+// clusters after; prose-position within each, natural order otherwise),
+// then rebuilds the flat photo list to match, so the lightbox's index
+// numbering (shared by both the note thumbnails and the gallery cards)
+// stays consistent with the new display order.
+$groupOrder = compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank);
+$orderedGroups = [];
+foreach ($groupOrder as $key) {
+    if (isset($groups[$key]) && !isset($orderedGroups[$key])) {
+        $orderedGroups[$key] = $groups[$key];
+    }
+}
+$groups = $orderedGroups;
+
+$files = [];
+foreach ($groups as $groupFiles) {
+    foreach ($groupFiles as $f) {
+        $files[] = $f;
     }
 }
 
@@ -598,11 +670,6 @@ foreach ($groups as $key => $groupFiles) {
         $fileToGroupKey[$gf] = $key;
     }
 }
-
-// Explicit group slugs, so the renderer knows to box these even with
-// just a single photo — an auto-detected single never gets a box, but
-// an explicitly named one always does; that's the point of naming it.
-$explicitGroupKeys = array_fill_keys(array_keys($explicitGroups), true);
 
 /* -----------------------------------------------------------------------
  * View-stats storage. Two interchangeable backends behind one small set
@@ -886,6 +953,25 @@ function is_safe_color($value) {
 }
 
 /**
+ * Masks every known {directive} in text with same-length blank spans,
+ * preserving every other character's original position — unlike
+ * actually removing them, this keeps byte offsets valid for
+ * PREG_OFFSET_CAPTURE against the original string. Used before
+ * mention-matching a group's name against raw .md content: without
+ * this, a filename inside another paragraph's {photos: a.jpg, b.jpg}
+ * list could falsely match as if it were mentioned in prose (a real
+ * risk for short keys especially, but not limited to them). Also used
+ * to detect whether a paragraph has any prose left after directives.
+ */
+function mask_directives($text) {
+    return preg_replace_callback(
+        '/\{\s*(?:color\s*:\s*[^}]+|sold|reserved|held|group\s*:\s*[^}]+|photos\s*:\s*[^}]+)\}/i',
+        function ($m) { return str_repeat(' ', strlen($m[0])); },
+        $text
+    );
+}
+
+/**
  * True if this .md content's first non-blank line is exactly the
  * required "{gallery}" marker (case-insensitive). A file without it is
  * left completely alone — not parsed, not rendered — which is what lets
@@ -938,6 +1024,7 @@ function extract_photo_directives($content) {
         if (!empty($paraLines)) {
             $photosRaw = null;
             $groupName = null;
+            $hasProse = false;
             foreach ($paraLines as $l) {
                 if ($photosRaw === null && preg_match('/\{\s*photos\s*:\s*([^}]+)\}/i', $l, $pm)) {
                     $photosRaw = $pm[1];
@@ -945,11 +1032,17 @@ function extract_photo_directives($content) {
                 if ($groupName === null && preg_match('/\{\s*group\s*:\s*([^}]+)\}/i', $l, $gm)) {
                     $groupName = trim($gm[1]);
                 }
+                // Anything left after masking every known directive is
+                // prose — this is what decides whether the paragraph
+                // gets an early ("mirrors the .md") position or falls
+                // back to natural order (see compute_zone_order()).
+                $stripped = trim(mask_directives($l));
+                if ($stripped !== '') $hasProse = true;
             }
             if ($photosRaw !== null) {
                 $photos = array_values(array_filter(array_map('trim', explode(',', $photosRaw))));
                 if (!empty($photos)) {
-                    $records[] = ['position' => $paraStartPos, 'groupName' => $groupName, 'photos' => $photos];
+                    $records[] = ['position' => $paraStartPos, 'groupName' => $groupName, 'photos' => $photos, 'hasProse' => $hasProse];
                 }
             }
         }
@@ -1250,7 +1343,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
  *  is drawn on its parent box instead); and, for a standalone item whose
  *  matched {color: value} directive has nowhere else to apply (single-
  *  photo "groups" never get a box), a colored inset ring instead. */
-function render_card($file, $index, $photoViews, $status = '', $color = null) {
+function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
     $hidden = $views > 0 ? '' : ' hidden';
     $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">&#128065; '
@@ -1262,7 +1355,13 @@ function render_card($file, $index, $photoViews, $status = '', $color = null) {
         $statusBadge = '<span class="reserved-badge-corner">RESERVED</span>';
     }
     $colorStyle = $color ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ' inset;"' : '';
-    return '<div class="card' . ($status ? ' ' . $status : '') . '"' . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    // $anchorId lets a standalone single be a valid "#group-<slug>" jump
+    // target too — render_group_thumbs() always links there for a
+    // mentioned item, whether it turned out to be a real box or just a
+    // single card; only a box's own container carried that id before,
+    // leaving the link dead for a single.
+    $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
+    return '<div class="card' . ($status ? ' ' . $status : '') . '"' . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $statusBadge . $badge . '</div>';
 }
@@ -1291,18 +1390,17 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         $accentColor = status_accent_color($status, $groupColors[$key] ?? null);
         // An auto-detected single (one file, no explicit {group:} naming
         // it) never gets its own box. An explicitly named group always
-        // does, even with just one photo — that's the point of naming it.
-        // Singles render straight into the shared outer grid (no
-        // separate wrapper) so a box appearing between them doesn't
-        // split the wall of cards into a short, sparse leftover row —
-        // see .gallery's CSS: the box is just a grid item that spans
-        // the full row width.
+        // does, even with just one photo — that's the point of naming
+        // it. $groups is already ordered boxes-first by this point (see
+        // compute_zone_order), so every single/cluster card below is
+        // part of one uninterrupted run — no box ever lands in the
+        // middle of it to fragment the grid.
+        $slug = slugify($key);
         if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key])) {
-            $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor);
+            $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor, 'group-' . $slug);
             $flatIndex++;
             continue;
         }
-        $slug = slugify($key);
         $label = $groupLabels[$key] ?? $key;
 
         $boxStyle = '';
@@ -1745,6 +1843,7 @@ gallery notices (visible here only, never to visitors):
     aspect-ratio: 1 / 1;
     cursor: pointer;
     position: relative;
+    scroll-margin-top: 16px;
   }
   .card img {
     width: 100%;
