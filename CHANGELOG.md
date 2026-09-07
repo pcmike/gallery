@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [1.1.0] - 2026-09-07
+
+### Breaking changes
+- **A `.md` file is only read if its first line is exactly `{gallery}`.** Any existing `forsale.md` (or similar) needs that line added, or it will silently stop being parsed. This is a hard requirement, not a toggle — added so this script can be dropped into a folder that already has its own unrelated `.md` files (notes, a README) without swallowing them.
+- **`TRACK_VIEWS` now defaults to `false`** (was `true`). Set it to `true` to get view-count badges/stats back.
+- **`ENABLE_THUMBNAIL_CACHE` (new) defaults to `false`.** Without it, every photo is served at full original resolution as its own "thumbnail," and HEIC/HEIF photos are excluded from the gallery entirely — even with Imagick installed. Set it to `true` for real deployments.
+- **`AUTO_GROUP_BY_FILENAME` (new) defaults to `false`** (auto-grouping by a `_01`/`-02` filename suffix was previously always on). Set it to `true` if your photos use that multi-angle naming convention.
+
+Reasoning for all three defaults: this script writes nothing to a folder's disk, and assumes nothing about a folder's filename conventions, unless explicitly told to.
+
+### Added
+- Explicit photo grouping in a `.md` file via `{group: Name}` and `{photos: a.jpg, b.jpg, ...}` directives — works regardless of filename, for a folder of photos with no naming convention at all. See the README for the full behavior matrix (boxed vs. unboxed, with/without text, permalinks, positional clustering).
+- `{photos:}` used without `{group:}` repositions the listed files adjacent to each other in the gallery, wherever the directive sits in the `.md`, without boxing them or creating an aggregate view count.
+- `{group:}` used alone (no `{photos:}` in the same paragraph) renames an already auto-detected group's display label.
+- `PHOTO_SORT_ORDER` constant: `'filename'` (default, natural sort) or `'mtime'` (file modification time, oldest first).
+- A troubleshooting HTML comment near the top of the page source (never shown to a normal visitor) listing anything that didn't resolve cleanly: a `.md` file missing its `{gallery}` marker, an unknown filename referenced in `{photos:}`, or a duplicate `{group:}`/`{photos:}` claim.
+
 ## [1.0.5] - 2026-09-06
 
 ### Fixed
