@@ -210,6 +210,32 @@ make_jpeg("$fx1/collide.png", 200, 150, 30, 200, 30);
 // every unmentioned file below.
 make_jpeg("$fx1/zebra.jpg", 200, 150, 90, 60, 10);
 
+// Regression: a textless box, defined at the very END of the .md, must
+// still render in the boxes zone ahead of every single — including one
+// mentioned early in the file (zebra.jpg above) — since boxes always
+// come first regardless of where their directive sits.
+make_jpeg("$fx1/late-box-a.jpg", 200, 150, 5, 5, 5);
+make_jpeg("$fx1/late-box-b.jpg", 200, 150, 6, 6, 6);
+
+// Regression: an anchor file listed first in {photos:} decides where a
+// textless cluster sits (its own natural rank), and the other members
+// follow in the exact order listed — never re-sorted to their own
+// natural order. zzz3 sorts last alphabetically among these three, so
+// listing it first should pull zzz1/zzz2 forward to sit right after it,
+// landing the whole block near the end of natural order (zzz3's spot),
+// not near the start (zzz1's spot).
+make_jpeg("$fx1/zzz1.jpg", 200, 150, 7, 7, 7);
+make_jpeg("$fx1/zzz2.jpg", 200, 150, 8, 8, 8);
+make_jpeg("$fx1/zzz3.jpg", 200, 150, 9, 9, 9);
+
+// Regression: mention-matching must search prose only. "aa-friend.jpg"
+// referenced inside another paragraph's bare {photos:} list contains
+// "aa" followed by a hyphen — a valid word boundary — so without
+// masking, that {photos:} directive's own raw text would falsely match
+// as if "aa" (aa.jpg's key) were mentioned in real prose.
+make_jpeg("$fx1/aa.jpg", 200, 150, 11, 11, 11);
+make_jpeg("$fx1/aa-friend.jpg", 200, 150, 12, 12, 12);
+
 $notes1 = <<<'MD'
 {gallery}
 # Defaults Fixture
@@ -245,6 +271,12 @@ Contact line stays intact after the code block. }
 (9) Duplicate claim attempt. {photos: dup.jpg}
 
 (10) Raw <script>alert(1)</script> attempt.
+
+{photos: aa-friend.jpg}
+
+{group: Late Box} {photos: late-box-a.jpg, late-box-b.jpg}
+
+{photos: zzz3.jpg, zzz1.jpg, zzz2.jpg}
 MD;
 file_put_contents("$fx1/gallery.md", $notes1);
 
@@ -286,11 +318,38 @@ check(
     'a standalone single (no directive) is still classic-auto-linked by mention, keyed by its extension-stripped name',
     (bool) preg_match('/id="item-zebra"/', $body)
 );
+check(
+    'the note box\'s "View 1 photo" jump link for a mentioned single has a real target (regression: only boxes used to get this id, leaving the link dead)',
+    str_contains($body, 'href="#group-zebra"') && str_contains($body, 'id="group-zebra"')
+);
 preg_match_all('/onclick="openLightbox\((\d+)\)"><img src="\?img=([^&]+)&/', $body, $orderMatches);
 $displayOrder = array_combine($orderMatches[2], array_map('intval', $orderMatches[1]));
 check(
-    'the mentioned zebra.jpg sorts ahead of unmentioned files (mention-order, not group-vs-single)',
-    isset($displayOrder['zebra.jpg']) && $displayOrder['zebra.jpg'] === 0
+    'the mentioned zebra.jpg sorts ahead of an unmentioned single within the singles zone (mention-order, not group-vs-single)',
+    isset($displayOrder['zebra.jpg'], $displayOrder['xss.jpg']) && $displayOrder['zebra.jpg'] < $displayOrder['xss.jpg']
+);
+
+check(
+    'a textless box defined at the end of the .md still renders in the boxes zone, ahead of every single',
+    str_contains($body, 'id="group-late-box"')
+        && isset($displayOrder['late-box-a.jpg'], $displayOrder['zebra.jpg'])
+        && $displayOrder['late-box-a.jpg'] < $displayOrder['zebra.jpg']
+);
+
+check(
+    'a textless cluster anchors on its first-listed file\'s natural rank, not its lowest-sorting member\'s',
+    isset($displayOrder['zzz3.jpg']) && $displayOrder['zzz3.jpg'] > $displayOrder['zebra.jpg']
+);
+check(
+    'the cluster\'s other members follow in the exact order listed, not re-sorted',
+    isset($displayOrder['zzz3.jpg'], $displayOrder['zzz1.jpg'], $displayOrder['zzz2.jpg'])
+        && $displayOrder['zzz3.jpg'] + 1 === $displayOrder['zzz1.jpg']
+        && $displayOrder['zzz1.jpg'] + 1 === $displayOrder['zzz2.jpg']
+);
+
+check(
+    'mention-matching searches prose only: "aa" inside another paragraph\'s {photos: aa-friend.jpg} is not a false mention of aa.jpg',
+    !str_contains($body, 'id="item-aa"')
 );
 
 check(
