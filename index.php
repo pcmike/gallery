@@ -1,29 +1,73 @@
 <?php
 /**
- * DROP-IN PHOTO GALLERY — v1.0.5
+ * DROP-IN PHOTO GALLERY — v1.1.0
  * Single PHP file, no dependencies, no build step. Drop into any folder
  * of photos and it renders a gallery for that folder.
  *
- * Full documentation (grouping, Markdown notes, {color}/{sold}/{reserved}
- * directives, view stats, deep linking, image caching, etc.) lives in the
- * repo's README: github.com/pcmike/gallery. The "?about" page this script
- * serves itself (open any deployed gallery and click "about" in the
- * footer, or visit "?about" directly) is a short in-app pitch that links
- * back there, plus the download link for this file.
+ * Full documentation (grouping, Markdown notes, {color}/{sold}/{reserved}/
+ * {group}/{photos} directives, view stats, deep linking, image caching,
+ * etc.) lives in the repo's README: github.com/pcmike/gallery. The
+ * "?about" page this script serves itself (open any deployed gallery and
+ * click "about" in the footer, or visit "?about" directly) is a short
+ * in-app pitch that links back there, plus the download link for this
+ * file.
  *
  * Quick reference for anyone editing this file directly:
- *   - GALLERY_VERSION / TRACK_VIEWS constants are just below.
- *   - Photo grouping: filename minus a trailing "_01"/"-02" suffix.
- *   - .md directives: {color: value}, {sold}, {reserved} (or {held}).
+ *   - GALLERY_VERSION / TRACK_VIEWS / ENABLE_THUMBNAIL_CACHE /
+ *     AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER constants are just below.
+ *     TRACK_VIEWS and ENABLE_THUMBNAIL_CACHE are off by default — this
+ *     script writes nothing to disk unless you turn one on.
+ *   - A .md file is only read if its first line is exactly {gallery}.
+ *   - Photo grouping: auto (filename minus a trailing "_01"/"-02"
+ *     suffix, if AUTO_GROUP_BY_FILENAME is on) or explicit via
+ *     {group: Name} + {photos: a.jpg, b.jpg} in a .md file.
+ *   - .md directives: {color: value}, {sold}, {reserved} (or {held}),
+ *     {group: Name}, {photos: a.jpg, b.jpg, ...}.
  *   - See each function's own docblock below for implementation details.
  */
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '1.0.5');
+define('GALLERY_VERSION', '1.1.0');
 
-// Turn photo/group/page view tracking on or off. See the "?about" page
-// (linked in the footer) for full documentation.
-define('TRACK_VIEWS', true);
+// Turn photo/group/page view tracking on or off. Off by default — this
+// script writes nothing to the folder's disk unless you turn something
+// on. Turning this on writes .gallery-stats.json or .gallery-stats.sqlite
+// into the folder, and is what enables the live view-count badges. See
+// the README for details.
+define('TRACK_VIEWS', false);
+
+// Turn thumbnail generation/caching on or off. Off by default — same
+// reasoning as TRACK_VIEWS, this writes into a .gallery-cache folder.
+// Strongly recommended for any real deployment: without it, every photo
+// is served at full original resolution as its own "thumbnail" (real
+// bandwidth cost), and HEIC/HEIF (iPhone) photos are excluded from the
+// gallery entirely, even with Imagick installed — HEIC can't be shown to
+// a browser without conversion, and conversion has nowhere to go without
+// this cache. See the README for details.
+define('ENABLE_THUMBNAIL_CACHE', false);
+
+// Auto-group photos by filename (stripping a trailing "_01"/"-02" style
+// suffix, e.g. "dp104_01.jpg" + "dp104_02.jpg" -> "dp104"). Off by
+// default. Turn this on if your photos actually use that multi-angle
+// naming convention (e.g. a "for sale" listing shot from several
+// angles) — leaving it on for an arbitrary folder of camera photos can
+// falsely merge unrelated shots that just happen to share a numeric
+// filename pattern (e.g. IMG_0234.jpg / IMG_0235.jpg from two different,
+// unrelated photos). See the README for details, and for how to define
+// groups explicitly via {group:}/{photos:} directives in a .md file
+// instead, regardless of filename.
+define('AUTO_GROUP_BY_FILENAME', false);
+
+// How photos are ordered before any .md-driven repositioning: 'filename'
+// (natural sort, the default) or 'mtime' (file modification time,
+// oldest first). 'filename' is the more reliable default for a script
+// meant to be copied/uploaded/backed up anywhere — many deployment
+// methods (FTP, zip/extract, a fresh git clone, cloud sync) reset a
+// file's modification time to "when it was placed here," not when the
+// photo was actually taken, which can make 'mtime' order effectively
+// arbitrary. Only switch to 'mtime' if you've verified your own
+// deployment method preserves the original timestamps.
+define('PHOTO_SORT_ORDER', 'filename');
 
 $dir = __DIR__;
 $self = basename(__FILE__);
@@ -34,8 +78,12 @@ $cacheDir = $dir . '/.gallery-cache';
 $imagickAvailable = class_exists('Imagick');
 $gdAvailable = extension_loaded('gd');
 
+// HEIC/HEIF requires Imagick to convert, and that conversion has nowhere
+// to go without the thumbnail cache enabled (see ENABLE_THUMBNAIL_CACHE
+// above) — so without both, those files are excluded rather than shown
+// broken.
 $imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
-if ($imagickAvailable) {
+if ($imagickAvailable && ENABLE_THUMBNAIL_CACHE) {
     $imageExtensions[] = 'heic';
     $imageExtensions[] = 'heif';
 }
@@ -47,21 +95,34 @@ $files = array_filter(scandir($dir), function ($file) use ($dir, $imageExtension
     return in_array($ext, $imageExtensions);
 });
 
-// Natural sort by filename, so groups like dp104_01, dp104_02, dp104_03
-// stay together and in order, followed by neo98_01, neo98_02, etc.
-usort($files, function ($a, $b) {
-    return strnatcasecmp($a, $b);
-});
+// Base ordering, before any .md-driven repositioning — see
+// PHOTO_SORT_ORDER above.
+if (PHOTO_SORT_ORDER === 'mtime') {
+    usort($files, function ($a, $b) use ($dir) {
+        return (@filemtime("$dir/$a") ?: 0) <=> (@filemtime("$dir/$b") ?: 0);
+    });
+} else {
+    // Natural sort by filename, so groups like dp104_01, dp104_02,
+    // dp104_03 stay together and in order, followed by neo98_01, etc.
+    usort($files, function ($a, $b) {
+        return strnatcasecmp($a, $b);
+    });
+}
 $files = array_values($files);
 
 /**
  * Derive a group key from a filename by stripping a trailing "_01" /
  * "-02" style numeric suffix. Only strips when there's an explicit
  * separator before the digits, so a standalone file like "iphone15.jpg"
- * keeps its full name rather than losing the "15".
+ * keeps its full name rather than losing the "15". A no-op entirely
+ * when AUTO_GROUP_BY_FILENAME is off — every file is then its own key,
+ * i.e. nothing gets auto-grouped by filename at all.
  */
 function group_key($filename) {
     $base = pathinfo($filename, PATHINFO_FILENAME);
+    if (!AUTO_GROUP_BY_FILENAME) {
+        return $base;
+    }
     $key = preg_replace('/[_\-]\d+$/', '', $base);
     return $key === '' ? $base : $key;
 }
@@ -83,13 +144,10 @@ function slugify($text) {
     return trim($text, '-');
 }
 
-// Build groups in the same order files already appear (natural sort), so
-// the flattened gallery order never changes. Computed early because both
-// the ?track endpoint and the gallery renderer need it.
-$groups = [];
-foreach ($files as $file) {
-    $groups[group_key($file)][] = $file;
-}
+// $groups is built later (see "GROUPING" below), after .md files are
+// discovered and their {group:}/{photos:} directives are extracted —
+// both the ?track endpoint and the gallery renderer need the final,
+// merged version, not just the filename-based auto-detection.
 
 // ?photo=<filename> deep-links straight to that photo in the lightbox on
 // page load. Only ever a filename that's actually in this folder.
@@ -135,6 +193,7 @@ function guess_mime($ext) {
 }
 
 function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
+    if (!ENABLE_THUMBNAIL_CACHE) return null;
     if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0775, true)) return null;
     if (!is_writable($cacheDir)) return null;
     $mtime = @filemtime($srcPath);
@@ -153,7 +212,7 @@ function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
  * requests that actually serve images.
  */
 function gc_image_cache($dir, $cacheDir, $files, $imagickAvailable) {
-    if (!is_dir($cacheDir)) return;
+    if (!ENABLE_THUMBNAIL_CACHE || !is_dir($cacheDir)) return;
     $valid = [];
     foreach ($files as $file) {
         $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
@@ -289,6 +348,225 @@ if (isset($_GET['img'])) {
 }
 
 /* -----------------------------------------------------------------------
+ * GROUPING: discover qualifying .md files, extract {group:}/{photos:}
+ * directives, and build the final $groups (auto-detected + explicit)
+ * before anything below (stats, ?track, rendering) needs it.
+ * ----------------------------------------------------------------------- */
+
+// Collected as issues are found below; surfaced as an HTML comment near
+// the top of the page (never anything a normal visitor would notice) so
+// a typo'd filename or a missing {gallery} marker doesn't just fail
+// silently with no way to ever find out why.
+$galleryNotices = [];
+
+// Only a .md file whose first non-blank line is exactly "{gallery}" is
+// treated as content for this script — anything else in the folder (a
+// personal notes.md, a leftover README, etc.) is left completely alone.
+$mdCandidates = array_filter(scandir($dir), function ($file) use ($dir) {
+    if (!is_file("$dir/$file")) return false;
+    return strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'md';
+});
+usort($mdCandidates, function ($a, $b) {
+    return strnatcasecmp($a, $b);
+});
+$mdCandidates = array_values($mdCandidates);
+
+$mdFiles = [];
+foreach ($mdCandidates as $candidate) {
+    if (has_gallery_marker(file_get_contents("$dir/$candidate"))) {
+        $mdFiles[] = $candidate;
+    } else {
+        $galleryNotices[] = '"' . $candidate . '" was found but ignored — its first line isn\'t the required {gallery} marker.';
+    }
+}
+
+$folderName = basename($dir);
+
+// If the first non-empty line remaining (after the marker) is a
+// "# Heading", use it as the page title instead of the folder name —
+// and strip it out of that file's content so it isn't shown twice.
+$pageTitle = $folderName;
+$mdContents = [];
+foreach ($mdFiles as $idx => $mdFile) {
+    $content = strip_gallery_marker(file_get_contents("$dir/$mdFile"));
+    if ($idx === 0) {
+        $lines = explode("\n", str_replace("\r\n", "\n", $content));
+        foreach ($lines as $li => $l) {
+            if (trim($l) === '') continue;
+            if (preg_match('/^#\s+(.+)$/', trim($l), $m)) {
+                $pageTitle = trim($m[1]);
+                unset($lines[$li]);
+                $content = implode("\n", $lines);
+            }
+            break; // only ever check the very first non-empty line
+        }
+    }
+    $mdContents[$mdFile] = $content;
+}
+
+// Extract {photos:}/{group:} directives across all qualifying .md files,
+// in file order, tracking each directive's approximate position so it
+// can be interleaved with auto-detected mention-order positions below.
+$explicitClaims = [];     // filename => true (removed from auto-detection)
+$explicitGroups = [];     // slug => ['name' => .., 'files' => [...], 'position' => N]
+$positionalClusters = []; // list of ['files' => [...], 'position' => N]
+$offset = 0;
+foreach ($mdContents as $content) {
+    foreach (extract_photo_directives($content) as $rec) {
+        $validPhotos = [];
+        foreach ($rec['photos'] as $p) {
+            $p = basename($p);
+            if (!in_array($p, $files, true)) {
+                $galleryNotices[] = 'Unknown file "' . $p . '" referenced in a {photos:} directive — ignored.';
+                continue;
+            }
+            if (isset($explicitClaims[$p])) {
+                $galleryNotices[] = '"' . $p . '" is referenced in more than one {photos:} directive — only the first applies.';
+                continue;
+            }
+            $validPhotos[] = $p;
+        }
+        if (empty($validPhotos)) continue;
+        $position = $offset + $rec['position'];
+        if ($rec['groupName'] !== null && $rec['groupName'] !== '') {
+            $slug = slugify($rec['groupName']);
+            if ($slug === '') continue;
+            if (isset($explicitGroups[$slug])) {
+                $galleryNotices[] = '{group: ' . $rec['groupName'] . '} is defined more than once — only the first definition applies.';
+                continue;
+            }
+            foreach ($validPhotos as $p) { $explicitClaims[$p] = true; }
+            $explicitGroups[$slug] = ['name' => $rec['groupName'], 'files' => $validPhotos, 'position' => $position];
+        } else {
+            foreach ($validPhotos as $p) { $explicitClaims[$p] = true; }
+            $positionalClusters[] = ['files' => $validPhotos, 'position' => $position];
+        }
+    }
+    $offset += strlen($content) + 1;
+}
+
+// Build the final groups: filename-based auto-detection (unless
+// AUTO_GROUP_BY_FILENAME is off, or a file was explicitly claimed above)
+// plus explicit named groups. A file claimed via a bare {photos:} (no
+// {group:}) stays its own standalone single, keyed by its own filename
+// so it can never merge with an unrelated auto-detected group.
+$groups = [];
+foreach ($files as $file) {
+    if (isset($explicitClaims[$file])) continue;
+    $groups[group_key($file)][] = $file;
+}
+foreach ($explicitClaims as $file => $claimed) {
+    $inNamedGroup = false;
+    foreach ($explicitGroups as $g) {
+        if (in_array($file, $g['files'], true)) { $inNamedGroup = true; break; }
+    }
+    if (!$inNamedGroup) {
+        $groups[pathinfo($file, PATHINFO_FILENAME)][] = $file;
+    }
+}
+foreach ($explicitGroups as $slug => $g) {
+    $groups[$slug] = $g['files'];
+}
+
+/**
+ * Determines display order by merging three position sources: earliest
+ * text-mention of an auto-detected group's name, an explicit named
+ * group's own {group:}+{photos:} directive position, and a positional
+ * {photos:}-only cluster's directive position (whose member files are
+ * kept adjacent to each other, in the order listed, wherever the
+ * cluster lands). Anything with no position at all keeps its normal
+ * filename/mtime-sort position, appended after everything ordered.
+ */
+function compute_display_order($mdContents, $groups, $explicitGroups, $positionalClusters) {
+    $blocks = []; // ['position' => N, 'keys' => [key, ...]]
+
+    $offset = 0;
+    $mentionPos = [];
+    foreach ($mdContents as $content) {
+        foreach ($groups as $key => $groupFiles) {
+            if (isset($mentionPos[$key]) || isset($explicitGroups[$key])) continue;
+            if (preg_match(group_mention_pattern($key), $content, $m, PREG_OFFSET_CAPTURE)) {
+                $mentionPos[$key] = $offset + $m[0][1];
+            }
+        }
+        $offset += strlen($content) + 1;
+    }
+    foreach ($mentionPos as $key => $pos) {
+        $blocks[] = ['position' => $pos, 'keys' => [$key]];
+    }
+    foreach ($explicitGroups as $slug => $g) {
+        if (isset($groups[$slug])) {
+            $blocks[] = ['position' => $g['position'], 'keys' => [$slug]];
+        }
+    }
+    foreach ($positionalClusters as $cluster) {
+        $keys = [];
+        foreach ($cluster['files'] as $f) {
+            $k = pathinfo($f, PATHINFO_FILENAME);
+            if (isset($groups[$k])) $keys[] = $k;
+        }
+        if (!empty($keys)) {
+            $blocks[] = ['position' => $cluster['position'], 'keys' => $keys];
+        }
+    }
+
+    usort($blocks, function ($a, $b) { return $a['position'] <=> $b['position']; });
+
+    $order = [];
+    foreach ($blocks as $block) {
+        foreach ($block['keys'] as $k) {
+            $order[] = $k;
+        }
+    }
+    return $order;
+}
+
+// Mirrors the order groups/clusters are first mentioned/defined in the
+// .md (mentioned/defined items first, in that order; anything else
+// keeps its normal filename/mtime-sort position, appended after them).
+$groupOrder = compute_display_order($mdContents, $groups, $explicitGroups, $positionalClusters);
+if (!empty($groupOrder)) {
+    $orderedGroups = [];
+    foreach ($groupOrder as $key) {
+        if (isset($groups[$key]) && !isset($orderedGroups[$key])) {
+            $orderedGroups[$key] = $groups[$key];
+        }
+    }
+    foreach ($groups as $key => $groupFiles) {
+        if (!isset($orderedGroups[$key])) {
+            $orderedGroups[$key] = $groupFiles;
+        }
+    }
+    $groups = $orderedGroups;
+
+    // Rebuild the flat photo list to match, so the lightbox's index
+    // numbering (shared by both the note thumbnails and the gallery
+    // cards) stays consistent with the new display order.
+    $files = [];
+    foreach ($groups as $groupFiles) {
+        foreach ($groupFiles as $f) {
+            $files[] = $f;
+        }
+    }
+}
+
+// Reverse lookup used by ?track below: which $groups key currently
+// contains a given filename. Needed because an explicit named group's
+// key is a slug chosen by the .md author, not something group_key()
+// could ever derive from the filename itself.
+$fileToGroupKey = [];
+foreach ($groups as $key => $groupFiles) {
+    foreach ($groupFiles as $gf) {
+        $fileToGroupKey[$gf] = $key;
+    }
+}
+
+// Explicit group slugs, so the renderer knows to box these even with
+// just a single photo — an auto-detected single never gets a box, but
+// an explicitly named one always does; that's the point of naming it.
+$explicitGroupKeys = array_fill_keys(array_keys($explicitGroups), true);
+
+/* -----------------------------------------------------------------------
  * View-stats storage. Two interchangeable backends behind one small set
  * of functions (stats_bump_pageview / stats_bump_photo /
  * stats_get_photo_views) so the rest of the script never needs to know
@@ -415,7 +693,7 @@ if (isset($_GET['track'])) {
         $requested = basename($_GET['track']);
         if (in_array($requested, $files, true)) {
             $newCount = stats_bump_photo($requested);
-            $groupKey = group_key($requested);
+            $groupKey = $fileToGroupKey[$requested] ?? group_key($requested);
             $groupFiles = $groups[$groupKey] ?? [$requested];
             $currentPhotoViews = stats_get_photo_views();
             $groupTotal = 0;
@@ -449,93 +727,6 @@ if (TRACK_VIEWS) {
 }
 
 gc_image_cache($dir, $cacheDir, $files, $imagickAvailable);
-
-// Find any .md files in the same folder to show as a note/announcement box.
-$mdFiles = array_filter(scandir($dir), function ($file) use ($dir) {
-    if (!is_file("$dir/$file")) return false;
-    return strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'md';
-});
-usort($mdFiles, function ($a, $b) {
-    return strnatcasecmp($a, $b);
-});
-$mdFiles = array_values($mdFiles);
-
-$folderName = basename($dir);
-
-// If the first non-empty line of the first .md file is a "# Heading",
-// use it as the page title instead of the folder name — and strip it
-// out of that file's content so it isn't shown twice.
-$pageTitle = $folderName;
-$mdContents = [];
-foreach ($mdFiles as $idx => $mdFile) {
-    $content = file_get_contents("$dir/$mdFile");
-    if ($idx === 0) {
-        $lines = explode("\n", str_replace("\r\n", "\n", $content));
-        foreach ($lines as $li => $l) {
-            if (trim($l) === '') continue;
-            if (preg_match('/^#\s+(.+)$/', trim($l), $m)) {
-                $pageTitle = trim($m[1]);
-                unset($lines[$li]);
-                $content = implode("\n", $lines);
-            }
-            break; // only ever check the very first non-empty line
-        }
-    }
-    $mdContents[$mdFile] = $content;
-}
-
-/**
- * Finds, for each group, the earliest position any .md file mentions its
- * name (across all .md files, in file order), and returns group keys
- * sorted by that position. A group never mentioned anywhere doesn't
- * appear in the result at all.
- */
-function detect_group_mention_order($mdContents, $groups) {
-    $earliestPos = [];
-    $offset = 0;
-    foreach ($mdContents as $content) {
-        foreach ($groups as $key => $groupFiles) {
-            if (isset($earliestPos[$key])) continue;
-            if (preg_match(group_mention_pattern($key), $content, $m, PREG_OFFSET_CAPTURE)) {
-                $earliestPos[$key] = $offset + $m[0][1];
-            }
-        }
-        $offset += strlen($content) + 1;
-    }
-    asort($earliestPos);
-    return array_keys($earliestPos);
-}
-
-// If a .md file mentions groups in a particular order, the gallery below
-// mirrors that order (mentioned groups first, in the order first
-// mentioned; anything not mentioned keeps its normal filename-sort
-// position after them). With no .md file — or a .md that mentions
-// nothing — this is a no-op and the gallery just stays in filename order.
-$groupOrder = detect_group_mention_order($mdContents, $groups);
-if (!empty($groupOrder)) {
-    $orderedGroups = [];
-    foreach ($groupOrder as $key) {
-        if (isset($groups[$key])) {
-            $orderedGroups[$key] = $groups[$key];
-        }
-    }
-    foreach ($groups as $key => $groupFiles) {
-        if (!isset($orderedGroups[$key])) {
-            $orderedGroups[$key] = $groupFiles;
-        }
-    }
-    $groups = $orderedGroups;
-
-    // Rebuild the flat photo list to match, so the lightbox's index
-    // numbering (shared by both the note thumbnails and the gallery
-    // cards) stays consistent with the new display order.
-    $files = [];
-    foreach ($groups as $groupFiles) {
-        foreach ($groupFiles as $f) {
-            $files[] = $f;
-        }
-    }
-}
 
 /**
  * Minimal Markdown -> HTML converter covering the formatting people
@@ -617,6 +808,30 @@ function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status,
     return $html;
 }
 
+/**
+ * A bare thumbnail strip for a {photos:}-only paragraph (no {group:}) —
+ * just the clickable thumbnails, with no "View N photos" jump link and
+ * no aggregate view count, since these files were never boxed into a
+ * real group in the first place (each keeps its own individual view
+ * badge on its standalone card instead).
+ */
+function render_photo_thumbs_plain($clusterFiles, $allFiles, $permalinkHtml = '') {
+    $html = '<div class="linked-photos plain"><div class="linked-photos-thumbs">';
+    foreach ($clusterFiles as $gf) {
+        $idx = array_search($gf, $allFiles, true);
+        if ($idx === false) continue;
+        $html .= '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
+                . '" loading="lazy" onclick="openLightbox(' . (int)$idx . ')" alt="'
+                . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
+    }
+    $html .= '</div>';
+    if ($permalinkHtml !== '') {
+        $html .= '<div class="linked-photos-meta">' . $permalinkHtml . '</div>';
+    }
+    $html .= '</div>';
+    return $html;
+}
+
 /** Small 🔗 icon linking to #<itemId> — the permalink for one .md item. */
 function render_item_permalink($itemId) {
     return '<a class="item-permalink" href="#' . htmlspecialchars($itemId, ENT_QUOTES, 'UTF-8')
@@ -633,6 +848,112 @@ function is_safe_color($value) {
 }
 
 /**
+ * True if this .md content's first non-blank line is exactly the
+ * required "{gallery}" marker (case-insensitive). A file without it is
+ * left completely alone — not parsed, not rendered — which is what lets
+ * this script sit in a folder that already has its own unrelated .md
+ * files (notes, a README, etc.) without swallowing them.
+ */
+function has_gallery_marker($content) {
+    foreach (explode("\n", str_replace("\r\n", "\n", $content)) as $line) {
+        $trimmed = trim($line);
+        if ($trimmed === '') continue;
+        return strcasecmp($trimmed, '{gallery}') === 0;
+    }
+    return false;
+}
+
+/** Removes a recognized leading "{gallery}" marker line, and nothing else. */
+function strip_gallery_marker($content) {
+    $lines = explode("\n", str_replace("\r\n", "\n", $content));
+    foreach ($lines as $i => $line) {
+        if (trim($line) === '') continue;
+        unset($lines[$i]);
+        break;
+    }
+    return implode("\n", $lines);
+}
+
+/**
+ * Scans one .md file's raw content for {photos: a.jpg, b.jpg, ...}
+ * directives — each optionally paired with a {group: Name} directive in
+ * the same paragraph — respecting the same paragraph/code-fence rules
+ * markdown_to_html uses (a blank line, or a line starting "(1)", starts
+ * a new paragraph; header/list/blockquote lines are never paragraph
+ * text). A bare {group:} with no {photos:} in the same paragraph isn't
+ * returned here — it only ever renames an already-existing group at
+ * render time (see markdown_to_html), so it doesn't affect membership.
+ *
+ * Returns an ordered list of ['position' => <char offset within
+ * $content>, 'groupName' => string|null, 'photos' => string[]].
+ */
+function extract_photo_directives($content) {
+    $content = str_replace("\r\n", "\n", $content);
+    $lines = explode("\n", $content);
+    $records = [];
+    $paraLines = [];
+    $paraStartPos = null;
+    $pos = 0;
+    $inCode = false;
+
+    $flush = function () use (&$paraLines, &$paraStartPos, &$records) {
+        if (!empty($paraLines)) {
+            $photosRaw = null;
+            $groupName = null;
+            foreach ($paraLines as $l) {
+                if ($photosRaw === null && preg_match('/\{\s*photos\s*:\s*([^}]+)\}/i', $l, $pm)) {
+                    $photosRaw = $pm[1];
+                }
+                if ($groupName === null && preg_match('/\{\s*group\s*:\s*([^}]+)\}/i', $l, $gm)) {
+                    $groupName = trim($gm[1]);
+                }
+            }
+            if ($photosRaw !== null) {
+                $photos = array_values(array_filter(array_map('trim', explode(',', $photosRaw))));
+                if (!empty($photos)) {
+                    $records[] = ['position' => $paraStartPos, 'groupName' => $groupName, 'photos' => $photos];
+                }
+            }
+        }
+        $paraLines = [];
+        $paraStartPos = null;
+    };
+
+    foreach ($lines as $line) {
+        $trimmed = trim($line);
+        $lineLen = strlen($line) + 1; // +1 for the \n explode() removed
+
+        if (strpos($trimmed, '```') === 0) {
+            $flush();
+            $inCode = !$inCode;
+            $pos += $lineLen;
+            continue;
+        }
+        if ($inCode || $trimmed === '') {
+            $flush();
+            $pos += $lineLen;
+            continue;
+        }
+        if (preg_match('/^(#{1,3})\s+/', $trimmed) || preg_match('/^>\s?/', $trimmed)
+            || preg_match('/^[-*]\s+/', $trimmed) || preg_match('/^\d+\.\s+/', $trimmed)) {
+            $flush();
+            $pos += $lineLen;
+            continue;
+        }
+        if (preg_match('/^\(\d+\)\s+/', $trimmed)) {
+            $flush();
+        }
+        if ($paraStartPos === null) {
+            $paraStartPos = $pos;
+        }
+        $paraLines[] = $trimmed;
+        $pos += $lineLen;
+    }
+    $flush();
+    return $records;
+}
+
+/**
  * Converts one .md file's content to HTML. Also, as a side effect:
  *  - attaches a thumbnail strip + view count after any paragraph that
  *    mentions a photo group's name (auto-link),
@@ -642,7 +963,7 @@ function is_safe_color($value) {
  *    (by reference) when a {sold} or {reserved}/{held} directive appears
  *    in that same paragraph.
  */
-function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, $photoViews) {
+function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, &$groupLabels, &$renderClaims, $photoViews) {
     $text = str_replace("\r\n", "\n", $text);
     $lines = explode("\n", $text);
     $html = '';
@@ -651,15 +972,18 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
     $codeBuf = '';
     $paraLines = [];
 
-    $flushPara = function () use (&$html, &$paraLines, $groups, $files, &$groupColors, &$groupStatus, $photoViews) {
+    $flushPara = function () use (&$html, &$paraLines, $groups, $files, &$groupColors, &$groupStatus, &$groupLabels, &$renderClaims, $photoViews) {
         if (empty($paraLines)) return;
 
         // Pull out optional {color: value} / {sold} / {reserved} (or
-        // {held}) directives, and strip them (and any resulting empty
-        // lines) from what actually shows. If both {sold} and
-        // {reserved}/{held} appear, sold wins — it's the more final state.
+        // {held}) / {group: Name} / {photos: a.jpg, b.jpg} directives,
+        // and strip them (and any resulting empty lines) from what
+        // actually shows. If both {sold} and {reserved}/{held} appear,
+        // sold wins — it's the more final state.
         $colorValue = null;
         $status = '';
+        $explicitGroupName = null;
+        $explicitPhotosRaw = null;
         $cleanLines = [];
         foreach ($paraLines as $l) {
             if ($colorValue === null && preg_match('/\{\s*color\s*:\s*([^}]+)\}/i', $l, $cm)) {
@@ -673,9 +997,62 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
             } elseif ($status !== 'sold' && preg_match('/\{\s*(reserved|held)\s*\}/i', $l)) {
                 $status = 'reserved';
             }
-            $l = trim(preg_replace(['/\{\s*color\s*:\s*[^}]+\}/i', '/\{\s*sold\s*\}/i', '/\{\s*(reserved|held)\s*\}/i'], '', $l));
+            if ($explicitGroupName === null && preg_match('/\{\s*group\s*:\s*([^}]+)\}/i', $l, $ggm)) {
+                $explicitGroupName = trim($ggm[1]);
+            }
+            if ($explicitPhotosRaw === null && preg_match('/\{\s*photos\s*:\s*([^}]+)\}/i', $l, $ppm)) {
+                $explicitPhotosRaw = $ppm[1];
+            }
+            $l = trim(preg_replace(
+                ['/\{\s*color\s*:\s*[^}]+\}/i', '/\{\s*sold\s*\}/i', '/\{\s*(reserved|held)\s*\}/i',
+                 '/\{\s*group\s*:\s*[^}]+\}/i', '/\{\s*photos\s*:\s*[^}]+\}/i'],
+                '', $l
+            ));
             if ($l !== '') $cleanLines[] = $l;
         }
+
+        // Register this paragraph's {photos:} claims in render order —
+        // before the empty-paragraph check below, so a directive-only
+        // paragraph (no other text) still consumes its claim. Otherwise
+        // a *later* paragraph re-referencing the same file would never
+        // see it as already taken, and would win the claim instead of
+        // correctly losing it (extraction, further up, already decided
+        // this paragraph's claim wins — rendering has to agree).
+        $explicitPhotos = [];
+        if ($explicitPhotosRaw !== null) {
+            foreach (explode(',', $explicitPhotosRaw) as $p) {
+                $p = basename(trim($p));
+                if ($p !== '' && in_array($p, $files, true) && !isset($renderClaims[$p])) {
+                    $explicitPhotos[] = $p;
+                    $renderClaims[$p] = true;
+                }
+            }
+        }
+
+        // An explicit {group:}+{photos:} pair identifies a real, already-
+        // built group (see GROUPING above) regardless of whether this
+        // paragraph has any other text — so its color/status/label side
+        // effects need to apply here, before the empty-paragraph check
+        // below, or a textless {group:}/{photos:} paragraph would return
+        // early and never actually apply them.
+        $matchedKeys = [];
+        if ($explicitGroupName !== null && !empty($explicitPhotos)) {
+            $slug = slugify($explicitGroupName);
+            if ($slug !== '' && isset($groups[$slug])) {
+                $matchedKeys[] = $slug;
+                if ($colorValue !== null) $groupColors[$slug] = $colorValue;
+                if ($status) $groupStatus[$slug] = $status;
+                $groupLabels[$slug] = $explicitGroupName;
+            }
+        }
+
+        // A paragraph left empty after stripping directives renders
+        // nothing in the note box — including for {group:}/{photos:}
+        // with no other text. That's fine: their structural effect (the
+        // box existing, membership, positional reordering, and the
+        // color/status/label side effects above) already happened; this
+        // check only decides whether there's a note-box entry to show,
+        // and with no text, there's genuinely nothing to show.
         if (empty($cleanLines)) {
             $paraLines = [];
             return;
@@ -683,18 +1060,26 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
 
         $rawText = implode(' ', $cleanLines);
 
-        // Only a paragraph that actually mentions a photo group's name
-        // gets an anchor + permalink — e.g. "item-dp104" (pairing with
-        // the gallery's "group-dp104"). A paragraph with no product name
-        // in it (shipping terms, a contact line, etc.) is just plain
-        // text, with nothing to link to.
-        $matchedKeys = [];
-        foreach ($groups as $key => $groupFiles) {
-            if (preg_match(group_mention_pattern($key), $rawText)) {
-                $matchedKeys[] = $key;
+        // With neither an explicit group match nor bare {photos:}, fall
+        // back to the existing behavior: match any group whose name is
+        // literally mentioned in the text.
+        if (empty($matchedKeys) && empty($explicitPhotos)) {
+            foreach ($groups as $key => $groupFiles) {
+                if (preg_match(group_mention_pattern($key), $rawText)) {
+                    $matchedKeys[] = $key;
+                }
             }
         }
-        $itemId = !empty($matchedKeys) ? ('item-' . slugify($matchedKeys[0])) : null;
+
+        $itemId = null;
+        if (!empty($matchedKeys)) {
+            $itemId = 'item-' . slugify($matchedKeys[0]);
+        } elseif (!empty($explicitPhotos)) {
+            // No box, no name — the closest thing to a stable identity
+            // here is the first listed file, so that's what the
+            // permalink anchors on.
+            $itemId = 'item-' . slugify(pathinfo($explicitPhotos[0], PATHINFO_FILENAME));
+        }
         $idAttr = $itemId ? (' id="' . htmlspecialchars($itemId, ENT_QUOTES, 'UTF-8') . '"') : '';
 
         $inner = implode('<br>', array_map('inline_markdown', $cleanLines));
@@ -706,15 +1091,27 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
             $html .= '<p' . $idAttr . '>' . $inner . '</p>';
         }
 
-        foreach ($matchedKeys as $i => $key) {
-            $groupFiles = $groups[$key];
-            $linkHtml = ($i === 0) ? render_item_permalink($itemId) : '';
-            $html .= render_group_thumbs($key, $groupFiles, $files, $photoViews, $status, $linkHtml);
-            if ($colorValue !== null) {
-                $groupColors[$key] = $colorValue;
+        if (!empty($matchedKeys)) {
+            foreach ($matchedKeys as $i => $key) {
+                $groupFiles = $groups[$key];
+                $linkHtml = ($i === 0) ? render_item_permalink($itemId) : '';
+                $html .= render_group_thumbs($key, $groupFiles, $files, $photoViews, $status, $linkHtml);
+                if ($colorValue !== null) {
+                    $groupColors[$key] = $colorValue;
+                }
+                if ($status) {
+                    $groupStatus[$key] = $status;
+                }
+                if ($explicitGroupName !== null) {
+                    $groupLabels[$key] = $explicitGroupName;
+                }
             }
-            if ($status) {
-                $groupStatus[$key] = $status;
+        } elseif (!empty($explicitPhotos)) {
+            $html .= render_photo_thumbs_plain($explicitPhotos, $files, render_item_permalink($itemId));
+            foreach ($explicitPhotos as $pf) {
+                $singleKey = pathinfo($pf, PATHINFO_FILENAME);
+                if ($colorValue !== null) $groupColors[$singleKey] = $colorValue;
+                if ($status) $groupStatus[$singleKey] = $status;
             }
         }
         $paraLines = [];
@@ -843,7 +1240,7 @@ function status_accent_color($status, $customColor) {
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
-function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews) {
+function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = []) {
     $html = '';
     $flatIndex = 0;
     $pendingSingles = [];
@@ -861,7 +1258,10 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews) {
     foreach ($groups as $key => $groupFiles) {
         $status = $groupStatus[$key] ?? '';
         $accentColor = status_accent_color($status, $groupColors[$key] ?? null);
-        if (count($groupFiles) === 1) {
+        // An auto-detected single (one file, no explicit {group:} naming
+        // it) never gets its own box. An explicitly named group always
+        // does, even with just one photo — that's the point of naming it.
+        if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key])) {
             $pendingSingles[] = [
                 'file' => $groupFiles[0], 'index' => $flatIndex, 'status' => $status,
                 'color' => $accentColor,
@@ -871,6 +1271,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews) {
         }
         $flushSingles();
         $slug = slugify($key);
+        $label = $groupLabels[$key] ?? $key;
 
         $boxStyle = '';
         $labelStyle = '';
@@ -887,7 +1288,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews) {
         $viewsHidden = $groupTotal > 0 ? '' : ' hidden';
 
         $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
-        $html .= '<h2 class="group-label"' . $labelStyle . '>' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8')
+        $html .= '<h2 class="group-label"' . $labelStyle . '>' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
                 . ' <span class="group-views' . $viewsHidden . '" data-group="' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">&middot; '
                 . number_format($groupTotal) . ' view' . ($groupTotal === 1 ? '' : 's') . '</span></h2>';
         $html .= '<div class="group-grid">';
@@ -988,11 +1389,11 @@ function render_about_page() {
 
   <h2>What it does</h2>
   <ul>
-    <li>Auto-groups photos by filename (<code>dp104_01.jpg</code>, <code>dp104_02.jpg</code> &rarr; "dp104")</li>
+    <li>Groups photos automatically by filename, or curate groups explicitly in a <code>.md</code> file — no naming convention required</li>
     <li>Full-screen lightbox with keyboard nav and mobile swipe</li>
     <li>Optional <code>.md</code> notes box — auto-linked thumbnails, <code>{color}</code>/<code>{sold}</code>/<code>{reserved}</code> directives</li>
-    <li>Live view stats per photo, per group, and total (SQLite or JSON, no setup)</li>
-    <li>Thumbnail generation/caching, with HEIC/HEIF conversion (Imagick or GD)</li>
+    <li>Live view stats and thumbnail caching — both opt-in, so nothing is written to your folder unless you turn them on</li>
+    <li>HEIC/HEIF (iPhone photo) support once thumbnail caching is enabled</li>
     <li>Deep links (<code>?photo=</code>, <code>#group-name</code>, <code>#item-name</code>) with correct Open Graph previews when shared</li>
   </ul>
 
@@ -1008,6 +1409,15 @@ function render_about_page() {
 // Populated as note files are parsed below; read by the gallery further down.
 $groupColors = [];
 $groupStatus = [];
+$groupLabels = [];
+
+// Tracks which files an explicit {photos:} directive has already
+// consumed *during rendering*, across every .md file, mirroring the
+// same first-occurrence-wins rule already applied once during
+// extraction (see GROUPING above) — without this, a file that lost a
+// duplicate-claim conflict there would still pass render-time's own
+// (otherwise unaware) validation and render a second time.
+$renderClaims = [];
 
 // Open Graph / Twitter Card data for link previews. A ?photo= deep link
 // reaches the server (unlike a #fragment one — see "DEEP LINKING" above),
@@ -1029,6 +1439,15 @@ if ($requestedPhoto) {
 }
 ?>
 <!-- Drop-in Photo Gallery v<?= htmlspecialchars(GALLERY_VERSION) ?> — github.com/pcmike -->
+<?php if (!empty($galleryNotices)): ?>
+<!--
+gallery notices (visible here only, never to visitors):
+<?php foreach ($galleryNotices as $notice): ?>
+  - <?= htmlspecialchars(str_replace('--', '- -', $notice), ENT_QUOTES, 'UTF-8') ?>
+
+<?php endforeach; ?>
+-->
+<?php endif; ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1418,7 +1837,7 @@ if ($requestedPhoto) {
     <?php foreach ($mdFiles as $mdFile): ?>
       <div class="note-box">
         <span class="note-filename"><?= htmlspecialchars($mdFile) ?></span>
-        <?= markdown_to_html($mdContents[$mdFile], $groups, $files, $groupColors, $groupStatus, $photoViews) ?>
+        <?= markdown_to_html($mdContents[$mdFile], $groups, $files, $groupColors, $groupStatus, $groupLabels, $renderClaims, $photoViews) ?>
       </div>
     <?php endforeach; ?>
   </div>
@@ -1428,7 +1847,7 @@ if ($requestedPhoto) {
   <div class="empty">No photos found in this folder.</div>
 <?php else: ?>
   <div class="gallery">
-    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews) ?>
+    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys) ?>
   </div>
 <?php endif; ?>
 
