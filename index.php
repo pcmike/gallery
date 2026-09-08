@@ -440,6 +440,15 @@ foreach ($mdContents as $content) {
             }
             $validPhotos[] = $p;
         }
+        // A directive-only paragraph only sees prose in its own
+        // paragraph (see GROUPING/order_within_zone), never a
+        // description written just before it — a blank line between
+        // them is enough to disconnect them, which is easy to write by
+        // accident. Flag it: it's not invalid, just probably not what
+        // was intended.
+        if (!$rec['hasProse'] && $rec['precededByPlainProse']) {
+            $galleryNotices[] = 'A {group:}/{photos:} paragraph right after a plain description isn\'t attached to it (a blank line separates them into different paragraphs) — merge them into one paragraph if that was intended.';
+        }
         if (empty($validPhotos)) continue;
         $position = $offset + $rec['position'];
         if ($rec['groupName'] !== null && $rec['groupName'] !== '') {
@@ -944,6 +953,26 @@ function render_item_permalink($itemId) {
 }
 
 /**
+ * A collapsed-by-default banner surfacing $galleryNotices directly on
+ * the page, not just in the HTML-comment fallback in the page source —
+ * "view page source" isn't something most people would think to try.
+ * Addressed explicitly to the gallery owner, so a visitor who clicks it
+ * out of curiosity can see right away it isn't meant for them.
+ */
+function render_gallery_notices_banner($notices) {
+    if (empty($notices)) return '';
+    $count = count($notices);
+    $html = '<details class="gallery-notices">';
+    $html .= '<summary>&#9888; ' . $count . ' setup notice' . ($count === 1 ? '' : 's') . ' for the gallery owner</summary>';
+    $html .= '<ul>';
+    foreach ($notices as $notice) {
+        $html .= '<li>' . htmlspecialchars($notice, ENT_QUOTES, 'UTF-8') . '</li>';
+    }
+    $html .= '</ul></details>';
+    return $html;
+}
+
+/**
  * Validates a {color: value} directive's value before it's ever used in
  * an inline style attribute — either a hex code (#abc, #aabbcc, #aabbccdd)
  * or a plain alphabetic CSS color word (e.g. "gold", "steelblue").
@@ -1020,32 +1049,53 @@ function extract_photo_directives($content) {
     $pos = 0;
     $inCode = false;
 
-    $flush = function () use (&$paraLines, &$paraStartPos, &$records) {
-        if (!empty($paraLines)) {
-            $photosRaw = null;
-            $groupName = null;
-            $hasProse = false;
-            foreach ($paraLines as $l) {
-                if ($photosRaw === null && preg_match('/\{\s*photos\s*:\s*([^}]+)\}/i', $l, $pm)) {
-                    $photosRaw = $pm[1];
-                }
-                if ($groupName === null && preg_match('/\{\s*group\s*:\s*([^}]+)\}/i', $l, $gm)) {
-                    $groupName = trim($gm[1]);
-                }
-                // Anything left after masking every known directive is
-                // prose — this is what decides whether the paragraph
-                // gets an early ("mirrors the .md") position or falls
-                // back to natural order (see compute_zone_order()).
-                $stripped = trim(mask_directives($l));
-                if ($stripped !== '') $hasProse = true;
+    // Tracks whether the most recently flushed paragraph was plain prose
+    // with no directive of its own — used to flag a likely-accidental
+    // disconnect: a description followed by a blank line, then a
+    // directive-only paragraph the author probably meant to attach to
+    // it. Anything that isn't "a real paragraph with prose and nothing
+    // else" (a header, list, blockquote, code fence, or a directive-
+    // bearing paragraph already claimed by its own directive) resets
+    // this to false, since something else now sits in between.
+    $lastParaWasPlainProse = false;
+
+    $flush = function () use (&$paraLines, &$paraStartPos, &$records, &$lastParaWasPlainProse) {
+        if (empty($paraLines)) return;
+        $photosRaw = null;
+        $groupName = null;
+        $hasProse = false;
+        $hasAnyDirective = false;
+        foreach ($paraLines as $l) {
+            if ($photosRaw === null && preg_match('/\{\s*photos\s*:\s*([^}]+)\}/i', $l, $pm)) {
+                $photosRaw = $pm[1];
             }
-            if ($photosRaw !== null) {
-                $photos = array_values(array_filter(array_map('trim', explode(',', $photosRaw))));
-                if (!empty($photos)) {
-                    $records[] = ['position' => $paraStartPos, 'groupName' => $groupName, 'photos' => $photos, 'hasProse' => $hasProse];
-                }
+            if ($groupName === null && preg_match('/\{\s*group\s*:\s*([^}]+)\}/i', $l, $gm)) {
+                $groupName = trim($gm[1]);
+            }
+            if (preg_match('/\{\s*(?:color\s*:\s*[^}]+|sold|reserved|held|group\s*:\s*[^}]+|photos\s*:\s*[^}]+)\}/i', $l)) {
+                $hasAnyDirective = true;
+            }
+            // Anything left after masking every known directive is
+            // prose — this is what decides whether the paragraph
+            // gets an early ("mirrors the .md") position or falls
+            // back to natural order (see compute_zone_order()).
+            $stripped = trim(mask_directives($l));
+            if ($stripped !== '') $hasProse = true;
+        }
+        if ($photosRaw !== null) {
+            $photos = array_values(array_filter(array_map('trim', explode(',', $photosRaw))));
+            if (!empty($photos)) {
+                $records[] = [
+                    'position' => $paraStartPos, 'groupName' => $groupName, 'photos' => $photos,
+                    'hasProse' => $hasProse, 'precededByPlainProse' => $lastParaWasPlainProse,
+                ];
             }
         }
+        // A paragraph only "donates" adjacency to whatever comes next if
+        // it's prose with no directive of its own — one already claimed
+        // by its own directive shouldn't also be offered to a different,
+        // later one.
+        $lastParaWasPlainProse = $hasProse && !$hasAnyDirective;
         $paraLines = [];
         $paraStartPos = null;
     };
@@ -1056,11 +1106,16 @@ function extract_photo_directives($content) {
 
         if (strpos($trimmed, '```') === 0) {
             $flush();
+            $lastParaWasPlainProse = false;
             $inCode = !$inCode;
             $pos += $lineLen;
             continue;
         }
-        if ($inCode || $trimmed === '') {
+        if ($inCode) {
+            $pos += $lineLen;
+            continue;
+        }
+        if ($trimmed === '') {
             $flush();
             $pos += $lineLen;
             continue;
@@ -1068,6 +1123,7 @@ function extract_photo_directives($content) {
         if (preg_match('/^(#{1,3})\s+/', $trimmed) || preg_match('/^>\s?/', $trimmed)
             || preg_match('/^[-*]\s+/', $trimmed) || preg_match('/^\d+\.\s+/', $trimmed)) {
             $flush();
+            $lastParaWasPlainProse = false;
             $pos += $lineLen;
             continue;
         }
@@ -1570,7 +1626,7 @@ if ($requestedPhoto) {
 <!-- Drop-in Photo Gallery v<?= htmlspecialchars(GALLERY_VERSION) ?> — github.com/pcmike -->
 <?php if (!empty($galleryNotices)): ?>
 <!--
-gallery notices (visible here only, never to visitors):
+gallery notices (also shown on the page itself, in a collapsed banner):
 <?php foreach ($galleryNotices as $notice): ?>
   - <?= htmlspecialchars(str_replace('--', '- -', $notice), ENT_QUOTES, 'UTF-8') ?>
 
@@ -1633,6 +1689,30 @@ gallery notices (visible here only, never to visitors):
     max-width: 700px;
     margin: 0 auto 8px;
     padding: 0 24px;
+  }
+  .gallery-notices {
+    background: rgba(245, 166, 35, 0.08);
+    border: 1px solid rgba(245, 166, 35, 0.35);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+  }
+  .gallery-notices summary {
+    cursor: pointer;
+    color: var(--reserved);
+    font-weight: 600;
+  }
+  .gallery-notices ul {
+    margin: 10px 0 0;
+    padding-left: 20px;
+    color: var(--muted);
+  }
+  .gallery-notices li {
+    margin-bottom: 6px;
+  }
+  .gallery-notices li:last-child {
+    margin-bottom: 0;
   }
   .note-box {
     background: #202225;
@@ -1964,8 +2044,15 @@ gallery notices (visible here only, never to visitors):
   <p><?= count($files) ?> photo<?= count($files) === 1 ? '' : 's' ?></p>
 </header>
 
+<?php if (empty($mdFiles) && !empty($galleryNotices)): ?>
+  <div class="notes">
+    <?= render_gallery_notices_banner($galleryNotices) ?>
+  </div>
+<?php endif; ?>
+
 <?php if (!empty($mdFiles)): ?>
   <div class="notes">
+    <?= render_gallery_notices_banner($galleryNotices) ?>
     <?php foreach ($mdFiles as $mdFile): ?>
       <div class="note-box">
         <span class="note-filename"><?= htmlspecialchars($mdFile) ?></span>
