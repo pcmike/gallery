@@ -68,7 +68,7 @@ This README is the full reference. A deployed gallery's `?about` page (the "gall
 Everything is a constant near the top of `index.php`:
 
 ```php
-define('GALLERY_VERSION', '1.1.0');
+define('GALLERY_VERSION', '1.1.1');
 
 // Off by default — writes .gallery-stats.json/.sqlite into the folder
 // once turned on. Strongly recommended for any real deployment: this is

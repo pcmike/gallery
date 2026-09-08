@@ -1,6 +1,6 @@
 <?php
 /**
- * DROP-IN PHOTO GALLERY — v1.1.0
+ * DROP-IN PHOTO GALLERY — v1.1.1
  * Single PHP file, no dependencies, no build step. Drop into any folder
  * of photos and it renders a gallery for that folder.
  *
@@ -27,7 +27,7 @@
  */
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '1.1.0');
+define('GALLERY_VERSION', '1.1.1');
 
 // Turn photo/group/page view tracking on or off. Off by default — this
 // script writes nothing to the folder's disk unless you turn something

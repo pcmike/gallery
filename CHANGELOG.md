@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [1.1.1] - 2026-09-07
+
+### Fixed
+- A gallery group box now has a one-click copy-link button, same as a `.md` item — the README always claimed both got one, but only `.md` items actually did. A group box had a valid `#group-<slug>` anchor id, just no visible button or click handler to copy it. `render_item_permalink()` generalized into `render_permalink_button()` (the `.item-permalink` class renamed to `.permalink-copy`, same underlying mechanism reused for both). Also added the same `:target` flash-highlight `.md` items already get, so following a shared group link actually shows you which box you landed on.
+
 ## [1.1.0] - 2026-09-07
 
 ### Breaking changes
