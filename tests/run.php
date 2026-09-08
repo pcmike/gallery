@@ -236,6 +236,13 @@ make_jpeg("$fx1/zzz3.jpg", 200, 150, 9, 9, 9);
 make_jpeg("$fx1/aa.jpg", 200, 150, 11, 11, 11);
 make_jpeg("$fx1/aa-friend.jpg", 200, 150, 12, 12, 12);
 
+// Regression: a description followed by a blank line, then a directive-
+// only paragraph the author probably meant to attach to it, should be
+// flagged as a likely-accidental disconnect (this exact pattern is what
+// caused a real, reported ordering surprise).
+make_jpeg("$fx1/adjacent-a.jpg", 200, 150, 13, 13, 13);
+make_jpeg("$fx1/adjacent-b.jpg", 200, 150, 14, 14, 14);
+
 $notes1 = <<<'MD'
 {gallery}
 # Defaults Fixture
@@ -277,6 +284,10 @@ Contact line stays intact after the code block. }
 {group: Late Box} {photos: late-box-a.jpg, late-box-b.jpg}
 
 {photos: zzz3.jpg, zzz1.jpg, zzz2.jpg}
+
+A plain description of the adjacent set.
+
+{group: Adjacent Set} {photos: adjacent-a.jpg, adjacent-b.jpg}
 MD;
 file_put_contents("$fx1/gallery.md", $notes1);
 
@@ -290,7 +301,7 @@ $base1 = "http://127.0.0.1:$port1";
 [$status, $body] = http_get("$base1/");
 check('GET / returns 200', $status === 200);
 check('page title from the {gallery}-marked file\'s heading', str_contains($body, '<title>Defaults Fixture — Gallery</title>'));
-check('{gallery} marker line itself never shows as rendered content', !str_contains($body, '<p>{gallery}</p>') && !preg_match('#<div class="notes">.*\{gallery\}#s', $body));
+check('{gallery} marker line itself never shows as rendered .md content', !str_contains($body, '<p>{gallery}</p>') && !preg_match('#<div class="note-box">.*?\{gallery\}.*?</div>#s', $body));
 
 check(
     'unrelated.md (no {gallery} marker) is ignored and noted',
@@ -299,6 +310,18 @@ check(
 check(
     'duplicate {photos:} claim is rejected and noted',
     str_contains($body, '&quot;dup.jpg&quot; is referenced in more than one {photos:} directive')
+);
+check(
+    'a directive right after a plain, unclaimed description is flagged as a likely-accidental disconnect',
+    str_contains($body, 'attached to it')
+);
+check(
+    'notices are surfaced on the page itself, not just in the HTML-comment fallback',
+    (bool) preg_match('/<details class="gallery-notices"><summary>&#9888; \d+ setup notices? for the gallery owner<\/summary>/', $body)
+);
+check(
+    '...and the on-page banner sits inside the notes box when one exists',
+    (bool) preg_match('#<div class="notes">\s*<details class="gallery-notices">#', $body)
 );
 
 check(
@@ -537,6 +560,30 @@ $posSecond = strpos($body, 'alt="a-second.jpg"');
 check(
     'mtime sort places the older file first despite reverse alphabetical filenames',
     $posFirst !== false && $posSecond !== false && $posFirst < $posSecond
+);
+
+/* ======================================================================= *
+ * FIXTURE 4: "nonotesbox" — every .md is rejected (missing marker), so
+ * there's no notes box at all — the banner needs its other placement.
+ * ======================================================================= */
+
+echo "== nonotesbox fixture: notices banner with no notes box to sit in ==\n";
+
+$fx4 = new_fixture_dir('nonotesbox');
+copy($indexSrc, "$fx4/index.php");
+make_jpeg("$fx4/only.jpg", 50, 50, 30, 30, 30);
+file_put_contents("$fx4/notes.md", "# Not marked for gallery\nNo {gallery} marker here.\n");
+
+$port4 = find_free_port();
+start_server($fx4, $port4);
+$base4 = "http://127.0.0.1:$port4";
+
+[$status, $body] = http_get("$base4/");
+check('GET / returns 200 (nonotesbox)', $status === 200);
+check('no note-box renders when every .md is rejected', !str_contains($body, 'class="note-box"'));
+check(
+    'the notices banner still appears, right after the header, when there is no notes box to sit in',
+    (bool) preg_match('#</header>\s*<div class="notes">\s*<details class="gallery-notices">#', $body)
 );
 
 /* --------------------------------------------------------------------- */
