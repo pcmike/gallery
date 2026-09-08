@@ -59,7 +59,7 @@ Both view tracking and thumbnail caching are **off by default** — this script 
 - `?download` serves the script itself; `?about` renders an in-app overview + download button, linking back here for full docs
 
 **Troubleshooting**
-- If something in a `.md` file doesn't behave as expected — a file typo'd in `{photos:}`, a duplicate `{group:}`/`{photos:}` claim, a `.md` file missing its `{gallery}` marker — it's silently excluded rather than erroring, but never silently *unexplained*: view the page source and look for an HTML comment near the top listing anything that didn't resolve cleanly. Never shown to a normal visitor.
+- If something in a `.md` file doesn't behave as expected — a file typo'd in `{photos:}`, a duplicate `{group:}`/`{photos:}` claim, a `.md` file missing its `{gallery}` marker, a directive that isn't attached to the description it was clearly meant to go with — it's silently excluded or repositioned rather than erroring, but never silently *unexplained*. Look for a small "⚠ N setup notices for the gallery owner" banner (collapsed by default) — at the top of the notes box if one exists, or right below the page header if no `.md` qualified at all. The same list is also in an HTML comment near the top of the page source, if you'd rather grep for it. Neither is alarming to a normal visitor — the banner is addressed explicitly to the gallery owner.
 
 This README is the full reference. A deployed gallery's `?about` page (the "gallery" link in the footer) gives visitors a short pitch, the feature list, and a download button, then points back here for anything more detailed.
 
@@ -101,7 +101,30 @@ define('PHOTO_SORT_ORDER', 'filename');
 
 ## Directive syntax
 
-Place these anywhere in an item's paragraph in a `.md` file:
+Every directive only ever applies to its own paragraph — never to a paragraph next to it, even one right above it with no other content in between. It's worth knowing precisely what ends a paragraph, since getting this wrong doesn't error, it just silently doesn't attach the way you'd expect:
+
+- **A blank line.** The most common one.
+- **A header** (`#`, `##`, `###`), **a blockquote** (`>`), or **a list item** (`-`, `*`, `1.`) — each of these is its own separate thing, never part of a paragraph.
+- **A code fence** (` ``` `) — nothing inside a code block is ever paragraph text, directives included.
+- **A line starting `(1)`, `(2)`, etc.** — this one's different: it forces a *new* paragraph immediately, without needing a blank line first, which is what lets a numbered listing work with no blank lines between items.
+
+This trips people up in one specific, very natural-to-write way — a description, then a blank line for readability, then a directive on its own line:
+
+```
+Take a look at my rack
+
+{group: Rack History} {photos: rack.jpg, rack_older.jpg, rack_oldest.jpg}
+```
+
+The blank line makes these two *different* paragraphs, so the directive never sees "Take a look at my rack" as its prose — it's treated as a textless directive (see the table below), which changes both what shows in the notes box and where it sorts. If you meant them to be one item, remove the blank line:
+
+```
+Take a look at my rack. {group: Rack History} {photos: rack.jpg, rack_older.jpg, rack_oldest.jpg}
+```
+
+If you write it the first way anyway, the on-page notices banner (see [Troubleshooting](#troubleshooting) above) will flag it for you.
+
+Place these directives anywhere in an item's paragraph in a `.md` file:
 
 | Directive | Effect |
 |---|---|
@@ -123,7 +146,7 @@ Place these anywhere in an item's paragraph in a `.md` file:
 | `{photos:}` alone, with text | No | No | Yes — early, by where the text sits in the `.md` | Text + thumbnails + permalink (anchored on the first listed file) |
 | `{group:}` alone, no `{photos:}` | Only if the text also matches an auto-detected group | Inherited from that group | N/A | Renames that group's label |
 
-A file explicitly claimed by `{photos:}` always takes priority over filename-based auto-detection, and is removed from that pool entirely. If the same file is referenced by two different `{photos:}` directives, the first one (in file order) wins — the second is silently dropped, but noted in the troubleshooting HTML comment described above.
+A file explicitly claimed by `{photos:}` always takes priority over filename-based auto-detection, and is removed from that pool entirely. If the same file is referenced by two different `{photos:}` directives, the first one (in file order) wins — the second is silently dropped, but noted in the notices banner described in [Troubleshooting](#troubleshooting) above.
 
 ## Project status
 
