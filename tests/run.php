@@ -386,6 +386,10 @@ check(
 
 check('explicit {group:}+{photos:} creates a labeled box', str_contains($body, 'id="group-widget-set"'));
 check('explicit group box uses the {group:} name as its label', str_contains($body, '>Widget Set <span'));
+check(
+    'a gallery group box has its own one-click copy-link button, same as a .md item',
+    str_contains($body, '<a class="permalink-copy" href="#group-widget-set" title="Copy link">&#128279;</a>')
+);
 check('explicit group inherits {sold} status', str_contains($body, '<div class="group-box sold"'));
 
 check(
