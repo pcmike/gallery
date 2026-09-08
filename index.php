@@ -959,10 +959,14 @@ function render_photo_thumbs_plain($clusterFiles, $allFiles, $permalinkHtml = ''
     return $html;
 }
 
-/** Small 🔗 icon linking to #<itemId> — the permalink for one .md item. */
-function render_item_permalink($itemId) {
-    return '<a class="item-permalink" href="#' . htmlspecialchars($itemId, ENT_QUOTES, 'UTF-8')
-         . '" title="Link to this item">&#128279;</a>';
+/**
+ * Small 🔗 button that copies a link to #<anchorId> to the clipboard —
+ * shared by a .md item's own anchor and a gallery group's anchor, since
+ * both are just "copy a link to this hash" in the same way.
+ */
+function render_permalink_button($anchorId) {
+    return '<a class="permalink-copy" href="#' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8')
+         . '" title="Copy link">&#128279;</a>';
 }
 
 /**
@@ -1295,7 +1299,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
         if (!empty($matchedKeys)) {
             foreach ($matchedKeys as $i => $key) {
                 $groupFiles = $groups[$key];
-                $linkHtml = ($i === 0) ? render_item_permalink($itemId) : '';
+                $linkHtml = ($i === 0) ? render_permalink_button($itemId) : '';
                 $html .= render_group_thumbs($key, $groupFiles, $files, $photoViews, $status, $linkHtml);
                 if ($colorValue !== null) {
                     $groupColors[$key] = $colorValue;
@@ -1308,7 +1312,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
                 }
             }
         } elseif (!empty($explicitPhotos)) {
-            $html .= render_photo_thumbs_plain($explicitPhotos, $files, render_item_permalink($itemId));
+            $html .= render_photo_thumbs_plain($explicitPhotos, $files, render_permalink_button($itemId));
             foreach ($explicitPhotos as $pf) {
                 // Must match the key these standalone singles were
                 // stored under in $groups (see GROUPING above): the
@@ -1489,7 +1493,8 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
         $html .= '<h2 class="group-label"' . $labelStyle . '>' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
                 . ' <span class="group-views' . $viewsHidden . '" data-group="' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">&middot; '
-                . number_format($groupTotal) . ' view' . ($groupTotal === 1 ? '' : 's') . '</span></h2>';
+                . number_format($groupTotal) . ' view' . ($groupTotal === 1 ? '' : 's') . '</span> '
+                . render_permalink_button('group-' . $slug) . '</h2>';
         $html .= '<div class="group-grid">';
         foreach ($groupFiles as $file) {
             $html .= render_card($file, $flatIndex, $photoViews);
@@ -1806,14 +1811,14 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .sold-badge, .reserved-badge { margin-bottom: 6px; }
 
   /* Per-item permalinks (#item-...) and the highlight flash when landing on one */
-  .item-permalink {
+  .permalink-copy {
     color: var(--muted);
     text-decoration: none;
     font-size: 0.8rem;
     opacity: 0.75;
   }
-  .item-permalink:hover { opacity: 1; }
-  .item-permalink.copied { color: #3ba55c; opacity: 1; }
+  .permalink-copy:hover { opacity: 1; }
+  .permalink-copy.copied { color: #3ba55c; opacity: 1; }
   .note-box p, .note-box .sold-item, .note-box .reserved-item { scroll-margin-top: 20px; }
   .note-box p:target,
   .note-box .sold-item:target,
@@ -1881,6 +1886,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     scroll-margin-top: 16px;
     position: relative;
     overflow: hidden;
+  }
+  .group-box:target {
+    animation: item-flash 2s ease-out;
   }
   .group-box.sold::after,
   .group-box.reserved::after {
@@ -2215,7 +2223,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     }, 1200);
   }
   document.addEventListener('click', (e) => {
-    const link = e.target.closest('.item-permalink');
+    const link = e.target.closest('.permalink-copy');
     if (!link) return;
     const cleanUrl = window.location.origin + window.location.pathname + link.hash;
     copyToClipboard(cleanUrl).then(() => flashCopied(link));
