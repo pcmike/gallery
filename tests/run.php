@@ -304,8 +304,12 @@ check('page title from the {gallery}-marked file\'s heading', str_contains($body
 check('{gallery} marker line itself never shows as rendered .md content', !str_contains($body, '<p>{gallery}</p>') && !preg_match('#<div class="note-box">.*?\{gallery\}.*?</div>#s', $body));
 
 check(
-    'unrelated.md (no {gallery} marker) is ignored and noted',
-    str_contains($body, '&quot;unrelated.md&quot; was found but ignored')
+    'unrelated.md (no {gallery} marker) is ignored and noted, generically (count-based, no filename)',
+    str_contains($body, 'A .md file was found but ignored because its first line')
+);
+check(
+    'the rejected .md\'s filename is never revealed anywhere on the page (privacy: it wasn\'t opted into the gallery)',
+    !str_contains($body, 'unrelated.md')
 );
 check(
     'duplicate {photos:} claim is rejected and noted',
@@ -584,6 +588,10 @@ check('no note-box renders when every .md is rejected', !str_contains($body, 'cl
 check(
     'the notices banner still appears, right after the header, when there is no notes box to sit in',
     (bool) preg_match('#</header>\s*<div class="notes">\s*<details class="gallery-notices">#', $body)
+);
+check(
+    'the rejected .md\'s filename is never revealed here either',
+    !str_contains($body, 'notes.md')
 );
 
 /* --------------------------------------------------------------------- */
