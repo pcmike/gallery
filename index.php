@@ -386,12 +386,25 @@ usort($mdCandidates, function ($a, $b) {
 $mdCandidates = array_values($mdCandidates);
 
 $mdFiles = [];
+$rejectedMdCount = 0;
 foreach ($mdCandidates as $candidate) {
     if (has_gallery_marker(file_get_contents("$dir/$candidate"))) {
         $mdFiles[] = $candidate;
     } else {
-        $galleryNotices[] = '"' . $candidate . '" was found but ignored — its first line isn\'t the required {gallery} marker.';
+        $rejectedMdCount++;
     }
+}
+if ($rejectedMdCount > 0) {
+    // Deliberately doesn't name the file(s): unlike every other notice
+    // here, this one would otherwise reveal the exact filename of a .md
+    // the folder owner specifically did *not* choose to expose via the
+    // gallery — and since a .md is served as a plain static file with
+    // no access control tied to the {gallery} marker (that's a PHP-
+    // application concept, not a permissions mechanism), naming it would
+    // hand a visitor the literal URL to go read its contents directly.
+    $galleryNotices[] = $rejectedMdCount === 1
+        ? 'A .md file was found but ignored because its first line isn\'t the required {gallery} marker. If it\'s meant to be your gallery notes, add {gallery} as its very first line.'
+        : $rejectedMdCount . ' .md files were found but ignored because none of them start with the required {gallery} marker. If one is meant to be your gallery notes, add {gallery} as its very first line.';
 }
 
 $folderName = basename($dir);
