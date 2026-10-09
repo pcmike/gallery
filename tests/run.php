@@ -8,18 +8,25 @@
  * tested by hand (`php -S` + curl). Covers the documented core behaviors
  * plus regression tests for every bug fixed so far.
  *
- * Three fixtures:
+ * Fixtures:
  *  - "defaults": an unmodified copy of index.php, so TRACK_VIEWS,
  *    ENABLE_THUMBNAIL_CACHE, and AUTO_GROUP_BY_FILENAME are all at their
  *    real off/off/off defaults. Covers the {gallery} marker requirement,
  *    explicit {group:}/{photos:} directives, positional clustering, the
- *    mistake-surfacing notices comment, and confirms nothing writes to
- *    disk unless turned on.
+ *    mistake-surfacing notices comment, confirms nothing writes to disk
+ *    unless turned on, and that ?download redirects to GitHub rather
+ *    than serving the file.
  *  - "optedin": TRACK_VIEWS / ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME
  *    all explicitly flipped on. Covers filename auto-grouping, view
- *    tracking, thumbnail caching + GC, and directive/security regressions
- *    that predate this file's opt-in-defaults batch.
+ *    tracking (including the per-photo debounce cookie), thumbnail
+ *    caching + GC, and directive/security regressions that predate this
+ *    file's opt-in-defaults batch.
+ *  - "hiddencounts": TRACK_VIEWS on, SHOW_VIEW_COUNTS_PUBLICLY off.
+ *    Confirms tracking keeps working server-side while the public badges
+ *    never render.
  *  - "mtimesort": PHOTO_SORT_ORDER set to 'mtime'.
+ *  - "nonotesbox": every .md rejected, so there's no notes box for the
+ *    setup-notices banner to sit in — covers its other placement.
  *
  * Run with: php tests/run.php
  * Requires: the GD extension, to synthesize tiny fixture JPEGs.
@@ -132,9 +139,14 @@ function start_server($docroot, $port) {
     exit(1);
 }
 
-/** GET request. Returns [statusCode, body, headerLines]. */
-function http_get($url, $headers = []) {
+/** GET request. Returns [statusCode, body, headerLines]. Pass
+ *  $followRedirects = false to inspect a redirect response itself
+ *  (status + Location header) instead of transparently following it. */
+function http_get($url, $headers = [], $followRedirects = true) {
     $opts = ['http' => ['method' => 'GET', 'ignore_errors' => true, 'timeout' => 5]];
+    if (!$followRedirects) {
+        $opts['http']['follow_location'] = 0;
+    }
     if ($headers) {
         $opts['http']['header'] = implode("\r\n", $headers);
     }
@@ -477,9 +489,16 @@ check('GET /?about returns 200', $status === 200);
 check('?about links to the GitHub repo', str_contains($body, 'github.com/pcmike/gallery'));
 check('?about shows the current version', str_contains($body, 'v' . $currentVersion));
 
-[$status, $body] = http_get("$base1/?download");
-check('GET /?download returns 200', $status === 200);
-check('?download serves index.php byte-for-byte', $body === $indexContents);
+[$status, $body, $dlHeaders] = http_get("$base1/?download", [], false);
+check('?download redirects (302), does not serve the file', $status === 302);
+check('?download body is empty, not the file contents', $body === '');
+$locationHeader = '';
+foreach ($dlHeaders as $h) {
+    if (stripos($h, 'Location:') === 0) {
+        $locationHeader = trim(substr($h, strlen('Location:')));
+    }
+}
+check('?download redirects to the GitHub repo', $locationHeader === 'https://github.com/pcmike/gallery');
 
 /* ======================================================================= *
  * FIXTURE 2: "optedin" — TRACK_VIEWS / ENABLE_THUMBNAIL_CACHE /
@@ -519,14 +538,36 @@ check('AUTO_GROUP_BY_FILENAME=true merges dp104_01/02 into a box', str_contains(
 count_occurrences($body, 'alt="iphone-15.jpg"', 2, 'iphone-15.jpg (group "iphone") matched once by mention, once by grid');
 count_occurrences($body, 'alt="iphone15.jpg"', 2, 'iphone15.jpg (distinct group "iphone15") matched once by mention, once by grid');
 
-[$status, $body] = http_get("$base2/?track=dp104_01.jpg");
+[$status, $body, $trackHeaders] = http_get("$base2/?track=dp104_01.jpg");
 $json = json_decode($body, true);
 check('?track=<valid file> returns 200 (optedin)', $status === 200);
 check('?track reports ok:true with a view count when TRACK_VIEWS is on', is_array($json) && $json['ok'] === true && $json['photoViews'] >= 1);
 
 [, $body] = http_get("$base2/?track=dp104_01.jpg", ['User-Agent: facebookexternalhit/1.1']);
-$json = json_decode($body, true);
-check('?track from a known preview bot is excluded (ok:false)', is_array($json) && $json['ok'] === false);
+$json2 = json_decode($body, true);
+check('?track from a known preview bot is excluded (ok:false)', is_array($json2) && $json2['ok'] === false);
+
+// Debounce: a second ?track for the same photo, same browser (cookie
+// forwarded), within the window should not increment the count again —
+// but should still report ok:true with the current total, not an error.
+$trackCookie = '';
+foreach ($trackHeaders as $h) {
+    if (stripos($h, 'Set-Cookie:') === 0 && str_contains($h, 'gallery_viewed=')) {
+        $trackCookie = trim(explode(';', substr($h, strlen('Set-Cookie:')))[0]);
+    }
+}
+check('?track response sets the gallery_viewed debounce cookie', $trackCookie !== '');
+$firstViews = $json['photoViews'];
+[, $debouncedBody] = http_get("$base2/?track=dp104_01.jpg", ["Cookie: $trackCookie"]);
+$debouncedJson = json_decode($debouncedBody, true);
+check('debounced ?track still reports ok:true', is_array($debouncedJson) && $debouncedJson['ok'] === true);
+check('debounced ?track does not increment the count', $debouncedJson['photoViews'] === $firstViews);
+
+// Debounce is per-photo, not a blanket "this browser already viewed
+// something" — a different photo, same cookie, should still count.
+[, $otherBody] = http_get("$base2/?track=dp104_02.jpg", ["Cookie: $trackCookie"]);
+$otherJson = json_decode($otherBody, true);
+check('debounce is per-photo: a different photo with the same cookie still counts', is_array($otherJson) && $otherJson['ok'] === true && $otherJson['photoViews'] >= 1);
 
 [$status, , $headers] = http_get("$base2/?img=dp104_01.jpg&size=thumb");
 check('?img=<valid file> returns 200 (optedin)', $status === 200);
@@ -544,6 +585,33 @@ unlink("$fx2/gc-orphan.jpg");
 http_get("$base2/"); // normal page load triggers gc_image_cache()
 check('orphaned cache entry removed after its source photo is deleted', !file_exists("$fx2/.gallery-cache/$orphanThumbHash"));
 check('cache entries for surviving photos are left alone', file_exists("$fx2/.gallery-cache/$dp104ThumbHash"));
+
+/* ======================================================================= *
+ * FIXTURE: "hiddencounts" — TRACK_VIEWS on, SHOW_VIEW_COUNTS_PUBLICLY off.
+ * Tracking keeps working server-side; the public badges never appear.
+ * ======================================================================= */
+
+echo "== hiddencounts fixture: tracking stays on, public badges stay off ==\n";
+
+$fxHidden = new_fixture_dir('hiddencounts');
+write_patched_index("$fxHidden/index.php", $indexContents, [
+    'TRACK_VIEWS' => 'true',
+    'SHOW_VIEW_COUNTS_PUBLICLY' => 'false',
+]);
+make_jpeg("$fxHidden/solo.jpg", 200, 150, 40, 80, 160);
+
+$portHidden = find_free_port();
+start_server($fxHidden, $portHidden);
+$baseHidden = "http://127.0.0.1:$portHidden";
+
+[, $hiddenBody] = http_get("$baseHidden/?track=solo.jpg");
+$hiddenJson = json_decode($hiddenBody, true);
+check('tracking still counts with SHOW_VIEW_COUNTS_PUBLICLY off', is_array($hiddenJson) && $hiddenJson['ok'] === true && $hiddenJson['photoViews'] >= 1);
+check('a stats file is still written with SHOW_VIEW_COUNTS_PUBLICLY off', is_file("$fxHidden/.gallery-stats.json") || is_file("$fxHidden/.gallery-stats.sqlite"));
+
+[, $pageBody] = http_get("$baseHidden/");
+check('view-badge stays hidden even though its count is > 0', (bool) preg_match('/class="view-badge hidden"[^>]*data-photo="solo\.jpg"/', $pageBody));
+check('showCountsPublicly is false in the page source', str_contains($pageBody, 'const showCountsPublicly = false;'));
 
 /* ======================================================================= *
  * FIXTURE 3: "mtimesort" — PHOTO_SORT_ORDER = 'mtime'.

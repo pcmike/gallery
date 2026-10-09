@@ -12,7 +12,7 @@ php -S localhost:8000 -t /path/to/test-folder
 
 Then visit `http://localhost:8000/`. Useful endpoints while testing:
 - `/?about` — short in-app pitch/feature overview, links to the README for full docs
-- `/?download` — downloads the script itself
+- `/?download` — redirects to the GitHub repo (it used to serve the script itself; see CHANGELOG)
 - `/?img=somefile.jpg&size=thumb` — the resize/cache endpoint directly (set `ENABLE_THUMBNAIL_CACHE` to `true` to actually exercise caching/resizing)
 - `/?track=somefile.jpg` — the view-tracking ping, returns JSON (set `TRACK_VIEWS` to `true` to see it actually track)
 
@@ -30,7 +30,7 @@ php tests/run.php
 
 Requires the GD extension (to synthesize fixture images) — that's it, no other dependencies. It cleans up its own fixture folders and server processes on exit, including on failure. If you interrupt it mid-run (Ctrl-C), check for and kill any stray `php -S` process it may have left running.
 
-It runs against four fixtures: **defaults** (an unmodified `index.php` copy, so `TRACK_VIEWS`/`ENABLE_THUMBNAIL_CACHE`/`AUTO_GROUP_BY_FILENAME` are all genuinely off), **optedin** (those three explicitly turned on), **mtimesort** (`PHOTO_SORT_ORDER` set to `mtime`), and **nonotesbox** (every `.md` rejected, so there's no notes box at all — exercises the notices banner's other placement). It covers:
+It runs against five fixtures: **defaults** (an unmodified `index.php` copy, so `TRACK_VIEWS`/`ENABLE_THUMBNAIL_CACHE`/`AUTO_GROUP_BY_FILENAME` are all genuinely off), **optedin** (those three explicitly turned on), **hiddencounts** (`TRACK_VIEWS` on, `SHOW_VIEW_COUNTS_PUBLICLY` off), **mtimesort** (`PHOTO_SORT_ORDER` set to `mtime`), and **nonotesbox** (every `.md` rejected, so there's no notes box at all — exercises the notices banner's other placement). It covers:
 - the `{gallery}` marker requirement (a `.md` file missing it is ignored and noted; one with it is parsed)
 - explicit `{group:}`/`{photos:}` directives across the full behavior matrix documented in the README — boxed vs. unboxed, with/without text, permalinks, positional clustering of unboxed files, `{group:}`-alone renaming an auto-detected group, and duplicate-claim rejection (including that a losing duplicate claim doesn't also render, and that a *textless* explicit group's `{sold}`/`{color:}` still apply — both were real regressions caught while building this)
 - the two-zone layout (every box renders before every single/cluster, even a textless box defined at the very end of the `.md`) and the prose-vs-natural-order rule within each zone, including that a textless multi-file group/cluster anchors on its first-*listed* file (not its lowest-sorting one) with the rest following in the exact order listed
@@ -40,7 +40,7 @@ It runs against four fixtures: **defaults** (an unmodified `index.php` copy, so 
 - filename auto-grouping (including the `iphone15.jpg` vs `iphone-15.jpg` suffix-stripping distinction) when `AUTO_GROUP_BY_FILENAME` is on, and that it's off by default
 - Markdown directives (`{color:}`, `{sold}`, `{reserved}`, `{sold}`+`{reserved}` precedence) and auto-linked thumbnails, including group keys with leading punctuation (e.g. `+model`)
 - the OG description's code-fence handling
-- `?about`, `?download`, `?img` (including path-traversal rejection, and that caching is off by default — full-size originals served, no `.gallery-cache` created), and `?track` (bot exclusion, path-traversal rejection, and that it's off by default)
+- `?about`, `?download` (redirects to GitHub rather than serving the file), `?img` (including path-traversal rejection, and that caching is off by default — full-size originals served, no `.gallery-cache` created), and `?track` (bot exclusion, path-traversal rejection, that it's off by default, the per-photo view-count debounce cookie, and that `SHOW_VIEW_COUNTS_PUBLICLY=false` keeps tracking working while hiding the public badges)
 - thumbnail cache creation and garbage collection when caching is on
 - `PHOTO_SORT_ORDER=mtime` actually reordering by file modification time
 

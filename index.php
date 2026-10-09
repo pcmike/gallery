@@ -9,14 +9,16 @@
  * etc.) lives in the repo's README: github.com/pcmike/gallery. The
  * "?about" page this script serves itself (open any deployed gallery and
  * click "about" in the footer, or visit "?about" directly) is a short
- * in-app pitch that links back there, plus the download link for this
- * file.
+ * in-app pitch that links to the GitHub repo, including a "Get it on
+ * GitHub" button — ?download used to serve this file's own bytes
+ * directly, but no longer exists; see the ?download handler below.
  *
  * Quick reference for anyone editing this file directly:
- *   - GALLERY_VERSION / TRACK_VIEWS / ENABLE_THUMBNAIL_CACHE /
- *     AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER constants are just below.
- *     TRACK_VIEWS and ENABLE_THUMBNAIL_CACHE are off by default — this
- *     script writes nothing to disk unless you turn one on.
+ *   - GALLERY_VERSION / TRACK_VIEWS / SHOW_VIEW_COUNTS_PUBLICLY /
+ *     ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER
+ *     constants are just below. TRACK_VIEWS and ENABLE_THUMBNAIL_CACHE
+ *     are off by default — this script writes nothing to disk unless you
+ *     turn one on.
  *   - A .md file is only read if its first line is exactly {gallery}.
  *   - Photo grouping: auto (filename minus a trailing "_01"/"-02"
  *     suffix, if AUTO_GROUP_BY_FILENAME is on) or explicit via
@@ -35,6 +37,14 @@ define('GALLERY_VERSION', '1.1.1');
 // into the folder, and is what enables the live view-count badges. See
 // the README for details.
 define('TRACK_VIEWS', false);
+
+// Whether view counts are shown publicly once TRACK_VIEWS is on. True by
+// default — preserves exactly today's behavior. Set to false to keep
+// tracking counts for yourself while hiding the public badges entirely —
+// useful if you'd rather not have a low view count sitting next to a
+// "for sale" listing making it look undesirable. Has no effect unless
+// TRACK_VIEWS is also on.
+define('SHOW_VIEW_COUNTS_PUBLICLY', true);
 
 // Turn thumbnail generation/caching on or off. Off by default — same
 // reasoning as TRACK_VIEWS, this writes into a .gallery-cache folder.
@@ -173,15 +183,15 @@ if (isset($_GET['photo'])) {
     }
 }
 
-// Visiting this page with ?download serves this very file as a plain
-// download, so anyone browsing a gallery can grab a copy of the script
-// for their own folder. Must run before anything else, and exit — no
-// gallery HTML should be sent alongside a file download.
+// ?download used to serve this file's own bytes directly. Redirects to
+// the GitHub repo instead, so anyone with an old bookmarked or shared
+// link still lands somewhere useful rather than a dead end. Removed
+// outright, not scrubbed, specifically so this script can never hand out
+// a copy of itself — including whatever secrets later constants define —
+// to a visitor who asks. A live snapshot was also just a worse copy than
+// GitHub's anyway: unversioned, possibly stale or hand-edited.
 if (isset($_GET['download'])) {
-    header('Content-Type: application/octet-stream');
-    header('Content-Disposition: attachment; filename="index.php"');
-    header('Content-Length: ' . filesize(__FILE__));
-    readfile(__FILE__);
+    header('Location: https://github.com/pcmike/gallery', true, 302);
     exit;
 }
 
@@ -794,6 +804,41 @@ function stats_get_photo_views() {
     return (is_array($data) && isset($data['photos']) && is_array($data['photos'])) ? $data['photos'] : [];
 }
 
+// How long a repeat ?track= ping for the same photo, from the same
+// browser, goes un-counted. Caps write amplification from a trivially
+// scriptable GET and makes the counts themselves more honest — flipping
+// back and forth on one photo in a single sitting shouldn't inflate it.
+define('VIEW_DEBOUNCE_SECONDS', 1800);
+
+/**
+ * True if this filename was already "viewed" (per the gallery_viewed
+ * cookie) within the debounce window — and either way, updates that
+ * cookie with the current timestamp for this filename. Stale entries
+ * (older than the window) are pruned on every call so the cookie stays
+ * small regardless of how many different photos get viewed in a
+ * session.
+ */
+function view_debounce_recently_viewed($filename) {
+    $decoded = json_decode((string) ($_COOKIE['gallery_viewed'] ?? ''), true);
+    if (!is_array($decoded)) {
+        $decoded = [];
+    }
+    $now = time();
+    foreach ($decoded as $f => $ts) {
+        if (!is_int($ts) || ($now - $ts) > VIEW_DEBOUNCE_SECONDS) {
+            unset($decoded[$f]);
+        }
+    }
+    $recentlyViewed = isset($decoded[$filename]) && ($now - $decoded[$filename]) < VIEW_DEBOUNCE_SECONDS;
+    $decoded[$filename] = $now;
+    setcookie('gallery_viewed', json_encode($decoded), [
+        'expires' => $now + VIEW_DEBOUNCE_SECONDS,
+        'path' => '/',
+        'samesite' => 'Lax',
+    ]);
+    return $recentlyViewed;
+}
+
 /** True if the request's User-Agent matches a known link-preview bot/crawler. */
 function is_bot_request() {
     $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
@@ -811,18 +856,27 @@ if (TRACK_VIEWS) {
 
 // ?track=<filename> is a tiny background ping fired by the lightbox each
 // time a photo is displayed. Only counts filenames that are actually in
-// this folder's photo list, and skips known bots. Responds with the fresh
-// photo + group totals as JSON so the page can update the visible numbers
+// this folder's photo list, skips known bots, and debounces a repeat
+// ping for the same photo from the same browser (see
+// view_debounce_recently_viewed() above). Responds with the fresh photo +
+// group totals as JSON so the page can update the visible numbers
 // immediately, with no reload — and never renders the gallery itself.
 if (isset($_GET['track'])) {
     $response = ['ok' => false];
     if (TRACK_VIEWS && !is_bot_request()) {
         $requested = basename($_GET['track']);
         if (in_array($requested, $files, true)) {
-            $newCount = stats_bump_photo($requested);
+            $currentPhotoViews = stats_get_photo_views();
+            if (view_debounce_recently_viewed($requested)) {
+                // Debounced: still report the current total, unincremented,
+                // so the live-updating badge reflects reality instead of
+                // looking stuck or broken.
+                $newCount = (int) ($currentPhotoViews[$requested] ?? 0);
+            } else {
+                $newCount = stats_bump_photo($requested);
+            }
             $groupKey = $fileToGroupKey[$requested] ?? group_key($requested);
             $groupFiles = $groups[$groupKey] ?? [$requested];
-            $currentPhotoViews = stats_get_photo_views();
             $groupTotal = 0;
             foreach ($groupFiles as $gf) {
                 $groupTotal += ($gf === $requested) ? $newCount : (int) ($currentPhotoViews[$gf] ?? 0);
@@ -913,7 +967,7 @@ function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status,
     foreach ($groupFiles as $gf) {
         $groupTotal += isset($photoViews[$gf]) ? (int) $photoViews[$gf] : 0;
     }
-    $viewsHidden = $groupTotal > 0 ? '' : ' hidden';
+    $viewsHidden = ($groupTotal > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
 
     $html = '<div class="linked-photos' . ($status ? ' ' . $status : '') . '">';
     $html .= '<div class="linked-photos-thumbs">';
@@ -1418,7 +1472,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
  *  photo "groups" never get a box), a colored inset ring instead. */
 function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
-    $hidden = $views > 0 ? '' : ' hidden';
+    $hidden = ($views > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
     $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">&#128065; '
            . number_format($views) . '</span>';
     $statusBadge = '';
@@ -1488,7 +1542,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         foreach ($groupFiles as $gf) {
             $groupTotal += isset($photoViews[$gf]) ? (int) $photoViews[$gf] : 0;
         }
-        $viewsHidden = $groupTotal > 0 ? '' : ' hidden';
+        $viewsHidden = ($groupTotal > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
 
         $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
         $html .= '<h2 class="group-label"' . $labelStyle . '>' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
@@ -1517,8 +1571,8 @@ function current_base_url() {
 }
 
 /**
- * Renders the "?about" page: a standalone documentation page (with the
- * download link for this script at the top) explaining everything this
+ * Renders the "?about" page: a standalone documentation page (with a
+ * link to the GitHub repo at the top) explaining everything this
  * gallery does, for anyone who found it deployed somewhere and wants to
  * use it themselves. Kept as a self-contained HTML string rather than a
  * .md-style file so it never depends on anything else in the folder.
@@ -1588,7 +1642,7 @@ function render_about_page() {
 
   <h1>Drop-in Photo Gallery</h1>
   <p class="subtitle">A single PHP file, no dependencies, no build step. Drop it into any folder of photos.</p>
-  <a class="download-btn" href="?download">&#11015; Download index.php</a>
+  <a class="download-btn" href="<?= htmlspecialchars($repoUrl, ENT_QUOTES, 'UTF-8') ?>">&#11015; Get it on GitHub</a>
 
   <h2>What it does</h2>
   <ul>
@@ -2110,6 +2164,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   const files = <?= json_encode($files) ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
+  const showCountsPublicly = <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'true' : 'false' ?>;
   let current = 0;
   const lightbox = document.getElementById('lightbox');
   const lightboxImg = document.getElementById('lightbox-img');
@@ -2121,8 +2176,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 
   // Writes fresh counts from a ?track response into every matching badge
   // on the page (a photo can appear both in the gallery and in a note-box
-  // thumbnail strip; a group total can appear in both places too).
+  // thumbnail strip; a group total can appear in both places too). A
+  // no-op when counts aren't shown publicly — tracking still happens
+  // server-side either way, there's just nothing to update on-page.
   function applyViewUpdate(data) {
+    if (!showCountsPublicly) return;
     document.querySelectorAll('.view-badge[data-photo="' + cssEscape(data.photo) + '"]').forEach((el) => {
       el.textContent = '👁 ' + data.photoViews.toLocaleString();
       el.classList.remove('hidden');
