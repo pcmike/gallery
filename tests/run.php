@@ -313,6 +313,7 @@ $base1 = "http://127.0.0.1:$port1";
 [$status, $body] = http_get("$base1/");
 check('GET / returns 200', $status === 200);
 check('page title from the {gallery}-marked file\'s heading', str_contains($body, '<title>Defaults Fixture — Gallery</title>'));
+check('"Last updated" shows on a plain flat (non-nested) gallery too', (bool) preg_match('/Last updated [A-Z][a-z]+ \d{1,2}, \d{4}/', $body));
 check('{gallery} marker line itself never shows as rendered .md content', !str_contains($body, '<p>{gallery}</p>') && !preg_match('#<div class="note-box">.*?\{gallery\}.*?</div>#s', $body));
 
 check(
@@ -612,6 +613,106 @@ check('a stats file is still written with SHOW_VIEW_COUNTS_PUBLICLY off', is_fil
 [, $pageBody] = http_get("$baseHidden/");
 check('view-badge stays hidden even though its count is > 0', (bool) preg_match('/class="view-badge hidden"[^>]*data-photo="solo\.jpg"/', $pageBody));
 check('showCountsPublicly is false in the page source', str_contains($pageBody, 'const showCountsPublicly = false;'));
+
+/* ======================================================================= *
+ * FIXTURE: "nested" — AUTO_GROUP_BY_FOLDER on, with AUTO_GROUP_BY_FILENAME
+ * and ENABLE_THUMBNAIL_CACHE also on to exercise precedence and per-folder
+ * colocation. Includes an EXTRA_FOLDERS virtual mount and a symlink
+ * planted specifically to confirm it's refused.
+ * ======================================================================= */
+
+echo "== nested fixture: folder grouping, precedence, EXTRA_FOLDERS, symlink safety ==\n";
+
+$fxNested = new_fixture_dir('nested');
+$archiveDir = new_fixture_dir('nested-archive'); // a real dir outside the gallery root
+mkdir("$fxNested/Paris");
+mkdir("$fxNested/StTropez");
+mkdir("$fxNested/outside-target"); // a real subfolder a symlink will point at
+make_jpeg("$fxNested/Paris/eiffel.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxNested/Paris/dp104_01.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$fxNested/StTropez/beach.jpg", 60, 60, 30, 30, 30);
+make_jpeg("$fxNested/StTropez/dp104_02.jpg", 60, 60, 40, 40, 40);
+make_jpeg("$fxNested/loose.jpg", 60, 60, 50, 50, 50);
+make_jpeg("$fxNested/outside-target/secret.jpg", 60, 60, 60, 60, 60);
+make_jpeg("$archiveDir/archived.jpg", 60, 60, 70, 70, 70);
+symlink("$fxNested/outside-target", "$fxNested/SneakyLink");
+
+write_patched_index("$fxNested/index.php", $indexContents, [
+    'AUTO_GROUP_BY_FOLDER' => 'true',
+    'AUTO_GROUP_BY_FILENAME' => 'true',
+    'ENABLE_THUMBNAIL_CACHE' => 'true',
+    'TRACK_VIEWS' => 'true',
+    'EXTRA_FOLDERS' => "['Archive' => " . var_export($archiveDir, true) . "]",
+]);
+
+$portNested = find_free_port();
+start_server($fxNested, $portNested);
+$baseNested = "http://127.0.0.1:$portNested";
+
+[, $nestedBody] = http_get("$baseNested/");
+check('folder-group box exists for Paris', str_contains($nestedBody, 'id="group-paris"'));
+check('Paris renders as an overview cover card (default FOLDER_DISPLAY_MODE)', (bool) preg_match('/<div class="folder-cover" id="group-paris">/', $nestedBody));
+check('Paris\'s cover card shows its recursive photo count (2 photos: eiffel + dp104_01)', (bool) preg_match('/id="group-paris">.*?2 photos/s', $nestedBody));
+check('Paris\'s cover card links to ?folder=Paris', str_contains($nestedBody, 'href="?folder=Paris"'));
+check('Paris\'s cover card has a copy-link button distinct from the navigation link', (bool) preg_match('/class="permalink-copy folder-permalink-copy" href="\?folder=Paris"/', $nestedBody));
+check('folder-group box exists for StTropez', str_contains($nestedBody, 'id="group-sttropez"'));
+check('folder-group box exists for the EXTRA_FOLDERS virtual mount Archive', str_contains($nestedBody, 'id="group-archive"'));
+check('a loose root-level file still gets its own card', str_contains($nestedBody, 'id="group-loose"'));
+check('the symlink is refused — no group for SneakyLink or outside-target leaking through it', !str_contains($nestedBody, 'sneakylink'));
+
+check('folder membership beats AUTO_GROUP_BY_FILENAME: dp104_01 (Paris) and dp104_02 (StTropez) do not merge', !str_contains($nestedBody, 'id="group-dp104"'));
+
+[$status] = http_get("$baseNested/?img=" . rawurlencode('Paris/eiffel.jpg') . '&size=thumb');
+check('?img serves a file inside a real subfolder', $status === 200);
+[$status] = http_get("$baseNested/?img=" . rawurlencode('Archive/archived.jpg') . '&size=thumb');
+check('?img serves a file inside an EXTRA_FOLDERS virtual mount', $status === 200);
+[$status] = http_get("$baseNested/?img=" . rawurlencode('SneakyLink/secret.jpg') . '&size=thumb');
+check('?img refuses a file reached only through a symlink', $status === 404);
+
+http_get("$baseNested/?track=" . rawurlencode('Paris/eiffel.jpg'));
+check('per-photo stats are colocated inside the photo\'s own subfolder, not the root', is_file("$fxNested/Paris/.gallery-stats.json") || is_file("$fxNested/Paris/.gallery-stats.sqlite"));
+// The root legitimately gets its own stats file regardless — the one
+// sitewide pageview counter always lives there by design (every GET /
+// above already bumped it). What must NOT be true is the root's store
+// *also* holding an entry for a subfolder photo's own view count.
+$rootHasEiffelEntry = false;
+if (is_file("$fxNested/.gallery-stats.json")) {
+    $rootData = json_decode((string) file_get_contents("$fxNested/.gallery-stats.json"), true);
+    $rootHasEiffelEntry = isset($rootData['photos']['Paris/eiffel.jpg']);
+} elseif (is_file("$fxNested/.gallery-stats.sqlite")) {
+    $rootPdo = new PDO('sqlite:' . "$fxNested/.gallery-stats.sqlite");
+    $stmt = $rootPdo->prepare('SELECT views FROM photo_views WHERE filename = :f');
+    $stmt->execute([':f' => 'Paris/eiffel.jpg']);
+    $rootHasEiffelEntry = $stmt->fetchColumn() !== false;
+}
+check('the gallery root\'s own stats store has no entry for a subfolder photo', !$rootHasEiffelEntry);
+
+http_get("$baseNested/?img=" . rawurlencode('Paris/eiffel.jpg') . '&size=thumb');
+check('thumbnail cache is colocated inside the photo\'s own subfolder, not the root', is_dir("$fxNested/Paris/.gallery-cache") && count(glob("$fxNested/Paris/.gallery-cache/*.jpg")) > 0);
+check('the gallery root does NOT get a .gallery-cache for a subfolder photo', !is_dir("$fxNested/.gallery-cache") || count(glob("$fxNested/.gallery-cache/*.jpg")) === 0);
+
+// ?folder=<name> drills into one folder-group's own scoped page.
+$rootTitle = basename($fxNested);
+[$folderStatus, $folderBody] = http_get("$baseNested/?folder=Paris");
+check('?folder=Paris returns 200', $folderStatus === 200);
+check('?folder=Paris shows its own files', str_contains($folderBody, 'eiffel.jpg') && str_contains($folderBody, 'dp104_01.jpg'));
+check('?folder=Paris does not show other folders\' files', !str_contains($folderBody, 'beach.jpg') && !str_contains($folderBody, 'dp104_02.jpg'));
+check('?folder=Paris does not show the loose root-level file', !str_contains($folderBody, 'loose.jpg'));
+check('?folder=Paris sets a "Folder — Root" page title', str_contains($folderBody, "<title>Paris — $rootTitle — Gallery</title>"));
+check('?folder=Paris sets a matching "Folder — Root" <h1>, not just <title>', str_contains($folderBody, "<h1>Paris — $rootTitle</h1>"));
+check('?folder=Paris shows its own photo count (2), not the whole gallery\'s', (bool) preg_match('/<p>2 photos\b/', $folderBody));
+check('every page shows a "Last updated" date derived from file mtimes', (bool) preg_match('/Last updated [A-Z][a-z]+ \d{1,2}, \d{4}/', $nestedBody));
+check('?folder=Paris also shows the same "Last updated" line', (bool) preg_match('/Last updated [A-Z][a-z]+ \d{1,2}, \d{4}/', $folderBody));
+check('?folder=Paris shows a breadcrumb back-link to the root', (bool) preg_match('/<p class="breadcrumb"><a href="\.\/">.*?' . preg_quote($rootTitle, '/') . '.*?<\/a><\/p>/', $folderBody));
+check('?folder=Paris does not render its own nested folder-cover cards', !str_contains($folderBody, '<div class="folder-cover"'));
+check('?folder=Paris reflects the folder in its Open Graph title', str_contains($folderBody, 'property="og:title" content="Paris — ' . $rootTitle . '"'));
+
+[$badFolderStatus] = http_get("$baseNested/?folder=" . rawurlencode('../outside-target'));
+check('?folder= with a path-traversal attempt 404s', $badFolderStatus === 404);
+[$unknownFolderStatus] = http_get("$baseNested/?folder=NoSuchFolder");
+check('?folder= with an unknown folder name 404s', $unknownFolderStatus === 404);
+[$rootAsFolderStatus] = http_get("$baseNested/?folder=loose.jpg");
+check('?folder= naming a non-folder file 404s', $rootAsFolderStatus === 404);
 
 /* ======================================================================= *
  * FIXTURE 3: "mtimesort" — PHOTO_SORT_ORDER = 'mtime'.

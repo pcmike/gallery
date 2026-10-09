@@ -15,14 +15,18 @@
  *
  * Quick reference for anyone editing this file directly:
  *   - GALLERY_VERSION / TRACK_VIEWS / SHOW_VIEW_COUNTS_PUBLICLY /
- *     ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER
- *     constants are just below. TRACK_VIEWS and ENABLE_THUMBNAIL_CACHE
- *     are off by default — this script writes nothing to disk unless you
+ *     ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER /
+ *     AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS
+ *     constants are just below. TRACK_VIEWS, ENABLE_THUMBNAIL_CACHE, and
+ *     AUTO_GROUP_BY_FOLDER are off by default — this script writes
+ *     nothing to disk and doesn't look at a single subfolder unless you
  *     turn one on.
  *   - A .md file is only read if its first line is exactly {gallery}.
- *   - Photo grouping: auto (filename minus a trailing "_01"/"-02"
- *     suffix, if AUTO_GROUP_BY_FILENAME is on) or explicit via
- *     {group: Name} + {photos: a.jpg, b.jpg} in a .md file.
+ *   - Photo grouping: auto by filename (minus a trailing "_01"/"-02"
+ *     suffix, if AUTO_GROUP_BY_FILENAME is on), auto by subfolder (if
+ *     AUTO_GROUP_BY_FOLDER is on — folder membership wins if both are
+ *     on), or explicit via {group: Name} + {photos: a.jpg, b.jpg} in a
+ *     .md file, which always wins over either auto-detection.
  *   - .md directives: {color: value}, {sold}, {reserved} (or {held}),
  *     {group: Name}, {photos: a.jpg, b.jpg, ...}.
  *   - See each function's own docblock below for implementation details.
@@ -79,9 +83,42 @@ define('AUTO_GROUP_BY_FILENAME', false);
 // deployment method preserves the original timestamps.
 define('PHOTO_SORT_ORDER', 'filename');
 
+// Scan subfolders recursively (to any depth) and group photos by which
+// one they're in. Off by default — a flat folder behaves exactly as it
+// always has. Turn this on for a trip folder like /trip/Paris,
+// /trip/StTropez, etc. See the README for FOLDER_DISPLAY_MODE and
+// EXTRA_FOLDERS, which only matter once this is on.
+define('AUTO_GROUP_BY_FOLDER', false);
+
+// How a folder-group renders once AUTO_GROUP_BY_FOLDER is on: 'overview'
+// (default) shows one cover card per subfolder — a highlight photo, a
+// label, a recursive photo count — and clicking it drills into that
+// folder's own page; 'inline' flattens every subfolder's photos
+// (including anything in deeper sub-subfolders) into one ordinary full
+// grid box, the same shape a filename-based group already renders as.
+// 'overview' fits a trip album meant to be browsed one place at a time;
+// 'inline' fits a handful of items organized into folders purely for the
+// owner's own convenience, where everything should stay visible at once
+// (this script's other real use case — a seller with a few items, each
+// in its own folder). Only read when AUTO_GROUP_BY_FOLDER is on.
+define('FOLDER_DISPLAY_MODE', 'overview');
+
+// Map a virtual top-level folder name to a real path elsewhere on the
+// server, e.g. ['OldTrip2020' => '/mnt/archive-disk/trip-photos-2020'].
+// Scanned exactly like a real subfolder once AUTO_GROUP_BY_FOLDER is on.
+// This exists specifically so a real, legitimate need — archiving an old
+// trip from a second disk — doesn't require a symlink: the scan refuses
+// to follow symlinks outright (a link pointing outside the gallery root
+// could otherwise make the scan's own trusted output enumerate arbitrary
+// filesystem paths as "valid"), so this is the safe way to get the same
+// result. The trust question becomes "did the owner write this exact
+// path into the one file they control," the same category of trust as
+// ADMIN_PASSWORD — not something inferred from the filesystem. Empty by
+// default.
+define('EXTRA_FOLDERS', []);
+
 $dir = __DIR__;
 $self = basename(__FILE__);
-$cacheDir = $dir . '/.gallery-cache';
 
 // Imagick is what makes HEIC/HEIF support and quality resizing possible;
 // GD is used as a fallback for resizing (but can't decode HEIC).
@@ -98,27 +135,178 @@ if ($imagickAvailable && ENABLE_THUMBNAIL_CACHE) {
     $imageExtensions[] = 'heif';
 }
 
-$files = array_filter(scandir($dir), function ($file) use ($dir, $imageExtensions, $self) {
-    if ($file === $self || $file === '.' || $file === '..') return false;
-    if (!is_file("$dir/$file")) return false;
-    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-    return in_array($ext, $imageExtensions);
-});
-
-// Base ordering, before any .md-driven repositioning — see
-// PHOTO_SORT_ORDER above.
-if (PHOTO_SORT_ORDER === 'mtime') {
-    usort($files, function ($a, $b) use ($dir) {
-        return (@filemtime("$dir/$a") ?: 0) <=> (@filemtime("$dir/$b") ?: 0);
-    });
-} else {
-    // Natural sort by filename, so groups like dp104_01, dp104_02,
-    // dp104_03 stay together and in order, followed by neo98_01, etc.
-    usort($files, function ($a, $b) {
-        return strnatcasecmp($a, $b);
-    });
+/**
+ * Recursively scans a real directory into a tree: ['files' => [bare
+ * filenames loose directly here, already sorted per PHOTO_SORT_ORDER],
+ * 'subdirs' => [folderName => nested node, ...]]. Only ever called when
+ * AUTO_GROUP_BY_FOLDER is on — a flat folder keeps using the untouched
+ * scan further below, so there is zero behavior change for the common
+ * case regardless of anything in this function.
+ *
+ * Two things this has to get right every time it steps into a subfolder:
+ * it must never follow a symlink (a link pointing outside the gallery
+ * root would otherwise let the scan's own trusted output enumerate
+ * arbitrary filesystem paths as "valid," which every downstream
+ * allowlist check would then trust) — checked both directly (is_link)
+ * and by confirming the resolved real path actually sits under its own
+ * parent's real path, so a less obvious escape doesn't slip through
+ * either. And it must exclude .gallery-cache — the one *directory* among
+ * this script's own infrastructure files — from being scanned as if it
+ * were a photo subfolder.
+ */
+function scan_folder_tree($realDir, $imageExtensions, $self, $isRoot = true) {
+    $node = ['files' => [], 'subdirs' => []];
+    $entries = @scandir($realDir);
+    if ($entries === false) return $node;
+    $parentReal = realpath($realDir);
+    foreach ($entries as $entry) {
+        if ($entry === '.' || $entry === '..') continue;
+        if ($isRoot && $entry === $self) continue;
+        $path = $realDir . '/' . $entry;
+        if (is_file($path)) {
+            $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
+            if (in_array($ext, $imageExtensions, true)) {
+                $node['files'][] = $entry;
+            }
+            continue;
+        }
+        if (!is_dir($path) || $entry === '.gallery-cache' || is_link($path)) {
+            continue;
+        }
+        $childReal = realpath($path);
+        if ($childReal === false || $parentReal === false
+            || strpos($childReal, $parentReal . DIRECTORY_SEPARATOR) !== 0) {
+            continue;
+        }
+        $node['subdirs'][$entry] = scan_folder_tree($path, $imageExtensions, $self, false);
+    }
+    if (PHOTO_SORT_ORDER === 'mtime') {
+        usort($node['files'], function ($a, $b) use ($realDir) {
+            return (@filemtime("$realDir/$a") ?: 0) <=> (@filemtime("$realDir/$b") ?: 0);
+        });
+    } else {
+        usort($node['files'], function ($a, $b) {
+            return strnatcasecmp($a, $b);
+        });
+    }
+    return $node;
 }
-$files = array_values($files);
+
+/**
+ * Merges EXTRA_FOLDERS into the root node as additional virtual
+ * subfolders. These point at real paths outside the gallery root on
+ * purpose — the admin wrote them into a constant they control, the same
+ * category of trust as ADMIN_PASSWORD — so the symlink/containment
+ * checks above (which exist to stop the scan's *own* directory listing
+ * from wandering outside the root) don't apply to them. A real folder of
+ * the same name already found during the normal scan always wins.
+ */
+function merge_extra_folders($rootNode, $imageExtensions, $self) {
+    foreach (EXTRA_FOLDERS as $virtualName => $realPath) {
+        if (!is_string($virtualName) || $virtualName === '' || strpbrk($virtualName, "/\\") !== false) continue;
+        if (isset($rootNode['subdirs'][$virtualName])) continue;
+        if (!is_dir($realPath) || is_link($realPath)) continue;
+        $rootNode['subdirs'][$virtualName] = scan_folder_tree($realPath, $imageExtensions, $self, false);
+    }
+    return $rootNode;
+}
+
+/** Every file in this tree as relative paths from the tree's own root
+ *  (e.g. "Paris/eiffel.jpg"), folders before nothing in particular order
+ *  — each node's own files are already sorted; subfolders are visited in
+ *  scandir order, which is fine since real cross-folder ordering is a
+ *  display-time concern (see folder-group rendering), not this one. */
+function flatten_folder_tree($node, $prefix = '') {
+    $out = [];
+    foreach ($node['files'] as $f) {
+        $out[] = $prefix === '' ? $f : $prefix . '/' . $f;
+    }
+    foreach ($node['subdirs'] as $name => $sub) {
+        $subPrefix = $prefix === '' ? $name : $prefix . '/' . $name;
+        foreach (flatten_folder_tree($sub, $subPrefix) as $rel) {
+            $out[] = $rel;
+        }
+    }
+    return $out;
+}
+
+/** Looks up the node for a relative folder path ('' or null = root), or
+ *  null if no such folder exists in the tree. */
+function find_folder_node($node, $relPath) {
+    if ($relPath === '' || $relPath === null) return $node;
+    $current = $node;
+    foreach (explode('/', trim($relPath, '/')) as $seg) {
+        if ($seg === '' || !isset($current['subdirs'][$seg])) return null;
+        $current = $current['subdirs'][$seg];
+    }
+    return $current;
+}
+
+/** Total file count across a node's entire subtree (itself + every descendant). */
+function count_folder_tree_files($node) {
+    $count = count($node['files']);
+    foreach ($node['subdirs'] as $sub) {
+        $count += count_folder_tree_files($sub);
+    }
+    return $count;
+}
+
+/**
+ * Resolves a relative path (e.g. "Paris/eiffel.jpg", or
+ * "OldTrip2020/x.jpg" for an EXTRA_FOLDERS virtual mount) to its real
+ * filesystem path. Purely a path-construction helper — this never
+ * decides whether a path is *valid*; every caller still has to check the
+ * requested relative path against the real, pre-built allowlist first.
+ */
+function resolve_real_path($dir, $relPath) {
+    $slash = strpos($relPath, '/');
+    $first = $slash === false ? $relPath : substr($relPath, 0, $slash);
+    if (isset(EXTRA_FOLDERS[$first]) && is_dir(EXTRA_FOLDERS[$first])) {
+        $rest = $slash === false ? '' : substr($relPath, $slash + 1);
+        return rtrim(EXTRA_FOLDERS[$first], '/') . ($rest === '' ? '' : '/' . $rest);
+    }
+    return $dir . '/' . $relPath;
+}
+
+/** The real directory containing a given relative file path — where that
+ *  file's colocated .gallery-stats.* / .gallery-cache actually live. */
+function containing_folder_real_path($dir, $relPath) {
+    $slash = strrpos($relPath, '/');
+    if ($slash === false) return $dir;
+    return resolve_real_path($dir, substr($relPath, 0, $slash));
+}
+
+if (AUTO_GROUP_BY_FOLDER) {
+    $folderTree = merge_extra_folders(
+        scan_folder_tree($dir, $imageExtensions, $self),
+        $imageExtensions,
+        $self
+    );
+    $files = flatten_folder_tree($folderTree);
+} else {
+    $folderTree = null;
+    $files = array_filter(scandir($dir), function ($file) use ($dir, $imageExtensions, $self) {
+        if ($file === $self || $file === '.' || $file === '..') return false;
+        if (!is_file("$dir/$file")) return false;
+        $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+        return in_array($ext, $imageExtensions);
+    });
+
+    // Base ordering, before any .md-driven repositioning — see
+    // PHOTO_SORT_ORDER above.
+    if (PHOTO_SORT_ORDER === 'mtime') {
+        usort($files, function ($a, $b) use ($dir) {
+            return (@filemtime("$dir/$a") ?: 0) <=> (@filemtime("$dir/$b") ?: 0);
+        });
+    } else {
+        // Natural sort by filename, so groups like dp104_01, dp104_02,
+        // dp104_03 stay together and in order, followed by neo98_01, etc.
+        usort($files, function ($a, $b) {
+            return strnatcasecmp($a, $b);
+        });
+    }
+    $files = array_values($files);
+}
 
 // Snapshot of each file's position in this base sort, before any .md-
 // driven repositioning happens — used as the "natural order" anchor for
@@ -173,11 +361,18 @@ function slugify($text) {
 // both the ?track endpoint and the gallery renderer need the final,
 // merged version, not just the filename-based auto-detection.
 
-// ?photo=<filename> deep-links straight to that photo in the lightbox on
-// page load. Only ever a filename that's actually in this folder.
+// ?photo=<filename-or-relative-path> deep-links straight to that photo in
+// the lightbox on page load. Only ever a value that's an exact match
+// against $files, the real list this script's own scan already trusts —
+// never basename()'d first, since that would strip a legitimate
+// subfolder prefix like "Paris/" right back off. The allowlist's exact-
+// match is what actually provides the safety here, not basename(); a
+// traversal attempt never matches anything the scan itself produced,
+// with or without that extra step. See serve_image() below for the same
+// reasoning applied to ?img=.
 $requestedPhoto = null;
 if (isset($_GET['photo'])) {
-    $candidate = basename($_GET['photo']);
+    $candidate = $_GET['photo'];
     if (in_array($candidate, $files, true)) {
         $requestedPhoto = $candidate;
     }
@@ -234,23 +429,38 @@ function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
  * accumulate stale thumbnails forever. Only runs on normal gallery page
  * loads (never on ?img/?track), so it doesn't add overhead to the
  * requests that actually serve images.
+ *
+ * $files are relative paths, and each one's cache lives colocated in its
+ * *own* containing folder (see containing_folder_real_path()) rather
+ * than one centralized cache at the root — so this groups by containing
+ * folder first and GCs each one independently. A flat gallery has
+ * exactly one such group (the root itself), so this is a no-op change
+ * in shape for that case, not just in effect.
  */
-function gc_image_cache($dir, $cacheDir, $files, $imagickAvailable) {
-    if (!ENABLE_THUMBNAIL_CACHE || !is_dir($cacheDir)) return;
-    $valid = [];
+function gc_image_cache($dir, $files, $imagickAvailable) {
+    if (!ENABLE_THUMBNAIL_CACHE) return;
+    $byFolder = [];
     foreach ($files as $file) {
-        $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-        $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
-        $variants = $isHeic ? ['thumb', 'share', 'full'] : ['thumb', 'share'];
-        $mtime = @filemtime($dir . '/' . $file);
-        foreach ($variants as $variant) {
-            $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
-        }
+        $byFolder[containing_folder_real_path($dir, $file)][] = $file;
     }
-    foreach (scandir($cacheDir) as $entry) {
-        if ($entry === '.' || $entry === '..') continue;
-        if (!isset($valid[$entry])) {
-            @unlink($cacheDir . '/' . $entry);
+    foreach ($byFolder as $folderPath => $folderFiles) {
+        $cacheDir = $folderPath . '/.gallery-cache';
+        if (!is_dir($cacheDir)) continue;
+        $valid = [];
+        foreach ($folderFiles as $file) {
+            $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+            $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
+            $variants = $isHeic ? ['thumb', 'share', 'full'] : ['thumb', 'share'];
+            $mtime = @filemtime(resolve_real_path($dir, $file));
+            foreach ($variants as $variant) {
+                $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
+            }
+        }
+        foreach (scandir($cacheDir) as $entry) {
+            if ($entry === '.' || $entry === '..') continue;
+            if (!isset($valid[$entry])) {
+                @unlink($cacheDir . '/' . $entry);
+            }
         }
     }
 }
@@ -313,14 +523,22 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim) {
     return false;
 }
 
-/** Serves ?img=<filename>&size=thumb|share|full, resizing/caching/converting as needed. */
-function serve_image($dir, $cacheDir, $filename, $variant, $validFiles) {
-    $filename = basename($filename);
+/** Serves ?img=<filename-or-relative-path>&size=thumb|share|full,
+ *  resizing/caching/converting as needed. $filename is validated by exact
+ *  match against $validFiles — the real list this script's own scan
+ *  already trusts — never basename()'d first, since that would strip a
+ *  legitimate subfolder prefix like "Paris/" right back off. The exact-
+ *  match allowlist is what actually provides the safety here: a
+ *  traversal attempt never matches anything the scan itself produced,
+ *  with or without that extra step, and nothing resembling "../" can
+ *  survive that match regardless of how many segments the path has. */
+function serve_image($dir, $filename, $variant, $validFiles) {
     if (!in_array($filename, $validFiles, true)) {
         http_response_code(404);
         return;
     }
-    $srcPath = $dir . '/' . $filename;
+    $srcPath = resolve_real_path($dir, $filename);
+    $cacheDir = containing_folder_real_path($dir, $filename) . '/.gallery-cache';
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
     $isHeic = in_array($ext, ['heic', 'heif'], true);
     $maxDims = ['thumb' => 480, 'share' => 1200, 'full' => 2400];
@@ -367,7 +585,7 @@ function img_url($file, $size) {
 }
 
 if (isset($_GET['img'])) {
-    serve_image($dir, $cacheDir, $_GET['img'], $_GET['size'] ?? 'thumb', $files);
+    serve_image($dir, $_GET['img'], $_GET['size'] ?? 'thumb', $files);
     exit;
 }
 
@@ -491,6 +709,30 @@ foreach ($mdContents as $content) {
     $offset += strlen($content) + 1;
 }
 
+// Folder-groups: each top-level subfolder (an immediate child of the
+// gallery root, or an EXTRA_FOLDERS virtual mount) with any files
+// anywhere in its own subtree becomes one group, keyed by its own
+// relative path. Every file inside a qualifying subfolder is claimed
+// here, the same way a {photos:}-claimed file already is — removed from
+// the filename-auto-grouping pool entirely below, so it's never
+// re-clustered by its filename suffix a second time inside a folder it's
+// already a member of. A folder's default label is its raw, unmodified
+// name — {group: Name} in the root's own .md still renames it, the same
+// mechanism that already renames any auto-detected group.
+$folderGroups = [];       // relative folder path => [recursive member files]
+$folderClaims = [];       // filename => true (removed from auto-detection, same as $explicitClaims)
+if (AUTO_GROUP_BY_FOLDER && $folderTree !== null) {
+    foreach ($folderTree['subdirs'] as $topName => $topNode) {
+        $members = flatten_folder_tree($topNode, $topName);
+        if (empty($members)) continue;
+        $folderGroups[$topName] = $members;
+        foreach ($members as $m) {
+            $folderClaims[$m] = true;
+        }
+    }
+}
+$folderGroupKeys = array_fill_keys(array_keys($folderGroups), true);
+
 // Build the final groups: filename-based auto-detection (unless
 // AUTO_GROUP_BY_FILENAME is off, or a file was explicitly claimed above)
 // plus explicit named groups. A file claimed via a bare {photos:} (no
@@ -498,8 +740,11 @@ foreach ($mdContents as $content) {
 // so it can never merge with an unrelated auto-detected group.
 $groups = [];
 foreach ($files as $file) {
-    if (isset($explicitClaims[$file])) continue;
+    if (isset($explicitClaims[$file]) || isset($folderClaims[$file])) continue;
     $groups[group_key($file)][] = $file;
+}
+foreach ($folderGroups as $folderKey => $members) {
+    $groups[$folderKey] = $members;
 }
 
 // A key shared by 2+ files is either a real, intended multi-angle group
@@ -550,10 +795,16 @@ foreach ($explicitGroups as $slug => $g) {
 
 // Explicit group slugs, so the renderer knows to box these even with
 // just a single photo — an auto-detected single never gets a box, but
-// an explicitly named one always does; that's the point of naming it.
-// Computed here (not just once, further down) because zone membership
-// during ordering depends on it too.
-$explicitGroupKeys = array_fill_keys(array_keys($explicitGroups), true);
+// an explicitly named one always does; that's the point of naming it. A
+// folder-group gets the same treatment: a photo deliberately organized
+// into its own named folder deserves a box (or, in 'overview' mode, a
+// cover card) regardless of how many other photos share it. Computed
+// here (not just once, further down) because zone membership during
+// ordering depends on it too.
+$explicitGroupKeys = array_fill_keys(
+    array_merge(array_keys($explicitGroups), array_keys($folderGroups)),
+    true
+);
 
 /**
  * Determines display order within a single zone (either "boxes" or
@@ -709,26 +960,46 @@ foreach ($groups as $key => $groupFiles) {
  * stats_get_photo_views) so the rest of the script never needs to know
  * or care which one is active. SQLite is used automatically when PHP
  * supports it; otherwise a flock-protected JSON file is used instead.
+ *
+ * Per-photo stats are colocated in whichever real folder a photo lives
+ * in — same pattern as the thumbnail cache — so each folder gets its own
+ * small .gallery-stats.json/.sqlite, scoped to just its own photos. A
+ * flat gallery has exactly one such store (the root itself), so this is
+ * a no-op change in shape for that case. Keyed by each photo's full
+ * relative path (not stripped to a bare filename) purely to keep every
+ * $photoViews[$file]-style lookup elsewhere in this script working
+ * unchanged regardless of which store a photo's data lives in — the
+ * safety from colocation (no cross-folder key collisions) comes from
+ * *which file* the data lives in, not the key format inside it.
+ *
+ * The one sitewide pageview counter is the exception: it's not a
+ * per-photo concept, so it always lives at the gallery root, regardless
+ * of how many folders contribute photos.
  * ----------------------------------------------------------------------- */
 
-$GLOBALS['__stats_mode'] = 'file';
-$GLOBALS['__stats_pdo'] = null;
-$GLOBALS['__stats_file'] = $dir . '/.gallery-stats.json';
+$GLOBALS['__stats_pool'] = []; // real folder path => ['mode' => .., 'pdo' => .., 'file' => ..]
 
-function stats_init($dir) {
+/** Lazily opens (or reuses) the stats connection for a given real folder. */
+function stats_connection($folderPath) {
+    if (isset($GLOBALS['__stats_pool'][$folderPath])) {
+        return $GLOBALS['__stats_pool'][$folderPath];
+    }
+    $conn = ['mode' => 'file', 'pdo' => null, 'file' => $folderPath . '/.gallery-stats.json'];
     if (class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
         try {
-            $pdo = new PDO('sqlite:' . $dir . '/.gallery-stats.sqlite');
+            $pdo = new PDO('sqlite:' . $folderPath . '/.gallery-stats.sqlite');
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $pdo->exec('PRAGMA journal_mode = WAL');
             $pdo->exec('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)');
             $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views (filename TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
-            $GLOBALS['__stats_pdo'] = $pdo;
-            $GLOBALS['__stats_mode'] = 'sqlite';
+            $conn['pdo'] = $pdo;
+            $conn['mode'] = 'sqlite';
         } catch (Exception $e) {
-            $GLOBALS['__stats_mode'] = 'file';
+            $conn['mode'] = 'file';
         }
     }
+    $GLOBALS['__stats_pool'][$folderPath] = $conn;
+    return $conn;
 }
 
 /** Reads-modifies-writes the flat-file JSON backend under an exclusive lock. */
@@ -758,50 +1029,70 @@ function stats_update_file($statsFile, $modifier) {
     return $data;
 }
 
-function stats_bump_pageview() {
-    if ($GLOBALS['__stats_mode'] === 'sqlite') {
-        $pdo = $GLOBALS['__stats_pdo'];
+/** The one sitewide pageview counter — always the gallery root's own store. */
+function stats_bump_pageview($rootDir) {
+    $conn = stats_connection($rootDir);
+    if ($conn['mode'] === 'sqlite') {
+        $pdo = $conn['pdo'];
         $pdo->exec("INSERT INTO stats(key, value) VALUES('pageviews', 1)
                     ON CONFLICT(key) DO UPDATE SET value = value + 1");
         return (int) $pdo->query("SELECT value FROM stats WHERE key = 'pageviews'")->fetchColumn();
     }
-    $stats = stats_update_file($GLOBALS['__stats_file'], function (&$data) {
+    $stats = stats_update_file($conn['file'], function (&$data) {
         $data['pageviews'] = ($data['pageviews'] ?? 0) + 1;
     });
     return (int) $stats['pageviews'];
 }
 
-/** Increments one photo's view count and returns its new total. */
-function stats_bump_photo($filename) {
-    if ($GLOBALS['__stats_mode'] === 'sqlite') {
-        $pdo = $GLOBALS['__stats_pdo'];
+/** Increments one photo's view count (in its own folder's store) and returns its new total. */
+function stats_bump_photo($folderPath, $relativePath) {
+    $conn = stats_connection($folderPath);
+    if ($conn['mode'] === 'sqlite') {
+        $pdo = $conn['pdo'];
         $stmt = $pdo->prepare(
             "INSERT INTO photo_views(filename, views) VALUES(:f, 1)
              ON CONFLICT(filename) DO UPDATE SET views = views + 1"
         );
-        $stmt->execute([':f' => $filename]);
+        $stmt->execute([':f' => $relativePath]);
         $sel = $pdo->prepare('SELECT views FROM photo_views WHERE filename = :f');
-        $sel->execute([':f' => $filename]);
+        $sel->execute([':f' => $relativePath]);
         return (int) $sel->fetchColumn();
     }
-    $stats = stats_update_file($GLOBALS['__stats_file'], function (&$data) use ($filename) {
-        $data['photos'][$filename] = ($data['photos'][$filename] ?? 0) + 1;
+    $stats = stats_update_file($conn['file'], function (&$data) use ($relativePath) {
+        $data['photos'][$relativePath] = ($data['photos'][$relativePath] ?? 0) + 1;
     });
-    return (int) ($stats['photos'][$filename] ?? 0);
+    return (int) ($stats['photos'][$relativePath] ?? 0);
 }
 
-function stats_get_photo_views() {
-    if ($GLOBALS['__stats_mode'] === 'sqlite') {
+/** Every tracked photo's view count from one folder's own store. */
+function stats_get_photo_views($folderPath) {
+    $conn = stats_connection($folderPath);
+    if ($conn['mode'] === 'sqlite') {
         $result = [];
-        foreach ($GLOBALS['__stats_pdo']->query('SELECT filename, views FROM photo_views') as $row) {
+        foreach ($conn['pdo']->query('SELECT filename, views FROM photo_views') as $row) {
             $result[$row['filename']] = (int) $row['views'];
         }
         return $result;
     }
-    $statsFile = $GLOBALS['__stats_file'];
-    if (!file_exists($statsFile)) return [];
-    $data = json_decode((string) @file_get_contents($statsFile), true);
+    if (!file_exists($conn['file'])) return [];
+    $data = json_decode((string) @file_get_contents($conn['file']), true);
     return (is_array($data) && isset($data['photos']) && is_array($data['photos'])) ? $data['photos'] : [];
+}
+
+/** Every tracked photo's view count across the whole tree, merged from
+ *  each contributing folder's own store — safe to merge with a plain
+ *  array union since every key is already a full relative path, unique
+ *  regardless of which folder it came from. */
+function stats_get_all_photo_views($dir, $files) {
+    $byFolder = [];
+    foreach ($files as $file) {
+        $byFolder[containing_folder_real_path($dir, $file)] = true;
+    }
+    $result = [];
+    foreach (array_keys($byFolder) as $folderPath) {
+        $result += stats_get_photo_views($folderPath);
+    }
+    return $result;
 }
 
 // How long a repeat ?track= ping for the same photo, from the same
@@ -850,10 +1141,6 @@ function is_bot_request() {
     );
 }
 
-if (TRACK_VIEWS) {
-    stats_init($dir);
-}
-
 // ?track=<filename> is a tiny background ping fired by the lightbox each
 // time a photo is displayed. Only counts filenames that are actually in
 // this folder's photo list, skips known bots, and debounces a repeat
@@ -864,16 +1151,21 @@ if (TRACK_VIEWS) {
 if (isset($_GET['track'])) {
     $response = ['ok' => false];
     if (TRACK_VIEWS && !is_bot_request()) {
-        $requested = basename($_GET['track']);
+        $requested = $_GET['track'];
         if (in_array($requested, $files, true)) {
-            $currentPhotoViews = stats_get_photo_views();
+            // A group's members always live in the same folder (folder
+            // membership and directive scoping both guarantee this — see
+            // GROUPING), so this one folder's store covers the whole
+            // group's totals below, not just the requested photo.
+            $requestedFolder = containing_folder_real_path($dir, $requested);
+            $currentPhotoViews = stats_get_photo_views($requestedFolder);
             if (view_debounce_recently_viewed($requested)) {
                 // Debounced: still report the current total, unincremented,
                 // so the live-updating badge reflects reality instead of
                 // looking stuck or broken.
                 $newCount = (int) ($currentPhotoViews[$requested] ?? 0);
             } else {
-                $newCount = stats_bump_photo($requested);
+                $newCount = stats_bump_photo($requestedFolder, $requested);
             }
             $groupKey = $fileToGroupKey[$requested] ?? group_key($requested);
             $groupFiles = $groups[$groupKey] ?? [$requested];
@@ -902,12 +1194,70 @@ $viewCount = 0;
 $photoViews = [];
 if (TRACK_VIEWS) {
     if (!is_bot_request()) {
-        $viewCount = stats_bump_pageview();
+        $viewCount = stats_bump_pageview($dir);
     }
-    $photoViews = stats_get_photo_views();
+    $photoViews = stats_get_all_photo_views($dir, $files);
 }
 
-gc_image_cache($dir, $cacheDir, $files, $imagickAvailable);
+gc_image_cache($dir, $files, $imagickAvailable);
+
+// Snapshot of the root's own title, before any ?folder= override below
+// ever touches $pageTitle — used for the breadcrumb back-link and for
+// building a folder page's own "Folder — Root Title" title.
+$rootPageTitle = $pageTitle;
+
+// "Last updated" — an absolute date, not a relative "2 days ago" (no
+// ticking-clock library needed), derived from the running maximum mtime
+// across every photo and every .md file. Deliberately not a
+// separately-maintained marker file: that only reflects admin-tool
+// saves, so anyone who just drops in new photos via FTP without ever
+// opening an admin tool would see a frozen, misleading date. This one
+// mechanism naturally captures all of it — a new photo's own mtime, a
+// notes .md's mtime — with no dedicated bookkeeping. Computed once here,
+// over the gallery's full (unscoped) file list, and shown on every page
+// including a ?folder= subpage — "last updated" describes the whole
+// gallery, not just what's currently in view.
+$lastUpdatedMtime = 0;
+foreach ($files as $f) {
+    $fp = ($folderTree !== null) ? resolve_real_path($dir, $f) : "$dir/$f";
+    $m = @filemtime($fp);
+    if ($m !== false && $m > $lastUpdatedMtime) $lastUpdatedMtime = $m;
+}
+foreach ($mdFiles as $mdFile) {
+    $m = @filemtime("$dir/$mdFile");
+    if ($m !== false && $m > $lastUpdatedMtime) $lastUpdatedMtime = $m;
+}
+
+// ?folder=<relative path> drills into one folder-group's own page from
+// its cover card (FOLDER_DISPLAY_MODE='overview') — the same gallery
+// shell, scoped down to just that folder's files in a flat grid, not a
+// separate template. Deliberately not recursive into a further level of
+// its own cover cards yet: any of its own sub-subfolders' files just
+// show up flattened into the same grid, the same way 'inline' mode would
+// show them. Validated here (against $groups, already fully built above)
+// so an invalid value 404s before any further rendering work happens.
+//
+// $pageTitle is prefixed right away, using the raw folder path — the
+// <title>, <h1> and Open Graph tags all render before the root's own .md
+// gets a chance to rename this folder via {group:} (see the
+// notes-rendering section further down), so a nicer renamed label simply
+// isn't known yet at this point. A reasonable simplification: still
+// accurate, just not renamed. $groups/$files themselves are scoped down
+// separately, later, after that .md has run.
+$currentFolderPath = null;
+if (isset($_GET['folder'])) {
+    $requestedFolder = $_GET['folder'];
+    if (!isset($folderGroupKeys[$requestedFolder]) || !isset($groups[$requestedFolder])) {
+        http_response_code(404);
+        exit;
+    }
+    $currentFolderPath = $requestedFolder;
+    $pageTitle = $currentFolderPath . ' — ' . $pageTitle;
+    // Same early-computation reasoning as $pageTitle above: the header's
+    // photo count renders before $files gets scoped down to the folder
+    // later on, so it would otherwise show the root's total count.
+    $currentFolderFileCount = count($groups[$currentFolderPath]);
+}
 
 /**
  * Minimal Markdown -> HTML converter covering the formatting people
@@ -1505,14 +1855,57 @@ function status_accent_color($status, $customColor) {
     return $customColor;
 }
 
+/**
+ * A folder-group's cover card in 'overview' mode: one highlight photo
+ * (the first in natural order — $recursiveFiles is already sorted this
+ * way by the scan), the label, and the recursive photo count across the
+ * whole subtree ($recursiveFiles already *is* that full recursive list,
+ * so no separate counting pass is needed). The copy-link icon is a
+ * sibling of the navigation link, not nested inside it — two <a> tags,
+ * never one inside the other.
+ */
+function render_folder_cover_card($folderPath, $label, $recursiveFiles) {
+    $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
+    $coverFile = $recursiveFiles[0] ?? null;
+    $count = count($recursiveFiles);
+    $slug = slugify($folderPath);
+    $html = '<div class="folder-cover" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
+    $html .= '<a class="folder-cover-link" href="' . $folderUrl . '">';
+    if ($coverFile !== null) {
+        $html .= '<img src="' . htmlspecialchars(img_url($coverFile, 'thumb'), ENT_QUOTES, 'UTF-8')
+                . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">';
+    }
+    $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
+    $html .= '<span class="folder-cover-count">' . number_format($count) . ' photo' . ($count === 1 ? '' : 's') . '</span>';
+    $html .= '</a>';
+    $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">&#128279;</a>';
+    $html .= '</div>';
+    return $html;
+}
+
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
-function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = []) {
+function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = []) {
     $html = '';
     $flatIndex = 0;
 
     foreach ($groups as $key => $groupFiles) {
+        // A folder-group in 'overview' mode renders as a cover card — one
+        // highlight photo, a label, a recursive photo count — not a full
+        // inline grid; drilling into it happens on its own page
+        // (?folder=<path>), not in the lightbox, so none of its members'
+        // lightbox indices are assigned here. $flatIndex still has to
+        // advance by the group's full member count regardless, to stay
+        // in sync with $files — the global flat list every other
+        // rendered card's lightbox index is drawn from.
+        if (isset($folderGroupKeys[$key]) && FOLDER_DISPLAY_MODE === 'overview') {
+            $label = $groupLabels[$key] ?? $key;
+            $html .= render_folder_cover_card($key, $label, $groupFiles);
+            $flatIndex += count($groupFiles);
+            continue;
+        }
+
         $status = $groupStatus[$key] ?? '';
         $accentColor = status_accent_color($status, $groupColors[$key] ?? null);
         // An auto-detected single (one file, no explicit {group:} naming
@@ -1686,6 +2079,17 @@ $ogDescription = !empty($mdFiles)
     ? markdown_to_plaintext($mdContents[$mdFiles[0]])
     : (count($files) . ' photo' . (count($files) === 1 ? '' : 's'));
 $ogImageUrl = !empty($files) ? $baseUrl . '/' . img_url($files[0], 'share') : '';
+if ($currentFolderPath !== null) {
+    // $pageTitle is already folder-prefixed (see the ?folder= validation
+    // block above), so $ogTitle below already picked that up — only the
+    // url/description/image need their own folder-scoped values here.
+    $ogUrl = $baseUrl . '/?folder=' . rawurlencode($currentFolderPath);
+    $folderMemberFiles = $groups[$currentFolderPath];
+    $ogDescription = count($folderMemberFiles) . ' photo' . (count($folderMemberFiles) === 1 ? '' : 's');
+    if (!empty($folderMemberFiles)) {
+        $ogImageUrl = $baseUrl . '/' . img_url($folderMemberFiles[0], 'share');
+    }
+}
 if ($requestedPhoto) {
     $ogImageUrl = $baseUrl . '/' . img_url($requestedPhoto, 'share');
     $ogUrl = $baseUrl . '/?photo=' . rawurlencode($requestedPhoto);
@@ -1971,6 +2375,52 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .group-box.sold .card img { filter: grayscale(1) brightness(0.6); }
   .group-box.sold .group-label { opacity: 0.6; }
   .group-box.reserved .group-label { opacity: 0.75; }
+
+  /* Folder-group cover card (FOLDER_DISPLAY_MODE='overview') — a normal
+     grid tile, not a full-width row, so several albums sit side by side. */
+  .folder-cover {
+    position: relative;
+    background: var(--card);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .folder-cover-link {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+  }
+  .folder-cover-link img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.25s ease;
+  }
+  .folder-cover-link:hover img { transform: scale(1.05); }
+  .folder-cover-label {
+    display: block;
+    padding: 10px 12px 2px;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .folder-cover-count {
+    display: block;
+    padding: 0 12px 10px;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .folder-permalink-copy {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(0,0,0,0.55);
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
   .group-label {
     margin: 0 0 12px;
     font-size: 0.95rem;
@@ -2115,33 +2565,73 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 <body>
 
 <header>
+  <?php if ($currentFolderPath !== null): ?>
+    <p class="breadcrumb"><a href="./">&larr; <?= htmlspecialchars($rootPageTitle) ?></a></p>
+  <?php endif; ?>
   <h1><?= htmlspecialchars($pageTitle) ?></h1>
-  <p><?= count($files) ?> photo<?= count($files) === 1 ? '' : 's' ?></p>
+  <?php $headerPhotoCount = $currentFolderPath !== null ? $currentFolderFileCount : count($files); ?>
+  <p><?= $headerPhotoCount ?> photo<?= $headerPhotoCount === 1 ? '' : 's' ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
 </header>
 
-<?php if (empty($mdFiles) && !empty($galleryNotices)): ?>
+<?php if ($currentFolderPath === null && empty($mdFiles) && !empty($galleryNotices)): ?>
   <div class="notes">
     <?= render_gallery_notices_banner($galleryNotices) ?>
   </div>
 <?php endif; ?>
 
-<?php if (!empty($mdFiles)): ?>
+<?php
+// markdown_to_html() still has to run against the *root's own, unscoped*
+// $groups/$files whenever a .md qualifies — its side effects
+// ($groupLabels especially) are what let a {group: Name} directive in
+// the root's notes rename a folder-group, including one being viewed
+// right now via ?folder=. Its visible output is a different question: a
+// folder's own page doesn't show the root's notes box at all (they
+// describe the whole trip, not specifically this one folder, and a
+// subfolder can't yet have its own — see the design doc), so the
+// rendered HTML is only kept, never discarded, when there's no
+// $currentFolderPath to hide it for.
+$noteBoxesHtml = [];
+foreach ($mdFiles as $mdFile) {
+    $noteBoxesHtml[$mdFile] = markdown_to_html($mdContents[$mdFile], $groups, $files, $groupColors, $groupStatus, $groupLabels, $renderClaims, $photoViews);
+}
+?>
+<?php if ($currentFolderPath === null && !empty($mdFiles)): ?>
   <div class="notes">
     <?= render_gallery_notices_banner($galleryNotices) ?>
     <?php foreach ($mdFiles as $mdFile): ?>
       <div class="note-box">
         <span class="note-filename"><?= htmlspecialchars($mdFile) ?></span>
-        <?= markdown_to_html($mdContents[$mdFile], $groups, $files, $groupColors, $groupStatus, $groupLabels, $renderClaims, $photoViews) ?>
+        <?= $noteBoxesHtml[$mdFile] ?>
       </div>
     <?php endforeach; ?>
   </div>
 <?php endif; ?>
 
+<?php
+// The actual ?folder= override: scope $groups/$files down to just this
+// one folder's files for the gallery grid below — a flat run of
+// individual cards, not further cover-card drilling.
+// $explicitGroupKeys/$folderGroupKeys are cleared since there's no
+// further boxing or drilling happening on this page. ($pageTitle was
+// already folder-prefixed earlier, in the ?folder= validation block.)
+$rootFolderGroupKeys = $folderGroupKeys;
+if ($currentFolderPath !== null) {
+    $folderFiles = $groups[$currentFolderPath];
+    $groups = [];
+    foreach ($folderFiles as $f) {
+        $groups[$f] = [$f];
+    }
+    $files = $folderFiles;
+    $explicitGroupKeys = [];
+    $folderGroupKeys = [];
+}
+?>
+
 <?php if (empty($files)): ?>
   <div class="empty">No photos found in this folder.</div>
 <?php else: ?>
   <div class="gallery">
-    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys) ?>
+    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys) ?>
   </div>
 <?php endif; ?>
 
@@ -2283,7 +2773,12 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   document.addEventListener('click', (e) => {
     const link = e.target.closest('.permalink-copy');
     if (!link) return;
-    const cleanUrl = window.location.origin + window.location.pathname + link.hash;
+    // A .md item's or group box's permalink is a same-page #anchor; a
+    // folder cover card's is a real "?folder=..." link instead (no
+    // hash) — copy whichever one this button actually has.
+    const cleanUrl = link.hash
+      ? window.location.origin + window.location.pathname + link.hash
+      : window.location.origin + window.location.pathname + link.getAttribute('href');
     copyToClipboard(cleanUrl).then(() => flashCopied(link));
   });
 
