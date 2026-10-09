@@ -102,6 +102,27 @@ function make_jpeg($path, $w, $h, $r, $g, $b) {
     imagedestroy($im);
 }
 
+// A minimal but well-formed enough MP4 container to exercise
+// video_duration_seconds()'s box-walking: just an ftyp box (ignored,
+// skipped over by size) followed by a moov box containing a single mvhd
+// (version 0) child with a real duration. No mdat/track data at all —
+// not meant to actually play, only to parse.
+function make_minimal_mp4($path, $durationSeconds, $timescale = 1) {
+    $ftypBody = 'isom' . pack('N', 0);
+    $ftyp = pack('N', 8 + strlen($ftypBody)) . 'ftyp' . $ftypBody;
+
+    $mvhdBody = pack('N', 0)         // version (0) + flags
+              . pack('N', 0)         // creation_time
+              . pack('N', 0)         // modification_time
+              . pack('N', $timescale)
+              . pack('N', (int) round($durationSeconds * $timescale));
+    $mvhd = pack('N', 8 + strlen($mvhdBody)) . 'mvhd' . $mvhdBody;
+
+    $moov = pack('N', 8 + strlen($mvhd)) . 'moov' . $mvhd;
+
+    file_put_contents($path, $ftyp . $moov);
+}
+
 function find_free_port() {
     $sock = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
     if (!$sock) {
@@ -713,6 +734,78 @@ check('?folder= with a path-traversal attempt 404s', $badFolderStatus === 404);
 check('?folder= with an unknown folder name 404s', $unknownFolderStatus === 404);
 [$rootAsFolderStatus] = http_get("$baseNested/?folder=loose.jpg");
 check('?folder= naming a non-folder file 404s', $rootAsFolderStatus === 404);
+
+/* ======================================================================= *
+ * FIXTURE: "video" — ENABLE_VIDEO on. Covers recognition, the generic
+ * placeholder thumbnail, the duration badge (and graceful degradation
+ * when a "video" doesn't parse as one), and the ?video= Range-request
+ * serving endpoint (full GET, a ranged GET, a suffix range, past-EOF, and
+ * a malformed Range header).
+ * ======================================================================= */
+
+echo "== video fixture: ENABLE_VIDEO, placeholder thumbnail, duration, Range requests ==\n";
+
+$fxVideo = new_fixture_dir('video');
+make_jpeg("$fxVideo/photo.jpg", 60, 60, 80, 80, 80);
+make_minimal_mp4("$fxVideo/clip.mp4", 65, 1); // 65 seconds -> "1:05"
+file_put_contents("$fxVideo/broken.mov", 'not actually a video container');
+
+write_patched_index("$fxVideo/index.php", $indexContents, [
+    'ENABLE_VIDEO' => 'true',
+]);
+
+$portVideo = find_free_port();
+start_server($fxVideo, $portVideo);
+$baseVideo = "http://127.0.0.1:$portVideo";
+
+[$videoPageStatus, $videoPageBody] = http_get("$baseVideo/");
+check('a video file is recognized and shown in the grid when ENABLE_VIDEO is on', $videoPageStatus === 200 && str_contains($videoPageBody, 'clip.mp4'));
+check('the video card uses the normal ?img= thumbnail URL (served as a placeholder, not a broken image)', str_contains($videoPageBody, 'src="?img=clip.mp4&amp;size=thumb"'));
+check('a video with a readable duration shows a duration badge', (bool) preg_match('#<span class="video-duration">1:05</span>#', $videoPageBody));
+$brokenCardStart = strpos($videoPageBody, 'alt="broken.mov"');
+$brokenCardEnd = $brokenCardStart === false ? false : strpos($videoPageBody, '</div>', $brokenCardStart);
+$brokenCardHtml = ($brokenCardStart !== false && $brokenCardEnd !== false) ? substr($videoPageBody, $brokenCardStart, $brokenCardEnd - $brokenCardStart) : '';
+check('a "video" that doesn\'t parse as a real container still renders, with no duration badge', $brokenCardStart !== false && !str_contains($brokenCardHtml, 'video-duration'));
+
+[$placeholderStatus, , $placeholderHeaders] = http_get("$baseVideo/?img=" . rawurlencode('clip.mp4') . '&size=thumb');
+check('?img= on a video file returns 200', $placeholderStatus === 200);
+check('?img= on a video file serves image/jpeg (the generic placeholder, not the video itself)', (bool) array_filter($placeholderHeaders, fn($h) => stripos($h, 'Content-Type: image/jpeg') === 0));
+
+$clipSize = filesize("$fxVideo/clip.mp4");
+
+[$fullStatus, $fullBody, $fullHeaders] = http_get("$baseVideo/?video=clip.mp4");
+check('?video= with no Range header returns 200 with the full file', $fullStatus === 200 && strlen($fullBody) === $clipSize);
+check('?video= advertises Accept-Ranges: bytes', (bool) array_filter($fullHeaders, fn($h) => stripos($h, 'Accept-Ranges: bytes') === 0));
+check('?video= sets the right video Content-Type', (bool) array_filter($fullHeaders, fn($h) => stripos($h, 'Content-Type: video/mp4') === 0));
+
+[$rangeStatus, $rangeBody, $rangeHeaders] = http_get("$baseVideo/?video=clip.mp4", ['Range: bytes=0-9']);
+check('a ranged ?video= request returns 206', $rangeStatus === 206);
+check('a ranged ?video= request returns exactly the requested span', strlen($rangeBody) === 10);
+check('a ranged ?video= request sets the right Content-Range', (bool) array_filter($rangeHeaders, fn($h) => stripos($h, "Content-Range: bytes 0-9/$clipSize") === 0));
+
+[$suffixStatus, $suffixBody] = http_get("$baseVideo/?video=clip.mp4", ['Range: bytes=-10']);
+check('a suffix range ("last 10 bytes") returns 206 with exactly 10 bytes', $suffixStatus === 206 && strlen($suffixBody) === 10);
+$fullBytes = file_get_contents("$fxVideo/clip.mp4");
+check('the suffix range\'s bytes actually are the file\'s last 10 bytes', $suffixBody === substr($fullBytes, -10));
+
+[$eofStatus, , $eofHeaders] = http_get("$baseVideo/?video=clip.mp4", ['Range: bytes=' . ($clipSize + 1000) . '-' . ($clipSize + 2000)]);
+check('a Range request entirely past end-of-file returns 416', $eofStatus === 416);
+check('a 416 response reports the real file size in Content-Range', (bool) array_filter($eofHeaders, fn($h) => stripos($h, "Content-Range: bytes */$clipSize") === 0));
+
+[$malformedStatus, $malformedBody] = http_get("$baseVideo/?video=clip.mp4", ['Range: bytes=abc-def']);
+check('a malformed Range header is ignored, falling back to a full 200 response', $malformedStatus === 200 && strlen($malformedBody) === $clipSize);
+
+[$videoTraversalStatus] = http_get("$baseVideo/?video=" . rawurlencode('../../../../etc/passwd'));
+check('?video= refuses a path-traversal attempt', $videoTraversalStatus === 404);
+
+// ENABLE_VIDEO stays off by default — a video file sitting in an
+// otherwise-default gallery is invisible and unservable, exactly like an
+// unmarked .md, even though the file genuinely exists on disk.
+make_minimal_mp4("$fx1/ignored.mp4", 10);
+[, $defaultsBodyWithVideo] = http_get("$base1/");
+check('a video file is invisible when ENABLE_VIDEO is off (the default)', !str_contains($defaultsBodyWithVideo, 'ignored.mp4'));
+[$videoOffStatus] = http_get("$base1/?video=ignored.mp4");
+check('?video= 404s when ENABLE_VIDEO is off, even for a file that really exists', $videoOffStatus === 404);
 
 /* ======================================================================= *
  * FIXTURE 3: "mtimesort" — PHOTO_SORT_ORDER = 'mtime'.

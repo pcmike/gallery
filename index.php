@@ -16,11 +16,11 @@
  * Quick reference for anyone editing this file directly:
  *   - GALLERY_VERSION / TRACK_VIEWS / SHOW_VIEW_COUNTS_PUBLICLY /
  *     ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER /
- *     AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS
- *     constants are just below. TRACK_VIEWS, ENABLE_THUMBNAIL_CACHE, and
- *     AUTO_GROUP_BY_FOLDER are off by default — this script writes
- *     nothing to disk and doesn't look at a single subfolder unless you
- *     turn one on.
+ *     AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS /
+ *     ENABLE_VIDEO constants are just below. TRACK_VIEWS,
+ *     ENABLE_THUMBNAIL_CACHE, AUTO_GROUP_BY_FOLDER, and ENABLE_VIDEO are
+ *     off by default — this script writes nothing to disk and doesn't
+ *     look at a single subfolder or video file unless you turn one on.
  *   - A .md file is only read if its first line is exactly {gallery}.
  *   - Photo grouping: auto by filename (minus a trailing "_01"/"-02"
  *     suffix, if AUTO_GROUP_BY_FILENAME is on), auto by subfolder (if
@@ -117,6 +117,23 @@ define('FOLDER_DISPLAY_MODE', 'overview');
 // default.
 define('EXTRA_FOLDERS', []);
 
+// Recognize .mov and .mp4 (iPhone's two video formats) as media items,
+// eligible for everything a photo already is — filename auto-grouping,
+// explicit {photos:}, folder-based grouping, ordering. Off by default:
+// someone's folder might already have an unrelated .mov screen recording
+// sitting in it, and turning this on is what decides the gallery should
+// start treating video files as content. No transcoding, no re-encoding,
+// no extracted frames — a video is served exactly as the camera produced
+// it (with HTTP Range support for seeking), and shown in the grid behind
+// a generic placeholder graphic rather than an actual frame, since that
+// would mean adding a video-processing dependency this project doesn't
+// carry. See the README for the real limitations this implies: codec
+// compatibility isn't guaranteed (HEVC-encoded .mov plays natively on
+// Apple platforms only), there's real bandwidth cost serving uncompressed
+// clips in full, and EXIF-style location auto-fill doesn't carry over
+// from an iPhone video the way it does from a photo.
+define('ENABLE_VIDEO', false);
+
 $dir = __DIR__;
 $self = basename(__FILE__);
 
@@ -133,6 +150,27 @@ $imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
 if ($imagickAvailable && ENABLE_THUMBNAIL_CACHE) {
     $imageExtensions[] = 'heic';
     $imageExtensions[] = 'heif';
+}
+
+/** Whether a filename's extension is one of the two video formats this
+ *  script recognizes when ENABLE_VIDEO is on — used everywhere a video
+ *  item needs different handling than a photo (serving, the grid
+ *  placeholder, cover-card selection), regardless of whether video
+ *  recognition is actually turned on; it's purely an extension check. */
+function is_video_file($filename) {
+    $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+    return in_array($ext, ['mov', 'mp4'], true);
+}
+
+// $mediaExtensions is what the scan below actually filters by — photo
+// extensions, plus .mov/.mp4 once ENABLE_VIDEO is on. Kept separate from
+// $imageExtensions itself, which stays photo-only: it's still used
+// downstream (image_cache_path, generate_resized_jpeg) for logic that
+// only ever makes sense for an actual photo.
+$mediaExtensions = $imageExtensions;
+if (ENABLE_VIDEO) {
+    $mediaExtensions[] = 'mov';
+    $mediaExtensions[] = 'mp4';
 }
 
 /**
@@ -154,7 +192,7 @@ if ($imagickAvailable && ENABLE_THUMBNAIL_CACHE) {
  * this script's own infrastructure files — from being scanned as if it
  * were a photo subfolder.
  */
-function scan_folder_tree($realDir, $imageExtensions, $self, $isRoot = true) {
+function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     $node = ['files' => [], 'subdirs' => []];
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
@@ -165,7 +203,7 @@ function scan_folder_tree($realDir, $imageExtensions, $self, $isRoot = true) {
         $path = $realDir . '/' . $entry;
         if (is_file($path)) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
-            if (in_array($ext, $imageExtensions, true)) {
+            if (in_array($ext, $mediaExtensions, true)) {
                 $node['files'][] = $entry;
             }
             continue;
@@ -178,7 +216,7 @@ function scan_folder_tree($realDir, $imageExtensions, $self, $isRoot = true) {
             || strpos($childReal, $parentReal . DIRECTORY_SEPARATOR) !== 0) {
             continue;
         }
-        $node['subdirs'][$entry] = scan_folder_tree($path, $imageExtensions, $self, false);
+        $node['subdirs'][$entry] = scan_folder_tree($path, $mediaExtensions, $self, false);
     }
     if (PHOTO_SORT_ORDER === 'mtime') {
         usort($node['files'], function ($a, $b) use ($realDir) {
@@ -201,12 +239,12 @@ function scan_folder_tree($realDir, $imageExtensions, $self, $isRoot = true) {
  * from wandering outside the root) don't apply to them. A real folder of
  * the same name already found during the normal scan always wins.
  */
-function merge_extra_folders($rootNode, $imageExtensions, $self) {
+function merge_extra_folders($rootNode, $mediaExtensions, $self) {
     foreach (EXTRA_FOLDERS as $virtualName => $realPath) {
         if (!is_string($virtualName) || $virtualName === '' || strpbrk($virtualName, "/\\") !== false) continue;
         if (isset($rootNode['subdirs'][$virtualName])) continue;
         if (!is_dir($realPath) || is_link($realPath)) continue;
-        $rootNode['subdirs'][$virtualName] = scan_folder_tree($realPath, $imageExtensions, $self, false);
+        $rootNode['subdirs'][$virtualName] = scan_folder_tree($realPath, $mediaExtensions, $self, false);
     }
     return $rootNode;
 }
@@ -278,18 +316,18 @@ function containing_folder_real_path($dir, $relPath) {
 
 if (AUTO_GROUP_BY_FOLDER) {
     $folderTree = merge_extra_folders(
-        scan_folder_tree($dir, $imageExtensions, $self),
-        $imageExtensions,
+        scan_folder_tree($dir, $mediaExtensions, $self),
+        $mediaExtensions,
         $self
     );
     $files = flatten_folder_tree($folderTree);
 } else {
     $folderTree = null;
-    $files = array_filter(scandir($dir), function ($file) use ($dir, $imageExtensions, $self) {
+    $files = array_filter(scandir($dir), function ($file) use ($dir, $mediaExtensions, $self) {
         if ($file === $self || $file === '.' || $file === '..') return false;
         if (!is_file("$dir/$file")) return false;
         $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-        return in_array($ext, $imageExtensions);
+        return in_array($ext, $mediaExtensions);
     });
 
     // Base ordering, before any .md-driven repositioning — see
@@ -315,6 +353,22 @@ if (AUTO_GROUP_BY_FOLDER) {
 $naturalRank = [];
 foreach ($files as $i => $f) {
     $naturalRank[$f] = $i;
+}
+
+// Duration badge (see ENABLE_VIDEO's doc comment) — read once per video
+// file here, alongside every other per-file precomputation, rather than
+// re-parsed on every render. Missing/unparseable just omits the badge
+// for that one file; it never blocks the rest of the page.
+$videoDurations = [];
+if (ENABLE_VIDEO) {
+    foreach ($files as $f) {
+        if (is_video_file($f)) {
+            $duration = video_duration_seconds(resolve_real_path($dir, $f));
+            if ($duration !== null) {
+                $videoDurations[$f] = $duration;
+            }
+        }
+    }
 }
 
 /**
@@ -407,8 +461,134 @@ function guess_mime($ext) {
         'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
         'gif' => 'image/gif', 'webp' => 'image/webp', 'bmp' => 'image/bmp',
         'heic' => 'image/heic', 'heif' => 'image/heif',
+        'mp4' => 'video/mp4', 'mov' => 'video/quicktime',
     ];
     return $map[$ext] ?? 'application/octet-stream';
+}
+
+/**
+ * Renders a generic "this is a video" placeholder graphic — a dark tile
+ * with a plain play triangle — wherever a video's "thumbnail" or share-
+ * preview image is requested. No frame extraction: that would mean
+ * adding a video-processing dependency (ffmpeg or similar) this project
+ * has never carried and isn't worth adding just for this. Same role for
+ * every video regardless of filename, so nothing to cache — generating
+ * one is cheap enough to just do on every request.
+ */
+function render_video_placeholder_image($maxDim) {
+    $w = max(1, (int) $maxDim);
+    $h = max(1, (int) round($w * 0.75));
+    $img = imagecreatetruecolor($w, $h);
+    imagefilledrectangle($img, 0, 0, $w, $h, imagecolorallocate($img, 28, 28, 30));
+    $triangleColor = imagecolorallocate($img, 200, 200, 205);
+    $size = min($w, $h) * 0.22;
+    $cx = $w / 2;
+    $cy = $h / 2;
+    $points = [
+        $cx - $size * 0.55, $cy - $size,
+        $cx - $size * 0.55, $cy + $size,
+        $cx + $size * 0.85, $cy,
+    ];
+    // imagefilledpolygon()'s $num_points argument was removed in PHP 8 (it's
+    // now inferred from $points); passing it explicitly still works on 7.x.
+    if (PHP_VERSION_ID >= 80000) {
+        imagefilledpolygon($img, $points, $triangleColor);
+    } else {
+        imagefilledpolygon($img, $points, 3, $triangleColor);
+    }
+    header('Content-Type: image/jpeg');
+    header('Cache-Control: public, max-age=31536000, immutable');
+    imagejpeg($img, null, 82);
+    imagedestroy($img);
+}
+
+/**
+ * Reads a clip's duration (in seconds) straight out of its MP4/MOV
+ * container's mvhd box — no transcoding, no external dependency, just
+ * walking a handful of well-documented box headers. iPhone video
+ * commonly places the moov atom at the *end* of the file (mdat written
+ * first, moov finalized after recording stops), so this walks top-level
+ * boxes by their declared size rather than assuming moov is near the
+ * start — each step is a seek + an 8-or-16-byte read, so a large
+ * preceding mdat costs nothing extra to skip over. Returns null on
+ * anything that doesn't parse as a well-formed enough container — a
+ * missing duration badge is a fine degradation, not worth failing the
+ * whole page over.
+ */
+function video_duration_seconds($path) {
+    $fh = @fopen($path, 'rb');
+    if ($fh === false) return null;
+    $fileSize = @filesize($path);
+    if ($fileSize === false || $fileSize < 8) {
+        fclose($fh);
+        return null;
+    }
+
+    $maxBoxes = 10000; // sanity guard against a corrupt/adversarial file forcing an infinite loop
+    $findBox = function ($startOffset, $rangeEnd, $wantType) use ($fh, &$maxBoxes) {
+        $pos = $startOffset;
+        $count = 0;
+        while ($pos < $rangeEnd && $count++ < $maxBoxes) {
+            if (fseek($fh, $pos) !== 0) return null;
+            $header = fread($fh, 8);
+            if ($header === false || strlen($header) < 8) return null;
+            $size = unpack('N', substr($header, 0, 4))[1];
+            $type = substr($header, 4, 4);
+            $headerLen = 8;
+            if ($size === 1) {
+                $ext = fread($fh, 8);
+                if ($ext === false || strlen($ext) < 8) return null;
+                $size = unpack('J', $ext)[1];
+                $headerLen = 16;
+            }
+            if ($size !== 0 && $size < $headerLen) return null; // corrupt
+            if ($type === $wantType) {
+                return ['offset' => $pos + $headerLen, 'size' => $size === 0 ? ($rangeEnd - $pos - $headerLen) : $size - $headerLen];
+            }
+            if ($size === 0) return null; // box extends to EOF and it's not the one we want
+            $pos += $size;
+        }
+        return null;
+    };
+
+    $moov = $findBox(0, $fileSize, 'moov');
+    if ($moov === null) {
+        fclose($fh);
+        return null;
+    }
+    $mvhd = $findBox($moov['offset'], $moov['offset'] + $moov['size'], 'mvhd');
+    if ($mvhd === null) {
+        fclose($fh);
+        return null;
+    }
+
+    fseek($fh, $mvhd['offset']);
+    $body = fread($fh, min($mvhd['size'], 32));
+    fclose($fh);
+    if ($body === false || strlen($body) < 1) return null;
+
+    $version = ord($body[0]);
+    if ($version === 1) {
+        if (strlen($body) < 32) return null;
+        $timescale = unpack('N', substr($body, 20, 4))[1];
+        $duration = unpack('J', substr($body, 24, 8))[1];
+    } else {
+        if (strlen($body) < 20) return null;
+        $timescale = unpack('N', substr($body, 12, 4))[1];
+        $duration = unpack('N', substr($body, 16, 4))[1];
+    }
+    if ($timescale <= 0) return null;
+    return $duration / $timescale;
+}
+
+/** Formats a duration in seconds as a plain "M:SS" badge (no leading
+ *  hours unit — these are short trip clips, not feature-length video). */
+function format_duration($seconds) {
+    $seconds = (int) round($seconds);
+    if ($seconds < 0) $seconds = 0;
+    $m = intdiv($seconds, 60);
+    $s = $seconds % 60;
+    return $m . ':' . str_pad((string) $s, 2, '0', STR_PAD_LEFT);
 }
 
 function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
@@ -537,12 +717,21 @@ function serve_image($dir, $filename, $variant, $validFiles) {
         http_response_code(404);
         return;
     }
+    $maxDims = ['thumb' => 480, 'share' => 1200, 'full' => 2400];
+    $maxDim = $maxDims[$variant] ?? 480;
+
+    // No frame extraction (see ENABLE_VIDEO's doc comment) — every size
+    // of a video's "thumbnail," grid tile or Open Graph share preview
+    // alike, gets the same generic placeholder graphic instead.
+    if (is_video_file($filename)) {
+        render_video_placeholder_image($maxDim);
+        return;
+    }
+
     $srcPath = resolve_real_path($dir, $filename);
     $cacheDir = containing_folder_real_path($dir, $filename) . '/.gallery-cache';
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
     $isHeic = in_array($ext, ['heic', 'heif'], true);
-    $maxDims = ['thumb' => 480, 'share' => 1200, 'full' => 2400];
-    $maxDim = $maxDims[$variant] ?? 480;
 
     // Non-HEIC files at full size are served untouched — no need to
     // resize or re-encode the original the lightbox already opens fine.
@@ -586,6 +775,88 @@ function img_url($file, $size) {
 
 if (isset($_GET['img'])) {
     serve_image($dir, $_GET['img'], $_GET['size'] ?? 'thumb', $files);
+    exit;
+}
+
+/**
+ * Serves ?video=<filename-or-relative-path> with HTTP Range support —
+ * the one genuinely new piece of serving logic video needs. The file is
+ * never transcoded or re-encoded, but video playback does need seeking,
+ * and a browser seeks by issuing a Range request; without honoring it,
+ * seeking either breaks outright or forces re-downloading the whole file
+ * from the start. $filename is validated the same exact-allowlist way as
+ * serve_image() above — and since ENABLE_VIDEO=false simply never adds
+ * .mov/.mp4 to $validFiles in the first place, a request here fails
+ * closed on its own with no extra check needed for the feature being off.
+ */
+function serve_video($dir, $filename, $validFiles) {
+    if (!in_array($filename, $validFiles, true)) {
+        http_response_code(404);
+        return;
+    }
+    $srcPath = resolve_real_path($dir, $filename);
+    $size = @filesize($srcPath);
+    if ($size === false) {
+        http_response_code(404);
+        return;
+    }
+    $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+
+    header('Content-Type: ' . guess_mime($ext));
+    header('Cache-Control: public, max-age=31536000, immutable');
+    header('Accept-Ranges: bytes');
+
+    $start = 0;
+    $end = $size - 1;
+    $range = $_SERVER['HTTP_RANGE'] ?? '';
+    $isRangeRequest = false;
+    if ($range !== '' && preg_match('/^bytes=(\d*)-(\d*)$/', trim($range), $m) && ($m[1] !== '' || $m[2] !== '')) {
+        $isRangeRequest = true;
+        if ($m[1] === '') {
+            // Suffix range ("bytes=-500"): the last N bytes.
+            $suffixLen = (int) $m[2];
+            $start = max(0, $size - $suffixLen);
+            $end = $size - 1;
+        } else {
+            $start = (int) $m[1];
+            $end = $m[2] === '' ? $size - 1 : min((int) $m[2], $size - 1);
+        }
+        if ($start >= $size || $start > $end) {
+            http_response_code(416);
+            header('Content-Range: bytes */' . $size);
+            return;
+        }
+    }
+    // A Range header present but not matching "bytes=..." at all (some
+    // other unit, or genuinely malformed) is simply ignored — falls back
+    // to serving the whole file with a normal 200, rather than erroring.
+
+    $fh = @fopen($srcPath, 'rb');
+    if ($fh === false) {
+        http_response_code(404);
+        return;
+    }
+    if ($isRangeRequest) {
+        http_response_code(206);
+        header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
+    }
+    $length = $end - $start + 1;
+    header('Content-Length: ' . $length);
+
+    fseek($fh, $start);
+    $remaining = $length;
+    $chunkSize = 8192;
+    while ($remaining > 0 && !feof($fh)) {
+        $chunk = fread($fh, min($chunkSize, $remaining));
+        if ($chunk === false || $chunk === '') break;
+        echo $chunk;
+        $remaining -= strlen($chunk);
+    }
+    fclose($fh);
+}
+
+if (isset($_GET['video'])) {
+    serve_video($dir, $_GET['video'], $files);
     exit;
 }
 
@@ -1819,8 +2090,12 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
  *  item ($status is '', 'sold', or 'reserved' — a grouped item's ribbon
  *  is drawn on its parent box instead); and, for a standalone item whose
  *  matched {color: value} directive has nowhere else to apply (single-
- *  photo "groups" never get a box), a colored inset ring instead. */
-function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null) {
+ *  photo "groups" never get a box), a colored inset ring instead. A
+ *  video's tile is this exact same markup — its <img> just resolves to
+ *  the generic placeholder graphic (see render_video_placeholder_image)
+ *  — plus a plain-text duration badge in the one corner not already
+ *  spoken for, when $videoDuration is known. */
+function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null, $videoDuration = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
     $hidden = ($views > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
     $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">&#128065; '
@@ -1831,6 +2106,9 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     } elseif ($status === 'reserved') {
         $statusBadge = '<span class="reserved-badge-corner">RESERVED</span>';
     }
+    $durationBadge = $videoDuration !== null
+        ? '<span class="video-duration">' . htmlspecialchars(format_duration($videoDuration), ENT_QUOTES, 'UTF-8') . '</span>'
+        : '';
     $colorStyle = $color ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ' inset;"' : '';
     // $anchorId lets a standalone single be a valid "#group-<slug>" jump
     // target too — render_group_thumbs() always links there for a
@@ -1840,7 +2118,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
     return '<div class="card' . ($status ? ' ' . $status : '') . '"' . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $statusBadge . $badge . '</div>';
+         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $durationBadge . $statusBadge . $badge . '</div>';
 }
 
 /**
@@ -1866,7 +2144,20 @@ function status_accent_color($status, $customColor) {
  */
 function render_folder_cover_card($folderPath, $label, $recursiveFiles) {
     $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
-    $coverFile = $recursiveFiles[0] ?? null;
+    // The cover photo prefers an actual photo over a video, even if a
+    // video sorts first — a video's generic placeholder graphic makes a
+    // flat, uninteresting highlight. Only fall back to a video if the
+    // folder has no photos at all.
+    $coverFile = null;
+    foreach ($recursiveFiles as $f) {
+        if (!is_video_file($f)) {
+            $coverFile = $f;
+            break;
+        }
+    }
+    if ($coverFile === null) {
+        $coverFile = $recursiveFiles[0] ?? null;
+    }
     $count = count($recursiveFiles);
     $slug = slugify($folderPath);
     $html = '<div class="folder-cover" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
@@ -1886,7 +2177,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles) {
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
-function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = []) {
+function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = []) {
     $html = '';
     $flatIndex = 0;
 
@@ -1917,7 +2208,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // middle of it to fragment the grid.
         $slug = slugify($key);
         if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key])) {
-            $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor, 'group-' . $slug);
+            $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor, 'group-' . $slug, $videoDurations[$groupFiles[0]] ?? null);
             $flatIndex++;
             continue;
         }
@@ -1944,7 +2235,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
                 . render_permalink_button('group-' . $slug) . '</h2>';
         $html .= '<div class="group-grid">';
         foreach ($groupFiles as $file) {
-            $html .= render_card($file, $flatIndex, $photoViews);
+            $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null);
             $flatIndex++;
         }
         $html .= '</div></div>';
@@ -2480,6 +2771,17 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     gap: 3px;
     pointer-events: none;
   }
+  .video-duration {
+    position: absolute;
+    bottom: 6px;
+    left: 6px;
+    background: rgba(0,0,0,0.65);
+    color: #eaeaea;
+    font-size: 0.68rem;
+    padding: 2px 7px;
+    border-radius: 10px;
+    pointer-events: none;
+  }
   .empty {
     text-align: center;
     color: var(--muted);
@@ -2512,7 +2814,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     touch-action: none;
   }
   .lightbox.open { display: flex; }
-  .lightbox img {
+  .lightbox img, .lightbox video {
     max-width: 90vw;
     max-height: 82vh;
     border-radius: 6px;
@@ -2631,7 +2933,7 @@ if ($currentFolderPath !== null) {
   <div class="empty">No photos found in this folder.</div>
 <?php else: ?>
   <div class="gallery">
-    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys) ?>
+    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations) ?>
   </div>
 <?php endif; ?>
 
@@ -2643,6 +2945,7 @@ if ($currentFolderPath !== null) {
   <button class="close" onclick="closeLightbox()">&times;</button>
   <button class="nav prev" onclick="navigate(-1)">&#10094;</button>
   <img id="lightbox-img" src="" alt="">
+  <video id="lightbox-video" controls playsinline style="display:none;"></video>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link to this photo">&#128279;</button>
@@ -2658,7 +2961,12 @@ if ($currentFolderPath !== null) {
   let current = 0;
   const lightbox = document.getElementById('lightbox');
   const lightboxImg = document.getElementById('lightbox-img');
+  const lightboxVideo = document.getElementById('lightbox-video');
   const caption = document.getElementById('lightbox-caption');
+
+  function isVideoFile(name) {
+    return /\.(mp4|mov)$/i.test(name);
+  }
 
   function cssEscape(value) {
     return (window.CSS && CSS.escape) ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
@@ -2698,19 +3006,38 @@ if ($currentFolderPath !== null) {
   }
   function closeLightbox() {
     lightbox.classList.remove('open');
+    lightboxVideo.pause();
   }
   function navigate(delta) {
     current = (current + delta + files.length) % files.length;
     updateImage();
   }
   function updateImage() {
-    lightboxImg.src = '?img=' + encodeURIComponent(files[current]) + '&size=full';
-    caption.textContent = files[current] + ' — ' + (current + 1) + ' / ' + files.length;
-    trackView(files[current]);
+    const file = files[current];
+    if (isVideoFile(file)) {
+      lightboxImg.style.display = 'none';
+      lightboxImg.src = '';
+      lightboxVideo.style.display = '';
+      lightboxVideo.src = '?video=' + encodeURIComponent(file);
+      lightboxVideo.load();
+    } else {
+      lightboxVideo.pause();
+      lightboxVideo.style.display = 'none';
+      lightboxVideo.src = '';
+      lightboxImg.style.display = '';
+      lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full';
+    }
+    caption.textContent = file + ' — ' + (current + 1) + ' / ' + files.length;
+    trackView(file);
   }
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
-    if (e.key === 'Escape') closeLightbox();
+    if (e.key === 'Escape') { closeLightbox(); return; }
+    // A focused <video>'s native controls already use arrow keys (seek)
+    // and spacebar (play/pause) — don't also fire our own nav on top of
+    // that, or an arrow press would both seek the clip and jump to a
+    // different lightbox item at the same time.
+    if (document.activeElement === lightboxVideo) return;
     if (e.key === 'ArrowLeft') navigate(-1);
     if (e.key === 'ArrowRight') navigate(1);
   });
