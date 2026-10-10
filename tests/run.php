@@ -69,6 +69,16 @@ register_shutdown_function(function () use (&$cleanupProcs, &$cleanupDirs) {
 
 /* --------------------------------------------------------------------- */
 
+// A PHP warning or notice in this test script means a check may have run on a missing value (an undefined
+// variable is null, and "starts with null" is always true): count it as a failure instead of letting it scroll by.
+set_error_handler(function ($errno, $message, $file, $line) {
+    if (!(error_reporting() & $errno)) return false;   // @-suppressed on purpose (e.g. polling a server that is still starting)
+    global $failCount;
+    $failCount++;
+    echo "  FAIL  PHP " . ($errno === E_WARNING || $errno === E_USER_WARNING ? 'warning' : 'notice') . " in the test script: $message (line $line)\n";
+    return true;
+});
+
 function check($description, $condition) {
     global $failCount, $passCount;
     if ($condition) {
@@ -186,6 +196,11 @@ function read_data_file($path) {
     }
     return json_decode($raw, true);
 }
+
+/** The settings file (.gallery-config.php): the 404 guard line, then JSON. */
+$cfgGuard = "<?php http_response_code(404); exit; ?>\n";
+function cfg_text($settings) { return $GLOBALS['cfgGuard'] . json_encode($settings === [] ? new stdClass() : $settings, JSON_HEX_TAG) . "\n"; }
+function cfg_read($path) { $raw = (string) file_get_contents($path); $raw = substr($raw, (int) strpos($raw, "\n") + 1); return json_decode($raw, true); }
 
 function write_data_file($path, $data) {
     file_put_contents($path, "<?php http_response_code(404); exit; ?>\n" . json_encode($data, JSON_HEX_TAG));
@@ -1112,8 +1127,8 @@ check('?admin with no credentials shows a password form (200), not a browser Bas
 check('?admin\'s login form is never indexed or cached', str_contains($noAuthBody, 'noindex') && (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'X-Robots-Tag: noindex') === 0) && (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'Cache-Control: no-store') === 0));
 check('...and asking for it starts no session (no Set-Cookie for an anonymous visitor)', !array_filter($noAuthHeaders, fn($h) => stripos($h, 'Set-Cookie:') === 0));
 
-[$wrongAuthStatus] = http_get("$baseAdmin/?admin", [$wrongAuthHeader]);
-check('?admin with a wrong password in a Basic header (a script) returns 401 with a challenge', $wrongAuthStatus === 401);
+[$wrongAuthStatus, $wrongAuthBody, $wrongAuthHeaders] = http_get("$baseAdmin/?admin", [$wrongAuthHeader]);
+check('?admin with a wrong password in a Basic header (a script, or a browser re-sending an old saved one) returns 401 and the login form, and NEVER a WWW-Authenticate challenge (that is what opens the browser\'s own dialog)', $wrongAuthStatus === 401 && !array_filter($wrongAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0) && str_contains($wrongAuthBody, 'name="login_password"') && (str_contains($wrongAuthBody, 'saved password') ));
 
 [$okStatus, $adminBody, $adminHeaders] = http_get("$baseAdmin/?admin", [$authHeader]);
 check('?admin with the correct password returns 200', $okStatus === 200);
@@ -1658,7 +1673,7 @@ $europeAdminQuery = '&folder=Europe';
 [, $fieldsBody] = $depthPost($europeAdminQuery, ['action' => 'save_folder_identity', 'display_name' => 'Europe 2026', 'description' => "Three weeks,\n  two <script>alert(1)</script> countries.", 'dates' => 'June 12-15, 2026', 'sort_order' => '2']);
 check('saving a folder\'s description, dates and position succeeds', str_contains($fieldsBody, 'class="flash ok"'));
 [, $fieldsRoot] = http_get("$baseDepth/");
-check('the description shows on the folder\'s cover card, escaped, with whitespace collapsed', str_contains($fieldsRoot, 'folder-cover-desc">Three weeks, two &lt;script&gt;alert(1)&lt;/script&gt; countries.<') && !str_contains($fieldsRoot, '<script>alert(1)'));
+check('the description is NOT on the folder\'s cover card (it lives on the folder\'s own page), and nothing from it leaks unescaped into the root page', !str_contains($fieldsRoot, 'folder-cover-desc') && !str_contains($fieldsRoot, 'Three weeks') && !str_contains($fieldsRoot, '<script>alert(1)'));
 check('the dates show on the folder\'s cover card', str_contains($fieldsRoot, 'folder-cover-dates">June 12-15, 2026<'));
 [, $fieldsPage] = http_get("$baseDepth/?folder=Europe");
 check('the dates sit under the folder\'s title, and the description is a centered note box (not loose text in the header)', str_contains($fieldsPage, '<p class="folder-dates">June 12-15, 2026</p>') && str_contains($fieldsPage, '<div class="notes">' . "\n" . '    <div class="note-box folder-description">Three weeks, two &lt;script&gt;') && !preg_match('#<header>.*folder-description.*</header>#s', $fieldsPage));
@@ -1791,8 +1806,17 @@ check('...leaving the newer value in place', str_contains($folderAfter, 'Changed
 
 // Admin page pieces.
 check('the Export section warns that the file records hidden items and GPS', str_contains($parisAdminBody, 'Handle the file with care') && str_contains($parisAdminBody, 'hidden'));
-check('the directive reference explains each tag next to its insert button', str_contains($depthAdminBody, 'admin-reference-row') && str_contains($depthAdminBody, 'Marks the item sold') && str_contains($depthAdminBody, 'data-snippet="{sold}"'));
-check('the directive reference page script collapses it on a phone-width screen', str_contains($depthAdminBody, "matchMedia('(max-width: 600px)')") && str_contains($depthAdminBody, "removeAttribute('open')"));
+preg_match('#<aside class="notes-reference".*?</aside>#s', $depthAdminBody, $refM); $ref = $refM[0] ?? '';
+check('the notes reference is on the Notes tab in full, once (not folded away, and not repeated inside every editor), never collapsed', $ref !== '' && substr_count($depthAdminBody, 'How notes work') === 1 && !str_contains($depthAdminBody, '<details class="admin-reference"') && !str_contains($ref, '<details'));
+foreach (['Making a file count', 'Formatting', 'Directives', 'Attaching photos to a paragraph', 'Where a directive applies', 'Showing a directive as text', "If something doesn't work"] as $section) {
+    $sections[] = str_contains(str_replace('&#039;', "'", $ref), $section);
+}
+check('[notes reference] it has every section: making a file count, formatting, the directives, attaching photos, where a directive applies, showing one as text, and troubleshooting', !in_array(false, $sections, true));
+check('[notes reference] each of the five directives is explained in full next to its insert button', str_contains($ref, 'data-snippet="{group: Name}"') && str_contains($ref, 'data-snippet="{photos: a.jpg, b.jpg}"') && str_contains($ref, 'data-snippet="{color: #ff0000}"') && str_contains($ref, 'data-snippet="{sold}"') && str_contains($ref, 'data-snippet="{reserved}"') && str_contains($ref, "whatever they're called") && str_contains($ref, 'red SOLD ribbon') && str_contains($ref, 'orange tag') && str_contains($ref, '{held}'));
+check('[notes reference] it explains the formatting that really works (bold, italic, underline, strikethrough, code, links, lists, quotes, code blocks) and that HTML is never run', str_contains($ref, '**bold**') && str_contains($ref, '__underline__') && str_contains($ref, '~~strikethrough~~') && str_contains($ref, '[words](https://example.com)') && str_contains($ref, '&gt; a quote') && str_contains($ref, 'never run'));
+check('[notes reference] it explains the rules that trip people up: {gallery} on the first line, the page-title heading, a directive only affecting its own paragraph, and the blank-line mistake with its fix', str_contains($ref, 'first line must be exactly') && str_contains($ref, 'page title') && str_contains($ref, 'its own paragraph') && str_contains($ref, 'Take a look at my rack') && str_contains($ref, 'Remove the blank line'));
+check('[notes reference] the Insert buttons exist only in the reference (five of them), not repeated in each editor', substr_count($ref, 'class="admin-insert-btn"') === 5 && substr_count(str_replace($ref, '', $depthAdminBody), 'class="admin-insert-btn"') === 0);
+check('the page script no longer folds the notes reference away on a phone: it is shown in full everywhere', !str_contains($depthAdminBody, ".admin-reference") && !str_contains($depthAdminBody, "querySelectorAll('.notes-reference"));
 check('a caption badge is a keyboard-reachable button that opens a popover on tap, not a tooltip only', str_contains($parisAfterCaption, 'role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)"') && str_contains($parisAfterCaption, 'function toggleCaptionPopover(badge, e)') && !str_contains($parisAfterCaption, '.item-badge.caption-badge { pointer-events: none; }'));
 
 // FOLDER_DISPLAY_MODE = 'inline': folders are only an organizing
@@ -1947,7 +1971,7 @@ foreach (['json' => true, 'sqlite' => false] as $upgradeMode => $forceJsonMode) 
     start_server($fxUp, $portUp);
     [, $upBody] = http_get("http://127.0.0.1:$portUp/");
     check("[$upgradeMode] the old per-photo counts are imported, not zeroed", str_contains($upBody, 'data-photo="old-photo.jpg">&#128065; 7<') && str_contains($upBody, 'data-photo="other.jpg">&#128065; 3<'));
-    check("[$upgradeMode] the old sitewide pageview total carries over (41, then this request makes 42)", str_contains($upBody, '42 views'));
+    check("[$upgradeMode] the old sitewide pageview total carries over (41, then this request makes 42)", str_contains($upBody, '42 visits'));
     $upTrack = json_decode(http_get("http://127.0.0.1:$portUp/?track=old-photo.jpg")[1], true);
     check("[$upgradeMode] counting continues from the imported total", ($upTrack['photoViews'] ?? null) === 8);
     if ($upgradeMode === 'json') {
@@ -2003,7 +2027,7 @@ if (strlen($v1Source) < 1000) {
         write_patched_index("$fxReal/index.php", $indexContents, ['TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true']);   // the upgrade: same folder, same data
         [, $v2Page] = http_get("$baseReal/");
         check("[real 1.1.1, $v1Flavour] after swapping in 2.0.0, both per-photo counts carry over exactly (5 and 2)", str_contains($v2Page, 'data-photo="a.jpg">&#128065; 5<') && str_contains($v2Page, 'data-photo="b.jpg">&#128065; 2<'));
-        check("[real 1.1.1, $v1Flavour] ...and the sitewide total carries over (4 loads under 1.1.1, plus this one)", str_contains($v2Page, '· 5 views'));
+        check("[real 1.1.1, $v1Flavour] ...and the sitewide total carries over (4 loads under 1.1.1, plus this one visit)", str_contains($v2Page, '· 5 visits'));
         $leftover = ''; foreach (scandir($fxReal) as $f) if (str_starts_with($f, '.gallery-stats') && !str_ends_with($f, '.php')) $leftover .= (string) file_get_contents("$fxReal/$f");
         check("[real 1.1.1, $v1Flavour] ...with no readable photo name left in any stats file, and the old JSON file gone", !str_contains($leftover, 'a.jpg') && !str_contains($leftover, 'b.jpg') && !is_file("$fxReal/.gallery-stats.json"));
     }
@@ -2108,6 +2132,56 @@ check('[gps import] ...and then it is', substr_count(http_get("$baseGps/?folder=
 [, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '0'], $gpsHdrs);
 check('[gps import] turning it off hides every location again but keeps the stored coordinates', str_contains($r, 'Saved coordinates are kept') && substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 0 && abs((read_data_file("$fxGps/Rome/.gallery-items.php")['items']['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001);
 
+echo "== the admin always sees their own hidden items, with no private-view password needed ==\n";
+
+$fxAr = new_fixture_dir('adminreveal');
+mkdir("$fxAr/Paris");
+make_jpeg("$fxAr/Paris/visible.jpg", 600, 400, 200, 80, 60); make_jpeg("$fxAr/Paris/hidden.jpg", 600, 400, 60, 80, 200);
+write_data_file("$fxAr/Paris/.gallery-items.php", ['items' => ['hidden.jpg' => ['restriction' => 'private', 'caption' => 'secret one']], 'groups' => []]);
+file_put_contents("$fxAr/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'reveal-test-pw-12', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy(__DIR__ . '/../index.php', "$fxAr/index.php");
+$portAr = find_free_port(); start_server($fxAr, $portAr); $baseAr = "http://127.0.0.1:$portAr";
+$arThumb = "$baseAr/?img=Paris%2Fhidden.jpg&size=thumb";
+check('[admin reveal] (setup) anonymous visitors cannot load a hidden photo\'s thumbnail', http_get($arThumb)[0] === 404);
+[, , $arLoginHd] = http_post("$baseAr/?admin", ['login_password' => 'reveal-test-pw-12'], [], false);
+$arCookie = extract_cookie_header($arLoginHd);
+check('[admin reveal] a logged-in admin CAN load a hidden photo\'s thumbnail even though no private-view password exists (this was a 404: broken thumbnails in the admin)', str_contains($arCookie, 'gallery_admin_') && http_get($arThumb, ["Cookie: $arCookie"])[0] === 200 && http_get("$baseAr/?img=Paris%2Fvisible.jpg&size=thumb", ["Cookie: $arCookie"])[0] === 200);
+[, $arAdminPage] = http_get("$baseAr/?admin&folder=Paris", ["Cookie: $arCookie"]);
+check('[admin reveal] ...and the admin page lists that hidden photo, marked hidden', str_contains($arAdminPage, 'hidden.jpg') && str_contains($arAdminPage, 'class="hid"'));
+check('[admin reveal] the admin also sees the hidden photo when browsing the public gallery; an anonymous visitor does not', str_contains(http_get("$baseAr/?folder=Paris", ["Cookie: $arCookie"])[1], 'hidden.jpg') && !str_contains(http_get("$baseAr/?folder=Paris")[1], 'hidden.jpg'));
+[, , $arPageHd] = http_get("$baseAr/?folder=Paris", ["Cookie: $arCookie"]);
+check('[admin reveal] a page rendered for the admin is private and uncached, like any revealed page', (bool) array_filter($arPageHd, fn($h) => stripos($h, 'Cache-Control: private, no-store') === 0));
+$arRevealName = ''; foreach ($arLoginHd as $h) if (preg_match('/^Set-Cookie: (gallery_reveal_[a-f0-9]+)=/i', $h, $m)) $arRevealName = $m[1];
+check('[admin reveal] the cookie that does it is a per-gallery token, not something a visitor can make up: a forged value, or the token another gallery or password would make, gets nothing', $arRevealName !== '' && http_get($arThumb, ["Cookie: $arRevealName=1"])[0] === 404 && http_get($arThumb, ["Cookie: $arRevealName=" . hash('sha256', '')])[0] === 404 && http_get($arThumb, ["Cookie: $arRevealName=" . hash('sha256', 'admin-reveal|some-other-password|' . __DIR__)])[0] === 404);
+// Basic auth for scripts reveals too (a valid admin request sets it).
+[, , $arBasicHd] = http_get("$baseAr/?admin", ['Authorization: Basic ' . base64_encode('x:reveal-test-pw-12')]);
+check('[admin reveal] an admin request made with a Basic header (a script) is given the same cookie', http_get($arThumb, ['Cookie: ' . extract_cookie_header($arBasicHd)])[0] === 200);
+// Logging out takes it away.
+[, $arAdminPg2] = http_get("$baseAr/?admin", ["Cookie: $arCookie"]);
+$arLogout = []; foreach (html_post_forms($arAdminPg2) as $f) if (str_contains($f['html'], 'value="logout"')) $arLogout = form_default_fields($f['html']);
+[, , $arOutHd] = http_post("$baseAr/?admin", $arLogout, ["Cookie: $arCookie"], false);
+check('[admin reveal] logging out clears that cookie too', (bool) array_filter($arOutHd, fn($h) => stripos($h, "Set-Cookie: $arRevealName=") === 0 && stripos($h, '1970') !== false));
+// Changing the admin password keeps the admin revealed (a new token) and retires the old one.
+[, , $arLogin2Hd] = http_post("$baseAr/?admin", ['login_password' => 'reveal-test-pw-12'], [], false);
+$arC2 = extract_cookie_header($arLogin2Hd);
+[, $arSet] = http_get("$baseAr/?admin", ["Cookie: $arC2"]); $arF = form_default_fields((function ($pg) { foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; })($arSet));
+[, $arPwBody, $arPwHd] = http_post("$baseAr/?admin", ['csrf_token' => $arF['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $arF['config_hash'], 'pw_admin' => 'a-brand-new-admin-pw', 'pw_admin2' => 'a-brand-new-admin-pw'], ["Cookie: $arC2", 'X-Requested-With: gallery-fetch'], false);
+$arC3 = extract_cookie_header($arPwHd);
+$arPwJson = json_decode($arPwBody, true);
+check('[admin reveal] changing the admin password through the page\'s script works', ($arPwJson['ok'] ?? null) === true, (string) $arPwBody);
+check('[admin reveal] ...and hands the admin a fresh reveal token in the same response', str_contains($arC3, $arRevealName . '='), $arC3);
+check('[admin reveal] ...which reveals hidden photos', http_get($arThumb, ["Cookie: $arC3"])[0] === 200);
+check('[admin reveal] ...while the token from the old password no longer does', http_get($arThumb, ["Cookie: $arRevealName=" . hash('sha256', 'admin-reveal|reveal-test-pw-12|' . $fxAr)])[0] === 404);
+// A gallery set up in the browser: the person who sets the password is revealed at once.
+$fxAr2 = new_fixture_dir('adminreveal-setup');
+mkdir("$fxAr2/Paris"); make_jpeg("$fxAr2/Paris/hidden.jpg", 300, 200, 1, 2, 3);
+write_data_file("$fxAr2/Paris/.gallery-items.php", ['items' => ['hidden.jpg' => ['restriction' => 'private']], 'groups' => []]);
+file_put_contents("$fxAr2/.gallery-config.php", cfg_text(['AUTO_GROUP_BY_FOLDER' => true]));
+copy(__DIR__ . '/../index.php', "$fxAr2/index.php");
+$portAr2 = find_free_port(); start_server($fxAr2, $portAr2); touch("$fxAr2/index.php", time());
+[, , $arClaimHd] = http_post("http://127.0.0.1:$portAr2/?admin", ['setup_password' => 'first-run-admin-pw-1', 'setup_password2' => 'first-run-admin-pw-1'], [], false);
+check('[admin reveal] a person who has just set their admin password in the first-run page can already see their hidden photos', http_get("http://127.0.0.1:$portAr2/?img=Paris%2Fhidden.jpg&size=thumb")[0] === 404 && http_get("http://127.0.0.1:$portAr2/?img=Paris%2Fhidden.jpg&size=thumb", ['Cookie: ' . extract_cookie_header($arClaimHd)])[0] === 200);
+
 echo "== first-run setup: choosing the admin password in the browser, for five minutes after upload ==\n";
 
 $fxSetup = new_fixture_dir('setup');
@@ -2169,10 +2243,6 @@ check('[setup] when the folder can\'t be written it says so, saves nothing, and 
 
 echo "== settings file: .gallery-config.php overrides the defaults and survives an update ==\n";
 
-$cfgGuard = "<?php http_response_code(404); exit; ?>\n";
-function cfg_text($settings) { return $GLOBALS['cfgGuard'] . json_encode($settings === [] ? new stdClass() : $settings, JSON_HEX_TAG) . "\n"; }
-function cfg_read($path) { $raw = (string) file_get_contents($path); $raw = substr($raw, (int) strpos($raw, "\n") + 1); return json_decode($raw, true); }
-$cfgHead = $cfgGuard;
 $fxCfg = new_fixture_dir('config');
 make_jpeg("$fxCfg/photo.jpg", 60, 60, 10, 10, 10);
 make_minimal_mp4("$fxCfg/clip.mp4", 2);
@@ -2311,7 +2381,7 @@ $siteHdrs = [$siteAuth, 'Cookie: ' . extract_cookie_header($sAdminHd)];
 $siteForm = function ($page) { foreach (html_post_forms($page) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; };
 $sForm = $siteForm($sAdmin);
 check('[site settings] the admin has a "Site settings" entry in the sidebar and a form with every managed setting', str_contains($sAdmin, 'data-tab="site" class="side-link"') && $sForm !== '' && str_contains($sForm, 'name="set_ENABLE_VIDEO"') && str_contains($sForm, 'name="set_AUTO_GROUP_BY_FOLDER"') && str_contains($sForm, 'name="set_PHOTO_SORT_ORDER"') && str_contains($sForm, 'name="set_MAP_CLUSTER_RADIUS_MILES"') && str_contains($sForm, 'name="pw_admin"'));
-check('[site settings] ...it shows what comes from the settings file, never the password itself, and the file-only settings read-only', str_contains($sAdmin, 'your setting') && !str_contains($sAdmin, 'first-admin-pw-123') && str_contains($sAdmin, 'EXTRA_FOLDERS') && !str_contains($sForm, 'name="set_EXTRA_FOLDERS"') && !str_contains($sForm, 'name="set_NGINX_ACCEL_REDIRECT_PREFIX"'));
+check('[site settings] ...it shows what comes from the settings file, never the password itself, and offers the server settings (extra folders, nginx prefix) as editable controls', str_contains($sAdmin, 'your setting') && !str_contains($sAdmin, 'first-admin-pw-123') && str_contains($sForm, 'data-name="set_EXTRA_FOLDERS"') && str_contains($sForm, 'name="set_NGINX_ACCEL_REDIRECT_PREFIX"') && str_contains($sForm, 'class="extra-add-btn'));
 check('[site settings] each setting says what the default is', str_contains($sForm, 'default: off') && str_contains($sForm, 'default: on'));
 // Snapshot everything that is NOT the settings file.
 $siteSnap = function () use ($fxSite) {
@@ -2405,6 +2475,13 @@ $noCsrf = []; foreach (html_post_forms($sAdmin8) as $f) if (str_contains($f['htm
 $noCsrf['csrf_token'] = 'wrong'; $noCsrf['set_ENABLE_VIDEO'] = '1'; $beforeCsrf = (string) file_get_contents($siteCfg);
 [, $rCsrf] = http_post("$baseSite/?admin", $noCsrf, $siteHdrs2);
 check('[site settings] a save without a valid CSRF token is refused and writes nothing', str_contains($rCsrf, 'session expired') && (string) file_get_contents($siteCfg) === $beforeCsrf);
+// Every warning shown before a change is a complete sentence, used exactly as written (not spliced into a template).
+preg_match_all("/'(?:risk|offwarn)' => '((?:[^'\\\\]|\\\\.)*)'/", $indexContents, $warnM);
+$warnings = array_map(fn($w) => stripslashes($w), $warnM[1]);
+$badWarnings = array_values(array_filter($warnings, fn($w) => !preg_match('/^[A-Z][^\n]*[.!]$/', $w)));
+check('[warnings] every confirmation text for a risky setting is a complete sentence (capital letter, full stop), so it reads right on its own', count($warnings) >= 10 && $badWarnings === [], implode(' | ', $badWarnings));
+check('[warnings] ...and none is glued onto a fixed lead-in ("This ...") in the page\'s script, which is what produced "This the map loads ..."', !preg_match("/'\\\\n\\\\nThis '/", $indexContents) && !str_contains($indexContents, 'Turning this on <?='));
+
 // Saving in place: the page's own script posts one setting at a time and gets JSON back.
 $ajaxHdrs = array_merge($siteHdrs2, ['X-Requested-With: gallery-fetch']);
 [, $pgA] = http_get("$baseSite/?admin", $siteHdrs2); $fa = form_default_fields($siteForm($pgA));
@@ -2435,6 +2512,61 @@ check('[autosave] saving a value the file already has says there is nothing to c
 $loc7 = ''; foreach ($jhd7 as $h) if (stripos($h, 'Location:') === 0) $loc7 = trim(substr($h, 9));
 check('[autosave] the ordinary form post (what a browser without JavaScript sends) still saves and redirects back to Site settings, as before', $jst7 === 303 && str_ends_with($loc7, '#site') && !isset(cfg_read($siteCfg)['ENABLE_VIDEO']));
 check('[autosave] a visitor who is not signed in gets nothing from the endpoint: no JSON, no change', !str_contains(http_post("$baseSite/?admin", ['action' => 'save_site_settings', 'set_ENABLE_MAP' => '1'], ['X-Requested-With: gallery-fetch'])[1], '"ok"') && !isset(cfg_read($siteCfg)['ENABLE_MAP']));
+
+// Server setup in the admin: folders from elsewhere on the server, and the nginx prefix.
+$siteAjax = function (array $fields) use ($baseSite, $siteHdrs2, $siteCfg, $siteForm) {
+    [, $pg] = http_get("$baseSite/?admin", $siteHdrs2); $ff = form_default_fields($siteForm($pg));
+    [, $body] = http_post("$baseSite/?admin", array_merge(['csrf_token' => $ff['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => md5_file($siteCfg)], $fields), array_merge($siteHdrs2, ['X-Requested-With: gallery-fetch']));
+    return json_decode($body, true) ?? ['ok' => null, 'text' => $body];
+};
+$extraSrc = new_fixture_dir('extra-source');
+make_jpeg("$extraSrc/archive1.jpg", 60, 60, 90, 90, 200);
+write_data_file("$extraSrc/.gallery-items.php", ['items' => ['archive1.jpg' => ['caption' => 'From the archive disk']], 'groups' => []]);
+$extraSrcReal = realpath($extraSrc);
+@symlink($extraSrc, "$extraSrc-link");
+$cfgBeforeExtra = (string) file_get_contents($siteCfg);
+$bad = [
+    'a relative path' => ['Rel' => 'photos/archive'],
+    'a path with ..' => ['Dots' => $extraSrcReal . '/../x'],
+    'a folder that does not exist' => ['Nope' => '/no/such/folder/here'],
+    'a file, not a folder' => ['AFile' => "$extraSrcReal/archive1.jpg"],
+    'a symlink' => ['Linked' => "$extraSrc-link"],
+    'a path through a symlink' => ['Through' => "$extraSrc-link/"],
+    'the gallery\'s own folder' => ['Self' => $fxSite],
+    'a folder inside the gallery' => ['Inside' => "$fxSite/Sub"],
+    'a folder that contains the gallery' => ['Outer' => sys_get_temp_dir()],
+    'a name with a slash' => ['a/b' => $extraSrcReal],
+    'a name starting with a dot' => ['.hidden' => $extraSrcReal],
+    'a name already used by a real folder' => ['Sub' => $extraSrcReal],
+];
+foreach ($bad as $why => $map) {
+    $r = $siteAjax(['set_EXTRA_FOLDERS' => json_encode($map)]);
+    check("[extra folders] $why is refused with a reason, and the settings file is untouched", ($r['ok'] ?? null) === false && ($r['text'] ?? '') !== '' && (string) file_get_contents($siteCfg) === $cfgBeforeExtra);
+}
+$dup = $siteAjax(['set_EXTRA_FOLDERS' => '{"Same":"' . $extraSrcReal . '","same":"' . $extraSrcReal . '"}']);
+check('[extra folders] the same name twice (ignoring case) is refused', ($dup['ok'] ?? null) === false && str_contains((string) $dup['text'], 'twice'));
+check('[extra folders] something that is not a list of folders is refused', ($siteAjax(['set_EXTRA_FOLDERS' => 'not json'])['ok'] ?? null) === false && ($siteAjax(['set_EXTRA_FOLDERS' => '["a","b"]'])['ok'] ?? null) === false);
+// A good one, end to end.
+$siteAjax(['set_AUTO_GROUP_BY_FOLDER' => '1']);
+$extraPhotoMd5 = md5_file("$extraSrc/archive1.jpg");
+$good = $siteAjax(['set_EXTRA_FOLDERS' => json_encode(['OldTrip' => $extraSrcReal])]);
+check('[extra folders] a real, readable folder elsewhere on the server is accepted, and handed back as stored', ($good['ok'] ?? null) === true && (array) ($good['extra'] ?? []) === ['OldTrip' => $extraSrcReal] && (cfg_read($siteCfg)['EXTRA_FOLDERS'] ?? null) === ['OldTrip' => $extraSrcReal]);
+$homeExtra = http_get("$baseSite/", $siteHdrs2)[1];
+check('[extra folders] its photos then appear in the gallery as a folder under that name, with thumbnails that load', str_contains($homeExtra, 'id="group-oldtrip"') && http_get("$baseSite/?img=OldTrip%2Farchive1.jpg&size=thumb")[0] === 200 && str_contains(http_get("$baseSite/?folder=OldTrip")[1], 'archive1.jpg'));
+check('[extra folders] the sidebar list in the admin includes it', str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], 'folder=OldTrip'));
+$rm = $siteAjax(['set_EXTRA_FOLDERS' => '{}']);
+check('[extra folders] removing it takes it out of the gallery and out of the settings file (back to the default)', ($rm['ok'] ?? null) === true && !isset(cfg_read($siteCfg)['EXTRA_FOLDERS']) && !str_contains(http_get("$baseSite/")[1], 'id="group-oldtrip"'));
+check('[extra folders] and nothing in that other folder was lost: the photo is byte-for-byte as it was and the caption saved there is intact (the gallery only adds its standard empty fields to a data file the first time it visits the folder)', md5_file("$extraSrc/archive1.jpg") === $extraPhotoMd5 && (read_data_file("$extraSrc/.gallery-items.php")['items'] ?? null) === ['archive1.jpg' => ['caption' => 'From the archive disk']]);
+@unlink("$extraSrc-link");
+// The nginx prefix.
+foreach (['kb' => 'no leading slash', '/kb/' => 'a trailing slash', '/a b' => 'a space', '//x' => 'a double slash', '/../x' => 'a ..', '/kb?x=1' => 'a query', '/kb;x' => 'a semicolon'] as $value => $why) {
+    $before = (string) file_get_contents($siteCfg);
+    $r = $siteAjax(['set_NGINX_ACCEL_REDIRECT_PREFIX' => $value]);
+    check("[nginx prefix] \"$value\" ($why) is refused and nothing is written", ($r['ok'] ?? null) === false && (string) file_get_contents($siteCfg) === $before);
+}
+check('[nginx prefix] a plain path like /kb is accepted and stored', ($siteAjax(['set_NGINX_ACCEL_REDIRECT_PREFIX' => '/kb'])['ok'] ?? null) === true && (cfg_read($siteCfg)['NGINX_ACCEL_REDIRECT_PREFIX'] ?? null) === '/kb');
+check('[nginx prefix] clearing it takes it out of the file again', ($siteAjax(['set_NGINX_ACCEL_REDIRECT_PREFIX' => ''])['ok'] ?? null) === true && !isset(cfg_read($siteCfg)['NGINX_ACCEL_REDIRECT_PREFIX']));
+$siteAjax(['set_AUTO_GROUP_BY_FOLDER' => '0']);
 
 // An unwritable gallery folder: say so, and hand over the exact text.
 $fxSiteRo = new_fixture_dir('sitesettings-ro');
@@ -2492,6 +2624,109 @@ check('[root identity] clearing the title falls back to the "# Heading" again', 
 // Folders are unchanged: they still have a position and their own form.
 [, $subAdmin] = http_get("$baseRoot/?admin&folder=Sub", $rootHdrs);
 check('[root identity] a folder\'s own form is unchanged (display name, position)', str_contains($subAdmin, '<label>Display name</label>') && str_contains($subAdmin, 'name="sort_order"') && str_contains($subAdmin, 'Save folder settings'));
+
+echo "== maps per folder: each folder and the root can show their own map, with their own settings ==\n";
+
+$fxMapF = new_fixture_dir('foldermap');
+mkdir("$fxMapF/Paris/Montmartre", 0777, true); mkdir("$fxMapF/Lisbon"); mkdir("$fxMapF/NoLoc");
+foreach (['top.jpg', 'Paris/a.jpg', 'Paris/b.jpg', 'Paris/hidden.jpg', 'Paris/Montmartre/m.jpg', 'Lisbon/l.jpg', 'NoLoc/n.jpg'] as $i => $f) make_jpeg("$fxMapF/$f", 60, 60, 20 + $i * 20, 40, 90);
+$mapLoc = fn ($lat, $lng) => ['location' => ['lat' => $lat, 'lng' => $lng, 'label' => ''], 'locationVisibility' => 'inherit'];
+write_data_file("$fxMapF/.gallery-items.php", ['items' => ['top.jpg' => $mapLoc(40.7, -74.0)], 'groups' => [], 'locationEnabled' => true]);
+write_data_file("$fxMapF/Paris/.gallery-items.php", ['items' => ['a.jpg' => $mapLoc(48.85, 2.35) + ['caption' => 'A'], 'b.jpg' => $mapLoc(48.92, 2.35), 'hidden.jpg' => $mapLoc(48.9, 2.4) + ['restriction' => 'private']], 'groups' => [], 'locationEnabled' => true]);
+write_data_file("$fxMapF/Paris/Montmartre/.gallery-items.php", ['items' => ['m.jpg' => $mapLoc(48.886, 2.343)], 'groups' => [], 'locationEnabled' => true, 'displayName' => 'The Hill']);
+write_data_file("$fxMapF/Lisbon/.gallery-items.php", ['items' => ['l.jpg' => $mapLoc(38.72, -9.14)], 'groups' => [], 'locationEnabled' => true]);
+write_data_file("$fxMapF/NoLoc/.gallery-items.php", ['items' => ['n.jpg' => $mapLoc(10.0, 10.0)], 'groups' => [], 'locationEnabled' => false]);
+file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_MAP' => true]));
+copy(__DIR__ . '/../index.php', "$fxMapF/index.php");
+$portMapF = find_free_port(); start_server($fxMapF, $portMapF); $baseMapF = "http://127.0.0.1:$portMapF";
+$mapAuth = 'Authorization: Basic ' . base64_encode('x:map-admin-pw-123');
+[, $mAdminPg, $mAdminHd] = http_get("$baseMapF/?admin&folder=Paris", [$mapAuth]);
+$mapHdrs = [$mapAuth, 'Cookie: ' . extract_cookie_header($mAdminHd)];
+$mapFiles = function ($html) { if (!preg_match('/var clusters = (\[.*?\]);/s', $html, $m)) return null; $clusters = json_decode($m[1], true); $files = []; foreach ($clusters as $c) foreach ($c as $pt) $files[] = $pt['file']; sort($files); return ['files' => $files, 'clusters' => count($clusters), 'raw' => $clusters]; };
+$mapForm = function ($pg) { foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_map_settings"')) return $f['html']; return ''; };
+$rootMapPage = http_get("$baseMapF/")[1]; $rm = $mapFiles($rootMapPage);
+check('[folder maps] the gallery root keeps its map by default, plotting every visible located photo from every folder (and no hidden or location-off ones)', $rm !== null && $rm['files'] === ['Lisbon/l.jpg', 'Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg', 'top.jpg'] && str_contains($rootMapPage, 'View full map'));
+check('[folder maps] a folder has NO map until it is switched on (a folder page must not start loading a third-party map by surprise)', $mapFiles(http_get("$baseMapF/?folder=Paris")[1]) === null && http_get("$baseMapF/?map&folder=Paris")[0] === 404);
+check('[folder maps] the admin offers the same map settings for a folder and for the gallery: show it, and the pin grouping', (function () use ($mapForm, $mAdminPg, $baseMapF, $mapHdrs) { $f = $mapForm($mAdminPg); $r = $mapForm(http_get("$baseMapF/?admin", $mapHdrs)[1]); return $f !== '' && $r !== '' && str_contains($f, 'name="map_enabled"') && str_contains($f, 'name="map_radius"') && str_contains($r, 'name="map_enabled"') && str_contains($r, 'name="map_radius"'); })());
+[, $mSaved] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => ''], $mapHdrs);
+check('[folder maps] switching on Paris\'s map saves, and says what it does', str_contains($mSaved, 'A map now shows on this folder') && str_contains($mSaved, 'class="flash ok"'));
+$parisPage = http_get("$baseMapF/?folder=Paris")[1]; $pm = $mapFiles($parisPage);
+check('[folder maps] Paris\'s page then shows a map of just what is in Paris and below it: not Lisbon, not the loose photo at the root, not the hidden photo, not the location-off folder', $pm !== null && $pm['files'] === ['Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg'] && str_contains($parisPage, 'href="?map&amp;folder=Paris"'));
+$colors = []; foreach ($pm['raw'] as $c) foreach ($c as $pt) $colors[basename(dirname($pt['file'])) . '|' . $pt['label']] = $pt['color'];
+check('[folder maps] points are coloured by sub-folder: the photos directly in Paris under the folder\'s name, the photos in Montmartre under its display name, in two colours, linking to it', count(array_unique($colors)) === 2 && isset($colors['Paris|Paris']) && isset($colors['Montmartre|The Hill']) && str_contains($parisPage, '"link":"?folder=Paris%2FMontmartre"'));
+check('[folder maps] with the site-wide pin grouping (50 miles) all three Paris photos are one pin', $pm['clusters'] === 1);
+[, $mAdminPg2] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
+user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '1'], $mapHdrs);
+check('[folder maps] a folder\'s own pin grouping (1 mile) overrides the site-wide one: the same three photos are now three pins', ($mapFiles(http_get("$baseMapF/?folder=Paris")[1])['clusters'] ?? 0) === 3);
+check('[folder maps] ...without touching any other page: the root map, on the site-wide 50 miles, still groups Paris into one pin (three pins in all: New York, Paris, Lisbon)', ($mapFiles(http_get("$baseMapF/")[1])['clusters'] ?? 0) === 3);
+[, $mapOnly] = http_get("$baseMapF/?map&folder=Paris");
+check('[folder maps] the folder has its own shareable map page: only its photos, its own link in the share preview, and a way back to the folder', str_contains($mapOnly, 'og:url" content="http://127.0.0.1:' . $portMapF . '/?map&amp;folder=Paris"') && $mapFiles($mapOnly)['files'] === ['Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg'] && str_contains($mapOnly, 'href="?folder=Paris" class="back"'));
+check('[folder maps] a folder that has not switched its map on, or that does not exist, has no map page (404)', http_get("$baseMapF/?map&folder=Lisbon")[0] === 404 && http_get("$baseMapF/?map&folder=Nope")[0] === 404);
+[, $badR] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '0'], $mapHdrs);
+[, $badR2] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => 'abc'], $mapHdrs);
+check('[folder maps] a pin grouping that is not a number from 1 to 10000 is refused with the reason, and the saved one stays', str_contains($badR, 'from 1 to 10000') && str_contains($badR2, 'from 1 to 10000') && ($mapFiles(http_get("$baseMapF/?folder=Paris")[1])['clusters'] ?? 0) === 3);
+$rootMapAdmin = http_get("$baseMapF/?admin", $mapHdrs)[1];
+$rootMapFields = form_default_fields($mapForm($rootMapAdmin)); unset($rootMapFields['map_enabled']); $rootMapFields['map_radius'] = '10';   // a browser sends nothing for an unchecked box
+http_post("$baseMapF/?admin", $rootMapFields, $mapHdrs);
+check('[folder maps] the gallery front page can switch its map off too, and then its map page is gone as well', !str_contains(http_get("$baseMapF/")[1], 'View full map') && http_get("$baseMapF/?map")[0] === 404 && $mapFiles(http_get("$baseMapF/?folder=Paris")[1]) !== null);
+user_submit("$baseMapF/?admin", http_get("$baseMapF/?admin", $mapHdrs)[1], 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => ''], $mapHdrs);
+check('[folder maps] ...and switching it back on restores it', $mapFiles(http_get("$baseMapF/")[1]) !== null && http_get("$baseMapF/?map")[0] === 200);
+check('[folder maps] the admin (who sees hidden items) gets the hidden photo on the map; a visitor never does', in_array('Paris/hidden.jpg', $mapFiles(http_get("$baseMapF/?folder=Paris", $mapHdrs)[1])['files'] ?? [], true) && !in_array('Paris/hidden.jpg', $mapFiles(http_get("$baseMapF/?folder=Paris")[1])['files'], true));
+$parisItems = read_data_file("$fxMapF/Paris/.gallery-items.php")['items'];
+check('[folder maps] saving map settings only stores the two map settings: every photo\'s caption, location and hide flag is as it was', ($parisItems['a.jpg']['caption'] ?? '') === 'A' && ($parisItems['hidden.jpg']['restriction'] ?? '') === 'private' && ($parisItems['b.jpg']['location']['lat'] ?? 0) == 48.92 && (read_data_file("$fxMapF/Paris/.gallery-items.php")['mapRadius'] ?? null) === 1);
+// The whole map feature off: nothing anywhere.
+file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+check('[folder maps] with the trip map off for the whole gallery there is no map anywhere, whatever each folder says, and the admin says why', $mapFiles(http_get("$baseMapF/?folder=Paris")[1]) === null && $mapFiles(http_get("$baseMapF/")[1]) === null && str_contains(http_get("$baseMapF/?admin&folder=Paris", $mapHdrs)[1], 'switched off for the whole gallery') && !str_contains(http_get("$baseMapF/?map&folder=Paris")[1], 'trip-map-full'));
+
+echo "== visits: the site total counts one per visitor per half hour, not every page load ==\n";
+
+$fxVis = new_fixture_dir('visits');
+mkdir("$fxVis/Paris"); make_jpeg("$fxVis/top.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxVis/Paris/a.jpg", 60, 60, 20, 20, 20);
+file_put_contents("$fxVis/.gallery-config.php", cfg_text(['TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'ADMIN_PASSWORD' => 'visit-admin-pw-123']));
+copy(__DIR__ . '/../index.php', "$fxVis/index.php");
+$portVis = find_free_port(); start_server($fxVis, $portVis); $baseVis = "http://127.0.0.1:$portVis";
+// A browser: keeps the cookies it is given and sends them back.
+$vGet = function ($path, &$jar, $headers = []) use ($baseVis) {
+    $cookie = implode('; ', array_map(fn($k, $v) => "$k=$v", array_keys($jar), $jar));
+    [$st, $body, $hd] = http_get("$baseVis$path", array_merge($cookie !== '' ? ["Cookie: $cookie"] : [], $headers));
+    foreach ($hd as $h) if (preg_match('/^Set-Cookie:\s*([^=]+)=([^;]*)/i', $h, $m)) $jar[trim($m[1])] = $m[2];
+    return [$st, $body, $hd];
+};
+$vCount = fn($body) => preg_match('/· ([0-9,]+) visits?/', $body, $m) ? (int) str_replace(',', '', $m[1]) : null;
+$alice = [];
+[, $v1, $vh1] = $vGet('/', $alice);
+$counts = [$vCount($v1)];
+foreach (['/?folder=Paris', '/?photo=top.jpg', '/', '/?folder=Paris', '/'] as $path) $counts[] = $vCount($vGet($path, $alice)[1]);
+check('[visits] one visitor opening the front page, a folder, a shared photo link and reloading counts as ONE visit throughout, not six', $counts === [1, 1, 1, 1, 1, 1], json_encode($counts));
+$visitCookie = ''; foreach ($vh1 as $h) if (stripos($h, 'Set-Cookie: gallery_visit=') === 0) $visitCookie = $h;
+check('[visits] the visit is remembered in a small first-party cookie: HttpOnly, SameSite=Lax, and expiring in about half an hour', $visitCookie !== '' && stripos($visitCookie, 'httponly') !== false && stripos($visitCookie, 'samesite=lax') !== false && (bool) preg_match('/expires=/i', $visitCookie));
+$bob = [];
+check('[visits] a different visitor (a browser with no cookie) is a second visit, and the footer says "visits"', $vCount($vGet('/', $bob)[1]) === 2 && str_contains($vGet('/', $bob)[1], '· 2 visits'));
+$late = ['gallery_visit' => (string) (time() - 1801)]; $justIn = ['gallery_visit' => (string) (time() - 1700)];
+check('[visits] someone who comes back after more than half an hour is a new visit; within half an hour is still the same one', $vCount($vGet('/', $late)[1]) === 3 && $vCount($vGet('/', $justIn)[1]) === 3);
+check('[visits] a visit keeps going as long as they keep clicking: the half hour slides forward with each page', (function () use ($vGet, $vCount) { $j = ['gallery_visit' => (string) (time() - 1700)]; $vGet('/?folder=Paris', $j); return (int) $j['gallery_visit'] >= time() - 2 && $vCount($vGet('/', $j)[1]) === 3; })());
+$none = [];
+[, $botBody, $botHd] = $vGet('/', $none, ['User-Agent: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)']);
+check('[visits] a search-engine or link-preview bot is not counted, and is given no cookie', $vCount($botBody) === 3 && !array_filter($botHd, fn($h) => stripos($h, 'Set-Cookie: gallery_visit') === 0));
+$headCtx = stream_context_create(['http' => ['method' => 'HEAD', 'ignore_errors' => true, 'timeout' => 5]]);
+@file_get_contents("$baseVis/", false, $headCtx);
+$pref = []; $vGet('/', $pref, ['Purpose: prefetch']); $pref2 = []; $vGet('/', $pref2, ['Sec-Purpose: prefetch;prerender']);
+check('[visits] a HEAD request (a link checker) and a browser prefetching or prerendering a page are not visits', $vCount($vGet('/', $none, ['User-Agent: Mozilla/5.0 (compatible; Googlebot/2.1)'])[1]) === 3 && $pref === [] && $pref2 === []);
+// The owner.
+[, , $visAdminHd] = http_post("$baseVis/?admin", ['login_password' => 'visit-admin-pw-123'], [], false);
+$owner = []; foreach (explode('; ', (string) extract_cookie_header($visAdminHd)) as $pair) { if (str_contains($pair, '=')) { [$k, $v] = explode('=', $pair, 2); $owner[$k] = $v; } }
+$ownerBody = $vGet('/', $owner)[1]; $ownerHd = $vGet('/?folder=Paris', $owner)[2];
+check('[visits] the admin\'s own browsing is not counted (and sets no visit cookie), however much they click around', $vCount($ownerBody) === 3 && !isset($owner['gallery_visit']) && !array_filter($ownerHd, fn($h) => stripos($h, 'Set-Cookie: gallery_visit') === 0));
+$pingOwner = json_decode($vGet('/?track=top.jpg', $owner)[1], true);
+check('[visits] ...nor are the admin\'s photo views', ($pingOwner['ok'] ?? null) === false);
+$carol = [];
+$pingCarol = json_decode($vGet('/?track=top.jpg', $carol)[1], true);
+$pingCarol2 = json_decode($vGet('/?track=top.jpg', $carol)[1], true);
+check('[visits] a visitor\'s photo views still count, once per photo per half hour as before', ($pingCarol['ok'] ?? null) === true && ($pingCarol['photoViews'] ?? 0) === 1 && ($pingCarol2['photoViews'] ?? 0) === 1);
+$adminVisits = http_get("$baseVis/?admin", array_merge(['Authorization: Basic ' . base64_encode('x:visit-admin-pw-123')]))[1];
+check('[visits] the admin says what is counted: visits in total, one per visitor per half hour, not counting you or bots', str_contains($adminVisits, 'visits in total') && str_contains($adminVisits, 'one per visitor per half hour'));
+$dave = []; $vGet('/', $dave);
+check('[visits] in the end the total is exactly the number of real visits: Alice, Bob, one returning after a long gap, and Dave, which is four, with everything else (bots, prefetches, the admin, reloads) left out', $vCount($vGet('/', $dave)[1]) === 4);
 
 echo "== admin folder tree: nesting, counts, the chosen folder ==\n";
 [, $treePage] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
@@ -2572,6 +2807,26 @@ check('[login] ?reveal shows a one-field password form too', $sv1 === 200 && str
 [$sv2, , $hv2] = http_post("$baseLogin/?reveal", ['login_password' => 'view-pw'], [], false);
 check('[login] the right private-view password redirects to the plain gallery and sets the viewer cookie', $sv2 === 302 && str_contains($cookieOf($hv2), '='));
 
+// A browser that saved a Basic password from an older version keeps sending it. That must never bring the
+// browser's own dialog back: a 401 with the form, no WWW-Authenticate, and the form still logs you in.
+$fxStale = new_fixture_dir('stale-password');
+make_jpeg("$fxStale/a.jpg", 60, 60, 1, 2, 3); mkdir("$fxStale/Sub"); make_jpeg("$fxStale/Sub/b.jpg", 60, 60, 4, 5, 6);
+file_put_contents("$fxStale/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'the-current-password-1', 'PRIVATE_VIEW_PASSWORD' => 'view-pw', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_MAP' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+copy(__DIR__ . '/../index.php', "$fxStale/index.php");
+$portStale = find_free_port(); start_server($fxStale, $portStale); $baseStale = "http://127.0.0.1:$portStale";
+$staleHdr = ['Authorization: Basic ' . base64_encode('admin:a-password-saved-long-ago')];
+$challenges = [];
+foreach (['?admin', '?reveal', '?admin&folder=Sub', '?admin&hidden=1', '?map', ''] as $route) {
+    [$stSt, , $stHd] = http_get("$baseStale/$route", $staleHdr, false);
+    foreach ($stHd as $h) if (stripos($h, 'WWW-Authenticate') === 0) $challenges[] = "$route: $h";
+}
+[$stA, $stBodyA] = http_get("$baseStale/?admin", $staleHdr);
+[$stR, $stBodyR] = http_get("$baseStale/?reveal", $staleHdr);
+check('[stale password] no route ever answers with a WWW-Authenticate challenge, even when the browser re-sends an old saved password', $challenges === [], implode(' | ', $challenges));
+check('[stale password] ?admin and ?reveal answer such a request with 401 and the ordinary login form, saying the saved password doesn\'t match', $stA === 401 && $stR === 401 && str_contains($stBodyA, 'name="login_password"') && str_contains($stBodyR, 'name="login_password"') && str_contains($stBodyA, 'saved password') && str_contains($stBodyR, 'saved password'));
+check('[stale password] typing the current password into the form still logs you in while the browser keeps sending the old one', http_post("$baseStale/?reveal", ['login_password' => 'view-pw'], $staleHdr, false)[0] === 302);
+check('[stale password] the source never sends a WWW-Authenticate header at all (a guard against it creeping back)', !preg_match('/header\(\s*[\'"]WWW-Authenticate/i', $indexContents));
+
 // The gallery title is the (unmarked) way to the admin.
 [, $homeLogin] = http_get("$baseLogin/");
 check('[login] the gallery title links to ?admin', str_contains($homeLogin, '<h1><a class="title-admin" rel="nofollow" href="?admin">Summer in Lisbon</a></h1>'));
@@ -2622,7 +2877,7 @@ check('[trip] the folder admin page shows the settings form, the location switch
 [, $r] = user_submit($parisUrl, $pAdmin, 'value="save_folder_identity"', ['display_name' => 'Paris, France', 'dates' => 'May 3–7, 2026', 'description' => 'Five days of croissants.', 'sort_order' => '1'], $tripHdrs);
 check('[trip] saving the folder settings form succeeds', str_contains($r, 'class="flash ok"'));
 [, $tripHome2] = http_get("$baseTrip/");
-check('[trip] the cover card now shows the display name, dates and description', str_contains($tripHome2, 'folder-cover-label">Paris, France<') && str_contains($tripHome2, 'folder-cover-dates">May 3–7, 2026<') && str_contains($tripHome2, 'folder-cover-desc">Five days of croissants.<'));
+check('[trip] the cover card shows the display name and dates, but not the description (that is on the folder\'s own page)', str_contains($tripHome2, 'folder-cover-label">Paris, France<') && str_contains($tripHome2, 'folder-cover-dates">May 3–7, 2026<') && !str_contains($tripHome2, 'croissants'));
 check('[trip] ...and Position 1 moved Paris ahead of Lisbon', strpos($tripHome2, 'id="group-paris"') < strpos($tripHome2, 'id="group-lisbon"'));
 
 // 4. Opt the folder into location sharing, then caption a photo. The admin must
@@ -2724,7 +2979,7 @@ preg_match('#<footer>(.*?)</footer>#s', $saleAfter, $saleFooter);
 check('[sale] ...and the sitewide "N views" total is hidden from the public footer too', isset($saleFooter[1]) && !preg_match('/\d+ views/', $saleFooter[1]) && str_contains($saleFooter[1], 'href="?about"'));
 // ...but the seller can see every count in the admin.
 [, $saleAdmin] = http_get("$baseSale/?admin", ['Authorization: Basic ' . base64_encode('admin:sale-admin')]);
-check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'page loads in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-sub">\s*&\#128065; 1 view\b#', $saleAdmin));
+check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'visit in total') || str_contains($saleAdmin, 'visits in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-sub">\s*&\#128065; 1 view\b#', $saleAdmin));
 check('[sale] ...and an untouched photo reads 0 views', (bool) preg_match('#unrelated\.jpg</div>\s*<div class="item-sub">\s*&\#128065; 0 views\b#', $saleAdmin));
 
 /* ======================================================================= *

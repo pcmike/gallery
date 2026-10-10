@@ -37,7 +37,7 @@ data("$d/.gallery-items.php", ['items'=>[
   'secret.jpg'=>['restriction'=>'private','caption'=>'hidden caption'],
   'geo1.jpg'=>['location'=>['lat'=>48.0,'lng'=>2.0,'label'=>''],'locationVisibility'=>'show'],
 ], 'groups'=>[], 'displayName'=>null,'cover'=>null,'locationEnabled'=>true]);
-data("$d/Asia/.gallery-items.php", ['items'=>['geo2.jpg'=>['location'=>['lat'=>35.0,'lng'=>139.0,'label'=>'Tokyo'],'locationVisibility'=>'show']],'groups'=>[],'displayName'=>'Asia & <Pacific>','description'=>'Hot "and" humid <i>!</i>','dates'=>'1-5 <Jan>','sortOrder'=>1,'cover'=>null,'locationEnabled'=>true]);
+data("$d/Asia/.gallery-items.php", ['items'=>['geo2.jpg'=>['location'=>['lat'=>35.0,'lng'=>139.0,'label'=>'Tokyo'],'locationVisibility'=>'show']],'groups'=>[],'displayName'=>'Asia & <Pacific>','description'=>'Hot "and" humid <i>!</i>','dates'=>'1-5 <Jan>','sortOrder'=>1,'cover'=>null,'locationEnabled'=>true,'mapEnabled'=>true,'mapRadius'=>25]);
 file_put_contents("$d/forsale.md", "{gallery}\n# Trip & <Sale>\n\nLoved Europe and Asia. Also dp104 here.\n\n{group: My <Box>} {photos: loose2.jpg, nope.jpg} {color: #ff0000}\n\n- list **bold** _it_ ~~x~~ `code` [link](https://example.com) [bad](javascript:alert(1))\n\n```\n{sold}\n```\n\n{sold} thing geo1\n");
 file_put_contents("$d/Europe/notes.md", "{gallery}\nFrance rocks {color: blue}\n");
 echo "built\n";

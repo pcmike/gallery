@@ -81,7 +81,7 @@ define('ADMIN_PASSWORD', 'a-long-random-string');  // optional: lets you see tho
 
 **Visitors see:** the page title (the gallery title you set in the admin, else your `# heading`); each item's text with its photos attached beneath it ("View 2 photos"), a box per multi-photo item, a red SOLD ribbon with greyed-out photos, an orange RESERVED tag. A `?photo=` link or a box's copy-link button (🔗) is what to paste into a post.
 
-**Your numbers:** with `SHOW_VIEW_COUNTS_PUBLICLY` off, no view count appears anywhere public — not on photos, not on boxes, not in the footer total. You see them in the admin: the sitewide total at the top, and "👁 N views" under every photo.
+**Your numbers:** with `SHOW_VIEW_COUNTS_PUBLICLY` off, no view count appears anywhere public — not on photos, not on boxes, not in the footer total. You see them in the admin: the visit total on the Photos tab, and each photo's own count when you select it.
 
 ### Recipe: a trip album
 
@@ -166,7 +166,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 | `ADMIN_PASSWORD` | none | choose it in the browser right after upload ([First-run setup](#first-run-setup)), or put a long random string in the settings file — turns the admin on | everything in the next table |
 | `ENABLE_PHOTO_LOCATION` | off | `true` to allow locations to be shown | per-folder switch + per-photo setting in the admin |
 | `ENABLE_MAP` | off | `true` for the map (the only feature that contacts another website) | needs `ENABLE_PHOTO_LOCATION` and something with a visible location |
-| `MAP_CLUSTER_RADIUS_MILES` | 50 | smaller for a city break, larger for a road trip | needs `ENABLE_MAP` |
+| `MAP_CLUSTER_RADIUS_MILES` | 50 | smaller for a city break, larger for a road trip. This is the default; each folder and the front page can set their own | needs `ENABLE_MAP` |
 | `PRIVATE_VIEW_PASSWORD` | none | a shareable password — turns "Private view" on | hiding items in the admin |
 | `NGINX_ACCEL_REDIRECT_PREFIX` | none | your gallery's URL path, e.g. `'/kb'`, once nginx is set up | the nginx rules |
 
@@ -179,6 +179,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 | Folder → *Dates*, *Description* | shown under the label on the card and at the top of the folder's page; the description is also the link-preview text (a notes file in that folder takes precedence there) | `AUTO_GROUP_BY_FOLDER` |
 | Folder → *Position* | the card order among sibling folders: numbered first, then natural order | a notes-file mention of a folder still places it earlier |
 | Photo → **Set as cover** | the folder's card image and its link-preview image | |
+| Folder (or gallery) → *Map: show a map on this page, pin grouping* | a map of just that folder's photos on its page, and its own `?map&folder=` page; the front page's map is on unless switched off, a folder's off unless switched on | `ENABLE_MAP`, `ENABLE_PHOTO_LOCATION`, and photos with a visible location |
 | Folder → *Show photo locations publicly* | turning it on stores the GPS of every photo in the folder that has some, so they show 📍 badges and map pins (after a confirmation) | `ENABLE_PHOTO_LOCATION` |
 | Photo → *Caption* | 💬 badge; the viewer's caption bar | |
 | Photo → *Web link* | ℹ️ badge | |
@@ -209,8 +210,10 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 - First `# Heading` in the first qualifying `.md` file becomes the page title, unless you've set a **Gallery title** in the admin (see [The admin editor](#the-admin-editor)), which wins
 
 **View stats** — off by default (`TRACK_VIEWS`)
-- Per-photo, per-group, and total page-load counts, all updating live with no refresh, once turned on
-- Auto-detects SQLite vs. JSON-file storage; known preview bots excluded from counts
+- **Visits**, not page loads: the site total counts **one per visitor per half hour**, however many folders and photos they open, so it tracks the number of people rather than the number of clicks. Reloading, the back button and a shared photo link are all part of the same visit; coming back after more than 30 minutes of silence is a new one. A small first-party cookie remembers when each visitor was last here (it holds nothing but a time).
+- **Photo views**: each photo's own count goes up when it's opened in the viewer, once per photo per visitor per half hour, so flipping back and forth over one photo doesn't inflate it. A box adds up its photos. Both update live, with no refresh.
+- **Not counted**: you (the admin's own browser, once you've logged in), link-preview and search-engine bots, a browser prefetching a page, and `HEAD` requests from link checkers.
+- Auto-detects SQLite vs. JSON-file storage.
 
 **Thumbnail caching** — on by default (`ENABLE_THUMBNAIL_CACHE`)
 - On-the-fly thumbnail generation + caching (Imagick or GD), on unless you turn it off
@@ -422,7 +425,7 @@ In the default `'overview'` mode, each level shows **one cover card per subfolde
 
 A few details worth knowing:
 
-- **Per-folder settings** — a display name, a short description, a date-range subtitle (typed by you; it is deliberately *never* read from the photos' EXIF, because that would publish when you were away from home), a chosen cover photo, and a position among sibling folders — are set in the admin editor and shown on the cover card and the folder's own page. Folders with no position sort naturally after any numbered ones.
+- **Per-folder settings** — a display name, a short description, a date-range subtitle (typed by you; it is deliberately *never* read from the photos' EXIF, because that would publish when you were away from home), a chosen cover photo, and a position among sibling folders — are set in the admin editor. The name, dates and cover photo appear on the cover card; the description appears in a box at the top of the folder's own page (and in shared-link previews), not on the card, which would crowd it. Folders with no position sort naturally after any numbered ones.
 - **A folder can carry its own notes.** A `{gallery}`-marked `.md` inside a subfolder becomes a note box on that folder's page, scoped to that folder's photos.
 - **Everything about a folder lives in that folder.** Stats, the thumbnail cache, and the admin's saved data sit inside the folder they describe, so two cameras' `IMG_0001.jpg` in different folders never collide.
 - **Renaming a folder keeps its data; making a new folder and moving photos into it does not.** A real rename (FTP client, file manager, `mv`) carries the folder's data file along. Creating a *new* folder under a different name is, from the gallery's point of view, a different, empty folder.
@@ -568,6 +571,12 @@ Neither renames your files. That would change files you own, which this project 
 ## The trip map
 
 Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actually has a visible location) and the gallery root gets a **Trip map** above the folders, lined up with them, with its own shareable `?map` page. It plots every visible, located photo from every folder together.
+
+**Each folder can have its own map too**, with its own settings. In a folder's settings (and the gallery's, on the Settings tab) the **Map** section has:
+
+- **Show a map on this page.** The gallery front page keeps its map unless you switch it off (as it always did); a folder starts with none, because switching one on makes that folder's page load a third-party map. A folder's map shows only the photos inside it and its subfolders, with their own colours per subfolder, and has its own shareable page at `?map&folder=Paris`. A folder with its map switched off has no map page (404).
+- **Pin grouping (miles).** How close photos must be to share a pin on *this* page's map. Leave it blank to use the site-wide `MAP_CLUSTER_RADIUS_MILES` (Site settings); a city break wants a small number, a road trip a large one.
+- The usual rules still apply on every map: a photo must have a visible location (its folder's location switch on, and not set to "always hide"), and a hidden photo or folder is never plotted for a visitor (the admin, who sees hidden things, sees them on the map too).
 
 - Photos within `MAP_CLUSTER_RADIUS_MILES` (default 50) of each other share one numbered pin, so a dense city doesn't turn into a wall of markers; clicking a cluster zooms in to its individual pins. A dense city trip and a cross-country drive want very different radii, so it's a setting.
 - Pins are colored by top-level folder, with a legend.

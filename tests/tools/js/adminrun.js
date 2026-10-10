@@ -1,23 +1,27 @@
 import * as std from 'std';
 import { El, makeDoc } from './dom.js';
 const src = std.loadFile(scriptArgs[1]); let fails = 0; const ok = (c, m) => { print((c ? '  ok    ' : '  FAIL  ') + m); if (!c) fails++; };
-function run(phone) {
+function run(notes) {
   const doc = makeDoc('');
-  const det = new El('details'); det._cls.add('admin-reference'); det.setAttribute('open', '');
-  const wrap = new El('div'); wrap._cls.add('md-file'); const ta = new El('textarea'); ta._cls.add('adm-textarea'); ta.value = 'Hello world'; ta.selectionStart = 5; ta.selectionEnd = 5; ta.focus = () => { ta.focused = true; };
-  const btn = new El('button'); btn._cls.add('admin-insert-btn'); btn.setAttribute('data-snippet', '{sold}'); wrap.appendChild(ta); wrap.appendChild(btn);
-  doc.querySelectorAll = (s) => s === '.admin-reference' ? [det] : s === '.admin-insert-btn' ? [btn] : [];
-  const f = new Function('document', 'window', 'confirm', src + '\n;return { admConfirmSaveAs };')(doc, { matchMedia: () => ({ matches: phone }) }, (m) => { f.asked = m; return true; });
-  return { det, btn, ta, f: (r => r)(f) };
+  const tas = []; const wrap = new El('div'); wrap._cls.add('md-file');
+  for (let i = 0; i < notes; i++) { const ta = new El('textarea'); ta._cls.add('adm-textarea'); ta.value = 'Hello world'; ta.selectionStart = 5; ta.selectionEnd = 5; ta.focus = () => { ta.focused = true; }; tas.push(ta); wrap.appendChild(ta); }
+  const btn = new El('button'); btn._cls.add('admin-insert-btn'); btn.setAttribute('data-snippet', '{sold}');
+  const hint = new El('p'); hint.hidden = true;
+  doc.querySelectorAll = (s) => s === '.adm-textarea' ? tas : s === '.admin-insert-btn' ? [btn] : [];
+  doc.querySelector = (s) => s === '.insert-hint' ? hint : null;
+  new Function('document', 'window', 'confirm', src + '\n;return {};')(doc, { matchMedia: () => ({ matches: false }) }, () => true);
+  return { btn, tas, hint };
 }
-let r = run(true);
-ok(!r.det.hasAttribute('open'), 'on a phone-width screen the directive reference starts collapsed');
-r = run(false);
-ok(r.det.hasAttribute('open'), 'on a wider screen it stays expanded');
+let r = run(1);
 r.btn.fire('click');
-ok(r.ta.value === 'Hello{sold} world' && r.ta.selectionStart === 11 && r.ta.focused === true, 'an insert button puts its directive at the cursor and moves the cursor after it');
-r.ta.selectionStart = 0; r.ta.selectionEnd = 5; r.btn.fire('click');
-ok(r.ta.value === '{sold}{sold} world', 'with text selected, the insert replaces the selection');
+ok(r.tas[0].value === 'Hello{sold} world' && r.tas[0].selectionStart === 11 && r.tas[0].focused === true, 'with one note, an insert button puts its directive at the cursor and moves the cursor after it');
+r.tas[0].selectionStart = 0; r.tas[0].selectionEnd = 5; r.btn.fire('click');
+ok(r.tas[0].value === '{sold}{sold} world', 'with text selected, the insert replaces the selection');
+r = run(2);
+r.btn.fire('click');
+ok(r.tas[0].value === 'Hello world' && r.tas[1].value === 'Hello world' && r.hint.hidden === false, 'with several notes and none clicked in yet, nothing is inserted and it says to click in one first');
+r.tas[1].fire('focus'); r.btn.fire('click');
+ok(r.tas[1].value === 'Hello{sold} world' && r.tas[0].value === 'Hello world' && r.hint.hidden === true, 'after clicking in the second note, the directive goes into that note, not the other, and the hint goes away');
 const form = new El('form'); const nn = new El('input'); nn._cls.add('adm-newname'); nn.value = '  copy.md '; form.appendChild(nn);
 const asked = []; const g = new Function('document', 'window', 'confirm', src + '\n;return admConfirmSaveAs;')(makeDoc(''), { matchMedia: () => ({ matches: false }) }, (m) => { asked.push(m); return false; });
 ok(g(form) === false && asked[0] === 'Save as "copy.md"? If that file already exists, it will be overwritten.', 'Save As asks for confirmation naming the trimmed file, and a "no" cancels the submit');

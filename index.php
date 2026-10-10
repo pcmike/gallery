@@ -2114,11 +2114,15 @@ function admin_credentials_valid() {
     return hash_equals(ADMIN_PASSWORD, $pass);
 }
 
-function admin_send_auth_challenge() {
-    header('WWW-Authenticate: Basic realm="Gallery Admin"');
+/** A request carried an HTTP Basic password that is wrong: a script's typo, or
+ *  — more often — a browser re-sending a password it saved when an older
+ *  version of this gallery asked for one. The answer is 401 (so a script can
+ *  tell) with the ordinary login form, and never a WWW-Authenticate header:
+ *  that header is what makes a browser open its own username/password dialog,
+ *  and a stale saved password must not bring that dialog back. */
+function admin_reject_saved_credentials() {
     http_response_code(401);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Authentication required.';
+    render_login_page('Gallery admin', 'Enter the admin password.', 'Your browser sent a saved password that doesn\'t match the current one. Type the current admin password below.');
 }
 
 /** The password form for ?admin and ?reveal: one field, no username, no
@@ -2218,10 +2222,7 @@ function reveal_cookie_value() {
     return hash('sha256', PRIVATE_VIEW_PASSWORD . '|' . __DIR__);
 }
 
-/** Sets the reveal cookie — called both on a successful ?reveal login and
- *  on a successful ?admin login (a valid admin login counts as revealed
- *  too, so the admin doesn't need a second credential just to see their
- *  own hidden items while browsing the plain gallery). A year-long
+/** Sets the private-view cookie, after a successful ?reveal login. A year-long
  *  expiry gives the same "enter it once" persistence ?admin's own
  *  session-based login already has, just via a plain cookie instead of a
  *  PHP session, since this has to survive on the *public*, unauthenticated
@@ -2237,16 +2238,43 @@ function set_reveal_cookie() {
     ]);
 }
 
-/** True if this visitor has already unlocked private view — via the
- *  reveal cookie (set by ?reveal or a prior ?admin login). Always false
- *  when PRIVATE_VIEW_PASSWORD is unset: with no password to ever enter,
- *  nothing can produce a matching cookie, so a hidden item simply stays
- *  hidden from everyone but the admin tool itself — the same
- *  closed-by-default posture as every other gate in this script. */
+/** What the admin's own reveal cookie holds: derived from the admin password
+ *  and this install's folder, so it can't be forged and means nothing to any
+ *  other gallery. This is how "a valid admin login counts as revealed too"
+ *  works — the admin always sees their own hidden items (in the admin's
+ *  thumbnails and when browsing the plain gallery) without a second
+ *  credential, and without needing a private-view password to exist. */
+function admin_reveal_cookie_value($password = null) {
+    $pw = $password ?? ADMIN_PASSWORD;
+    return $pw === '' ? '' : hash('sha256', 'admin-reveal|' . $pw . '|' . __DIR__);
+}
+
+/** Sets that cookie on every authenticated admin request. $password is passed
+ *  only right after the password was just set or changed, when the constant
+ *  still holds the old value. */
+function set_admin_reveal_cookie($password = null) {
+    $value = admin_reveal_cookie_value($password);
+    if ($value === '') return;
+    setcookie(REVEAL_COOKIE_NAME, $value, [
+        'expires' => time() + 31536000,
+        'path' => '/',
+        'secure' => is_https_request(),
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+}
+
+/** True if this visitor can see hidden items: they have unlocked private view
+ *  (the cookie from ?reveal), or they are the admin (the cookie from an
+ *  ?admin login). With neither password set, nothing can produce a matching
+ *  cookie, so a hidden item simply stays hidden — the same closed-by-default
+ *  posture as every other gate in this script. */
 function is_revealed() {
-    if (PRIVATE_VIEW_PASSWORD === '') return false;
     $cookie = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
-    return is_string($cookie) && $cookie !== '' && hash_equals(reveal_cookie_value(), $cookie);
+    if (!is_string($cookie) || $cookie === '') return false;
+    if (PRIVATE_VIEW_PASSWORD !== '' && hash_equals(reveal_cookie_value(), $cookie)) return true;
+    $adminValue = admin_reveal_cookie_value();
+    return $adminValue !== '' && hash_equals($adminValue, $cookie);
 }
 
 /** Normalizes a stored restriction value to exactly "inherit", "public",
@@ -2458,10 +2486,9 @@ function run_reveal_route($dir) {
             login_throttle_record_failure($dir, 'reveal', $ip);
         }
         if ($formPass === null && (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']))) {
-            header('WWW-Authenticate: Basic realm="Gallery Private View"');
+            // A wrong saved Basic password (see admin_reject_saved_credentials): the form, never a challenge.
             http_response_code(401);
-            header('Content-Type: text/plain; charset=UTF-8');
-            echo 'Authentication required.';
+            render_login_page('Private view', 'Enter the password to see the hidden items.', 'Your browser sent a saved password that doesn\'t match the current one. Type the current private-view password below.');
             return;
         }
         render_login_page('Private view', 'Enter the password to see the hidden items.', $formPass !== null ? 'That password isn\'t right.' : '');
@@ -2538,6 +2565,56 @@ function map_point_link($file, $groupKey, $folderGroupKeys) {
     return '#group-' . $slug;
 }
 
+/** Whether a folder — or the gallery root, with $folderPath null — shows a map
+ *  of its own photos on its page (and has its own ?map&folder= page). Stored
+ *  with the folder like its location switch. The root keeps the behaviour it
+ *  always had, so it is on unless switched off; a folder starts off, since
+ *  turning one on makes its page load a third-party map. */
+function folder_map_enabled($dir, $folderPath) {
+    $data = items_read($folderPath === null ? $dir : resolve_real_path($dir, $folderPath));
+    $v = $data['mapEnabled'] ?? null;
+    return $folderPath === null ? $v !== false : $v === true;
+}
+
+/** How close (in miles) photos must be to share one pin on this page's map:
+ *  the folder's own setting if it has one, else the site-wide default. */
+function folder_map_radius($dir, $folderPath) {
+    $data = items_read($folderPath === null ? $dir : resolve_real_path($dir, $folderPath));
+    $r = $data['mapRadius'] ?? null;
+    return (is_int($r) || is_float($r)) && $r >= 1 && $r <= 10000 ? $r : MAP_CLUSTER_RADIUS_MILES;
+}
+
+/** The points for one folder's map: just those inside it (and its subfolders),
+ *  coloured by which subfolder they are in, with the photos directly in the
+ *  folder under the folder's own name. At the root this is every point, as
+ *  collected. Nothing here widens what is shown: the points arrive already
+ *  filtered by hiding and by the location switches. */
+function map_points_for_folder($points, $dir, $folderPath) {
+    if ($folderPath === null) return $points;
+    $prefix = $folderPath . '/';
+    $metaLabel = folder_display_meta($dir, $folderPath)['label'];
+    $folderLabel = $metaLabel !== '' ? $metaLabel : basename($folderPath);
+    $out = []; $colorIndex = []; $next = 0;
+    foreach ($points as $p) {
+        if (strpos($p['file'], $prefix) !== 0) continue;
+        $rest = substr($p['file'], strlen($prefix));
+        $slash = strpos($rest, '/');
+        $child = $slash === false ? '' : substr($rest, 0, $slash);
+        if (!isset($colorIndex[$child])) $colorIndex[$child] = $next++;
+        if ($child === '') {
+            $p['label'] = $folderLabel;
+            $p['link'] = '#group-' . slugify(pathinfo(basename($p['file']), PATHINFO_FILENAME));
+        } else {
+            $childMeta = folder_display_meta($dir, $prefix . $child);
+            $p['label'] = $childMeta['label'] !== '' ? $childMeta['label'] : $child;
+            $p['link'] = '?folder=' . rawurlencode($prefix . $child);
+        }
+        $p['color'] = map_group_color($colorIndex[$child]);
+        $out[] = $p;
+    }
+    return $out;
+}
+
 /**
  * Every visible, located point worth plotting — already filtered the
  * same way everything else on the page is: $files/$itemsData here are
@@ -2599,9 +2676,9 @@ function map_legend_from_points($points) {
  * tiles themselves) — only emitted when there's actually at least one
  * point to plot.
  */
-function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary) {
+function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, $radiusMiles = null) {
     if (empty($points)) return;
-    $clusters = cluster_map_points($points, MAP_CLUSTER_RADIUS_MILES);
+    $clusters = cluster_map_points($points, $radiusMiles ?? MAP_CLUSTER_RADIUS_MILES);
     // Hex-escaped so the raw JSON can sit directly inside a <script>
     // block with no further quoting — safe even if a caption happens to
     // contain "</script>", a quote, or an ampersand.
@@ -2691,18 +2768,20 @@ function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary) 
  * objection that already ruled out geocoding — a generic map icon
  * instead, same honesty standard as the video placeholder.
  */
-function render_map_page($points, $legend, $pageTitle, $baseUrl) {
+function render_map_page($points, $legend, $pageTitle, $baseUrl, $folderPath = null, $radiusMiles = null) {
     send_viewer_aware_cache_headers();
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $title = htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8');
-    $ogUrl = htmlspecialchars($baseUrl . '/?map', ENT_QUOTES, 'UTF-8');
+    $ogUrl = htmlspecialchars($baseUrl . '/?map' . ($folderPath !== null ? '&folder=' . rawurlencode($folderPath) : ''), ENT_QUOTES, 'UTF-8');
+    $backHref = $folderPath === null ? gallery_root_href() : '?folder=' . rawurlencode($folderPath);
+    $backText = $folderPath === null ? 'Back to gallery' : 'Back to ' . basename($folderPath);
     $ogImage = htmlspecialchars($baseUrl . '/?mapicon', ENT_QUOTES, 'UTF-8');
     // A bare "#group-<slug>" resolves against the *current* URL — here
     // /?map — so it would scroll nowhere on this page. Point in-page
     // anchors at the gallery root instead; ?folder= links are already
     // root-relative query strings and need no help.
     foreach ($points as &$p) {
-        if ($p['link'][0] === '#') $p['link'] = './' . $p['link'];
+        if ($p['link'][0] === '#') $p['link'] = ($folderPath === null ? './' : '?folder=' . rawurlencode($folderPath)) . $p['link'];
     }
     unset($p);
 ?>
@@ -2734,12 +2813,12 @@ function render_map_page($points, $legend, $pageTitle, $baseUrl) {
 </head>
 <body>
 <div class="wrap">
-  <a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>" class="back">&larr; Back to gallery</a>
+  <a href="<?= htmlspecialchars($backHref, ENT_QUOTES, 'UTF-8') ?>" class="back">&larr; <?= htmlspecialchars($backText, ENT_QUOTES, 'UTF-8') ?></a>
   <h1><?= $title ?> — Map</h1>
   <?php if (empty($points)): ?>
     <p style="color:var(--muted);">No photos have a visible location yet.</p>
   <?php else: ?>
-    <?= render_leaflet_map($points, $legend, 'trip-map-full', '70vh', true) ?>
+    <?= render_leaflet_map($points, $legend, 'trip-map-full', '70vh', true, $radiusMiles) ?>
   <?php endif; ?>
 </div>
 </body>
@@ -2775,7 +2854,7 @@ function items_path($folderPath) {
  *  locationEnabled is this folder's own
  *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null];
 }
 
 function items_read($folderPath) {
@@ -3075,30 +3154,84 @@ function render_admin_folder_nav($files, $currentFolder) {
     return '<nav class="admin-folder-nav" aria-label="Folders"><ul class="ftree"><li>' . $link('', 'Root', '?admin') . '</li>' . $branch('') . '</ul></nav>';
 }
 
-/** A collapsed-by-default-on-mobile reference panel: the directive table
- *  plus buttons that insert syntax at the textarea's cursor — plain text
- *  insertion, no different from typing it, so it never touches the
- *  byte-for-byte save guarantee the textarea itself keeps. */
-function render_admin_reference_panel() {
-    $directives = [
-        ['Group a box', '{group: Name}', 'Names a gallery box, or renames an auto-detected one.'],
-        ['Claim photos', '{photos: a.jpg, b.jpg}', 'Assigns specific files to this paragraph, whatever their filenames.'],
-        ['Accent color', '{color: #ff0000}', 'A custom accent color for that group\'s box.'],
-        ['Sold', '{sold}', 'Marks the item sold: dimmed text, grayscale photos, a red ribbon.'],
-        ['Reserved', '{reserved}', 'Marks it reserved (also {held}): an orange tag, photos stay in color.'],
-    ];
-    // Open by default (a desktop has room for it); the page script
-    // collapses it on a phone-width screen, and it's a plain <details>,
-    // so it toggles either way.
-    $html = '<details class="admin-reference" open><summary>Directive reference</summary><div class="admin-reference-body">';
-    $html .= '<p>Click a button to insert that directive at the cursor:</p><div class="admin-reference-list">';
-    foreach ($directives as [$label, $snippet, $what]) {
-        $html .= '<div class="admin-reference-row"><button type="button" class="admin-insert-btn" data-snippet="' . htmlspecialchars($snippet, ENT_QUOTES, 'UTF-8') . '">'
-                . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</button> <code>' . htmlspecialchars($snippet, ENT_QUOTES, 'UTF-8') . '</code> <span class="muted">'
-                . htmlspecialchars($what, ENT_QUOTES, 'UTF-8') . '</span></div>';
-    }
-    $html .= '</div><p class="admin-reference-note">Full syntax, including multi-file groups and auto-linked mentions, is documented in the README.</p></div></details>';
-    return $html;
+/** The notes reference: everything about writing a notes file, in full, beside
+ *  the editors rather than folded away. The Insert buttons put a directive at
+ *  the cursor of the note you last clicked in (plain text insertion, no
+ *  different from typing it, so it never touches the byte-for-byte save
+ *  guarantee of the textarea itself). */
+function render_admin_notes_reference() {
+    $e = function ($t) { return htmlspecialchars($t, ENT_QUOTES, 'UTF-8'); };
+    $c = function ($t) use ($e) { return '<code>' . $e($t) . '</code>'; };
+    $ins = function ($label, $snippet) use ($e) { return '<button type="button" class="admin-insert-btn" data-snippet="' . $e($snippet) . '">' . $e($label) . '</button>'; };
+    ob_start();
+?>
+    <h2 class="section-title">How notes work</h2>
+    <p>A notes file is a short box of text at the top of the gallery page (or at the top of a folder's page, if the file is in that folder). Write plain text with a little formatting, and use <strong>directives</strong> in {curly braces} to attach photos, mark an item sold, and so on.</p>
+
+    <h3>Making a file count</h3>
+    <ul>
+      <li>The <strong>first line must be exactly</strong> <?= $c('{gallery}') ?>. Any other <code>.md</code> file in the folder is left completely alone (a personal notes file is never read). A file without it is listed as "not active", with a one-click button to add the line.</li>
+      <li>In the gallery's first notes file, a <?= $c('# Heading') ?> on the first line after that becomes the <strong>page title</strong>, and isn't repeated in the box. A <strong>Gallery title</strong> set in Settings wins over it.</li>
+      <li>A notes file inside a subfolder only affects <strong>that folder's page</strong> and photos.</li>
+    </ul>
+
+    <h3>Formatting</h3>
+    <table class="ref-table">
+      <tr><td><?= $c('# Heading') ?><br><?= $c('## Smaller') ?> <?= $c('### Smaller still') ?></td><td>Headings</td></tr>
+      <tr><td><?= $c('**bold**') ?> <?= $c('*italic*') ?> <?= $c('_italic_') ?><br><?= $c('***both***') ?> <?= $c('__underline__') ?><br><?= $c('~~strikethrough~~') ?></td><td>Text styles</td></tr>
+      <tr><td><?= $c('`code`') ?></td><td>Inline code, shown as typed (see "Showing a directive as text" below)</td></tr>
+      <tr><td><?= $c('[words](https://example.com)') ?></td><td>A link. Only <code>http://</code> and <code>https://</code> addresses become links.</td></tr>
+      <tr><td><?= $c('- an item') ?> <?= $c('* an item') ?><br><?= $c('1. a numbered item') ?></td><td>Bulleted and numbered lists</td></tr>
+      <tr><td><?= $c('> a quote') ?></td><td>A block quote</td></tr>
+      <tr><td><?= $c('```') ?> on its own line, before and after</td><td>A block of code, shown exactly as typed</td></tr>
+    </table>
+    <p class="hint">HTML you type is never run: it appears as plain text.</p>
+
+    <h3>Directives</h3>
+    <p>A directive is a word in {curly braces}, written anywhere in an item's paragraph. It's removed from what visitors read. Click a button to put one at the cursor of the note you last clicked in.</p>
+    <table class="ref-table">
+      <tr><td><?= $ins('Group a box', '{group: Name}') ?><br><?= $c('{group: Name}') ?></td><td>Draws a labelled <strong>box</strong> around this item's photos (with its own view count). On its own, it renames a box the gallery already made, such as a folder or a group of <code>alpha_01.jpg</code>, <code>alpha_02.jpg</code>.</td></tr>
+      <tr><td><?= $ins('Claim photos', '{photos: a.jpg, b.jpg}') ?><br><?= $c('{photos: a.jpg, b.jpg}') ?></td><td>Attaches exactly these files to this paragraph, <strong>whatever they're called</strong>. Separate the names with commas, spelled as in the folder. A file can belong to one paragraph only: the first claim wins.</td></tr>
+      <tr><td><?= $ins('Accent color', '{color: #ff0000}') ?><br><?= $c('{color: #5865f2}') ?> or <?= $c('{color: gold}') ?></td><td>The accent colour of that item's box: a hex code or a plain colour word.</td></tr>
+      <tr><td><?= $ins('Sold', '{sold}') ?><br><?= $c('{sold}') ?></td><td>Marks the item <strong>sold</strong>: dimmed, struck-through text, grayscale photos and a red SOLD ribbon.</td></tr>
+      <tr><td><?= $ins('Reserved', '{reserved}') ?><br><?= $c('{reserved}') ?> or <?= $c('{held}') ?></td><td>Marks it <strong>reserved</strong>: an orange tag; the photos stay in colour.</td></tr>
+    </table>
+    <p class="hint insert-hint" hidden>Click inside the note you want to add it to first, then press the button.</p>
+    <p class="hint">If an item has both, sold wins over reserved, and either one overrides a custom colour, so the signal is never ambiguous.</p>
+
+    <h3>Attaching photos to a paragraph</h3>
+    <p>Three ways, from least to most typing:</p>
+    <ol>
+      <li><strong>Just mention it.</strong> If a paragraph contains a photo's name as a whole word (not case-sensitive), its photos appear under it. With filename grouping off, the name is the file's name without its extension (<code>zebra.jpg</code> is "zebra"); with it on, a trailing <code>_01</code> or <code>-02</code> is dropped too, so <code>alpha_01.jpg</code> and <code>alpha_02.jpg</code> are both "alpha". Mentioning a folder's name (with folders shown as cover cards) links to that folder.</li>
+      <li><strong>List them:</strong> works with any filenames.
+<pre class="ref-example">The blue one is my favourite. {photos: IMG_0231.jpg, IMG_0232.jpg}</pre></li>
+      <li><strong>List them and give the item a box:</strong>
+<pre class="ref-example">Hand-built keyboard, 65%. {group: Keyboard} {photos: kb1.jpg, kb2.jpg} {color: gold}</pre></li>
+    </ol>
+    <p>A photo you list always beats the automatic matching, and is taken out of it.</p>
+
+    <h3>Where a directive applies</h3>
+    <p>A directive only ever affects <strong>its own paragraph</strong>, never the one above or below, even with nothing in between. A paragraph ends at:</p>
+    <ul>
+      <li>a <strong>blank line</strong> (the usual cause of surprises),</li>
+      <li>a heading, a quote or a list item (each stands alone), and a code block,</li>
+      <li>a line starting <?= $c('(1)') ?>, <?= $c('(2)') ?> and so on, which starts a new paragraph straight away so a numbered listing needs no blank lines.</li>
+    </ul>
+    <p>So this does <em>not</em> work as hoped, because the blank line makes two paragraphs:</p>
+<pre class="ref-example">Take a look at my rack
+
+{group: Rack} {photos: rack.jpg, rack2.jpg}</pre>
+    <p>Remove the blank line to make it one item:</p>
+<pre class="ref-example">Take a look at my rack. {group: Rack} {photos: rack.jpg, rack2.jpg}</pre>
+
+    <h3>Showing a directive as text</h3>
+    <p>To write about a directive without it doing anything, put it in backticks: <?= $c('`{sold}`') ?> shows the word <code>{sold}</code> and marks nothing. Everything on this page is written that way.</p>
+
+    <h3>If something doesn't work</h3>
+    <p>The gallery page shows a small, collapsed <strong>setup notices</strong> banner when something in a notes file didn't resolve: a filename in <?= $c('{photos:}') ?> that isn't in the folder, a file claimed twice, a directive cut off from its text by a blank line, or a file missing <?= $c('{gallery}') ?>.</p>
+    <p class="hint">The complete reference, with a table of every combination of <code>{group:}</code> and <code>{photos:}</code>, is in the README under "Directive syntax".</p>
+<?php
+    return ob_get_clean();
 }
 
 /**
@@ -3180,7 +3313,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'save_site_settings') {
         $result = site_settings_save($isFetch);
         if ($isFetch) {
-            admin_json_exit(['ok' => ($result['type'] ?? '') === 'ok', 'text' => (string) ($result['text'] ?? ''), 'hash' => $result['hash'] ?? null, 'manual' => $result['manual'] ?? null, 'unchanged' => !empty($result['unchanged'])]);
+            admin_json_exit(['ok' => ($result['type'] ?? '') === 'ok', 'text' => (string) ($result['text'] ?? ''), 'hash' => $result['hash'] ?? null, 'manual' => $result['manual'] ?? null, 'unchanged' => !empty($result['unchanged']), 'extra' => $result['extra'] ?? null]);
         }
         return $result;
     }
@@ -3314,6 +3447,28 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $data['cover'] = $bare;
         });
         return ['type' => 'ok', 'text' => '"' . $bare . '" set as ' . ($adminFolderPath === null ? 'the gallery\'s cover photo (the picture in shared-link previews).' : 'this folder\'s cover photo.')];
+    }
+
+    if ($action === 'save_map_settings') {
+        $enabled = !empty($_POST['map_enabled']);
+        $rawRadius = trim((string) ($_POST['map_radius'] ?? ''));
+        if ($rawRadius === '') {
+            $radius = null;
+        } elseif (is_numeric($rawRadius) && (float) $rawRadius >= 1 && (float) $rawRadius <= 10000) {
+            $radius = (float) $rawRadius == (int) $rawRadius ? (int) $rawRadius : (float) $rawRadius;
+        } else {
+            return ['type' => 'error', 'text' => 'Pin grouping must be a number of miles from 1 to 10000, or blank to use the site-wide setting.'];
+        }
+        $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
+        items_update($targetReal, function (&$data) use ($enabled, $radius) {
+            $data['mapEnabled'] = $enabled;
+            $data['mapRadius'] = $radius;
+        });
+        $where = $adminFolderPath === null ? 'the gallery\'s front page' : 'this folder\'s page';
+        $text = $enabled ? 'A map now shows on ' . $where . ', from the photos whose location is visible.' : 'The map no longer shows on ' . $where . '. Nothing is deleted.';
+        if ($enabled && !ENABLE_MAP) $text .= ' It stays hidden until the Trip map is switched on in Site settings.';
+        elseif ($enabled && !ENABLE_PHOTO_LOCATION) $text .= ' It stays empty until photo locations are allowed in Site settings.';
+        return ['type' => 'ok', 'text' => $text . ($radius !== null ? ' Photos within ' . $radius . ' mile' . ($radius == 1 ? '' : 's') . ' of each other share a pin.' : '')];
     }
 
     if ($action === 'toggle_location_enabled') {
@@ -3530,6 +3685,35 @@ function render_admin_hidden_panel($data) {
 <?php
 }
 
+/** The "Map" section of a folder's (or the gallery's) settings: whether its page
+ *  shows a map of its own photos, and how close photos must be to share a pin.
+ *  Both are per page; a blank radius means the site-wide setting. */
+function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $on = $isRoot ? (($itemsHere['mapEnabled'] ?? null) !== false) : (($itemsHere['mapEnabled'] ?? null) === true);
+    $radius = $itemsHere['mapRadius'] ?? null;
+    $confirm = 'Show a map on this page? The map loads its code from cdnjs and its tiles from OpenStreetMap in each visitor\'s browser, so those two sites can see that someone visited. It only plots photos whose location is visible.';
+?>
+    <h3 class="subhead">Map</h3>
+    <?php if (!ENABLE_MAP): ?>
+      <p class="muted" style="margin-top:0;">The trip map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="var l=document.querySelector('.side-link'); if (l) { l.click(); return false; }">Site settings</a> first; then each folder can show its own map.</p>
+    <?php else: ?>
+      <form method="post" class="map-form">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="save_map_settings">
+        <label><input type="checkbox" name="map_enabled" value="1" <?= $on ? 'checked' : '' ?> data-initial="<?= $on ? '1' : '0' ?>"> Show a map of <?= $isRoot ? 'the whole gallery on its front page' : 'this folder\'s photos on its page' ?></label>
+        <div class="field" style="max-width:300px; margin-top:8px;">
+          <label>Pin grouping (miles)</label>
+          <input type="number" name="map_radius" min="1" max="10000" step="1" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?> (site-wide)">
+          <p class="hint">Photos closer together than this share one numbered pin. Leave blank to use the site-wide setting (<?= (int) MAP_CLUSTER_RADIUS_MILES ?>). A city trip wants a small number, a road trip a big one.</p>
+        </div>
+        <p class="hint" style="margin:0 0 8px;"><?= $isRoot ? 'The map covers every photo in the gallery with a visible location.' : 'The map covers the photos in this folder and its subfolders that have a visible location (this folder\'s own location switch above must be on).' ?></p>
+        <button type="submit" class="secondary" onclick="var c = this.form.map_enabled; if (c.checked &amp;&amp; c.getAttribute('data-initial') !== '1') return confirm(<?= $esc(json_encode($confirm)) ?>);">Save map settings</button>
+      </form>
+    <?php endif; ?>
+<?php
+}
+
 /** The identity form — title, dates, description (and position, for a
  *  folder) — shared by a folder's settings and the gallery's own, so the root
  *  is configured the same way a folder is. */
@@ -3567,7 +3751,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath) {
         <div class="field wide">
           <label>Description</label>
           <textarea name="description" maxlength="500" style="min-height:70px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
-          <p class="hint"><?= $isRoot ? 'A sentence or two, shown in a box at the top of the page and in shared-link previews. For anything longer or richer, use a notes file.' : 'A sentence or two, shown on its cover card and in a box at the top of its page.' ?></p>
+          <p class="hint"><?= $isRoot ? 'A sentence or two, shown in a box at the top of the page and in shared-link previews. For anything longer or richer, use a notes file.' : 'A sentence or two, shown in a box at the top of its page and in shared-link previews.' ?></p>
         </div>
       </div>
       <button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button>
@@ -3589,14 +3773,14 @@ function gallery_setting_definitions() {
         ['title' => 'What is shown', 'items' => [
             ['name' => 'AUTO_GROUP_BY_FOLDER', 'type' => 'bool', 'label' => 'Show subfolders',
              'help' => 'Each subfolder becomes its own group, to any depth (a trip with Paris/, Lisbon/ …). Off by default because this script is often dropped into a folder that already holds other things.',
-             'risk' => 'shows every photo in every subfolder to visitors',
+             'risk' => 'Every photo in every subfolder becomes visible to visitors.',
              'offwarn' => 'Visitors will stop seeing the subfolders, and links to them will stop working. Nothing is deleted: the folders, photos, captions and settings all stay exactly as they are, and come back when you turn this on again.'],
             ['name' => 'FOLDER_DISPLAY_MODE', 'type' => 'enum', 'label' => 'Folder style',
              'options' => ['overview' => 'Cover cards (click to open)', 'inline' => 'Inline (all on one page)'],
              'help' => 'Only used when subfolders are shown.'],
             ['name' => 'ENABLE_VIDEO', 'type' => 'bool', 'label' => 'Show videos (.mov, .mp4)',
              'help' => 'Videos are served exactly as recorded, with no conversion, so big clips use real bandwidth and some phone formats don\'t play in every browser.',
-             'risk' => 'shows every .mov and .mp4 in the gallery folders to visitors',
+             'risk' => 'Every .mov and .mp4 in the gallery folders becomes visible to visitors.',
              'offwarn' => 'Videos will disappear from the gallery, and links to them will stop working. Nothing is deleted: the files and their captions, locations and hide settings stay, and come back when you turn this on again.'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
              'help' => 'alpha_01.jpg and alpha_02.jpg become one group, "alpha". Handy for for-sale listings; on a camera roll it can merge unrelated photos. Folders are better for trips.'],
@@ -3609,23 +3793,80 @@ function gallery_setting_definitions() {
              'help' => 'Small thumbnails kept in a .gallery-cache folder, so pages load fast and iPhone photos can be shown. If the folder can\'t be written, the original photo is sent instead. Off sends every photo at full size.',
              'offwarn' => 'Every photo will be sent at full size, so pages get slow, and iPhone (HEIC) photos can\'t be shown at all. Nothing is deleted; thumbnails already made are left in place.'],
             ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
-             'help' => 'Counts page loads and photo views in a stats file in the gallery folder. You always see the numbers in this admin.'],
+             'help' => 'Counts visits (one per visitor per half hour, however many pages they open; not you, and not bots) and views of each photo, in a stats file in the gallery folder. You always see the numbers in this admin.'],
             ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
              'help' => 'Needs "Count views". Off keeps the numbers to yourself.'],
         ]],
         ['title' => 'Locations and the map', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
              'help' => 'Needed before any location can show. Each folder still has its own switch in its settings, and any photo can opt out.',
-             'risk' => 'GPS coordinates can reveal where you live or were; they stay private until a folder\'s own switch is turned on',
+             'risk' => 'GPS coordinates can reveal where you live or where you were. They stay private until a folder\'s own location switch is turned on.',
              'offwarn' => 'Photo locations and the map will disappear for visitors. Nothing is deleted: every saved location stays and comes back when you turn this on again.'],
             ['name' => 'ENABLE_MAP', 'type' => 'bool', 'label' => 'Trip map',
              'help' => 'A map of every photo that has a visible location. Needs "Allow photo locations".',
-             'risk' => 'the map loads Leaflet (cdnjs) and map tiles (OpenStreetMap) in each visitor\'s browser, so those sites see the visit',
+             'risk' => 'The map loads its code from cdnjs and its map tiles from OpenStreetMap in each visitor\'s browser, so those two sites can see that someone visited.',
              'offwarn' => 'The trip map will disappear. Nothing is deleted: every photo location stays saved.'],
             ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 1, 'max' => 10000,
-             'help' => 'Photos closer together than this share one numbered pin. 50 suits most trips; a dense city trip wants less.'],
+             'help' => 'Photos closer together than this share one numbered pin. 50 suits most trips; a dense city trip wants less. This is the default: each folder, and the gallery front page, can set its own in its settings.'],
+        ]],
+        ['title' => 'Server setup (advanced)', 'items' => [
+            ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
+             'help' => 'Show a folder that lives somewhere else on the server (an archive on another disk) as one more subfolder, under the name you give it. Needs "Show subfolders". Photos stay where they are; only a path is stored here.',
+             'risk' => 'Every photo and video in that folder, and in its subfolders, becomes visible to visitors.'],
+            ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect',
+             'help' => 'Hands photo and video files to nginx instead of reading them with PHP, which is what makes a hidden photo unreachable at its direct address. Leave empty unless nginx already has the matching "internal" location (see the README), for example /kb.',
+             'risk' => 'Unless nginx already has the matching internal location, every photo and video will stop loading until you clear this again.'],
         ]],
     ];
+}
+
+/** Checks the map of extra folders the Site settings screen posts (JSON, name =>
+ *  path) before it is ever stored. A path must be a real, readable folder,
+ *  written as the real path (no symlink anywhere in it, since the scan refuses
+ *  to follow them), outside this gallery's own folder and not one that
+ *  contains it. Returns the clean map, or null with reasons in $errors. */
+function site_settings_validate_extra_folders($raw, &$errors) {
+    $map = json_decode((string) $raw, true);
+    if (!is_array($map) || ($map !== [] && array_is_list($map))) { $errors[] = 'The list of folders from elsewhere wasn\'t understood.'; return null; }
+    if (count($map) > 50) { $errors[] = 'That is more folders from elsewhere than the gallery allows (50).'; return null; }
+    $gallery = realpath(__DIR__);
+    $out = []; $seen = []; $bad = false;
+    foreach ($map as $name => $path) {
+        $name = (string) $name; $q = '"' . $name . '"';
+        if (!is_string($path)) { $errors[] = "The path for $q isn't text."; $bad = true; continue; }
+        if ($name === '' || $name !== trim($name) || strlen($name) > 60 || $name[0] === '.' || preg_match('#[/\\\\\x00-\x1F\x7F]#', $name)) {
+            $errors[] = "$q isn't a usable folder name: 1 to 60 characters, no slashes, no leading dot or space."; $bad = true; continue;
+        }
+        if (isset($seen[strtolower($name)])) { $errors[] = "The name $q is used twice."; $bad = true; continue; }
+        $seen[strtolower($name)] = true;
+        if (is_dir(__DIR__ . '/' . $name)) { $errors[] = "A folder called $q already exists in the gallery, so that name is taken."; $bad = true; continue; }
+        $p = rtrim($path, '/\\');
+        if ($p === '' || preg_match('#[\x00-\x1F\x7F]#', $path) || !preg_match('#^(/|[A-Za-z]:[\\\\/])#', $p) || preg_grep('#^\.\.?$#', preg_split('#[\\\\/]+#', $p))) {
+            $errors[] = "The path for $q must be a full path starting with / (no .. in it)."; $bad = true; continue;
+        }
+        if (!@is_dir($p) || !@is_readable($p)) {
+            $errors[] = "The path for $q ($p) isn't a folder this server can read. Check it exists and that the web server may open it (and, on shared hosting, that PHP is allowed outside the website's folder)."; $bad = true; continue;
+        }
+        $real = realpath($p);
+        if (is_link($p) || $real === false || $real !== $p) {
+            $errors[] = "The path for $q goes through a link or isn't written as its real path" . ($real ? " (it is $real)" : '') . ". The gallery doesn't follow links, so give the real path."; $bad = true; continue;
+        }
+        if ($gallery !== false && ($real === $gallery || str_starts_with($real . '/', $gallery . '/') || str_starts_with($gallery . '/', $real . '/'))) {
+            $errors[] = "The path for $q overlaps this gallery's own folder (inside it, or containing it), which would show things twice or expose too much."; $bad = true; continue;
+        }
+        $out[$name] = $real;
+    }
+    return $bad ? null : $out;
+}
+
+/** The nginx prefix: empty, or a plain URL path such as /kb. */
+function site_settings_valid_nginx_prefix($value) {
+    if ($value === '') return true;
+    if (strlen($value) > 120 || $value[0] !== '/' || str_ends_with($value, '/') || str_contains($value, '//')) return false;
+    foreach (explode('/', substr($value, 1)) as $segment) {
+        if ($segment === '' || $segment === '.' || $segment === '..' || !preg_match('/^[A-Za-z0-9._~-]+$/', $segment)) return false;
+    }
+    return true;
 }
 
 /** The settings file's exact text for $cfg: the data guard, then the keys in
@@ -3668,6 +3909,12 @@ function site_settings_save($ajax = false) {
             $raw = $_POST['set_' . $name];
             if ($d['type'] === 'bool') {
                 $value = $raw === '1';
+            } elseif ($d['type'] === 'folders') {
+                $value = site_settings_validate_extra_folders($raw, $errors);
+                if ($value === null) continue;
+            } elseif ($d['type'] === 'text') {
+                if (!site_settings_valid_nginx_prefix($raw)) { $errors[] = '"' . $d['label'] . '" must be empty or a plain path like /kb (starting with /, no trailing slash, letters, digits and . _ ~ - only).'; continue; }
+                $value = $raw;
             } elseif ($d['type'] === 'enum') {
                 if (!array_key_exists($raw, $d['options'])) { $errors[] = '"' . $d['label'] . '" must be one of the choices offered.'; continue; }
                 $value = $raw;
@@ -3720,11 +3967,14 @@ function site_settings_save($ajax = false) {
     if ($roundStatus !== 'ok' || $roundTrip !== $a) { @unlink($tmp); return $fail('the file that would have been written didn\'t read back correctly, so it was not installed.'); }
     if (!@rename($tmp, $path)) { @unlink($tmp); return $fail('the settings file couldn\'t be replaced.'); }
     // Changing the admin password must not log the person who just changed it out.
-    if ($newAdmin !== null) $_SESSION['admin_auth'] = hash('sha256', 'admin|' . $newAdmin . '|' . __DIR__);
+    if ($newAdmin !== null) {
+        $_SESSION['admin_auth'] = hash('sha256', 'admin|' . $newAdmin . '|' . __DIR__);
+        set_admin_reveal_cookie($newAdmin);   // the reveal token is derived from the password too
+    }
     $n = count($cfg);
     if ($ajax) {
         // The page updates in place, so there is no "next page" to carry a message: say it now, and hand back the new file fingerprint.
-        return ['type' => 'ok', 'text' => ($newAdmin !== null ? 'Admin password changed; you stay signed in.' : 'Saved.'), 'hash' => md5_file($path), 'differing' => $n];
+        return ['type' => 'ok', 'text' => ($newAdmin !== null ? 'Admin password changed; you stay signed in.' : 'Saved.'), 'hash' => md5_file($path), 'differing' => $n, 'extra' => (object) ($cfg['EXTRA_FOLDERS'] ?? [])];
     }
     $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Settings saved' . ($newAdmin !== null ? ' (admin password changed; you stay signed in)' : '') . '. ' . ($n === 0 ? 'Everything is on its default.' : $n . ' setting' . ($n === 1 ? '' : 's') . ' differ' . ($n === 1 ? 's' : '') . ' from the defaults and will survive updating index.php.') . ' Your photos, captions, locations and counts were not touched.'];
     return ['type' => 'redirect'];
@@ -3751,7 +4001,7 @@ function render_admin_site_settings($csrfToken) {
         <p class="muted">Create a file named <code>.gallery-config.php</code> next to <code>index.php</code> containing exactly this:</p>
         <textarea readonly rows="12" style="width:100%; font-family:ui-monospace,monospace;" onfocus="this.select()"><?= $esc($GLOBALS['__site_settings_manual']) ?></textarea>
       <?php endif; ?>
-      <p class="muted sitesync" hidden>Saved. The other screens (the sidebar, photo counts) refresh when you leave this one.</p>
+      <p class="muted sitesync" hidden>Saved. The folder list is already up to date; the photo grids and other tabs refresh when you leave this one.</p>
       <form method="post" class="site-settings-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_site_settings">
@@ -3764,7 +4014,7 @@ function render_admin_site_settings($csrfToken) {
                 <div class="name"><?= $esc($d['label']) ?>
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
-                <?php if (!empty($d['risk'])): ?><div class="risk">Turning this on <?= $esc($d['risk']) ?>.</div><?php endif; ?>
+                <?php if (!empty($d['risk'])): ?><div class="risk"><?= $esc($d['risk']) ?></div><?php endif; ?>
               </div>
               <div class="ctl">
                 <?php if ($d['type'] === 'bool'): ?>
@@ -3772,6 +4022,18 @@ function render_admin_site_settings($csrfToken) {
                   <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['risk'])): ?> data-risk="<?= $esc($d['risk']) ?>"<?php endif; ?><?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
                 <?php elseif ($d['type'] === 'enum'): ?>
                   <select name="set_<?= $esc($name) ?>"><?php foreach ($d['options'] as $val => $lab): ?><option value="<?= $esc($val) ?>" <?= (string) $now === (string) $val ? 'selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?></select>
+                <?php elseif ($d['type'] === 'text'): ?>
+                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" data-risk="<?= $esc($d['risk'] ?? '') ?>" style="max-width:180px;">
+                <?php elseif ($d['type'] === 'folders'): ?>
+                  <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode((object) $now, JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>" data-risk="<?= $esc($d['risk']) ?>">
+                    <ul class="extra-list"><?php foreach ($now as $fname => $fpath): ?><li><strong><?= $esc($fname) ?></strong> <span class="muted">&rarr;</span> <code><?= $esc($fpath) ?></code> <button type="button" class="extra-remove secondary" data-name="<?= $esc($fname) ?>">Remove</button></li><?php endforeach; ?></ul>
+                    <p class="muted extra-none"<?= $now ? ' hidden' : '' ?>>None added.</p>
+                    <div class="extra-add">
+                      <input type="text" class="extra-name" placeholder="Name, e.g. OldTrip2020" maxlength="60" autocomplete="off">
+                      <input type="text" class="extra-path" placeholder="/full/path/to/the/folder" autocomplete="off" spellcheck="false">
+                      <button type="button" class="extra-add-btn secondary">Add folder</button>
+                    </div>
+                  </div>
                 <?php else: ?>
                   <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="1" value="<?= $esc($now) ?>" style="max-width:110px;">
                 <?php endif; ?>
@@ -3806,15 +4068,6 @@ function render_admin_site_settings($csrfToken) {
             <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private-remove" data-confirm="Remove the private-view password? Anyone you gave it to will no longer be able to see the hidden items. The hidden items themselves stay hidden and nothing is deleted.">Remove it (turn private view off)</button><span class="rowstate" role="status" aria-live="polite"></span></span>
             <label class="muted nojs-only"><input type="checkbox" name="pw_private_remove" value="1"> Remove it (turn private view off)</label><?php endif; ?>
           </div>
-        </div>
-
-        <h3 class="subhead">Only in the settings file</h3>
-        <p class="muted" style="margin-top:0;">These need care or matching server setup, so they're not editable here. Edit <code>.gallery-config.php</code> directly (see the README).</p>
-        <div class="site-row">
-          <div><div class="name">Folders from elsewhere on the server</div><div class="help"><code>EXTRA_FOLDERS</code>: <?= EXTRA_FOLDERS ? $esc(implode(', ', array_map(function ($k, $v) { return $k . ' → ' . $v; }, array_keys(EXTRA_FOLDERS), EXTRA_FOLDERS))) : 'none' ?></div></div>
-        </div>
-        <div class="site-row">
-          <div><div class="name">nginx internal redirect</div><div class="help"><code>NGINX_ACCEL_REDIRECT_PREFIX</code>: <?= NGINX_ACCEL_REDIRECT_PREFIX === '' ? 'off' : $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?></div></div>
         </div>
 
         <div class="item-actions nojs-only" style="margin-top:14px;">
@@ -4000,13 +4253,25 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .md-badge { font-size:0.72rem; padding:2px 8px; border-radius:10px; }
   .md-badge.active { background:rgba(59,165,92,0.2); color:var(--ok); }
   .md-badge.inactive { background:rgba(255,255,255,0.08); color:var(--muted); }
-  .admin-reference { margin-top:10px; font-size:0.85rem; }
-  .admin-reference summary { cursor:pointer; color:var(--muted); }
-  .admin-reference-list { margin:8px 0; }
-  .admin-reference-row { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 10px; margin-bottom:6px; }
-  .admin-reference-row code { background:#101012; padding:1px 6px; border-radius:4px; font-size:0.78rem; }
-  .admin-insert-btn { background:#2a2a2e; color:var(--text); font-size:0.78rem; padding:4px 9px; }
-  .admin-reference-note { color:var(--muted); font-size:0.78rem; }
+  /* The notes reference sits beside the editors and stays in view while you type. */
+  .notes-layout { display:grid; grid-template-columns:minmax(0,1fr) 400px; gap:18px; align-items:start; }
+  .notes-reference { position:sticky; top:76px; max-height:calc(100vh - 92px); overflow-y:auto; background:var(--card); border-radius:10px; padding:16px 18px; font-size:0.85rem; line-height:1.55; }
+  .notes-reference h2 { margin:0 0 8px; }
+  .notes-reference h3 { font-size:0.74rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:20px 0 8px; font-weight:600; }
+  .notes-reference p { margin:0 0 10px; }
+  .notes-reference ul, .notes-reference ol { margin:0 0 10px; padding-left:20px; }
+  .notes-reference li { margin-bottom:5px; }
+  .notes-reference code { background:#101012; padding:1px 6px; border-radius:4px; font-size:0.78rem; overflow-wrap:anywhere; }
+  /* In a side column, each row reads better as the syntax on top and what it does underneath. */
+  .notes-reference .ref-table, .notes-reference .ref-table tbody, .notes-reference .ref-table tr, .notes-reference .ref-table td { display:block; width:100%; }
+  .notes-reference .ref-table tr { padding:9px 0; border-top:1px solid #26262a; }
+  .notes-reference .ref-table tr:first-child { border-top:0; padding-top:0; }
+  .notes-reference .ref-table td { padding:0; }
+  .notes-reference .ref-table td:first-child { margin-bottom:5px; }
+  .notes-reference .ref-table td:last-child { color:#cfcfd4; }
+  .notes-reference pre.ref-example { background:#101012; border-radius:6px; padding:8px 10px; margin:6px 0 10px; font-size:0.78rem; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .admin-insert-btn { background:#2a2a2e; color:var(--text); font-size:0.78rem; padding:4px 9px; margin-bottom:4px; }
+  @media (max-width: 1100px) { .notes-layout { grid-template-columns:1fr; } .notes-reference { position:static; max-height:none; } }
   /* Photos tab: a grid of thumbnails, and one editor panel above it that
      opens with the selected photo's own form (every photo's real form is in
      the page; only the selected one is shown). */
@@ -4021,6 +4286,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .site-row .src { font-weight:500; font-size:0.68rem; color:#9bb0ff; background:rgba(88,101,242,0.18); padding:1px 7px; border-radius:9px; margin-left:6px; }
   .site-row .help { color:var(--muted); font-size:0.8rem; margin-top:3px; }
   .site-row .risk { color:#f5a623; font-size:0.78rem; margin-top:4px; }
+  .site-row .risk::before { content:"\26A0\FE0E  "; }
   .site-row .ctl { display:flex; align-items:center; justify-content:flex-end; gap:12px; flex-wrap:wrap; }
   .site-row .ctl.col { flex-direction:column; align-items:stretch; gap:6px; }
   .site-row .meta { font-size:0.72rem; color:var(--muted); }
@@ -4047,6 +4313,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .js-tabs .js-only { display:inline; }
   .js-tabs .nojs-only { display:none !important; }
   .manual-box { margin:0 0 14px; }
+  .site-row .ctl:has(.extra-folders) { flex-direction:column; align-items:stretch; justify-content:flex-start; }
+  .extra-folders { width:100%; }
+  .extra-list { list-style:none; margin:0 0 8px; padding:0; }
+  .extra-list li { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 0; border-top:1px solid #26262a; font-size:0.85rem; }
+  .extra-list li:first-child { border-top:0; }
+  .extra-list code { word-break:break-all; }
+  .extra-add { display:flex; flex-direction:column; gap:6px; }
   .photos-hint { margin:0 0 12px; }
   .thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(124px, 1fr)); gap:10px; }
   .thumb { position:relative; padding:0; border:2px solid transparent; background:var(--card); border-radius:9px; cursor:pointer; overflow:hidden; text-align:left; color:var(--text); display:flex; flex-direction:column; font:inherit; }
@@ -4065,7 +4338,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .photo-editor { background:var(--card); border-radius:10px; padding:14px; margin-bottom:16px; scroll-margin-top:84px; }
   .js-tabs .photo-editor { display:none; }
   .js-tabs .photo-editor.has-open { display:block; }
-  .item-editor + .item-editor { border-top:1px solid #26262a; margin-top:16px; padding-top:16px; }
+  /* Only without JavaScript, where every photo's form is listed one after another. With it, one editor is shown at a time and must look identical whichever photo it is. */
+  .admin-main:not(.js-tabs) .item-editor + .item-editor { border-top:1px solid #26262a; margin-top:16px; padding-top:16px; }
   .js-tabs .item-editor { display:none; }
   .js-tabs .item-editor.open { display:block; }
   .editor-head { display:flex; gap:14px; align-items:center; margin-bottom:14px; }
@@ -4130,7 +4404,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <?php endif; ?>
   <div class="tab-panel" data-tab="photos">
   <?php if (TRACK_VIEWS): ?>
-    <p class="muted" style="margin-top:0;">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> page loads in total. Select a photo to see its own count. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
+    <p class="muted" style="margin-top:0;">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> visit<?= stats_get_pageviews($dir) === 1 ? '' : 's' ?> in total (one per visitor per half hour, not counting you or bots). Select a photo to see its own count. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
   <?php endif; ?>
 
   <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
@@ -4293,6 +4567,7 @@ foreach ($adminFiles as $file) {
       <button type="submit" class="<?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'secondary' : 'danger' ?>"><?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'Make this folder public again' : 'Hide this entire folder from public view' ?></button>
     </form>
     </div>
+    <?php render_admin_map_form($itemsHere, $csrfToken, false); ?>
     <?php if (!empty($itemsHere['cover'])): ?>
       <p class="muted" style="margin-top:10px;">Cover photo: <?= htmlspecialchars($itemsHere['cover'], ENT_QUOTES, 'UTF-8') ?> — click "Set as cover" on any photo below to change it.</p>
     <?php endif; ?>
@@ -4316,6 +4591,7 @@ foreach ($adminFiles as $file) {
         <button type="submit" class="secondary"<?php if (empty($itemsHere['locationEnabled'])): ?> onclick="return confirm(<?= $locConfirmAttr ?>)"<?php endif; ?>><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
       </form>
     </div>
+    <?php render_admin_map_form($itemsHere, $csrfToken, true); ?>
     <h3 class="subhead">Settings file</h3>
     <?php $cfgApplied = array_values(array_unique($GLOBALS['__gallery_config_applied'] ?? [])); ?>
     <?php if (is_file(__DIR__ . '/.gallery-config.php')): ?>
@@ -4361,6 +4637,8 @@ foreach ($adminFiles as $file) {
 
   </div>
   <div class="tab-panel" data-tab="notes">
+  <div class="notes-layout">
+  <div class="notes-main">
   <section class="panel" id="notes">
     <h2 class="section-title">Notes <span class="muted">(<?= count($mdCandidates) ?> .md file<?= count($mdCandidates) === 1 ? '' : 's' ?> in this folder)</span></h2>
     <?php if (empty($mdCandidates)): ?>
@@ -4389,7 +4667,6 @@ foreach ($adminFiles as $file) {
           <input type="hidden" name="action" value="save_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
           <textarea name="content" class="adm-textarea"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
-          <?= render_admin_reference_panel() ?>
           <div class="field-row" style="margin-top:8px; align-items:flex-end;">
             <div class="field" style="max-width:260px;">
               <label>Save as a different filename (optional)</label>
@@ -4414,7 +4691,6 @@ foreach ($adminFiles as $file) {
         <input type="hidden" name="md_file" value="">
         <textarea name="content" class="adm-textarea">{gallery}
 </textarea>
-        <?= render_admin_reference_panel() ?>
         <div class="field-row" style="margin-top:8px; align-items:flex-end;">
           <div class="field" style="max-width:260px;">
             <label>Filename</label>
@@ -4425,7 +4701,9 @@ foreach ($adminFiles as $file) {
       </form>
     </details>
   </section>
-
+  </div>
+  <aside class="notes-reference" aria-label="Notes reference"><?= render_admin_notes_reference() ?></aside>
+  </div>
   </div>
   <div class="tab-panel" data-tab="site">
 <?php render_admin_site_settings($csrfToken); ?>
@@ -4452,16 +4730,23 @@ foreach ($adminFiles as $file) {
 <script>
   // The directive reference starts expanded on a desktop and collapsed
   // on a phone-width screen; it's a plain <details>, so either can toggle.
-  if (window.matchMedia && window.matchMedia('(max-width: 600px)').matches) {
-    document.querySelectorAll('.admin-reference').forEach(function (d) { d.removeAttribute('open'); });
-  }
   // The folder list is a sidebar on a desktop and a collapsed "Folders" bar on a phone.
   if (window.matchMedia && window.matchMedia('(max-width: 800px)').matches) {
     document.querySelectorAll('.admin-folders').forEach(function (d) { d.removeAttribute('open'); });
   }
+  // The notes reference's Insert buttons put a directive at the cursor of the note you last clicked in (or into
+  // the only note there is); with several notes and none clicked, they say to click in one first.
+  var lastNote = null;
+  document.querySelectorAll('.adm-textarea').forEach(function (ta) {
+    ta.addEventListener('focus', function () { lastNote = ta; });
+  });
   document.querySelectorAll('.admin-insert-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      const textarea = btn.closest('.md-file').querySelector('.adm-textarea');
+      const notes = document.querySelectorAll('.adm-textarea');
+      const textarea = lastNote || (notes.length === 1 ? notes[0] : null);
+      const hint = document.querySelector('.insert-hint');
+      if (!textarea) { if (hint) hint.hidden = false; return; }
+      if (hint) hint.hidden = true;
       const snippet = btn.getAttribute('data-snippet');
       const start = textarea.selectionStart, end = textarea.selectionEnd;
       textarea.value = textarea.value.slice(0, start) + snippet + textarea.value.slice(end);
@@ -4560,7 +4845,8 @@ foreach ($adminFiles as $file) {
     fromLocation();
   })();
   // Folder tree: branches not on the way to the folder being edited start folded; the chevron toggles one.
-  (function () {
+  // A function so it can be run again when Site settings changes which folders exist.
+  function initFolderTree() {
     var nav = document.querySelector('.admin-folder-nav');
     if (!nav) return;
     [].forEach.call(nav.querySelectorAll('li.has-children'), function (li) {
@@ -4571,7 +4857,8 @@ foreach ($adminFiles as $file) {
         toggle.setAttribute('aria-expanded', folded ? 'false' : 'true');
       });
     });
-  })();
+  }
+  initFolderTree();
   // Site settings: every change saves the moment it is made (one request at a time, so the file's
   // fingerprint never races), and anything that publishes content, contacts a third party, or removes
   // something visitors see asks first. The other screens refresh when you leave this one.
@@ -4586,6 +4873,26 @@ foreach ($adminFiles as $file) {
       node.textContent = text; node.className = 'rowstate ' + (kind || '');
       clearTimeout(node._t);
       if (kind === 'ok') node._t = setTimeout(function () { node.textContent = ''; node.className = 'rowstate'; }, 3000);
+    }
+    // The folder list and the tab counts are redrawn from a fresh copy of the page the moment a setting is saved
+    // (subfolders on or off, videos on or off ...), so they never lag behind what you just changed.
+    var refreshTimer;
+    function refreshChrome() {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(function () {
+        fetch(location.pathname + location.search, { credentials: 'same-origin' })
+          .then(function (r) { return r.text(); })
+          .then(function (html) {
+            var doc = new DOMParser().parseFromString(html, 'text/html');
+            var fresh = doc.querySelector('.admin-folders'), old = document.querySelector('.admin-folders');
+            if (fresh && old) { old.innerHTML = fresh.innerHTML; initFolderTree(); }
+            [].forEach.call(document.querySelectorAll('.admin-tabs a[data-tab]'), function (a) {
+              var c = a.querySelector('.count'), f = doc.querySelector('.admin-tabs a[data-tab="' + a.getAttribute('data-tab') + '"] .count');
+              if (c && f) c.textContent = f.textContent;
+            });
+          })
+          .catch(function () {});
+      }, 200);
     }
     function stateOf(el) { var holder = el.closest('.pwline') || el.closest('.ctl'); return holder ? holder.querySelector('.rowstate') : null; }
     function showManual(text) {
@@ -4608,7 +4915,7 @@ foreach ($adminFiles as $file) {
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
             if (j.ok && j.hash) hashInput.value = j.hash;
-            if (j.ok) { say(node, j.text, 'ok'); window.__siteDirty = true; if (sync) sync.hidden = false; if (onOk) onOk(j); }
+            if (j.ok) { say(node, j.text, 'ok'); window.__siteDirty = true; if (sync) sync.hidden = false; refreshChrome(); if (onOk) onOk(j); }
             else { say(node, j.text, 'err'); if (onFail) onFail(); if (j.manual) showManual(j.manual); }
           })
           .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.', 'err'); if (onFail) onFail(); });
@@ -4617,7 +4924,7 @@ foreach ($adminFiles as $file) {
     [].forEach.call(form.querySelectorAll('input[type=checkbox][data-label]'), function (cb) {
       cb.addEventListener('change', function () {
         var on = cb.checked, label = cb.getAttribute('data-label'), risk = cb.getAttribute('data-risk'), off = cb.getAttribute('data-offwarn');
-        var msg = on && risk ? 'Turn on "' + label + '"?\n\nThis ' + risk + '.' : (!on && off ? 'Turn off "' + label + '"?\n\n' + off : '');
+        var msg = on && risk ? 'Turn on "' + label + '"?\n\n' + risk : (!on && off ? 'Turn off "' + label + '"?\n\n' + off : '');
         if (msg && !confirm(msg)) { cb.checked = !on; return; }
         var f = {}; f[cb.name] = on ? '1' : '0';
         post(f, stateOf(cb), function () { cb.checked = !on; });
@@ -4629,6 +4936,52 @@ foreach ($adminFiles as $file) {
         var f = {}; f[el.name] = el.value;
         post(f, stateOf(el), function () { el.value = el.getAttribute('data-prev'); }, function () { el.setAttribute('data-prev', el.value); });
       });
+    });
+    [].forEach.call(form.querySelectorAll('input[type=text][name^=set_]'), function (el) {
+      el.setAttribute('data-prev', el.value);
+      el.addEventListener('change', function () {
+        el.value = el.value.trim();
+        var risk = el.getAttribute('data-risk'), label = el.getAttribute('data-label');
+        if (el.value !== '' && risk && !confirm('Set "' + label + '" to ' + el.value + '?\n\n' + risk)) { el.value = el.getAttribute('data-prev'); return; }
+        var f = {}; f[el.name] = el.value;
+        post(f, stateOf(el), function () { el.value = el.getAttribute('data-prev'); }, function () { el.setAttribute('data-prev', el.value); });
+      });
+    });
+    [].forEach.call(form.querySelectorAll('.extra-folders'), function (box) {
+      var map = {};
+      try { map = JSON.parse(box.getAttribute('data-map')) || {}; } catch (e) {}
+      var list = box.querySelector('.extra-list'), none = box.querySelector('.extra-none'), status = stateOf(box);
+      function draw() {
+        list.textContent = '';
+        Object.keys(map).forEach(function (name) {
+          var li = document.createElement('li'), strong = document.createElement('strong'), arrow = document.createElement('span'), code = document.createElement('code'), btn = document.createElement('button');
+          strong.textContent = name; arrow.className = 'muted'; arrow.textContent = '\u2192'; code.textContent = map[name];
+          btn.type = 'button'; btn.className = 'extra-remove secondary'; btn.textContent = 'Remove'; btn.setAttribute('data-name', name);
+          li.appendChild(strong); li.appendChild(document.createTextNode(' ')); li.appendChild(arrow); li.appendChild(document.createTextNode(' ')); li.appendChild(code); li.appendChild(document.createTextNode(' ')); li.appendChild(btn);
+          list.appendChild(li);
+        });
+        none.hidden = Object.keys(map).length > 0;
+      }
+      function send(next, onOk) {
+        var f = {}; f[box.getAttribute('data-name')] = JSON.stringify(next);
+        post(f, status, null, function (j) { map = (j.extra && typeof j.extra === 'object') ? j.extra : next; draw(); if (onOk) onOk(); });
+      }
+      box.querySelector('.extra-add-btn').addEventListener('click', function () {
+        var n = box.querySelector('.extra-name').value.trim(), p = box.querySelector('.extra-path').value.trim();
+        if (!n || !p) { say(status, 'Give it a name and a full path.', 'err'); return; }
+        if (!confirm('Add "' + n + '" (' + p + ')?\n\n' + box.getAttribute('data-risk'))) return;
+        var next = {}; Object.keys(map).forEach(function (k) { next[k] = map[k]; }); next[n] = p;
+        send(next, function () { box.querySelector('.extra-name').value = ''; box.querySelector('.extra-path').value = ''; });
+      });
+      list.addEventListener('click', function (ev) {
+        var b = ev.target.closest ? ev.target.closest('.extra-remove') : null;
+        if (!b) return;
+        var n = b.getAttribute('data-name');
+        if (!confirm('Stop showing "' + n + '"?\n\nNothing is deleted: its photos and their captions stay where they are, and come back if you add it again.')) return;
+        var next = {}; Object.keys(map).forEach(function (k) { if (k !== n) next[k] = map[k]; });
+        send(next);
+      });
+      draw();
     });
     [].forEach.call(form.querySelectorAll('.pw-btn'), function (btn) {
       function go() {
@@ -4787,6 +5140,7 @@ function run_admin_setup() {
                 admin_start_session();
                 session_regenerate_id(true);
                 $_SESSION['admin_auth'] = hash('sha256', 'admin|' . $pw . '|' . __DIR__);
+                set_admin_reveal_cookie($pw);
                 $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Your admin password is set and you\'re signed in. Site settings (left) is where the gallery-wide settings live; the password is kept in .gallery-config.php, which survives updating index.php.'];
                 @unlink(__DIR__ . '/.gallery-setup');
                 header('Location: ?admin#site', true, 303);
@@ -4838,7 +5192,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         if ($basicSupplied && $formPass === null) {
             if (!admin_credentials_valid()) {
                 login_throttle_record_failure($dir, 'admin', $ip);
-                admin_send_auth_challenge();
+                admin_reject_saved_credentials();
                 return;
             }
         } elseif ($formPass !== null) {
@@ -4853,7 +5207,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             session_regenerate_id(true);
             $_SESSION['admin_auth'] = admin_session_marker();
             login_throttle_record_success($dir, 'admin', $ip);
-            set_reveal_cookie();
+            set_admin_reveal_cookie();
             header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin'), true, 303);
             return;
         } else {
@@ -4865,8 +5219,12 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     // A valid admin login counts as revealed too — one-directional, and
     // this is what makes it true on the *public* gallery view, not just
     // inside ?admin itself (a plain cookie, since the public page is
-    // never behind its own session/Basic-Auth check).
-    set_reveal_cookie();
+    // never behind its own session/Basic-Auth check). Not when the password
+    // is being changed in this very request: that sets the new token itself,
+    // and a second Set-Cookie for the same name would only be noise.
+    if (!(($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['action'] ?? '') === 'save_site_settings' && !empty($_POST['pw_admin']))) {
+        set_admin_reveal_cookie();
+    }
     admin_start_session();
 
     if (isset($_GET['hidden'])) {
@@ -5223,6 +5581,52 @@ function is_bot_request() {
     );
 }
 
+/** How long a visitor can go quiet and still be the same visit. */
+define('VISIT_WINDOW_SECONDS', 1800);
+
+/** True if this browser is the admin's own (it carries the admin's reveal token,
+ *  set at login). The owner looking at their own gallery is not an audience. */
+function is_admin_browser() {
+    $token = admin_reveal_cookie_value();
+    $cookie = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
+    return $token !== '' && is_string($cookie) && $cookie !== '' && hash_equals($token, $cookie);
+}
+
+/** True if this request is a browser quietly fetching a page ahead of time, or
+ *  a link checker asking for headers: neither is anyone looking at the gallery. */
+function is_non_viewing_request() {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') return true;
+    foreach (['HTTP_PURPOSE', 'HTTP_SEC_PURPOSE', 'HTTP_X_PURPOSE', 'HTTP_X_MOZ'] as $header) {
+        if (isset($_SERVER[$header]) && preg_match('/prefetch|prerender|preview/i', (string) $_SERVER[$header])) return true;
+    }
+    return false;
+}
+
+/**
+ * Whether this page load begins a new VISIT, and so adds one to the site total.
+ * A visit is one visitor for as long as they keep coming back within
+ * VISIT_WINDOW_SECONDS of their last page: opening a dozen folders, a photo
+ * link, reload and back button are all one visit. (Counting every page load,
+ * as this once did, made the total several times the number of people.) It
+ * does not count the admin's own browser, link-preview bots, prefetches or
+ * HEAD requests. A small first-party cookie holds the time of the visitor's
+ * last page; every counted page load slides it forward.
+ */
+function visit_is_new() {
+    if (is_bot_request() || is_non_viewing_request() || is_admin_browser()) return false;
+    $now = time();
+    $last = (int) ($_COOKIE['gallery_visit'] ?? 0);
+    $isNew = $last <= 0 || $last > $now + 60 || ($now - $last) > VISIT_WINDOW_SECONDS;
+    setcookie('gallery_visit', (string) $now, [
+        'expires' => $now + VISIT_WINDOW_SECONDS,
+        'path' => '/',
+        'secure' => is_https_request(),
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+    return $isNew;
+}
+
 // ?track=<filename> is a tiny background ping fired by the lightbox each
 // time a photo is displayed. Only counts filenames that are actually in
 // this folder's photo list, skips known bots, and debounces a repeat
@@ -5232,7 +5636,7 @@ function is_bot_request() {
 // immediately, with no reload — and never renders the gallery itself.
 if (isset($_GET['track'])) {
     $response = ['ok' => false];
-    if (TRACK_VIEWS && !is_bot_request()) {
+    if (TRACK_VIEWS && !is_bot_request() && !is_admin_browser() && !is_non_viewing_request()) {
         $requested = $_GET['track'];
         if (in_array($requested, $files, true)) {
             // A group's members always live in the same folder (folder
@@ -5276,9 +5680,8 @@ if (isset($_GET['track'])) {
 $viewCount = 0;
 $photoViews = [];
 if (TRACK_VIEWS) {
-    if (!is_bot_request()) {
-        $viewCount = stats_bump_pageview($dir);
-    }
+    // The site total counts visits, not page loads (see visit_is_new()): the number shown is the running total either way.
+    $viewCount = visit_is_new() ? stats_bump_pageview($dir) : stats_get_pageviews($dir);
     $photoViews = stats_get_all_photo_views($dir, $files);
 }
 
@@ -6130,9 +6533,6 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if (!empty($meta['dates'])) {
         $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
-    if (!empty($meta['description'])) {
-        $html .= '<span class="folder-cover-desc">' . htmlspecialchars($meta['description'], ENT_QUOTES, 'UTF-8') . '</span>';
-    }
     $html .= '<span class="folder-cover-count">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</span>';
     $html .= '</a>';
     $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">&#128279;</a>';
@@ -6397,11 +6797,21 @@ $baseUrl = current_base_url();
 // in that specific case is a reasonable, minor simplification rather
 // than forcing notes processing to run early just for this.
 $mapPoints = ENABLE_MAP ? collect_map_points($dir, $files, $itemsData, $fileToGroupKey, $folderGroupKeys, $groupLabels) : [];
+// A map belongs to the page it is on: the root's covers everything, a folder's just what is inside it, and each
+// has its own switch (the root's is on unless turned off, a folder's off unless turned on).
+$mapShown = ENABLE_MAP && folder_map_enabled($dir, $currentFolderPath);
+$mapPoints = map_points_for_folder($mapPoints, $dir, $currentFolderPath);
 $mapLegend = map_legend_from_points($mapPoints);
+$mapPageHref = '?map' . ($currentFolderPath !== null ? '&folder=' . rawurlencode($currentFolderPath) : '');
+$mapRadius = ENABLE_MAP ? folder_map_radius($dir, $currentFolderPath) : MAP_CLUSTER_RADIUS_MILES;
 
-// ?map — the dedicated, shareable map page.
+// ?map — the dedicated, shareable map page (?map&folder=X for one folder's own).
 if (ENABLE_MAP && isset($_GET['map'])) {
-    render_map_page($mapPoints, $mapLegend, $rootPageTitle, $baseUrl);
+    if (!$mapShown) {
+        http_response_code(404);
+        exit;
+    }
+    render_map_page($mapPoints, $mapLegend, $currentFolderPath === null ? $rootPageTitle : $pageTitle, $baseUrl, $currentFolderPath, $mapRadius);
     exit;
 }
 
@@ -6776,7 +7186,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     font-size: 0.95rem;
   }
   .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); }
-  .folder-cover-desc { display:block; padding:2px 12px 0; font-size:0.82rem; color:var(--muted); overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
   .folder-dates { margin:2px 0 0; color:var(--muted); font-size:0.9rem; }
   .note-box.folder-description { white-space: pre-line; }
   .folder-cover-count {
@@ -7179,10 +7588,10 @@ if ($currentFolderPath !== null) {
   </div>
 <?php endif; ?>
 
-<?php if (ENABLE_MAP && $currentFolderPath === null && !empty($mapPoints)): ?>
+<?php if ($mapShown && !empty($mapPoints)): ?>
   <section class="map-preview">
-    <h2 class="map-preview-heading">Trip map <a href="?map" class="map-preview-link">View full map &rarr;</a></h2>
-    <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true) ?>
+    <h2 class="map-preview-heading"><?= $currentFolderPath === null ? 'Trip map' : 'Map' ?> <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-preview-link">View full map &rarr;</a></h2>
+    <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius) ?>
   </section>
 <?php endif; ?>
 
@@ -7195,7 +7604,7 @@ if ($currentFolderPath !== null) {
 <?php endif; ?>
 
 <footer>
-  <a href="?about">gallery</a><?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?> · <?= number_format($viewCount) ?> views<?php endif; ?><?php if (PRIVATE_VIEW_PASSWORD !== ''): ?> · <a href="?reveal">Private view</a><?php endif; ?>
+  <a href="?about">gallery</a><?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?> · <?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?><?php endif; ?><?php if (PRIVATE_VIEW_PASSWORD !== ''): ?> · <a href="?reveal">Private view</a><?php endif; ?>
 </footer>
 
 <div class="lightbox" id="lightbox">
