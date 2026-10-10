@@ -1205,6 +1205,8 @@ check('?reveal 404s outright when PRIVATE_VIEW_PASSWORD is unset (the default)',
 // preview section and no Leaflet request of any kind.
 [$mapOffStatus, $mapOffBody] = http_get("$base1/?map");
 check('?map with ENABLE_MAP off just renders the normal page', $mapOffStatus === 200 && str_contains($mapOffBody, 'Defaults Fixture'));
+[, $mapIconOffBody] = http_get("$base1/?mapicon");
+check('?mapicon is ignored (normal page) when ENABLE_MAP is off', str_contains($mapIconOffBody, 'Defaults Fixture'));
 check('no map preview or Leaflet library loads when ENABLE_MAP is off', !str_contains($mapOffBody, '<section class="map-preview"') && !str_contains($mapOffBody, 'cdnjs.cloudflare.com/ajax/libs/leaflet'));
 
 /* ======================================================================= *
@@ -1276,6 +1278,13 @@ check('clustering produced the right number of clusters (Paris+Louvre merged, Ro
 $clusterSizes = array_map('count', $clusters);
 sort($clusterSizes);
 check('the Paris+Louvre cluster has 2 members; Rome and NYC are singles', $clusterSizes === [1, 1, 2]);
+
+check('?map has an og:image pointing at ?mapicon and a large-image twitter card', str_contains($mapBody, 'property="og:image" content="http://127.0.0.1:' . $portMap . '/?mapicon"') && str_contains($mapBody, 'summary_large_image'));
+[$iconStatus, $iconBody, $iconHeaders] = http_get("$baseMap/?mapicon");
+$iconIsJpeg = false;
+foreach ($iconHeaders as $h) { if (stripos($h, 'content-type: image/jpeg') === 0) $iconIsJpeg = true; }
+$iconSize = @getimagesizefromstring($iconBody);
+check('?mapicon serves a 1200x630 JPEG', $iconStatus === 200 && $iconIsJpeg && $iconSize !== false && $iconSize[0] === 1200 && $iconSize[1] === 630);
 
 check('a hidden item never appears on the map at all', !str_contains($mapBody, 'hidden.jpg'));
 

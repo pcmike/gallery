@@ -554,6 +554,13 @@ if (isset($_GET['about'])) {
     exit;
 }
 
+// ?mapicon — the generic share-preview image for ?map (see
+// render_map_icon_image()). Inert unless ENABLE_MAP is on, like ?map.
+if (ENABLE_MAP && isset($_GET['mapicon'])) {
+    render_map_icon_image();
+    exit;
+}
+
 // ?reveal — the "Private view" link in the footer. See run_reveal_route()
 // for the full HTTPS/throttle/auth flow; checked early, like ?about/
 // ?download, since it's a distinct mode of this one file, not something
@@ -635,6 +642,44 @@ function render_video_placeholder_image($maxDim) {
     header('Content-Type: image/jpeg');
     header('Cache-Control: public, max-age=31536000, immutable');
     imagejpeg($img, null, 82);
+    imagedestroy($img);
+}
+
+/**
+ * The ?map page's share-preview image: a dark tile with a plain map
+ * pin. Not a rendered snapshot of the actual map — that needs a
+ * third-party static-maps API, the same dependency objection that ruled
+ * out geocoding — so, same honesty standard as the video placeholder, a
+ * generic icon that says "this link is a map" and nothing more. 1200x630
+ * is the usual large-link-preview size. Identical for every gallery, so
+ * nothing to cache or key; cheap enough to draw per request.
+ */
+function render_map_icon_image() {
+    $w = 1200;
+    $h = 630;
+    $img = imagecreatetruecolor($w, $h);
+    $bg = imagecolorallocate($img, 28, 28, 30);
+    imagefilledrectangle($img, 0, 0, $w, $h, $bg);
+    $pin = imagecolorallocate($img, 224, 138, 60);
+    $r = (int) round($h * 0.19);
+    $cx = (int) ($w / 2);
+    $cy = (int) round($h * 0.42);
+    imagefilledellipse($img, $cx, $cy, $r * 2, $r * 2, $pin);
+    // Tangent-ish taper from the circle's lower flanks down to the point.
+    $tipY = (int) round($h * 0.82);
+    $dx = (int) round($r * 0.86);
+    $dy = (int) round($r * 0.5);
+    $points = [$cx - $dx, $cy + $dy, $cx + $dx, $cy + $dy, $cx, $tipY];
+    // Same PHP 7/8 imagefilledpolygon() signature split as the video tile.
+    if (PHP_VERSION_ID >= 80000) {
+        imagefilledpolygon($img, $points, $pin);
+    } else {
+        imagefilledpolygon($img, $points, 3, $pin);
+    }
+    imagefilledellipse($img, $cx, $cy, (int) round($r * 0.8), (int) round($r * 0.8), $bg);
+    header('Content-Type: image/jpeg');
+    header('Cache-Control: public, max-age=31536000, immutable');
+    imagejpeg($img, null, 85);
     imagedestroy($img);
 }
 
@@ -1998,6 +2043,7 @@ function render_map_page($points, $legend, $pageTitle, $baseUrl) {
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $title = htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8');
     $ogUrl = htmlspecialchars($baseUrl . '/?map', ENT_QUOTES, 'UTF-8');
+    $ogImage = htmlspecialchars($baseUrl . '/?mapicon', ENT_QUOTES, 'UTF-8');
     // A bare "#group-<slug>" resolves against the *current* URL — here
     // /?map — so it would scroll nowhere on this page. Point in-page
     // anchors at the gallery root instead; ?folder= links are already
@@ -2017,6 +2063,8 @@ function render_map_page($points, $legend, $pageTitle, $baseUrl) {
 <meta property="og:title" content="<?= $title ?> — Map">
 <meta property="og:description" content="<?= count($points) ?> location<?= count($points) === 1 ? '' : 's' ?> plotted from this gallery.">
 <meta property="og:url" content="<?= $ogUrl ?>">
+<meta property="og:image" content="<?= $ogImage ?>">
+<meta name="twitter:card" content="summary_large_image">
 <style>
   :root { --bg:#0f0f10; --card:#1a1a1c; --text:#eaeaea; --muted:#8a8a8f; }
   * { box-sizing: border-box; }
