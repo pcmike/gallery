@@ -2081,6 +2081,49 @@ check('[gps import] ...and then it is', substr_count(http_get("$baseGps/?folder=
 [, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '0'], $gpsHdrs);
 check('[gps import] turning it off hides every location again but keeps the stored coordinates', str_contains($r, 'Saved coordinates are kept') && substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 0 && abs((read_data_file("$fxGps/Rome/.gallery-items.php")['items']['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001);
 
+echo "== root identity: the gallery is configured like a folder ==\n";
+
+$fxRoot = new_fixture_dir('rootid');
+make_jpeg("$fxRoot/one.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxRoot/two.jpg", 60, 60, 200, 10, 10);
+mkdir("$fxRoot/Sub"); make_jpeg("$fxRoot/Sub/in.jpg", 60, 60, 20, 20, 20);
+file_put_contents("$fxRoot/notes.md", "{gallery}\n# From The Heading\n\nSome longer notes.\n");
+write_patched_index("$fxRoot/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ADMIN_PASSWORD' => "'root-pw'"]);
+$portRoot = find_free_port(); start_server($fxRoot, $portRoot); $baseRoot = "http://127.0.0.1:$portRoot";
+$rootAuth = 'Authorization: Basic ' . base64_encode('x:root-pw');
+[, $rAdmin, $rAdminHd] = http_get("$baseRoot/?admin", [$rootAuth]);
+$rootHdrs = [$rootAuth, 'Cookie: ' . extract_cookie_header($rAdminHd)];
+check('[root identity] the root\'s Settings tab has the same form a folder has: title, dates, description (no position at the root)', str_contains($rAdmin, 'Gallery settings') && str_contains($rAdmin, '<label>Gallery title</label>') && str_contains($rAdmin, 'name="dates"') && str_contains($rAdmin, 'name="description"') && str_contains($rAdmin, 'Save gallery settings') && !str_contains($rAdmin, 'name="sort_order"'));
+[, $rHome0] = http_get("$baseRoot/");
+check('[root identity] before anything is set, the "# Heading" in the notes file is still the page title', str_contains($rHome0, '<title>From The Heading — Gallery</title>') && !str_contains($rHome0, 'class="folder-dates"'));
+[, $r] = user_submit("$baseRoot/?admin", $rAdmin, 'value="save_folder_identity"', ['display_name' => 'Summer 2026', 'dates' => 'June 1–9', 'description' => 'Two weeks of nothing but sun.'], $rootHdrs);
+check('[root identity] saving the gallery settings works', str_contains($r, 'class="flash ok"') && str_contains($r, 'Gallery settings saved.'));
+[, $rHome1] = http_get("$baseRoot/");
+check('[root identity] the form\'s title beats the "# Heading" (page title, tab and h1)', str_contains($rHome1, '<title>Summer 2026 — Gallery</title>') && str_contains($rHome1, 'Summer 2026</a></h1>') && !str_contains($rHome1, 'From The Heading'));
+check('[root identity] the dates show under the title, like a folder\'s', str_contains($rHome1, '<p class="folder-dates">June 1–9</p>'));
+check('[root identity] the description is a centered note box above the notes box, like a folder\'s', (bool) preg_match('#</header>\s*<div class="notes">\s*<div class="note-box folder-description">Two weeks of nothing but sun\.</div>.*?Some longer notes\.#s', $rHome1));
+check('[root identity] shared-link previews use the title and the description', str_contains($rHome1, 'property="og:title" content="Summer 2026"') && str_contains($rHome1, 'property="og:description" content="Two weeks of nothing but sun."'));
+[, $rFolder] = http_get("$baseRoot/?folder=Sub");
+check('[root identity] a folder\'s way back uses the gallery title', str_contains($rFolder, '&larr; Summer 2026</a>') || str_contains($rFolder, '← Summer 2026</a>'));
+// A cover for shared links.
+[, $rAdmin2] = http_get("$baseRoot/?admin", $rootHdrs);
+[, $r] = user_submit("$baseRoot/?admin", $rAdmin2, 'name="file" value="two.jpg"', [], $rootHdrs);
+$coverForm = ''; foreach (html_post_forms($rAdmin2) as $f) if (str_contains($f['html'], 'value="set_cover"') && str_contains($f['html'], 'value="two.jpg"')) $coverForm = $f['html'];
+[$cs, $cb] = http_post("$baseRoot/?admin", form_default_fields($coverForm), $rootHdrs);
+check('[root identity] "Set as cover" works at the root too', $cs === 200 && str_contains($cb, 'set as the gallery') && str_contains($cb, 'class="flash ok"'));
+check('[root identity] ...and the shared-link picture is then that photo, not simply the first', (bool) preg_match('#property="og:image" content="[^"]*img=two\.jpg#', http_get("$baseRoot/")[1]));
+// Hostile text is escaped like every other field.
+[, $rAdmin3] = http_get("$baseRoot/?admin", $rootHdrs);
+user_submit("$baseRoot/?admin", $rAdmin3, 'value="save_folder_identity"', ['display_name' => '<b>x</b>', 'description' => '<script>alert(1)</script>'], $rootHdrs);
+[, $rHome2] = http_get("$baseRoot/");
+check('[root identity] hostile title and description are escaped', !str_contains($rHome2, '<script>alert(1)</script>') && str_contains($rHome2, '&lt;script&gt;alert(1)&lt;/script&gt;') && str_contains($rHome2, '&lt;b&gt;x&lt;/b&gt;'));
+// Blank the title again: the heading comes back.
+[, $rAdmin4] = http_get("$baseRoot/?admin", $rootHdrs);
+user_submit("$baseRoot/?admin", $rAdmin4, 'value="save_folder_identity"', ['display_name' => ''], $rootHdrs);
+check('[root identity] clearing the title falls back to the "# Heading" again', str_contains(http_get("$baseRoot/")[1], '<title>From The Heading — Gallery</title>'));
+// Folders are unchanged: they still have a position and their own form.
+[, $subAdmin] = http_get("$baseRoot/?admin&folder=Sub", $rootHdrs);
+check('[root identity] a folder\'s own form is unchanged (display name, position)', str_contains($subAdmin, '<label>Display name</label>') && str_contains($subAdmin, 'name="sort_order"') && str_contains($subAdmin, 'Save folder settings'));
+
 echo "== counts: photos and videos are counted separately ==\n";
 
 $fxCount = new_fixture_dir('counts');

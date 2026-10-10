@@ -79,7 +79,7 @@ define('ADMIN_PASSWORD', 'a-long-random-string');  // optional: lets you see tho
 3. Mark items with `{sold}`, `{reserved}` and `{color: #5865f2}` anywhere in their paragraph. Delete the "How this maps…" explanation at the bottom of the example.
 4. Photos with arbitrary names (`IMG_0234.jpg`)? Don't rely on names: write `{group: Widget Alpha} {photos: IMG_0234.jpg, IMG_0891.jpg}` in the paragraph instead. See [Directive syntax](#directive-syntax).
 
-**Visitors see:** the page title from your `# heading`; each item's text with its photos attached beneath it ("View 2 photos"), a box per multi-photo item, a red SOLD ribbon with greyed-out photos, an orange RESERVED tag. A `?photo=` link or a box's copy-link button (🔗) is what to paste into a post.
+**Visitors see:** the page title (the gallery title you set in the admin, else your `# heading`); each item's text with its photos attached beneath it ("View 2 photos"), a box per multi-photo item, a red SOLD ribbon with greyed-out photos, an orange RESERVED tag. A `?photo=` link or a box's copy-link button (🔗) is what to paste into a post.
 
 **Your numbers:** with `SHOW_VIEW_COUNTS_PUBLICLY` off, no view count appears anywhere public — not on photos, not on boxes, not in the footer total. You see them in the admin: the sitewide total at the top, and "👁 N views" under every photo.
 
@@ -174,6 +174,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 
 | Control | Changes what visitors see | Needs |
 |---|---|---|
+| Gallery (root) → *Gallery title*, *Dates*, *Description*, *Cover* | the page title and browser tab, dates under the title, a description box above the notes, the shared-link title, text and picture. The root is configured the same way a folder is; the title overrides a `# Heading` in a notes file | Always available in the admin |
 | Folder → *Display name* | the card label, the page title, the breadcrumb, the map legend, the link preview title | `AUTO_GROUP_BY_FOLDER`. A `{group: Name}` in your notes file overrides it |
 | Folder → *Dates*, *Description* | shown under the label on the card and at the top of the folder's page; the description is also the link-preview text (a notes file in that folder takes precedence there) | `AUTO_GROUP_BY_FOLDER` |
 | Folder → *Position* | the card order among sibling folders: numbered first, then natural order | a notes-file mention of a folder still places it earlier |
@@ -205,7 +206,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 - Small, deliberate subset of Markdown (headers, bold/italic/underline/strikethrough, code, links, lists, blockquotes)
 - Auto-linked thumbnails: mention an auto-detected group's name in a paragraph and its photos auto-attach, no tagging required
 - Inline directives: `{color: value}`, `{sold}`, `{reserved}` (or `{held}`), `{group: Name}`, `{photos: a.jpg, b.jpg, ...}`
-- First `# Heading` in the first qualifying `.md` file becomes the page title
+- First `# Heading` in the first qualifying `.md` file becomes the page title, unless you've set a **Gallery title** in the admin (see [The admin editor](#the-admin-editor)), which wins
 
 **View stats** — off by default (`TRACK_VIEWS`)
 - Per-photo, per-group, and total page-load counts, all updating live with no refresh, once turned on
@@ -419,7 +420,7 @@ Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours al
 
 - **Tabs** in a sticky bar — **Photos**, **Folder settings**, **Notes**, **Export** — showing one section at a time, with the **folders as a tree** in a sidebar (a collapsed bar on a phone), so even a big gallery stays navigable. If anything is hidden, a red **Hidden** entry appears at the top of the sidebar, above Root (see below)
 - every photo and video in the current folder as a **grid of thumbnails**; select one and the editor panel above the grid opens with its caption, web link, location and visibility fields (Prev / Next step through the folder, and a one-click **Set as cover** for the folder). Badges on the thumbnails show which have captions, locations or are hidden
-- the folder's own settings: display name, date range, description, position, whether its photo locations show publicly, and whether the whole folder is hidden
+- the folder's own settings: display name, date range, description, position, whether its photo locations show publicly, and whether the whole folder is hidden. **The gallery itself has the same form** (title, dates, description, and a cover for shared links) on the root's Settings tab, so you never need a notes file just to name it — a notes file is for richer text, lists and `{sold}` items
 - every `.md` in the folder — including ones missing the `{gallery}` marker, tagged as not active, with a one-click **Add `{gallery}` marker** — edited as **raw text, saved byte-for-byte** (never parsed and re-written). **Save**, **Save As** and **Delete** are separate actions (Save As and Delete ask you to confirm), and the destination is locked to a `.md` name so nothing typed there can reach `index.php`. A reference panel beside the editor explains each directive and inserts its syntax at the cursor (it starts collapsed on a phone)
 - **Two tabs, one record:** every item and folder form remembers what it loaded, and a save whose record was changed elsewhere in the meantime (another tab or device) is refused with an explanation instead of silently overwriting. Editing a *different* photo in the same folder never conflicts
 - **Export as JSON** for the folder or the whole tree — the only backup of the captions and settings you typed, which a plain save can't undo

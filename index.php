@@ -1334,6 +1334,10 @@ foreach ($mdFiles as $idx => $mdFile) {
     }
     $mdContents[$mdFile] = $content;
 }
+// The admin's gallery title (the root's own settings) wins over a "# Heading"
+// in a notes file, which wins over the folder name.
+$rootMeta = root_display_meta($dir);
+if ($rootMeta['label'] !== '') $pageTitle = $rootMeta['label'];
 
 // Extract {photos:}/{group:} directives across all qualifying .md files,
 // in file order, tracking each directive's approximate position so it
@@ -2223,6 +2227,19 @@ function folder_files_under($files, $folderPath) {
 
 /** A folder's own admin-set identity, read from its own
  *  .gallery-items.php, normalized so callers never re-check types. */
+/** The gallery root's own title, dates, description and cover — the same
+ *  record a folder keeps (in the root's .gallery-items.php), so the root is
+ *  configured the same way folders are. */
+function root_display_meta($dir) {
+    $d = items_read($dir);
+    return [
+        'label' => is_string($d['displayName'] ?? null) ? $d['displayName'] : '',
+        'cover' => is_string($d['cover'] ?? null) && $d['cover'] !== '' ? $d['cover'] : null,
+        'description' => is_string($d['description'] ?? null) ? $d['description'] : '',
+        'dates' => is_string($d['dates'] ?? null) ? $d['dates'] : '',
+    ];
+}
+
 function folder_display_meta($dir, $folderRel) {
     $d = items_read(resolve_real_path($dir, $folderRel));
     return [
@@ -3029,9 +3046,6 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
 
     if ($action === 'save_folder_identity') {
-        if ($adminFolderPath === null) {
-            return ['type' => 'error', 'text' => 'Not applicable at the root.'];
-        }
         $displayName = trim((string) ($_POST['display_name'] ?? ''));
         // Only fields actually present in the POST are touched, so a form
         // (or an older client) that only sends the display name never
@@ -3045,7 +3059,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $text = admin_clean_text($_POST['dates'], 80);
             $updates['dates'] = $text !== '' ? $text : null;
         }
-        if (array_key_exists('sort_order', $_POST)) {
+        if ($adminFolderPath !== null && array_key_exists('sort_order', $_POST)) {   // no position at the root
             $raw = trim((string) $_POST['sort_order']);
             if ($raw === '') {
                 $updates['sortOrder'] = null;
@@ -3067,9 +3081,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             }
         });
         if ($stale) {
-            return ['type' => 'error', 'text' => 'This folder\'s settings' . admin_stale_message()];
+            return ['type' => 'error', 'text' => ($adminFolderPath === null ? 'The gallery\'s settings' : 'This folder\'s settings') . admin_stale_message()];
         }
-        return ['type' => 'ok', 'text' => 'Folder settings saved.'];
+        return ['type' => 'ok', 'text' => $adminFolderPath === null ? 'Gallery settings saved.' : 'Folder settings saved.'];
     }
 
     if ($action === 'toggle_folder_restriction') {
@@ -3084,17 +3098,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
 
     if ($action === 'set_cover') {
-        if ($adminFolderPath === null) {
-            return ['type' => 'error', 'text' => 'Not applicable at the root.'];
-        }
         $bare = basename((string) ($_POST['file'] ?? ''));
-        if (!in_array($adminFolderPath . '/' . $bare, $files, true)) {
+        if (!in_array($adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare, $files, true)) {
             return ['type' => 'error', 'text' => 'Unknown file.'];
         }
         items_update($adminFolderReal, function (&$data) use ($bare) {
             $data['cover'] = $bare;
         });
-        return ['type' => 'ok', 'text' => '"' . $bare . '" set as this folder\'s cover photo.'];
+        return ['type' => 'ok', 'text' => '"' . $bare . '" set as ' . ($adminFolderPath === null ? 'the gallery\'s cover photo (the picture in shared-link previews).' : 'this folder\'s cover photo.')];
     }
 
     if ($action === 'toggle_location_enabled') {
@@ -3311,6 +3322,51 @@ function render_admin_hidden_panel($data) {
 <?php
 }
 
+/** The identity form — title, dates, description (and position, for a
+ *  folder) — shared by a folder's settings and the gallery's own, so the root
+ *  is configured the same way a folder is. */
+function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath) {
+    $isRoot = $adminFolderPath === null;
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $name = $isRoot ? basename(__DIR__) : basename($adminFolderPath);
+?>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="save_folder_identity">
+      <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
+      <div class="settings-grid<?= $isRoot ? ' root' : '' ?>">
+        <div class="field">
+          <label><?= $isRoot ? 'Gallery title' : 'Display name' ?></label>
+          <input type="text" name="display_name" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
+          <?php if ($isRoot): ?>
+            <p class="hint">Shown at the top of the page, in the browser tab and in shared links, instead of "<?= $esc($name) ?>". If blank, a "# Heading" at the top of a notes file is used, then the folder name.</p>
+          <?php else: ?>
+            <p class="hint">Shown on its cover card instead of "<?= $esc($name) ?>".</p>
+          <?php endif; ?>
+        </div>
+        <div class="field">
+          <label>Dates (optional)</label>
+          <input type="text" name="dates" maxlength="80" placeholder="June 12&ndash;15, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
+          <p class="hint">Typed by you, never read from the photos' EXIF, so it can't reveal when you were away.</p>
+        </div>
+        <?php if (!$isRoot): ?>
+        <div class="field">
+          <label>Position</label>
+          <input type="number" name="sort_order" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
+          <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
+        </div>
+        <?php endif; ?>
+        <div class="field wide">
+          <label>Description</label>
+          <textarea name="description" maxlength="500" style="min-height:70px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
+          <p class="hint"><?= $isRoot ? 'A sentence or two, shown in a box at the top of the page and in shared-link previews. For anything longer or richer, use a notes file.' : 'A sentence or two, shown on its cover card and in a box at the top of its page.' ?></p>
+        </div>
+      </div>
+      <button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button>
+    </form>
+<?php
+}
+
 /**
  * Renders the full ?admin page: folder nav, this folder's own identity
  * (display name/cover/location toggle, when viewing a subfolder), every
@@ -3419,6 +3475,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .hint { color:var(--muted); font-size:0.75rem; margin:3px 0 0; }
   h3.subhead { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:18px 0 8px; font-weight:600; }
   .settings-grid { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px 14px; }
+  .settings-grid.root { grid-template-columns:2fr 1fr; }
   .settings-grid .wide { grid-column:1 / -1; }
   .privacy-row { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
   .privacy-row form { margin:0; }
@@ -3445,7 +3502,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .admin-main .editor-nav { margin-left:0; justify-content:flex-start; }
     .admin-main .thumb-grid { grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:8px; }
     .admin-folder-nav { max-height:220px; overflow-y:auto; }
-    .settings-grid { grid-template-columns:1fr; }
+    .settings-grid, .settings-grid.root { grid-template-columns:1fr; }
   }
   .flash { padding:10px 14px; border-radius:8px; margin:14px 0; font-size:0.9rem; }
   .flash.ok { background:rgba(59,165,92,0.15); color:var(--ok); }
@@ -3665,18 +3722,14 @@ foreach ($adminFiles as $file) {
           <?php endif; ?>
         <div class="item-actions">
           <button type="submit">Save</button>
-          <?php if ($adminFolderPath !== null): ?>
-            <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
-          <?php endif; ?>
+          <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
         </div>
       </form>
-      <?php if ($adminFolderPath !== null): ?>
-        <form method="post" id="<?= $coverFormId ?>">
-          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-          <input type="hidden" name="action" value="set_cover">
-          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
-        </form>
-      <?php endif; ?>
+      <form method="post" id="<?= $coverFormId ?>">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="set_cover">
+        <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
+      </form>
     </div>
 <?php
     $editorsHtml .= ob_get_clean();
@@ -3714,34 +3767,7 @@ foreach ($adminFiles as $file) {
   <?php if ($adminFolderPath !== null): ?>
   <section class="panel" id="settings">
     <h2 class="section-title">This folder's own settings</h2>
-    <form method="post">
-      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-      <input type="hidden" name="action" value="save_folder_identity">
-      <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
-      <div class="settings-grid">
-        <div class="field">
-          <label>Display name</label>
-          <input type="text" name="display_name" value="<?= htmlspecialchars($itemsHere['displayName'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-          <p class="hint">Shown on its cover card instead of "<?= htmlspecialchars(basename($adminFolderPath), ENT_QUOTES, 'UTF-8') ?>".</p>
-        </div>
-        <div class="field">
-          <label>Dates (optional)</label>
-          <input type="text" name="dates" maxlength="80" placeholder="June 12&ndash;15, 2026" value="<?= htmlspecialchars($itemsHere['dates'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-          <p class="hint">Typed by you, never read from the photos' EXIF, so it can't reveal when you were away.</p>
-        </div>
-        <div class="field">
-          <label>Position</label>
-          <input type="number" name="sort_order" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
-          <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
-        </div>
-        <div class="field wide">
-          <label>Description</label>
-          <textarea name="description" maxlength="500" style="min-height:70px; font-family:inherit;"><?= htmlspecialchars($itemsHere['description'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
-          <p class="hint">A sentence or two, shown on its cover card and in a box at the top of its page.</p>
-        </div>
-      </div>
-      <button type="submit">Save folder settings</button>
-    </form>
+    <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath); ?>
     <h3 class="subhead">Privacy</h3>
     <div class="privacy-row">
     <form method="post">
@@ -3762,14 +3788,23 @@ foreach ($adminFiles as $file) {
   </section>
   <?php else: ?>
   <section class="panel" id="settings">
-    <h2 class="section-title">Root settings</h2>
-    <label><input type="checkbox" disabled <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?>> Show photo locations publicly at the root</label>
-    <form method="post" style="margin-top:6px;">
-      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-      <input type="hidden" name="action" value="toggle_location_enabled">
-      <input type="hidden" name="enabled" value="<?= !empty($itemsHere['locationEnabled']) ? '0' : '1' ?>">
-      <button type="submit" class="secondary"<?php if (empty($itemsHere['locationEnabled'])): ?> onclick="return confirm(<?= $locConfirmAttr ?>)"<?php endif; ?>><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
-    </form>
+    <h2 class="section-title">Gallery settings</h2>
+    <?php render_admin_identity_form($itemsHere, $csrfToken, null); ?>
+    <?php if (!empty($itemsHere['cover'])): ?>
+      <p class="muted" style="margin-top:10px;">Cover photo (the picture in shared-link previews): <?= htmlspecialchars($itemsHere['cover'], ENT_QUOTES, 'UTF-8') ?> &mdash; choose another with "Set as cover" on a photo in the Photos tab.</p>
+    <?php else: ?>
+      <p class="muted" style="margin-top:10px;">Shared links use the first photo as their picture. To choose one, select a photo in the Photos tab and use "Set as cover".</p>
+    <?php endif; ?>
+    <h3 class="subhead">Privacy</h3>
+    <div class="privacy-row">
+      <label><input type="checkbox" disabled <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?>> Show photo locations publicly at the root</label>
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="toggle_location_enabled">
+        <input type="hidden" name="enabled" value="<?= !empty($itemsHere['locationEnabled']) ? '0' : '1' ?>">
+        <button type="submit" class="secondary"<?php if (empty($itemsHere['locationEnabled'])): ?> onclick="return confirm(<?= $locConfirmAttr ?>)"<?php endif; ?>><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
+      </form>
+    </div>
   </section>
   <?php endif; ?>
 
@@ -5599,10 +5634,12 @@ if (ENABLE_MAP && isset($_GET['map'])) {
 
 $ogTitle = $pageTitle;
 $ogUrl = $baseUrl . '/';
-$ogDescription = !empty($mdFiles)
+$ogDescription = $rootMeta['description'] !== '' ? $rootMeta['description'] : (!empty($mdFiles)
     ? markdown_to_plaintext($mdContents[$mdFiles[0]])
-    : media_count_label($files);
-$ogImageUrl = !empty($files) ? $baseUrl . '/' . img_url($files[0], 'share') : '';
+    : media_count_label($files));
+// The cover chosen in the admin, if it is still a visible root-level photo.
+$ogRootPhoto = ($rootMeta['cover'] !== null && in_array($rootMeta['cover'], $files, true)) ? $rootMeta['cover'] : ($files[0] ?? null);
+$ogImageUrl = $ogRootPhoto !== null ? $baseUrl . '/' . img_url($ogRootPhoto, 'share') : '';
 if ($currentFolderPath !== null) {
     // $pageTitle is already folder-prefixed (see the ?folder= validation
     // block above), so $ogTitle below already picked that up — only the
@@ -6191,11 +6228,18 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   <?php else: ?>
     <h1><?= htmlspecialchars($pageTitle) ?></h1>
   <?php endif; ?>
-  <?php if ($currentFolderPath !== null && $currentFolderMeta['dates'] !== ''): ?>
-    <p class="folder-dates"><?= htmlspecialchars($currentFolderMeta['dates']) ?></p>
+  <?php $headerMeta = $currentFolderPath !== null ? $currentFolderMeta : $rootMeta; ?>
+  <?php if ($headerMeta['dates'] !== ''): ?>
+    <p class="folder-dates"><?= htmlspecialchars($headerMeta['dates']) ?></p>
   <?php endif; ?>
   <p><?= htmlspecialchars(media_count_label($currentFolderPath !== null ? $currentFolderFiles : $files), ENT_QUOTES, 'UTF-8') ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
 </header>
+
+<?php if ($headerMeta['description'] !== ''): ?>
+  <div class="notes">
+    <div class="note-box folder-description"><?= htmlspecialchars($headerMeta['description']) ?></div>
+  </div>
+<?php endif; ?>
 
 <?php if ($currentFolderPath === null && empty($mdFiles) && !empty($galleryNotices)): ?>
   <div class="notes">
@@ -6348,11 +6392,6 @@ if ($currentFolderPath !== null) {
 <?php if ($currentFolderPath !== null && empty($folderMdFiles) && !empty($folderGalleryNotices)): ?>
   <div class="notes">
     <?= render_gallery_notices_banner($folderGalleryNotices) ?>
-  </div>
-<?php endif; ?>
-<?php if ($currentFolderPath !== null && $currentFolderMeta['description'] !== ''): ?>
-  <div class="notes">
-    <div class="note-box folder-description"><?= htmlspecialchars($currentFolderMeta['description']) ?></div>
   </div>
 <?php endif; ?>
 <?php if ($currentFolderPath !== null && !empty($folderMdFiles)): ?>
