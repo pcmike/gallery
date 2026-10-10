@@ -15,7 +15,7 @@ Needs python3, php (gd + imagick, for the fixture) and Chromium. The map check a
 needs internet access for Leaflet (cdnjs); without it that check is skipped, not failed.
 Exit status 0 only if every check passes.
 """
-import os, sys, time, subprocess, tempfile, shutil, socket, base64, urllib.request
+import json, os, sys, time, subprocess, tempfile, shutil, socket, base64, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 from cdp import Browser
 SHOTS = sys.argv[sys.argv.index("--shots") + 1] if "--shots" in sys.argv else None
@@ -331,15 +331,18 @@ try:
     ok(b.js("window.__stay") == "same page", "...without reloading the page")
     lefts = b.js("[...document.querySelectorAll('.site-row .switch')].map(e => Math.round(e.getBoundingClientRect().left))")
     ok(max(lefts) - min(lefts) <= 2, "...and the status message doesn't push that switch out of line with the others", str(lefts))
-    # something that publishes content asks first, and saying no changes nothing
-    b.js("window.__answer = false;"); snap = cfg(); tog("ENABLE_VIDEO"); b.drain(0.8)
-    ok(b.js("window.__confirms.length") == 1 and "Show videos" in b.js("window.__confirms[0]") and "becomes visible to visitors" in b.js("window.__confirms[0]"), "turning on videos asks first, naming what it publishes")
-    ok(chk("ENABLE_VIDEO") is False and cfg() == snap, "...and answering no puts the switch back and writes nothing")
-    b.js("window.__answer = true;"); tog("ENABLE_VIDEO"); b.drain(1.0)
-    ok(chk("ENABLE_VIDEO") is True and '"ENABLE_VIDEO": true' in cfg() and '"TRACK_VIEWS": true' in cfg(), "answering yes saves it, and the earlier change is still there (each save builds on the last)")
-    # turning something off that visitors see warns that nothing is deleted
-    b.js("window.__confirms.length = 0"); tog("ENABLE_VIDEO"); b.drain(1.0)
-    ok("Nothing is deleted" in b.js("window.__confirms[0] || ''") and chk("ENABLE_VIDEO") is False and '"ENABLE_VIDEO"' not in cfg(), "turning videos off warns that nothing is deleted, then saves, and the setting leaves the file (back to its default)")
+    # something that publishes content has its warning in orange text on the row, never in a dialog
+    ok(b.js("(() => { const r = document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row'); const w = r.querySelector('.risk'); return !!w && getComputedStyle(w).display !== 'none' && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('becomes visible to visitors'); })()"), "turning on videos is explained by orange text already on its row, naming what it publishes")
+    tog("ENABLE_VIDEO"); b.drain(1.0)
+    ok(chk("ENABLE_VIDEO") is True and '"ENABLE_VIDEO": true' in cfg() and '"TRACK_VIEWS": true' in cfg() and b.js("window.__confirms.length") == 0, "flipping it saves at once with no question, and the earlier change is still there (each save builds on the last)")
+    ok(b.js("document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row').querySelector('.offnote').hidden"), "the 'what turning it off does' note stays out of the way while it is on")
+    # turning something off shows what that does, beside the switch, instead of asking
+    tog("ENABLE_VIDEO"); b.drain(1.0)
+    ok(chk("ENABLE_VIDEO") is False and '"ENABLE_VIDEO"' not in cfg() and b.js("window.__confirms.length") == 0, "turning videos off saves at once too, and the setting leaves the file (back to its default)")
+    ok(b.js("(() => { const n = document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row').querySelector('.offnote'); return !n.hidden && getComputedStyle(n).color.startsWith('rgb(245, 166, 35)') && n.textContent.includes('Nothing is deleted'); })()"), "...and an orange note appears beside it saying nothing is deleted")
+    tog("ENABLE_VIDEO"); b.drain(1.0)
+    ok(b.js("document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row').querySelector('.offnote').hidden"), "...and goes away when it is switched back on")
+    tog("ENABLE_VIDEO"); b.drain(1.0)
     # choices and numbers save on change
     b.js("(() => { const s = document.querySelector('select[name=set_PHOTO_SORT_ORDER]'); s.value = 'mtime'; s.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     b.js("(() => { const n = document.querySelector('input[name=set_MAP_CLUSTER_RADIUS_MILES]'); n.value = '25'; n.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
@@ -353,34 +356,61 @@ try:
     b.js("document.querySelector('.pw-btn[data-pw=admin]').click()"); b.drain(0.6)
     ok("Type the new password first" in b.js("document.querySelector('.pw-btn[data-pw=admin]').parentNode.querySelector('.rowstate').textContent"), "pressing a password button with nothing typed says so")
     # enabling folders changes what the rest of the admin shows: it refreshes when you leave
-    b.js("window.__answer = true;"); tog("AUTO_GROUP_BY_FOLDER"); b.drain(1.0)
-    ok(chk("AUTO_GROUP_BY_FOLDER") is True and '"AUTO_GROUP_BY_FOLDER": true' in cfg() and any("subfolder" in m for m in b.js("window.__confirms")), "turning subfolders on asks (it publishes every photo in them) and then saves")
+    tog("AUTO_GROUP_BY_FOLDER"); b.drain(1.0)
+    ok(chk("AUTO_GROUP_BY_FOLDER") is True and '"AUTO_GROUP_BY_FOLDER": true' in cfg() and b.js("window.__confirms.length") == 0 and "visible to visitors" in b.js("document.querySelector('input[name=set_AUTO_GROUP_BY_FOLDER][type=checkbox]').closest('.site-row').querySelector('.risk').textContent"), "turning subfolders on saves at once, with the orange note on its row saying what it publishes and no question")
     ok(b.js("!document.querySelector('.sitesync').hidden"), "after a change the panel says the other screens refresh when you leave it")
     b.drain(0.8)
     ok(b.js("document.querySelector('.admin-folder-nav a[href*=Sub]') !== null") and b.js("window.__stay") == "same page" and b.js(vis2) == ["site"], "the folder list on the left updates the moment subfolders are turned on, without leaving this screen or reloading the page", str(b.js(vis2)))
     # folders from elsewhere on the server: add and remove from the screen
     b.js("document.querySelector('.extra-name').value = 'OldTrip'; document.querySelector('.extra-path').value = %s;" % repr(EXTRA).replace("'", '"'))
     b.js("window.__confirms.length = 0"); b.js("document.querySelector('.extra-add-btn').click()"); b.drain(1.2)
-    ok(any("becomes visible to visitors" in m and "photo and video in that folder" in m for m in b.js("window.__confirms")), "adding a folder from elsewhere asks first, saying it shows everything in it")
+    ok(b.js("window.__confirms.length") == 0 and "photo and video in that folder" in b.js("document.querySelector('.extra-folders').closest('.site-row').querySelector('.risk').textContent"), "adding a folder from elsewhere asks nothing: the orange note on the row already says it shows everything in it")
     ok("OldTrip" in b.js("document.querySelector('.extra-list').textContent") and EXTRA in b.js("document.querySelector('.extra-list').textContent") and '"EXTRA_FOLDERS"' in cfg(), "...then lists it on the screen and saves it", cfg()[:200])
     ok(b.js("document.querySelector('.admin-folder-nav a[href*=OldTrip]') !== null"), "...and the sidebar shows it straight away")
     b.js("document.querySelector('.extra-name').value = 'Bad'; document.querySelector('.extra-path').value = '/no/such/folder'; document.querySelector('.extra-add-btn').click()"); b.drain(1.0)
     ok("isn't a folder this server can read" in b.js("document.body.innerText") and "Bad" not in b.js("document.querySelector('.extra-list').textContent"), "a path that doesn't exist is refused with the reason, and isn't added")
     b.js("window.__confirms.length = 0"); b.js("document.querySelector('.extra-remove').click()"); b.drain(1.2)
-    ok("Nothing is deleted" in b.js("window.__confirms[0] || ''") and '"EXTRA_FOLDERS"' not in cfg() and b.js("document.querySelector('.admin-folder-nav a[href*=OldTrip]') === null"), "removing it asks (saying nothing is deleted), takes it out of the file, and the sidebar drops it at once")
+    ok(b.js("window.__confirms.length") == 0 and "Nothing was deleted" in b.js("document.querySelector('.extra-folders').closest('.site-row').innerText") and '"EXTRA_FOLDERS"' not in cfg() and b.js("document.querySelector('.admin-folder-nav a[href*=OldTrip]') === null"), "removing it asks nothing, says nothing was deleted, takes it out of the file, and the sidebar drops it at once")
     # the nginx prefix
     b.js("window.__confirms.length = 0; (() => { const i = document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]'); i.value = 'kb'; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     ok('NGINX_ACCEL_REDIRECT_PREFIX' not in cfg() and b.js("document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]').value") == "", "an nginx prefix that isn't a plain path (no leading slash) is refused and the field clears back")
     b.js("window.__confirms.length = 0; (() => { const i = document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]'); i.value = '/kb'; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
-    ok("every photo and video will stop loading" in b.js("window.__confirms[0] || ''") and '"NGINX_ACCEL_REDIRECT_PREFIX": "/kb"' in cfg(), "setting it warns that photos and videos stop loading without the matching nginx setup, then saves")
+    ok(b.js("window.__confirms.length") == 0 and '"NGINX_ACCEL_REDIRECT_PREFIX": "/kb"' in cfg() and "every photo and video will stop loading" in b.js("document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]').closest('.site-row').querySelector('.risk').textContent"), "setting it saves at once; the orange note on its row already warns that photos and videos stop loading without the matching nginx setup")
     b.js("(() => { const i = document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]'); i.value = ''; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     ok('NGINX_ACCEL_REDIRECT_PREFIX' not in cfg(), "clearing it needs no question and takes it out of the file")
     b.js("document.querySelector('.admin-tabs a[data-tab=photos]').click()"); b.drain(1.8)
     ok(b.js("window.__stay") is None and b.js("document.querySelector('.admin-folder-nav a[href*=Sub]') !== null") and b.js(vis2) == ["photos"], "leaving Site settings after a change reloads, landing on the tab clicked, and the sidebar now lists the new folder", str(b.js(vis2)))
+    # removing the private password: orange text on the row, no dialog
+    b.js("document.querySelector('.admin-tabs a[data-tab=site]') ? document.querySelector('.admin-tabs a[data-tab=site]').click() : document.querySelector('.side-link').click()"); b.drain(0.5)
+    b.js("window.__confirms = []; window.confirm = m => { window.__confirms.push(m); return true; };")
+    ok(b.js("(() => { const w = document.querySelector('.pw-btn[data-pw=private-remove]').closest('.site-row').querySelector('.warn-note'); return !!w && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('nothing is deleted'); })()"), "the private-view row carries an orange note about what removing the password does")
+    b.js("document.querySelector('.pw-btn[data-pw=private-remove]').click()"); b.drain(1.0)
+    ok(b.js("window.__confirms.length") == 0 and 'PRIVATE_VIEW_PASSWORD' not in cfg(), "removing the private-view password saves at once with no question")
     # a hidden photo's thumbnail must load in the admin, even with no private-view password
     b.goto(B2 + "/?admin&folder=Sub#photos", 1.8)
     th = b.js("[...document.querySelectorAll('.thumb img')].map(i => [i.closest('.thumb').title, i.complete && i.naturalWidth > 0])")
     ok(len(th) >= 1 and any("hidden one" in t[0] for t in th) and all(t[1] for t in th), "the admin's thumbnails all load, including a hidden photo's (they were broken when no private-view password was set)", str(th))
+    # the map and location switches are instant too
+    b.goto(B2 + "/?admin#site", 1.2)
+    tog("ENABLE_MAP"); b.drain(1.0); tog("ENABLE_PHOTO_LOCATION"); b.drain(1.0)
+    b.goto(B2 + "/?admin&folder=Sub#photos", 1.5)
+    ok(b.js("document.querySelectorAll('.map-form').length") == 1 and b.js("(() => { const n = document.querySelector('.map-form .nojs-only'); return getComputedStyle(n).display === 'none'; })()"), "[map] a folder's Map section is a switch and a number with no visible Save button")
+    ok(b.js("(() => { const w = document.querySelector('.map-form .warn-note'); return getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('OpenStreetMap'); })()"), "...with the orange note about the third-party map sites sitting right under the switch")
+    b.js("window.__stay = 'same page'; window.__confirms = []; window.confirm = m => { window.__confirms.push(m); return true; };")
+    mst = lambda sel: b.js(f"document.querySelector('{sel}').closest('.instant-row, .field').querySelector('.rowstate').textContent")
+    b.js("document.querySelector('.map-form .switch .slider').click()"); b.drain(1.0)
+    items_sub = lambda: json.loads(open(SITE2 + "/Sub/.gallery-items.php").read().split("?>\n", 1)[1])
+    ok(items_sub().get("mapEnabled") is True and mst(".map-form input[name=map_enabled][type=checkbox]").startswith("Saved") and b.js("window.__stay") == "same page" and b.js("window.__confirms.length") == 0, "[map] flipping the switch saves in place: 'Saved', no reload, no dialog", mst(".map-form input[name=map_enabled][type=checkbox]"))
+    b.js("(() => { const n = document.querySelector('.map-form input[name=map_radius]'); n.value = '15'; n.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
+    ok(items_sub().get("mapRadius") == 15 and items_sub().get("mapEnabled") is True, "[map] the pin grouping saves on change and leaves the switch alone")
+    b.js("(() => { const n = document.querySelector('.map-form input[name=map_radius]'); n.value = '-3'; n.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
+    ok(b.js("document.querySelector('.map-form input[name=map_radius]').value") == "15" and "from 1 to 10000" in mst(".map-form input[name=map_radius]") and items_sub().get("mapRadius") == 15, "[map] an invalid pin grouping goes back to what was saved, with the reason beside it")
+    b.js("document.querySelector('.map-form .switch .slider').click()"); b.drain(1.0)
+    ok(items_sub().get("mapEnabled") is False and items_sub().get("mapRadius") == 15, "[map] switching it off keeps the radius")
+    ok(b.js("document.querySelectorAll('.instant-form:not(.map-form)').length") >= 1 and b.js("(() => { const w = document.querySelector('.instant-form:not(.map-form) .warn-note'); return !!w && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)'); })()"), "[location] the folder's location switch has its own orange warning beside it")
+    b.js("document.querySelector('.instant-form:not(.map-form) .switch .slider').click()"); b.drain(1.0)
+    ok(items_sub().get("locationEnabled") is True and b.js("window.__confirms.length") == 0 and b.js("window.__stay") == "same page", "[location] flipping it saves in place, no dialog")
+    ok(not b.problems(IGN), "[map] none of that raised console or CSP errors", "; ".join(b.problems(IGN))[:300])
     cfg_now = cfg()
     ok(cfg_now.startswith(guard) and '"ADMIN_PASSWORD": "site-admin-pw-1"' in cfg_now, "the settings file is still the 404 guard plus JSON, and the admin password in it is untouched")
     ok(open(SITE2 + "/.gallery-items.php").read() == before_items, "none of it touched the captions and titles stored for the photos")

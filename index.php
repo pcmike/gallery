@@ -1495,9 +1495,17 @@ foreach ($mdContents as $content) {
     foreach (extract_photo_directives($content) as $rec) {
         $validPhotos = [];
         foreach ($rec['photos'] as $p) {
+            $typed = $p;
             $p = basename($p);
             if (!in_array($p, $files, true)) {
-                $galleryNotices[] = 'Unknown file "' . $p . '" referenced in a {photos:} directive — ignored.';
+                // A photo that lives in a subfolder is not "unknown": say where the directive can and can't reach.
+                $inFolder = false;
+                foreach ($files as $f) {
+                    if (strpos($f, '/') !== false && substr($f, -strlen('/' . $p)) === '/' . $p) { $inFolder = true; break; }
+                }
+                $galleryNotices[] = $inFolder
+                    ? '"' . $typed . '" is inside a folder, and {photos:} only reaches photos loose in the gallery\'s top level. To show a folder under a paragraph, write the folder\'s name in it.'
+                    : 'Unknown file "' . $p . '" referenced in a {photos:} directive — ignored.';
                 continue;
             }
             if (isset($explicitClaims[$p])) {
@@ -3224,6 +3232,17 @@ function render_admin_notes_reference() {
     <p>Remove the blank line to make it one item:</p>
 <pre class="ref-example">Take a look at my rack. {group: Rack} {photos: rack.jpg, rack2.jpg}</pre>
 
+    <h3>Notes and folders</h3>
+    <p>With <strong>Show subfolders</strong> on, notes still work, with these differences:</p>
+    <table class="ref-table">
+      <tr><td>Mention a folder's name</td><td>In the paragraph, write the folder's name as a whole word (<?= $c('Paris') ?>). Its photos appear under the paragraph with a "View 3 photos" link to the folder. This is how you describe a folder from the gallery's top-level notes.</td></tr>
+      <tr><td><?= $c('{group: Name}') ?> on a folder's paragraph</td><td>Renames that folder's card or box on the page you're on. To rename it everywhere, use the folder's <strong>Display name</strong> in its settings.</td></tr>
+      <tr><td><?= $c('{sold}') ?> <?= $c('{reserved}') ?></td><td>Always mark the paragraph and its thumbnails. With <em>Inline</em> folders the folder's box is marked too; a <em>cover card</em> is not.</td></tr>
+      <tr><td><?= $c('{color: gold}') ?></td><td>Colours a <strong>box</strong>. A folder is a box only with <em>Inline</em> folders; a cover card ignores it. A single photo mentioned by name gets the colour in either mode.</td></tr>
+      <tr><td><?= $c('{photos: a.jpg}') ?></td><td>Only works in the <strong>top-level notes</strong>, on photos that sit loose at the top level. It cannot reach a photo inside a folder, and is not read at all in a folder's own notes (a setup notice says so).</td></tr>
+      <tr><td>A note file inside a folder</td><td>Appears on that folder's page and only knows that folder's contents: mention a photo by its name (<?= $c('eiffel') ?> for <code>eiffel.jpg</code>) or a subfolder by its name, and use <?= $c('{sold}') ?>, <?= $c('{reserved}') ?> and <?= $c('{color:}') ?> on it.</td></tr>
+    </table>
+
     <h3>Showing a directive as text</h3>
     <p>To write about a directive without it doing anything, put it in backticks: <?= $c('`{sold}`') ?> shows the word <code>{sold}</code> and marks nothing. Everything on this page is written that way.</p>
 
@@ -3450,25 +3469,40 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
 
     if ($action === 'save_map_settings') {
-        $enabled = !empty($_POST['map_enabled']);
-        $rawRadius = trim((string) ($_POST['map_radius'] ?? ''));
-        if ($rawRadius === '') {
-            $radius = null;
-        } elseif (is_numeric($rawRadius) && (float) $rawRadius >= 1 && (float) $rawRadius <= 10000) {
-            $radius = (float) $rawRadius == (int) $rawRadius ? (int) $rawRadius : (float) $rawRadius;
-        } else {
-            return ['type' => 'error', 'text' => 'Pin grouping must be a number of miles from 1 to 10000, or blank to use the site-wide setting.'];
-        }
         $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
-        items_update($targetReal, function (&$data) use ($enabled, $radius) {
-            $data['mapEnabled'] = $enabled;
-            $data['mapRadius'] = $radius;
+        $updates = [];
+        if (isset($_POST['map_enabled'])) $updates['mapEnabled'] = $_POST['map_enabled'] === '1';
+        if (isset($_POST['map_radius'])) {
+            $rawRadius = trim((string) $_POST['map_radius']);
+            if ($rawRadius === '') {
+                $updates['mapRadius'] = null;
+            } elseif (is_numeric($rawRadius) && (float) $rawRadius >= 1 && (float) $rawRadius <= 10000) {
+                $updates['mapRadius'] = (float) $rawRadius == (int) $rawRadius ? (int) $rawRadius : (float) $rawRadius;
+            } else {
+                return ['type' => 'error', 'text' => 'Pin grouping must be a number of miles from 1 to 10000, or blank to use the site-wide setting.'];
+            }
+        }
+        if (!$updates) return ['type' => 'error', 'text' => 'Nothing to save.'];
+        items_update($targetReal, function (&$data) use ($updates) {
+            foreach ($updates as $k => $v) $data[$k] = $v;
         });
         $where = $adminFolderPath === null ? 'the gallery\'s front page' : 'this folder\'s page';
-        $text = $enabled ? 'A map now shows on ' . $where . ', from the photos whose location is visible.' : 'The map no longer shows on ' . $where . '. Nothing is deleted.';
-        if ($enabled && !ENABLE_MAP) $text .= ' It stays hidden until the Trip map is switched on in Site settings.';
-        elseif ($enabled && !ENABLE_PHOTO_LOCATION) $text .= ' It stays empty until photo locations are allowed in Site settings.';
-        return ['type' => 'ok', 'text' => $text . ($radius !== null ? ' Photos within ' . $radius . ' mile' . ($radius == 1 ? '' : 's') . ' of each other share a pin.' : '')];
+        $parts = [];
+        if (array_key_exists('mapEnabled', $updates)) {
+            if ($updates['mapEnabled']) {
+                $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.';
+                if (!ENABLE_MAP) $part .= ' It stays hidden until the Trip map is switched on in Site settings.';
+                elseif (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until photo locations are allowed in Site settings.';
+            } else {
+                $part = 'The map no longer shows on ' . $where . '. Nothing is deleted.';
+            }
+            $parts[] = $part;
+        }
+        if (array_key_exists('mapRadius', $updates)) {
+            $parts[] = $updates['mapRadius'] === null ? 'This map uses the site-wide pin grouping.' : 'Photos within ' . $updates['mapRadius'] . ' mile' . ($updates['mapRadius'] == 1 ? '' : 's') . ' of each other share a pin.';
+        }
+        $text = 'Saved. ' . implode(' ', $parts);
+        return ['type' => 'ok', 'text' => $text];
     }
 
     if ($action === 'toggle_location_enabled') {
@@ -3685,6 +3719,27 @@ function render_admin_hidden_panel($data) {
 <?php
 }
 
+/** A setting that is one switch: flip it and it is saved on the spot (the page's
+ *  script posts it; the small Save button only exists for a browser without
+ *  JavaScript). The warning, if any, sits beside it in orange. */
+function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $warn = '') {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+?>
+    <form method="post" class="instant-form">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="<?= $esc($action) ?>">
+      <input type="hidden" name="<?= $esc($field) ?>" value="0">
+      <div class="instant-row">
+        <label class="switch"><input type="checkbox" name="<?= $esc($field) ?>" value="1" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
+        <span class="instant-label"><?= $esc($label) ?></span>
+        <span class="rowstate" role="status" aria-live="polite"></span>
+      </div>
+      <?php if ($warn !== ''): ?><div class="warn-note"><?= $esc($warn) ?></div><?php endif; ?>
+      <div class="nojs-only"><button type="submit" class="secondary">Save</button></div>
+    </form>
+<?php
+}
+
 /** The "Map" section of a folder's (or the gallery's) settings: whether its page
  *  shows a map of its own photos, and how close photos must be to share a pin.
  *  Both are per page; a blank radius means the site-wide setting. */
@@ -3692,23 +3747,29 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $on = $isRoot ? (($itemsHere['mapEnabled'] ?? null) !== false) : (($itemsHere['mapEnabled'] ?? null) === true);
     $radius = $itemsHere['mapRadius'] ?? null;
-    $confirm = 'Show a map on this page? The map loads its code from cdnjs and its tiles from OpenStreetMap in each visitor\'s browser, so those two sites can see that someone visited. It only plots photos whose location is visible.';
 ?>
     <h3 class="subhead">Map</h3>
     <?php if (!ENABLE_MAP): ?>
       <p class="muted" style="margin-top:0;">The trip map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="var l=document.querySelector('.side-link'); if (l) { l.click(); return false; }">Site settings</a> first; then each folder can show its own map.</p>
     <?php else: ?>
-      <form method="post" class="map-form">
+      <form method="post" class="instant-form map-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_map_settings">
-        <label><input type="checkbox" name="map_enabled" value="1" <?= $on ? 'checked' : '' ?> data-initial="<?= $on ? '1' : '0' ?>"> Show a map of <?= $isRoot ? 'the whole gallery on its front page' : 'this folder\'s photos on its page' ?></label>
-        <div class="field" style="max-width:300px; margin-top:8px;">
+        <input type="hidden" name="map_enabled" value="0">
+        <div class="instant-row">
+          <label class="switch"><input type="checkbox" name="map_enabled" value="1" <?= $on ? 'checked' : '' ?>><span class="slider"></span></label>
+          <span class="instant-label">Show a map of <?= $isRoot ? 'the whole gallery on its front page' : 'this folder\'s photos on its page' ?></span>
+          <span class="rowstate" role="status" aria-live="polite"></span>
+        </div>
+        <div class="warn-note">A map makes each visitor's browser load its code from cdnjs and its tiles from OpenStreetMap, so those two sites can see that someone visited this page. It only plots photos whose location is visible.</div>
+        <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'The map covers every photo in the gallery with a visible location.' : 'The map covers the photos in this folder and its subfolders that have a visible location (this folder\'s own location switch above must be on).' ?></p>
+        <div class="field" style="max-width:300px;">
           <label>Pin grouping (miles)</label>
           <input type="number" name="map_radius" min="1" max="10000" step="1" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?> (site-wide)">
+          <span class="rowstate" role="status" aria-live="polite"></span>
           <p class="hint">Photos closer together than this share one numbered pin. Leave blank to use the site-wide setting (<?= (int) MAP_CLUSTER_RADIUS_MILES ?>). A city trip wants a small number, a road trip a big one.</p>
         </div>
-        <p class="hint" style="margin:0 0 8px;"><?= $isRoot ? 'The map covers every photo in the gallery with a visible location.' : 'The map covers the photos in this folder and its subfolders that have a visible location (this folder\'s own location switch above must be on).' ?></p>
-        <button type="submit" class="secondary" onclick="var c = this.form.map_enabled; if (c.checked &amp;&amp; c.getAttribute('data-initial') !== '1') return confirm(<?= $esc(json_encode($confirm)) ?>);">Save map settings</button>
+        <div class="nojs-only"><button type="submit" class="secondary">Save map settings</button></div>
       </form>
     <?php endif; ?>
 <?php
@@ -4015,17 +4076,18 @@ function render_admin_site_settings($csrfToken) {
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
                 <?php if (!empty($d['risk'])): ?><div class="risk"><?= $esc($d['risk']) ?></div><?php endif; ?>
+                <?php if (!empty($d['offwarn'])): ?><div class="warn-note offnote" hidden><?= $esc($d['offwarn']) ?></div><?php endif; ?>
               </div>
               <div class="ctl">
                 <?php if ($d['type'] === 'bool'): ?>
                   <input type="hidden" name="set_<?= $esc($name) ?>" value="0">
-                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['risk'])): ?> data-risk="<?= $esc($d['risk']) ?>"<?php endif; ?><?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
+                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
                 <?php elseif ($d['type'] === 'enum'): ?>
                   <select name="set_<?= $esc($name) ?>"><?php foreach ($d['options'] as $val => $lab): ?><option value="<?= $esc($val) ?>" <?= (string) $now === (string) $val ? 'selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?></select>
                 <?php elseif ($d['type'] === 'text'): ?>
-                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" data-risk="<?= $esc($d['risk'] ?? '') ?>" style="max-width:180px;">
+                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
                 <?php elseif ($d['type'] === 'folders'): ?>
-                  <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode((object) $now, JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>" data-risk="<?= $esc($d['risk']) ?>">
+                  <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode((object) $now, JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>">
                     <ul class="extra-list"><?php foreach ($now as $fname => $fpath): ?><li><strong><?= $esc($fname) ?></strong> <span class="muted">&rarr;</span> <code><?= $esc($fpath) ?></code> <button type="button" class="extra-remove secondary" data-name="<?= $esc($fname) ?>">Remove</button></li><?php endforeach; ?></ul>
                     <p class="muted extra-none"<?= $now ? ' hidden' : '' ?>>None added.</p>
                     <div class="extra-add">
@@ -4060,12 +4122,13 @@ function render_admin_site_settings($csrfToken) {
           <div>
             <div class="name">Private-view password <?php if (isset($fromFile['PRIVATE_VIEW_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
             <div class="help"><?= PRIVATE_VIEW_PASSWORD === '' ? 'Not set, so hidden items stay hidden from everyone but you.' : 'Currently set.' ?> What you tell someone so they can see the hidden items (at least 6 characters). Leave blank to keep it as it is.</div>
+            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><div class="warn-note">Removing it means anyone you gave it to can no longer see the hidden items. The items stay hidden and nothing is deleted.</div><?php endif; ?>
           </div>
           <div class="ctl col">
             <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password">
             <input type="password" name="pw_private2" autocomplete="new-password" placeholder="Type it again">
             <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private">Set private-view password</button><span class="rowstate" role="status" aria-live="polite"></span></span>
-            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private-remove" data-confirm="Remove the private-view password? Anyone you gave it to will no longer be able to see the hidden items. The hidden items themselves stay hidden and nothing is deleted.">Remove it (turn private view off)</button><span class="rowstate" role="status" aria-live="polite"></span></span>
+            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private-remove">Remove it (turn private view off)</button><span class="rowstate" role="status" aria-live="polite"></span></span>
             <label class="muted nojs-only"><input type="checkbox" name="pw_private_remove" value="1"> Remove it (turn private view off)</label><?php endif; ?>
           </div>
         </div>
@@ -4110,14 +4173,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         $autoLoc = extract_photo_gps(resolve_real_path($dir, $adminFile));
         if ($autoLoc !== null) $adminAutoLoc[$adminFile] = $autoLoc;
     }
-    // Shown before locations are turned on: it publishes places, so say how
-    // many, and how to keep one back. Turning them off never asks.
+    // The warning shown beside the location switch (turning it on publishes places, so say how many and how to keep one back).
     $gpsCount = count($adminAutoLoc);
-    $locConfirm = 'Turn on public locations for this folder? ' . ($gpsCount > 0
-        ? $gpsCount . ' photo' . ($gpsCount === 1 ? ' here has' : 's here have') . ' GPS in the file, and will show ' . ($gpsCount === 1 ? 'its' : 'their') . ' location on the gallery and the map.'
-        : 'Any photo here with GPS in the file will show its location on the gallery and the map.')
-        . ' You can keep a single photo private afterwards (Location visibility: Always hide).';
-    $locConfirmAttr = htmlspecialchars(json_encode($locConfirm), ENT_QUOTES, 'UTF-8');
+    $locWarn = 'Turning this on makes the GPS location of ' . ($gpsCount > 0
+        ? $gpsCount . ' photo' . ($gpsCount === 1 ? ' here' : 's here') . ' visible to visitors, on the gallery and on the map.'
+        : 'any photo here that has one visible to visitors, on the gallery and on the map.')
+        . ' A single photo can be kept private by setting its Location visibility to Always hide.';
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
 ?>
@@ -4302,6 +4363,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .admin-main .site-row .ctl { justify-content:flex-start; }
   }
   /* The status text has its own reserved space, so a switch doesn't shift sideways while it says "Saved."; an error gets a line of its own. */
+  .warn-note { color:#f5a623; font-size:0.78rem; margin:6px 0 10px; }
+  .warn-note::before { content:"\26A0\FE0E  "; }
+  .instant-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .instant-label { font-size:0.9rem; }
+  .instant-form { margin:0 0 6px; }
   .rowstate { font-size:0.78rem; color:var(--muted); min-width:3.6em; }
   .rowstate:empty { display:inline-block; }
   .rowstate.ok { color:var(--ok); }
@@ -4554,12 +4620,8 @@ foreach ($adminFiles as $file) {
     <h2 class="section-title">This folder's own settings</h2>
     <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath); ?>
     <h3 class="subhead">Privacy</h3>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (ENABLE_PHOTO_LOCATION is off: nothing shows regardless)' : ''), $locWarn); ?>
     <div class="privacy-row">
-    <form method="post">
-      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-      <input type="hidden" name="action" value="toggle_location_enabled">
-      <label><input type="checkbox" name="enabled" value="1" <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?> onchange="if (this.checked &amp;&amp; !confirm(<?= $locConfirmAttr ?>)) { this.checked = false; return; } this.form.submit()"> Show photo locations publicly for this folder<?php if (!ENABLE_PHOTO_LOCATION): ?> <span class="muted">(ENABLE_PHOTO_LOCATION is off — nothing shows regardless)</span><?php endif; ?></label>
-    </form>
     <form method="post">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_folder_restriction">
@@ -4582,15 +4644,7 @@ foreach ($adminFiles as $file) {
       <p class="muted" style="margin-top:10px;">Shared links use the first photo as their picture. To choose one, select a photo in the Photos tab and use "Set as cover".</p>
     <?php endif; ?>
     <h3 class="subhead">Privacy</h3>
-    <div class="privacy-row">
-      <label><input type="checkbox" disabled <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?>> Show photo locations publicly at the root</label>
-      <form method="post">
-        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-        <input type="hidden" name="action" value="toggle_location_enabled">
-        <input type="hidden" name="enabled" value="<?= !empty($itemsHere['locationEnabled']) ? '0' : '1' ?>">
-        <button type="submit" class="secondary"<?php if (empty($itemsHere['locationEnabled'])): ?> onclick="return confirm(<?= $locConfirmAttr ?>)"<?php endif; ?>><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
-      </form>
-    </div>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (ENABLE_PHOTO_LOCATION is off: nothing shows regardless)' : ''), $locWarn); ?>
     <?php render_admin_map_form($itemsHere, $csrfToken, true); ?>
     <h3 class="subhead">Settings file</h3>
     <?php $cfgApplied = array_values(array_unique($GLOBALS['__gallery_config_applied'] ?? [])); ?>
@@ -4859,6 +4913,37 @@ foreach ($adminFiles as $file) {
     });
   }
   initFolderTree();
+  // Settings that are a single switch or number save the moment they change, in place: the control, the little status
+  // beside it, and nothing else on the page moves. (The small Save button exists only without JavaScript.)
+  [].forEach.call(document.querySelectorAll('.instant-form'), function (form) {
+    form.addEventListener('submit', function (ev) { ev.preventDefault(); });
+    var csrf = form.querySelector('input[name=csrf_token]').value, action = form.querySelector('input[name=action]').value;
+    function say(node, text, kind) {
+      if (!node) return;
+      node.textContent = text; node.className = 'rowstate ' + (kind || '');
+      clearTimeout(node._t);
+      if (kind === 'ok') node._t = setTimeout(function () { node.textContent = ''; node.className = 'rowstate'; }, Math.max(3000, text.length * 60));
+    }
+    [].forEach.call(form.querySelectorAll('input[type=checkbox], input[type=number]'), function (el) {
+      var isBox = el.type === 'checkbox';
+      if (!isBox) el.setAttribute('data-prev', el.value);
+      el.addEventListener('change', function () {
+        var holder = el.closest('.instant-row, .field') || form, node = holder.querySelector('.rowstate');
+        var body = new URLSearchParams();
+        body.set('csrf_token', csrf); body.set('action', action); body.set(el.name, isBox ? (el.checked ? '1' : '0') : el.value);
+        var revert = function () { if (isBox) el.checked = !el.checked; else el.value = el.getAttribute('data-prev'); };
+        say(node, 'Saving…', 'busy');
+        fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+            headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+          .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+          .then(function (j) {
+            if (j.ok) { say(node, j.text, 'ok'); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); }
+            else { say(node, j.text, 'err'); revert(); }
+          })
+          .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.', 'err'); revert(); });
+      });
+    });
+  });
   // Site settings: every change saves the moment it is made (one request at a time, so the file's
   // fingerprint never races), and anything that publishes content, contacts a third party, or removes
   // something visitors see asks first. The other screens refresh when you leave this one.
@@ -4923,11 +5008,11 @@ foreach ($adminFiles as $file) {
     }
     [].forEach.call(form.querySelectorAll('input[type=checkbox][data-label]'), function (cb) {
       cb.addEventListener('change', function () {
-        var on = cb.checked, label = cb.getAttribute('data-label'), risk = cb.getAttribute('data-risk'), off = cb.getAttribute('data-offwarn');
-        var msg = on && risk ? 'Turn on "' + label + '"?\n\n' + risk : (!on && off ? 'Turn off "' + label + '"?\n\n' + off : '');
-        if (msg && !confirm(msg)) { cb.checked = !on; return; }
+        var on = cb.checked, off = cb.getAttribute('data-offwarn');
+        var row = cb.closest('.site-row'), note = row ? row.querySelector('.offnote') : null;
         var f = {}; f[cb.name] = on ? '1' : '0';
-        post(f, stateOf(cb), function () { cb.checked = !on; });
+        // What switching it off does appears beside the switch once it is off (and goes when it is back on), instead of in a dialog.
+        post(f, stateOf(cb), function () { cb.checked = !on; }, function () { if (note) note.hidden = on || !off; });
       });
     });
     [].forEach.call(form.querySelectorAll('select[name^=set_], input[type=number][name^=set_]'), function (el) {
@@ -4941,8 +5026,6 @@ foreach ($adminFiles as $file) {
       el.setAttribute('data-prev', el.value);
       el.addEventListener('change', function () {
         el.value = el.value.trim();
-        var risk = el.getAttribute('data-risk'), label = el.getAttribute('data-label');
-        if (el.value !== '' && risk && !confirm('Set "' + label + '" to ' + el.value + '?\n\n' + risk)) { el.value = el.getAttribute('data-prev'); return; }
         var f = {}; f[el.name] = el.value;
         post(f, stateOf(el), function () { el.value = el.getAttribute('data-prev'); }, function () { el.setAttribute('data-prev', el.value); });
       });
@@ -4969,7 +5052,6 @@ foreach ($adminFiles as $file) {
       box.querySelector('.extra-add-btn').addEventListener('click', function () {
         var n = box.querySelector('.extra-name').value.trim(), p = box.querySelector('.extra-path').value.trim();
         if (!n || !p) { say(status, 'Give it a name and a full path.', 'err'); return; }
-        if (!confirm('Add "' + n + '" (' + p + ')?\n\n' + box.getAttribute('data-risk'))) return;
         var next = {}; Object.keys(map).forEach(function (k) { next[k] = map[k]; }); next[n] = p;
         send(next, function () { box.querySelector('.extra-name').value = ''; box.querySelector('.extra-path').value = ''; });
       });
@@ -4977,9 +5059,8 @@ foreach ($adminFiles as $file) {
         var b = ev.target.closest ? ev.target.closest('.extra-remove') : null;
         if (!b) return;
         var n = b.getAttribute('data-name');
-        if (!confirm('Stop showing "' + n + '"?\n\nNothing is deleted: its photos and their captions stay where they are, and come back if you add it again.')) return;
         var next = {}; Object.keys(map).forEach(function (k) { if (k !== n) next[k] = map[k]; });
-        send(next);
+        send(next, function () { say(status, 'Removed. Nothing was deleted: its photos and their captions stay where they are.', 'ok'); });
       });
       draw();
     });
@@ -4988,7 +5069,7 @@ foreach ($adminFiles as $file) {
         var kind = btn.getAttribute('data-pw'), node = stateOf(btn), f = {}, els = form.elements;
         if (kind === 'admin') { f.pw_admin = els['pw_admin'].value; f.pw_admin2 = els['pw_admin2'].value; }
         else if (kind === 'private') { f.pw_private = els['pw_private'].value; f.pw_private2 = els['pw_private2'].value; }
-        else { if (!confirm(btn.getAttribute('data-confirm'))) return; f.pw_private_remove = '1'; }
+        else { f.pw_private_remove = '1'; }
         if ((kind === 'admin' && !f.pw_admin) || (kind === 'private' && !f.pw_private)) { say(node, 'Type the new password first.', 'err'); return; }
         post(f, node, null, function () {
           ['pw_admin', 'pw_admin2', 'pw_private', 'pw_private2'].forEach(function (n) { if (els[n]) els[n].value = ''; });
@@ -5268,6 +5349,10 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             setcookie(REVEAL_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
             header('Location: ' . gallery_root_href(), true, 303);
             return;
+        }
+        if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch' && in_array($resultMessage['type'] ?? '', ['ok', 'error'], true)) {
+            // A setting flipped in place by the page's script: answer in JSON, no page.
+            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')]);
         }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);
@@ -7567,6 +7652,13 @@ if ($currentFolderPath !== null) {
             : $folderMdScan['rejectedCount'] . ' .md files were found in this folder but ignored because none of them start with the required {gallery} marker.';
     }
     foreach ($folderMdFiles as $folderMdFile) {
+        // {photos:} is read only from the gallery's top-level notes; say so rather than ignore it silently.
+        foreach (extract_photo_directives($folderMdContents[$folderMdFile]) as $folderRec) {
+            if (!empty($folderRec['photos'])) {
+                $folderGalleryNotices[] = '{photos:} is only read in the gallery\'s top-level notes, so it does nothing here. In a folder\'s own notes, write a photo\'s name (without .jpg) in the paragraph and its photo appears under it; {sold}, {reserved} and {color:} then apply to that photo.';
+                break;
+            }
+        }
         $folderNoteBoxesHtml[$folderMdFile] = markdown_to_html($folderMdContents[$folderMdFile], $groups, $files, $groupColors, $groupStatus, $groupLabels, $renderClaims, $photoViews);
     }
 }

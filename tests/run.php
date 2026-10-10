@@ -1812,6 +1812,25 @@ foreach (['Making a file count', 'Formatting', 'Directives', 'Attaching photos t
     $sections[] = str_contains(str_replace('&#039;', "'", $ref), $section);
 }
 check('[notes reference] it has every section: making a file count, formatting, the directives, attaching photos, where a directive applies, showing one as text, and troubleshooting', !in_array(false, $sections, true));
+check('[notes reference] it has a "Notes and folders" section saying what works with folders (a mention, {group:}, {sold}, {color:}) and that {photos:} reaches only top-level photos', str_contains($ref, 'Notes and folders') && str_contains($ref, 'Only works in the <strong>top-level notes</strong>') && str_contains($ref, 'cover card ignores it'));
+// {photos:} that cannot work in folder mode says so (it used to say "Unknown file", or fail silently).
+$fxFN = new_fixture_dir('foldernotes');
+mkdir("$fxFN/Paris");
+make_jpeg("$fxFN/Paris/eiffel.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxFN/top.jpg", 60, 60, 50, 50, 50);
+file_put_contents("$fxFN/n.md", "{gallery}\n\nA trip {photos: Paris/eiffel.jpg} {group: Tower}\n\nTop {photos: top.jpg} {group: Top Box}\n\nPlain text only, nothing to do with a missing file.\n");
+file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nBoth {photos: eiffel.jpg} {group: Landmarks}\n");
+write_patched_index("$fxFN/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true']);
+$portFN = find_free_port(); start_server($fxFN, $portFN);
+[, $fnRoot] = http_get("http://127.0.0.1:$portFN/");
+[, $fnParis] = http_get("http://127.0.0.1:$portFN/?folder=Paris");
+check('[folder notes] a top-level {photos:} that names a photo inside a folder says so, instead of calling the file unknown', str_contains($fnRoot, 'Paris/eiffel.jpg&quot; is inside a folder') && !str_contains($fnRoot, 'Unknown file'));
+check('[folder notes] ...and a {photos:} on a loose top-level photo still works (a labelled box)', str_contains($fnRoot, 'id="group-top-box"') && str_contains($fnRoot, '>Top Box'));
+check('[folder notes] a {photos:} in a folder\'s own notes raises a notice on that folder\'s page, which is shown once', substr_count($fnParis, '{photos:} is only read in the gallery&#039;s top-level notes') >= 1 && str_contains($fnParis, 'setup notice'));
+check('[folder notes] ...and the photo is still shown, as a plain card', str_contains($fnParis, 'id="group-eiffel"') && !str_contains($fnParis, 'Landmarks'));
+[, $fnParisClean] = (function () use ($fxFN, $portFN) { file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nSeen the eiffel yet? {sold}\n"); usleep(300000); return http_get("http://127.0.0.1:$portFN/?folder=Paris"); })();
+check('[folder notes] a folder note that just mentions a photo raises no notice and marks it sold', !str_contains($fnParisClean, 'setup notice') && str_contains($fnParisClean, 'sold-badge-corner'));
+
 check('[notes reference] each of the five directives is explained in full next to its insert button', str_contains($ref, 'data-snippet="{group: Name}"') && str_contains($ref, 'data-snippet="{photos: a.jpg, b.jpg}"') && str_contains($ref, 'data-snippet="{color: #ff0000}"') && str_contains($ref, 'data-snippet="{sold}"') && str_contains($ref, 'data-snippet="{reserved}"') && str_contains($ref, "whatever they're called") && str_contains($ref, 'red SOLD ribbon') && str_contains($ref, 'orange tag') && str_contains($ref, '{held}'));
 check('[notes reference] it explains the formatting that really works (bold, italic, underline, strikethrough, code, links, lists, quotes, code blocks) and that HTML is never run', str_contains($ref, '**bold**') && str_contains($ref, '__underline__') && str_contains($ref, '~~strikethrough~~') && str_contains($ref, '[words](https://example.com)') && str_contains($ref, '&gt; a quote') && str_contains($ref, 'never run'));
 check('[notes reference] it explains the rules that trip people up: {gallery} on the first line, the page-title heading, a directive only affecting its own paragraph, and the blank-line mistake with its fix', str_contains($ref, 'first line must be exactly') && str_contains($ref, 'page title') && str_contains($ref, 'its own paragraph') && str_contains($ref, 'Take a look at my rack') && str_contains($ref, 'Remove the blank line'));
@@ -2666,7 +2685,7 @@ check('[folder maps] a folder that has not switched its map on, or that does not
 [, $badR2] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => 'abc'], $mapHdrs);
 check('[folder maps] a pin grouping that is not a number from 1 to 10000 is refused with the reason, and the saved one stays', str_contains($badR, 'from 1 to 10000') && str_contains($badR2, 'from 1 to 10000') && ($mapFiles(http_get("$baseMapF/?folder=Paris")[1])['clusters'] ?? 0) === 3);
 $rootMapAdmin = http_get("$baseMapF/?admin", $mapHdrs)[1];
-$rootMapFields = form_default_fields($mapForm($rootMapAdmin)); unset($rootMapFields['map_enabled']); $rootMapFields['map_radius'] = '10';   // a browser sends nothing for an unchecked box
+$rootMapFields = form_default_fields($mapForm($rootMapAdmin)); $rootMapFields['map_enabled'] = '0'; $rootMapFields['map_radius'] = '10';   // the hidden 0 is what an unchecked switch sends
 http_post("$baseMapF/?admin", $rootMapFields, $mapHdrs);
 check('[folder maps] the gallery front page can switch its map off too, and then its map page is gone as well', !str_contains(http_get("$baseMapF/")[1], 'View full map') && http_get("$baseMapF/?map")[0] === 404 && $mapFiles(http_get("$baseMapF/?folder=Paris")[1]) !== null);
 user_submit("$baseMapF/?admin", http_get("$baseMapF/?admin", $mapHdrs)[1], 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => ''], $mapHdrs);
@@ -2674,6 +2693,36 @@ check('[folder maps] ...and switching it back on restores it', $mapFiles(http_ge
 check('[folder maps] the admin (who sees hidden items) gets the hidden photo on the map; a visitor never does', in_array('Paris/hidden.jpg', $mapFiles(http_get("$baseMapF/?folder=Paris", $mapHdrs)[1])['files'] ?? [], true) && !in_array('Paris/hidden.jpg', $mapFiles(http_get("$baseMapF/?folder=Paris")[1])['files'], true));
 $parisItems = read_data_file("$fxMapF/Paris/.gallery-items.php")['items'];
 check('[folder maps] saving map settings only stores the two map settings: every photo\'s caption, location and hide flag is as it was', ($parisItems['a.jpg']['caption'] ?? '') === 'A' && ($parisItems['hidden.jpg']['restriction'] ?? '') === 'private' && ($parisItems['b.jpg']['location']['lat'] ?? 0) == 48.92 && (read_data_file("$fxMapF/Paris/.gallery-items.php")['mapRadius'] ?? null) === 1);
+// Flipped in place by the page's script: each control posts only itself, so changing one never disturbs the other.
+$mapAjax = function ($path, array $fields) use ($baseMapF, $mapHdrs, $mapForm) {
+    [, $pg] = http_get("$baseMapF/?admin$path", $mapHdrs); $ff = form_default_fields($mapForm($pg));
+    [, $body] = http_post("$baseMapF/?admin$path", array_merge(['csrf_token' => $ff['csrf_token'], 'action' => 'save_map_settings'], $fields), array_merge($mapHdrs, ['X-Requested-With: gallery-fetch']));
+    return json_decode($body, true) ?? ['ok' => null, 'text' => $body];
+};
+$parisData = fn () => read_data_file("$fxMapF/Paris/.gallery-items.php");
+$mapAjax('&folder=Paris', ['map_radius' => '7']);
+$jOff = $mapAjax('&folder=Paris', ['map_enabled' => '0']);
+check('[instant] switching a folder\'s map off by itself (the page\'s script posts just that switch) answers JSON and leaves its pin grouping alone', ($jOff['ok'] ?? null) === true && str_contains((string) $jOff['text'], 'no longer shows') && ($parisData()['mapEnabled'] ?? null) === false && ($parisData()['mapRadius'] ?? null) === 7);
+$jOn = $mapAjax('&folder=Paris', ['map_enabled' => '1']);
+check('[instant] ...and switching it back on does not touch the radius either', ($jOn['ok'] ?? null) === true && ($parisData()['mapEnabled'] ?? null) === true && ($parisData()['mapRadius'] ?? null) === 7);
+$jRad = $mapAjax('&folder=Paris', ['map_radius' => '12']);
+check('[instant] changing only the pin grouping leaves the switch as it was', ($jRad['ok'] ?? null) === true && ($parisData()['mapRadius'] ?? null) === 12 && ($parisData()['mapEnabled'] ?? null) === true);
+$jBlank = $mapAjax('&folder=Paris', ['map_radius' => '']);
+check('[instant] clearing the pin grouping goes back to the site-wide setting, and says so', ($jBlank['ok'] ?? null) === true && str_contains((string) $jBlank['text'], 'site-wide') && array_key_exists('mapRadius', $parisData()) && $parisData()['mapRadius'] === null);
+$jBad = $mapAjax('&folder=Paris', ['map_radius' => '-4']);
+check('[instant] an invalid pin grouping answers JSON with the reason and changes nothing', ($jBad['ok'] ?? null) === false && str_contains((string) $jBad['text'], 'from 1 to 10000') && array_key_exists('mapRadius', $parisData()) && $parisData()['mapRadius'] === null);
+$locAjax = function ($path, $on) use ($baseMapF, $mapHdrs, $mapForm) {
+    [, $pg] = http_get("$baseMapF/?admin$path", $mapHdrs); $ff = form_default_fields($mapForm($pg));
+    [, $body] = http_post("$baseMapF/?admin$path", ['csrf_token' => $ff['csrf_token'], 'action' => 'toggle_location_enabled', 'enabled' => $on ? '1' : '0'], array_merge($mapHdrs, ['X-Requested-With: gallery-fetch']));
+    return json_decode($body, true) ?? ['ok' => null, 'text' => $body];
+};
+$jLocOff = $locAjax('&folder=Lisbon', false);
+check('[instant] the folder location switch works in place too: off answers JSON, says saved coordinates are kept, and the folder stops showing them', ($jLocOff['ok'] ?? null) === true && str_contains((string) $jLocOff['text'], 'kept') && empty(read_data_file("$fxMapF/Lisbon/.gallery-items.php")['locationEnabled']) && read_data_file("$fxMapF/Lisbon/.gallery-items.php")['items']['l.jpg']['location']['lat'] == 38.72);
+$jLocOn = $locAjax('&folder=Lisbon', true);
+check('[instant] ...and on answers JSON and turns it back on', ($jLocOn['ok'] ?? null) === true && !empty(read_data_file("$fxMapF/Lisbon/.gallery-items.php")['locationEnabled']));
+[, $mapAdminAgain] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
+check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">A map makes each visitor') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 2);
+
 // The whole map feature off: nothing anywhere.
 file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
 check('[folder maps] with the trip map off for the whole gallery there is no map anywhere, whatever each folder says, and the admin says why', $mapFiles(http_get("$baseMapF/?folder=Paris")[1]) === null && $mapFiles(http_get("$baseMapF/")[1]) === null && str_contains(http_get("$baseMapF/?admin&folder=Paris", $mapHdrs)[1], 'switched off for the whole gallery') && !str_contains(http_get("$baseMapF/?map&folder=Paris")[1], 'trip-map-full'));
@@ -2913,7 +2962,7 @@ check('[trip] the shareable ?map page loads and has its own link preview', $trip
 [, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
 check('[trip] Lisbon\'s tram photo has GPS pre-filled too, but Lisbon has not opted in so it is not on the map', abs((float) (form_default_fields((function ($h) { foreach (html_post_forms($h) as $f) if (str_contains($f['html'], 'name="file" value="tram.jpg"') && str_contains($f['html'], 'save_item')) return $f['html']; return ''; })($lAdmin))['lat'] ?? 0) - 38.7) < 0.01 && count($clusters3) === 1);
 check('[trip] ...and Lisbon\'s admin warns that its GPS stays private until the switch is turned on, naming what turning it on does', str_contains($lAdmin, 'Nothing is public while this folder') && str_contains($lAdmin, 'Private for now') && str_contains($lAdmin, 'Always hide'));
-check('[trip] ...the switch asks for confirmation before publishing, with the number of photos affected', (bool) preg_match('#onchange="if \(this\.checked &amp;&amp; !confirm\(&quot;Turn on public locations for this folder\? 1 photo here has GPS#', $lAdmin));
+check('[trip] ...the location switch is an instant toggle with the warning beside it in orange (naming how many photos it will publish), not a dialog', str_contains($lAdmin, 'class="instant-form"') && (bool) preg_match('#<div class="warn-note">Turning this on makes the GPS location of 1 photo here visible to visitors#', $lAdmin) && !str_contains($lAdmin, 'confirm(&quot;Turn on public locations'));
 [, $r] = user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $tripHdrs);
 [, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
 [, $tripHome4] = http_get("$baseTrip/");
