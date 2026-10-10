@@ -3197,7 +3197,7 @@ function render_admin_notes_reference() {
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Claim photos', '{photos: a.jpg, b.jpg}') ?> <?= $c('{photos: a.jpg, b.jpg}') ?></div>
           <p>Attaches exactly these files to this paragraph, <strong>whatever they're called</strong>. Separate names with commas, spelled as in the folder. A file belongs to one paragraph only: the first claim wins.</p></div>
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Accent color', '{color: #ff0000}') ?> <?= $c('{color: gold}') ?> or <?= $c('{color: #5865f2}') ?></div>
-          <p>The accent colour of that item's box: a hex code or a plain colour word. In a paragraph with no photo or folder to put a box round, it puts a coloured bar beside the paragraph's text.</p></div>
+          <p>The accent colour of that item's box: a hex code or a plain colour word. The paragraph's own text gets a bar in the same colour, so the two read as one item; with no photo or folder to colour, the bar is all it does.</p></div>
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Sold', '{sold}') ?> <?= $c('{sold}') ?></div>
           <p>Marks the item <strong>sold</strong>: dimmed, struck-through text, grayscale photos and a red SOLD ribbon.</p></div>
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Reserved', '{reserved}') ?> <?= $c('{reserved}') ?> or <?= $c('{held}') ?></div>
@@ -6534,9 +6534,9 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
         } elseif ($status === 'reserved') {
             $html .= '<div class="reserved-item"' . $idAttr . '><span class="reserved-badge">RESERVED</span><p>' . $inner . '</p></div>';
         } else {
-            // With nothing in the paragraph to put a box round (no photo or folder mentioned or listed), a {color:}
-            // accents the paragraph itself rather than silently doing nothing.
-            $accent = ($colorValue !== null && empty($matchedKeys) && empty($explicitPhotos))
+            // A {color:} always accents its own paragraph with a bar, so the text and the photos or folder it colours
+            // read as one item (and with nothing to put a box round it still does something visible).
+            $accent = ($colorValue !== null)
                 ? ' class="accent-note" style="border-left-color: ' . htmlspecialchars($colorValue, ENT_QUOTES, 'UTF-8') . ';"' : '';
             $html .= '<p' . $idAttr . $accent . '>' . $inner . '</p>';
         }

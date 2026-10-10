@@ -1841,6 +1841,10 @@ file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nCheck out these pictures fro
 usleep(300000);
 [, $fnParisAccent] = http_get("http://127.0.0.1:$portFN/?folder=Paris");
 check('[folder notes] a {color:} in a paragraph that mentions no photo or folder accents the paragraph itself (it used to do nothing)', str_contains($fnParisAccent, '<p class="accent-note" style="border-left-color: gold;">Check out these pictures from around the city!</p>') && !str_contains($fnParisAccent, '{color'));
+file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nCheck out eiffel {photos: eiffel.jpg}{color: gold}\n");
+usleep(300000);
+[, $fnParisBoth] = http_get("http://127.0.0.1:$portFN/?folder=Paris");
+check('[folder notes] a {color:} that also colours a photo puts the same bar beside the paragraph, so the two match', str_contains($fnParisBoth, '<p id="item-eiffel-jpg" class="accent-note" style="border-left-color: gold;">') && str_contains($fnParisBoth, 'class="card ringed" id="group-eiffel-jpg" style="--ring: gold;"'));
 file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nNice view {photos: eiffel.jpg} {color: gold}\n");
 usleep(300000);
 [, $fnParisPlain] = http_get("http://127.0.0.1:$portFN/?folder=Paris");
