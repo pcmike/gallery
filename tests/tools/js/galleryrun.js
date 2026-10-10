@@ -2,6 +2,8 @@ import * as std from 'std';
 import { El, makeDoc } from './dom.js';
 const html = std.loadFile(scriptArgs[1]); const src = std.loadFile(scriptArgs[2]);
 let fails = 0; const ok = (c, m) => { print((c ? '  ok    ' : '  FAIL  ') + m); if (!c) fails++; };
+// QuickJS has no URLSearchParams; a small stand-in for the one thing the page asks of it (reading a parameter).
+globalThis.URLSearchParams = class { constructor(q) { this.m = {}; String(q).replace(/^\?/, '').split('&').filter(Boolean).forEach((kv) => { const [k, v] = kv.split('='); this.m[k] = decodeURIComponent(v || ''); }); } get(k) { return k in this.m ? this.m[k] : null; } };
 const doc = makeDoc(html);
 const fetched = []; const timers = [];
 const win = { location: null, CSS: undefined, addEventListener() {}, matchMedia: () => ({ matches: false }) };
@@ -80,6 +82,9 @@ api.toggleCaptionPopover(cbadge, ev); doc.fire('click', {}); ok(card.querySelect
 // copy-link buttons
 const link = new El('a'); link._cls.add('permalink-copy'); link.hash = '#group-x'; link.closest = (s) => s === '.permalink-copy' ? link : null;
 doc.fire('click', { target: link }); await Promise.resolve(); ok(nav.copied === 'http://example.test/kb/#group-x', 'a copy-link button copies origin + path + #anchor (not the whole current URL with a query)');
+loc.search = '?folder=Europe%2FFrance&photo=x.jpg';
+doc.fire('click', { target: link }); await Promise.resolve(); ok(nav.copied === 'http://example.test/kb/?folder=Europe%2FFrance#group-x', 'on a folder page a copied paragraph link keeps ?folder= (and drops everything else, such as ?photo=)');
+loc.search = '';
 const flink = new El('a'); flink._cls.add('permalink-copy'); flink.hash = ''; flink.setAttribute('href', '?folder=Europe%2FFrance'); flink.closest = (s) => s === '.permalink-copy' ? flink : null;
 doc.fire('click', { target: flink }); await Promise.resolve(); ok(nav.copied === 'http://example.test/kb/?folder=Europe%2FFrance', 'a folder cover card\'s copy-link button copies its ?folder= URL');
 print(fails ? `\n${fails} FAILED` : '\ngallery script: all checks passed'); std.exit(fails ? 1 : 0);
