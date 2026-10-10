@@ -1998,6 +1998,14 @@ function render_map_page($points, $legend, $pageTitle, $baseUrl) {
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $title = htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8');
     $ogUrl = htmlspecialchars($baseUrl . '/?map', ENT_QUOTES, 'UTF-8');
+    // A bare "#group-<slug>" resolves against the *current* URL — here
+    // /?map — so it would scroll nowhere on this page. Point in-page
+    // anchors at the gallery root instead; ?folder= links are already
+    // root-relative query strings and need no help.
+    foreach ($points as &$p) {
+        if ($p['link'][0] === '#') $p['link'] = './' . $p['link'];
+    }
+    unset($p);
 ?>
 <!DOCTYPE html>
 <html lang="en">

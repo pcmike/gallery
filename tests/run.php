@@ -1291,7 +1291,15 @@ $standaloneCluster = null;
 foreach ($clusters as $c) {
     if (count($c) === 1 && $c[0]['file'] === 'standalone.jpg') { $standaloneCluster = $c; break; }
 }
-check('a standalone item\'s popup link points at its own #group-<slug> anchor, not a folder page', $standaloneCluster !== null && $standaloneCluster[0]['link'] === '#group-standalone');
+check('on the ?map page a standalone item\'s popup link goes to the root\'s #group-<slug> anchor (./#..., since a bare #... would stay on ?map), not a folder page', $standaloneCluster !== null && $standaloneCluster[0]['link'] === './#group-standalone');
+
+preg_match('/var clusters = (\[.*?\]);/s', $mapRootBody, $rootClusterMatch);
+$rootClusters = json_decode($rootClusterMatch[1] ?? '', true) ?: [];
+$rootStandaloneLink = null;
+foreach ($rootClusters as $c) {
+    if (count($c) === 1 && $c[0]['file'] === 'standalone.jpg') { $rootStandaloneLink = $c[0]['link']; break; }
+}
+check('on the gallery root itself the same popup link stays a plain in-page #group-<slug> anchor', $rootStandaloneLink === '#group-standalone');
 
 $romeCluster = null;
 foreach ($clusters as $c) {
