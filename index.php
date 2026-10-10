@@ -6537,7 +6537,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
             // A {color:} always accents its own paragraph with a bar, so the text and the photos or folder it colours
             // read as one item (and with nothing to put a box round it still does something visible).
             $accent = ($colorValue !== null)
-                ? ' class="accent-note" style="border-left-color: ' . htmlspecialchars($colorValue, ENT_QUOTES, 'UTF-8') . ';"' : '';
+                ? ' class="accent-note" style="--bar: ' . htmlspecialchars($colorValue, ENT_QUOTES, 'UTF-8') . ';"' : '';
             $html .= '<p' . $idAttr . $accent . '>' . $inner . '</p>';
         }
 
@@ -7467,7 +7467,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); }
   .folder-dates { margin:2px 0 0; color:var(--muted); font-size:0.9rem; }
   .note-box.folder-description { white-space: pre-line; }
-  .note-box p.accent-note { border-left: 4px solid; padding-left: 12px; }
+  /* A straight bar drawn inside the paragraph (a border curved whenever the paragraph was the target of a link). */
+  .note-box p.accent-note { box-shadow: inset 4px 0 0 var(--bar); padding-left: 14px; border-radius: 0; }
+  .note-box p.accent-note:target { border-radius: 0; }
   .folder-cover-count {
     display: block;
     padding: 0 12px 10px;
