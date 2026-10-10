@@ -110,6 +110,39 @@ function make_jpeg($path, $w, $h, $r, $g, $b) {
 // skipped over by size) followed by a moov box containing a single mvhd
 // (version 0) child with a real duration. No mdat/track data at all —
 // not meant to actually play, only to parse.
+/** A JPEG whose EXIF block holds only a GPS IFD — PHP has no EXIF writer,
+ *  so this hand-assembles a minimal little-endian TIFF inside an APP1
+ *  segment. $latDMS/$lngDMS are three [numerator, denominator] pairs. */
+function make_gps_jpeg($path, $latRef, $latDMS, $lngRef, $lngDMS) {
+    $im = imagecreatetruecolor(60, 60);
+    imagefill($im, 0, 0, imagecolorallocate($im, 10, 200, 10));
+    ob_start();
+    imagejpeg($im);
+    $jpeg = ob_get_clean();
+    imagedestroy($im);
+    $rationals = function ($dms) {
+        $out = '';
+        foreach ($dms as [$n, $d]) $out .= pack('VV', $n, $d);
+        return $out;
+    };
+    $gpsOffset = 8 + 2 + 12 + 4; // TIFF header + IFD0 (one entry) + next-IFD pointer
+    $gpsEntries = 4;
+    $dataStart = $gpsOffset + 2 + 12 * $gpsEntries + 4;
+    $latData = $rationals($latDMS);
+    $lngData = $rationals($lngDMS);
+    $tiff = 'II' . pack('v', 42) . pack('V', 8)
+          . pack('v', 1) . pack('vvVV', 0x8825, 4, 1, $gpsOffset) . pack('V', 0)
+          . pack('v', $gpsEntries)
+          . pack('vvV', 1, 2, 2) . $latRef . "\0\0\0"
+          . pack('vvVV', 2, 5, 3, $dataStart)
+          . pack('vvV', 3, 2, 2) . $lngRef . "\0\0\0"
+          . pack('vvVV', 4, 5, 3, $dataStart + strlen($latData))
+          . pack('V', 0)
+          . $latData . $lngData;
+    $exif = "Exif\0\0" . $tiff;
+    file_put_contents($path, substr($jpeg, 0, 2) . "\xFF\xE1" . pack('n', strlen($exif) + 2) . $exif . substr($jpeg, 2));
+}
+
 function make_minimal_mp4($path, $durationSeconds, $timescale = 1) {
     $ftypBody = 'isom' . pack('N', 0);
     $ftyp = pack('N', 8 + strlen($ftypBody)) . 'ftyp' . $ftypBody;
@@ -1500,6 +1533,67 @@ check('inline mode: the root shows the folder as an inline box, not a cover card
 [$inlineStatus, $inlinePage] = http_get("http://127.0.0.1:$portInline/?folder=Europe");
 check('inline mode: ?folder=Europe still loads', $inlineStatus === 200);
 check('inline mode: a folder\'s page is flat — everything beneath it as plain cards, no cover cards', str_contains($inlinePage, 'alt="Europe/intro.jpg"') && str_contains($inlinePage, 'alt="Europe/France/eiffel.jpg"') && !str_contains($inlinePage, '<div class="folder-cover"'));
+
+// AUTO_GROUP_BY_FOLDER off (the default) with photos in subfolders: the
+// gallery looks empty of them, so it says why — a count only, never a
+// folder or file name.
+$fxSubNotice = new_fixture_dir('subnotice');
+mkdir("$fxSubNotice/TopSecretTrip/Day1", 0777, true);
+make_jpeg("$fxSubNotice/loose.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxSubNotice/TopSecretTrip/a.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$fxSubNotice/TopSecretTrip/Day1/b.jpg", 60, 60, 30, 30, 30);
+write_patched_index("$fxSubNotice/index.php", $indexContents, []);
+$portSubNotice = find_free_port();
+start_server($fxSubNotice, $portSubNotice);
+[, $subNoticeBody] = http_get("http://127.0.0.1:$portSubNotice/");
+check('photos in subfolders with AUTO_GROUP_BY_FOLDER off produce a setup notice with the right count', str_contains($subNoticeBody, '2 photos/videos were found in subfolders but aren&#039;t shown') && str_contains($subNoticeBody, 'AUTO_GROUP_BY_FOLDER'));
+check('...which names no folder or file', !str_contains($subNoticeBody, 'TopSecretTrip') && !str_contains($subNoticeBody, 'Day1'));
+check('...and the gallery itself still shows only the loose photo', str_contains($subNoticeBody, 'alt="loose.jpg"') && !str_contains($subNoticeBody, 'a.jpg') && !str_contains($subNoticeBody, 'b.jpg'));
+check('the defaults fixture (a flat folder) gets no such notice', $mapOffBody !== '' && !str_contains($mapOffBody, 'found in subfolders'));
+
+/* ======================================================================= *
+ * FIXTURE: "gps" — EXIF GPS auto-fill in the admin, for JPEG and (where
+ * Imagick can write/read HEIC) HEIC. Never covered before: 48°51'30.24"N
+ * 2°17'40.2"E is 48.8584, 2.2945; the southern/western pair checks the
+ * sign handling.
+ * ======================================================================= */
+
+echo "== gps fixture: EXIF location auto-fill (JPEG, HEIC) ==\n";
+
+$fxGps = new_fixture_dir('gps');
+make_gps_jpeg("$fxGps/north-east.jpg", 'N', [[48, 1], [51, 1], [3024, 100]], 'E', [[2, 1], [17, 1], [402, 10]]);
+make_gps_jpeg("$fxGps/south-west.jpg", 'S', [[33, 1], [51, 1], [0, 1]], 'W', [[151, 1], [12, 1], [0, 1]]);
+make_jpeg("$fxGps/no-gps.jpg", 60, 60, 80, 80, 80);
+$heicOk = false;
+if (class_exists('Imagick') && count(Imagick::queryFormats('HEIC')) > 0) {
+    try {
+        $heicSrc = new Imagick("$fxGps/north-east.jpg");
+        $heicSrc->setImageFormat('heic');
+        $heicSrc->writeImage("$fxGps/phone.heic");
+        $heicOk = is_file("$fxGps/phone.heic");
+    } catch (Exception $e) {
+        $heicOk = false;
+    }
+}
+write_patched_index("$fxGps/index.php", $indexContents, [
+    'ADMIN_PASSWORD' => "'test-admin-pw-123'",
+    'ENABLE_PHOTO_LOCATION' => 'true',
+    'ENABLE_THUMBNAIL_CACHE' => 'true',
+]);
+$portGps = find_free_port();
+start_server($fxGps, $portGps);
+[, $gpsAdmin] = http_get("http://127.0.0.1:$portGps/?admin", ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')]);
+$gpsCard = function ($body, $name) {
+    return preg_match('/<div class="item-card">(?:(?!<div class="item-card">).)*?' . preg_quote($name, '/') . '.*?<\/form>/s', $body, $m) ? $m[0] : '';
+};
+check('a JPEG\'s EXIF GPS pre-fills the admin\'s location fields (N/E)', str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '2.2945'));
+check('southern and western hemispheres come out negative', str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-33.85') && str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-151.2'));
+check('a JPEG with no GPS block gets no pre-filled location', !preg_match('/value="-?\d+\.\d+"/', $gpsCard($gpsAdmin, 'no-gps.jpg')));
+if ($heicOk) {
+    check('a HEIC\'s EXIF GPS pre-fills the admin\'s location fields too', str_contains($gpsCard($gpsAdmin, 'phone.heic'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'phone.heic'), '2.2945'));
+} else {
+    echo "  skip  HEIC GPS auto-fill (this PHP's Imagick can't write HEIC to build a fixture)\n";
+}
 
 /* ======================================================================= *
  * FIXTURE 3: "mtimesort" — PHOTO_SORT_ORDER = 'mtime'.

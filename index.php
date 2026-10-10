@@ -167,8 +167,10 @@ define('ADMIN_PASSWORD', '');
 // doesn't override it to "hide." The admin tool itself can always see
 // and edit location data regardless of this constant — it only gates
 // what an ordinary visitor is ever shown. Real coverage is narrower than
-// it sounds: EXIF GPS auto-fill only works for JPEG (via exif_read_data)
-// — HEIC, PNG, GIF, WEBP, and BMP need the coordinates typed in by hand.
+// it sounds: EXIF GPS auto-fill works for JPEG (via exif_read_data) and,
+// where Imagick can read HEIC (the same condition HEIC display already
+// has), for HEIC/HEIF — PNG, GIF, WEBP, and BMP generally carry no GPS
+// block, so those need the coordinates typed in by hand.
 define('ENABLE_PHOTO_LOCATION', false);
 
 // A second, lower-privilege password that unlocks items flagged hidden
@@ -327,6 +329,47 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
 }
 
 /**
+ * For when AUTO_GROUP_BY_FOLDER is off: a bounded look for photos/videos
+ * sitting in subfolders, so a first-time owner who organized a trip into
+ * subfolders sees *why* the gallery looks empty instead of nothing at
+ * all. Bounded on purpose — this script is often dropped into a folder
+ * that already has unrelated, possibly huge subtrees (a whole web root),
+ * and it must never walk all of that on every request just to print a
+ * hint. Visits at most $maxDirs directories, never follows symlinks, and
+ * skips dot-directories (.git, .gallery-cache). Returns [count found,
+ * whether the search was cut short].
+ */
+function count_media_in_subfolders($realDir, $mediaExtensions, $maxDirs = 40) {
+    $count = 0;
+    $visited = 0;
+    $truncated = false;
+    $queue = [];
+    foreach ((@scandir($realDir) ?: []) as $entry) {
+        if ($entry[0] === '.') continue;
+        $path = $realDir . '/' . $entry;
+        if (is_dir($path) && !is_link($path)) $queue[] = $path;
+    }
+    while ($queue) {
+        if ($visited++ >= $maxDirs) {
+            $truncated = true;
+            break;
+        }
+        $current = array_shift($queue);
+        foreach ((@scandir($current) ?: []) as $entry) {
+            if ($entry[0] === '.') continue;
+            $path = $current . '/' . $entry;
+            if (is_link($path)) continue;
+            if (is_dir($path)) {
+                $queue[] = $path;
+            } elseif (in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), $mediaExtensions, true)) {
+                $count++;
+            }
+        }
+    }
+    return [$count, $truncated];
+}
+
+/**
  * Merges EXTRA_FOLDERS into the root node as additional virtual
  * subfolders. These point at real paths outside the gallery root on
  * purpose — the admin wrote them into a constant they control, the same
@@ -419,6 +462,7 @@ if (AUTO_GROUP_BY_FOLDER) {
     $files = flatten_folder_tree($folderTree);
 } else {
     $folderTree = null;
+    [$subfolderMediaCount, $subfolderMediaTruncated] = count_media_in_subfolders($dir, $mediaExtensions);
     $files = array_filter(scandir($dir), function ($file) use ($dir, $mediaExtensions, $self) {
         if ($file === $self || $file === '.' || $file === '..') return false;
         if (!is_file("$dir/$file")) return false;
@@ -1085,6 +1129,12 @@ if (isset($_GET['video'])) {
 // a typo'd filename or a missing {gallery} marker doesn't just fail
 // silently with no way to ever find out why.
 $galleryNotices = [];
+if (!empty($subfolderMediaCount)) {
+    $galleryNotices[] = ($subfolderMediaTruncated ? 'At least ' : '') . $subfolderMediaCount
+        . ' photo' . ($subfolderMediaCount === 1 ? '' : 's') . '/video' . ($subfolderMediaCount === 1 ? ' was' : 's were')
+        . ' found in subfolders but ' . ($subfolderMediaCount === 1 ? 'isn\'t' : 'aren\'t')
+        . ' shown — set AUTO_GROUP_BY_FOLDER to true to include them (see the README\'s "Folders" section).';
+}
 
 // Only a .md file whose first non-blank line is exactly "{gallery}" is
 // treated as content for this script — anything else in the folder (a
@@ -2328,12 +2378,46 @@ function exif_gps_to_decimal($component, $ref) {
     return (strtoupper((string) $ref) === 'S' || strtoupper((string) $ref) === 'W') ? -$decimal : $decimal;
 }
 
-/** Auto-fills location from a JPEG's embedded EXIF GPS block, if any.
- *  JPEG only — real coverage is narrower than it sounds: HEIC, PNG, GIF,
- *  WEBP, and BMP need their coordinates entered by hand (see
- *  ENABLE_PHOTO_LOCATION's own doc comment). Returns null on anything
- *  missing or unparseable — manual entry is always the fallback, never a
- *  hard failure. */
+/** Auto-fills location from a photo's embedded EXIF GPS block, if any:
+ *  JPEG via exif_read_data(), HEIC/HEIF via Imagick (see
+ *  extract_heic_gps). Anything else (PNG, GIF, WEBP, BMP, video) has no
+ *  GPS block to read, so manual entry is the only route. Returns null on
+ *  anything missing or unparseable — manual entry is always the
+ *  fallback, never a hard failure. */
+function extract_photo_gps($realPath) {
+    $ext = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
+    if (in_array($ext, ['heic', 'heif'], true)) {
+        return extract_heic_gps($realPath);
+    }
+    return extract_jpeg_gps($realPath);
+}
+
+/** HEIC/HEIF carry the same EXIF GPS tags, but exif_read_data() can't
+ *  open the container — Imagick can, and exposes them as exif:GPS*
+ *  properties (each coordinate as "n/d,n/d,n/d"). pingImage() reads
+ *  just the metadata, without decoding the pixels. Needs Imagick with
+ *  HEIC support, the same condition HEIC display already has. */
+function extract_heic_gps($realPath) {
+    if (!class_exists('Imagick')) return null;
+    try {
+        $im = new Imagick();
+        $im->pingImage($realPath);
+        $props = $im->getImageProperties('exif:GPS*');
+        $im->clear();
+    } catch (Exception $e) {
+        return null;
+    }
+    $split = function ($value) {
+        return array_map('trim', explode(',', (string) $value));
+    };
+    if (empty($props['exif:GPSLatitude']) || empty($props['exif:GPSLongitude'])) return null;
+    $lat = exif_gps_to_decimal($split($props['exif:GPSLatitude']), $props['exif:GPSLatitudeRef'] ?? 'N');
+    $lng = exif_gps_to_decimal($split($props['exif:GPSLongitude']), $props['exif:GPSLongitudeRef'] ?? 'E');
+    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng)) return null;
+    return ['lat' => round($lat, 6), 'lng' => round($lng, 6)];
+}
+
+/** JPEG half of extract_photo_gps(). */
 function extract_jpeg_gps($realPath) {
     if (!function_exists('exif_read_data')) return null;
     $ext = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
@@ -3042,7 +3126,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       $entry = $itemsHere['items'][$bare] ?? [];
       $loc = $entry['location'] ?? null;
       if ($loc === null && !is_video_file($file)) {
-          $auto = extract_jpeg_gps(resolve_real_path($dir, $file));
+          $auto = extract_photo_gps(resolve_real_path($dir, $file));
           if ($auto !== null) { $loc = $auto; }
       }
     ?>
