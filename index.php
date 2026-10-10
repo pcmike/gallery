@@ -3160,6 +3160,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .flash { padding:10px 14px; border-radius:8px; margin:14px 0; font-size:0.9rem; }
   .flash.ok { background:rgba(59,165,92,0.15); color:var(--ok); }
   .flash.error { background:rgba(237,66,69,0.15); color:var(--err); }
+  .flash a { color:inherit; font-weight:600; text-decoration:underline; }
   .panel { background:var(--card); border-radius:10px; padding:16px; margin-bottom:16px; }
   label { display:block; font-size:0.8rem; color:var(--muted); margin-bottom:3px; }
   input[type=text], input[type=url], input[type=number], textarea, select {
