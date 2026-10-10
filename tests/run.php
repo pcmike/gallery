@@ -2382,11 +2382,11 @@ write_patched_index("$fxDates/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER
 $portDates = find_free_port(); start_server($fxDates, $portDates);
 $datesAuth = ['Authorization: Basic ' . base64_encode('x:dates-pw-123456')];
 [, $datesAdmin] = http_get("http://127.0.0.1:$portDates/?admin&folder=Trip", $datesAuth);
-check('[dates] a folder\'s settings offer the span of its photos (here from file dates, subfolders included) with a one-click button, and say where the dates come from', str_contains($datesAdmin, 'span <strong>Oct 3' . "\u{2013}" . '9, 2026</strong>') && str_contains($datesAdmin, 'class="secondary date-suggest" data-dates="Oct 3' . "\u{2013}" . '9, 2026"') && str_contains($datesAdmin, 'modified dates') && !str_contains($datesAdmin, 'Only what you save is shown') && !str_contains($datesAdmin, 'the dates the photos were taken'));
+check('[dates] a folder\'s settings offer the span of its photos (here from file dates, subfolders included) with a one-click button, and say where the dates come from', str_contains($datesAdmin, 'span <strong>10/03/2026' . "\u{2013}" . '10/09/2026</strong>') && str_contains($datesAdmin, 'class="secondary date-suggest" data-dates="10/03/2026' . "\u{2013}" . '10/09/2026"') && str_contains($datesAdmin, 'modified dates') && !str_contains($datesAdmin, 'Only what you save is shown') && !str_contains($datesAdmin, 'the dates the photos were taken'));
 [, $datesRoot] = http_get("http://127.0.0.1:$portDates/?admin", $datesAuth);
-check('[dates] the gallery root suggests a range across years', str_contains($datesRoot, 'Dec 30, 2025 ' . "\u{2013}" . ' Oct 9, 2026'));
-check('[dates] nothing is stored or shown to visitors until the form is saved', !str_contains(http_get("http://127.0.0.1:$portDates/?folder=Trip")[1], 'Oct 3'));
-write_data_file("$fxDates/Trip/.gallery-items.php", ['dates' => "Oct 3" . "\u{2013}" . "9, 2026", 'items' => [], 'groups' => []]);
+check('[dates] the gallery root suggests a range across years', str_contains($datesRoot, '12/30/2025' . "\u{2013}" . '10/09/2026'));
+check('[dates] nothing is stored or shown to visitors until the form is saved', !str_contains(http_get("http://127.0.0.1:$portDates/?folder=Trip")[1], '10/03/2026'));
+write_data_file("$fxDates/Trip/.gallery-items.php", ['dates' => "10/03/2026" . "\u{2013}" . "10/09/2026", 'items' => [], 'groups' => []]);
 [, $datesSaved] = http_get("http://127.0.0.1:$portDates/?admin&folder=Trip", $datesAuth);
 check('[dates] once the dates field already holds the suggestion, the suggestion is not offered again', !str_contains($datesSaved, 'class="secondary date-suggest"'));
 

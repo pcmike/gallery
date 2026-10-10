@@ -3783,15 +3783,12 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
 /** The identity form — title, dates, description (and position, for a
  *  folder) — shared by a folder's settings and the gallery's own, so the root
  *  is configured the same way a folder is. */
-/** "Oct 3 – 9, 2026" style text for two timestamps (a single day when they fall on the same one). */
+/** "05/02/2026" for one day, "05/02/2026–05/09/2026" for a span (numeric and without spaces, so it stays on one line
+ *  on a cover card). */
 function format_date_range($min, $max) {
-    $parts = function ($t) { return ['year' => (int) gmdate('Y', $t), 'mon' => (int) gmdate('n', $t), 'mday' => (int) gmdate('j', $t)]; };
-    $a = $parts($min); $b = $parts($max);
-    $mon = function ($d) { return substr(gmdate('F', gmmktime(0, 0, 0, $d['mon'], 1, 2000)), 0, 3); };
-    if ($a['year'] === $b['year'] && $a['mon'] === $b['mon'] && $a['mday'] === $b['mday']) return $mon($a) . ' ' . $a['mday'] . ', ' . $a['year'];
-    if ($a['year'] === $b['year'] && $a['mon'] === $b['mon']) return $mon($a) . ' ' . $a['mday'] . "\u{2013}" . $b['mday'] . ', ' . $a['year'];
-    if ($a['year'] === $b['year']) return $mon($a) . ' ' . $a['mday'] . ' ' . "\u{2013}" . ' ' . $mon($b) . ' ' . $b['mday'] . ', ' . $a['year'];
-    return $mon($a) . ' ' . $a['mday'] . ', ' . $a['year'] . ' ' . "\u{2013}" . ' ' . $mon($b) . ' ' . $b['mday'] . ', ' . $b['year'];
+    $first = gmdate('m/d/Y', $min);
+    $last = gmdate('m/d/Y', $max);
+    return $first === $last ? $first : $first . "\u{2013}" . $last;
 }
 
 /**
@@ -3848,7 +3845,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         </div>
         <div class="field">
           <label>Dates (optional)</label>
-          <input type="text" name="dates" maxlength="80" placeholder="June 12&ndash;15, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
+          <input type="text" name="dates" maxlength="80" placeholder="06/12/2026&ndash;06/15/2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
           <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
             <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
               <button type="button" class="secondary date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
@@ -7464,7 +7461,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     font-weight: 600;
     font-size: 0.95rem;
   }
-  .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); }
+  .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .folder-dates { margin:2px 0 0; color:var(--muted); font-size:0.9rem; }
   .note-box.folder-description { white-space: pre-line; }
   /* A straight bar drawn inside the paragraph (a border curved whenever the paragraph was the target of a link). */
