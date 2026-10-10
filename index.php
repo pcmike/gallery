@@ -3371,23 +3371,25 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   /* Layout: a sticky bar, a folder tree beside the content, and sections
      you can jump to, so a long page is never a scroll hunt. */
   .admin-bar { position:sticky; top:0; z-index:20; background:rgba(15,15,16,0.94); backdrop-filter:blur(6px); border-bottom:1px solid #26262a; }
-  .admin-bar-inner { max-width:1180px; margin:0 auto; padding:10px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .admin-bar h1 { font-size:1.05rem; margin:0; }
-  .admin-bar .crumb { color:var(--muted); font-size:0.85rem; margin-right:auto; }
-  .admin-bar a.back { color:var(--muted); text-decoration:none; font-size:0.85rem; }
-  .admin-tabs-wrap { max-width:1180px; margin:0 auto; padding:0 16px; }
-  .admin-tabs { display:flex; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .admin-bar-inner { max-width:1180px; margin:0 auto; padding:0 16px; min-height:56px; display:flex; align-items:center; gap:14px; }
+  .admin-bar h1 { font-size:1.05rem; margin:0; white-space:nowrap; }
+  .admin-bar .crumb { color:var(--muted); font-size:0.85rem; margin-right:auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .admin-bar a.back { color:var(--muted); text-decoration:none; font-size:0.85rem; white-space:nowrap; }
+  .admin-bar .logout-form { margin:0; flex:none; }
+  .admin-tabs { display:flex; align-self:stretch; gap:2px; overflow-x:auto; scrollbar-width:none; flex:none; }
   .admin-tabs::-webkit-scrollbar { display:none; }
-  .admin-tabs a { color:var(--muted); text-decoration:none; font-size:0.9rem; padding:10px 16px; border-bottom:3px solid transparent; border-radius:8px 8px 0 0; white-space:nowrap; display:flex; align-items:center; gap:7px; }
+  .admin-tabs a { color:var(--muted); text-decoration:none; font-size:0.9rem; padding:0 14px; border-top:3px solid transparent; border-bottom:3px solid transparent; white-space:nowrap; display:flex; align-items:center; gap:7px; }
   .admin-tabs a:hover { color:var(--text); background:rgba(255,255,255,0.04); }
   .admin-tabs a.active { color:#fff; background:rgba(88,101,242,0.16); border-bottom-color:var(--accent); font-weight:600; }
-  .admin-tabs a .count { font-size:0.72rem; font-weight:600; background:rgba(255,255,255,0.09); color:var(--muted); padding:1px 7px; border-radius:10px; }
+  .admin-tabs a .count, .side-hidden .count { font-size:0.72rem; font-weight:600; background:rgba(255,255,255,0.09); color:var(--muted); padding:1px 7px; border-radius:10px; }
   .admin-tabs a.active .count { background:rgba(88,101,242,0.45); color:#fff; }
-  .admin-tabs a.tab-hidden { color:#ff7b7d; }
-  .admin-tabs a.tab-hidden .count { background:rgba(237,66,69,0.25); color:#ff9a9c; }
-  .admin-tabs a.tab-hidden:hover { background:rgba(237,66,69,0.08); }
-  .admin-tabs a.tab-hidden.active { color:#fff; background:rgba(237,66,69,0.2); border-bottom-color:var(--err); }
-  .admin-tabs a.tab-hidden.active .count { background:rgba(237,66,69,0.6); color:#fff; }
+  /* Hidden is about the whole tree, not the folder being edited, so it
+     lives with the places in the sidebar, above Root, in red. */
+  .side-hidden { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 0 10px; padding:6px 10px 6px 12px; border-radius:6px; font-size:0.85rem; color:#ff7b7d; text-decoration:none; background:rgba(237,66,69,0.08); border:1px solid rgba(237,66,69,0.25); }
+  .side-hidden .count { background:rgba(237,66,69,0.25); color:#ff9a9c; }
+  .side-hidden:hover { background:rgba(237,66,69,0.14); }
+  .side-hidden.active { color:#fff; background:rgba(237,66,69,0.3); border-color:var(--err); }
+  .side-hidden.active .count { background:rgba(237,66,69,0.7); color:#fff; }
   .js-tabs .tab-panel { display:none; }
   .js-tabs .tab-panel.active { display:block; }
   .tab-panel > .panel + .panel, .tab-panel > .flash + .panel { margin-top:0; }
@@ -3396,7 +3398,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .hidden-list a { color:#8ab4ff; }
   .item-card.flash-target { outline:2px solid var(--accent); outline-offset:2px; transition:outline-color 1.5s; }
   .admin-layout { max-width:1180px; margin:0 auto; padding:18px 16px 64px; display:grid; grid-template-columns:210px minmax(0,1fr); gap:22px; align-items:start; }
-  .admin-side { position:sticky; top:118px; max-height:calc(100vh - 136px); overflow-y:auto; }
+  .admin-side { position:sticky; top:76px; max-height:calc(100vh - 92px); overflow-y:auto; }
   .admin-folders > summary { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; cursor:pointer; list-style:none; }
   .admin-folders > summary::-webkit-details-marker { display:none; }
   .admin-folders > summary .here { text-transform:none; letter-spacing:0; display:none; color:var(--text); }
@@ -3405,7 +3407,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-folder-nav a:hover { color:var(--text); background:var(--card); }
   .admin-folder-nav a.current { color:var(--text); background:var(--accent); }
   .admin-main { min-width:0; }
-  .admin-main section, .admin-main details.panel { scroll-margin-top:124px; }
+  .admin-main section, .admin-main details.panel { scroll-margin-top:84px; }
   .admin-main h2.section-title { font-size:1.05rem; margin:0 0 12px; }
   .admin-main details.panel > summary { cursor:pointer; font-weight:600; font-size:1.05rem; list-style:none; display:flex; align-items:center; gap:10px; }
   .admin-main details.panel > summary::-webkit-details-marker { display:none; }
@@ -3422,8 +3424,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .privacy-row { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
   .privacy-row form { margin:0; }
   .hidden-warning { font-size:0.9rem; line-height:1.55; }
+  @media (max-width: 960px) {
+    .admin-bar-inner { flex-wrap:wrap; gap:0 10px; padding:8px 12px 0; }
+    .admin-bar .crumb { flex:1 1 0; }
+    .admin-tabs { order:5; flex-basis:100%; align-self:auto; margin-top:6px; }
+    .admin-tabs a { padding:10px 12px; }
+    .admin-side { top:112px; max-height:calc(100vh - 128px); }
+    .admin-main section, .admin-main details.panel { scroll-margin-top:116px; }
+  }
   @media (max-width: 800px) {
-    .admin-bar-inner { gap:6px 10px; padding:8px 12px; }
     .admin-folders > summary { background:var(--card); padding:9px 12px; border-radius:8px; font-size:0.85rem; text-transform:none; letter-spacing:0; color:var(--muted); margin:0; }
     .admin-folders > summary::before { content:"\25B8  "; }
     .admin-folders[open] > summary::before { content:"\25BE  "; }
@@ -3431,7 +3440,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .admin-folders[open] > summary { margin-bottom:6px; }
     .admin-layout { grid-template-columns:1fr; gap:12px; }
     .admin-side { position:static; max-height:none; }
-    .admin-tabs a { padding:9px 12px; }
     .admin-folder-nav { max-height:220px; overflow-y:auto; }
     .settings-grid { grid-template-columns:1fr; }
   }
@@ -3492,24 +3500,24 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <a class="back" href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; Gallery</a>
     <h1>Gallery Admin</h1>
     <span class="crumb">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span>
-    <form method="post" style="margin:0;">
-      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-      <input type="hidden" name="action" value="logout">
-      <button type="submit" class="secondary">Log out</button>
-    </form>
-  </div>
-  <div class="admin-tabs-wrap">
     <nav class="admin-tabs" role="tablist" aria-label="Sections">
-      <?php if ($adminHidden): ?><a href="#hidden" role="tab" data-tab="hidden" class="tab-hidden">Hidden <span class="count"><?= count($adminHidden['folders']) + count($adminHidden['items']) ?></span></a><?php endif; ?>
       <a href="#photos" role="tab" data-tab="photos">Photos <span class="count"><?= count($adminFiles) ?></span></a>
       <a href="#settings" role="tab" data-tab="settings"><?= $adminFolderPath !== null ? 'Folder settings' : 'Settings' ?></a>
       <a href="#notes" role="tab" data-tab="notes">Notes <span class="count"><?= count($mdCandidates) ?></span></a>
       <a href="#export" role="tab" data-tab="export">Export</a>
     </nav>
+    <form method="post" class="logout-form">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="logout">
+      <button type="submit" class="secondary">Log out</button>
+    </form>
   </div>
 </header>
 <div class="admin-layout">
 <aside class="admin-side">
+  <?php if ($adminHidden): ?>
+    <a href="#hidden" data-tab="hidden" class="side-hidden">Hidden <span class="count"><?= count($adminHidden['folders']) + count($adminHidden['items']) ?></span></a>
+  <?php endif; ?>
   <details class="admin-folders" open>
     <summary>Folders <span class="here">&middot; <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span></summary>
     <?= render_admin_folder_nav($files, $adminFolderPath) ?: '<p class="muted">No subfolders.</p>' ?>
@@ -3542,7 +3550,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     </div>
   <?php endif; ?>
 
-  <h2 class="section-title" id="photos" style="margin-top:0; scroll-margin-top:120px;">Photos &amp; video <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
+  <h2 class="section-title" id="photos" style="margin-top:0; scroll-margin-top:84px;">Photos &amp; video <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
   <div class="grid">
     <?php foreach ($adminFiles as $file): $bare = basename($file);
       $entry = $itemsHere['items'][$bare] ?? [];
@@ -3847,7 +3855,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   (function () {
     var main = document.querySelector('.admin-main');
     if (!main) return;
-    var tabs = [].slice.call(document.querySelectorAll('.admin-tabs a[data-tab]'));
+    var tabs = [].slice.call(document.querySelectorAll('.admin-tabs a[data-tab], .side-hidden[data-tab]'));
     var panels = [].slice.call(document.querySelectorAll('.tab-panel'));
     var names = tabs.map(function (t) { return t.getAttribute('data-tab'); });
     var KEY = 'galleryAdminTab';
@@ -3859,7 +3867,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         t.classList.toggle('active', on);
         t.setAttribute('aria-selected', on ? 'true' : 'false');
       });
-      try { sessionStorage.setItem(KEY, name); } catch (e) {}
+      // "Hidden" is a look at the whole tree, not a section of a folder:
+      // moving to another folder shouldn't land you back on it.
+      if (name !== 'hidden') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
     function focusCard(id) {
