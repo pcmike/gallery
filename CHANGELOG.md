@@ -2,6 +2,49 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.0] - 2026-10-10
+
+A large release, built and tested in phases on one branch and shipped as one version. **Everything new is off by default, behind its own constant** — a deployment that changes nothing but the file behaves like 1.1.1, with the one exception below.
+
+### Breaking changes
+- **`?download` no longer serves the script.** It now redirects (302) to the GitHub repository. It used to `readfile()` the running `index.php` to anyone who asked; once `ADMIN_PASSWORD` lives in that same file, that would have handed the password to any visitor, and scrubbing secrets out of the output is a fix that has to be remembered forever. Removing the endpoint closes the whole class at once. An old bookmarked link lands on the repository rather than a dead end. `?about`'s download button now points at GitHub too.
+
+### Added — folders
+- **Nested folders, to any depth** (`AUTO_GROUP_BY_FOLDER`, off by default). A root like `/trip` with `Europe/France/Paris` underneath shows each subfolder as its own group. With `FOLDER_DISPLAY_MODE = 'overview'` (the default) each level shows one **cover card per subfolder** — a highlight photo, a label and a *recursive* photo count — plus any photos loose at that level, and clicking a card opens `?folder=Europe/France` and repeats. `'inline'` instead shows every folder's photos in one box, for people who use folders only to stay organized. A breadcrumb links through every ancestor.
+- `?folder=` is validated against the script's own file list, never trusted: `../`, leading/trailing slashes, a file path, an empty value, a nonexistent folder, and a hidden folder all return 404. Symlinked subfolders are refused outright.
+- `EXTRA_FOLDERS`: an explicit, admin-written map of virtual folder names to real paths (for archiving an old trip on another disk) — declared in code you control, so no symlink is involved.
+- Per-folder **display name, description, a typed date-range subtitle, a chosen cover photo, and a position among sibling folders**, all editable in `?admin`. Stored inside the folder they describe, so they survive a real rename. The date range is deliberately never derived from EXIF: that would publish when you were away from home.
+- A folder may carry its own `{gallery}`-marked `.md`, becoming a note box on that folder's page, scoped to that folder's photos only.
+- A `.md` mention of a folder links to its `?folder=` page in overview mode.
+- Stats, the thumbnail cache and per-item data are **colocated in each folder**, so two cameras' `IMG_0001.jpg` in different folders never collide, and a real folder rename carries its data along.
+- A **"Last updated"** date in the header, derived from the newest file modification time across photos and notes — not a separately maintained marker, so it also reflects files uploaded by FTP.
+- A setup notice when photos exist in subfolders but `AUTO_GROUP_BY_FOLDER` is off, so a first-time owner isn't left with a silently sparse gallery.
+
+### Added — video
+- `ENABLE_VIDEO`: `.mov` and `.mp4` are served as gallery items. No transcoding, no frame extraction. Tiles and share previews use one generic placeholder graphic; the lightbox plays the clip in a native `<video>`. Seeking works: real HTTP `Range` support (`206`, `416` past the end, malformed ranges ignored). A **duration badge** is read straight from the container's `mvhd` box.
+
+### Added — captions, location, and the admin editor
+- **Per-item captions, a web link, and a location**, one per photo or video. The lightbox shows the caption (or just a position counter) — **it no longer prints the raw filename.** Grid badges (caption, location, link) sit along the bottom edge.
+- **`ENABLE_PHOTO_LOCATION`** (off by default) is the first of three gates: also needed are a per-folder switch and a per-photo setting (inherit / always show / always hide), all closed by default. GPS is auto-filled from EXIF for JPEG and HEIC where present; coordinates are validated before they reach any URL.
+- **`?admin`** (`ADMIN_PASSWORD`, empty = the code path doesn't exist): HTTP Basic Auth compared with `hash_equals()`, refused over plain HTTP except on localhost (with a page explaining why), CSRF-protected saves, a 4-hour session, and a failed-login throttle (5 failures in 15 minutes imposes a 60-second delay). Usable from a phone. It edits every item's caption/link/location, folder settings, every `.md` in the folder (raw text, saved byte-for-byte; **Save**, **Save As** and **Delete** are separate, confirmed actions; a one-click fix for a missing `{gallery}` marker), and exports `.gallery-items.json` for a folder or the whole tree. Stale entries for deleted photos are cleaned up and reported.
+
+### Added — hiding items, and Private view
+- A **hide flag** per item and per folder (at any depth) in the admin. A hidden item is removed from the page, counts, lightbox list and every endpoint (`?img=`, `?photo=`, `?track=`, `?folder=`, `?video=`) for an unrevealed visitor — not merely styled invisible. A group whose members are all hidden disappears rather than showing "0 photos". Each item can also be forced *public* inside a hidden folder.
+- **`PRIVATE_VIEW_PASSWORD`** and a discreet "Private view" footer link (`?reveal`): a password, deliberately not a secret link, since links pasted into chat get crawled. Same HTTPS requirement and throttle as the admin. A valid admin login counts as revealed too.
+- An admin **"Hidden items"** summary across the whole tree in three tiers, and a persistent warning that hiding doesn't stop someone who already knows a file's URL unless the web server is locked down.
+- **`NGINX_ACCEL_REDIRECT_PREFIX`** hands matching files to nginx via `X-Accel-Redirect`, so an nginx `internal` rule can make the bare file URLs unreachable. See the README for the nginx and Apache setups.
+
+### Added — trip map
+- **`ENABLE_MAP`** (off by default): every visible, located photo on one Leaflet + OpenStreetMap map, at its own shareable **`?map`** URL with a condensed preview on the gallery root. Photos within `MAP_CLUSTER_RADIUS_MILES` (default 50) merge into one numbered pin that zooms in when clicked; pins are colored per top-level folder with a legend; a pin opens a popup (thumbnail, label, link) rather than navigating. Hidden items are never plotted. `?map` has its own Open Graph tags and a generic map-pin preview image. **This is the first feature that makes third-party requests** (Leaflet from cdnjs, tiles from OpenStreetMap), which is why it is opt-in.
+
+### Added — other
+- `SHOW_VIEW_COUNTS_PUBLICLY` (default `true`): track views for yourself while hiding the public badges.
+- View counts are debounced per browser (30 minutes, per photo), so reloading a photo no longer inflates it. A debounced request still returns the current total.
+
+### Notes
+- The original photo files are served untouched, so **embedded EXIF GPS in the full-size image is not stripped** — the location gates control what the gallery shows, not what a saved original contains. See the README.
+- `tests/run.php` now has 285 checks. It also no longer leaks processes: each run used to orphan its `php -S` servers (~350 MB for ten), which accumulated over a long session and exhausted a small host — and it no longer follows directory symlinks when cleaning up its fixtures.
+
 ## [1.1.1] - 2026-09-07
 
 ### Fixed

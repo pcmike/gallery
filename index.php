@@ -1,12 +1,13 @@
 <?php
 /**
- * DROP-IN PHOTO GALLERY — v1.1.1
+ * DROP-IN PHOTO GALLERY — v2.0.0
  * Single PHP file, no dependencies, no build step. Drop into any folder
  * of photos and it renders a gallery for that folder.
  *
- * Full documentation (grouping, Markdown notes, {color}/{sold}/{reserved}/
- * {group}/{photos} directives, view stats, deep linking, image caching,
- * etc.) lives in the repo's README: github.com/pcmike/gallery. The
+ * Full documentation (grouping, nested folders, video, captions and
+ * locations, the admin editor, hiding items, the trip map, Markdown
+ * notes, {color}/{sold}/{reserved}/{group}/{photos} directives, view
+ * stats, deep linking, image caching, etc.) lives in the repo's README: github.com/pcmike/gallery. The
  * "?about" page this script serves itself (open any deployed gallery and
  * click "about" in the footer, or visit "?about" directly) is a short
  * in-app pitch that links to the GitHub repo, including a "Get it on
@@ -41,7 +42,7 @@
  */
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '1.1.1');
+define('GALLERY_VERSION', '2.0.0');
 
 // Turn photo/group/page view tracking on or off. Off by default — this
 // script writes nothing to the folder's disk unless you turn something
@@ -4357,7 +4358,7 @@ function render_about_page() {
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $aboutUrl = htmlspecialchars(current_base_url() . '/?about', ENT_QUOTES, 'UTF-8');
     $repoUrl = 'https://github.com/pcmike/gallery';
-    $aboutDescription = 'A single-file, drop-in PHP photo gallery with Markdown notes, sold/reserved markers, view stats, and deep links.';
+    $aboutDescription = 'A single-file, drop-in PHP photo gallery for trips and listings: nested folders, video, captions, a map, Markdown notes, view stats, and deep links.';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -4428,6 +4429,7 @@ function render_about_page() {
     <li>Live view stats and thumbnail caching — both opt-in, so nothing is written to your folder unless you turn them on</li>
     <li>HEIC/HEIF (iPhone photo) support once thumbnail caching is enabled</li>
     <li>Deep links (<code>?photo=</code>, <code>#group-name</code>, <code>#item-name</code>) with correct Open Graph previews when shared</li>
+    <li>For trips: nested folders to any depth, video, per-photo captions and locations, an owner-only admin editor, items you can hide from the public link, and a map &mdash; each one opt-in</li>
   </ul>
 
   <h2>Full documentation &amp; source</h2>
