@@ -1232,6 +1232,12 @@ http_post("$baseAdmin/?admin", [
     'action' => 'save_notes', 'md_file' => 'newnotes.md', 'new_name' => '', 'content' => "{gallery}\nUpdated content.\n", 'csrf_token' => $csrf,
 ], [$authHeader, "Cookie: $sessionCookie"]);
 check('overwriting an existing notes file replaces its content exactly', trim((string) file_get_contents("$fxAdmin/newnotes.md")) === trim("{gallery}\nUpdated content."));
+[, $editorPage] = http_get("$baseAdmin/?admin", [$authHeader, "Cookie: $sessionCookie"]);
+preg_match('#<textarea name="content" class="adm-textarea">(.*?)</textarea>#s', substr($editorPage, (int) strpos($editorPage, 'newnotes.md')), $editorTa);
+check('[notes editor] an active notes file is shown exactly as stored, {gallery} line included (hiding it made every save switch the note off)', str_starts_with(html_entity_decode($editorTa[1] ?? ''), "{gallery}\nUpdated content."));
+[, $savedNoMarker] = http_post("$baseAdmin/?admin", ['action' => 'save_notes', 'md_file' => 'newnotes.md', 'new_name' => '', 'content' => "Updated again.\n", 'csrf_token' => $csrf], [$authHeader, "Cookie: $sessionCookie"]);
+check('[notes editor] saving text with no {gallery} first line says the file is not active', str_contains($savedNoMarker, 'not active'));
+http_post("$baseAdmin/?admin", ['action' => 'save_notes', 'md_file' => 'newnotes.md', 'new_name' => '', 'content' => "{gallery}\nUpdated content.\n", 'csrf_token' => $csrf], [$authHeader, "Cookie: $sessionCookie"]);
 http_post("$baseAdmin/?admin", [
     'action' => 'delete_notes', 'md_file' => 'newnotes.md', 'csrf_token' => $csrf,
 ], [$authHeader, "Cookie: $sessionCookie"]);
@@ -1826,10 +1832,17 @@ $portFN = find_free_port(); start_server($fxFN, $portFN);
 [, $fnParis] = http_get("http://127.0.0.1:$portFN/?folder=Paris");
 check('[folder notes] a top-level {photos:} that names a photo inside a folder says so, instead of calling the file unknown', str_contains($fnRoot, 'Paris/eiffel.jpg&quot; is inside a folder') && !str_contains($fnRoot, 'Unknown file'));
 check('[folder notes] ...and a {photos:} on a loose top-level photo still works (a labelled box)', str_contains($fnRoot, 'id="group-top-box"') && str_contains($fnRoot, '>Top Box'));
-check('[folder notes] a {photos:} in a folder\'s own notes raises a notice on that folder\'s page, which is shown once', substr_count($fnParis, '{photos:} is only read in the gallery&#039;s top-level notes') >= 1 && str_contains($fnParis, 'setup notice'));
-check('[folder notes] ...and the photo is still shown, as a plain card', str_contains($fnParis, 'id="group-eiffel"') && !str_contains($fnParis, 'Landmarks'));
+check('[folder notes] a {photos:} + {group:} in a folder\'s own notes work like the top level: a labelled box, the thumbnails under the paragraph, no notice', str_contains($fnParis, 'id="group-landmarks"') && str_contains($fnParis, '>Landmarks') && str_contains($fnParis, 'id="item-landmarks"') && !str_contains($fnParis, 'setup notice'));
 [, $fnParisClean] = (function () use ($fxFN, $portFN) { file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nSeen the eiffel yet? {sold}\n"); usleep(300000); return http_get("http://127.0.0.1:$portFN/?folder=Paris"); })();
 check('[folder notes] a folder note that just mentions a photo raises no notice and marks it sold', !str_contains($fnParisClean, 'setup notice') && str_contains($fnParisClean, 'sold-badge-corner'));
+file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nNice view {photos: eiffel.jpg} {color: gold}\n");
+usleep(300000);
+[, $fnParisPlain] = http_get("http://127.0.0.1:$portFN/?folder=Paris");
+check('[folder notes] a bare {photos:} in a folder note keeps the photo as its own card and colours it', (bool) preg_match('/<div class="card" id="group-eiffel-jpg" style="box-shadow: 0 0 0 3px gold inset;"/', $fnParisPlain));
+file_put_contents("$fxFN/n.md", "{gallery}\n\nThe Paris leg {sold}\n\nTop {photos: top.jpg} {group: Top Box}\n");
+usleep(300000);
+[, $fnRoot2] = http_get("http://127.0.0.1:$portFN/");
+check('[folder notes] a paragraph that mentions a folder marks its cover card sold (ribbon and class)', (bool) preg_match('/<div class="folder-cover sold" id="group-paris"[^>]*>\s*<a class="folder-cover-link"[^>]*><span class="sold-badge-corner">SOLD<\/span>/', $fnRoot2));
 
 check('[notes reference] each of the five directives is explained in full next to its insert button', str_contains($ref, 'data-snippet="{group: Name}"') && str_contains($ref, 'data-snippet="{photos: a.jpg, b.jpg}"') && str_contains($ref, 'data-snippet="{color: #ff0000}"') && str_contains($ref, 'data-snippet="{sold}"') && str_contains($ref, 'data-snippet="{reserved}"') && str_contains($ref, "whatever they're called") && str_contains($ref, 'red SOLD ribbon') && str_contains($ref, 'orange tag') && str_contains($ref, '{held}'));
 check('[notes reference] it explains the formatting that really works (bold, italic, underline, strikethrough, code, links, lists, quotes, code blocks) and that HTML is never run', str_contains($ref, '**bold**') && str_contains($ref, '__underline__') && str_contains($ref, '~~strikethrough~~') && str_contains($ref, '[words](https://example.com)') && str_contains($ref, '&gt; a quote') && str_contains($ref, 'never run'));
