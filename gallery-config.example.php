@@ -32,7 +32,7 @@
 
     // --- Locations and the map ---------------------------------------------
     // "ENABLE_PHOTO_LOCATION": true,       // default false: allow photo locations to be shown (per-folder switch in the admin)
-    // "ENABLE_MAP": true,                  // default false: the trip map (loads Leaflet and OpenStreetMap tiles)
+    // "ENABLE_MAP": true,                  // default false: the maps (load Leaflet and OpenStreetMap tiles)
     // "MAP_CLUSTER_RADIUS_MILES": 50,      // how close photos must be to share one pin
 
     // --- Passwords ---------------------------------------------------------

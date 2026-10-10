@@ -5,7 +5,7 @@
  * of photos and it renders a gallery for that folder.
  *
  * Full documentation (grouping, nested folders, video, captions and
- * locations, the admin editor, hiding items, the trip map, Markdown
+ * locations, the admin editor, hiding items, the maps, Markdown
  * notes, {color}/{sold}/{reserved}/{group}/{photos} directives, view
  * stats, deep linking, image caching, etc.) lives in the repo's README: github.com/pcmike/gallery. The
  * "?about" page this script serves itself (open any deployed gallery and
@@ -7026,9 +7026,9 @@ $renderClaims = [];
 // so its preview can point at that specific photo and mention its group.
 $baseUrl = current_base_url();
 
-// The trip map's data — computed once here, reused both by ?map's own
-// dedicated page below and the condensed preview embedded on the
-// gallery root (see the main template further down). Once $files/
+// The map's data — computed once here, reused both by a ?map link
+// (the page with the overlay open) and the page's own map buttons
+// (see the main template further down). Once $files/
 // $itemsData/$fileToGroupKey/$folderGroupKeys/$groupLabels all reflect
 // their final, hiding-filtered, admin-named state. A {group:} directive
 // in a .md could still rename a group after this point (during notes

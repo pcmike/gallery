@@ -20,7 +20,7 @@ Shipping available anywhere, buyer covers insurance.
 
 Two ways to put several photos under one item — pick whichever fits your files.
 
-**Filename-based (what this example uses):** turn on `AUTO_GROUP_BY_FILENAME` in `index.php`, then name your photos so each item's filename prefix is a word that appears in that item's paragraph:
+**Filename-based (what this example uses):** turn on **Group photos by filename** (Site settings in the admin, or `AUTO_GROUP_BY_FILENAME` in the settings file), then name your photos so each item's filename prefix is a word that appears in that item's paragraph:
 
 ```
 alpha_01.jpg, alpha_02.jpg    -> attach to (1), because "Alpha" is in its text
@@ -28,7 +28,7 @@ bravo_01.jpg                  -> attaches to (2), because "Bravo" is in its text
 charlie_01.jpg, charlie_02.jpg -> attach to (3), because "Charlie" is in its text
 ```
 
-The match is a plain, case-insensitive, whole-word search — no special tagging needed. The word has to be the *whole* filename prefix, exactly: a paragraph that says "Widget Model A" would **not** match `widgeta_01.jpg`; it would need the word `widgeta` in it. `AUTO_GROUP_BY_FILENAME` is off by default, since it can falsely merge unrelated photos in a folder with no naming convention (see the README) — it's worth turning on specifically because this example relies on it.
+The match is a plain, case-insensitive, whole-word search — no special tagging needed. The word has to be the *whole* filename prefix, exactly: a paragraph that says "Widget Model A" would **not** match `widgeta_01.jpg`; it would need the word `widgeta` in it. That setting is off by default, since it can falsely merge unrelated photos in a folder with no naming convention (see the README) — it's worth turning on specifically because this example relies on it.
 
 **Explicit (works with any filenames, no convention needed):** add `{group: Name}` and `{photos: a.jpg, b.jpg, ...}` directives instead, e.g. replacing item (1)'s price line with:
 

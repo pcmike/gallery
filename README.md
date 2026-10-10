@@ -6,7 +6,7 @@ Built for sharing "for sale" listings (Reddit, Discord, etc.) as much as for pla
 
 **Everything beyond the basic gallery is opt-in.** With no settings changed, this script writes only small thumbnails into a `.gallery-cache` folder (nothing else), makes no requests to any third party, and doesn't show a single subfolder, video, or photo location. (It does peek into subfolders, read-only and capped at 40 of them, purely to warn you if photos in there are being skipped — see [Folders](#folders).)
 
-**Contents:** [Quick start](#quick-start) · [Recipes](#recipes--start-here) · [What affects what](#what-affects-what) · [Features](#features) · [Troubleshooting](#troubleshooting) · [Configuration](#configuration) · [Directive syntax](#directive-syntax) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [The admin editor](#the-admin-editor) · [Hiding items and private view](#hiding-items-and-private-view) · [Locking down the files themselves](#locking-down-the-files-themselves) · [The trip map](#the-trip-map) · [Sharing and previews](#sharing-and-previews) · [Security notes](#security-notes) · [Keeping runtime data out of git](#keeping-runtime-data-out-of-git) · [Upgrading to 2.0](#upgrading-to-20)
+**Contents:** [Quick start](#quick-start) · [Recipes](#recipes--start-here) · [What affects what](#what-affects-what) · [Features](#features) · [Troubleshooting](#troubleshooting) · [Configuration](#configuration) · [Directive syntax](#directive-syntax) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [The admin editor](#the-admin-editor) · [Hiding items and private view](#hiding-items-and-private-view) · [Locking down the files themselves](#locking-down-the-files-themselves) · [The maps](#the-maps) · [Sharing and previews](#sharing-and-previews) · [Security notes](#security-notes) · [Keeping runtime data out of git](#keeping-runtime-data-out-of-git) · [Upgrading to 2.0](#upgrading-to-20)
 
 ## Quick start
 
@@ -198,7 +198,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 - Two ways to group photos, independent of each other:
   - **Auto-grouping** by filename (`dp104_01.jpg`, `dp104_02.jpg` → grouped under "dp104") — off by default, turn on with `AUTO_GROUP_BY_FILENAME` if your photos actually use that naming convention. Only strips a trailing `_01`/`-02` suffix when there's an explicit separator before the digits, so `iphone-15.jpg` groups as "iphone" but `iphone15.jpg` keeps its full name.
   - **Explicit groups** via `{group: Name}` + `{photos: a.jpg, b.jpg}` in a `.md` file — works regardless of filename, for a folder of photos with no naming convention at all. See [Directive syntax](#directive-syntax).
-- Full-screen lightbox: keyboard nav, mobile swipe gestures (left/right/down)
+- Full-screen viewer: keyboard arrows and phone swipe (left/right/down), staying inside the folder of the photo you opened; the caption, the photo's web link, and (with the map on) a small map of where it was taken
 - **Layout is two zones**: every group box (auto-detected or explicit) always renders first, stacked as full-width rows; every standalone single and unboxed `{photos:}` cluster follows below, as one continuous grid. A box is a full-width grid item, so this guarantees the wall of singles below it always starts on a fresh row instead of a box interrupting a partially-filled one.
 - **Ordering within each zone**: an item with prose (a classic mention, or a directive whose paragraph has other text) sorts earliest-first, by where that text sits in the `.md` — mirroring the order a reader encounters the descriptions. An item with no prose (a textless directive, or anything never mentioned/claimed) falls back to natural order (`PHOTO_SORT_ORDER`) instead of jumping the queue just because its directive happens to sit early in the file.
 - For a textless multi-file group/cluster, its position is anchored on whichever file is listed **first** in its `{photos:}` directive — not its lowest-sorting member — with the rest of its files following immediately after, in the exact order listed. Directives are never silently re-sorted.
@@ -230,7 +230,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 - [Per-photo captions, web links, and locations](#captions-and-locations), shown as small badges and in the lightbox
 - An owner-only [admin editor](#the-admin-editor) for all of that, plus your notes `.md` files — usable from a phone
 - [Hiding items](#hiding-items-and-private-view) from the public link, with a separate viewer password
-- A [trip map](#the-trip-map) of everything that has a location
+- [Maps](#the-maps): a page map (closed until a visitor opens it) and a small map in the photo viewer, both only when you turn them on
 
 ## Troubleshooting
 
@@ -313,7 +313,7 @@ define('PRIVATE_VIEW_PASSWORD', '');
 // down the files themselves".
 define('NGINX_ACCEL_REDIRECT_PREFIX', '');
 
-// Off by default. The trip map loads Leaflet (from cdnjs) and map tiles
+// Off by default. The maps load Leaflet (from cdnjs) and map tiles
 // (from OpenStreetMap) — the only feature that contacts a third party.
 define('ENABLE_MAP', false);
 
@@ -354,7 +354,7 @@ The sidebar's **Site settings** shows every setting that is safe to change from 
 
 - **What is shown:** subfolders, folder style, videos, grouping by filename, photo order.
 - **Thumbnails and counting:** thumbnails, counting views, showing counts to visitors.
-- **Locations and the map:** allowing photo locations, the trip map, how close photos must be to share a pin.
+- **Locations and the map:** allowing photo locations, the map, how close photos must be to share a pin.
 - **Passwords:** change the admin password (typed twice, at least 12 characters; you stay signed in) and set or remove the private-view password, each with its own button beside the fields. Neither password is ever shown back to you.
 
 How it behaves:
@@ -570,7 +570,7 @@ Tested on Apache 2.4.68 + PHP-FPM: with no `.htaccess` at all the form login wor
 
 Neither renames your files. That would change files you own, which this project doesn't do.
 
-## The trip map
+## The maps
 
 Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actually has a visible location) and two maps become available. Neither is in the way: **the page map starts closed**, behind a small *Show map* button (its choice is remembered per browser), and **the little map in the photo viewer** shows only for a photo that has a visible location.
 
