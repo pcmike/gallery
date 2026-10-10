@@ -3393,9 +3393,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-jump a:hover { color:var(--text); background:var(--card); }
   .admin-layout { max-width:1180px; margin:0 auto; padding:18px 16px 64px; display:grid; grid-template-columns:210px minmax(0,1fr); gap:22px; align-items:start; }
   .admin-side { position:sticky; top:62px; max-height:calc(100vh - 80px); overflow-y:auto; }
-  .admin-side h2 { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; }
+  .admin-folders > summary { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; cursor:pointer; list-style:none; }
+  .admin-folders > summary::-webkit-details-marker { display:none; }
+  .admin-folders > summary .here { text-transform:none; letter-spacing:0; display:none; color:var(--text); }
   .admin-folder-nav { display:flex; flex-direction:column; gap:1px; }
-  .admin-folder-nav a { color:var(--muted); text-decoration:none; padding:5px 10px 5px 12px; border-radius:6px; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .admin-folder-nav a { flex:none; color:var(--muted); text-decoration:none; padding:5px 10px 5px 12px; border-radius:6px; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .admin-folder-nav a:hover { color:var(--text); background:var(--card); }
   .admin-folder-nav a.current { color:var(--text); background:var(--accent); }
   .admin-main { min-width:0; }
@@ -3410,6 +3412,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   details.subtle { margin-top:10px; }
   details.subtle > summary { cursor:pointer; color:var(--muted); font-size:0.85rem; }
   .hint { color:var(--muted); font-size:0.75rem; margin:3px 0 0; }
+  h3.subhead { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:18px 0 8px; font-weight:600; }
   .settings-grid { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px 14px; }
   .settings-grid .wide { grid-column:1 / -1; }
   .privacy-row { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
@@ -3418,6 +3421,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .hidden-warning details { margin-top:6px; }
   .hidden-warning summary { cursor:pointer; opacity:0.9; }
   @media (max-width: 800px) {
+    .admin-bar-inner { gap:6px 10px; padding:8px 12px; }
+    .admin-jump { order:5; flex-basis:100%; }
+    .admin-folders > summary { background:var(--card); padding:9px 12px; border-radius:8px; font-size:0.85rem; text-transform:none; letter-spacing:0; color:var(--muted); margin:0; }
+    .admin-folders > summary::before { content:"\25B8  "; }
+    .admin-folders[open] > summary::before { content:"\25BE  "; }
+    .admin-folders > summary .here { display:inline; }
+    .admin-folders[open] > summary { margin-bottom:6px; }
     .admin-layout { grid-template-columns:1fr; gap:12px; }
     .admin-side { position:static; max-height:none; }
     .admin-folder-nav { max-height:220px; overflow-y:auto; }
@@ -3475,24 +3485,43 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </style>
 </head>
 <body>
-<div class="wrap">
-  <form method="post" style="float:right; margin:0;">
-    <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-    <input type="hidden" name="action" value="logout">
-    <button type="submit" class="secondary">Log out</button>
-  </form>
-  <a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>" class="muted">&larr; Back to gallery</a>
-  <h1>Gallery Admin</h1>
-  <p class="muted">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></p>
+<header class="admin-bar">
+  <div class="admin-bar-inner">
+    <a class="back" href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; Gallery</a>
+    <h1>Gallery Admin</h1>
+    <span class="crumb">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span>
+    <nav class="admin-jump" aria-label="Sections">
+      <a href="#settings"><?= $adminFolderPath !== null ? 'Folder settings' : 'Settings' ?></a>
+      <a href="#notes">Notes</a>
+      <a href="#photos">Photos</a>
+      <a href="#export">Export</a>
+    </nav>
+    <form method="post" style="margin:0;">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="logout">
+      <button type="submit" class="secondary">Log out</button>
+    </form>
+  </div>
+</header>
+<div class="admin-layout">
+<aside class="admin-side">
+  <details class="admin-folders" open>
+    <summary>Folders <span class="here">&middot; <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span></summary>
+    <?= render_admin_folder_nav($files, $adminFolderPath) ?: '<p class="muted">No subfolders.</p>' ?>
+  </details>
+</aside>
+<main class="admin-main">
   <?php if (TRACK_VIEWS): ?>
-    <p class="muted">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> page loads in total. Per-photo counts are listed under each photo below. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
+    <p class="muted" style="margin-top:0;">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> page loads in total. Per-photo counts are listed under each photo below. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
   <?php endif; ?>
-  <?= render_admin_folder_nav($files, $adminFolderPath) ?>
 
   <?php if (admin_any_hidden($dir, $files, $folderGroupKeys)): ?>
-    <div class="flash error">
-      <strong>Hidden items exist.</strong> Hiding only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level (see the README for the nginx/<code>X-Accel-Redirect</code> or Apache <code>.htaccess</code> setup). This warning reappears every time this screen loads — it isn't a one-time check.
-      <a href="?admin&hidden=1">Review hidden items &rarr;</a>
+    <div class="flash error hidden-warning">
+      <strong>Hidden items exist.</strong> <a href="?admin&hidden=1">Review hidden items &rarr;</a>
+      <details>
+        <summary>Why this isn't a lock</summary>
+        Hiding only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level (see the README for the nginx/<code>X-Accel-Redirect</code> or Apache <code>.htaccess</code> setup). This warning reappears every time this screen loads — it isn't a one-time check.
+      </details>
     </div>
   <?php endif; ?>
 
@@ -3501,47 +3530,57 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <?php endif; ?>
 
   <?php if ($adminFolderPath !== null): ?>
-  <div class="panel">
-    <h2 style="margin-top:0;">This folder's own settings</h2>
+  <section class="panel" id="settings">
+    <h2 class="section-title">This folder's own settings</h2>
     <form method="post">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="save_folder_identity">
       <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
-      <div class="field">
-        <label>Display name (shown on its cover card instead of "<?= htmlspecialchars(basename($adminFolderPath), ENT_QUOTES, 'UTF-8') ?>")</label>
-        <input type="text" name="display_name" value="<?= htmlspecialchars($itemsHere['displayName'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-      </div>
-      <div class="field">
-        <label>Dates (optional subtitle, typed by you — never read from the photos' EXIF, so it never reveals when you were away unless you say so)</label>
-        <input type="text" name="dates" maxlength="80" placeholder="June 12&ndash;15, 2026" value="<?= htmlspecialchars($itemsHere['dates'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-      </div>
-      <div class="field">
-        <label>Description (a sentence or two, shown on its cover card and at the top of its page)</label>
-        <textarea name="description" maxlength="500" style="min-height:70px; font-family:inherit;"><?= htmlspecialchars($itemsHere['description'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
-      </div>
-      <div class="field">
-        <label>Position among its sibling folders (lowest first; blank = natural order, after any numbered ones)</label>
-        <input type="number" name="sort_order" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
+      <div class="settings-grid">
+        <div class="field">
+          <label>Display name</label>
+          <input type="text" name="display_name" value="<?= htmlspecialchars($itemsHere['displayName'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          <p class="hint">Shown on its cover card instead of "<?= htmlspecialchars(basename($adminFolderPath), ENT_QUOTES, 'UTF-8') ?>".</p>
+        </div>
+        <div class="field">
+          <label>Dates (optional)</label>
+          <input type="text" name="dates" maxlength="80" placeholder="June 12&ndash;15, 2026" value="<?= htmlspecialchars($itemsHere['dates'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          <p class="hint">Typed by you, never read from the photos' EXIF, so it can't reveal when you were away.</p>
+        </div>
+        <div class="field">
+          <label>Position</label>
+          <input type="number" name="sort_order" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
+          <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
+        </div>
+        <div class="field wide">
+          <label>Description</label>
+          <textarea name="description" maxlength="500" style="min-height:70px; font-family:inherit;"><?= htmlspecialchars($itemsHere['description'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
+          <p class="hint">A sentence or two, shown on its cover card and in a box at the top of its page.</p>
+        </div>
       </div>
       <button type="submit">Save folder settings</button>
     </form>
-    <form method="post" style="margin-top:12px;">
+    <h3 class="subhead">Privacy</h3>
+    <div class="privacy-row">
+    <form method="post">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_location_enabled">
       <label><input type="checkbox" name="enabled" value="1" <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?> onchange="if (this.checked &amp;&amp; !confirm(<?= $locConfirmAttr ?>)) { this.checked = false; return; } this.form.submit()"> Show photo locations publicly for this folder<?php if (!ENABLE_PHOTO_LOCATION): ?> <span class="muted">(ENABLE_PHOTO_LOCATION is off — nothing shows regardless)</span><?php endif; ?></label>
     </form>
-    <form method="post" style="margin-top:8px;">
+    <form method="post">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_folder_restriction">
       <input type="hidden" name="hidden" value="<?= !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private' ? '0' : '1' ?>">
       <button type="submit" class="<?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'secondary' : 'danger' ?>"><?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'Make this folder public again' : 'Hide this entire folder from public view' ?></button>
     </form>
+    </div>
     <?php if (!empty($itemsHere['cover'])): ?>
       <p class="muted" style="margin-top:10px;">Cover photo: <?= htmlspecialchars($itemsHere['cover'], ENT_QUOTES, 'UTF-8') ?> — click "Set as cover" on any photo below to change it.</p>
     <?php endif; ?>
-  </div>
+  </section>
   <?php else: ?>
-  <div class="panel">
+  <section class="panel" id="settings">
+    <h2 class="section-title">Root settings</h2>
     <label><input type="checkbox" disabled <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?>> Show photo locations publicly at the root</label>
     <form method="post" style="margin-top:6px;">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
@@ -3549,7 +3588,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       <input type="hidden" name="enabled" value="<?= !empty($itemsHere['locationEnabled']) ? '0' : '1' ?>">
       <button type="submit" class="secondary"<?php if (empty($itemsHere['locationEnabled'])): ?> onclick="return confirm(<?= $locConfirmAttr ?>)"<?php endif; ?>><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
     </form>
-  </div>
+  </section>
   <?php endif; ?>
 
   <?php
@@ -3583,10 +3622,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   </div>
   <?php endif; ?>
 
-  <div class="panel">
-    <h2 style="margin-top:0;">Notes (.md files in this folder)</h2>
+  <details class="panel" id="notes" <?= !empty($mdCandidates) ? 'open' : '' ?>>
+    <summary>Notes <span class="count">(<?= count($mdCandidates) ?> .md file<?= count($mdCandidates) === 1 ? '' : 's' ?> in this folder)</span></summary>
     <?php if (empty($mdCandidates)): ?>
-      <p class="muted">No .md files here yet.</p>
+      <p class="muted">No .md files here yet. A notes file is a short text box (with optional sold/reserved markers) shown above the photos.</p>
     <?php endif; ?>
     <?php foreach ($mdCandidates as $mdFile):
       $isActive = isset($activeMd[$mdFile]);
@@ -3628,8 +3667,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         </form>
       </div>
     <?php endforeach; ?>
-    <div class="md-file">
-      <strong>New file</strong>
+    <details class="subtle md-file" <?= empty($mdCandidates) ? 'open' : '' ?>>
+      <summary><strong>+ New notes file</strong></summary>
       <form method="post" onsubmit="return admConfirmSaveAs(this);">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_notes">
@@ -3645,8 +3684,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           <button type="submit">Create</button>
         </div>
       </form>
-    </div>
-  </div>
+    </details>
+  </details>
 
   <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
     <div class="panel loc-unsaved-summary">
@@ -3660,21 +3699,35 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     </div>
   <?php endif; ?>
 
-  <h2>Photos &amp; video (<?= count($adminFiles) ?>)</h2>
+  <h2 class="section-title" id="photos" style="margin-top:26px; scroll-margin-top:70px;">Photos &amp; video <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
   <div class="grid">
     <?php foreach ($adminFiles as $file): $bare = basename($file);
       $entry = $itemsHere['items'][$bare] ?? [];
       $loc = $entry['location'] ?? ($adminAutoLoc[$file] ?? null);
       $locUnsaved = isset($adminAutoLoc[$file]);
     ?>
+      <?php
+        $rest = item_restriction($entry);
+        $vis = $entry['locationVisibility'] ?? 'inherit';
+        $moreOpen = $loc !== null || $vis !== 'inherit' || $rest !== 'inherit' || $locUnsaved;
+        $coverFormId = 'cover-' . md5($file);
+      ?>
       <div class="item-card">
-        <?php if (is_video_file($file)): ?>
-          <div class="item-thumb-placeholder" style="display:flex;align-items:center;justify-content:center;color:var(--muted);">&#9654; video<?php if (isset($videoDurations[$file])): ?> &middot; <?= htmlspecialchars(format_duration($videoDurations[$file]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></div>
-        <?php else: ?>
-          <img src="<?= htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8') ?>" alt="">
-        <?php endif; ?>
-        <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
-        <?php if (TRACK_VIEWS): ?><div class="item-filename" style="margin-top:-4px;">&#128065; <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?></div><?php endif; ?>
+        <div class="item-head">
+          <?php if (is_video_file($file)): ?>
+            <div class="item-thumb-placeholder">&#9654; video<?php if (isset($videoDurations[$file])): ?><br><?= htmlspecialchars(format_duration($videoDurations[$file]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></div>
+          <?php else: ?>
+            <img src="<?= htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8') ?>" alt="">
+          <?php endif; ?>
+          <div class="item-meta">
+            <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
+            <div class="item-sub">
+              <?php if (TRACK_VIEWS): ?>&#128065; <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
+              <?php if ($rest === 'private'): ?> &middot; hidden<?php endif; ?>
+              <?php if (!empty($itemsHere['cover']) && $itemsHere['cover'] === $bare): ?> &middot; folder cover<?php endif; ?>
+            </div>
+          </div>
+        </div>
         <form method="post">
           <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
           <input type="hidden" name="action" value="save_item">
@@ -3688,57 +3741,62 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             <label>Web link</label>
             <input type="url" name="web" value="<?= htmlspecialchars($entry['web'] ?? '', ENT_QUOTES, 'UTF-8') ?>" placeholder="https://&hellip;">
           </div>
-          <div class="loc-row">
-            <div class="field">
-              <label>Latitude</label>
-              <input type="text" name="lat" value="<?= htmlspecialchars($loc['lat'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          <details class="item-more" <?= $moreOpen ? 'open' : '' ?>>
+            <summary>Location &amp; visibility<?php if ($loc !== null): ?> <span class="item-flags">&middot; &#128205; <?= htmlspecialchars((string) ($loc['label'] ?? '') !== '' ? $loc['label'] : round((float) $loc['lat'], 2) . ', ' . round((float) $loc['lng'], 2), ENT_QUOTES, 'UTF-8') ?></span><?php endif; ?></summary>
+            <div class="loc-row" style="margin-top:8px;">
+              <div class="field">
+                <label>Latitude</label>
+                <input type="text" name="lat" value="<?= htmlspecialchars($loc['lat'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+              </div>
+              <div class="field">
+                <label>Longitude</label>
+                <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+              </div>
             </div>
-            <div class="field">
-              <label>Longitude</label>
-              <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-            </div>
-          </div>
           <?php if ($locUnsaved): ?>
             <p class="muted loc-unsaved" style="margin:0 0 8px;">&#9888; <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (set <em>Always hide</em> to keep it out)." ?></p>
           <?php endif; ?>
-          <div class="field">
-            <label>Location label (optional)</label>
-            <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            <div class="field">
+              <label>Location label (optional)</label>
+              <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="field">
+              <label>Location visibility</label>
+              <select name="loc_visibility">
+                <option value="inherit" <?= $vis === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
+                <option value="show" <?= $vis === 'show' ? 'selected' : '' ?>>Always show</option>
+                <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Visibility</label>
+              <select name="restriction">
+                <option value="inherit" <?= $rest === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
+                <option value="public" <?= $rest === 'public' ? 'selected' : '' ?>>Always show (even if this folder is hidden)</option>
+                <option value="private" <?= $rest === 'private' ? 'selected' : '' ?>>Always hide</option>
+              </select>
+            </div>
+          </details>
+          <div class="item-actions">
+            <button type="submit">Save</button>
+            <?php if ($adminFolderPath !== null): ?>
+              <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
+            <?php endif; ?>
           </div>
-          <div class="field">
-            <label>Location visibility</label>
-            <select name="loc_visibility">
-              <?php $vis = $entry['locationVisibility'] ?? 'inherit'; ?>
-              <option value="inherit" <?= $vis === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
-              <option value="show" <?= $vis === 'show' ? 'selected' : '' ?>>Always show</option>
-              <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Visibility</label>
-            <select name="restriction">
-              <?php $rest = item_restriction($entry); ?>
-              <option value="inherit" <?= $rest === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
-              <option value="public" <?= $rest === 'public' ? 'selected' : '' ?>>Always show (even if this folder is hidden)</option>
-              <option value="private" <?= $rest === 'private' ? 'selected' : '' ?>>Always hide</option>
-            </select>
-          </div>
-          <button type="submit">Save</button>
         </form>
         <?php if ($adminFolderPath !== null): ?>
-          <form method="post" style="margin-top:6px;">
+          <form method="post" id="<?= $coverFormId ?>">
             <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
             <input type="hidden" name="action" value="set_cover">
             <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
-            <button type="submit" class="secondary">Set as cover</button>
           </form>
         <?php endif; ?>
       </div>
     <?php endforeach; ?>
   </div>
 
-  <div class="panel" style="margin-top:20px;">
-    <h2 style="margin-top:0;">Export</h2>
+  <details class="panel" id="export" style="margin-top:20px;">
+    <summary>Export</summary>
     <p class="muted">Downloads this folder's captions, locations, web links, display name, and chosen cover as JSON — the only backup this data has.</p>
     <p class="muted"><strong>Handle the file with care:</strong> it also records which items and folders you've hidden, and any GPS coordinates you've entered. Pasting it into a support email or leaving it somewhere public would reveal both, regardless of what's actually hidden on the gallery.</p>
     <form method="post">
@@ -3751,13 +3809,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       <input type="hidden" name="action" value="export_tree">
       <button type="submit" class="secondary">Export the whole tree as JSON</button>
     </form>
-  </div>
+  </details>
+</main>
 </div>
 <script>
   // The directive reference starts expanded on a desktop and collapsed
   // on a phone-width screen; it's a plain <details>, so either can toggle.
   if (window.matchMedia && window.matchMedia('(max-width: 600px)').matches) {
     document.querySelectorAll('.admin-reference').forEach(function (d) { d.removeAttribute('open'); });
+  }
+  // The folder list is a sidebar on a desktop and a collapsed "Folders" bar on a phone.
+  if (window.matchMedia && window.matchMedia('(max-width: 800px)').matches) {
+    document.querySelectorAll('.admin-folders').forEach(function (d) { d.removeAttribute('open'); });
   }
   document.querySelectorAll('.admin-insert-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {

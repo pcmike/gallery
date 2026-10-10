@@ -129,7 +129,7 @@ for ap in paths_for_admin():
             if k in FILL: data[k] = FILL[k]
         if data.get("action") == "save_notes" or data.get("action") == "create_notes": data["content"] = NOTES
         if data.get("action") == "create_notes" or "new_name" in data and data.get("action") != "save_notes": data["new_name"] = "poison.md"
-        if data.get("action") in ("delete_notes", "toggle_folder_restriction", "export_items", "export_tree"): continue
+        if data.get("action") in ("delete_notes", "toggle_folder_restriction", "export_items", "export_tree", "logout"): continue
         s2, body2, h2 = fetch(ap, method="POST", data=data, headers=AH); poisoned += 1
         check("POST " + ap + " " + str(data.get("action")), body2, h2)
 # also create a notes file with payloads in a poisoned folder and at the root

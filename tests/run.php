@@ -1733,7 +1733,7 @@ check('...and the NUL was stripped, not used to truncate the name (no bare "evil
 // Two admin "tabs" on one record: a stale save is refused, not silently
 // overwritten; a save to a *different* record in the same folder is fine.
 $hashFor = function ($body, $file) {
-    return preg_match('/item-filename">[^<]*' . preg_quote($file, '/') . '<\/div>\s*<form method="post">.*?name="loaded_hash" value="([a-f0-9]{32})"/s', $body, $m) ? $m[1] : null;
+    return preg_match('/item-filename">[^<]*' . preg_quote($file, '/') . '<\/div>.*?<form method="post">.*?name="loaded_hash" value="([a-f0-9]{32})"/s', $body, $m) ? $m[1] : null;
 };
 [, $tabA] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
 $eiffelHashA = $hashFor($tabA, 'eiffel.jpg');
@@ -2098,6 +2098,10 @@ $loginCookie = $cookieOf($h2); $loc2 = ''; foreach ($h2 as $h) if (stripos($h, '
 check('[login] the right password redirects to the very URL asked for, and sets the session cookie', $s2 === 303 && $loc2 === '?admin&folder=Sub' && str_contains($loginCookie, 'gallery_admin_'));
 [$s3, $b3] = http_get("$baseLogin/?admin&folder=Sub", ["Cookie: $loginCookie"]);
 check('[login] with just that cookie (no Authorization header) the admin page opens, on the right folder', $s3 === 200 && str_contains($b3, 'Gallery Admin') && str_contains($b3, 'Editing: Sub'));
+check('[admin layout] a sticky top bar carries the title, the folder being edited, section links and Log out', str_contains($b3, '<header class="admin-bar">') && str_contains($b3, 'Editing: Sub') && str_contains($b3, 'href="#photos"') && str_contains($b3, 'href="#settings"') && str_contains($b3, 'value="logout"'));
+check('[admin layout] folders are a tree beside the content, with the current one marked', str_contains($b3, 'class="admin-folder-nav"') && str_contains($b3, 'class="current" aria-current="page"') && str_contains($b3, '<main class="admin-main">'));
+check('[admin layout] the long, rarely-used parts start collapsed (Notes with no files, Export) and each photo\'s location fields sit in their own disclosure', str_contains($b3, '<details class="panel" id="notes" >') && str_contains($b3, '<details class="panel" id="export"') && str_contains($b3, '<details class="item-more"'));
+check('[admin layout] the section anchors the top bar links to exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="photos"') && str_contains($b3, 'id="notes"') && str_contains($b3, 'id="export"'));
 check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="login_password"'));
 check('[login] a login also counts as private view (the viewer cookie is set too)', str_contains($loginCookie, '=') && substr_count($loginCookie, '=') >= 2);
 // A saved change from an expired session must not be saved, and must say why.
@@ -2274,8 +2278,8 @@ preg_match('#<footer>(.*?)</footer>#s', $saleAfter, $saleFooter);
 check('[sale] ...and the sitewide "N views" total is hidden from the public footer too', isset($saleFooter[1]) && !preg_match('/\d+ views/', $saleFooter[1]) && str_contains($saleFooter[1], 'href="?about"'));
 // ...but the seller can see every count in the admin.
 [, $saleAdmin] = http_get("$baseSale/?admin", ['Authorization: Basic ' . base64_encode('admin:sale-admin')]);
-check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'page loads in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-filename"[^>]*>&\#128065; 1 view<#', $saleAdmin));
-check('[sale] ...and an untouched photo reads 0 views', (bool) preg_match('#unrelated\.jpg</div>\s*<div class="item-filename"[^>]*>&\#128065; 0 views<#', $saleAdmin));
+check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'page loads in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-sub">\s*&\#128065; 1 view\b#', $saleAdmin));
+check('[sale] ...and an untouched photo reads 0 views', (bool) preg_match('#unrelated\.jpg</div>\s*<div class="item-sub">\s*&\#128065; 0 views\b#', $saleAdmin));
 
 /* ======================================================================= *
  * RECIPE: private family photos — hide an item and a whole folder through
