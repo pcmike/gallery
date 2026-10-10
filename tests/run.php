@@ -781,6 +781,31 @@ check('?img serves a file inside an EXTRA_FOLDERS virtual mount', $status === 20
 [$status] = http_get("$baseNested/?img=" . rawurlencode('SneakyLink/secret.jpg') . '&size=thumb');
 check('?img refuses a file reached only through a symlink', $status === 404);
 
+// ?img= is validated by resolving the one claimed path directly (before
+// the tree is scanned), so every way of lying about a path must still 404.
+foreach ([
+    'a doubled slash' => 'Paris//eiffel.jpg',
+    'a ./ prefix' => './Paris/eiffel.jpg',
+    'a .. segment' => 'Paris/../Paris/eiffel.jpg',
+    'a leading slash' => '/Paris/eiffel.jpg',
+    'a backslash' => 'Paris\\eiffel.jpg',
+    'a NUL byte' => "Paris/eiffel.jpg\0.png",
+    'a folder, not a file' => 'Paris',
+    'the script itself' => 'index.php',
+    'a non-media extension' => 'Paris/notes.txt',
+    'something inside .gallery-cache' => '.gallery-cache/anything.jpg',
+    'a name that does not exist' => 'Paris/nope.jpg',
+    'a file reached only through a symlinked folder' => 'SneakyLink/secret.jpg',
+    'a wrong-case spelling of a real file' => 'Paris/EIFFEL.JPG',
+] as $label => $badImg) {
+    [$badImgStatus] = http_get("$baseNested/?img=" . rawurlencode($badImg) . '&size=thumb');
+    check("?img= with $label returns 404", $badImgStatus === 404);
+}
+[$arrayImgStatus] = http_get("$baseNested/?img[]=" . rawurlencode('Paris/eiffel.jpg'));
+check('?img[]= (an array, not a string) returns 404', $arrayImgStatus === 404);
+[$okImgStatus] = http_get("$baseNested/?img=" . rawurlencode('Paris/eiffel.jpg') . '&size=thumb');
+check('...while the real nested path still serves', $okImgStatus === 200);
+
 http_get("$baseNested/?track=" . rawurlencode('Paris/eiffel.jpg'));
 check('per-photo stats are colocated inside the photo\'s own subfolder, not the root', is_file("$fxNested/Paris/.gallery-stats.json") || is_file("$fxNested/Paris/.gallery-stats.sqlite"));
 // The root legitimately gets its own stats file regardless — the one

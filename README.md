@@ -214,7 +214,8 @@ A few details worth knowing:
 - **Everything about a folder lives in that folder.** Stats, the thumbnail cache, and the admin's saved data sit inside the folder they describe, so two cameras' `IMG_0001.jpg` in different folders never collide.
 - **Renaming a folder keeps its data; making a new folder and moving photos into it does not.** A real rename (FTP client, file manager, `mv`) carries the folder's data file along. Creating a *new* folder under a different name is, from the gallery's point of view, a different, empty folder.
 - **Symlinked folders are refused**, so a link can't make the gallery list files outside itself. To include a folder from elsewhere (an archive on another disk), name it in `EXTRA_FOLDERS` instead.
-- If photos exist in subfolders but `AUTO_GROUP_BY_FOLDER` is off, a setup notice says so.
+- If photos exist in subfolders but `AUTO_GROUP_BY_FOLDER` is off, a setup notice says so (a count only, never a name; the search is capped at 40 folders so a gallery dropped into a big existing site never walks all of it).
+- Sibling folders order by an admin-set position first, then naturally by name (Day 2 before Day 10, case-insensitive) — or by the folder's own modification time if `PHOTO_SORT_ORDER` is `'mtime'`.
 - The header shows **"Last updated"**, derived from the newest file modification time across photos and notes, so it also reflects files you uploaded by FTP.
 
 ## Video
@@ -233,7 +234,7 @@ Things to know before turning it on:
 
 ## Captions and locations
 
-Each photo or video can have a **caption**, an informational **web link**, and a **location**, all entered in the [admin editor](#the-admin-editor). A caption appears in the lightbox (replacing the filename — the lightbox no longer shows filenames at all; with no caption it shows just "3 / 12") and as a small badge on the grid thumbnail, with the link and location getting badges of their own along the bottom edge. Captions and links need no setting: entering one *is* the opt-in. Caption text is never scanned for mentions and never changes where a photo sorts.
+Each photo or video can have a **caption**, an informational **web link**, and a **location**, all entered in the [admin editor](#the-admin-editor). A caption appears in the lightbox (replacing the filename — the lightbox no longer shows filenames at all; with no caption it shows just "3 / 12") and as a small badge on the grid thumbnail (hover shows it on a desktop; tapping the badge opens a small popover on a phone), with the link and location getting badges of their own along the bottom edge. Captions and links need no setting: entering one *is* the opt-in. Caption text is never scanned for mentions and never changes where a photo sorts.
 
 **Location is gated three times, all closed by default**, because GPS is more sensitive than anything else here:
 
@@ -252,6 +253,7 @@ Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours al
 - every photo and video in the current folder, with caption, web link and location fields, and a one-click **Set as cover** for the folder
 - the folder's own settings: display name, date range, description, position, whether its photo locations show publicly, and whether the whole folder is hidden
 - every `.md` in the folder — including ones missing the `{gallery}` marker, tagged as not active, with a one-click **Add `{gallery}` marker** — edited as **raw text, saved byte-for-byte** (never parsed and re-written). **Save**, **Save As** and **Delete** are separate, confirmed actions, the destination is locked to a `.md` name so nothing typed there can reach `index.php`, and a save that touches several files reports each one on its own. A reference panel beside the editor inserts directive syntax at the cursor
+- **Two tabs, one record:** every item and folder form remembers what it loaded, and a save whose record was changed elsewhere in the meantime (another tab or device) is refused with an explanation instead of silently overwriting. Editing a *different* photo in the same folder never conflicts
 - **Export as JSON** for the folder or the whole tree — the only backup of the captions and settings you typed, which a plain save can't undo
 - a **Hidden items** summary across the whole tree
 

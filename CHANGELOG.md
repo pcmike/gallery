@@ -18,7 +18,9 @@ A large release, built and tested in phases on one branch and shipped as one ver
 - A `.md` mention of a folder links to its `?folder=` page in overview mode.
 - Stats, the thumbnail cache and per-item data are **colocated in each folder**, so two cameras' `IMG_0001.jpg` in different folders never collide, and a real folder rename carries its data along.
 - A **"Last updated"** date in the header, derived from the newest file modification time across photos and notes — not a separately maintained marker, so it also reflects files uploaded by FTP.
-- A setup notice when photos exist in subfolders but `AUTO_GROUP_BY_FOLDER` is off, so a first-time owner isn't left with a silently sparse gallery.
+- A setup notice when photos exist in subfolders but `AUTO_GROUP_BY_FOLDER` is off, so a first-time owner isn't left with a silently sparse gallery (a count only; the search is capped at 40 folders).
+- Sibling folders order by an admin-set position, then naturally by name (Day 2 before Day 10), or by folder mtime under `PHOTO_SORT_ORDER = 'mtime'`.
+- `?img=` and `?video=` validate the one claimed path directly instead of scanning the whole tree first — one tree walk per thumbnail is what made large, deep galleries slow. The check rejects `..`, doubled/leading slashes, backslashes, NULs, folders, the script itself, `.gallery-cache`, symlinked folders, non-media extensions, and any name that isn't an exact-case match for a real file (so a case-insensitive filesystem can't dodge a per-photo hide flag). `?track=` and page loads still scan, since they need the whole group.
 
 ### Added — video
 - `ENABLE_VIDEO`: `.mov` and `.mp4` are served as gallery items. No transcoding, no frame extraction. Tiles and share previews use one generic placeholder graphic; the lightbox plays the clip in a native `<video>`. Seeking works: real HTTP `Range` support (`206`, `416` past the end, malformed ranges ignored). A **duration badge** is read straight from the container's `mvhd` box.
@@ -26,6 +28,8 @@ A large release, built and tested in phases on one branch and shipped as one ver
 ### Added — captions, location, and the admin editor
 - **Per-item captions, a web link, and a location**, one per photo or video. The lightbox shows the caption (or just a position counter) — **it no longer prints the raw filename.** Grid badges (caption, location, link) sit along the bottom edge.
 - **`ENABLE_PHOTO_LOCATION`** (off by default) is the first of three gates: also needed are a per-folder switch and a per-photo setting (inherit / always show / always hide), all closed by default. GPS is auto-filled from EXIF for JPEG and HEIC where present; coordinates are validated before they reach any URL.
+- **Two admin tabs can't silently overwrite each other:** a save whose record changed since the page loaded is refused with an explanation (per record, so different photos never conflict).
+- The caption badge is a tap target that opens a popover on a phone, not just a hover tooltip.
 - **`?admin`** (`ADMIN_PASSWORD`, empty = the code path doesn't exist): HTTP Basic Auth compared with `hash_equals()`, refused over plain HTTP except on localhost (with a page explaining why), CSRF-protected saves, a 4-hour session, and a failed-login throttle (5 failures in 15 minutes imposes a 60-second delay). Usable from a phone. It edits every item's caption/link/location, folder settings, every `.md` in the folder (raw text, saved byte-for-byte; **Save**, **Save As** and **Delete** are separate, confirmed actions; a one-click fix for a missing `{gallery}` marker), and exports `.gallery-items.json` for a folder or the whole tree. Stale entries for deleted photos are cleaned up and reported.
 
 ### Added — hiding items, and Private view

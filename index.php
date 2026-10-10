@@ -429,6 +429,66 @@ function count_folder_tree_files($node) {
 }
 
 /**
+ * Validates ONE claimed media path directly, without building the whole
+ * file list first. ?img= and ?video= fire once per thumbnail — a grid of
+ * 300 photos is 300 requests — and "scan the entire tree, then check
+ * membership" costs the same on a ten-photo folder as it would, per
+ * request, on thousands of photos in deep folders. This answers the same
+ * question the scan's own allowlist answers, with the same rules, by
+ * resolving only the path in question:
+ *   - no empty, ".", ".." or NUL/backslash anywhere; no absolute path
+ *   - a recognized media extension (so ENABLE_VIDEO off means no video)
+ *   - never the script itself, never inside .gallery-cache
+ *   - every folder along the way is a real directory, not a symlink; the
+ *     first segment may instead be an EXTRA_FOLDERS virtual mount (an
+ *     admin-written constant, trusted the same way — but a real folder
+ *     of the same name wins, exactly as in the scan)
+ *   - the final name must appear, character for character, in its
+ *     folder's own listing — not merely resolve. On a case-insensitive
+ *     filesystem "EIFFEL.JPG" would otherwise reach eiffel.jpg while
+ *     missing the per-photo hide flag keyed on the exact name.
+ *   - the folder's real path stays under its root
+ * It never decides anything about *visibility*: callers still apply
+ * file_is_hidden() to whatever this accepts.
+ */
+function valid_media_path($dir, $rel, $mediaExtensions, $self) {
+    if (!is_string($rel) || $rel === '' || strlen($rel) > 2048) return false;
+    if (strpbrk($rel, "\0\\") !== false) return false;
+    $segments = explode('/', $rel);
+    foreach ($segments as $seg) {
+        if ($seg === '' || $seg === '.' || $seg === '..') return false;
+    }
+    $file = array_pop($segments);
+    if (!empty($segments) && !AUTO_GROUP_BY_FOLDER) return false;
+    if (!in_array(strtolower(pathinfo($file, PATHINFO_EXTENSION)), $mediaExtensions, true)) return false;
+    if (empty($segments) && $file === $self) return false;
+
+    $current = $dir;
+    $root = realpath($dir);
+    foreach ($segments as $i => $seg) {
+        if (strcasecmp($seg, '.gallery-cache') === 0) return false;
+        $next = $current . '/' . $seg;
+        if ($i === 0 && !(is_dir($next) && !is_link($next))) {
+            $mount = EXTRA_FOLDERS[$seg] ?? null;
+            if (!is_string($mount) || strpbrk($seg, "/\\") !== false || !is_dir($mount) || is_link($mount)) return false;
+            $next = $mount;
+            $root = realpath($mount);
+        } elseif ($i > 0 && (!is_dir($next) || is_link($next))) {
+            return false;
+        } elseif ($i === 0 && !is_dir($next)) {
+            return false;
+        }
+        $current = $next;
+    }
+    $realCurrent = realpath($current);
+    if ($root === false || $realCurrent === false) return false;
+    if ($realCurrent !== $root && strpos($realCurrent . '/', $root . '/') !== 0) return false;
+    $listing = @scandir($current);
+    if ($listing === false || !in_array($file, $listing, true)) return false;
+    return is_file($current . '/' . $file);
+}
+
+/**
  * Resolves a relative path (e.g. "Paris/eiffel.jpg", or
  * "OldTrip2020/x.jpg" for an EXTRA_FOLDERS virtual mount) to its real
  * filesystem path. Purely a path-construction helper — this never
@@ -451,6 +511,23 @@ function containing_folder_real_path($dir, $relPath) {
     $slash = strrpos($relPath, '/');
     if ($slash === false) return $dir;
     return resolve_real_path($dir, substr($relPath, 0, $slash));
+}
+
+// ?img= and ?video= answer here, before the tree is scanned: one
+// direct path validation (see valid_media_path) instead of walking every
+// folder for every thumbnail. serve_image()/serve_video() still run
+// their own allowlist check and the hide check on whatever is passed in.
+if (isset($_GET['img']) || isset($_GET['video'])) {
+    $claimedIsImg = isset($_GET['img']);
+    $claimed = $claimedIsImg ? $_GET['img'] : $_GET['video'];
+    $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
+    $claimedItems = $claimedList ? items_get_all_for_files($dir, $claimedList) : [];
+    if ($claimedIsImg) {
+        serve_image($dir, $claimed, $_GET['size'] ?? 'thumb', $claimedList, $claimedItems);
+    } else {
+        serve_video($dir, $claimed, $claimedList, $claimedItems);
+    }
+    exit;
 }
 
 if (AUTO_GROUP_BY_FOLDER) {
@@ -1013,10 +1090,6 @@ function osm_location_url($lat, $lng) {
          . '#map=16/' . rawurlencode($lat) . '/' . rawurlencode($lng);
 }
 
-if (isset($_GET['img'])) {
-    serve_image($dir, $_GET['img'], $_GET['size'] ?? 'thumb', $files, $itemsData);
-    exit;
-}
 
 /**
  * Serves ?video=<filename-or-relative-path> with HTTP Range support —
@@ -1113,10 +1186,6 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
     fclose($fh);
 }
 
-if (isset($_GET['video'])) {
-    serve_video($dir, $_GET['video'], $files, $itemsData);
-    exit;
-}
 
 /* -----------------------------------------------------------------------
  * GROUPING: discover qualifying .md files, extract {group:}/{photos:}
@@ -1522,9 +1591,9 @@ $allFiles = $files;
 // merely skipped in a display loop. That's what makes every downstream
 // count, the lightbox's own file list, and every allowlist check below
 // all naturally agree with what's actually rendered — a count that
-// doesn't match what's visible would itself be a leak. (?img=/?video=/
-// ?photo= already ran their own check above, since they execute before
-// $groups even exists — this filter runs too late to help them.) If
+// doesn't match what's visible would itself be a leak. (?img=/?video= answer even earlier, before the tree is scanned, with
+// their own check; ?photo= runs its own just above — this filter runs
+// too late to help them.) If
 // every member of a group ends up hidden, the group itself disappears
 // here too, rather than rendering an empty "0 photos" box, which would
 // be its own tell that something's being withheld.
