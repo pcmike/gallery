@@ -51,7 +51,7 @@ if (li >= 0 && mapBox) {
   ok(doc.head.children.some(c => c.tagName === 'SCRIPT' && String(c.src).includes('leaflet')), '...and only now is the map library requested (nothing was fetched before)');
   api.openLightbox(nl); ok(mapBox.hidden === true && mapBtn.hidden === true, 'a photo without one shows neither');
 }
-if (wi >= 0) { api.openLightbox(wi); ok(webEl.hidden === false && webEl.href === webLinks[wi], 'a photo with a web link shows it beside the permalink icon'); api.openLightbox(webLinks.findIndex(w => !w)); ok(webEl.hidden === true, '...and one without shows no link'); }
+if (wi >= 0) { api.openLightbox(wi); ok(webEl.hidden === false && webEl.href === webLinks[wi] && webEl.title === 'Information link: ' + webLinks[wi], 'a photo with a web link shows it beside the permalink icon'); api.openLightbox(webLinks.findIndex(w => !w)); ok(webEl.hidden === true, '...and one without shows no link'); }
 api.openLightbox(sameDir(B0)[0]);
 // keyboard
 doc.fire('keydown', { key: 'ArrowRight' }); ok(cap.textContent.includes('2 / ' + M0), 'ArrowRight advances');

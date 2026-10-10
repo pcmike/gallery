@@ -1165,6 +1165,7 @@ http_post("$baseAdmin/?admin", [
 ], [$authHeader, "Cookie: $sessionCookie"]);
 [, $publicBodyWithWeb] = http_get("$baseAdmin/");
 check('a valid web link shows publicly as a web-link badge', str_contains($publicBodyWithWeb, 'class="item-badge web-badge" href="https://example.com/info"'));
+check('...whose tooltip says where it goes: "Information link: <url>"', str_contains($publicBodyWithWeb, 'title="Information link: https://example.com/info"'));
 
 // Location — three gates: global constant (on, in this fixture), the
 // folder's own toggle (starts off), and per-photo visibility.
@@ -2352,7 +2353,7 @@ write_patched_index("$fxDates/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER
 $portDates = find_free_port(); start_server($fxDates, $portDates);
 $datesAuth = ['Authorization: Basic ' . base64_encode('x:dates-pw-123456')];
 [, $datesAdmin] = http_get("http://127.0.0.1:$portDates/?admin&folder=Trip", $datesAuth);
-check('[dates] a folder\'s settings offer the span of its photos (here from file dates, subfolders included) with a one-click button, and say where the dates come from', str_contains($datesAdmin, 'span <strong>Oct 3' . "\u{2013}" . '9, 2026</strong>') && str_contains($datesAdmin, 'class="secondary date-suggest" data-dates="Oct 3' . "\u{2013}" . '9, 2026"') && str_contains($datesAdmin, 'files were last modified'));
+check('[dates] a folder\'s settings offer the span of its photos (here from file dates, subfolders included) with a one-click button, and say where the dates come from', str_contains($datesAdmin, 'span <strong>Oct 3' . "\u{2013}" . '9, 2026</strong>') && str_contains($datesAdmin, 'class="secondary date-suggest" data-dates="Oct 3' . "\u{2013}" . '9, 2026"') && str_contains($datesAdmin, 'modified dates') && !str_contains($datesAdmin, 'Only what you save is shown') && !str_contains($datesAdmin, 'the dates the photos were taken'));
 [, $datesRoot] = http_get("http://127.0.0.1:$portDates/?admin", $datesAuth);
 check('[dates] the gallery root suggests a range across years', str_contains($datesRoot, 'Dec 30, 2025 ' . "\u{2013}" . ' Oct 9, 2026'));
 check('[dates] nothing is stored or shown to visitors until the form is saved', !str_contains(http_get("http://127.0.0.1:$portDates/?folder=Trip")[1], 'Oct 3'));

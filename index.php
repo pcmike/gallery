@@ -3474,7 +3474,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (array_key_exists('mapEnabled', $updates)) {
             if ($updates['mapEnabled']) {
                 $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.';
-                if (!ENABLE_MAP) $part .= ' It stays hidden until the Trip map is switched on in Site settings.';
+                if (!ENABLE_MAP) $part .= ' It stays hidden until the map is switched on in Site settings.';
                 elseif (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until photo locations are allowed in Site settings.';
             } else {
                 $part = 'The map no longer shows on ' . $where . '. Nothing is deleted.';
@@ -3736,7 +3736,7 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
 ?>
     <h3 class="subhead">Map</h3>
     <?php if (!ENABLE_MAP): ?>
-      <p class="muted" style="margin-top:0;">The trip map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="var l=document.querySelector('.side-link'); if (l) { l.click(); return false; }">Site settings</a> first; then each folder can show its own map.</p>
+      <p class="muted" style="margin-top:0;">The map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="var l=document.querySelector('.side-link'); if (l) { l.click(); return false; }">Site settings</a> first; then each folder can show its own map.</p>
     <?php else: ?>
       <form method="post" class="instant-form map-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
@@ -3804,7 +3804,7 @@ function suggest_folder_dates($dir, $fileList, $cap = 300) {
     if (!$times) return null;
     return [
         'text' => format_date_range(min($times), max($times)),
-        'source' => $fromExif * 2 >= count($times) ? 'the dates the photos were taken' : 'the dates the files were last modified (these photos carry no capture date)',
+        'source' => $fromExif * 2 >= count($times) ? '' : 'from the files\' modified dates: these photos carry no capture date',
     ];
 }
 
@@ -3831,10 +3831,9 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <label>Dates (optional)</label>
           <input type="text" name="dates" maxlength="80" placeholder="June 12&ndash;15, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
           <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
-            <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong> (<?= $esc($dateSuggestion['source']) ?>).
+            <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
               <button type="button" class="secondary date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
           <?php endif; ?>
-          <p class="hint">Only what you save is shown to visitors, so you can change the suggestion or leave this blank (dates can reveal when you were away).</p>
         </div>
         <?php if (!$isRoot): ?>
         <div class="field">
@@ -3897,10 +3896,10 @@ function gallery_setting_definitions() {
              'help' => 'Needed before any location can show. Each folder still has its own switch in its settings, and any photo can opt out.',
              'risk' => 'GPS coordinates can reveal where you live or where you were. They stay private until a folder\'s own location switch is turned on.',
              'offwarn' => 'Photo locations and the map will disappear for visitors. Nothing is deleted: every saved location stays and comes back when you turn this on again.'],
-            ['name' => 'ENABLE_MAP', 'type' => 'bool', 'label' => 'Trip map',
+            ['name' => 'ENABLE_MAP', 'type' => 'bool', 'label' => 'Map',
              'help' => 'A map of every photo that has a visible location. Needs "Allow photo locations".',
              'risk' => 'The map loads its code from cdnjs and its map tiles from OpenStreetMap in each visitor\'s browser, so those two sites can see that someone visited.',
-             'offwarn' => 'The trip map will disappear. Nothing is deleted: every photo location stays saved.'],
+             'offwarn' => 'The maps will disappear. Nothing is deleted: every photo location stays saved.'],
             ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 1, 'max' => 10000,
              'help' => 'Photos closer together than this share one numbered pin. 50 suits most trips; a dense city trip wants less. This is the default: each folder, and the gallery front page, can set its own in its settings.'],
         ]],
@@ -6677,7 +6676,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     }
     if (!empty($itemEntry['web'])) {
         $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
-                     . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
+                     . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
                      . '" onclick="event.stopPropagation()">&#127760;</a>';
     }
     $colorStyle = $color ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ' inset;"' : '';
@@ -6958,7 +6957,7 @@ function render_about_page() {
   <ul>
     <li>A clean grid of photos and videos, with a full-screen viewer: keyboard arrows, phone swipe, captions, and a link icon for a photo's web page</li>
     <li>Trips as folders: a cover card per folder with its dates and photo count, nested to any depth, and a viewer that stays inside the folder you opened</li>
-    <li>Where it was taken, if you choose to share it: a small map in the corner of the photo that opens bigger, and an optional trip map, both loaded only when someone asks for them</li>
+    <li>Where it was taken, if you choose to share it: a small map in the corner of the photo that opens bigger, and an optional page map, both loaded only when someone asks for them</li>
     <li>Shareable links to a photo, a folder or a map, with correct previews when pasted into a chat</li>
   </ul>
 
@@ -7926,7 +7925,7 @@ if ($currentFolderPath !== null) {
 <?php if ($mapShown && !empty($mapPoints)): ?>
   <section class="map-preview" id="map-preview">
     <h2 class="map-preview-heading">
-      <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body">&#128506; <span class="map-toggle-label">Show <?= $currentFolderPath === null ? 'trip map' : 'map' ?></span></button>
+      <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body">&#128506; <span class="map-toggle-label">Show map</span></button>
       <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-preview-link">View full map &rarr;</a>
     </h2>
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
@@ -7961,7 +7960,7 @@ if ($currentFolderPath !== null) {
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link to this photo">&#128279;</button>
-    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Open this photo's link" hidden>&#127760;</a>
+    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden>&#127760;</a>
 <?php if (ENABLE_MAP): ?>
     <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden>&#128205;</button>
 <?php endif; ?>
@@ -8213,7 +8212,7 @@ if ($currentFolderPath !== null) {
   function updateLightboxExtras() {
     const web = webLinks[current];
     if (webLink) {
-      if (web) { webLink.href = web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); }
+      if (web) { webLink.href = web; webLink.title = 'Information link: ' + web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); webLink.title = ''; }
     }
     if (!mapBox || !mapToggle) return;
     const loc = locations[current];
@@ -8248,7 +8247,7 @@ if ($currentFolderPath !== null) {
   function updateLightboxExtras() {
     const web = webLinks[current];
     if (!webLink) return;
-    if (web) { webLink.href = web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); }
+    if (web) { webLink.href = web; webLink.title = 'Information link: ' + web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); webLink.title = ''; }
   }
 <?php endif; ?>
   document.addEventListener('keydown', (e) => {

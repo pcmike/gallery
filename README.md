@@ -572,9 +572,9 @@ Neither renames your files. That would change files you own, which this project 
 
 ## The trip map
 
-Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actually has a visible location) and two maps become available. Neither is in the way: **the page map starts closed**, behind a small *Show trip map* button (its choice is remembered per browser), and **the little map in the photo viewer** shows only for a photo that has a visible location.
+Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actually has a visible location) and two maps become available. Neither is in the way: **the page map starts closed**, behind a small *Show map* button (its choice is remembered per browser), and **the little map in the photo viewer** shows only for a photo that has a visible location.
 
-- **The page map.** The gallery front page offers a *Show trip map* button above the folders; pressing it loads the map, which plots every visible, located photo from every folder together, and links to a shareable `?map` page. Nothing from the map's third parties is requested until a visitor presses it.
+- **The page map.** The gallery front page offers a *Show map* button above the folders; pressing it loads the map, which plots every visible, located photo from every folder together, and links to a shareable `?map` page. Nothing from the map's third parties is requested until a visitor presses it.
 - **The viewer map.** In the full-screen viewer a photo with a visible location shows a small map in the top left corner of the photo, about half a mile across. Click it to enlarge it (move, zoom, *Open in OpenStreetMap*); the 📍 button beside the caption turns it off and on, and the choice is remembered. It is on by default, because it gives the photo real context, but it only exists when `ENABLE_MAP` is on, and the map library is requested only when such a photo is opened.
 
 **Each folder can have its own map too**, with its own settings. In a folder's settings (and the gallery's, on the Settings tab) the **Map** section has:
