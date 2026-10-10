@@ -7691,6 +7691,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     padding: 7px 12px; font-size: 0.85rem; cursor: pointer;
   }
   .map-toggle:hover { border-color: #46464c; }
+  .map-toggle .map-icon { vertical-align: -4px; margin-right: 2px; }
   .map-preview-body[hidden] { display: none; }
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
   .lightbox .close,
@@ -7969,7 +7970,7 @@ if (!empty($serveMapPage)) {
 <?php if ($mapShown && !empty($mapPoints)): ?>
   <section class="map-preview" id="map-preview">
     <h2 class="map-preview-heading">
-      <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body">&#128506; <span class="map-toggle-label">Show map</span></button>
+      <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body"><svg class="map-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M9 4 3 6.5V20l6-2.5 6 2.5 6-2.5V4l-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/></svg> <span class="map-toggle-label">Show map</span></button>
       <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-preview-link">View full map &rarr;</a>
     </h2>
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
