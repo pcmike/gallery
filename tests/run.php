@@ -279,7 +279,12 @@ function start_server($docroot, $port) {
     // reaped). Output goes to /dev/null rather than an undrained pipe,
     // which would eventually fill and block the server on a log write.
     $descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
-    $cmd = [PHP_BINARY, '-S', '127.0.0.1:' . (int) $port, '-t', $docroot];
+    // A just-copied index.php is inside the first-run setup window (?admin offers to set a password for a few
+    // minutes after upload). Fixtures are not "just uploaded", so age the script, as an hour-old install would be.
+    if (is_file("$docroot/index.php")) @touch("$docroot/index.php", time() - 3600);
+    // opcache is on for the built-in server and re-checks files only every 2 seconds, so a test that swaps index.php
+    // and requests it at once could be served the old compiled copy: tests must be deterministic, so it's off here.
+    $cmd = [PHP_BINARY, '-d', 'opcache.enable=0', '-S', '127.0.0.1:' . (int) $port, '-t', $docroot];
     $proc = proc_open($cmd, $descriptors, $pipes);
     if (!is_resource($proc)) {
         fwrite(STDERR, "Could not start the PHP built-in server\n");
@@ -2103,6 +2108,65 @@ check('[gps import] ...and then it is', substr_count(http_get("$baseGps/?folder=
 [, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '0'], $gpsHdrs);
 check('[gps import] turning it off hides every location again but keeps the stored coordinates', str_contains($r, 'Saved coordinates are kept') && substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 0 && abs((read_data_file("$fxGps/Rome/.gallery-items.php")['items']['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001);
 
+echo "== first-run setup: choosing the admin password in the browser, for five minutes after upload ==\n";
+
+$fxSetup = new_fixture_dir('setup');
+make_jpeg("$fxSetup/photo.jpg", 60, 60, 10, 10, 10);
+copy(__DIR__ . '/../index.php', "$fxSetup/index.php");
+$portSetup = find_free_port(); start_server($fxSetup, $portSetup); $baseSetup = "http://127.0.0.1:$portSetup";   // the harness ages index.php: "uploaded an hour ago"
+$setupCfg = "$fxSetup/.gallery-config.php"; $setupIndex = "$fxSetup/index.php";
+check('[setup] an index.php uploaded long ago with no password: ?admin does not exist (404), as before', http_get("$baseSetup/?admin")[0] === 404);
+touch($setupIndex, time() - 290);
+[$sst, $sbody, $shd] = http_get("$baseSetup/?admin");
+check('[setup] just after upload (inside the five minutes) ?admin offers to choose a password: a form, never indexed, never cached', $sst === 200 && str_contains($sbody, 'Set up your gallery') && str_contains($sbody, 'name="setup_password"') && str_contains($sbody, 'noindex') && (bool) array_filter($shd, fn($h) => stripos($h, 'Cache-Control: no-store') === 0) && (bool) array_filter($shd, fn($h) => stripos($h, 'X-Robots-Tag: noindex') === 0));
+check('[setup] ...and it says plainly that whoever opens it first sets the password, and that it closes by itself', str_contains($sbody, 'Whoever opens this page first') && str_contains($sbody, '5 minutes'));
+check('[setup] ...and nothing on the public page advertises it', !str_contains(http_get("$baseSetup/")[1], 'Set up your gallery') && !str_contains(http_get("$baseSetup/")[1], 'name="setup_password"') && !str_contains(http_get("$baseSetup/")[1], 'href="?admin"'));
+touch($setupIndex, time() - 310);
+check('[setup] after the five minutes it is gone again (404)', http_get("$baseSetup/?admin")[0] === 404);
+file_put_contents("$fxSetup/.gallery-setup", '');
+check('[setup] an empty .gallery-setup file next to index.php reopens it, for coming back later', str_contains(http_get("$baseSetup/?admin")[1], 'name="setup_password"'));
+// Bad input writes nothing.
+[, $rMismatch] = http_post("$baseSetup/?admin", ['setup_password' => 'a-good-long-password', 'setup_password2' => 'another-long-password']);
+[, $rShort] = http_post("$baseSetup/?admin", ['setup_password' => 'short', 'setup_password2' => 'short']);
+check('[setup] two passwords that differ, or one under 12 characters, are refused with the reason and nothing is written', (str_contains($rMismatch, "don't match") || str_contains($rMismatch, 'don&#039;t match')) && str_contains($rShort, 'at least 12 characters') && !file_exists($setupCfg));
+// A settings file that exists but isn't valid is never overwritten.
+file_put_contents($setupCfg, $cfgGuard . "{\"ENABLE_VIDEO\": true,\n");
+$brokenBytes = (string) file_get_contents($setupCfg);
+[, $rBroken] = http_post("$baseSetup/?admin", ['setup_password' => 'a-good-long-password', 'setup_password2' => 'a-good-long-password']);
+check('[setup] a settings file that is not valid is never overwritten: it says so and leaves the file exactly as it was', str_contains($rBroken, 'isn&#039;t valid') && (string) file_get_contents($setupCfg) === $brokenBytes);
+// Settings that were already there are kept when the password is added.
+file_put_contents($setupCfg, cfg_text(['ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true]));
+$claimPw = "my 'first' admin password // with, odd } chars";
+[$cst, , $chd] = http_post("$baseSetup/?admin", ['setup_password' => $claimPw, 'setup_password2' => $claimPw], [], false);
+$claimLoc = ''; foreach ($chd as $h) if (stripos($h, 'Location:') === 0) $claimLoc = trim(substr($h, 9));
+$claimCookie = extract_cookie_header($chd);
+check('[setup] choosing a password redirects into the admin\'s Site settings, already signed in (a session cookie)', $cst === 303 && $claimLoc === '?admin#site' && str_contains($claimCookie, 'gallery_admin_'));
+$claimCfg = cfg_read($setupCfg); ksort($claimCfg);
+check('[setup] the password is stored in the settings file next to the settings that were already there, and nowhere else', $claimCfg === ['ADMIN_PASSWORD' => $claimPw, 'ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true] && (fileperms($setupCfg) & 0o077) === 0 && str_starts_with((string) file_get_contents($setupCfg), $cfgGuard));
+[, $claimedPage] = http_get("$baseSetup/?admin", ["Cookie: $claimCookie"]);
+check('[setup] with that session the admin opens with no further password, and says it is set and where it is kept', str_contains($claimedPage, 'Gallery Admin') && str_contains($claimedPage, 'Your admin password is set'));
+check('[setup] the .gallery-setup file has done its job and is removed', !file_exists("$fxSetup/.gallery-setup"));
+// Closed for good.
+touch($setupIndex, time());
+file_put_contents("$fxSetup/.gallery-setup", '');
+[, $loginAgain] = http_get("$baseSetup/?admin");
+$beforeSecond = (string) file_get_contents($setupCfg);
+[, $second] = http_post("$baseSetup/?admin", ['setup_password' => 'an-attackers-password-1', 'setup_password2' => 'an-attackers-password-1']);
+check('[setup] once a password exists, setup never appears again, even with a fresh index.php and a .gallery-setup file: it is the login form', str_contains($loginAgain, 'name="login_password"') && !str_contains($loginAgain, 'name="setup_password"'));
+check('[setup] ...and a second visitor posting a new password changes nothing', !str_contains($second, 'Your admin password is set') && (string) file_get_contents($setupCfg) === $beforeSecond && cfg_read($setupCfg)['ADMIN_PASSWORD'] === $claimPw);
+check('[setup] ...the chosen password (with quotes, slashes, a comma and a brace in it) logs in through the form', http_post("$baseSetup/?admin", ['login_password' => $claimPw], [], false)[0] === 303 && http_post("$baseSetup/?admin", ['login_password' => 'an-attackers-password-1'], [], false)[0] === 200);
+unlink("$fxSetup/.gallery-setup");
+// An unwritable folder: say so and hand over the exact file.
+$fxSetupRo = new_fixture_dir('setup-ro');
+make_jpeg("$fxSetupRo/a.jpg", 60, 60, 1, 2, 3);
+copy(__DIR__ . '/../index.php', "$fxSetupRo/index.php");
+$portSetupRo = find_free_port(); start_server($fxSetupRo, $portSetupRo);
+touch("$fxSetupRo/index.php", time());
+chmod($fxSetupRo, 0555);
+[, $roSetup] = http_post("http://127.0.0.1:$portSetupRo/?admin", ['setup_password' => 'read-only-folder-password', 'setup_password2' => 'read-only-folder-password']);
+chmod($fxSetupRo, 0775);
+check('[setup] when the folder can\'t be written it says so, saves nothing, and shows the exact settings file to create by hand', str_contains($roSetup, 'isn&#039;t writable') && str_contains($roSetup, '&quot;ADMIN_PASSWORD&quot;: &quot;read-only-folder-password&quot;') && !file_exists("$fxSetupRo/.gallery-config.php"));
+
 echo "== settings file: .gallery-config.php overrides the defaults and survives an update ==\n";
 
 $cfgGuard = "<?php http_response_code(404); exit; ?>\n";
@@ -2169,7 +2233,8 @@ file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true
 check('[settings file] the root Settings tab says the file is in use and names the settings it provides, never their values', str_contains($cfgAdmin, 'is in use and keeps its settings') && str_contains($cfgAdmin, 'ENABLE_VIDEO, ADMIN_PASSWORD') && !str_contains($cfgAdmin, 'cfg-pw-123'));
 unlink("$fxCfg/.gallery-config.php");
 [, $cfgAdmin2] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
-check('[settings file] without the file the admin says so and explains how to keep settings across updates', http_get("$baseCfg/?admin")[0] === 404);
+touch("$fxCfg/index.php", time() - 3600);
+check('[settings file] with no password anywhere and an old index.php, ?admin does not exist (404)', http_get("$baseCfg/?admin")[0] === 404);
 
 echo "== settings never destroy data: captions, locations, hide flags and stats survive any setting being switched ==\n";
 
@@ -2396,6 +2461,18 @@ check('[root identity] clearing the title falls back to the "# Heading" again', 
 // Folders are unchanged: they still have a position and their own form.
 [, $subAdmin] = http_get("$baseRoot/?admin&folder=Sub", $rootHdrs);
 check('[root identity] a folder\'s own form is unchanged (display name, position)', str_contains($subAdmin, '<label>Display name</label>') && str_contains($subAdmin, 'name="sort_order"') && str_contains($subAdmin, 'Save folder settings'));
+
+echo "== admin folder tree: nesting, counts, the chosen folder ==\n";
+[, $treePage] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
+preg_match('#<nav class="admin-folder-nav".*?</nav>#s', $treePage, $treeM); $tree = $treeM[0] ?? '';
+check('[tree] the folders are a nested tree: each folder\'s children are a list inside it (Europe > France > Paris)', (bool) preg_match('#<li class="has-children">.*?fname">Europe</span>.*?<ul><li class="has-children">.*?fname">France</span>.*?<ul>.*?fname">Paris</span>#s', $tree));
+check('[tree] every folder, and the root, carries a count of what is directly in it', substr_count($tree, 'class="fcount"') === substr_count($tree, '<a ') && preg_match('#fname">Paris</span><span class="fcount">\d+</span>#', $tree));
+check('[tree] a folder\'s tooltip gives its own count and, for a parent, the count including its subfolders', (bool) preg_match('#title="Europe: \d+ here, \d+ including subfolders"#', $tree));
+check('[tree] only the folder being edited is marked current, and it is Paris', substr_count($tree, 'class="current" aria-current="page"') === 1 && (bool) preg_match('#class="current" aria-current="page"[^>]*><span class="fname">Paris</span>#', $tree));
+check('[tree] a folder with subfolders has a fold toggle for them, and a folder without has none', substr_count($tree, 'class="ftoggle"') === substr_count($tree, '<li class="has-children">') && substr_count($tree, 'class="ftoggle"') >= 2);
+check('[tree] the chosen folder is bold, like the active tab, in the page\'s styles', (bool) preg_match('#\.admin-folder-nav a\.current \{[^}]*font-weight:\s*600#', $treePage));
+[, $rootTreePage] = http_get("$baseDepth/?admin", [$depthAuth, "Cookie: $depthCookie"]);
+check('[tree] at the root the Root entry is the current one', (bool) preg_match('#class="current" aria-current="page"[^>]*><span class="fname">Root</span>#', $rootTreePage));
 
 echo "== counts: photos and videos are counted separately ==\n";
 

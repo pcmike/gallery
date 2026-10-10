@@ -32,7 +32,7 @@
  *     (With AUTO_GROUP_BY_FOLDER off it still peeks into subfolders, read-
  *     only and capped, solely to warn that photos there are being skipped.)
  *     ADMIN_PASSWORD and PRIVATE_VIEW_PASSWORD are empty by default,
- *     which makes ?admin and ?reveal completely inert rather than merely
+ *     which makes ?admin (apart from the first-run setup page) and ?reveal completely inert rather than merely
  *     unauthenticated. NGINX_ACCEL_REDIRECT_PREFIX is empty by default,
  *     which keeps every image/video served by plain PHP, same as always.
  *   - A .md file is only read if its first line is exactly {gallery}.
@@ -304,9 +304,11 @@ define('ENABLE_VIDEO', gallery_setting('ENABLE_VIDEO', false));
 // Password for the admin editor, reached via ?admin — captions, per-item
 // location/web link, display names, and raw .md editing. Empty by
 // default, and that's not merely "unauthenticated": with no password
-// set, ?admin is completely inert — the whole admin code path doesn't
-// run at all, the same way ?about/?download are modes of this one file
-// rather than separate scripts. Set this to a long random token, not a
+// set, ?admin does not exist (404) — the whole admin code path doesn't
+// run at all — with one exception: for five minutes after this file is
+// uploaded (or while an empty .gallery-setup file sits beside it) ?admin
+// offers a one-time page to choose the password, and the choice is saved in
+// the settings file. Set this to a long random token, not a
 // memorable phrase — this is the one credential in this script that, if
 // guessed, grants write access, so it deserves the strongest value you'd
 // put in any constant here. See the README for the HTTPS requirement and
@@ -3021,18 +3023,56 @@ function admin_resolve_folder($files) {
 
 /** Every folder at every depth, as a flat row of links labelled with the
  *  full path — parents before children, so the tree reads top-down. */
+/** How many photos/videos each folder holds: [own, total] keyed by folder path
+ *  ('' is the root). "Own" is what is directly in that folder (what its Photos
+ *  tab lists); "total" includes everything beneath it. */
+function admin_folder_counts($files) {
+    $own = []; $total = [];
+    foreach ($files as $f) {
+        $d = dirname($f);
+        $d = ($d === '.' || $d === '') ? '' : $d;
+        $own[$d] = ($own[$d] ?? 0) + 1;
+        for ($p = $d; ; $p = (strpos($p, '/') === false ? '' : substr($p, 0, strrpos($p, '/')))) {
+            $total[$p] = ($total[$p] ?? 0) + 1;
+            if ($p === '') break;
+        }
+    }
+    return [$own, $total];
+}
+
+/** The folders as a tree: each folder under its parent with guide lines, a
+ *  count of what is directly in it, and a chevron to fold the ones beneath it.
+ *  The folder being edited is marked (the script keeps its ancestors open and
+ *  folds the other branches; without JavaScript everything stays open). */
 function render_admin_folder_nav($files, $currentFolder) {
     $folderPaths = all_folder_paths($files);
     if (empty($folderPaths)) return '';
-    $html = '<nav class="admin-folder-nav" aria-label="Folders"><a href="?admin"' . ($currentFolder === null ? ' class="current" aria-current="page"' : '') . '>Root</a>';
-    foreach ($folderPaths as $key) {
-        $depth = substr_count($key, '/');
-        $active = ($currentFolder === $key) ? ' class="current" aria-current="page"' : '';
-        $html .= '<a href="?admin&amp;folder=' . htmlspecialchars(rawurlencode($key), ENT_QUOTES, 'UTF-8') . '"' . $active
-              . ' style="padding-left:' . (12 + $depth * 14) . 'px" title="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '">'
-              . htmlspecialchars(basename($key), ENT_QUOTES, 'UTF-8') . '</a>';
+    [$own, $total] = admin_folder_counts($files);
+    $children = [];
+    foreach ($folderPaths as $path) {
+        $parent = strpos($path, '/') === false ? '' : substr($path, 0, strrpos($path, '/'));
+        $children[$parent][] = $path;
     }
-    return $html . '</nav>';
+    $link = function ($path, $label, $href) use ($own, $total, $currentFolder) {
+        $current = ($path === '' ? $currentFolder === null : $currentFolder === $path);
+        $here = $own[$path] ?? 0; $all = $total[$path] ?? 0;
+        $title = ($path === '' ? 'Root' : $path) . ': ' . $here . ' here' . ($all !== $here ? ', ' . $all . ' including subfolders' : '');
+        return '<a href="' . $href . '"' . ($current ? ' class="current" aria-current="page"' : '') . ' title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '">'
+             . '<span class="fname">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span><span class="fcount">' . $here . '</span></a>';
+    };
+    $branch = function ($parent) use (&$branch, $children, $link) {
+        $out = '';
+        foreach ($children[$parent] ?? [] as $path) {
+            $kids = !empty($children[$path]);
+            $out .= '<li' . ($kids ? ' class="has-children"' : '') . '>'
+                  . ($kids ? '<button type="button" class="ftoggle" aria-expanded="true" aria-label="Show or hide the folders inside ' . htmlspecialchars(basename($path), ENT_QUOTES, 'UTF-8') . '"></button>' : '')
+                  . $link($path, basename($path), '?admin&amp;folder=' . htmlspecialchars(rawurlencode($path), ENT_QUOTES, 'UTF-8'));
+            if ($kids) $out .= '<ul>' . $branch($path) . '</ul>';
+            $out .= '</li>';
+        }
+        return $out;
+    };
+    return '<nav class="admin-folder-nav" aria-label="Folders"><ul class="ftree"><li>' . $link('', 'Root', '?admin') . '</li>' . $branch('') . '</ul></nav>';
 }
 
 /** A collapsed-by-default-on-mobile reference panel: the directive table
@@ -3832,10 +3872,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-tabs a.active .count { background:rgba(88,101,242,0.45); color:#fff; }
   /* Hidden is about the whole tree, not the folder being edited, so it
      lives with the places in the sidebar, above Root, in red. */
-  .side-hidden { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 0 10px; padding:6px 10px 6px 12px; border-radius:6px; font-size:0.85rem; color:#ff7b7d; text-decoration:none; background:rgba(237,66,69,0.08); border:1px solid rgba(237,66,69,0.25); }
+  .side-hidden { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 0 10px; padding:6px 10px 6px 11px; border-radius:6px; font-size:0.85rem; color:#ff7b7d; text-decoration:none; background:rgba(237,66,69,0.08); border:1px solid rgba(237,66,69,0.25); }
   .side-hidden .count { background:rgba(237,66,69,0.25); color:#ff9a9c; }
   .side-hidden:hover { background:rgba(237,66,69,0.14); }
-  .side-hidden.active { color:#fff; background:rgba(237,66,69,0.3); border-color:var(--err); }
+  .side-hidden.active { color:#fff; font-weight:600; background:rgba(237,66,69,0.3); border-color:var(--err); }
   .side-hidden.active .count { background:rgba(237,66,69,0.7); color:#fff; }
   .js-tabs .tab-panel { display:none; }
   .js-tabs .tab-panel.active { display:block; }
@@ -3845,13 +3885,27 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .hidden-list a { color:#8ab4ff; }
   .admin-layout { max-width:1180px; margin:0 auto; padding:18px 16px 64px; display:grid; grid-template-columns:210px minmax(0,1fr); gap:22px; align-items:start; }
   .admin-side { position:sticky; top:76px; max-height:calc(100vh - 92px); overflow-y:auto; }
-  .admin-folders > summary { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; cursor:pointer; list-style:none; }
+  .admin-folders > summary { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; padding-left:12px; cursor:pointer; list-style:none; }
+  .admin-side .muted { padding-left:12px; }
   .admin-folders > summary::-webkit-details-marker { display:none; }
   .admin-folders > summary .here { text-transform:none; letter-spacing:0; display:none; color:var(--text); }
-  .admin-folder-nav { display:flex; flex-direction:column; gap:1px; }
-  .admin-folder-nav a { flex:none; color:var(--muted); text-decoration:none; padding:5px 10px 5px 12px; border-radius:6px; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .admin-folder-nav ul { list-style:none; margin:0; padding:0; }
+  .admin-folder-nav li { position:relative; margin:1px 0; }
+  /* A level in: a guide line down the left, so a child clearly belongs to its parent. */
+  .admin-folder-nav li > ul { margin-left:15px; border-left:1px solid #34343a; }
+  .admin-folder-nav a { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--muted); text-decoration:none; padding:5px 8px 5px 12px; border-radius:6px; font-size:0.85rem; }
+  .admin-folder-nav a .fname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .admin-folder-nav a .fcount { flex:none; font-size:0.72rem; color:#6f6f78; font-variant-numeric:tabular-nums; }
   .admin-folder-nav a:hover { color:var(--text); background:var(--card); }
-  .admin-folder-nav a.current { color:var(--text); background:var(--accent); }
+  .admin-folder-nav a:hover .fcount { color:var(--muted); }
+  .admin-folder-nav a.current { color:#fff; background:var(--accent); font-weight:600; }
+  .admin-folder-nav a.current .fcount { color:rgba(255,255,255,0.8); font-weight:500; }
+  /* The fold chevron sits in the gutter left of the name, so names stay in one column. */
+  .admin-folder-nav .ftoggle { position:absolute; left:-1px; top:5px; width:14px; height:22px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; border-radius:4px; }
+  .admin-folder-nav .ftoggle::before { content:"\25BE"; font-size:0.7rem; display:block; line-height:22px; text-align:center; transition:transform .12s; }
+  .admin-folder-nav li.collapsed > .ftoggle::before { transform:rotate(-90deg); }
+  .admin-folder-nav .ftoggle:hover { color:var(--text); background:rgba(255,255,255,0.08); }
+  .admin-folder-nav li.collapsed > ul { display:none; }
   .admin-main { min-width:0; }
   .admin-main section, .admin-main details.panel { scroll-margin-top:84px; }
   .admin-main h2.section-title { font-size:1.05rem; margin:0 0 12px; }
@@ -3892,7 +3946,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .admin-main .editor-head { flex-wrap:wrap; }
     .admin-main .editor-nav { margin-left:0; justify-content:flex-start; }
     .admin-main .thumb-grid { grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:8px; }
-    .admin-folder-nav { max-height:220px; overflow-y:auto; }
+    .admin-folder-nav { max-height:260px; overflow-y:auto; }
     .settings-grid, .settings-grid.root { grid-template-columns:1fr; }
   }
   .flash { padding:10px 14px; border-radius:8px; margin:14px 0; font-size:0.9rem; }
@@ -3928,9 +3982,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   /* Photos tab: a grid of thumbnails, and one editor panel above it that
      opens with the selected photo's own form (every photo's real form is in
      the page; only the selected one is shown). */
-  .side-link { display:block; margin:0 0 10px; padding:6px 12px; border-radius:6px; font-size:0.85rem; color:var(--muted); text-decoration:none; background:var(--card); }
-  .side-link:hover { color:var(--text); }
-  .side-link.active { color:#fff; background:var(--accent); }
+  /* The left column's text all starts at the same place: 12px in, counting a pill's 1px border, so the pills,
+     the FOLDERS label and every folder name line up. Site settings is teal (blue is "selected", red is Hidden). */
+  .side-link { display:flex; align-items:center; margin:0 0 10px; padding:6px 10px 6px 11px; border-radius:6px; font-size:0.85rem; color:#5eead4; text-decoration:none; background:rgba(45,212,191,0.09); border:1px solid rgba(45,212,191,0.3); }
+  .side-link:hover { background:rgba(45,212,191,0.17); }
+  .side-link.active { color:#04201c; font-weight:600; background:#2dd4bf; border-color:#2dd4bf; }
   .site-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(190px,260px); gap:6px 22px; padding:12px 0; border-top:1px solid #26262a; align-items:start; }
   .site-settings h3.subhead + .site-row, .site-settings .muted + .site-row { border-top:0; }
   .site-row .name { font-weight:600; font-size:0.92rem; }
@@ -4455,6 +4511,19 @@ foreach ($adminFiles as $file) {
     window.addEventListener('hashchange', fromLocation);
     fromLocation();
   })();
+  // Folder tree: branches not on the way to the folder being edited start folded; the chevron toggles one.
+  (function () {
+    var nav = document.querySelector('.admin-folder-nav');
+    if (!nav) return;
+    [].forEach.call(nav.querySelectorAll('li.has-children'), function (li) {
+      var toggle = li.querySelector(':scope > .ftoggle');
+      if (!li.querySelector('a.current')) { li.classList.add('collapsed'); toggle.setAttribute('aria-expanded', 'false'); }
+      toggle.addEventListener('click', function () {
+        var folded = li.classList.toggle('collapsed');
+        toggle.setAttribute('aria-expanded', folded ? 'false' : 'true');
+      });
+    });
+  })();
   // Site settings: ask before saving if something that publishes content or
   // contacts a third party is being switched on.
   [].forEach.call(document.querySelectorAll('.site-settings-form'), function (form) {
@@ -4479,6 +4548,148 @@ foreach ($adminFiles as $file) {
 }
 
 /**
+ * First-run setup. With no admin password the admin doesn't exist (?admin is
+ * a 404) — except for a short window right after this file is put on the
+ * server, so the person who just uploaded it can choose a password in the
+ * browser instead of editing a file. The window is SETUP seconds after
+ * index.php's last modification (a re-upload reopens it), or whenever an
+ * empty file named .gallery-setup sits next to it (proof you can write to the
+ * folder, for coming back later). It closes for good once a password exists.
+ * Whoever opens the page first in that window sets the password, which is
+ * why the window is short and nothing public ever mentions it.
+ */
+function admin_setup_window_seconds() {
+    return 300;
+}
+
+function admin_setup_window_open() {
+    clearstatcache(true, __FILE__);
+    $mtime = @filemtime(__FILE__);
+    if ($mtime !== false) {
+        $age = time() - $mtime;
+        if ($age >= -60 && $age < admin_setup_window_seconds()) return true;
+    }
+    return is_file(__DIR__ . '/.gallery-setup');
+}
+
+/** Sets the first admin password, once, under a lock so two simultaneous
+ *  visitors can't both win. Returns ['ok' => true] or ['error' => text,
+ *  'manual' => settings-file text to create by hand (when it can't be
+ *  written)]. Only the settings file is touched; any settings already in it
+ *  are kept. */
+function admin_setup_claim($password) {
+    $lock = @fopen(__FILE__, 'r');
+    if ($lock) flock($lock, LOCK_EX);
+    try {
+        $path = gallery_config_path();
+        $raw = is_file($path) ? @file_get_contents($path) : '';
+        if ($raw === false) return ['error' => 'The settings file exists but can\'t be read, so nothing was changed.'];
+        [$status, $cfg] = gallery_config_parse((string) $raw);
+        if ($status !== 'ok') return ['error' => 'The settings file (.gallery-config.php) exists but isn\'t valid, and saving would overwrite it. Fix or delete that file, then try again.'];
+        if (isset($cfg['ADMIN_PASSWORD']) && is_string($cfg['ADMIN_PASSWORD']) && $cfg['ADMIN_PASSWORD'] !== '') {
+            return ['error' => 'An admin password has just been set by someone else. If that wasn\'t you, delete .gallery-config.php and set it again.', 'taken' => true];
+        }
+        $cfg['ADMIN_PASSWORD'] = $password;
+        $content = gallery_config_render($cfg);
+        if ($content === null) return ['error' => 'That password has characters that can\'t be stored. Try a different one.'];
+        $manual = ['error' => 'The gallery\'s folder isn\'t writable by the web server, so the password couldn\'t be saved. Create a file named .gallery-config.php next to index.php containing exactly the text below, then reload this page.', 'manual' => $content];
+        if (!is_writable(__DIR__)) return $manual;
+        $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmp, $content, LOCK_EX) === false) { @unlink($tmp); return $manual; }
+        @chmod($tmp, 0600);
+        [$roundStatus, $roundTrip] = gallery_config_parse((string) @file_get_contents($tmp));
+        if ($roundStatus !== 'ok' || ($roundTrip['ADMIN_PASSWORD'] ?? null) !== $password) { @unlink($tmp); return ['error' => 'The settings file didn\'t read back correctly, so it was not installed.']; }
+        if (!@rename($tmp, $path)) { @unlink($tmp); return $manual; }
+        return ['ok' => true];
+    } finally {
+        if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+    }
+}
+
+function render_setup_page($error = '', $manual = '') {
+    header('Content-Type: text/html; charset=UTF-8');
+    header('X-Robots-Tag: noindex, nofollow');
+    $minutes = (int) round(admin_setup_window_seconds() / 60);
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Set up your gallery</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; margin:0; }
+  .wrap { max-width:440px; margin:0 auto; padding:64px 24px; }
+  h1 { font-size:1.35rem; margin:0 0 8px; }
+  p { color:#9a9aa0; font-size:0.92rem; margin:0 0 16px; }
+  label { display:block; font-size:0.8rem; color:#9a9aa0; margin:12px 0 4px; }
+  input[type=password] { width:100%; box-sizing:border-box; padding:10px 12px; font-size:1rem; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:8px; }
+  input[type=password]:focus { outline:2px solid #5865f2; outline-offset:1px; }
+  button { margin-top:16px; width:100%; padding:11px 12px; font-size:1rem; background:#5865f2; color:#fff; border:0; border-radius:8px; cursor:pointer; }
+  .err { background:rgba(237,66,69,0.15); color:#ff8a8c; padding:9px 12px; border-radius:8px; font-size:0.9rem; margin-bottom:12px; }
+  .warn { background:rgba(245,166,35,0.1); border:1px solid rgba(245,166,35,0.35); color:#f5c26b; padding:9px 12px; border-radius:8px; font-size:0.85rem; margin-bottom:16px; }
+  textarea { width:100%; box-sizing:border-box; font-family:ui-monospace,monospace; font-size:0.8rem; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:8px; padding:8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Set up your gallery</h1>
+  <p>Choose the password that will unlock this gallery's admin: captions, folder settings, notes and the site settings. You'll be signed in straight away.</p>
+  <div class="warn">Whoever opens this page first sets the password, so do it now. This page switches itself off <?= $minutes ?> minutes after <code>index.php</code> was uploaded, and for good once a password exists.</div>
+  <?php if ($error !== ''): ?><div class="err" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+  <?php if ($manual !== ''): ?><textarea readonly rows="8" onfocus="this.select()"><?= htmlspecialchars($manual, ENT_QUOTES, 'UTF-8') ?></textarea><?php endif; ?>
+  <form method="post" action="">
+    <label for="setup_password">Admin password (at least 12 characters)</label>
+    <input type="password" id="setup_password" name="setup_password" autocomplete="new-password" autofocus required minlength="12">
+    <label for="setup_password2">Type it again</label>
+    <input type="password" id="setup_password2" name="setup_password2" autocomplete="new-password" required minlength="12">
+    <button type="submit">Set password and sign in</button>
+  </form>
+</div>
+</body>
+</html>
+<?php
+}
+
+function run_admin_setup() {
+    if (!is_https_request() && !is_local_request()) {
+        render_https_required_page();
+        return;
+    }
+    $error = ''; $manual = '';
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['setup_password']) && is_string($_POST['setup_password'])) {
+        $pw = str_replace("\0", '', $_POST['setup_password']);
+        $pw2 = is_string($_POST['setup_password2'] ?? null) ? str_replace("\0", '', $_POST['setup_password2']) : '';
+        if ($pw !== $pw2) $error = 'The two passwords you typed don\'t match.';
+        elseif (strlen($pw) < 12) $error = 'Use at least 12 characters: this one password can change your whole gallery.';
+        elseif (preg_match('/[\x00-\x1F\x7F]/', $pw)) $error = 'The password can\'t contain control characters.';
+        else {
+            $result = admin_setup_claim($pw);
+            if (!empty($result['ok'])) {
+                // Signed in as part of setting it up, and the setup file (if any) has done its job.
+                admin_start_session();
+                session_regenerate_id(true);
+                $_SESSION['admin_auth'] = hash('sha256', 'admin|' . $pw . '|' . __DIR__);
+                $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Your admin password is set and you\'re signed in. Site settings (left) is where the gallery-wide settings live; the password is kept in .gallery-config.php, which survives updating index.php.'];
+                @unlink(__DIR__ . '/.gallery-setup');
+                header('Location: ?admin#site', true, 303);
+                return;
+            }
+            $error = (string) ($result['error'] ?? 'Could not set the password.');
+            $manual = (string) ($result['manual'] ?? '');
+            if (!empty($result['taken'])) {
+                // Someone else got there first: this is a login page now.
+                render_login_page('Gallery admin', 'Enter the admin password.', $error);
+                return;
+            }
+        }
+    }
+    render_setup_page($error, $manual);
+}
+
+/**
  * Entry point for ?admin — auth (HTTPS, Basic Auth, throttle), then
  * dispatches to a POST action handler or the page itself. Exits the
  * script either way; nothing below this ever runs for an admin request.
@@ -4486,7 +4697,8 @@ foreach ($adminFiles as $file) {
 function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $galleryNotices) {
     send_sensitive_page_headers();
     if (ADMIN_PASSWORD === '') {
-        http_response_code(404);
+        // No password yet: the admin doesn't exist (404) — except right after upload, when it can be set here.
+        if (admin_setup_window_open()) run_admin_setup(); else http_response_code(404);
         return;
     }
     if (!is_https_request() && !is_local_request()) {

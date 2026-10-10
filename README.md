@@ -47,7 +47,7 @@ Pick what you're doing. Each recipe lists the few settings to change — written
 | Show iPhone (HEIC) photos | [iPhone photos](#recipe-iphone-heic-photos) |
 | See exactly what each setting and admin control does | [What affects what](#what-affects-what) |
 
-You only ever edit the `define('NAME', value);` lines near the top of `index.php` (a plain text editor is fine), and, for the admin, click the gallery's **title** (it's a link that looks like plain text) or visit `yoursite.com/your-folder/?admin` — over **HTTPS** (or `localhost` while testing); on plain HTTP the admin refuses to load, because its password would travel unprotected. Every recipe below was followed step by step against the real script, through the admin's real forms, as part of this project's test suite.
+Settings are changed from the admin's **Site settings** screen (or in a [settings file](#keeping-your-settings-across-updates) that survives updates). To get into the admin the first time, **open `yoursite.com/your-folder/?admin` within five minutes of uploading `index.php`** and choose a password ([First-run setup](#first-run-setup)); after that, click the gallery's **title** (it's a link that looks like plain text) or visit `?admin` — over **HTTPS** (or `localhost` while testing); on plain HTTP the admin refuses to load, because its password would travel unprotected. Every recipe below was followed step by step against the real script, through the admin's real forms, as part of this project's test suite.
 
 ### Recipe: a plain gallery
 
@@ -163,7 +163,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 | `FOLDER_DISPLAY_MODE` | `'overview'` | `'inline'` to show a folder's photos in a box instead of a cover card | needs `AUTO_GROUP_BY_FOLDER` |
 | `EXTRA_FOLDERS` | none | add `'Name' => '/real/path'` pairs | needs `AUTO_GROUP_BY_FOLDER` |
 | `ENABLE_VIDEO` | off | `true` for `.mov` / `.mp4` | |
-| `ADMIN_PASSWORD` | none | a long random string — turns the admin on | everything in the next table |
+| `ADMIN_PASSWORD` | none | choose it in the browser right after upload ([First-run setup](#first-run-setup)), or put a long random string in the settings file — turns the admin on | everything in the next table |
 | `ENABLE_PHOTO_LOCATION` | off | `true` to allow locations to be shown | per-folder switch + per-photo setting in the admin |
 | `ENABLE_MAP` | off | `true` for the map (the only feature that contacts another website) | needs `ENABLE_PHOTO_LOCATION` and something with a visible location |
 | `MAP_CLUSTER_RADIUS_MILES` | 50 | smaller for a city break, larger for a road trip | needs `ENABLE_MAP` |
@@ -462,7 +462,16 @@ The admin always shows and stores location data for you regardless of these; the
 
 ## The admin editor
 
-Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours alone) and open the admin: **click the gallery's title** at the top of the page (on a folder's page it leads to that folder's admin), or go to `?admin`. The title is deliberately unmarked — no underline, colour or hover change — so visitors have no reason to try it. You get a plain one-field password form (no username, no browser pop-up), and stay signed in for the session. With the password unset the admin doesn't exist: `?admin` returns 404, and the title isn't a link. You get:
+### First-run setup
+
+A new gallery has no admin password, so `?admin` doesn't exist (it answers 404) — except right after you upload: for **five minutes after `index.php` was last uploaded**, `yoursite.com/your-folder/?admin` shows a one-time "Set up your gallery" page. Type a password twice (at least 12 characters), and you're signed in, on Site settings. The password is saved in `.gallery-config.php`, and the page never appears again once a password exists.
+
+- **Do it right away.** Whoever opens that page first in the five minutes sets the password. That's why the window is short, why nothing on the public page mentions it, and why it needs HTTPS (or `localhost`) like the admin itself. If several people try at the same moment, exactly one wins and the rest are shown the login form (tested with six simultaneous attempts on nginx and Apache).
+- **Came back later?** Re-uploading `index.php` reopens the five minutes, or create an empty file named `.gallery-setup` next to it (that proves you can write to the folder) and reload; the file is removed once the password is set.
+- **Prefer not to use it?** Put `"ADMIN_PASSWORD"` in a [settings file](#keeping-your-settings-across-updates) yourself and the setup page never exists.
+- **It only ever adds the password.** Any settings already in `.gallery-config.php` are kept, and if that file is unreadable or invalid the page refuses rather than overwrite it. If the folder isn't writable it shows you the exact file to create by hand.
+
+Choose an admin password ([First-run setup](#first-run-setup), a long random string is the right choice — it's yours alone) and open the admin: **click the gallery's title** at the top of the page (on a folder's page it leads to that folder's admin), or go to `?admin`. The title is deliberately unmarked — no underline, colour or hover change — so visitors have no reason to try it. You get a plain one-field password form (no username, no browser pop-up), and stay signed in for the session. With no password set (and the first-run window closed) the admin doesn't exist: `?admin` returns 404, and the title isn't a link. You get:
 
 - **Tabs** in a sticky bar — **Photos**, **Folder settings**, **Notes**, **Export** — showing one section at a time, with the **folders as a tree** in a sidebar (a collapsed bar on a phone), so even a big gallery stays navigable. If anything is hidden, a red **Hidden** entry appears at the top of the sidebar, above Root (see below)
 - every photo and video in the current folder as a **grid of thumbnails**; select one and the editor panel above the grid opens with its caption, web link, location and visibility fields (Prev / Next step through the folder, and a one-click **Set as cover** for the folder). Badges on the thumbnails show which have captions, locations or are hidden
@@ -475,7 +484,7 @@ Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours al
 
 How it's locked down: the password is compared with `hash_equals()`; the page **refuses to load over plain HTTP** (except on `localhost`/`127.0.0.1`) and explains why, since the password would otherwise travel in the clear; logging in starts a fresh session (a session id issued earlier can never be a logged-in one), which lasts up to 4 hours and ends when you press **Log out** (top right of the admin) — that also clears the Private view cookie, and changing `ADMIN_PASSWORD` signs every existing session out; a CSRF token protects every save; and a failed-login throttle (5 *wrong* passwords from one address within 15 minutes imposes a 60-second delay before that address's next attempt is even checked; just opening the form doesn't count). If you were signed out and submit a change, it isn't saved and the form tells you why. A script can still send an HTTP `Authorization: Basic` header (any username, the password as the password) instead of using the form. The admin works at a phone's width.
 
-**`ADMIN_PASSWORD` lives in `index.php` itself**, a deliberate choice to keep this a single file. Redact it before pasting or sharing your copy of the script for support.
+**`ADMIN_PASSWORD` is kept in the settings file (`.gallery-config.php`)** — or in `index.php` itself if you put it there. Redact it before pasting or sharing either file for support.
 
 **The admin's data files are protected by default — and worth a second layer.** Everything the admin writes lives in a `.gallery-items.php` inside each folder (and the stats and login-throttle files are `.gallery-stats.php` and `.gallery-login-attempts.php`). They hold your captions, any GPS coordinates you entered, and the exact filenames of everything you've hidden. A web server serves any file in the folder to anyone who asks for its URL, so these are stored as PHP files that begin with a one-line guard: a direct request runs that line, which answers **404 and stops**, so none of the JSON below it is ever sent — on any host that runs PHP, with no server setting needed. The gallery itself never runs these files; it reads them as plain text and skips the first line. Captions are written with `<` and `>` escaped, so a caption can't smuggle PHP into the file.
 
@@ -633,7 +642,7 @@ What the script does to protect you, and the limits worth knowing.
 **Limits, stated plainly**
 - **A web server hands out any file it can see.** Hiding keeps hidden items out of every page, but the files themselves still answer to their exact address unless you add the [server rules](#locking-down-the-files-themselves).
 - **Original photos keep their embedded GPS** (see [Captions and locations](#captions-and-locations)).
-- **`ADMIN_PASSWORD` and `PRIVATE_VIEW_PASSWORD` live in `index.php`.** Pick long random ones, and redact them before sharing your copy of the file.
+- **`ADMIN_PASSWORD` and `PRIVATE_VIEW_PASSWORD` live in the settings file** (or in `index.php`, if you put them there). Pick long random ones, and redact them before sharing either file.
 - **Behind a reverse proxy, the script believes what the server tells PHP.** It reads the client address from `REMOTE_ADDR` (used for the login throttle and for allowing plain HTTP only from `localhost`) and treats a request as secure if `HTTPS` is set, the port is 443, or `X-Forwarded-Proto` is `https`. With php-fpm and the standard `fastcgi_param`s this is right. If instead you `proxy_pass` to a PHP web server on the same machine, *every* visitor looks like `127.0.0.1` — the HTTPS requirement then protects nothing and the throttle is shared — so pass the real client address and protocol through, or keep PHP behind FastCGI.
 - **Photos are cached by browsers for up to a year** (`immutable`) — that's what keeps a big gallery fast — **and replacing one still works.** Every photo and video address carries a short tag (`&v=…`, a hash of the file's modification time and size). Swap `rack.jpg` for a new picture under the same name and its tag changes, so browsers fetch the new one; photos you didn't touch keep their cached copies. (Link previews pick up the new picture too, since the preview address changes with it.) The tag is a hash, so it doesn't reveal when a file was changed. If you ever replace a file with an identical-size one *and* restore its old timestamp, the tag can't tell — touch the file.
 - Images and Markdown are processed from folders **you** control. The script isn't built to accept uploads from strangers, and doesn't.

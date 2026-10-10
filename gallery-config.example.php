@@ -36,7 +36,7 @@
     // "MAP_CLUSTER_RADIUS_MILES": 50,      // how close photos must be to share one pin
 
     // --- Passwords ---------------------------------------------------------
-    // "ADMIN_PASSWORD": "a-long-random-string",   // empty = the admin does not exist
+    // "ADMIN_PASSWORD": "a-long-random-string",   // empty = no password yet (first-run setup is open for 5 minutes after upload)
     // "PRIVATE_VIEW_PASSWORD": "something-to-share",   // empty = no private view
 
     // --- Server setup (file only: not editable in the admin) ---------------
