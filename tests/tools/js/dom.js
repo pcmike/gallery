@@ -8,6 +8,7 @@ export class El {
   get innerHTML(){ return this._html!==null ? this._html : esc(this.textContent) } set innerHTML(v){this._html=String(v); this._text=''; this.children=[]}
   addEventListener(t,f){(this._l[t]=this._l[t]||[]).push(f)}
   fire(t,ev){ev=ev||{}; ev.target=ev.target||this; ev.stopPropagation=ev.stopPropagation||(()=>{}); ev.preventDefault=ev.preventDefault||(()=>{}); (this._l[t]||[]).forEach(f=>f(ev))}
+  getBoundingClientRect(){ return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 } }
   appendChild(c){c.parent=this; this.children.push(c); return c}
   remove(){ if(this.parent) this.parent.children=this.parent.children.filter(x=>x!==this); this.parent=null }
   _all(){ return this.children.flatMap(c=>[c,...c._all()]) }
@@ -20,7 +21,7 @@ export class El {
 export function makeDoc(html) {
   const byId = {}; for (const m of html.matchAll(/<(\w+)[^>]*\sid="([^"]+)"/g)) byId[m[2]] = new El(m[1], m[2]);
   const body = new El('body'); const l = {};
-  return { byId, body, documentElement: new El('html'), activeElement: body, readyState:'complete',
+  return { byId, body, head: new El('head'), documentElement: new El('html'), activeElement: body, readyState:'complete',
     getElementById: (id) => byId[id] || null, createElement: (t) => new El(t),
     addEventListener: (t,f)=>{(l[t]=l[t]||[]).push(f)}, fire: (t,ev)=>{ev=ev||{}; ev.target=ev.target||body; ev.stopPropagation=ev.stopPropagation||(()=>{}); ev.preventDefault=ev.preventDefault||(()=>{}); (l[t]||[]).forEach(f=>f(ev))},
     querySelectorAll: (sel)=>[], querySelector:()=>null, _l:l };

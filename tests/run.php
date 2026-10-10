@@ -1814,11 +1814,12 @@ check('...leaving the newer value in place', str_contains($folderAfter, 'Changed
 check('the Export section warns that the file records hidden items and GPS', str_contains($parisAdminBody, 'Handle the file with care') && str_contains($parisAdminBody, 'hidden'));
 preg_match('#<aside class="notes-reference".*?</aside>#s', $depthAdminBody, $refM); $ref = $refM[0] ?? '';
 check('the notes reference is on the Notes tab in full, once (not folded away, and not repeated inside every editor), never collapsed', $ref !== '' && substr_count($depthAdminBody, 'How notes work') === 1 && !str_contains($depthAdminBody, '<details class="admin-reference"') && !str_contains($ref, '<details'));
-foreach (['Making a file count', 'Formatting', 'Directives', 'Attaching photos to a paragraph', 'Where a directive applies', 'Showing a directive as text', "If something doesn't work"] as $section) {
+foreach (['Start here', 'Formatting', 'Directives', 'Attaching photos to a paragraph', 'Where a directive applies', 'Notes and folders', 'Showing a directive as text', "If something doesn't work"] as $section) {
     $sections[] = str_contains(str_replace('&#039;', "'", $ref), $section);
 }
-check('[notes reference] it has every section: making a file count, formatting, the directives, attaching photos, where a directive applies, showing one as text, and troubleshooting', !in_array(false, $sections, true));
-check('[notes reference] it has a "Notes and folders" section saying what works with folders (a mention, {group:}, {sold}, {color:}) and that {photos:} reaches only top-level photos', str_contains($ref, 'Notes and folders') && str_contains($ref, 'Only works in the <strong>top-level notes</strong>') && str_contains($ref, 'cover card ignores it'));
+check('[notes reference] it has every section: start here, formatting, the directives, attaching photos, where a directive applies, folders, showing one as text, and troubleshooting', !in_array(false, $sections, true));
+check('[notes reference] it is split into six tabs (start, formatting, directives, photos, folders, fixing), each with a panel, and starts with a complete example', substr_count($ref, 'role="tab"') === 6 && substr_count($ref, '<section class="ref-panel"') === 6 && str_contains($ref, 'Our week in Lisbon.'));
+check('[notes reference] it has a "Notes and folders" section saying what works with folders (a mention, {group:}, {sold}, {color:}) and that {photos:} reaches only top-level photos', str_contains($ref, 'Notes and folders') && str_contains($ref, 'directly in the folder the notes are in') && str_contains($ref, 'A <em>cover card</em> takes that paragraph'));
 // {photos:} that cannot work in folder mode says so (it used to say "Unknown file", or fail silently).
 $fxFN = new_fixture_dir('foldernotes');
 mkdir("$fxFN/Paris");
@@ -1848,7 +1849,7 @@ check('[notes reference] each of the five directives is explained in full next t
 check('[notes reference] it explains the formatting that really works (bold, italic, underline, strikethrough, code, links, lists, quotes, code blocks) and that HTML is never run', str_contains($ref, '**bold**') && str_contains($ref, '__underline__') && str_contains($ref, '~~strikethrough~~') && str_contains($ref, '[words](https://example.com)') && str_contains($ref, '&gt; a quote') && str_contains($ref, 'never run'));
 check('[notes reference] it explains the rules that trip people up: {gallery} on the first line, the page-title heading, a directive only affecting its own paragraph, and the blank-line mistake with its fix', str_contains($ref, 'first line must be exactly') && str_contains($ref, 'page title') && str_contains($ref, 'its own paragraph') && str_contains($ref, 'Take a look at my rack') && str_contains($ref, 'Remove the blank line'));
 check('[notes reference] the Insert buttons exist only in the reference (five of them), not repeated in each editor', substr_count($ref, 'class="admin-insert-btn"') === 5 && substr_count(str_replace($ref, '', $depthAdminBody), 'class="admin-insert-btn"') === 0);
-check('the page script no longer folds the notes reference away on a phone: it is shown in full everywhere', !str_contains($depthAdminBody, ".admin-reference") && !str_contains($depthAdminBody, "querySelectorAll('.notes-reference"));
+check('the page script no longer folds the notes reference away on a phone: it is shown in full everywhere', !str_contains($depthAdminBody, ".admin-reference") && str_contains($depthAdminBody, 'ref.classList.add(\'js-ref\')'));
 check('a caption badge is a keyboard-reachable button that opens a popover on tap, not a tooltip only', str_contains($parisAfterCaption, 'role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)"') && str_contains($parisAfterCaption, 'function toggleCaptionPopover(badge, e)') && !str_contains($parisAfterCaption, '.item-badge.caption-badge { pointer-events: none; }'));
 
 // FOLDER_DISPLAY_MODE = 'inline': folders are only an organizing

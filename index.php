@@ -3129,84 +3129,109 @@ function render_admin_notes_reference() {
     $e = function ($t) { return htmlspecialchars($t, ENT_QUOTES, 'UTF-8'); };
     $c = function ($t) use ($e) { return '<code>' . $e($t) . '</code>'; };
     $ins = function ($label, $snippet) use ($e) { return '<button type="button" class="admin-insert-btn" data-snippet="' . $e($snippet) . '">' . $e($label) . '</button>'; };
+    $ex = function ($t) use ($e) { return '<pre class="ref-example">' . $e($t) . '</pre>'; };
     ob_start();
 ?>
     <h2 class="section-title">How notes work</h2>
-    <p>A notes file is a short box of text at the top of the gallery page (or at the top of a folder's page, if the file is in that folder). Write plain text with a little formatting, and use <strong>directives</strong> in {curly braces} to attach photos, mark an item sold, and so on.</p>
+    <nav class="ref-tabs" role="tablist" aria-label="Notes reference sections">
+      <button type="button" role="tab" data-ref="start" class="active">Start here</button>
+      <button type="button" role="tab" data-ref="format">Formatting</button>
+      <button type="button" role="tab" data-ref="directives">Directives</button>
+      <button type="button" role="tab" data-ref="photos">Photos</button>
+      <button type="button" role="tab" data-ref="folders">Folders</button>
+      <button type="button" role="tab" data-ref="fix">Fixing</button>
+    </nav>
 
-    <h3>Making a file count</h3>
-    <ul>
-      <li>The <strong>first line must be exactly</strong> <?= $c('{gallery}') ?>. Any other <code>.md</code> file in the folder is left completely alone (a personal notes file is never read). A file without it is listed as "not active", with a one-click button to add the line.</li>
-      <li>In the gallery's first notes file, a <?= $c('# Heading') ?> on the first line after that becomes the <strong>page title</strong>, and isn't repeated in the box. A <strong>Gallery title</strong> set in Settings wins over it.</li>
-      <li>A notes file inside a subfolder only affects <strong>that folder's page</strong> and photos.</li>
-    </ul>
+    <section class="ref-panel" data-ref="start">
+      <h3>Start here</h3>
+      <p>A notes file is a short box of text at the top of a page. Add <strong>directives</strong> in {curly braces} to attach photos, mark things sold, or colour a box. A complete small example:</p>
+      <?= $ex("{gallery}\n# Summer trip\n\nOur week in Lisbon. {color: gold}\n\nHand-built keyboard, 65%. {group: Keyboard} {photos: kb1.jpg, kb2.jpg}\n\nThis one has gone. {sold}") ?>
+      <ol class="ref-steps">
+        <li>The <strong>first line must be exactly</strong> <?= $c('{gallery}') ?>. Any other <code>.md</code> file is left completely alone (a personal notes file is never read). A file without it is listed as "not active", with a one-click button to add the line.</li>
+        <li>A <?= $c('# Heading') ?> on the next line becomes the <strong>page title</strong> (in the gallery's first notes file) and isn't repeated in the box. A <strong>Gallery title</strong> set in Settings wins over it.</li>
+        <li>A paragraph can carry directives. A directive only ever affects <strong>its own paragraph</strong>, and visitors never see it.</li>
+        <li>A notes file inside a folder shows on <strong>that folder's page</strong> and works the same way there.</li>
+      </ol>
+      <p class="hint">Not sure where to look? <button type="button" class="linklike" data-goto="directives">What can I put in {braces}?</button> <button type="button" class="linklike" data-goto="photos">How do I attach photos?</button> <button type="button" class="linklike" data-goto="fix">Something isn't working.</button></p>
+    </section>
 
-    <h3>Formatting</h3>
-    <table class="ref-table">
-      <tr><td><?= $c('# Heading') ?><br><?= $c('## Smaller') ?> <?= $c('### Smaller still') ?></td><td>Headings</td></tr>
-      <tr><td><?= $c('**bold**') ?> <?= $c('*italic*') ?> <?= $c('_italic_') ?><br><?= $c('***both***') ?> <?= $c('__underline__') ?><br><?= $c('~~strikethrough~~') ?></td><td>Text styles</td></tr>
-      <tr><td><?= $c('`code`') ?></td><td>Inline code, shown as typed (see "Showing a directive as text" below)</td></tr>
-      <tr><td><?= $c('[words](https://example.com)') ?></td><td>A link. Only <code>http://</code> and <code>https://</code> addresses become links.</td></tr>
-      <tr><td><?= $c('- an item') ?> <?= $c('* an item') ?><br><?= $c('1. a numbered item') ?></td><td>Bulleted and numbered lists</td></tr>
-      <tr><td><?= $c('> a quote') ?></td><td>A block quote</td></tr>
-      <tr><td><?= $c('```') ?> on its own line, before and after</td><td>A block of code, shown exactly as typed</td></tr>
-    </table>
-    <p class="hint">HTML you type is never run: it appears as plain text.</p>
+    <section class="ref-panel" data-ref="format">
+      <h3>Formatting</h3>
+      <table class="ref-table">
+        <tr><td><?= $c('# Heading') ?><br><?= $c('## Smaller') ?> <?= $c('### Smaller still') ?></td><td>Headings</td></tr>
+        <tr><td><?= $c('**bold**') ?> <?= $c('*italic*') ?> <?= $c('_italic_') ?><br><?= $c('***both***') ?> <?= $c('__underline__') ?><br><?= $c('~~strikethrough~~') ?></td><td>Text styles</td></tr>
+        <tr><td><?= $c('`code`') ?></td><td>Inline code, shown as typed (this is also how you write a directive without it doing anything: <?= $c('`{sold}`') ?> shows the word and marks nothing)</td></tr>
+        <tr><td><?= $c('[words](https://example.com)') ?></td><td>A link. Only <code>http://</code> and <code>https://</code> addresses become links.</td></tr>
+        <tr><td><?= $c('- an item') ?> <?= $c('* an item') ?><br><?= $c('1. a numbered item') ?></td><td>Bulleted and numbered lists</td></tr>
+        <tr><td><?= $c('> a quote') ?></td><td>A block quote</td></tr>
+        <tr><td><?= $c('```') ?> on its own line, before and after</td><td>A block of code, shown exactly as typed</td></tr>
+      </table>
+      <p class="hint">HTML you type is never run: it appears as plain text.</p>
+    </section>
 
-    <h3>Directives</h3>
-    <p>A directive is a word in {curly braces}, written anywhere in an item's paragraph. It's removed from what visitors read. Click a button to put one at the cursor of the note you last clicked in.</p>
-    <table class="ref-table">
-      <tr><td><?= $ins('Group a box', '{group: Name}') ?><br><?= $c('{group: Name}') ?></td><td>Draws a labelled <strong>box</strong> around this item's photos (with its own view count). On its own, it renames a box the gallery already made, such as a folder or a group of <code>alpha_01.jpg</code>, <code>alpha_02.jpg</code>.</td></tr>
-      <tr><td><?= $ins('Claim photos', '{photos: a.jpg, b.jpg}') ?><br><?= $c('{photos: a.jpg, b.jpg}') ?></td><td>Attaches exactly these files to this paragraph, <strong>whatever they're called</strong>. Separate the names with commas, spelled as in the folder. A file can belong to one paragraph only: the first claim wins.</td></tr>
-      <tr><td><?= $ins('Accent color', '{color: #ff0000}') ?><br><?= $c('{color: #5865f2}') ?> or <?= $c('{color: gold}') ?></td><td>The accent colour of that item's box: a hex code or a plain colour word.</td></tr>
-      <tr><td><?= $ins('Sold', '{sold}') ?><br><?= $c('{sold}') ?></td><td>Marks the item <strong>sold</strong>: dimmed, struck-through text, grayscale photos and a red SOLD ribbon.</td></tr>
-      <tr><td><?= $ins('Reserved', '{reserved}') ?><br><?= $c('{reserved}') ?> or <?= $c('{held}') ?></td><td>Marks it <strong>reserved</strong>: an orange tag; the photos stay in colour.</td></tr>
-    </table>
-    <p class="hint insert-hint" hidden>Click inside the note you want to add it to first, then press the button.</p>
-    <p class="hint">If an item has both, sold wins over reserved, and either one overrides a custom colour, so the signal is never ambiguous.</p>
+    <section class="ref-panel" data-ref="directives">
+      <h3>Directives</h3>
+      <p>Write them anywhere in a paragraph. Press a button to put one at the cursor of the note you last clicked in.</p>
+      <div class="ref-cards">
+        <div class="ref-card"><div class="ref-card-head"><?= $ins('Group a box', '{group: Name}') ?> <?= $c('{group: Name}') ?></div>
+          <p>Draws a labelled <strong>box</strong> around this paragraph's photos, with its own view count. On its own it renames a box the gallery already made (a folder, or <code>alpha_01.jpg</code> and <code>alpha_02.jpg</code> grouped by name).</p></div>
+        <div class="ref-card"><div class="ref-card-head"><?= $ins('Claim photos', '{photos: a.jpg, b.jpg}') ?> <?= $c('{photos: a.jpg, b.jpg}') ?></div>
+          <p>Attaches exactly these files to this paragraph, <strong>whatever they're called</strong>. Separate names with commas, spelled as in the folder. A file belongs to one paragraph only: the first claim wins.</p></div>
+        <div class="ref-card"><div class="ref-card-head"><?= $ins('Accent color', '{color: #ff0000}') ?> <?= $c('{color: gold}') ?> or <?= $c('{color: #5865f2}') ?></div>
+          <p>The accent colour of that item's box: a hex code or a plain colour word.</p></div>
+        <div class="ref-card"><div class="ref-card-head"><?= $ins('Sold', '{sold}') ?> <?= $c('{sold}') ?></div>
+          <p>Marks the item <strong>sold</strong>: dimmed, struck-through text, grayscale photos and a red SOLD ribbon.</p></div>
+        <div class="ref-card"><div class="ref-card-head"><?= $ins('Reserved', '{reserved}') ?> <?= $c('{reserved}') ?> or <?= $c('{held}') ?></div>
+          <p>Marks it <strong>reserved</strong>: an orange tag; the photos stay in colour.</p></div>
+      </div>
+      <p class="hint insert-hint" hidden>Click inside the note you want to add it to first, then press the button.</p>
+      <p class="hint">If an item has both, sold wins over reserved, and either one overrides a custom colour, so the signal is never ambiguous.</p>
+    </section>
 
-    <h3>Attaching photos to a paragraph</h3>
-    <p>Three ways, from least to most typing:</p>
-    <ol>
-      <li><strong>Just mention it.</strong> If a paragraph contains a photo's name as a whole word (not case-sensitive), its photos appear under it. With filename grouping off, the name is the file's name without its extension (<code>zebra.jpg</code> is "zebra"); with it on, a trailing <code>_01</code> or <code>-02</code> is dropped too, so <code>alpha_01.jpg</code> and <code>alpha_02.jpg</code> are both "alpha". Mentioning a folder's name (with folders shown as cover cards) links to that folder.</li>
-      <li><strong>List them:</strong> works with any filenames.
-<pre class="ref-example">The blue one is my favourite. {photos: IMG_0231.jpg, IMG_0232.jpg}</pre></li>
-      <li><strong>List them and give the item a box:</strong>
-<pre class="ref-example">Hand-built keyboard, 65%. {group: Keyboard} {photos: kb1.jpg, kb2.jpg} {color: gold}</pre></li>
-    </ol>
-    <p>A photo you list always beats the automatic matching, and is taken out of it.</p>
+    <section class="ref-panel" data-ref="photos">
+      <h3>Attaching photos to a paragraph</h3>
+      <p>Three ways, from least to most typing:</p>
+      <ol class="ref-steps">
+        <li><strong>Just mention it.</strong> If a paragraph contains a photo's name as a whole word (not case-sensitive), its photos appear under it. With filename grouping off the name is the file's name without its extension (<code>zebra.jpg</code> is "zebra"); with it on, a trailing <code>_01</code> or <code>-02</code> is dropped, so <code>alpha_01.jpg</code> and <code>alpha_02.jpg</code> are both "alpha".</li>
+        <li><strong>List them</strong>, which works with any filenames:
+          <?= $ex("The blue one is my favourite. {photos: IMG_0231.jpg, IMG_0232.jpg}") ?></li>
+        <li><strong>List them and give the item a box:</strong>
+          <?= $ex("Hand-built keyboard, 65%. {group: Keyboard} {photos: kb1.jpg, kb2.jpg} {color: gold}") ?></li>
+      </ol>
+      <p>A photo you list always beats the automatic matching, and is taken out of it.</p>
+      <h3>Where a directive applies</h3>
+      <p>A directive only ever affects <strong>its own paragraph</strong>, never the one above or below, even with nothing in between. A paragraph ends at a <strong>blank line</strong> (the usual cause of surprises), a heading, a quote or a list item (each stands alone), a code block, and a line starting <?= $c('(1)') ?>, <?= $c('(2)') ?> and so on, which starts a new paragraph straight away so a numbered listing needs no blank lines.</p>
+      <p>So this does <em>not</em> work as hoped, because the blank line makes two paragraphs:</p>
+      <?= $ex("Take a look at my rack\n\n{group: Rack} {photos: rack.jpg, rack2.jpg}") ?>
+      <p>Remove the blank line to make it one item:</p>
+      <?= $ex("Take a look at my rack. {group: Rack} {photos: rack.jpg, rack2.jpg}") ?>
+    </section>
 
-    <h3>Where a directive applies</h3>
-    <p>A directive only ever affects <strong>its own paragraph</strong>, never the one above or below, even with nothing in between. A paragraph ends at:</p>
-    <ul>
-      <li>a <strong>blank line</strong> (the usual cause of surprises),</li>
-      <li>a heading, a quote or a list item (each stands alone), and a code block,</li>
-      <li>a line starting <?= $c('(1)') ?>, <?= $c('(2)') ?> and so on, which starts a new paragraph straight away so a numbered listing needs no blank lines.</li>
-    </ul>
-    <p>So this does <em>not</em> work as hoped, because the blank line makes two paragraphs:</p>
-<pre class="ref-example">Take a look at my rack
+    <section class="ref-panel" data-ref="folders">
+      <h3>Notes and folders</h3>
+      <p>Notes work the same at the top and inside every folder: a notes file affects the page it sits on, and can use every directive on the photos <strong>directly in its own folder</strong>.</p>
+      <table class="ref-table">
+        <tr><td>Mention a folder's name</td><td>Write a subfolder's name as a whole word in a paragraph. A <em>cover card</em> takes that paragraph's <?= $c('{sold}') ?>, <?= $c('{reserved}') ?> and <?= $c('{color:}') ?>. With <em>Inline</em> folders its photos also appear under the paragraph.</td></tr>
+        <tr><td><?= $c('{group: Name}') ?> on a folder's paragraph</td><td>Renames that folder's card or box on the page you're on. To rename it everywhere, use the folder's <strong>Display name</strong> in its settings.</td></tr>
+        <tr><td><?= $c('{photos: a.jpg}') ?></td><td>Reaches photos <strong>directly in the folder the notes are in</strong>. A photo inside a subfolder can't be claimed from above: write the subfolder's name instead, or put the notes in that subfolder.</td></tr>
+        <tr><td>Mention a photo by name</td><td><?= $c('eiffel') ?> pulls <code>eiffel.jpg</code> up to the paragraph, in any folder's notes.</td></tr>
+        <tr><td>The photo viewer</td><td>The arrows stay inside one folder, so a trip's days don't run into each other.</td></tr>
+      </table>
+    </section>
 
-{group: Rack} {photos: rack.jpg, rack2.jpg}</pre>
-    <p>Remove the blank line to make it one item:</p>
-<pre class="ref-example">Take a look at my rack. {group: Rack} {photos: rack.jpg, rack2.jpg}</pre>
-
-    <h3>Notes and folders</h3>
-    <p>With <strong>Show subfolders</strong> on, notes still work, with these differences:</p>
-    <table class="ref-table">
-      <tr><td>Mention a folder's name</td><td>In the paragraph, write the folder's name as a whole word (<?= $c('Paris') ?>). Its photos appear under the paragraph with a "View 3 photos" link to the folder. This is how you describe a folder from the gallery's top-level notes.</td></tr>
-      <tr><td><?= $c('{group: Name}') ?> on a folder's paragraph</td><td>Renames that folder's card or box on the page you're on. To rename it everywhere, use the folder's <strong>Display name</strong> in its settings.</td></tr>
-      <tr><td><?= $c('{sold}') ?> <?= $c('{reserved}') ?></td><td>Always mark the paragraph and its thumbnails. With <em>Inline</em> folders the folder's box is marked too; a <em>cover card</em> is not.</td></tr>
-      <tr><td><?= $c('{color: gold}') ?></td><td>Colours a <strong>box</strong>. A folder is a box only with <em>Inline</em> folders; a cover card ignores it. A single photo mentioned by name gets the colour in either mode.</td></tr>
-      <tr><td><?= $c('{photos: a.jpg}') ?></td><td>Only works in the <strong>top-level notes</strong>, on photos that sit loose at the top level. It cannot reach a photo inside a folder, and is not read at all in a folder's own notes (a setup notice says so).</td></tr>
-      <tr><td>A note file inside a folder</td><td>Appears on that folder's page and only knows that folder's contents: mention a photo by its name (<?= $c('eiffel') ?> for <code>eiffel.jpg</code>) or a subfolder by its name, and use <?= $c('{sold}') ?>, <?= $c('{reserved}') ?> and <?= $c('{color:}') ?> on it.</td></tr>
-    </table>
-
-    <h3>Showing a directive as text</h3>
-    <p>To write about a directive without it doing anything, put it in backticks: <?= $c('`{sold}`') ?> shows the word <code>{sold}</code> and marks nothing. Everything on this page is written that way.</p>
-
-    <h3>If something doesn't work</h3>
-    <p>The gallery page shows a small, collapsed <strong>setup notices</strong> banner when something in a notes file didn't resolve: a filename in <?= $c('{photos:}') ?> that isn't in the folder, a file claimed twice, a directive cut off from its text by a blank line, or a file missing <?= $c('{gallery}') ?>.</p>
-    <p class="hint">The complete reference, with a table of every combination of <code>{group:}</code> and <code>{photos:}</code>, is in the README under "Directive syntax".</p>
+    <section class="ref-panel" data-ref="fix">
+      <h3>If something doesn't work</h3>
+      <p>The page shows a small, collapsed <strong>setup notices</strong> banner when something in a notes file didn't resolve:</p>
+      <ul>
+        <li>a filename in <?= $c('{photos:}') ?> that isn't in the folder, or is inside a subfolder,</li>
+        <li>a file claimed twice, or a <?= $c('{group:}') ?> name used twice,</li>
+        <li>a directive cut off from its text by a blank line,</li>
+        <li>a <code>.md</code> file missing <?= $c('{gallery}') ?>.</li>
+      </ul>
+      <h3>Showing a directive as text</h3>
+      <p>To write about a directive without it doing anything, put it in backticks: <?= $c('`{sold}`') ?> shows the word <code>{sold}</code> and marks nothing. Everything on this page is written that way.</p>
+      <p class="hint">The complete reference, with a table of every combination of <code>{group:}</code> and <code>{photos:}</code>, is in the README under "Directive syntax".</p>
+    </section>
 <?php
     return ob_get_clean();
 }
@@ -4341,6 +4366,20 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .notes-reference .ref-table td:last-child { color:#cfcfd4; }
   .notes-reference pre.ref-example { background:#101012; border-radius:6px; padding:8px 10px; margin:6px 0 10px; font-size:0.78rem; white-space:pre-wrap; overflow-wrap:anywhere; }
   .admin-insert-btn { background:#2a2a2e; color:var(--text); font-size:0.78rem; padding:4px 9px; margin-bottom:4px; }
+  .ref-tabs { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 4px; padding-bottom:10px; border-bottom:1px solid #26262a; }
+  .ref-tabs button { background:#202024; color:var(--muted); border:1px solid transparent; border-radius:6px; padding:5px 10px; font-size:0.78rem; }
+  .ref-tabs button:hover { color:var(--text); }
+  .ref-tabs button.active { background:var(--accent); color:#fff; }
+  .notes-reference.js-ref .ref-panel { display:none; }
+  .notes-reference.js-ref .ref-panel.active { display:block; }
+  .notes-reference .ref-panel:first-of-type h3 { margin-top:14px; }
+  .notes-reference .ref-steps { padding-left:22px; }
+  .notes-reference .ref-cards { display:flex; flex-direction:column; gap:8px; margin:0 0 10px; }
+  .notes-reference .ref-card { background:#18181b; border:1px solid #26262a; border-radius:8px; padding:9px 11px; }
+  .notes-reference .ref-card p { margin:5px 0 0; color:#cfcfd4; }
+  .notes-reference .ref-card-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .notes-reference .ref-card-head .admin-insert-btn { margin:0; }
+  .notes-reference button.linklike { background:none; color:var(--accent); padding:0 2px; font-size:inherit; text-decoration:underline; }
   @media (max-width: 1100px) { .notes-layout { grid-template-columns:1fr; } .notes-reference { position:static; max-height:none; } }
   /* Photos tab: a grid of thumbnails, and one editor panel above it that
      opens with the selected photo's own form (every photo's real form is in
@@ -4797,6 +4836,22 @@ foreach ($adminFiles as $file) {
   document.querySelectorAll('.adm-textarea').forEach(function (ta) {
     ta.addEventListener('focus', function () { lastNote = ta; });
   });
+  // The notes reference shows one section at a time (without JavaScript every section is simply listed).
+  [].forEach.call(document.querySelectorAll('.notes-reference'), function (ref) {
+    var tabs = ref.querySelectorAll('.ref-tabs button'), panels = ref.querySelectorAll('.ref-panel');
+    function show(name) {
+      [].forEach.call(tabs, function (t) { var on = t.getAttribute('data-ref') === name; t.classList.toggle('active', on); t.setAttribute('aria-selected', on ? 'true' : 'false'); });
+      [].forEach.call(panels, function (p) { p.classList.toggle('active', p.getAttribute('data-ref') === name); });
+      ref.scrollTop = 0;
+      try { sessionStorage.setItem('galleryRefTab', name); } catch (e) {}
+    }
+    ref.classList.add('js-ref');
+    [].forEach.call(tabs, function (t) { t.addEventListener('click', function () { show(t.getAttribute('data-ref')); }); });
+    [].forEach.call(ref.querySelectorAll('[data-goto]'), function (l) { l.addEventListener('click', function () { show(l.getAttribute('data-goto')); }); });
+    var saved = null;
+    try { saved = sessionStorage.getItem('galleryRefTab'); } catch (e) {}
+    show(saved && ref.querySelector('.ref-panel[data-ref="' + saved + '"]') ? saved : 'start');
+  });
   document.querySelectorAll('.admin-insert-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       const notes = document.querySelectorAll('.adm-textarea');
@@ -4805,7 +4860,15 @@ foreach ($adminFiles as $file) {
       if (!textarea) { if (hint) hint.hidden = false; return; }
       if (hint) hint.hidden = true;
       const snippet = btn.getAttribute('data-snippet');
-      const start = textarea.selectionStart, end = textarea.selectionEnd;
+      let start = textarea.selectionStart, end = textarea.selectionEnd;
+      // Never write into the {gallery} line itself: a cursor still sitting in it (or at the very start) means the end of the text.
+      const firstBreak = textarea.value.indexOf('\n'), firstLine = firstBreak < 0 ? textarea.value : textarea.value.slice(0, firstBreak);
+      if (/^\s*\{gallery\}\s*$/i.test(firstLine) && start <= firstLine.length) {
+        const sep = textarea.value === '' || textarea.value.slice(-1) === '\n' ? '' : ' ';
+        start = end = textarea.value.length;
+        textarea.value = textarea.value + sep;
+        start = end = textarea.value.length;
+      }
       textarea.value = textarea.value.slice(0, start) + snippet + textarea.value.slice(end);
       textarea.focus();
       textarea.selectionStart = textarea.selectionEnd = start + snippet.length;
@@ -6828,7 +6891,7 @@ function render_about_page() {
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $aboutUrl = htmlspecialchars(current_base_url() . '/?about', ENT_QUOTES, 'UTF-8');
     $repoUrl = 'https://github.com/pcmike/gallery';
-    $aboutDescription = 'A single-file, drop-in PHP photo gallery for trips and listings: nested folders, video, captions, a map, Markdown notes, view stats, and deep links.';
+    $aboutDescription = 'A single-file, drop-in PHP photo gallery for trips and listings: folders, video, captions, optional maps, Markdown notes, a browser-based admin, and shareable links.';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -6891,15 +6954,29 @@ function render_about_page() {
   <p class="subtitle">A single PHP file, no dependencies, no build step. Drop it into any folder of photos.</p>
   <a class="download-btn" href="<?= htmlspecialchars($repoUrl, ENT_QUOTES, 'UTF-8') ?>">&#11015; Get it on GitHub</a>
 
-  <h2>What it does</h2>
+  <h2>What visitors get</h2>
   <ul>
-    <li>Groups photos automatically by filename, or curate groups explicitly in a <code>.md</code> file — no naming convention required</li>
-    <li>Full-screen lightbox with keyboard nav and mobile swipe</li>
-    <li>Optional <code>.md</code> notes box — auto-linked thumbnails, <code>{color}</code>/<code>{sold}</code>/<code>{reserved}</code> directives</li>
-    <li>Live view stats and thumbnail caching — both opt-in, so nothing is written to your folder unless you turn them on</li>
-    <li>HEIC/HEIF (iPhone photo) support once thumbnail caching is enabled</li>
-    <li>Deep links (<code>?photo=</code>, <code>#group-name</code>, <code>#item-name</code>) with correct Open Graph previews when shared</li>
-    <li>For trips: nested folders to any depth, video, per-photo captions and locations, an owner-only admin editor, items you can hide from the public link, and a map &mdash; each one opt-in</li>
+    <li>A clean grid of photos and videos, with a full-screen viewer: keyboard arrows, phone swipe, captions, and a link icon for a photo's web page</li>
+    <li>Trips as folders: a cover card per folder with its dates and photo count, nested to any depth, and a viewer that stays inside the folder you opened</li>
+    <li>Where it was taken, if you choose to share it: a small map in the corner of the photo that opens bigger, and an optional trip map, both loaded only when someone asks for them</li>
+    <li>Shareable links to a photo, a folder or a map, with correct previews when pasted into a chat</li>
+  </ul>
+
+  <h2>What the owner gets</h2>
+  <ul>
+    <li>Set up in the browser: upload the file, open <code>?admin</code> and choose a password. A sign-in form, not a browser pop-up</li>
+    <li>An admin with tabs and a thumbnail grid: captions, locations, web links, hide flags, covers, folder names, descriptions, and dates that it can suggest from the photos' own</li>
+    <li>Site settings you flip on a page (each one saves at once and says what it exposes), kept in a small settings file that survives replacing <code>index.php</code></li>
+    <li>Markdown notes boxes, at the top and inside any folder: <code>{photos}</code>, <code>{group}</code>, <code>{color}</code>, <code>{sold}</code> and <code>{reserved}</code> for trip journals or for-sale listings, explained in the admin as you write</li>
+    <li>Items you can hide from the public link and still reach yourself, an optional private-view password, and visit counts (people, not page loads)</li>
+  </ul>
+
+  <h2>Careful by default</h2>
+  <ul>
+    <li>One PHP file, no dependencies, no build step. It writes only small files of its own (thumbnails, your settings, captions), never touches your photos, and keeps those files private</li>
+    <li>Photo locations, the map, video, subfolders and passwords are all off until you enable them, and the admin tells you what each one publishes</li>
+    <li>Your captions, locations and stats are never deleted by changing a setting</li>
+    <li>Also: HEIC (iPhone) photos once thumbnails are on, video with duration tiles, and deep links to any photo, group or note</li>
   </ul>
 
   <h2>Full documentation &amp; source</h2>
@@ -8052,7 +8129,9 @@ if ($currentFolderPath !== null) {
   (function () {
     const btn = document.getElementById('map-toggle'), body = document.getElementById('map-preview-body');
     if (!btn || !body) return;
-    const label = btn.querySelector('.map-toggle-label'), noun = label.textContent.replace(/^Show /, '');
+    const label = btn.querySelector('.map-toggle-label');
+    if (!label) return;
+    const noun = label.textContent.replace(/^Show /, '');
     let drawn = false;
     function set(open) {
       body.hidden = !open;
