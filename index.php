@@ -3507,7 +3507,12 @@ function stats_connection($folderPath) {
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $pdo->exec('PRAGMA journal_mode = WAL');
             $pdo->exec('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)');
-            $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views (filename TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
+            // Keyed by a hash of the photo's path, not the path itself: a
+            // SQLite file is binary and can't carry the PHP guard the JSON
+            // stores do, so it could be fetched by URL — and a readable
+            // filename in it would hand over a hidden item's exact name.
+            // Counts are still kept for every item, hidden or not.
+            $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views_h (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
             $conn['pdo'] = $pdo;
             $conn['mode'] = 'sqlite';
         } catch (Exception $e) {
@@ -3515,7 +3520,85 @@ function stats_connection($folderPath) {
         }
     }
     $GLOBALS['__stats_pool'][$folderPath] = $conn;
+    stats_import_legacy($folderPath, $conn);
     return $conn;
+}
+
+/** The stats key for a photo in the SQLite store. */
+function stats_key($relativePath) {
+    return hash('sha256', (string) $relativePath);
+}
+
+/**
+ * One-time import of what a 1.x install already recorded, so upgrading
+ * never zeroes the view counts: the plain-JSON store (.gallery-stats.json)
+ * and the old SQLite table with readable filenames (photo_views). Both
+ * are folded into the current store and then removed — the JSON file is
+ * deleted, and the SQLite table is dropped and the file VACUUMed so the
+ * old names don't linger in free pages. Best effort: if the folder isn't
+ * writable the old data is simply left where it was.
+ */
+function stats_import_legacy($folderPath, $conn) {
+    $legacy = ['pageviews' => 0, 'photos' => []];
+    $legacyJson = $folderPath . '/.gallery-stats.json';
+    $removeJson = false;
+    if (is_file($legacyJson)) {
+        $decoded = json_decode((string) @file_get_contents($legacyJson), true);
+        if (is_array($decoded)) {
+            $legacy['pageviews'] += (int) ($decoded['pageviews'] ?? 0);
+            foreach ((array) ($decoded['photos'] ?? []) as $name => $views) {
+                $legacy['photos'][(string) $name] = ($legacy['photos'][(string) $name] ?? 0) + (int) $views;
+            }
+            $removeJson = true;
+        }
+    }
+    $dropLegacyTable = false;
+    if ($conn['mode'] === 'sqlite') {
+        try {
+            $hasLegacyTable = (bool) $conn['pdo']->query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'photo_views'")->fetchColumn();
+            if ($hasLegacyTable) {
+                foreach ($conn['pdo']->query('SELECT filename, views FROM photo_views') as $row) {
+                    $legacy['photos'][(string) $row['filename']] = ($legacy['photos'][(string) $row['filename']] ?? 0) + (int) $row['views'];
+                }
+                $dropLegacyTable = true;
+            }
+        } catch (Exception $e) {
+            return;
+        }
+    }
+    if (!$removeJson && !$dropLegacyTable) return;
+
+    if ($conn['mode'] === 'sqlite') {
+        $pdo = $conn['pdo'];
+        try {
+            $pdo->beginTransaction();
+            if ($legacy['pageviews'] > 0) {
+                $pdo->prepare("INSERT INTO stats(key, value) VALUES('pageviews', :v) ON CONFLICT(key) DO UPDATE SET value = value + :v")
+                    ->execute([':v' => $legacy['pageviews']]);
+            }
+            $ins = $pdo->prepare('INSERT INTO photo_views_h(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
+            foreach ($legacy['photos'] as $name => $views) {
+                $ins->execute([':k' => stats_key($name), ':v' => $views]);
+            }
+            if ($dropLegacyTable) $pdo->exec('DROP TABLE photo_views');
+            $pdo->commit();
+            if ($dropLegacyTable) {
+                $pdo->exec('VACUUM');
+                $pdo->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+            }
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            return;
+        }
+    } else {
+        stats_update_file($conn['file'], function (&$data) use ($legacy) {
+            $data['pageviews'] = (int) ($data['pageviews'] ?? 0) + $legacy['pageviews'];
+            foreach ($legacy['photos'] as $name => $views) {
+                $data['photos'][$name] = (int) ($data['photos'][$name] ?? 0) + $views;
+            }
+        });
+    }
+    if ($removeJson) @unlink($legacyJson);
 }
 
 /** Reads-modifies-writes the flat-file JSON backend under an exclusive lock. */
@@ -3565,13 +3648,14 @@ function stats_bump_photo($folderPath, $relativePath) {
     $conn = stats_connection($folderPath);
     if ($conn['mode'] === 'sqlite') {
         $pdo = $conn['pdo'];
+        $key = stats_key($relativePath);
         $stmt = $pdo->prepare(
-            "INSERT INTO photo_views(filename, views) VALUES(:f, 1)
-             ON CONFLICT(filename) DO UPDATE SET views = views + 1"
+            "INSERT INTO photo_views_h(key, views) VALUES(:k, 1)
+             ON CONFLICT(key) DO UPDATE SET views = views + 1"
         );
-        $stmt->execute([':f' => $relativePath]);
-        $sel = $pdo->prepare('SELECT views FROM photo_views WHERE filename = :f');
-        $sel->execute([':f' => $relativePath]);
+        $stmt->execute([':k' => $key]);
+        $sel = $pdo->prepare('SELECT views FROM photo_views_h WHERE key = :k');
+        $sel->execute([':k' => $key]);
         return (int) $sel->fetchColumn();
     }
     $stats = stats_update_file($conn['file'], function (&$data) use ($relativePath) {
@@ -3580,13 +3664,21 @@ function stats_bump_photo($folderPath, $relativePath) {
     return (int) ($stats['photos'][$relativePath] ?? 0);
 }
 
-/** Every tracked photo's view count from one folder's own store. */
-function stats_get_photo_views($folderPath) {
+/** View counts from one folder's own store, as relativePath => views.
+ *  $candidateFiles names the files whose counts are wanted: the SQLite
+ *  store keeps only hashes, so it can answer only for paths it's asked
+ *  about (the JSON store has the names and returns everything). */
+function stats_get_photo_views($folderPath, $candidateFiles = []) {
     $conn = stats_connection($folderPath);
     if ($conn['mode'] === 'sqlite') {
+        $byKey = [];
+        foreach ($conn['pdo']->query('SELECT key, views FROM photo_views_h') as $row) {
+            $byKey[$row['key']] = (int) $row['views'];
+        }
         $result = [];
-        foreach ($conn['pdo']->query('SELECT filename, views FROM photo_views') as $row) {
-            $result[$row['filename']] = (int) $row['views'];
+        foreach ($candidateFiles as $file) {
+            $key = stats_key($file);
+            if (isset($byKey[$key])) $result[$file] = $byKey[$key];
         }
         return $result;
     }
@@ -3602,11 +3694,11 @@ function stats_get_photo_views($folderPath) {
 function stats_get_all_photo_views($dir, $files) {
     $byFolder = [];
     foreach ($files as $file) {
-        $byFolder[containing_folder_real_path($dir, $file)] = true;
+        $byFolder[containing_folder_real_path($dir, $file)][] = $file;
     }
     $result = [];
-    foreach (array_keys($byFolder) as $folderPath) {
-        $result += stats_get_photo_views($folderPath);
+    foreach ($byFolder as $folderPath => $folderFiles) {
+        $result += stats_get_photo_views($folderPath, $folderFiles);
     }
     return $result;
 }
@@ -3674,23 +3766,17 @@ if (isset($_GET['track'])) {
             // GROUPING), so this one folder's store covers the whole
             // group's totals below, not just the requested photo.
             $requestedFolder = containing_folder_real_path($dir, $requested);
-            $currentPhotoViews = stats_get_photo_views($requestedFolder);
-            // A hidden item (only reachable here by a revealed viewer) is
-            // never counted: its filename would otherwise land in the
-            // stats store, and the SQLite flavour of that store is a
-            // binary file that can't carry the PHP guard the JSON files
-            // do — it would hand a hidden item's exact name to anyone who
-            // requested the file's URL.
-            if (view_debounce_recently_viewed($requested) || file_is_hidden($dir, $requested, $itemsData)) {
-                // Debounced (or hidden): still report the current total,
-                // unincremented, so the live-updating badge reflects
-                // reality instead of looking stuck or broken.
+            $groupKey = $fileToGroupKey[$requested] ?? group_key($requested);
+            $groupFiles = $groups[$groupKey] ?? [$requested];
+            $currentPhotoViews = stats_get_photo_views($requestedFolder, $groupFiles);
+            if (view_debounce_recently_viewed($requested)) {
+                // Debounced: still report the current total, unincremented,
+                // so the live-updating badge reflects reality instead of
+                // looking stuck or broken.
                 $newCount = (int) ($currentPhotoViews[$requested] ?? 0);
             } else {
                 $newCount = stats_bump_photo($requestedFolder, $requested);
             }
-            $groupKey = $fileToGroupKey[$requested] ?? group_key($requested);
-            $groupFiles = $groups[$groupKey] ?? [$requested];
             $groupTotal = 0;
             foreach ($groupFiles as $gf) {
                 $groupTotal += ($gf === $requested) ? $newCount : (int) ($currentPhotoViews[$gf] ?? 0);

@@ -839,8 +839,8 @@ if (is_file("$fxNested/.gallery-stats.php")) {
     $rootHasEiffelEntry = isset($rootData['photos']['Paris/eiffel.jpg']);
 } elseif (is_file("$fxNested/.gallery-stats.sqlite")) {
     $rootPdo = new PDO('sqlite:' . "$fxNested/.gallery-stats.sqlite");
-    $stmt = $rootPdo->prepare('SELECT views FROM photo_views WHERE filename = :f');
-    $stmt->execute([':f' => 'Paris/eiffel.jpg']);
+    $stmt = $rootPdo->prepare('SELECT views FROM photo_views_h WHERE key = :k');
+    $stmt->execute([':k' => hash('sha256', 'Paris/eiffel.jpg')]);
     $rootHasEiffelEntry = $stmt->fetchColumn() !== false;
 }
 check('the gallery root\'s own stats store has no entry for a subfolder photo', !$rootHasEiffelEntry);
@@ -1242,18 +1242,23 @@ $revealCookie = extract_cookie_header($revealHeaders);
 check('?reveal sets a cookie', $revealCookie !== null);
 [, $revealedBody] = http_get("$basePrivate/", ["Cookie: $revealCookie"]);
 check('once revealed, every hidden item is visible again — including the entirely-hidden folder', str_contains($revealedBody, 'loose1.jpg') && str_contains($revealedBody, '<div class="folder-cover"'));
-// A revealed viewer opening a hidden item must not put its filename into
-// the stats store (the SQLite store is a binary file that can't carry the
-// PHP guard, so it would be fetchable by URL). A visible item still counts.
+// A revealed viewer opening a hidden item IS counted (the owner wants to
+// know), but no file a web server could hand out may contain its name:
+// the JSON store is a guarded PHP file, and the SQLite store keys rows by
+// a hash, never the filename.
 [, $hiddenTrackBody] = http_get("$basePrivate/?track=loose1.jpg", ["Cookie: $revealCookie"]);
-check('tracking a hidden item as a revealed viewer still answers ok, without counting it', str_contains($hiddenTrackBody, '"ok":true') && str_contains($hiddenTrackBody, '"photoViews":0'));
+check('tracking a hidden item as a revealed viewer counts it', str_contains($hiddenTrackBody, '"ok":true') && str_contains($hiddenTrackBody, '"photoViews":1'));
 http_get("$basePrivate/?track=loose2.jpg", ["Cookie: $revealCookie"]);
-$statsBlob = '';
-foreach (['.gallery-stats.php', '.gallery-stats.sqlite'] as $statsName) {
-    if (is_file("$fxPrivate/$statsName")) $statsBlob .= (string) file_get_contents("$fxPrivate/$statsName");
+$sqliteBlob = is_file("$fxPrivate/.gallery-stats.sqlite") ? (string) file_get_contents("$fxPrivate/.gallery-stats.sqlite") : '';
+$sqliteWal = is_file("$fxPrivate/.gallery-stats.sqlite-wal") ? (string) file_get_contents("$fxPrivate/.gallery-stats.sqlite-wal") : '';
+$jsonBlob = is_file("$fxPrivate/.gallery-stats.php") ? (string) file_get_contents("$fxPrivate/.gallery-stats.php") : '';
+check('(setup) a stats store exists', $sqliteBlob !== '' || $jsonBlob !== '');
+check('the SQLite stats file (and its WAL) never contains a filename, hidden or not', !str_contains($sqliteBlob . $sqliteWal, 'loose1.jpg') && !str_contains($sqliteBlob . $sqliteWal, 'loose2.jpg'));
+check('...and the hidden item\'s count is real and comes back (revealed viewer\'s page badge)', str_contains((string) http_get("$basePrivate/", ["Cookie: $revealCookie"])[1], 'data-photo="loose1.jpg">&#128065; 1<'));
+if ($jsonBlob !== '') {
+    [$privStatsStatus, $privStatsBody] = http_get("$basePrivate/.gallery-stats.php");
+    check('the guarded JSON stats file answers 404 with an empty body when fetched', $privStatsStatus === 404 && $privStatsBody === '');
 }
-check('the stats store has no trace of the hidden item\'s filename...', $statsBlob !== '' && !str_contains($statsBlob, 'loose1.jpg'));
-check('...while a visible item is still counted', str_contains($statsBlob, 'loose2.jpg'));
 [$revealedImgStatus] = http_get("$basePrivate/?img=loose1.jpg&size=thumb", ["Cookie: $revealCookie"]);
 check('?img= serves a hidden item once revealed', $revealedImgStatus === 200);
 
@@ -1724,6 +1729,56 @@ $mA = strpos($folderMtimeBody, 'id="group-alpha"');
 $mB = strpos($folderMtimeBody, 'id="group-bravo"');
 $mC = strpos($folderMtimeBody, 'id="group-charlie"');
 check('with PHOTO_SORT_ORDER=mtime, root folders sort by the folder\'s own mtime, oldest first (Charlie, Alpha, Bravo)', $mC !== false && $mC < $mA && $mA < $mB);
+
+/* ======================================================================= *
+ * FIXTURE: "upgrade" — a 1.x install's stats survive the move to 2.0.
+ * 1.x kept view counts in a plain .gallery-stats.json (or a SQLite file
+ * with readable filenames); 2.0 stores them in guarded/hashed form. A
+ * first request must import the old counts, not zero them, and must not
+ * leave the readable old copies lying around.
+ * ======================================================================= */
+
+echo "== upgrade fixtures: 1.x view counts carried into 2.0 ==\n";
+
+foreach (['json' => true, 'sqlite' => false] as $upgradeMode => $forceJsonMode) {
+    $fxUp = new_fixture_dir("upgrade-$upgradeMode");
+    make_jpeg("$fxUp/old-photo.jpg", 60, 60, 10, 10, 10);
+    make_jpeg("$fxUp/other.jpg", 60, 60, 20, 20, 20);
+    $patched = $indexContents;
+    if ($forceJsonMode) {
+        // Force the flat-file backend even though pdo_sqlite exists here.
+        $patched = str_replace("in_array('sqlite', PDO::getAvailableDrivers(), true)", 'false', $patched, $replaced);
+        if ($replaced !== 1) { echo "  FAIL  (setup) could not force JSON stats mode\n"; $failCount++; }
+    }
+    write_patched_index("$fxUp/index.php", $patched, ['TRACK_VIEWS' => 'true']);
+    if ($upgradeMode === 'json') {
+        file_put_contents("$fxUp/.gallery-stats.json", json_encode(['pageviews' => 41, 'photos' => ['old-photo.jpg' => 7, 'other.jpg' => 3]]));
+    } elseif (class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+        $legacyPdo = new PDO('sqlite:' . "$fxUp/.gallery-stats.sqlite");
+        $legacyPdo->exec('CREATE TABLE stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)');
+        $legacyPdo->exec('CREATE TABLE photo_views (filename TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
+        $legacyPdo->exec("INSERT INTO stats VALUES ('pageviews', 41)");
+        $legacyPdo->exec("INSERT INTO photo_views VALUES ('old-photo.jpg', 7), ('other.jpg', 3)");
+        $legacyPdo = null;
+    } else {
+        echo "  skip  SQLite upgrade fixture (no pdo_sqlite)\n";
+        continue;
+    }
+    $portUp = find_free_port();
+    start_server($fxUp, $portUp);
+    [, $upBody] = http_get("http://127.0.0.1:$portUp/");
+    check("[$upgradeMode] the old per-photo counts are imported, not zeroed", str_contains($upBody, 'data-photo="old-photo.jpg">&#128065; 7<') && str_contains($upBody, 'data-photo="other.jpg">&#128065; 3<'));
+    check("[$upgradeMode] the old sitewide pageview total carries over (41, then this request makes 42)", str_contains($upBody, '42 views'));
+    $upTrack = json_decode(http_get("http://127.0.0.1:$portUp/?track=old-photo.jpg")[1], true);
+    check("[$upgradeMode] counting continues from the imported total", ($upTrack['photoViews'] ?? null) === 8);
+    if ($upgradeMode === 'json') {
+        check('[json] the readable 1.x .gallery-stats.json is removed after import', !file_exists("$fxUp/.gallery-stats.json"));
+        check('[json] the new store is a guarded PHP file', strncmp((string) @file_get_contents("$fxUp/.gallery-stats.php"), '<?php http_response_code(404); exit; ?>', 38) === 0);
+    } else {
+        $upBlob = (string) file_get_contents("$fxUp/.gallery-stats.sqlite") . (is_file("$fxUp/.gallery-stats.sqlite-wal") ? (string) file_get_contents("$fxUp/.gallery-stats.sqlite-wal") : '');
+        check('[sqlite] no readable filename remains anywhere in the SQLite file after the upgrade (table dropped and VACUUMed)', !str_contains($upBlob, 'old-photo.jpg') && !str_contains($upBlob, 'other.jpg'));
+    }
+}
 
 /* ======================================================================= *
  * FIXTURE: "gps" — EXIF GPS auto-fill in the admin, for JPEG and (where
