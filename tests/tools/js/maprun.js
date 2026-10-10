@@ -12,6 +12,8 @@ if (scriptArgs[3]) { // swap in synthetic cluster data
   src = src.replace(/var clusters = .*?;\n/s, 'var clusters = ' + std.loadFile(scriptArgs[3]).trim() + ';\n');
 }
 new Function('document', 'window', 'L', src)(doc, win, L);
+// A map that waits to be asked for (see the page's Show map button) registers its drawing function; ask for it.
+if (win.__lazyMaps) for (const f of Object.values(win.__lazyMaps)) f();
 print('--- map: ' + scriptArgs[2]);
 const cl = (src.match(/var clusters = (.*?);\n/s) || [])[1]; const clusters = JSON.parse(cl);
 const singles = clusters.filter(c => c.length === 1).length, multi = clusters.filter(c => c.length > 1).length;

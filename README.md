@@ -104,7 +104,7 @@ define('ENABLE_VIDEO', true);               // .mov / .mp4
 3. Still in that folder, tick **Show photo locations publicly for this folder** — locations are off for every folder until you opt it in, so one trip can share places and another never will. **Ticking it publishes:** an orange note beside the switch says so (and how many photos have GPS); it saves at once and reads the GPS out of every photo in that folder that has some (most phone photos do) and shows those places on the gallery and the map straight away. To keep one photo private, open it below and set *Location visibility* to **Always hide** (or clear its coordinates) and Save. Photos you upload to the folder later are picked up the next time you open that folder in the admin.
 4. Under **Photos & video**, give a photo a *Caption* and *Web link*, and correct a location if the GPS is off (*Latitude* and *Longitude* are already filled in) — then **Save**. Visitors get small badges: caption-bubble icon, pin icon for location (opens OpenStreetMap), globe link. The lightbox shows the caption, never the filename.
 5. **Set as cover** on a photo to choose the folder's card image. That same photo is the picture shown when someone pastes the folder's link.
-6. The map appears on the front page (and at its own shareable `?map` link) as soon as at least one photo has a *visible* location. Photos close together share one numbered pin (`MAP_CLUSTER_RADIUS_MILES`, default 50); pins are colored per top-level folder.
+6. The map appears on the front page (and a shareable `?map` link that opens it) as soon as at least one photo has a *visible* location. Photos close together share one numbered pin (`MAP_CLUSTER_RADIUS_MILES`, default 50); pins are colored per top-level folder.
 
 **Videos** show a play-button tile and their length; they play in the viewer. They can't have their location read automatically — type it in. **Back up your captions:** *Export the whole tree as JSON* at the bottom of any admin page downloads everything you've typed.
 
@@ -179,7 +179,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 | Folder → *Dates*, *Description* | shown under the label on the card and at the top of the folder's page; the description is also the link-preview text (a notes file in that folder takes precedence there) | `AUTO_GROUP_BY_FOLDER` |
 | Folder → *Position* | the card order among sibling folders: numbered first, then natural order | a notes-file mention of a folder still places it earlier |
 | Photo → **Set as cover** | the folder's card image and its link-preview image | |
-| Folder (or gallery) → *Map: show a map on this page, pin grouping* | a map of just that folder's photos on its page, and its own `?map&folder=` page; the front page's map is on unless switched off, a folder's off unless switched on | `ENABLE_MAP`, `ENABLE_PHOTO_LOCATION`, and photos with a visible location |
+| Folder (or gallery) → *Map: show a map on this page, pin grouping* | a map of just that folder's photos on its page, and a shareable `?map&folder=` link that opens it; the front page's map is on unless switched off, a folder's off unless switched on | `ENABLE_MAP`, `ENABLE_PHOTO_LOCATION`, and photos with a visible location |
 | Folder → *Show photo locations publicly* | turning it on stores the GPS of every photo in the folder that has some, so they show pin icons and map pins (an orange warning sits beside the switch) | `ENABLE_PHOTO_LOCATION` |
 | Photo → *Caption* | caption-bubble icon; the viewer's caption bar | |
 | Photo → *Web link* | globe icon, and an icon in the viewer | |
@@ -574,7 +574,7 @@ Neither renames your files. That would change files you own, which this project 
 
 Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actually has a visible location) and two maps become available. Neither is in the way: **the page map starts closed**, behind a small *Show map* button (its choice is remembered per browser), and **the little map in the photo viewer** shows only for a photo that has a visible location.
 
-- **The page map.** The gallery front page offers a *Show map* button above the folders; pressing it loads the map, which plots every visible, located photo from every folder together, and a *View full map* button beside it opens a large map over the page (click outside it, press Escape or use the cross to close it), with a link to the same map as its own shareable `?map` page. Nothing from the map's third parties is requested until a visitor presses it.
+- **The page map.** The gallery front page offers a *Show map* button above the folders; pressing it loads the map, which plots every visible, located photo from every folder together, and a *View full map* button beside it opens a large map over the page (click outside it, press Escape or use the cross to close it), and the address bar follows it (`?map`), so copying the address (or the overlay's *Copy link* button) shares the map, and the browser's Back button closes it. Nothing from the map's third parties is requested until a visitor presses it.
 - **The viewer map.** In the full-screen viewer a photo with a visible location shows a small map in the top left corner of the photo, about half a mile across. Click it to enlarge it (move, zoom, *Open in OpenStreetMap*); the pin button beside the caption turns it off and on, and the choice is remembered. It is on by default, because it gives the photo real context, but it only exists when `ENABLE_MAP` is on, and the map library is requested only when such a photo is opened.
 
 **Each folder can have its own map too**, with its own settings. In a folder's settings (and the gallery's, on the Settings tab) the **Map** section has:
@@ -586,7 +586,7 @@ Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actua
 - Photos within `MAP_CLUSTER_RADIUS_MILES` (default 50) of each other share one numbered pin, so a dense city doesn't turn into a wall of markers; clicking a cluster zooms in to its individual pins. A dense city trip and a cross-country drive want very different radii, so it's a setting.
 - Pins are colored by top-level folder, with a legend. A note can override that: a folder or group given `{color: gold}` has gold pins, and `{sold}` / `{reserved}` give red / orange ones.
 - Clicking a pin opens a small popup (thumbnail, label, link) — it doesn't navigate on first click; the link inside does, to that group's page.
-- Hidden items are never plotted. `?map` has its own link preview, with a generic map-pin image (a rendered snapshot of the map would need a third-party static-maps service).
+- Hidden items are never plotted. A `?map` link has its own link preview, with a generic map-pin image (a rendered snapshot of the map would need a third-party static-maps service).
 
 **This is the one feature that contacts a third party.** It loads Leaflet from cdnjs and map tiles from OpenStreetMap, which is why it's off by default: with it on, a visitor's browser makes those requests once they open a map (the page map's button, or a photo that has a location).
 

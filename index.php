@@ -381,7 +381,7 @@ define('REVEAL_COOKIE_NAME', 'gallery_reveal_' . substr(hash('sha256', __DIR__),
 // script and image tiles from a third party at page-load time. Has no
 // effect at all unless ENABLE_PHOTO_LOCATION is also on and at least one
 // photo actually has a visible location — see ENABLE_PHOTO_LOCATION's
-// own doc comment for that gating. Reached at its own shareable ?map
+// own doc comment for that gating. Shared as ?map
 // URL, with a smaller preview embedded on the gallery root.
 define('ENABLE_MAP', gallery_setting('ENABLE_MAP', false));
 
@@ -2744,72 +2744,6 @@ function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, 
 <?php
 }
 
-/**
- * The dedicated, shareable ?map page — a condensed preview also lives
- * inline on the gallery root (see the main template), but "check out our
- * whole route" deserves its own link, the same treatment ?folder=/
- * ?photo= already get. No live rendered-map snapshot for its Open Graph
- * image — that needs a third-party static-maps API, the same dependency
- * objection that already ruled out geocoding — a generic map icon
- * instead, same honesty standard as the video placeholder.
- */
-function render_map_page($points, $legend, $pageTitle, $baseUrl, $folderPath = null, $radiusMiles = null) {
-    send_viewer_aware_cache_headers();
-    $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
-    $title = htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8');
-    $ogUrl = htmlspecialchars($baseUrl . '/?map' . ($folderPath !== null ? '&folder=' . rawurlencode($folderPath) : ''), ENT_QUOTES, 'UTF-8');
-    $backHref = $folderPath === null ? gallery_root_href() : '?folder=' . rawurlencode($folderPath);
-    $backText = $folderPath === null ? 'Back to gallery' : 'Back to ' . basename($folderPath);
-    $ogImage = htmlspecialchars($baseUrl . '/?mapicon', ENT_QUOTES, 'UTF-8');
-    // A bare "#group-<slug>" resolves against the *current* URL — here
-    // /?map — so it would scroll nowhere on this page. Point in-page
-    // anchors at the gallery root instead; ?folder= links are already
-    // root-relative query strings and need no help.
-    foreach ($points as &$p) {
-        if ($p['link'][0] === '#') $p['link'] = ($folderPath === null ? './' : '?folder=' . rawurlencode($folderPath)) . $p['link'];
-    }
-    unset($p);
-?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= $title ?> — Map</title>
-<meta property="og:type" content="website">
-<meta property="og:title" content="<?= $title ?> — Map">
-<meta property="og:description" content="<?= count($points) ?> location<?= count($points) === 1 ? '' : 's' ?> plotted from this gallery.">
-<meta property="og:url" content="<?= $ogUrl ?>">
-<meta property="og:image" content="<?= $ogImage ?>">
-<meta name="twitter:card" content="summary_large_image">
-<style>
-  :root { --bg:#0f0f10; --card:#1a1a1c; --text:#eaeaea; --muted:#8a8a8f; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  .wrap { max-width:1100px; margin:0 auto; padding:20px 16px 48px; }
-  h1 { font-size:1.3rem; margin:0 0 14px; }
-  a.back { color:var(--muted); text-decoration:none; font-size:0.9rem; }
-  .map-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:0.85rem; color:var(--muted); }
-  .map-legend-item { display:flex; align-items:center; gap:6px; }
-  .map-legend-swatch { width:12px; height:12px; border-radius:50%; display:inline-block; }
-  .leaflet-popup-content-wrapper { background:var(--card); color:var(--text); }
-  .leaflet-popup-tip { background:var(--card); }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <a href="<?= htmlspecialchars($backHref, ENT_QUOTES, 'UTF-8') ?>" class="back">&larr; <?= htmlspecialchars($backText, ENT_QUOTES, 'UTF-8') ?></a>
-  <h1><?= $title ?> — Map</h1>
-  <?php if (empty($points)): ?>
-    <p style="color:var(--muted);">No photos have a visible location yet.</p>
-  <?php else: ?>
-    <?= render_leaflet_map($points, $legend, 'trip-map-full', '70vh', true, $radiusMiles) ?>
-  <?php endif; ?>
-</div>
-</body>
-</html>
-<?php
-}
 
 /* -----------------------------------------------------------------------
  * Per-item data: captions, location, a web link, a folder-group's own
@@ -7108,17 +7042,18 @@ $mapShown = ENABLE_MAP && folder_map_enabled($dir, $currentFolderPath);
 $mapPoints = map_points_for_folder($mapPoints, $dir, $currentFolderPath);
 $mapLegend = map_legend_from_points($mapPoints);
 $mapPageHref = '?map' . ($currentFolderPath !== null ? '&folder=' . rawurlencode($currentFolderPath) : '');
+$mapPageHrefAbs = '/' . $mapPageHref;
 $mapRadius = ENABLE_MAP ? folder_map_radius($dir, $currentFolderPath) : MAP_CLUSTER_RADIUS_MILES;
 
-// ?map — the dedicated, shareable map page (?map&folder=X for one folder's own).
+// ?map — a shareable link to the map: the gallery page (?map&folder=X: that folder's page) with the map overlay open.
 if (ENABLE_MAP && isset($_GET['map'])) {
     if (!$mapShown) {
         http_response_code(404);
         exit;
     }
-    // Served after the page's notes have been read (see below), so a colour a note gives a folder or group reaches its
-    // pins; everything printed meanwhile is thrown away.
-    $serveMapPage = true;
+    // The map has no page of its own: ?map (and ?map&folder=X) is this gallery page with the map overlay open, so one
+    // link shows the map over the very page it belongs to.
+    $openMapOnLoad = true;
 }
 
 $ogTitle = $pageTitle;
@@ -7160,8 +7095,16 @@ if ($requestedPhoto) {
         $ogTitle = $photoGroupKey . ' — ' . $pageTitle;
     }
 }
+if (!empty($openMapOnLoad)) {
+    // A shared ?map link previews as the map, not as the page behind it.
+    $mapLabel = $currentFolderPath === null ? $rootPageTitle : $pageTitle;
+    $ogTitle = $mapLabel . ' — Map';
+    $pageTitle = $ogTitle;
+    $ogUrl = $baseUrl . $mapPageHrefAbs;
+    $ogDescription = count($mapPoints) . ' location' . (count($mapPoints) === 1 ? '' : 's') . ' plotted from this gallery.';
+    $ogImageUrl = $baseUrl . '/?mapicon';
+}
 send_viewer_aware_cache_headers();
-if (!empty($serveMapPage)) ob_start();
 ?>
 <!-- Drop-in Photo Gallery v<?= htmlspecialchars(GALLERY_VERSION) ?> — github.com/pcmike -->
 <?php if (!empty($galleryNotices)): ?>
@@ -7651,8 +7594,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-modal[hidden] { display: none; }
   .map-modal-card { position: relative; width: min(100%, 1100px); background: var(--card); border-radius: 12px; padding: 12px; box-shadow: 0 12px 48px rgba(0,0,0,0.6); max-height: 100%; overflow: auto; }
   .map-modal-close { position: absolute; top: 10px; right: 10px; z-index: 5; width: 34px; height: 34px; padding: 0; border-radius: 50%; border: none; background: rgba(0,0,0,0.7); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; }
-  .map-modal-page { display: inline-block; margin: 8px 2px 0; font-size: 0.8rem; color: var(--muted); text-decoration: none; }
-  .map-modal-page:hover { color: var(--text); text-decoration: underline; }
+  .map-modal-share { display: inline-flex; align-items: center; gap: 6px; margin: 8px 2px 0; padding: 4px 8px; background: none; border: 0; font-size: 0.8rem; color: var(--muted); cursor: pointer; }
+  .map-modal-share:hover { color: var(--text); }
+  .map-modal-share.copied { color: #3ba55c; }
   .map-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.8rem; color: var(--muted); }
   .map-legend-item { display: flex; align-items: center; gap: 6px; }
   .map-legend-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
@@ -8002,11 +7946,6 @@ if (ENABLE_MAP && $mapPoints) {
     $mapPoints = apply_note_colors_to_points($mapPoints, $groups, $groupColors, $groupStatus, $groupLabels);
     $mapLegend = map_legend_from_points($mapPoints);
 }
-if (!empty($serveMapPage)) {
-    ob_end_clean();
-    render_map_page($mapPoints, $mapLegend, $currentFolderPath === null ? $rootPageTitle : $pageTitle, $baseUrl, $currentFolderPath, $mapRadius);
-    exit;
-}
 ?>
 <?php if ($mapShown && !empty($mapPoints)): ?>
   <section class="map-preview" id="map-preview">
@@ -8025,7 +7964,7 @@ if (!empty($serveMapPage)) {
     <div class="map-modal-card">
       <button type="button" class="map-modal-close" aria-label="Close the map">&times;</button>
       <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-modal', 'min(72vh, 720px)', true, $mapRadius, true) ?>
-      <a class="map-modal-page" href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>">Open as its own page &#8599;</a>
+      <button type="button" class="map-modal-share" id="map-share" data-href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('link') ?> Copy link to this map</button>
     </div>
   </div>
 <?php endif; ?>
@@ -8249,8 +8188,9 @@ if (!empty($serveMapPage)) {
   (function () {
     const modal = document.getElementById('map-modal'), opener = document.getElementById('map-full');
     if (!modal || !opener) return;
-    let drawn = false;
-    function open() {
+    const mapHref = opener.getAttribute('href');
+    let drawn = false, pushed = false;
+    function show() {
       modal.hidden = false;
       document.body.style.overflow = 'hidden';
       if (!drawn) {
@@ -8261,9 +8201,20 @@ if (!empty($serveMapPage)) {
         });
       }
     }
-    function close() { modal.hidden = true; document.body.style.overflow = ''; }
+    function hide() { modal.hidden = true; document.body.style.overflow = ''; }
+    // The address bar follows the overlay (?map), so copying it shares the map; Back closes it.
+    function open() {
+      show();
+      if (!/[?&]map\b/.test(location.search)) { history.pushState({ galleryMap: 1 }, '', mapHref); pushed = true; }
+    }
+    function close() {
+      hide();
+      if (pushed) { pushed = false; history.back(); }
+      else if (/[?&]map\b/.test(location.search)) { history.replaceState(null, '', location.search.replace(/[?&]map\b(=[^&]*)?/, '').replace(/^&/, '?') || location.pathname); }
+    }
+    window.addEventListener('popstate', function () { if (!modal.hidden && !/[?&]map\b/.test(location.search)) { pushed = false; hide(); } });
     opener.addEventListener('click', function (e) {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;   // let "open in a new tab" still work
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;   // "open in a new tab" still works
       e.preventDefault();
       open();
     });
@@ -8272,7 +8223,12 @@ if (!empty($serveMapPage)) {
       const a = e.target.closest && e.target.closest('.leaflet-popup a[href^="#"]');
       if (a) close();   // a pin's link to something on this page: show it
     });
+    const share = document.getElementById('map-share');
+    if (share) share.addEventListener('click', function () {
+      copyToClipboard(location.origin + location.pathname + share.getAttribute('data-href')).then(function () { flashCopied(share); });
+    });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.hidden) close(); });
+    if (<?= !empty($openMapOnLoad) ? 'true' : 'false' ?>) show();
   })();
 
   // ---- The little map in the viewer: where the open photo was taken, top left of the photo, about half a mile

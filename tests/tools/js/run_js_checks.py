@@ -54,7 +54,7 @@ try:
             if not (r.stdout + r.stderr).strip().startswith("OK"): bad += 1; print(f"SYNTAX ERROR in {name} script #{i}: {(r.stdout + r.stderr).strip()[:300]}")
     print(f"=== syntax: {total} inline scripts checked, {bad} with errors"); failures += bad
     # 2. behaviour
-    mapi = max(range(len(scripts["map"])), key=lambda i: len(scripts["map"][i]))
+    mapi = next(i for i, js in enumerate(scripts["map"]) if "var clusters =" in js)
     run(["maprun.js", f"{WORK}/map.html", f"{WORK}/js/map-{mapi}.js"], "map script, real data")
     run(["maprun.js", f"{WORK}/map.html", f"{WORK}/js/map-{mapi}.js", HERE + "/clusters.json"], "map script, synthetic cluster (exercises pin-click expansion)")
     gi = max(range(len(scripts["gallery"])), key=lambda i: len(scripts["gallery"][i]))

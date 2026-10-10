@@ -1509,7 +1509,7 @@ check('the gallery root embeds a condensed map preview when ENABLE_MAP is on', s
 check('the root preview links to the full ?map page', str_contains($mapRootBody, 'href="?map"'));
 preg_match('#<div class="map-preview-body".*?</section>#s', $mapRootBody, $mapPreviewHtml);
 check('the root preview shows a legend with one entry per distinct group', substr_count($mapPreviewHtml[0] ?? '', '<span class="map-legend-item">') === 3);
-check('the full map opens over the page: a dialog with its own copy of the map and legend, a close cross, and a link to the map as its own page', str_contains($mapRootBody, 'id="map-modal"') && str_contains($mapRootBody, 'class="map-modal-close"') && substr_count($mapRootBody, '<span class="map-legend-item">') === 6 && str_contains($mapRootBody, 'class="map-modal-page" href="?map"') && str_contains($mapRootBody, 'id="map-full"'));
+check('the full map opens over the page: a dialog with its own copy of the map and legend, a close cross, and a button to copy its link', str_contains($mapRootBody, 'id="map-modal"') && str_contains($mapRootBody, 'class="map-modal-close"') && substr_count($mapRootBody, '<span class="map-legend-item">') === 6 && str_contains($mapRootBody, 'id="map-share" data-href="?map"') && str_contains($mapRootBody, 'id="map-full"'));
 check('the two map buttons are one joined control (show/hide and full map), not two buttons pushed apart', (bool) preg_match('#id="map-toggle".*?</button>\s*<a href="\?map" class="map-combo-btn" id="map-full"#s', $mapRootBody));
 
 [$mapStatus, $mapBody] = http_get("$baseMap/?map");
@@ -1546,7 +1546,7 @@ $standaloneCluster = null;
 foreach ($clusters as $c) {
     if (count($c) === 1 && $c[0]['file'] === 'standalone.jpg') { $standaloneCluster = $c; break; }
 }
-check('on the ?map page a standalone item\'s popup link goes to the root\'s #group-<slug> anchor (./#..., since a bare #... would stay on ?map), not a folder page', $standaloneCluster !== null && $standaloneCluster[0]['link'] === './#group-standalone');
+check('a standalone item\'s popup link goes to its #group-<slug> anchor on the same page (the map is an overlay on that page, so a bare #... lands right), not a folder page', $standaloneCluster !== null && $standaloneCluster[0]['link'] === '#group-standalone');
 
 preg_match('/var clusters = (\[.*?\]);/s', $mapRootBody, $rootClusterMatch);
 $rootClusters = json_decode($rootClusterMatch[1] ?? '', true) ?: [];
@@ -2368,8 +2368,8 @@ $pinCols = function ($body) { preg_match_all('/"color":"(#[0-9a-f]+|[a-z]+)"/i',
 [, $pinHome] = http_get("http://127.0.0.1:$portPin/");
 [, $pinPage] = http_get("http://127.0.0.1:$portPin/?map");
 check('[pin colours] a note\'s {color:} on a folder colours that folder\'s pins on the page map, and {sold} turns its pins red', in_array('#ff0000', $pinCols($pinHome), true) && in_array('#e5484d', $pinCols($pinHome), true));
-check('[pin colours] ...and the full ?map page agrees, with the legend using the same colours', in_array('#ff0000', $pinCols($pinPage), true) && in_array('#e5484d', $pinCols($pinPage), true) && str_contains($pinPage, 'map-legend-swatch" style="background:#ff0000;"') && str_contains($pinPage, 'trip-map-full'));
-check('[pin colours] the ?map page is a clean standalone page, none of the gallery page printed before it leaked out', !str_contains($pinPage, 'class="gallery"') && !str_contains($pinPage, 'folder-cover') && substr_count($pinPage, '<!DOCTYPE html>') === 1);
+check('[pin colours] ...and the full map (the page with ?map, overlay open) agrees, with the legend using the same colours', in_array('#ff0000', $pinCols($pinPage), true) && in_array('#e5484d', $pinCols($pinPage), true) && str_contains($pinPage, 'map-legend-swatch" style="background:#ff0000;"') && str_contains($pinPage, 'id="trip-map-modal"'));
+check('[pin colours] ?map is the gallery page itself with the map overlay set to open, previewing as the map (title, description and the map icon), and exactly one document', str_contains($pinPage, 'class="gallery"') && str_contains($pinPage, 'if (true) show();') && str_contains($pinPage, '<meta property="og:title" content="') && str_contains($pinPage, ' — Map">') && str_contains($pinPage, 'og:image" content="http://127.0.0.1:' . $portPin . '/?mapicon"') && str_contains($pinPage, '2 locations plotted') && substr_count($pinPage, '<!DOCTYPE html>') === 1 && str_contains($pinHome, 'if (false) show();'));
 file_put_contents("$fxPin/n.md", "{gallery}\n\nNothing coloured here.\n");
 usleep(300000);
 [, $pinPlain] = http_get("http://127.0.0.1:$portPin/?map");
@@ -2750,7 +2750,7 @@ user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settin
 check('[folder maps] a folder\'s own pin grouping (1 mile) overrides the site-wide one: the same three photos are now three pins', ($mapFiles(http_get("$baseMapF/?folder=Paris")[1])['clusters'] ?? 0) === 3);
 check('[folder maps] ...without touching any other page: the root map, on the site-wide 50 miles, still groups Paris into one pin (three pins in all: New York, Paris, Lisbon)', ($mapFiles(http_get("$baseMapF/")[1])['clusters'] ?? 0) === 3);
 [, $mapOnly] = http_get("$baseMapF/?map&folder=Paris");
-check('[folder maps] the folder has its own shareable map page: only its photos, its own link in the share preview, and a way back to the folder', str_contains($mapOnly, 'og:url" content="http://127.0.0.1:' . $portMapF . '/?map&amp;folder=Paris"') && $mapFiles($mapOnly)['files'] === ['Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg'] && str_contains($mapOnly, 'href="?folder=Paris" class="back"'));
+check('[folder maps] the folder has its own shareable map link: the page of the folder with the map open, only its photos, its own link in the share preview, and the breadcrumb back', str_contains($mapOnly, 'og:url" content="http://127.0.0.1:' . $portMapF . '/?map&amp;folder=Paris"') && $mapFiles($mapOnly)['files'] === ['Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg'] && str_contains($mapOnly, 'if (true) show();') && str_contains($mapOnly, 'class="breadcrumb"'));
 check('[folder maps] a folder that has not switched its map on, or that does not exist, has no map page (404)', http_get("$baseMapF/?map&folder=Lisbon")[0] === 404 && http_get("$baseMapF/?map&folder=Nope")[0] === 404);
 [, $badR] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '0'], $mapHdrs);
 [, $badR2] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => 'abc'], $mapHdrs);
