@@ -67,7 +67,7 @@ const badge = new El('span'); badge._cls.add('view-badge'); badge.classList.add(
 const seen = []; const popRoots = []; doc.querySelectorAll = (sel) => { seen.push(sel); if (sel.startsWith('.view-badge[data-photo=')) return [badge]; if (sel === '.caption-popover') return popRoots.flatMap(r => r._all().filter(c => c._cls.has('caption-popover'))); return []; };
 api.openLightbox(0); // triggers trackView -> fetch -> applyViewUpdate (async)
 for (let i = 0; i < 6; i++) await Promise.resolve();
-ok(badge.textContent.includes('5') && !badge.classList.contains('hidden'), 'a ?track= response updates the on-page view badge and un-hides it');
+ok(badge.innerHTML.includes('#i-eye') && badge.innerHTML.includes(' 5') && !badge.classList.contains('hidden'), 'a ?track= response updates the on-page view badge and un-hides it');
 ok(seen.some(s => s.includes('.view-badge[data-photo="')), '...found by an attribute selector built with the photo name');
 // caption popover
 const card = new El('div'); card._cls.add('card'); popRoots.push(card); const cbadge = new El('span'); cbadge._cls.add('caption-badge'); cbadge.setAttribute('title', 'He said "hi" & <b>left</b>'); card.appendChild(cbadge);

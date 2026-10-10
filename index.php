@@ -4248,6 +4248,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .muted { color:var(--muted); font-size:0.85rem; }
   /* Layout: a sticky bar, a folder tree beside the content, and sections
      you can jump to, so a long page is never a scroll hunt. */
+  <?= ui_icon_css() ?>
   .admin-bar { position:sticky; top:0; z-index:20; background:rgba(15,15,16,0.94); backdrop-filter:blur(6px); border-bottom:1px solid #26262a; }
   .admin-bar-inner { max-width:1180px; margin:0 auto; padding:0 16px; min-height:56px; display:flex; align-items:center; gap:14px; }
   .admin-bar h1 { font-size:1.05rem; margin:0; white-space:nowrap; }
@@ -4492,6 +4493,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </style>
 </head>
 <body>
+<?= ui_icon_sprite() ?>
 <header class="admin-bar">
   <div class="admin-bar-inner">
     <?php // Back to the page you were editing: a folder's admin returns to that folder, not to the front page. ?>
@@ -4534,16 +4536,16 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <?php endif; ?>
   <div class="tab-panel" data-tab="photos">
   <?php if (TRACK_VIEWS): ?>
-    <p class="muted" style="margin-top:0;">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> visit<?= stats_get_pageviews($dir) === 1 ? '' : 's' ?> in total (one per visitor per half hour, not counting you or bots). Select a photo to see its own count. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
+    <p class="muted" style="margin-top:0;"><?= ui_icon('chart') ?> <?= number_format(stats_get_pageviews($dir)) ?> visit<?= stats_get_pageviews($dir) === 1 ? '' : 's' ?> in total (one per visitor per half hour, not counting you or bots). Select a photo to see its own count. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
   <?php endif; ?>
 
   <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
     <div class="panel loc-unsaved-summary">
       <?php if (!empty($itemsHere['locationEnabled'])): ?>
-        <strong>&#9888; <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS that isn't saved yet.</strong>
+        <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS that isn't saved yet.</strong>
         <span class="muted">It couldn't be stored automatically (is this folder writable by the web server?). Click <em>Save</em> on each photo to publish its location.</span>
       <?php else: ?>
-        <strong>&#9888; <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS in the file.</strong>
+        <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS in the file.</strong>
         <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos you set to <em>Always hide</em>.</span>
       <?php endif; ?>
     </div>
@@ -4571,14 +4573,14 @@ foreach ($adminFiles as $file) {
     <div class="item-editor" id="edit-<?= $hid ?>">
       <div class="editor-head">
         <?php if ($isVideo): ?>
-          <div class="item-thumb-placeholder">&#9654; video<?php if ($durationText !== ''): ?><br><?= $durationText ?><?php endif; ?></div>
+          <div class="item-thumb-placeholder"><?= ui_icon('play') ?> video<?php if ($durationText !== ''): ?><br><?= $durationText ?><?php endif; ?></div>
         <?php else: ?>
           <img src="<?= $thumbUrl ?>" alt="">
         <?php endif; ?>
         <div class="item-meta">
           <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
           <div class="item-sub">
-            <?php if (TRACK_VIEWS): ?>&#128065; <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
+            <?php if (TRACK_VIEWS): ?><?= ui_icon('eye') ?> <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
             <?php if ($rest === 'private'): ?> &middot; hidden<?php endif; ?>
             <?php if ($isCover): ?> &middot; folder cover<?php endif; ?>
           </div>
@@ -4633,7 +4635,7 @@ foreach ($adminFiles as $file) {
           </div>
         </div>
         <?php if ($locUnsaved): ?>
-            <p class="muted loc-unsaved" style="margin:0 0 8px;">&#9888; <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (set <em>Always hide</em> to keep it out)." ?></p>
+            <p class="muted loc-unsaved" style="margin:0 0 8px;"><?= ui_icon('warn') ?> <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (set <em>Always hide</em> to keep it out)." ?></p>
           <?php endif; ?>
         <div class="item-actions">
           <button type="submit">Save</button>
@@ -4653,15 +4655,15 @@ foreach ($adminFiles as $file) {
 ?>
     <button type="button" class="thumb" id="photo-<?= $hid ?>" data-edit="edit-<?= $hid ?>" title="<?= htmlspecialchars($thumbTitle, ENT_QUOTES, 'UTF-8') ?>">
       <?php if ($isVideo): ?>
-        <span class="thumb-img thumb-video">&#9654;<?php if ($durationText !== ''): ?><small><?= $durationText ?></small><?php endif; ?></span>
+        <span class="thumb-img thumb-video"><?= ui_icon('play') ?><?php if ($durationText !== ''): ?><small><?= $durationText ?></small><?php endif; ?></span>
       <?php else: ?>
         <img class="thumb-img" src="<?= $thumbUrl ?>" loading="lazy" alt="">
       <?php endif; ?>
       <span class="thumb-badges">
-        <?php if (($entry['caption'] ?? '') !== ''): ?><span title="Has a caption">&#128172;</span><?php endif; ?>
-        <?php if ($loc !== null && !$locUnsaved): ?><span title="Has a location">&#128205;</span><?php endif; ?>
-        <?php if ($locUnsaved): ?><span class="warn" title="GPS found in the file, not saved">&#9888;</span><?php endif; ?>
-        <?php if ($isCover): ?><span title="Folder cover">&#9733;</span><?php endif; ?>
+        <?php if (($entry['caption'] ?? '') !== ''): ?><span title="Has a caption"><?= ui_icon('caption') ?></span><?php endif; ?>
+        <?php if ($loc !== null && !$locUnsaved): ?><span title="Has a location"><?= ui_icon('pin') ?></span><?php endif; ?>
+        <?php if ($locUnsaved): ?><span class="warn" title="GPS found in the file, not saved"><?= ui_icon('warn') ?></span><?php endif; ?>
+        <?php if ($isCover): ?><span title="Folder cover"><?= ui_icon('star') ?></span><?php endif; ?>
         <?php if ($rest === 'private'): ?><span class="hid" title="Hidden from visitors">hidden</span><?php endif; ?>
       </span>
       <span class="thumb-name"><?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?></span>
@@ -6066,7 +6068,7 @@ function render_photo_thumbs_plain($clusterFiles, $allFiles, $permalinkHtml = ''
  */
 function render_permalink_button($anchorId) {
     return '<a class="permalink-copy" href="#' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8')
-         . '" title="Copy link">&#128279;</a>';
+         . '" title="Copy link">' . ui_icon('link') . '</a>';
 }
 
 /** Whether a rendered notes file has nothing to show: no text and no
@@ -6090,7 +6092,7 @@ function render_gallery_notices_banner($notices, $open = false) {
     if (empty($notices)) return '';
     $count = count($notices);
     $html = '<details class="gallery-notices"' . ($open ? ' open' : '') . '>';
-    $html .= '<summary>&#9888; ' . $count . ' setup notice' . ($count === 1 ? '' : 's') . ' for the gallery owner</summary>';
+    $html .= '<summary>' . ui_icon('warn') . ' ' . $count . ' setup notice' . ($count === 1 ? '' : 's') . ' for the gallery owner</summary>';
     $html .= '<ul>';
     foreach ($notices as $notice) {
         $html .= '<li>' . htmlspecialchars($notice, ENT_QUOTES, 'UTF-8') . '</li>';
@@ -6666,7 +6668,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
 function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null, $videoDuration = null, $itemEntry = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
     $hidden = ($views > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
-    $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">&#128065; '
+    $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('eye') . ' '
            . number_format($views) . '</span>';
     $statusBadge = '';
     if ($status === 'sold') {
@@ -6685,19 +6687,19 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         // A hover tooltip on desktop (title); a tap target that opens a
         // small popover on a touch screen, where hover doesn't exist.
         $itemBadges .= '<span class="item-badge caption-badge" title="' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8')
-                     . '" role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') toggleCaptionPopover(this, event)">&#128172;</span>';
+                     . '" role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') toggleCaptionPopover(this, event)">' . ui_icon('caption') . '</span>';
     }
     if (photo_location_visible($itemEntry ?? [])) {
         $loc = $itemEntry['location'];
         $locTitle = trim(($loc['label'] ?? '') !== '' ? $loc['label'] : ($loc['lat'] . ', ' . $loc['lng']));
         $itemBadges .= '<a class="item-badge location-badge" href="' . htmlspecialchars(osm_location_url($loc['lat'], $loc['lng']), ENT_QUOTES, 'UTF-8')
                      . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($locTitle, ENT_QUOTES, 'UTF-8')
-                     . '" onclick="event.stopPropagation()">&#128205;</a>';
+                     . '" onclick="event.stopPropagation()">' . ui_icon('pin') . '</a>';
     }
     if (!empty($itemEntry['web'])) {
         $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
                      . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
-                     . '" onclick="event.stopPropagation()">&#127760;</a>';
+                     . '" onclick="event.stopPropagation()">' . ui_icon('globe') . '</a>';
     }
     // The ring is drawn by .ringed::after, above the picture: an inset shadow on the card itself sat underneath it, unseen.
     $colorStyle = $color ? ' style="--ring: ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ';"' : '';
@@ -6711,6 +6713,37 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div></div>';
+}
+
+/** The small line drawings used instead of emoji (so every device shows the same, clear picture): one set, drawn
+ *  with the current text colour. ui_icon_sprite() prints them once per page; ui_icon() refers to one. */
+function ui_icon_paths() {
+    return [
+        'map'     => '<path d="M9 4 3 6.5V20l6-2.5 6 2.5 6-2.5V4l-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/>',
+        'pin'     => '<path d="M12 21s-6.5-5.4-6.5-10.5a6.5 6.5 0 1 1 13 0C18.5 15.6 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.3"/>',
+        'caption' => '<path d="M20.5 15.5a2 2 0 0 1-2 2H9l-5 3.5V6.5a2 2 0 0 1 2-2h12.5a2 2 0 0 1 2 2z"/><path d="M8 9.5h8M8 13h5"/>',
+        'globe'   => '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>',
+        'link'    => '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+        'eye'     => '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+        'check'   => '<path d="M4.5 12.5 9.5 17.5 19.5 7"/>',
+        'warn'    => '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.4h.01"/>',
+        'play'    => '<path d="M8 5.5v13l10.5-6.5z"/>',
+        'star'    => '<path d="m12 3.5 2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8z"/>',
+        'chart'   => '<path d="M5 20V11M12 20V4M19 20v-6"/>',
+    ];
+}
+function ui_icon($name) {
+    return '<svg class="ico" aria-hidden="true"><use href="#i-' . $name . '"></use></svg>';
+}
+function ui_icon_sprite() {
+    $out = '<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">';
+    foreach (ui_icon_paths() as $name => $paths) {
+        $out .= '<symbol id="i-' . $name . '" viewBox="0 0 24 24">' . $paths . '</symbol>';
+    }
+    return $out . '</svg>';
+}
+function ui_icon_css() {
+    return '.ico { width: 1.15em; height: 1.15em; vertical-align: -0.22em; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }';
 }
 
 /**
@@ -6791,7 +6824,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     }
     $html .= '<span class="folder-cover-count">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</span>';
     $html .= '</a>';
-    $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">&#128279;</a>';
+    $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
     $html .= '</div>';
     return $html;
 }
@@ -7542,6 +7575,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     align-items: center;
     gap: 4px;
   }
+  <?= ui_icon_css() ?>
   .view-badge {
     background: rgba(0,0,0,0.65);
     color: #eaeaea;
@@ -7691,7 +7725,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     padding: 7px 12px; font-size: 0.85rem; cursor: pointer;
   }
   .map-toggle:hover { border-color: #46464c; }
-  .map-toggle .map-icon { vertical-align: -4px; margin-right: 2px; }
+  .map-toggle .ico { margin-right: 2px; }
   .map-preview-body[hidden] { display: none; }
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
   .lightbox .close,
@@ -7717,6 +7751,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 </style>
 </head>
 <body>
+<?= ui_icon_sprite() ?>
 
 <header>
   <?php if ($currentFolderPath !== null): ?>
@@ -7970,7 +8005,7 @@ if (!empty($serveMapPage)) {
 <?php if ($mapShown && !empty($mapPoints)): ?>
   <section class="map-preview" id="map-preview">
     <h2 class="map-preview-heading">
-      <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body"><svg class="map-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M9 4 3 6.5V20l6-2.5 6 2.5 6-2.5V4l-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/></svg> <span class="map-toggle-label">Show map</span></button>
+      <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body"><?= ui_icon('map') ?> <span class="map-toggle-label">Show map</span></button>
       <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-preview-link">View full map &rarr;</a>
     </h2>
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
@@ -8004,10 +8039,10 @@ if (!empty($serveMapPage)) {
 <?php endif; ?>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
-    <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link to this photo">&#128279;</button>
-    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden>&#127760;</a>
+    <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link to this photo"><?= ui_icon('link') ?></button>
+    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
 <?php if (ENABLE_MAP): ?>
-    <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden>&#128205;</button>
+    <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>
 <?php endif; ?>
   </div>
   <button class="nav next" onclick="navigate(1)">&#10095;</button>
@@ -8061,7 +8096,7 @@ if (!empty($serveMapPage)) {
   function applyViewUpdate(data) {
     if (!showCountsPublicly) return;
     document.querySelectorAll('.view-badge[data-photo="' + cssEscape(data.photo) + '"]').forEach((el) => {
-      el.textContent = '👁 ' + data.photoViews.toLocaleString();
+      el.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-eye"></use></svg> ' + data.photoViews.toLocaleString();
       el.classList.remove('hidden');
     });
     if (data.groupSlug) {
@@ -8354,11 +8389,11 @@ if (!empty($serveMapPage)) {
     return Promise.resolve();
   }
   function flashCopied(el) {
-    const original = el.textContent;
-    el.textContent = '✅';
+    const original = el.innerHTML;
+    el.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg>';
     el.classList.add('copied');
     setTimeout(() => {
-      el.textContent = original;
+      el.innerHTML = original;
       el.classList.remove('copied');
     }, 1200);
   }

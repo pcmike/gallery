@@ -102,11 +102,11 @@ define('ENABLE_VIDEO', true);               // .mov / .mp4
 1. Visit `trip/` — each folder is a cover card, in natural name order (Day 2 before Day 10). Click one to open it; a breadcrumb leads back. Folders can nest as deep as you like.
 2. Go to `trip/?admin`, pick a folder from the row of links at the top, and fill in **This folder's own settings**: *Display name*, *Dates* (typed text; the admin suggests the span of the folder's photos, with a one-click "Use these dates" button), *Description*, and *Position among its sibling folders* (1 = first). **Save folder settings.** These show on its cover card, at the top of its page, in link previews, and in the map legend.
 3. Still in that folder, tick **Show photo locations publicly for this folder** — locations are off for every folder until you opt it in, so one trip can share places and another never will. **Ticking it publishes:** an orange note beside the switch says so (and how many photos have GPS); it saves at once and reads the GPS out of every photo in that folder that has some (most phone photos do) and shows those places on the gallery and the map straight away. To keep one photo private, open it below and set *Location visibility* to **Always hide** (or clear its coordinates) and Save. Photos you upload to the folder later are picked up the next time you open that folder in the admin.
-4. Under **Photos & video**, give a photo a *Caption* and *Web link*, and correct a location if the GPS is off (*Latitude* and *Longitude* are already filled in) — then **Save**. Visitors get small badges: 💬 caption, 📍 location (opens OpenStreetMap), 🌐 link. The lightbox shows the caption, never the filename.
+4. Under **Photos & video**, give a photo a *Caption* and *Web link*, and correct a location if the GPS is off (*Latitude* and *Longitude* are already filled in) — then **Save**. Visitors get small badges: caption-bubble icon, pin icon for location (opens OpenStreetMap), globe link. The lightbox shows the caption, never the filename.
 5. **Set as cover** on a photo to choose the folder's card image. That same photo is the picture shown when someone pastes the folder's link.
 6. The map appears on the front page (and at its own shareable `?map` link) as soon as at least one photo has a *visible* location. Photos close together share one numbered pin (`MAP_CLUSTER_RADIUS_MILES`, default 50); pins are colored per top-level folder.
 
-**Videos** show a ▶ tile and their length; they play in the viewer. They can't have their location read automatically — type it in. **Back up your captions:** *Export the whole tree as JSON* at the bottom of any admin page downloads everything you've typed.
+**Videos** show a play-button tile and their length; they play in the viewer. They can't have their location read automatically — type it in. **Back up your captions:** *Export the whole tree as JSON* at the bottom of any admin page downloads everything you've typed.
 
 ### Recipe: family photos, some private
 
@@ -180,10 +180,10 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 | Folder → *Position* | the card order among sibling folders: numbered first, then natural order | a notes-file mention of a folder still places it earlier |
 | Photo → **Set as cover** | the folder's card image and its link-preview image | |
 | Folder (or gallery) → *Map: show a map on this page, pin grouping* | a map of just that folder's photos on its page, and its own `?map&folder=` page; the front page's map is on unless switched off, a folder's off unless switched on | `ENABLE_MAP`, `ENABLE_PHOTO_LOCATION`, and photos with a visible location |
-| Folder → *Show photo locations publicly* | turning it on stores the GPS of every photo in the folder that has some, so they show 📍 badges and map pins (an orange warning sits beside the switch) | `ENABLE_PHOTO_LOCATION` |
-| Photo → *Caption* | 💬 badge; the viewer's caption bar | |
-| Photo → *Web link* | 🌐 badge, and an icon in the viewer | |
-| Photo → *Latitude / Longitude / Location label* | 📍 badge and map pin (filled in from the photo's GPS when it has any; stored for you when the folder's switch is turned on) | `ENABLE_PHOTO_LOCATION`, the folder's switch, and *Location visibility* not *Always hide* |
+| Folder → *Show photo locations publicly* | turning it on stores the GPS of every photo in the folder that has some, so they show pin icons and map pins (an orange warning sits beside the switch) | `ENABLE_PHOTO_LOCATION` |
+| Photo → *Caption* | caption-bubble icon; the viewer's caption bar | |
+| Photo → *Web link* | globe icon, and an icon in the viewer | |
+| Photo → *Latitude / Longitude / Location label* | pin icon and map pin (filled in from the photo's GPS when it has any; stored for you when the folder's switch is turned on) | `ENABLE_PHOTO_LOCATION`, the folder's switch, and *Location visibility* not *Always hide* |
 | Photo → *Location visibility* | *Inherit folder setting*, *Always show* (a landmark in a folder that otherwise shares no locations) or *Always hide* (a front door in a folder that does) | `ENABLE_PHOTO_LOCATION` |
 | Photo → *Visibility* · Folder → **Hide this entire folder** | removes it from everything for anyone without the viewer password | `PRIVATE_VIEW_PASSWORD` to let anyone back in |
 | Group names (front page) | renames a filename-based group's box | `AUTO_GROUP_BY_FILENAME`. A `{group: Name}` directive overrides it |
@@ -575,7 +575,7 @@ Neither renames your files. That would change files you own, which this project 
 Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actually has a visible location) and two maps become available. Neither is in the way: **the page map starts closed**, behind a small *Show map* button (its choice is remembered per browser), and **the little map in the photo viewer** shows only for a photo that has a visible location.
 
 - **The page map.** The gallery front page offers a *Show map* button above the folders; pressing it loads the map, which plots every visible, located photo from every folder together, and links to a shareable `?map` page. Nothing from the map's third parties is requested until a visitor presses it.
-- **The viewer map.** In the full-screen viewer a photo with a visible location shows a small map in the top left corner of the photo, about half a mile across. Click it to enlarge it (move, zoom, *Open in OpenStreetMap*); the 📍 button beside the caption turns it off and on, and the choice is remembered. It is on by default, because it gives the photo real context, but it only exists when `ENABLE_MAP` is on, and the map library is requested only when such a photo is opened.
+- **The viewer map.** In the full-screen viewer a photo with a visible location shows a small map in the top left corner of the photo, about half a mile across. Click it to enlarge it (move, zoom, *Open in OpenStreetMap*); the pin button beside the caption turns it off and on, and the choice is remembered. It is on by default, because it gives the photo real context, but it only exists when `ENABLE_MAP` is on, and the map library is requested only when such a photo is opened.
 
 **Each folder can have its own map too**, with its own settings. In a folder's settings (and the gallery's, on the Settings tab) the **Map** section has:
 

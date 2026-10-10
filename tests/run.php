@@ -189,6 +189,9 @@ function user_submit($postUrl, $pageHtml, $needle, $overrides = [], $headers = [
 /** The generated data files start with a PHP guard line (see
  *  data_file_guard_line() in index.php) so a direct request for one
  *  answers 404 with nothing else. These read/write that exact format. */
+/** The markup of one of the page's line-drawing icons (see ui_icon in index.php). */
+function ico($name) { return '<svg class="ico" aria-hidden="true"><use href="#i-' . $name . '"></use></svg>'; }
+
 function read_data_file($path) {
     $raw = (string) file_get_contents($path);
     if (strncmp($raw, '<?php', 5) === 0) {
@@ -568,7 +571,7 @@ check(
 );
 check(
     'notices are surfaced on the page itself, not just in the HTML-comment fallback',
-    (bool) preg_match('/<details class="gallery-notices"><summary>&#9888; \d+ setup notices? for the gallery owner<\/summary>/', $body)
+    (bool) preg_match('/<details class="gallery-notices"><summary>' . preg_quote(ico('warn'), '/') . ' \d+ setup notices? for the gallery owner<\/summary>/', $body)
 );
 check(
     '...and the on-page banner sits inside the notes box when one exists',
@@ -635,7 +638,7 @@ check('explicit {group:}+{photos:} creates a labeled box', str_contains($body, '
 check('explicit group box uses the {group:} name as its label', str_contains($body, '>Widget Set <span'));
 check(
     'a gallery group box has its own one-click copy-link button, same as a .md item',
-    str_contains($body, '<a class="permalink-copy" href="#group-widget-set" title="Copy link">&#128279;</a>')
+    str_contains($body, '<a class="permalink-copy" href="#group-widget-set" title="Copy link">' . ico('link') . '</a>')
 );
 check('explicit group inherits {sold} status', str_contains($body, '<div class="group-box sold"'));
 
@@ -1390,7 +1393,7 @@ $sqliteWal = is_file("$fxPrivate/.gallery-stats.sqlite-wal") ? (string) file_get
 $jsonBlob = is_file("$fxPrivate/.gallery-stats.php") ? (string) file_get_contents("$fxPrivate/.gallery-stats.php") : '';
 check('(setup) a stats store exists', $sqliteBlob !== '' || $jsonBlob !== '');
 check('the SQLite stats file (and its WAL) never contains a filename, hidden or not', !str_contains($sqliteBlob . $sqliteWal, 'loose1.jpg') && !str_contains($sqliteBlob . $sqliteWal, 'loose2.jpg'));
-check('...and the hidden item\'s count is real and comes back (revealed viewer\'s page badge)', str_contains((string) http_get("$basePrivate/", ["Cookie: $revealCookie"])[1], 'data-photo="loose1.jpg">&#128065; 1<'));
+check('...and the hidden item\'s count is real and comes back (revealed viewer\'s page badge)', str_contains((string) http_get("$basePrivate/", ["Cookie: $revealCookie"])[1], 'data-photo="loose1.jpg">' . ico('eye') . ' 1<'));
 if ($jsonBlob !== '') {
     [$privStatsStatus, $privStatsBody] = http_get("$basePrivate/.gallery-stats.php");
     check('the guarded JSON stats file answers 404 with an empty body when fetched', $privStatsStatus === 404 && $privStatsBody === '');
@@ -2012,7 +2015,7 @@ foreach (['json' => true, 'sqlite' => false] as $upgradeMode => $forceJsonMode) 
     $portUp = find_free_port();
     start_server($fxUp, $portUp);
     [, $upBody] = http_get("http://127.0.0.1:$portUp/");
-    check("[$upgradeMode] the old per-photo counts are imported, not zeroed", str_contains($upBody, 'data-photo="old-photo.jpg">&#128065; 7<') && str_contains($upBody, 'data-photo="other.jpg">&#128065; 3<'));
+    check("[$upgradeMode] the old per-photo counts are imported, not zeroed", str_contains($upBody, 'data-photo="old-photo.jpg">' . ico('eye') . ' 7<') && str_contains($upBody, 'data-photo="other.jpg">' . ico('eye') . ' 3<'));
     check("[$upgradeMode] the old sitewide pageview total carries over (41, then this request makes 42)", str_contains($upBody, '42 visits'));
     $upTrack = json_decode(http_get("http://127.0.0.1:$portUp/?track=old-photo.jpg")[1], true);
     check("[$upgradeMode] counting continues from the imported total", ($upTrack['photoViews'] ?? null) === 8);
@@ -2068,7 +2071,7 @@ if (strlen($v1Source) < 1000) {
         check("[real 1.1.1, $v1Flavour] the old script really recorded 5 and 2 views and wrote its own stats file", str_contains($v1Page, 'data-photo="a.jpg">&#128065; 5<') && str_contains($v1Page, 'data-photo="b.jpg">&#128065; 2<') && $v1Files !== []);
         write_patched_index("$fxReal/index.php", $indexContents, ['TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true']);   // the upgrade: same folder, same data
         [, $v2Page] = http_get("$baseReal/");
-        check("[real 1.1.1, $v1Flavour] after swapping in 2.0.0, both per-photo counts carry over exactly (5 and 2)", str_contains($v2Page, 'data-photo="a.jpg">&#128065; 5<') && str_contains($v2Page, 'data-photo="b.jpg">&#128065; 2<'));
+        check("[real 1.1.1, $v1Flavour] after swapping in 2.0.0, both per-photo counts carry over exactly (5 and 2)", str_contains($v2Page, 'data-photo="a.jpg">' . ico('eye') . ' 5<') && str_contains($v2Page, 'data-photo="b.jpg">' . ico('eye') . ' 2<'));
         check("[real 1.1.1, $v1Flavour] ...and the sitewide total carries over (4 loads under 1.1.1, plus this one visit)", str_contains($v2Page, '· 5 visits'));
         $leftover = ''; foreach (scandir($fxReal) as $f) if (str_starts_with($f, '.gallery-stats') && !str_ends_with($f, '.php')) $leftover .= (string) file_get_contents("$fxReal/$f");
         check("[real 1.1.1, $v1Flavour] ...with no readable photo name left in any stats file, and the old JSON file gone", !str_contains($leftover, 'a.jpg') && !str_contains($leftover, 'b.jpg') && !is_file("$fxReal/.gallery-stats.json"));
@@ -2416,7 +2419,7 @@ $snapshot = function () use ($fxKeep) {
     return $snap;
 };
 $onPage = http_get("$baseKeep/")[1];
-check('[keep data] (setup) with everything on: the folder is shown, the hidden video is not (its hide flag works), and the two counted views are visible', str_contains($onPage, 'id="group-sub"') && !str_contains($onPage, 'alt="clip.mp4"') && !str_contains($onPage, 'img=clip.mp4') && str_contains($onPage, 'data-photo="photo.jpg">&#128065; 2<'));
+check('[keep data] (setup) with everything on: the folder is shown, the hidden video is not (its hide flag works), and the two counted views are visible', str_contains($onPage, 'id="group-sub"') && !str_contains($onPage, 'alt="clip.mp4"') && !str_contains($onPage, 'img=clip.mp4') && str_contains($onPage, 'data-photo="photo.jpg">' . ico('eye') . ' 2<'));
 $before = $snapshot();   // taken after every request that is allowed to count a view
 // Switch every one of those settings OFF and use the site (public pages, admin) several times.
 file_put_contents("$fxKeep/.gallery-config.php", $keepOff);
@@ -2429,7 +2432,7 @@ check('[keep data] every caption, location, hide flag, link, folder description 
 file_put_contents("$fxKeep/.gallery-config.php", $keepOn);
 $onAgain = http_get("$baseKeep/")[1];
 check('[keep data] switching them back ON brings the folder back, and the video\'s hide flag still hides it (it did not reset to visible)', str_contains($onAgain, 'id="group-sub"') && !str_contains($onAgain, 'alt="clip.mp4"') && !str_contains($onAgain, 'img=clip.mp4'));
-check('[keep data] ...and counting resumes from where it left off (the earlier 2 views, now 3)', http_get("$baseKeep/?track=photo.jpg")[0] === 200 && str_contains(http_get("$baseKeep/")[1], 'data-photo="photo.jpg">&#128065; 3<'));
+check('[keep data] ...and counting resumes from where it left off (the earlier 2 views, now 3)', http_get("$baseKeep/?track=photo.jpg")[0] === 200 && str_contains(http_get("$baseKeep/")[1], 'data-photo="photo.jpg">' . ico('eye') . ' 3<'));
 $subAgain = http_get("$baseKeep/?folder=Sub")[1];
 check('[keep data] ...the folder page shows its description and its photo\'s caption again', str_contains($subAgain, 'A folder description') && str_contains($subAgain, 'Deep photo caption'));
 $afterOn = $snapshot();
@@ -3093,8 +3096,8 @@ preg_match('#<footer>(.*?)</footer>#s', $saleAfter, $saleFooter);
 check('[sale] ...and the sitewide "N views" total is hidden from the public footer too', isset($saleFooter[1]) && !preg_match('/\d+ views/', $saleFooter[1]) && str_contains($saleFooter[1], 'href="?about"'));
 // ...but the seller can see every count in the admin.
 [, $saleAdmin] = http_get("$baseSale/?admin", ['Authorization: Basic ' . base64_encode('admin:sale-admin')]);
-check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'visit in total') || str_contains($saleAdmin, 'visits in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-sub">\s*&\#128065; 1 view\b#', $saleAdmin));
-check('[sale] ...and an untouched photo reads 0 views', (bool) preg_match('#unrelated\.jpg</div>\s*<div class="item-sub">\s*&\#128065; 0 views\b#', $saleAdmin));
+check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'visit in total') || str_contains($saleAdmin, 'visits in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-sub">\s*<svg class="ico"[^>]*><use href="\#i-eye"></use></svg> 1 view\b#', $saleAdmin));
+check('[sale] ...and an untouched photo reads 0 views', (bool) preg_match('#unrelated\.jpg</div>\s*<div class="item-sub">\s*<svg class="ico"[^>]*><use href="\#i-eye"></use></svg> 0 views\b#', $saleAdmin));
 
 /* ======================================================================= *
  * RECIPE: private family photos — hide an item and a whole folder through
