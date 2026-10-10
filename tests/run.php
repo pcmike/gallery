@@ -2344,6 +2344,27 @@ unlink("$fxCfg/.gallery-config.php");
 touch("$fxCfg/index.php", time() - 3600);
 check('[settings file] with no password anywhere and an old index.php, ?admin does not exist (404)', http_get("$baseCfg/?admin")[0] === 404);
 
+echo "== note colours reach the map pins ==\n";
+$fxPin = new_fixture_dir('pincolor');
+mkdir("$fxPin/Paris"); mkdir("$fxPin/Rome");
+make_jpeg("$fxPin/Paris/a.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxPin/Rome/b.jpg", 60, 60, 20, 20, 20);
+write_data_file("$fxPin/Paris/.gallery-items.php", ['items' => ['a.jpg' => ['location' => ['lat' => 48.85, 'lng' => 2.35, 'label' => ''], 'locationVisibility' => 'show']], 'groups' => [], 'locationEnabled' => true]);
+write_data_file("$fxPin/Rome/.gallery-items.php", ['items' => ['b.jpg' => ['location' => ['lat' => 41.9, 'lng' => 12.5, 'label' => ''], 'locationVisibility' => 'show']], 'groups' => [], 'locationEnabled' => true]);
+file_put_contents("$fxPin/n.md", "{gallery}\n\nThe Paris leg {color: #ff0000}\n\nRome was hot. {sold}\n");
+write_patched_index("$fxPin/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ENABLE_PHOTO_LOCATION' => 'true', 'ENABLE_MAP' => 'true']);
+$portPin = find_free_port(); start_server($fxPin, $portPin);
+$pinCols = function ($body) { preg_match_all('/"color":"(#[0-9a-f]+|[a-z]+)"/i', $body, $m); return array_values(array_unique($m[1])); };
+[, $pinHome] = http_get("http://127.0.0.1:$portPin/");
+[, $pinPage] = http_get("http://127.0.0.1:$portPin/?map");
+check('[pin colours] a note\'s {color:} on a folder colours that folder\'s pins on the page map, and {sold} turns its pins red', in_array('#ff0000', $pinCols($pinHome), true) && in_array('#e5484d', $pinCols($pinHome), true));
+check('[pin colours] ...and the full ?map page agrees, with the legend using the same colours', in_array('#ff0000', $pinCols($pinPage), true) && in_array('#e5484d', $pinCols($pinPage), true) && str_contains($pinPage, 'map-legend-swatch" style="background:#ff0000;"') && str_contains($pinPage, 'trip-map-full'));
+check('[pin colours] the ?map page is a clean standalone page, none of the gallery page printed before it leaked out', !str_contains($pinPage, 'class="gallery"') && !str_contains($pinPage, 'folder-cover') && substr_count($pinPage, '<!DOCTYPE html>') === 1);
+file_put_contents("$fxPin/n.md", "{gallery}\n\nNothing coloured here.\n");
+usleep(300000);
+[, $pinPlain] = http_get("http://127.0.0.1:$portPin/?map");
+check('[pin colours] with no colour in the notes the pins keep their folder colours', !in_array('#ff0000', $pinCols($pinPlain), true) && !in_array('#e5484d', $pinCols($pinPlain), true) && count($pinCols($pinPlain)) === 2);
+
 echo "== dates suggested from the photos ==\n";
 $fxDates = new_fixture_dir('datesug');
 mkdir("$fxDates/Trip"); mkdir("$fxDates/Trip/Day2");

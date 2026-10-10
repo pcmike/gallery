@@ -584,7 +584,7 @@ Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actua
 - The usual rules still apply on every map: a photo must have a visible location (its folder's location switch on, and not set to "always hide"), and a hidden photo or folder is never plotted for a visitor (the admin, who sees hidden things, sees them on the map too).
 
 - Photos within `MAP_CLUSTER_RADIUS_MILES` (default 50) of each other share one numbered pin, so a dense city doesn't turn into a wall of markers; clicking a cluster zooms in to its individual pins. A dense city trip and a cross-country drive want very different radii, so it's a setting.
-- Pins are colored by top-level folder, with a legend.
+- Pins are colored by top-level folder, with a legend. A note can override that: a folder or group given `{color: gold}` has gold pins, and `{sold}` / `{reserved}` give red / orange ones.
 - Clicking a pin opens a small popup (thumbnail, label, link) — it doesn't navigate on first click; the link inside does, to that group's page.
 - Hidden items are never plotted. `?map` has its own link preview, with a generic map-pin image (a rendered snapshot of the map would need a third-party static-maps service).
 

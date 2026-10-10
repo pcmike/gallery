@@ -479,6 +479,14 @@ try:
     cfg_now = cfg()
     ok(cfg_now.startswith(guard) and '"ADMIN_PASSWORD": "site-admin-pw-1"' in cfg_now, "the settings file is still the 404 guard plus JSON, and the admin password in it is untouched")
     ok(open(SITE2 + "/.gallery-items.php").read() == before_items, "none of it touched the captions and titles stored for the photos")
+    # a folder marked sold or reserved by the notes keeps its ribbon on top of the (greyed) picture
+    open(SITE2 + "/n.md", "w").write("{gallery}\n\nThe Sub folder {sold}\n")
+    b.viewport(1280, 900); b.goto(B2 + "/", 2.5)
+    rib = b.js("""(() => { const c = document.querySelector('.folder-cover.sold'); if (!c) return null; const r = c.querySelector('.sold-badge-corner'); if (!r) return 'no ribbon';
+        const q = r.getBoundingClientRect(); const e = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); const img = c.querySelector('img');
+        return {top: e === r, imgLoaded: img.complete && img.naturalWidth > 0}; })()""")
+    ok(isinstance(rib, dict) and rib["top"] and rib["imgLoaded"], "[cover card] a folder marked {sold} still shows its SOLD ribbon once the picture has loaded (the grey filter used to paint over it)", str(rib))
+    os.remove(SITE2 + "/n.md")
     b.viewport(390, 844, mobile=True); b.goto(B2 + "/?admin#site", 1.2); shot(b, "15-site-settings-phone")
     ok(b.js(overflow), "[site settings] no horizontal scrolling on a phone", f"scrollWidth={b.js('document.documentElement.scrollWidth')}")
     srv2.terminate(); srv2.wait()

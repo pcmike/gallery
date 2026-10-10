@@ -2612,6 +2612,25 @@ function collect_map_points($dir, $files, $itemsData, $fileToGroupKey, $folderGr
     return $points;
 }
 
+/** Recolours map pins by what the page's notes say about the group each photo is in: a {color:} gives its photos
+ *  that colour, {sold} and {reserved} the same red and orange as their ribbons (status wins over colour, as it does on
+ *  the page). A recoloured pin takes its group's name in the legend. Photos in groups the notes don't mention keep their
+ *  folder colour. */
+function apply_note_colors_to_points($points, $groups, $groupColors, $groupStatus, $groupLabels) {
+    $byFile = [];
+    foreach ($groups as $key => $members) {
+        $status = $groupStatus[$key] ?? '';
+        $color = $status === 'sold' ? '#e5484d' : ($status === 'reserved' ? '#f5a623' : ($groupColors[$key] ?? null));
+        if ($color === null || !is_safe_color($color)) continue;
+        foreach ($members as $f) $byFile[$f] = [$color, $groupLabels[$key] ?? $key];
+    }
+    foreach ($points as &$pt) {
+        if (isset($byFile[$pt['file']])) { $pt['color'] = $byFile[$pt['file']][0]; $pt['label'] = $byFile[$pt['file']][1]; }
+    }
+    unset($pt);
+    return $points;
+}
+
 /** The legend: one swatch + label per distinct group actually plotted,
  *  in first-seen order — a color-coded map means nothing without a key
  *  to read it against. */
@@ -7065,8 +7084,9 @@ if (ENABLE_MAP && isset($_GET['map'])) {
         http_response_code(404);
         exit;
     }
-    render_map_page($mapPoints, $mapLegend, $currentFolderPath === null ? $rootPageTitle : $pageTitle, $baseUrl, $currentFolderPath, $mapRadius);
-    exit;
+    // Served after the page's notes have been read (see below), so a colour a note gives a folder or group reaches its
+    // pins; everything printed meanwhile is thrown away.
+    $serveMapPage = true;
 }
 
 $ogTitle = $pageTitle;
@@ -7109,6 +7129,7 @@ if ($requestedPhoto) {
     }
 }
 send_viewer_aware_cache_headers();
+if (!empty($serveMapPage)) ob_start();
 ?>
 <!-- Drop-in Photo Gallery v<?= htmlspecialchars(GALLERY_VERSION) ?> — github.com/pcmike -->
 <?php if (!empty($galleryNotices)): ?>
@@ -7434,6 +7455,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .folder-cover-link:hover img { transform: scale(1.05); }
   .folder-cover.sold img { filter: grayscale(1) brightness(0.6); }
+  /* The sold picture has a filter, which makes it paint over an earlier, positioned sibling: lift the ribbon above it. */
+  .folder-cover .sold-badge-corner, .folder-cover .reserved-badge-corner { z-index: 2; }
   .folder-cover-label {
     display: block;
     padding: 10px 12px 2px;
@@ -7927,6 +7950,18 @@ if ($currentFolderPath !== null) {
   </div>
 <?php endif; ?>
 
+<?php
+// A note can colour a group or folder ({color:}) or mark it sold/reserved: its photos' pins follow.
+if (ENABLE_MAP && $mapPoints) {
+    $mapPoints = apply_note_colors_to_points($mapPoints, $groups, $groupColors, $groupStatus, $groupLabels);
+    $mapLegend = map_legend_from_points($mapPoints);
+}
+if (!empty($serveMapPage)) {
+    ob_end_clean();
+    render_map_page($mapPoints, $mapLegend, $currentFolderPath === null ? $rootPageTitle : $pageTitle, $baseUrl, $currentFolderPath, $mapRadius);
+    exit;
+}
+?>
 <?php if ($mapShown && !empty($mapPoints)): ?>
   <section class="map-preview" id="map-preview">
     <h2 class="map-preview-heading">
