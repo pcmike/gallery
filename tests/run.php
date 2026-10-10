@@ -1837,6 +1837,10 @@ check('[folder notes] ...and a {photos:} on a loose top-level photo still works 
 check('[folder notes] a {photos:} + {group:} in a folder\'s own notes work like the top level: a labelled box, the thumbnails under the paragraph, no notice', str_contains($fnParis, 'id="group-landmarks"') && str_contains($fnParis, '>Landmarks') && str_contains($fnParis, 'id="item-landmarks"') && !str_contains($fnParis, 'setup notice'));
 [, $fnParisClean] = (function () use ($fxFN, $portFN) { file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nSeen the eiffel yet? {sold}\n"); usleep(300000); return http_get("http://127.0.0.1:$portFN/?folder=Paris"); })();
 check('[folder notes] a folder note that just mentions a photo raises no notice and marks it sold', !str_contains($fnParisClean, 'setup notice') && str_contains($fnParisClean, 'sold-badge-corner'));
+file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nCheck out these pictures from around the city!{color: gold}\n");
+usleep(300000);
+[, $fnParisAccent] = http_get("http://127.0.0.1:$portFN/?folder=Paris");
+check('[folder notes] a {color:} in a paragraph that mentions no photo or folder accents the paragraph itself (it used to do nothing)', str_contains($fnParisAccent, '<p class="accent-note" style="border-left-color: gold;">Check out these pictures from around the city!</p>') && !str_contains($fnParisAccent, '{color'));
 file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nNice view {photos: eiffel.jpg} {color: gold}\n");
 usleep(300000);
 [, $fnParisPlain] = http_get("http://127.0.0.1:$portFN/?folder=Paris");

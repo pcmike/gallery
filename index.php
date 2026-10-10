@@ -3178,7 +3178,7 @@ function render_admin_notes_reference() {
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Claim photos', '{photos: a.jpg, b.jpg}') ?> <?= $c('{photos: a.jpg, b.jpg}') ?></div>
           <p>Attaches exactly these files to this paragraph, <strong>whatever they're called</strong>. Separate names with commas, spelled as in the folder. A file belongs to one paragraph only: the first claim wins.</p></div>
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Accent color', '{color: #ff0000}') ?> <?= $c('{color: gold}') ?> or <?= $c('{color: #5865f2}') ?></div>
-          <p>The accent colour of that item's box: a hex code or a plain colour word.</p></div>
+          <p>The accent colour of that item's box: a hex code or a plain colour word. In a paragraph with no photo or folder to put a box round, it puts a coloured bar beside the paragraph's text.</p></div>
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Sold', '{sold}') ?> <?= $c('{sold}') ?></div>
           <p>Marks the item <strong>sold</strong>: dimmed, struck-through text, grayscale photos and a red SOLD ribbon.</p></div>
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Reserved', '{reserved}') ?> <?= $c('{reserved}') ?> or <?= $c('{held}') ?></div>
@@ -6515,7 +6515,11 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
         } elseif ($status === 'reserved') {
             $html .= '<div class="reserved-item"' . $idAttr . '><span class="reserved-badge">RESERVED</span><p>' . $inner . '</p></div>';
         } else {
-            $html .= '<p' . $idAttr . '>' . $inner . '</p>';
+            // With nothing in the paragraph to put a box round (no photo or folder mentioned or listed), a {color:}
+            // accents the paragraph itself rather than silently doing nothing.
+            $accent = ($colorValue !== null && empty($matchedKeys) && empty($explicitPhotos))
+                ? ' class="accent-note" style="border-left-color: ' . htmlspecialchars($colorValue, ENT_QUOTES, 'UTF-8') . ';"' : '';
+            $html .= '<p' . $idAttr . $accent . '>' . $inner . '</p>';
         }
 
         if (!empty($matchedKeys)) {
@@ -7439,6 +7443,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); }
   .folder-dates { margin:2px 0 0; color:var(--muted); font-size:0.9rem; }
   .note-box.folder-description { white-space: pre-line; }
+  .note-box p.accent-note { border-left: 4px solid; padding-left: 12px; }
   .folder-cover-count {
     display: block;
     padding: 0 12px 10px;

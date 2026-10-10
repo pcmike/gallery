@@ -397,7 +397,7 @@ Place these directives anywhere in an item's paragraph in a `.md` file:
 
 | Directive | Effect |
 |---|---|
-| `{color: #5865f2}` or `{color: gold}` | Custom accent color for that group's gallery box |
+| `{color: #5865f2}` or `{color: gold}` | Custom accent color for that group's gallery box (or, in a paragraph with no photo or folder to box, a coloured bar beside the text) |
 | `{sold}` | Marks the item sold — dimmed/struck-through text, grayscaled photos, red ribbon |
 | `{reserved}` / `{held}` | Marks the item reserved — orange tag/ribbon, photos stay full-color |
 | `{group: Name}` | Names a group's gallery box, or renames an auto-detected one |
