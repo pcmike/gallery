@@ -1080,12 +1080,13 @@ $baseAdmin = "http://127.0.0.1:$portAdmin";
 $authHeader = 'Authorization: Basic ' . base64_encode('admin:test-admin-pw-123');
 $wrongAuthHeader = 'Authorization: Basic ' . base64_encode('admin:wrong-password');
 
-[$noAuthStatus, , $noAuthHeaders] = http_get("$baseAdmin/?admin");
-check('?admin with no credentials returns 401', $noAuthStatus === 401);
-check('?admin\'s 401 carries a WWW-Authenticate challenge', (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate: Basic') === 0));
+[$noAuthStatus, $noAuthBody, $noAuthHeaders] = http_get("$baseAdmin/?admin");
+check('?admin with no credentials shows a password form (200), not a browser Basic-Auth pop-up', $noAuthStatus === 200 && str_contains($noAuthBody, 'name="login_password"') && !array_filter($noAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0));
+check('?admin\'s login form is never indexed or cached', str_contains($noAuthBody, 'noindex') && (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'X-Robots-Tag: noindex') === 0) && (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'Cache-Control: no-store') === 0));
+check('...and asking for it starts no session (no Set-Cookie for an anonymous visitor)', !array_filter($noAuthHeaders, fn($h) => stripos($h, 'Set-Cookie:') === 0));
 
 [$wrongAuthStatus] = http_get("$baseAdmin/?admin", [$wrongAuthHeader]);
-check('?admin with the wrong password returns 401', $wrongAuthStatus === 401);
+check('?admin with a wrong password in a Basic header (a script) returns 401 with a challenge', $wrongAuthStatus === 401);
 
 [$okStatus, $adminBody, $adminHeaders] = http_get("$baseAdmin/?admin", [$authHeader]);
 check('?admin with the correct password returns 200', $okStatus === 200);
@@ -1382,11 +1383,11 @@ check('...but ?reveal is on a separate throttle realm and still works', $revealS
 [$revealInertStatus] = http_get("$base1/?reveal");
 check('?reveal 404s outright when PRIVATE_VIEW_PASSWORD is unset (the default)', $revealInertStatus === 404);
 
-// A bare request (no credentials) is just the first step of a Basic Auth
-// login, so any number of them must never lock anyone out.
+// A bare request (no credentials) is just a visit to the form, so any
+// number of them must never lock anyone out.
 $bareStatuses = [];
 for ($i = 0; $i < 8; $i++) { [$bareStatuses[]] = http_get("$basePrivate/?reveal"); }
-check('eight bare ?reveal requests all just get the 401 challenge (no lockout from missing credentials)', $bareStatuses === array_fill(0, 8, 401));
+check('eight bare ?reveal requests all just get the password form (no lockout from missing credentials)', $bareStatuses === array_fill(0, 8, 200));
 
 // ENABLE_MAP off (the default): ?map is simply ignored, not a crash or a
 // special endpoint — the normal gallery page renders, with no map
@@ -1631,7 +1632,7 @@ check('saving a folder\'s description, dates and position succeeds', str_contain
 check('the description shows on the folder\'s cover card, escaped, with whitespace collapsed', str_contains($fieldsRoot, 'folder-cover-desc">Three weeks, two &lt;script&gt;alert(1)&lt;/script&gt; countries.<') && !str_contains($fieldsRoot, '<script>alert(1)'));
 check('the dates show on the folder\'s cover card', str_contains($fieldsRoot, 'folder-cover-dates">June 12-15, 2026<'));
 [, $fieldsPage] = http_get("$baseDepth/?folder=Europe");
-check('the dates and description head the folder\'s own page', str_contains($fieldsPage, '<p class="folder-dates">June 12-15, 2026</p>') && str_contains($fieldsPage, '<p class="folder-description">Three weeks, two &lt;script&gt;'));
+check('the dates sit under the folder\'s title, and the description is a centered note box (not loose text in the header)', str_contains($fieldsPage, '<p class="folder-dates">June 12-15, 2026</p>') && str_contains($fieldsPage, '<div class="notes">' . "\n" . '    <div class="note-box folder-description">Three weeks, two &lt;script&gt;') && !preg_match('#<header>.*folder-description.*</header>#s', $fieldsPage));
 check('the folder\'s page title uses its display name', (bool) preg_match('/<title>Europe 2026 — /', $fieldsPage));
 check('the folder\'s Open Graph description uses its description', str_contains($fieldsPage, 'property="og:description" content="Three weeks, two &lt;script&gt;'));
 
@@ -1800,6 +1801,51 @@ check('photos in subfolders with AUTO_GROUP_BY_FOLDER off produce a setup notice
 check('...which names no folder or file', !str_contains($subNoticeBody, 'TopSecretTrip') && !str_contains($subNoticeBody, 'Day1'));
 check('...and the gallery itself still shows only the loose photo', str_contains($subNoticeBody, 'alt="loose.jpg"') && !str_contains($subNoticeBody, 'a.jpg') && !str_contains($subNoticeBody, 'b.jpg'));
 check('the defaults fixture (a flat folder) gets no such notice', $mapOffBody !== '' && !str_contains($mapOffBody, 'found in subfolders'));
+
+// ENABLE_VIDEO off (the default) with videos in a folder: the folder is
+// invisible, so the banner has to say why — a count only, never a name.
+// This is the "I made a Videos/ folder for the trip and nothing shows"
+// case.
+foreach (['grouping off' => 'false', 'grouping on' => 'true'] as $label => $grouping) {
+    $fxVid = new_fixture_dir('vidnotice');
+    mkdir("$fxVid/SecretVideos/Day1", 0777, true);
+    make_jpeg("$fxVid/loose.jpg", 60, 60, 10, 10, 10);
+    file_put_contents("$fxVid/SecretVideos/a.mp4", 'x');
+    file_put_contents("$fxVid/SecretVideos/Day1/b.MOV", 'x');
+    file_put_contents("$fxVid/loose.mov", 'x');
+    write_patched_index("$fxVid/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => $grouping]);
+    $portVid = find_free_port();
+    start_server($fxVid, $portVid);
+    [, $vidBody] = http_get("http://127.0.0.1:$portVid/");
+    check("[video notice, $label] videos with ENABLE_VIDEO off produce a setup notice with the right count", str_contains($vidBody, '3 video files (.mov/.mp4) were found but aren&#039;t shown, because ENABLE_VIDEO is off') && str_contains($vidBody, 'setup notice'));
+    check("[video notice, $label] ...which names no folder or file", !str_contains($vidBody, 'SecretVideos') && !str_contains($vidBody, 'Day1') && !str_contains($vidBody, 'a.mp4') && !str_contains($vidBody, 'loose.mov'));
+    check("[video notice, $label] ...and the banner stays collapsed when there are photos to look at", str_contains($vidBody, '<details class="gallery-notices">'));
+    check("[video notice, $label] ...and the videos really are not shown (the photo is)", str_contains($vidBody, 'alt="loose.jpg"') && http_get("http://127.0.0.1:$portVid/?folder=SecretVideos")[0] === 404);
+}
+
+// A video-only gallery: nothing at all to show, but the owner is told why.
+$fxVidOnly = new_fixture_dir('vidonly');
+mkdir("$fxVidOnly/Videos", 0777, true);
+file_put_contents("$fxVidOnly/Videos/only.mp4", 'x');
+write_patched_index("$fxVidOnly/index.php", $indexContents, []);
+$portVidOnly = find_free_port();
+start_server($fxVidOnly, $portVidOnly);
+[, $vidOnlyBody] = http_get("http://127.0.0.1:$portVidOnly/");
+check('[video notice] ...and, with nothing else to show, the banner is already open rather than collapsed', str_contains($vidOnlyBody, '<details class="gallery-notices" open>'));
+check('[video notice] a gallery holding only a Videos/ folder says why it is empty (singular wording)', str_contains($vidOnlyBody, '1 video file (.mov/.mp4) was found but isn&#039;t shown, because ENABLE_VIDEO is off') && str_contains($vidOnlyBody, '1 setup notice'));
+
+// With ENABLE_VIDEO on, nothing is ignored, so there is nothing to say.
+$fxVidOn = new_fixture_dir('vidon');
+mkdir("$fxVidOn/Videos", 0777, true);
+file_put_contents("$fxVidOn/Videos/only.mp4", 'x');
+file_put_contents("$fxVidOn/loose.mp4", 'x');
+write_patched_index("$fxVidOn/index.php", $indexContents, ['ENABLE_VIDEO' => 'true']);
+$portVidOn = find_free_port();
+start_server($fxVidOn, $portVidOn);
+[, $vidOnBody] = http_get("http://127.0.0.1:$portVidOn/");
+check('[video notice] with ENABLE_VIDEO on there is no such notice', !str_contains($vidOnBody, 'ENABLE_VIDEO is off') && str_contains($vidOnBody, 'loose.mp4'));
+check('[video notice] a folder with no videos at all gets no such notice', $subNoticeBody !== '' && !str_contains($subNoticeBody, 'ENABLE_VIDEO is off'));
+check('[video notice] the defaults fixture, which does hold a video, does get it (that is the point)', str_contains($mapOffBody, 'ENABLE_VIDEO is off'));
 
 // Root folder order: natural name order (Day 2 before Day 10, case-blind),
 // not scan order — and folder mtime when PHOTO_SORT_ORDER = 'mtime'.
@@ -1988,6 +2034,110 @@ if ($heicOk) {
  * a cover, and check what a visitor — and a pasted link — then sees.
  * ======================================================================= */
 
+echo "== locations: turning a folder on publishes what it can; opting out stays out ==\n";
+
+$fxGps = new_fixture_dir('gps-import');
+mkdir("$fxGps/Rome");
+$romeGps = [['N', [[41, 1], [53, 1], [0, 1]], 'E', [[12, 1], [29, 1], [0, 1]]], ['N', [[41, 1], [54, 1], [0, 1]], 'E', [[12, 1], [30, 1], [0, 1]]], ['N', [[41, 1], [55, 1], [0, 1]], 'E', [[12, 1], [31, 1], [0, 1]]]];
+foreach (['colosseum', 'hotel', 'cleared'] as $n => $name) make_gps_jpeg("$fxGps/Rome/$name.jpg", ...$romeGps[$n]);
+make_jpeg("$fxGps/Rome/plain.jpg", 60, 60, 1, 2, 3);
+write_patched_index("$fxGps/index.php", $indexContents, [
+    'AUTO_GROUP_BY_FOLDER' => 'true', 'ENABLE_PHOTO_LOCATION' => 'true', 'ENABLE_MAP' => 'true', 'ADMIN_PASSWORD' => "'gps-admin-pw'",
+]);
+$portGps = find_free_port(); start_server($fxGps, $portGps); $baseGps = "http://127.0.0.1:$portGps";
+$gpsAuth = 'Authorization: Basic ' . base64_encode('admin:gps-admin-pw');
+[, $gAdmin, $gAdminHd] = http_get("$baseGps/?admin&folder=Rome", [$gpsAuth]);
+$gpsHdrs = [$gpsAuth, 'Cookie: ' . extract_cookie_header($gAdminHd)];
+$romeUrl = "$baseGps/?admin&folder=Rome";
+$gpsRomeFile = fn ($page, $file) => (function ($h) use ($file) { foreach (html_post_forms($h) as $f) if (str_contains($f['html'], 'name="file" value="' . $file . '"') && str_contains($f['html'], 'save_item')) return $f['html']; return ''; })($page);
+check('[gps import] before the switch: three photos have GPS, the admin warns and nothing is public', str_contains($gAdmin, '3 photos here have GPS in the file') && !str_contains(http_get("$baseGps/")[1], 'trip-map-preview'));
+// The owner opts one photo out (hotel) and clears another (cleared) *before* turning the folder on.
+[, $r] = user_submit($romeUrl, $gAdmin, 'name="file" value="hotel.jpg"', ['loc_visibility' => 'hide'], $gpsHdrs);
+check('[gps import] "Always hide" on a photo saves (its coordinates are kept, just never shown)', str_contains($r, 'class="flash ok"'));
+[, $gAdmin] = http_get($romeUrl, $gpsHdrs);
+[, $r] = user_submit($romeUrl, $gAdmin, 'name="file" value="cleared.jpg"', ['lat' => '', 'lng' => '', 'loc_label' => ''], $gpsHdrs);
+check('[gps import] clearing a photo\'s coordinates saves', str_contains($r, 'class="flash ok"'));
+[, $gAdmin] = http_get($romeUrl, $gpsHdrs);
+[, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $gpsHdrs);
+check('[gps import] turning the switch on reports how many photos now show a location', str_contains($r, 'class="flash ok"') && str_contains($r, '1 photo has GPS in the file and now shows a location'));
+$items = read_data_file("$fxGps/Rome/.gallery-items.php")['items'] ?? [];
+check('[gps import] the unhidden photo got its GPS stored (41.883, 12.483)', abs(($items['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001 && abs(($items['colosseum.jpg']['location']['lng'] ?? 0) - 12.4833) < 0.001);
+check('[gps import] a photo with no GPS is marked checked and given no location', !isset($items['plain.jpg']['location']) && !empty($items['plain.jpg']['gpsChecked']));
+$romePub = http_get("$baseGps/?folder=Rome")[1];
+check('[gps import] visitors see the imported photo\'s location badge and the map', str_contains(http_get("$baseGps/")[1], 'trip-map-preview') && substr_count($romePub, 'location-badge') === 1);
+$mapPins = (function ($h) { preg_match('/var clusters = (\[.*?\]);/s', $h, $m); return json_decode($m[1] ?? '[]', true); })(http_get("$baseGps/")[1]);
+check('[gps import] ...only that photo is on the map: the hidden one and the cleared one stay out', count($mapPins) === 1 && str_contains(json_encode($mapPins), 'colosseum.jpg') && !str_contains(json_encode($mapPins), 'hotel.jpg') && !str_contains(json_encode($mapPins), 'cleared.jpg'));
+// Opening the folder again (which also picks up later uploads) must not resurrect the cleared location.
+[, $gAdmin] = http_get($romeUrl, $gpsHdrs);
+check('[gps import] re-opening the folder does not bring a deliberately cleared location back', str_contains($gpsRomeFile($gAdmin, 'cleared.jpg'), 'name="lat" value=""'));
+// A photo uploaded after the switch is on is picked up the next time the owner opens the folder.
+make_gps_jpeg("$fxGps/Rome/late.jpg", 'N', [[41, 1], [56, 1], [0, 1]], 'E', [[12, 1], [32, 1], [0, 1]]);
+check('[gps import] a photo uploaded later is not public until the owner next opens the folder...', substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 1);
+[, $gAdmin] = http_get($romeUrl, $gpsHdrs);
+check('[gps import] ...and then it is', substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 2);
+// The switch asks first, and turning it off keeps the data.
+[, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '0'], $gpsHdrs);
+check('[gps import] turning it off hides every location again but keeps the stored coordinates', str_contains($r, 'Saved coordinates are kept') && substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 0 && abs((read_data_file("$fxGps/Rome/.gallery-items.php")['items']['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001);
+
+echo "== login: a password form, not a browser pop-up; discreet entry; empty notes box ==\n";
+
+$fxLogin = new_fixture_dir('login');
+make_jpeg("$fxLogin/one.jpg", 60, 60, 10, 10, 10);
+mkdir("$fxLogin/Sub"); make_jpeg("$fxLogin/Sub/two.jpg", 60, 60, 20, 20, 20);
+file_put_contents("$fxLogin/trip.md", "{gallery}\n# Summer in Lisbon\n");
+write_patched_index("$fxLogin/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ADMIN_PASSWORD' => "'login-pw'", 'PRIVATE_VIEW_PASSWORD' => "'view-pw'"]);
+$portLogin = find_free_port(); start_server($fxLogin, $portLogin); $baseLogin = "http://127.0.0.1:$portLogin";
+$cookieOf = fn ($hd) => extract_cookie_header($hd);
+
+// Wrong password: the form again, with a message, and nothing logged in.
+[$s1, $b1, $h1] = http_post("$baseLogin/?admin", ['login_password' => 'nope']);
+check('[login] a wrong password re-shows the form with a plain message (200), and sets no session', $s1 === 200 && str_contains($b1, 'That password isn&#039;t right') && str_contains($b1, 'name="login_password"') && !array_filter($h1, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0));
+// Right password: redirected back to the same admin URL, with a session cookie; no Authorization header needed afterwards.
+[$s2, , $h2] = http_post("$baseLogin/?admin&folder=Sub", ['login_password' => 'login-pw'], [], false);
+$loginCookie = $cookieOf($h2); $loc2 = ''; foreach ($h2 as $h) if (stripos($h, 'Location:') === 0) $loc2 = trim(substr($h, 9));
+check('[login] the right password redirects to the very URL asked for, and sets the session cookie', $s2 === 303 && $loc2 === '?admin&folder=Sub' && str_contains($loginCookie, 'gallery_admin_'));
+[$s3, $b3] = http_get("$baseLogin/?admin&folder=Sub", ["Cookie: $loginCookie"]);
+check('[login] with just that cookie (no Authorization header) the admin page opens, on the right folder', $s3 === 200 && str_contains($b3, 'Gallery Admin') && str_contains($b3, 'Editing: Sub'));
+check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="login_password"'));
+check('[login] a login also counts as private view (the viewer cookie is set too)', str_contains($loginCookie, '=') && substr_count($loginCookie, '=') >= 2);
+// A saved change from an expired session must not be saved, and must say why.
+[$s4, $b4] = http_post("$baseLogin/?admin", ['action' => 'save_item', 'file' => 'one.jpg', 'caption' => 'should not stick']);
+check('[login] a change posted without a session is refused with a "session expired" form, and nothing is saved', $s4 === 200 && str_contains($b4, 'Your session expired') && !is_file("$fxLogin/.gallery-items.php"));
+// Basic auth for scripts still works.
+check('[login] a script can still send a Basic Authorization header instead', str_contains(http_get("$baseLogin/?admin", ['Authorization: Basic ' . base64_encode('x:login-pw')])[1], 'Gallery Admin'));
+// Logging out.
+[, $b5] = http_get("$baseLogin/?admin", ["Cookie: $loginCookie"]);
+$logoutForm = ''; foreach (html_post_forms($b5) as $f) if (str_contains($f['html'], 'value="logout"')) $logoutForm = $f['html'];
+check('[login] the admin page has a Log out button', $logoutForm !== '');
+[$s6, , $h6] = http_post("$baseLogin/?admin", form_default_fields($logoutForm), ["Cookie: $loginCookie"], false);
+check('[login] logging out redirects away and expires the cookies', $s6 === 303 && (bool) array_filter($h6, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0 && stripos($h, 'expires=Thu, 01 Jan 1970') !== false));
+check('[login] after logging out, the old cookie no longer opens the admin', str_contains(http_get("$baseLogin/?admin", ["Cookie: $loginCookie"])[1], 'name="login_password"'));
+// Five wrong passwords lock the next attempt for a minute, even a right one.
+for ($i = 0; $i < 5; $i++) http_post("$baseLogin/?admin", ['login_password' => 'bad' . $i]);
+[$s7] = http_post("$baseLogin/?admin", ['login_password' => 'login-pw']);
+check('[login] five wrong passwords lock the next attempt (429), even with the right password', $s7 === 429);
+// The private view uses the same kind of form.
+[$sv1, $bv1] = http_get("$baseLogin/?reveal");
+check('[login] ?reveal shows a one-field password form too', $sv1 === 200 && str_contains($bv1, 'name="login_password"') && str_contains($bv1, 'Private view'));
+[$sv2, , $hv2] = http_post("$baseLogin/?reveal", ['login_password' => 'view-pw'], [], false);
+check('[login] the right private-view password redirects to the plain gallery and sets the viewer cookie', $sv2 === 302 && str_contains($cookieOf($hv2), '='));
+
+// The gallery title is the (unmarked) way to the admin.
+[, $homeLogin] = http_get("$baseLogin/");
+check('[login] the gallery title links to ?admin', str_contains($homeLogin, '<h1><a class="title-admin" rel="nofollow" href="?admin">Summer in Lisbon</a></h1>'));
+check('[login] ...and the link carries no styling that would give it away (no underline, colour, cursor or hover rule)', (bool) preg_match('/header h1 a\.title-admin \{\s*color: inherit;\s*text-decoration: none;\s*cursor: inherit;/', $homeLogin) && !str_contains($homeLogin, 'title-admin:hover'));
+[, $subLogin] = http_get("$baseLogin/?folder=Sub");
+check('[login] on a folder page the title leads to that folder\'s admin', str_contains($subLogin, 'href="?admin&amp;folder=Sub"'));
+$fxPlainTitle = new_fixture_dir('plaintitle'); make_jpeg("$fxPlainTitle/a.jpg", 60, 60, 1, 2, 3); copy(__DIR__ . '/../index.php', "$fxPlainTitle/index.php");
+$portPlainTitle = find_free_port(); start_server($fxPlainTitle, $portPlainTitle);
+$plainTitle = http_get("http://127.0.0.1:$portPlainTitle/")[1];
+check('[login] with no ADMIN_PASSWORD (the default) the title is plain text, nothing links to the admin', !str_contains($plainTitle, 'title-admin"') && !str_contains($plainTitle, 'href="?admin'));
+
+// A notes file whose only content is "# Title" gives the page its title and shows no empty box.
+check('[login] a notes file holding only a "# Title" becomes the title, with no empty "trip.md" box', str_contains($homeLogin, 'Summer in Lisbon') && !str_contains($homeLogin, 'class="note-box"') && !str_contains($homeLogin, 'trip.md'));
+file_put_contents("$fxLogin/trip.md", "{gallery}\n# Summer in Lisbon\n\nBring sunscreen.\n");
+check('[login] ...but the box comes back as soon as the file has any text', str_contains(http_get("$baseLogin/")[1], 'class="note-box"') && str_contains(http_get("$baseLogin/")[1], 'Bring sunscreen.'));
+
 echo "== recipe: trip album (folders, admin forms, GPS, map, video, share links) ==\n";
 
 $fxTrip = new_fixture_dir('recipe-trip');
@@ -2035,8 +2185,15 @@ $eiffelForm = '';
 foreach (html_post_forms($pAdmin) as $form) { if (str_contains($form['html'], 'name="file" value="eiffel.jpg"') && str_contains($form['html'], 'save_item')) $eiffelForm = $form['html']; }
 $eiffelFields = form_default_fields($eiffelForm);
 check('[trip] the admin pre-fills the photo\'s location from its EXIF GPS (48.8584, 2.2945) before anything is typed', abs((float) ($eiffelFields['lat'] ?? 0) - 48.8584) < 0.0001 && abs((float) ($eiffelFields['lng'] ?? 0) - 2.2945) < 0.0001);
+check('[trip] turning the folder\'s switch on says how many photos now show a location, and how to keep one private', str_contains($r, '1 photo has GPS in the file and now shows a location') && str_contains($r, 'Always hide'));
+check('[trip] ...the GPS was stored for that photo right then (nothing to Save first), so there is no "not saved yet" nagging', str_contains($pAdmin, 'name="lat" value="48.8584') && !str_contains($pAdmin, 'not saved yet') && !str_contains($pAdmin, 'loc-unsaved-summary'));
+check('[trip] ...and visitors see the map and the location badge straight away', str_contains(http_get("$baseTrip/")[1], 'trip-map-preview') && str_contains(http_get("$baseTrip/?folder=Paris")[1], 'location-badge'));
 [, $r] = user_submit($parisUrl, $pAdmin, 'name="file" value="eiffel.jpg"', ['caption' => 'The iron lady', 'web' => 'https://en.wikipedia.org/wiki/Eiffel_Tower', 'loc_label' => 'Champ de Mars'], $tripHdrs);
 check('[trip] saving the photo (caption + link, untouched pre-filled GPS) succeeds', str_contains($r, 'class="flash ok"'));
+[, $pAdminSaved] = http_get($parisUrl, $tripHdrs);
+$eiffelSavedForm = '';
+foreach (html_post_forms($pAdminSaved) as $form) { if (str_contains($form['html'], 'name="file" value="eiffel.jpg"') && str_contains($form['html'], 'save_item')) $eiffelSavedForm = $form['html']; }
+check('[trip] once saved, the "not saved yet" warning is gone from that photo', $eiffelSavedForm !== '' && !str_contains($eiffelSavedForm, 'not saved yet'));
 [, $parisPub] = http_get("$baseTrip/?folder=Paris");
 check('[trip] visitors see the caption badge, the location badge (OpenStreetMap link) and the web-link badge', str_contains($parisPub, 'caption-badge" title="The iron lady"') && (bool) preg_match('#class="item-badge location-badge" href="https://www\.openstreetmap\.org/[^"]*48\.8584#', $parisPub) && str_contains($parisPub, 'href="https://en.wikipedia.org/wiki/Eiffel_Tower"'));
 check('[trip] the lightbox caption data carries the caption, never the filename', str_contains($parisPub, '"The iron lady"') && !preg_match('/captions = \[[^\]]*eiffel/', $parisPub));
@@ -2050,12 +2207,14 @@ check('[trip] ...whose legend uses the folder\'s display name', str_contains($tr
 check('[trip] the shareable ?map page loads and has its own link preview', $tripMapStatus === 200 && str_contains($tripMapPage, 'property="og:image"') && str_contains($tripMapPage, '?mapicon'));
 [, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
 check('[trip] Lisbon\'s tram photo has GPS pre-filled too, but Lisbon has not opted in so it is not on the map', abs((float) (form_default_fields((function ($h) { foreach (html_post_forms($h) as $f) if (str_contains($f['html'], 'name="file" value="tram.jpg"') && str_contains($f['html'], 'save_item')) return $f['html']; return ''; })($lAdmin))['lat'] ?? 0) - 38.7) < 0.01 && count($clusters3) === 1);
+check('[trip] ...and Lisbon\'s admin warns that its GPS stays private until the switch is turned on, naming what turning it on does', str_contains($lAdmin, 'Nothing is public while this folder') && str_contains($lAdmin, 'Private for now') && str_contains($lAdmin, 'Always hide'));
+check('[trip] ...the switch asks for confirmation before publishing, with the number of photos affected', (bool) preg_match('#onchange="if \(this\.checked &amp;&amp; !confirm\(&quot;Turn on public locations for this folder\? 1 photo here has GPS#', $lAdmin));
 [, $r] = user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $tripHdrs);
 [, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
-user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'name="file" value="tram.jpg"', ['caption' => 'Tram 28'], $tripHdrs);
 [, $tripHome4] = http_get("$baseTrip/");
 preg_match('/var clusters = (\[.*?\]);/s', $tripHome4, $cm4); $clusters4 = json_decode($cm4[1] ?? '[]', true);
-check('[trip] once Lisbon opts in and the tram photo is saved, the map has two pins', count($clusters4) === 2);
+check('[trip] once Lisbon opts in, its tram photo is on the map with no further Save, so the map has two pins', count($clusters4) === 2);
+user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'name="file" value="tram.jpg"', ['caption' => 'Tram 28'], $tripHdrs);
 
 // 6. Pick a cover photo with the page's own "Set as cover" button.
 [, $pAdmin] = http_get($parisUrl, $tripHdrs);
@@ -2155,7 +2314,7 @@ check('[family] the admin\'s "Hidden items" summary lists the folder and the pho
 [$goodPwStatus, , $goodPwHd] = http_get("$baseFam/?reveal", ['Authorization: Basic ' . base64_encode('x:fam-view')], false);
 $famViewer = extract_cookie_header($goodPwHd);
 $loc = ''; foreach ($goodPwHd as $h) if (stripos($h, 'Location:') === 0) $loc = trim(substr($h, 9));
-check('[family] "Private view": no password / wrong password get 401, the right one redirects back to the plain gallery link', $noPwStatus === 401 && $badPwStatus === 401 && $goodPwStatus === 302 && ($loc === './' || $loc === '/'));
+check('[family] "Private view": no password shows the form, a wrong Basic password gets 401, the right one redirects back to the plain gallery link', $noPwStatus === 200 && $badPwStatus === 401 && $goodPwStatus === 302 && ($loc === './' || $loc === '/'));
 [, $famViewed] = http_get("$baseFam/", ["Cookie: $famViewer"]);
 check('[family] with the viewer cookie, the whole gallery is back (5 photos, Birthday card, kids.jpg)', str_contains($famViewed, 'alt="kids.jpg"') && str_contains($famViewed, 'id="group-birthday"') && str_contains($famViewed, '5 photos') && http_get("$baseFam/?folder=Birthday", ["Cookie: $famViewer"])[0] === 200);
 // Two galleries on one domain, different viewer passwords, ONE browser: browsers

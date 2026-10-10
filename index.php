@@ -58,7 +58,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.0');
+define('GALLERY_VERSION', '2.0.1');
 
 // Turn photo/group/page view tracking on or off. Off by default — this
 // script writes nothing to the folder's disk unless you turn something
@@ -380,6 +380,44 @@ function count_media_in_subfolders($realDir, $mediaExtensions, $maxDirs = 40) {
             if (is_dir($path)) {
                 $queue[] = $path;
             } elseif (in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), $mediaExtensions, true)) {
+                $count++;
+            }
+        }
+    }
+    return [$count, $truncated];
+}
+
+/**
+ * For when ENABLE_VIDEO is off: a bounded count of .mov/.mp4 files
+ * sitting anywhere under the gallery root (and any EXTRA_FOLDERS), so an
+ * owner who makes a "Videos/" folder and sees nothing is told why instead
+ * of left guessing. Same constraints as count_media_in_subfolders():
+ * never follows a linked directory, skips dot-directories, and visits at
+ * most $maxDirs directories so a drop into a big web root stays cheap.
+ * Returns [count found, whether the search was cut short]. A count only,
+ * never names — a folder holding nothing but ignored videos isn't one the
+ * owner has published, and this banner is visible to every visitor.
+ */
+function count_ignored_videos($realDir, $maxDirs = 40) {
+    $count = 0;
+    $visited = 0;
+    $truncated = false;
+    $queue = [$realDir];
+    foreach (EXTRA_FOLDERS as $extraPath) {
+        if (is_string($extraPath) && is_dir($extraPath) && !is_link($extraPath)) $queue[] = $extraPath;
+    }
+    while ($queue) {
+        if ($visited++ >= $maxDirs) {
+            $truncated = true;
+            break;
+        }
+        $current = array_shift($queue);
+        foreach ((@scandir($current) ?: []) as $entry) {
+            if ($entry[0] === '.') continue;
+            $path = $current . '/' . $entry;
+            if (is_dir($path)) {
+                if (!is_link($path)) $queue[] = $path;
+            } elseif (is_video_file($entry) && is_file($path)) {
                 $count++;
             }
         }
@@ -1242,6 +1280,16 @@ if (!empty($subfolderMediaCount)) {
         . ' shown — set AUTO_GROUP_BY_FOLDER to true to include them (see the README\'s "Folders" section).';
 }
 
+if (!ENABLE_VIDEO) {
+    [$ignoredVideoCount, $ignoredVideoTruncated] = count_ignored_videos($dir);
+    if ($ignoredVideoCount > 0) {
+        $galleryNotices[] = ($ignoredVideoTruncated ? 'At least ' : '') . $ignoredVideoCount
+            . ' video file' . ($ignoredVideoCount === 1 ? ' (.mov/.mp4) was' : 's (.mov/.mp4) were')
+            . ' found but ' . ($ignoredVideoCount === 1 ? 'isn\'t' : 'aren\'t')
+            . ' shown, because ENABLE_VIDEO is off — set it to true to include them (see the README\'s "Video" section).';
+    }
+}
+
 // Only a .md file whose first non-blank line is exactly "{gallery}" is
 // treated as content for this script — anything else in the folder (a
 // personal notes.md, a leftover README, etc.) is left completely alone.
@@ -1858,6 +1906,22 @@ function send_viewer_aware_cache_headers() {
         header('Cache-Control: private, no-store');
     }
 }
+function admin_session_name() {
+    return 'gallery_admin_' . substr(hash('sha256', __DIR__), 0, 10);
+}
+
+/** What a logged-in admin session carries. Derived from the password and
+ *  this install's folder, so changing ADMIN_PASSWORD logs every existing
+ *  session out, and a session from another gallery means nothing here. */
+function admin_session_marker() {
+    return hash('sha256', 'admin|' . ADMIN_PASSWORD . '|' . __DIR__);
+}
+
+function admin_session_authed() {
+    return isset($_SESSION['admin_auth']) && is_string($_SESSION['admin_auth'])
+        && hash_equals(admin_session_marker(), $_SESSION['admin_auth']);
+}
+
 function admin_start_session() {
     if (session_status() === PHP_SESSION_ACTIVE) return;
     ini_set('session.gc_maxlifetime', 14400);
@@ -1865,7 +1929,7 @@ function admin_start_session() {
     // the admin session its own name: a gallery living inside another PHP
     // site would otherwise share — and clobber — that site's PHPSESSID.
     ini_set('session.use_strict_mode', '1');
-    session_name('gallery_admin_' . substr(hash('sha256', __DIR__), 0, 10));
+    session_name(admin_session_name());
     // Secure matches is_https_request() rather than being hardcoded true
     // — the one exception this feature already makes for localhost
     // testing over plain HTTP would otherwise never get the cookie back
@@ -1908,6 +1972,47 @@ function admin_send_auth_challenge() {
     echo 'Authentication required.';
 }
 
+/** The password form for ?admin and ?reveal: one field, no username, no
+ *  browser pop-up. Never indexed or cached or framed. $error is shown above
+ *  the field after a wrong password. */
+function render_login_page($heading, $blurb, $error = '') {
+    header('Content-Type: text/html; charset=UTF-8');
+    header('X-Robots-Tag: noindex, nofollow');
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title><?= htmlspecialchars($heading, ENT_QUOTES, 'UTF-8') ?></title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; margin:0; }
+  .wrap { max-width:360px; margin:0 auto; padding:72px 24px; }
+  h1 { font-size:1.3rem; margin:0 0 6px; }
+  p { color:#9a9aa0; font-size:0.9rem; margin:0 0 18px; }
+  input[type=password] { width:100%; box-sizing:border-box; padding:10px 12px; font-size:1rem; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:8px; }
+  input[type=password]:focus { outline:2px solid #5865f2; outline-offset:1px; }
+  button { margin-top:12px; width:100%; padding:10px 12px; font-size:1rem; background:#5865f2; color:#fff; border:0; border-radius:8px; cursor:pointer; }
+  .err { background:rgba(237,66,69,0.15); color:#ff8a8c; padding:8px 12px; border-radius:8px; font-size:0.9rem; margin-bottom:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><?= htmlspecialchars($heading, ENT_QUOTES, 'UTF-8') ?></h1>
+  <p><?= htmlspecialchars($blurb, ENT_QUOTES, 'UTF-8') ?></p>
+  <?php if ($error !== ''): ?><div class="err" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+  <form method="post" action="">
+    <input type="password" name="login_password" autocomplete="current-password" autofocus required aria-label="Password">
+    <button type="submit">Continue</button>
+  </form>
+</div>
+</body>
+</html>
+<?php
+}
+
 /** A plain-English refusal page for ?admin or ?reveal over an insecure
  *  connection — HTTP Basic Auth credentials are plaintext-equivalent
  *  without TLS, so this fails closed rather than just documenting the
@@ -1934,7 +2039,7 @@ function render_https_required_page() {
 <body>
 <div class="wrap">
   <h1>HTTPS required</h1>
-  <p>This page logs in with a password sent over HTTP Basic Auth, which is sent in a form that's trivially readable by anyone on the network path if the connection isn't encrypted. To protect that password, this page refuses to run at all over a plain <code>http://</code> connection.</p>
+  <p>This page asks for a password, and over a plain <code>http://</code> connection that password travels in a form anyone on the network path can read. To protect it, this page refuses to run at all without HTTPS.</p>
   <p>If you're testing this on your own machine, visiting it as <code>localhost</code> or <code>127.0.0.1</code> is allowed over plain HTTP. For a real deployment, put this site behind HTTPS — <a href="https://letsencrypt.org/" target="_blank" rel="noopener noreferrer">Let's Encrypt</a> issues free certificates, and most hosting control panels can set one up in a few clicks.</p>
 </div>
 </body>
@@ -2179,20 +2284,25 @@ function run_reveal_route($dir) {
         echo 'Too many failed attempts. Try again in a moment.';
         return;
     }
+    // The form is the normal way in; a Basic Authorization header (a script,
+    // a bookmarked login) is still honored. Only a password that was
+    // actually *supplied* and wrong counts against the throttle: a plain
+    // visit to the form tells us nothing about guessing.
     $pass = $_SERVER['PHP_AUTH_PW'] ?? null;
-    if (!is_string($pass) || !hash_equals(PRIVATE_VIEW_PASSWORD, $pass)) {
-        // Only *supplied* credentials that were wrong count against the
-        // throttle. A request with none is the normal first step of any
-        // Basic Auth login (the browser asks, gets this 401, then
-        // prompts) and tells us nothing about guessing — counting it
-        // would let five bare requests lock out everyone behind one IP.
-        if (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW'])) {
+    $formPass = ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_password']) && is_string($_POST['login_password'])) ? $_POST['login_password'] : null;
+    $supplied = $formPass ?? $pass;
+    if (!is_string($supplied) || !hash_equals(PRIVATE_VIEW_PASSWORD, $supplied)) {
+        if (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']) || $formPass !== null) {
             login_throttle_record_failure($dir, 'reveal', $ip);
         }
-        header('WWW-Authenticate: Basic realm="Gallery Private View"');
-        http_response_code(401);
-        header('Content-Type: text/plain; charset=UTF-8');
-        echo 'Authentication required.';
+        if ($formPass === null && (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']))) {
+            header('WWW-Authenticate: Basic realm="Gallery Private View"');
+            http_response_code(401);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'Authentication required.';
+            return;
+        }
+        render_login_page('Private view', 'Enter the password to see the hidden items.', $formPass !== null ? 'That password isn\'t right.' : '');
         return;
     }
     login_throttle_record_success($dir, 'reveal', $ip);
@@ -2554,6 +2664,58 @@ function photo_location_visible($itemEntry) {
     return !empty($itemEntry['_folderLocationEnabled']);
 }
 
+/** Whether this PHP can read embedded GPS out of this kind of file at all
+ *  (JPEG needs the exif extension, HEIC/HEIF needs Imagick). Anything else
+ *  — PNG, GIF, WEBP, video — has no GPS block, so there is nothing to wait
+ *  for or to mark as checked. */
+function gps_readable_file($file) {
+    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+    if ($ext === 'jpg' || $ext === 'jpeg') return function_exists('exif_read_data');
+    if ($ext === 'heic' || $ext === 'heif') return class_exists('Imagick');
+    return false;
+}
+
+/**
+ * Once a folder's locations are switched on, every photo in it that has
+ * GPS in the file gets that location stored, so turning the switch on
+ * actually puts the places on the gallery and map — hiding one photo is
+ * then the opt-out (its "Always hide" setting, or clearing its
+ * coordinates), not showing each one. A photo is read once and marked
+ * (gpsChecked), so a location the owner later clears stays cleared, and a
+ * photo with no GPS isn't re-read on every visit. A photo that already
+ * has a saved location is never touched. Returns how many photos were
+ * given a location. Runs when the switch is turned on and whenever the
+ * owner opens that folder in the admin (which is how photos uploaded
+ * later get picked up); never on a visitor's request.
+ */
+function import_folder_gps($dir, $folderReal, $looseFiles) {
+    if (!ENABLE_PHOTO_LOCATION) return 0;
+    $data = items_read($folderReal);
+    if (empty($data['locationEnabled'])) return 0;
+    $found = [];
+    foreach ($looseFiles as $file) {
+        $bare = basename($file);
+        $entry = $data['items'][$bare] ?? [];
+        if (!empty($entry['location']) || !empty($entry['gpsChecked']) || !gps_readable_file($file)) continue;
+        $found[$bare] = extract_photo_gps(resolve_real_path($dir, $file));
+    }
+    if (!$found) return 0;
+    $imported = 0;
+    items_update($folderReal, function (&$d) use ($found, &$imported) {
+        foreach ($found as $bare => $loc) {
+            $entry = $d['items'][$bare] ?? [];
+            if (!empty($entry['location']) || !empty($entry['gpsChecked'])) continue;
+            $entry['gpsChecked'] = true;
+            if ($loc !== null) {
+                $entry['location'] = ['lat' => $loc['lat'], 'lng' => $loc['lng'], 'label' => ''];
+                $imported++;
+            }
+            $d['items'][$bare] = $entry;
+        }
+    });
+    return empty($GLOBALS['__data_write_failed']) ? $imported : 0;
+}
+
 /** A numeric latitude/longitude pair, validated the same discipline
  *  is_safe_color() already applies to {color:} before it's ever trusted
  *  into a generated map-link URL. */
@@ -2695,10 +2857,13 @@ function admin_resolve_folder($files) {
 function render_admin_folder_nav($files, $currentFolder) {
     $folderPaths = all_folder_paths($files);
     if (empty($folderPaths)) return '';
-    $html = '<nav class="admin-folder-nav"><a href="?admin"' . ($currentFolder === null ? ' class="current"' : '') . '>Root</a>';
+    $html = '<nav class="admin-folder-nav" aria-label="Folders"><a href="?admin"' . ($currentFolder === null ? ' class="current" aria-current="page"' : '') . '>Root</a>';
     foreach ($folderPaths as $key) {
-        $active = ($currentFolder === $key) ? ' class="current"' : '';
-        $html .= ' <a href="?admin&folder=' . rawurlencode($key) . '"' . $active . '>' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '</a>';
+        $depth = substr_count($key, '/');
+        $active = ($currentFolder === $key) ? ' class="current" aria-current="page"' : '';
+        $html .= '<a href="?admin&amp;folder=' . htmlspecialchars(rawurlencode($key), ENT_QUOTES, 'UTF-8') . '"' . $active
+              . ' style="padding-left:' . (12 + $depth * 14) . 'px" title="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '">'
+              . htmlspecialchars(basename($key), ENT_QUOTES, 'UTF-8') . '</a>';
     }
     return $html . '</nav>';
 }
@@ -2791,6 +2956,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
     $action = $_POST['action'] ?? '';
 
+    if ($action === 'logout') {
+        return ['type' => 'logout'];
+    }
+
     if ($action === 'save_item') {
         $bare = basename((string) ($_POST['file'] ?? ''));
         $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
@@ -2827,6 +2996,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             } else {
                 unset($entry['location']);
             }
+            // Saved by the owner, so whatever location it has (or deliberately
+            // doesn't) stands: never auto-import GPS over it later.
+            $entry['gpsChecked'] = true;
             $entry['locationVisibility'] = $visibility;
             if ($restriction === 'inherit') { unset($entry['restriction']); } else { $entry['restriction'] = $restriction; }
             $data['items'][$bare] = $entry;
@@ -2931,7 +3103,20 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         items_update($targetReal, function (&$data) use ($enabled) {
             $data['locationEnabled'] = $enabled;
         });
-        return ['type' => 'ok', 'text' => 'Location sharing ' . ($enabled ? 'enabled' : 'disabled') . ' for this folder.'];
+        if (!$enabled) {
+            return ['type' => 'ok', 'text' => 'Location sharing disabled for this folder. Saved coordinates are kept, just not shown.'];
+        }
+        $prefix = $adminFolderPath === null ? '' : $adminFolderPath . '/';
+        $imported = import_folder_gps($dir, $targetReal, split_folder_level($files, $prefix)['loose']);
+        $text = 'Location sharing enabled for this folder.';
+        if (!ENABLE_PHOTO_LOCATION) {
+            $text .= ' Nothing shows yet, because ENABLE_PHOTO_LOCATION is off in index.php.';
+        } elseif ($imported > 0) {
+            $text .= ' ' . $imported . ' photo' . ($imported === 1 ? ' has' : 's have') . ' GPS in the file and now show' . ($imported === 1 ? 's' : '') . ' a location to visitors and on the map. To keep one private, set its Location visibility to "Always hide" (or clear its coordinates) and Save.';
+        } else {
+            $text .= ' None of its photos has GPS to show; add coordinates by hand on any photo.';
+        }
+        return ['type' => 'ok', 'text' => $text];
     }
 
     if ($action === 'add_gallery_marker') {
@@ -3154,8 +3339,30 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $csrfToken = htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8');
     $folderLabel = $adminFolderPath ?? 'Root';
+    import_folder_gps($dir, $adminFolderReal, $adminFiles);
     $itemsHere = items_read($adminFolderReal);
     $adminViews = TRACK_VIEWS ? stats_get_all_photo_views($dir, $adminFiles) : [];
+    // Photos whose GPS the gallery can read from the file but that have no
+    // *saved* location yet (and haven't been read before). With the
+    // folder's switch on they were just imported above, so these are only
+    // left when the switch is off — the editor pre-fills them for review,
+    // and each is flagged below and counted in the folder panel.
+    $adminAutoLoc = [];
+    foreach ($adminFiles as $adminFile) {
+        if (is_video_file($adminFile)) continue;
+        $adminEntry = $itemsHere['items'][basename($adminFile)] ?? [];
+        if (($adminEntry['location'] ?? null) !== null || !empty($adminEntry['gpsChecked'])) continue;
+        $autoLoc = extract_photo_gps(resolve_real_path($dir, $adminFile));
+        if ($autoLoc !== null) $adminAutoLoc[$adminFile] = $autoLoc;
+    }
+    // Shown before locations are turned on: it publishes places, so say how
+    // many, and how to keep one back. Turning them off never asks.
+    $gpsCount = count($adminAutoLoc);
+    $locConfirm = 'Turn on public locations for this folder? ' . ($gpsCount > 0
+        ? $gpsCount . ' photo' . ($gpsCount === 1 ? ' here has' : 's here have') . ' GPS in the file, and will show ' . ($gpsCount === 1 ? 'its' : 'their') . ' location on the gallery and the map.'
+        : 'Any photo here with GPS in the file will show its location on the gallery and the map.')
+        . ' You can keep a single photo private afterwards (Location visibility: Always hide).';
+    $locConfirmAttr = htmlspecialchars(json_encode($locConfirm), ENT_QUOTES, 'UTF-8');
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
 ?>
@@ -3170,13 +3377,52 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   :root { --bg:#0f0f10; --card:#1a1a1c; --text:#eaeaea; --muted:#8a8a8f; --accent:#5865f2; --ok:#3ba55c; --err:#ed4245; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; }
-  .wrap { max-width:960px; margin:0 auto; padding:24px 16px 64px; }
+  .wrap { max-width:960px; margin:0 auto; padding:24px 16px 64px; }  /* (hidden-items page) */
   h1 { font-size:1.4rem; margin:0 0 4px; }
   h2 { font-size:1.1rem; margin:28px 0 10px; }
   .muted { color:var(--muted); font-size:0.85rem; }
-  .admin-folder-nav { margin:14px 0; display:flex; flex-wrap:wrap; gap:8px; }
-  .admin-folder-nav a { color:var(--muted); text-decoration:none; padding:5px 10px; border-radius:6px; background:var(--card); font-size:0.85rem; }
+  /* Layout: a sticky bar, a folder tree beside the content, and sections
+     you can jump to, so a long page is never a scroll hunt. */
+  .admin-bar { position:sticky; top:0; z-index:20; background:rgba(15,15,16,0.94); backdrop-filter:blur(6px); border-bottom:1px solid #26262a; }
+  .admin-bar-inner { max-width:1180px; margin:0 auto; padding:10px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .admin-bar h1 { font-size:1.05rem; margin:0; }
+  .admin-bar .crumb { color:var(--muted); font-size:0.85rem; margin-right:auto; }
+  .admin-bar a.back { color:var(--muted); text-decoration:none; font-size:0.85rem; }
+  .admin-jump { display:flex; gap:4px; overflow-x:auto; }
+  .admin-jump a { color:var(--muted); text-decoration:none; font-size:0.85rem; padding:5px 10px; border-radius:6px; white-space:nowrap; }
+  .admin-jump a:hover { color:var(--text); background:var(--card); }
+  .admin-layout { max-width:1180px; margin:0 auto; padding:18px 16px 64px; display:grid; grid-template-columns:210px minmax(0,1fr); gap:22px; align-items:start; }
+  .admin-side { position:sticky; top:62px; max-height:calc(100vh - 80px); overflow-y:auto; }
+  .admin-side h2 { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; }
+  .admin-folder-nav { display:flex; flex-direction:column; gap:1px; }
+  .admin-folder-nav a { color:var(--muted); text-decoration:none; padding:5px 10px 5px 12px; border-radius:6px; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .admin-folder-nav a:hover { color:var(--text); background:var(--card); }
   .admin-folder-nav a.current { color:var(--text); background:var(--accent); }
+  .admin-main { min-width:0; }
+  .admin-main section, .admin-main details.panel { scroll-margin-top:70px; }
+  .admin-main h2.section-title { font-size:1.05rem; margin:0 0 12px; }
+  .admin-main details.panel > summary { cursor:pointer; font-weight:600; font-size:1.05rem; list-style:none; display:flex; align-items:center; gap:10px; }
+  .admin-main details.panel > summary::-webkit-details-marker { display:none; }
+  .admin-main details.panel > summary::before { content:"\25B8"; color:var(--muted); transition:transform .15s; }
+  .admin-main details.panel[open] > summary::before { transform:rotate(90deg); }
+  .admin-main details.panel > summary .count { font-weight:400; font-size:0.8rem; color:var(--muted); }
+  .admin-main details.panel[open] > summary { margin-bottom:12px; }
+  details.subtle { margin-top:10px; }
+  details.subtle > summary { cursor:pointer; color:var(--muted); font-size:0.85rem; }
+  .hint { color:var(--muted); font-size:0.75rem; margin:3px 0 0; }
+  .settings-grid { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px 14px; }
+  .settings-grid .wide { grid-column:1 / -1; }
+  .privacy-row { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
+  .privacy-row form { margin:0; }
+  .hidden-warning { font-size:0.85rem; }
+  .hidden-warning details { margin-top:6px; }
+  .hidden-warning summary { cursor:pointer; opacity:0.9; }
+  @media (max-width: 800px) {
+    .admin-layout { grid-template-columns:1fr; gap:12px; }
+    .admin-side { position:static; max-height:none; }
+    .admin-folder-nav { max-height:220px; overflow-y:auto; }
+    .settings-grid { grid-template-columns:1fr; }
+  }
   .flash { padding:10px 14px; border-radius:8px; margin:14px 0; font-size:0.9rem; }
   .flash.ok { background:rgba(59,165,92,0.15); color:var(--ok); }
   .flash.error { background:rgba(237,66,69,0.15); color:var(--err); }
@@ -3207,10 +3453,19 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-reference-row code { background:#101012; padding:1px 6px; border-radius:4px; font-size:0.78rem; }
   .admin-insert-btn { background:#2a2a2e; color:var(--text); font-size:0.78rem; padding:4px 9px; }
   .admin-reference-note { color:var(--muted); font-size:0.78rem; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:14px; }
-  .item-card { background:var(--card); border-radius:10px; padding:12px; }
-  .item-card img, .item-card .item-thumb-placeholder { width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:6px; margin-bottom:8px; background:#101012; }
-  .item-filename { font-size:0.78rem; color:var(--muted); word-break:break-all; margin-bottom:8px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(290px, 1fr)); gap:14px; }
+  .item-card { background:var(--card); border-radius:10px; padding:12px; display:flex; flex-direction:column; }
+  .item-head { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
+  .item-head img, .item-head .item-thumb-placeholder { width:72px; height:72px; flex:none; object-fit:cover; border-radius:6px; background:#101012; }
+  .item-thumb-placeholder { display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:0.7rem; text-align:center; }
+  .item-meta { min-width:0; }
+  .item-filename { font-size:0.8rem; color:var(--text); word-break:break-all; }
+  .item-sub { font-size:0.75rem; color:var(--muted); margin-top:2px; }
+  .item-card details.item-more { margin:2px 0 10px; }
+  .item-card details.item-more > summary { cursor:pointer; color:var(--muted); font-size:0.82rem; padding:2px 0; }
+  .item-actions { display:flex; gap:8px; align-items:center; margin-top:auto; }
+  .item-actions form { margin:0; }
+  .item-flags { color:var(--muted); font-size:0.75rem; }
   .loc-row { display:flex; gap:6px; }
   .loc-row .field { flex:1; }
   @media (max-width: 600px) {
@@ -3221,6 +3476,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </head>
 <body>
 <div class="wrap">
+  <form method="post" style="float:right; margin:0;">
+    <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+    <input type="hidden" name="action" value="logout">
+    <button type="submit" class="secondary">Log out</button>
+  </form>
   <a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>" class="muted">&larr; Back to gallery</a>
   <h1>Gallery Admin</h1>
   <p class="muted">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></p>
@@ -3268,7 +3528,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <form method="post" style="margin-top:12px;">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_location_enabled">
-      <label><input type="checkbox" name="enabled" value="1" <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?> onchange="this.form.submit()"> Show photo locations publicly for this folder<?php if (!ENABLE_PHOTO_LOCATION): ?> <span class="muted">(ENABLE_PHOTO_LOCATION is off — nothing shows regardless)</span><?php endif; ?></label>
+      <label><input type="checkbox" name="enabled" value="1" <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?> onchange="if (this.checked &amp;&amp; !confirm(<?= $locConfirmAttr ?>)) { this.checked = false; return; } this.form.submit()"> Show photo locations publicly for this folder<?php if (!ENABLE_PHOTO_LOCATION): ?> <span class="muted">(ENABLE_PHOTO_LOCATION is off — nothing shows regardless)</span><?php endif; ?></label>
     </form>
     <form method="post" style="margin-top:8px;">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
@@ -3287,7 +3547,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_location_enabled">
       <input type="hidden" name="enabled" value="<?= !empty($itemsHere['locationEnabled']) ? '0' : '1' ?>">
-      <button type="submit" class="secondary"><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
+      <button type="submit" class="secondary"<?php if (empty($itemsHere['locationEnabled'])): ?> onclick="return confirm(<?= $locConfirmAttr ?>)"<?php endif; ?>><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
     </form>
   </div>
   <?php endif; ?>
@@ -3388,15 +3648,24 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     </div>
   </div>
 
+  <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
+    <div class="panel loc-unsaved-summary">
+      <?php if (!empty($itemsHere['locationEnabled'])): ?>
+        <strong>&#9888; <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS that isn't saved yet.</strong>
+        <span class="muted">It couldn't be stored automatically (is this folder writable by the web server?). Click <em>Save</em> on each photo to publish its location.</span>
+      <?php else: ?>
+        <strong>&#9888; <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS in the file.</strong>
+        <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos you set to <em>Always hide</em>.</span>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
+
   <h2>Photos &amp; video (<?= count($adminFiles) ?>)</h2>
   <div class="grid">
     <?php foreach ($adminFiles as $file): $bare = basename($file);
       $entry = $itemsHere['items'][$bare] ?? [];
-      $loc = $entry['location'] ?? null;
-      if ($loc === null && !is_video_file($file)) {
-          $auto = extract_photo_gps(resolve_real_path($dir, $file));
-          if ($auto !== null) { $loc = $auto; }
-      }
+      $loc = $entry['location'] ?? ($adminAutoLoc[$file] ?? null);
+      $locUnsaved = isset($adminAutoLoc[$file]);
     ?>
       <div class="item-card">
         <?php if (is_video_file($file)): ?>
@@ -3429,6 +3698,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
               <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
             </div>
           </div>
+          <?php if ($locUnsaved): ?>
+            <p class="muted loc-unsaved" style="margin:0 0 8px;">&#9888; <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (set <em>Always hide</em> to keep it out)." ?></p>
+          <?php endif; ?>
           <div class="field">
             <label>Location label (optional)</label>
             <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
@@ -3532,16 +3804,41 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         echo 'Too many failed attempts. Try again in a moment.';
         return;
     }
-    if (!admin_credentials_valid()) {
-        // Same rule as ?reveal: only wrong credentials that were actually
-        // sent count; the bare first request of a login does not.
-        if (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW'])) {
-            login_throttle_record_failure($dir, 'admin', $ip);
+    // Already logged in (the session carries it), or a Basic Authorization
+    // header (scripts), or the password form. A visitor with no session
+    // cookie never starts a session just by asking for ?admin.
+    if (isset($_COOKIE[admin_session_name()])) admin_start_session();
+    $sessionAuthed = session_status() === PHP_SESSION_ACTIVE && admin_session_authed();
+    if (!$sessionAuthed) {
+        $basicSupplied = isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']);
+        $formPass = ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action']) && isset($_POST['login_password']) && is_string($_POST['login_password'])) ? $_POST['login_password'] : null;
+        if ($basicSupplied && $formPass === null) {
+            if (!admin_credentials_valid()) {
+                login_throttle_record_failure($dir, 'admin', $ip);
+                admin_send_auth_challenge();
+                return;
+            }
+        } elseif ($formPass !== null) {
+            if (!hash_equals(ADMIN_PASSWORD, $formPass)) {
+                login_throttle_record_failure($dir, 'admin', $ip);
+                render_login_page('Gallery admin', 'Enter the admin password.', 'That password isn\'t right.');
+                return;
+            }
+            // A fresh session id at the moment of login, so nothing issued
+            // before it can ever be a logged-in session.
+            admin_start_session();
+            session_regenerate_id(true);
+            $_SESSION['admin_auth'] = admin_session_marker();
+            login_throttle_record_success($dir, 'admin', $ip);
+            set_reveal_cookie();
+            header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin'), true, 303);
+            return;
+        } else {
+            render_login_page('Gallery admin', 'Enter the admin password.', $_SERVER['REQUEST_METHOD'] === 'POST' ? 'Your session expired. Sign in again, then repeat that change.' : '');
+            return;
         }
-        admin_send_auth_challenge();
-        return;
     }
-    login_throttle_record_success($dir, 'admin', $ip);
+    if (!$sessionAuthed) login_throttle_record_success($dir, 'admin', $ip);
     // A valid admin login counts as revealed too — one-directional, and
     // this is what makes it true on the *public* gallery view, not just
     // inside ?admin itself (a plain cookie, since the public page is
@@ -3572,6 +3869,18 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         // A save that couldn't write must not read as a save: say what to fix.
         if (!empty($GLOBALS['__data_write_failed']) && ($resultMessage['type'] ?? '') === 'ok') {
             $resultMessage = ['type' => 'error', 'text' => 'Nothing was saved: this folder isn\'t writable by the web server. Give the web server\'s user write permission on it (on many hosts: chmod 755 or 775 on the folder, owned by that user), then try again.'];
+        }
+        if ($resultMessage['type'] === 'logout') {
+            // Back to being an ordinary visitor: no admin session, and no
+            // private-view cookie either (a login sets both).
+            $_SESSION = [];
+            if (ini_get('session.use_cookies')) {
+                setcookie(session_name(), '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Strict']);
+            }
+            session_destroy();
+            setcookie(REVEAL_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+            header('Location: ' . gallery_root_href(), true, 303);
+            return;
         }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);
@@ -4144,6 +4453,16 @@ function render_permalink_button($anchorId) {
          . '" title="Copy link">&#128279;</a>';
 }
 
+/** Whether a rendered notes file has nothing to show: no text and no
+ *  photos. That is what a file holding only a "# Title" (lifted out as the
+ *  page title) or only directives renders to, and an empty box captioned
+ *  with a filename tells a visitor nothing. The file still takes effect
+ *  (its title, its directives) — only the empty box is left out. */
+function note_box_is_empty($html) {
+    if (preg_match('/<(img|video|iframe|hr)\b/i', $html)) return false;
+    return trim(html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8')) === '';
+}
+
 /**
  * A collapsed-by-default banner surfacing $galleryNotices directly on
  * the page, not just in the HTML-comment fallback in the page source —
@@ -4151,10 +4470,10 @@ function render_permalink_button($anchorId) {
  * Addressed explicitly to the gallery owner, so a visitor who clicks it
  * out of curiosity can see right away it isn't meant for them.
  */
-function render_gallery_notices_banner($notices) {
+function render_gallery_notices_banner($notices, $open = false) {
     if (empty($notices)) return '';
     $count = count($notices);
-    $html = '<details class="gallery-notices">';
+    $html = '<details class="gallery-notices"' . ($open ? ' open' : '') . '>';
     $html .= '<summary>&#9888; ' . $count . ' setup notice' . ($count === 1 ? '' : 's') . ' for the gallery owner</summary>';
     $html .= '<ul>';
     foreach ($notices as $notice) {
@@ -5127,6 +5446,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     padding: 32px 24px 16px;
     text-align: center;
   }
+  /* The title is also the way into ?admin, deliberately unmarked: it looks
+     and behaves like plain text (no underline, colour, cursor or hover
+     change). Keyboard focus still shows the browser's normal ring. */
+  header h1 a.title-admin {
+    color: inherit;
+    text-decoration: none;
+    cursor: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
   header h1 {
     margin: 0 0 4px;
     font-size: 1.6rem;
@@ -5386,7 +5714,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); }
   .folder-cover-desc { display:block; padding:2px 12px 0; font-size:0.82rem; color:var(--muted); overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
   .folder-dates { margin:2px 0 0; color:var(--muted); font-size:0.9rem; }
-  .folder-description { margin:6px 0 0; color:var(--muted); max-width:62ch; }
+  .note-box.folder-description { white-space: pre-line; }
   .folder-cover-count {
     display: block;
     padding: 0 12px 10px;
@@ -5520,7 +5848,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     color: var(--text);
     text-decoration: underline;
   }
-  .map-preview { margin-top: 32px; }
+  /* Same column as the photo grid below it (max-width and side padding
+     match .gallery), so the map lines up with the tiles instead of
+     running to the edges of the window. */
+  .map-preview { max-width: 1400px; margin: 8px auto 0; padding: 0 24px; }
   .map-preview-heading {
     font-size: 1rem; margin: 0 0 10px;
     display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
@@ -5601,12 +5932,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   <?php if ($currentFolderPath !== null): ?>
     <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
   <?php endif; ?>
-  <h1><?= htmlspecialchars($pageTitle) ?></h1>
+  <?php if (ADMIN_PASSWORD !== ''): ?>
+    <h1><a class="title-admin" rel="nofollow" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a></h1>
+  <?php else: ?>
+    <h1><?= htmlspecialchars($pageTitle) ?></h1>
+  <?php endif; ?>
   <?php if ($currentFolderPath !== null && $currentFolderMeta['dates'] !== ''): ?>
     <p class="folder-dates"><?= htmlspecialchars($currentFolderMeta['dates']) ?></p>
-  <?php endif; ?>
-  <?php if ($currentFolderPath !== null && $currentFolderMeta['description'] !== ''): ?>
-    <p class="folder-description"><?= htmlspecialchars($currentFolderMeta['description']) ?></p>
   <?php endif; ?>
   <?php $headerPhotoCount = $currentFolderPath !== null ? $currentFolderFileCount : count($files); ?>
   <p><?= $headerPhotoCount ?> photo<?= $headerPhotoCount === 1 ? '' : 's' ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
@@ -5614,7 +5946,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 
 <?php if ($currentFolderPath === null && empty($mdFiles) && !empty($galleryNotices)): ?>
   <div class="notes">
-    <?= render_gallery_notices_banner($galleryNotices) ?>
+    <?= render_gallery_notices_banner($galleryNotices, empty($files)) ?>
   </div>
 <?php endif; ?>
 
@@ -5636,8 +5968,8 @@ foreach ($mdFiles as $mdFile) {
 ?>
 <?php if ($currentFolderPath === null && !empty($mdFiles)): ?>
   <div class="notes">
-    <?= render_gallery_notices_banner($galleryNotices) ?>
-    <?php foreach ($mdFiles as $mdFile): ?>
+    <?= render_gallery_notices_banner($galleryNotices, empty($files)) ?>
+    <?php foreach ($mdFiles as $mdFile): if (note_box_is_empty($noteBoxesHtml[$mdFile])) continue; ?>
       <div class="note-box">
         <span class="note-filename"><?= htmlspecialchars($mdFile) ?></span>
         <?= $noteBoxesHtml[$mdFile] ?>
@@ -5765,10 +6097,15 @@ if ($currentFolderPath !== null) {
     <?= render_gallery_notices_banner($folderGalleryNotices) ?>
   </div>
 <?php endif; ?>
+<?php if ($currentFolderPath !== null && $currentFolderMeta['description'] !== ''): ?>
+  <div class="notes">
+    <div class="note-box folder-description"><?= htmlspecialchars($currentFolderMeta['description']) ?></div>
+  </div>
+<?php endif; ?>
 <?php if ($currentFolderPath !== null && !empty($folderMdFiles)): ?>
   <div class="notes">
     <?= render_gallery_notices_banner($folderGalleryNotices) ?>
-    <?php foreach ($folderMdFiles as $folderMdFile): ?>
+    <?php foreach ($folderMdFiles as $folderMdFile): if (note_box_is_empty($folderNoteBoxesHtml[$folderMdFile])) continue; ?>
       <div class="note-box">
         <span class="note-filename"><?= htmlspecialchars($folderMdFile) ?></span>
         <?= $folderNoteBoxesHtml[$folderMdFile] ?>
@@ -5777,19 +6114,19 @@ if ($currentFolderPath !== null) {
   </div>
 <?php endif; ?>
 
+<?php if (ENABLE_MAP && $currentFolderPath === null && !empty($mapPoints)): ?>
+  <section class="map-preview">
+    <h2 class="map-preview-heading">Trip map <a href="?map" class="map-preview-link">View full map &rarr;</a></h2>
+    <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true) ?>
+  </section>
+<?php endif; ?>
+
 <?php if (empty($files)): ?>
   <div class="empty">No photos found in this folder.</div>
 <?php else: ?>
   <div class="gallery">
     <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix) ?>
   </div>
-<?php endif; ?>
-
-<?php if (ENABLE_MAP && $currentFolderPath === null && !empty($mapPoints)): ?>
-  <section class="map-preview">
-    <h2 class="map-preview-heading">Trip map <a href="?map" class="map-preview-link">View full map &rarr;</a></h2>
-    <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '320px', true) ?>
-  </section>
 <?php endif; ?>
 
 <footer>

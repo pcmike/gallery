@@ -47,7 +47,7 @@ Pick what you're doing. Each recipe lists the few settings to change near the to
 | Show iPhone (HEIC) photos | [iPhone photos](#recipe-iphone-heic-photos) |
 | See exactly what each setting and admin control does | [What affects what](#what-affects-what) |
 
-You only ever edit the `define('NAME', value);` lines near the top of `index.php` (a plain text editor is fine), and, for the admin, visit `yoursite.com/your-folder/?admin` — over **HTTPS** (or `localhost` while testing); on plain HTTP the admin refuses to load, because its password would travel unprotected. Every recipe below was followed step by step against the real script, through the admin's real forms, as part of this project's test suite.
+You only ever edit the `define('NAME', value);` lines near the top of `index.php` (a plain text editor is fine), and, for the admin, click the gallery's **title** (it's a link that looks like plain text) or visit `yoursite.com/your-folder/?admin` — over **HTTPS** (or `localhost` while testing); on plain HTTP the admin refuses to load, because its password would travel unprotected. Every recipe below was followed step by step against the real script, through the admin's real forms, as part of this project's test suite.
 
 ### Recipe: a plain gallery
 
@@ -55,7 +55,7 @@ You only ever edit the `define('NAME', value);` lines near the top of `index.php
 
 **Visitors see:** every photo in that folder (not in its subfolders), in filename order, with a full-screen viewer (arrow keys, swipe on a phone). A link like `yoursite.com/folder/?photo=name.jpg` opens straight to one photo and previews correctly when pasted into Discord or Reddit.
 
-**What it won't do until you ask:** it writes nothing into your folder, loads nothing from any other website, and `?admin`, `?reveal`, `?map` and `?folder=` all do nothing. If photos exist in subfolders, a small collapsed "setup notice" tells you that — it's a count, never a name, and it's the cue to try the [trip album](#recipe-a-trip-album).
+**What it won't do until you ask:** it writes nothing into your folder, loads nothing from any other website, and `?admin`, `?reveal`, `?map` and `?folder=` all do nothing. If photos exist in subfolders, or videos exist anywhere (they're ignored until `ENABLE_VIDEO` is on), a small collapsed "setup notice" tells you that — it's a count, never a name, and it's the cue to try the [trip album](#recipe-a-trip-album) or [turn video on](#video).
 
 **Worth turning on:** `ENABLE_THUMBNAIL_CACHE` → `true` (the page loads small thumbnails instead of full-size originals; required for iPhone photos). `PHOTO_SORT_ORDER` → `'mtime'` to sort by file date instead of name (only if your upload method keeps dates).
 
@@ -101,8 +101,8 @@ define('ENABLE_VIDEO', true);               // .mov / .mp4
 **Steps** (folders like `trip/Paris/…`, `trip/Lisbon/…`, with `index.php` in `trip/`):
 1. Visit `trip/` — each folder is a cover card, in natural name order (Day 2 before Day 10). Click one to open it; a breadcrumb leads back. Folders can nest as deep as you like.
 2. Go to `trip/?admin`, pick a folder from the row of links at the top, and fill in **This folder's own settings**: *Display name*, *Dates* (typed text — never read from the photos), *Description*, and *Position among its sibling folders* (1 = first). **Save folder settings.** These show on its cover card, at the top of its page, in link previews, and in the map legend.
-3. Still in that folder, tick **Show photo locations publicly for this folder** — locations are off for every folder until you opt it in, so one trip can share places and another never will.
-4. Under **Photos & video**, give a photo a *Caption* and *Web link*. If the photo has GPS in it (most phone photos do), *Latitude* and *Longitude* are **already filled in** — leave them, or correct them, then **Save**. Visitors get small badges: 💬 caption, 📍 location (opens OpenStreetMap), ℹ️ link. The lightbox shows the caption, never the filename.
+3. Still in that folder, tick **Show photo locations publicly for this folder** — locations are off for every folder until you opt it in, so one trip can share places and another never will. **Ticking it publishes:** it asks you to confirm, then reads the GPS out of every photo in that folder that has some (most phone photos do) and shows those places on the gallery and the map straight away. To keep one photo private, open it below and set *Location visibility* to **Always hide** (or clear its coordinates) and Save. Photos you upload to the folder later are picked up the next time you open that folder in the admin.
+4. Under **Photos & video**, give a photo a *Caption* and *Web link*, and correct a location if the GPS is off (*Latitude* and *Longitude* are already filled in) — then **Save**. Visitors get small badges: 💬 caption, 📍 location (opens OpenStreetMap), ℹ️ link. The lightbox shows the caption, never the filename.
 5. **Set as cover** on a photo to choose the folder's card image. That same photo is the picture shown when someone pastes the folder's link.
 6. The map appears on the front page (and at its own shareable `?map` link) as soon as at least one photo has a *visible* location. Photos close together share one numbered pin (`MAP_CLUSTER_RADIUS_MILES`, default 50); pins are colored per top-level folder.
 
@@ -178,10 +178,10 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 | Folder → *Dates*, *Description* | shown under the label on the card and at the top of the folder's page; the description is also the link-preview text (a notes file in that folder takes precedence there) | `AUTO_GROUP_BY_FOLDER` |
 | Folder → *Position* | the card order among sibling folders: numbered first, then natural order | a notes-file mention of a folder still places it earlier |
 | Photo → **Set as cover** | the folder's card image and its link-preview image | |
-| Folder → *Show photo locations publicly* | lets that folder's photos show 📍 badges and map pins | `ENABLE_PHOTO_LOCATION` |
+| Folder → *Show photo locations publicly* | turning it on stores the GPS of every photo in the folder that has some, so they show 📍 badges and map pins (after a confirmation) | `ENABLE_PHOTO_LOCATION` |
 | Photo → *Caption* | 💬 badge; the viewer's caption bar | |
 | Photo → *Web link* | ℹ️ badge | |
-| Photo → *Latitude / Longitude / Location label* | 📍 badge and map pin (filled in from the photo's GPS when it has any) | `ENABLE_PHOTO_LOCATION`, the folder's switch, and *Location visibility* not *Always hide* |
+| Photo → *Latitude / Longitude / Location label* | 📍 badge and map pin (filled in from the photo's GPS when it has any; stored for you when the folder's switch is turned on) | `ENABLE_PHOTO_LOCATION`, the folder's switch, and *Location visibility* not *Always hide* |
 | Photo → *Location visibility* | *Inherit folder setting*, *Always show* (a landmark in a folder that otherwise shares no locations) or *Always hide* (a front door in a folder that does) | `ENABLE_PHOTO_LOCATION` |
 | Photo → *Visibility* · Folder → **Hide this entire folder** | removes it from everything for anyone without the viewer password | `PRIVATE_VIEW_PASSWORD` to let anyone back in |
 | Group names (front page) | renames a filename-based group's box | `AUTO_GROUP_BY_FILENAME`. A `{group: Name}` directive overrides it |
@@ -232,7 +232,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 
 If something in a `.md` file doesn't behave as expected — a file typo'd in `{photos:}`, a duplicate `{group:}`/`{photos:}` claim, a `.md` file missing its `{gallery}` marker, a directive that isn't attached to the description it was clearly meant to go with — it's silently excluded or repositioned rather than erroring, but never silently *unexplained*. Look for a small "⚠ N setup notices for the gallery owner" banner (collapsed by default) — at the top of the notes box if one exists, or right below the page header if no `.md` qualified at all. The same list is also in an HTML comment near the top of the page source, if you'd rather grep for it. Neither is alarming to a normal visitor — the banner is addressed explicitly to the gallery owner.
 
-**`?admin` or the Private view keeps asking for the password and never accepts it** (on Apache with PHP-FPM or CGI) means Apache isn't passing the login to PHP: add `CGIPassAuth On` to the gallery's `.htaccess` (see [Locking down the files themselves](#locking-down-the-files-themselves)).
+**`?admin` or the Private view keeps showing the password form after the right password** means the browser isn't keeping the login cookie: check that cookies aren't blocked for the site and that you're on HTTPS (the cookie is `Secure` there). A script that logs in with an `Authorization` header on Apache with PHP-FPM or CGI also needs `CGIPassAuth On` (see [Locking down the files themselves](#locking-down-the-files-themselves)); the form doesn't.
 
 **"Nothing was saved: this folder isn't writable by the web server"** (in the admin) means PHP can't write into the folder — the single most common hosting snag. Three optional features write there: the admin's saved captions and settings, view counts (`TRACK_VIEWS`), and the thumbnail cache. Without write permission the gallery itself still works fine; those three just can't save. On most hosts the fix is to give the web server's user write permission on the folder (and on any album folder you edit in the admin, including an [`EXTRA_FOLDERS`](#recipe-an-archive-on-another-disk) one). The admin tells you plainly when a save fails; it never reports "Saved" for something it couldn't write.
 
@@ -243,7 +243,7 @@ This README is the full reference. A deployed gallery's `?about` page (the "gall
 Everything is a constant near the top of `index.php`:
 
 ```php
-define('GALLERY_VERSION', '2.0.0');
+define('GALLERY_VERSION', '2.0.1');
 
 // Off by default — writes .gallery-stats.php/.sqlite into the folder
 // once turned on. Strongly recommended for any real deployment: this is
@@ -387,6 +387,8 @@ A few details worth knowing:
 
 Set `ENABLE_VIDEO` and `.mov` / `.mp4` files (an iPhone's two formats) become gallery items alongside photos, eligible for grouping, ordering, captions and everything else a photo is. The file is served exactly as it was recorded: no transcoding, no frame extraction.
 
+**It's off by default, and videos are invisible while it is.** A folder holding only videos (say a `Videos/` folder for a trip) doesn't appear at all, because as far as the gallery is concerned it has nothing in it. So you aren't left guessing, a collapsed "setup notices" banner on the main page says how many `.mov`/`.mp4` files it found and ignored, and that `ENABLE_VIDEO` is the switch (a count only, never a folder or file name; the search is capped at 40 folders).
+
 - Tiles and share previews use one generic placeholder graphic (a play triangle), not a frame from the clip. A shared video link previews as a plain icon and title, not a playable embed.
 - The lightbox plays it in the browser's own player; there is no autoplay.
 - Seeking works (the gallery honors HTTP `Range` requests), and a **duration badge** is read from the file's container.
@@ -407,13 +409,13 @@ Each photo or video can have a **caption**, an informational **web link**, and a
 2. A **per-folder** switch in the admin — one trip can opt in without affecting any other.
 3. A **per-photo** setting: *inherit the folder* (default), *always show*, or *always hide* — so a landmark can be pinned inside an otherwise-private folder, or a front door hidden inside a public one.
 
-The admin always shows and stores location data for you regardless of these; they control only what visitors see. Coordinates are auto-filled from EXIF for JPEG and HEIC photos that have GPS data (PNG, GIF, WEBP and BMP generally don't — enter those by hand), and are validated as real numbers before they ever reach a link. There is no place-name lookup: that needs a third-party service and a key. Paste coordinates from any map tool.
+The admin always shows and stores location data for you regardless of these; they control only what visitors see. Coordinates come from EXIF for JPEG and HEIC photos that have GPS data (PNG, GIF, WEBP and BMP generally don't — enter those by hand), and are validated as real numbers before they ever reach a link. **Turning a folder's switch on is what publishes them:** it asks first, then stores the GPS of every photo in that folder, so the places appear right away. To keep a photo out, set its *Location visibility* to *Always hide* or clear its coordinates and Save; a photo you have saved yourself is never overwritten by GPS from the file, and a cleared location stays cleared. Photos added to the folder later are picked up when you next open it in the admin (never on a visitor's request). Turning the switch off hides every location again and keeps what was stored. There is no place-name lookup: that needs a third-party service and a key. Paste coordinates from any map tool.
 
 > **Heads-up: the original files keep their GPS.** The gallery serves your original photo files untouched, so a visitor can save a full-size image and read its embedded GPS coordinates even with every gate above closed. The gates control what the *gallery* shows, not what a saved original contains. If that matters, strip location metadata from the photos before uploading them.
 
 ## The admin editor
 
-Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours alone) and visit `?admin`. With it unset the admin simply doesn't exist: `?admin` returns 404. You get:
+Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours alone) and open the admin: **click the gallery's title** at the top of the page (on a folder's page it leads to that folder's admin), or go to `?admin`. The title is deliberately unmarked — no underline, colour or hover change — so visitors have no reason to try it. You get a plain one-field password form (no username, no browser pop-up), and stay signed in for the session. With the password unset the admin doesn't exist: `?admin` returns 404, and the title isn't a link. You get:
 
 - every photo and video in the current folder, with caption, web link and location fields, and a one-click **Set as cover** for the folder
 - the folder's own settings: display name, date range, description, position, whether its photo locations show publicly, and whether the whole folder is hidden
@@ -422,7 +424,7 @@ Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours al
 - **Export as JSON** for the folder or the whole tree — the only backup of the captions and settings you typed, which a plain save can't undo
 - a **Hidden items** summary across the whole tree
 
-How it's locked down: HTTP Basic Auth compared with `hash_equals()`; the page **refuses to load over plain HTTP** (except on `localhost`/`127.0.0.1`) and explains why, since Basic Auth over HTTP is plaintext; a CSRF token protects every save; the session lasts 4 hours; and a failed-login throttle (5 *wrong* passwords from one address within 15 minutes imposes a 60-second delay before that address's next attempt is even checked; a request with no credentials at all — the normal first step of any login — doesn't count). There is no reliable cross-browser "log out" — closing the browser is the dependable reset. The admin works at a phone's width.
+How it's locked down: the password is compared with `hash_equals()`; the page **refuses to load over plain HTTP** (except on `localhost`/`127.0.0.1`) and explains why, since the password would otherwise travel in the clear; logging in starts a fresh session (a session id issued earlier can never be a logged-in one), which lasts up to 4 hours and ends when you press **Log out** (top right of the admin) — that also clears the Private view cookie, and changing `ADMIN_PASSWORD` signs every existing session out; a CSRF token protects every save; and a failed-login throttle (5 *wrong* passwords from one address within 15 minutes imposes a 60-second delay before that address's next attempt is even checked; just opening the form doesn't count). If you were signed out and submit a change, it isn't saved and the form tells you why. A script can still send an HTTP `Authorization: Basic` header (any username, the password as the password) instead of using the form. The admin works at a phone's width.
 
 **`ADMIN_PASSWORD` lives in `index.php` itself**, a deliberate choice to keep this a single file. Redact it before pasting or sharing your copy of the script for support.
 
@@ -435,7 +437,7 @@ The one stats file that can't carry that guard is the optional `.gallery-stats.s
 For the photos or clips that shouldn't be on the public link — people who didn't agree to be, say — but that you still want trusted viewers to see in the same gallery:
 
 1. In the admin, hide an **item**, or an entire **folder** (at any depth). A folder's hide applies to everything beneath it; an individual item can be set back to *public* inside a hidden folder, or *hidden* inside a public one.
-2. Set `PRIVATE_VIEW_PASSWORD`. A discreet **Private view** link appears in the footer (`?reveal`), prompting for that password; on success it sets a cookie and returns to the plain gallery link, so you can bookmark the bare URL. It is a **password, not a secret link** — links pasted into Discord or Reddit get crawled by preview bots and can't be revoked without breaking them for everyone. A valid admin login counts as revealed too.
+2. Set `PRIVATE_VIEW_PASSWORD`. A discreet **Private view** link appears in the footer (`?reveal`), asking for that password in the same kind of one-field form; on success it sets a cookie and returns to the plain gallery link, so you can bookmark the bare URL. It is a **password, not a secret link** — links pasted into Discord or Reddit get crawled by preview bots and can't be revoked without breaking them for everyone. A valid admin login counts as revealed too.
 
 A hidden item is removed from the page outright, not merely styled invisible: it's absent from the grid, notes, the lightbox's list, every count and badge (a count that didn't match what's visible would itself be a tell), the map, and link previews — and `?img=`, `?photo=`, `?track=`, `?folder=` and the video endpoint all refuse it to an unrevealed visitor. A group whose members are all hidden disappears rather than showing "0 photos". The same HTTPS requirement and failed-login throttle as the admin apply, with separate lockout state. Viewers stay unlocked for a year; the cookie is specific to each copy of the gallery (it's named and signed from the gallery's own folder), so several galleries on one site never interfere.
 
@@ -494,19 +496,19 @@ This blocks only external requests for the bare files (a **403**, where nginx's 
 
 **It depends on `AllowOverride`.** `.htaccess` only counts if the server is set to read it for that folder (`AllowOverride All`, or at least `FileInfo`/`AuthConfig`-level access for these rules). Many hosts allow it; some don't, and then **the rules are silently ignored** — tested: with `AllowOverride None` a hidden photo's bare address answers 200. So always check with `curl -I https://yoursite.com/kb/IMG_0412.jpg` (expect 403), the same way as for nginx. Even then the generated data files stay safe, because they carry their own guard. nginx's `internal` is a hard guarantee; this is only as good as your host's `AllowOverride`.
 
-**Logging in on Apache with PHP-FPM or CGI.** Apache doesn't hand the `Authorization` header to PHP in those modes, so `?admin` and `?reveal` keep asking for the password and never accept it (tested: 401 with the correct password). Add one line to the same `.htaccess` (needs Apache 2.4.13 or newer):
+**Scripts that log in with an `Authorization` header on Apache with PHP-FPM or CGI.** Apache doesn't hand that header to PHP in those modes, so a script sending it just gets the password form back. The form that people use doesn't send it and is unaffected. If you do script it, add one line to the same `.htaccess` (Apache 2.4.13 or newer):
 
 ```apache
 CGIPassAuth On
 ```
 
-With that, login works (tested on Apache 2.4.68 + PHP-FPM). With `mod_php` — the other common setup — PHP receives the header natively and you don't need it (not tested here).
+Tested on Apache 2.4.68 + PHP-FPM: with no `.htaccess` at all the form login works and a Basic header is not seen; with `CGIPassAuth On` the header works too. The form login was also tested on nginx 1.26 + PHP-FPM 8.4 (where the header is passed anyway).
 
 Neither renames your files. That would change files you own, which this project doesn't do.
 
 ## The trip map
 
-Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actually has a visible location) and the gallery root gets a **Trip map**, with its own shareable `?map` page. It plots every visible, located photo from every folder together.
+Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actually has a visible location) and the gallery root gets a **Trip map** above the folders, lined up with them, with its own shareable `?map` page. It plots every visible, located photo from every folder together.
 
 - Photos within `MAP_CLUSTER_RADIUS_MILES` (default 50) of each other share one numbered pin, so a dense city doesn't turn into a wall of markers; clicking a cluster zooms in to its individual pins. A dense city trip and a cross-country drive want very different radii, so it's a setting.
 - Pins are colored by top-level folder, with a legend.
@@ -573,7 +575,7 @@ What the script does to protect you, and the limits worth knowing.
 
 **What it protects, by default**
 - **Everything it writes is private.** The generated data files (captions, locations, hide flags, stats, login throttle) answer 404 if requested by URL, on any host that runs PHP — see [The admin editor](#the-admin-editor). Output is HTML-escaped everywhere, captions are written with `<`/`>` escaped in those files, and a request can only ever *select* among files the script found itself, never name a path (`..`, symlinks, wrong-case spellings and NUL bytes are all refused).
-- **Logins:** HTTP Basic Auth compared in constant time; the admin and private view refuse to load over plain HTTP (except from `localhost`); a failed-login throttle; CSRF tokens on every admin write; a stale-edit check; and an admin session cookie that is `HttpOnly`, `SameSite=Strict`, uniquely named (it won't collide with another PHP app's `PHPSESSID` on the same domain) and rejects a session id the server never issued.
+- **Logins:** a password form (no browser pop-up) with the password compared in constant time and a fresh session id on login; the admin and private view refuse to load over plain HTTP (except from `localhost`); a failed-login throttle; CSRF tokens on every admin write; a stale-edit check; and an admin session cookie that is `HttpOnly`, `SameSite=Strict`, uniquely named (it won't collide with another PHP app's `PHPSESSID` on the same domain) and rejects a session id the server never issued.
 - **Admin and private-view pages** are sent with `Cache-Control: no-store`, `X-Frame-Options: DENY` and a policy that stops them being framed or their forms being posted elsewhere. Every response carries `X-Content-Type-Options: nosniff`.
 - **Hidden items stay out of caches.** A hidden photo or video, even when served to a trusted viewer, is `Cache-Control: private, no-store`, and a page rendered for a viewer is too — so a CDN or shared proxy in front of the gallery can't keep one and hand it to the next visitor. Ordinary photos stay cacheable.
 - **The Host header** is used in absolute URLs (link previews) only if it looks like a real host name.
