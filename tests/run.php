@@ -1317,6 +1317,191 @@ foreach ($clusters as $c) {
 check('Rome (a different folder-group) gets a different color than Paris', $romeCluster !== null && $parisCluster !== null && $romeCluster[0]['color'] !== $parisCluster[0]['color']);
 
 /* ======================================================================= *
+ * FIXTURE: "depth" — folders nested three levels deep. Covers
+ * drill-down at every level (cover cards for subfolders, flat cards for
+ * loose files, breadcrumbs), path-trick 404s, a hide flag placed on a
+ * *nested* folder (honored at depth, for ?folder=, ?img= and counts),
+ * the admin at depth, and the folder description/dates/position fields.
+ * ======================================================================= */
+
+echo "== depth fixture: nested drill-down, nested hiding, admin at depth, folder fields ==\n";
+
+$fxDepth = new_fixture_dir('depth');
+mkdir("$fxDepth/Europe/France/Paris", 0777, true);
+mkdir("$fxDepth/Europe/France/Lyon", 0777, true);
+mkdir("$fxDepth/Europe/Germany", 0777, true);
+mkdir("$fxDepth/Asia");
+make_jpeg("$fxDepth/loose.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxDepth/Europe/intro.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$fxDepth/Europe/France/Paris/eiffel.jpg", 60, 60, 30, 30, 30);
+make_jpeg("$fxDepth/Europe/France/Paris/louvre.jpg", 60, 60, 40, 40, 40);
+make_jpeg("$fxDepth/Europe/France/Lyon/lyon.jpg", 60, 60, 50, 50, 50);
+make_jpeg("$fxDepth/Europe/Germany/berlin.jpg", 60, 60, 60, 60, 60);
+make_jpeg("$fxDepth/Asia/tokyo.jpg", 60, 60, 70, 70, 70);
+// Hand-placed, as if from an earlier admin session: Germany (a *nested*
+// folder) is hidden from public view.
+file_put_contents("$fxDepth/Europe/Germany/.gallery-items.json", json_encode([
+    'items' => [], 'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => false, 'restriction' => 'private',
+]));
+file_put_contents("$fxDepth/trip.md", "{gallery}\nWe loved Europe so much.\n");
+
+write_patched_index("$fxDepth/index.php", $indexContents, [
+    'AUTO_GROUP_BY_FOLDER' => 'true',
+    'ADMIN_PASSWORD' => "'test-admin-pw-123'",
+    'PRIVATE_VIEW_PASSWORD' => "'viewer-pw-456'",
+]);
+$portDepth = find_free_port();
+start_server($fxDepth, $portDepth);
+$baseDepth = "http://127.0.0.1:$portDepth";
+
+[, $depthRoot] = http_get("$baseDepth/");
+check('the root shows a cover card per top-level folder', str_contains($depthRoot, 'id="group-europe"') && str_contains($depthRoot, 'id="group-asia"'));
+check('the root does not show nested folders as cards of their own', !str_contains($depthRoot, 'id="group-france"') && !str_contains($depthRoot, 'id="group-paris"'));
+check('Europe\'s count is recursive and excludes the hidden nested Germany (intro + 3 France = 4)', (bool) preg_match('/id="group-europe">.*?4 photos/s', $depthRoot));
+check('a .md mention of a folder links to its ?folder= page in overview mode', (bool) preg_match('/class="linked-photos-jump" href="\?folder=Europe">View 4 photos &rarr;/', $depthRoot));
+
+[$europeStatus, $europeBody] = http_get("$baseDepth/?folder=Europe");
+check('?folder=Europe returns 200', $europeStatus === 200);
+check('Europe\'s page shows France as a cover card (its recursive count, 3 photos)', (bool) preg_match('/<div class="folder-cover" id="group-france">.*?href="\?folder=Europe%2FFrance".*?3 photos/s', $europeBody));
+check('Europe\'s page shows its loose photo as a plain card, not a folder', str_contains($europeBody, 'alt="Europe/intro.jpg"') && !str_contains($europeBody, 'id="group-intro"><a class="folder-cover-link"'));
+check('the hidden nested Germany has no cover card and no mention anywhere on Europe\'s page', !str_contains($europeBody, 'group-germany') && !str_contains($europeBody, 'berlin') && !str_contains($europeBody, 'Germany'));
+check('a one-folder-deep page\'s breadcrumb is just the way back to the root', (bool) preg_match('/<p class="breadcrumb"><a href="\.\/">[^<]*<\/a><\/p>/', $europeBody));
+
+[$franceStatus, $franceBody] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France'));
+check('?folder=Europe/France (two levels deep) returns 200', $franceStatus === 200);
+check('France\'s page shows Paris and Lyon as cover cards', str_contains($franceBody, 'id="group-paris"') && str_contains($franceBody, 'id="group-lyon"'));
+check('a cover card links to its full nested path', str_contains($franceBody, 'href="?folder=Europe%2FFrance%2FParis"'));
+check('a two-deep page\'s breadcrumb links back through Europe', (bool) preg_match('/<p class="breadcrumb"><a href="\.\/">[^<]*<\/a> \/ <a href="\?folder=Europe">Europe<\/a><\/p>/', $franceBody));
+
+[$parisStatus, $parisBody] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France/Paris'));
+check('?folder=Europe/France/Paris (three levels deep) returns 200', $parisStatus === 200);
+check('the deepest page shows its own photos as plain cards', str_contains($parisBody, 'alt="Europe/France/Paris/eiffel.jpg"') && str_contains($parisBody, 'alt="Europe/France/Paris/louvre.jpg"') && !str_contains($parisBody, 'lyon.jpg'));
+check('its breadcrumb links through every ancestor', (bool) preg_match('/<a href="\?folder=Europe">Europe<\/a> \/ <a href="\?folder=Europe%2FFrance">France<\/a><\/p>/', $parisBody));
+check('its title is the folder\'s own name, not the whole path', (bool) preg_match('/<title>Paris — /', $parisBody));
+check('its card thumbnails use the full nested path', str_contains($parisBody, 'src="?img=Europe%2FFrance%2FParis%2Feiffel.jpg&amp;size=thumb"'));
+
+foreach ([
+    'a nonexistent nested folder' => 'Europe/Nope',
+    'a ../ path trick' => '../',
+    'a ../ trick hidden inside a real path' => 'Europe/../Asia',
+    'a trailing slash' => 'Europe/',
+    'a leading slash' => '/Europe',
+    'a file path, not a folder' => 'Europe/France/Paris/eiffel.jpg',
+    'an empty value' => '',
+    'the hidden nested folder, for an unrevealed visitor' => 'Europe/Germany',
+] as $label => $badPath) {
+    [$badStatus] = http_get("$baseDepth/?folder=" . rawurlencode($badPath));
+    check("?folder= with $label returns 404", $badStatus === 404);
+}
+[$hiddenImgStatus] = http_get("$baseDepth/?img=" . rawurlencode('Europe/Germany/berlin.jpg') . '&size=thumb');
+check('a photo inside a nested hidden folder is refused at ?img= too', $hiddenImgStatus === 404);
+
+// Reveal: the viewer password unlocks the nested folder everywhere.
+[, , $depthRevealHeaders] = http_get("$baseDepth/?reveal", ['Authorization: Basic ' . base64_encode('viewer:viewer-pw-456')], false);
+$depthRevealCookie = extract_cookie_header($depthRevealHeaders);
+[$revealedGermanyStatus, $revealedGermanyBody] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/Germany'), ["Cookie: $depthRevealCookie"]);
+check('once revealed, the nested hidden folder\'s own page loads', $revealedGermanyStatus === 200 && str_contains($revealedGermanyBody, 'berlin.jpg'));
+[, $revealedEuropeBody] = http_get("$baseDepth/?folder=Europe", ["Cookie: $depthRevealCookie"]);
+check('once revealed, Europe\'s page shows the Germany cover card', str_contains($revealedEuropeBody, 'id="group-germany"'));
+
+// Admin at depth.
+$depthAuth = 'Authorization: Basic ' . base64_encode('admin:test-admin-pw-123');
+[, $depthAdminBody, $depthAdminHeaders] = http_get("$baseDepth/?admin", [$depthAuth]);
+$depthCookie = extract_cookie_header($depthAdminHeaders);
+$depthCsrf = extract_csrf_token($depthAdminBody);
+$depthPost = function ($query, $fields) use ($baseDepth, $depthAuth, &$depthCookie, &$depthCsrf) {
+    return http_post("$baseDepth/?admin$query", $fields + ['csrf_token' => $depthCsrf], [$depthAuth, "Cookie: $depthCookie"]);
+};
+check('the admin nav lists nested folders at every depth', str_contains($depthAdminBody, 'folder=Europe%2FFrance%2FParis') && str_contains($depthAdminBody, 'folder=Europe%2FFrance"'));
+
+$parisAdminQuery = '&folder=' . rawurlencode('Europe/France/Paris');
+[$parisAdminStatus, $parisAdminBody] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
+check('?admin&folder= works three levels deep', $parisAdminStatus === 200 && str_contains($parisAdminBody, 'eiffel.jpg'));
+check('the admin grid shows only what is loose in that folder (not Lyon\'s photo)', !str_contains($parisAdminBody, 'lyon.jpg'));
+[$badAdminStatus] = http_get("$baseDepth/?admin&folder=" . rawurlencode('Europe/Nope'), [$depthAuth, "Cookie: $depthCookie"]);
+check('?admin&folder= with a bogus nested path returns 404', $badAdminStatus === 404);
+
+[, $captionBody] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'eiffel.jpg', 'caption' => 'Iron lady']);
+check('a caption saved on a deeply nested photo succeeds', str_contains($captionBody, 'class="flash ok"'));
+check('...and its colocated data file lives inside that folder', is_file("$fxDepth/Europe/France/Paris/.gallery-items.json"));
+[, $parisAfterCaption] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France/Paris'));
+check('...and shows publicly on that folder\'s page', str_contains($parisAfterCaption, 'Iron lady'));
+
+// Folder fields: description, dates, position.
+$europeAdminQuery = '&folder=Europe';
+[, $fieldsBody] = $depthPost($europeAdminQuery, ['action' => 'save_folder_identity', 'display_name' => 'Europe 2026', 'description' => "Three weeks,\n  two <script>alert(1)</script> countries.", 'dates' => 'June 12-15, 2026', 'sort_order' => '2']);
+check('saving a folder\'s description, dates and position succeeds', str_contains($fieldsBody, 'class="flash ok"'));
+[, $fieldsRoot] = http_get("$baseDepth/");
+check('the description shows on the folder\'s cover card, escaped, with whitespace collapsed', str_contains($fieldsRoot, 'folder-cover-desc">Three weeks, two &lt;script&gt;alert(1)&lt;/script&gt; countries.<') && !str_contains($fieldsRoot, '<script>alert(1)'));
+check('the dates show on the folder\'s cover card', str_contains($fieldsRoot, 'folder-cover-dates">June 12-15, 2026<'));
+[, $fieldsPage] = http_get("$baseDepth/?folder=Europe");
+check('the dates and description head the folder\'s own page', str_contains($fieldsPage, '<p class="folder-dates">June 12-15, 2026</p>') && str_contains($fieldsPage, '<p class="folder-description">Three weeks, two &lt;script&gt;'));
+check('the folder\'s page title uses its display name', (bool) preg_match('/<title>Europe 2026 — /', $fieldsPage));
+check('the folder\'s Open Graph description uses its description', str_contains($fieldsPage, 'property="og:description" content="Three weeks, two &lt;script&gt;'));
+
+// Position: Asia first, then Europe (position 2); positions beat natural
+// order. (The root notes' mention of Europe is what the mention check
+// above needed — and by design a prose mention positions a folder ahead
+// of natural order, where a position acts, so swap in notes that mention
+// neither folder before testing position on its own.)
+file_put_contents("$fxDepth/trip.md", "{gallery}\nNothing in here names a folder.\n");
+$depthPost('&folder=Asia', ['action' => 'save_folder_identity', 'display_name' => '', 'sort_order' => '1']);
+[, $orderedRoot] = http_get("$baseDepth/");
+check('numbered folders sort by position ahead of natural order (Asia=1 before Europe=2)', strpos($orderedRoot, 'id="group-asia"') < strpos($orderedRoot, 'id="group-europe"'));
+$depthPost('&folder=Asia', ['action' => 'save_folder_identity', 'display_name' => '', 'sort_order' => '3']);
+[, $reorderedRoot] = http_get("$baseDepth/");
+check('changing positions reorders them (Europe=2 now before Asia=3)', strpos($reorderedRoot, 'id="group-europe"') < strpos($reorderedRoot, 'id="group-asia"'));
+$depthPost('&folder=Asia', ['action' => 'save_folder_identity', 'display_name' => '', 'sort_order' => '']);
+[, $unorderedRoot] = http_get("$baseDepth/");
+check('clearing a position puts the folder back in natural order, after numbered ones', strpos($unorderedRoot, 'id="group-europe"') < strpos($unorderedRoot, 'id="group-asia"'));
+
+// Nested siblings order too (position on Lyon pulls it ahead of Paris).
+$depthPost('&folder=' . rawurlencode('Europe/France/Lyon'), ['action' => 'save_folder_identity', 'display_name' => '', 'sort_order' => '1']);
+[, $franceOrdered] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France'));
+check('position works among nested siblings (Lyon=1 ahead of Paris)', strpos($franceOrdered, 'id="group-lyon"') < strpos($franceOrdered, 'id="group-paris"'));
+
+[, $badPosBody] = $depthPost($europeAdminQuery, ['action' => 'save_folder_identity', 'display_name' => 'Europe 2026', 'sort_order' => 'first']);
+check('a non-numeric position is rejected with an error', str_contains($badPosBody, 'class="flash error"') && str_contains($badPosBody, 'whole number'));
+$depthPost($europeAdminQuery, ['action' => 'save_folder_identity', 'display_name' => 'Europe 2026']);
+[, $keptFieldsRoot] = http_get("$baseDepth/");
+check('a save that omits the other fields leaves them untouched', str_contains($keptFieldsRoot, 'folder-cover-dates">June 12-15, 2026<'));
+
+// Hiding at depth through the admin itself.
+[, $hideNestedBody] = $depthPost($parisAdminQuery, ['action' => 'toggle_folder_restriction', 'hidden' => '1']);
+check('hiding a deeply nested folder through the admin succeeds', str_contains($hideNestedBody, 'class="flash ok"'));
+[$hiddenParisStatus] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France/Paris'));
+check('...and the nested folder\'s page is then a 404 to the public', $hiddenParisStatus === 404);
+[, $franceAfterHide] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France'));
+check('...and its parent no longer shows its cover card, and the count drops', !str_contains($franceAfterHide, 'id="group-paris"') && (bool) preg_match('/id="group-lyon">.*?1 photo/s', $franceAfterHide));
+[, $hiddenSummary] = http_get("$baseDepth/?admin&hidden", [$depthAuth, "Cookie: $depthCookie"]);
+check('the admin\'s Hidden items summary lists nested hidden folders (Germany and Paris)', str_contains($hiddenSummary, 'folder=Europe%2FGermany') && str_contains($hiddenSummary, 'folder=Europe%2FFrance%2FParis'));
+
+// Whole-tree export.
+[$treeStatus, $treeBody] = $depthPost('', ['action' => 'export_tree']);
+$treeJson = json_decode($treeBody, true);
+check('the whole-tree export is JSON keyed by folder path, root as ""', $treeStatus === 200 && is_array($treeJson) && array_key_exists('', $treeJson) && isset($treeJson['Europe']) && isset($treeJson['Europe/France/Paris']));
+check('...and carries the saved fields', ($treeJson['Europe']['description'] ?? '') !== '' && ($treeJson['Europe']['dates'] ?? '') === 'June 12-15, 2026');
+
+// FOLDER_DISPLAY_MODE = 'inline': folders are only an organizing
+// convenience, so a folder's own page shows everything beneath it as one
+// flat run — no cover cards at any depth.
+$fxInline = new_fixture_dir('depth-inline');
+mkdir("$fxInline/Europe/France", 0777, true);
+make_jpeg("$fxInline/Europe/intro.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$fxInline/Europe/France/eiffel.jpg", 60, 60, 30, 30, 30);
+write_patched_index("$fxInline/index.php", $indexContents, [
+    'AUTO_GROUP_BY_FOLDER' => 'true',
+    'FOLDER_DISPLAY_MODE' => "'inline'",
+]);
+$portInline = find_free_port();
+start_server($fxInline, $portInline);
+[, $inlineRoot] = http_get("http://127.0.0.1:$portInline/");
+check('inline mode: the root shows the folder as an inline box, not a cover card', str_contains($inlineRoot, 'class="group-box') && !str_contains($inlineRoot, '<div class="folder-cover"'));
+[$inlineStatus, $inlinePage] = http_get("http://127.0.0.1:$portInline/?folder=Europe");
+check('inline mode: ?folder=Europe still loads', $inlineStatus === 200);
+check('inline mode: a folder\'s page is flat — everything beneath it as plain cards, no cover cards', str_contains($inlinePage, 'alt="Europe/intro.jpg"') && str_contains($inlinePage, 'alt="Europe/France/eiffel.jpg"') && !str_contains($inlinePage, '<div class="folder-cover"'));
+
+/* ======================================================================= *
  * FIXTURE 3: "mtimesort" — PHOTO_SORT_ORDER = 'mtime'.
  * ======================================================================= */
 

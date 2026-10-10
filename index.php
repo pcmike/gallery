@@ -1298,7 +1298,7 @@ $explicitGroupKeys = array_fill_keys(
  * $keysInZone restricts consideration to keys belonging to this zone;
  * every key in $keysInZone appears exactly once in the result.
  */
-function order_within_zone($keysInZone, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank) {
+function order_within_zone($keysInZone, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride = []) {
     $inZone = array_fill_keys($keysInZone, true);
     $handled = [];
     $positioned = []; // ['position' => N, 'keys' => [...]]
@@ -1352,7 +1352,7 @@ function order_within_zone($keysInZone, $mdContents, $groups, $explicitGroups, $
 
     foreach ($keysInZone as $key) {
         if (isset($handled[$key])) continue;
-        $natural[] = ['rank' => $naturalRank[$groups[$key][0]] ?? PHP_INT_MAX, 'keys' => [$key]];
+        $natural[] = ['rank' => $rankOverride[$key] ?? ($naturalRank[$groups[$key][0]] ?? PHP_INT_MAX), 'keys' => [$key]];
         $handled[$key] = true;
     }
 
@@ -1378,18 +1378,22 @@ function order_within_zone($keysInZone, $mdContents, $groups, $explicitGroups, $
  * always starts on a fresh row, instead of a box interrupting a
  * partially-filled row of cards.
  */
-function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank) {
+function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank, $rankOverride = [], $folderGroupKeys = []) {
     $boxKeys = [];
     $singleKeys = [];
     foreach ($groups as $key => $groupFiles) {
-        if (count($groupFiles) >= 2 || isset($explicitGroupKeys[$key])) {
+        // A folder-group is always in the box zone, even with one photo:
+        // its cover card is a folder, not a single photo's card, and an
+        // admin-set position has to be able to reorder it against every
+        // other folder, not only the ones that happen to hold 2+ photos.
+        if (count($groupFiles) >= 2 || isset($explicitGroupKeys[$key]) || isset($folderGroupKeys[$key])) {
             $boxKeys[] = $key;
         } else {
             $singleKeys[] = $key;
         }
     }
-    $boxOrder = order_within_zone($boxKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank);
-    $singleOrder = order_within_zone($singleKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank);
+    $boxOrder = order_within_zone($boxKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride);
+    $singleOrder = order_within_zone($singleKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride);
     return array_merge($boxOrder, $singleOrder);
 }
 
@@ -1398,7 +1402,18 @@ function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalCl
 // then rebuilds the flat photo list to match, so the lightbox's index
 // numbering (shared by both the note thumbnails and the gallery cards)
 // stays consistent with the new display order.
-$groupOrder = compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank);
+// A folder-group with an admin-set position (see ?admin) sorts ahead of
+// every folder without one, ascending — it replaces only the *natural*
+// ranking, so a prose mention in the root's own .md still positions a
+// folder first, same precedence as for any other group.
+$folderSortRank = [];
+foreach ($folderGroupKeys as $folderKey => $_true) {
+    $sortOrder = folder_display_meta($dir, $folderKey)['sortOrder'];
+    if ($sortOrder !== null) {
+        $folderSortRank[$folderKey] = $sortOrder - 1000000000;
+    }
+}
+$groupOrder = compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank, $folderSortRank, $folderGroupKeys);
 $orderedGroups = [];
 foreach ($groupOrder as $key) {
     if (isset($groups[$key]) && !isset($orderedGroups[$key])) {
@@ -1773,12 +1788,125 @@ function file_is_hidden($dir, $file, $itemsData) {
     if ($own === 'private') return true;
     if ($own === 'public') return false;
     if (AUTO_GROUP_BY_FOLDER && strpos($file, '/') !== false) {
-        $topFolder = explode('/', $file, 2)[0];
-        if (item_restriction(items_read(resolve_real_path($dir, $topFolder))) === 'private') {
-            return true;
+        // Every ancestor, not just the top-level one: a folder hidden at
+        // any depth hides everything beneath it, the same way a hidden
+        // top-level folder always has.
+        $path = '';
+        foreach (explode('/', dirname($file)) as $segment) {
+            $path = $path === '' ? $segment : $path . '/' . $segment;
+            if (folder_restriction_cached($dir, $path) === 'private') {
+                return true;
+            }
         }
     }
     return false;
+}
+
+/** One folder's own restriction, read once per request — file_is_hidden()
+ *  asks about every ancestor of every file, so without this a deep tree
+ *  would re-read the same small JSON files thousands of times.
+ *  items_update() resets it, so an admin save is never read back stale. */
+function folder_restriction_cached($dir, $folderRel, $reset = false) {
+    static $cache = [];
+    if ($reset) {
+        $cache = [];
+        return null;
+    }
+    if (!isset($cache[$folderRel])) {
+        $cache[$folderRel] = item_restriction(items_read(resolve_real_path($dir, $folderRel)));
+    }
+    return $cache[$folderRel];
+}
+
+/* -----------------------------------------------------------------------
+ * Folder levels. $files (already hiding-filtered by the time a page is
+ * built from it) is the allowlist for everything here: a folder path is
+ * only ever "valid" because some file the script itself found sits under
+ * it, never because a request said so — the same discipline as ?img=.
+ * ----------------------------------------------------------------------- */
+
+/** Splits $files under $prefix ('' for the root, else 'A/B/') into the
+ *  files loose directly at that level and each immediate subfolder's
+ *  recursive members. */
+function split_folder_level($files, $prefix) {
+    $folders = [];
+    $loose = [];
+    $len = strlen($prefix);
+    foreach ($files as $f) {
+        if ($prefix !== '' && strncmp($f, $prefix, $len) !== 0) continue;
+        $rest = substr($f, $len);
+        $slash = strpos($rest, '/');
+        if ($slash === false) {
+            $loose[] = $f;
+        } else {
+            $folders[substr($rest, 0, $slash)][] = $f;
+        }
+    }
+    return ['folders' => $folders, 'loose' => $loose];
+}
+
+/** Every folder path (at any depth) that has at least one file under it,
+ *  parents before their children. */
+function all_folder_paths($files) {
+    $set = [];
+    foreach ($files as $f) {
+        $d = dirname($f);
+        while ($d !== '.' && $d !== '' && !isset($set[$d])) {
+            $set[$d] = true;
+            $d = dirname($d);
+        }
+    }
+    $paths = array_keys($set);
+    usort($paths, 'strnatcasecmp');
+    return $paths;
+}
+
+/** The files under a folder path, or [] if no file does — which is also
+ *  the "this folder doesn't exist (or is hidden from you)" answer. */
+function folder_files_under($files, $folderPath) {
+    if (!is_string($folderPath) || $folderPath === '') return [];
+    $prefix = $folderPath . '/';
+    $len = strlen($prefix);
+    return array_values(array_filter($files, function ($f) use ($prefix, $len) {
+        return strncmp($f, $prefix, $len) === 0;
+    }));
+}
+
+/** A folder's own admin-set identity, read from its own
+ *  .gallery-items.json, normalized so callers never re-check types. */
+function folder_display_meta($dir, $folderRel) {
+    $d = items_read(resolve_real_path($dir, $folderRel));
+    return [
+        'label' => is_string($d['displayName'] ?? null) ? $d['displayName'] : '',
+        'cover' => is_string($d['cover'] ?? null) && $d['cover'] !== '' ? $d['cover'] : null,
+        'description' => is_string($d['description'] ?? null) ? $d['description'] : '',
+        'dates' => is_string($d['dates'] ?? null) ? $d['dates'] : '',
+        'sortOrder' => is_int($d['sortOrder'] ?? null) ? $d['sortOrder'] : null,
+    ];
+}
+
+/** Orders sibling folder names: an explicit admin-set position first
+ *  (ascending), everything else after in natural order — by name, or by
+ *  folder mtime when PHOTO_SORT_ORDER says so. */
+function order_folder_children($dir, $prefix, $names) {
+    $meta = [];
+    foreach ($names as $name) {
+        $meta[$name] = folder_display_meta($dir, $prefix . $name);
+    }
+    usort($names, function ($a, $b) use ($meta, $dir, $prefix) {
+        $oa = $meta[$a]['sortOrder'];
+        $ob = $meta[$b]['sortOrder'];
+        if ($oa !== null && $ob !== null && $oa !== $ob) return $oa <=> $ob;
+        if ($oa !== null && $ob === null) return -1;
+        if ($oa === null && $ob !== null) return 1;
+        if (PHOTO_SORT_ORDER === 'mtime') {
+            $ma = @filemtime(resolve_real_path($dir, $prefix . $a)) ?: 0;
+            $mb = @filemtime(resolve_real_path($dir, $prefix . $b)) ?: 0;
+            if ($ma !== $mb) return $ma <=> $mb;
+        }
+        return strnatcasecmp($a, $b);
+    });
+    return $names;
 }
 
 /**
@@ -2115,10 +2243,14 @@ function items_path($folderPath) {
  *  locationVisibility, web}. groups: filename-based group key (root-level
  *  only — see the admin editor) => {displayName}. displayName/cover
  *  describe *this folder itself* when a parent renders it as a
- *  folder-group cover card. locationEnabled is this folder's own
+ *  folder-group cover card, along with description (a short blurb), dates
+ *  (a free-text date-range subtitle — typed by the admin, never derived
+ *  from EXIF, since that would publish when the owner was away) and
+ *  sortOrder (an explicit position among sibling folders).
+ *  locationEnabled is this folder's own
  *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => false];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false];
 }
 
 function items_read($folderPath) {
@@ -2126,6 +2258,7 @@ function items_read($folderPath) {
 }
 
 function items_update($folderPath, $modifier) {
+    folder_restriction_cached(null, null, true);
     return json_file_update(items_path($folderPath), items_default(), $modifier);
 }
 
@@ -2261,16 +2394,22 @@ function gc_items_data($dir, $files, &$galleryNotices) {
 /** ?admin's own &folder= — validated against the real $folderGroupKeys
  *  the same way the public ?folder= is. false means "was given but
  *  invalid" (caller 404s); null means root. */
-function admin_resolve_folder($folderGroupKeys) {
+function admin_resolve_folder($files) {
     if (!isset($_GET['folder'])) return null;
     $requested = $_GET['folder'];
-    return isset($folderGroupKeys[$requested]) ? $requested : false;
+    // Valid at any depth, but only if the script's own file list has
+    // something under it — same allowlist-not-trust rule as the public
+    // ?folder=.
+    return !empty(folder_files_under($files, $requested)) ? $requested : false;
 }
 
-function render_admin_folder_nav($folderGroupKeys, $currentFolder) {
-    if (empty($folderGroupKeys)) return '';
+/** Every folder at every depth, as a flat row of links labelled with the
+ *  full path — parents before children, so the tree reads top-down. */
+function render_admin_folder_nav($files, $currentFolder) {
+    $folderPaths = all_folder_paths($files);
+    if (empty($folderPaths)) return '';
     $html = '<nav class="admin-folder-nav"><a href="?admin"' . ($currentFolder === null ? ' class="current"' : '') . '>Root</a>';
-    foreach (array_keys($folderGroupKeys) as $key) {
+    foreach ($folderPaths as $key) {
         $active = ($currentFolder === $key) ? ' class="current"' : '';
         $html .= ' <a href="?admin&folder=' . rawurlencode($key) . '"' . $active . '>' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '</a>';
     }
@@ -2306,6 +2445,19 @@ function render_admin_reference_panel() {
  * implies success in another — reported per-action, not assumed
  * all-or-nothing.
  */
+/** Plain single-line-ish text from a form field: control characters
+ *  dropped, whitespace runs collapsed, length capped. Output is always
+ *  HTML-escaped where it's shown, so this is about tidiness and bounding
+ *  what a .gallery-items.json can grow to, not about escaping. */
+function admin_clean_text($value, $maxLen) {
+    $text = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) $value);
+    $text = trim(preg_replace('/\s+/u', ' ', (string) $text));
+    if (function_exists('mb_substr')) {
+        return mb_substr($text, 0, $maxLen, 'UTF-8');
+    }
+    return substr($text, 0, $maxLen);
+}
+
 function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups) {
     if (!admin_csrf_valid($_POST['csrf_token'] ?? '')) {
         return ['type' => 'error', 'text' => 'Your session expired — please try again.'];
@@ -2373,10 +2525,34 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         }
         $displayName = trim((string) ($_POST['display_name'] ?? ''));
-        items_update($adminFolderReal, function (&$data) use ($displayName) {
-            $data['displayName'] = $displayName !== '' ? $displayName : null;
+        // Only fields actually present in the POST are touched, so a form
+        // (or an older client) that only sends the display name never
+        // wipes the other three.
+        $updates = ['displayName' => $displayName !== '' ? $displayName : null];
+        if (array_key_exists('description', $_POST)) {
+            $text = admin_clean_text($_POST['description'], 500);
+            $updates['description'] = $text !== '' ? $text : null;
+        }
+        if (array_key_exists('dates', $_POST)) {
+            $text = admin_clean_text($_POST['dates'], 80);
+            $updates['dates'] = $text !== '' ? $text : null;
+        }
+        if (array_key_exists('sort_order', $_POST)) {
+            $raw = trim((string) $_POST['sort_order']);
+            if ($raw === '') {
+                $updates['sortOrder'] = null;
+            } elseif (preg_match('/^-?\d{1,5}$/', $raw)) {
+                $updates['sortOrder'] = (int) $raw;
+            } else {
+                return ['type' => 'error', 'text' => 'Position must be a whole number (or blank for natural order).'];
+            }
+        }
+        items_update($adminFolderReal, function (&$data) use ($updates) {
+            foreach ($updates as $k => $v) {
+                $data[$k] = $v;
+            }
         });
-        return ['type' => 'ok', 'text' => 'Folder display name saved.'];
+        return ['type' => 'ok', 'text' => 'Folder settings saved.'];
     }
 
     if ($action === 'toggle_folder_restriction') {
@@ -2459,6 +2635,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'ok', 'text' => '"' . $mdFile . '" deleted.'];
     }
 
+    if ($action === 'export_tree') {
+        return ['type' => 'export_tree'];
+    }
+
     if ($action === 'export_items') {
         return ['type' => 'export'];
     }
@@ -2473,6 +2653,22 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
  *  phase), the export becomes a new way to reveal what's hidden and that
  *  it exists — mishandling the exported file is its own leak vector,
  *  independent of the actual hidden content. */
+/** Every folder's .gallery-items.json in one download, keyed by relative
+ *  folder path ("" is the root) — same irreplaceable data, same leak
+ *  caution as admin_export_items(), just the whole tree at once. */
+function admin_export_tree($dir, $files) {
+    $tree = ['' => items_read($dir)];
+    foreach (all_folder_paths($files) as $path) {
+        $data = items_read(resolve_real_path($dir, $path));
+        if ($data !== items_default()) {
+            $tree[$path] = $data;
+        }
+    }
+    header('Content-Type: application/json');
+    header('Content-Disposition: attachment; filename="whole-tree-gallery-items.json"');
+    echo json_encode($tree, JSON_PRETTY_PRINT);
+}
+
 function admin_export_items($adminFolderPath, $adminFolderReal) {
     $data = items_read($adminFolderReal);
     $name = ($adminFolderPath === null ? 'root' : slugify($adminFolderPath)) . '-gallery-items.json';
@@ -2488,7 +2684,7 @@ function admin_export_items($adminFolderPath, $adminFolderReal) {
  *  signal rather than implying a privacy guarantee this script can't
  *  actually confirm without the webserver-level step. */
 function admin_any_hidden($dir, $files, $folderGroupKeys) {
-    foreach ($folderGroupKeys as $folderKey => $_true) {
+    foreach (all_folder_paths($files) as $folderKey) {
         if (item_restriction(items_read(resolve_real_path($dir, $folderKey))) === 'private') {
             return true;
         }
@@ -2514,7 +2710,7 @@ function admin_any_hidden($dir, $files, $folderGroupKeys) {
  */
 function render_admin_hidden_summary($dir, $files, $folderGroupKeys) {
     $hiddenFolders = [];
-    foreach ($folderGroupKeys as $folderKey => $_true) {
+    foreach (all_folder_paths($files) as $folderKey) {
         if (item_restriction(items_read(resolve_real_path($dir, $folderKey))) === 'private') {
             $hiddenFolders[] = $folderKey;
         }
@@ -2526,8 +2722,14 @@ function render_admin_hidden_summary($dir, $files, $folderGroupKeys) {
     foreach ($files as $file) {
         $entry = items_read(containing_folder_real_path($dir, $file))['items'][basename($file)] ?? null;
         $own = item_restriction($entry);
-        $topFolder = (strpos($file, '/') !== false) ? explode('/', $file, 2)[0] : null;
-        $folderHidden = $topFolder !== null && isset($hiddenFolderSet[$topFolder]);
+        // Hidden by any ancestor, at any depth.
+        $folderHidden = false;
+        $ancestorPath = '';
+        foreach (explode('/', dirname($file)) as $segment) {
+            if ($segment === '.') break;
+            $ancestorPath = $ancestorPath === '' ? $segment : $ancestorPath . '/' . $segment;
+            if (isset($hiddenFolderSet[$ancestorPath])) { $folderHidden = true; break; }
+        }
         if ($own === 'private') {
             $hiddenItems[] = $file;
         } elseif ($folderHidden && $own === 'public') {
@@ -2673,7 +2875,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <a href="./" class="muted">&larr; Back to gallery</a>
   <h1>Gallery Admin</h1>
   <p class="muted">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></p>
-  <?= render_admin_folder_nav($folderGroupKeys, $adminFolderPath) ?>
+  <?= render_admin_folder_nav($files, $adminFolderPath) ?>
 
   <?php if (admin_any_hidden($dir, $files, $folderGroupKeys)): ?>
     <div class="flash error">
@@ -2693,10 +2895,22 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="save_folder_identity">
       <div class="field">
-        <label>Display name (shown on its cover card instead of "<?= htmlspecialchars($adminFolderPath, ENT_QUOTES, 'UTF-8') ?>")</label>
+        <label>Display name (shown on its cover card instead of "<?= htmlspecialchars(basename($adminFolderPath), ENT_QUOTES, 'UTF-8') ?>")</label>
         <input type="text" name="display_name" value="<?= htmlspecialchars($itemsHere['displayName'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
       </div>
-      <button type="submit">Save name</button>
+      <div class="field">
+        <label>Dates (optional subtitle, typed by you — never read from the photos' EXIF, so it never reveals when you were away unless you say so)</label>
+        <input type="text" name="dates" maxlength="80" placeholder="June 12&ndash;15, 2026" value="<?= htmlspecialchars($itemsHere['dates'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+      </div>
+      <div class="field">
+        <label>Description (a sentence or two, shown on its cover card and at the top of its page)</label>
+        <textarea name="description" maxlength="500" style="min-height:70px; font-family:inherit;"><?= htmlspecialchars($itemsHere['description'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
+      </div>
+      <div class="field">
+        <label>Position among its sibling folders (lowest first; blank = natural order, after any numbered ones)</label>
+        <input type="number" name="sort_order" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
+      </div>
+      <button type="submit">Save folder settings</button>
     </form>
     <form method="post" style="margin-top:12px;">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
@@ -2904,6 +3118,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       <input type="hidden" name="action" value="export_items">
       <button type="submit" class="secondary">Export as JSON</button>
     </form>
+    <form method="post" style="margin-top:8px;">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="export_tree">
+      <button type="submit" class="secondary">Export the whole tree as JSON</button>
+    </form>
   </div>
 </div>
 <script>
@@ -2969,26 +3188,26 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
 
-    $adminFolderPath = admin_resolve_folder($folderGroupKeys);
+    $adminFolderPath = admin_resolve_folder($files);
     if ($adminFolderPath === false) {
         http_response_code(404);
         return;
     }
     $adminFolderReal = $adminFolderPath === null ? $dir : resolve_real_path($dir, $adminFolderPath);
-    $adminFiles = $adminFolderPath === null
-        ? array_values(array_filter($files, function ($f) use ($groups, $folderGroupKeys) {
-            foreach ($folderGroupKeys as $fk => $_true) {
-                if (in_array($f, $groups[$fk], true)) return false;
-            }
-            return true;
-        }))
-        : ($groups[$adminFolderPath] ?? []);
+    // Just what sits loose directly in this folder — its subfolders get
+    // their own admin page, reached from the nav, so an edit's target path
+    // is always exactly <this folder>/<bare filename>.
+    $adminFiles = split_folder_level($files, $adminFolderPath === null ? '' : $adminFolderPath . '/')['loose'];
 
     $resultMessage = null;
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $resultMessage = handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups);
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);
+            return;
+        }
+        if ($resultMessage['type'] === 'export_tree') {
+            admin_export_tree($dir, $files);
             return;
         }
     }
@@ -3291,16 +3510,35 @@ foreach ($mdFiles as $mdFile) {
 $currentFolderPath = null;
 if (isset($_GET['folder'])) {
     $requestedFolder = $_GET['folder'];
-    if (!isset($folderGroupKeys[$requestedFolder]) || !isset($groups[$requestedFolder])) {
+    // Valid only if the script's own (already hiding-filtered) file list
+    // has something under it — a nested path like Europe/France/Paris
+    // works the same as a top-level one, and a hidden, nonexistent, or
+    // path-trick value (../, a trailing slash, a file) all simply have
+    // nothing under them.
+    $currentFolderFiles = AUTO_GROUP_BY_FOLDER ? folder_files_under($files, $requestedFolder) : [];
+    if (empty($currentFolderFiles)) {
         http_response_code(404);
         exit;
     }
     $currentFolderPath = $requestedFolder;
-    $pageTitle = $currentFolderPath . ' — ' . $pageTitle;
+    $currentFolderMeta = folder_display_meta($dir, $currentFolderPath);
+    $currentFolderName = $currentFolderMeta['label'] !== '' ? $currentFolderMeta['label'] : basename($currentFolderPath);
+    $pageTitle = $currentFolderName . ' — ' . $pageTitle;
     // Same early-computation reasoning as $pageTitle above: the header's
     // photo count renders before $files gets scoped down to the folder
     // later on, so it would otherwise show the root's total count.
-    $currentFolderFileCount = count($groups[$currentFolderPath]);
+    $currentFolderFileCount = count($currentFolderFiles);
+    // Breadcrumb: every ancestor between the root and this folder, each
+    // labelled by its own admin-set name when it has one.
+    $folderCrumbs = [];
+    $ancestor = '';
+    $segments = explode('/', $currentFolderPath);
+    array_pop($segments);
+    foreach ($segments as $segment) {
+        $ancestor = $ancestor === '' ? $segment : $ancestor . '/' . $segment;
+        $ancestorMeta = folder_display_meta($dir, $ancestor);
+        $folderCrumbs[] = ['?folder=' . rawurlencode($ancestor), $ancestorMeta['label'] !== '' ? $ancestorMeta['label'] : $segment];
+    }
 }
 
 /**
@@ -3374,8 +3612,11 @@ function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status,
     }
     $html .= '</div>';
     $html .= '<div class="linked-photos-meta">';
-    $html .= '<a class="linked-photos-jump" href="#group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">View '
-            . $count . ' photo' . ($count === 1 ? '' : 's') . ' &darr;</a>';
+    // A folder-group in 'overview' mode has no inline grid to scroll to:
+    // its jump link opens the folder's own page instead.
+    $folderHref = $GLOBALS['folderMentionLinks'][$key] ?? null;
+    $html .= '<a class="linked-photos-jump" href="' . ($folderHref !== null ? htmlspecialchars($folderHref, ENT_QUOTES, 'UTF-8') : '#group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8')) . '">View '
+            . $count . ' photo' . ($count === 1 ? '' : 's') . ($folderHref !== null ? ' &rarr;' : ' &darr;') . '</a>';
     $html .= '<span class="group-views' . $viewsHidden . '" data-group="' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">&middot; '
             . number_format($groupTotal) . ' view' . ($groupTotal === 1 ? '' : 's') . '</span>';
     $html .= $permalinkHtml;
@@ -3980,7 +4221,7 @@ function status_accent_color($status, $customColor) {
  * overrides the automatic choice when it's still a real member of this
  * folder's own recursive file list.
  */
-function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualCover = null) {
+function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualCover = null, $idKey = null, $meta = null) {
     $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
     $coverFile = null;
     if ($manualCover !== null) {
@@ -4007,7 +4248,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
         $coverFile = $recursiveFiles[0] ?? null;
     }
     $count = count($recursiveFiles);
-    $slug = slugify($folderPath);
+    $slug = slugify($idKey ?? $folderPath);
     $html = '<div class="folder-cover" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
     $html .= '<a class="folder-cover-link" href="' . $folderUrl . '">';
     if ($coverFile !== null) {
@@ -4015,6 +4256,12 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
                 . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">';
     }
     $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
+    if (!empty($meta['dates'])) {
+        $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
+    }
+    if (!empty($meta['description'])) {
+        $html .= '<span class="folder-cover-desc">' . htmlspecialchars($meta['description'], ENT_QUOTES, 'UTF-8') . '</span>';
+    }
     $html .= '<span class="folder-cover-count">' . number_format($count) . ' photo' . ($count === 1 ? '' : 's') . '</span>';
     $html .= '</a>';
     $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">&#128279;</a>';
@@ -4025,7 +4272,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
-function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = [], $folderCovers = [], $itemsData = []) {
+function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = [], $folderCovers = [], $itemsData = [], $folderMeta = [], $folderLinkPrefix = '') {
     $html = '';
     $flatIndex = 0;
 
@@ -4040,7 +4287,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // rendered card's lightbox index is drawn from.
         if (isset($folderGroupKeys[$key]) && FOLDER_DISPLAY_MODE === 'overview') {
             $label = $groupLabels[$key] ?? $key;
-            $html .= render_folder_cover_card($key, $label, $groupFiles, $folderCovers[$key] ?? null);
+            $html .= render_folder_cover_card($folderLinkPrefix . $key, $label, $groupFiles, $folderCovers[$key] ?? null, $key, $folderMeta[$key] ?? null);
             $flatIndex += count($groupFiles);
             continue;
         }
@@ -4206,13 +4453,19 @@ $groupLabels = [];
 // .gallery-items.json; a root-level filename-based group's lives in the
 // root's own.
 $folderCovers = [];
+$folderMeta = [];       // folder key => ['description' => .., 'dates' => ..], for its cover card
+$folderMentionLinks = []; // group key => href, for a .md mention's jump link (overview mode only)
 foreach ($folderGroupKeys as $folderKey => $_true) {
-    $folderItemsData = items_read(resolve_real_path($dir, $folderKey));
-    if (!empty($folderItemsData['displayName'])) {
-        $groupLabels[$folderKey] = $folderItemsData['displayName'];
+    $m = folder_display_meta($dir, $folderKey);
+    if ($m['label'] !== '') {
+        $groupLabels[$folderKey] = $m['label'];
     }
-    if (!empty($folderItemsData['cover'])) {
-        $folderCovers[$folderKey] = $folderItemsData['cover'];
+    if ($m['cover'] !== null) {
+        $folderCovers[$folderKey] = $m['cover'];
+    }
+    $folderMeta[$folderKey] = ['description' => $m['description'], 'dates' => $m['dates']];
+    if (FOLDER_DISPLAY_MODE === 'overview') {
+        $folderMentionLinks[$folderKey] = '?folder=' . rawurlencode($folderKey);
     }
 }
 $rootItemsData = items_read($dir);
@@ -4265,8 +4518,11 @@ if ($currentFolderPath !== null) {
     // block above), so $ogTitle below already picked that up — only the
     // url/description/image need their own folder-scoped values here.
     $ogUrl = $baseUrl . '/?folder=' . rawurlencode($currentFolderPath);
-    $folderMemberFiles = $groups[$currentFolderPath];
+    $folderMemberFiles = $currentFolderFiles;
     $ogDescription = count($folderMemberFiles) . ' photo' . (count($folderMemberFiles) === 1 ? '' : 's');
+    if ($currentFolderMeta['description'] !== '') {
+        $ogDescription = $currentFolderMeta['description'];
+    }
     // A subfolder's own notes .md (see the full scan further down, once
     // $groups/$files are actually scoped to it) can supply a real
     // description here too — just the plaintext summary, which doesn't
@@ -4593,6 +4849,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     font-weight: 600;
     font-size: 0.95rem;
   }
+  .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); }
+  .folder-cover-desc { display:block; padding:2px 12px 0; font-size:0.82rem; color:var(--muted); overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
+  .folder-dates { margin:2px 0 0; color:var(--muted); font-size:0.9rem; }
+  .folder-description { margin:6px 0 0; color:var(--muted); max-width:62ch; }
   .folder-cover-count {
     display: block;
     padding: 0 12px 10px;
@@ -4799,9 +5059,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 
 <header>
   <?php if ($currentFolderPath !== null): ?>
-    <p class="breadcrumb"><a href="./">&larr; <?= htmlspecialchars($rootPageTitle) ?></a></p>
+    <p class="breadcrumb"><a href="./">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
   <?php endif; ?>
   <h1><?= htmlspecialchars($pageTitle) ?></h1>
+  <?php if ($currentFolderPath !== null && $currentFolderMeta['dates'] !== ''): ?>
+    <p class="folder-dates"><?= htmlspecialchars($currentFolderMeta['dates']) ?></p>
+  <?php endif; ?>
+  <?php if ($currentFolderPath !== null && $currentFolderMeta['description'] !== ''): ?>
+    <p class="folder-description"><?= htmlspecialchars($currentFolderMeta['description']) ?></p>
+  <?php endif; ?>
   <?php $headerPhotoCount = $currentFolderPath !== null ? $currentFolderFileCount : count($files); ?>
   <p><?= $headerPhotoCount ?> photo<?= $headerPhotoCount === 1 ? '' : 's' ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
 </header>
@@ -4860,25 +5126,65 @@ foreach ($mdFiles as $mdFile) {
 // within one folder; this doesn't recluster them into a group the way
 // the root would, just keeps them from overwriting each other.
 $rootFolderGroupKeys = $folderGroupKeys;
+$folderLinkPrefix = '';
 if ($currentFolderPath !== null) {
-    $folderFiles = $groups[$currentFolderPath];
+    $folderFiles = $currentFolderFiles;
     $folderPrefix = $currentFolderPath . '/';
+    $folderLinkPrefix = $folderPrefix;
+    // The root's own labels/covers/mention links are keyed by top-level
+    // folder names; on a folder's page the keys are this level's own
+    // names, so start clean rather than let a same-named folder deeper
+    // down pick up the wrong top-level folder's settings.
+    $groupLabels = [];
+    $folderCovers = [];
+    $folderMeta = [];
+    $folderMentionLinks = [];
+
+    // 'overview' mode drills one level at a time: each immediate
+    // subfolder is a cover card (recursively counted), anything loose
+    // directly here is a flat card, and the same logic repeats on that
+    // subfolder's own page — to any depth. 'inline' mode never reaches
+    // a cover card, so a folder's page just shows everything beneath it.
+    $level = FOLDER_DISPLAY_MODE === 'overview'
+        ? split_folder_level($folderFiles, $folderPrefix)
+        : ['folders' => [], 'loose' => $folderFiles];
+
+    $groups = [];
+    $folderGroupKeys = [];
+    foreach (order_folder_children($dir, $folderPrefix, array_keys($level['folders'])) as $childName) {
+        $groups[$childName] = $level['folders'][$childName];
+        $folderGroupKeys[$childName] = true;
+        $m = folder_display_meta($dir, $folderPrefix . $childName);
+        if ($m['label'] !== '') $groupLabels[$childName] = $m['label'];
+        if ($m['cover'] !== null) $folderCovers[$childName] = $m['cover'];
+        $folderMeta[$childName] = ['description' => $m['description'], 'dates' => $m['dates']];
+        $folderMentionLinks[$childName] = '?folder=' . rawurlencode($folderPrefix . $childName);
+    }
+
     $bareBaseCounts = [];
-    foreach ($folderFiles as $f) {
+    foreach ($level['loose'] as $f) {
         $bare = substr($f, strlen($folderPrefix));
         $rawBase = pathinfo($bare, PATHINFO_FILENAME);
         $bareBaseCounts[$rawBase] = ($bareBaseCounts[$rawBase] ?? 0) + 1;
     }
-    $groups = [];
-    foreach ($folderFiles as $f) {
+    foreach ($level['loose'] as $f) {
         $bare = substr($f, strlen($folderPrefix));
         $rawBase = pathinfo($bare, PATHINFO_FILENAME);
         $localKey = $bareBaseCounts[$rawBase] > 1 ? $bare : group_key($bare);
+        // A loose file whose bare name matches a subfolder's would
+        // overwrite that folder's card; fall back to the full filename.
+        if (isset($groups[$localKey])) $localKey = $bare;
         $groups[$localKey] = [$f];
     }
-    $files = $folderFiles;
+    // The flat list has to follow the new card order exactly: every
+    // card's lightbox index is drawn from it.
+    $files = [];
+    foreach ($groups as $groupFiles) {
+        foreach ($groupFiles as $f) {
+            $files[] = $f;
+        }
+    }
     $explicitGroupKeys = [];
-    $folderGroupKeys = [];
 }
 
 // A subfolder may optionally carry its own {gallery}-marked .md,
@@ -4932,7 +5238,7 @@ if ($currentFolderPath !== null) {
   <div class="empty">No photos found in this folder.</div>
 <?php else: ?>
   <div class="gallery">
-    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData) ?>
+    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix) ?>
   </div>
 <?php endif; ?>
 
