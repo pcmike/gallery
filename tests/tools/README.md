@@ -16,7 +16,7 @@ python3 tests/tools/browser/browser_checks.py [--shots DIR]
 QJS=/path/to/qjs python3 tests/tools/js/run_js_checks.py     # QJS defaults to `qjs` on PATH
 ```
 
-Both exit 0 only when nothing is found.
+All of them exit 0 only when nothing is found. The gallery itself runs under `PHP_SERVER` (default `php`), so you can check another PHP version, e.g. `PHP_SERVER=/path/to/php8.3 python3 tests/tools/fuzz/fuzz.py` (the fixture is still built with the `php` on your PATH, which needs gd + imagick; a static CLI build from <https://dl.static-php.dev/> makes a handy second version). `php tests/run.php` already uses whatever PHP you run it with.
 
 **Getting QuickJS without root** (Debian/Ubuntu): `apt-get download quickjs && dpkg -x quickjs_*.deb ~/quickjs`, then `QJS=~/quickjs/usr/bin/qjs`.
 

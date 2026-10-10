@@ -67,6 +67,10 @@ It does **not** cover things that need a real browser (lightbox JS, swipe gestur
 
 Run both `php -l index.php` and `php tests/run.php` before committing, and add a case to `tests/run.php` for any bug fix so it can't silently regress.
 
+## PHP versions
+
+The minimum is **PHP 8.3**, and it's a tested claim: the whole suite and every tool in `tests/tools/` pass on 8.3 and on 8.4 (the version this is developed on). Before raising or lowering the minimum, run them on the new floor. A throwaway second PHP needs no install — grab a static CLI build from <https://dl.static-php.dev/static-php-cli/common/> and run `php83 tests/run.php` and, for the tools, `PHP_SERVER=/path/to/php83 python3 tests/tools/fuzz/fuzz.py` (see [`tests/tools/README.md`](tests/tools/README.md)). Such a build has GD and SQLite but no Imagick, so the HEIC tests skip and thumbnails use the GD path — which is useful coverage of its own.
+
 ## Optional tools: fuzzing and JavaScript checks
 
 Four extra checks live in [`tests/tools/`](tests/tools/README.md), outside the main suite because they need a bit more (python3, plus Chromium for the browser one and QuickJS for the JavaScript one): a **fuzzer** that sends a few thousand hostile requests at every endpoint with PHP reporting every error, a **cross-site-scripting canary** (`xss.py`) that plants payloads in every input and fails if any comes back unescaped in a dangerous context, a **real-browser run** (headless Chromium: clicks, key presses, layout, the map, a real admin form under its CSP, screenshots), and a **JavaScript runner** that executes the page scripts against a fake DOM and a fake Leaflet. Both are worth running after touching request handling, the admin, or any inline script — the fuzzer is what found the `?size[]=` fatal error and the admin NUL-byte crash that the main suite hadn't thought to try.

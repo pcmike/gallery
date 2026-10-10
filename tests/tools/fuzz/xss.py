@@ -47,7 +47,7 @@ copyfile(SITE + "/loose1.jpg", SITE + "/" + "<img src=x onerror=alert(XSSTOK2)>.
 copyfile(SITE + "/loose1.jpg", SITE + "/" + '" onmouseover="alert(XSSTOK5).jpg')
 copyfile(SITE + "/loose1.jpg", SITE + "/" + "';alert(XSSTOK6);'.jpg")
 
-srv = subprocess.Popen(["php", "-d", "display_errors=1", "-d", "error_reporting=-1", "-d", "html_errors=0", "-S", f"127.0.0.1:{PORT}", "-t", SITE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+srv = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-d", "display_errors=1", "-d", "error_reporting=-1", "-d", "html_errors=0", "-S", f"127.0.0.1:{PORT}", "-t", SITE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1.2)
 findings = []; pages = 0; reached = {"script-payload (caption/description/notes)": 0, "attr-payload (display name/dates/notes)": 0, "tag-payload": 0}
 class NoRedir(urllib.request.HTTPRedirectHandler):

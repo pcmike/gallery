@@ -23,7 +23,7 @@ if SHOTS: os.makedirs(SHOTS, exist_ok=True)
 WORK = tempfile.mkdtemp(prefix="gallery-browser-"); SITE = WORK + "/site"
 s = socket.socket(); s.bind(("127.0.0.1", 0)); PORT = s.getsockname()[1]; s.close(); B = f"http://127.0.0.1:{PORT}"
 subprocess.run(["php", HERE + "/../fuzz/build_fixture.php", SITE], check=True, stdout=subprocess.DEVNULL)
-srv = subprocess.Popen(["php", "-S", f"127.0.0.1:{PORT}", "-t", SITE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+srv = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT}", "-t", SITE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 fails = 0; skips = 0
 def ok(cond, msg, detail=""):
     global fails

@@ -43,13 +43,13 @@
  *   - See each function's own docblock below for implementation details.
  */
 
-// Needs PHP 8.1+. Say so plainly rather than failing with a cryptic error
+// Needs PHP 8.3+. Say so plainly rather than failing with a cryptic error
 // halfway through the page (this check itself only uses syntax every PHP
 // version since 7.0 can parse).
-if (PHP_VERSION_ID < 80100) {
+if (PHP_VERSION_ID < 80300) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=UTF-8');
-    echo 'This gallery needs PHP 8.1 or newer; this server is running PHP ' . PHP_VERSION . '.';
+    echo 'This gallery needs PHP 8.3 or newer; this server is running PHP ' . PHP_VERSION . '.';
     exit;
 }
 

@@ -2233,7 +2233,8 @@ preg_match('/const files = (\[.*?\]);\s*\/\/.*?const fileVersions = (\[.*?\]);/s
 $fvFiles = json_decode($fvm[1] ?? '[]', true); $fvVers = json_decode($fvm[2] ?? '[]', true);
 check('[cache-bust] the lightbox script is given the same tags (so full-size images and videos are busted too)', count($fvFiles) === count($fvVers) && count($fvFiles) === 3 && $fvVers[array_search('swap.jpg', $fvFiles)] === $vSwap1);
 check('[cache-bust] the lightbox builds its full-size and video addresses with the tag', str_contains($bust1, "'&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '')") && str_contains($bust1, "'?video=' + encodeURIComponent(file) + (fileVersions[current]"));
-check('[cache-bust] the tag is a hash, not the raw modification time or size (a visitor can\'t read when a file changed)', !str_contains($vSwap1, (string) filemtime("$fxBust/swap.jpg")) && !preg_match('/v=\d{9,}/', $bust1));
+$rawMtime = (string) filemtime("$fxBust/swap.jpg"); $rawSize = (string) filesize("$fxBust/swap.jpg");
+check('[cache-bust] the tag is a hash, never the raw modification time or size (a visitor can\'t read when a file changed)', $vSwap1 !== $rawMtime && !str_contains($bust1, "v=$rawMtime") && !str_contains($bust1, "v=$rawSize") && !str_contains($bust1, "v=" . dechex((int) $rawMtime)) && (bool) preg_match('/^[0-9a-f]{10}$/', $vSwap1));
 // Now replace the photo, under the same name.
 sleep(1); make_jpeg("$fxBust/swap.jpg", 90, 90, 20, 200, 20);
 [, $bust2] = http_get("$baseBust/");

@@ -21,7 +21,7 @@ def free_port():
 PORT = free_port(); B = f"http://127.0.0.1:{PORT}"
 log = WORK + "/php-errors.log"; open(log, "w").close()
 subprocess.run(["php", HERE + "/build_fixture.php", SITE], check=True, stdout=subprocess.DEVNULL)
-srv = subprocess.Popen(["php", "-d", "display_errors=1", "-d", "error_reporting=-1", "-d", "html_errors=0", "-d", "log_errors=1", "-d", f"error_log={log}", "-S", f"127.0.0.1:{PORT}", "-t", SITE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+srv = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-d", "display_errors=1", "-d", "error_reporting=-1", "-d", "html_errors=0", "-d", "log_errors=1", "-d", f"error_log={log}", "-S", f"127.0.0.1:{PORT}", "-t", SITE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1.2)
 BAD=re.compile(rb"(Warning|Notice|Fatal error|Deprecated|Parse error|Uncaught|Stack trace)\b")
 problems=[]; n=0
