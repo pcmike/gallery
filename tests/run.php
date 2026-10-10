@@ -2105,7 +2105,10 @@ check('[gps import] turning it off hides every location again but keeps the stor
 
 echo "== settings file: .gallery-config.php overrides the defaults and survives an update ==\n";
 
-$cfgHead = "<?php if (!defined('GALLERY_CONFIG_LOADING')) { http_response_code(404); exit; }\n";
+$cfgGuard = "<?php http_response_code(404); exit; ?>\n";
+function cfg_text($settings) { return $GLOBALS['cfgGuard'] . json_encode($settings === [] ? new stdClass() : $settings, JSON_HEX_TAG) . "\n"; }
+function cfg_read($path) { $raw = (string) file_get_contents($path); $raw = substr($raw, (int) strpos($raw, "\n") + 1); return json_decode($raw, true); }
+$cfgHead = $cfgGuard;
 $fxCfg = new_fixture_dir('config');
 make_jpeg("$fxCfg/photo.jpg", 60, 60, 10, 10, 10);
 make_minimal_mp4("$fxCfg/clip.mp4", 2);
@@ -2115,7 +2118,7 @@ $portCfg = find_free_port(); start_server($fxCfg, $portCfg); $baseCfg = "http://
 $cfgHome = fn () => http_get("$baseCfg/")[1];
 $h0 = $cfgHome();
 check('[settings file] with no settings file, the defaults apply (video off, no admin, no subfolders, no title link to the admin)', !str_contains($h0, 'clip.mp4') && http_get("$baseCfg/?admin")[0] === 404 && !str_contains($h0, 'href="?admin"'));
-file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true];\n");
+file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true]));
 $h1 = $cfgHome();
 check('[settings file] a .gallery-config.php beside index.php overrides the defaults (video shown, folders on, admin exists, title links to it)', str_contains($h1, 'alt="clip.mp4"') && str_contains($h1, 'id="group-sub"') && str_contains($h1, 'href="?admin"') && http_get("$baseCfg/?admin")[0] === 200);
 check('[settings file] ...and the password in it really works for the admin login', str_contains(http_post("$baseCfg/?admin", ['login_password' => 'cfg-pw-123'])[1] . http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')])[1], 'Gallery Admin'));
@@ -2127,27 +2130,41 @@ check('[settings file] replacing index.php with a fresh copy (an update) keeps e
 // defaults in index.php (video off, folders off here would be the defaults, so
 // flip the other way), and the file says otherwise.
 $edited = str_replace(["gallery_setting('ENABLE_VIDEO', false)", "gallery_setting('AUTO_GROUP_BY_FOLDER', false)"], ["gallery_setting('ENABLE_VIDEO', true)", "gallery_setting('AUTO_GROUP_BY_FOLDER', true)"], $indexContents, $editedCount);
-file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => false, 'AUTO_GROUP_BY_FOLDER' => false];\n");
+file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => false, 'AUTO_GROUP_BY_FOLDER' => false]));
 file_put_contents("$fxCfg/index.php", $edited);
 $hEdit = $cfgHome();
 check('[settings file] it wins over a value edited into index.php (file says off, index.php says on: off)', $editedCount === 2 && !str_contains($hEdit, 'clip.mp4') && !str_contains($hEdit, 'id="group-sub"'));
 unlink("$fxCfg/.gallery-config.php");
 check('[settings file] ...and without the file, the edited index.php applies as before (on)', str_contains($cfgHome(), 'alt="clip.mp4"'));
-file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true];\n");
+file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true]));
 copy(__DIR__ . '/../index.php', "$fxCfg/index.php");
 // Anything wrong in the file is reported, never fatal, and the rest still applies.
-file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDDEO' => true, 'TRACK_VIEWS' => 'yes', 'PHOTO_SORT_ORDER' => 'random', 'ENABLE_VIDEO' => true, 'MAP_CLUSTER_RADIUS_MILES' => 'far'];\n");
+file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDDEO' => true, 'TRACK_VIEWS' => 'yes', 'PHOTO_SORT_ORDER' => 'random', 'ENABLE_VIDEO' => true, 'MAP_CLUSTER_RADIUS_MILES' => 'far']));
 $h2 = $cfgHome();
 check('[settings file] a typo\'d name, a wrong kind of value and a value not on the allowed list are each reported in the setup notices', str_contains($h2, '&quot;ENABLE_VIDDEO&quot; isn&#039;t a setting') && str_contains($h2, '&quot;TRACK_VIEWS&quot; should be true or false') && str_contains($h2, '&quot;PHOTO_SORT_ORDER&quot; should be one of') && str_contains($h2, '&quot;MAP_CLUSTER_RADIUS_MILES&quot; should be a number'));
 check('[settings file] ...and the good setting in the same file still applies', str_contains($h2, 'alt="clip.mp4"'));
-file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => true,\n");   // syntax error
+file_put_contents("$fxCfg/.gallery-config.php", $cfgGuard . "{\"ENABLE_VIDEO\": true,\n");   // not valid JSON
 [$st3, $h3] = http_get("$baseCfg/");
-check('[settings file] a syntax error in the file does not take the site down: it loads on the defaults, with a notice', $st3 === 200 && str_contains($h3, 'alt="photo.jpg"') && str_contains($h3, 'couldn&#039;t be loaded') && !str_contains($h3, 'alt="clip.mp4"'));
-file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "echo 'oops';\n");
+check('[settings file] a settings file that is not valid JSON does not take the site down: it loads on the defaults, with a notice', $st3 === 200 && str_contains($h3, 'alt="photo.jpg"') && str_contains($h3, 'isn&#039;t valid JSON') && !str_contains($h3, 'alt="clip.mp4"'));
+file_put_contents("$fxCfg/.gallery-config.php", $cfgGuard . "[1, 2, 3]\n");   // valid JSON, but not an object of settings
 [$st4, $h4] = http_get("$baseCfg/");
-check('[settings file] a file that does not return a list is reported and ignored', $st4 === 200 && str_contains($h4, 'must return a list of settings'));
+check('[settings file] a file that is valid JSON but not an object of settings is reported and ignored', $st4 === 200 && str_contains($h4, 'must hold an object of settings'));
+// Hand-editing: comments and a trailing comma are fine, and the shipped example is a safe template.
+file_put_contents("$fxCfg/.gallery-config.php", $cfgGuard . "// my notes\n{\n    // \"ENABLE_TIMES\": true,\n    \"ENABLE_VIDEO\": true,   // yes please\n}\n");
+$hHand = $cfgHome();
+check('[settings file] hand-written JSON with // note lines, a trailing comment after a value and a trailing comma loads cleanly, with no settings-file notice', str_contains($hHand, 'alt="clip.mp4"') && !str_contains($hHand, '.gallery-config.php'));
+$exampleText = (string) file_get_contents(__DIR__ . '/../gallery-config.example.php');
+file_put_contents("$fxCfg/.gallery-config.php", $exampleText);
+$hExample = $cfgHome();
+check('[settings file] the shipped gallery-config.example.php, copied as it is, changes nothing and raises no settings-file notice', !str_contains($hExample, 'alt="clip.mp4"') && !str_contains($hExample, '.gallery-config.php'));
+$uncommented = str_replace('// "ENABLE_VIDEO": true,', '"ENABLE_VIDEO": true,', $exampleText, $uncommentCount);
+file_put_contents("$fxCfg/.gallery-config.php", $uncommented);
+check('[settings file] ...and removing the // from one line of it (leaving the explanation after it) turns that setting on', $uncommentCount === 1 && str_contains($uncommented, '"ENABLE_VIDEO": true,') && str_contains($cfgHome(), 'alt="clip.mp4"') && http_get("$baseCfg/.gallery-config.php")[0] === 404);
+// A "//" or a comma inside a value is data, never a comment or a stray comma.
+file_put_contents("$fxCfg/.gallery-config.php", $cfgGuard . "{\n  \"ADMIN_PASSWORD\": \"a//b, }c // not a comment\",   // a real comment\n  \"ENABLE_VIDEO\": true,\n}\n");
+check('[settings file] a password containing "//", a comma and a brace is read back exactly, and a real comment after it is still ignored', http_post("$baseCfg/?admin", ['login_password' => 'a//b, }c // not a comment'], [], false)[0] === 303 && str_contains($cfgHome(), 'alt="clip.mp4"'));
 // The admin says what comes from the file, by name only.
-file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123'];\n");
+file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123']));
 [, $cfgAdmin] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
 check('[settings file] the root Settings tab says the file is in use and names the settings it provides, never their values', str_contains($cfgAdmin, 'is in use and keeps its settings') && str_contains($cfgAdmin, 'ENABLE_VIDEO, ADMIN_PASSWORD') && !str_contains($cfgAdmin, 'cfg-pw-123'));
 unlink("$fxCfg/.gallery-config.php");
@@ -2161,8 +2178,8 @@ make_jpeg("$fxKeep/photo.jpg", 60, 60, 10, 10, 10);
 make_minimal_mp4("$fxKeep/clip.mp4", 2);
 mkdir("$fxKeep/Sub"); make_jpeg("$fxKeep/Sub/deep.jpg", 60, 60, 20, 20, 20); make_minimal_mp4("$fxKeep/Sub/deepclip.mp4", 2);
 copy(__DIR__ . '/../index.php', "$fxKeep/index.php");
-$keepOn = $cfgHead . "return ['ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'ENABLE_PHOTO_LOCATION' => true];\n";
-$keepOff = $cfgHead . "return ['ENABLE_VIDEO' => false, 'AUTO_GROUP_BY_FOLDER' => false, 'TRACK_VIEWS' => false, 'ENABLE_PHOTO_LOCATION' => false, 'ENABLE_THUMBNAIL_CACHE' => false];\n";
+$keepOn = cfg_text(['ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'ENABLE_PHOTO_LOCATION' => true]);
+$keepOff = cfg_text(['ENABLE_VIDEO' => false, 'AUTO_GROUP_BY_FOLDER' => false, 'TRACK_VIEWS' => false, 'ENABLE_PHOTO_LOCATION' => false, 'ENABLE_THUMBNAIL_CACHE' => false]);
 file_put_contents("$fxKeep/.gallery-config.php", $keepOn);
 write_data_file("$fxKeep/.gallery-items.php", ['items' => [
     'clip.mp4' => ['caption' => 'Waves at dusk', 'location' => ['lat' => 38.7, 'lng' => -9.1, 'label' => 'Lisbon'], 'locationVisibility' => 'show', 'restriction' => 'private', 'gpsChecked' => true],
@@ -2203,6 +2220,139 @@ unlink("$fxKeep/photo.jpg");
 http_get("$baseKeep/");
 $afterDelete = read_data_file("$fxKeep/.gallery-items.php");
 check('[keep data] but an entry whose file was really deleted is still cleaned up, and the video\'s entry is untouched', !isset($afterDelete['items']['photo.jpg']) && isset($afterDelete['items']['clip.mp4']) && ($afterDelete['items']['clip.mp4']['caption'] ?? '') === 'Waves at dusk');
+
+echo "== site settings: the admin screen for the constants, which only ever writes .gallery-config.php ==\n";
+
+$fxSite = new_fixture_dir('sitesettings');
+make_jpeg("$fxSite/photo.jpg", 60, 60, 10, 10, 10);
+make_minimal_mp4("$fxSite/clip.mp4", 2);
+mkdir("$fxSite/Sub"); make_jpeg("$fxSite/Sub/deep.jpg", 60, 60, 20, 20, 20);
+file_put_contents("$fxSite/notes.md", "{gallery}\n# Notes title\n\nBody text that must survive.\n");
+file_put_contents("$fxSite/Sub/readme-notes.md", "{gallery}\nA folder's own notes.\n");
+write_data_file("$fxSite/.gallery-items.php", ['items' => [
+    'photo.jpg' => ['caption' => 'Precious caption', 'location' => ['lat' => 48.8584, 'lng' => 2.2945, 'label' => 'Paris'], 'locationVisibility' => 'show', 'gpsChecked' => true],
+    'clip.mp4' => ['caption' => 'Video caption', 'restriction' => 'private'],
+], 'groups' => [], 'displayName' => 'Kept title', 'description' => 'Kept description', 'locationEnabled' => true]);
+write_data_file("$fxSite/Sub/.gallery-items.php", ['items' => ['deep.jpg' => ['caption' => 'Deep caption', 'location' => ['lat' => 1.5, 'lng' => 2.5, 'label' => '']]], 'groups' => [], 'description' => 'Sub description', 'locationEnabled' => true]);
+copy(__DIR__ . '/../index.php', "$fxSite/index.php");
+$siteCfg = "$fxSite/.gallery-config.php";
+$siteHead = $cfgGuard;
+file_put_contents($siteCfg, cfg_text(['ADMIN_PASSWORD' => 'first-admin-pw-123', 'TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true]));
+$portSite = find_free_port(); start_server($fxSite, $portSite); $baseSite = "http://127.0.0.1:$portSite";
+$siteAuth = 'Authorization: Basic ' . base64_encode('x:first-admin-pw-123');
+http_get("$baseSite/?track=photo.jpg"); http_get("$baseSite/?track=photo.jpg"); http_get("$baseSite/");
+[, $sAdmin, $sAdminHd] = http_get("$baseSite/?admin", [$siteAuth]);
+$siteHdrs = [$siteAuth, 'Cookie: ' . extract_cookie_header($sAdminHd)];
+$siteForm = function ($page) { foreach (html_post_forms($page) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; };
+$sForm = $siteForm($sAdmin);
+check('[site settings] the admin has a "Site settings" entry in the sidebar and a form with every managed setting', str_contains($sAdmin, 'data-tab="site" class="side-link"') && $sForm !== '' && str_contains($sForm, 'name="set_ENABLE_VIDEO"') && str_contains($sForm, 'name="set_AUTO_GROUP_BY_FOLDER"') && str_contains($sForm, 'name="set_PHOTO_SORT_ORDER"') && str_contains($sForm, 'name="set_MAP_CLUSTER_RADIUS_MILES"') && str_contains($sForm, 'name="pw_admin"'));
+check('[site settings] ...it shows what comes from the settings file, never the password itself, and the file-only settings read-only', str_contains($sAdmin, 'your setting') && !str_contains($sAdmin, 'first-admin-pw-123') && str_contains($sAdmin, 'EXTRA_FOLDERS') && !str_contains($sForm, 'name="set_EXTRA_FOLDERS"') && !str_contains($sForm, 'name="set_NGINX_ACCEL_REDIRECT_PREFIX"'));
+check('[site settings] each setting says what the default is', str_contains($sForm, 'default: off') && str_contains($sForm, 'default: on'));
+// Snapshot everything that is NOT the settings file.
+$siteSnap = function () use ($fxSite) {
+    $snap = [];
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($fxSite, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $f) {
+        $rel = substr($f->getPathname(), strlen($fxSite) + 1);
+        if ($rel === '.gallery-config.php' || $rel === 'index.php' || str_contains($rel, '.gallery-cache/') || str_contains($rel, '.tmp.')) continue;
+        $snap[$rel] = md5_file($f->getPathname());
+    }
+    ksort($snap); return $snap;
+};
+$snapBefore = $siteSnap();
+// A real save: turn video, folders and the map on, thumbnails off, change two enums and the number.
+[, $r] = user_submit("$baseSite/?admin", $sAdmin, 'value="save_site_settings"', [
+    'set_ENABLE_VIDEO' => '1', 'set_AUTO_GROUP_BY_FOLDER' => '1', 'set_ENABLE_THUMBNAIL_CACHE' => '0', 'set_FOLDER_DISPLAY_MODE' => 'inline',
+    'set_PHOTO_SORT_ORDER' => 'mtime', 'set_MAP_CLUSTER_RADIUS_MILES' => '25',
+], $siteHdrs);
+check('[site settings] a save redirects back and then shows a confirmation that says nothing else was touched', str_contains($r, 'Settings saved') && str_contains($r, 'were not touched') && str_contains($r, 'class="flash ok"'));
+$snapAfterSave = $siteSnap();   // before any public page is viewed (a view is counted, legitimately)
+$written = (string) file_get_contents($siteCfg);
+$loadedCfg = cfg_read($siteCfg);
+$expectedCfg = ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'ENABLE_VIDEO' => true, 'FOLDER_DISPLAY_MODE' => 'inline', 'MAP_CLUSTER_RADIUS_MILES' => 25, 'PHOTO_SORT_ORDER' => 'mtime', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true];
+ksort($loadedCfg);
+check('[site settings] the settings file is the 404 guard plus JSON holding exactly the intended settings, keeping the ones already there', str_starts_with($written, $siteHead) && $loadedCfg === $expectedCfg);
+check('[site settings] the file is private to the web server user (not world-readable), since it holds the passwords', (fileperms($siteCfg) & 0o077) === 0);
+$siteHome = http_get("$baseSite/")[1];
+check('[site settings] the new settings take effect immediately: the folder is shown and the video is a gallery item', str_contains($siteHome, 'id="group-sub"') || str_contains($siteHome, 'Sub/deep.jpg'));
+check('[site settings] ...and a direct request for the settings file still answers 404', http_get("$baseSite/.gallery-config.php")[0] === 404);
+check('[site settings] NOTHING ELSE changed: every caption, location, hide flag, description, notes file, photo and the stats store is byte-for-byte what it was', $snapAfterSave === $snapBefore && count($snapBefore) >= 8);
+// Setting something back to its default removes it from the file.
+[, $sAdmin2] = http_get("$baseSite/?admin", $siteHdrs);
+$snapBaseline2 = $siteSnap();
+user_submit("$baseSite/?admin", $sAdmin2, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '0', 'set_AUTO_GROUP_BY_FOLDER' => '0', 'set_ENABLE_THUMBNAIL_CACHE' => '1', 'set_FOLDER_DISPLAY_MODE' => 'overview', 'set_PHOTO_SORT_ORDER' => 'filename', 'set_MAP_CLUSTER_RADIUS_MILES' => '50'], $siteHdrs);
+$backCfg = cfg_read($siteCfg); ksort($backCfg);
+check('[site settings] putting settings back to their defaults removes them from the file, so later default improvements still reach you', $backCfg == ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true]);
+check('[site settings] ...and, again, no data file changed (compared with a baseline taken after the public page was viewed)', $siteSnap() === $snapBaseline2);
+// Settings the screen doesn't manage, and hand-added keys, are kept.
+file_put_contents($siteCfg, cfg_text(['ADMIN_PASSWORD' => 'first-admin-pw-123', 'EXTRA_FOLDERS' => ['Old' => '/tmp/somewhere'], 'NGINX_ACCEL_REDIRECT_PREFIX' => '/kb', 'MY_OWN_NOTE' => 'keep me']));
+[, $sAdmin3] = http_get("$baseSite/?admin", $siteHdrs);
+user_submit("$baseSite/?admin", $sAdmin3, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '1'], $siteHdrs);
+$keptCfg = cfg_read($siteCfg);
+check('[site settings] file-only settings (EXTRA_FOLDERS, the nginx prefix) and any key it doesn\'t manage survive a save untouched', ($keptCfg['EXTRA_FOLDERS'] ?? null) === ['Old' => '/tmp/somewhere'] && ($keptCfg['NGINX_ACCEL_REDIRECT_PREFIX'] ?? null) === '/kb' && ($keptCfg['MY_OWN_NOTE'] ?? null) === 'keep me' && ($keptCfg['ENABLE_VIDEO'] ?? null) === true);
+file_put_contents($siteCfg, cfg_text(['ADMIN_PASSWORD' => 'first-admin-pw-123']));
+// Bad input: nothing is written, the reasons are given.
+[, $sAdmin4] = http_get("$baseSite/?admin", $siteHdrs); $cfgBytes = (string) file_get_contents($siteCfg);
+[, $rBad] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['set_PHOTO_SORT_ORDER' => 'random', 'set_MAP_CLUSTER_RADIUS_MILES' => '-5', 'set_ENABLE_VIDEO' => '1'], $siteHdrs);
+check('[site settings] a value that isn\'t one of the choices, or a number out of range, saves nothing and says why', str_contains($rBad, 'Nothing was saved') && str_contains($rBad, 'Photo order') && str_contains($rBad, 'Map pin grouping') && (string) file_get_contents($siteCfg) === $cfgBytes);
+// Passwords.
+[, $rMis] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => 'a-new-long-password-1', 'pw_admin2' => 'different-long-password-2'], $siteHdrs);
+[, $rShort] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => 'short', 'pw_admin2' => 'short'], $siteHdrs);
+check('[site settings] a new admin password that doesn\'t match, or is too short, is refused and the old one stays', str_contains($rMis, "don't match") || str_contains($rMis, 'don&#039;t match'));
+check('[site settings] ...too short is refused with the reason', str_contains($rShort, 'at least 12 characters') && (string) file_get_contents($siteCfg) === $cfgBytes);
+$nasty = "p'a\\ss\"w \$x<?php echo 'X'; system('id'); ?>\n";
+$nasty = str_replace("\n", '', $nasty);
+[, $rPw] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => $nasty, 'pw_admin2' => $nasty], $siteHdrs);
+check('[site settings] changing the admin password works, and you stay signed in (the session still opens the admin, no password asked)', str_contains($rPw, 'admin password changed') && str_contains(http_get("$baseSite/?admin", [$siteHdrs[1]])[1], 'Gallery Admin'));
+$pwCfg = cfg_read($siteCfg);
+check('[site settings] a password full of quotes, backslashes, $ and PHP tags is stored as plain data and reads back exactly', ($pwCfg['ADMIN_PASSWORD'] ?? null) === $nasty);
+check('[site settings] the new password logs in through the form (a redirect into the admin); the old one no longer does (the form again)', http_post("$baseSite/?admin", ['login_password' => $nasty], [], false)[0] === 303 && http_post("$baseSite/?admin", ['login_password' => 'first-admin-pw-123'], [], false)[0] === 200);
+// Hostile text can't be injected through any value: only typed, allow-listed values are ever written.
+$cfgFileText = (string) file_get_contents($siteCfg);
+$cfgAfterGuard = substr($cfgFileText, strpos($cfgFileText, "\n") + 1);
+check('[site settings] the written file is the 404 guard plus plain JSON data, never code: one PHP tag in the whole file even though the password contained "system(\'id\')" and a PHP tag, and the rest decodes as JSON', substr_count($cfgFileText, '<?php') === 1 && str_starts_with($cfgFileText, $cfgGuard) && is_array(json_decode($cfgAfterGuard, true)) && (json_decode($cfgAfterGuard, true)['ADMIN_PASSWORD'] ?? null) === $nasty);
+// A fresh login for the rest (the password changed).
+$siteAuth2 = 'Authorization: Basic ' . base64_encode('x:' . $nasty);
+[, $sAdmin5, $sAdmin5Hd] = http_get("$baseSite/?admin", [$siteAuth2]);
+$siteHdrs2 = [$siteAuth2, 'Cookie: ' . extract_cookie_header($sAdmin5Hd)];
+// Private-view password and removing it.
+user_submit("$baseSite/?admin", $sAdmin5, 'value="save_site_settings"', ['pw_private' => 'viewme', 'pw_private2' => 'viewme'], $siteHdrs2);
+$pv = cfg_read($siteCfg);
+check('[site settings] the private-view password can be set from here', ($pv['PRIVATE_VIEW_PASSWORD'] ?? null) === 'viewme');
+[, $sAdmin6] = http_get("$baseSite/?admin", $siteHdrs2);
+check('[site settings] ...and the screen never shows it back, offering "Remove it" instead', !str_contains($sAdmin6, 'value="viewme"') && str_contains($sAdmin6, 'name="pw_private_remove"'));
+user_submit("$baseSite/?admin", $sAdmin6, 'value="save_site_settings"', ['pw_private_remove' => '1'], $siteHdrs2);
+check('[site settings] removing it turns private view off', !isset(cfg_read($siteCfg)['PRIVATE_VIEW_PASSWORD']));
+// A concurrent change to the file is detected, not overwritten.
+[, $sAdmin7] = http_get("$baseSite/?admin", $siteHdrs2);
+file_put_contents($siteCfg, (string) file_get_contents($siteCfg) . "// edited by hand meanwhile\n");   // a full-line // note is allowed
+$handEdited = (string) file_get_contents($siteCfg);
+[, $rStale] = user_submit("$baseSite/?admin", $sAdmin7, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '1'], $siteHdrs2);
+check('[site settings] if the file was changed since the page loaded, the save is refused and the file left as it is', str_contains($rStale, 'was changed somewhere else') && (string) file_get_contents($siteCfg) === $handEdited);
+// A settings file the screen can't understand is never overwritten.
+file_put_contents($siteCfg, $siteHead . "{\"ADMIN_PASSWORD\": \"x\",\n");   // not valid JSON
+[, $sBroken] = http_get("$baseSite/?admin", [$siteAuth2]);   // site falls back to the defaults, so use Basic with the... default (no admin)
+check('[site settings] (setup) a syntax error in the file means the site runs on defaults', http_get("$baseSite/")[0] === 200);
+// CSRF.
+file_put_contents($siteCfg, cfg_text(['ADMIN_PASSWORD' => $nasty]));
+[, $sAdmin8] = http_get("$baseSite/?admin", $siteHdrs2);
+$noCsrf = []; foreach (html_post_forms($sAdmin8) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) { $noCsrf = form_default_fields($f['html']); }
+$noCsrf['csrf_token'] = 'wrong'; $noCsrf['set_ENABLE_VIDEO'] = '1'; $beforeCsrf = (string) file_get_contents($siteCfg);
+[, $rCsrf] = http_post("$baseSite/?admin", $noCsrf, $siteHdrs2);
+check('[site settings] a save without a valid CSRF token is refused and writes nothing', str_contains($rCsrf, 'session expired') && (string) file_get_contents($siteCfg) === $beforeCsrf);
+// An unwritable gallery folder: say so, and hand over the exact text.
+$fxSiteRo = new_fixture_dir('sitesettings-ro');
+make_jpeg("$fxSiteRo/a.jpg", 60, 60, 1, 2, 3);
+copy(__DIR__ . '/../index.php', "$fxSiteRo/index.php");
+file_put_contents("$fxSiteRo/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ro-admin-pw-1234']));
+$portSiteRo = find_free_port(); start_server($fxSiteRo, $portSiteRo);
+$roAuth = 'Authorization: Basic ' . base64_encode('x:ro-admin-pw-1234');
+[, $roAdmin, $roHd] = http_get("http://127.0.0.1:$portSiteRo/?admin", [$roAuth]);
+chmod($fxSiteRo, 0555); chmod("$fxSiteRo/.gallery-config.php", 0644);
+$roBytes = (string) file_get_contents("$fxSiteRo/.gallery-config.php");
+[, $roRes] = user_submit("http://127.0.0.1:$portSiteRo/?admin", $roAdmin, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '1'], [$roAuth, 'Cookie: ' . extract_cookie_header($roHd)]);
+chmod($fxSiteRo, 0775);
+check('[site settings] when the folder can\'t be written it says so, saves nothing, and shows the exact file to create by hand', str_contains($roRes, 'Nothing was saved') && str_contains($roRes, '&quot;ENABLE_VIDEO&quot;: true') && (string) file_get_contents("$fxSiteRo/.gallery-config.php") === $roBytes && !glob("$fxSiteRo/.gallery-config.php.tmp.*"));
 
 echo "== root identity: the gallery is configured like a folder ==\n";
 

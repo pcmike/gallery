@@ -321,25 +321,48 @@ define('MAP_CLUSTER_RADIUS_MILES', 50);
 
 ### Keeping your settings across updates
 
-Updating the gallery means replacing `index.php` with a newer copy, and anything you edited into the old one is gone with it. To keep your settings, put them in a **settings file** instead: a file named `.gallery-config.php` next to `index.php` (a ready-to-edit copy, `gallery-config.example.php`, is in this repository). It lists only the settings you want to change from the defaults:
+Updating the gallery means replacing `index.php` with a newer copy, and anything you edited into the old one is gone with it. To keep your settings, they live in a **settings file** instead: `.gallery-config.php`, next to `index.php`. It lists only the settings you've changed from the defaults.
 
-```php
-<?php if (!defined('GALLERY_CONFIG_LOADING')) { http_response_code(404); exit; }
-return [
-    'ENABLE_VIDEO'         => true,
-    'AUTO_GROUP_BY_FOLDER' => true,
-    'ADMIN_PASSWORD'       => 'a-long-random-string',
-];
+**The easy way is the admin:** open **Site settings** (in the left sidebar) and flip the switches. See [Site settings in the admin](#site-settings-in-the-admin) below. It creates and updates the file for you.
+
+You can also write it by hand. It's the same kind of file as the gallery's other data files: a one-line guard (so a direct request answers 404) followed by plain JSON. Nothing in it is ever run as code. A ready-to-edit copy, `gallery-config.example.php`, is in this repository.
+
+```
+<?php http_response_code(404); exit; ?>
+{
+    "ENABLE_VIDEO": true,
+    "AUTO_GROUP_BY_FOLDER": true,
+    "ADMIN_PASSWORD": "a-long-random-string"   // a note to yourself
+}
 ```
 
-- **It overrides the defaults in `index.php`, and everything it doesn't mention keeps its default.** So a newer `index.php` can improve a default, and you get that improvement for everything you haven't pinned.
+- **It overrides the defaults in `index.php`, and everything it doesn't mention keeps its default.** So a newer `index.php` can improve a default and you get that improvement for everything you haven't pinned.
 - **It stays when you update.** Replace `index.php` as often as you like; the file isn't touched. This is tested by swapping in a fresh copy.
-- **Mistakes never break the site.** A misspelt name, a value of the wrong kind (`'yes'` for a true/false setting), a value that isn't one of the allowed choices, a file that returns the wrong thing, even a syntax error: each is ignored, and the setup-notices banner says which, so you notice. The gallery carries on with the defaults.
-- **A direct request for it answers 404** (the first line does that), and because its name starts with `.gallery-` the [lock-down rules for the data files](#locking-down-the-files-themselves) cover it too. It holds `ADMIN_PASSWORD` in plain text, as `index.php` always did, so keep it out of git (this repository's `.gitignore` lists it, and [so should yours](#keeping-runtime-data-out-of-git)).
+- **Hand-editing is forgiving.** Text after `//` on a line is ignored, so you can leave notes (a `//` inside a password or path is just text), and a comma after the last entry is fine. Names are exactly as in the [options table](#what-affects-what) (`ENABLE_VIDEO`, `TRACK_VIEWS`, …); `true` and `false` have no quotes, text does.
+- **Mistakes never break the site.** A misspelt name, a value of the wrong kind (`"yes"` for a true/false setting), a value that isn't one of the allowed choices, a file that isn't valid JSON: each is ignored, and the setup-notices banner says which, so you notice. The gallery carries on with the defaults.
+- **It is private.** A direct request for it answers 404, and because its name starts with `.gallery-` the [lock-down rules for the data files](#locking-down-the-files-themselves) cover it too. It holds `ADMIN_PASSWORD` in plain text, as `index.php` always did, so keep it out of git (this repository's `.gitignore` lists it, and [so should yours](#keeping-runtime-data-out-of-git)).
 - **`GALLERY_VERSION` and the cookie name can't be set from it**, since they belong to the code.
-- **The admin's root Settings tab says whether the file is in use and which settings come from it** (names only, never values).
 
-A setting set in the file beats the same setting edited into `index.php`.
+A setting in the file beats the same setting edited into `index.php`.
+
+### Site settings in the admin
+
+The sidebar's **Site settings** shows every setting that is safe to change from a web page, as switches and choices, each with a one-line explanation and its default:
+
+- **What is shown:** subfolders, folder style, videos, grouping by filename, photo order.
+- **Thumbnails and counting:** thumbnails, counting views, showing counts to visitors.
+- **Locations and the map:** allowing photo locations, the trip map, how close photos must be to share a pin.
+- **Passwords:** change the admin password (typed twice, at least 12 characters; you stay signed in) and set or remove the private-view password. Neither password is ever shown back to you.
+
+How it behaves:
+
+- **It only ever writes `.gallery-config.php`.** Your photos, captions, locations, hide flags, notes, folder settings and view counts are never read or changed by it, and switching a setting *off* only hides things: the data stays and comes back when you switch it on again. (This is tested by comparing every file in the gallery before and after a save, and by switching settings off and on around real captions, GPS data and view counts. The save itself was also run end to end in a real browser and on nginx 1.26 and Apache 2.4 with PHP-FPM, where the page after saving shows the new value immediately.)
+- **Only settings that differ from the defaults are stored**, so a better default in a later release still reaches you for everything you haven't changed. Put a setting back to its default and it leaves the file.
+- **Switching on something that publishes content or contacts a third party asks first**, naming it: subfolders, videos, photo locations, the map.
+- **The server-level settings stay in the file only:** `EXTRA_FOLDERS` (paths elsewhere on the server) and `NGINX_ACCEL_REDIRECT_PREFIX` (needs matching nginx config). The screen lists them read-only, and a save keeps them, and any other key you added by hand, exactly as they were.
+- **It won't overwrite what it can't read.** If the settings file isn't valid, saving is refused until you fix or delete it. If the file was changed since the page loaded (another tab, or by hand), the save is refused rather than overwriting that change. The new file is written to a temporary name, read back to check it holds exactly what was intended, and only then moved into place.
+- **If the gallery's folder isn't writable** it says so, changes nothing, and shows you the exact text to put in `.gallery-config.php` yourself.
+- **Saving rewrites the file**, so any `//` notes you added by hand are not kept.
 
 ## Directive syntax
 
@@ -448,6 +471,7 @@ Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours al
 - **Two tabs, one record:** every item and folder form remembers what it loaded, and a save whose record was changed elsewhere in the meantime (another tab or device) is refused with an explanation instead of silently overwriting. Editing a *different* photo in the same folder never conflicts
 - **Export as JSON** for the folder or the whole tree — the only backup of the captions and settings you typed, which a plain save can't undo
 - the red **Hidden** entry, when anything is hidden: a plain explanation that hiding isn't a lock, then every hidden folder and photo across the whole tree, each linking straight to where you can change it
+- **Site settings** (sidebar): the gallery-wide switches and the two passwords, saved in `.gallery-config.php` so they survive updates (see [Site settings in the admin](#site-settings-in-the-admin))
 
 How it's locked down: the password is compared with `hash_equals()`; the page **refuses to load over plain HTTP** (except on `localhost`/`127.0.0.1`) and explains why, since the password would otherwise travel in the clear; logging in starts a fresh session (a session id issued earlier can never be a logged-in one), which lasts up to 4 hours and ends when you press **Log out** (top right of the admin) — that also clears the Private view cookie, and changing `ADMIN_PASSWORD` signs every existing session out; a CSRF token protects every save; and a failed-login throttle (5 *wrong* passwords from one address within 15 minutes imposes a 60-second delay before that address's next attempt is even checked; just opening the form doesn't count). If you were signed out and submit a change, it isn't saved and the form tells you why. A script can still send an HTTP `Authorization: Basic` header (any username, the password as the password) instead of using the form. The admin works at a phone's width.
 

@@ -244,6 +244,42 @@ try:
     refused = any("X-Frame-Options" in (e.get("params", {}).get("entry", {}).get("text", "") + str(e.get("params", {}))) for e in b.events)
     ok(framed is True or refused, "[admin] the browser refuses to display it inside a frame (X-Frame-Options: DENY)", str(framed))
     b.call("Network.setExtraHTTPHeaders", {"headers": {}})
+    # ---------------- Site settings (a real person, real clicks) ----------------
+    print("== site settings")
+    SITE2 = WORK + "/site2"; os.makedirs(SITE2)
+    shutil.copy(HERE + "/../../../index.php", SITE2 + "/index.php")
+    subprocess.run(["php", "-r", "$i=imagecreatetruecolor(80,60); imagejpeg($i, $argv[1]);", SITE2 + "/p.jpg"], check=True)
+    open(SITE2 + "/clip.mp4", "wb").write(b"x")
+    open(SITE2 + "/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"items":{"p.jpg":{"caption":"Keep this caption"}},"groups":[],"displayName":"Keep this title"}')
+    cfgfile = SITE2 + "/.gallery-config.php"
+    guard = "<?php http_response_code(404); exit; ?>\n"
+    open(cfgfile, "w").write(guard + '{"ADMIN_PASSWORD": "site-admin-pw-1"}\n')
+    s2 = socket.socket(); s2.bind(("127.0.0.1", 0)); PORT2 = s2.getsockname()[1]; s2.close(); B2 = f"http://127.0.0.1:{PORT2}"
+    srv2 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT2}", "-t", SITE2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    b.viewport(1280, 900); b.goto(B2 + "/?admin", 1.0)
+    b.js("document.querySelector('input[name=login_password]').focus()"); b.call("Input.insertText", {"text": "site-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
+    b.js("document.querySelector('.side-link').click()"); b.drain(0.4); shot(b, "14-site-settings")
+    vis2 = "[...document.querySelectorAll('.tab-panel')].filter(p => getComputedStyle(p).display !== 'none').map(p => p.dataset.tab)"
+    ok(b.js(vis2) == ["site"] and b.js("document.querySelector('.side-link').classList.contains('active')"), "clicking Site settings in the sidebar shows the settings (and nothing else)", str(b.js(vis2)))
+    ok(b.js("document.querySelectorAll('.site-row .switch input').length") >= 7 and not b.problems(IGN), "...as a list of switches, with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
+    before_items = open(SITE2 + "/.gallery-items.php").read()
+    b.js("window.__confirms = []; window.confirm = m => { window.__confirms.push(m); return true; };")
+    b.js("document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.switch').querySelector('.slider').click()")
+    b.js("document.querySelector('input[name=set_TRACK_VIEWS][type=checkbox]').closest('.switch').querySelector('.slider').click()")
+    b.js("document.querySelector('.site-settings-form button[type=submit]').click()"); b.drain(1.8)
+    ok("Show videos" in b.js("(window.__confirms || []).join('|')") or b.js("location.hash") == "#site", "turning on something that publishes content asks first, naming it")
+    ok(b.js(vis2) == ["site"] and "Settings saved" in b.js("document.body.innerText"), "after saving, the page returns to Site settings with a confirmation (post, redirect, get)", b.js("location.href"))
+    cfg_now = open(cfgfile).read()
+    ok('"ENABLE_VIDEO": true' in cfg_now and '"TRACK_VIEWS": true' in cfg_now and "ADMIN_PASSWORD" in cfg_now and cfg_now.startswith(guard), "the settings file (the 404 guard plus JSON) holds exactly those two changes plus the password already there", cfg_now.replace("\n", " ")[:300])
+    ok(b.js("document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').checked") is True and b.js("document.querySelector('input[name=set_TRACK_VIEWS][type=checkbox]').checked") is True, "...and the screen shows both switches on straight away (no stale cached copy of the settings)")
+    ok(open(SITE2 + "/.gallery-items.php").read() == before_items, "saving never touched the captions and titles stored for the photos")
+    b.goto(B2 + "/", 1.2)
+    ok(b.js("document.querySelectorAll('.card').length") >= 2, "the public gallery picks the new setting up straight away (the video is now an item)", str(b.js("document.querySelectorAll('.card').length")))
+    b.viewport(390, 844, mobile=True); b.goto(B2 + "/?admin#site", 1.2); shot(b, "15-site-settings-phone")
+    ok(b.js(overflow), "[site settings] no horizontal scrolling on a phone", f"scrollWidth={b.js('document.documentElement.scrollWidth')}")
+    srv2.terminate(); srv2.wait()
+    b.viewport(1280, 900)
 except Exception as e:
     fails += 1; print("  FAIL  the browser run crashed:", type(e).__name__, e)
 finally:

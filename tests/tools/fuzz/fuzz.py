@@ -85,8 +85,8 @@ def csrf():
 tok=csrf()
 weird=['', 'x', 'a'*3000, '<?php echo 1; ?>', "'; DROP TABLE x;--", '../../etc/passwd', '0','-1','1e999','NaN','99999999999999999999', '😀', "\x00", "line1\nline2\r\n", ' ', '{"a":1}']
 arrs=[['a','b'],{'k':'v'}]
-actions=['save_item','save_group_label','save_folder_identity','toggle_location_enabled','toggle_folder_restriction','set_cover','save_notes','delete_notes','add_gallery_marker','export_items','export_tree','nonexistent','']
-fields=['file','caption','web','lat','lng','loc_label','loc_visibility','restriction','group_key','display_name','description','dates','sort_order','enabled','hidden','cover','md_file','new_name','content','confirm','loaded_hash']
+actions=['save_item','save_group_label','save_folder_identity','toggle_location_enabled','toggle_folder_restriction','set_cover','save_notes','delete_notes','add_gallery_marker','export_items','export_tree','save_site_settings','save_site_settings','nonexistent','']
+fields=['file','caption','web','lat','lng','loc_label','loc_visibility','restriction','group_key','display_name','description','dates','sort_order','enabled','hidden','cover','md_file','new_name','content','confirm','loaded_hash','set_ENABLE_VIDEO','set_AUTO_GROUP_BY_FOLDER','set_TRACK_VIEWS','set_PHOTO_SORT_ORDER','set_FOLDER_DISPLAY_MODE','set_MAP_CLUSTER_RADIUS_MILES','pw_admin','pw_admin2','pw_private','pw_private2','pw_private_remove','config_hash']
 random.seed(7)
 import atexit; atexit.register(lambda: (srv.poll() is None) and srv.terminate())
 scopes=['','&folder=Europe','&folder=Asia','&folder='+q('Europe/France/Paris',safe=''),'&folder=nope']
@@ -96,6 +96,12 @@ for i in range(900):
         data[f]=random.choice(weird) if random.random()>0.2 else random.choice(arrs)[0:2] if False else random.choice(weird)
     if random.random()<0.15:
         data[random.choice(fields)+'[]']=['x','y']
+    if act=='save_site_settings' and random.random()<0.6:
+        # a correct fingerprint of the settings file some of the time, so the real save path (not just "stale") is exercised
+        import hashlib
+        cp=SITE+'/.gallery-config.php'; data['config_hash']=hashlib.md5(open(cp,'rb').read() if os.path.exists(cp) else b'').hexdigest()
+        for k,v in (('set_ENABLE_VIDEO',random.choice(['0','1','x',''])),('set_PHOTO_SORT_ORDER',random.choice(['filename','mtime','random'])),('set_MAP_CLUSTER_RADIUS_MILES',random.choice(['50','0','1e9','abc','-3']))):
+            if random.random()<0.7: data[k]=v
     if random.random()<0.5 and act in('save_item','set_cover'): data['file']=random.choice(['loose1.jpg','loose2.jpg','eiffel.jpg','p.jpg','geo1.jpg'])
     r=random.choice(scopes)
     # mutations to the data files must not poison later requests:

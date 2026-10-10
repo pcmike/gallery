@@ -65,44 +65,116 @@ define('GALLERY_VERSION', '2.0.1');
 
 /**
  * The optional settings file. Everything below is configured by the
- * define() lines in this file, and those lines are the defaults. If a file
- * named .gallery-config.php sits next to this script, the values it returns
- * override them — so replacing this file with a newer version keeps your
- * settings, instead of resetting them to the defaults. The file is plain PHP:
+ * gallery_setting() lines in this file, and the values in them are the
+ * defaults. If a file named .gallery-config.php sits next to this script,
+ * the values it holds override them — so replacing this file with a newer
+ * version keeps your settings, instead of resetting them to the defaults.
+ * Like the gallery's other data files it is a one-line PHP guard (so a
+ * direct request answers 404) followed by plain JSON, never executed or
+ * compiled, so it can't be a way to run code and a stale cache can't make a
+ * saved setting appear not to have saved:
  *
- *   <?php if (!defined('GALLERY_CONFIG_LOADING')) { http_response_code(404); exit; }
- *   return ['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => '...'];
+ *   <?php http_response_code(404); exit; ?>
+ *   {"ENABLE_VIDEO": true, "ADMIN_PASSWORD": "..."}
  *
- * (the first line makes a direct request for it answer 404). Only the
+ * Lines (or the end of a line) starting with // are ignored, for notes to
+ * yourself, and a comma after the last entry is forgiven. Only the
  * settings named in this file are honored, each must be the same kind of
  * value as its default (true/false, text, a number, a list), and anything
  * else — a typo'd name, a wrong kind of value, a file that can't be read or
- * has a syntax error — is ignored with a note in the setup-notices banner,
+ * isn't valid JSON — is ignored with a note in the setup-notices banner,
  * never a broken site. Without the file nothing changes at all.
  */
-function gallery_setting($name, $default, $allowed = null) {
-    static $loaded = false, $cfg = [], $asked = [];
-    if (!$loaded) {
-        $loaded = true;
-        $path = __DIR__ . '/.gallery-config.php';
-        if (is_file($path)) {
-            if (!is_readable($path)) {
-                $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php exists but can't be read by the web server — using the settings in index.php.";
-            } else {
-                try {
-                    if (!defined('GALLERY_CONFIG_LOADING')) define('GALLERY_CONFIG_LOADING', true);
-                    $result = (static function ($file) { return include $file; })($path);
-                    if (is_array($result)) {
-                        $cfg = $result;
-                    } else {
-                        $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php must return a list of settings (return ['NAME' => value];) — using the settings in index.php.";
-                    }
-                } catch (Throwable $e) {
-                    $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php couldn't be loaded (" . get_class($e) . ") — using the settings in index.php.";
-                }
-            }
+/** Where the settings file lives, and what loading it found. Loaded once,
+ *  the first time anything asks for a setting (the define() lines below). */
+function gallery_config_path() {
+    return __DIR__ . '/.gallery-config.php';
+}
+
+/** Removes // comments (whole-line or after a value) and a comma left after
+ *  the last entry, from hand-edited settings text. It tracks whether it is
+ *  inside a JSON string, so a "//" or a "," in a password or a path is never
+ *  mistaken for either. */
+function gallery_config_clean($raw) {
+    $n = strlen($raw);
+    // 1. comments
+    $out = ''; $inStr = false;
+    for ($i = 0; $i < $n; $i++) {
+        $c = $raw[$i];
+        if ($inStr) {
+            $out .= $c;
+            if ($c === '\\' && $i + 1 < $n) $out .= $raw[++$i];
+            elseif ($c === '"') $inStr = false;
+            continue;
         }
+        if ($c === '"') { $inStr = true; $out .= $c; continue; }
+        if ($c === '/' && $i + 1 < $n && $raw[$i + 1] === '/') {
+            while ($i < $n && $raw[$i] !== "\n") $i++;
+            $out .= "\n";
+            continue;
+        }
+        $out .= $c;
     }
+    // 2. a comma directly before a closing } or ]
+    $raw = $out; $n = strlen($raw); $out = ''; $inStr = false;
+    for ($i = 0; $i < $n; $i++) {
+        $c = $raw[$i];
+        if ($inStr) {
+            $out .= $c;
+            if ($c === '\\' && $i + 1 < $n) $out .= $raw[++$i];
+            elseif ($c === '"') $inStr = false;
+            continue;
+        }
+        if ($c === '"') { $inStr = true; $out .= $c; continue; }
+        if ($c === ',') {
+            $j = $i + 1;
+            while ($j < $n && ctype_space($raw[$j])) $j++;
+            if ($j < $n && ($raw[$j] === '}' || $raw[$j] === ']')) continue;
+        }
+        $out .= $c;
+    }
+    return $out;
+}
+
+/** Reads the settings file's text into settings. Returns [status, settings]
+ *  where status is 'ok', 'broken' (not valid JSON) or 'invalid' (valid, but
+ *  not an object of settings). */
+function gallery_config_parse($raw) {
+    $raw = gallery_config_clean(data_file_strip_guard($raw));
+    if (trim($raw) === '') return ['ok', []];
+    $decoded = json_decode($raw, true);
+    if (json_last_error() !== JSON_ERROR_NONE) return ['broken', []];
+    if (!is_array($decoded) || ($decoded !== [] && array_is_list($decoded))) return ['invalid', []];
+    return ['ok', $decoded];
+}
+
+function gallery_config_load() {
+    static $state = null;
+    if ($state !== null) return $state;
+    $state = ['status' => 'absent', 'cfg' => []];
+    $path = gallery_config_path();
+    if (!is_file($path)) return $state;
+    $raw = is_readable($path) ? @file_get_contents($path) : false;
+    if ($raw === false) {
+        $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php exists but can't be read by the web server — using the settings in index.php.";
+        $state['status'] = 'unreadable';
+        return $state;
+    }
+    [$status, $cfg] = gallery_config_parse($raw);
+    if ($status === 'ok') {
+        $state = ['status' => 'ok', 'cfg' => $cfg];
+    } else {
+        $GLOBALS['__gallery_config_problems'][] = $status === 'broken'
+            ? ".gallery-config.php couldn't be read (it isn't valid JSON — a stray comma or a missing quote?) — using the settings in index.php."
+            : ".gallery-config.php must hold an object of settings, like {\"NAME\": value} — using the settings in index.php.";
+        $state['status'] = $status;
+    }
+    return $state;
+}
+
+function gallery_setting($name, $default, $allowed = null) {
+    static $asked = [];
+    $cfg = gallery_config_load()['cfg'];
     if ($name === null) {
         // End of the settings block: whatever the file names that nothing asked for is a typo.
         foreach (array_keys($cfg) as $k) {
@@ -111,6 +183,7 @@ function gallery_setting($name, $default, $allowed = null) {
         return null;
     }
     $asked[$name] = true;
+    $GLOBALS['__gallery_defaults'][$name] = $default;   // what the admin's Site settings shows as "default"
     if (!array_key_exists($name, $cfg)) return $default;
     $v = $cfg[$name];
     $ok = is_bool($default) ? is_bool($v)
@@ -3054,6 +3127,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'logout'];
     }
 
+    if ($action === 'save_site_settings') {
+        return site_settings_save();
+    }
+
     if ($action === 'save_item') {
         $bare = basename((string) ($_POST['file'] ?? ''));
         $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
@@ -3445,6 +3522,243 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath) {
 }
 
 /**
+ * The settings the admin's "Site settings" screen can change: one table that
+ * drives both the form and the validation, so nothing outside it can ever be
+ * written. Passwords are handled separately (never shown, confirmed), and
+ * EXTRA_FOLDERS / NGINX_ACCEL_REDIRECT_PREFIX are deliberately file-only:
+ * the first points the gallery at paths elsewhere on the server and the
+ * second needs matching web-server config, so neither belongs behind a web
+ * form. The screen only ever writes .gallery-config.php.
+ */
+function gallery_setting_definitions() {
+    return [
+        ['title' => 'What is shown', 'items' => [
+            ['name' => 'AUTO_GROUP_BY_FOLDER', 'type' => 'bool', 'label' => 'Show subfolders',
+             'help' => 'Each subfolder becomes its own group, to any depth (a trip with Paris/, Lisbon/ …). Off by default because this script is often dropped into a folder that already holds other things.',
+             'risk' => 'shows every photo in every subfolder to visitors'],
+            ['name' => 'FOLDER_DISPLAY_MODE', 'type' => 'enum', 'label' => 'Folder style',
+             'options' => ['overview' => 'Cover cards (click to open)', 'inline' => 'Inline (all on one page)'],
+             'help' => 'Only used when subfolders are shown.'],
+            ['name' => 'ENABLE_VIDEO', 'type' => 'bool', 'label' => 'Show videos (.mov, .mp4)',
+             'help' => 'Videos are served exactly as recorded, with no conversion, so big clips use real bandwidth and some phone formats don\'t play in every browser.',
+             'risk' => 'shows every .mov and .mp4 in the gallery folders to visitors'],
+            ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
+             'help' => 'alpha_01.jpg and alpha_02.jpg become one group, "alpha". Handy for for-sale listings; on a camera roll it can merge unrelated photos. Folders are better for trips.'],
+            ['name' => 'PHOTO_SORT_ORDER', 'type' => 'enum', 'label' => 'Photo order',
+             'options' => ['filename' => 'By filename', 'mtime' => 'By date modified (oldest first)'],
+             'help' => 'Date order is only reliable if your upload method keeps the original file dates.'],
+        ]],
+        ['title' => 'Thumbnails and counting', 'items' => [
+            ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
+             'help' => 'Small thumbnails kept in a .gallery-cache folder, so pages load fast and iPhone photos can be shown. If the folder can\'t be written, the original photo is sent instead. Off sends every photo at full size.'],
+            ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
+             'help' => 'Counts page loads and photo views in a stats file in the gallery folder. You always see the numbers in this admin.'],
+            ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
+             'help' => 'Needs "Count views". Off keeps the numbers to yourself.'],
+        ]],
+        ['title' => 'Locations and the map', 'items' => [
+            ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
+             'help' => 'Needed before any location can show. Each folder still has its own switch in its settings, and any photo can opt out.',
+             'risk' => 'GPS coordinates can reveal where you live or were; they stay private until a folder\'s own switch is turned on'],
+            ['name' => 'ENABLE_MAP', 'type' => 'bool', 'label' => 'Trip map',
+             'help' => 'A map of every photo that has a visible location. Needs "Allow photo locations".',
+             'risk' => 'the map loads Leaflet (cdnjs) and map tiles (OpenStreetMap) in each visitor\'s browser, so those sites see the visit'],
+            ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 1, 'max' => 10000,
+             'help' => 'Photos closer together than this share one numbered pin. 50 suits most trips; a dense city trip wants less.'],
+        ]],
+    ];
+}
+
+/** The settings file's exact text for $cfg: the data guard, then the keys in
+ *  a stable order as JSON. Returns null if it can't be encoded (invalid
+ *  UTF-8 in a value). */
+function gallery_config_render($cfg) {
+    $order = [];
+    foreach (gallery_setting_definitions() as $group) foreach ($group['items'] as $d) $order[] = $d['name'];
+    foreach (['ADMIN_PASSWORD', 'PRIVATE_VIEW_PASSWORD', 'EXTRA_FOLDERS', 'NGINX_ACCEL_REDIRECT_PREFIX'] as $n) $order[] = $n;
+    $keys = array_values(array_unique(array_merge(array_values(array_intersect($order, array_keys($cfg))), array_keys($cfg))));
+    $ordered = [];
+    foreach ($keys as $k) $ordered[$k] = $cfg[$k];
+    $json = json_encode($ordered === [] ? new stdClass() : $ordered, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
+    return $json === false ? null : data_file_guard_line() . $json . "\n";
+}
+
+/** Validates the Site settings form and rewrites .gallery-config.php, and
+ *  nothing else: captions, locations, hide flags, stats and notes are never
+ *  read or written here. Returns an admin result array. */
+function site_settings_save() {
+    $state = gallery_config_load();
+    $path = gallery_config_path();
+    if (!in_array($state['status'], ['absent', 'ok'], true)) {
+        return ['type' => 'error', 'text' => 'The settings file (.gallery-config.php) exists but can\'t be read as settings, so nothing was changed — saving would overwrite whatever is in it. Fix or delete that file, then try again.'];
+    }
+    $currentRaw = is_file($path) ? (string) file_get_contents($path) : '';
+    if (!hash_equals(md5($currentRaw), (string) ($_POST['config_hash'] ?? ''))) {
+        return ['type' => 'error', 'text' => 'The settings file' . admin_stale_message()];
+    }
+    $cfg = $state['cfg'];
+    $defaults = $GLOBALS['__gallery_defaults'] ?? [];
+    $errors = [];
+    $setOrUnset = function ($name, $value) use (&$cfg, $defaults) {
+        if (array_key_exists($name, $defaults) && $defaults[$name] === $value) unset($cfg[$name]); else $cfg[$name] = $value;
+    };
+    foreach (gallery_setting_definitions() as $group) {
+        foreach ($group['items'] as $d) {
+            $name = $d['name'];
+            if (!isset($_POST['set_' . $name]) || !is_string($_POST['set_' . $name])) continue;
+            $raw = $_POST['set_' . $name];
+            if ($d['type'] === 'bool') {
+                $value = $raw === '1';
+            } elseif ($d['type'] === 'enum') {
+                if (!array_key_exists($raw, $d['options'])) { $errors[] = '"' . $d['label'] . '" must be one of the choices offered.'; continue; }
+                $value = $raw;
+            } else {
+                if (!is_numeric($raw) || (float) $raw < $d['min'] || (float) $raw > $d['max']) { $errors[] = '"' . $d['label'] . '" must be a number from ' . $d['min'] . ' to ' . $d['max'] . '.'; continue; }
+                $value = (float) $raw == (int) $raw ? (int) $raw : (float) $raw;
+            }
+            $setOrUnset($name, $value);
+        }
+    }
+    $newAdmin = null;
+    $adminPw = (string) ($_POST['pw_admin'] ?? '');
+    if ($adminPw !== '') {
+        if ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
+        elseif (strlen($adminPw) < 12) $errors[] = 'The admin password needs at least 12 characters — it is the one credential that can change your gallery.';
+        elseif (preg_match('/[\x00-\x1F\x7F]/', $adminPw)) $errors[] = 'The admin password can\'t contain control characters.';
+        else { $setOrUnset('ADMIN_PASSWORD', $adminPw); $newAdmin = $adminPw; }
+    }
+    $viewPw = (string) ($_POST['pw_private'] ?? '');
+    if (!empty($_POST['pw_private_remove'])) {
+        $setOrUnset('PRIVATE_VIEW_PASSWORD', '');
+    } elseif ($viewPw !== '') {
+        if ($viewPw !== (string) ($_POST['pw_private2'] ?? '')) $errors[] = 'The two private-view passwords you typed don\'t match.';
+        elseif (strlen($viewPw) < 6) $errors[] = 'The private-view password needs at least 6 characters.';
+        elseif (preg_match('/[\x00-\x1F\x7F]/', $viewPw)) $errors[] = 'The private-view password can\'t contain control characters.';
+        else $setOrUnset('PRIVATE_VIEW_PASSWORD', $viewPw);
+    }
+    if ($errors) {
+        return ['type' => 'error', 'text' => 'Nothing was saved. ' . implode(' ', $errors)];
+    }
+    $a = $cfg; $b = $state['cfg']; ksort($a); ksort($b);
+    if ($a === $b) {
+        return ['type' => 'ok', 'text' => 'Nothing to change: those are the settings already in use.'];
+    }
+    $content = gallery_config_render($cfg);
+    if ($content === null) {
+        return ['type' => 'error', 'text' => 'Nothing was saved: one of the values isn\'t valid text (it has bytes that aren\'t UTF-8).'];
+    }
+    $fail = function ($why) use ($content) {
+        $GLOBALS['__site_settings_manual'] = $content;
+        return ['type' => 'error', 'text' => 'Nothing was saved: ' . $why . ' The text below is the settings file; put it in a file named .gallery-config.php next to index.php yourself.'];
+    };
+    if (!is_writable(__DIR__)) return $fail('the gallery\'s folder isn\'t writable by the web server.');
+    $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, $content, LOCK_EX) === false) { @unlink($tmp); return $fail('the settings file couldn\'t be written.'); }
+    @chmod($tmp, 0600);
+    // Read back what was written, as the loader will, and refuse to install it unless it is exactly the settings intended.
+    [$roundStatus, $roundTrip] = gallery_config_parse((string) @file_get_contents($tmp));
+    ksort($roundTrip);
+    if ($roundStatus !== 'ok' || $roundTrip !== $a) { @unlink($tmp); return $fail('the file that would have been written didn\'t read back correctly, so it was not installed.'); }
+    if (!@rename($tmp, $path)) { @unlink($tmp); return $fail('the settings file couldn\'t be replaced.'); }
+    // Changing the admin password must not log the person who just changed it out.
+    if ($newAdmin !== null) $_SESSION['admin_auth'] = hash('sha256', 'admin|' . $newAdmin . '|' . __DIR__);
+    $n = count($cfg);
+    $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Settings saved' . ($newAdmin !== null ? ' (admin password changed; you stay signed in)' : '') . '. ' . ($n === 0 ? 'Everything is on its default.' : $n . ' setting' . ($n === 1 ? '' : 's') . ' differ' . ($n === 1 ? 's' : '') . ' from the defaults and will survive updating index.php.') . ' Your photos, captions, locations and counts were not touched.'];
+    return ['type' => 'redirect'];
+}
+
+/** The Site settings panel. */
+function render_admin_site_settings($csrfToken) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $state = gallery_config_load();
+    $path = gallery_config_path();
+    $hash = md5(is_file($path) ? (string) file_get_contents($path) : '');
+    $defaults = $GLOBALS['__gallery_defaults'] ?? [];
+    $fromFile = array_flip(array_unique($GLOBALS['__gallery_config_applied'] ?? []));
+    $show = function ($v) { return is_bool($v) ? ($v ? 'on' : 'off') : (is_array($v) ? ($v ? count($v) . ' item' . (count($v) === 1 ? '' : 's') : 'none') : ($v === '' ? 'none' : (string) $v)); };
+    $broken = !in_array($state['status'], ['absent', 'ok'], true);
+?>
+    <section class="panel site-settings">
+      <h2 class="section-title">Site settings</h2>
+      <p class="muted" style="margin-top:0;">These apply to the whole gallery. They are saved in <code>.gallery-config.php</code> beside <code>index.php</code>, which survives replacing <code>index.php</code> with a newer version. <strong>Saving here only changes that file</strong>: your photos, captions, locations, hide flags, notes and view counts are never touched, and switching a setting off hides things without deleting anything.</p>
+      <?php if ($broken): ?>
+        <div class="flash error">The settings file exists but can't be read as settings, so this screen won't change it (that could overwrite what's in it). Fix or delete <code>.gallery-config.php</code>, then reload.</div>
+      <?php endif; ?>
+      <?php if (!empty($GLOBALS['__site_settings_manual'])): ?>
+        <p class="muted">Create a file named <code>.gallery-config.php</code> next to <code>index.php</code> containing exactly this:</p>
+        <textarea readonly rows="12" style="width:100%; font-family:ui-monospace,monospace;" onfocus="this.select()"><?= $esc($GLOBALS['__site_settings_manual']) ?></textarea>
+      <?php endif; ?>
+      <form method="post" class="site-settings-form">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="save_site_settings">
+        <input type="hidden" name="config_hash" value="<?= $esc($hash) ?>">
+        <?php foreach (gallery_setting_definitions() as $group): ?>
+          <h3 class="subhead"><?= $esc($group['title']) ?></h3>
+          <?php foreach ($group['items'] as $d): $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null; ?>
+            <div class="site-row">
+              <div>
+                <div class="name"><?= $esc($d['label']) ?>
+                  <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
+                <div class="help"><?= $esc($d['help']) ?></div>
+                <?php if (!empty($d['risk'])): ?><div class="risk">Turning this on <?= $esc($d['risk']) ?>.</div><?php endif; ?>
+              </div>
+              <div class="ctl">
+                <?php if ($d['type'] === 'bool'): ?>
+                  <input type="hidden" name="set_<?= $esc($name) ?>" value="0">
+                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>"<?php if (!empty($d['risk'])): ?> data-risk="<?= $esc($d['label'] . ' — ' . $d['risk']) ?>"<?php endif; ?>><span class="slider"></span></label>
+                <?php elseif ($d['type'] === 'enum'): ?>
+                  <select name="set_<?= $esc($name) ?>"><?php foreach ($d['options'] as $val => $lab): ?><option value="<?= $esc($val) ?>" <?= (string) $now === (string) $val ? 'selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?></select>
+                <?php else: ?>
+                  <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="1" value="<?= $esc($now) ?>" style="max-width:110px;">
+                <?php endif; ?>
+                <span class="meta">default: <?= $esc($show($def)) ?></span>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        <?php endforeach; ?>
+
+        <h3 class="subhead">Passwords</h3>
+        <div class="site-row">
+          <div>
+            <div class="name">Admin password <?php if (isset($fromFile['ADMIN_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
+            <div class="help">Currently set. Leave blank to keep it. At least 12 characters; you stay signed in after changing it. It can't be removed here, since that would lock this screen away.</div>
+          </div>
+          <div class="ctl col">
+            <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password">
+            <input type="password" name="pw_admin2" autocomplete="new-password" placeholder="Type it again">
+          </div>
+        </div>
+        <div class="site-row">
+          <div>
+            <div class="name">Private-view password <?php if (isset($fromFile['PRIVATE_VIEW_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
+            <div class="help"><?= PRIVATE_VIEW_PASSWORD === '' ? 'Not set, so hidden items stay hidden from everyone but you.' : 'Currently set.' ?> What you tell someone so they can see the hidden items (at least 6 characters). Leave blank to keep it as it is.</div>
+          </div>
+          <div class="ctl col">
+            <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password">
+            <input type="password" name="pw_private2" autocomplete="new-password" placeholder="Type it again">
+            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><label class="muted"><input type="checkbox" name="pw_private_remove" value="1"> Remove it (turn private view off)</label><?php endif; ?>
+          </div>
+        </div>
+
+        <h3 class="subhead">Only in the settings file</h3>
+        <p class="muted" style="margin-top:0;">These need care or matching server setup, so they're not editable here. Edit <code>.gallery-config.php</code> directly (see the README).</p>
+        <div class="site-row">
+          <div><div class="name">Folders from elsewhere on the server</div><div class="help"><code>EXTRA_FOLDERS</code>: <?= EXTRA_FOLDERS ? $esc(implode(', ', array_map(function ($k, $v) { return $k . ' → ' . $v; }, array_keys(EXTRA_FOLDERS), EXTRA_FOLDERS))) : 'none' ?></div></div>
+        </div>
+        <div class="site-row">
+          <div><div class="name">nginx internal redirect</div><div class="help"><code>NGINX_ACCEL_REDIRECT_PREFIX</code>: <?= NGINX_ACCEL_REDIRECT_PREFIX === '' ? 'off' : $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?></div></div>
+        </div>
+
+        <div class="item-actions" style="margin-top:14px;">
+          <button type="submit"<?= $broken ? ' disabled' : '' ?>>Save site settings</button>
+          <span class="muted">Only settings that differ from the defaults are stored, so a future update's better defaults still reach you.</span>
+        </div>
+      </form>
+    </section>
+<?php
+}
+
+/**
  * Renders the full ?admin page: folder nav, this folder's own identity
  * (display name/cover/location toggle, when viewing a subfolder), every
  * .md here (active or not) with a raw-text editor, and the photo/video
@@ -3614,6 +3928,29 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   /* Photos tab: a grid of thumbnails, and one editor panel above it that
      opens with the selected photo's own form (every photo's real form is in
      the page; only the selected one is shown). */
+  .side-link { display:block; margin:0 0 10px; padding:6px 12px; border-radius:6px; font-size:0.85rem; color:var(--muted); text-decoration:none; background:var(--card); }
+  .side-link:hover { color:var(--text); }
+  .side-link.active { color:#fff; background:var(--accent); }
+  .site-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(190px,260px); gap:6px 22px; padding:12px 0; border-top:1px solid #26262a; align-items:start; }
+  .site-settings h3.subhead + .site-row, .site-settings .muted + .site-row { border-top:0; }
+  .site-row .name { font-weight:600; font-size:0.92rem; }
+  .site-row .src { font-weight:500; font-size:0.68rem; color:#9bb0ff; background:rgba(88,101,242,0.18); padding:1px 7px; border-radius:9px; margin-left:6px; }
+  .site-row .help { color:var(--muted); font-size:0.8rem; margin-top:3px; }
+  .site-row .risk { color:#f5a623; font-size:0.78rem; margin-top:4px; }
+  .site-row .ctl { display:flex; align-items:center; justify-content:flex-end; gap:12px; flex-wrap:wrap; }
+  .site-row .ctl.col { flex-direction:column; align-items:stretch; gap:6px; }
+  .site-row .meta { font-size:0.72rem; color:var(--muted); }
+  .switch { position:relative; display:inline-block; width:42px; height:24px; margin:0; }
+  .switch input { opacity:0; width:0; height:0; }
+  .switch .slider { position:absolute; inset:0; background:#3a3a42; border-radius:24px; cursor:pointer; transition:background .15s; }
+  .switch .slider::before { content:""; position:absolute; height:18px; width:18px; left:3px; top:3px; background:#fff; border-radius:50%; transition:transform .15s; }
+  .switch input:checked + .slider { background:var(--accent); }
+  .switch input:checked + .slider::before { transform:translateX(18px); }
+  .switch input:focus-visible + .slider { outline:2px solid #fff; outline-offset:2px; }
+  @media (max-width: 800px) {
+    .admin-main .site-row { grid-template-columns:1fr; }
+    .admin-main .site-row .ctl { justify-content:flex-start; }
+  }
   .photos-hint { margin:0 0 12px; }
   .thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(124px, 1fr)); gap:10px; }
   .thumb { position:relative; padding:0; border:2px solid transparent; background:var(--card); border-radius:9px; cursor:pointer; overflow:hidden; text-align:left; color:var(--text); display:flex; flex-direction:column; font:inherit; }
@@ -3679,6 +4016,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <?php if ($adminHidden): ?>
     <a href="#hidden" data-tab="hidden" class="side-hidden">Hidden <span class="count"><?= count($adminHidden['folders']) + count($adminHidden['items']) ?></span></a>
   <?php endif; ?>
+  <a href="#site" data-tab="site" class="side-link">Site settings</a>
   <details class="admin-folders" open>
     <summary>Folders <span class="here">&middot; <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span></summary>
     <?= render_admin_folder_nav($files, $adminFolderPath) ?: '<p class="muted">No subfolders.</p>' ?>
@@ -3993,6 +4331,9 @@ foreach ($adminFiles as $file) {
   </section>
 
   </div>
+  <div class="tab-panel" data-tab="site">
+<?php render_admin_site_settings($csrfToken); ?>
+  </div>
   <div class="tab-panel" data-tab="export">
   <section class="panel" id="export">
     <h2 class="section-title">Export</h2>
@@ -4039,7 +4380,7 @@ foreach ($adminFiles as $file) {
   (function () {
     var main = document.querySelector('.admin-main');
     if (!main) return;
-    var tabs = [].slice.call(document.querySelectorAll('.admin-tabs a[data-tab], .side-hidden[data-tab]'));
+    var tabs = [].slice.call(document.querySelectorAll('.admin-tabs a[data-tab], .side-hidden[data-tab], .side-link[data-tab]'));
     var panels = [].slice.call(document.querySelectorAll('.tab-panel'));
     var names = tabs.map(function (t) { return t.getAttribute('data-tab'); });
     var KEY = 'galleryAdminTab';
@@ -4053,7 +4394,7 @@ foreach ($adminFiles as $file) {
       });
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
-      if (name !== 'hidden') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
+      if (name !== 'hidden' && name !== 'site') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
     // The photo editor: one panel above the thumbnail grid that shows the
@@ -4114,6 +4455,16 @@ foreach ($adminFiles as $file) {
     window.addEventListener('hashchange', fromLocation);
     fromLocation();
   })();
+  // Site settings: ask before saving if something that publishes content or
+  // contacts a third party is being switched on.
+  [].forEach.call(document.querySelectorAll('.site-settings-form'), function (form) {
+    form.addEventListener('submit', function (ev) {
+      var risky = [].filter.call(form.querySelectorAll('input[type=checkbox][data-risk]'), function (c) {
+        return c.checked && c.getAttribute('data-initial') !== '1';
+      }).map(function (c) { return '\u2022 ' + c.getAttribute('data-risk'); });
+      if (risky.length && !confirm('You are turning on:\n\n' + risky.join('\n') + '\n\nSave these settings?')) ev.preventDefault();
+    });
+  });
   function admConfirmSaveAs(form) {
     const newNameField = form.querySelector('.adm-newname');
     if (newNameField && newNameField.value.trim() !== '') {
@@ -4216,6 +4567,11 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         if (!empty($GLOBALS['__data_write_failed']) && ($resultMessage['type'] ?? '') === 'ok') {
             $resultMessage = ['type' => 'error', 'text' => 'Nothing was saved: this folder isn\'t writable by the web server. Give the web server\'s user write permission on it (on many hosts: chmod 755 or 775 on the folder, owned by that user), then try again.'];
         }
+        if ($resultMessage['type'] === 'redirect') {
+            // Post, redirect, get: the new settings take effect on the next request, and the page shows them.
+            header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin') . '#site', true, 303);
+            return;
+        }
         if ($resultMessage['type'] === 'logout') {
             // Back to being an ordinary visitor: no admin session, and no
             // private-view cookie either (a login sets both).
@@ -4238,6 +4594,10 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         }
     }
 
+    if ($resultMessage === null && !empty($_SESSION['admin_flash']) && is_array($_SESSION['admin_flash'])) {
+        $resultMessage = $_SESSION['admin_flash'];
+        unset($_SESSION['admin_flash']);
+    }
     $mdCandidates = scan_md_candidates($adminFolderReal);
     render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $adminFiles, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $mdCandidates, $resultMessage);
 }
