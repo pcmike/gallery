@@ -66,6 +66,15 @@ It does **not** cover things that need a real browser (lightbox JS, swipe gestur
 
 Run both `php -l index.php` and `php tests/run.php` before committing, and add a case to `tests/run.php` for any bug fix so it can't silently regress.
 
+## Optional tools: fuzzing and JavaScript checks
+
+Two extra checks live in [`tests/tools/`](tests/tools/README.md), outside the main suite because they need a bit more (python3, and QuickJS for the second): a **fuzzer** that sends a few thousand hostile requests at every endpoint with PHP reporting every error, and a **JavaScript runner** that executes the page scripts against a fake DOM and a fake Leaflet. Both are worth running after touching request handling, the admin, or any inline script — the fuzzer is what found the `?size[]=` fatal error and the admin NUL-byte crash that the main suite hadn't thought to try.
+
+```
+python3 tests/tools/fuzz/fuzz.py
+QJS=/path/to/qjs python3 tests/tools/js/run_js_checks.py
+```
+
 ## Code style / constraints
 
 - **Single file, no dependencies.** The whole point is drop-in simplicity — avoid introducing a required external library or build step.
