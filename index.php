@@ -46,7 +46,7 @@ define('GALLERY_VERSION', '2.0.0');
 
 // Turn photo/group/page view tracking on or off. Off by default — this
 // script writes nothing to the folder's disk unless you turn something
-// on. Turning this on writes .gallery-stats.json or .gallery-stats.sqlite
+// on. Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
 // into the folder, and is what enables the live view-count badges. See
 // the README for details.
 define('TRACK_VIEWS', false);
@@ -589,10 +589,10 @@ if (ENABLE_VIDEO) {
 }
 
 // Per-file caption/location/web data, set via the admin tool (?admin) —
-// see the ".gallery-items.json" section below for the storage shape.
+// see the ".gallery-items.php" section below for the storage shape.
 // Read unconditionally (not gated behind ADMIN_PASSWORD): a gallery that
 // never touches the admin tool just gets an empty result per folder,
-// cheaply, the same way an untouched .gallery-stats.json costs nothing.
+// cheaply, the same way an untouched .gallery-stats.php costs nothing.
 $itemsData = items_get_all_for_files($dir, $files);
 
 /**
@@ -1622,8 +1622,8 @@ if (!is_revealed()) {
 /* -----------------------------------------------------------------------
  * Small generic JSON file storage, flock-protected the same way the
  * stats JSON fallback below is — reused by two otherwise-unrelated
- * concerns (the admin tool's .gallery-items.json, and the login-attempt
- * throttle's .gallery-login-attempts.json) so the locking mechanics
+ * concerns (the admin tool's .gallery-items.php, and the login-attempt
+ * throttle's .gallery-login-attempts.php) so the locking mechanics
  * aren't duplicated a third time. Deliberately generic over the data
  * shape, unlike stats_update_file below, since callers here have
  * genuinely different shapes rather than variations on the same one.
@@ -1631,26 +1631,59 @@ if (!is_revealed()) {
 
 /** Reads a JSON file, merging it over $defaultData (missing file or
  *  corrupt content just yields $defaultData untouched). */
-function json_file_read($path, $defaultData) {
-    if (!file_exists($path)) return $defaultData;
-    $decoded = json_decode((string) @file_get_contents($path), true);
-    return is_array($decoded) ? array_merge($defaultData, $decoded) : $defaultData;
+/**
+ * The first line of every generated data file (.gallery-items.php,
+ * .gallery-stats.php, .gallery-login-attempts.php). These hold captions,
+ * GPS coordinates, hide flags — and with them the exact filenames of
+ * hidden items — and a web server serves any file in the folder to
+ * anyone who asks for its URL. Stored as a .php file starting with this
+ * line, a direct request is handed to PHP instead, which hits the exit
+ * on the first line and answers 404 with nothing else: the JSON below
+ * is never sent, on any host that runs PHP, with no server rule needed.
+ * (A server rule that blocks ".gallery-*" is still worth adding as a
+ * second layer — see the README.) This script itself never *executes*
+ * these files; it reads them as plain text and drops this line.
+ */
+function data_file_guard_line() {
+    return "<?php http_response_code(404); exit; ?>\n";
 }
 
-/** Read-modify-write a JSON file under an exclusive lock; $modifier
- *  receives the current data (merged over $defaultData) by reference. */
+/** The JSON text of a guarded data file: raw contents with the guard
+ *  line removed. Tolerates a file with no guard (plain JSON). */
+function data_file_strip_guard($raw) {
+    $raw = (string) $raw;
+    if (strncmp($raw, '<?php', 5) === 0) {
+        $newline = strpos($raw, "\n");
+        return $newline === false ? '' : substr($raw, $newline + 1);
+    }
+    return $raw;
+}
+
+/** JSON for a guarded data file. JSON_HEX_TAG writes "<" and ">" as
+ *  \u003C/\u003E, so a caption that happens to contain "<?php" can never
+ *  put a PHP open tag into the file — nothing after the guard line is
+ *  ever parsed as code, even by a server with short tags on. */
+function data_file_encode($data) {
+    return data_file_guard_line() . json_encode($data, JSON_HEX_TAG);
+}
+
+function json_file_read($path, $defaultData) {
+    if (!file_exists($path)) return $defaultData;
+    $decoded = json_decode(data_file_strip_guard(@file_get_contents($path)), true);
+    return is_array($decoded) ? array_merge($defaultData, $decoded) : $defaultData;
+}
 function json_file_update($path, $defaultData, $modifier) {
     $data = $defaultData;
     $fp = @fopen($path, 'c+');
     if ($fp) {
         if (flock($fp, LOCK_EX)) {
             $raw = stream_get_contents($fp);
-            $decoded = json_decode($raw, true);
+            $decoded = json_decode(data_file_strip_guard($raw), true);
             if (is_array($decoded)) {
                 $data = array_merge($data, $decoded);
             }
             $modifier($data);
-            $encoded = json_encode($data);
+            $encoded = data_file_encode($data);
             ftruncate($fp, 0);
             rewind($fp);
             fwrite($fp, $encoded);
@@ -1708,7 +1741,7 @@ function is_https_request() {
  * just waits a minute, not calls the site owner.
  */
 function login_throttle_path($rootDir) {
-    return $rootDir . '/.gallery-login-attempts.json';
+    return $rootDir . '/.gallery-login-attempts.php';
 }
 
 function login_throttle_key($realm, $ip) {
@@ -1999,7 +2032,7 @@ function folder_files_under($files, $folderPath) {
 }
 
 /** A folder's own admin-set identity, read from its own
- *  .gallery-items.json, normalized so callers never re-check types. */
+ *  .gallery-items.php, normalized so callers never re-check types. */
 function folder_display_meta($dir, $folderRel) {
     $d = items_read(resolve_real_path($dir, $folderRel));
     return [
@@ -2353,7 +2386,7 @@ function render_map_page($points, $legend, $pageTitle, $baseUrl) {
  * display name and chosen cover photo, and a folder's own location
  * toggle. All of it machine-written by the admin tool, never hand-
  * edited, so plain JSON is enough — no custom parser to get wrong. Lives
- * in .gallery-items.json, colocated per folder exactly like
+ * in .gallery-items.php, colocated per folder exactly like
  * .gallery-stats.* and .gallery-cache: a photo's caption lives in the
  * same real folder the photo itself does, and a folder-group's own
  * display name/cover live inside *that* folder (not its parent) — the
@@ -2362,7 +2395,7 @@ function render_map_page($points, $legend, $pageTitle, $baseUrl) {
  * ----------------------------------------------------------------------- */
 
 function items_path($folderPath) {
-    return $folderPath . '/.gallery-items.json';
+    return $folderPath . '/.gallery-items.php';
 }
 
 /** items: bare filename => {caption, location: {lat,lng,label},
@@ -2506,13 +2539,13 @@ function extract_jpeg_gps($realPath) {
 }
 
 /**
- * Garbage-collects stale .gallery-items.json entries — a photo deleted
+ * Garbage-collects stale .gallery-items.php entries — a photo deleted
  * (or renamed by hand, not via a real folder rename) orphans its caption
  * entry within a folder that itself still exists. Same precedent as
  * thumbnail-cache cleanup: swept here, and reported through the existing
  * notices mechanism, the same way an unknown {photos:} reference already
  * is. A whole folder disappearing needs no separate handling — its
- * .gallery-items.json is deleted along with it in the same operation.
+ * .gallery-items.php is deleted along with it in the same operation.
  */
 function gc_items_data($dir, $files, &$galleryNotices) {
     $byFolder = [];
@@ -2641,7 +2674,7 @@ function admin_stale_message() {
 /** Plain single-line-ish text from a form field: control characters
  *  dropped, whitespace runs collapsed, length capped. Output is always
  *  HTML-escaped where it's shown, so this is about tidiness and bounding
- *  what a .gallery-items.json can grow to, not about escaping. */
+ *  what a .gallery-items.php can grow to, not about escaping. */
 function admin_clean_text($value, $maxLen) {
     $text = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) $value);
     $text = trim(preg_replace('/\s+/u', ' ', (string) $text));
@@ -2857,14 +2890,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     return ['type' => 'error', 'text' => 'Unknown action.'];
 }
 
-/** Streams the current folder's own .gallery-items.json back out as a
+/** Streams the current folder's own .gallery-items.php back out as a
  *  download — the only backup this irreplaceable, hand-entered data has
  *  at all. One caution worth repeating next to the download itself, not
  *  a design change: once a hidden flag exists in this file (a later
  *  phase), the export becomes a new way to reveal what's hidden and that
  *  it exists — mishandling the exported file is its own leak vector,
  *  independent of the actual hidden content. */
-/** Every folder's .gallery-items.json in one download, keyed by relative
+/** Every folder's .gallery-items.php in one download, keyed by relative
  *  folder path ("" is the root) — same irreplaceable data, same leak
  *  caution as admin_export_items(), just the whole tree at once. */
 function admin_export_tree($dir, $files) {
@@ -3446,7 +3479,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
  *
  * Per-photo stats are colocated in whichever real folder a photo lives
  * in — same pattern as the thumbnail cache — so each folder gets its own
- * small .gallery-stats.json/.sqlite, scoped to just its own photos. A
+ * small .gallery-stats.php/.sqlite, scoped to just its own photos. A
  * flat gallery has exactly one such store (the root itself), so this is
  * a no-op change in shape for that case. Keyed by each photo's full
  * relative path (not stripped to a bare filename) purely to keep every
@@ -3467,7 +3500,7 @@ function stats_connection($folderPath) {
     if (isset($GLOBALS['__stats_pool'][$folderPath])) {
         return $GLOBALS['__stats_pool'][$folderPath];
     }
-    $conn = ['mode' => 'file', 'pdo' => null, 'file' => $folderPath . '/.gallery-stats.json'];
+    $conn = ['mode' => 'file', 'pdo' => null, 'file' => $folderPath . '/.gallery-stats.php'];
     if (class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
         try {
             $pdo = new PDO('sqlite:' . $folderPath . '/.gallery-stats.sqlite');
@@ -3492,7 +3525,7 @@ function stats_update_file($statsFile, $modifier) {
     if ($fp) {
         if (flock($fp, LOCK_EX)) {
             $raw = stream_get_contents($fp);
-            $decoded = json_decode($raw, true);
+            $decoded = json_decode(data_file_strip_guard($raw), true);
             if (is_array($decoded)) {
                 $data = array_merge($data, $decoded);
             }
@@ -3500,7 +3533,7 @@ function stats_update_file($statsFile, $modifier) {
                 $data['photos'] = [];
             }
             $modifier($data);
-            $encoded = json_encode($data);
+            $encoded = data_file_encode($data);
             ftruncate($fp, 0);
             rewind($fp);
             fwrite($fp, $encoded);
@@ -3558,7 +3591,7 @@ function stats_get_photo_views($folderPath) {
         return $result;
     }
     if (!file_exists($conn['file'])) return [];
-    $data = json_decode((string) @file_get_contents($conn['file']), true);
+    $data = json_decode(data_file_strip_guard(@file_get_contents($conn['file'])), true);
     return (is_array($data) && isset($data['photos']) && is_array($data['photos'])) ? $data['photos'] : [];
 }
 
@@ -3642,10 +3675,16 @@ if (isset($_GET['track'])) {
             // group's totals below, not just the requested photo.
             $requestedFolder = containing_folder_real_path($dir, $requested);
             $currentPhotoViews = stats_get_photo_views($requestedFolder);
-            if (view_debounce_recently_viewed($requested)) {
-                // Debounced: still report the current total, unincremented,
-                // so the live-updating badge reflects reality instead of
-                // looking stuck or broken.
+            // A hidden item (only reachable here by a revealed viewer) is
+            // never counted: its filename would otherwise land in the
+            // stats store, and the SQLite flavour of that store is a
+            // binary file that can't carry the PHP guard the JSON files
+            // do — it would hand a hidden item's exact name to anyone who
+            // requested the file's URL.
+            if (view_debounce_recently_viewed($requested) || file_is_hidden($dir, $requested, $itemsData)) {
+                // Debounced (or hidden): still report the current total,
+                // unincremented, so the live-updating badge reflects
+                // reality instead of looking stuck or broken.
                 $newCount = (int) ($currentPhotoViews[$requested] ?? 0);
             } else {
                 $newCount = stats_bump_photo($requestedFolder, $requested);
@@ -4441,7 +4480,7 @@ function status_accent_color($status, $customColor) {
  * so no separate counting pass is needed). The copy-link icon is a
  * sibling of the navigation link, not nested inside it — two <a> tags,
  * never one inside the other. $manualCover (a bare filename from the
- * folder's own .gallery-items.json — see ?admin's "Set as cover")
+ * folder's own .gallery-items.php — see ?admin's "Set as cover")
  * overrides the automatic choice when it's still a real member of this
  * folder's own recursive file list.
  */
@@ -4694,7 +4733,7 @@ $groupLabels = [];
 // explicit claim beating auto-detection (the admin UI disables the field
 // in that case rather than accepting a value that then appears to do
 // nothing). A folder-group's name lives in that folder's own
-// .gallery-items.json; a root-level filename-based group's lives in the
+// .gallery-items.php; a root-level filename-based group's lives in the
 // root's own.
 $folderCovers = [];
 $folderMeta = [];       // folder key => ['description' => .., 'dates' => ..], for its cover card

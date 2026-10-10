@@ -110,6 +110,21 @@ function make_jpeg($path, $w, $h, $r, $g, $b) {
 // skipped over by size) followed by a moov box containing a single mvhd
 // (version 0) child with a real duration. No mdat/track data at all —
 // not meant to actually play, only to parse.
+/** The generated data files start with a PHP guard line (see
+ *  data_file_guard_line() in index.php) so a direct request for one
+ *  answers 404 with nothing else. These read/write that exact format. */
+function read_data_file($path) {
+    $raw = (string) file_get_contents($path);
+    if (strncmp($raw, '<?php', 5) === 0) {
+        $raw = (string) substr($raw, strpos($raw, "\n") + 1);
+    }
+    return json_decode($raw, true);
+}
+
+function write_data_file($path, $data) {
+    file_put_contents($path, "<?php http_response_code(404); exit; ?>\n" . json_encode($data, JSON_HEX_TAG));
+}
+
 /** A JPEG whose EXIF block holds only a GPS IFD — PHP has no EXIF writer,
  *  so this hand-assembles a minimal little-endian TIFF inside an APP1
  *  segment. $latDMS/$lngDMS are three [numerator, denominator] pairs. */
@@ -579,7 +594,7 @@ echo "== defaults fixture: opt-in checks (nothing written without permission) ==
 [$status, $body] = http_get("$base1/?track=widget_01.jpg");
 $json = json_decode($body, true);
 check('?track reports ok:false when TRACK_VIEWS is off (default)', is_array($json) && $json['ok'] === false);
-check('no JSON stats file created by default', !file_exists("$fx1/.gallery-stats.json"));
+check('no JSON stats file created by default', !file_exists("$fx1/.gallery-stats.php"));
 check('no SQLite stats file created by default', !file_exists("$fx1/.gallery-stats.sqlite"));
 
 [$status, , $headers] = http_get("$base1/?img=widget_01.jpg&size=thumb");
@@ -720,7 +735,7 @@ $baseHidden = "http://127.0.0.1:$portHidden";
 [, $hiddenBody] = http_get("$baseHidden/?track=solo.jpg");
 $hiddenJson = json_decode($hiddenBody, true);
 check('tracking still counts with SHOW_VIEW_COUNTS_PUBLICLY off', is_array($hiddenJson) && $hiddenJson['ok'] === true && $hiddenJson['photoViews'] >= 1);
-check('a stats file is still written with SHOW_VIEW_COUNTS_PUBLICLY off', is_file("$fxHidden/.gallery-stats.json") || is_file("$fxHidden/.gallery-stats.sqlite"));
+check('a stats file is still written with SHOW_VIEW_COUNTS_PUBLICLY off', is_file("$fxHidden/.gallery-stats.php") || is_file("$fxHidden/.gallery-stats.sqlite"));
 
 [, $pageBody] = http_get("$baseHidden/");
 check('view-badge stays hidden even though its count is > 0', (bool) preg_match('/class="view-badge hidden"[^>]*data-photo="solo\.jpg"/', $pageBody));
@@ -807,14 +822,20 @@ check('?img[]= (an array, not a string) returns 404', $arrayImgStatus === 404);
 check('...while the real nested path still serves', $okImgStatus === 200);
 
 http_get("$baseNested/?track=" . rawurlencode('Paris/eiffel.jpg'));
-check('per-photo stats are colocated inside the photo\'s own subfolder, not the root', is_file("$fxNested/Paris/.gallery-stats.json") || is_file("$fxNested/Paris/.gallery-stats.sqlite"));
+check('per-photo stats are colocated inside the photo\'s own subfolder, not the root', is_file("$fxNested/Paris/.gallery-stats.php") || is_file("$fxNested/Paris/.gallery-stats.sqlite"));
+foreach (['.gallery-stats.php', 'Paris/.gallery-stats.php'] as $statsFileName) {
+    if (is_file("$fxNested/$statsFileName")) {
+        [$statsDirectStatus, $statsDirectBody] = http_get("$baseNested/$statsFileName");
+        check("the view-stats file ($statsFileName) is a guarded PHP file: fetching it returns 404 and nothing else", $statsDirectStatus === 404 && $statsDirectBody === '' && strncmp((string) file_get_contents("$fxNested/$statsFileName"), '<?php', 5) === 0);
+    }
+}
 // The root legitimately gets its own stats file regardless — the one
 // sitewide pageview counter always lives there by design (every GET /
 // above already bumped it). What must NOT be true is the root's store
 // *also* holding an entry for a subfolder photo's own view count.
 $rootHasEiffelEntry = false;
-if (is_file("$fxNested/.gallery-stats.json")) {
-    $rootData = json_decode((string) file_get_contents("$fxNested/.gallery-stats.json"), true);
+if (is_file("$fxNested/.gallery-stats.php")) {
+    $rootData = read_data_file("$fxNested/.gallery-stats.php");
     $rootHasEiffelEntry = isset($rootData['photos']['Paris/eiffel.jpg']);
 } elseif (is_file("$fxNested/.gallery-stats.sqlite")) {
     $rootPdo = new PDO('sqlite:' . "$fxNested/.gallery-stats.sqlite");
@@ -948,7 +969,7 @@ check('?admin 404s outright when ADMIN_PASSWORD is unset (the default)', $adminI
  * failed-login throttle, CSRF, and every admin action: captions,
  * location (all three visibility gates), web links, folder display
  * name/cover, the {gallery}-marker one-click fix, raw notes save/save-
- * as/delete, export, and stale .gallery-items.json entry GC.
+ * as/delete, export, and stale .gallery-items.php entry GC.
  * ======================================================================= */
 
 echo "== admin fixture: auth, CSRF, throttle, and every admin action ==\n";
@@ -1104,8 +1125,8 @@ http_post("$baseAdmin/?admin", [
 unlink("$fxAdmin/orphan-soon.jpg");
 [, $bodyAfterOrphan] = http_get("$baseAdmin/");
 check('a stale caption entry for a deleted photo is reported in the notices', str_contains($bodyAfterOrphan, 'was cleaned up'));
-$itemsAfterGc = json_decode((string) file_get_contents("$fxAdmin/.gallery-items.json"), true);
-check('the orphaned entry is actually removed from .gallery-items.json', !isset($itemsAfterGc['items']['orphan-soon.jpg']));
+$itemsAfterGc = read_data_file("$fxAdmin/.gallery-items.php");
+check('the orphaned entry is actually removed from .gallery-items.php', !isset($itemsAfterGc['items']['orphan-soon.jpg']));
 check('a surviving file\'s own entry is left alone by the same GC pass', isset($itemsAfterGc['items']['loose.jpg']));
 
 // Login throttle: 5 failures from one IP locks the 6th attempt out
@@ -1116,11 +1137,11 @@ for ($i = 0; $i < 5; $i++) {
 }
 [$lockedStatus] = http_get("$baseAdmin/?admin", [$authHeader]);
 check('after 5 failed attempts, even the correct password is locked out', $lockedStatus === 429);
-$throttleData = json_decode((string) file_get_contents("$fxAdmin/.gallery-login-attempts.json"), true);
+$throttleData = read_data_file("$fxAdmin/.gallery-login-attempts.php");
 foreach ($throttleData as $k => $v) {
     $throttleData[$k]['lockUntil'] = time() - 1;
 }
-file_put_contents("$fxAdmin/.gallery-login-attempts.json", json_encode($throttleData));
+write_data_file("$fxAdmin/.gallery-login-attempts.php", ($throttleData));
 [$unlockedStatus] = http_get("$baseAdmin/?admin", [$authHeader]);
 check('once the lockout window passes, the correct password works again', $unlockedStatus === 200);
 
@@ -1221,6 +1242,18 @@ $revealCookie = extract_cookie_header($revealHeaders);
 check('?reveal sets a cookie', $revealCookie !== null);
 [, $revealedBody] = http_get("$basePrivate/", ["Cookie: $revealCookie"]);
 check('once revealed, every hidden item is visible again — including the entirely-hidden folder', str_contains($revealedBody, 'loose1.jpg') && str_contains($revealedBody, '<div class="folder-cover"'));
+// A revealed viewer opening a hidden item must not put its filename into
+// the stats store (the SQLite store is a binary file that can't carry the
+// PHP guard, so it would be fetchable by URL). A visible item still counts.
+[, $hiddenTrackBody] = http_get("$basePrivate/?track=loose1.jpg", ["Cookie: $revealCookie"]);
+check('tracking a hidden item as a revealed viewer still answers ok, without counting it', str_contains($hiddenTrackBody, '"ok":true') && str_contains($hiddenTrackBody, '"photoViews":0'));
+http_get("$basePrivate/?track=loose2.jpg", ["Cookie: $revealCookie"]);
+$statsBlob = '';
+foreach (['.gallery-stats.php', '.gallery-stats.sqlite'] as $statsName) {
+    if (is_file("$fxPrivate/$statsName")) $statsBlob .= (string) file_get_contents("$fxPrivate/$statsName");
+}
+check('the stats store has no trace of the hidden item\'s filename...', $statsBlob !== '' && !str_contains($statsBlob, 'loose1.jpg'));
+check('...while a visible item is still counted', str_contains($statsBlob, 'loose2.jpg'));
 [$revealedImgStatus] = http_get("$basePrivate/?img=loose1.jpg&size=thumb", ["Cookie: $revealCookie"]);
 check('?img= serves a hidden item once revealed', $revealedImgStatus === 200);
 
@@ -1290,18 +1323,18 @@ make_jpeg("$fxMap/hidden.jpg", 60, 60, 40, 40, 40);
 // Paris + Louvre are ~2.5 miles apart (well within the 50-mile default
 // radius) and should cluster; Rome is ~690 miles from Paris and should
 // not. Coordinates are real-world for a meaningful distance check.
-file_put_contents("$fxMap/Paris/.gallery-items.json", json_encode([
+write_data_file("$fxMap/Paris/.gallery-items.php", ([
     'items' => [
         'eiffel.jpg' => ['location' => ['lat' => 48.8584, 'lng' => 2.2945, 'label' => '']],
         'louvre.jpg' => ['location' => ['lat' => 48.8606, 'lng' => 2.3376, 'label' => '']],
     ],
     'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => true,
 ]));
-file_put_contents("$fxMap/Rome/.gallery-items.json", json_encode([
+write_data_file("$fxMap/Rome/.gallery-items.php", ([
     'items' => ['colosseum.jpg' => ['location' => ['lat' => 41.8902, 'lng' => 12.4922, 'label' => '']]],
     'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => true,
 ]));
-file_put_contents("$fxMap/.gallery-items.json", json_encode([
+write_data_file("$fxMap/.gallery-items.php", ([
     'items' => [
         'standalone.jpg' => ['location' => ['lat' => 40.7128, 'lng' => -74.0060, 'label' => 'NYC']],
         'hidden.jpg' => ['location' => ['lat' => 34.0522, 'lng' => -118.2437], 'restriction' => 'private'],
@@ -1398,7 +1431,7 @@ make_jpeg("$fxDepth/Europe/Germany/berlin.jpg", 60, 60, 60, 60, 60);
 make_jpeg("$fxDepth/Asia/tokyo.jpg", 60, 60, 70, 70, 70);
 // Hand-placed, as if from an earlier admin session: Germany (a *nested*
 // folder) is hidden from public view.
-file_put_contents("$fxDepth/Europe/Germany/.gallery-items.json", json_encode([
+write_data_file("$fxDepth/Europe/Germany/.gallery-items.php", ([
     'items' => [], 'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => false, 'restriction' => 'private',
 ]));
 file_put_contents("$fxDepth/trip.md", "{gallery}\nWe loved Europe so much.\n");
@@ -1489,7 +1522,7 @@ check('?admin&folder= with a bogus nested path returns 404', $badAdminStatus ===
 
 [, $captionBody] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'eiffel.jpg', 'caption' => 'Iron lady']);
 check('a caption saved on a deeply nested photo succeeds', str_contains($captionBody, 'class="flash ok"'));
-check('...and its colocated data file lives inside that folder', is_file("$fxDepth/Europe/France/Paris/.gallery-items.json"));
+check('...and its colocated data file lives inside that folder', is_file("$fxDepth/Europe/France/Paris/.gallery-items.php"));
 [, $parisAfterCaption] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France/Paris'));
 check('...and shows publicly on that folder\'s page', str_contains($parisAfterCaption, 'Iron lady'));
 
@@ -1547,6 +1580,45 @@ check('the admin\'s Hidden items summary lists nested hidden folders (Germany an
 $treeJson = json_decode($treeBody, true);
 check('the whole-tree export is JSON keyed by folder path, root as ""', $treeStatus === 200 && is_array($treeJson) && array_key_exists('', $treeJson) && isset($treeJson['Europe']) && isset($treeJson['Europe/France/Paris']));
 check('...and carries the saved fields', ($treeJson['Europe']['description'] ?? '') !== '' && ($treeJson['Europe']['dates'] ?? '') === 'June 12-15, 2026');
+
+// The generated data files are PHP files starting with an exit guard, so
+// asking the web server for one by URL yields a bare 404 and none of the
+// JSON — captions, GPS, and (above all) the filenames of hidden items.
+$guard = "<?php http_response_code(404); exit; ?>\n";
+$onDisk = (string) file_get_contents("$fxDepth/Europe/France/Paris/.gallery-items.php");
+check('a data file on disk starts with the exit guard line', strncmp($onDisk, $guard, strlen($guard)) === 0);
+$depthPost('', ['action' => 'save_item', 'file' => 'loose.jpg', 'caption' => 'a root-level caption']);
+check('(setup) the root data file now exists', is_file("$fxDepth/.gallery-items.php"));
+foreach ([
+    'a folder\'s captions file' => '/Europe/France/Paris/.gallery-items.php',
+    'the hidden-flag file naming a hidden folder' => '/Europe/Germany/.gallery-items.php',
+    'the root data file' => '/.gallery-items.php',
+] as $label => $dataUrl) {
+    [$dataStatus, $dataBody] = http_get("$baseDepth$dataUrl");
+    check("requesting $label directly returns 404 with an empty body", $dataStatus === 404 && $dataBody === '');
+}
+[, $germanyDirect] = http_get("$baseDepth/Europe/Germany/.gallery-items.php");
+check('...and the hide flag is not in anything it sends', !str_contains($germanyDirect, 'private') && !str_contains($germanyDirect, 'restriction'));
+
+// A caption containing PHP open tags must neither end up as live code in
+// the file nor reach the page unescaped.
+$evil = "x<?php echo 'PWNED'; ?>y <?= 'PWNED2' ?>";
+[, $evilSave] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'louvre.jpg', 'caption' => $evil]);
+check('saving a caption with PHP open tags succeeds', str_contains($evilSave, 'class="flash ok"'));
+$evilOnDisk = (string) file_get_contents("$fxDepth/Europe/France/Paris/.gallery-items.php");
+check('...but the file holds no "<?" after its guard line (tags are written as <)', substr_count($evilOnDisk, '<?') === 1 && str_contains($evilOnDisk, '<'));
+[$evilStatus, $evilDirect] = http_get("$baseDepth/Europe/France/Paris/.gallery-items.php");
+check('...so requesting the file still runs only the guard (404, nothing echoed)', $evilStatus === 404 && $evilDirect === '');
+[, $evilPage] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France/Paris'), ["Cookie: $depthCookie"]);
+check('...and the caption comes back literally, escaped, never executed', !str_contains($evilPage, 'PWNED') || str_contains($evilPage, '&lt;?php echo'));
+$evilRoundTrip = read_data_file("$fxDepth/Europe/France/Paris/.gallery-items.php");
+check('...and round-trips through the file exactly', ($evilRoundTrip['items']['louvre.jpg']['caption'] ?? null) === $evil);
+
+// A plain-JSON file with no guard line (hand-made, or left by something
+// else) is still read.
+file_put_contents("$fxDepth/Asia/.gallery-items.php", json_encode(['items' => ['tokyo.jpg' => ['caption' => 'plain json, no guard']]]));
+[, $plainJsonPage] = http_get("$baseDepth/?folder=Asia");
+check('an unguarded plain-JSON data file is still read', str_contains($plainJsonPage, 'plain json, no guard'));
 
 // Two admin "tabs" on one record: a stale save is refused, not silently
 // overwritten; a save to a *different* record in the same folder is fine.

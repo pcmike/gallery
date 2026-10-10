@@ -80,7 +80,7 @@ Everything is a constant near the top of `index.php`:
 ```php
 define('GALLERY_VERSION', '2.0.0');
 
-// Off by default — writes .gallery-stats.json/.sqlite into the folder
+// Off by default — writes .gallery-stats.php/.sqlite into the folder
 // once turned on. Strongly recommended for any real deployment: this is
 // what powers the live view-count badges.
 define('TRACK_VIEWS', false);
@@ -261,7 +261,9 @@ How it's locked down: HTTP Basic Auth compared with `hash_equals()`; the page **
 
 **`ADMIN_PASSWORD` lives in `index.php` itself**, a deliberate choice to keep this a single file. Redact it before pasting or sharing your copy of the script for support.
 
-**The admin's data files are publicly fetchable unless you block them.** Everything the admin writes lives in a `.gallery-items.json` inside each folder, and a web server serves that like any other file: anyone who requests `yoursite.com/kb/.gallery-items.json` can read your captions, any GPS coordinates you entered, **and the exact filenames of everything you've hidden, marked as hidden** — which hands over the very URLs hiding is meant to protect. Don't put anything in a caption you wouldn't put on the page, and add the data-file rule in [Locking down the files themselves](#locking-down-the-files-themselves), which takes one block.
+**The admin's data files are protected by default — and worth a second layer.** Everything the admin writes lives in a `.gallery-items.php` inside each folder (and the stats and login-throttle files are `.gallery-stats.php` and `.gallery-login-attempts.php`). They hold your captions, any GPS coordinates you entered, and the exact filenames of everything you've hidden. A web server serves any file in the folder to anyone who asks for its URL, so these are stored as PHP files that begin with a one-line guard: a direct request runs that line, which answers **404 and stops**, so none of the JSON below it is ever sent — on any host that runs PHP, with no server setting needed. The gallery itself never runs these files; it reads them as plain text and skips the first line. Captions are written with `<` and `>` escaped, so a caption can't smuggle PHP into the file. Hidden items are never counted in the view stats, so their names never reach that store either.
+
+Still add the server rule in [Locking down the files themselves](#locking-down-the-files-themselves) if you can: it's a second layer, and it covers the one file the guard can't — the optional `.gallery-stats.sqlite`, a binary SQLite database that can't start with a PHP line (it holds only the names and counts of items that *aren't* hidden).
 
 ## Hiding items and private view
 
@@ -280,8 +282,10 @@ Everything above governs requests that go through `index.php`. **A photo is stil
 
 ```nginx
 # The gallery's generated data files (captions, GPS, hide flags, stats,
-# login throttle, thumbnail cache): never public. 404, not 403, so their
-# existence isn't confirmed either.
+# login throttle, thumbnail cache): never public. The .php ones already
+# answer 404 on their own; this is a second layer, and the only cover for
+# the binary .gallery-stats.sqlite. 404, not 403, so existence isn't
+# confirmed either.
 location ~ /\.gallery- {
     return 404;
 }
@@ -353,16 +357,16 @@ This is nginx-only; there's no Apache equivalent here.
 
 ## Keeping runtime data out of git
 
-If you keep your deployed gallery in git, add this to `.gitignore`: these files are generated, not source — and `.gallery-items.json` can contain GPS coordinates, which shouldn't be committed by accident.
+If you keep your deployed gallery in git, add this to `.gitignore`: these files are generated, not source — and `.gallery-items.php` can contain GPS coordinates, which shouldn't be committed by accident.
 
 ```
 .gallery-cache/
-.gallery-items.json
+.gallery-items.php
 .gallery-stats.*
-.gallery-login-attempts.json
+.gallery-login-attempts.php
 ```
 
-`.gallery-items.json` (the captions, locations and settings you typed) and your hand-written `.md` files are the only things here that can't be regenerated — use the admin's JSON export, and your host's own backups for the notes.
+`.gallery-items.php` (the captions, locations and settings you typed) and your hand-written `.md` files are the only things here that can't be regenerated — use the admin's JSON export, and your host's own backups for the notes.
 
 ## Upgrading to 2.0
 
