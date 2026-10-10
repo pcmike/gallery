@@ -38,7 +38,8 @@ try:
     make("moov_at_end.mp4"); make("faststart.mp4", "-movflags", "+faststart"); make("quicktime.mov", "-f", "mov")
     for n in ("moov_at_end.mp4", "faststart.mp4", "quicktime.mov"): print(f"  {n:18s} boxes {boxes(f'{d}/{n}')}")
     ok(boxes(f"{d}/moov_at_end.mp4").index("moov") > boxes(f"{d}/moov_at_end.mp4").index("mdat"), "(setup) one clip really has its metadata AFTER the video data, like a phone's")
-    src = open(HERE + "/../../../index.php").read().replace("define('ENABLE_VIDEO', false)", "define('ENABLE_VIDEO', true)")
+    import re
+    src = re.sub(r"define\('ENABLE_VIDEO',\s*gallery_setting\([^)]*\)\)", "define('ENABLE_VIDEO', true)", open(HERE + "/../../../index.php").read(), count=1)
     open(f"{d}/index.php", "w").write(src)
     subprocess.run(["php", "-r", '$i = imagecreatetruecolor(30, 30); imagejpeg($i, $argv[1]);', f"{d}/photo.jpg"], check=True)
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); B = f"http://127.0.0.1:{p}"

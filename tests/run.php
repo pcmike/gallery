@@ -379,7 +379,8 @@ function extract_csrf_token($body) {
 function write_patched_index($destPath, $indexContents, $patches) {
     $content = $indexContents;
     foreach ($patches as $const => $value) {
-        $pattern = "/define\('" . preg_quote($const, '/') . "',\s*[^)]+\)/";
+        // A setting is define('NAME', gallery_setting('NAME', default[, allowed])): replace the whole define.
+        $pattern = "/define\('" . preg_quote($const, '/') . "',\s*gallery_setting\([^)]*\)\)/";
         $replacement = "define('$const', " . $value . ')';
         $new = preg_replace($pattern, $replacement, $content, 1, $count);
         if ($count !== 1) {
@@ -684,11 +685,32 @@ check('no JSON stats file created by default', !file_exists("$fx1/.gallery-stats
 check('no SQLite stats file created by default', !file_exists("$fx1/.gallery-stats.sqlite"));
 
 [$status, , $headers] = http_get("$base1/?img=widget_01.jpg&size=thumb");
-check('?img=<file>&size=thumb still returns 200 with caching off', $status === 200);
-check('no .gallery-cache directory created by default', !is_dir("$fx1/.gallery-cache"));
-$origBytes = filesize("$fx1/widget_01.jpg");
-[, $thumbBody] = http_get("$base1/?img=widget_01.jpg&size=thumb");
-check('with caching off, "thumb" is served at full original size (no resizing)', strlen($thumbBody) === $origBytes);
+check('?img=<file>&size=thumb returns 200 by default (thumbnails are on)', $status === 200);
+$cacheFiles = is_dir("$fx1/.gallery-cache") ? array_values(array_diff(scandir("$fx1/.gallery-cache"), ['.', '..'])) : [];
+check('a default install writes thumbnails into .gallery-cache, and only there: no stats or data file appears anywhere', $cacheFiles !== [] && !array_filter(scandir($fx1), fn($f) => str_starts_with($f, '.gallery-stats') || str_starts_with($f, '.gallery-items')));
+// With the cache switched off explicitly, nothing is written and "thumb" is the original.
+$fxNoCache = new_fixture_dir('nocache');
+make_jpeg("$fxNoCache/big.jpg", 2400, 1800, 200, 80, 60);
+write_patched_index("$fxNoCache/index.php", $indexContents, ['ENABLE_THUMBNAIL_CACHE' => 'false']);
+$portNoCache = find_free_port(); start_server($fxNoCache, $portNoCache);
+[$ncStatus, $ncBody] = http_get("http://127.0.0.1:$portNoCache/?img=big.jpg&size=thumb");
+check('with ENABLE_THUMBNAIL_CACHE set to false, no .gallery-cache directory is created', $ncStatus === 200 && !is_dir("$fxNoCache/.gallery-cache"));
+check('...and "thumb" is then served at full original size (no resizing)', strlen($ncBody) === filesize("$fxNoCache/big.jpg"));
+$fxCacheOn = new_fixture_dir('cacheon');
+make_jpeg("$fxCacheOn/big.jpg", 2400, 1800, 200, 80, 60);
+copy(__DIR__ . '/../index.php', "$fxCacheOn/index.php");
+$portCacheOn = find_free_port(); start_server($fxCacheOn, $portCacheOn);
+[, $coBody] = http_get("http://127.0.0.1:$portCacheOn/?img=big.jpg&size=thumb");
+check('by default a large photo\'s thumbnail really is smaller than the original', strlen($coBody) > 0 && strlen($coBody) < filesize("$fxCacheOn/big.jpg"));
+// An unwritable folder must not break anything: the original is served, as with the cache off.
+$fxRo2 = new_fixture_dir('cachero');
+make_jpeg("$fxRo2/big.jpg", 2400, 1800, 200, 80, 60);
+copy(__DIR__ . '/../index.php', "$fxRo2/index.php");
+chmod($fxRo2, 0555);
+$portRo2 = find_free_port(); start_server($fxRo2, $portRo2);
+[$roStatus, $roBody] = http_get("http://127.0.0.1:$portRo2/?img=big.jpg&size=thumb");
+check('with the cache on (the default) but the folder unwritable, the photo is still served (the original)', $roStatus === 200 && strlen($roBody) === filesize("$fxRo2/big.jpg") && !is_dir("$fxRo2/.gallery-cache"));
+chmod($fxRo2, 0775);
 
 [$status] = http_get("$base1/?img=" . '../../../../etc/passwd' . "&size=thumb");
 check('?img path traversal is blocked (basename + allow-list)', $status === 404);
@@ -1902,7 +1924,7 @@ foreach (['json' => true, 'sqlite' => false] as $upgradeMode => $forceJsonMode) 
         $patched = str_replace("in_array('sqlite', PDO::getAvailableDrivers(), true)", 'false', $patched, $replaced);
         if ($replaced !== 1) { echo "  FAIL  (setup) could not force JSON stats mode\n"; $failCount++; }
     }
-    write_patched_index("$fxUp/index.php", $patched, ['TRACK_VIEWS' => 'true']);
+    write_patched_index("$fxUp/index.php", $patched, ['TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true']);
     if ($upgradeMode === 'json') {
         file_put_contents("$fxUp/.gallery-stats.json", json_encode(['pageviews' => 41, 'photos' => ['old-photo.jpg' => 7, 'other.jpg' => 3]]));
     } elseif (class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
@@ -1938,7 +1960,7 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     $fxRo = new_fixture_dir('upgrade-readonly');
     make_jpeg("$fxRo/p.jpg", 60, 60, 10, 10, 10);
     $patchedRo = str_replace("in_array('sqlite', PDO::getAvailableDrivers(), true)", 'false', $indexContents);
-    write_patched_index("$fxRo/index.php", $patchedRo, ['TRACK_VIEWS' => 'true']);
+    write_patched_index("$fxRo/index.php", $patchedRo, ['TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true']);
     file_put_contents("$fxRo/.gallery-stats.json", json_encode(['pageviews' => 9, 'photos' => ['p.jpg' => 4]]));
     chmod($fxRo, 0555);
     $portRo = find_free_port();
@@ -1973,7 +1995,7 @@ if (strlen($v1Source) < 1000) {
         [, $v1Page] = http_get("$baseReal/");
         $v1Files = array_values(array_filter(scandir($fxReal), fn($f) => str_starts_with($f, '.gallery-stats')));
         check("[real 1.1.1, $v1Flavour] the old script really recorded 5 and 2 views and wrote its own stats file", str_contains($v1Page, 'data-photo="a.jpg">&#128065; 5<') && str_contains($v1Page, 'data-photo="b.jpg">&#128065; 2<') && $v1Files !== []);
-        file_put_contents("$fxReal/index.php", str_replace("define('TRACK_VIEWS', false)", "define('TRACK_VIEWS', true)", $indexContents));   // the upgrade: same folder, same data
+        write_patched_index("$fxReal/index.php", $indexContents, ['TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true']);   // the upgrade: same folder, same data
         [, $v2Page] = http_get("$baseReal/");
         check("[real 1.1.1, $v1Flavour] after swapping in 2.0.0, both per-photo counts carry over exactly (5 and 2)", str_contains($v2Page, 'data-photo="a.jpg">&#128065; 5<') && str_contains($v2Page, 'data-photo="b.jpg">&#128065; 2<'));
         check("[real 1.1.1, $v1Flavour] ...and the sitewide total carries over (4 loads under 1.1.1, plus this one)", str_contains($v2Page, '· 5 views'));
@@ -2080,6 +2102,107 @@ check('[gps import] ...and then it is', substr_count(http_get("$baseGps/?folder=
 // The switch asks first, and turning it off keeps the data.
 [, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '0'], $gpsHdrs);
 check('[gps import] turning it off hides every location again but keeps the stored coordinates', str_contains($r, 'Saved coordinates are kept') && substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 0 && abs((read_data_file("$fxGps/Rome/.gallery-items.php")['items']['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001);
+
+echo "== settings file: .gallery-config.php overrides the defaults and survives an update ==\n";
+
+$cfgHead = "<?php if (!defined('GALLERY_CONFIG_LOADING')) { http_response_code(404); exit; }\n";
+$fxCfg = new_fixture_dir('config');
+make_jpeg("$fxCfg/photo.jpg", 60, 60, 10, 10, 10);
+make_minimal_mp4("$fxCfg/clip.mp4", 2);
+mkdir("$fxCfg/Sub"); make_jpeg("$fxCfg/Sub/in.jpg", 60, 60, 20, 20, 20);
+copy(__DIR__ . '/../index.php', "$fxCfg/index.php");
+$portCfg = find_free_port(); start_server($fxCfg, $portCfg); $baseCfg = "http://127.0.0.1:$portCfg";
+$cfgHome = fn () => http_get("$baseCfg/")[1];
+$h0 = $cfgHome();
+check('[settings file] with no settings file, the defaults apply (video off, no admin, no subfolders, no title link to the admin)', !str_contains($h0, 'clip.mp4') && http_get("$baseCfg/?admin")[0] === 404 && !str_contains($h0, 'href="?admin"'));
+file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true];\n");
+$h1 = $cfgHome();
+check('[settings file] a .gallery-config.php beside index.php overrides the defaults (video shown, folders on, admin exists, title links to it)', str_contains($h1, 'alt="clip.mp4"') && str_contains($h1, 'id="group-sub"') && str_contains($h1, 'href="?admin"') && http_get("$baseCfg/?admin")[0] === 200);
+check('[settings file] ...and the password in it really works for the admin login', str_contains(http_post("$baseCfg/?admin", ['login_password' => 'cfg-pw-123'])[1] . http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')])[1], 'Gallery Admin'));
+check('[settings file] a direct request for the file answers 404 and shows nothing', (function () use ($baseCfg) { [$st, $b] = http_get("$baseCfg/.gallery-config.php"); return $st === 404 && !str_contains($b, 'cfg-pw-123') && !str_contains($b, 'ADMIN_PASSWORD'); })());
+// An update: index.php is replaced by a fresh copy. The settings stay.
+copy(__DIR__ . '/../index.php', "$fxCfg/index.php");
+check('[settings file] replacing index.php with a fresh copy (an update) keeps every setting', str_contains($cfgHome(), 'alt="clip.mp4"') && str_contains($cfgHome(), 'id="group-sub"') && http_get("$baseCfg/?admin")[0] === 200);
+// The settings file beats an edit made in index.php itself: someone changed the
+// defaults in index.php (video off, folders off here would be the defaults, so
+// flip the other way), and the file says otherwise.
+$edited = str_replace(["gallery_setting('ENABLE_VIDEO', false)", "gallery_setting('AUTO_GROUP_BY_FOLDER', false)"], ["gallery_setting('ENABLE_VIDEO', true)", "gallery_setting('AUTO_GROUP_BY_FOLDER', true)"], $indexContents, $editedCount);
+file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => false, 'AUTO_GROUP_BY_FOLDER' => false];\n");
+file_put_contents("$fxCfg/index.php", $edited);
+$hEdit = $cfgHome();
+check('[settings file] it wins over a value edited into index.php (file says off, index.php says on: off)', $editedCount === 2 && !str_contains($hEdit, 'clip.mp4') && !str_contains($hEdit, 'id="group-sub"'));
+unlink("$fxCfg/.gallery-config.php");
+check('[settings file] ...and without the file, the edited index.php applies as before (on)', str_contains($cfgHome(), 'alt="clip.mp4"'));
+file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true];\n");
+copy(__DIR__ . '/../index.php', "$fxCfg/index.php");
+// Anything wrong in the file is reported, never fatal, and the rest still applies.
+file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDDEO' => true, 'TRACK_VIEWS' => 'yes', 'PHOTO_SORT_ORDER' => 'random', 'ENABLE_VIDEO' => true, 'MAP_CLUSTER_RADIUS_MILES' => 'far'];\n");
+$h2 = $cfgHome();
+check('[settings file] a typo\'d name, a wrong kind of value and a value not on the allowed list are each reported in the setup notices', str_contains($h2, '&quot;ENABLE_VIDDEO&quot; isn&#039;t a setting') && str_contains($h2, '&quot;TRACK_VIEWS&quot; should be true or false') && str_contains($h2, '&quot;PHOTO_SORT_ORDER&quot; should be one of') && str_contains($h2, '&quot;MAP_CLUSTER_RADIUS_MILES&quot; should be a number'));
+check('[settings file] ...and the good setting in the same file still applies', str_contains($h2, 'alt="clip.mp4"'));
+file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => true,\n");   // syntax error
+[$st3, $h3] = http_get("$baseCfg/");
+check('[settings file] a syntax error in the file does not take the site down: it loads on the defaults, with a notice', $st3 === 200 && str_contains($h3, 'alt="photo.jpg"') && str_contains($h3, 'couldn&#039;t be loaded') && !str_contains($h3, 'alt="clip.mp4"'));
+file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "echo 'oops';\n");
+[$st4, $h4] = http_get("$baseCfg/");
+check('[settings file] a file that does not return a list is reported and ignored', $st4 === 200 && str_contains($h4, 'must return a list of settings'));
+// The admin says what comes from the file, by name only.
+file_put_contents("$fxCfg/.gallery-config.php", $cfgHead . "return ['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123'];\n");
+[, $cfgAdmin] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
+check('[settings file] the root Settings tab says the file is in use and names the settings it provides, never their values', str_contains($cfgAdmin, 'is in use and keeps its settings') && str_contains($cfgAdmin, 'ENABLE_VIDEO, ADMIN_PASSWORD') && !str_contains($cfgAdmin, 'cfg-pw-123'));
+unlink("$fxCfg/.gallery-config.php");
+[, $cfgAdmin2] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
+check('[settings file] without the file the admin says so and explains how to keep settings across updates', http_get("$baseCfg/?admin")[0] === 404);
+
+echo "== settings never destroy data: captions, locations, hide flags and stats survive any setting being switched ==\n";
+
+$fxKeep = new_fixture_dir('keepdata');
+make_jpeg("$fxKeep/photo.jpg", 60, 60, 10, 10, 10);
+make_minimal_mp4("$fxKeep/clip.mp4", 2);
+mkdir("$fxKeep/Sub"); make_jpeg("$fxKeep/Sub/deep.jpg", 60, 60, 20, 20, 20); make_minimal_mp4("$fxKeep/Sub/deepclip.mp4", 2);
+copy(__DIR__ . '/../index.php', "$fxKeep/index.php");
+$keepOn = $cfgHead . "return ['ENABLE_VIDEO' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'ENABLE_PHOTO_LOCATION' => true];\n";
+$keepOff = $cfgHead . "return ['ENABLE_VIDEO' => false, 'AUTO_GROUP_BY_FOLDER' => false, 'TRACK_VIEWS' => false, 'ENABLE_PHOTO_LOCATION' => false, 'ENABLE_THUMBNAIL_CACHE' => false];\n";
+file_put_contents("$fxKeep/.gallery-config.php", $keepOn);
+write_data_file("$fxKeep/.gallery-items.php", ['items' => [
+    'clip.mp4' => ['caption' => 'Waves at dusk', 'location' => ['lat' => 38.7, 'lng' => -9.1, 'label' => 'Lisbon'], 'locationVisibility' => 'show', 'restriction' => 'private', 'gpsChecked' => true],
+    'photo.jpg' => ['caption' => 'Kept caption', 'web' => 'https://example.test/x'],
+], 'groups' => [], 'displayName' => 'Keep me', 'locationEnabled' => true]);
+write_data_file("$fxKeep/Sub/.gallery-items.php", ['items' => [
+    'deepclip.mp4' => ['caption' => 'Deep clip caption'], 'deep.jpg' => ['caption' => 'Deep photo caption', 'location' => ['lat' => 1.5, 'lng' => 2.5, 'label' => '']],
+], 'groups' => [], 'description' => 'A folder description', 'locationEnabled' => true]);
+$portKeep = find_free_port(); start_server($fxKeep, $portKeep); $baseKeep = "http://127.0.0.1:$portKeep";
+foreach (['/', '/?folder=Sub', '/?track=photo.jpg', '/?track=photo.jpg'] as $u) http_get("$baseKeep$u");
+$snapshot = function () use ($fxKeep) {
+    $snap = [];
+    foreach (['.gallery-items.php', 'Sub/.gallery-items.php'] as $f) $snap[$f] = read_data_file("$fxKeep/$f");
+    foreach (scandir($fxKeep) as $f) if (str_starts_with($f, '.gallery-stats')) $snap[$f] = md5_file("$fxKeep/$f");
+    return $snap;
+};
+$onPage = http_get("$baseKeep/")[1];
+check('[keep data] (setup) with everything on: the folder is shown, the hidden video is not (its hide flag works), and the two counted views are visible', str_contains($onPage, 'id="group-sub"') && !str_contains($onPage, 'alt="clip.mp4"') && !str_contains($onPage, 'img=clip.mp4') && str_contains($onPage, 'data-photo="photo.jpg">&#128065; 2<'));
+$before = $snapshot();   // taken after every request that is allowed to count a view
+// Switch every one of those settings OFF and use the site (public pages, admin) several times.
+file_put_contents("$fxKeep/.gallery-config.php", $keepOff);
+foreach (['/', '/', '/?folder=Sub', '/?map', '/?admin', '/?admin&folder=Sub'] as $u) http_get("$baseKeep$u", ['Authorization: Basic ' . base64_encode('x:nopw')]);
+$offPage = http_get("$baseKeep/")[1];
+check('[keep data] (setup) with those settings off the videos and folders are really gone from the page', !str_contains($offPage, 'clip.mp4') && !str_contains($offPage, 'id="group-sub"'));
+$after = $snapshot();
+check('[keep data] every caption, location, hide flag, link, folder description and stats file is exactly as it was after switching those settings OFF', $before === $after);
+// Switch them back on: everything is back, and counting resumes from where it left off.
+file_put_contents("$fxKeep/.gallery-config.php", $keepOn);
+$onAgain = http_get("$baseKeep/")[1];
+check('[keep data] switching them back ON brings the folder back, and the video\'s hide flag still hides it (it did not reset to visible)', str_contains($onAgain, 'id="group-sub"') && !str_contains($onAgain, 'alt="clip.mp4"') && !str_contains($onAgain, 'img=clip.mp4'));
+check('[keep data] ...and counting resumes from where it left off (the earlier 2 views, now 3)', http_get("$baseKeep/?track=photo.jpg")[0] === 200 && str_contains(http_get("$baseKeep/")[1], 'data-photo="photo.jpg">&#128065; 3<'));
+$subAgain = http_get("$baseKeep/?folder=Sub")[1];
+check('[keep data] ...the folder page shows its description and its photo\'s caption again', str_contains($subAgain, 'A folder description') && str_contains($subAgain, 'Deep photo caption'));
+$afterOn = $snapshot();
+check('[keep data] ...and the stored captions, locations, hide flags and descriptions are exactly what was there before (only counts moved)', array_intersect_key($afterOn, ['.gallery-items.php' => 1, 'Sub/.gallery-items.php' => 1]) === array_intersect_key($before, ['.gallery-items.php' => 1, 'Sub/.gallery-items.php' => 1]));
+// A file that really is deleted is still cleaned up (the old, intended behaviour).
+unlink("$fxKeep/photo.jpg");
+http_get("$baseKeep/");
+$afterDelete = read_data_file("$fxKeep/.gallery-items.php");
+check('[keep data] but an entry whose file was really deleted is still cleaned up, and the video\'s entry is untouched', !isset($afterDelete['items']['photo.jpg']) && isset($afterDelete['items']['clip.mp4']) && ($afterDelete['items']['clip.mp4']['caption'] ?? '') === 'Waves at dusk');
 
 echo "== root identity: the gallery is configured like a folder ==\n";
 
@@ -2553,7 +2676,9 @@ $portPlain = find_free_port(); start_server($fxPlain, $portPlain); $basePlain = 
 foreach (['/', '/?photo=one.jpg', '/?about', '/?img=one.jpg&size=thumb', '/?track=one.jpg', '/?map', '/?folder=Subfolder', '/?admin', '/?reveal'] as $u) http_get("$basePlain$u");
 $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
 check('[plain] a copy of index.php with no settings changed shows the root photos, and not the ones in the subfolder', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && !str_contains($plain, 'three.jpg') && !str_contains($plain, 'Subfolder'));
-check('[plain] ...writes nothing into the folder, whatever is requested (no cache, stats or data files)', $before === $after);
+$newEntries = array_values(array_diff($after, $before));
+$plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
+check('[plain] ...writes only thumbnails (a .gallery-cache folder of images) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f)));
 check('[plain] ...makes no request to any third party (no external host in any src/href except github)', !preg_match('#(src|href)="https?://(?!github\.com|127\.0\.0\.1)#', $plain));
 check('[plain] ...?admin, ?reveal, ?map, ?folder= are all inert (404 / the normal page)', http_get("$basePlain/?admin")[0] === 404 && http_get("$basePlain/?reveal")[0] === 404 && http_get("$basePlain/?folder=Subfolder")[0] === 404 && !str_contains(http_get("$basePlain/?map")[1], 'cdnjs.cloudflare.com'));
 check('[plain] ...and says (in the collapsed notices banner) that a photo in a subfolder is being skipped', str_contains($plain, '1 photo/video was found in subfolders but isn&#039;t shown'));
@@ -2563,7 +2688,7 @@ if (class_exists('Imagick') && count(Imagick::queryFormats('HEIC')) > 0) {
         $fxHeic = new_fixture_dir("recipe-heic-$mode");
         $src = new Imagick(); $src->newImage(60, 60, new ImagickPixel('rgb(200,120,40)')); $src->setImageFormat('heic'); $src->writeImage("$fxHeic/iphone.heic");
         make_jpeg("$fxHeic/normal.jpg", 60, 60, 10, 10, 10);
-        write_patched_index("$fxHeic/index.php", $indexContents, $cache ? ['ENABLE_THUMBNAIL_CACHE' => 'true'] : []);
+        write_patched_index("$fxHeic/index.php", $indexContents, ['ENABLE_THUMBNAIL_CACHE' => $cache ? 'true' : 'false']);
         $portHeic = find_free_port(); start_server($fxHeic, $portHeic); $baseHeic = "http://127.0.0.1:$portHeic";
         [, $heicPage] = http_get("$baseHeic/");
         if (!$cache) {

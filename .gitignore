@@ -1,7 +1,10 @@
 # Generated at runtime by index.php — never commit these. (.gallery-items.php
 # holds your captions and any GPS coordinates; the others are stats and the
-# login throttle. The .json names are the 1.x stats files, kept ignored too.)
+# login throttle. The .json names are the 1.x stats files, kept ignored too.
+# .gallery-config.php is a deployment's own settings file and holds its
+# passwords; the shareable template is gallery-config.example.php.)
 .gallery-cache/
+.gallery-config.php
 .gallery-items.php
 .gallery-stats.php
 .gallery-login-attempts.php

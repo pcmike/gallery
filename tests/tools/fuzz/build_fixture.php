@@ -4,17 +4,15 @@
 $d = rtrim($argv[1] ?? (__DIR__ . '/site'), '/');
 @mkdir($d, 0777, true);
 $src = file_get_contents($argv[2] ?? (dirname(__DIR__, 3) . '/index.php'));
+// A setting is define('NAME', gallery_setting('NAME', default...)); replace the whole define.
 foreach ([
-  "define('AUTO_GROUP_BY_FOLDER', false)" => "define('AUTO_GROUP_BY_FOLDER', true)",
-  "define('AUTO_GROUP_BY_FILENAME', false)" => "define('AUTO_GROUP_BY_FILENAME', true)",
-  "define('ENABLE_VIDEO', false)" => "define('ENABLE_VIDEO', true)",
-  "define('ENABLE_THUMBNAIL_CACHE', false)" => "define('ENABLE_THUMBNAIL_CACHE', true)",
-  "define('TRACK_VIEWS', false)" => "define('TRACK_VIEWS', true)",
-  "define('ENABLE_PHOTO_LOCATION', false)" => "define('ENABLE_PHOTO_LOCATION', true)",
-  "define('ENABLE_MAP', false)" => "define('ENABLE_MAP', true)",
-  "define('ADMIN_PASSWORD', '')" => "define('ADMIN_PASSWORD', 'adm-pw')",
-  "define('PRIVATE_VIEW_PASSWORD', '')" => "define('PRIVATE_VIEW_PASSWORD', 'viewer-pw')",
-] as $a => $b) { if (substr_count($src, $a) !== 1) { fwrite(STDERR, "patch miss: $a\n"); exit(1); } $src = str_replace($a, $b, $src); }
+  'AUTO_GROUP_BY_FOLDER' => 'true', 'AUTO_GROUP_BY_FILENAME' => 'true', 'ENABLE_VIDEO' => 'true', 'ENABLE_THUMBNAIL_CACHE' => 'true',
+  'TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true', 'ENABLE_PHOTO_LOCATION' => 'true', 'ENABLE_MAP' => 'true',
+  'ADMIN_PASSWORD' => "'adm-pw'", 'PRIVATE_VIEW_PASSWORD' => "'viewer-pw'",
+] as $name => $value) {
+  $src = preg_replace("/define\\('" . $name . "',\\s*gallery_setting\\([^)]*\\)\\)/", "define('$name', $value)", $src, 1, $n);
+  if ($n !== 1) { fwrite(STDERR, "patch miss: $name\n"); exit(1); }
+}
 file_put_contents("$d/index.php", $src);
 function jpg($path, $r=100,$g=100,$b=100) { @mkdir(dirname($path), 0777, true); $im=imagecreatetruecolor(80,60); imagefill($im,0,0,imagecolorallocate($im,$r,$g,$b)); imagejpeg($im,$path); }
 function gpsjpg($path,$lat,$lng) {

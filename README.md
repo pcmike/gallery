@@ -4,7 +4,7 @@ A single-file, drop-in PHP photo gallery. No dependencies, no build step, no dat
 
 Built for sharing "for sale" listings (Reddit, Discord, etc.) as much as for plain photo galleries — automatic or hand-curated photo grouping, a lightweight Markdown notes box with sold/reserved markers, opt-in view stats, and deep links that actually preview correctly when shared. Version 2 also handles **trips**: nested folders to any depth, video, per-photo captions and locations, an owner-only admin editor, items you can hide from the public link, and a map.
 
-**Everything beyond the basic gallery is opt-in.** With no settings changed, this script writes nothing to your folder, makes no requests to any third party, and doesn't show a single subfolder, video, or photo location. (It does peek into subfolders, read-only and capped at 40 of them, purely to warn you if photos in there are being skipped — see [Folders](#folders).)
+**Everything beyond the basic gallery is opt-in.** With no settings changed, this script writes only small thumbnails into a `.gallery-cache` folder (nothing else), makes no requests to any third party, and doesn't show a single subfolder, video, or photo location. (It does peek into subfolders, read-only and capped at 40 of them, purely to warn you if photos in there are being skipped — see [Folders](#folders).)
 
 **Contents:** [Quick start](#quick-start) · [Recipes](#recipes--start-here) · [What affects what](#what-affects-what) · [Features](#features) · [Troubleshooting](#troubleshooting) · [Configuration](#configuration) · [Directive syntax](#directive-syntax) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [The admin editor](#the-admin-editor) · [Hiding items and private view](#hiding-items-and-private-view) · [Locking down the files themselves](#locking-down-the-files-themselves) · [The trip map](#the-trip-map) · [Sharing and previews](#sharing-and-previews) · [Security notes](#security-notes) · [Keeping runtime data out of git](#keeping-runtime-data-out-of-git) · [Upgrading to 2.0](#upgrading-to-20)
 
@@ -19,7 +19,7 @@ your-folder/
 ```
 
 Requirements: **PHP 8.3 or newer** (tested on 8.3.32 and 8.4.26 — the whole suite, the fuzzer, the cross-site-scripting check and the real-browser run on both). 8.3 still receives security fixes (until the end of 2027); older versions don't, so the page says so plainly instead of failing. No required extensions — everything degrades gracefully without them. Optional:
-- **Imagick** (with HEIC/HEIF support) or **GD** — enables thumbnail generation/caching, once you turn `ENABLE_THUMBNAIL_CACHE` on (see [Configuration](#configuration)). Imagick specifically is required for HEIC/HEIF photos (iPhone default format) to display at all.
+- **Imagick** (with HEIC/HEIF support) or **GD** — enables thumbnail generation/caching, which is on by default (`ENABLE_THUMBNAIL_CACHE`, see [Configuration](#configuration)); without either, or if the folder can't be written, the original photos are served instead. Imagick specifically is required for HEIC/HEIF photos (iPhone default format) to display at all.
 - **pdo_sqlite** — used automatically for view-stat storage if present and `TRACK_VIEWS` is on; falls back to a flock-protected JSON file otherwise. (The SQLite store keys its rows by a hash of each photo's path, never the filename, because that file can be fetched by URL.)
 - **EXIF** (`exif_read_data`) — only for reading GPS out of JPEGs when you've turned on photo locations.
 
@@ -31,11 +31,11 @@ Requirements: **PHP 8.3 or newer** (tested on 8.3.32 and 8.4.26 — the whole su
 ...
 ```
 
-Both view tracking and thumbnail caching are **off by default** — this script writes nothing to your folder's disk unless you explicitly turn one on (or use the [admin editor](#the-admin-editor), which saves what you type). See [Configuration](#configuration) for why you'll probably want to turn them on anyway.
+Thumbnail caching is **on by default** (it writes only small derived images into `.gallery-cache`); view tracking is **off** — nothing else is written to your folder's disk unless you turn it on or use the [admin editor](#the-admin-editor), which saves what you type. See [Configuration](#configuration) for what each setting does.
 
 ## Recipes — start here
 
-Pick what you're doing. Each recipe lists the few settings to change near the top of `index.php`, what to do in the [admin editor](#the-admin-editor) if you need it, and what visitors then see. Everything else in this README is the full reference for those pieces.
+Pick what you're doing. Each recipe lists the few settings to change — written below as `define('NAME', value);`; put them in a [settings file](#keeping-your-settings-across-updates) so an update doesn't reset them (or change the default in `index.php`'s own `gallery_setting('NAME', default)` line) — what to do in the [admin editor](#the-admin-editor) if you need it, and what visitors then see. Everything else in this README is the full reference for those pieces.
 
 | I want to… | Go to |
 |---|---|
@@ -55,9 +55,9 @@ You only ever edit the `define('NAME', value);` lines near the top of `index.php
 
 **Visitors see:** every photo in that folder (not in its subfolders), in filename order, with a full-screen viewer (arrow keys, swipe on a phone). A link like `yoursite.com/folder/?photo=name.jpg` opens straight to one photo and previews correctly when pasted into Discord or Reddit.
 
-**What it won't do until you ask:** it writes nothing into your folder, loads nothing from any other website, and `?admin`, `?reveal`, `?map` and `?folder=` all do nothing. If photos exist in subfolders, or videos exist anywhere (they're ignored until `ENABLE_VIDEO` is on), a small collapsed "setup notice" tells you that — it's a count, never a name, and it's the cue to try the [trip album](#recipe-a-trip-album) or [turn video on](#video).
+**What it won't do until you ask:** it writes nothing into your folder except thumbnails, loads nothing from any other website, and `?admin`, `?reveal`, `?map` and `?folder=` all do nothing. If photos exist in subfolders, or videos exist anywhere (they're ignored until `ENABLE_VIDEO` is on), a small collapsed "setup notice" tells you that — it's a count, never a name, and it's the cue to try the [trip album](#recipe-a-trip-album) or [turn video on](#video).
 
-**Worth turning on:** `ENABLE_THUMBNAIL_CACHE` → `true` (the page loads small thumbnails instead of full-size originals; required for iPhone photos). `PHOTO_SORT_ORDER` → `'mtime'` to sort by file date instead of name (only if your upload method keeps dates).
+**Worth knowing:** thumbnails are already on (the page loads small thumbnails instead of full-size originals, and iPhone photos need them). `PHOTO_SORT_ORDER` → `'mtime'` to sort by file date instead of name (only if your upload method keeps dates).
 
 ### Recipe: a for-sale listing
 
@@ -154,11 +154,11 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 
 | Setting | Default | Turn it on / change it to… | Pairs with |
 |---|---|---|---|
-| `ENABLE_THUMBNAIL_CACHE` | off | `true` for any real deployment: small thumbnails, and iPhone photos | creates `.gallery-cache/` folders |
+| `ENABLE_THUMBNAIL_CACHE` | **on** | `false` for a gallery that must never write to its folder (then every photo is served full-size and iPhone photos can't be shown) | creates `.gallery-cache/` folders; falls back to the original if it can't write |
 | `AUTO_GROUP_BY_FILENAME` | off | `true` if photos are named `item_01.jpg, item_02.jpg` | notes `.md` (mention the prefix word) |
 | `AUTO_GROUP_BY_FOLDER` | off | `true` to use subfolders as albums | admin folder settings, `FOLDER_DISPLAY_MODE`, `EXTRA_FOLDERS` |
 | `TRACK_VIEWS` | off | `true` to count views | `SHOW_VIEW_COUNTS_PUBLICLY`; the admin shows the counts |
-| `SHOW_VIEW_COUNTS_PUBLICLY` | on | `false` to count but show nobody (you see them in the admin) | needs `TRACK_VIEWS` |
+| `SHOW_VIEW_COUNTS_PUBLICLY` | **off** | `true` to show visitors the view counts (you always see them in the admin) | needs `TRACK_VIEWS` |
 | `PHOTO_SORT_ORDER` | `'filename'` | `'mtime'` to sort photos *and* folders by date | |
 | `FOLDER_DISPLAY_MODE` | `'overview'` | `'inline'` to show a folder's photos in a box instead of a cover card | needs `AUTO_GROUP_BY_FOLDER` |
 | `EXTRA_FOLDERS` | none | add `'Name' => '/real/path'` pairs | needs `AUTO_GROUP_BY_FOLDER` |
@@ -212,8 +212,8 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 - Per-photo, per-group, and total page-load counts, all updating live with no refresh, once turned on
 - Auto-detects SQLite vs. JSON-file storage; known preview bots excluded from counts
 
-**Thumbnail caching** — off by default (`ENABLE_THUMBNAIL_CACHE`)
-- On-the-fly thumbnail generation + caching (Imagick or GD), once turned on
+**Thumbnail caching** — on by default (`ENABLE_THUMBNAIL_CACHE`)
+- On-the-fly thumbnail generation + caching (Imagick or GD), on unless you turn it off
 - HEIC/HEIF conversion for both grid and lightbox (Imagick only) — requires this to be on; HEIC files are excluded from the gallery entirely otherwise, even with Imagick installed
 
 **Deep linking & sharing**
@@ -235,13 +235,13 @@ If something in a `.md` file doesn't behave as expected — a file typo'd in `{p
 
 **`?admin` or the Private view keeps showing the password form after the right password** means the browser isn't keeping the login cookie: check that cookies aren't blocked for the site and that you're on HTTPS (the cookie is `Secure` there). A script that logs in with an `Authorization` header on Apache with PHP-FPM or CGI also needs `CGIPassAuth On` (see [Locking down the files themselves](#locking-down-the-files-themselves)); the form doesn't.
 
-**"Nothing was saved: this folder isn't writable by the web server"** (in the admin) means PHP can't write into the folder — the single most common hosting snag. Three optional features write there: the admin's saved captions and settings, view counts (`TRACK_VIEWS`), and the thumbnail cache. Without write permission the gallery itself still works fine; those three just can't save. On most hosts the fix is to give the web server's user write permission on the folder (and on any album folder you edit in the admin, including an [`EXTRA_FOLDERS`](#recipe-an-archive-on-another-disk) one). The admin tells you plainly when a save fails; it never reports "Saved" for something it couldn't write.
+**"Nothing was saved: this folder isn't writable by the web server"** (in the admin) means PHP can't write into the folder — the single most common hosting snag. Three features write there: the admin's saved captions and settings, view counts (`TRACK_VIEWS`), and the thumbnail cache. Without write permission the gallery itself still works fine: the first two just can't save, and the cache quietly falls back to serving the original photos. On most hosts the fix is to give the web server's user write permission on the folder (and on any album folder you edit in the admin, including an [`EXTRA_FOLDERS`](#recipe-an-archive-on-another-disk) one). The admin tells you plainly when a save fails; it never reports "Saved" for something it couldn't write.
 
 This README is the full reference. A deployed gallery's `?about` page (the "gallery" link in the footer) gives visitors a short pitch, the feature list, and a download button, then points back here for anything more detailed.
 
 ## Configuration
 
-Everything is a constant near the top of `index.php`:
+Everything is a setting near the top of `index.php`. The `define('NAME', gallery_setting('NAME', default))` lines there are the **defaults**; a [settings file](#keeping-your-settings-across-updates) beside it overrides them and survives updates. The block below shows the defaults (the second argument):
 
 ```php
 define('GALLERY_VERSION', '2.0.1');
@@ -251,17 +251,17 @@ define('GALLERY_VERSION', '2.0.1');
 // what powers the live view-count badges.
 define('TRACK_VIEWS', false);
 
-// Whether view counts are shown publicly once TRACK_VIEWS is on. Set to
-// false to keep tracking for yourself while hiding the public badges —
-// handy if a low count next to a "for sale" listing would hurt it.
-define('SHOW_VIEW_COUNTS_PUBLICLY', true);
+// Whether view counts are shown to visitors once TRACK_VIEWS is on. Off by
+// default, so turning on tracking never publishes numbers by surprise (you
+// always see them in the admin). Set to true to show the live badges.
+define('SHOW_VIEW_COUNTS_PUBLICLY', false);
 
-// Off by default — writes into a .gallery-cache folder once turned on.
-// Strongly recommended: without it, every photo is served at full
-// original resolution as its own "thumbnail" (real bandwidth cost), and
-// HEIC/HEIF (iPhone) photos are excluded from the gallery entirely,
-// even with Imagick installed.
-define('ENABLE_THUMBNAIL_CACHE', false);
+// On by default — small thumbnails go into a .gallery-cache folder.
+// Without it every photo is served at full original resolution as its
+// own "thumbnail" (real bandwidth cost) and HEIC/HEIF (iPhone) photos
+// can't be shown at all. If the folder can't be written, the original
+// photo is served instead. Set to false to never write there.
+define('ENABLE_THUMBNAIL_CACHE', true);
 
 // Off by default. Turn on if your photos use a multi-angle naming
 // convention (e.g. dp104_01.jpg, dp104_02.jpg) — leaving it on for an
@@ -317,6 +317,29 @@ define('ENABLE_MAP', false);
 // Photos closer together than this (miles) share one numbered map pin.
 define('MAP_CLUSTER_RADIUS_MILES', 50);
 ```
+
+
+### Keeping your settings across updates
+
+Updating the gallery means replacing `index.php` with a newer copy, and anything you edited into the old one is gone with it. To keep your settings, put them in a **settings file** instead: a file named `.gallery-config.php` next to `index.php` (a ready-to-edit copy, `gallery-config.example.php`, is in this repository). It lists only the settings you want to change from the defaults:
+
+```php
+<?php if (!defined('GALLERY_CONFIG_LOADING')) { http_response_code(404); exit; }
+return [
+    'ENABLE_VIDEO'         => true,
+    'AUTO_GROUP_BY_FOLDER' => true,
+    'ADMIN_PASSWORD'       => 'a-long-random-string',
+];
+```
+
+- **It overrides the defaults in `index.php`, and everything it doesn't mention keeps its default.** So a newer `index.php` can improve a default, and you get that improvement for everything you haven't pinned.
+- **It stays when you update.** Replace `index.php` as often as you like; the file isn't touched. This is tested by swapping in a fresh copy.
+- **Mistakes never break the site.** A misspelt name, a value of the wrong kind (`'yes'` for a true/false setting), a value that isn't one of the allowed choices, a file that returns the wrong thing, even a syntax error: each is ignored, and the setup-notices banner says which, so you notice. The gallery carries on with the defaults.
+- **A direct request for it answers 404** (the first line does that), and because its name starts with `.gallery-` the [lock-down rules for the data files](#locking-down-the-files-themselves) cover it too. It holds `ADMIN_PASSWORD` in plain text, as `index.php` always did, so keep it out of git (this repository's `.gitignore` lists it, and [so should yours](#keeping-runtime-data-out-of-git)).
+- **`GALLERY_VERSION` and the cookie name can't be set from it**, since they belong to the code.
+- **The admin's root Settings tab says whether the file is in use and which settings come from it** (names only, never values).
+
+A setting set in the file beats the same setting edited into `index.php`.
 
 ## Directive syntax
 
@@ -550,16 +573,17 @@ The `B` flag is not optional: it escapes the folder name before it goes into the
 
 ## Keeping runtime data out of git
 
-If you keep your deployed gallery in git, add this to `.gitignore`: these files are generated, not source — and `.gallery-items.php` can contain GPS coordinates, which shouldn't be committed by accident.
+If you keep your deployed gallery in git, add this to `.gitignore`: these files are generated or private, not source — `.gallery-items.php` can contain GPS coordinates, and `.gallery-config.php` holds your passwords, so neither should be committed by accident.
 
 ```
 .gallery-cache/
 .gallery-items.php
+.gallery-config.php
 .gallery-stats.*
 .gallery-login-attempts.php
 ```
 
-`.gallery-items.php` (the captions, locations and settings you typed) and your hand-written `.md` files are the only things here that can't be regenerated — use the admin's JSON export, and your host's own backups for the notes.
+`.gallery-items.php` (the captions, locations and settings you typed), your settings file `.gallery-config.php` and your hand-written `.md` files are the only things here that can't be regenerated — use the admin's JSON export for the captions, and your host's own backups for the rest.
 
 ## Upgrading to 2.0
 
@@ -569,7 +593,7 @@ Dropping the new `index.php` over a 1.x copy leaves your gallery looking the sam
 - **Your view counts carry over.** 1.x kept them in `.gallery-stats.json` (or a SQLite file with readable filenames). On the first request with `TRACK_VIEWS` on, 2.0 imports the per-photo counts and the sitewide total into its new stores, then deletes the old JSON file (or drops the old SQLite table and compacts the file, so the old filenames don't linger in it). If the folder isn't writable the old data is simply left where it was.
 - **You may see one new setup notice.** If your folder has subfolders containing photos and `AUTO_GROUP_BY_FOLDER` is off, the collapsed "setup notices" banner now says how many photos in subfolders aren't being shown (a count, never a name). Turn the setting on to show them, or ignore it — it's addressed to you, not your visitors.
 
-Everything else is opt-in. Copy your own settings across by editing the constants in the new file. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+Everything else is opt-in. Copy your own settings across by editing the constants in the new file, or — better, so you never have to again — put them in a [settings file](#keeping-your-settings-across-updates). See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Security notes
 

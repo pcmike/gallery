@@ -1,6 +1,6 @@
 <?php
 /**
- * DROP-IN PHOTO GALLERY — v2.0.0
+ * DROP-IN PHOTO GALLERY
  * Single PHP file, no dependencies, no build step. Drop into any folder
  * of photos and it renders a gallery for that folder.
  *
@@ -20,10 +20,13 @@
  *     AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS /
  *     ENABLE_VIDEO / ADMIN_PASSWORD / ENABLE_PHOTO_LOCATION /
  *     PRIVATE_VIEW_PASSWORD / NGINX_ACCEL_REDIRECT_PREFIX / ENABLE_MAP /
- *     MAP_CLUSTER_RADIUS_MILES constants are just below. TRACK_VIEWS,
- *     ENABLE_THUMBNAIL_CACHE, AUTO_GROUP_BY_FOLDER, ENABLE_VIDEO,
- *     ENABLE_PHOTO_LOCATION, and ENABLE_MAP are off by default — this
- *     script writes nothing to disk (apart from what the admin saves),
+ *     MAP_CLUSTER_RADIUS_MILES constants are just below, and are only the
+ *     DEFAULTS: a .gallery-config.php beside this file overrides them and
+ *     survives replacing this file with a newer version (see
+ *     gallery_setting() below and the README). TRACK_VIEWS,
+ *     AUTO_GROUP_BY_FOLDER, ENABLE_VIDEO, ENABLE_PHOTO_LOCATION and
+ *     ENABLE_MAP are off by default — this script writes nothing to disk
+ *     (apart from thumbnails in .gallery-cache and what the admin saves),
  *     makes no outbound/third-party requests, and doesn't show a single
  *     subfolder, video file, or photo location unless you turn one on.
  *     (With AUTO_GROUP_BY_FOLDER off it still peeks into subfolders, read-
@@ -60,31 +63,96 @@ header('X-Content-Type-Options: nosniff');
 // Version shown on the "?about" page and stamped in the page source.
 define('GALLERY_VERSION', '2.0.1');
 
+/**
+ * The optional settings file. Everything below is configured by the
+ * define() lines in this file, and those lines are the defaults. If a file
+ * named .gallery-config.php sits next to this script, the values it returns
+ * override them — so replacing this file with a newer version keeps your
+ * settings, instead of resetting them to the defaults. The file is plain PHP:
+ *
+ *   <?php if (!defined('GALLERY_CONFIG_LOADING')) { http_response_code(404); exit; }
+ *   return ['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => '...'];
+ *
+ * (the first line makes a direct request for it answer 404). Only the
+ * settings named in this file are honored, each must be the same kind of
+ * value as its default (true/false, text, a number, a list), and anything
+ * else — a typo'd name, a wrong kind of value, a file that can't be read or
+ * has a syntax error — is ignored with a note in the setup-notices banner,
+ * never a broken site. Without the file nothing changes at all.
+ */
+function gallery_setting($name, $default, $allowed = null) {
+    static $loaded = false, $cfg = [], $asked = [];
+    if (!$loaded) {
+        $loaded = true;
+        $path = __DIR__ . '/.gallery-config.php';
+        if (is_file($path)) {
+            if (!is_readable($path)) {
+                $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php exists but can't be read by the web server — using the settings in index.php.";
+            } else {
+                try {
+                    if (!defined('GALLERY_CONFIG_LOADING')) define('GALLERY_CONFIG_LOADING', true);
+                    $result = (static function ($file) { return include $file; })($path);
+                    if (is_array($result)) {
+                        $cfg = $result;
+                    } else {
+                        $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php must return a list of settings (return ['NAME' => value];) — using the settings in index.php.";
+                    }
+                } catch (Throwable $e) {
+                    $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php couldn't be loaded (" . get_class($e) . ") — using the settings in index.php.";
+                }
+            }
+        }
+    }
+    if ($name === null) {
+        // End of the settings block: whatever the file names that nothing asked for is a typo.
+        foreach (array_keys($cfg) as $k) {
+            if (!isset($asked[$k])) $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php: \"" . (is_string($k) ? $k : '?') . "\" isn't a setting (a typo?) — ignored.";
+        }
+        return null;
+    }
+    $asked[$name] = true;
+    if (!array_key_exists($name, $cfg)) return $default;
+    $v = $cfg[$name];
+    $ok = is_bool($default) ? is_bool($v)
+        : (is_string($default) ? is_string($v)
+        : (is_array($default) ? is_array($v)
+        : (is_int($default) ? (is_int($v) || is_float($v)) : false)));
+    if ($ok && $allowed !== null && !in_array($v, $allowed, true)) $ok = false;
+    if (!$ok) {
+        $want = $allowed !== null ? 'one of ' . implode(', ', array_map(function ($a) { return "'" . $a . "'"; }, $allowed))
+            : (is_bool($default) ? 'true or false' : (is_string($default) ? 'text' : (is_array($default) ? 'a list' : 'a number')));
+        $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php: \"" . $name . "\" should be " . $want . " — ignored.";
+        return $default;
+    }
+    $GLOBALS['__gallery_config_applied'][] = $name;
+    return $v;
+}
+
 // Turn photo/group/page view tracking on or off. Off by default — this
 // script writes nothing to the folder's disk unless you turn something
 // on. Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
 // into the folder, and is what enables the live view-count badges. See
 // the README for details.
-define('TRACK_VIEWS', false);
+define('TRACK_VIEWS', gallery_setting('TRACK_VIEWS', false));
 
-// Whether view counts are shown publicly once TRACK_VIEWS is on. True by
-// default — preserves exactly today's behavior. Set to false to keep
-// tracking counts for yourself (they show in ?admin) while hiding every
-// public badge and the footer total entirely —
-// useful if you'd rather not have a low view count sitting next to a
-// "for sale" listing making it look undesirable. Has no effect unless
-// TRACK_VIEWS is also on.
-define('SHOW_VIEW_COUNTS_PUBLICLY', true);
+// Whether view counts are shown publicly once TRACK_VIEWS is on. Off by
+// default: turning on tracking shouldn't also start publishing numbers
+// without you meaning it (counts still show to you in ?admin). Set to
+// true to show the live badges and the footer total to visitors. Has no
+// effect unless TRACK_VIEWS is also on.
+define('SHOW_VIEW_COUNTS_PUBLICLY', gallery_setting('SHOW_VIEW_COUNTS_PUBLICLY', false));
 
-// Turn thumbnail generation/caching on or off. Off by default — same
-// reasoning as TRACK_VIEWS, this writes into a .gallery-cache folder.
-// Strongly recommended for any real deployment: without it, every photo
-// is served at full original resolution as its own "thumbnail" (real
-// bandwidth cost), and HEIC/HEIF (iPhone) photos are excluded from the
-// gallery entirely, even with Imagick installed — HEIC can't be shown to
-// a browser without conversion, and conversion has nowhere to go without
-// this cache. See the README for details.
-define('ENABLE_THUMBNAIL_CACHE', false);
+// Thumbnail generation/caching. On by default: without it every photo is
+// served at full original resolution as its own "thumbnail" (real
+// bandwidth cost — a page of phone photos can be hundreds of megabytes),
+// and HEIC/HEIF (iPhone) photos can't be shown at all, since converting
+// them needs somewhere to keep the result. It only ever writes small
+// derived images into a .gallery-cache folder beside this file, exposes
+// nothing that isn't already in the gallery, and if that folder can't be
+// written (or GD/Imagick is missing) the original photo is served as
+// before. Set to false for a gallery that must never write to its folder.
+// See the README for details.
+define('ENABLE_THUMBNAIL_CACHE', gallery_setting('ENABLE_THUMBNAIL_CACHE', true));
 
 // Auto-group photos by filename (stripping a trailing "_01"/"-02" style
 // suffix, e.g. "dp104_01.jpg" + "dp104_02.jpg" -> "dp104"). Off by
@@ -96,7 +164,7 @@ define('ENABLE_THUMBNAIL_CACHE', false);
 // unrelated photos). See the README for details, and for how to define
 // groups explicitly via {group:}/{photos:} directives in a .md file
 // instead, regardless of filename.
-define('AUTO_GROUP_BY_FILENAME', false);
+define('AUTO_GROUP_BY_FILENAME', gallery_setting('AUTO_GROUP_BY_FILENAME', false));
 
 // How photos are ordered before any .md-driven repositioning: 'filename'
 // (natural sort, the default) or 'mtime' (file modification time,
@@ -107,14 +175,14 @@ define('AUTO_GROUP_BY_FILENAME', false);
 // photo was actually taken, which can make 'mtime' order effectively
 // arbitrary. Only switch to 'mtime' if you've verified your own
 // deployment method preserves the original timestamps.
-define('PHOTO_SORT_ORDER', 'filename');
+define('PHOTO_SORT_ORDER', gallery_setting('PHOTO_SORT_ORDER', 'filename', ['filename', 'mtime']));
 
 // Scan subfolders recursively (to any depth) and group photos by which
 // one they're in. Off by default — a flat folder behaves exactly as it
 // always has. Turn this on for a trip folder like /trip/Paris,
 // /trip/StTropez, etc. See the README for FOLDER_DISPLAY_MODE and
 // EXTRA_FOLDERS, which only matter once this is on.
-define('AUTO_GROUP_BY_FOLDER', false);
+define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', false));
 
 // How a folder-group renders once AUTO_GROUP_BY_FOLDER is on: 'overview'
 // (default) shows one cover card per subfolder — a highlight photo, a
@@ -127,7 +195,7 @@ define('AUTO_GROUP_BY_FOLDER', false);
 // owner's own convenience, where everything should stay visible at once
 // (this script's other real use case — a seller with a few items, each
 // in its own folder). Only read when AUTO_GROUP_BY_FOLDER is on.
-define('FOLDER_DISPLAY_MODE', 'overview');
+define('FOLDER_DISPLAY_MODE', gallery_setting('FOLDER_DISPLAY_MODE', 'overview', ['overview', 'inline']));
 
 // Map a virtual top-level folder name to a real path elsewhere on the
 // server, e.g. ['OldTrip2020' => '/mnt/archive-disk/trip-photos-2020'].
@@ -141,7 +209,7 @@ define('FOLDER_DISPLAY_MODE', 'overview');
 // path into the one file they control," the same category of trust as
 // ADMIN_PASSWORD — not something inferred from the filesystem. Empty by
 // default.
-define('EXTRA_FOLDERS', []);
+define('EXTRA_FOLDERS', gallery_setting('EXTRA_FOLDERS', []));
 
 // Recognize .mov and .mp4 (iPhone's two video formats) as media items,
 // eligible for everything a photo already is — filename auto-grouping,
@@ -158,7 +226,7 @@ define('EXTRA_FOLDERS', []);
 // Apple platforms only), there's real bandwidth cost serving uncompressed
 // clips in full, and EXIF-style location auto-fill doesn't carry over
 // from an iPhone video the way it does from a photo.
-define('ENABLE_VIDEO', false);
+define('ENABLE_VIDEO', gallery_setting('ENABLE_VIDEO', false));
 
 // Password for the admin editor, reached via ?admin — captions, per-item
 // location/web link, display names, and raw .md editing. Empty by
@@ -170,7 +238,7 @@ define('ENABLE_VIDEO', false);
 // guessed, grants write access, so it deserves the strongest value you'd
 // put in any constant here. See the README for the HTTPS requirement and
 // the failed-login throttle this password is protected by.
-define('ADMIN_PASSWORD', '');
+define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 
 // Whether a photo's location (latitude/longitude, auto-filled from EXIF
 // where possible, always editable by hand in the admin tool) is ever
@@ -188,7 +256,7 @@ define('ADMIN_PASSWORD', '');
 // where Imagick can read HEIC (the same condition HEIC display already
 // has), for HEIC/HEIF — PNG, GIF, WEBP, and BMP generally carry no GPS
 // block, so those need the coordinates typed in by hand.
-define('ENABLE_PHOTO_LOCATION', false);
+define('ENABLE_PHOTO_LOCATION', gallery_setting('ENABLE_PHOTO_LOCATION', false));
 
 // A second, lower-privilege password that unlocks items flagged hidden
 // from public view in the admin tool — scoped to viewing only, never
@@ -204,7 +272,7 @@ define('ENABLE_PHOTO_LOCATION', false);
 // actually remembered, so expect it to be shorter and more guessable
 // than ADMIN_PASSWORD — which is exactly why it gets the same
 // failed-attempt throttle, not an exemption from it.
-define('PRIVATE_VIEW_PASSWORD', '');
+define('PRIVATE_VIEW_PASSWORD', gallery_setting('PRIVATE_VIEW_PASSWORD', ''));
 
 // Hands matching image/video requests to nginx's own static file serving
 // instead of reading them with PHP, via the X-Accel-Redirect header —
@@ -218,7 +286,7 @@ define('PRIVATE_VIEW_PASSWORD', '');
 // nginx config is actually in place; see the README for the full setup
 // and why Apache's equivalent (a plain deny rule in .htaccess) can't use
 // this same mechanism.
-define('NGINX_ACCEL_REDIRECT_PREFIX', '');
+define('NGINX_ACCEL_REDIRECT_PREFIX', gallery_setting('NGINX_ACCEL_REDIRECT_PREFIX', ''));
 
 // The name of the cookie that remembers a browser unlocked private view
 // (see PRIVATE_VIEW_PASSWORD and is_revealed() below). Derived from this
@@ -240,7 +308,7 @@ define('REVEAL_COOKIE_NAME', 'gallery_reveal_' . substr(hash('sha256', __DIR__),
 // photo actually has a visible location — see ENABLE_PHOTO_LOCATION's
 // own doc comment for that gating. Reached at its own shareable ?map
 // URL, with a smaller preview embedded on the gallery root.
-define('ENABLE_MAP', false);
+define('ENABLE_MAP', gallery_setting('ENABLE_MAP', false));
 
 // How close together (in miles) two photos' locations have to be before
 // the map merges them into a single cluster pin instead of showing each
@@ -248,7 +316,8 @@ define('ENABLE_MAP', false);
 // dense city trip and a cross-country road trip want very different
 // values, so this is deliberately tunable per deployment rather than a
 // fixed constant buried in code.
-define('MAP_CLUSTER_RADIUS_MILES', 50);
+define('MAP_CLUSTER_RADIUS_MILES', gallery_setting('MAP_CLUSTER_RADIUS_MILES', 50));
+gallery_setting(null, null);   // done asking: report any name in the settings file that isn't a setting
 
 $dir = __DIR__;
 $self = basename(__FILE__);
@@ -1273,6 +1342,7 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
 // a typo'd filename or a missing {gallery} marker doesn't just fail
 // silently with no way to ever find out why.
 $galleryNotices = [];
+foreach (($GLOBALS['__gallery_config_problems'] ?? []) as $configProblem) $galleryNotices[] = $configProblem;
 if (!empty($subfolderMediaCount)) {
     $galleryNotices[] = ($subfolderMediaTruncated ? 'At least ' : '') . $subfolderMediaCount
         . ' photo' . ($subfolderMediaCount === 1 ? '' : 's') . '/video' . ($subfolderMediaCount === 1 ? ' was' : 's were')
@@ -2819,6 +2889,13 @@ function extract_jpeg_gps($realPath) {
  * notices mechanism, the same way an unknown {photos:} reference already
  * is. A whole folder disappearing needs no separate handling — its
  * .gallery-items.php is deleted along with it in the same operation.
+ *
+ * An entry is an orphan only if its file is GONE from the disk — never
+ * merely because a setting currently keeps that file out of the gallery.
+ * Switching ENABLE_VIDEO off hides every video, and switching the thumbnail
+ * cache off hides every HEIC photo; neither means those files were deleted,
+ * and their captions, locations and hide flags must survive until the
+ * setting is switched back on.
  */
 function gc_items_data($dir, $files, &$galleryNotices) {
     $byFolder = [];
@@ -2833,9 +2910,9 @@ function gc_items_data($dir, $files, &$galleryNotices) {
         if (!file_exists($path)) continue;
         $validBareNames = array_fill_keys($byFolder[$folderPath] ?? [], true);
         $orphanCount = 0;
-        items_update($folderPath, function (&$data) use ($validBareNames, &$orphanCount) {
+        items_update($folderPath, function (&$data) use ($validBareNames, $folderPath, &$orphanCount) {
             foreach (array_keys($data['items']) as $bare) {
-                if (!isset($validBareNames[$bare])) {
+                if (!isset($validBareNames[$bare]) && !file_exists($folderPath . '/' . $bare)) {
                     unset($data['items'][$bare]);
                     $orphanCount++;
                 }
@@ -3805,6 +3882,15 @@ foreach ($adminFiles as $file) {
         <button type="submit" class="secondary"<?php if (empty($itemsHere['locationEnabled'])): ?> onclick="return confirm(<?= $locConfirmAttr ?>)"<?php endif; ?>><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
       </form>
     </div>
+    <h3 class="subhead">Settings file</h3>
+    <?php $cfgApplied = array_values(array_unique($GLOBALS['__gallery_config_applied'] ?? [])); ?>
+    <?php if (is_file(__DIR__ . '/.gallery-config.php')): ?>
+      <p class="muted" style="margin:0;"><code>.gallery-config.php</code> is in use and keeps its settings when you replace <code>index.php</code>.
+        <?= $cfgApplied ? count($cfgApplied) . ' setting' . (count($cfgApplied) === 1 ? '' : 's') . ' come from it: ' . htmlspecialchars(implode(', ', $cfgApplied), ENT_QUOTES, 'UTF-8') . '.' : 'It doesn\'t override anything yet.' ?>
+        Everything else uses the defaults in <code>index.php</code>.</p>
+    <?php else: ?>
+      <p class="muted" style="margin:0;">No settings file. Your settings live in <code>index.php</code>, so replacing it with a newer version resets them. To keep them across updates, put them in a <code>.gallery-config.php</code> next to it (see the README, "Keeping your settings across updates").</p>
+    <?php endif; ?>
   </section>
   <?php endif; ?>
 
