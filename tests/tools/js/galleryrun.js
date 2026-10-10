@@ -9,15 +9,17 @@ const nav = { clipboard: { writeText: (t) => { nav.copied = t; return Promise.re
 const loc = { origin: 'http://example.test', pathname: '/kb/', hash: '', search: '' }; win.location = loc;
 const fetchStub = (u) => { fetched.push(u); return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, photo: decodeURIComponent(String(u).split('=')[1]), photoViews: 5, groupSlug: 'x', groupViews: 9 }) }); };
 const api = new Function('document', 'window', 'navigator', 'location', 'history', 'fetch', 'setTimeout',
-  src + '\n;return { files, captions, openLightbox, closeLightbox, navigate, toggleCaptionPopover, isVideoFile, applyViewUpdate: typeof applyViewUpdate==="function"?applyViewUpdate:null };')(doc, win, nav, loc, { replaceState() {} }, fetchStub, (f) => timers.push(f));
-const { files, captions } = api; const N = files.length;
+  src + '\n;return { files, captions, fileVersions, openLightbox, closeLightbox, navigate, toggleCaptionPopover, isVideoFile, applyViewUpdate: typeof applyViewUpdate==="function"?applyViewUpdate:null };')(doc, win, nav, loc, { replaceState() {} }, fetchStub, (f) => timers.push(f));
+const { files, captions, fileVersions } = api; const N = files.length;
+const tag = (i) => (fileVersions[i] ? '&v=' + fileVersions[i] : '');
 const lb = doc.byId['lightbox'], img = doc.byId['lightbox-img'], vid = doc.byId['lightbox-video'], cap = doc.byId['lightbox-caption'];
 print(`--- gallery script: ${N} files on the page`);
 ok(!!lb && !!img && !!vid && !!cap, 'the lightbox elements the script needs all exist in the page HTML');
 // lightbox: opens on a photo
 api.openLightbox(0);
 ok(lb.classList.contains('open'), 'openLightbox adds the "open" class');
-ok(img.src === '?img=' + encodeURIComponent(files[0]) + '&size=full', 'a photo loads its full-size image URL');
+ok(fileVersions.length === N && /^[0-9a-f]{10}$/.test(fileVersions[0]), 'the page gives the script a 10-character cache-busting tag for every file');
+ok(img.src === '?img=' + encodeURIComponent(files[0]) + '&size=full' + tag(0), 'a photo loads its full-size image URL, with its cache-busting tag');
 ok(vid.src === '' && vid.style.display === 'none', '...and the <video> is hidden and emptied');
 ok(cap.textContent === '1 / ' + N, 'a caption-less photo shows only "1 / N" — never its filename');
 ok(!cap.textContent.includes('.jpg'), '...(no filename anywhere in the caption bar)');
@@ -27,7 +29,7 @@ const ci = captions.findIndex(c => c);
 if (ci >= 0) { api.openLightbox(ci); ok(cap.textContent === captions[ci] + ' — ' + (ci + 1) + ' / ' + N, 'a captioned photo shows "caption — n / N" (textContent, so the <b> in it is inert text)'); ok(!cap.textContent.includes(files[ci]), '...and still not its filename'); }
 // video
 const vi = files.findIndex(f => api.isVideoFile(f));
-if (vi >= 0) { api.openLightbox(vi); ok(vid.src === '?video=' + encodeURIComponent(files[vi]) && vid.style.display === '' && img.style.display === 'none' && vid.loaded === true, 'a video loads into the <video> element via ?video=, and the image is hidden'); api.navigate(1); ok(vid.paused === true || vid.src === '', 'navigating away from a video pauses it'); }
+if (vi >= 0) { api.openLightbox(vi); ok(vid.src === '?video=' + encodeURIComponent(files[vi]) + tag(vi) && vid.style.display === '' && img.style.display === 'none' && vid.loaded === true, 'a video loads into the <video> element via ?video=, and the image is hidden'); api.navigate(1); ok(vid.paused === true || vid.src === '', 'navigating away from a video pauses it'); }
 // navigation wraps both ways
 api.openLightbox(0); api.navigate(-1); ok(img.src.includes(encodeURIComponent(files[N - 1])) || vid.src.includes(encodeURIComponent(files[N - 1])), 'navigate(-1) from the first item wraps to the last');
 api.navigate(1); ok(cap.textContent.startsWith('1 / ') || cap.textContent.includes('1 / ' + N), 'navigate(+1) from the last wraps to the first');

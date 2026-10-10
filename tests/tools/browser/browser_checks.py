@@ -78,6 +78,20 @@ try:
         ok(b.js("document.querySelector('.breadcrumb') !== null"), "...which has a breadcrumb back")
     b.goto(B + "/?folder=Europe%2FFrance%2FParis", 1.5)
     ok(b.js("document.querySelectorAll('.breadcrumb a').length") >= 3, "a three-level-deep folder page has a breadcrumb through every ancestor")
+    # ---------------- replacing a photo under the same name ----------------
+    print("== replacing a photo under the same name (real browser cache)")
+    def thumb_rgb():
+        b.goto(B + "/", 1.2)
+        b.js("[...document.querySelectorAll('.card img')].find(i => i.alt === 'loose2.jpg').scrollIntoView()"); b.drain(1.2)
+        return b.js("""(() => { const i = [...document.querySelectorAll('.card img')].find(x => x.alt === 'loose2.jpg'); if (!(i.complete && i.naturalWidth)) return null;
+            const c = document.createElement('canvas'); c.width = c.height = 1; const g = c.getContext('2d'); g.drawImage(i, i.naturalWidth / 2 - 4, i.naturalHeight / 2 - 4, 8, 8, 0, 0, 1, 1);
+            return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3); })()""")
+    before = thumb_rgb()
+    subprocess.run(["php", "-r", "$im = imagecreatetruecolor(160, 120); imagefill($im, 0, 0, imagecolorallocate($im, 30, 60, 220)); imagejpeg($im, $argv[1]);", SITE + "/loose2.jpg"], check=True)
+    os.utime(SITE + "/loose2.jpg", (time.time() + 30, time.time() + 30))
+    after = thumb_rgb()
+    ok(before is not None and before[0] > before[2], "before the swap, the thumbnail is the original (reddish) picture", str(before))
+    ok(after is not None and after[2] > after[0], "after replacing the file under the same name, a normal page load shows the NEW (bluish) picture, not the browser's cached one", f"{before} -> {after}")
     # ---------------- map (real Leaflet) ----------------
     print("== map (real Leaflet from cdnjs)")
     b.goto(B + "/?map", 4.0); shot(b, "05-map")

@@ -1094,8 +1094,28 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     serve_original_file($srcPath, $filename, guess_mime($ext));
 }
 
+/**
+ * A short tag that changes whenever a photo or video is replaced — a hash
+ * of its modification time and size, so replacing a file under the same
+ * name (even with one the same size, or an old timestamp preserved by a
+ * copy tool) gives it a new tag in all but freak cases. It rides along on
+ * the image/video address as &v=..., because those responses are cached
+ * by browsers for a year ("immutable") and the address alone never
+ * changed: without it, a replaced photo kept showing the old picture to
+ * anyone who had seen it. Hashed rather than the raw timestamp, so a
+ * visitor can't read when each file was uploaded or last touched. The
+ * server ignores it. One stat per file per request, remembered.
+ */
+function file_version($file) {
+    static $seen = [];
+    if (isset($seen[$file])) return $seen[$file];
+    $stat = @stat(resolve_real_path($GLOBALS['dir'], $file));
+    return $seen[$file] = $stat ? substr(hash('sha256', $stat['mtime'] . '|' . $stat['size']), 0, 10) : '';
+}
+
 function img_url($file, $size) {
-    return '?img=' . rawurlencode($file) . '&size=' . $size;
+    $v = file_version($file);
+    return '?img=' . rawurlencode($file) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '');
 }
 
 /** A location-pin badge's link target — OpenStreetMap needs no API key
@@ -5790,6 +5810,10 @@ if ($currentFolderPath !== null) {
 
 <script>
   const files = <?= json_encode($files) ?>;
+  // A short tag per file that changes when the file is replaced — appended to
+  // the full-size image / video address so a browser that cached the old
+  // picture (they're cached for a year) fetches the new one.
+  const fileVersions = <?= json_encode(array_map('file_version', $files)) ?>;
   // Admin-written captions only — never the raw filename. A visitor
   // curious enough to open dev tools shouldn't learn anything from a
   // filename an unrevealed caption-less photo never meant to publish.
@@ -5880,14 +5904,14 @@ if ($currentFolderPath !== null) {
       lightboxImg.style.display = 'none';
       lightboxImg.src = '';
       lightboxVideo.style.display = '';
-      lightboxVideo.src = '?video=' + encodeURIComponent(file);
+      lightboxVideo.src = '?video=' + encodeURIComponent(file) + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
       lightboxVideo.load();
     } else {
       lightboxVideo.pause();
       lightboxVideo.style.display = 'none';
       lightboxVideo.src = '';
       lightboxImg.style.display = '';
-      lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full';
+      lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
     }
     const captionText = captions[current];
     caption.textContent = (captionText ? captionText + ' — ' : '') + (current + 1) + ' / ' + files.length;

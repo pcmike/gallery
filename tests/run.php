@@ -945,7 +945,7 @@ file_put_contents("$fxNested/Paris/unmarked.md", "Just some personal notes, not 
 [, $subfolderNotesBody] = http_get("$baseNested/?folder=Paris");
 check('a subfolder\'s own notes.md renders as its own note box', (bool) preg_match('#<div class="note-box">\s*<span class="note-filename">notes\.md</span>#', $subfolderNotesBody));
 check('the subfolder note\'s mention+{color:} directive applies to the matching card, anchors aligned', (bool) preg_match('#<div class="card" id="group-eiffel" style="box-shadow: 0 0 0 3px gold inset;"#', $subfolderNotesBody) && str_contains($subfolderNotesBody, 'href="#group-eiffel"'));
-check('the subfolder note\'s thumbnail strip links to the real full-path image, not a bare filename', str_contains($subfolderNotesBody, 'src="?img=Paris%2Feiffel.jpg&amp;size=thumb"'));
+check('the subfolder note\'s thumbnail strip links to the real full-path image, not a bare filename', (bool) preg_match('#src="\?img=Paris%2Feiffel\.jpg&amp;size=thumb&amp;v=[0-9a-f]{10}"#', $subfolderNotesBody));
 check('an unmarked .md in the subfolder is rejected generically, filename never revealed', str_contains($subfolderNotesBody, 'A .md file was found in this folder but ignored') && !str_contains($subfolderNotesBody, 'unmarked.md'));
 [, $subfolderOgBody] = http_get("$baseNested/?folder=Paris");
 check('?folder= Open Graph description comes from the subfolder\'s own notes when it has one', str_contains($subfolderOgBody, 'property="og:description" content="The eiffel photo turned out great."'));
@@ -977,7 +977,7 @@ $baseVideo = "http://127.0.0.1:$portVideo";
 
 [$videoPageStatus, $videoPageBody] = http_get("$baseVideo/");
 check('a video file is recognized and shown in the grid when ENABLE_VIDEO is on', $videoPageStatus === 200 && str_contains($videoPageBody, 'clip.mp4'));
-check('the video card uses the normal ?img= thumbnail URL (served as a placeholder, not a broken image)', str_contains($videoPageBody, 'src="?img=clip.mp4&amp;size=thumb"'));
+check('the video card uses the normal ?img= thumbnail URL (served as a placeholder, not a broken image)', (bool) preg_match('#src="\?img=clip\.mp4&amp;size=thumb&amp;v=[0-9a-f]{10}"#', $videoPageBody));
 check('a video with a readable duration shows a duration badge', (bool) preg_match('#<span class="video-duration">1:05</span>#', $videoPageBody));
 $brokenCardStart = strpos($videoPageBody, 'alt="broken.mov"');
 $brokenCardEnd = $brokenCardStart === false ? false : strpos($videoPageBody, '</div>', $brokenCardStart);
@@ -1554,7 +1554,7 @@ check('?folder=Europe/France/Paris (three levels deep) returns 200', $parisStatu
 check('the deepest page shows its own photos as plain cards', str_contains($parisBody, 'alt="Europe/France/Paris/eiffel.jpg"') && str_contains($parisBody, 'alt="Europe/France/Paris/louvre.jpg"') && !str_contains($parisBody, 'lyon.jpg'));
 check('its breadcrumb links through every ancestor', (bool) preg_match('/<a href="\?folder=Europe">Europe<\/a> \/ <a href="\?folder=Europe%2FFrance">France<\/a><\/p>/', $parisBody));
 check('its title is the folder\'s own name, not the whole path', (bool) preg_match('/<title>Paris — /', $parisBody));
-check('its card thumbnails use the full nested path', str_contains($parisBody, 'src="?img=Europe%2FFrance%2FParis%2Feiffel.jpg&amp;size=thumb"'));
+check('its card thumbnails use the full nested path', (bool) preg_match('#src="\?img=Europe%2FFrance%2FParis%2Feiffel\.jpg&amp;size=thumb&amp;v=[0-9a-f]{10}"#', $parisBody));
 
 foreach ([
     'a nonexistent nested folder' => 'Europe/Nope',
@@ -2005,7 +2005,7 @@ check('[trip] once Lisbon opts in and the tram photo is saved, the map has two p
 [, $pAdmin] = http_get($parisUrl, $tripHdrs);
 foreach (html_post_forms($pAdmin) as $form) { if (str_contains($form['html'], 'value="set_cover"') && str_contains($form['html'], 'value="louvre.jpg"')) { [, $r] = http_post($parisUrl, form_default_fields($form['html']), $tripHdrs); } }
 [, $tripHome5] = http_get("$baseTrip/");
-check('[trip] after "Set as cover" on louvre.jpg, Paris\'s cover card shows the Louvre photo', (bool) preg_match('#id="group-paris">.*?src="\?img=Paris%2Flouvre\.jpg&amp;size=thumb"#s', $tripHome5));
+check('[trip] after "Set as cover" on louvre.jpg, Paris\'s cover card shows the Louvre photo', (bool) preg_match('#id="group-paris">.*?src="\?img=Paris%2Flouvre\.jpg&amp;size=thumb&amp;v=[0-9a-f]{10}"#s', $tripHome5));
 
 // 7. Video: duration badge, in the gallery and the lightbox list.
 check('[trip] the 5-second video shows a duration badge and is in the lightbox list', str_contains($parisPub, 'video-duration">0:05<') && str_contains($parisPub, 'Paris\/seine.mp4'));
@@ -2052,7 +2052,7 @@ check('[sale] SHOW_VIEW_COUNTS_PUBLICLY off: the count is kept but every public 
 check('[sale] ...and the stats file is not readable by URL', (function () use ($baseSale, $fxSale) { foreach (['.gallery-stats.php', '.gallery-stats.sqlite', '.gallery-stats.json'] as $f) { [$st, $b] = http_get("$baseSale/$f"); if (is_file("$fxSale/$f") && $f === '.gallery-stats.php' && !($st === 404 && $b === '')) return false; } return true; })());
 // Pasting a photo link into Discord/Reddit.
 [, $salePhoto] = http_get("$baseSale/?photo=alpha_01.jpg");
-check('[sale] a pasted ?photo= link previews with an absolute share-size image and the group in its title', (bool) preg_match('#property="og:image" content="http://127\.0\.0\.1:\d+/\?img=alpha_01\.jpg&amp;size=share"#', $salePhoto) && str_contains($salePhoto, 'property="og:title" content="alpha — Example listing'));
+check('[sale] a pasted ?photo= link previews with an absolute share-size image and the group in its title', (bool) preg_match('#property="og:image" content="http://127\.0\.0\.1:\d+/\?img=alpha_01\.jpg&amp;size=share&amp;v=[0-9a-f]{10}"#', $salePhoto) && str_contains($salePhoto, 'property="og:title" content="alpha — Example listing'));
 http_get("$baseSale/?img=alpha_01.jpg&size=thumb");
 check('[sale] ENABLE_THUMBNAIL_CACHE on: thumbnails are cached in .gallery-cache next to the photos', is_dir("$fxSale/.gallery-cache") && count(glob("$fxSale/.gallery-cache/*.jpg")) > 0);
 preg_match('#<footer>(.*?)</footer>#s', $saleAfter, $saleFooter);
@@ -2209,6 +2209,44 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     [, $roSaveOk] = user_submit("$baseRo2/?admin", $roPage, 'name="file" value="a.jpg"', ['caption' => 'sticks now'], $roHdrs);
     check('[unwritable folder] ...and once the permission is fixed, the same save works', str_contains($roSaveOk, 'class="flash ok"') && is_file("$fxRo2/.gallery-items.php"));
 }
+
+/* ======================================================================= *
+ * Replacing a photo under the same name must reach visitors. Images are
+ * cached by browsers for a year ("immutable") and their address never
+ * changed, so a swapped file kept showing its old picture. The address now
+ * carries a tag (&v=…) derived from the file's modification time and size.
+ * ======================================================================= */
+
+echo "== cache-busting tag on image and video addresses ==\n";
+
+$fxBust = new_fixture_dir('cachebust');
+make_jpeg("$fxBust/swap.jpg", 60, 60, 200, 30, 30);
+make_jpeg("$fxBust/steady.jpg", 60, 60, 30, 30, 200);
+make_minimal_mp4("$fxBust/clip.mp4", 5);
+write_patched_index("$fxBust/index.php", $indexContents, ['ENABLE_VIDEO' => 'true', 'ENABLE_THUMBNAIL_CACHE' => 'true']);
+$portBust = find_free_port(); start_server($fxBust, $portBust); $baseBust = "http://127.0.0.1:$portBust";
+$vOf = function ($page, $file) { return preg_match('#src="\?img=' . preg_quote(rawurlencode($file), '#') . '&amp;size=thumb&amp;v=([0-9a-f]{10})"#', $page, $m) ? $m[1] : null; };
+[, $bust1] = http_get("$baseBust/"); $vSwap1 = $vOf($bust1, 'swap.jpg'); $vSteady1 = $vOf($bust1, 'steady.jpg');
+check('[cache-bust] every thumbnail address carries a 10-character tag', $vSwap1 !== null && $vSteady1 !== null && $vSwap1 !== $vSteady1);
+check('[cache-bust] ...the same file gets the same tag on every request (so caching still works)', $vOf(http_get("$baseBust/")[1], 'swap.jpg') === $vSwap1);
+preg_match('/const files = (\[.*?\]);\s*\/\/.*?const fileVersions = (\[.*?\]);/s', $bust1, $fvm);
+$fvFiles = json_decode($fvm[1] ?? '[]', true); $fvVers = json_decode($fvm[2] ?? '[]', true);
+check('[cache-bust] the lightbox script is given the same tags (so full-size images and videos are busted too)', count($fvFiles) === count($fvVers) && count($fvFiles) === 3 && $fvVers[array_search('swap.jpg', $fvFiles)] === $vSwap1);
+check('[cache-bust] the lightbox builds its full-size and video addresses with the tag', str_contains($bust1, "'&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '')") && str_contains($bust1, "'?video=' + encodeURIComponent(file) + (fileVersions[current]"));
+check('[cache-bust] the tag is a hash, not the raw modification time or size (a visitor can\'t read when a file changed)', !str_contains($vSwap1, (string) filemtime("$fxBust/swap.jpg")) && !preg_match('/v=\d{9,}/', $bust1));
+// Now replace the photo, under the same name.
+sleep(1); make_jpeg("$fxBust/swap.jpg", 90, 90, 20, 200, 20);
+[, $bust2] = http_get("$baseBust/");
+check('[cache-bust] replacing swap.jpg under the same name changes its tag', $vOf($bust2, 'swap.jpg') !== null && $vOf($bust2, 'swap.jpg') !== $vSwap1);
+check('[cache-bust] ...and only its tag: the untouched photo keeps its (cacheable) address', $vOf($bust2, 'steady.jpg') === $vSteady1);
+// Same size, only the timestamp differs (e.g. an edit that keeps the byte count): still a new tag.
+$sameSize = file_get_contents("$fxBust/swap.jpg"); $vBefore = $vOf($bust2, 'swap.jpg'); sleep(1); touch("$fxBust/swap.jpg", time() + 5);
+check('[cache-bust] ...and touching a file (new timestamp, identical bytes) also changes it', $vOf(http_get("$baseBust/")[1], 'swap.jpg') !== $vBefore);
+// The server must still answer the plain, tag-less addresses: bookmarks, pasted links, old caches.
+[$plainStatus] = http_get("$baseBust/?img=swap.jpg&size=thumb"); [$taggedStatus] = http_get("$baseBust/?img=swap.jpg&size=thumb&v=whatever");
+check('[cache-bust] the server ignores the tag: the old tag-less address and any tag both still work', $plainStatus === 200 && $taggedStatus === 200);
+check('[cache-bust] a video\'s tile and the lightbox list carry tags too (clip.mp4)', $vOf($bust2, 'clip.mp4') !== null);
+check('[cache-bust] the pasted-link preview image address carries the tag, so a refreshed photo refreshes its preview', (bool) preg_match('#property="og:image" content="[^"]*size=share&amp;v=[0-9a-f]{10}"#', http_get("$baseBust/?photo=swap.jpg")[1]));
 
 /* ======================================================================= *
  * RECIPES: the default install, and iPhone (HEIC) photos.
