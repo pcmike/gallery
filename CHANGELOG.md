@@ -13,6 +13,8 @@ All notable changes to this project are documented here. Versions correspond to 
 - A clearer setup notice for `{photos:}`: one that names a photo inside a folder (the directive only reaches photos directly in the notes' own folder) used to report `Unknown file "eiffel.jpg"`, as if the file didn't exist; it now says the photo is inside a folder and what to write instead.
 
 ### Fixed
+- **A `{color:}` on a single photo drew its ring underneath the picture, so you never saw it.** The ring is now drawn over the photo (cards for sold and reserved photos get the same).
+- **A link copied from a paragraph on a folder's page pointed at the front page.** It dropped the `?folder=`, so the anchor didn't exist where it landed; it now keeps the folder.
 - **A folder marked `{sold}` lost its SOLD ribbon once the picture loaded.** The greyed picture painted over it; the ribbon is now lifted above it (`{reserved}` was unaffected, since that picture isn't greyed).
 - **The notes editor hid the `{gallery}` line, so saving any change switched the note off.** The editor now shows the file exactly as stored, and saving text with no `{gallery}` first line says the file is not active.
 - **Number boxes in the admin (such as the pin grouping) had black arrows on a black background.** They now use the dark control style.

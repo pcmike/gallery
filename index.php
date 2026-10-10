@@ -6702,14 +6702,15 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
                      . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
                      . '" onclick="event.stopPropagation()">&#127760;</a>';
     }
-    $colorStyle = $color ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ' inset;"' : '';
+    // The ring is drawn by .ringed::after, above the picture: an inset shadow on the card itself sat underneath it, unseen.
+    $colorStyle = $color ? ' style="--ring: ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ';"' : '';
     // $anchorId lets a standalone single be a valid "#group-<slug>" jump
     // target too — render_group_thumbs() always links there for a
     // mentioned item, whether it turned out to be a real box or just a
     // single card; only a box's own container carried that id before,
     // leaving the link dead for a single.
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
-    return '<div class="card' . ($status ? ' ' . $status : '') . '"' . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div></div>';
@@ -7513,6 +7514,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     cursor: pointer;
     position: relative;
     scroll-margin-top: 16px;
+  }
+  .card.ringed::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: inset 0 0 0 3px var(--ring);
   }
   .card img {
     width: 100%;
@@ -8363,8 +8368,10 @@ if (!empty($serveMapPage)) {
     // A .md item's or group box's permalink is a same-page #anchor; a
     // folder cover card's is a real "?folder=..." link instead (no
     // hash) — copy whichever one this button actually has.
+    // A link made on a folder's page must keep pointing at that folder (and nothing else of the address, such as ?photo=).
+    const folderQuery = () => { const f = new URLSearchParams(window.location.search).get('folder'); return f ? '?folder=' + encodeURIComponent(f) : ''; };
     const cleanUrl = link.hash
-      ? window.location.origin + window.location.pathname + link.hash
+      ? window.location.origin + window.location.pathname + folderQuery() + link.hash
       : window.location.origin + window.location.pathname + link.getAttribute('href');
     copyToClipboard(cleanUrl).then(() => flashCopied(link));
   });

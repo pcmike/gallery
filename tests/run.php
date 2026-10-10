@@ -1006,7 +1006,7 @@ file_put_contents("$fxNested/Paris/notes.md", "{gallery}\nThe eiffel photo turne
 file_put_contents("$fxNested/Paris/unmarked.md", "Just some personal notes, not gallery content.\n");
 [, $subfolderNotesBody] = http_get("$baseNested/?folder=Paris");
 check('a subfolder\'s own notes.md renders as its own note box', (bool) preg_match('#<div class="note-box">\s*<span class="note-filename">notes\.md</span>#', $subfolderNotesBody));
-check('the subfolder note\'s mention+{color:} directive applies to the matching card, anchors aligned', (bool) preg_match('#<div class="card" id="group-eiffel" style="box-shadow: 0 0 0 3px gold inset;"#', $subfolderNotesBody) && str_contains($subfolderNotesBody, 'href="#group-eiffel"'));
+check('the subfolder note\'s mention+{color:} directive applies to the matching card, anchors aligned', (bool) preg_match('#<div class="card ringed" id="group-eiffel" style="--ring: gold;"#', $subfolderNotesBody) && str_contains($subfolderNotesBody, 'href="#group-eiffel"'));
 check('the subfolder note\'s thumbnail strip links to the real full-path image, not a bare filename', (bool) preg_match('#src="\?img=Paris%2Feiffel\.jpg&amp;size=thumb&amp;v=[0-9a-f]{10}"#', $subfolderNotesBody));
 check('an unmarked .md in the subfolder is rejected generically, filename never revealed', str_contains($subfolderNotesBody, 'A .md file was found in this folder but ignored') && !str_contains($subfolderNotesBody, 'unmarked.md'));
 [, $subfolderOgBody] = http_get("$baseNested/?folder=Paris");
@@ -1844,7 +1844,7 @@ check('[folder notes] a {color:} in a paragraph that mentions no photo or folder
 file_put_contents("$fxFN/Paris/n.md", "{gallery}\n\nNice view {photos: eiffel.jpg} {color: gold}\n");
 usleep(300000);
 [, $fnParisPlain] = http_get("http://127.0.0.1:$portFN/?folder=Paris");
-check('[folder notes] a bare {photos:} in a folder note keeps the photo as its own card and colours it', (bool) preg_match('/<div class="card" id="group-eiffel-jpg" style="box-shadow: 0 0 0 3px gold inset;"/', $fnParisPlain));
+check('[folder notes] a bare {photos:} in a folder note keeps the photo as its own card and colours it', (bool) preg_match('/<div class="card ringed" id="group-eiffel-jpg" style="--ring: gold;"/', $fnParisPlain));
 file_put_contents("$fxFN/n.md", "{gallery}\n\nThe Paris leg {sold}\n\nTop {photos: top.jpg} {group: Top Box}\n");
 usleep(300000);
 [, $fnRoot2] = http_get("http://127.0.0.1:$portFN/");
