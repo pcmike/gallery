@@ -183,6 +183,51 @@ function http_get($url, $headers = [], $followRedirects = true) {
     return [$status, $body === false ? '' : $body, $responseHeaders];
 }
 
+/** POST request with a form-urlencoded body. Returns [statusCode, body,
+ *  headerLines], same shape as http_get(). */
+function http_post($url, $postData, $headers = [], $followRedirects = true) {
+    $opts = ['http' => [
+        'method' => 'POST',
+        'header' => implode("\r\n", array_merge(['Content-Type: application/x-www-form-urlencoded'], $headers)),
+        'content' => http_build_query($postData),
+        'ignore_errors' => true,
+        'timeout' => 5,
+    ]];
+    if (!$followRedirects) {
+        $opts['http']['follow_location'] = 0;
+    }
+    $context = stream_context_create($opts);
+    $body = @file_get_contents($url, false, $context);
+    $status = 0;
+    $responseHeaders = $http_response_header ?? [];
+    foreach ($responseHeaders as $h) {
+        if (preg_match('#^HTTP/\S+\s+(\d+)#', $h, $m)) {
+            $status = (int) $m[1];
+        }
+    }
+    return [$status, $body === false ? '' : $body, $responseHeaders];
+}
+
+/** Pulls the first Set-Cookie response header's name=value pair (ignoring
+ *  path/expiry attributes) out, for resending as a plain Cookie: header
+ *  on a follow-up request — enough to carry a PHP session across the
+ *  admin tool's CSRF-protected GET-then-POST flow. */
+function extract_cookie_header($responseHeaders) {
+    foreach ($responseHeaders as $h) {
+        if (stripos($h, 'Set-Cookie:') === 0) {
+            $value = trim(substr($h, strlen('Set-Cookie:')));
+            [$pair] = explode(';', $value, 2);
+            return $pair;
+        }
+    }
+    return null;
+}
+
+/** Pulls the csrf_token hidden input's value out of a rendered admin page. */
+function extract_csrf_token($body) {
+    return preg_match('/csrf_token" value="([a-f0-9]+)"/', $body, $m) ? $m[1] : null;
+}
+
 /** Writes a copy of index.php with one or more constants patched. */
 function write_patched_index($destPath, $indexContents, $patches) {
     $content = $indexContents;
@@ -735,6 +780,20 @@ check('?folder= with an unknown folder name 404s', $unknownFolderStatus === 404)
 [$rootAsFolderStatus] = http_get("$baseNested/?folder=loose.jpg");
 check('?folder= naming a non-folder file 404s', $rootAsFolderStatus === 404);
 
+// A subfolder may optionally carry its own {gallery}-marked .md, scoped
+// to just that subfolder's own photos.
+file_put_contents("$fxNested/Paris/notes.md", "{gallery}\nThe eiffel photo turned out great. {color: gold}\n");
+file_put_contents("$fxNested/Paris/unmarked.md", "Just some personal notes, not gallery content.\n");
+[, $subfolderNotesBody] = http_get("$baseNested/?folder=Paris");
+check('a subfolder\'s own notes.md renders as its own note box', (bool) preg_match('#<div class="note-box">\s*<span class="note-filename">notes\.md</span>#', $subfolderNotesBody));
+check('the subfolder note\'s mention+{color:} directive applies to the matching card, anchors aligned', (bool) preg_match('#<div class="card" id="group-eiffel" style="box-shadow: 0 0 0 3px gold inset;"#', $subfolderNotesBody) && str_contains($subfolderNotesBody, 'href="#group-eiffel"'));
+check('the subfolder note\'s thumbnail strip links to the real full-path image, not a bare filename', str_contains($subfolderNotesBody, 'src="?img=Paris%2Feiffel.jpg&amp;size=thumb"'));
+check('an unmarked .md in the subfolder is rejected generically, filename never revealed', str_contains($subfolderNotesBody, 'A .md file was found in this folder but ignored') && !str_contains($subfolderNotesBody, 'unmarked.md'));
+[, $subfolderOgBody] = http_get("$baseNested/?folder=Paris");
+check('?folder= Open Graph description comes from the subfolder\'s own notes when it has one', str_contains($subfolderOgBody, 'property="og:description" content="The eiffel photo turned out great."'));
+unlink("$fxNested/Paris/notes.md");
+unlink("$fxNested/Paris/unmarked.md");
+
 /* ======================================================================= *
  * FIXTURE: "video" — ENABLE_VIDEO on. Covers recognition, the generic
  * placeholder thumbnail, the duration badge (and graceful degradation
@@ -806,6 +865,193 @@ make_minimal_mp4("$fx1/ignored.mp4", 10);
 check('a video file is invisible when ENABLE_VIDEO is off (the default)', !str_contains($defaultsBodyWithVideo, 'ignored.mp4'));
 [$videoOffStatus] = http_get("$base1/?video=ignored.mp4");
 check('?video= 404s when ENABLE_VIDEO is off, even for a file that really exists', $videoOffStatus === 404);
+
+// ?admin is completely inert — not just unauthenticated — when
+// ADMIN_PASSWORD is unset, which $fx1/$base1 (the "defaults" fixture)
+// never sets.
+[$adminInertStatus] = http_get("$base1/?admin");
+check('?admin 404s outright when ADMIN_PASSWORD is unset (the default)', $adminInertStatus === 404);
+
+/* ======================================================================= *
+ * FIXTURE: "admin" — ADMIN_PASSWORD set. Covers HTTP Basic Auth, the
+ * failed-login throttle, CSRF, and every admin action: captions,
+ * location (all three visibility gates), web links, folder display
+ * name/cover, the {gallery}-marker one-click fix, raw notes save/save-
+ * as/delete, export, and stale .gallery-items.json entry GC.
+ * ======================================================================= */
+
+echo "== admin fixture: auth, CSRF, throttle, and every admin action ==\n";
+
+$fxAdmin = new_fixture_dir('admin');
+mkdir("$fxAdmin/Paris");
+make_jpeg("$fxAdmin/loose.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxAdmin/Paris/eiffel.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$fxAdmin/orphan-soon.jpg", 60, 60, 30, 30, 30);
+file_put_contents("$fxAdmin/unmarked.md", "Some personal notes, not yet gallery content.\n");
+file_put_contents("$fxAdmin/widgets.md", "{gallery}\nThe widget set. {group: Widget Set} {photos: loose.jpg}\n");
+
+write_patched_index("$fxAdmin/index.php", $indexContents, [
+    'ADMIN_PASSWORD' => "'test-admin-pw-123'",
+    'AUTO_GROUP_BY_FOLDER' => 'true',
+    'ENABLE_PHOTO_LOCATION' => 'true',
+]);
+
+$portAdmin = find_free_port();
+start_server($fxAdmin, $portAdmin);
+$baseAdmin = "http://127.0.0.1:$portAdmin";
+$authHeader = 'Authorization: Basic ' . base64_encode('admin:test-admin-pw-123');
+$wrongAuthHeader = 'Authorization: Basic ' . base64_encode('admin:wrong-password');
+
+[$noAuthStatus, , $noAuthHeaders] = http_get("$baseAdmin/?admin");
+check('?admin with no credentials returns 401', $noAuthStatus === 401);
+check('?admin\'s 401 carries a WWW-Authenticate challenge', (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate: Basic') === 0));
+
+[$wrongAuthStatus] = http_get("$baseAdmin/?admin", [$wrongAuthHeader]);
+check('?admin with the wrong password returns 401', $wrongAuthStatus === 401);
+
+[$okStatus, $adminBody, $adminHeaders] = http_get("$baseAdmin/?admin", [$authHeader]);
+check('?admin with the correct password returns 200', $okStatus === 200);
+check('the admin page actually renders', str_contains($adminBody, 'Gallery Admin'));
+$sessionCookie = extract_cookie_header($adminHeaders);
+check('logging in starts a PHP session (for the CSRF token)', $sessionCookie !== null);
+$csrf = extract_csrf_token($adminBody);
+check('the admin page embeds a CSRF token', $csrf !== null);
+
+// CSRF: a save without a valid token is rejected and changes nothing.
+[, $csrfRejectBody] = http_post("$baseAdmin/?admin", [
+    'action' => 'save_item', 'file' => 'loose.jpg', 'caption' => 'should not stick', 'csrf_token' => 'bogus-token',
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('a save with an invalid CSRF token is rejected', str_contains($csrfRejectBody, 'class="flash error"') && str_contains($csrfRejectBody, 'expired'));
+[, $afterCsrfRejectBody] = http_get("$baseAdmin/");
+check('the rejected save did not actually take effect', !str_contains($afterCsrfRejectBody, 'should not stick'));
+
+// Caption.
+[, $saveCaptionBody] = http_post("$baseAdmin/?admin", [
+    'action' => 'save_item', 'file' => 'loose.jpg', 'caption' => 'A nice view', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('saving a caption with a valid CSRF token succeeds', str_contains($saveCaptionBody, 'class="flash ok"'));
+[, $publicBodyWithCaption] = http_get("$baseAdmin/");
+check('the saved caption shows publicly as a caption badge', (bool) preg_match('/caption-badge" title="A nice view"/', $publicBodyWithCaption));
+check('the saved caption replaces the filename in the lightbox caption data', str_contains($publicBodyWithCaption, '"A nice view"') && !preg_match('/captions = \[[^\]]*"loose\.jpg"/', $publicBodyWithCaption));
+
+// Web link: rejected without a scheme, accepted with one.
+[, $badWebBody] = http_post("$baseAdmin/?admin", [
+    'action' => 'save_item', 'file' => 'loose.jpg', 'web' => 'example.com', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('a web link missing http(s):// is rejected', str_contains($badWebBody, 'class="flash error"'));
+http_post("$baseAdmin/?admin", [
+    'action' => 'save_item', 'file' => 'loose.jpg', 'caption' => 'A nice view', 'web' => 'https://example.com/info', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+[, $publicBodyWithWeb] = http_get("$baseAdmin/");
+check('a valid web link shows publicly as a web-link badge', str_contains($publicBodyWithWeb, 'class="item-badge web-badge" href="https://example.com/info"'));
+
+// Location — three gates: global constant (on, in this fixture), the
+// folder's own toggle (starts off), and per-photo visibility.
+http_post("$baseAdmin/?admin", [
+    'action' => 'save_item', 'file' => 'loose.jpg', 'caption' => 'A nice view', 'web' => 'https://example.com/info',
+    'lat' => '48.8584', 'lng' => '2.2945', 'loc_visibility' => 'inherit', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+[, $bodyLocInherit] = http_get("$baseAdmin/");
+check('a location with "inherit" visibility stays hidden while the folder\'s own toggle is off', !str_contains($bodyLocInherit, 'location-badge'));
+http_post("$baseAdmin/?admin", [
+    'action' => 'toggle_location_enabled', 'enabled' => '1', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+[, $bodyLocFolderOn] = http_get("$baseAdmin/");
+check('once the folder\'s own location toggle is on, "inherit" visibility now shows the pin', str_contains($bodyLocFolderOn, 'location-badge'));
+http_post("$baseAdmin/?admin", [
+    'action' => 'save_item', 'file' => 'loose.jpg', 'caption' => 'A nice view', 'web' => 'https://example.com/info',
+    'lat' => '48.8584', 'lng' => '2.2945', 'loc_visibility' => 'hide', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+[, $bodyLocHide] = http_get("$baseAdmin/");
+check('a per-photo "always hide" wins even with the folder toggle on', !str_contains($bodyLocHide, 'location-badge'));
+
+// Bad coordinates are rejected outright.
+[, $badCoordBody] = http_post("$baseAdmin/?admin", [
+    'action' => 'save_item', 'file' => 'loose.jpg', 'lat' => '999', 'lng' => '2.2945', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('an out-of-range latitude is rejected', str_contains($badCoordBody, 'class="flash error"'));
+
+// A {group:}-controlled display name can't be overridden from the admin
+// form (the field itself is also rendered disabled).
+[, $widgetAdminBody] = http_get("$baseAdmin/?admin", [$authHeader, "Cookie: $sessionCookie"]);
+check('a {group:}-controlled group\'s display-name field renders disabled', (bool) preg_match('/name="display_name"[^>]*disabled[^>]*>.*?widget-set/is', $widgetAdminBody) || (bool) preg_match('/widget-set.*?disabled/is', $widgetAdminBody));
+[, $rejectGroupLabelBody] = http_post("$baseAdmin/?admin", [
+    'action' => 'save_group_label', 'group_key' => 'widget-set', 'display_name' => 'Should not apply', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('saving a display name for a {group:}-controlled group is rejected server-side too', str_contains($rejectGroupLabelBody, 'class="flash error"'));
+
+// Folder display name + cover (Paris, a real folder-group).
+[, $parisAdminBody] = http_get("$baseAdmin/?admin&folder=Paris", [$authHeader, "Cookie: $sessionCookie"]);
+$parisCsrf = extract_csrf_token($parisAdminBody);
+http_post("$baseAdmin/?admin&folder=Paris", [
+    'action' => 'save_folder_identity', 'display_name' => 'Our Trip to Paris', 'csrf_token' => $parisCsrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+[, $publicBodyRenamedFolder] = http_get("$baseAdmin/");
+check('an admin-set folder display name shows on its public cover card', str_contains($publicBodyRenamedFolder, 'folder-cover-label">Our Trip to Paris<'));
+http_post("$baseAdmin/?admin&folder=Paris", [
+    'action' => 'set_cover', 'file' => 'eiffel.jpg', 'csrf_token' => $parisCsrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+[, $parisAdminAfterCover] = http_get("$baseAdmin/?admin&folder=Paris", [$authHeader, "Cookie: $sessionCookie"]);
+check('"Set as cover" is recorded and shown back in the admin tool', str_contains($parisAdminAfterCover, 'eiffel.jpg'));
+
+// {gallery} marker one-click fix.
+http_post("$baseAdmin/?admin", [
+    'action' => 'add_gallery_marker', 'md_file' => 'unmarked.md', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('the {gallery} marker fix actually prepends the marker on disk', str_starts_with((string) file_get_contents("$fxAdmin/unmarked.md"), "{gallery}\n"));
+[, $adminAfterMarkerFix] = http_get("$baseAdmin/?admin", [$authHeader, "Cookie: $sessionCookie"]);
+check('the fixed .md now shows as active in the admin tool', (bool) preg_match('/unmarked\.md.*?md-badge active/s', $adminAfterMarkerFix));
+
+// Raw notes: create, overwrite, delete — byte-for-byte, no parsing.
+http_post("$baseAdmin/?admin", [
+    'action' => 'save_notes', 'md_file' => '', 'new_name' => 'newnotes', 'content' => "{gallery}\nBrand new notes.\n", 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('creating a new notes file writes it to disk with a .md extension added', file_exists("$fxAdmin/newnotes.md") && str_contains((string) file_get_contents("$fxAdmin/newnotes.md"), 'Brand new notes.'));
+http_post("$baseAdmin/?admin", [
+    'action' => 'save_notes', 'md_file' => 'newnotes.md', 'new_name' => '', 'content' => "{gallery}\nUpdated content.\n", 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('overwriting an existing notes file replaces its content exactly', trim((string) file_get_contents("$fxAdmin/newnotes.md")) === trim("{gallery}\nUpdated content."));
+http_post("$baseAdmin/?admin", [
+    'action' => 'delete_notes', 'md_file' => 'newnotes.md', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('deleting a notes file actually removes it from disk', !file_exists("$fxAdmin/newnotes.md"));
+
+// Export as JSON.
+[$exportStatus, $exportBody, $exportHeaders] = http_post("$baseAdmin/?admin", [
+    'action' => 'export_items', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+check('export returns 200 with a JSON content type', $exportStatus === 200 && (bool) array_filter($exportHeaders, fn($h) => stripos($h, 'Content-Type: application/json') === 0));
+check('export sets a download filename', (bool) array_filter($exportHeaders, fn($h) => stripos($h, 'Content-Disposition: attachment') === 0));
+$exportedData = json_decode($exportBody, true);
+check('the exported JSON actually contains the saved item data', is_array($exportedData) && isset($exportedData['items']['loose.jpg']['caption']) && $exportedData['items']['loose.jpg']['caption'] === 'A nice view');
+
+// Stale entry GC: a caption for a file that then gets deleted is cleaned
+// up (and reported), while one for a surviving file is left alone.
+http_post("$baseAdmin/?admin", [
+    'action' => 'save_item', 'file' => 'orphan-soon.jpg', 'caption' => 'about to vanish', 'csrf_token' => $csrf,
+], [$authHeader, "Cookie: $sessionCookie"]);
+unlink("$fxAdmin/orphan-soon.jpg");
+[, $bodyAfterOrphan] = http_get("$baseAdmin/");
+check('a stale caption entry for a deleted photo is reported in the notices', str_contains($bodyAfterOrphan, 'was cleaned up'));
+$itemsAfterGc = json_decode((string) file_get_contents("$fxAdmin/.gallery-items.json"), true);
+check('the orphaned entry is actually removed from .gallery-items.json', !isset($itemsAfterGc['items']['orphan-soon.jpg']));
+check('a surviving file\'s own entry is left alone by the same GC pass', isset($itemsAfterGc['items']['loose.jpg']));
+
+// Login throttle: 5 failures from one IP locks the 6th attempt out
+// entirely (not even evaluating a correct password), until the lockout
+// window passes.
+for ($i = 0; $i < 5; $i++) {
+    http_get("$baseAdmin/?admin", [$wrongAuthHeader]);
+}
+[$lockedStatus] = http_get("$baseAdmin/?admin", [$authHeader]);
+check('after 5 failed attempts, even the correct password is locked out', $lockedStatus === 429);
+$throttleData = json_decode((string) file_get_contents("$fxAdmin/.gallery-login-attempts.json"), true);
+foreach ($throttleData as $k => $v) {
+    $throttleData[$k]['lockUntil'] = time() - 1;
+}
+file_put_contents("$fxAdmin/.gallery-login-attempts.json", json_encode($throttleData));
+[$unlockedStatus] = http_get("$baseAdmin/?admin", [$authHeader]);
+check('once the lockout window passes, the correct password works again', $unlockedStatus === 200);
 
 /* ======================================================================= *
  * FIXTURE 3: "mtimesort" — PHOTO_SORT_ORDER = 'mtime'.

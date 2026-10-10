@@ -17,10 +17,13 @@
  *   - GALLERY_VERSION / TRACK_VIEWS / SHOW_VIEW_COUNTS_PUBLICLY /
  *     ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER /
  *     AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS /
- *     ENABLE_VIDEO constants are just below. TRACK_VIEWS,
- *     ENABLE_THUMBNAIL_CACHE, AUTO_GROUP_BY_FOLDER, and ENABLE_VIDEO are
- *     off by default — this script writes nothing to disk and doesn't
- *     look at a single subfolder or video file unless you turn one on.
+ *     ENABLE_VIDEO / ADMIN_PASSWORD / ENABLE_PHOTO_LOCATION constants are
+ *     just below. TRACK_VIEWS, ENABLE_THUMBNAIL_CACHE, AUTO_GROUP_BY_FOLDER,
+ *     ENABLE_VIDEO, and ENABLE_PHOTO_LOCATION are off by default — this
+ *     script writes nothing to disk and doesn't look at a single
+ *     subfolder, video file, or photo's location unless you turn one on.
+ *     ADMIN_PASSWORD is empty by default, which makes ?admin completely
+ *     inert rather than merely unauthenticated.
  *   - A .md file is only read if its first line is exactly {gallery}.
  *   - Photo grouping: auto by filename (minus a trailing "_01"/"-02"
  *     suffix, if AUTO_GROUP_BY_FILENAME is on), auto by subfolder (if
@@ -133,6 +136,34 @@ define('EXTRA_FOLDERS', []);
 // clips in full, and EXIF-style location auto-fill doesn't carry over
 // from an iPhone video the way it does from a photo.
 define('ENABLE_VIDEO', false);
+
+// Password for the admin editor, reached via ?admin — captions, per-item
+// location/web link, display names, and raw .md editing. Empty by
+// default, and that's not merely "unauthenticated": with no password
+// set, ?admin is completely inert — the whole admin code path doesn't
+// run at all, the same way ?about/?download are modes of this one file
+// rather than separate scripts. Set this to a long random token, not a
+// memorable phrase — this is the one credential in this script that, if
+// guessed, grants write access, so it deserves the strongest value you'd
+// put in any constant here. See the README for the HTTPS requirement and
+// the failed-login throttle this password is protected by.
+define('ADMIN_PASSWORD', '');
+
+// Whether a photo's location (latitude/longitude, auto-filled from EXIF
+// where possible, always editable by hand in the admin tool) is ever
+// shown to a visitor at all. False by default — GPS coordinates are more
+// sensitive than anything else this script handles, so this is the most
+// deserving of an off default of any constant here. Even once this is
+// on, nothing is shown until a folder's own location setting is also
+// turned on in the admin tool (deployment data, not a code constant),
+// and a specific photo's own per-item setting (inherit the folder
+// default, always show, or always hide — three states, not a checkbox)
+// doesn't override it to "hide." The admin tool itself can always see
+// and edit location data regardless of this constant — it only gates
+// what an ordinary visitor is ever shown. Real coverage is narrower than
+// it sounds: EXIF GPS auto-fill only works for JPEG (via exif_read_data)
+// — HEIC, PNG, GIF, WEBP, and BMP need the coordinates typed in by hand.
+define('ENABLE_PHOTO_LOCATION', false);
 
 $dir = __DIR__;
 $self = basename(__FILE__);
@@ -370,6 +401,13 @@ if (ENABLE_VIDEO) {
         }
     }
 }
+
+// Per-file caption/location/web data, set via the admin tool (?admin) —
+// see the ".gallery-items.json" section below for the storage shape.
+// Read unconditionally (not gated behind ADMIN_PASSWORD): a gallery that
+// never touches the admin tool just gets an empty result per folder,
+// cheaply, the same way an untouched .gallery-stats.json costs nothing.
+$itemsData = items_get_all_for_files($dir, $files);
 
 /**
  * Derive a group key from a filename by stripping a trailing "_01" /
@@ -773,6 +811,14 @@ function img_url($file, $size) {
     return '?img=' . rawurlencode($file) . '&size=' . $size;
 }
 
+/** A location-pin badge's link target — OpenStreetMap needs no API key
+ *  and no dependency this project doesn't already avoid adding, unlike
+ *  a full in-app map (a later, dedicated phase). */
+function osm_location_url($lat, $lng) {
+    return 'https://www.openstreetmap.org/?mlat=' . rawurlencode($lat) . '&mlon=' . rawurlencode($lng)
+         . '#map=16/' . rawurlencode($lat) . '/' . rawurlencode($lng);
+}
+
 if (isset($_GET['img'])) {
     serve_image($dir, $_GET['img'], $_GET['size'] ?? 'thumb', $files);
     exit;
@@ -875,24 +921,11 @@ $galleryNotices = [];
 // Only a .md file whose first non-blank line is exactly "{gallery}" is
 // treated as content for this script — anything else in the folder (a
 // personal notes.md, a leftover README, etc.) is left completely alone.
-$mdCandidates = array_filter(scandir($dir), function ($file) use ($dir) {
-    if (!is_file("$dir/$file")) return false;
-    return strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'md';
-});
-usort($mdCandidates, function ($a, $b) {
-    return strnatcasecmp($a, $b);
-});
-$mdCandidates = array_values($mdCandidates);
+$mdCandidates = scan_md_candidates($dir);
 
-$mdFiles = [];
-$rejectedMdCount = 0;
-foreach ($mdCandidates as $candidate) {
-    if (has_gallery_marker(file_get_contents("$dir/$candidate"))) {
-        $mdFiles[] = $candidate;
-    } else {
-        $rejectedMdCount++;
-    }
-}
+$mdScan = scan_gallery_md_files($dir);
+$mdFiles = $mdScan['files'];
+$rejectedMdCount = $mdScan['rejectedCount'];
 if ($rejectedMdCount > 0) {
     // Deliberately doesn't name the file(s): unlike every other notice
     // here, this one would otherwise reveal the exact filename of a .md
@@ -914,7 +947,7 @@ $folderName = basename($dir);
 $pageTitle = $folderName;
 $mdContents = [];
 foreach ($mdFiles as $idx => $mdFile) {
-    $content = strip_gallery_marker(file_get_contents("$dir/$mdFile"));
+    $content = $mdScan['contents'][$mdFile];
     if ($idx === 0) {
         $lines = explode("\n", str_replace("\r\n", "\n", $content));
         foreach ($lines as $li => $l) {
@@ -1225,6 +1258,975 @@ foreach ($groups as $key => $groupFiles) {
     }
 }
 
+// ?admin — checked here, as soon as $groups exists, and before anything
+// below it (stats, ?track, the public page) does any work a management
+// request has no business triggering. See run_admin_route()'s own
+// docblock, further down, for the full auth/CSRF flow.
+if (isset($_GET['admin'])) {
+    run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $galleryNotices);
+    exit;
+}
+
+/* -----------------------------------------------------------------------
+ * Small generic JSON file storage, flock-protected the same way the
+ * stats JSON fallback below is — reused by two otherwise-unrelated
+ * concerns (the admin tool's .gallery-items.json, and the login-attempt
+ * throttle's .gallery-login-attempts.json) so the locking mechanics
+ * aren't duplicated a third time. Deliberately generic over the data
+ * shape, unlike stats_update_file below, since callers here have
+ * genuinely different shapes rather than variations on the same one.
+ * ----------------------------------------------------------------------- */
+
+/** Reads a JSON file, merging it over $defaultData (missing file or
+ *  corrupt content just yields $defaultData untouched). */
+function json_file_read($path, $defaultData) {
+    if (!file_exists($path)) return $defaultData;
+    $decoded = json_decode((string) @file_get_contents($path), true);
+    return is_array($decoded) ? array_merge($defaultData, $decoded) : $defaultData;
+}
+
+/** Read-modify-write a JSON file under an exclusive lock; $modifier
+ *  receives the current data (merged over $defaultData) by reference. */
+function json_file_update($path, $defaultData, $modifier) {
+    $data = $defaultData;
+    $fp = @fopen($path, 'c+');
+    if ($fp) {
+        if (flock($fp, LOCK_EX)) {
+            $raw = stream_get_contents($fp);
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                $data = array_merge($data, $decoded);
+            }
+            $modifier($data);
+            $encoded = json_encode($data);
+            ftruncate($fp, 0);
+            rewind($fp);
+            fwrite($fp, $encoded);
+            fflush($fp);
+            flock($fp, LOCK_UN);
+        }
+        fclose($fp);
+    }
+    return $data;
+}
+
+/* -----------------------------------------------------------------------
+ * Admin auth: HTTP Basic Auth (checked with hash_equals — no timing
+ * leak), an HTTPS requirement, a session-carried CSRF token for the
+ * actual save actions, and a failed-attempt throttle shared with any
+ * future second password this script grows (see ADMIN_PASSWORD's own
+ * doc comment above; PRIVATE_VIEW_PASSWORD, when it exists, reuses this
+ * unchanged).
+ * ----------------------------------------------------------------------- */
+
+/** True for a request this script considers already-local — the one
+ *  exception to the HTTPS requirement below, so ?admin is still testable
+ *  on a bare `php -S localhost:8000` during development. */
+function is_local_request() {
+    // Deliberately keyed off REMOTE_ADDR alone — the actual TCP peer
+    // address, which a client can't forge in an ordinary request —
+    // rather than also trusting the Host header. A request's Host header
+    // is attacker-controlled: on a real public deployment, anyone could
+    // send "Host: localhost" and bypass the HTTPS requirement entirely
+    // if that were accepted here on its own.
+    return in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true);
+}
+
+/** True if this request arrived over HTTPS — checks the same three
+ *  signals current_base_url() already does (a direct TLS connection, a
+ *  trusted reverse-proxy header, or port 443), so a site behind a
+ *  load balancer or CDN that terminates TLS upstream is still correctly
+ *  recognized as HTTPS. */
+function is_https_request() {
+    return (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+        || (($_SERVER['SERVER_PORT'] ?? '') == 443);
+}
+
+/**
+ * Lightweight failed-login throttle, tracking failures per client IP in
+ * a small flock-protected file at the gallery root — same mechanism the
+ * view-stats JSON fallback already uses, nothing new conceptually,
+ * shared across every password prompt this script has rather than one
+ * per feature. 5 failures from one IP within 15 minutes forces a flat
+ * 60-second lockout on that IP's *next* attempt — rejected outright,
+ * without even checking the password it carries, matching "the next
+ * attempt is not even evaluated." A flat delay, not a permanent
+ * lockout: a legitimate visitor who fat-fingers a password a few times
+ * just waits a minute, not calls the site owner.
+ */
+function login_throttle_path($rootDir) {
+    return $rootDir . '/.gallery-login-attempts.json';
+}
+
+function login_throttle_key($realm, $ip) {
+    return $realm . '|' . $ip;
+}
+
+/** True if this IP is currently clear to even have its password
+ *  checked for the given realm (e.g. 'admin'). */
+function login_throttle_allows($rootDir, $realm, $ip) {
+    $data = json_file_read(login_throttle_path($rootDir), []);
+    $entry = $data[login_throttle_key($realm, $ip)] ?? null;
+    if ($entry === null) return true;
+    return time() >= ($entry['lockUntil'] ?? 0);
+}
+
+/** Records one failed attempt; imposes a 60-second lockout once 5 have
+ *  landed from the same IP within the last 15 minutes. */
+function login_throttle_record_failure($rootDir, $realm, $ip) {
+    $key = login_throttle_key($realm, $ip);
+    json_file_update(login_throttle_path($rootDir), [], function (&$data) use ($key) {
+        $now = time();
+        $entry = $data[$key] ?? ['attempts' => [], 'lockUntil' => 0];
+        $entry['attempts'] = array_values(array_filter($entry['attempts'], function ($t) use ($now) {
+            return $t > $now - 900; // keep only the last 15 minutes
+        }));
+        $entry['attempts'][] = $now;
+        if (count($entry['attempts']) >= 5) {
+            $entry['lockUntil'] = $now + 60;
+            $entry['attempts'] = [];
+        }
+        $data[$key] = $entry;
+    });
+}
+
+/** Clears a realm/IP's failure history after a successful login. */
+function login_throttle_record_success($rootDir, $realm, $ip) {
+    $key = login_throttle_key($realm, $ip);
+    json_file_update(login_throttle_path($rootDir), [], function (&$data) use ($key) {
+        unset($data[$key]);
+    });
+}
+
+/** Starts (or resumes) the PHP session used to carry the admin CSRF
+ *  token, with a 4-hour server-side lifetime — set here, before
+ *  session_start(), so no server or php.ini change is needed. The
+ *  browser-side cookie itself keeps no explicit expiry (a plain session
+ *  cookie), so in practice a login lasts up to 4 hours of continuous
+ *  use, or until the browser closes, whichever comes first. Only ever
+ *  called for ?admin requests — an ordinary visitor's page load never
+ *  starts a session or sets this cookie. */
+function admin_start_session() {
+    if (session_status() === PHP_SESSION_ACTIVE) return;
+    ini_set('session.gc_maxlifetime', 14400);
+    // Secure matches is_https_request() rather than being hardcoded true
+    // — the one exception this feature already makes for localhost
+    // testing over plain HTTP would otherwise never get the cookie back
+    // from the browser at all, since a Secure cookie is withheld from
+    // any non-HTTPS request.
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => is_https_request(),
+        'httponly' => true,
+        'samesite' => 'Strict',
+    ]);
+    session_start();
+}
+
+function admin_csrf_token() {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+function admin_csrf_valid($submittedToken) {
+    return isset($_SESSION['csrf_token']) && is_string($submittedToken)
+        && hash_equals($_SESSION['csrf_token'], $submittedToken);
+}
+
+/** Checks the request's HTTP Basic Auth credentials against
+ *  ADMIN_PASSWORD. Any username is accepted — there's only one account. */
+function admin_credentials_valid() {
+    $pass = $_SERVER['PHP_AUTH_PW'] ?? null;
+    if (!is_string($pass)) return false;
+    return hash_equals(ADMIN_PASSWORD, $pass);
+}
+
+function admin_send_auth_challenge() {
+    header('WWW-Authenticate: Basic realm="Gallery Admin"');
+    http_response_code(401);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'Authentication required.';
+}
+
+/** A plain-English refusal page for ?admin over an insecure connection —
+ *  HTTP Basic Auth credentials are plaintext-equivalent without TLS, so
+ *  this fails closed rather than just documenting the risk. Explains
+ *  itself and points toward a free certificate, rather than a bare
+ *  error that teaches a visitor nothing about what to do next. */
+function render_admin_https_required_page() {
+    http_response_code(403);
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTTPS required</title>
+<style>
+  body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.6; margin:0; }
+  .wrap { max-width:560px; margin:0 auto; padding:48px 24px; }
+  h1 { font-size:1.4rem; }
+  a { color:#8ab4ff; }
+  code { background:rgba(255,255,255,0.08); padding:1px 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>HTTPS required for the admin editor</h1>
+  <p>This page logs in with a password sent over HTTP Basic Auth, which is sent in a form that's trivially readable by anyone on the network path if the connection isn't encrypted. To protect that password, <code>?admin</code> refuses to run at all over a plain <code>http://</code> connection.</p>
+  <p>If you're testing this on your own machine, visiting it as <code>localhost</code> or <code>127.0.0.1</code> is allowed over plain HTTP. For a real deployment, put this site behind HTTPS — <a href="https://letsencrypt.org/" target="_blank" rel="noopener noreferrer">Let's Encrypt</a> issues free certificates, and most hosting control panels can set one up in a few clicks.</p>
+</div>
+</body>
+</html>
+<?php
+}
+
+/* -----------------------------------------------------------------------
+ * Per-item data: captions, location, a web link, a folder-group's own
+ * display name and chosen cover photo, and a folder's own location
+ * toggle. All of it machine-written by the admin tool, never hand-
+ * edited, so plain JSON is enough — no custom parser to get wrong. Lives
+ * in .gallery-items.json, colocated per folder exactly like
+ * .gallery-stats.* and .gallery-cache: a photo's caption lives in the
+ * same real folder the photo itself does, and a folder-group's own
+ * display name/cover live inside *that* folder (not its parent) — the
+ * same place a genuine folder rename already carries everything else
+ * along for free, with nothing left to update in some other file.
+ * ----------------------------------------------------------------------- */
+
+function items_path($folderPath) {
+    return $folderPath . '/.gallery-items.json';
+}
+
+/** items: bare filename => {caption, location: {lat,lng,label},
+ *  locationVisibility, web}. groups: filename-based group key (root-level
+ *  only — see the admin editor) => {displayName}. displayName/cover
+ *  describe *this folder itself* when a parent renders it as a
+ *  folder-group cover card. locationEnabled is this folder's own
+ *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
+function items_default() {
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => false];
+}
+
+function items_read($folderPath) {
+    return json_file_read(items_path($folderPath), items_default());
+}
+
+function items_update($folderPath, $modifier) {
+    return json_file_update(items_path($folderPath), items_default(), $modifier);
+}
+
+/** Every file's own item data (caption/location/web), across every real
+ *  folder $files touches, re-keyed to each file's full relative path —
+ *  same colocated-merge shape as stats_get_all_photo_views(). */
+function items_get_all_for_files($dir, $files) {
+    $byFolder = [];
+    foreach ($files as $file) {
+        $byFolder[containing_folder_real_path($dir, $file)][] = $file;
+    }
+    $result = [];
+    foreach ($byFolder as $folderPath => $folderFiles) {
+        $data = items_read($folderPath);
+        foreach ($folderFiles as $file) {
+            $bare = basename($file);
+            $entry = $data['items'][$bare] ?? [];
+            // Not real item data — a folder-level setting stashed onto
+            // each of its own files' entries so callers (the location
+            // badge/pin, specifically) don't need a second lookup
+            // structure just to find out which folder a file lives in.
+            $entry['_folderLocationEnabled'] = !empty($data['locationEnabled']);
+            $result[$file] = $entry;
+        }
+    }
+    return $result;
+}
+
+/** The three-gate check (global constant, folder toggle, per-photo
+ *  tri-state) that decides whether an unrevealed visitor ever sees this
+ *  photo's location — see ENABLE_PHOTO_LOCATION's own doc comment for
+ *  the full reasoning. The admin tool itself ignores all three; it can
+ *  always see and edit location data for its own authenticated owner. */
+function photo_location_visible($itemEntry) {
+    if (!ENABLE_PHOTO_LOCATION) return false;
+    if (empty($itemEntry['location'])) return false;
+    $visibility = $itemEntry['locationVisibility'] ?? 'inherit';
+    if ($visibility === 'hide') return false;
+    if ($visibility === 'show') return true;
+    return !empty($itemEntry['_folderLocationEnabled']);
+}
+
+/** A numeric latitude/longitude pair, validated the same discipline
+ *  is_safe_color() already applies to {color:} before it's ever trusted
+ *  into a generated map-link URL. */
+function is_valid_coordinate($lat, $lng) {
+    return is_numeric($lat) && is_numeric($lng)
+        && (float) $lat >= -90 && (float) $lat <= 90
+        && (float) $lng >= -180 && (float) $lng <= 180;
+}
+
+/** Converts one EXIF GPS component (3 degree/minute/second rationals,
+ *  e.g. "48/1", "51/1", "3056/100") plus its N/S/E/W ref into a signed
+ *  decimal-degree float. */
+function exif_gps_to_decimal($component, $ref) {
+    if (!is_array($component) || count($component) < 3) return null;
+    $toFloat = function ($frac) {
+        if (is_string($frac) && strpos($frac, '/') !== false) {
+            [$num, $den] = array_pad(explode('/', $frac, 2), 2, '1');
+            $den = (float) $den;
+            return $den != 0 ? ((float) $num) / $den : 0.0;
+        }
+        return (float) $frac;
+    };
+    $decimal = $toFloat($component[0]) + ($toFloat($component[1]) / 60) + ($toFloat($component[2]) / 3600);
+    return (strtoupper((string) $ref) === 'S' || strtoupper((string) $ref) === 'W') ? -$decimal : $decimal;
+}
+
+/** Auto-fills location from a JPEG's embedded EXIF GPS block, if any.
+ *  JPEG only — real coverage is narrower than it sounds: HEIC, PNG, GIF,
+ *  WEBP, and BMP need their coordinates entered by hand (see
+ *  ENABLE_PHOTO_LOCATION's own doc comment). Returns null on anything
+ *  missing or unparseable — manual entry is always the fallback, never a
+ *  hard failure. */
+function extract_jpeg_gps($realPath) {
+    if (!function_exists('exif_read_data')) return null;
+    $ext = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
+    if (!in_array($ext, ['jpg', 'jpeg'], true)) return null;
+    $exif = @exif_read_data($realPath, 'GPS');
+    if (!is_array($exif) || empty($exif['GPSLatitude']) || empty($exif['GPSLongitude'])) return null;
+    $lat = exif_gps_to_decimal($exif['GPSLatitude'], $exif['GPSLatitudeRef'] ?? 'N');
+    $lng = exif_gps_to_decimal($exif['GPSLongitude'], $exif['GPSLongitudeRef'] ?? 'E');
+    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng)) return null;
+    return ['lat' => round($lat, 6), 'lng' => round($lng, 6)];
+}
+
+/**
+ * Garbage-collects stale .gallery-items.json entries — a photo deleted
+ * (or renamed by hand, not via a real folder rename) orphans its caption
+ * entry within a folder that itself still exists. Same precedent as
+ * thumbnail-cache cleanup: swept here, and reported through the existing
+ * notices mechanism, the same way an unknown {photos:} reference already
+ * is. A whole folder disappearing needs no separate handling — its
+ * .gallery-items.json is deleted along with it in the same operation.
+ */
+function gc_items_data($dir, $files, &$galleryNotices) {
+    $byFolder = [];
+    foreach ($files as $file) {
+        $byFolder[containing_folder_real_path($dir, $file)][] = basename($file);
+    }
+    // Only ever GC folders that actually have an items store — a gallery
+    // that's never touched the admin tool pays nothing for this.
+    $candidateFolders = array_unique(array_merge(array_keys($byFolder), [$dir]));
+    foreach ($candidateFolders as $folderPath) {
+        $path = items_path($folderPath);
+        if (!file_exists($path)) continue;
+        $validBareNames = array_fill_keys($byFolder[$folderPath] ?? [], true);
+        $orphanCount = 0;
+        items_update($folderPath, function (&$data) use ($validBareNames, &$orphanCount) {
+            foreach (array_keys($data['items']) as $bare) {
+                if (!isset($validBareNames[$bare])) {
+                    unset($data['items'][$bare]);
+                    $orphanCount++;
+                }
+            }
+        });
+        if ($orphanCount > 0) {
+            $galleryNotices[] = $orphanCount === 1
+                ? 'A caption/location/web entry for a deleted or renamed photo was cleaned up.'
+                : $orphanCount . ' caption/location/web entries for deleted or renamed photos were cleaned up.';
+        }
+    }
+}
+
+/* -----------------------------------------------------------------------
+ * The admin editor (?admin). Entirely inert when ADMIN_PASSWORD is
+ * empty — see its own doc comment above. Manages the current folder's
+ * (root or one subfolder) caption/location/web per item, its folder- or
+ * filename-group display names, its chosen cover photo, and every .md
+ * in it (active or not) with raw-text save/save-as/delete.
+ * ----------------------------------------------------------------------- */
+
+/** ?admin's own &folder= — validated against the real $folderGroupKeys
+ *  the same way the public ?folder= is. false means "was given but
+ *  invalid" (caller 404s); null means root. */
+function admin_resolve_folder($folderGroupKeys) {
+    if (!isset($_GET['folder'])) return null;
+    $requested = $_GET['folder'];
+    return isset($folderGroupKeys[$requested]) ? $requested : false;
+}
+
+function render_admin_folder_nav($folderGroupKeys, $currentFolder) {
+    if (empty($folderGroupKeys)) return '';
+    $html = '<nav class="admin-folder-nav"><a href="?admin"' . ($currentFolder === null ? ' class="current"' : '') . '>Root</a>';
+    foreach (array_keys($folderGroupKeys) as $key) {
+        $active = ($currentFolder === $key) ? ' class="current"' : '';
+        $html .= ' <a href="?admin&folder=' . rawurlencode($key) . '"' . $active . '>' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '</a>';
+    }
+    return $html . '</nav>';
+}
+
+/** A collapsed-by-default-on-mobile reference panel: the directive table
+ *  plus buttons that insert syntax at the textarea's cursor — plain text
+ *  insertion, no different from typing it, so it never touches the
+ *  byte-for-byte save guarantee the textarea itself keeps. */
+function render_admin_reference_panel() {
+    $directives = [
+        ['Group a box', '{group: Name}'],
+        ['Claim photos', '{photos: a.jpg, b.jpg}'],
+        ['Accent color', '{color: #ff0000}'],
+        ['Sold', '{sold}'],
+        ['Reserved', '{reserved}'],
+    ];
+    $html = '<details class="admin-reference" open><summary>Directive reference</summary><div class="admin-reference-body">';
+    $html .= '<p>Click to insert at the cursor:</p><div class="admin-reference-buttons">';
+    foreach ($directives as [$label, $snippet]) {
+        $html .= '<button type="button" class="admin-insert-btn" data-snippet="' . htmlspecialchars($snippet, ENT_QUOTES, 'UTF-8') . '">'
+                . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</button>';
+    }
+    $html .= '</div><p class="admin-reference-note">Full syntax, including multi-file groups and auto-linked mentions, is documented in the README.</p></div></details>';
+    return $html;
+}
+
+/**
+ * Processes exactly one admin POST action. Every action is CSRF-checked
+ * first; a save can touch at most one concern (an item, a group label, a
+ * folder setting, or one .md file) so a failure in one never silently
+ * implies success in another — reported per-action, not assumed
+ * all-or-nothing.
+ */
+function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups) {
+    if (!admin_csrf_valid($_POST['csrf_token'] ?? '')) {
+        return ['type' => 'error', 'text' => 'Your session expired — please try again.'];
+    }
+    $action = $_POST['action'] ?? '';
+
+    if ($action === 'save_item') {
+        $bare = basename((string) ($_POST['file'] ?? ''));
+        $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
+        if (!in_array($fullPath, $files, true)) {
+            return ['type' => 'error', 'text' => 'Unknown file.'];
+        }
+        $caption = trim((string) ($_POST['caption'] ?? ''));
+        $web = trim((string) ($_POST['web'] ?? ''));
+        $lat = trim((string) ($_POST['lat'] ?? ''));
+        $lng = trim((string) ($_POST['lng'] ?? ''));
+        $locLabel = trim((string) ($_POST['loc_label'] ?? ''));
+        $visibility = $_POST['loc_visibility'] ?? 'inherit';
+        if (!in_array($visibility, ['inherit', 'show', 'hide'], true)) $visibility = 'inherit';
+        if ($web !== '' && !preg_match('#^https?://#i', $web)) {
+            return ['type' => 'error', 'text' => 'The web link needs to start with http:// or https://.'];
+        }
+        if (($lat !== '' || $lng !== '') && !is_valid_coordinate($lat === '' ? 0 : $lat, $lng === '' ? 0 : $lng)) {
+            return ['type' => 'error', 'text' => 'That latitude/longitude isn\'t a valid coordinate.'];
+        }
+        items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility) {
+            $entry = $data['items'][$bare] ?? [];
+            if ($caption !== '') { $entry['caption'] = $caption; } else { unset($entry['caption']); }
+            if ($web !== '') { $entry['web'] = $web; } else { unset($entry['web']); }
+            if ($lat !== '' && $lng !== '') {
+                $entry['location'] = ['lat' => (float) $lat, 'lng' => (float) $lng, 'label' => $locLabel];
+            } else {
+                unset($entry['location']);
+            }
+            $entry['locationVisibility'] = $visibility;
+            $data['items'][$bare] = $entry;
+        });
+        return ['type' => 'ok', 'text' => 'Saved "' . $bare . '".'];
+    }
+
+    if ($action === 'save_group_label') {
+        $groupKey = (string) ($_POST['group_key'] ?? '');
+        if (!isset($groups[$groupKey])) {
+            return ['type' => 'error', 'text' => 'Unknown group.'];
+        }
+        if (isset($explicitGroups[$groupKey])) {
+            return ['type' => 'error', 'text' => 'That name is controlled by a {group:} directive and can\'t be changed here.'];
+        }
+        $displayName = trim((string) ($_POST['display_name'] ?? ''));
+        items_update($dir, function (&$data) use ($groupKey, $displayName) {
+            if ($displayName === '') {
+                unset($data['groups'][$groupKey]);
+            } else {
+                $data['groups'][$groupKey] = ['displayName' => $displayName];
+            }
+        });
+        return ['type' => 'ok', 'text' => 'Display name saved.'];
+    }
+
+    if ($action === 'save_folder_identity') {
+        if ($adminFolderPath === null) {
+            return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        }
+        $displayName = trim((string) ($_POST['display_name'] ?? ''));
+        items_update($adminFolderReal, function (&$data) use ($displayName) {
+            $data['displayName'] = $displayName !== '' ? $displayName : null;
+        });
+        return ['type' => 'ok', 'text' => 'Folder display name saved.'];
+    }
+
+    if ($action === 'set_cover') {
+        if ($adminFolderPath === null) {
+            return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        }
+        $bare = basename((string) ($_POST['file'] ?? ''));
+        if (!in_array($adminFolderPath . '/' . $bare, $files, true)) {
+            return ['type' => 'error', 'text' => 'Unknown file.'];
+        }
+        items_update($adminFolderReal, function (&$data) use ($bare) {
+            $data['cover'] = $bare;
+        });
+        return ['type' => 'ok', 'text' => '"' . $bare . '" set as this folder\'s cover photo.'];
+    }
+
+    if ($action === 'toggle_location_enabled') {
+        $enabled = !empty($_POST['enabled']);
+        $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
+        items_update($targetReal, function (&$data) use ($enabled) {
+            $data['locationEnabled'] = $enabled;
+        });
+        return ['type' => 'ok', 'text' => 'Location sharing ' . ($enabled ? 'enabled' : 'disabled') . ' for this folder.'];
+    }
+
+    if ($action === 'add_gallery_marker') {
+        $mdFile = basename((string) ($_POST['md_file'] ?? ''));
+        $path = $adminFolderReal . '/' . $mdFile;
+        if (strtolower(pathinfo($mdFile, PATHINFO_EXTENSION)) !== 'md' || !is_file($path)) {
+            return ['type' => 'error', 'text' => 'Unknown file.'];
+        }
+        $content = (string) file_get_contents($path);
+        if (has_gallery_marker($content)) {
+            return ['type' => 'error', 'text' => 'Already active.'];
+        }
+        if (@file_put_contents($path, "{gallery}\n" . $content) === false) {
+            return ['type' => 'error', 'text' => 'Could not write to "' . $mdFile . '".'];
+        }
+        return ['type' => 'ok', 'text' => '"' . $mdFile . '" is now active.'];
+    }
+
+    if ($action === 'save_notes') {
+        $existing = basename((string) ($_POST['md_file'] ?? ''));
+        $newName = trim((string) ($_POST['new_name'] ?? ''));
+        $content = (string) ($_POST['content'] ?? '');
+        $target = basename($newName !== '' ? $newName : $existing);
+        if ($target === '') {
+            return ['type' => 'error', 'text' => 'A filename is required.'];
+        }
+        if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
+            $target .= '.md';
+        }
+        $targetPath = $adminFolderReal . '/' . $target;
+        if (@file_put_contents($targetPath, $content) === false) {
+            return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
+        }
+        return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '".'];
+    }
+
+    if ($action === 'delete_notes') {
+        $mdFile = basename((string) ($_POST['md_file'] ?? ''));
+        $path = $adminFolderReal . '/' . $mdFile;
+        if (strtolower(pathinfo($mdFile, PATHINFO_EXTENSION)) !== 'md' || !is_file($path)) {
+            return ['type' => 'error', 'text' => 'Unknown file.'];
+        }
+        if (!@unlink($path)) {
+            return ['type' => 'error', 'text' => 'Could not delete "' . $mdFile . '".'];
+        }
+        return ['type' => 'ok', 'text' => '"' . $mdFile . '" deleted.'];
+    }
+
+    if ($action === 'export_items') {
+        return ['type' => 'export'];
+    }
+
+    return ['type' => 'error', 'text' => 'Unknown action.'];
+}
+
+/** Streams the current folder's own .gallery-items.json back out as a
+ *  download — the only backup this irreplaceable, hand-entered data has
+ *  at all. One caution worth repeating next to the download itself, not
+ *  a design change: once a hidden flag exists in this file (a later
+ *  phase), the export becomes a new way to reveal what's hidden and that
+ *  it exists — mishandling the exported file is its own leak vector,
+ *  independent of the actual hidden content. */
+function admin_export_items($adminFolderPath, $adminFolderReal) {
+    $data = items_read($adminFolderReal);
+    $name = ($adminFolderPath === null ? 'root' : slugify($adminFolderPath)) . '-gallery-items.json';
+    header('Content-Type: application/json');
+    header('Content-Disposition: attachment; filename="' . $name . '"');
+    echo json_encode($data, JSON_PRETTY_PRINT);
+}
+
+/**
+ * Renders the full ?admin page: folder nav, this folder's own identity
+ * (display name/cover/location toggle, when viewing a subfolder), every
+ * .md here (active or not) with a raw-text editor, and the photo/video
+ * grid itself — caption, location, web link per item, usable at a phone
+ * width same as the public gallery already holds itself to.
+ */
+function render_admin_page($dir, $adminFolderPath, $adminFolderReal, $adminFiles, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $mdCandidates, $resultMessage) {
+    $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
+    $csrfToken = htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8');
+    $folderLabel = $adminFolderPath ?? 'Root';
+    $itemsHere = items_read($adminFolderReal);
+    $mdScan = scan_gallery_md_files($adminFolderReal);
+    $activeMd = array_fill_keys($mdScan['files'], true);
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Gallery Admin — v<?= $version ?></title>
+<style>
+  :root { --bg:#0f0f10; --card:#1a1a1c; --text:#eaeaea; --muted:#8a8a8f; --accent:#5865f2; --ok:#3ba55c; --err:#ed4245; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; }
+  .wrap { max-width:960px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  h2 { font-size:1.1rem; margin:28px 0 10px; }
+  .muted { color:var(--muted); font-size:0.85rem; }
+  .admin-folder-nav { margin:14px 0; display:flex; flex-wrap:wrap; gap:8px; }
+  .admin-folder-nav a { color:var(--muted); text-decoration:none; padding:5px 10px; border-radius:6px; background:var(--card); font-size:0.85rem; }
+  .admin-folder-nav a.current { color:var(--text); background:var(--accent); }
+  .flash { padding:10px 14px; border-radius:8px; margin:14px 0; font-size:0.9rem; }
+  .flash.ok { background:rgba(59,165,92,0.15); color:var(--ok); }
+  .flash.error { background:rgba(237,66,69,0.15); color:var(--err); }
+  .panel { background:var(--card); border-radius:10px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-size:0.8rem; color:var(--muted); margin-bottom:3px; }
+  input[type=text], input[type=url], input[type=number], textarea, select {
+    width:100%; background:#101012; border:1px solid #2a2a2e; color:var(--text);
+    border-radius:6px; padding:7px 9px; font-size:0.9rem; font-family:inherit;
+  }
+  textarea { min-height:160px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; resize:vertical; }
+  .field { margin-bottom:10px; }
+  .field-row { display:flex; gap:10px; flex-wrap:wrap; }
+  .field-row .field { flex:1; min-width:140px; }
+  button, .btn { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px; font-size:0.85rem; cursor:pointer; }
+  button.secondary { background:#2a2a2e; color:var(--text); }
+  button.danger { background:var(--err); }
+  .md-file { border-top:1px solid #26262a; padding:14px 0; }
+  .md-file:first-child { border-top:none; }
+  .md-file-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .md-badge { font-size:0.72rem; padding:2px 8px; border-radius:10px; }
+  .md-badge.active { background:rgba(59,165,92,0.2); color:var(--ok); }
+  .md-badge.inactive { background:rgba(255,255,255,0.08); color:var(--muted); }
+  .admin-reference { margin-top:10px; font-size:0.85rem; }
+  .admin-reference summary { cursor:pointer; color:var(--muted); }
+  .admin-reference-buttons { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+  .admin-insert-btn { background:#2a2a2e; color:var(--text); font-size:0.78rem; padding:4px 9px; }
+  .admin-reference-note { color:var(--muted); font-size:0.78rem; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:14px; }
+  .item-card { background:var(--card); border-radius:10px; padding:12px; }
+  .item-card img, .item-card .item-thumb-placeholder { width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:6px; margin-bottom:8px; background:#101012; }
+  .item-filename { font-size:0.78rem; color:var(--muted); word-break:break-all; margin-bottom:8px; }
+  .loc-row { display:flex; gap:6px; }
+  .loc-row .field { flex:1; }
+  @media (max-width: 600px) {
+    .wrap { padding:16px 10px 48px; }
+    .grid { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="./" class="muted">&larr; Back to gallery</a>
+  <h1>Gallery Admin</h1>
+  <p class="muted">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></p>
+  <?= render_admin_folder_nav($folderGroupKeys, $adminFolderPath) ?>
+
+  <?php if ($resultMessage): ?>
+    <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
+  <?php endif; ?>
+
+  <?php if ($adminFolderPath !== null): ?>
+  <div class="panel">
+    <h2 style="margin-top:0;">This folder's own settings</h2>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="save_folder_identity">
+      <div class="field">
+        <label>Display name (shown on its cover card instead of "<?= htmlspecialchars($adminFolderPath, ENT_QUOTES, 'UTF-8') ?>")</label>
+        <input type="text" name="display_name" value="<?= htmlspecialchars($itemsHere['displayName'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+      </div>
+      <button type="submit">Save name</button>
+    </form>
+    <form method="post" style="margin-top:12px;">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="toggle_location_enabled">
+      <label><input type="checkbox" name="enabled" value="1" <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?> onchange="this.form.submit()"> Show photo locations publicly for this folder<?php if (!ENABLE_PHOTO_LOCATION): ?> <span class="muted">(ENABLE_PHOTO_LOCATION is off — nothing shows regardless)</span><?php endif; ?></label>
+    </form>
+    <?php if (!empty($itemsHere['cover'])): ?>
+      <p class="muted" style="margin-top:10px;">Cover photo: <?= htmlspecialchars($itemsHere['cover'], ENT_QUOTES, 'UTF-8') ?> — click "Set as cover" on any photo below to change it.</p>
+    <?php endif; ?>
+  </div>
+  <?php else: ?>
+  <div class="panel">
+    <label><input type="checkbox" disabled <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?>> Show photo locations publicly at the root</label>
+    <form method="post" style="margin-top:6px;">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="toggle_location_enabled">
+      <input type="hidden" name="enabled" value="<?= !empty($itemsHere['locationEnabled']) ? '0' : '1' ?>">
+      <button type="submit" class="secondary"><?= !empty($itemsHere['locationEnabled']) ? 'Disable' : 'Enable' ?> for the root</button>
+    </form>
+  </div>
+  <?php endif; ?>
+
+  <?php
+  // Display-name fields for root-level filename/explicit groups (a
+  // folder-group's own name is edited from inside that folder — see
+  // above). Only groups that actually render as a named box get one; a
+  // lone standalone single has no separate "name" shown anywhere to edit.
+  if ($adminFolderPath === null):
+  ?>
+  <div class="panel">
+    <h2 style="margin-top:0;">Group names</h2>
+    <?php $anyGroupNames = false; foreach ($groups as $gKey => $gFiles):
+      if (isset($folderGroupKeys[$gKey])) continue;
+      if (count($gFiles) < 2 && !isset($explicitGroupKeys[$gKey])) continue;
+      $anyGroupNames = true;
+      $isExplicit = isset($explicitGroups[$gKey]);
+    ?>
+      <form method="post" class="field-row" style="align-items:flex-end;">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="save_group_label">
+        <input type="hidden" name="group_key" value="<?= htmlspecialchars($gKey, ENT_QUOTES, 'UTF-8') ?>">
+        <div class="field">
+          <label><?= htmlspecialchars($gKey, ENT_QUOTES, 'UTF-8') ?> (<?= count($gFiles) ?> item<?= count($gFiles) === 1 ? '' : 's' ?>)</label>
+          <input type="text" name="display_name" value="<?= htmlspecialchars($isExplicit ? $explicitGroups[$gKey]['name'] : ($itemsHere['groups'][$gKey]['displayName'] ?? ''), ENT_QUOTES, 'UTF-8') ?>" <?= $isExplicit ? 'disabled' : '' ?>>
+        </div>
+        <?php if (!$isExplicit): ?><button type="submit">Save</button><?php else: ?><span class="muted">Controlled by {group:} in a .md</span><?php endif; ?>
+      </form>
+    <?php endforeach; if (!$anyGroupNames): ?>
+      <p class="muted">No multi-photo groups at the root yet.</p>
+    <?php endif; ?>
+  </div>
+  <?php endif; ?>
+
+  <div class="panel">
+    <h2 style="margin-top:0;">Notes (.md files in this folder)</h2>
+    <?php if (empty($mdCandidates)): ?>
+      <p class="muted">No .md files here yet.</p>
+    <?php endif; ?>
+    <?php foreach ($mdCandidates as $mdFile):
+      $isActive = isset($activeMd[$mdFile]);
+      $raw = (string) @file_get_contents($adminFolderReal . '/' . $mdFile);
+      $editable = $isActive ? strip_gallery_marker($raw) : $raw;
+    ?>
+      <div class="md-file">
+        <div class="md-file-head">
+          <strong><?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?></strong>
+          <span class="md-badge <?= $isActive ? 'active' : 'inactive' ?>"><?= $isActive ? 'active' : 'not active' ?></span>
+          <?php if (!$isActive): ?>
+            <form method="post" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+              <input type="hidden" name="action" value="add_gallery_marker">
+              <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
+              <button type="submit" class="secondary">Add {gallery} marker</button>
+            </form>
+          <?php endif; ?>
+        </div>
+        <form method="post" onsubmit="return admConfirmSaveAs(this);">
+          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+          <input type="hidden" name="action" value="save_notes">
+          <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
+          <textarea name="content" class="adm-textarea"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
+          <?= render_admin_reference_panel() ?>
+          <div class="field-row" style="margin-top:8px; align-items:flex-end;">
+            <div class="field" style="max-width:260px;">
+              <label>Save as a different filename (optional)</label>
+              <input type="text" name="new_name" class="adm-newname" placeholder="leave blank to overwrite this file">
+            </div>
+            <button type="submit">Save</button>
+          </div>
+        </form>
+        <form method="post" onsubmit="return confirm('Delete <?= htmlspecialchars(addslashes($mdFile), ENT_QUOTES, 'UTF-8') ?>? This can\'t be undone.');" style="margin-top:6px;">
+          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+          <input type="hidden" name="action" value="delete_notes">
+          <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
+          <button type="submit" class="danger">Delete</button>
+        </form>
+      </div>
+    <?php endforeach; ?>
+    <div class="md-file">
+      <strong>New file</strong>
+      <form method="post" onsubmit="return admConfirmSaveAs(this);">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="save_notes">
+        <input type="hidden" name="md_file" value="">
+        <textarea name="content" class="adm-textarea">{gallery}
+</textarea>
+        <?= render_admin_reference_panel() ?>
+        <div class="field-row" style="margin-top:8px; align-items:flex-end;">
+          <div class="field" style="max-width:260px;">
+            <label>Filename</label>
+            <input type="text" name="new_name" class="adm-newname" placeholder="notes.md" required>
+          </div>
+          <button type="submit">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <h2>Photos &amp; video (<?= count($adminFiles) ?>)</h2>
+  <div class="grid">
+    <?php foreach ($adminFiles as $file): $bare = basename($file);
+      $entry = $itemsHere['items'][$bare] ?? [];
+      $loc = $entry['location'] ?? null;
+      if ($loc === null && !is_video_file($file)) {
+          $auto = extract_jpeg_gps(resolve_real_path($dir, $file));
+          if ($auto !== null) { $loc = $auto; }
+      }
+    ?>
+      <div class="item-card">
+        <?php if (is_video_file($file)): ?>
+          <div class="item-thumb-placeholder" style="display:flex;align-items:center;justify-content:center;color:var(--muted);">&#9654; video<?php if (isset($videoDurations[$file])): ?> &middot; <?= htmlspecialchars(format_duration($videoDurations[$file]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></div>
+        <?php else: ?>
+          <img src="<?= htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8') ?>" alt="">
+        <?php endif; ?>
+        <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+          <input type="hidden" name="action" value="save_item">
+          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
+          <div class="field">
+            <label>Caption</label>
+            <input type="text" name="caption" value="<?= htmlspecialchars($entry['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          </div>
+          <div class="field">
+            <label>Web link</label>
+            <input type="url" name="web" value="<?= htmlspecialchars($entry['web'] ?? '', ENT_QUOTES, 'UTF-8') ?>" placeholder="https://&hellip;">
+          </div>
+          <div class="loc-row">
+            <div class="field">
+              <label>Latitude</label>
+              <input type="text" name="lat" value="<?= htmlspecialchars($loc['lat'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="field">
+              <label>Longitude</label>
+              <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+          </div>
+          <div class="field">
+            <label>Location label (optional)</label>
+            <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          </div>
+          <div class="field">
+            <label>Location visibility</label>
+            <select name="loc_visibility">
+              <?php $vis = $entry['locationVisibility'] ?? 'inherit'; ?>
+              <option value="inherit" <?= $vis === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
+              <option value="show" <?= $vis === 'show' ? 'selected' : '' ?>>Always show</option>
+              <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
+            </select>
+          </div>
+          <button type="submit">Save</button>
+        </form>
+        <?php if ($adminFolderPath !== null): ?>
+          <form method="post" style="margin-top:6px;">
+            <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+            <input type="hidden" name="action" value="set_cover">
+            <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
+            <button type="submit" class="secondary">Set as cover</button>
+          </form>
+        <?php endif; ?>
+      </div>
+    <?php endforeach; ?>
+  </div>
+
+  <div class="panel" style="margin-top:20px;">
+    <h2 style="margin-top:0;">Export</h2>
+    <p class="muted">Downloads this folder's captions, locations, web links, display name, and chosen cover as JSON — the only backup this data has.</p>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="export_items">
+      <button type="submit" class="secondary">Export as JSON</button>
+    </form>
+  </div>
+</div>
+<script>
+  document.querySelectorAll('.admin-insert-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const textarea = btn.closest('.md-file').querySelector('.adm-textarea');
+      const snippet = btn.getAttribute('data-snippet');
+      const start = textarea.selectionStart, end = textarea.selectionEnd;
+      textarea.value = textarea.value.slice(0, start) + snippet + textarea.value.slice(end);
+      textarea.focus();
+      textarea.selectionStart = textarea.selectionEnd = start + snippet.length;
+    });
+  });
+  function admConfirmSaveAs(form) {
+    const newNameField = form.querySelector('.adm-newname');
+    if (newNameField && newNameField.value.trim() !== '') {
+      return confirm('Save as "' + newNameField.value.trim() + '"? If that file already exists, it will be overwritten.');
+    }
+    return true;
+  }
+</script>
+</body>
+</html>
+<?php
+}
+
+/**
+ * Entry point for ?admin — auth (HTTPS, Basic Auth, throttle), then
+ * dispatches to a POST action handler or the page itself. Exits the
+ * script either way; nothing below this ever runs for an admin request.
+ */
+function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $galleryNotices) {
+    if (ADMIN_PASSWORD === '') {
+        http_response_code(404);
+        return;
+    }
+    if (!is_https_request() && !is_local_request()) {
+        render_admin_https_required_page();
+        return;
+    }
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    if (!login_throttle_allows($dir, 'admin', $ip)) {
+        http_response_code(429);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'Too many failed attempts. Try again in a moment.';
+        return;
+    }
+    if (!admin_credentials_valid()) {
+        login_throttle_record_failure($dir, 'admin', $ip);
+        admin_send_auth_challenge();
+        return;
+    }
+    login_throttle_record_success($dir, 'admin', $ip);
+    admin_start_session();
+
+    $adminFolderPath = admin_resolve_folder($folderGroupKeys);
+    if ($adminFolderPath === false) {
+        http_response_code(404);
+        return;
+    }
+    $adminFolderReal = $adminFolderPath === null ? $dir : resolve_real_path($dir, $adminFolderPath);
+    $adminFiles = $adminFolderPath === null
+        ? array_values(array_filter($files, function ($f) use ($groups, $folderGroupKeys) {
+            foreach ($folderGroupKeys as $fk => $_true) {
+                if (in_array($f, $groups[$fk], true)) return false;
+            }
+            return true;
+        }))
+        : ($groups[$adminFolderPath] ?? []);
+
+    $resultMessage = null;
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $resultMessage = handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups);
+        if ($resultMessage['type'] === 'export') {
+            admin_export_items($adminFolderPath, $adminFolderReal);
+            return;
+        }
+    }
+
+    $mdCandidates = scan_md_candidates($adminFolderReal);
+    render_admin_page($dir, $adminFolderPath, $adminFolderReal, $adminFiles, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $mdCandidates, $resultMessage);
+}
+
 /* -----------------------------------------------------------------------
  * View-stats storage. Two interchangeable backends behind one small set
  * of functions (stats_bump_pageview / stats_bump_photo /
@@ -1471,6 +2473,7 @@ if (TRACK_VIEWS) {
 }
 
 gc_image_cache($dir, $files, $imagickAvailable);
+gc_items_data($dir, $files, $galleryNotices);
 
 // Snapshot of the root's own title, before any ?folder= override below
 // ever touches $pageTitle — used for the breadcrumb back-link and for
@@ -1717,6 +2720,48 @@ function strip_gallery_marker($content) {
         break;
     }
     return implode("\n", $lines);
+}
+
+/** Every .md file sitting directly in a real folder, natural-sorted —
+ *  every one, marker or not; the caller decides what counts as "active."
+ *  Reused for the gallery root's own notes scan, a subfolder's own notes
+ *  (see AUTO_GROUP_BY_FOLDER), and the admin tool's "every .md in this
+ *  folder" listing, which deliberately includes non-marker ones too. */
+function scan_md_candidates($realFolderPath) {
+    $entries = @scandir($realFolderPath);
+    if ($entries === false) return [];
+    $candidates = array_filter($entries, function ($file) use ($realFolderPath) {
+        if (!is_file("$realFolderPath/$file")) return false;
+        return strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'md';
+    });
+    usort($candidates, function ($a, $b) {
+        return strnatcasecmp($a, $b);
+    });
+    return array_values($candidates);
+}
+
+/** Qualifying (marker-having) .md files in a real folder, with the
+ *  marker already stripped from their content — same rule as the
+ *  gallery root's own notes: only a .md whose first non-blank line is
+ *  exactly "{gallery}" counts. Used for the root's own notes, and for a
+ *  subfolder's own ?folder= page (see AUTO_GROUP_BY_FOLDER) — a Paris
+ *  .md can't claim a StTropez photo simply because it's only ever
+ *  evaluated against Paris's own already-scoped $groups/$files. */
+function scan_gallery_md_files($realFolderPath) {
+    $candidates = scan_md_candidates($realFolderPath);
+    $files = [];
+    $contents = [];
+    $rejectedCount = 0;
+    foreach ($candidates as $candidate) {
+        $raw = file_get_contents("$realFolderPath/$candidate");
+        if (has_gallery_marker($raw)) {
+            $files[] = $candidate;
+            $contents[$candidate] = strip_gallery_marker($raw);
+        } else {
+            $rejectedCount++;
+        }
+    }
+    return ['files' => $files, 'contents' => $contents, 'rejectedCount' => $rejectedCount];
 }
 
 /**
@@ -2095,7 +3140,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
  *  the generic placeholder graphic (see render_video_placeholder_image)
  *  — plus a plain-text duration badge in the one corner not already
  *  spoken for, when $videoDuration is known. */
-function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null, $videoDuration = null) {
+function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null, $videoDuration = null, $itemEntry = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
     $hidden = ($views > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
     $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">&#128065; '
@@ -2109,6 +3154,25 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     $durationBadge = $videoDuration !== null
         ? '<span class="video-duration">' . htmlspecialchars(format_duration($videoDuration), ENT_QUOTES, 'UTF-8') . '</span>'
         : '';
+    // Caption/location/web badges — bottom edge, right-justified,
+    // extending the view-badge's own corner into a flex row (see
+    // .card-badges) rather than stacking into a cramped cluster.
+    $itemBadges = '';
+    if (!empty($itemEntry['caption'])) {
+        $itemBadges .= '<span class="item-badge caption-badge" title="' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8') . '">&#128172;</span>';
+    }
+    if (photo_location_visible($itemEntry ?? [])) {
+        $loc = $itemEntry['location'];
+        $locTitle = trim(($loc['label'] ?? '') !== '' ? $loc['label'] : ($loc['lat'] . ', ' . $loc['lng']));
+        $itemBadges .= '<a class="item-badge location-badge" href="' . htmlspecialchars(osm_location_url($loc['lat'], $loc['lng']), ENT_QUOTES, 'UTF-8')
+                     . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($locTitle, ENT_QUOTES, 'UTF-8')
+                     . '" onclick="event.stopPropagation()">&#128205;</a>';
+    }
+    if (!empty($itemEntry['web'])) {
+        $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
+                     . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
+                     . '" onclick="event.stopPropagation()">&#8505;</a>';
+    }
     $colorStyle = $color ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ' inset;"' : '';
     // $anchorId lets a standalone single be a valid "#group-<slug>" jump
     // target too — render_group_thumbs() always links there for a
@@ -2118,7 +3182,8 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
     return '<div class="card' . ($status ? ' ' . $status : '') . '"' . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $durationBadge . $statusBadge . $badge . '</div>';
+         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $durationBadge . $statusBadge
+         . '<div class="card-badges">' . $itemBadges . $badge . '</div></div>';
 }
 
 /**
@@ -2140,19 +3205,32 @@ function status_accent_color($status, $customColor) {
  * whole subtree ($recursiveFiles already *is* that full recursive list,
  * so no separate counting pass is needed). The copy-link icon is a
  * sibling of the navigation link, not nested inside it — two <a> tags,
- * never one inside the other.
+ * never one inside the other. $manualCover (a bare filename from the
+ * folder's own .gallery-items.json — see ?admin's "Set as cover")
+ * overrides the automatic choice when it's still a real member of this
+ * folder's own recursive file list.
  */
-function render_folder_cover_card($folderPath, $label, $recursiveFiles) {
+function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualCover = null) {
     $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
-    // The cover photo prefers an actual photo over a video, even if a
-    // video sorts first — a video's generic placeholder graphic makes a
-    // flat, uninteresting highlight. Only fall back to a video if the
-    // folder has no photos at all.
     $coverFile = null;
-    foreach ($recursiveFiles as $f) {
-        if (!is_video_file($f)) {
-            $coverFile = $f;
-            break;
+    if ($manualCover !== null) {
+        foreach ($recursiveFiles as $f) {
+            if (basename($f) === $manualCover) {
+                $coverFile = $f;
+                break;
+            }
+        }
+    }
+    // The automatic fallback prefers an actual photo over a video, even
+    // if a video sorts first — a video's generic placeholder graphic
+    // makes a flat, uninteresting highlight. Only fall back to a video
+    // if the folder has no photos at all.
+    if ($coverFile === null) {
+        foreach ($recursiveFiles as $f) {
+            if (!is_video_file($f)) {
+                $coverFile = $f;
+                break;
+            }
         }
     }
     if ($coverFile === null) {
@@ -2177,7 +3255,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles) {
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
-function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = []) {
+function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels = [], $explicitGroupKeys = [], $folderGroupKeys = [], $videoDurations = [], $folderCovers = [], $itemsData = []) {
     $html = '';
     $flatIndex = 0;
 
@@ -2192,7 +3270,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // rendered card's lightbox index is drawn from.
         if (isset($folderGroupKeys[$key]) && FOLDER_DISPLAY_MODE === 'overview') {
             $label = $groupLabels[$key] ?? $key;
-            $html .= render_folder_cover_card($key, $label, $groupFiles);
+            $html .= render_folder_cover_card($key, $label, $groupFiles, $folderCovers[$key] ?? null);
             $flatIndex += count($groupFiles);
             continue;
         }
@@ -2208,7 +3286,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // middle of it to fragment the grid.
         $slug = slugify($key);
         if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key])) {
-            $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor, 'group-' . $slug, $videoDurations[$groupFiles[0]] ?? null);
+            $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor, 'group-' . $slug, $videoDurations[$groupFiles[0]] ?? null, $itemsData[$groupFiles[0]] ?? null);
             $flatIndex++;
             continue;
         }
@@ -2235,7 +3313,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
                 . render_permalink_button('group-' . $slug) . '</h2>';
         $html .= '<div class="group-grid">';
         foreach ($groupFiles as $file) {
-            $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null);
+            $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
             $flatIndex++;
         }
         $html .= '</div></div>';
@@ -2245,10 +3323,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
 
 /** Builds the current request's scheme://host/path, for absolute OG image URLs. */
 function current_base_url() {
-    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-          || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
-          || (($_SERVER['SERVER_PORT'] ?? '') == 443);
-    $scheme = $https ? 'https' : 'http';
+    $scheme = is_https_request() ? 'https' : 'http';
     $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
     $path = isset($_SERVER['PHP_SELF']) ? rtrim(str_replace('\\', '/', dirname($_SERVER['PHP_SELF'])), '/') : '';
     return $scheme . '://' . $host . $path;
@@ -2352,6 +3427,32 @@ $groupColors = [];
 $groupStatus = [];
 $groupLabels = [];
 
+// Admin-set display names (see ?admin) seed $groupLabels here, before any
+// {group:} directive in a .md gets its turn further down — a directive
+// always wins over an admin-set name, the same precedent as any other
+// explicit claim beating auto-detection (the admin UI disables the field
+// in that case rather than accepting a value that then appears to do
+// nothing). A folder-group's name lives in that folder's own
+// .gallery-items.json; a root-level filename-based group's lives in the
+// root's own.
+$folderCovers = [];
+foreach ($folderGroupKeys as $folderKey => $_true) {
+    $folderItemsData = items_read(resolve_real_path($dir, $folderKey));
+    if (!empty($folderItemsData['displayName'])) {
+        $groupLabels[$folderKey] = $folderItemsData['displayName'];
+    }
+    if (!empty($folderItemsData['cover'])) {
+        $folderCovers[$folderKey] = $folderItemsData['cover'];
+    }
+}
+$rootItemsData = items_read($dir);
+foreach (($rootItemsData['groups'] ?? []) as $groupKey => $groupMeta) {
+    if (isset($folderGroupKeys[$groupKey]) || !isset($groups[$groupKey])) continue;
+    if (!empty($groupMeta['displayName'])) {
+        $groupLabels[$groupKey] = $groupMeta['displayName'];
+    }
+}
+
 // Tracks which files an explicit {photos:} directive has already
 // consumed *during rendering*, across every .md file, mirroring the
 // same first-occurrence-wins rule already applied once during
@@ -2377,6 +3478,15 @@ if ($currentFolderPath !== null) {
     $ogUrl = $baseUrl . '/?folder=' . rawurlencode($currentFolderPath);
     $folderMemberFiles = $groups[$currentFolderPath];
     $ogDescription = count($folderMemberFiles) . ' photo' . (count($folderMemberFiles) === 1 ? '' : 's');
+    // A subfolder's own notes .md (see the full scan further down, once
+    // $groups/$files are actually scoped to it) can supply a real
+    // description here too — just the plaintext summary, which doesn't
+    // need the heavier mention/directive-aware pass that scan to feed
+    // the visible note box does.
+    $earlyFolderMdScan = scan_gallery_md_files(resolve_real_path($dir, $currentFolderPath));
+    if (!empty($earlyFolderMdScan['files'])) {
+        $ogDescription = markdown_to_plaintext($earlyFolderMdScan['contents'][$earlyFolderMdScan['files'][0]]);
+    }
     if (!empty($folderMemberFiles)) {
         $ogImageUrl = $baseUrl . '/' . img_url($folderMemberFiles[0], 'share');
     }
@@ -2757,10 +3867,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     top: 6px;
     left: 6px;
   }
-  .view-badge {
+  .card-badges {
     position: absolute;
     bottom: 6px;
     right: 6px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .view-badge {
     background: rgba(0,0,0,0.65);
     color: #eaeaea;
     font-size: 0.68rem;
@@ -2771,6 +3886,21 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     gap: 3px;
     pointer-events: none;
   }
+  .item-badge {
+    background: rgba(0,0,0,0.65);
+    color: #eaeaea;
+    font-size: 0.7rem;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    line-height: 1;
+  }
+  a.item-badge { pointer-events: auto; }
+  .item-badge.caption-badge { pointer-events: none; }
   .video-duration {
     position: absolute;
     bottom: 6px;
@@ -2887,11 +4017,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 // ($groupLabels especially) are what let a {group: Name} directive in
 // the root's notes rename a folder-group, including one being viewed
 // right now via ?folder=. Its visible output is a different question: a
-// folder's own page doesn't show the root's notes box at all (they
-// describe the whole trip, not specifically this one folder, and a
-// subfolder can't yet have its own — see the design doc), so the
-// rendered HTML is only kept, never discarded, when there's no
-// $currentFolderPath to hide it for.
+// folder's own page doesn't show the root's notes box (they describe the
+// whole trip, not specifically this one folder), so the rendered HTML is
+// only kept, never discarded, when there's no $currentFolderPath to hide
+// it for. A subfolder's own notes are a separate pipeline, further down,
+// once $groups/$files have actually been scoped down to it.
 $noteBoxesHtml = [];
 foreach ($mdFiles as $mdFile) {
     $noteBoxesHtml[$mdFile] = markdown_to_html($mdContents[$mdFile], $groups, $files, $groupColors, $groupStatus, $groupLabels, $renderClaims, $photoViews);
@@ -2916,24 +4046,92 @@ foreach ($mdFiles as $mdFile) {
 // $explicitGroupKeys/$folderGroupKeys are cleared since there's no
 // further boxing or drilling happening on this page. ($pageTitle was
 // already folder-prefixed earlier, in the ?folder= validation block.)
+//
+// Keyed the same bare, extension-stripped way a root-level standalone
+// single already is (see group_key()) — "eiffel," not "Paris/eiffel.jpg"
+// — so a mention or {color:}/{sold:}/{reserved:} directive in this
+// subfolder's own notes (further down) can refer to it the natural way,
+// and the card's own "#group-<slug>" anchor matches whatever that
+// note's jump link points at. Two files that would collide on that bare
+// key (different extensions, or two numbered angles — the same
+// coincidence the root's own disambiguation pass already handles) fall
+// back to their full bare filename instead, which is always unique
+// within one folder; this doesn't recluster them into a group the way
+// the root would, just keeps them from overwriting each other.
 $rootFolderGroupKeys = $folderGroupKeys;
 if ($currentFolderPath !== null) {
     $folderFiles = $groups[$currentFolderPath];
+    $folderPrefix = $currentFolderPath . '/';
+    $bareBaseCounts = [];
+    foreach ($folderFiles as $f) {
+        $bare = substr($f, strlen($folderPrefix));
+        $rawBase = pathinfo($bare, PATHINFO_FILENAME);
+        $bareBaseCounts[$rawBase] = ($bareBaseCounts[$rawBase] ?? 0) + 1;
+    }
     $groups = [];
     foreach ($folderFiles as $f) {
-        $groups[$f] = [$f];
+        $bare = substr($f, strlen($folderPrefix));
+        $rawBase = pathinfo($bare, PATHINFO_FILENAME);
+        $localKey = $bareBaseCounts[$rawBase] > 1 ? $bare : group_key($bare);
+        $groups[$localKey] = [$f];
     }
     $files = $folderFiles;
     $explicitGroupKeys = [];
     $folderGroupKeys = [];
 }
+
+// A subfolder may optionally carry its own {gallery}-marked .md,
+// becoming a dedicated notes box just for that subfolder's own photos —
+// scoped to it the same way the root's notes are scoped to the whole
+// site, so a Paris .md simply has no way to claim a StTropez photo. Page
+// title stays root-driven (see $rootPageTitle above) — a subfolder's own
+// heading, if it has one, is just left as plain text in its own note
+// box, not promoted to the page <title>. $groups/$files are already the
+// folder-scoped, bare-keyed versions the override above produced, so
+// this is the exact same call shape the root's own notes use — a mention
+// or directive here naturally lines up with the card it actually
+// describes, anchors included.
+$folderMdFiles = [];
+$folderMdContents = [];
+$folderGalleryNotices = [];
+$folderNoteBoxesHtml = [];
+if ($currentFolderPath !== null) {
+    $folderRealPath = resolve_real_path($dir, $currentFolderPath);
+    $folderMdScan = scan_gallery_md_files($folderRealPath);
+    $folderMdFiles = $folderMdScan['files'];
+    $folderMdContents = $folderMdScan['contents'];
+    if ($folderMdScan['rejectedCount'] > 0) {
+        $folderGalleryNotices[] = $folderMdScan['rejectedCount'] === 1
+            ? 'A .md file was found in this folder but ignored because its first line isn\'t the required {gallery} marker.'
+            : $folderMdScan['rejectedCount'] . ' .md files were found in this folder but ignored because none of them start with the required {gallery} marker.';
+    }
+    foreach ($folderMdFiles as $folderMdFile) {
+        $folderNoteBoxesHtml[$folderMdFile] = markdown_to_html($folderMdContents[$folderMdFile], $groups, $files, $groupColors, $groupStatus, $groupLabels, $renderClaims, $photoViews);
+    }
+}
 ?>
+<?php if ($currentFolderPath !== null && empty($folderMdFiles) && !empty($folderGalleryNotices)): ?>
+  <div class="notes">
+    <?= render_gallery_notices_banner($folderGalleryNotices) ?>
+  </div>
+<?php endif; ?>
+<?php if ($currentFolderPath !== null && !empty($folderMdFiles)): ?>
+  <div class="notes">
+    <?= render_gallery_notices_banner($folderGalleryNotices) ?>
+    <?php foreach ($folderMdFiles as $folderMdFile): ?>
+      <div class="note-box">
+        <span class="note-filename"><?= htmlspecialchars($folderMdFile) ?></span>
+        <?= $folderNoteBoxesHtml[$folderMdFile] ?>
+      </div>
+    <?php endforeach; ?>
+  </div>
+<?php endif; ?>
 
 <?php if (empty($files)): ?>
   <div class="empty">No photos found in this folder.</div>
 <?php else: ?>
   <div class="gallery">
-    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations) ?>
+    <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData) ?>
   </div>
 <?php endif; ?>
 
@@ -2955,6 +4153,12 @@ if ($currentFolderPath !== null) {
 
 <script>
   const files = <?= json_encode($files) ?>;
+  // Admin-written captions only — never the raw filename. A visitor
+  // curious enough to open dev tools shouldn't learn anything from a
+  // filename an unrevealed caption-less photo never meant to publish.
+  const captions = <?= json_encode(array_map(function ($f) use ($itemsData) {
+      return (!empty($itemsData[$f]['caption'])) ? $itemsData[$f]['caption'] : null;
+  }, $files)) ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
   const showCountsPublicly = <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'true' : 'false' ?>;
@@ -3027,7 +4231,8 @@ if ($currentFolderPath !== null) {
       lightboxImg.style.display = '';
       lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full';
     }
-    caption.textContent = file + ' — ' + (current + 1) + ' / ' + files.length;
+    const captionText = captions[current];
+    caption.textContent = (captionText ? captionText + ' — ' : '') + (current + 1) + ' / ' + files.length;
     trackView(file);
   }
   document.addEventListener('keydown', (e) => {
