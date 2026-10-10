@@ -18,11 +18,13 @@
  *     ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER /
  *     AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS /
  *     ENABLE_VIDEO / ADMIN_PASSWORD / ENABLE_PHOTO_LOCATION /
- *     PRIVATE_VIEW_PASSWORD / NGINX_ACCEL_REDIRECT_PREFIX constants are
- *     just below. TRACK_VIEWS, ENABLE_THUMBNAIL_CACHE, AUTO_GROUP_BY_FOLDER,
- *     ENABLE_VIDEO, and ENABLE_PHOTO_LOCATION are off by default — this
- *     script writes nothing to disk and doesn't look at a single
- *     subfolder, video file, or photo's location unless you turn one on.
+ *     PRIVATE_VIEW_PASSWORD / NGINX_ACCEL_REDIRECT_PREFIX / ENABLE_MAP /
+ *     MAP_CLUSTER_RADIUS_MILES constants are just below. TRACK_VIEWS,
+ *     ENABLE_THUMBNAIL_CACHE, AUTO_GROUP_BY_FOLDER, ENABLE_VIDEO,
+ *     ENABLE_PHOTO_LOCATION, and ENABLE_MAP are off by default — this
+ *     script writes nothing to disk, makes no outbound/third-party
+ *     requests, and doesn't look at a single subfolder, video file, or
+ *     photo's location unless you turn one on.
  *     ADMIN_PASSWORD and PRIVATE_VIEW_PASSWORD are empty by default,
  *     which makes ?admin and ?reveal completely inert rather than merely
  *     unauthenticated. NGINX_ACCEL_REDIRECT_PREFIX is empty by default,
@@ -207,6 +209,25 @@ define('NGINX_ACCEL_REDIRECT_PREFIX', '');
 // is_revealed(), which happens well before this script reaches that
 // point in its own source otherwise.
 define('REVEAL_COOKIE_NAME', 'gallery_reveal');
+
+// Plots every visible, located photo on one overview map — Leaflet plus
+// OpenStreetMap tiles, the only realistic option with no API key. Off by
+// default: this is the *first* feature in this script to break the
+// "one file, nothing else happens" promise, since it loads an external
+// script and image tiles from a third party at page-load time. Has no
+// effect at all unless ENABLE_PHOTO_LOCATION is also on and at least one
+// photo actually has a visible location — see ENABLE_PHOTO_LOCATION's
+// own doc comment for that gating. Reached at its own shareable ?map
+// URL, with a smaller preview embedded on the gallery root.
+define('ENABLE_MAP', false);
+
+// How close together (in miles) two photos' locations have to be before
+// the map merges them into a single cluster pin instead of showing each
+// individually. 50 is a reasonable middle ground out of the box — a
+// dense city trip and a cross-country road trip want very different
+// values, so this is deliberately tunable per deployment rather than a
+// fixed constant buried in code.
+define('MAP_CLUSTER_RADIUS_MILES', 50);
 
 $dir = __DIR__;
 $self = basename(__FILE__);
@@ -1752,6 +1773,269 @@ function run_reveal_route($dir) {
     login_throttle_record_success($dir, 'reveal', $ip);
     set_reveal_cookie();
     header('Location: ./', true, 302);
+}
+
+/* -----------------------------------------------------------------------
+ * The trip map (?map, ENABLE_MAP): one overview map per gallery root,
+ * every subfolder's pins together. Leaflet + OpenStreetMap tiles — the
+ * only realistic option with no API key — loaded from a CDN only when
+ * this is actually on, since it's the first thing in this script to ever
+ * make an outbound, third-party request. Clustering is plain haversine-
+ * distance arithmetic, no mapping-library plugin for that part.
+ * ----------------------------------------------------------------------- */
+
+/** Great-circle distance between two lat/lng points, in miles. */
+function haversine_miles($lat1, $lng1, $lat2, $lng2) {
+    $earthRadiusMiles = 3958.8;
+    $dLat = deg2rad($lat2 - $lat1);
+    $dLng = deg2rad($lng2 - $lng1);
+    $a = sin($dLat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLng / 2) ** 2;
+    return $earthRadiusMiles * 2 * atan2(sqrt($a), sqrt(1 - $a));
+}
+
+/** Greedy single-pass clustering: the first not-yet-clustered point
+ *  anchors a new cluster and absorbs every remaining point within
+ *  MAP_CLUSTER_RADIUS_MILES of *that anchor* (not re-measured from newly
+ *  absorbed members) — simple and deterministic, not necessarily the
+ *  tightest possible grouping, which is fine for "nearby photos read as
+ *  one pin," not a precision clustering problem. */
+function cluster_map_points($points, $radiusMiles) {
+    $clusters = [];
+    $used = array_fill(0, count($points), false);
+    for ($i = 0; $i < count($points); $i++) {
+        if ($used[$i]) continue;
+        $cluster = [$points[$i]];
+        $used[$i] = true;
+        for ($j = $i + 1; $j < count($points); $j++) {
+            if ($used[$j]) continue;
+            if (haversine_miles($points[$i]['lat'], $points[$i]['lng'], $points[$j]['lat'], $points[$j]['lng']) <= $radiusMiles) {
+                $cluster[] = $points[$j];
+                $used[$j] = true;
+            }
+        }
+        $clusters[] = $cluster;
+    }
+    return $clusters;
+}
+
+/** A fixed, high-contrast palette cycling by index — plenty of
+ *  realistic top-level groups (trip folders) will fit before repeating,
+ *  and a repeat is a cosmetic coincidence, not a correctness problem
+ *  (the legend still names each group correctly regardless). */
+function map_group_color($index) {
+    static $palette = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#bfef45', '#fabed4', '#469990'];
+    return $palette[$index % count($palette)];
+}
+
+/** Where a pin's popup link actually goes — the identical destination
+ *  logic already used for mention-links and copy-link buttons: a
+ *  top-level folder-group in 'overview' mode gets its own ?folder= page;
+ *  anything else (a filename-based group, an explicit group, or a plain
+ *  standalone single) gets its #group-<slug> anchor on the current page,
+ *  not a separate linking system. */
+function map_point_link($file, $groupKey, $folderGroupKeys) {
+    if ($groupKey !== null && isset($folderGroupKeys[$groupKey]) && FOLDER_DISPLAY_MODE === 'overview') {
+        return '?folder=' . rawurlencode($groupKey);
+    }
+    $slug = slugify($groupKey !== null ? $groupKey : pathinfo(basename($file), PATHINFO_FILENAME));
+    return '#group-' . $slug;
+}
+
+/**
+ * Every visible, located point worth plotting — already filtered the
+ * same way everything else on the page is: $files/$itemsData here are
+ * whatever they stand as *after* the hiding filter above, so a hidden
+ * item is never plotted, same as its thumbnail and its file bytes never
+ * load for an unrevealed visitor. photo_location_visible() applies the
+ * same three location gates (global/folder/per-item) a grid badge
+ * already does. Each point is colored and grouped by its top-level
+ * identity (folder-group if it has one, otherwise its own group key) so
+ * a Paris cluster and a StTropez cluster read as visually distinct.
+ */
+function collect_map_points($dir, $files, $itemsData, $fileToGroupKey, $folderGroupKeys, $groupLabels) {
+    $points = [];
+    $groupColorIndex = [];
+    $nextColorIndex = 0;
+    foreach ($files as $file) {
+        $entry = $itemsData[$file] ?? [];
+        if (!photo_location_visible($entry)) continue;
+        $loc = $entry['location'];
+        $groupKey = $fileToGroupKey[$file] ?? null;
+        $colorKey = $groupKey ?? $file;
+        if (!isset($groupColorIndex[$colorKey])) {
+            $groupColorIndex[$colorKey] = $nextColorIndex++;
+        }
+        $label = $groupKey !== null ? ($groupLabels[$groupKey] ?? $groupKey) : pathinfo(basename($file), PATHINFO_FILENAME);
+        $points[] = [
+            'lat' => (float) $loc['lat'],
+            'lng' => (float) $loc['lng'],
+            'file' => $file,
+            'caption' => $entry['caption'] ?? '',
+            'label' => $label,
+            'color' => map_group_color($groupColorIndex[$colorKey]),
+            'thumbUrl' => img_url($file, 'thumb'),
+            'link' => map_point_link($file, $groupKey, $folderGroupKeys),
+        ];
+    }
+    return $points;
+}
+
+/** The legend: one swatch + label per distinct group actually plotted,
+ *  in first-seen order — a color-coded map means nothing without a key
+ *  to read it against. */
+function map_legend_from_points($points) {
+    $seen = [];
+    $legend = [];
+    foreach ($points as $p) {
+        if (isset($seen[$p['color'] . '|' . $p['label']])) continue;
+        $seen[$p['color'] . '|' . $p['label']] = true;
+        $legend[] = ['color' => $p['color'], 'label' => $p['label']];
+    }
+    return $legend;
+}
+
+/**
+ * Renders one Leaflet map instance — the shared markup/JS for both the
+ * condensed root-page preview and the full ?map page, parameterized over
+ * container id and height so the same code draws both. Loads Leaflet's
+ * CSS and JS from the cdnjs CDN (two third-party requests, plus the OSM
+ * tiles themselves) — only emitted when there's actually at least one
+ * point to plot.
+ */
+function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary) {
+    if (empty($points)) return;
+    $clusters = cluster_map_points($points, MAP_CLUSTER_RADIUS_MILES);
+    // Hex-escaped so the raw JSON can sit directly inside a <script>
+    // block with no further quoting — safe even if a caption happens to
+    // contain "</script>", a quote, or an ampersand.
+    $clustersJson = json_encode($clusters, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+?>
+<?php if ($loadLibrary): ?>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<?php endif; ?>
+<div id="<?= htmlspecialchars($mapId, ENT_QUOTES, 'UTF-8') ?>" style="height:<?= htmlspecialchars($heightCss, ENT_QUOTES, 'UTF-8') ?>; border-radius:10px;"></div>
+<?php if (!empty($legend)): ?>
+<div class="map-legend">
+  <?php foreach ($legend as $l): ?>
+    <span class="map-legend-item"><span class="map-legend-swatch" style="background:<?= htmlspecialchars($l['color'], ENT_QUOTES, 'UTF-8') ?>;"></span><?= htmlspecialchars($l['label'], ENT_QUOTES, 'UTF-8') ?></span>
+  <?php endforeach; ?>
+</div>
+<?php endif; ?>
+<script>
+(function () {
+  var clusters = <?= $clustersJson ?>;
+  var mapEl = document.getElementById('<?= htmlspecialchars($mapId, ENT_QUOTES, 'UTF-8') ?>');
+  if (!mapEl || !window.L) return;
+  var map = L.map(mapEl);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+  }).addTo(map);
+
+  function escapeHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function popupHtml(pt) {
+    var cap = pt.caption ? pt.caption : pt.label;
+    return '<a href="' + escapeHtml(pt.link) + '" style="display:block;text-decoration:none;color:inherit;">' +
+      '<img src="' + escapeHtml(pt.thumbUrl) + '" style="width:120px;height:120px;object-fit:cover;border-radius:6px;display:block;margin-bottom:6px;" loading="lazy">' +
+      '<strong>' + escapeHtml(cap) + '</strong></a>';
+  }
+
+  function addSingle(pt) {
+    L.circleMarker([pt.lat, pt.lng], { radius: 9, color: '#fff', weight: 2, fillColor: pt.color, fillOpacity: 0.9 })
+      .addTo(map)
+      .bindPopup(popupHtml(pt));
+  }
+
+  var allBounds = [];
+  clusters.forEach(function (members) {
+    members.forEach(function (m) { allBounds.push([m.lat, m.lng]); });
+    if (members.length === 1) {
+      addSingle(members[0]);
+      return;
+    }
+    var avgLat = members.reduce(function (s, m) { return s + m.lat; }, 0) / members.length;
+    var avgLng = members.reduce(function (s, m) { return s + m.lng; }, 0) / members.length;
+    var marker = L.marker([avgLat, avgLng], {
+      icon: L.divIcon({
+        html: '<div style="background:' + members[0].color + ';color:#fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:0.85rem;font-weight:600;box-shadow:0 0 0 2px #fff;">' + members.length + '</div>',
+        className: '', iconSize: [32, 32], iconAnchor: [16, 16],
+      }),
+    }).addTo(map);
+    marker.on('click', function () {
+      map.removeLayer(marker);
+      var bounds = members.map(function (m) { return [m.lat, m.lng]; });
+      members.forEach(addSingle);
+      map.fitBounds(bounds, { maxZoom: 15, padding: [30, 30] });
+    });
+  });
+
+  if (allBounds.length === 1) {
+    map.setView(allBounds[0], 13);
+  } else {
+    map.fitBounds(allBounds, { padding: [30, 30] });
+  }
+})();
+</script>
+<?php
+}
+
+/**
+ * The dedicated, shareable ?map page — a condensed preview also lives
+ * inline on the gallery root (see the main template), but "check out our
+ * whole route" deserves its own link, the same treatment ?folder=/
+ * ?photo= already get. No live rendered-map snapshot for its Open Graph
+ * image — that needs a third-party static-maps API, the same dependency
+ * objection that already ruled out geocoding — a generic map icon
+ * instead, same honesty standard as the video placeholder.
+ */
+function render_map_page($points, $legend, $pageTitle, $baseUrl) {
+    $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
+    $title = htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8');
+    $ogUrl = htmlspecialchars($baseUrl . '/?map', ENT_QUOTES, 'UTF-8');
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><?= $title ?> — Map</title>
+<meta property="og:type" content="website">
+<meta property="og:title" content="<?= $title ?> — Map">
+<meta property="og:description" content="<?= count($points) ?> location<?= count($points) === 1 ? '' : 's' ?> plotted from this gallery.">
+<meta property="og:url" content="<?= $ogUrl ?>">
+<style>
+  :root { --bg:#0f0f10; --card:#1a1a1c; --text:#eaeaea; --muted:#8a8a8f; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1100px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:1.3rem; margin:0 0 14px; }
+  a.back { color:var(--muted); text-decoration:none; font-size:0.9rem; }
+  .map-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:0.85rem; color:var(--muted); }
+  .map-legend-item { display:flex; align-items:center; gap:6px; }
+  .map-legend-swatch { width:12px; height:12px; border-radius:50%; display:inline-block; }
+  .leaflet-popup-content-wrapper { background:var(--card); color:var(--text); }
+  .leaflet-popup-tip { background:var(--card); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="./" class="back">&larr; Back to gallery</a>
+  <h1><?= $title ?> — Map</h1>
+  <?php if (empty($points)): ?>
+    <p style="color:var(--muted);">No photos have a visible location yet.</p>
+  <?php else: ?>
+    <?= render_leaflet_map($points, $legend, 'trip-map-full', '70vh', true) ?>
+  <?php endif; ?>
+</div>
+</body>
+</html>
+<?php
 }
 
 /* -----------------------------------------------------------------------
@@ -3895,6 +4179,25 @@ $renderClaims = [];
 // reaches the server (unlike a #fragment one — see "DEEP LINKING" above),
 // so its preview can point at that specific photo and mention its group.
 $baseUrl = current_base_url();
+
+// The trip map's data — computed once here, reused both by ?map's own
+// dedicated page below and the condensed preview embedded on the
+// gallery root (see the main template further down). Once $files/
+// $itemsData/$fileToGroupKey/$folderGroupKeys/$groupLabels all reflect
+// their final, hiding-filtered, admin-named state. A {group:} directive
+// in a .md could still rename a group after this point (during notes
+// rendering, further down) — a map legend showing a folder's raw name
+// in that specific case is a reasonable, minor simplification rather
+// than forcing notes processing to run early just for this.
+$mapPoints = ENABLE_MAP ? collect_map_points($dir, $files, $itemsData, $fileToGroupKey, $folderGroupKeys, $groupLabels) : [];
+$mapLegend = map_legend_from_points($mapPoints);
+
+// ?map — the dedicated, shareable map page.
+if (ENABLE_MAP && isset($_GET['map'])) {
+    render_map_page($mapPoints, $mapLegend, $rootPageTitle, $baseUrl);
+    exit;
+}
+
 $ogTitle = $pageTitle;
 $ogUrl = $baseUrl . '/';
 $ogDescription = !empty($mdFiles)
@@ -4361,6 +4664,18 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     color: var(--text);
     text-decoration: underline;
   }
+  .map-preview { margin-top: 32px; }
+  .map-preview-heading {
+    font-size: 1rem; margin: 0 0 10px;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+  .map-preview-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+  .map-preview-link:hover { color: var(--text); text-decoration: underline; }
+  .map-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.8rem; color: var(--muted); }
+  .map-legend-item { display: flex; align-items: center; gap: 6px; }
+  .map-legend-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .leaflet-popup-content-wrapper { background: var(--card); color: var(--text); }
+  .leaflet-popup-tip { background: var(--card); }
   /* Lightbox */
   .lightbox {
     display: none;
@@ -4563,6 +4878,13 @@ if ($currentFolderPath !== null) {
   <div class="gallery">
     <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData) ?>
   </div>
+<?php endif; ?>
+
+<?php if (ENABLE_MAP && $currentFolderPath === null && !empty($mapPoints)): ?>
+  <section class="map-preview">
+    <h2 class="map-preview-heading">Trip map <a href="?map" class="map-preview-link">View full map &rarr;</a></h2>
+    <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '320px', true) ?>
+  </section>
 <?php endif; ?>
 
 <footer>

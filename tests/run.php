@@ -90,7 +90,10 @@ function rrmdir($dir) {
     foreach (scandir($dir) as $entry) {
         if ($entry === '.' || $entry === '..') continue;
         $path = "$dir/$entry";
-        is_dir($path) ? rrmdir($path) : @unlink($path);
+        // is_link first: is_dir() is true for a symlink to a directory, and
+        // recursing would empty the link's target (possibly outside the
+        // fixture) and then fail to rmdir the link itself.
+        (is_dir($path) && !is_link($path)) ? rrmdir($path) : @unlink($path);
     }
     @rmdir($dir);
 }
@@ -136,16 +139,19 @@ function find_free_port() {
 
 function start_server($docroot, $port) {
     global $cleanupProcs;
-    $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-    $cmd = escapeshellarg(PHP_BINARY) . ' -S 127.0.0.1:' . (int) $port . ' -t ' . escapeshellarg($docroot);
+    // argv-array form (no `sh -c` in between) so proc_terminate() in the
+    // shutdown handler hits php itself — with a shell wrapper it didn't,
+    // and every run orphaned its servers (~35MB each, 10 per run, never
+    // reaped). Output goes to /dev/null rather than an undrained pipe,
+    // which would eventually fill and block the server on a log write.
+    $descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+    $cmd = [PHP_BINARY, '-S', '127.0.0.1:' . (int) $port, '-t', $docroot];
     $proc = proc_open($cmd, $descriptors, $pipes);
     if (!is_resource($proc)) {
         fwrite(STDERR, "Could not start the PHP built-in server\n");
         exit(1);
     }
     $cleanupProcs[] = $proc;
-    stream_set_blocking($pipes[1], false);
-    stream_set_blocking($pipes[2], false);
 
     $deadline = microtime(true) + 5;
     while (microtime(true) < $deadline) {
@@ -1193,6 +1199,105 @@ check('...but ?reveal is on a separate throttle realm and still works', $revealS
 // Neither password feature does anything when unset (the default).
 [$revealInertStatus] = http_get("$base1/?reveal");
 check('?reveal 404s outright when PRIVATE_VIEW_PASSWORD is unset (the default)', $revealInertStatus === 404);
+
+// ENABLE_MAP off (the default): ?map is simply ignored, not a crash or a
+// special endpoint — the normal gallery page renders, with no map
+// preview section and no Leaflet request of any kind.
+[$mapOffStatus, $mapOffBody] = http_get("$base1/?map");
+check('?map with ENABLE_MAP off just renders the normal page', $mapOffStatus === 200 && str_contains($mapOffBody, 'Defaults Fixture'));
+check('no map preview or Leaflet library loads when ENABLE_MAP is off', !str_contains($mapOffBody, '<section class="map-preview"') && !str_contains($mapOffBody, 'cdnjs.cloudflare.com/ajax/libs/leaflet'));
+
+/* ======================================================================= *
+ * FIXTURE: "map" — ENABLE_MAP + ENABLE_PHOTO_LOCATION both on. Covers
+ * the dedicated ?map page, the condensed root-page preview, clustering
+ * (near points merge, far points don't), per-group color-coding and the
+ * legend, correct popup link targets (?folder= for a folder-group, a
+ * #group-<slug> anchor for a standalone item), and that a hidden item
+ * never appears on the map at all.
+ * ======================================================================= */
+
+echo "== map fixture: ?map, clustering, legend, link targets, hiding ==\n";
+
+$fxMap = new_fixture_dir('map');
+mkdir("$fxMap/Paris");
+mkdir("$fxMap/Rome");
+make_jpeg("$fxMap/Paris/eiffel.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxMap/Paris/louvre.jpg", 60, 60, 15, 15, 15);
+make_jpeg("$fxMap/Rome/colosseum.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$fxMap/standalone.jpg", 60, 60, 30, 30, 30);
+make_jpeg("$fxMap/hidden.jpg", 60, 60, 40, 40, 40);
+
+// Paris + Louvre are ~2.5 miles apart (well within the 50-mile default
+// radius) and should cluster; Rome is ~690 miles from Paris and should
+// not. Coordinates are real-world for a meaningful distance check.
+file_put_contents("$fxMap/Paris/.gallery-items.json", json_encode([
+    'items' => [
+        'eiffel.jpg' => ['location' => ['lat' => 48.8584, 'lng' => 2.2945, 'label' => '']],
+        'louvre.jpg' => ['location' => ['lat' => 48.8606, 'lng' => 2.3376, 'label' => '']],
+    ],
+    'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => true,
+]));
+file_put_contents("$fxMap/Rome/.gallery-items.json", json_encode([
+    'items' => ['colosseum.jpg' => ['location' => ['lat' => 41.8902, 'lng' => 12.4922, 'label' => '']]],
+    'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => true,
+]));
+file_put_contents("$fxMap/.gallery-items.json", json_encode([
+    'items' => [
+        'standalone.jpg' => ['location' => ['lat' => 40.7128, 'lng' => -74.0060, 'label' => 'NYC']],
+        'hidden.jpg' => ['location' => ['lat' => 34.0522, 'lng' => -118.2437], 'restriction' => 'private'],
+    ],
+    'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => true,
+]));
+
+write_patched_index("$fxMap/index.php", $indexContents, [
+    'ENABLE_MAP' => 'true',
+    'ENABLE_PHOTO_LOCATION' => 'true',
+    'AUTO_GROUP_BY_FOLDER' => 'true',
+]);
+
+$portMap = find_free_port();
+start_server($fxMap, $portMap);
+$baseMap = "http://127.0.0.1:$portMap";
+
+[, $mapRootBody] = http_get("$baseMap/");
+check('the gallery root embeds a condensed map preview when ENABLE_MAP is on', str_contains($mapRootBody, 'id="trip-map-preview"'));
+check('the root preview links to the full ?map page', str_contains($mapRootBody, 'href="?map"'));
+check('the root preview shows a legend with one entry per distinct group', substr_count($mapRootBody, '<span class="map-legend-item">') === 3);
+
+[$mapStatus, $mapBody] = http_get("$baseMap/?map");
+check('?map returns 200', $mapStatus === 200);
+check('?map loads the Leaflet library from a CDN', str_contains($mapBody, 'cdnjs.cloudflare.com/ajax/libs/leaflet'));
+check('?map\'s Open Graph description mentions the point count', str_contains($mapBody, 'property="og:description" content="4 locations plotted'));
+
+preg_match('/var clusters = (\[.*?\]);/s', $mapBody, $clusterMatch);
+$clusters = json_decode($clusterMatch[1] ?? '', true);
+check('clustering produced the right number of clusters (Paris+Louvre merged, Rome/NYC separate)', is_array($clusters) && count($clusters) === 3);
+
+$clusterSizes = array_map('count', $clusters);
+sort($clusterSizes);
+check('the Paris+Louvre cluster has 2 members; Rome and NYC are singles', $clusterSizes === [1, 1, 2]);
+
+check('a hidden item never appears on the map at all', !str_contains($mapBody, 'hidden.jpg'));
+
+// Find the Paris cluster specifically (2 members) to check its link/color.
+$parisCluster = null;
+foreach ($clusters as $c) {
+    if (count($c) === 2) { $parisCluster = $c; break; }
+}
+check('a folder-group member\'s popup link points at its ?folder= page', $parisCluster !== null && $parisCluster[0]['link'] === '?folder=Paris');
+check('both members of the same folder-group share the same color', $parisCluster !== null && $parisCluster[0]['color'] === $parisCluster[1]['color']);
+
+$standaloneCluster = null;
+foreach ($clusters as $c) {
+    if (count($c) === 1 && $c[0]['file'] === 'standalone.jpg') { $standaloneCluster = $c; break; }
+}
+check('a standalone item\'s popup link points at its own #group-<slug> anchor, not a folder page', $standaloneCluster !== null && $standaloneCluster[0]['link'] === '#group-standalone');
+
+$romeCluster = null;
+foreach ($clusters as $c) {
+    if (count($c) === 1 && $c[0]['file'] === 'Rome/colosseum.jpg') { $romeCluster = $c; break; }
+}
+check('Rome (a different folder-group) gets a different color than Paris', $romeCluster !== null && $parisCluster !== null && $romeCluster[0]['color'] !== $parisCluster[0]['color']);
 
 /* ======================================================================= *
  * FIXTURE 3: "mtimesort" — PHOTO_SORT_ORDER = 'mtime'.
