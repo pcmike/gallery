@@ -4,7 +4,9 @@ A single-file, drop-in PHP photo gallery. No dependencies, no build step, no dat
 
 Built for sharing "for sale" listings (Reddit, Discord, etc.) as much as for plain photo galleries — automatic or hand-curated photo grouping, a lightweight Markdown notes box with sold/reserved markers, opt-in view stats, and deep links that actually preview correctly when shared. Version 2 also handles **trips**: nested folders to any depth, video, per-photo captions and locations, an owner-only admin editor, items you can hide from the public link, and a map.
 
-**Everything beyond the basic gallery is opt-in.** With no settings changed, this script writes nothing to your folder, makes no requests to any third party, and doesn't look at a single subfolder, video, or photo location.
+**Everything beyond the basic gallery is opt-in.** With no settings changed, this script writes nothing to your folder, makes no requests to any third party, and doesn't show a single subfolder, video, or photo location. (It does peek into subfolders, read-only and capped at 40 of them, purely to warn you if photos in there are being skipped — see [Folders](#folders).)
+
+**Contents:** [Quick start](#quick-start) · [Features](#features) · [Troubleshooting](#troubleshooting) · [Configuration](#configuration) · [Directive syntax](#directive-syntax) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [The admin editor](#the-admin-editor) · [Hiding items and private view](#hiding-items-and-private-view) · [Locking down the files themselves](#locking-down-the-files-themselves) · [The trip map](#the-trip-map) · [Sharing and previews](#sharing-and-previews) · [Keeping runtime data out of git](#keeping-runtime-data-out-of-git) · [Upgrading to 2.0](#upgrading-to-20)
 
 ## Quick start
 
@@ -16,9 +18,10 @@ your-folder/
   forsale.md    <- optional
 ```
 
-Requirements: PHP 7.4+ (developed against PHP 8.3/8.4). No required extensions — everything degrades gracefully without them. Optional:
+Requirements: PHP 7.4+ (developed and tested against PHP 8.4; the code avoids PHP 8-only functions and syntax, but I haven't been able to run it on 7.4 itself). No required extensions — everything degrades gracefully without them. Optional:
 - **Imagick** (with HEIC/HEIF support) or **GD** — enables thumbnail generation/caching, once you turn `ENABLE_THUMBNAIL_CACHE` on (see [Configuration](#configuration)). Imagick specifically is required for HEIC/HEIF photos (iPhone default format) to display at all.
-- **pdo_sqlite** — used automatically for view-stat storage if present and `TRACK_VIEWS` is on; falls back to a flock-protected JSON file otherwise.
+- **pdo_sqlite** — used automatically for view-stat storage if present and `TRACK_VIEWS` is on; falls back to a flock-protected JSON file otherwise. (The SQLite store keys its rows by a hash of each photo's path, never the filename, because that file can be fetched by URL.)
+- **EXIF** (`exif_read_data`) — only for reading GPS out of JPEGs when you've turned on photo locations.
 
 **A `.md` file only counts if its first line is exactly `{gallery}`.** Anything else in the folder — a personal notes file, a leftover README — is left completely alone, never parsed or rendered. This is required, not optional; there's no way to turn it off.
 
@@ -28,7 +31,7 @@ Requirements: PHP 7.4+ (developed against PHP 8.3/8.4). No required extensions �
 ...
 ```
 
-Both view tracking and thumbnail caching are **off by default** — this script writes nothing to your folder's disk unless you explicitly turn one on. See [Configuration](#configuration) for why you'll probably want to turn them on anyway.
+Both view tracking and thumbnail caching are **off by default** — this script writes nothing to your folder's disk unless you explicitly turn one on (or use the [admin editor](#the-admin-editor), which saves what you type). See [Configuration](#configuration) for why you'll probably want to turn them on anyway.
 
 ## Features
 
@@ -68,8 +71,9 @@ Both view tracking and thumbnail caching are **off by default** — this script 
 - [Hiding items](#hiding-items-and-private-view) from the public link, with a separate viewer password
 - A [trip map](#the-trip-map) of everything that has a location
 
-**Troubleshooting**
-- If something in a `.md` file doesn't behave as expected — a file typo'd in `{photos:}`, a duplicate `{group:}`/`{photos:}` claim, a `.md` file missing its `{gallery}` marker, a directive that isn't attached to the description it was clearly meant to go with — it's silently excluded or repositioned rather than erroring, but never silently *unexplained*. Look for a small "⚠ N setup notices for the gallery owner" banner (collapsed by default) — at the top of the notes box if one exists, or right below the page header if no `.md` qualified at all. The same list is also in an HTML comment near the top of the page source, if you'd rather grep for it. Neither is alarming to a normal visitor — the banner is addressed explicitly to the gallery owner.
+## Troubleshooting
+
+If something in a `.md` file doesn't behave as expected — a file typo'd in `{photos:}`, a duplicate `{group:}`/`{photos:}` claim, a `.md` file missing its `{gallery}` marker, a directive that isn't attached to the description it was clearly meant to go with — it's silently excluded or repositioned rather than erroring, but never silently *unexplained*. Look for a small "⚠ N setup notices for the gallery owner" banner (collapsed by default) — at the top of the notes box if one exists, or right below the page header if no `.md` qualified at all. The same list is also in an HTML comment near the top of the page source, if you'd rather grep for it. Neither is alarming to a normal visitor — the banner is addressed explicitly to the gallery owner.
 
 This README is the full reference. A deployed gallery's `?about` page (the "gallery" link in the footer) gives visitors a short pitch, the feature list, and a download button, then points back here for anything more detailed.
 
@@ -252,18 +256,18 @@ Set `ADMIN_PASSWORD` (a long random string is the right choice — it's yours al
 
 - every photo and video in the current folder, with caption, web link and location fields, and a one-click **Set as cover** for the folder
 - the folder's own settings: display name, date range, description, position, whether its photo locations show publicly, and whether the whole folder is hidden
-- every `.md` in the folder — including ones missing the `{gallery}` marker, tagged as not active, with a one-click **Add `{gallery}` marker** — edited as **raw text, saved byte-for-byte** (never parsed and re-written). **Save**, **Save As** and **Delete** are separate, confirmed actions, the destination is locked to a `.md` name so nothing typed there can reach `index.php`, and a save that touches several files reports each one on its own. A reference panel beside the editor inserts directive syntax at the cursor
+- every `.md` in the folder — including ones missing the `{gallery}` marker, tagged as not active, with a one-click **Add `{gallery}` marker** — edited as **raw text, saved byte-for-byte** (never parsed and re-written). **Save**, **Save As** and **Delete** are separate actions (Save As and Delete ask you to confirm), and the destination is locked to a `.md` name so nothing typed there can reach `index.php`. A reference panel beside the editor explains each directive and inserts its syntax at the cursor (it starts collapsed on a phone)
 - **Two tabs, one record:** every item and folder form remembers what it loaded, and a save whose record was changed elsewhere in the meantime (another tab or device) is refused with an explanation instead of silently overwriting. Editing a *different* photo in the same folder never conflicts
 - **Export as JSON** for the folder or the whole tree — the only backup of the captions and settings you typed, which a plain save can't undo
 - a **Hidden items** summary across the whole tree
 
-How it's locked down: HTTP Basic Auth compared with `hash_equals()`; the page **refuses to load over plain HTTP** (except on `localhost`/`127.0.0.1`) and explains why, since Basic Auth over HTTP is plaintext; a CSRF token protects every save; the session lasts 4 hours; and a failed-login throttle (5 failures from one address within 15 minutes imposes a 60-second delay before that address's next attempt is even checked). There is no reliable cross-browser "log out" — closing the browser is the dependable reset. The admin works at a phone's width.
+How it's locked down: HTTP Basic Auth compared with `hash_equals()`; the page **refuses to load over plain HTTP** (except on `localhost`/`127.0.0.1`) and explains why, since Basic Auth over HTTP is plaintext; a CSRF token protects every save; the session lasts 4 hours; and a failed-login throttle (5 *wrong* passwords from one address within 15 minutes imposes a 60-second delay before that address's next attempt is even checked; a request with no credentials at all — the normal first step of any login — doesn't count). There is no reliable cross-browser "log out" — closing the browser is the dependable reset. The admin works at a phone's width.
 
 **`ADMIN_PASSWORD` lives in `index.php` itself**, a deliberate choice to keep this a single file. Redact it before pasting or sharing your copy of the script for support.
 
-**The admin's data files are protected by default — and worth a second layer.** Everything the admin writes lives in a `.gallery-items.php` inside each folder (and the stats and login-throttle files are `.gallery-stats.php` and `.gallery-login-attempts.php`). They hold your captions, any GPS coordinates you entered, and the exact filenames of everything you've hidden. A web server serves any file in the folder to anyone who asks for its URL, so these are stored as PHP files that begin with a one-line guard: a direct request runs that line, which answers **404 and stops**, so none of the JSON below it is ever sent — on any host that runs PHP, with no server setting needed. The gallery itself never runs these files; it reads them as plain text and skips the first line. Captions are written with `<` and `>` escaped, so a caption can't smuggle PHP into the file. Hidden items are never counted in the view stats, so their names never reach that store either.
+**The admin's data files are protected by default — and worth a second layer.** Everything the admin writes lives in a `.gallery-items.php` inside each folder (and the stats and login-throttle files are `.gallery-stats.php` and `.gallery-login-attempts.php`). They hold your captions, any GPS coordinates you entered, and the exact filenames of everything you've hidden. A web server serves any file in the folder to anyone who asks for its URL, so these are stored as PHP files that begin with a one-line guard: a direct request runs that line, which answers **404 and stops**, so none of the JSON below it is ever sent — on any host that runs PHP, with no server setting needed. The gallery itself never runs these files; it reads them as plain text and skips the first line. Captions are written with `<` and `>` escaped, so a caption can't smuggle PHP into the file.
 
-Still add the server rule in [Locking down the files themselves](#locking-down-the-files-themselves) if you can: it's a second layer, and it covers the one file the guard can't — the optional `.gallery-stats.sqlite`, a binary SQLite database that can't start with a PHP line (it holds only the names and counts of items that *aren't* hidden).
+The one stats file that can't carry that guard is the optional `.gallery-stats.sqlite` — a binary SQLite database can't start with a PHP line. It holds only counts, keyed by a SHA-256 hash of each photo's path, so a visitor who fetches it learns no filenames (hidden items are counted like any other, and their names still never appear). It's still worth adding the server rule in [Locking down the files themselves](#locking-down-the-files-themselves) if you can: it's a second layer over all of these files, and it keeps even those hashed counts private.
 
 ## Hiding items and private view
 
@@ -296,8 +300,6 @@ location ~* ^/kb/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$ {
 }
 ```
 
-Both blocks were tested against nginx 1.26 with php-fpm 8.4: every bare photo, video and data-file URL (including a hidden item, a nested one, and an upper-case extension) returns 404; the gallery, thumbnails, full-size images and video `Range` requests (a real `206`) all work through `index.php`; a hidden item stays unreachable by URL even for a viewer who has entered the private-view password; and `?admin`/`?reveal` Basic Auth passes through php-fpm correctly. They assume your site already has the ordinary pieces a PHP site on nginx has — `index index.php;` and a `location ~ \.php$` that hands scripts to php-fpm.
-
 Then check and reload, and confirm the bare URL is now unreachable:
 
 ```
@@ -306,7 +308,9 @@ sudo systemctl reload nginx
 curl -I https://yoursite.com/kb/IMG_0412.jpg     # expect 404
 ```
 
-Finally set `NGINX_ACCEL_REDIRECT_PREFIX` to `'/kb'` (verified in the same test: `index.php` answers with `X-Accel-Redirect` and nginx serves the file). The script then answers allowed requests with an `X-Accel-Redirect` header and nginx serves the file itself (which also gives you nginx's own, well-tested `Range` handling for video). Leave it empty and the script serves files itself with PHP — correct everywhere, just without the lockdown. The prefix must match the `location` above exactly. `.*` already covers nested folders.
+Both blocks were tested against nginx 1.26 with php-fpm 8.4: every bare photo, video and data-file URL (including a hidden item, a nested one, and an upper-case extension) returns 404; the gallery, thumbnails, full-size images and video `Range` requests (a real `206`) all work through `index.php`; a hidden item stays unreachable by URL even for a viewer who has entered the private-view password; and `?admin`/`?reveal` Basic Auth passes through php-fpm correctly. They assume your site already has the ordinary pieces a PHP site on nginx has — `index index.php;` and a `location ~ \.php$` that hands scripts to php-fpm.
+
+Finally set `NGINX_ACCEL_REDIRECT_PREFIX` to `'/kb'`, matching the `location` above exactly (`.*` already covers nested folders). The script then answers allowed requests with an `X-Accel-Redirect` header and nginx serves the file itself, which also gives you nginx's own, well-tested `Range` handling for video. Leave it empty and the script serves files itself with PHP — correct everywhere, just without the lockdown.
 
 **Apache** — blunter, and works on FTP-only hosting, since `.htaccess` is an uploadable file:
 
@@ -353,6 +357,8 @@ It was tested with the setup above: `/kb/Europe/France/Paris/` and a folder with
 - **The folder name is captured inside the `rewrite` itself**, which is what makes nginx escape it. Capturing it in the `location` line and passing the variable along breaks on a name with a space (it returned a 502 in testing).
 - Every other link on the page (`?img=`, `?folder=`, `?about`, `#anchors`) keeps working from a pretty URL because the query string rides along; the one that didn't — the "back to the gallery" link — is handled by the script (it names the real root when the request path isn't the script's own).
 
+It relies on your php-fpm setup passing the *original* request URL as `REQUEST_URI` (the standard `fastcgi_param REQUEST_URI $request_uri;` does), which is how the script tells a pretty URL from a direct one.
+
 This is nginx-only; there's no Apache equivalent here.
 
 ## Keeping runtime data out of git
@@ -370,9 +376,11 @@ If you keep your deployed gallery in git, add this to `.gitignore`: these files 
 
 ## Upgrading to 2.0
 
-Dropping the new `index.php` over a 1.x copy changes nothing you can see, with **one exception**:
+Dropping the new `index.php` over a 1.x copy leaves your gallery looking the same, with three things worth knowing:
 
 - **`?download` now redirects to this repository instead of serving the script.** Anything that fetched the script from `?download` on your gallery should get it from GitHub instead. (Serving it directly would have handed `ADMIN_PASSWORD` to any visitor once the admin existed.)
+- **Your view counts carry over.** 1.x kept them in `.gallery-stats.json` (or a SQLite file with readable filenames). On the first request with `TRACK_VIEWS` on, 2.0 imports the per-photo counts and the sitewide total into its new stores, then deletes the old JSON file (or drops the old SQLite table and compacts the file, so the old filenames don't linger in it). If the folder isn't writable the old data is simply left where it was.
+- **You may see one new setup notice.** If your folder has subfolders containing photos and `AUTO_GROUP_BY_FOLDER` is off, the collapsed "setup notices" banner now says how many photos in subfolders aren't being shown (a count, never a name). Turn the setting on to show them, or ignore it — it's addressed to you, not your visitors.
 
 Everything else is opt-in. Copy your own settings across by editing the constants in the new file. See [CHANGELOG.md](CHANGELOG.md) for the full list.
 

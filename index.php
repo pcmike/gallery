@@ -23,9 +23,11 @@
  *     MAP_CLUSTER_RADIUS_MILES constants are just below. TRACK_VIEWS,
  *     ENABLE_THUMBNAIL_CACHE, AUTO_GROUP_BY_FOLDER, ENABLE_VIDEO,
  *     ENABLE_PHOTO_LOCATION, and ENABLE_MAP are off by default — this
- *     script writes nothing to disk, makes no outbound/third-party
- *     requests, and doesn't look at a single subfolder, video file, or
- *     photo's location unless you turn one on.
+ *     script writes nothing to disk (apart from what the admin saves),
+ *     makes no outbound/third-party requests, and doesn't show a single
+ *     subfolder, video file, or photo location unless you turn one on.
+ *     (With AUTO_GROUP_BY_FOLDER off it still peeks into subfolders, read-
+ *     only and capped, solely to warn that photos there are being skipped.)
  *     ADMIN_PASSWORD and PRIVATE_VIEW_PASSWORD are empty by default,
  *     which makes ?admin and ?reveal completely inert rather than merely
  *     unauthenticated. NGINX_ACCEL_REDIRECT_PREFIX is empty by default,
@@ -1942,9 +1944,8 @@ function item_restriction($entry) {
  *  folder hidden entirely can still have one specific item deliberately
  *  shown, and a public folder can still have one sensitive item hidden;
  *  neither needs the other's permission. "Inherit" (the default) falls
- *  through to whichever top-level folder-group $file sits in, if any —
- *  only ever checked one level deep, matching this project's existing
- *  folder-group scope elsewhere (see AUTO_GROUP_BY_FOLDER). */
+ *  through to the folders $file sits in: hidden if *any* ancestor, at any
+ *  depth, is flagged private (see AUTO_GROUP_BY_FOLDER). */
 function file_is_hidden($dir, $file, $itemsData) {
     $own = item_restriction($itemsData[$file] ?? null);
     if ($own === 'private') return true;
@@ -3618,6 +3619,9 @@ function stats_import_legacy($folderPath, $conn) {
                 $data['photos'][$name] = (int) ($data['photos'][$name] ?? 0) + $views;
             }
         });
+        // If the new store couldn't be created (unwritable folder), keep
+        // the old file: deleting it now would lose the only copy.
+        if (!file_exists($conn['file'])) return;
     }
     if ($removeJson) @unlink($legacyJson);
 }
@@ -5503,12 +5507,15 @@ foreach ($mdFiles as $mdFile) {
 <?php endif; ?>
 
 <?php
-// The actual ?folder= override: scope $groups/$files down to just this
-// one folder's files for the gallery grid below — a flat run of
-// individual cards, not further cover-card drilling.
-// $explicitGroupKeys/$folderGroupKeys are cleared since there's no
-// further boxing or drilling happening on this page. ($pageTitle was
-// already folder-prefixed earlier, in the ?folder= validation block.)
+// The actual ?folder= override: scope $groups/$files down to just what's
+// under this folder, built from the already hiding-filtered $files. In
+// 'overview' mode each immediate subfolder becomes a cover card (which
+// links to its own ?folder= page, repeating this to any depth) and
+// anything loose at this level is a flat card; in 'inline' mode there are
+// no cover cards and everything beneath is one flat run.
+// $explicitGroupKeys is cleared (a root-level {group:} box means nothing
+// here) and $folderGroupKeys is rebuilt for this level only. ($pageTitle
+// was already set earlier, in the ?folder= validation block.)
 //
 // Keyed the same bare, extension-stripped way a root-level standalone
 // single already is (see group_key()) — "eiffel," not "Paris/eiffel.jpg"

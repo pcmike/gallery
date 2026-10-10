@@ -1798,6 +1798,22 @@ foreach (['json' => true, 'sqlite' => false] as $upgradeMode => $forceJsonMode) 
     }
 }
 
+// If the new store can't be created (read-only folder), the 1.x counts must
+// be left alone, not deleted after a failed import.
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    $fxRo = new_fixture_dir('upgrade-readonly');
+    make_jpeg("$fxRo/p.jpg", 60, 60, 10, 10, 10);
+    $patchedRo = str_replace("in_array('sqlite', PDO::getAvailableDrivers(), true)", 'false', $indexContents);
+    write_patched_index("$fxRo/index.php", $patchedRo, ['TRACK_VIEWS' => 'true']);
+    file_put_contents("$fxRo/.gallery-stats.json", json_encode(['pageviews' => 9, 'photos' => ['p.jpg' => 4]]));
+    chmod($fxRo, 0555);
+    $portRo = find_free_port();
+    start_server($fxRo, $portRo);
+    http_get("http://127.0.0.1:$portRo/");
+    check('a read-only folder: the 1.x stats file is NOT deleted when the new store can\'t be written', is_file("$fxRo/.gallery-stats.json") && !is_file("$fxRo/.gallery-stats.php"));
+    chmod($fxRo, 0755);
+}
+
 /* ======================================================================= *
  * FIXTURE: "gps" — EXIF GPS auto-fill in the admin, for JPEG and (where
  * Imagick can write/read HEIC) HEIC. Never covered before: 48°51'30.24"N
