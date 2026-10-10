@@ -17,13 +17,16 @@
  *   - GALLERY_VERSION / TRACK_VIEWS / SHOW_VIEW_COUNTS_PUBLICLY /
  *     ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER /
  *     AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS /
- *     ENABLE_VIDEO / ADMIN_PASSWORD / ENABLE_PHOTO_LOCATION constants are
+ *     ENABLE_VIDEO / ADMIN_PASSWORD / ENABLE_PHOTO_LOCATION /
+ *     PRIVATE_VIEW_PASSWORD / NGINX_ACCEL_REDIRECT_PREFIX constants are
  *     just below. TRACK_VIEWS, ENABLE_THUMBNAIL_CACHE, AUTO_GROUP_BY_FOLDER,
  *     ENABLE_VIDEO, and ENABLE_PHOTO_LOCATION are off by default — this
  *     script writes nothing to disk and doesn't look at a single
  *     subfolder, video file, or photo's location unless you turn one on.
- *     ADMIN_PASSWORD is empty by default, which makes ?admin completely
- *     inert rather than merely unauthenticated.
+ *     ADMIN_PASSWORD and PRIVATE_VIEW_PASSWORD are empty by default,
+ *     which makes ?admin and ?reveal completely inert rather than merely
+ *     unauthenticated. NGINX_ACCEL_REDIRECT_PREFIX is empty by default,
+ *     which keeps every image/video served by plain PHP, same as always.
  *   - A .md file is only read if its first line is exactly {gallery}.
  *   - Photo grouping: auto by filename (minus a trailing "_01"/"-02"
  *     suffix, if AUTO_GROUP_BY_FILENAME is on), auto by subfolder (if
@@ -164,6 +167,46 @@ define('ADMIN_PASSWORD', '');
 // it sounds: EXIF GPS auto-fill only works for JPEG (via exif_read_data)
 // — HEIC, PNG, GIF, WEBP, and BMP need the coordinates typed in by hand.
 define('ENABLE_PHOTO_LOCATION', false);
+
+// A second, lower-privilege password that unlocks items flagged hidden
+// from public view in the admin tool — scoped to viewing only, never
+// editing. Empty/off by default, same pattern as ADMIN_PASSWORD. The
+// bare gallery link stays completely public and frictionless regardless
+// — this only matters once ?reveal is visited (a small "Private view"
+// link in the footer, shown only when this is set). Deliberately a
+// password, not a secret link: a link pasted into Discord/Reddit gets
+// crawled automatically by that platform's own link-preview bot, and a
+// secret embedded in a URL can't be revoked short of breaking the link
+// for everyone who had it. This password is the weaker of the two this
+// script has — it has to be spoken or texted to someone else and
+// actually remembered, so expect it to be shorter and more guessable
+// than ADMIN_PASSWORD — which is exactly why it gets the same
+// failed-attempt throttle, not an exemption from it.
+define('PRIVATE_VIEW_PASSWORD', '');
+
+// Hands matching image/video requests to nginx's own static file serving
+// instead of reading them with PHP, via the X-Accel-Redirect header —
+// once nginx is configured with an `internal` location for this
+// gallery's path (see the README), this is the only way a hidden item's
+// file is ever actually unreachable at its bare URL, not just
+// unreferenced. Empty by default: that's what makes it safe to ship —
+// left empty, nothing changes, and every image/video is still served by
+// plain PHP readfile()/streaming exactly as before. Set to the gallery's
+// own URL path (e.g. '/kb', no trailing slash) only once the matching
+// nginx config is actually in place; see the README for the full setup
+// and why Apache's equivalent (a plain deny rule in .htaccess) can't use
+// this same mechanism.
+define('NGINX_ACCEL_REDIRECT_PREFIX', '');
+
+// Internal — not meant to be edited. The name of the cookie that
+// remembers a browser unlocked private view (see PRIVATE_VIEW_PASSWORD
+// and is_revealed() below). A plain define() alongside the others here,
+// rather than inline where it's first used further down, specifically
+// because define() executes in file order (unlike a function
+// declaration) — it has to run before anything below ever calls
+// is_revealed(), which happens well before this script reaches that
+// point in its own source otherwise.
+define('REVEAL_COOKIE_NAME', 'gallery_reveal');
 
 $dir = __DIR__;
 $self = basename(__FILE__);
@@ -465,7 +508,7 @@ function slugify($text) {
 $requestedPhoto = null;
 if (isset($_GET['photo'])) {
     $candidate = $_GET['photo'];
-    if (in_array($candidate, $files, true)) {
+    if (in_array($candidate, $files, true) && (!file_is_hidden($dir, $candidate, $itemsData) || is_revealed())) {
         $requestedPhoto = $candidate;
     }
 }
@@ -490,6 +533,15 @@ if (isset($_GET['about'])) {
     exit;
 }
 
+// ?reveal — the "Private view" link in the footer. See run_reveal_route()
+// for the full HTTPS/throttle/auth flow; checked early, like ?about/
+// ?download, since it's a distinct mode of this one file, not something
+// that needs $groups or any of the scan below.
+if (isset($_GET['reveal'])) {
+    run_reveal_route($dir);
+    exit;
+}
+
 /* -----------------------------------------------------------------------
  * Image serving: resized/cached thumbnails, HEIC conversion.
  * ----------------------------------------------------------------------- */
@@ -502,6 +554,31 @@ function guess_mime($ext) {
         'mp4' => 'video/mp4', 'mov' => 'video/quicktime',
     ];
     return $map[$ext] ?? 'application/octet-stream';
+}
+
+/**
+ * Serves an original, untransformed file — hands it to nginx's own
+ * static serving via X-Accel-Redirect once NGINX_ACCEL_REDIRECT_PREFIX
+ * is configured to match a real `internal` location block for this
+ * gallery's own path (see the README), instead of reading it with PHP.
+ * $relativePath is the file's path relative to the gallery root, used to
+ * build the URL path nginx matches against its own location blocks —
+ * not a filesystem path, and it has to line up exactly with that config.
+ * Falls back to plain readfile() when the prefix is unset, which is also
+ * what makes leaving it empty safe to ship as the default: zero nginx
+ * config required, works correctly on any host, same as always.
+ */
+function serve_original_file($srcPath, $relativePath, $mimeType) {
+    header('Content-Type: ' . $mimeType);
+    if (NGINX_ACCEL_REDIRECT_PREFIX !== '') {
+        // Each path segment encoded separately — the slashes themselves
+        // are the URL structure nginx's location block matches against,
+        // not something to escape away.
+        $urlPath = implode('/', array_map('rawurlencode', explode('/', $relativePath)));
+        header('X-Accel-Redirect: ' . rtrim(NGINX_ACCEL_REDIRECT_PREFIX, '/') . '/' . $urlPath);
+        return;
+    }
+    readfile($srcPath);
 }
 
 /**
@@ -750,8 +827,16 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim) {
  *  traversal attempt never matches anything the scan itself produced,
  *  with or without that extra step, and nothing resembling "../" can
  *  survive that match regardless of how many segments the path has. */
-function serve_image($dir, $filename, $variant, $validFiles) {
+function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     if (!in_array($filename, $validFiles, true)) {
+        http_response_code(404);
+        return;
+    }
+    // A checkbox that only skips a thumbnail in the grid isn't real
+    // privacy if the file itself is still fetchable directly — this
+    // refuses it to anyone without a valid reveal, the same allowlist-
+    // plus-identity-check discipline as the line above.
+    if (file_is_hidden($dir, $filename, $itemsData) && !is_revealed()) {
         http_response_code(404);
         return;
     }
@@ -774,9 +859,8 @@ function serve_image($dir, $filename, $variant, $validFiles) {
     // Non-HEIC files at full size are served untouched — no need to
     // resize or re-encode the original the lightbox already opens fine.
     if (!$isHeic && $variant === 'full') {
-        header('Content-Type: ' . guess_mime($ext));
         header('Cache-Control: public, max-age=31536000, immutable');
-        readfile($srcPath);
+        serve_original_file($srcPath, $filename, guess_mime($ext));
         return;
     }
 
@@ -803,8 +887,7 @@ function serve_image($dir, $filename, $variant, $validFiles) {
         http_response_code(415);
         return;
     }
-    header('Content-Type: ' . guess_mime($ext));
-    readfile($srcPath);
+    serve_original_file($srcPath, $filename, guess_mime($ext));
 }
 
 function img_url($file, $size) {
@@ -820,7 +903,7 @@ function osm_location_url($lat, $lng) {
 }
 
 if (isset($_GET['img'])) {
-    serve_image($dir, $_GET['img'], $_GET['size'] ?? 'thumb', $files);
+    serve_image($dir, $_GET['img'], $_GET['size'] ?? 'thumb', $files, $itemsData);
     exit;
 }
 
@@ -834,9 +917,16 @@ if (isset($_GET['img'])) {
  * serve_image() above — and since ENABLE_VIDEO=false simply never adds
  * .mov/.mp4 to $validFiles in the first place, a request here fails
  * closed on its own with no extra check needed for the feature being off.
+ * The hidden-item check below runs before any Range handling, not after
+ * — a second code path added later just for partial requests is exactly
+ * the kind of place a gate like this gets forgotten.
  */
-function serve_video($dir, $filename, $validFiles) {
+function serve_video($dir, $filename, $validFiles, $itemsData = []) {
     if (!in_array($filename, $validFiles, true)) {
+        http_response_code(404);
+        return;
+    }
+    if (file_is_hidden($dir, $filename, $itemsData) && !is_revealed()) {
         http_response_code(404);
         return;
     }
@@ -847,6 +937,17 @@ function serve_video($dir, $filename, $validFiles) {
         return;
     }
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+
+    // Once nginx is configured for this (see serve_original_file()),
+    // hand the whole request to its own static serving instead — nginx
+    // already handles Range requests correctly on its own, a free
+    // upgrade over the plain-PHP handling below, which stays as the
+    // baseline that works on any host regardless.
+    if (NGINX_ACCEL_REDIRECT_PREFIX !== '') {
+        header('Cache-Control: public, max-age=31536000, immutable');
+        serve_original_file($srcPath, $filename, guess_mime($ext));
+        return;
+    }
 
     header('Content-Type: ' . guess_mime($ext));
     header('Cache-Control: public, max-age=31536000, immutable');
@@ -902,7 +1003,7 @@ function serve_video($dir, $filename, $validFiles) {
 }
 
 if (isset($_GET['video'])) {
-    serve_video($dir, $_GET['video'], $files);
+    serve_video($dir, $_GET['video'], $files, $itemsData);
     exit;
 }
 
@@ -1267,6 +1368,50 @@ if (isset($_GET['admin'])) {
     exit;
 }
 
+// A snapshot of every real file, taken before the hiding filter below
+// ever touches $files — gc_image_cache()/gc_items_data() further down
+// need the *complete* picture to tell "genuinely deleted" apart from
+// "hidden from this particular unrevealed visitor." Using the
+// already-filtered $files there would make every hidden item look
+// deleted to the garbage collector, which would wipe out its own hide
+// flag (and its cached thumbnails) the next time an unrevealed visitor
+// just loads the page — the opposite of what hiding is supposed to do.
+$allFiles = $files;
+
+// Private view, for everything from here on (the public page, ?track=,
+// ?folder=): a hidden item — or an entirely-hidden folder-group — is
+// removed from $groups/$files outright for an unrevealed visitor, not
+// merely skipped in a display loop. That's what makes every downstream
+// count, the lightbox's own file list, and every allowlist check below
+// all naturally agree with what's actually rendered — a count that
+// doesn't match what's visible would itself be a leak. (?img=/?video=/
+// ?photo= already ran their own check above, since they execute before
+// $groups even exists — this filter runs too late to help them.) If
+// every member of a group ends up hidden, the group itself disappears
+// here too, rather than rendering an empty "0 photos" box, which would
+// be its own tell that something's being withheld.
+if (!is_revealed()) {
+    foreach ($groups as $key => $groupFiles) {
+        $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData) {
+            return !file_is_hidden($dir, $f, $itemsData);
+        }));
+        if (empty($visibleMembers)) {
+            unset($groups[$key], $folderGroupKeys[$key], $explicitGroupKeys[$key]);
+        } else {
+            $groups[$key] = $visibleMembers;
+        }
+    }
+    $visibleSet = [];
+    foreach ($groups as $groupFiles) {
+        foreach ($groupFiles as $f) {
+            $visibleSet[$f] = true;
+        }
+    }
+    $files = array_values(array_filter($files, function ($f) use ($visibleSet) {
+        return isset($visibleSet[$f]);
+    }));
+}
+
 /* -----------------------------------------------------------------------
  * Small generic JSON file storage, flock-protected the same way the
  * stats JSON fallback below is — reused by two otherwise-unrelated
@@ -1452,12 +1597,13 @@ function admin_send_auth_challenge() {
     echo 'Authentication required.';
 }
 
-/** A plain-English refusal page for ?admin over an insecure connection —
- *  HTTP Basic Auth credentials are plaintext-equivalent without TLS, so
- *  this fails closed rather than just documenting the risk. Explains
- *  itself and points toward a free certificate, rather than a bare
- *  error that teaches a visitor nothing about what to do next. */
-function render_admin_https_required_page() {
+/** A plain-English refusal page for ?admin or ?reveal over an insecure
+ *  connection — HTTP Basic Auth credentials are plaintext-equivalent
+ *  without TLS, so this fails closed rather than just documenting the
+ *  risk. Explains itself and points toward a free certificate, rather
+ *  than a bare error that teaches a visitor nothing about what to do
+ *  next. */
+function render_https_required_page() {
     http_response_code(403);
 ?>
 <!DOCTYPE html>
@@ -1476,13 +1622,136 @@ function render_admin_https_required_page() {
 </head>
 <body>
 <div class="wrap">
-  <h1>HTTPS required for the admin editor</h1>
-  <p>This page logs in with a password sent over HTTP Basic Auth, which is sent in a form that's trivially readable by anyone on the network path if the connection isn't encrypted. To protect that password, <code>?admin</code> refuses to run at all over a plain <code>http://</code> connection.</p>
+  <h1>HTTPS required</h1>
+  <p>This page logs in with a password sent over HTTP Basic Auth, which is sent in a form that's trivially readable by anyone on the network path if the connection isn't encrypted. To protect that password, this page refuses to run at all over a plain <code>http://</code> connection.</p>
   <p>If you're testing this on your own machine, visiting it as <code>localhost</code> or <code>127.0.0.1</code> is allowed over plain HTTP. For a real deployment, put this site behind HTTPS — <a href="https://letsencrypt.org/" target="_blank" rel="noopener noreferrer">Let's Encrypt</a> issues free certificates, and most hosting control panels can set one up in a few clicks.</p>
 </div>
 </body>
 </html>
 <?php
+}
+
+/* -----------------------------------------------------------------------
+ * Private view: a hidden item (or an entirely hidden folder-group) is
+ * omitted from the public page outright, for any visitor without a
+ * valid "reveal" — either the ?reveal password, or a valid admin login
+ * (one-directional: admin implies revealed, revealed never implies
+ * admin). The reveal cookie's value is a deterministic hash of
+ * PRIVATE_VIEW_PASSWORD itself rather than a random per-session token —
+ * there's no server-side session store to check it against, so this
+ * needs to be independently re-derivable on every request; a visitor
+ * who never entered the real password has no way to produce a matching
+ * value. Each item's restriction is a small named value ("public" /
+ * "private"), not a bare boolean, so a second audience tier later is an
+ * addition, not a rewrite of the flag itself.
+ * ----------------------------------------------------------------------- */
+
+function reveal_cookie_value() {
+    return hash('sha256', PRIVATE_VIEW_PASSWORD);
+}
+
+/** Sets the reveal cookie — called both on a successful ?reveal login and
+ *  on a successful ?admin login (a valid admin login counts as revealed
+ *  too, so the admin doesn't need a second credential just to see their
+ *  own hidden items while browsing the plain gallery). A year-long
+ *  expiry gives the same "enter it once" persistence ?admin's own
+ *  session-based login already has, just via a plain cookie instead of a
+ *  PHP session, since this has to survive on the *public*, unauthenticated
+ *  page view, not just inside ?admin/?reveal themselves. */
+function set_reveal_cookie() {
+    if (PRIVATE_VIEW_PASSWORD === '') return;
+    setcookie(REVEAL_COOKIE_NAME, reveal_cookie_value(), [
+        'expires' => time() + 31536000,
+        'path' => '/',
+        'secure' => is_https_request(),
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+}
+
+/** True if this visitor has already unlocked private view — via the
+ *  reveal cookie (set by ?reveal or a prior ?admin login). Always false
+ *  when PRIVATE_VIEW_PASSWORD is unset: with no password to ever enter,
+ *  nothing can produce a matching cookie, so a hidden item simply stays
+ *  hidden from everyone but the admin tool itself — the same
+ *  closed-by-default posture as every other gate in this script. */
+function is_revealed() {
+    if (PRIVATE_VIEW_PASSWORD === '') return false;
+    $cookie = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
+    return is_string($cookie) && $cookie !== '' && hash_equals(reveal_cookie_value(), $cookie);
+}
+
+/** Normalizes a stored restriction value to exactly "inherit", "public",
+ *  or "private" — missing/corrupt/unrecognized all degrade to "inherit",
+ *  the always-safe default of "nothing changes until you touch it." Used
+ *  both for an item's own three-state override (inherit the folder's
+ *  setting / always show / always hide — same shape as location-
+ *  visibility's own tri-state) and for a folder's own entry, where only
+ *  the "private" value is ever meaningful (a folder has nothing to
+ *  "inherit" from in this one-level-deep model). */
+function item_restriction($entry) {
+    $r = is_array($entry) ? ($entry['restriction'] ?? 'inherit') : 'inherit';
+    return in_array($r, ['public', 'private'], true) ? $r : 'inherit';
+}
+
+/** Whether $file is hidden from an unrevealed visitor. An item's own
+ *  explicit "public"/"private" always wins, in either direction — a
+ *  folder hidden entirely can still have one specific item deliberately
+ *  shown, and a public folder can still have one sensitive item hidden;
+ *  neither needs the other's permission. "Inherit" (the default) falls
+ *  through to whichever top-level folder-group $file sits in, if any —
+ *  only ever checked one level deep, matching this project's existing
+ *  folder-group scope elsewhere (see AUTO_GROUP_BY_FOLDER). */
+function file_is_hidden($dir, $file, $itemsData) {
+    $own = item_restriction($itemsData[$file] ?? null);
+    if ($own === 'private') return true;
+    if ($own === 'public') return false;
+    if (AUTO_GROUP_BY_FOLDER && strpos($file, '/') !== false) {
+        $topFolder = explode('/', $file, 2)[0];
+        if (item_restriction(items_read(resolve_real_path($dir, $topFolder))) === 'private') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * ?reveal — the only thing that invokes a real HTTP Basic Auth prompt
+ * for PRIVATE_VIEW_PASSWORD. Same HTTPS requirement and failed-attempt
+ * throttle as ?admin (a separate throttle realm, so failures on one
+ * password never lock out the other). On success, sets the reveal
+ * cookie and redirects back to the bare URL — dropping ?reveal from the
+ * address bar, not just leaving it there, so "bookmark the plain gallery
+ * link afterward" is literally true.
+ */
+function run_reveal_route($dir) {
+    if (PRIVATE_VIEW_PASSWORD === '') {
+        http_response_code(404);
+        return;
+    }
+    if (!is_https_request() && !is_local_request()) {
+        render_https_required_page();
+        return;
+    }
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    if (!login_throttle_allows($dir, 'reveal', $ip)) {
+        http_response_code(429);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'Too many failed attempts. Try again in a moment.';
+        return;
+    }
+    $pass = $_SERVER['PHP_AUTH_PW'] ?? null;
+    if (!is_string($pass) || !hash_equals(PRIVATE_VIEW_PASSWORD, $pass)) {
+        login_throttle_record_failure($dir, 'reveal', $ip);
+        header('WWW-Authenticate: Basic realm="Gallery Private View"');
+        http_response_code(401);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'Authentication required.';
+        return;
+    }
+    login_throttle_record_success($dir, 'reveal', $ip);
+    set_reveal_cookie();
+    header('Location: ./', true, 302);
 }
 
 /* -----------------------------------------------------------------------
@@ -1716,13 +1985,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $locLabel = trim((string) ($_POST['loc_label'] ?? ''));
         $visibility = $_POST['loc_visibility'] ?? 'inherit';
         if (!in_array($visibility, ['inherit', 'show', 'hide'], true)) $visibility = 'inherit';
+        $restriction = $_POST['restriction'] ?? 'inherit';
+        if (!in_array($restriction, ['inherit', 'public', 'private'], true)) $restriction = 'inherit';
         if ($web !== '' && !preg_match('#^https?://#i', $web)) {
             return ['type' => 'error', 'text' => 'The web link needs to start with http:// or https://.'];
         }
         if (($lat !== '' || $lng !== '') && !is_valid_coordinate($lat === '' ? 0 : $lat, $lng === '' ? 0 : $lng)) {
             return ['type' => 'error', 'text' => 'That latitude/longitude isn\'t a valid coordinate.'];
         }
-        items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility) {
+        items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility, $restriction) {
             $entry = $data['items'][$bare] ?? [];
             if ($caption !== '') { $entry['caption'] = $caption; } else { unset($entry['caption']); }
             if ($web !== '') { $entry['web'] = $web; } else { unset($entry['web']); }
@@ -1732,6 +2003,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
                 unset($entry['location']);
             }
             $entry['locationVisibility'] = $visibility;
+            if ($restriction === 'inherit') { unset($entry['restriction']); } else { $entry['restriction'] = $restriction; }
             $data['items'][$bare] = $entry;
         });
         return ['type' => 'ok', 'text' => 'Saved "' . $bare . '".'];
@@ -1765,6 +2037,17 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $data['displayName'] = $displayName !== '' ? $displayName : null;
         });
         return ['type' => 'ok', 'text' => 'Folder display name saved.'];
+    }
+
+    if ($action === 'toggle_folder_restriction') {
+        if ($adminFolderPath === null) {
+            return ['type' => 'error', 'text' => 'Not applicable at the root — hide individual items instead.'];
+        }
+        $hidden = !empty($_POST['hidden']);
+        items_update($adminFolderReal, function (&$data) use ($hidden) {
+            if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction']); }
+        });
+        return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'hidden from public view.' : 'public again.')];
     }
 
     if ($action === 'set_cover') {
@@ -1858,6 +2141,121 @@ function admin_export_items($adminFolderPath, $adminFolderReal) {
     echo json_encode($data, JSON_PRETTY_PRINT);
 }
 
+/** True whenever anything in the whole tree is currently flagged hidden
+ *  — drives the admin tool's persistent lockdown warning (see
+ *  render_admin_page): reappearing every time the screen loads, not a
+ *  one-time dismissible notice, since the goal is an honest, ongoing
+ *  signal rather than implying a privacy guarantee this script can't
+ *  actually confirm without the webserver-level step. */
+function admin_any_hidden($dir, $files, $folderGroupKeys) {
+    foreach ($folderGroupKeys as $folderKey => $_true) {
+        if (item_restriction(items_read(resolve_real_path($dir, $folderKey))) === 'private') {
+            return true;
+        }
+    }
+    foreach ($files as $file) {
+        $entry = items_read(containing_folder_real_path($dir, $file))['items'][basename($file)] ?? null;
+        if (item_restriction($entry) === 'private') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * The admin tool's "Hidden items" summary — across the *whole* tree in
+ * one place, since confirming "nothing is exposed that shouldn't be" by
+ * clicking into every folder individually doesn't scale once depth is
+ * arbitrary. Three tiers, not a flat "hidden" list — folders hidden
+ * entirely, individual items hidden inside an otherwise-public folder,
+ * and individual items deliberately shown despite sitting inside a
+ * hidden folder — blurring them into one list risks reading as complete
+ * when it isn't.
+ */
+function render_admin_hidden_summary($dir, $files, $folderGroupKeys) {
+    $hiddenFolders = [];
+    foreach ($folderGroupKeys as $folderKey => $_true) {
+        if (item_restriction(items_read(resolve_real_path($dir, $folderKey))) === 'private') {
+            $hiddenFolders[] = $folderKey;
+        }
+    }
+    $hiddenFolderSet = array_fill_keys($hiddenFolders, true);
+
+    $hiddenItems = [];
+    $shownDespiteHiddenFolder = [];
+    foreach ($files as $file) {
+        $entry = items_read(containing_folder_real_path($dir, $file))['items'][basename($file)] ?? null;
+        $own = item_restriction($entry);
+        $topFolder = (strpos($file, '/') !== false) ? explode('/', $file, 2)[0] : null;
+        $folderHidden = $topFolder !== null && isset($hiddenFolderSet[$topFolder]);
+        if ($own === 'private') {
+            $hiddenItems[] = $file;
+        } elseif ($folderHidden && $own === 'public') {
+            $shownDespiteHiddenFolder[] = $file;
+        }
+    }
+
+    $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Hidden items — Gallery Admin v<?= $version ?></title>
+<style>
+  :root { --bg:#0f0f10; --card:#1a1a1c; --text:#eaeaea; --muted:#8a8a8f; --accent:#5865f2; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; }
+  .wrap { max-width:720px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:1.4rem; }
+  h2 { font-size:1rem; margin:24px 0 8px; }
+  .muted { color:var(--muted); font-size:0.85rem; }
+  .panel { background:var(--card); border-radius:10px; padding:16px; margin-bottom:14px; }
+  ul { margin:0; padding-left:20px; }
+  li { margin-bottom:4px; font-size:0.9rem; }
+  a { color:#8ab4ff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="?admin" class="muted">&larr; Back to admin</a>
+  <h1>Hidden items</h1>
+  <p class="muted">Across the whole tree, in one place.</p>
+
+  <div class="panel">
+    <h2 style="margin-top:0;">Folders hidden entirely (<?= count($hiddenFolders) ?>)</h2>
+    <?php if (empty($hiddenFolders)): ?>
+      <p class="muted">None.</p>
+    <?php else: ?>
+      <ul><?php foreach ($hiddenFolders as $f): ?><li><a href="?admin&folder=<?= rawurlencode($f) ?>"><?= htmlspecialchars($f, ENT_QUOTES, 'UTF-8') ?></a></li><?php endforeach; ?></ul>
+    <?php endif; ?>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0;">Individual items hidden (<?= count($hiddenItems) ?>)</h2>
+    <?php if (empty($hiddenItems)): ?>
+      <p class="muted">None.</p>
+    <?php else: ?>
+      <ul><?php foreach ($hiddenItems as $f): ?><li><?= htmlspecialchars($f, ENT_QUOTES, 'UTF-8') ?></li><?php endforeach; ?></ul>
+    <?php endif; ?>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0;">Items shown despite a hidden folder (<?= count($shownDespiteHiddenFolder) ?>)</h2>
+    <?php if (empty($shownDespiteHiddenFolder)): ?>
+      <p class="muted">None.</p>
+    <?php else: ?>
+      <ul><?php foreach ($shownDespiteHiddenFolder as $f): ?><li><?= htmlspecialchars($f, ENT_QUOTES, 'UTF-8') ?></li><?php endforeach; ?></ul>
+    <?php endif; ?>
+  </div>
+</div>
+</body>
+</html>
+<?php
+}
+
 /**
  * Renders the full ?admin page: folder nav, this folder's own identity
  * (display name/cover/location toggle, when viewing a subfolder), every
@@ -1865,7 +2263,7 @@ function admin_export_items($adminFolderPath, $adminFolderReal) {
  * grid itself — caption, location, web link per item, usable at a phone
  * width same as the public gallery already holds itself to.
  */
-function render_admin_page($dir, $adminFolderPath, $adminFolderReal, $adminFiles, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $mdCandidates, $resultMessage) {
+function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $adminFiles, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $mdCandidates, $resultMessage) {
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $csrfToken = htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8');
     $folderLabel = $adminFolderPath ?? 'Root';
@@ -1937,6 +2335,13 @@ function render_admin_page($dir, $adminFolderPath, $adminFolderReal, $adminFiles
   <p class="muted">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></p>
   <?= render_admin_folder_nav($folderGroupKeys, $adminFolderPath) ?>
 
+  <?php if (admin_any_hidden($dir, $files, $folderGroupKeys)): ?>
+    <div class="flash error">
+      <strong>Hidden items exist.</strong> Hiding only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level (see the README for the nginx/<code>X-Accel-Redirect</code> or Apache <code>.htaccess</code> setup). This warning reappears every time this screen loads — it isn't a one-time check.
+      <a href="?admin&hidden=1">Review hidden items &rarr;</a>
+    </div>
+  <?php endif; ?>
+
   <?php if ($resultMessage): ?>
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
@@ -1957,6 +2362,12 @@ function render_admin_page($dir, $adminFolderPath, $adminFolderReal, $adminFiles
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_location_enabled">
       <label><input type="checkbox" name="enabled" value="1" <?= !empty($itemsHere['locationEnabled']) ? 'checked' : '' ?> onchange="this.form.submit()"> Show photo locations publicly for this folder<?php if (!ENABLE_PHOTO_LOCATION): ?> <span class="muted">(ENABLE_PHOTO_LOCATION is off — nothing shows regardless)</span><?php endif; ?></label>
+    </form>
+    <form method="post" style="margin-top:8px;">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="toggle_folder_restriction">
+      <input type="hidden" name="hidden" value="<?= !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private' ? '0' : '1' ?>">
+      <button type="submit" class="<?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'secondary' : 'danger' ?>"><?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'Make this folder public again' : 'Hide this entire folder from public view' ?></button>
     </form>
     <?php if (!empty($itemsHere['cover'])): ?>
       <p class="muted" style="margin-top:10px;">Cover photo: <?= htmlspecialchars($itemsHere['cover'], ENT_QUOTES, 'UTF-8') ?> — click "Set as cover" on any photo below to change it.</p>
@@ -2122,6 +2533,15 @@ function render_admin_page($dir, $adminFolderPath, $adminFolderReal, $adminFiles
               <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
             </select>
           </div>
+          <div class="field">
+            <label>Visibility</label>
+            <select name="restriction">
+              <?php $rest = item_restriction($entry); ?>
+              <option value="inherit" <?= $rest === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
+              <option value="public" <?= $rest === 'public' ? 'selected' : '' ?>>Always show (even if this folder is hidden)</option>
+              <option value="private" <?= $rest === 'private' ? 'selected' : '' ?>>Always hide</option>
+            </select>
+          </div>
           <button type="submit">Save</button>
         </form>
         <?php if ($adminFolderPath !== null): ?>
@@ -2181,7 +2601,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     if (!is_https_request() && !is_local_request()) {
-        render_admin_https_required_page();
+        render_https_required_page();
         return;
     }
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
@@ -2197,7 +2617,17 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     login_throttle_record_success($dir, 'admin', $ip);
+    // A valid admin login counts as revealed too — one-directional, and
+    // this is what makes it true on the *public* gallery view, not just
+    // inside ?admin itself (a plain cookie, since the public page is
+    // never behind its own session/Basic-Auth check).
+    set_reveal_cookie();
     admin_start_session();
+
+    if (isset($_GET['hidden'])) {
+        render_admin_hidden_summary($dir, $files, $folderGroupKeys);
+        return;
+    }
 
     $adminFolderPath = admin_resolve_folder($folderGroupKeys);
     if ($adminFolderPath === false) {
@@ -2224,7 +2654,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     }
 
     $mdCandidates = scan_md_candidates($adminFolderReal);
-    render_admin_page($dir, $adminFolderPath, $adminFolderReal, $adminFiles, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $mdCandidates, $resultMessage);
+    render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $adminFiles, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $mdCandidates, $resultMessage);
 }
 
 /* -----------------------------------------------------------------------
@@ -2472,8 +2902,8 @@ if (TRACK_VIEWS) {
     $photoViews = stats_get_all_photo_views($dir, $files);
 }
 
-gc_image_cache($dir, $files, $imagickAvailable);
-gc_items_data($dir, $files, $galleryNotices);
+gc_image_cache($dir, $allFiles, $imagickAvailable);
+gc_items_data($dir, $allFiles, $galleryNotices);
 
 // Snapshot of the root's own title, before any ?folder= override below
 // ever touches $pageTitle — used for the breadcrumb back-link and for
@@ -4136,7 +4566,7 @@ if ($currentFolderPath !== null) {
 <?php endif; ?>
 
 <footer>
-  <a href="?about">gallery</a><?php if ($viewCount > 0): ?> · <?= number_format($viewCount) ?> views<?php endif; ?>
+  <a href="?about">gallery</a><?php if ($viewCount > 0): ?> · <?= number_format($viewCount) ?> views<?php endif; ?><?php if (PRIVATE_VIEW_PASSWORD !== ''): ?> · <a href="?reveal">Private view</a><?php endif; ?>
 </footer>
 
 <div class="lightbox" id="lightbox">

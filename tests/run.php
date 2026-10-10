@@ -212,15 +212,22 @@ function http_post($url, $postData, $headers = [], $followRedirects = true) {
  *  path/expiry attributes) out, for resending as a plain Cookie: header
  *  on a follow-up request — enough to carry a PHP session across the
  *  admin tool's CSRF-protected GET-then-POST flow. */
+/** Collects every Set-Cookie response header's name=value pair (ignoring
+ *  path/expiry attributes) into one semicolon-joined string, suitable for
+ *  resending as a single Cookie: header — a response can set more than
+ *  one cookie at once (e.g. a PHP session cookie *and* the reveal
+ *  cookie, from the same admin login), and a real browser would carry
+ *  all of them forward together. Returns null only if there were none. */
 function extract_cookie_header($responseHeaders) {
+    $pairs = [];
     foreach ($responseHeaders as $h) {
         if (stripos($h, 'Set-Cookie:') === 0) {
             $value = trim(substr($h, strlen('Set-Cookie:')));
             [$pair] = explode(';', $value, 2);
-            return $pair;
+            $pairs[] = $pair;
         }
     }
-    return null;
+    return $pairs ? implode('; ', $pairs) : null;
 }
 
 /** Pulls the csrf_token hidden input's value out of a rendered admin page. */
@@ -1052,6 +1059,140 @@ foreach ($throttleData as $k => $v) {
 file_put_contents("$fxAdmin/.gallery-login-attempts.json", json_encode($throttleData));
 [$unlockedStatus] = http_get("$baseAdmin/?admin", [$authHeader]);
 check('once the lockout window passes, the correct password works again', $unlockedStatus === 200);
+
+/* ======================================================================= *
+ * FIXTURE: "private" — PRIVATE_VIEW_PASSWORD + ADMIN_PASSWORD both set.
+ * Covers ?reveal (auth, cookie, bookmarkable redirect), per-item hiding,
+ * per-folder hiding, the per-item tri-state override in both directions,
+ * a group disappearing entirely once every member is hidden, hidden
+ * items being excluded from every count (not just their thumbnail), a
+ * valid admin login counting as revealed, the two password prompts
+ * sharing the throttle mechanism but not its lockout state, and the
+ * admin tool's hidden-items summary (three tiers) and persistent warning.
+ * ======================================================================= */
+
+echo "== private fixture: ?reveal, per-item/per-folder hiding, all three gates ==\n";
+
+$fxPrivate = new_fixture_dir('private');
+mkdir("$fxPrivate/Paris");
+make_jpeg("$fxPrivate/loose1.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxPrivate/loose2.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$fxPrivate/Paris/eiffel.jpg", 60, 60, 30, 30, 30);
+make_jpeg("$fxPrivate/Paris/other.jpg", 60, 60, 40, 40, 40);
+
+write_patched_index("$fxPrivate/index.php", $indexContents, [
+    'ADMIN_PASSWORD' => "'admin-pw-456'",
+    'PRIVATE_VIEW_PASSWORD' => "'reveal-pw-789'",
+    'AUTO_GROUP_BY_FOLDER' => 'true',
+    'TRACK_VIEWS' => 'true',
+]);
+
+$portPrivate = find_free_port();
+start_server($fxPrivate, $portPrivate);
+$basePrivate = "http://127.0.0.1:$portPrivate";
+$adminAuth = 'Authorization: Basic ' . base64_encode('admin:admin-pw-456');
+$revealAuth = 'Authorization: Basic ' . base64_encode('x:reveal-pw-789');
+$revealWrongAuth = 'Authorization: Basic ' . base64_encode('x:wrong');
+
+// Public baseline: everything visible, footer carries the Private view link.
+[, $privateBaselineBody] = http_get("$basePrivate/");
+check('the "Private view" footer link appears once PRIVATE_VIEW_PASSWORD is set', str_contains($privateBaselineBody, 'href="?reveal">Private view</a>'));
+check('nothing is hidden yet — loose1.jpg is visible', str_contains($privateBaselineBody, 'loose1.jpg'));
+
+// Log into admin, flag loose1.jpg hidden.
+[, $adminLoginBody, $adminLoginHeadersFirst] = http_get("$basePrivate/?admin", [$adminAuth]);
+$sessCookie = extract_cookie_header($adminLoginHeadersFirst);
+$adminCsrf = extract_csrf_token($adminLoginBody);
+http_post("$basePrivate/?admin", [
+    'action' => 'save_item', 'file' => 'loose1.jpg', 'restriction' => 'private', 'csrf_token' => $adminCsrf,
+], [$adminAuth, "Cookie: $sessCookie"]);
+
+[, $afterHideBody] = http_get("$basePrivate/");
+check('a hidden item is omitted from the public page entirely', !str_contains($afterHideBody, 'loose1.jpg'));
+[$hiddenImgStatus] = http_get("$basePrivate/?img=loose1.jpg&size=thumb");
+check('?img= refuses a hidden item to an unrevealed visitor', $hiddenImgStatus === 404);
+[, $hiddenPhotoBody] = http_get("$basePrivate/?photo=loose1.jpg");
+check('?photo= deep link does not open a hidden item for an unrevealed visitor', str_contains($hiddenPhotoBody, 'initialPhoto = null;'));
+[$hiddenTrackStatus, $hiddenTrackBody] = http_get("$basePrivate/?track=loose1.jpg");
+$hiddenTrackJson = json_decode($hiddenTrackBody, true);
+check('?track= does not count a view for a hidden item from an unrevealed visitor', is_array($hiddenTrackJson) && $hiddenTrackJson['ok'] === false);
+
+// Hide the entire Paris folder.
+http_post("$basePrivate/?admin&folder=Paris", [
+    'action' => 'toggle_folder_restriction', 'hidden' => '1',
+    'csrf_token' => extract_csrf_token(http_get("$basePrivate/?admin&folder=Paris", [$adminAuth, "Cookie: $sessCookie"])[1]),
+], [$adminAuth, "Cookie: $sessCookie"]);
+[, $afterFolderHideBody] = http_get("$basePrivate/");
+check('an entirely-hidden folder has no cover card on the overview page', !str_contains($afterFolderHideBody, '<div class="folder-cover"'));
+[$hiddenFolderPageStatus] = http_get("$basePrivate/?folder=Paris");
+check('typing ?folder=<hidden folder> directly 404s for an unrevealed visitor, not just missing its cover card', $hiddenFolderPageStatus === 404);
+[$hiddenFolderImgStatus] = http_get("$basePrivate/?img=" . rawurlencode('Paris/eiffel.jpg') . '&size=thumb');
+check('?img= for a file inside a hidden folder is refused too', $hiddenFolderImgStatus === 404);
+check('loose2.jpg (never flagged) is unaffected by hiding loose1.jpg and Paris', str_contains($afterFolderHideBody, 'loose2.jpg'));
+
+// Per-item override: Paris/other.jpg explicitly shown despite the hidden folder.
+$parisCsrf2 = extract_csrf_token(http_get("$basePrivate/?admin&folder=Paris", [$adminAuth, "Cookie: $sessCookie"])[1]);
+http_post("$basePrivate/?admin&folder=Paris", [
+    'action' => 'save_item', 'file' => 'other.jpg', 'restriction' => 'public', 'csrf_token' => $parisCsrf2,
+], [$adminAuth, "Cookie: $sessCookie"]);
+[, $afterOverrideBody] = http_get("$basePrivate/");
+check('an item explicitly shown overrides its own hidden folder', str_contains($afterOverrideBody, 'Paris%2Fother.jpg'));
+check('eiffel.jpg (no override) still stays hidden inside the same folder', !str_contains($afterOverrideBody, 'eiffel.jpg'));
+[$overrideImgStatus] = http_get("$basePrivate/?img=" . rawurlencode('Paris/other.jpg') . '&size=thumb');
+check('?img= honors the per-item "always show" override too', $overrideImgStatus === 200);
+// Revert the override so the "whole group disappears" check below is clean.
+http_post("$basePrivate/?admin&folder=Paris", [
+    'action' => 'save_item', 'file' => 'other.jpg', 'restriction' => 'inherit', 'csrf_token' => $parisCsrf2,
+], [$adminAuth, "Cookie: $sessCookie"]);
+[, $afterRevertBody] = http_get("$basePrivate/");
+check('once every member of a group is hidden, the group itself disappears (no "0 photos" tell)', !preg_match('/id="group-paris"/', $afterRevertBody));
+
+// ?reveal: wrong password, correct password, cookie, redirect, then everything visible.
+[$revealWrongStatus] = http_get("$basePrivate/?reveal", [$revealWrongAuth]);
+check('?reveal with the wrong password returns 401', $revealWrongStatus === 401);
+[$revealStatus, , $revealHeaders] = http_get("$basePrivate/?reveal", [$revealAuth], false);
+check('?reveal with the correct password redirects (302)', $revealStatus === 302);
+check('the redirect drops back to the bare URL, not leaving ?reveal in it', (bool) array_filter($revealHeaders, fn($h) => stripos($h, 'Location: ./') === 0));
+$revealCookie = extract_cookie_header($revealHeaders);
+check('?reveal sets a cookie', $revealCookie !== null);
+[, $revealedBody] = http_get("$basePrivate/", ["Cookie: $revealCookie"]);
+check('once revealed, every hidden item is visible again — including the entirely-hidden folder', str_contains($revealedBody, 'loose1.jpg') && str_contains($revealedBody, '<div class="folder-cover"'));
+[$revealedImgStatus] = http_get("$basePrivate/?img=loose1.jpg&size=thumb", ["Cookie: $revealCookie"]);
+check('?img= serves a hidden item once revealed', $revealedImgStatus === 200);
+
+// A valid admin login counts as revealed too, on the *public* page.
+[, , $adminLoginHeaders] = http_get("$basePrivate/?admin", [$adminAuth]);
+$adminRevealCookie = extract_cookie_header($adminLoginHeaders);
+[, $adminRevealedBody] = http_get("$basePrivate/", ["Cookie: $adminRevealCookie"]);
+check('a valid admin login also sets the reveal cookie, unlocking the public page too', str_contains($adminRevealedBody, 'loose1.jpg'));
+
+// The admin tool itself always sees everything, regardless of hiding.
+[, $adminGridBody] = http_get("$basePrivate/?admin", [$adminAuth, "Cookie: $sessCookie"]);
+check('the admin tool\'s own grid always shows a hidden item, hide flag and all', str_contains($adminGridBody, 'loose1.jpg'));
+check('the admin tool shows a persistent lockdown warning while hidden items exist', str_contains($adminGridBody, 'Hidden items exist'));
+
+// Hidden-items summary: three tiers, not a flat list.
+[, $hiddenSummaryBody] = http_get("$basePrivate/?admin&hidden=1", [$adminAuth, "Cookie: $sessCookie"]);
+check('the hidden-items summary lists the entirely-hidden folder', (bool) preg_match('/Folders hidden entirely \(1\)/', $hiddenSummaryBody) && str_contains($hiddenSummaryBody, '>Paris<'));
+check('the hidden-items summary lists the individually-hidden item', (bool) preg_match('/Individual items hidden \(1\)/', $hiddenSummaryBody) && str_contains($hiddenSummaryBody, 'loose1.jpg'));
+
+// Aggregate counts exclude hidden items, not just their thumbnails —
+// loose1 hidden + Paris hidden leaves only loose2 visible (1 photo).
+check('the header photo count excludes hidden items, not just their thumbnails', (bool) preg_match('/<p>1 photo\b/', $afterRevertBody));
+
+// The two password prompts share the throttle mechanism but not its
+// lockout state — failing the admin login doesn't lock out ?reveal.
+for ($i = 0; $i < 5; $i++) {
+    http_get("$basePrivate/?admin", ['Authorization: Basic ' . base64_encode('admin:wrong' . $i)]);
+}
+[$adminLockedStatus] = http_get("$basePrivate/?admin", [$adminAuth]);
+check('5 failed admin attempts lock out the admin login', $adminLockedStatus === 429);
+[$revealStillWorksStatus] = http_get("$basePrivate/?reveal", [$revealAuth], false);
+check('...but ?reveal is on a separate throttle realm and still works', $revealStillWorksStatus === 302);
+
+// Neither password feature does anything when unset (the default).
+[$revealInertStatus] = http_get("$base1/?reveal");
+check('?reveal 404s outright when PRIVATE_VIEW_PASSWORD is unset (the default)', $revealInertStatus === 404);
 
 /* ======================================================================= *
  * FIXTURE 3: "mtimesort" — PHOTO_SORT_ORDER = 'mtime'.
