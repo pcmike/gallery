@@ -7647,7 +7647,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     font-size: 1rem; margin: 0 0 10px; font-weight: 400;
     display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px;
   }
-  a.map-toggle { text-decoration: none; display: inline-block; }
   .map-modal { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 20px; }
   .map-modal[hidden] { display: none; }
   .map-modal-card { position: relative; width: min(100%, 1100px); background: var(--card); border-radius: 12px; padding: 12px; box-shadow: 0 12px 48px rgba(0,0,0,0.6); max-height: 100%; overflow: auto; }
@@ -7726,12 +7725,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* Leaflet's panes use large z-indexes; keep them inside their own box so no map can land on top of the viewer. */
   .leaflet-container { isolation: isolate; z-index: 0; }
   .lightbox-map.leaflet-container { z-index: 5; }
-  .map-toggle {
-    background: var(--card); color: var(--text); border: 1px solid #2c2c30; border-radius: 8px;
-    padding: 7px 12px; font-size: 0.85rem; cursor: pointer;
-  }
-  .map-toggle:hover { border-color: #46464c; }
-  .map-toggle .ico { margin-right: 2px; }
+  /* Two icon buttons joined into one control: show/hide the map, and open it large. */
+  .map-combo { display: inline-flex; border: 1px solid #2c2c30; border-radius: 8px; overflow: hidden; background: var(--card); }
+  .map-combo-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 34px; padding: 0; background: none; border: 0; color: var(--text); font-size: 1.05rem; cursor: pointer; text-decoration: none; }
+  .map-combo-btn + .map-combo-btn { border-left: 1px solid #2c2c30; }
+  .map-combo-btn:hover { background: #26262a; }
+  .map-combo-btn[aria-expanded="true"] { background: var(--accent); color: #fff; }
+  .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
   .lightbox .close,
@@ -8011,8 +8011,10 @@ if (!empty($serveMapPage)) {
 <?php if ($mapShown && !empty($mapPoints)): ?>
   <section class="map-preview" id="map-preview">
     <h2 class="map-preview-heading">
-      <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body"><?= ui_icon('map') ?> <span class="map-toggle-label">Show map</span></button>
-      <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-toggle" id="map-full"><?= ui_icon('expand') ?> View full map</a>
+      <span class="map-combo">
+        <button type="button" class="map-combo-btn" id="map-toggle" title="Show map" aria-expanded="false" aria-controls="map-preview-body"><?= ui_icon('map') ?><span class="map-toggle-label">Show map</span></button>
+        <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-combo-btn" id="map-full" title="View full map"><?= ui_icon('expand') ?><span class="map-toggle-label">View full map</span></a>
+      </span>
     </h2>
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
       <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius, true) ?>
@@ -8230,6 +8232,7 @@ if (!empty($serveMapPage)) {
       body.hidden = !open;
       btn.setAttribute('aria-expanded', open ? 'true' : 'false');
       label.textContent = (open ? 'Hide ' : 'Show ') + noun;
+      btn.title = label.textContent;
       remembered('galleryMapOpen', open ? '1' : '0');
       if (open && !drawn) {
         loadLeaflet(function () {
