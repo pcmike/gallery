@@ -1507,7 +1507,10 @@ $baseMap = "http://127.0.0.1:$portMap";
 [, $mapRootBody] = http_get("$baseMap/");
 check('the gallery root embeds a condensed map preview when ENABLE_MAP is on', str_contains($mapRootBody, 'id="trip-map-preview"'));
 check('the root preview links to the full ?map page', str_contains($mapRootBody, 'href="?map"'));
-check('the root preview shows a legend with one entry per distinct group', substr_count($mapRootBody, '<span class="map-legend-item">') === 3);
+preg_match('#<div class="map-preview-body".*?</section>#s', $mapRootBody, $mapPreviewHtml);
+check('the root preview shows a legend with one entry per distinct group', substr_count($mapPreviewHtml[0] ?? '', '<span class="map-legend-item">') === 3);
+check('the full map opens over the page: a dialog with its own copy of the map and legend, a close cross, and a link to the map as its own page', str_contains($mapRootBody, 'id="map-modal"') && str_contains($mapRootBody, 'class="map-modal-close"') && substr_count($mapRootBody, '<span class="map-legend-item">') === 6 && str_contains($mapRootBody, 'class="map-modal-page" href="?map"') && str_contains($mapRootBody, 'id="map-full"'));
+check('the "View full map" button sits beside the Show map button (same row, left side), not pushed to the far right', (bool) preg_match('#id="map-toggle".*?</button>\s*<a href="\?map" class="map-toggle" id="map-full">#s', $mapRootBody));
 
 [$mapStatus, $mapBody] = http_get("$baseMap/?map");
 check('?map returns 200', $mapStatus === 200);

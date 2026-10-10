@@ -6730,6 +6730,7 @@ function ui_icon_paths() {
         'play'    => '<path d="M8 5.5v13l10.5-6.5z"/>',
         'star'    => '<path d="m12 3.5 2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8z"/>',
         'chart'   => '<path d="M5 20V11M12 20V4M19 20v-6"/>',
+        'expand'  => '<path d="M15 3h6v6M9 21H3v-6M21 3l-7.5 7.5M3 21l7.5-7.5"/>',
     ];
 }
 function ui_icon($name) {
@@ -7644,10 +7645,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-preview { max-width: 1400px; margin: 8px auto 0; padding: 0 24px; }
   .map-preview-heading {
     font-size: 1rem; margin: 0 0 10px; font-weight: 400;
-    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px;
   }
-  .map-preview-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
-  .map-preview-link:hover { color: var(--text); text-decoration: underline; }
+  a.map-toggle { text-decoration: none; display: inline-block; }
+  .map-modal { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .map-modal[hidden] { display: none; }
+  .map-modal-card { position: relative; width: min(100%, 1100px); background: var(--card); border-radius: 12px; padding: 12px; box-shadow: 0 12px 48px rgba(0,0,0,0.6); max-height: 100%; overflow: auto; }
+  .map-modal-close { position: absolute; top: 10px; right: 10px; z-index: 5; width: 34px; height: 34px; padding: 0; border-radius: 50%; border: none; background: rgba(0,0,0,0.7); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; }
+  .map-modal-page { display: inline-block; margin: 8px 2px 0; font-size: 0.8rem; color: var(--muted); text-decoration: none; }
+  .map-modal-page:hover { color: var(--text); text-decoration: underline; }
   .map-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.8rem; color: var(--muted); }
   .map-legend-item { display: flex; align-items: center; gap: 6px; }
   .map-legend-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
@@ -8006,12 +8012,20 @@ if (!empty($serveMapPage)) {
   <section class="map-preview" id="map-preview">
     <h2 class="map-preview-heading">
       <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body"><?= ui_icon('map') ?> <span class="map-toggle-label">Show map</span></button>
-      <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-preview-link">View full map &rarr;</a>
+      <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-toggle" id="map-full"><?= ui_icon('expand') ?> View full map</a>
     </h2>
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
       <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius, true) ?>
     </div>
   </section>
+  <?php // The full map opens over the page: click outside it, press Escape or use the cross to close it. ?>
+  <div class="map-modal" id="map-modal" data-map="trip-map-modal" role="dialog" aria-modal="true" aria-label="Map" hidden>
+    <div class="map-modal-card">
+      <button type="button" class="map-modal-close" aria-label="Close the map">&times;</button>
+      <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-modal', 'min(72vh, 720px)', true, $mapRadius, true) ?>
+      <a class="map-modal-page" href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>">Open as its own page &#8599;</a>
+    </div>
+  </div>
 <?php endif; ?>
 
 <?php if (empty($files)): ?>
@@ -8227,6 +8241,35 @@ if (!empty($serveMapPage)) {
     }
     btn.addEventListener('click', function () { set(body.hidden); });
     if (remembered('galleryMapOpen') === '1') set(true);
+  })();
+
+  (function () {
+    const modal = document.getElementById('map-modal'), opener = document.getElementById('map-full');
+    if (!modal || !opener) return;
+    let drawn = false;
+    function open() {
+      modal.hidden = false;
+      document.body.style.overflow = 'hidden';
+      if (!drawn) {
+        loadLeaflet(function () {
+          drawn = true;
+          const draw = window.__lazyMaps && window.__lazyMaps[modal.getAttribute('data-map')];
+          if (draw) draw();
+        });
+      }
+    }
+    function close() { modal.hidden = true; document.body.style.overflow = ''; }
+    opener.addEventListener('click', function (e) {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;   // let "open in a new tab" still work
+      e.preventDefault();
+      open();
+    });
+    modal.addEventListener('click', function (e) {
+      if (e.target === modal || (e.target.closest && e.target.closest('.map-modal-close'))) { close(); return; }
+      const a = e.target.closest && e.target.closest('.leaflet-popup a[href^="#"]');
+      if (a) close();   // a pin's link to something on this page: show it
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.hidden) close(); });
   })();
 
   // ---- The little map in the viewer: where the open photo was taken, top left of the photo, about half a mile
