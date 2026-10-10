@@ -55,7 +55,8 @@ define('TRACK_VIEWS', false);
 
 // Whether view counts are shown publicly once TRACK_VIEWS is on. True by
 // default — preserves exactly today's behavior. Set to false to keep
-// tracking counts for yourself while hiding the public badges entirely —
+// tracking counts for yourself (they show in ?admin) while hiding every
+// public badge and the footer total entirely —
 // useful if you'd rather not have a low view count sitting next to a
 // "for sale" listing making it look undesirable. Has no effect unless
 // TRACK_VIEWS is also on.
@@ -205,9 +206,13 @@ define('PRIVATE_VIEW_PASSWORD', '');
 // this same mechanism.
 define('NGINX_ACCEL_REDIRECT_PREFIX', '');
 
-// Internal — not meant to be edited. The name of the cookie that
-// remembers a browser unlocked private view (see PRIVATE_VIEW_PASSWORD
-// and is_revealed() below). A plain define() alongside the others here,
+// The name of the cookie that remembers a browser unlocked private view
+// (see PRIVATE_VIEW_PASSWORD and is_revealed() below). Leave it alone
+// unless you run several galleries on one domain with *different* viewer
+// passwords: the cookie covers the whole domain, so they'd keep signing
+// each other's viewers out — give each copy its own name (any plain
+// word; changing it only asks existing viewers to enter the password
+// once more). A plain define() alongside the others here,
 // rather than inline where it's first used further down, specifically
 // because define() executes in file order (unlike a function
 // declaration) — it has to run before anything below ever calls
@@ -1680,6 +1685,12 @@ function json_file_read($path, $defaultData) {
 function json_file_update($path, $defaultData, $modifier) {
     $data = $defaultData;
     $fp = @fopen($path, 'c+');
+    if (!$fp) {
+        // Usually the folder isn't writable by the web server. Remember it
+        // so the admin can say so instead of reporting a save that never
+        // happened (see run_admin_route).
+        $GLOBALS['__data_write_failed'] = true;
+    }
     if ($fp) {
         if (flock($fp, LOCK_EX)) {
             $raw = stream_get_contents($fp);
@@ -1691,9 +1702,13 @@ function json_file_update($path, $defaultData, $modifier) {
             $encoded = data_file_encode($data);
             ftruncate($fp, 0);
             rewind($fp);
-            fwrite($fp, $encoded);
+            if (fwrite($fp, $encoded) !== strlen($encoded)) {
+                $GLOBALS['__data_write_failed'] = true;   // disk full, quota, ...
+            }
             fflush($fp);
             flock($fp, LOCK_UN);
+        } else {
+            $GLOBALS['__data_write_failed'] = true;
         }
         fclose($fp);
     }
@@ -3072,6 +3087,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $csrfToken = htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8');
     $folderLabel = $adminFolderPath ?? 'Root';
     $itemsHere = items_read($adminFolderReal);
+    $adminViews = TRACK_VIEWS ? stats_get_all_photo_views($dir, $adminFiles) : [];
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
 ?>
@@ -3139,6 +3155,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>" class="muted">&larr; Back to gallery</a>
   <h1>Gallery Admin</h1>
   <p class="muted">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></p>
+  <?php if (TRACK_VIEWS): ?>
+    <p class="muted">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> page loads in total. Per-photo counts are listed under each photo below. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
+  <?php endif; ?>
   <?= render_admin_folder_nav($files, $adminFolderPath) ?>
 
   <?php if (admin_any_hidden($dir, $files, $folderGroupKeys)): ?>
@@ -3317,6 +3336,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           <img src="<?= htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8') ?>" alt="">
         <?php endif; ?>
         <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
+        <?php if (TRACK_VIEWS): ?><div class="item-filename" style="margin-top:-4px;">&#128065; <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?></div><?php endif; ?>
         <form method="post">
           <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
           <input type="hidden" name="action" value="save_item">
@@ -3477,7 +3497,12 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
 
     $resultMessage = null;
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $GLOBALS['__data_write_failed'] = false;
         $resultMessage = handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups);
+        // A save that couldn't write must not read as a save: say what to fix.
+        if (!empty($GLOBALS['__data_write_failed']) && ($resultMessage['type'] ?? '') === 'ok') {
+            $resultMessage = ['type' => 'error', 'text' => 'Nothing was saved: this folder isn\'t writable by the web server. Give the web server\'s user write permission on it (on many hosts: chmod 755 or 775 on the folder, owned by that user), then try again.'];
+        }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);
             return;
@@ -3666,6 +3691,18 @@ function stats_bump_pageview($rootDir) {
         $data['pageviews'] = ($data['pageviews'] ?? 0) + 1;
     });
     return (int) $stats['pageviews'];
+}
+
+/** The sitewide page-load total, read without counting a view (the admin
+ *  shows it; stats_bump_pageview() is what counts one). */
+function stats_get_pageviews($rootDir) {
+    $conn = stats_connection($rootDir);
+    if ($conn['mode'] === 'sqlite') {
+        return (int) $conn['pdo']->query("SELECT value FROM stats WHERE key = 'pageviews'")->fetchColumn();
+    }
+    if (!file_exists($conn['file'])) return 0;
+    $data = json_decode(data_file_strip_guard(@file_get_contents($conn['file'])), true);
+    return is_array($data) ? (int) ($data['pageviews'] ?? 0) : 0;
 }
 
 /** Increments one photo's view count (in its own folder's store) and returns its new total. */
@@ -5670,7 +5707,7 @@ if ($currentFolderPath !== null) {
 <?php endif; ?>
 
 <footer>
-  <a href="?about">gallery</a><?php if ($viewCount > 0): ?> · <?= number_format($viewCount) ?> views<?php endif; ?><?php if (PRIVATE_VIEW_PASSWORD !== ''): ?> · <a href="?reveal">Private view</a><?php endif; ?>
+  <a href="?about">gallery</a><?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?> · <?= number_format($viewCount) ?> views<?php endif; ?><?php if (PRIVATE_VIEW_PASSWORD !== ''): ?> · <a href="?reveal">Private view</a><?php endif; ?>
 </footer>
 
 <div class="lightbox" id="lightbox">

@@ -2033,6 +2033,7 @@ foreach (['alpha_01' => 10, 'alpha_02' => 20, 'bravo_01' => 30, 'charlie_01' => 
 copy(__DIR__ . '/../examples/example-forsale.md', "$fxSale/forsale.md");
 write_patched_index("$fxSale/index.php", $indexContents, [
     'AUTO_GROUP_BY_FILENAME' => 'true', 'TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'false', 'ENABLE_THUMBNAIL_CACHE' => 'true',
+    'ADMIN_PASSWORD' => "'sale-admin'",
 ]);
 $portSale = find_free_port(); start_server($fxSale, $portSale); $baseSale = "http://127.0.0.1:$portSale";
 [, $sale] = http_get("$baseSale/");
@@ -2054,7 +2055,12 @@ check('[sale] ...and the stats file is not readable by URL', (function () use ($
 check('[sale] a pasted ?photo= link previews with an absolute share-size image and the group in its title', (bool) preg_match('#property="og:image" content="http://127\.0\.0\.1:\d+/\?img=alpha_01\.jpg&amp;size=share"#', $salePhoto) && str_contains($salePhoto, 'property="og:title" content="alpha — Example listing'));
 http_get("$baseSale/?img=alpha_01.jpg&size=thumb");
 check('[sale] ENABLE_THUMBNAIL_CACHE on: thumbnails are cached in .gallery-cache next to the photos', is_dir("$fxSale/.gallery-cache") && count(glob("$fxSale/.gallery-cache/*.jpg")) > 0);
-check('[sale] the admin does not exist (ADMIN_PASSWORD unset): ?admin is a 404', http_get("$baseSale/?admin")[0] === 404);
+preg_match('#<footer>(.*?)</footer>#s', $saleAfter, $saleFooter);
+check('[sale] ...and the sitewide "N views" total is hidden from the public footer too', isset($saleFooter[1]) && !preg_match('/\d+ views/', $saleFooter[1]) && str_contains($saleFooter[1], 'href="?about"'));
+// ...but the seller can see every count in the admin.
+[, $saleAdmin] = http_get("$baseSale/?admin", ['Authorization: Basic ' . base64_encode('admin:sale-admin')]);
+check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'page loads in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-filename"[^>]*>&\#128065; 1 view<#', $saleAdmin));
+check('[sale] ...and an untouched photo reads 0 views', (bool) preg_match('#unrelated\.jpg</div>\s*<div class="item-filename"[^>]*>&\#128065; 0 views<#', $saleAdmin));
 
 /* ======================================================================= *
  * RECIPE: private family photos — hide an item and a whole folder through
@@ -2114,6 +2120,55 @@ check('[inline code] ...they are shown literally, as code', str_contains($codeBo
 check('[inline code] ...while a real directive in the same paragraph still works (Real Box holds real.jpg)', str_contains($codeBody, 'Real Box') && str_contains($codeBody, 'alt="real.jpg"') && !str_contains($codeBody, 'class="group-box sold"'));
 check('[inline code] ...unbalanced braces inside code do not swallow the text around them', str_contains($codeBody, '<code>lone { brace</code>') && str_contains($codeBody, '<code>}</code>'));
 check('[inline code] ...and a heading containing a code span keeps its braces in the page title', str_contains($codeBody, '<title>Docs &amp; `{sold}` demo — Gallery</title>'));
+
+/* ======================================================================= *
+ * RECIPE: an archive on another disk (EXTRA_FOLDERS) — the README says it
+ * "works exactly like" a real folder, admin features included.
+ * ======================================================================= */
+
+echo "== recipe: an archive on another disk (EXTRA_FOLDERS + the admin) ==\n";
+
+$fxArc = new_fixture_dir('recipe-archive'); $arcDisk = new_fixture_dir('recipe-archive-disk');
+make_jpeg("$fxArc/home.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$arcDisk/old1.jpg", 60, 60, 100, 10, 10); make_jpeg("$arcDisk/old2.jpg", 60, 60, 110, 10, 10);
+write_patched_index("$fxArc/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ADMIN_PASSWORD' => "'arc-admin'", 'PRIVATE_VIEW_PASSWORD' => "'arc-view'", 'EXTRA_FOLDERS' => "['OldTrip2020' => " . var_export($arcDisk, true) . "]"]);
+$portArc = find_free_port(); start_server($fxArc, $portArc); $baseArc = "http://127.0.0.1:$portArc";
+$arcAuth = 'Authorization: Basic ' . base64_encode('admin:arc-admin');
+[, $arcHome] = http_get("$baseArc/");
+check('[archive] the folder named in EXTRA_FOLDERS appears as an album next to the real photos', str_contains($arcHome, 'id="group-oldtrip2020"') && str_contains($arcHome, 'alt="home.jpg"') && str_contains($arcHome, '2 photos'));
+[, $arcPage] = http_get("$baseArc/?folder=OldTrip2020");
+check('[archive] opening it shows its photos, served from the other disk', str_contains($arcPage, 'alt="OldTrip2020/old1.jpg"') && http_get("$baseArc/?img=OldTrip2020%2Fold1.jpg&size=thumb")[0] === 200);
+[, $arcAdm, $arcHd] = http_get("$baseArc/?admin&folder=OldTrip2020", [$arcAuth]); $arcHdrs = [$arcAuth, "Cookie: " . extract_cookie_header($arcHd)];
+check('[archive] it is a normal folder in the admin\'s folder list', str_contains($arcAdm, 'folder=OldTrip2020') && str_contains($arcAdm, 'old1.jpg'));
+[, $r] = user_submit("$baseArc/?admin&folder=OldTrip2020", $arcAdm, 'value="save_folder_identity"', ['display_name' => '2020 Archive', 'description' => 'From the old disk.'], $arcHdrs);
+[, $arcAdm] = http_get("$baseArc/?admin&folder=OldTrip2020", $arcHdrs);
+user_submit("$baseArc/?admin&folder=OldTrip2020", $arcAdm, 'name="file" value="old1.jpg"', ['caption' => 'Before everything'], $arcHdrs);
+[, $arcHome2] = http_get("$baseArc/"); [, $arcPage2] = http_get("$baseArc/?folder=OldTrip2020");
+check('[archive] display name, description and a caption can be saved on it; the data is kept with the archive itself, on that disk', str_contains($arcHome2, 'folder-cover-label">2020 Archive<') && str_contains($arcPage2, 'caption-badge" title="Before everything"') && is_file("$arcDisk/.gallery-items.php"));
+[, $arcAdm] = http_get("$baseArc/?admin&folder=OldTrip2020", $arcHdrs);
+user_submit("$baseArc/?admin&folder=OldTrip2020", $arcAdm, 'value="toggle_folder_restriction"', [], $arcHdrs);
+check('[archive] it can be hidden like any folder: gone for the public, back for a viewer with the password', http_get("$baseArc/?folder=OldTrip2020")[0] === 404 && !str_contains(http_get("$baseArc/")[1], 'oldtrip2020'));
+[, , $arcViewHd] = http_get("$baseArc/?reveal", ['Authorization: Basic ' . base64_encode('v:arc-view')], false);
+check('[archive] ...(viewer password)', http_get("$baseArc/?folder=OldTrip2020", ['Cookie: ' . extract_cookie_header($arcViewHd)])[0] === 200);
+
+// The most common real-world admin failure: PHP can't write to the folder.
+// A save must say so, not claim success.
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    $fxRo2 = new_fixture_dir('recipe-readonly-admin');
+    make_jpeg("$fxRo2/a.jpg", 60, 60, 10, 10, 10);
+    write_patched_index("$fxRo2/index.php", $indexContents, ['ADMIN_PASSWORD' => "'ro-admin'"]);
+    $portRo2 = find_free_port(); start_server($fxRo2, $portRo2); $baseRo2 = "http://127.0.0.1:$portRo2";
+    $roAuth = 'Authorization: Basic ' . base64_encode('admin:ro-admin');
+    [, $roPage, $roHd] = http_get("$baseRo2/?admin", [$roAuth]); $roHdrs = [$roAuth, 'Cookie: ' . extract_cookie_header($roHd)];
+    chmod($fxRo2, 0555);
+    [, $roSave] = user_submit("$baseRo2/?admin", $roPage, 'name="file" value="a.jpg"', ['caption' => 'will not stick'], $roHdrs);
+    check('[unwritable folder] a save the server cannot write says "Nothing was saved" and why — not "Saved"', str_contains($roSave, 'class="flash error"') && str_contains($roSave, 'Nothing was saved') && str_contains($roSave, 'writable') && !str_contains($roSave, 'class="flash ok"'));
+    check('[unwritable folder] ...and nothing was written', !file_exists("$fxRo2/.gallery-items.php"));
+    chmod($fxRo2, 0755);
+    [, $roPage] = http_get("$baseRo2/?admin", $roHdrs);
+    [, $roSaveOk] = user_submit("$baseRo2/?admin", $roPage, 'name="file" value="a.jpg"', ['caption' => 'sticks now'], $roHdrs);
+    check('[unwritable folder] ...and once the permission is fixed, the same save works', str_contains($roSaveOk, 'class="flash ok"') && is_file("$fxRo2/.gallery-items.php"));
+}
 
 /* ======================================================================= *
  * RECIPES: the default install, and iPhone (HEIC) photos.

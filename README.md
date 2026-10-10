@@ -6,7 +6,7 @@ Built for sharing "for sale" listings (Reddit, Discord, etc.) as much as for pla
 
 **Everything beyond the basic gallery is opt-in.** With no settings changed, this script writes nothing to your folder, makes no requests to any third party, and doesn't show a single subfolder, video, or photo location. (It does peek into subfolders, read-only and capped at 40 of them, purely to warn you if photos in there are being skipped — see [Folders](#folders).)
 
-**Contents:** [Quick start](#quick-start) · [Features](#features) · [Troubleshooting](#troubleshooting) · [Configuration](#configuration) · [Directive syntax](#directive-syntax) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [The admin editor](#the-admin-editor) · [Hiding items and private view](#hiding-items-and-private-view) · [Locking down the files themselves](#locking-down-the-files-themselves) · [The trip map](#the-trip-map) · [Sharing and previews](#sharing-and-previews) · [Keeping runtime data out of git](#keeping-runtime-data-out-of-git) · [Upgrading to 2.0](#upgrading-to-20)
+**Contents:** [Quick start](#quick-start) · [Recipes](#recipes--start-here) · [What affects what](#what-affects-what) · [Features](#features) · [Troubleshooting](#troubleshooting) · [Configuration](#configuration) · [Directive syntax](#directive-syntax) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [The admin editor](#the-admin-editor) · [Hiding items and private view](#hiding-items-and-private-view) · [Locking down the files themselves](#locking-down-the-files-themselves) · [The trip map](#the-trip-map) · [Sharing and previews](#sharing-and-previews) · [Keeping runtime data out of git](#keeping-runtime-data-out-of-git) · [Upgrading to 2.0](#upgrading-to-20)
 
 ## Quick start
 
@@ -32,6 +32,163 @@ Requirements: PHP 7.4+ (developed and tested against PHP 8.4; the code avoids PH
 ```
 
 Both view tracking and thumbnail caching are **off by default** — this script writes nothing to your folder's disk unless you explicitly turn one on (or use the [admin editor](#the-admin-editor), which saves what you type). See [Configuration](#configuration) for why you'll probably want to turn them on anyway.
+
+## Recipes — start here
+
+Pick what you're doing. Each recipe lists the few settings to change near the top of `index.php`, what to do in the [admin editor](#the-admin-editor) if you need it, and what visitors then see. Everything else in this README is the full reference for those pieces.
+
+| I want to… | Go to |
+|---|---|
+| Just show a folder of photos | [A plain gallery](#recipe-a-plain-gallery) |
+| Post a "for sale" listing on Reddit or Discord | [A for-sale listing](#recipe-a-for-sale-listing) |
+| Share a trip — captions, places, video, a map | [A trip album](#recipe-a-trip-album) |
+| Show family photos but keep some private | [Family photos, some private](#recipe-family-photos-some-private) |
+| Include an old archive that lives on another disk | [An archive on another disk](#recipe-an-archive-on-another-disk) |
+| Show iPhone (HEIC) photos | [iPhone photos](#recipe-iphone-heic-photos) |
+| See exactly what each setting and admin control does | [What affects what](#what-affects-what) |
+
+You only ever edit the `define('NAME', value);` lines near the top of `index.php` (a plain text editor is fine), and, for the admin, visit `yoursite.com/your-folder/?admin` — over **HTTPS** (or `localhost` while testing); on plain HTTP the admin refuses to load, because its password would travel unprotected. Every recipe below was followed step by step against the real script, through the admin's real forms, as part of this project's test suite.
+
+### Recipe: a plain gallery
+
+**Do:** copy `index.php` into the folder with your photos. That's all.
+
+**Visitors see:** every photo in that folder (not in its subfolders), in filename order, with a full-screen viewer (arrow keys, swipe on a phone). A link like `yoursite.com/folder/?photo=name.jpg` opens straight to one photo and previews correctly when pasted into Discord or Reddit.
+
+**What it won't do until you ask:** it writes nothing into your folder, loads nothing from any other website, and `?admin`, `?reveal`, `?map` and `?folder=` all do nothing. If photos exist in subfolders, a small collapsed "setup notice" tells you that — it's a count, never a name, and it's the cue to try the [trip album](#recipe-a-trip-album).
+
+**Worth turning on:** `ENABLE_THUMBNAIL_CACHE` → `true` (the page loads small thumbnails instead of full-size originals; required for iPhone photos). `PHOTO_SORT_ORDER` → `'mtime'` to sort by file date instead of name (only if your upload method keeps dates).
+
+### Recipe: a for-sale listing
+
+For a handful of items, several photos each, shared as one link.
+
+**Settings:**
+
+```php
+define('AUTO_GROUP_BY_FILENAME', true);   // photos named alpha_01.jpg, alpha_02.jpg group as "alpha"
+define('ENABLE_THUMBNAIL_CACHE', true);   // small thumbnails, big saving for buyers on phones
+define('TRACK_VIEWS', true);              // optional: count views
+define('SHOW_VIEW_COUNTS_PUBLICLY', false); // optional: ...but keep the numbers to yourself
+define('ADMIN_PASSWORD', 'a-long-random-string');  // optional: lets you see those counts
+```
+
+**Steps:**
+1. Copy [`examples/example-forsale.md`](examples/example-forsale.md) into the folder (rename it `forsale.md`). Its first line, `{gallery}`, is what makes the gallery read it.
+2. Name your photos after each item — `alpha_01.jpg`, `alpha_02.jpg`, `bravo_01.jpg` — and write that **same word** in the item's paragraph (`Widget **Alpha** — brand new…`). The word must be the whole filename prefix: a paragraph that says "Widget Model A" will *not* pick up `widgeta_01.jpg`.
+3. Mark items with `{sold}`, `{reserved}` and `{color: #5865f2}` anywhere in their paragraph. Delete the "How this maps…" explanation at the bottom of the example.
+4. Photos with arbitrary names (`IMG_0234.jpg`)? Don't rely on names: write `{group: Widget Alpha} {photos: IMG_0234.jpg, IMG_0891.jpg}` in the paragraph instead. See [Directive syntax](#directive-syntax).
+
+**Visitors see:** the page title from your `# heading`; each item's text with its photos attached beneath it ("View 2 photos"), a box per multi-photo item, a red SOLD ribbon with greyed-out photos, an orange RESERVED tag. A `?photo=` link or a box's copy-link button (🔗) is what to paste into a post.
+
+**Your numbers:** with `SHOW_VIEW_COUNTS_PUBLICLY` off, no view count appears anywhere public — not on photos, not on boxes, not in the footer total. You see them in the admin: the sitewide total at the top, and "👁 N views" under every photo.
+
+### Recipe: a trip album
+
+Folders per place, captions on photos, where-it-was-taken, a map, a video or two.
+
+**Settings:**
+
+```php
+define('AUTO_GROUP_BY_FOLDER', true);       // each subfolder becomes an album
+define('ENABLE_THUMBNAIL_CACHE', true);
+define('ADMIN_PASSWORD', 'a-long-random-string');   // needed for everything below
+define('ENABLE_PHOTO_LOCATION', true);      // lets locations be shown (gate 1 of 3)
+define('ENABLE_MAP', true);                 // the map (loads Leaflet + OpenStreetMap — the one third-party feature)
+define('ENABLE_VIDEO', true);               // .mov / .mp4
+```
+
+**Steps** (folders like `trip/Paris/…`, `trip/Lisbon/…`, with `index.php` in `trip/`):
+1. Visit `trip/` — each folder is a cover card, in natural name order (Day 2 before Day 10). Click one to open it; a breadcrumb leads back. Folders can nest as deep as you like.
+2. Go to `trip/?admin`, pick a folder from the row of links at the top, and fill in **This folder's own settings**: *Display name*, *Dates* (typed text — never read from the photos), *Description*, and *Position among its sibling folders* (1 = first). **Save folder settings.** These show on its cover card, at the top of its page, in link previews, and in the map legend.
+3. Still in that folder, tick **Show photo locations publicly for this folder** — locations are off for every folder until you opt it in, so one trip can share places and another never will.
+4. Under **Photos & video**, give a photo a *Caption* and *Web link*. If the photo has GPS in it (most phone photos do), *Latitude* and *Longitude* are **already filled in** — leave them, or correct them, then **Save**. Visitors get small badges: 💬 caption, 📍 location (opens OpenStreetMap), ℹ️ link. The lightbox shows the caption, never the filename.
+5. **Set as cover** on a photo to choose the folder's card image. That same photo is the picture shown when someone pastes the folder's link.
+6. The map appears on the front page (and at its own shareable `?map` link) as soon as at least one photo has a *visible* location. Photos close together share one numbered pin (`MAP_CLUSTER_RADIUS_MILES`, default 50); pins are colored per top-level folder.
+
+**Videos** show a ▶ tile and their length; they play in the viewer. They can't have their location read automatically — type it in. **Back up your captions:** *Export the whole tree as JSON* at the bottom of any admin page downloads everything you've typed.
+
+### Recipe: family photos, some private
+
+Everything in one gallery; some photos or folders visible only to people you give a password.
+
+**Settings:**
+
+```php
+define('AUTO_GROUP_BY_FOLDER', true);       // only if you use folders
+define('ADMIN_PASSWORD', 'a-long-random-string');
+define('PRIVATE_VIEW_PASSWORD', 'something-you-can-tell-people');   // lets hiding work
+```
+
+**Steps:**
+1. In `?admin`, hide a single photo: set its **Visibility** to *Always hide*, **Save**. Hide a whole folder: open it in the admin and press **Hide this entire folder from public view** (it hides everything beneath it too).
+2. To show *one* photo inside a hidden folder, set that photo's Visibility to *Always show (even if this folder is hidden)*.
+3. Tell your people the `PRIVATE_VIEW_PASSWORD` and have them use the small **Private view** link in the page footer. They type the password once; the browser remembers it for a year, and they're sent back to the normal link — so the link you share never changes and never contains a secret. (The cookie covers the whole domain: if you run several galleries on one site with *different* viewer passwords, give each copy its own `REVEAL_COOKIE_NAME` or they'll sign each other's viewers out.)
+
+**Visitors without the password see** a gallery with no trace of what's hidden: not in the grid, the viewer, the photo counts, the map or link previews, and requesting a hidden photo or folder directly just gives "not found". **With the password**, everything is back. A valid admin login counts as having it. The admin's **Hidden items** page lists everything hidden in one place.
+
+**One more step that matters:** hiding controls what the *gallery* serves. The photo files are still ordinary files a web server will hand out to anyone who knows an exact address. To close that, add the server rules in [Locking down the files themselves](#locking-down-the-files-themselves) (tested for nginx; Apache's rules are provided untested). The admin reminds you of this on every page while anything is hidden.
+
+### Recipe: an archive on another disk
+
+Old trips on a different drive, shown inside the gallery without copying them.
+
+```php
+define('AUTO_GROUP_BY_FOLDER', true);
+define('EXTRA_FOLDERS', ['OldTrip2020' => '/mnt/archive/trip-photos-2020']);
+```
+
+`OldTrip2020` then appears as an album alongside your real folders, and works exactly like one (captions, hiding, map…) — its saved captions and settings live in a `.gallery-items.php` inside *that* folder on the other disk, so for admin edits PHP needs write access there (viewing needs only read). It exists because the gallery refuses symlinked folders (a link could point anywhere on the server); naming the real path in this file, which only you can edit, is the safe alternative. A real folder with the same name wins.
+
+### Recipe: iPhone (HEIC) photos
+
+```php
+define('ENABLE_THUMBNAIL_CACHE', true);
+```
+
+That's the whole recipe — it also needs the **Imagick** PHP extension with HEIC support. With the cache **off**, `.heic` files are left out of the gallery entirely (browsers can't show them); with it **on** (and Imagick present) they appear with real JPEG thumbnails and are converted for the full-size viewer. GPS in a HEIC is read for the admin's pre-filled location, the same as for a JPEG.
+
+### What affects what
+
+**Settings in `index.php`** (the first four are the ones people reach for):
+
+| Setting | Default | Turn it on / change it to… | Pairs with |
+|---|---|---|---|
+| `ENABLE_THUMBNAIL_CACHE` | off | `true` for any real deployment: small thumbnails, and iPhone photos | creates `.gallery-cache/` folders |
+| `AUTO_GROUP_BY_FILENAME` | off | `true` if photos are named `item_01.jpg, item_02.jpg` | notes `.md` (mention the prefix word) |
+| `AUTO_GROUP_BY_FOLDER` | off | `true` to use subfolders as albums | admin folder settings, `FOLDER_DISPLAY_MODE`, `EXTRA_FOLDERS` |
+| `TRACK_VIEWS` | off | `true` to count views | `SHOW_VIEW_COUNTS_PUBLICLY`; the admin shows the counts |
+| `SHOW_VIEW_COUNTS_PUBLICLY` | on | `false` to count but show nobody (you see them in the admin) | needs `TRACK_VIEWS` |
+| `PHOTO_SORT_ORDER` | `'filename'` | `'mtime'` to sort photos *and* folders by date | |
+| `FOLDER_DISPLAY_MODE` | `'overview'` | `'inline'` to show a folder's photos in a box instead of a cover card | needs `AUTO_GROUP_BY_FOLDER` |
+| `EXTRA_FOLDERS` | none | add `'Name' => '/real/path'` pairs | needs `AUTO_GROUP_BY_FOLDER` |
+| `ENABLE_VIDEO` | off | `true` for `.mov` / `.mp4` | |
+| `ADMIN_PASSWORD` | none | a long random string — turns the admin on | everything in the next table |
+| `ENABLE_PHOTO_LOCATION` | off | `true` to allow locations to be shown | per-folder switch + per-photo setting in the admin |
+| `ENABLE_MAP` | off | `true` for the map (the only feature that contacts another website) | needs `ENABLE_PHOTO_LOCATION` and something with a visible location |
+| `MAP_CLUSTER_RADIUS_MILES` | 50 | smaller for a city break, larger for a road trip | needs `ENABLE_MAP` |
+| `PRIVATE_VIEW_PASSWORD` | none | a shareable password — turns "Private view" on | hiding items in the admin |
+| `NGINX_ACCEL_REDIRECT_PREFIX` | none | your gallery's URL path, e.g. `'/kb'`, once nginx is set up | the nginx rules |
+
+**Controls in the admin** (`?admin`; folder controls appear when you open a subfolder):
+
+| Control | Changes what visitors see | Needs |
+|---|---|---|
+| Folder → *Display name* | the card label, the page title, the breadcrumb, the map legend, the link preview title | `AUTO_GROUP_BY_FOLDER`. A `{group: Name}` in your notes file overrides it |
+| Folder → *Dates*, *Description* | shown under the label on the card and at the top of the folder's page; the description is also the link-preview text (a notes file in that folder takes precedence there) | `AUTO_GROUP_BY_FOLDER` |
+| Folder → *Position* | the card order among sibling folders: numbered first, then natural order | a notes-file mention of a folder still places it earlier |
+| Photo → **Set as cover** | the folder's card image and its link-preview image | |
+| Folder → *Show photo locations publicly* | lets that folder's photos show 📍 badges and map pins | `ENABLE_PHOTO_LOCATION` |
+| Photo → *Caption* | 💬 badge; the viewer's caption bar | |
+| Photo → *Web link* | ℹ️ badge | |
+| Photo → *Latitude / Longitude / Location label* | 📍 badge and map pin (filled in from the photo's GPS when it has any) | `ENABLE_PHOTO_LOCATION`, the folder's switch, and *Location visibility* not *Always hide* |
+| Photo → *Location visibility* | *Inherit folder setting*, *Always show* (a landmark in a folder that otherwise shares no locations) or *Always hide* (a front door in a folder that does) | `ENABLE_PHOTO_LOCATION` |
+| Photo → *Visibility* · Folder → **Hide this entire folder** | removes it from everything for anyone without the viewer password | `PRIVATE_VIEW_PASSWORD` to let anyone back in |
+| Group names (front page) | renames a filename-based group's box | `AUTO_GROUP_BY_FILENAME`. A `{group: Name}` directive overrides it |
+| Notes editor | edit, Save As, Delete your `.md` files; add the missing `{gallery}` marker with one click | |
+| **Export as JSON** | downloads your saved captions and settings (one folder, or the whole tree) | |
+
+**Elsewhere** (not settings, but they change the result): a notes `.md` file only counts if its first line is `{gallery}` · filenames with a numeric suffix group together when `AUTO_GROUP_BY_FILENAME` is on · the folder structure *is* the album structure when `AUTO_GROUP_BY_FOLDER` is on · the web-server rules decide whether hidden files can still be fetched by address.
 
 ## Features
 
@@ -74,6 +231,8 @@ Both view tracking and thumbnail caching are **off by default** — this script 
 ## Troubleshooting
 
 If something in a `.md` file doesn't behave as expected — a file typo'd in `{photos:}`, a duplicate `{group:}`/`{photos:}` claim, a `.md` file missing its `{gallery}` marker, a directive that isn't attached to the description it was clearly meant to go with — it's silently excluded or repositioned rather than erroring, but never silently *unexplained*. Look for a small "⚠ N setup notices for the gallery owner" banner (collapsed by default) — at the top of the notes box if one exists, or right below the page header if no `.md` qualified at all. The same list is also in an HTML comment near the top of the page source, if you'd rather grep for it. Neither is alarming to a normal visitor — the banner is addressed explicitly to the gallery owner.
+
+**"Nothing was saved: this folder isn't writable by the web server"** (in the admin) means PHP can't write into the folder — the single most common hosting snag. Three optional features write there: the admin's saved captions and settings, view counts (`TRACK_VIEWS`), and the thumbnail cache. Without write permission the gallery itself still works fine; those three just can't save. On most hosts the fix is to give the web server's user write permission on the folder (and on any album folder you edit in the admin, including an [`EXTRA_FOLDERS`](#recipe-an-archive-on-another-disk) one). The admin tells you plainly when a save fails; it never reports "Saved" for something it couldn't write.
 
 This README is the full reference. A deployed gallery's `?about` page (the "gallery" link in the footer) gives visitors a short pitch, the feature list, and a download button, then points back here for anything more detailed.
 
@@ -276,7 +435,7 @@ For the photos or clips that shouldn't be on the public link — people who didn
 1. In the admin, hide an **item**, or an entire **folder** (at any depth). A folder's hide applies to everything beneath it; an individual item can be set back to *public* inside a hidden folder, or *hidden* inside a public one.
 2. Set `PRIVATE_VIEW_PASSWORD`. A discreet **Private view** link appears in the footer (`?reveal`), prompting for that password; on success it sets a cookie and returns to the plain gallery link, so you can bookmark the bare URL. It is a **password, not a secret link** — links pasted into Discord or Reddit get crawled by preview bots and can't be revoked without breaking them for everyone. A valid admin login counts as revealed too.
 
-A hidden item is removed from the page outright, not merely styled invisible: it's absent from the grid, notes, the lightbox's list, every count and badge (a count that didn't match what's visible would itself be a tell), the map, and link previews — and `?img=`, `?photo=`, `?track=`, `?folder=` and the video endpoint all refuse it to an unrevealed visitor. A group whose members are all hidden disappears rather than showing "0 photos". The same HTTPS requirement and failed-login throttle as the admin apply, with separate lockout state.
+A hidden item is removed from the page outright, not merely styled invisible: it's absent from the grid, notes, the lightbox's list, every count and badge (a count that didn't match what's visible would itself be a tell), the map, and link previews — and `?img=`, `?photo=`, `?track=`, `?folder=` and the video endpoint all refuse it to an unrevealed visitor. A group whose members are all hidden disappears rather than showing "0 photos". The same HTTPS requirement and failed-login throttle as the admin apply, with separate lockout state. Viewers stay unlocked for a year; the cookie covers the whole domain, so two galleries on one site with *different* viewer passwords need different `REVEAL_COOKIE_NAME` values (a plain word near the top of `index.php`) or they'll sign each other's viewers out.
 
 ### Locking down the files themselves
 
