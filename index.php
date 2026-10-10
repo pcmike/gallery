@@ -1487,60 +1487,10 @@ if ($rootMeta['label'] !== '') $pageTitle = $rootMeta['label'];
 // Extract {photos:}/{group:} directives across all qualifying .md files,
 // in file order, tracking each directive's approximate position so it
 // can be interleaved with auto-detected mention-order positions below.
-$explicitClaims = [];     // filename => true (removed from auto-detection)
-$explicitGroups = [];     // slug => ['name' => .., 'files' => [...], 'position' => N]
-$positionalClusters = []; // list of ['files' => [...], 'position' => N]
-$offset = 0;
-foreach ($mdContents as $content) {
-    foreach (extract_photo_directives($content) as $rec) {
-        $validPhotos = [];
-        foreach ($rec['photos'] as $p) {
-            $typed = $p;
-            $p = basename($p);
-            if (!in_array($p, $files, true)) {
-                // A photo that lives in a subfolder is not "unknown": say where the directive can and can't reach.
-                $inFolder = false;
-                foreach ($files as $f) {
-                    if (strpos($f, '/') !== false && substr($f, -strlen('/' . $p)) === '/' . $p) { $inFolder = true; break; }
-                }
-                $galleryNotices[] = $inFolder
-                    ? '"' . $typed . '" is inside a folder, and {photos:} only reaches photos loose in the gallery\'s top level. To show a folder under a paragraph, write the folder\'s name in it.'
-                    : 'Unknown file "' . $p . '" referenced in a {photos:} directive — ignored.';
-                continue;
-            }
-            if (isset($explicitClaims[$p])) {
-                $galleryNotices[] = '"' . $p . '" is referenced in more than one {photos:} directive — only the first applies.';
-                continue;
-            }
-            $validPhotos[] = $p;
-        }
-        // A directive-only paragraph only sees prose in its own
-        // paragraph (see GROUPING/order_within_zone), never a
-        // description written just before it — a blank line between
-        // them is enough to disconnect them, which is easy to write by
-        // accident. Flag it: it's not invalid, just probably not what
-        // was intended.
-        if (!$rec['hasProse'] && $rec['precededByPlainProse']) {
-            $galleryNotices[] = 'A {group:}/{photos:} paragraph right after a plain description isn\'t attached to it (a blank line separates them into different paragraphs) — merge them into one paragraph if that was intended.';
-        }
-        if (empty($validPhotos)) continue;
-        $position = $offset + $rec['position'];
-        if ($rec['groupName'] !== null && $rec['groupName'] !== '') {
-            $slug = slugify($rec['groupName']);
-            if ($slug === '') continue;
-            if (isset($explicitGroups[$slug])) {
-                $galleryNotices[] = '{group: ' . $rec['groupName'] . '} is defined more than once — only the first definition applies.';
-                continue;
-            }
-            foreach ($validPhotos as $p) { $explicitClaims[$p] = true; }
-            $explicitGroups[$slug] = ['name' => $rec['groupName'], 'files' => $validPhotos, 'position' => $position, 'hasProse' => $rec['hasProse']];
-        } else {
-            foreach ($validPhotos as $p) { $explicitClaims[$p] = true; }
-            $positionalClusters[] = ['files' => $validPhotos, 'position' => $position, 'hasProse' => $rec['hasProse']];
-        }
-    }
-    $offset += strlen($content) + 1;
-}
+$rootDirectives = collect_explicit_directives($mdContents, array_values(array_filter($files, function ($f) { return strpos($f, '/') === false; })), '', $files, $galleryNotices);
+$explicitClaims = $rootDirectives['claims'];           // filename => true (removed from auto-detection)
+$explicitGroups = $rootDirectives['groups'];           // slug => ['name' => .., 'files' => [...], 'position' => N]
+$positionalClusters = $rootDirectives['clusters'];     // list of ['files' => [...], 'position' => N]
 
 // Folder-groups: each top-level subfolder (an immediate child of the
 // gallery root, or an EXTRA_FOLDERS virtual mount) with any files
@@ -3558,6 +3508,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (@file_put_contents($targetPath, $content) === false) {
             return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
         }
+        if (!has_gallery_marker($content)) {
+            return ['type' => 'ok', 'text' => 'Saved to "' . $target . '", but it is not active: its first line is not {gallery}, so the gallery ignores it. Put {gallery} on the first line to switch it on.'];
+        }
         return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '".'];
     }
 
@@ -4701,7 +4654,9 @@ foreach ($adminFiles as $file) {
     <?php foreach ($mdCandidates as $mdFile):
       $isActive = isset($activeMd[$mdFile]);
       $raw = (string) @file_get_contents($adminFolderReal . '/' . $mdFile);
-      $editable = $isActive ? strip_gallery_marker($raw) : $raw;
+      // Shown exactly as stored, {gallery} line included: what you see is what a save writes. (Hiding the line used to
+      // write it back without the marker, which quietly switched the notes off.)
+      $editable = $raw;
     ?>
       <div class="md-file">
         <div class="md-file-head">
@@ -6122,6 +6077,70 @@ function scan_gallery_md_files($realFolderPath) {
 }
 
 /**
+ * Reads the {photos:}/{group:} directives of one level's notes: the gallery's
+ * top-level notes, or the notes inside one folder. Both go through here, so a
+ * directive means the same thing wherever it is written. A notes file can claim
+ * the photos that sit directly in its own folder ($candidates, full paths); a name
+ * is read relative to that folder ($prefix is '' at the top, 'Paris/' in Paris).
+ * Problems are added to $notices. Returns ['claims' => path => true,
+ * 'groups' => slug => [...], 'clusters' => [...]].
+ */
+function collect_explicit_directives($mdContents, $candidates, $prefix, $allFiles, &$notices) {
+    $claims = [];
+    $groups = [];
+    $clusters = [];
+    $offset = 0;
+    foreach ($mdContents as $content) {
+        foreach (extract_photo_directives($content) as $rec) {
+            $validPhotos = [];
+            foreach ($rec['photos'] as $typed) {
+                $bare = basename($typed);
+                $full = $prefix . $bare;
+                if (!in_array($full, $candidates, true)) {
+                    // A photo that lives in a subfolder is not "unknown": say where the directive can and can't reach.
+                    $inFolder = false;
+                    foreach ($allFiles as $f) {
+                        if (strncmp($f, $prefix, strlen($prefix)) === 0 && strpos(substr($f, strlen($prefix)), '/') !== false && substr($f, -strlen('/' . $bare)) === '/' . $bare) { $inFolder = true; break; }
+                    }
+                    $notices[] = $inFolder
+                        ? '"' . $typed . '" is inside a folder, and {photos:} only reaches photos directly in the same folder as the notes. To show a folder under a paragraph, write the folder\'s name in it.'
+                        : 'Unknown file "' . $bare . '" referenced in a {photos:} directive — ignored.';
+                    continue;
+                }
+                if (isset($claims[$full])) {
+                    $notices[] = '"' . $bare . '" is referenced in more than one {photos:} directive — only the first applies.';
+                    continue;
+                }
+                $validPhotos[] = $full;
+            }
+            // A directive-only paragraph only sees prose in its own paragraph (see GROUPING/order_within_zone), never a
+            // description written just before it — a blank line between them is enough to disconnect them, which is easy
+            // to write by accident. Flag it: it's not invalid, just probably not what was intended.
+            if (!$rec['hasProse'] && $rec['precededByPlainProse']) {
+                $notices[] = 'A {group:}/{photos:} paragraph right after a plain description isn\'t attached to it (a blank line separates them into different paragraphs) — merge them into one paragraph if that was intended.';
+            }
+            if (empty($validPhotos)) continue;
+            $position = $offset + $rec['position'];
+            if ($rec['groupName'] !== null && $rec['groupName'] !== '') {
+                $slug = slugify($rec['groupName']);
+                if ($slug === '') continue;
+                if (isset($groups[$slug])) {
+                    $notices[] = '{group: ' . $rec['groupName'] . '} is defined more than once — only the first definition applies.';
+                    continue;
+                }
+                foreach ($validPhotos as $p) { $claims[$p] = true; }
+                $groups[$slug] = ['name' => $rec['groupName'], 'files' => $validPhotos, 'position' => $position, 'hasProse' => $rec['hasProse']];
+            } else {
+                foreach ($validPhotos as $p) { $claims[$p] = true; }
+                $clusters[] = ['files' => $validPhotos, 'position' => $position, 'hasProse' => $rec['hasProse']];
+            }
+        }
+        $offset += strlen($content) + 1;
+    }
+    return ['claims' => $claims, 'groups' => $groups, 'clusters' => $clusters];
+}
+
+/**
  * Scans one .md file's raw content for {photos: a.jpg, b.jpg, ...}
  * directives — each optionally paired with a {group: Name} directive in
  * the same paragraph — respecting the same paragraph/code-fence rules
@@ -6244,7 +6263,7 @@ function extract_photo_directives($content) {
  *    (by reference) when a {sold} or {reserved}/{held} directive appears
  *    in that same paragraph.
  */
-function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, &$groupLabels, &$renderClaims, $photoViews) {
+function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, &$groupLabels, &$renderClaims, $photoViews, $prefix = '') {
     $text = str_replace("\r\n", "\n", $text);
     $lines = explode("\n", $text);
     $html = '';
@@ -6253,7 +6272,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
     $codeBuf = '';
     $paraLines = [];
 
-    $flushPara = function () use (&$html, &$paraLines, $groups, $files, &$groupColors, &$groupStatus, &$groupLabels, &$renderClaims, $photoViews) {
+    $flushPara = function () use (&$html, &$paraLines, $groups, $files, &$groupColors, &$groupStatus, &$groupLabels, &$renderClaims, $photoViews, $prefix) {
         if (empty($paraLines)) return;
 
         // Pull out optional {color: value} / {sold} / {reserved} (or
@@ -6302,7 +6321,9 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
         $explicitPhotos = [];
         if ($explicitPhotosRaw !== null) {
             foreach (explode(',', $explicitPhotosRaw) as $p) {
+                // Names are read relative to the folder the notes are in ($prefix), like extraction does.
                 $p = basename(trim($p));
+                $p = $p === '' ? '' : $prefix . $p;
                 if ($p !== '' && in_array($p, $files, true) && !isset($renderClaims[$p])) {
                     $explicitPhotos[] = $p;
                     $renderClaims[$p] = true;
@@ -6360,7 +6381,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
             // here is the first listed file (full filename, extension
             // included, to stay unique — see group_key()), so that's
             // what the permalink anchors on.
-            $itemId = 'item-' . slugify($explicitPhotos[0]);
+            $itemId = 'item-' . slugify(substr($explicitPhotos[0], strlen($prefix)));
         }
         $idAttr = $itemId ? (' id="' . htmlspecialchars($itemId, ENT_QUOTES, 'UTF-8') . '"') : '';
 
@@ -6395,8 +6416,9 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
                 // stored under in $groups (see GROUPING above): the
                 // file's own full filename, not its extension-stripped
                 // base.
-                if ($colorValue !== null) $groupColors[$pf] = $colorValue;
-                if ($status) $groupStatus[$pf] = $status;
+                $pfKey = substr($pf, strlen($prefix));
+                if ($colorValue !== null) $groupColors[$pfKey] = $colorValue;
+                if ($status) $groupStatus[$pfKey] = $status;
             }
         }
         $paraLines = [];
@@ -6603,13 +6625,17 @@ function media_count_label($files) {
     return $parts ? implode(' · ', $parts) : '0 photos';
 }
 
-function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualCover = null, $idKey = null, $meta = null) {
+function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualCover = null, $idKey = null, $meta = null, $status = '', $accentColor = null) {
     $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
     $coverFile = pick_folder_cover($recursiveFiles, $manualCover);
     $count = count($recursiveFiles);
     $slug = slugify($idKey ?? $folderPath);
-    $html = '<div class="folder-cover" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
+    // The paragraph that mentions a folder can mark it sold or reserved, or give it a colour, like any other group.
+    $style = $accentColor ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($accentColor, ENT_QUOTES, 'UTF-8') . ';"' : '';
+    $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
     $html .= '<a class="folder-cover-link" href="' . $folderUrl . '">';
+    if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
+    elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     if ($coverFile !== null) {
         $html .= '<img src="' . htmlspecialchars(img_url($coverFile, 'thumb'), ENT_QUOTES, 'UTF-8')
                 . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">';
@@ -6643,7 +6669,8 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // rendered card's lightbox index is drawn from.
         if (isset($folderGroupKeys[$key]) && FOLDER_DISPLAY_MODE === 'overview') {
             $label = $groupLabels[$key] ?? $key;
-            $html .= render_folder_cover_card($folderLinkPrefix . $key, $label, $groupFiles, $folderCovers[$key] ?? null, $key, $folderMeta[$key] ?? null);
+            $coverStatus = $groupStatus[$key] ?? '';
+            $html .= render_folder_cover_card($folderLinkPrefix . $key, $label, $groupFiles, $folderCovers[$key] ?? null, $key, $folderMeta[$key] ?? null, $coverStatus, status_accent_color($coverStatus, $groupColors[$key] ?? null));
             $flatIndex += count($groupFiles);
             continue;
         }
@@ -7264,6 +7291,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     transition: transform 0.25s ease;
   }
   .folder-cover-link:hover img { transform: scale(1.05); }
+  .folder-cover.sold img { filter: grayscale(1) brightness(0.6); }
   .folder-cover-label {
     display: block;
     padding: 10px 12px 2px;
@@ -7566,6 +7594,10 @@ foreach ($mdFiles as $mdFile) {
 // the root would, just keeps them from overwriting each other.
 $rootFolderGroupKeys = $folderGroupKeys;
 $folderLinkPrefix = '';
+$folderMdFiles = [];
+$folderMdContents = [];
+$folderGalleryNotices = [];
+$folderNoteBoxesHtml = [];
 if ($currentFolderPath !== null) {
     $folderFiles = $currentFolderFiles;
     $folderPrefix = $currentFolderPath . '/';
@@ -7615,6 +7647,66 @@ if ($currentFolderPath !== null) {
         if (isset($groups[$localKey])) $localKey = $bare;
         $groups[$localKey] = [$f];
     }
+    // This folder's own notes go through the same directive reading as the top-level ones (see
+    // collect_explicit_directives): {photos:} and {group:} claim the photos directly in this folder, a mention
+    // pulls a photo or subfolder up to its paragraph. The photos it may claim are judged before the hiding
+    // filter, so a hidden photo is dropped without a word instead of being reported.
+    $folderRealPath = resolve_real_path($dir, $currentFolderPath);
+    $folderMdScan = scan_gallery_md_files($folderRealPath);
+    $folderMdFiles = $folderMdScan['files'];
+    $folderMdContents = $folderMdScan['contents'];
+    if ($folderMdScan['rejectedCount'] > 0) {
+        $folderGalleryNotices[] = $folderMdScan['rejectedCount'] === 1
+            ? 'A .md file was found in this folder but ignored because its first line isn\'t the required {gallery} marker.'
+            : $folderMdScan['rejectedCount'] . ' .md files were found in this folder but ignored because none of them start with the required {gallery} marker.';
+    }
+    $directFiles = function ($list) use ($folderPrefix) {
+        return array_values(array_filter($list, function ($f) use ($folderPrefix) {
+            return strncmp($f, $folderPrefix, strlen($folderPrefix)) === 0 && strpos(substr($f, strlen($folderPrefix)), '/') === false;
+        }));
+    };
+    $folderDirectives = collect_explicit_directives($folderMdContents, $directFiles($allFiles), $folderPrefix, $allFiles, $folderGalleryNotices);
+    $visibleDirect = array_flip($directFiles($files));
+    $folderExplicitGroups = [];
+    foreach ($folderDirectives['groups'] as $slug => $g) {
+        $g['files'] = array_values(array_filter($g['files'], function ($f) use ($visibleDirect) { return isset($visibleDirect[$f]); }));
+        if ($g['files']) $folderExplicitGroups[$slug] = $g;
+    }
+    $folderClusters = [];
+    foreach ($folderDirectives['clusters'] as $c) {
+        $c['files'] = array_values(array_filter($c['files'], function ($f) use ($visibleDirect) { return isset($visibleDirect[$f]); }));
+        if ($c['files']) $folderClusters[] = $c;
+    }
+    $folderClaimed = [];
+    foreach (array_merge(array_column($folderExplicitGroups, 'files'), array_column($folderClusters, 'files')) as $claimedList) {
+        foreach ($claimedList as $f) $folderClaimed[$f] = true;
+    }
+    // A claimed photo leaves its own card; it comes back as its box, or (a bare {photos:}) as a card of its own
+    // that its paragraph can style, keyed by the whole file name like the top-level ones.
+    $naturalRankHere = [];
+    foreach ($groups as $groupFiles) {
+        foreach ($groupFiles as $f) $naturalRankHere[$f] = count($naturalRankHere);
+    }
+    foreach ($groups as $groupKey => $groupFiles) {
+        if (count($groupFiles) === 1 && isset($folderClaimed[$groupFiles[0]])) unset($groups[$groupKey]);
+    }
+    $inNamedGroup = [];
+    foreach ($folderExplicitGroups as $slug => $g) {
+        $groups[$slug] = $g['files'];
+        foreach ($g['files'] as $f) $inNamedGroup[$f] = true;
+    }
+    foreach (array_keys($folderClaimed) as $f) {
+        if (!isset($inNamedGroup[$f])) $groups[substr($f, strlen($folderPrefix))] = [$f];
+    }
+    $explicitGroupKeys = array_fill_keys(array_keys($folderExplicitGroups), true);
+    // Same ordering as the top level: a paragraph pulls what it mentions or claims up to its place, everything
+    // else keeps the order it had (folders first, then the photos).
+    $groupOrder = compute_zone_order($folderMdContents, $groups, $folderExplicitGroups, $folderClusters, $explicitGroupKeys, $naturalRankHere, [], $folderGroupKeys);
+    $orderedHere = [];
+    foreach ($groupOrder as $key) {
+        if (isset($groups[$key]) && !isset($orderedHere[$key])) $orderedHere[$key] = $groups[$key];
+    }
+    $groups = $orderedHere;
     // The flat list has to follow the new card order exactly: every
     // card's lightbox index is drawn from it.
     $files = [];
@@ -7623,7 +7715,6 @@ if ($currentFolderPath !== null) {
             $files[] = $f;
         }
     }
-    $explicitGroupKeys = [];
 }
 
 // A subfolder may optionally carry its own {gallery}-marked .md,
@@ -7637,29 +7728,9 @@ if ($currentFolderPath !== null) {
 // this is the exact same call shape the root's own notes use — a mention
 // or directive here naturally lines up with the card it actually
 // describes, anchors included.
-$folderMdFiles = [];
-$folderMdContents = [];
-$folderGalleryNotices = [];
-$folderNoteBoxesHtml = [];
 if ($currentFolderPath !== null) {
-    $folderRealPath = resolve_real_path($dir, $currentFolderPath);
-    $folderMdScan = scan_gallery_md_files($folderRealPath);
-    $folderMdFiles = $folderMdScan['files'];
-    $folderMdContents = $folderMdScan['contents'];
-    if ($folderMdScan['rejectedCount'] > 0) {
-        $folderGalleryNotices[] = $folderMdScan['rejectedCount'] === 1
-            ? 'A .md file was found in this folder but ignored because its first line isn\'t the required {gallery} marker.'
-            : $folderMdScan['rejectedCount'] . ' .md files were found in this folder but ignored because none of them start with the required {gallery} marker.';
-    }
     foreach ($folderMdFiles as $folderMdFile) {
-        // {photos:} is read only from the gallery's top-level notes; say so rather than ignore it silently.
-        foreach (extract_photo_directives($folderMdContents[$folderMdFile]) as $folderRec) {
-            if (!empty($folderRec['photos'])) {
-                $folderGalleryNotices[] = '{photos:} is only read in the gallery\'s top-level notes, so it does nothing here. In a folder\'s own notes, write a photo\'s name (without .jpg) in the paragraph and its photo appears under it; {sold}, {reserved} and {color:} then apply to that photo.';
-                break;
-            }
-        }
-        $folderNoteBoxesHtml[$folderMdFile] = markdown_to_html($folderMdContents[$folderMdFile], $groups, $files, $groupColors, $groupStatus, $groupLabels, $renderClaims, $photoViews);
+        $folderNoteBoxesHtml[$folderMdFile] = markdown_to_html($folderMdContents[$folderMdFile], $groups, $files, $groupColors, $groupStatus, $groupLabels, $renderClaims, $photoViews, $folderLinkPrefix);
     }
 }
 ?>
@@ -7797,8 +7868,20 @@ if ($currentFolderPath !== null) {
     lightbox.classList.remove('open');
     lightboxVideo.pause();
   }
+  // The arrows stay inside the folder the open photo is in: a folder is its own set, however the page lays
+  // folders out, so Next from the last photo of one folder goes back to that folder's first, not into another's.
+  function folderOf(name) {
+    const slash = name.lastIndexOf('/');
+    return slash < 0 ? '' : name.slice(0, slash);
+  }
+  function siblingsOf(index) {
+    const dir = folderOf(files[index]), out = [];
+    for (let i = 0; i < files.length; i++) if (folderOf(files[i]) === dir) out.push(i);
+    return out;
+  }
   function navigate(delta) {
-    current = (current + delta + files.length) % files.length;
+    const set = siblingsOf(current), at = set.indexOf(current);
+    current = set[(at + delta + set.length) % set.length];
     updateImage();
   }
   function updateImage() {
@@ -7817,7 +7900,8 @@ if ($currentFolderPath !== null) {
       lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
     }
     const captionText = captions[current];
-    caption.textContent = (captionText ? captionText + ' — ' : '') + (current + 1) + ' / ' + files.length;
+    const set = siblingsOf(current);
+    caption.textContent = (captionText ? captionText + ' — ' : '') + (set.indexOf(current) + 1) + ' / ' + set.length;
     trackView(file);
   }
   document.addEventListener('keydown', (e) => {
