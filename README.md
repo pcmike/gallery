@@ -127,7 +127,7 @@ define('PRIVATE_VIEW_PASSWORD', 'something-you-can-tell-people');   // lets hidi
 
 **Visitors without the password see** a gallery with no trace of what's hidden: not in the grid, the viewer, the photo counts, the map or link previews, and requesting a hidden photo or folder directly just gives "not found". **With the password**, everything is back. A valid admin login counts as having it. The admin's **Hidden items** page lists everything hidden in one place.
 
-**One more step that matters:** hiding controls what the *gallery* serves. The photo files are still ordinary files a web server will hand out to anyone who knows an exact address. To close that, add the server rules in [Locking down the files themselves](#locking-down-the-files-themselves) (tested for nginx; Apache's rules are provided untested). The admin reminds you of this on every page while anything is hidden.
+**One more step that matters:** hiding controls what the *gallery* serves. The photo files are still ordinary files a web server will hand out to anyone who knows an exact address. To close that, add the server rules in [Locking down the files themselves](#locking-down-the-files-themselves) (both nginx and Apache rules are given, and both were tested against the real servers). The admin reminds you of this on every page while anything is hidden.
 
 ### Recipe: an archive on another disk
 
@@ -231,6 +231,8 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 ## Troubleshooting
 
 If something in a `.md` file doesn't behave as expected — a file typo'd in `{photos:}`, a duplicate `{group:}`/`{photos:}` claim, a `.md` file missing its `{gallery}` marker, a directive that isn't attached to the description it was clearly meant to go with — it's silently excluded or repositioned rather than erroring, but never silently *unexplained*. Look for a small "⚠ N setup notices for the gallery owner" banner (collapsed by default) — at the top of the notes box if one exists, or right below the page header if no `.md` qualified at all. The same list is also in an HTML comment near the top of the page source, if you'd rather grep for it. Neither is alarming to a normal visitor — the banner is addressed explicitly to the gallery owner.
+
+**`?admin` or the Private view keeps asking for the password and never accepts it** (on Apache with PHP-FPM or CGI) means Apache isn't passing the login to PHP: add `CGIPassAuth On` to the gallery's `.htaccess` (see [Locking down the files themselves](#locking-down-the-files-themselves)).
 
 **"Nothing was saved: this folder isn't writable by the web server"** (in the admin) means PHP can't write into the folder — the single most common hosting snag. Three optional features write there: the admin's saved captions and settings, view counts (`TRACK_VIEWS`), and the thumbnail cache. Without write permission the gallery itself still works fine; those three just can't save. On most hosts the fix is to give the web server's user write permission on the folder (and on any album folder you edit in the admin, including an [`EXTRA_FOLDERS`](#recipe-an-archive-on-another-disk) one). The admin tells you plainly when a save fails; it never reports "Saved" for something it couldn't write.
 
@@ -471,19 +473,34 @@ Both blocks were tested against nginx 1.26 with php-fpm 8.4: every bare photo, v
 
 Finally set `NGINX_ACCEL_REDIRECT_PREFIX` to `'/kb'`, matching the `location` above exactly (`.*` already covers nested folders). The script then answers allowed requests with an `X-Accel-Redirect` header and nginx serves the file itself, which also gives you nginx's own, well-tested `Range` handling for video. Leave it empty and the script serves files itself with PHP — correct everywhere, just without the lockdown.
 
-**Apache** — blunter, and works on FTP-only hosting, since `.htaccess` is an uploadable file:
+**Apache** — blunter, and works on FTP-only hosting, since `.htaccess` is an uploadable file. Put this in the gallery's folder as `.htaccess`:
 
 ```apache
-<FilesMatch "\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$">
+# The photo and video files themselves: reachable only through index.php.
+# (?i) matters: camera files are often IMG_0412.JPG, and without it those
+# upper-case names would slip straight past this rule.
+<FilesMatch "(?i)\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$">
     Require all denied
 </FilesMatch>
 
+# The gallery's generated data files (a second layer; the .php ones also
+# answer 404 on their own, and this is the only cover for .gallery-stats.sqlite).
 <FilesMatch "^\.gallery-">
     Require all denied
 </FilesMatch>
 ```
 
-This blocks only external requests for the bare files; `index.php` still reads them straight from disk. It depends on `AllowOverride` being enabled for that directory, which isn't universal, and it can be silently ignored with no symptom — so test it with `curl -I` the same way. nginx's `internal` is a hard guarantee; this is not. **Unlike the nginx rules above, these Apache rules have not been tested against a real Apache** — they're the standard form, but check them yourself before relying on them.
+This blocks only external requests for the bare files (a **403**, where nginx's `internal` gives a 404); `index.php` still reads them straight from disk, so the gallery works as before. It was tested against Apache 2.4.68 with PHP-FPM: bare photos (a hidden one, nested ones, upper-case `.JPG`, videos) and the data files are refused; the gallery, thumbnails and full-size images work; and a hidden photo stays unreachable by address.
+
+**It depends on `AllowOverride`.** `.htaccess` only counts if the server is set to read it for that folder (`AllowOverride All`, or at least `FileInfo`/`AuthConfig`-level access for these rules). Many hosts allow it; some don't, and then **the rules are silently ignored** — tested: with `AllowOverride None` a hidden photo's bare address answers 200. So always check with `curl -I https://yoursite.com/kb/IMG_0412.jpg` (expect 403), the same way as for nginx. Even then the generated data files stay safe, because they carry their own guard. nginx's `internal` is a hard guarantee; this is only as good as your host's `AllowOverride`.
+
+**Logging in on Apache with PHP-FPM or CGI.** Apache doesn't hand the `Authorization` header to PHP in those modes, so `?admin` and `?reveal` keep asking for the password and never accept it (tested: 401 with the correct password). Add one line to the same `.htaccess` (needs Apache 2.4.13 or newer):
+
+```apache
+CGIPassAuth On
+```
+
+With that, login works (tested on Apache 2.4.68 + PHP-FPM). With `mod_php` — the other common setup — PHP receives the header natively and you don't need it (not tested here).
 
 Neither renames your files. That would change files you own, which this project doesn't do.
 
@@ -516,9 +533,16 @@ It was tested with the setup above: `/kb/Europe/France/Paris/` and a folder with
 - **The folder name is captured inside the `rewrite` itself**, which is what makes nginx escape it. Capturing it in the `location` line and passing the variable along breaks on a name with a space (it returned a 502 in testing).
 - Every other link on the page (`?img=`, `?folder=`, `?about`, `#anchors`) keeps working from a pretty URL because the query string rides along; the one that didn't — the "back to the gallery" link — is handled by the script (it names the real root when the request path isn't the script's own).
 
-It relies on your php-fpm setup passing the *original* request URL as `REQUEST_URI` (the standard `fastcgi_param REQUEST_URI $request_uri;` does), which is how the script tells a pretty URL from a direct one.
+It relies on your php-fpm setup passing the *original* request URL as `REQUEST_URI` (the standard `fastcgi_param REQUEST_URI $request_uri;` does), which is how the script tells a pretty URL from a direct one. Folder names with spaces, `&`, `%`, `+` and `#` were all tested and resolve correctly.
 
-This is nginx-only; there's no Apache equivalent here.
+**Apache** can do the same with one line in the gallery's `.htaccess` (needs `AllowOverride` for `FileInfo`, and `mod_rewrite`):
+
+```apache
+RewriteEngine On
+RewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]
+```
+
+The `B` flag is not optional: it escapes the folder name before it goes into the query string, and without it a name with a space, `&`, `+` or `#` fails (tested: a 403 or 404). It only matches a path ending in `/`, so it can't catch `index.php` or a photo. Tested on Apache 2.4.68 with PHP-FPM, including the back-link.
 
 ## Keeping runtime data out of git
 

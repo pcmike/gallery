@@ -20,6 +20,8 @@ Both exit 0 only when nothing is found.
 
 **Getting QuickJS without root** (Debian/Ubuntu): `apt-get download quickjs && dpkg -x quickjs_*.deb ~/quickjs`, then `QJS=~/quickjs/usr/bin/qjs`.
 
+**Web-server rules** (the nginx and Apache snippets in the README) are not automated — they were checked by hand against the real servers, unprivileged and with no install: `apt-get download nginx php8.4-fpm apache2-bin apache2-data apache2 libapr1t64 libaprutil1t64` (or `quickjs` for QuickJS), `dpkg -x` each into a scratch directory, and run them on high ports with `LD_LIBRARY_PATH` pointing at the unpacked libraries (Apache via `mod_proxy_fcgi` to the unpacked php-fpm, with `PHP_INI_SCAN_DIR=/etc/php/8.4/cli/conf.d`). Re-run that after changing a rule in the README.
+
 The shared fixture is [`fuzz/build_fixture.php`](fuzz/build_fixture.php): every feature switched on, folder and file names containing `& < > ' % ;` spaces and non-ASCII, a hidden folder, captions with HTML in them, GPS photos, a video and a HEIC. Run it by hand to get a gallery to poke at:
 
 ```
