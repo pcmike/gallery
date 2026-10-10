@@ -18,7 +18,7 @@ your-folder/
   forsale.md    <- optional
 ```
 
-Requirements: PHP 7.4+ (developed and tested against PHP 8.4; the code avoids PHP 8-only functions and syntax, but I haven't been able to run it on 7.4 itself). No required extensions — everything degrades gracefully without them. Optional:
+Requirements: **PHP 8.1 or newer** (developed and tested against PHP 8.4). 8.1 is the floor the code supports, not a recommendation — PHP 8.1 itself no longer gets security fixes, so use 8.3 or 8.4 if your host offers it. On an older PHP the page says so plainly instead of failing. No required extensions — everything degrades gracefully without them. Optional:
 - **Imagick** (with HEIC/HEIF support) or **GD** — enables thumbnail generation/caching, once you turn `ENABLE_THUMBNAIL_CACHE` on (see [Configuration](#configuration)). Imagick specifically is required for HEIC/HEIF photos (iPhone default format) to display at all.
 - **pdo_sqlite** — used automatically for view-stat storage if present and `TRACK_VIEWS` is on; falls back to a flock-protected JSON file otherwise. (The SQLite store keys its rows by a hash of each photo's path, never the filename, because that file can be fetched by URL.)
 - **EXIF** (`exif_read_data`) — only for reading GPS out of JPEGs when you've turned on photo locations.

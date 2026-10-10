@@ -43,6 +43,16 @@
  *   - See each function's own docblock below for implementation details.
  */
 
+// Needs PHP 8.1+. Say so plainly rather than failing with a cryptic error
+// halfway through the page (this check itself only uses syntax every PHP
+// version since 7.0 can parse).
+if (PHP_VERSION_ID < 80100) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'This gallery needs PHP 8.1 or newer; this server is running PHP ' . PHP_VERSION . '.';
+    exit;
+}
+
 // Version shown on the "?about" page and stamped in the page source.
 define('GALLERY_VERSION', '2.0.0');
 
@@ -758,13 +768,7 @@ function render_video_placeholder_image($maxDim) {
         $cx - $size * 0.55, $cy + $size,
         $cx + $size * 0.85, $cy,
     ];
-    // imagefilledpolygon()'s $num_points argument was removed in PHP 8 (it's
-    // now inferred from $points); passing it explicitly still works on 7.x.
-    if (PHP_VERSION_ID >= 80000) {
-        imagefilledpolygon($img, $points, $triangleColor);
-    } else {
-        imagefilledpolygon($img, $points, 3, $triangleColor);
-    }
+    imagefilledpolygon($img, $points, $triangleColor);
     header('Content-Type: image/jpeg');
     header('Cache-Control: public, max-age=31536000, immutable');
     imagejpeg($img, null, 82);
@@ -796,12 +800,7 @@ function render_map_icon_image() {
     $dx = (int) round($r * 0.86);
     $dy = (int) round($r * 0.5);
     $points = [$cx - $dx, $cy + $dy, $cx + $dx, $cy + $dy, $cx, $tipY];
-    // Same PHP 7/8 imagefilledpolygon() signature split as the video tile.
-    if (PHP_VERSION_ID >= 80000) {
-        imagefilledpolygon($img, $points, $pin);
-    } else {
-        imagefilledpolygon($img, $points, 3, $pin);
-    }
+    imagefilledpolygon($img, $points, $pin);
     imagefilledellipse($img, $cx, $cy, (int) round($r * 0.8), (int) round($r * 0.8), $bg);
     header('Content-Type: image/jpeg');
     header('Cache-Control: public, max-age=31536000, immutable');
