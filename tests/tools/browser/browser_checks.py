@@ -112,6 +112,20 @@ try:
     for name, path in (("gallery", "/"), ("folder", "/?folder=Europe"), ("nested", "/?folder=Europe%2FFrance%2FParis"), ("about", "/?about")):
         b.goto(B + path, 1.5); shot(b, f"06-mobile-{name}")
         ok(b.js(overflow), f"[{name}] no horizontal scrolling on a phone", f"scrollWidth={b.js('document.documentElement.scrollWidth')}")
+    # ---------------- swipe gestures (real touch events) ----------------
+    print("== swipe gestures on a phone (real touch events)")
+    b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
+    b.goto(B + "/", 1.5); b.js("openLightbox(0)"); b.drain(0.6)
+    cap = lambda: b.js("document.getElementById('lightbox-caption').textContent")
+    isopen = lambda: b.js("document.getElementById('lightbox').classList.contains('open')")
+    c0 = cap(); ok(isopen() and c0.startswith("1 / "), "(setup) the lightbox is open on item 1", c0)
+    b.swipe(300, 400, 100, 410); c1 = cap(); ok(c1.startswith("2 / "), "swiping left moves to the next item", f"{c0!r} -> {c1!r}")
+    b.swipe(100, 400, 300, 395); c2 = cap(); ok(c2.startswith("1 / "), "swiping right moves back", f"{c1!r} -> {c2!r}")
+    b.swipe(200, 400, 170, 402); ok(cap() == c2, "a drag shorter than 50px is ignored (no accidental page turn)", cap())
+    b.swipe(200, 400, 210, 200); ok(isopen(), "swiping UP does not close it")
+    b.swipe(200, 300, 205, 600); ok(not isopen(), "swiping DOWN closes the lightbox")
+    shot(b, "10-after-swipe-close")
+    b.call("Emulation.setTouchEmulationEnabled", {"enabled": False})
     # ---------------- admin ----------------
     print("== admin")
     b.call("Network.setExtraHTTPHeaders", {"headers": {"Authorization": "Basic " + auth}})

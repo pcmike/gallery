@@ -224,6 +224,26 @@ function make_gps_jpeg($path, $latRef, $latDMS, $lngRef, $lngDMS) {
     file_put_contents($path, substr($jpeg, 0, 2) . "\xFF\xE1" . pack('n', strlen($exif) + 2) . $exif . substr($jpeg, 2));
 }
 
+/** A JPEG with the EXIF layout an iPhone writes: big-endian ("MM"), IFD0 with
+ *  Make/Orientation before the GPS pointer, and a GPS IFD with the extra tags
+ *  real phones add (VersionID, altitude, timestamp). Latitude/longitude are
+ *  [deg, min, sec*100] integer triples. */
+function make_iphone_gps_jpeg($path, $latRef, $lat, $lngRef, $lng) {
+    $im = imagecreatetruecolor(40, 40); ob_start(); imagejpeg($im); $j = ob_get_clean(); imagedestroy($im);
+    $rat = fn($n, $d) => pack('NN', $n, $d);
+    $ent = fn($tag, $type, $count, $val) => pack('nnN', $tag, $type, $count) . $val;
+    $make = "Apple\0"; $base = 8; $ifd0Len = 2 + 12 * 3 + 4; $gpsEntries = 8; $gpsLen = 2 + 12 * $gpsEntries + 4;
+    $gpsOff = $base + $ifd0Len + strlen($make); $dataOff = $gpsOff + $gpsLen;
+    $latD = $rat($lat[0], 1) . $rat($lat[1], 1) . $rat($lat[2], 100); $lngD = $rat($lng[0], 1) . $rat($lng[1], 1) . $rat($lng[2], 100);
+    $alt = $rat(1234, 100); $ts = $rat(17, 1) . $rat(5, 1) . $rat(33, 1);
+    $ifd0 = pack('n', 3) . $ent(0x010F, 2, strlen($make), pack('N', $base + $ifd0Len)) . $ent(0x0112, 3, 1, pack('nn', 6, 0)) . $ent(0x8825, 4, 1, pack('N', $gpsOff)) . pack('N', 0);
+    $gps = pack('n', $gpsEntries) . $ent(0, 1, 4, "\x02\x02\x00\x00") . $ent(1, 2, 2, $latRef . "\0\0\0") . $ent(2, 5, 3, pack('N', $dataOff))
+         . $ent(3, 2, 2, $lngRef . "\0\0\0") . $ent(4, 5, 3, pack('N', $dataOff + strlen($latD))) . $ent(5, 1, 1, "\x00\0\0\0")
+         . $ent(6, 5, 1, pack('N', $dataOff + strlen($latD) + strlen($lngD))) . $ent(7, 5, 3, pack('N', $dataOff + strlen($latD) + strlen($lngD) + strlen($alt))) . pack('N', 0);
+    $exif = "Exif\0\0" . 'MM' . pack('n', 42) . pack('N', $base) . $ifd0 . $make . $gps . $latD . $lngD . $alt . $ts;
+    file_put_contents($path, substr($j, 0, 2) . "\xFF\xE1" . pack('n', strlen($exif) + 2) . $exif . substr($j, 2));
+}
+
 function make_minimal_mp4($path, $durationSeconds, $timescale = 1) {
     $ftypBody = 'isom' . pack('N', 0);
     $ftyp = pack('N', 8 + strlen($ftypBody)) . 'ftyp' . $ftypBody;
@@ -1881,6 +1901,40 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
 }
 
 /* ======================================================================= *
+ * The REAL 1.1.1 script builds up view counts; then 2.0.0 is dropped over it.
+ * (Skipped if the v1.1.1 tag isn't in this checkout.) Unlike the imitation
+ * upgrade fixtures above, this is the actual old code writing the actual old
+ * data files.
+ * ======================================================================= */
+
+echo "== upgrade from the real v1.1.1 script ==\n";
+$v1Source = (string) @shell_exec('git -C ' . escapeshellarg(dirname(__DIR__)) . ' show v1.1.1:index.php 2>/dev/null');
+if (strlen($v1Source) < 1000) {
+    echo "  skip  real v1.1.1 upgrade (the v1.1.1 tag isn't available in this checkout)\n";
+} else {
+    foreach (['sqlite', 'json'] as $v1Flavour) {
+        $fxReal = new_fixture_dir("upgrade-real-$v1Flavour");
+        make_jpeg("$fxReal/a.jpg", 40, 40, 10, 10, 10); make_jpeg("$fxReal/b.jpg", 40, 40, 20, 20, 20);
+        $oldCode = str_replace("define('TRACK_VIEWS', false)", "define('TRACK_VIEWS', true)", $v1Source);
+        if ($v1Flavour === 'json') $oldCode = str_replace("in_array('sqlite', PDO::getAvailableDrivers(), true)", 'false', $oldCode);
+        file_put_contents("$fxReal/index.php", $oldCode);
+        $portReal = find_free_port(); start_server($fxReal, $portReal); $baseReal = "http://127.0.0.1:$portReal";
+        for ($i = 0; $i < 3; $i++) http_get("$baseReal/");
+        for ($i = 0; $i < 5; $i++) http_get("$baseReal/?track=a.jpg");
+        for ($i = 0; $i < 2; $i++) http_get("$baseReal/?track=b.jpg");
+        [, $v1Page] = http_get("$baseReal/");
+        $v1Files = array_values(array_filter(scandir($fxReal), fn($f) => str_starts_with($f, '.gallery-stats')));
+        check("[real 1.1.1, $v1Flavour] the old script really recorded 5 and 2 views and wrote its own stats file", str_contains($v1Page, 'data-photo="a.jpg">&#128065; 5<') && str_contains($v1Page, 'data-photo="b.jpg">&#128065; 2<') && $v1Files !== []);
+        file_put_contents("$fxReal/index.php", str_replace("define('TRACK_VIEWS', false)", "define('TRACK_VIEWS', true)", $indexContents));   // the upgrade: same folder, same data
+        [, $v2Page] = http_get("$baseReal/");
+        check("[real 1.1.1, $v1Flavour] after swapping in 2.0.0, both per-photo counts carry over exactly (5 and 2)", str_contains($v2Page, 'data-photo="a.jpg">&#128065; 5<') && str_contains($v2Page, 'data-photo="b.jpg">&#128065; 2<'));
+        check("[real 1.1.1, $v1Flavour] ...and the sitewide total carries over (4 loads under 1.1.1, plus this one)", str_contains($v2Page, '· 5 views'));
+        $leftover = ''; foreach (scandir($fxReal) as $f) if (str_starts_with($f, '.gallery-stats') && !str_ends_with($f, '.php')) $leftover .= (string) file_get_contents("$fxReal/$f");
+        check("[real 1.1.1, $v1Flavour] ...with no readable photo name left in any stats file, and the old JSON file gone", !str_contains($leftover, 'a.jpg') && !str_contains($leftover, 'b.jpg') && !is_file("$fxReal/.gallery-stats.json"));
+    }
+}
+
+/* ======================================================================= *
  * FIXTURE: "gps" — EXIF GPS auto-fill in the admin, for JPEG and (where
  * Imagick can write/read HEIC) HEIC. Never covered before: 48°51'30.24"N
  * 2°17'40.2"E is 48.8584, 2.2945; the southern/western pair checks the
@@ -1893,6 +1947,7 @@ $fxGps = new_fixture_dir('gps');
 make_gps_jpeg("$fxGps/north-east.jpg", 'N', [[48, 1], [51, 1], [3024, 100]], 'E', [[2, 1], [17, 1], [402, 10]]);
 make_gps_jpeg("$fxGps/south-west.jpg", 'S', [[33, 1], [51, 1], [0, 1]], 'W', [[151, 1], [12, 1], [0, 1]]);
 make_jpeg("$fxGps/no-gps.jpg", 60, 60, 80, 80, 80);
+make_iphone_gps_jpeg("$fxGps/iphone.jpg", 'N', [37, 46, 2964], 'W', [122, 25, 984]);   // San Francisco
 $heicOk = false;
 if (class_exists('Imagick') && count(Imagick::queryFormats('HEIC')) > 0) {
     try {
@@ -1917,6 +1972,7 @@ $gpsCard = function ($body, $name) {
 };
 check('a JPEG\'s EXIF GPS pre-fills the admin\'s location fields (N/E)', str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '2.2945'));
 check('southern and western hemispheres come out negative', str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-33.85') && str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-151.2'));
+check('an iPhone-style (big-endian EXIF, extra tags) JPEG pre-fills too: San Francisco is 37.7749, -122.4194 (west is negative)', str_contains($gpsCard($gpsAdmin, 'iphone.jpg'), '37.7749') && str_contains($gpsCard($gpsAdmin, 'iphone.jpg'), '-122.4194'));
 check('a JPEG with no GPS block gets no pre-filled location', !preg_match('/value="-?\d+\.\d+"/', $gpsCard($gpsAdmin, 'no-gps.jpg')));
 if ($heicOk) {
     check('a HEIC\'s EXIF GPS pre-fills the admin\'s location fields too', str_contains($gpsCard($gpsAdmin, 'phone.heic'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'phone.heic'), '2.2945'));

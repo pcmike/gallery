@@ -83,6 +83,13 @@ class Browser:
         self.call("Emulation.setDeviceMetricsOverride", {"width": w, "height": h, "deviceScaleFactor": 1, "mobile": mobile})
     def key(self, key, code, vk):
         for t in ("keyDown", "keyUp"): self.call("Input.dispatchKeyEvent", {"type": t, "key": key, "code": code, "windowsVirtualKeyCode": vk})
+    def swipe(self, x1, y1, x2, y2, steps=6):
+        """A real touch drag: touchStart, a few touchMoves, touchEnd (needs touch emulation on)."""
+        self.call("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x1, "y": y1}]})
+        for i in range(1, steps + 1):
+            self.call("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x1 + (x2 - x1) * i / steps, "y": y1 + (y2 - y1) * i / steps}]})
+        self.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        self.drain(0.3)
     def screenshot(self, path):
         open(path, "wb").write(base64.b64decode(self.call("Page.captureScreenshot", {"format": "png"})["data"]))
     def problems(self, ignore=()):
