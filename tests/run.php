@@ -1515,6 +1515,42 @@ $treeJson = json_decode($treeBody, true);
 check('the whole-tree export is JSON keyed by folder path, root as ""', $treeStatus === 200 && is_array($treeJson) && array_key_exists('', $treeJson) && isset($treeJson['Europe']) && isset($treeJson['Europe/France/Paris']));
 check('...and carries the saved fields', ($treeJson['Europe']['description'] ?? '') !== '' && ($treeJson['Europe']['dates'] ?? '') === 'June 12-15, 2026');
 
+// Two admin "tabs" on one record: a stale save is refused, not silently
+// overwritten; a save to a *different* record in the same folder is fine.
+$hashFor = function ($body, $file) {
+    return preg_match('/item-filename">[^<]*' . preg_quote($file, '/') . '<\/div>\s*<form method="post">.*?name="loaded_hash" value="([a-f0-9]{32})"/s', $body, $m) ? $m[1] : null;
+};
+[, $tabA] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
+$eiffelHashA = $hashFor($tabA, 'eiffel.jpg');
+$louvreHashA = $hashFor($tabA, 'louvre.jpg');
+check('the admin grid embeds a per-record fingerprint in each item form', $eiffelHashA !== null && $louvreHashA !== null && $eiffelHashA !== $louvreHashA);
+[, $tabBSave] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'eiffel.jpg', 'caption' => 'Saved from tab B', 'loaded_hash' => $eiffelHashA]);
+check('tab B saves eiffel with the fingerprint it loaded: accepted', str_contains($tabBSave, 'class="flash ok"'));
+[, $tabAStale] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'eiffel.jpg', 'caption' => 'Tab A overwrite attempt', 'loaded_hash' => $eiffelHashA]);
+check('tab A then saves eiffel from its now-stale page: refused with a clear message', str_contains($tabAStale, 'class="flash error"') && str_contains($tabAStale, 'was changed somewhere else'));
+[, $afterStale] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France/Paris'), ["Cookie: $depthCookie"]);
+check('...and the refused save changed nothing (tab B\'s caption survives)', str_contains($afterStale, 'Saved from tab B') && !str_contains($afterStale, 'Tab A overwrite attempt'));
+[, $tabALouvre] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'louvre.jpg', 'caption' => 'Different photo, same folder', 'loaded_hash' => $louvreHashA]);
+check('a stale page can still save a *different* photo in the same folder (no false conflict)', str_contains($tabALouvre, 'class="flash ok"'));
+[, $tabAFresh] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
+[, $tabARetry] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'eiffel.jpg', 'caption' => 'Tab A, after reloading', 'loaded_hash' => $hashFor($tabAFresh, 'eiffel.jpg')]);
+check('after reloading, the same edit goes through', str_contains($tabARetry, 'class="flash ok"'));
+// Folder settings get the same protection.
+[, $folderPage] = http_get("$baseDepth/?admin&folder=Europe", [$depthAuth, "Cookie: $depthCookie"]);
+$folderHash = preg_match('/action" value="save_folder_identity">\s*<input type="hidden" name="loaded_hash" value="([a-f0-9]{32})"/', $folderPage, $fm) ? $fm[1] : null;
+check('the folder settings form carries a fingerprint too', $folderHash !== null);
+$depthPost('&folder=Europe', ['action' => 'save_folder_identity', 'display_name' => 'Europe 2026', 'dates' => 'Changed in tab B', 'loaded_hash' => $folderHash]);
+[, $folderStale] = $depthPost('&folder=Europe', ['action' => 'save_folder_identity', 'display_name' => 'Europe 2026', 'dates' => 'Stale overwrite', 'loaded_hash' => $folderHash]);
+check('a stale folder-settings save is refused too', str_contains($folderStale, 'class="flash error"') && str_contains($folderStale, 'was changed somewhere else'));
+[, $folderAfter] = http_get("$baseDepth/");
+check('...leaving the newer value in place', str_contains($folderAfter, 'Changed in tab B') && !str_contains($folderAfter, 'Stale overwrite'));
+
+// Admin page pieces.
+check('the Export section warns that the file records hidden items and GPS', str_contains($parisAdminBody, 'Handle the file with care') && str_contains($parisAdminBody, 'hidden'));
+check('the directive reference explains each tag next to its insert button', str_contains($depthAdminBody, 'admin-reference-row') && str_contains($depthAdminBody, 'Marks the item sold') && str_contains($depthAdminBody, 'data-snippet="{sold}"'));
+check('the directive reference page script collapses it on a phone-width screen', str_contains($depthAdminBody, "matchMedia('(max-width: 600px)')") && str_contains($depthAdminBody, "removeAttribute('open')"));
+check('a caption badge is a keyboard-reachable button that opens a popover on tap, not a tooltip only', str_contains($parisAfterCaption, 'role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)"') && str_contains($parisAfterCaption, 'function toggleCaptionPopover(badge, e)') && !str_contains($parisAfterCaption, '.item-badge.caption-badge { pointer-events: none; }'));
+
 // FOLDER_DISPLAY_MODE = 'inline': folders are only an organizing
 // convenience, so a folder's own page shows everything beneath it as one
 // flat run — no cover cards at any depth.
@@ -1550,6 +1586,39 @@ check('photos in subfolders with AUTO_GROUP_BY_FOLDER off produce a setup notice
 check('...which names no folder or file', !str_contains($subNoticeBody, 'TopSecretTrip') && !str_contains($subNoticeBody, 'Day1'));
 check('...and the gallery itself still shows only the loose photo', str_contains($subNoticeBody, 'alt="loose.jpg"') && !str_contains($subNoticeBody, 'a.jpg') && !str_contains($subNoticeBody, 'b.jpg'));
 check('the defaults fixture (a flat folder) gets no such notice', $mapOffBody !== '' && !str_contains($mapOffBody, 'found in subfolders'));
+
+// Root folder order: natural name order (Day 2 before Day 10, case-blind),
+// not scan order — and folder mtime when PHOTO_SORT_ORDER = 'mtime'.
+$fxFolderOrder = new_fixture_dir('folderorder');
+foreach (['Day 10', 'Day 2', 'day 1'] as $i => $name) {
+    mkdir("$fxFolderOrder/$name");
+    make_jpeg("$fxFolderOrder/$name/p.jpg", 60, 60, 30 * $i + 10, 10, 10);
+}
+write_patched_index("$fxFolderOrder/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true']);
+$portFolderOrder = find_free_port();
+start_server($fxFolderOrder, $portFolderOrder);
+[, $folderOrderBody] = http_get("http://127.0.0.1:$portFolderOrder/");
+$posDay1 = strpos($folderOrderBody, 'id="group-day-1"');
+$posDay2 = strpos($folderOrderBody, 'id="group-day-2"');
+$posDay10 = strpos($folderOrderBody, 'id="group-day-10"');
+check('root folders sort naturally by name: day 1, Day 2, Day 10 (not scan order, not case-sensitive)', $posDay1 !== false && $posDay1 < $posDay2 && $posDay2 < $posDay10);
+
+$fxFolderMtime = new_fixture_dir('foldermtime');
+foreach (['Alpha', 'Bravo', 'Charlie'] as $name) {
+    mkdir("$fxFolderMtime/$name");
+    make_jpeg("$fxFolderMtime/$name/p.jpg", 60, 60, 40, 40, 40);
+}
+touch("$fxFolderMtime/Charlie", time() - 3000);
+touch("$fxFolderMtime/Alpha", time() - 2000);
+touch("$fxFolderMtime/Bravo", time() - 1000);
+write_patched_index("$fxFolderMtime/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'PHOTO_SORT_ORDER' => "'mtime'"]);
+$portFolderMtime = find_free_port();
+start_server($fxFolderMtime, $portFolderMtime);
+[, $folderMtimeBody] = http_get("http://127.0.0.1:$portFolderMtime/");
+$mA = strpos($folderMtimeBody, 'id="group-alpha"');
+$mB = strpos($folderMtimeBody, 'id="group-bravo"');
+$mC = strpos($folderMtimeBody, 'id="group-charlie"');
+check('with PHOTO_SORT_ORDER=mtime, root folders sort by the folder\'s own mtime, oldest first (Charlie, Alpha, Bravo)', $mC !== false && $mC < $mA && $mA < $mB);
 
 /* ======================================================================= *
  * FIXTURE: "gps" — EXIF GPS auto-fill in the admin, for JPEG and (where

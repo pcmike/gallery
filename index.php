@@ -1453,16 +1453,22 @@ function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalCl
 // then rebuilds the flat photo list to match, so the lightbox's index
 // numbering (shared by both the note thumbnails and the gallery cards)
 // stays consistent with the new display order.
-// A folder-group with an admin-set position (see ?admin) sorts ahead of
-// every folder without one, ascending — it replaces only the *natural*
-// ranking, so a prose mention in the root's own .md still positions a
-// folder first, same precedence as for any other group.
-$folderSortRank = [];
+// Folder-groups order among themselves by order_folder_children(): an
+// admin-set position first (see ?admin), then natural name order — or
+// folder mtime when PHOTO_SORT_ORDER says so. They take over each
+// other's existing natural-order *slots* rather than jumping ahead of
+// everything, so how folders interleave with filename groups doesn't
+// change; only the folders' order among themselves does. It replaces
+// only the natural ranking, so a prose mention in the root's own .md
+// still positions a folder first, same precedence as for any group.
+$folderSlots = [];
 foreach ($folderGroupKeys as $folderKey => $_true) {
-    $sortOrder = folder_display_meta($dir, $folderKey)['sortOrder'];
-    if ($sortOrder !== null) {
-        $folderSortRank[$folderKey] = $sortOrder - 1000000000;
-    }
+    $folderSlots[] = $naturalRank[$groups[$folderKey][0]] ?? PHP_INT_MAX;
+}
+sort($folderSlots);
+$folderSortRank = [];
+foreach (order_folder_children($dir, '', array_keys($folderGroupKeys)) as $slot => $folderKey) {
+    $folderSortRank[$folderKey] = $folderSlots[$slot];
 }
 $groupOrder = compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank, $folderSortRank, $folderGroupKeys);
 $orderedGroups = [];
@@ -2507,17 +2513,21 @@ function render_admin_folder_nav($files, $currentFolder) {
  *  byte-for-byte save guarantee the textarea itself keeps. */
 function render_admin_reference_panel() {
     $directives = [
-        ['Group a box', '{group: Name}'],
-        ['Claim photos', '{photos: a.jpg, b.jpg}'],
-        ['Accent color', '{color: #ff0000}'],
-        ['Sold', '{sold}'],
-        ['Reserved', '{reserved}'],
+        ['Group a box', '{group: Name}', 'Names a gallery box, or renames an auto-detected one.'],
+        ['Claim photos', '{photos: a.jpg, b.jpg}', 'Assigns specific files to this paragraph, whatever their filenames.'],
+        ['Accent color', '{color: #ff0000}', 'A custom accent color for that group\'s box.'],
+        ['Sold', '{sold}', 'Marks the item sold: dimmed text, grayscale photos, a red ribbon.'],
+        ['Reserved', '{reserved}', 'Marks it reserved (also {held}): an orange tag, photos stay in color.'],
     ];
+    // Open by default (a desktop has room for it); the page script
+    // collapses it on a phone-width screen, and it's a plain <details>,
+    // so it toggles either way.
     $html = '<details class="admin-reference" open><summary>Directive reference</summary><div class="admin-reference-body">';
-    $html .= '<p>Click to insert at the cursor:</p><div class="admin-reference-buttons">';
-    foreach ($directives as [$label, $snippet]) {
-        $html .= '<button type="button" class="admin-insert-btn" data-snippet="' . htmlspecialchars($snippet, ENT_QUOTES, 'UTF-8') . '">'
-                . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</button>';
+    $html .= '<p>Click a button to insert that directive at the cursor:</p><div class="admin-reference-list">';
+    foreach ($directives as [$label, $snippet, $what]) {
+        $html .= '<div class="admin-reference-row"><button type="button" class="admin-insert-btn" data-snippet="' . htmlspecialchars($snippet, ENT_QUOTES, 'UTF-8') . '">'
+                . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</button> <code>' . htmlspecialchars($snippet, ENT_QUOTES, 'UTF-8') . '</code> <span class="muted">'
+                . htmlspecialchars($what, ENT_QUOTES, 'UTF-8') . '</span></div>';
     }
     $html .= '</div><p class="admin-reference-note">Full syntax, including multi-file groups and auto-linked mentions, is documented in the README.</p></div></details>';
     return $html;
@@ -2530,6 +2540,35 @@ function render_admin_reference_panel() {
  * implies success in another — reported per-action, not assumed
  * all-or-nothing.
  */
+/** A short fingerprint of one record as it was when an admin form was
+ *  rendered, posted back as `loaded_hash` and compared against the record
+ *  as it is at save time, under the same lock. If it differs, someone
+ *  else (a second tab, a second device) changed that exact record in the
+ *  meantime — warn instead of silently overwriting. Per-record, not
+ *  per-file: two sessions editing *different* photos in one folder never
+ *  collide. A save with no loaded_hash at all (an older client) skips the
+ *  check rather than failing. */
+function admin_record_hash($record) {
+    return md5(json_encode($record));
+}
+
+/** The folder-level fields the "This folder's own settings" form edits,
+ *  normalized so the render-time and save-time fingerprints match. */
+function folder_identity_record($data) {
+    return [
+        'displayName' => $data['displayName'] ?? null,
+        'description' => $data['description'] ?? null,
+        'dates' => $data['dates'] ?? null,
+        'sortOrder' => $data['sortOrder'] ?? null,
+    ];
+}
+
+/** A function, not a const: the admin route runs before execution ever
+ *  reaches this point in the file, and only functions are hoisted. */
+function admin_stale_message() {
+    return ' was changed somewhere else (another tab or device) since you opened this page, so nothing was saved. Reload to see the current values, then make your change again.';
+}
+
 /** Plain single-line-ish text from a form field: control characters
  *  dropped, whitespace runs collapsed, length capped. Output is always
  *  HTML-escaped where it's shown, so this is about tidiness and bounding
@@ -2570,8 +2609,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (($lat !== '' || $lng !== '') && !is_valid_coordinate($lat === '' ? 0 : $lat, $lng === '' ? 0 : $lng)) {
             return ['type' => 'error', 'text' => 'That latitude/longitude isn\'t a valid coordinate.'];
         }
-        items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility, $restriction) {
+        $loadedHash = isset($_POST['loaded_hash']) ? (string) $_POST['loaded_hash'] : null;
+        $stale = false;
+        items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility, $restriction, $loadedHash, &$stale) {
             $entry = $data['items'][$bare] ?? [];
+            if ($loadedHash !== null && !hash_equals(admin_record_hash($entry), $loadedHash)) {
+                $stale = true;
+                return;
+            }
             if ($caption !== '') { $entry['caption'] = $caption; } else { unset($entry['caption']); }
             if ($web !== '') { $entry['web'] = $web; } else { unset($entry['web']); }
             if ($lat !== '' && $lng !== '') {
@@ -2583,6 +2628,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             if ($restriction === 'inherit') { unset($entry['restriction']); } else { $entry['restriction'] = $restriction; }
             $data['items'][$bare] = $entry;
         });
+        if ($stale) {
+            return ['type' => 'error', 'text' => '"' . $bare . '"' . admin_stale_message()];
+        }
         return ['type' => 'ok', 'text' => 'Saved "' . $bare . '".'];
     }
 
@@ -2632,11 +2680,20 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
                 return ['type' => 'error', 'text' => 'Position must be a whole number (or blank for natural order).'];
             }
         }
-        items_update($adminFolderReal, function (&$data) use ($updates) {
+        $loadedHash = isset($_POST['loaded_hash']) ? (string) $_POST['loaded_hash'] : null;
+        $stale = false;
+        items_update($adminFolderReal, function (&$data) use ($updates, $loadedHash, &$stale) {
+            if ($loadedHash !== null && !hash_equals(admin_record_hash(folder_identity_record($data)), $loadedHash)) {
+                $stale = true;
+                return;
+            }
             foreach ($updates as $k => $v) {
                 $data[$k] = $v;
             }
         });
+        if ($stale) {
+            return ['type' => 'error', 'text' => 'This folder\'s settings' . admin_stale_message()];
+        }
         return ['type' => 'ok', 'text' => 'Folder settings saved.'];
     }
 
@@ -2940,7 +2997,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .md-badge.inactive { background:rgba(255,255,255,0.08); color:var(--muted); }
   .admin-reference { margin-top:10px; font-size:0.85rem; }
   .admin-reference summary { cursor:pointer; color:var(--muted); }
-  .admin-reference-buttons { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+  .admin-reference-list { margin:8px 0; }
+  .admin-reference-row { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 10px; margin-bottom:6px; }
+  .admin-reference-row code { background:#101012; padding:1px 6px; border-radius:4px; font-size:0.78rem; }
   .admin-insert-btn { background:#2a2a2e; color:var(--text); font-size:0.78rem; padding:4px 9px; }
   .admin-reference-note { color:var(--muted); font-size:0.78rem; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:14px; }
@@ -2979,6 +3038,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <form method="post">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="save_folder_identity">
+      <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
       <div class="field">
         <label>Display name (shown on its cover card instead of "<?= htmlspecialchars(basename($adminFolderPath), ENT_QUOTES, 'UTF-8') ?>")</label>
         <input type="text" name="display_name" value="<?= htmlspecialchars($itemsHere['displayName'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
@@ -3140,6 +3200,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         <form method="post">
           <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
           <input type="hidden" name="action" value="save_item">
+          <input type="hidden" name="loaded_hash" value="<?= admin_record_hash($entry) ?>">
           <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
           <div class="field">
             <label>Caption</label>
@@ -3198,6 +3259,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <div class="panel" style="margin-top:20px;">
     <h2 style="margin-top:0;">Export</h2>
     <p class="muted">Downloads this folder's captions, locations, web links, display name, and chosen cover as JSON — the only backup this data has.</p>
+    <p class="muted"><strong>Handle the file with care:</strong> it also records which items and folders you've hidden, and any GPS coordinates you've entered. Pasting it into a support email or leaving it somewhere public would reveal both, regardless of what's actually hidden on the gallery.</p>
     <form method="post">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="export_items">
@@ -3211,6 +3273,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   </div>
 </div>
 <script>
+  // The directive reference starts expanded on a desktop and collapsed
+  // on a phone-width screen; it's a plain <details>, so either can toggle.
+  if (window.matchMedia && window.matchMedia('(max-width: 600px)').matches) {
+    document.querySelectorAll('.admin-reference').forEach(function (d) { d.removeAttribute('open'); });
+  }
   document.querySelectorAll('.admin-insert-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       const textarea = btn.closest('.md-file').querySelector('.adm-textarea');
@@ -4255,7 +4322,10 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // .card-badges) rather than stacking into a cramped cluster.
     $itemBadges = '';
     if (!empty($itemEntry['caption'])) {
-        $itemBadges .= '<span class="item-badge caption-badge" title="' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8') . '">&#128172;</span>';
+        // A hover tooltip on desktop (title); a tap target that opens a
+        // small popover on a touch screen, where hover doesn't exist.
+        $itemBadges .= '<span class="item-badge caption-badge" title="' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8')
+                     . '" role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') toggleCaptionPopover(this, event)">&#128172;</span>';
     }
     if (photo_location_visible($itemEntry ?? [])) {
         $loc = $itemEntry['location'];
@@ -5035,7 +5105,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     line-height: 1;
   }
   a.item-badge { pointer-events: auto; }
-  .item-badge.caption-badge { pointer-events: none; }
+  .item-badge.caption-badge { pointer-events: auto; cursor: pointer; }
+  .caption-popover {
+    position: absolute; left: 8px; right: 8px; bottom: 34px; z-index: 3;
+    background: rgba(0,0,0,0.88); color: #fff; padding: 8px 10px;
+    border-radius: 8px; font-size: 0.85rem; line-height: 1.35;
+    pointer-events: none; overflow-wrap: anywhere;
+  }
   .video-duration {
     position: absolute;
     bottom: 6px;
@@ -5402,6 +5478,27 @@ if ($currentFolderPath !== null) {
       .then((data) => { if (data && data.ok) applyViewUpdate(data); })
       .catch(() => {});
   }
+
+  // Caption badge: tap/click/Enter shows the caption in a small popover
+  // on that card (textContent, so it's never parsed as HTML); tapping
+  // anywhere else, or the badge again, dismisses it. Stops the click
+  // from also opening the lightbox.
+  function toggleCaptionPopover(badge, e) {
+    e.stopPropagation();
+    e.preventDefault();
+    const card = badge.closest('.card');
+    if (!card) return;
+    const existing = card.querySelector('.caption-popover');
+    document.querySelectorAll('.caption-popover').forEach(function (p) { p.remove(); });
+    if (existing) return;
+    const pop = document.createElement('div');
+    pop.className = 'caption-popover';
+    pop.textContent = badge.getAttribute('title');
+    card.appendChild(pop);
+  }
+  document.addEventListener('click', function () {
+    document.querySelectorAll('.caption-popover').forEach(function (p) { p.remove(); });
+  });
 
   function openLightbox(index) {
     current = index;
