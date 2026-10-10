@@ -1597,7 +1597,7 @@ $baseDepth = "http://127.0.0.1:$portDepth";
 check('the root shows a cover card per top-level folder', str_contains($depthRoot, 'id="group-europe"') && str_contains($depthRoot, 'id="group-asia"'));
 check('the root does not show nested folders as cards of their own', !str_contains($depthRoot, 'id="group-france"') && !str_contains($depthRoot, 'id="group-paris"'));
 check('Europe\'s count is recursive and excludes the hidden nested Germany (intro + 3 France = 4)', (bool) preg_match('/id="group-europe">.*?4 photos/s', $depthRoot));
-check('a .md mention of a folder links to its ?folder= page in overview mode', (bool) preg_match('/class="linked-photos-jump" href="\?folder=Europe">View 4 photos &rarr;/', $depthRoot));
+check('a .md mention of a folder in overview mode adds no thumbnail strip (the cover card is on the same page), though the paragraph stays and the card is there', !str_contains($depthRoot, 'class="linked-photos-jump" href="?folder=Europe"') && str_contains($depthRoot, 'id="item-europe"') && str_contains($depthRoot, '<div class="folder-cover" id="group-europe"'));
 
 [$europeStatus, $europeBody] = http_get("$baseDepth/?folder=Europe");
 check('?folder=Europe returns 200', $europeStatus === 200);
@@ -2332,11 +2332,32 @@ check('[settings file] a password containing "//", a comma and a brace is read b
 // The admin says what comes from the file, by name only.
 file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123']));
 [, $cfgAdmin] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
-check('[settings file] the root Settings tab says the file is in use and names the settings it provides, never their values', str_contains($cfgAdmin, 'is in use and keeps its settings') && str_contains($cfgAdmin, 'ENABLE_VIDEO, ADMIN_PASSWORD') && !str_contains($cfgAdmin, 'cfg-pw-123'));
+check('[settings file] the root Settings tab no longer carries a "settings file" paragraph (Site settings is where that lives), and never shows a password', !str_contains($cfgAdmin, 'is in use and keeps its settings') && !str_contains($cfgAdmin, 'cfg-pw-123'));
 unlink("$fxCfg/.gallery-config.php");
 [, $cfgAdmin2] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
 touch("$fxCfg/index.php", time() - 3600);
 check('[settings file] with no password anywhere and an old index.php, ?admin does not exist (404)', http_get("$baseCfg/?admin")[0] === 404);
+
+echo "== dates suggested from the photos ==\n";
+$fxDates = new_fixture_dir('datesug');
+mkdir("$fxDates/Trip"); mkdir("$fxDates/Trip/Day2");
+make_jpeg("$fxDates/Trip/a.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$fxDates/Trip/Day2/b.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$fxDates/top.jpg", 60, 60, 30, 30, 30);
+touch("$fxDates/Trip/a.jpg", gmmktime(12, 0, 0, 10, 3, 2026));
+touch("$fxDates/Trip/Day2/b.jpg", gmmktime(12, 0, 0, 10, 9, 2026));
+touch("$fxDates/top.jpg", gmmktime(12, 0, 0, 12, 30, 2025));
+write_patched_index("$fxDates/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ADMIN_PASSWORD' => "'dates-pw-123456'"]);
+$portDates = find_free_port(); start_server($fxDates, $portDates);
+$datesAuth = ['Authorization: Basic ' . base64_encode('x:dates-pw-123456')];
+[, $datesAdmin] = http_get("http://127.0.0.1:$portDates/?admin&folder=Trip", $datesAuth);
+check('[dates] a folder\'s settings offer the span of its photos (here from file dates, subfolders included) with a one-click button, and say where the dates come from', str_contains($datesAdmin, 'span <strong>Oct 3' . "\u{2013}" . '9, 2026</strong>') && str_contains($datesAdmin, 'class="secondary date-suggest" data-dates="Oct 3' . "\u{2013}" . '9, 2026"') && str_contains($datesAdmin, 'files were last modified'));
+[, $datesRoot] = http_get("http://127.0.0.1:$portDates/?admin", $datesAuth);
+check('[dates] the gallery root suggests a range across years', str_contains($datesRoot, 'Dec 30, 2025 ' . "\u{2013}" . ' Oct 9, 2026'));
+check('[dates] nothing is stored or shown to visitors until the form is saved', !str_contains(http_get("http://127.0.0.1:$portDates/?folder=Trip")[1], 'Oct 3'));
+write_data_file("$fxDates/Trip/.gallery-items.php", ['dates' => "Oct 3" . "\u{2013}" . "9, 2026", 'items' => [], 'groups' => []]);
+[, $datesSaved] = http_get("http://127.0.0.1:$portDates/?admin&folder=Trip", $datesAuth);
+check('[dates] once the dates field already holds the suggestion, the suggestion is not offered again', !str_contains($datesSaved, 'class="secondary date-suggest"'));
 
 echo "== settings never destroy data: captions, locations, hide flags and stats survive any setting being switched ==\n";
 

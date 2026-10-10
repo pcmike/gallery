@@ -2634,7 +2634,7 @@ function map_legend_from_points($points) {
  * tiles themselves) — only emitted when there's actually at least one
  * point to plot.
  */
-function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, $radiusMiles = null) {
+function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, $radiusMiles = null, $lazy = false) {
     if (empty($points)) return;
     $clusters = cluster_map_points($points, $radiusMiles ?? MAP_CLUSTER_RADIUS_MILES);
     // Hex-escaped so the raw JSON can sit directly inside a <script>
@@ -2642,7 +2642,7 @@ function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, 
     // contain "</script>", a quote, or an ampersand.
     $clustersJson = json_encode($clusters, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 ?>
-<?php if ($loadLibrary): ?>
+<?php if ($loadLibrary && !$lazy): ?>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <?php endif; ?>
@@ -2658,6 +2658,7 @@ function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, 
 (function () {
   var clusters = <?= $clustersJson ?>;
   var mapEl = document.getElementById('<?= htmlspecialchars($mapId, ENT_QUOTES, 'UTF-8') ?>');
+  function draw() {
   if (!mapEl || !window.L) return;
   var map = L.map(mapEl);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -2712,6 +2713,13 @@ function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, 
   } else {
     map.fitBounds(allBounds, { padding: [30, 30] });
   }
+  }
+<?php if ($lazy): ?>
+  // Nothing is fetched from anywhere until a visitor asks for the map (see showLazyMap in the page script).
+  (window.__lazyMaps = window.__lazyMaps || {})['<?= htmlspecialchars($mapId, ENT_QUOTES, 'UTF-8') ?>'] = draw;
+<?php else: ?>
+  draw();
+<?php endif; ?>
 })();
 </script>
 <?php
@@ -3731,7 +3739,51 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
 /** The identity form — title, dates, description (and position, for a
  *  folder) — shared by a folder's settings and the gallery's own, so the root
  *  is configured the same way a folder is. */
-function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath) {
+/** "Oct 3 – 9, 2026" style text for two timestamps (a single day when they fall on the same one). */
+function format_date_range($min, $max) {
+    $parts = function ($t) { return ['year' => (int) gmdate('Y', $t), 'mon' => (int) gmdate('n', $t), 'mday' => (int) gmdate('j', $t)]; };
+    $a = $parts($min); $b = $parts($max);
+    $mon = function ($d) { return substr(gmdate('F', gmmktime(0, 0, 0, $d['mon'], 1, 2000)), 0, 3); };
+    if ($a['year'] === $b['year'] && $a['mon'] === $b['mon'] && $a['mday'] === $b['mday']) return $mon($a) . ' ' . $a['mday'] . ', ' . $a['year'];
+    if ($a['year'] === $b['year'] && $a['mon'] === $b['mon']) return $mon($a) . ' ' . $a['mday'] . "\u{2013}" . $b['mday'] . ', ' . $a['year'];
+    if ($a['year'] === $b['year']) return $mon($a) . ' ' . $a['mday'] . ' ' . "\u{2013}" . ' ' . $mon($b) . ' ' . $b['mday'] . ', ' . $a['year'];
+    return $mon($a) . ' ' . $a['mday'] . ', ' . $a['year'] . ' ' . "\u{2013}" . ' ' . $mon($b) . ' ' . $b['mday'] . ', ' . $b['year'];
+}
+
+/**
+ * What dates do a folder's photos span? Offered to the admin as a suggestion for the folder's Dates field and never
+ * published unless they save it. Uses each JPEG's own capture date when it has one, else the file's modified date.
+ * Looks at no more than $cap photos, so a huge folder can't slow the admin down. Returns null with nothing to go on.
+ */
+function suggest_folder_dates($dir, $fileList, $cap = 300) {
+    $times = [];
+    $fromExif = 0;
+    $looked = 0;
+    foreach ($fileList as $f) {
+        if (is_video_file($f)) continue;
+        if (++$looked > $cap) break;
+        $real = resolve_real_path($dir, $f);
+        if (!$real || !is_file($real)) continue;
+        $t = null;
+        if (function_exists('exif_read_data') && preg_match('/\.jpe?g$/i', $f)) {
+            $ex = @exif_read_data($real, 'EXIF', false);
+            $raw = is_array($ex) ? ($ex['DateTimeOriginal'] ?? $ex['DateTimeDigitized'] ?? null) : null;
+            if (is_string($raw) && preg_match('/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)/', $raw, $m) && (int) $m[1] > 1971 && checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+                $t = gmmktime((int) $m[4], (int) $m[5], (int) $m[6], (int) $m[2], (int) $m[3], (int) $m[1]);
+                $fromExif++;
+            }
+        }
+        if ($t === null) $t = @filemtime($real) ?: null;
+        if ($t !== null) $times[] = $t;
+    }
+    if (!$times) return null;
+    return [
+        'text' => format_date_range(min($times), max($times)),
+        'source' => $fromExif * 2 >= count($times) ? 'the dates the photos were taken' : 'the dates the files were last modified (these photos carry no capture date)',
+    ];
+}
+
+function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $dateSuggestion = null) {
     $isRoot = $adminFolderPath === null;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $name = $isRoot ? basename(__DIR__) : basename($adminFolderPath);
@@ -3753,7 +3805,11 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath) {
         <div class="field">
           <label>Dates (optional)</label>
           <input type="text" name="dates" maxlength="80" placeholder="June 12&ndash;15, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
-          <p class="hint">Typed by you, never read from the photos' EXIF, so it can't reveal when you were away.</p>
+          <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
+            <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong> (<?= $esc($dateSuggestion['source']) ?>).
+              <button type="button" class="secondary date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
+          <?php endif; ?>
+          <p class="hint">Only what you save is shown to visitors, so you can change the suggestion or leave this blank (dates can reveal when you were away).</p>
         </div>
         <?php if (!$isRoot): ?>
         <div class="field">
@@ -4251,7 +4307,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .panel { background:var(--card); border-radius:10px; padding:16px; margin-bottom:16px; }
   label { display:block; font-size:0.8rem; color:var(--muted); margin-bottom:3px; }
   input[type=text], input[type=url], input[type=number], textarea, select {
-    width:100%; background:#101012; border:1px solid #2a2a2e; color:var(--text);
+    color-scheme:dark; width:100%; background:#101012; border:1px solid #2a2a2e; color:var(--text);
     border-radius:6px; padding:7px 9px; font-size:0.9rem; font-family:inherit;
   }
   textarea { min-height:160px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; resize:vertical; }
@@ -4384,7 +4440,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <body>
 <header class="admin-bar">
   <div class="admin-bar-inner">
-    <a class="back" href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; Gallery</a>
+    <?php // Back to the page you were editing: a folder's admin returns to that folder, not to the front page. ?>
+    <a class="back" href="<?= htmlspecialchars($adminFolderPath === null ? gallery_root_href() : '?folder=' . rawurlencode($adminFolderPath), ENT_QUOTES, 'UTF-8') ?>">&larr; Gallery</a>
     <h1>Gallery Admin</h1>
     <span class="crumb">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span>
     <nav class="admin-tabs" role="tablist" aria-label="Sections">
@@ -4571,7 +4628,7 @@ foreach ($adminFiles as $file) {
   <?php if ($adminFolderPath !== null): ?>
   <section class="panel" id="settings">
     <h2 class="section-title">This folder's own settings</h2>
-    <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath); ?>
+    <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, suggest_folder_dates($dir, folder_files_under($files, $adminFolderPath))); ?>
     <h3 class="subhead">Privacy</h3>
     <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (ENABLE_PHOTO_LOCATION is off: nothing shows regardless)' : ''), $locWarn); ?>
     <div class="privacy-row">
@@ -4590,7 +4647,7 @@ foreach ($adminFiles as $file) {
   <?php else: ?>
   <section class="panel" id="settings">
     <h2 class="section-title">Gallery settings</h2>
-    <?php render_admin_identity_form($itemsHere, $csrfToken, null); ?>
+    <?php render_admin_identity_form($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files)); ?>
     <?php if (!empty($itemsHere['cover'])): ?>
       <p class="muted" style="margin-top:10px;">Cover photo (the picture in shared-link previews): <?= htmlspecialchars($itemsHere['cover'], ENT_QUOTES, 'UTF-8') ?> &mdash; choose another with "Set as cover" on a photo in the Photos tab.</p>
     <?php else: ?>
@@ -4599,15 +4656,6 @@ foreach ($adminFiles as $file) {
     <h3 class="subhead">Privacy</h3>
     <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (ENABLE_PHOTO_LOCATION is off: nothing shows regardless)' : ''), $locWarn); ?>
     <?php render_admin_map_form($itemsHere, $csrfToken, true); ?>
-    <h3 class="subhead">Settings file</h3>
-    <?php $cfgApplied = array_values(array_unique($GLOBALS['__gallery_config_applied'] ?? [])); ?>
-    <?php if (is_file(__DIR__ . '/.gallery-config.php')): ?>
-      <p class="muted" style="margin:0;"><code>.gallery-config.php</code> is in use and keeps its settings when you replace <code>index.php</code>.
-        <?= $cfgApplied ? count($cfgApplied) . ' setting' . (count($cfgApplied) === 1 ? '' : 's') . ' come from it: ' . htmlspecialchars(implode(', ', $cfgApplied), ENT_QUOTES, 'UTF-8') . '.' : 'It doesn\'t override anything yet.' ?>
-        Everything else uses the defaults in <code>index.php</code>.</p>
-    <?php else: ?>
-      <p class="muted" style="margin:0;">No settings file. Your settings live in <code>index.php</code>, so replacing it with a newer version resets them. To keep them across updates, put them in a <code>.gallery-config.php</code> next to it (see the README, "Keeping your settings across updates").</p>
-    <?php endif; ?>
   </section>
   <?php endif; ?>
 
@@ -4868,6 +4916,17 @@ foreach ($adminFiles as $file) {
     });
   }
   initFolderTree();
+  // "Use these dates": copies the suggestion into the Dates box; nothing is saved until the form is.
+  [].forEach.call(document.querySelectorAll('.date-suggest'), function (btn) {
+    btn.addEventListener('click', function () {
+      var input = btn.closest('.field').querySelector('input[name=dates]');
+      if (!input) return;
+      input.value = btn.getAttribute('data-dates');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+      btn.remove();
+    });
+  });
   // Settings that are a single switch or number save the moment they change, in place: the control, the little status
   // beside it, and nothing else on the page moves. (The small Save button exists only without JavaScript.)
   [].forEach.call(document.querySelectorAll('.instant-form'), function (form) {
@@ -5864,6 +5923,9 @@ function markdown_to_plaintext($text, $maxLen = 160) {
  * than one group).
  */
 function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status, $permalinkHtml = '') {
+    // A folder shown as a cover card on this very page needs no strip of thumbnails under the paragraph that
+    // mentions it: the card is right there (and carries the paragraph's sold/reserved/colour).
+    if (isset($GLOBALS['folderMentionLinks'][$key])) return '';
     $slug = slugify($key);
     $count = count($groupFiles);
     $groupTotal = 0;
@@ -6553,7 +6615,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     if (!empty($itemEntry['web'])) {
         $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
                      . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
-                     . '" onclick="event.stopPropagation()">&#8505;</a>';
+                     . '" onclick="event.stopPropagation()">&#127760;</a>';
     }
     $colorStyle = $color ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ' inset;"' : '';
     // $anchorId lets a standalone single be a valid "#group-<slug>" jump
@@ -7439,7 +7501,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
      running to the edges of the window. */
   .map-preview { max-width: 1400px; margin: 8px auto 0; padding: 0 24px; }
   .map-preview-heading {
-    font-size: 1rem; margin: 0 0 10px;
+    font-size: 1rem; margin: 0 0 10px; font-weight: 400;
     display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
   }
   .map-preview-link { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
@@ -7489,6 +7551,39 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     opacity: 0.75;
   }
   .lightbox-copy:hover { opacity: 1; }
+  .lightbox-web { text-decoration: none; font-size: 1rem; }
+  .lightbox-map-toggle.off { opacity: 0.35; filter: grayscale(1); }
+  /* The little map in the viewer: over the photo's top left corner; click to enlarge. */
+  .lightbox-map {
+    position: fixed; z-index: 5; width: 170px; height: 130px;
+    border-radius: 8px; overflow: hidden; border: 2px solid rgba(255,255,255,0.85);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.55); cursor: zoom-in; background: #1a1a1c;
+  }
+  .lightbox-map[hidden] { display: none; }
+  .lightbox-map.expanded {
+    left: 50% !important; top: 50% !important; transform: translate(-50%, -50%);
+    width: min(88vw, 900px); height: min(70vh, 640px); cursor: auto;
+  }
+  .lightbox-map img { max-width: none !important; max-height: none !important; border-radius: 0; box-shadow: none; }
+  .lbmap-close, .lbmap-osm { display: none; position: absolute; z-index: 1000; }
+  .lightbox-map.expanded .lbmap-close, .lightbox-map.expanded .lbmap-osm { display: block; }
+  .lbmap-close {
+    top: 8px; right: 8px; width: 34px; height: 34px; padding: 0; border-radius: 50%;
+    background: rgba(0,0,0,0.7); color: #fff; font-size: 1.4rem; line-height: 1; border: none; cursor: pointer;
+  }
+  .leaflet-container a.lbmap-osm {
+    left: 8px; bottom: 22px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px;
+    border-radius: 6px; font-size: 0.78rem; text-decoration: none;
+  }
+  /* Leaflet's panes use large z-indexes; keep them inside their own box so no map can land on top of the viewer. */
+  .leaflet-container { isolation: isolate; z-index: 0; }
+  .lightbox-map.leaflet-container { z-index: 5; }
+  .map-toggle {
+    background: var(--card); color: var(--text); border: 1px solid #2c2c30; border-radius: 8px;
+    padding: 7px 12px; font-size: 0.85rem; cursor: pointer;
+  }
+  .map-toggle:hover { border-color: #46464c; }
+  .map-preview-body[hidden] { display: none; }
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
   .lightbox .close,
   .lightbox .nav {
@@ -7752,9 +7847,14 @@ if ($currentFolderPath !== null) {
 <?php endif; ?>
 
 <?php if ($mapShown && !empty($mapPoints)): ?>
-  <section class="map-preview">
-    <h2 class="map-preview-heading"><?= $currentFolderPath === null ? 'Trip map' : 'Map' ?> <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-preview-link">View full map &rarr;</a></h2>
-    <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius) ?>
+  <section class="map-preview" id="map-preview">
+    <h2 class="map-preview-heading">
+      <button type="button" class="map-toggle" id="map-toggle" aria-expanded="false" aria-controls="map-preview-body">&#128506; <span class="map-toggle-label">Show <?= $currentFolderPath === null ? 'trip map' : 'map' ?></span></button>
+      <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-preview-link">View full map &rarr;</a>
+    </h2>
+    <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
+      <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius, true) ?>
+    </div>
   </section>
 <?php endif; ?>
 
@@ -7775,9 +7875,19 @@ if ($currentFolderPath !== null) {
   <button class="nav prev" onclick="navigate(-1)">&#10094;</button>
   <img id="lightbox-img" src="" alt="">
   <video id="lightbox-video" controls playsinline style="display:none;"></video>
+<?php if (ENABLE_MAP): ?>
+  <div class="lightbox-map" id="lightbox-map" hidden>
+    <button type="button" class="lbmap-close" title="Close the big map" aria-label="Close the big map">&times;</button>
+    <a class="lbmap-osm" href="https://www.openstreetmap.org/" target="_blank" rel="noopener noreferrer">Open in OpenStreetMap &#8599;</a>
+  </div>
+<?php endif; ?>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link to this photo">&#128279;</button>
+    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Open this photo's link" hidden>&#127760;</a>
+<?php if (ENABLE_MAP): ?>
+    <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden>&#128205;</button>
+<?php endif; ?>
   </div>
   <button class="nav next" onclick="navigate(1)">&#10095;</button>
 </div>
@@ -7793,6 +7903,17 @@ if ($currentFolderPath !== null) {
   // filename an unrevealed caption-less photo never meant to publish.
   const captions = <?= json_encode(array_map(function ($f) use ($itemsData) {
       return (!empty($itemsData[$f]['caption'])) ? $itemsData[$f]['caption'] : null;
+  }, $files)) ?>;
+  // Where each file was taken, only for photos whose location is meant to be public and only when the map feature
+  // is on (the little map in the viewer loads a third-party map, like the overview map does), and each file's web link.
+  const locations = <?= json_encode(array_map(function ($f) use ($itemsData) {
+      $entry = $itemsData[$f] ?? [];
+      if (!ENABLE_MAP || !photo_location_visible($entry)) return null;
+      return [(float) $entry['location']['lat'], (float) $entry['location']['lng']];
+  }, $files)) ?>;
+  const webLinks = <?= json_encode(array_map(function ($f) use ($itemsData) {
+      $w = $itemsData[$f]['web'] ?? '';
+      return preg_match('#^https?://#i', (string) $w) ? $w : null;
   }, $files)) ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
@@ -7865,6 +7986,7 @@ if ($currentFolderPath !== null) {
     lightbox.classList.add('open');
   }
   function closeLightbox() {
+    if (typeof collapseMiniMap === 'function') collapseMiniMap();
     lightbox.classList.remove('open');
     lightboxVideo.pause();
   }
@@ -7902,11 +8024,157 @@ if ($currentFolderPath !== null) {
     const captionText = captions[current];
     const set = siblingsOf(current);
     caption.textContent = (captionText ? captionText + ' — ' : '') + (set.indexOf(current) + 1) + ' / ' + set.length;
+    updateLightboxExtras();
     trackView(file);
   }
+<?php if (ENABLE_MAP): ?>
+  // ---- Maps: Leaflet is fetched only when a visitor asks for one (the overview's "Show map" button, or the little
+  // map in the viewer), so a page that nobody opens a map on contacts no third party.
+  let leafletQueue = null;
+  function loadLeaflet(done) {
+    if (window.L) { done(); return; }
+    if (leafletQueue) { leafletQueue.push(done); return; }
+    leafletQueue = [done];
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js';
+    js.onload = function () { const queued = leafletQueue; leafletQueue = null; queued.forEach(function (f) { f(); }); };
+    js.onerror = function () { leafletQueue = null; };
+    document.head.appendChild(js);
+  }
+  function remembered(key, value) {
+    try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (e) {}
+    return null;
+  }
+  (function () {
+    const btn = document.getElementById('map-toggle'), body = document.getElementById('map-preview-body');
+    if (!btn || !body) return;
+    const label = btn.querySelector('.map-toggle-label'), noun = label.textContent.replace(/^Show /, '');
+    let drawn = false;
+    function set(open) {
+      body.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      label.textContent = (open ? 'Hide ' : 'Show ') + noun;
+      remembered('galleryMapOpen', open ? '1' : '0');
+      if (open && !drawn) {
+        loadLeaflet(function () {
+          drawn = true;
+          const draw = window.__lazyMaps && window.__lazyMaps[body.getAttribute('data-map')];
+          if (draw) draw();
+        });
+      }
+    }
+    btn.addEventListener('click', function () { set(body.hidden); });
+    if (remembered('galleryMapOpen') === '1') set(true);
+  })();
+
+  // ---- The little map in the viewer: where the open photo was taken, top left of the photo, about half a mile
+  // across. Click it to enlarge and move around; the 📍 button beside the caption turns it off (and on again).
+  const mapBox = document.getElementById('lightbox-map');
+  const mapToggle = document.getElementById('lightbox-map-toggle');
+  const webLink = document.getElementById('lightbox-web');
+  let miniMap = null, miniMarker = null, miniExpanded = false;
+  const MINI_ZOOM = 15;
+  function miniWanted() { return remembered('galleryLightboxMap') !== '0'; }
+  function placeMiniMap() {
+    if (!mapBox || mapBox.hidden || miniExpanded) return;
+    const shown = lightboxImg.style.display === 'none' ? lightboxVideo : lightboxImg;
+    const r = shown.getBoundingClientRect();
+    mapBox.style.left = Math.round(Math.max(8, r.left + 10)) + 'px';
+    mapBox.style.top = Math.round(Math.max(8, r.top + 10)) + 'px';
+  }
+  function setMiniInteractive(on) {
+    if (!miniMap) return;
+    ['dragging', 'scrollWheelZoom', 'doubleClickZoom', 'touchZoom', 'boxZoom', 'keyboard'].forEach(function (h) {
+      if (miniMap[h]) { if (on) miniMap[h].enable(); else miniMap[h].disable(); }
+    });
+    if (miniMap.zoomControl) { if (on) miniMap.zoomControl.addTo(miniMap); else miniMap.zoomControl.remove(); }
+  }
+  function expandMiniMap() {
+    if (miniExpanded || !miniMap) return;
+    miniExpanded = true;
+    mapBox.classList.add('expanded');
+    mapBox.style.left = ''; mapBox.style.top = '';
+    setMiniInteractive(true);
+    miniMap.invalidateSize();
+    const loc = locations[current];
+    if (loc) {
+      const link = mapBox.querySelector('.lbmap-osm');
+      if (link) link.href = 'https://www.openstreetmap.org/?mlat=' + loc[0] + '&mlon=' + loc[1] + '#map=16/' + loc[0] + '/' + loc[1];
+    }
+  }
+  function collapseMiniMap() {
+    if (!miniExpanded) return;
+    miniExpanded = false;
+    if (mapBox) mapBox.classList.remove('expanded');
+    setMiniInteractive(false);
+    const loc = locations[current];
+    if (miniMap && loc) { miniMap.invalidateSize(); miniMap.setView([loc[0], loc[1]], MINI_ZOOM, { animate: false }); }
+    placeMiniMap();
+  }
+  function showMiniAt(loc) {
+    if (!mapBox || mapBox.hidden || locations[current] !== loc) return;
+    if (!miniMap) {
+      miniMap = L.map(mapBox, { zoomControl: true, attributionControl: true });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>',
+        maxZoom: 19,
+      }).addTo(miniMap);
+      miniMap.attributionControl.setPrefix(false);
+      miniMarker = L.circleMarker([loc[0], loc[1]], { radius: 7, color: '#fff', weight: 2, fillColor: '#5865f2', fillOpacity: 0.95 }).addTo(miniMap);
+      setMiniInteractive(false);
+    }
+    miniMarker.setLatLng([loc[0], loc[1]]);
+    miniMap.invalidateSize();
+    miniMap.setView([loc[0], loc[1]], MINI_ZOOM, { animate: false });
+  }
+  function updateLightboxExtras() {
+    const web = webLinks[current];
+    if (webLink) {
+      if (web) { webLink.href = web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); }
+    }
+    if (!mapBox || !mapToggle) return;
+    const loc = locations[current];
+    mapToggle.hidden = !loc;
+    mapToggle.classList.toggle('off', !miniWanted());
+    if (!loc || !miniWanted()) { collapseMiniMap(); mapBox.hidden = true; return; }
+    mapBox.hidden = false;
+    placeMiniMap();
+    loadLeaflet(function () { showMiniAt(loc); });
+  }
+  if (mapBox && mapToggle) {
+    mapToggle.addEventListener('click', function () {
+      remembered('galleryLightboxMap', miniWanted() ? '0' : '1');
+      updateLightboxExtras();
+    });
+    mapBox.addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('.lbmap-close')) { e.stopPropagation(); collapseMiniMap(); return; }
+      if (e.target.closest && e.target.closest('.lbmap-osm')) return;
+      if (!miniExpanded) expandMiniMap();
+    });
+    ['touchstart', 'touchend'].forEach(function (name) {
+      mapBox.addEventListener(name, function (e) { e.stopPropagation(); }, { passive: true });
+    });
+    lightboxImg.addEventListener('load', placeMiniMap);
+    lightboxVideo.addEventListener('loadedmetadata', placeMiniMap);
+    window.addEventListener('resize', placeMiniMap);
+  }
+<?php else: ?>
+  const webLink = document.getElementById('lightbox-web');
+  const miniExpanded = false;
+  function collapseMiniMap() {}
+  function updateLightboxExtras() {
+    const web = webLinks[current];
+    if (!webLink) return;
+    if (web) { webLink.href = web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); }
+  }
+<?php endif; ?>
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
-    if (e.key === 'Escape') { closeLightbox(); return; }
+    if (e.key === 'Escape') { if (miniExpanded) { collapseMiniMap(); return; } closeLightbox(); return; }
     // A focused <video>'s native controls already use arrow keys (seek)
     // and spacebar (play/pause) — don't also fire our own nav on top of
     // that, or an arrow press would both seek the clip and jump to a
