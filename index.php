@@ -3396,7 +3396,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .hidden-list { margin:0; padding-left:20px; }
   .hidden-list li { margin-bottom:6px; font-size:0.9rem; }
   .hidden-list a { color:#8ab4ff; }
-  .item-card.flash-target { outline:2px solid var(--accent); outline-offset:2px; transition:outline-color 1.5s; }
   .admin-layout { max-width:1180px; margin:0 auto; padding:18px 16px 64px; display:grid; grid-template-columns:210px minmax(0,1fr); gap:22px; align-items:start; }
   .admin-side { position:sticky; top:76px; max-height:calc(100vh - 92px); overflow-y:auto; }
   .admin-folders > summary { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; cursor:pointer; list-style:none; }
@@ -3440,6 +3439,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .admin-folders[open] > summary { margin-bottom:6px; }
     .admin-layout { grid-template-columns:1fr; gap:12px; }
     .admin-side { position:static; max-height:none; }
+    .admin-main .editor-grid { grid-template-columns:1fr 1fr; }
+    .admin-main .editor-grid .wide2 { grid-column:1 / -1; }
+    .admin-main .editor-head { flex-wrap:wrap; }
+    .admin-main .editor-nav { margin-left:0; justify-content:flex-start; }
+    .admin-main .thumb-grid { grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:8px; }
     .admin-folder-nav { max-height:220px; overflow-y:auto; }
     .settings-grid { grid-template-columns:1fr; }
   }
@@ -3473,17 +3477,40 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-reference-row code { background:#101012; padding:1px 6px; border-radius:4px; font-size:0.78rem; }
   .admin-insert-btn { background:#2a2a2e; color:var(--text); font-size:0.78rem; padding:4px 9px; }
   .admin-reference-note { color:var(--muted); font-size:0.78rem; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(290px, 1fr)); gap:14px; }
-  .item-card { background:var(--card); border-radius:10px; padding:12px; display:flex; flex-direction:column; }
-  .item-head { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
-  .item-head img, .item-head .item-thumb-placeholder { width:72px; height:72px; flex:none; object-fit:cover; border-radius:6px; background:#101012; }
-  .item-thumb-placeholder { display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:0.7rem; text-align:center; }
+  /* Photos tab: a grid of thumbnails, and one editor panel above it that
+     opens with the selected photo's own form (every photo's real form is in
+     the page; only the selected one is shown). */
+  .photos-hint { margin:0 0 12px; }
+  .thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(124px, 1fr)); gap:10px; }
+  .thumb { position:relative; padding:0; border:2px solid transparent; background:var(--card); border-radius:9px; cursor:pointer; overflow:hidden; text-align:left; color:var(--text); display:flex; flex-direction:column; font:inherit; }
+  .thumb:hover { border-color:#3a3a42; }
+  .thumb.selected { border-color:var(--accent); box-shadow:0 0 0 2px rgba(88,101,242,0.35); }
+  .thumb .thumb-img { width:100%; aspect-ratio:1/1; object-fit:cover; display:block; background:#101012; }
+  .thumb .thumb-video { display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:1.6rem; color:var(--muted); }
+  .thumb .thumb-video small { font-size:0.7rem; }
+  .thumb-badges { position:absolute; top:5px; right:5px; display:flex; gap:3px; font-size:0.7rem; }
+  .thumb-badges span { background:rgba(0,0,0,0.68); padding:1px 5px; border-radius:8px; line-height:1.4; }
+  .thumb-badges .warn { color:#f5a623; }
+  .thumb-badges .hid { color:#ff9a9c; }
+  .thumb-name { font-size:0.72rem; color:var(--muted); padding:5px 7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .thumb.dirty::after { content:""; position:absolute; left:6px; top:6px; width:10px; height:10px; border-radius:50%; background:#f5a623; box-shadow:0 0 0 2px rgba(0,0,0,0.6); }
+  .thumb.flash-target { outline:2px solid var(--accent); outline-offset:2px; }
+  .photo-editor { background:var(--card); border-radius:10px; padding:14px; margin-bottom:16px; scroll-margin-top:84px; }
+  .js-tabs .photo-editor { display:none; }
+  .js-tabs .photo-editor.has-open { display:block; }
+  .item-editor + .item-editor { border-top:1px solid #26262a; margin-top:16px; padding-top:16px; }
+  .js-tabs .item-editor { display:none; }
+  .js-tabs .item-editor.open { display:block; }
+  .editor-head { display:flex; gap:14px; align-items:center; margin-bottom:14px; }
+  .editor-head img, .editor-head .item-thumb-placeholder { width:96px; height:96px; flex:none; object-fit:cover; border-radius:8px; background:#101012; }
+  .item-thumb-placeholder { display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:0.75rem; text-align:center; }
   .item-meta { min-width:0; }
-  .item-filename { font-size:0.8rem; color:var(--text); word-break:break-all; }
-  .item-sub { font-size:0.75rem; color:var(--muted); margin-top:2px; }
-  .item-card details.item-more { margin:2px 0 10px; }
-  .item-card details.item-more > summary { cursor:pointer; color:var(--muted); font-size:0.82rem; padding:2px 0; }
-  .item-actions { display:flex; gap:8px; align-items:center; margin-top:auto; }
+  .item-filename { font-size:0.9rem; color:var(--text); word-break:break-all; }
+  .item-sub { font-size:0.78rem; color:var(--muted); margin-top:3px; }
+  .editor-nav { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .editor-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:0 12px; }
+  .editor-grid .wide2 { grid-column:span 2; }
+  .item-actions { display:flex; gap:8px; align-items:center; margin-top:6px; }
   .item-actions form { margin:0; }
   .item-flags { color:var(--muted); font-size:0.75rem; }
   .loc-row { display:flex; gap:6px; }
@@ -3535,7 +3562,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <?php endif; ?>
   <div class="tab-panel" data-tab="photos">
   <?php if (TRACK_VIEWS): ?>
-    <p class="muted" style="margin-top:0;">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> page loads in total. Per-photo counts are listed under each photo below. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
+    <p class="muted" style="margin-top:0;">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> page loads in total. Select a photo to see its own count. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
   <?php endif; ?>
 
   <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
@@ -3551,101 +3578,137 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <?php endif; ?>
 
   <h2 class="section-title" id="photos" style="margin-top:0; scroll-margin-top:84px;">Photos &amp; video <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
-  <div class="grid">
-    <?php foreach ($adminFiles as $file): $bare = basename($file);
-      $entry = $itemsHere['items'][$bare] ?? [];
-      $loc = $entry['location'] ?? ($adminAutoLoc[$file] ?? null);
-      $locUnsaved = isset($adminAutoLoc[$file]);
-    ?>
-      <?php
-        $rest = item_restriction($entry);
-        $vis = $entry['locationVisibility'] ?? 'inherit';
-        $moreOpen = $loc !== null || $vis !== 'inherit' || $rest !== 'inherit' || $locUnsaved;
-        $coverFormId = 'cover-' . md5($file);
-      ?>
-      <div class="item-card" id="photo-<?= md5($file) ?>">
-        <div class="item-head">
-          <?php if (is_video_file($file)): ?>
-            <div class="item-thumb-placeholder">&#9654; video<?php if (isset($videoDurations[$file])): ?><br><?= htmlspecialchars(format_duration($videoDurations[$file]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></div>
-          <?php else: ?>
-            <img src="<?= htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8') ?>" alt="">
-          <?php endif; ?>
-          <div class="item-meta">
-            <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
-            <div class="item-sub">
-              <?php if (TRACK_VIEWS): ?>&#128065; <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
-              <?php if ($rest === 'private'): ?> &middot; hidden<?php endif; ?>
-              <?php if (!empty($itemsHere['cover']) && $itemsHere['cover'] === $bare): ?> &middot; folder cover<?php endif; ?>
-            </div>
+<?php
+$editorsHtml = '';
+$thumbsHtml = '';
+foreach ($adminFiles as $file) {
+    $bare = basename($file);
+    $entry = $itemsHere['items'][$bare] ?? [];
+    $loc = $entry['location'] ?? ($adminAutoLoc[$file] ?? null);
+    $locUnsaved = isset($adminAutoLoc[$file]);
+    $rest = item_restriction($entry);
+    $vis = $entry['locationVisibility'] ?? 'inherit';
+    $isVideo = is_video_file($file);
+    $isCover = !empty($itemsHere['cover']) && $itemsHere['cover'] === $bare;
+    $hid = md5($file);
+    $coverFormId = 'cover-' . $hid;
+    $thumbUrl = htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8');
+    $durationText = ($isVideo && isset($videoDurations[$file])) ? htmlspecialchars(format_duration($videoDurations[$file]), ENT_QUOTES, 'UTF-8') : '';
+    ob_start();
+?>
+    <div class="item-editor" id="edit-<?= $hid ?>">
+      <div class="editor-head">
+        <?php if ($isVideo): ?>
+          <div class="item-thumb-placeholder">&#9654; video<?php if ($durationText !== ''): ?><br><?= $durationText ?><?php endif; ?></div>
+        <?php else: ?>
+          <img src="<?= $thumbUrl ?>" alt="">
+        <?php endif; ?>
+        <div class="item-meta">
+          <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
+          <div class="item-sub">
+            <?php if (TRACK_VIEWS): ?>&#128065; <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
+            <?php if ($rest === 'private'): ?> &middot; hidden<?php endif; ?>
+            <?php if ($isCover): ?> &middot; folder cover<?php endif; ?>
           </div>
         </div>
-        <form method="post">
-          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-          <input type="hidden" name="action" value="save_item">
-          <input type="hidden" name="loaded_hash" value="<?= admin_record_hash($entry) ?>">
-          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
-          <div class="field">
+        <div class="editor-nav">
+          <button type="button" class="secondary" data-nav="-1" title="Previous photo">&lsaquo; Prev</button>
+          <button type="button" class="secondary" data-nav="1" title="Next photo">Next &rsaquo;</button>
+          <button type="button" class="secondary" data-close title="Close the editor">Close</button>
+        </div>
+      </div>
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="save_item">
+        <input type="hidden" name="loaded_hash" value="<?= admin_record_hash($entry) ?>">
+        <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
+        <div class="editor-grid">
+          <div class="field wide2">
             <label>Caption</label>
             <input type="text" name="caption" value="<?= htmlspecialchars($entry['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
           </div>
-          <div class="field">
+          <div class="field wide2">
             <label>Web link</label>
             <input type="url" name="web" value="<?= htmlspecialchars($entry['web'] ?? '', ENT_QUOTES, 'UTF-8') ?>" placeholder="https://&hellip;">
           </div>
-          <details class="item-more" <?= $moreOpen ? 'open' : '' ?>>
-            <summary>Location &amp; visibility<?php if ($loc !== null): ?> <span class="item-flags">&middot; &#128205; <?= htmlspecialchars((string) ($loc['label'] ?? '') !== '' ? $loc['label'] : round((float) $loc['lat'], 2) . ', ' . round((float) $loc['lng'], 2), ENT_QUOTES, 'UTF-8') ?></span><?php endif; ?></summary>
-            <div class="loc-row" style="margin-top:8px;">
-              <div class="field">
-                <label>Latitude</label>
-                <input type="text" name="lat" value="<?= htmlspecialchars($loc['lat'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-              </div>
-              <div class="field">
-                <label>Longitude</label>
-                <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-              </div>
-            </div>
-          <?php if ($locUnsaved): ?>
+          <div class="field">
+            <label>Latitude</label>
+            <input type="text" name="lat" value="<?= htmlspecialchars($loc['lat'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          </div>
+          <div class="field">
+            <label>Longitude</label>
+            <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          </div>
+          <div class="field wide2">
+            <label>Location label (optional)</label>
+            <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          </div>
+          <div class="field wide2">
+            <label>Location visibility</label>
+            <select name="loc_visibility">
+              <option value="inherit" <?= $vis === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
+              <option value="show" <?= $vis === 'show' ? 'selected' : '' ?>>Always show</option>
+              <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
+            </select>
+          </div>
+          <div class="field wide2">
+            <label>Visibility</label>
+            <select name="restriction">
+              <option value="inherit" <?= $rest === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
+              <option value="public" <?= $rest === 'public' ? 'selected' : '' ?>>Always show (even if this folder is hidden)</option>
+              <option value="private" <?= $rest === 'private' ? 'selected' : '' ?>>Always hide</option>
+            </select>
+          </div>
+        </div>
+        <?php if ($locUnsaved): ?>
             <p class="muted loc-unsaved" style="margin:0 0 8px;">&#9888; <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (set <em>Always hide</em> to keep it out)." ?></p>
           <?php endif; ?>
-            <div class="field">
-              <label>Location label (optional)</label>
-              <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-            </div>
-            <div class="field">
-              <label>Location visibility</label>
-              <select name="loc_visibility">
-                <option value="inherit" <?= $vis === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
-                <option value="show" <?= $vis === 'show' ? 'selected' : '' ?>>Always show</option>
-                <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Visibility</label>
-              <select name="restriction">
-                <option value="inherit" <?= $rest === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
-                <option value="public" <?= $rest === 'public' ? 'selected' : '' ?>>Always show (even if this folder is hidden)</option>
-                <option value="private" <?= $rest === 'private' ? 'selected' : '' ?>>Always hide</option>
-              </select>
-            </div>
-          </details>
-          <div class="item-actions">
-            <button type="submit">Save</button>
-            <?php if ($adminFolderPath !== null): ?>
-              <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
-            <?php endif; ?>
-          </div>
+        <div class="item-actions">
+          <button type="submit">Save</button>
+          <?php if ($adminFolderPath !== null): ?>
+            <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
+          <?php endif; ?>
+        </div>
+      </form>
+      <?php if ($adminFolderPath !== null): ?>
+        <form method="post" id="<?= $coverFormId ?>">
+          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+          <input type="hidden" name="action" value="set_cover">
+          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
         </form>
-        <?php if ($adminFolderPath !== null): ?>
-          <form method="post" id="<?= $coverFormId ?>">
-            <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-            <input type="hidden" name="action" value="set_cover">
-            <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
-          </form>
-        <?php endif; ?>
-      </div>
-    <?php endforeach; ?>
-  </div>
-
+      <?php endif; ?>
+    </div>
+<?php
+    $editorsHtml .= ob_get_clean();
+    $thumbTitle = $file . (($entry['caption'] ?? '') !== '' ? ' — ' . $entry['caption'] : '');
+    ob_start();
+?>
+    <button type="button" class="thumb" id="photo-<?= $hid ?>" data-edit="edit-<?= $hid ?>" title="<?= htmlspecialchars($thumbTitle, ENT_QUOTES, 'UTF-8') ?>">
+      <?php if ($isVideo): ?>
+        <span class="thumb-img thumb-video">&#9654;<?php if ($durationText !== ''): ?><small><?= $durationText ?></small><?php endif; ?></span>
+      <?php else: ?>
+        <img class="thumb-img" src="<?= $thumbUrl ?>" loading="lazy" alt="">
+      <?php endif; ?>
+      <span class="thumb-badges">
+        <?php if (($entry['caption'] ?? '') !== ''): ?><span title="Has a caption">&#128172;</span><?php endif; ?>
+        <?php if ($loc !== null && !$locUnsaved): ?><span title="Has a location">&#128205;</span><?php endif; ?>
+        <?php if ($locUnsaved): ?><span class="warn" title="GPS found in the file, not saved">&#9888;</span><?php endif; ?>
+        <?php if ($isCover): ?><span title="Folder cover">&#9733;</span><?php endif; ?>
+        <?php if ($rest === 'private'): ?><span class="hid" title="Hidden from visitors">hidden</span><?php endif; ?>
+      </span>
+      <span class="thumb-name"><?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?></span>
+    </button>
+<?php
+    $thumbsHtml .= ob_get_clean();
+}
+?>
+  <?php if (empty($adminFiles)): ?>
+    <p class="muted">No photos or videos in this folder.</p>
+  <?php else: ?>
+    <p class="muted photos-hint">Select a photo to edit its caption, link, location and visibility.</p>
+    <div class="photo-editor" id="photo-editor"><?= $editorsHtml ?></div>
+    <div class="thumb-grid"><?= $thumbsHtml ?></div>
+  <?php endif; ?>
   </div>
   <div class="tab-panel" data-tab="settings">
   <?php if ($adminFolderPath !== null): ?>
@@ -3872,19 +3935,48 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (name !== 'hidden') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
+    // The photo editor: one panel above the thumbnail grid that shows the
+    // selected photo's own form (and none at all until one is selected).
+    var slot = document.getElementById('photo-editor');
+    var editors = [].slice.call(document.querySelectorAll('.item-editor'));
+    var thumbs = [].slice.call(document.querySelectorAll('.thumb[data-edit]'));
+    function openEditor(id, scroll) {
+      var any = false;
+      editors.forEach(function (e) { var on = e.id === id; e.classList.toggle('open', on); if (on) any = true; });
+      thumbs.forEach(function (t) { t.classList.toggle('selected', t.getAttribute('data-edit') === id); });
+      if (slot) slot.classList.toggle('has-open', any);
+      if (any && scroll && slot) slot.scrollIntoView({ block: 'start' });
+    }
+    thumbs.forEach(function (t) {
+      t.addEventListener('click', function () { openEditor(t.getAttribute('data-edit'), true); });
+    });
+    editors.forEach(function (e, i) {
+      var thumb = document.querySelector('.thumb[data-edit="' + e.id + '"]');
+      e.addEventListener('input', function () { if (thumb) thumb.classList.add('dirty'); });
+      [].forEach.call(e.querySelectorAll('[data-nav]'), function (b) {
+        b.addEventListener('click', function () {
+          var n = i + parseInt(b.getAttribute('data-nav'), 10);
+          if (n >= 0 && n < editors.length) { openEditor(editors[n].id, false); if (slot) slot.scrollIntoView({ block: 'nearest' }); }
+        });
+      });
+      var close = e.querySelector('[data-close]');
+      if (close) close.addEventListener('click', function () { openEditor(null); });
+    });
     function focusCard(id) {
-      var el = id && document.getElementById(id);
-      if (!el) return;
-      el.classList.add('flash-target');
-      el.scrollIntoView({ block: 'center' });
-      setTimeout(function () { el.classList.remove('flash-target'); }, 2500);
+      var t = id && document.getElementById(id);
+      if (!t || !t.getAttribute('data-edit')) return;
+      t.classList.add('flash-target');
+      openEditor(t.getAttribute('data-edit'), true);
+      setTimeout(function () { t.classList.remove('flash-target'); }, 2500);
     }
     function fromLocation() {
       var h = decodeURIComponent((location.hash || '').slice(1));
       if (h.indexOf('photo-') === 0) { show('photos'); focusCard(h); return; }
-      if (names.indexOf(h) >= 0) { show(h); return; }
+      // Just saved a photo: its editor comes back open, whichever tab the
+      // address still names.
       var card = main.getAttribute('data-focus-card');
       if (card) { show('photos'); focusCard(card); return; }
+      if (names.indexOf(h) >= 0) { show(h); return; }
       var saved = null;
       try { saved = sessionStorage.getItem(KEY); } catch (e) {}
       show(saved);

@@ -2016,7 +2016,7 @@ $portGps = find_free_port();
 start_server($fxGps, $portGps);
 [, $gpsAdmin] = http_get("http://127.0.0.1:$portGps/?admin", ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')]);
 $gpsCard = function ($body, $name) {
-    return preg_match('/<div class="item-card"[^>]*>(?:(?!<div class="item-card").)*?' . preg_quote($name, '/') . '.*?<\/form>/s', $body, $m) ? $m[0] : '';
+    return preg_match('/<div class="item-editor"[^>]*>(?:(?!<div class="item-editor").)*?' . preg_quote($name, '/') . '.*?<\/form>/s', $body, $m) ? $m[0] : '';
 };
 check('a JPEG\'s EXIF GPS pre-fills the admin\'s location fields (N/E)', str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '2.2945'));
 check('southern and western hemispheres come out negative', str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-33.85') && str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-151.2'));
@@ -2121,7 +2121,8 @@ check('[login] with just that cookie (no Authorization header) the admin page op
 check('[admin layout] a sticky top bar carries the title, the folder being edited, section links and Log out', str_contains($b3, '<header class="admin-bar">') && str_contains($b3, 'Editing: Sub') && str_contains($b3, 'href="#photos"') && str_contains($b3, 'href="#settings"') && str_contains($b3, 'value="logout"'));
 check('[admin layout] folders are a tree beside the content, with the current one marked', str_contains($b3, 'class="admin-folder-nav"') && str_contains($b3, 'class="current" aria-current="page"') && str_contains($b3, '<main class="admin-main"'));
 check('[admin layout] the sections are real tabs (Photos, Folder settings, Notes, Export), each with its own panel; no Hidden tab when nothing is hidden', str_contains($b3, 'role="tablist"') && str_contains($b3, 'data-tab="photos"') && str_contains($b3, 'data-tab="settings"') && str_contains($b3, 'data-tab="notes"') && str_contains($b3, 'data-tab="export"') && str_contains($b3, '<div class="tab-panel" data-tab="export">') && !str_contains($b3, 'data-tab="hidden"'));
-check('[admin layout] each photo\'s location fields sit in their own disclosure, and its card has a stable id to link to', str_contains($b3, '<details class="item-more"') || !str_contains($b3, 'class="item-card"'));
+check('[admin layout] the Photos tab is a grid of thumbnails with one editor panel above it (every photo\'s own form is in the page, shown only when selected)', str_contains($b3, 'class="photo-editor" id="photo-editor"') && str_contains($b3, 'class="thumb-grid"') && substr_count($b3, 'class="thumb"') === substr_count($b3, 'class="item-editor"') && substr_count($b3, 'class="thumb"') >= 1 && strpos($b3, 'id="photo-editor"') < strpos($b3, 'class="thumb-grid"'));
+check('[admin layout] each thumbnail has a stable id to link to and points at its editor', (bool) preg_match('#<button type="button" class="thumb" id="photo-([0-9a-f]{32})" data-edit="edit-\1"#', $b3) && (bool) preg_match('#<div class="item-editor" id="edit-[0-9a-f]{32}">#', $b3));
 check('[admin layout] the anchors inside the panels still exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="photos"') && str_contains($b3, 'id="notes"') && str_contains($b3, 'id="export"'));
 check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="login_password"'));
 check('[login] a login also counts as private view (the viewer cookie is set too)', str_contains($loginCookie, '=') && substr_count($loginCookie, '=') >= 2);
