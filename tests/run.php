@@ -2102,6 +2102,16 @@ $loc = ''; foreach ($goodPwHd as $h) if (stripos($h, 'Location:') === 0) $loc = 
 check('[family] "Private view": no password / wrong password get 401, the right one redirects back to the plain gallery link', $noPwStatus === 401 && $badPwStatus === 401 && $goodPwStatus === 302 && ($loc === './' || $loc === '/'));
 [, $famViewed] = http_get("$baseFam/", ["Cookie: $famViewer"]);
 check('[family] with the viewer cookie, the whole gallery is back (5 photos, Birthday card, kids.jpg)', str_contains($famViewed, 'alt="kids.jpg"') && str_contains($famViewed, 'id="group-birthday"') && str_contains($famViewed, '5 photos') && http_get("$baseFam/?folder=Birthday", ["Cookie: $famViewer"])[0] === 200);
+// Two galleries on one domain, different viewer passwords, ONE browser: browsers
+// key cookies by host (ignoring the port here), so the cookie names must differ
+// or unlocking one gallery would overwrite the other's. $revealCookie is from the
+// "private" fixture, $famViewer from this one.
+preg_match('/^([^=]+)=/', (string) $revealCookie, $nameA); preg_match('/^([^=]+)=/', (string) $famViewer, $nameB);
+$bothCookies = "$revealCookie; $famViewer";
+check('[two galleries] each gallery\'s viewer cookie has its own name (so one browser can hold both)', !empty($nameA[1]) && !empty($nameB[1]) && $nameA[1] !== $nameB[1]);
+check('[two galleries] a browser holding BOTH cookies is unlocked on gallery A...', str_contains(http_get("$basePrivate/", ["Cookie: $bothCookies"])[1], 'loose1.jpg'));
+check('[two galleries] ...and on gallery B, each cookie doing its own job', str_contains(http_get("$baseFam/", ["Cookie: $bothCookies"])[1], 'alt="kids.jpg"'));
+check('[two galleries] gallery B\'s cookie does not unlock gallery A (and vice versa)', !str_contains(http_get("$basePrivate/", ["Cookie: $famViewer"])[1], 'loose1.jpg') && !str_contains(http_get("$baseFam/", ["Cookie: $revealCookie"])[1], 'alt="kids.jpg"'));
 // One photo can be shown again inside a hidden folder.
 [, $bAdmin] = http_get("$baseFam/?admin&folder=Birthday", $famHdrs);
 [, $r] = user_submit("$baseFam/?admin&folder=Birthday", $bAdmin, 'name="file" value="cake.jpg"', ['restriction' => 'public'], $famHdrs);

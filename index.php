@@ -207,18 +207,15 @@ define('PRIVATE_VIEW_PASSWORD', '');
 define('NGINX_ACCEL_REDIRECT_PREFIX', '');
 
 // The name of the cookie that remembers a browser unlocked private view
-// (see PRIVATE_VIEW_PASSWORD and is_revealed() below). Leave it alone
-// unless you run several galleries on one domain with *different* viewer
-// passwords: the cookie covers the whole domain, so they'd keep signing
-// each other's viewers out — give each copy its own name (any plain
-// word; changing it only asks existing viewers to enter the password
-// once more). A plain define() alongside the others here,
-// rather than inline where it's first used further down, specifically
-// because define() executes in file order (unlike a function
-// declaration) — it has to run before anything below ever calls
-// is_revealed(), which happens well before this script reaches that
-// point in its own source otherwise.
-define('REVEAL_COOKIE_NAME', 'gallery_reveal');
+// (see PRIVATE_VIEW_PASSWORD and is_revealed() below). Derived from this
+// copy's own folder, so several galleries on one domain — each with its own
+// viewer password — each get their own cookie and never sign each other's
+// viewers out (a cookie covers the whole domain, so a single shared name
+// would have them overwrite one another). Nothing to configure. A plain
+// define() here rather than where it's first used, because define()
+// executes in file order (unlike a function declaration) and this has to
+// run before anything below ever calls is_revealed().
+define('REVEAL_COOKIE_NAME', 'gallery_reveal_' . substr(hash('sha256', __DIR__), 0, 10));
 
 // Plots every visible, located photo on one overview map — Leaflet plus
 // OpenStreetMap tiles, the only realistic option with no API key. Off by
@@ -1907,7 +1904,10 @@ function render_https_required_page() {
  * ----------------------------------------------------------------------- */
 
 function reveal_cookie_value() {
-    return hash('sha256', PRIVATE_VIEW_PASSWORD);
+    // Mixed with this install's folder: the cookie is a bearer token for
+    // *this* gallery only, not a bare hash of the password that another
+    // gallery sharing the same password would also accept.
+    return hash('sha256', PRIVATE_VIEW_PASSWORD . '|' . __DIR__);
 }
 
 /** Sets the reveal cookie — called both on a successful ?reveal login and

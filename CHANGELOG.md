@@ -56,6 +56,7 @@ A large release, built and tested in phases on one branch and shipped as one ver
 
 ### Fixed
 - **A pasted `?folder=` link now previews with the cover photo chosen in the admin** (it used the folder's first file). One shared function picks the cover for both the card and the preview.
+- **Two galleries on one domain no longer sign each other's viewers out.** The "Private view" cookie used one fixed name for the whole domain; it is now named and signed from each copy's own folder, so every gallery keeps its own (and one gallery's cookie is no longer valid in another that merely shares the password).
 - **The sitewide "N views" total no longer shows in the public footer when `SHOW_VIEW_COUNTS_PUBLICLY` is off.**
 - **The admin no longer says "Saved" when it couldn't write** (a folder the web server can't write to — very common on shared hosting). It says "Nothing was saved" and what to change.
 - `examples/example-forsale.md` did what its text promised only by accident: it claimed the filename prefix `widgeta` matches "Widget Model A", which it doesn't, so none of its items got photos. Rewritten (Alpha/Bravo/Charlie), and the claim corrected.
