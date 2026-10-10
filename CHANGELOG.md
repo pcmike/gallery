@@ -46,6 +46,7 @@ A large release, built and tested in phases on one branch and shipped as one ver
 - View counts are debounced per browser (30 minutes, per photo), so reloading a photo no longer inflates it. A debounced request still returns the current total.
 
 ### Notes
+- **The `.gallery-items.json` data files are publicly fetchable unless blocked, and they list the filenames of hidden items.** The README now has a one-block nginx rule and an Apache equivalent. The nginx lockdown, data-file and optional pretty-folder-URL rules were tested against nginx 1.26 + php-fpm 8.4; the Apache rules were not.
 - The original photo files are served untouched, so **embedded EXIF GPS in the full-size image is not stripped** — the location gates control what the gallery shows, not what a saved original contains. See the README.
 - `tests/run.php` now has 285 checks. It also no longer leaks processes: each run used to orphan its `php -S` servers (~350 MB for ten), which accumulated over a long session and exhausted a small host — and it no longer follows directory symlinks when cleaning up its fixtures.
 

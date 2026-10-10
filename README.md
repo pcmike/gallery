@@ -261,7 +261,7 @@ How it's locked down: HTTP Basic Auth compared with `hash_equals()`; the page **
 
 **`ADMIN_PASSWORD` lives in `index.php` itself**, a deliberate choice to keep this a single file. Redact it before pasting or sharing your copy of the script for support.
 
-Everything the admin writes is as publicly fetchable as a hand-written `.md` already is (the per-folder data is a `.gallery-items.json`) — machine-generated doesn't mean confidential. Don't put anything in a caption you wouldn't put on the page.
+**The admin's data files are publicly fetchable unless you block them.** Everything the admin writes lives in a `.gallery-items.json` inside each folder, and a web server serves that like any other file: anyone who requests `yoursite.com/kb/.gallery-items.json` can read your captions, any GPS coordinates you entered, **and the exact filenames of everything you've hidden, marked as hidden** — which hands over the very URLs hiding is meant to protect. Don't put anything in a caption you wouldn't put on the page, and add the data-file rule in [Locking down the files themselves](#locking-down-the-files-themselves), which takes one block.
 
 ## Hiding items and private view
 
@@ -276,13 +276,23 @@ A hidden item is removed from the page outright, not merely styled invisible: it
 
 Everything above governs requests that go through `index.php`. **A photo is still an ordinary static file** that the web server will serve directly if someone knows or guesses its URL (`yoursite.com/kb/IMG_0412.jpg`) — and if filenames run in sequence, a gap shows where something is missing. Hiding keeps hidden items out of every page, but only a web-server rule stops the direct fetch. The admin shows a persistent warning whenever anything is hidden, saying exactly this.
 
-**nginx** — strongest, but needs shell access to the server. Edit the site's config and add, inside the `server { }` block, a location scoped to the gallery's path (this example assumes `https://yoursite.com/kb/`; a second gallery needs its own block):
+**nginx** — strongest, but needs shell access to the server. Edit the site's config and add, inside the `server { }` block, two locations scoped to the gallery's path (this example assumes `https://yoursite.com/kb/`; a second gallery needs its own pair). Keep the first one above the second, since nginx takes the first matching regex location:
 
 ```nginx
+# The gallery's generated data files (captions, GPS, hide flags, stats,
+# login throttle, thumbnail cache): never public. 404, not 403, so their
+# existence isn't confirmed either.
+location ~ /\.gallery- {
+    return 404;
+}
+
+# The photo and video files themselves: reachable only through index.php.
 location ~* ^/kb/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$ {
     internal;
 }
 ```
+
+Both blocks were tested against nginx 1.26 with php-fpm 8.4: every bare photo, video and data-file URL (including a hidden item, a nested one, and an upper-case extension) returns 404; the gallery, thumbnails, full-size images and video `Range` requests (a real `206`) all work through `index.php`; a hidden item stays unreachable by URL even for a viewer who has entered the private-view password; and `?admin`/`?reveal` Basic Auth passes through php-fpm correctly. They assume your site already has the ordinary pieces a PHP site on nginx has — `index index.php;` and a `location ~ \.php$` that hands scripts to php-fpm.
 
 Then check and reload, and confirm the bare URL is now unreachable:
 
@@ -292,7 +302,7 @@ sudo systemctl reload nginx
 curl -I https://yoursite.com/kb/IMG_0412.jpg     # expect 404
 ```
 
-Finally set `NGINX_ACCEL_REDIRECT_PREFIX` to `'/kb'`. The script then answers allowed requests with an `X-Accel-Redirect` header and nginx serves the file itself (which also gives you nginx's own, well-tested `Range` handling for video). Leave it empty and the script serves files itself with PHP — correct everywhere, just without the lockdown. The prefix must match the `location` above exactly. `.*` already covers nested folders.
+Finally set `NGINX_ACCEL_REDIRECT_PREFIX` to `'/kb'` (verified in the same test: `index.php` answers with `X-Accel-Redirect` and nginx serves the file). The script then answers allowed requests with an `X-Accel-Redirect` header and nginx serves the file itself (which also gives you nginx's own, well-tested `Range` handling for video). Leave it empty and the script serves files itself with PHP — correct everywhere, just without the lockdown. The prefix must match the `location` above exactly. `.*` already covers nested folders.
 
 **Apache** — blunter, and works on FTP-only hosting, since `.htaccess` is an uploadable file:
 
@@ -300,9 +310,13 @@ Finally set `NGINX_ACCEL_REDIRECT_PREFIX` to `'/kb'`. The script then answers al
 <FilesMatch "\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$">
     Require all denied
 </FilesMatch>
+
+<FilesMatch "^\.gallery-">
+    Require all denied
+</FilesMatch>
 ```
 
-This blocks only external requests for the bare file; `index.php` still reads the files straight from disk. It depends on `AllowOverride` being enabled for that directory, which isn't universal, and it can be silently ignored with no symptom — so test it with `curl -I` the same way. nginx's `internal` is a hard guarantee; this is not.
+This blocks only external requests for the bare files; `index.php` still reads them straight from disk. It depends on `AllowOverride` being enabled for that directory, which isn't universal, and it can be silently ignored with no symptom — so test it with `curl -I` the same way. nginx's `internal` is a hard guarantee; this is not. **Unlike the nginx rules above, these Apache rules have not been tested against a real Apache** — they're the standard form, but check them yourself before relying on them.
 
 Neither renames your files. That would change files you own, which this project doesn't do.
 
@@ -321,7 +335,21 @@ Set `ENABLE_MAP` (and `ENABLE_PHOTO_LOCATION`, plus a folder or photo that actua
 
 Every link you're likely to paste gets a correct Open Graph preview: `?photo=`, `?folder=` (the folder's display name, description or notes, and cover photo) and `?map`. A hidden item or folder is treated as nonexistent for an unrevealed requester — including a link-preview crawler, which has no cookie — so pasting its URL anywhere never generates a preview of it.
 
-`?folder=Europe/France/Paris` works with no server configuration. If you'd rather share a path like `/trip/Europe/France/Paris/`, a web-server rewrite that maps the pretty path onto the query string will do it — the script simply reads `$_GET['folder']`, however it got there. No rewrite rule is included or tested here, because the right one depends on your server layout; if you write one, make sure it doesn't also catch `index.php` itself or the real photo files, and check it with `curl` before relying on it.
+`?folder=Europe/France/Paris` works with no server configuration, and it's the canonical link the gallery itself hands out (copy-link buttons, link previews). If you'd rather *type* or share `/kb/Europe/France/Paris/`, nginx can map a directory-style URL onto it. Add this inside the `server { }` block, alongside the rules above:
+
+```nginx
+location ~ ^/kb/.+/$ {
+    rewrite ^/kb/(.+)/$ /kb/index.php?folder=$1 last;
+}
+```
+
+It was tested with the setup above: `/kb/Europe/France/Paris/` and a folder with a space in its name (`/kb/Day%201/`) both load; a nonexistent folder gets the gallery's own 404; and the gallery's back-link points at the real root. Three things make it safe, and worth keeping if you change it:
+
+- **It only matches a path ending in `/`**, so it can never catch `index.php` or a photo (a rule matching every path under `/kb/` would shadow your PHP handler and could serve the script's source as text).
+- **The folder name is captured inside the `rewrite` itself**, which is what makes nginx escape it. Capturing it in the `location` line and passing the variable along breaks on a name with a space (it returned a 502 in testing).
+- Every other link on the page (`?img=`, `?folder=`, `?about`, `#anchors`) keeps working from a pretty URL because the query string rides along; the one that didn't — the "back to the gallery" link — is handled by the script (it names the real root when the request path isn't the script's own).
+
+This is nginx-only; there's no Apache equivalent here.
 
 ## Keeping runtime data out of git
 

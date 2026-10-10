@@ -2335,7 +2335,7 @@ function render_map_page($points, $legend, $pageTitle, $baseUrl) {
 </head>
 <body>
 <div class="wrap">
-  <a href="./" class="back">&larr; Back to gallery</a>
+  <a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>" class="back">&larr; Back to gallery</a>
   <h1><?= $title ?> — Map</h1>
   <?php if (empty($points)): ?>
     <p style="color:var(--muted);">No photos have a visible location yet.</p>
@@ -3085,7 +3085,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </head>
 <body>
 <div class="wrap">
-  <a href="./" class="muted">&larr; Back to gallery</a>
+  <a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>" class="muted">&larr; Back to gallery</a>
   <h1>Gallery Admin</h1>
   <p class="muted">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></p>
   <?= render_admin_folder_nav($files, $adminFolderPath) ?>
@@ -4562,6 +4562,25 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
     return $html;
 }
 
+/**
+ * Where "back to the gallery" points. Normally just "./", which resolves
+ * to the gallery's own folder. But if the web server maps a pretty folder
+ * link (/kb/Europe/France/) onto this script, "./" would resolve to that
+ * folder's own page instead — the back-link would go nowhere. In that
+ * case, point at the script's real directory explicitly. Every other
+ * relative link on a page (?img=, ?folder=, ?about, #anchors) resolves
+ * correctly from a pretty URL because the query string rides along.
+ */
+function gallery_root_href() {
+    $script = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+    $requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
+    $scriptDir = rtrim(dirname($script), '/') . '/';
+    if ($script === '' || !is_string($requestPath) || $requestPath === $script || $requestPath === $scriptDir) {
+        return './';
+    }
+    return implode('/', array_map('rawurlencode', explode('/', $scriptDir)));
+}
+
 /** Builds the current request's scheme://host/path, for absolute OG image URLs. */
 function current_base_url() {
     $scheme = is_https_request() ? 'https' : 'http';
@@ -4636,7 +4655,7 @@ function render_about_page() {
 <div class="wrap">
 
   <div class="top-bar">
-    <a class="back-link" href="./">&larr; Back to gallery</a>
+    <a class="back-link" href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; Back to gallery</a>
     <span class="version-tag">v<?= $version ?></span>
   </div>
 
@@ -5290,7 +5309,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 
 <header>
   <?php if ($currentFolderPath !== null): ?>
-    <p class="breadcrumb"><a href="./">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
+    <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
   <?php endif; ?>
   <h1><?= htmlspecialchars($pageTitle) ?></h1>
   <?php if ($currentFolderPath !== null && $currentFolderMeta['dates'] !== ''): ?>

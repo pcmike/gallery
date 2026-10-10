@@ -1425,6 +1425,14 @@ check('Europe\'s page shows its loose photo as a plain card, not a folder', str_
 check('the hidden nested Germany has no cover card and no mention anywhere on Europe\'s page', !str_contains($europeBody, 'group-germany') && !str_contains($europeBody, 'berlin') && !str_contains($europeBody, 'Germany'));
 check('a one-folder-deep page\'s breadcrumb is just the way back to the root', (bool) preg_match('/<p class="breadcrumb"><a href="\.\/">[^<]*<\/a><\/p>/', $europeBody));
 
+// A web server may rewrite a pretty URL (/Europe/France/) onto this script
+// with the query string riding along. "./" would then resolve to that
+// pretty folder itself, so the back-link has to name the real root. (php -S
+// treats a nonexistent path the same way: index.php, original REQUEST_URI.)
+[$prettyStatus, $prettyBody] = http_get("$baseDepth/trip/Europe/France/?folder=" . rawurlencode('Europe/France'));
+check('a pretty-style path with ?folder= still renders that folder', $prettyStatus === 200 && str_contains($prettyBody, 'id="group-paris"'));
+check('...and its back-link names the real gallery root, not "./" (which would resolve to the pretty path itself)', (bool) preg_match('#<p class="breadcrumb"><a href="/">#', $prettyBody));
+
 [$franceStatus, $franceBody] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France'));
 check('?folder=Europe/France (two levels deep) returns 200', $franceStatus === 200);
 check('France\'s page shows Paris and Lyon as cover cards', str_contains($franceBody, 'id="group-paris"') && str_contains($franceBody, 'id="group-lyon"'));
