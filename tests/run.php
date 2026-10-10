@@ -2112,6 +2112,36 @@ check('[two galleries] each gallery\'s viewer cookie has its own name (so one br
 check('[two galleries] a browser holding BOTH cookies is unlocked on gallery A...', str_contains(http_get("$basePrivate/", ["Cookie: $bothCookies"])[1], 'loose1.jpg'));
 check('[two galleries] ...and on gallery B, each cookie doing its own job', str_contains(http_get("$baseFam/", ["Cookie: $bothCookies"])[1], 'alt="kids.jpg"'));
 check('[two galleries] gallery B\'s cookie does not unlock gallery A (and vice versa)', !str_contains(http_get("$basePrivate/", ["Cookie: $famViewer"])[1], 'loose1.jpg') && !str_contains(http_get("$baseFam/", ["Cookie: $revealCookie"])[1], 'alt="kids.jpg"'));
+// --- Security headers and caching (the privacy of hidden items must survive a CDN) ---
+$hv = function ($headers, $name) { foreach ($headers as $h) if (stripos($h, "$name:") === 0) return trim(substr($h, strlen($name) + 1)); return null; };
+[, , $hiddenImgHd] = http_get("$baseFam/?img=kids.jpg&size=full", ["Cookie: $famViewer"]);
+[, , $hiddenThumbHd] = http_get("$baseFam/?img=kids.jpg&size=thumb", ["Cookie: $famViewer"]);
+[, , $publicImgHd] = http_get("$baseFam/?img=park.jpg&size=full");
+check('[headers] a HIDDEN photo served to a viewer — full size and thumbnail alike — is "private, no-store": a CDN or shared proxy must never keep it', $hv($hiddenImgHd, 'Cache-Control') === 'private, no-store' && $hv($hiddenThumbHd, 'Cache-Control') === 'private, no-store');
+check('[headers] an ordinary photo is still cacheable ("public, max-age=31536000, immutable")', $hv($publicImgHd, 'Cache-Control') === 'public, max-age=31536000, immutable');
+[, , $anonPageHd] = http_get("$baseFam/"); [, , $viewerPageHd] = http_get("$baseFam/", ["Cookie: $famViewer"]);
+check('[headers] the page for a revealed viewer is "private, no-store" and says it varies by cookie', $hv($viewerPageHd, 'Cache-Control') === 'private, no-store' && stripos((string) $hv($viewerPageHd, 'Vary'), 'Cookie') !== false);
+check('[headers] the anonymous page also declares Vary: Cookie (and is not marked no-store)', stripos((string) $hv($anonPageHd, 'Vary'), 'Cookie') !== false && $hv($anonPageHd, 'Cache-Control') !== 'private, no-store');
+[, , $trackHd] = http_get("$baseFam/?track=park.jpg", ["Cookie: $famViewer"]);
+check('[headers] ...and so does the revealed viewer\'s ?track response', $hv($trackHd, 'Cache-Control') === 'private, no-store');
+[, , $adminHd] = http_get("$baseFam/?admin", $famHdrs); [, , $admin401Hd] = http_get("$baseFam/?admin"); [, , $reveal401Hd] = http_get("$baseFam/?reveal");
+foreach (['the admin page' => $adminHd, 'the admin 401' => $admin401Hd, 'the ?reveal 401' => $reveal401Hd] as $lbl => $hd) {
+    check("[headers] $lbl can't be framed, is never cached, and its forms may only post back to the site", str_contains((string) $hv($hd, 'Cache-Control'), 'no-store') && $hv($hd, 'X-Frame-Options') === 'DENY' && str_contains((string) $hv($hd, 'Content-Security-Policy'), "frame-ancestors 'none'") && str_contains((string) $hv($hd, 'Content-Security-Policy'), "form-action 'self'"));
+}
+foreach (['a page' => $anonPageHd, 'a photo' => $publicImgHd, 'the admin' => $adminHd] as $lbl => $hd) check("[headers] $lbl carries X-Content-Type-Options: nosniff", $hv($hd, 'X-Content-Type-Options') === 'nosniff');
+// The admin session has its own name (not PHPSESSID, which a host site may use), is HttpOnly/SameSite=Strict, and rejects ids it never issued.
+$adminSetCookie = ''; foreach ($adminHd as $h) if (stripos($h, 'Set-Cookie: gallery_admin_') === 0) $adminSetCookie = $h;
+[, , $firstLoginHd] = http_get("$baseFam/?admin", [$famAuth]); $sessLine = ''; foreach ($firstLoginHd as $h) if (stripos($h, 'Set-Cookie: gallery_admin_') === 0) $sessLine = $h;
+check('[session] the admin session cookie is named gallery_admin_… (not PHPSESSID), HttpOnly and SameSite=Strict', $sessLine !== '' && stripos($sessLine, 'httponly') !== false && stripos($sessLine, 'samesite=strict') !== false && !preg_match('/PHPSESSID/i', implode("\n", $firstLoginHd)));
+preg_match('/Set-Cookie: (gallery_admin_[a-z0-9]+)=/i', $sessLine, $sn);
+[, , $forgedHd] = http_get("$baseFam/?admin", [$famAuth, 'Cookie: ' . ($sn[1] ?? 'x') . '=attackerchosenid0123456789abcdef']);
+$forgedSet = ''; foreach ($forgedHd as $h) if (stripos($h, 'Set-Cookie: gallery_admin_') === 0) $forgedSet = $h;
+check('[session] a session id the attacker chose is not accepted: the server issues a fresh one (no fixation)', $forgedSet !== '' && !str_contains($forgedSet, 'attackerchosenid0123456789abcdef'));
+// A hostile Host header must not be echoed into the absolute URLs of link previews.
+[, $badHostPage] = http_get("$baseFam/", ['Host: "><svg onload=alert(1)>']);
+[, $goodHostPage] = http_get("$baseFam/", ['Host: gallery.example.test:8080']);
+check('[headers] a malformed Host header is never echoed into the page (og:url falls back to the server\'s own name)', !str_contains($badHostPage, 'svg onload') && str_contains($badHostPage, 'property="og:url" content="http://127.0.0.1'));
+check('[headers] ...while a normal Host (with a port) is used as before', str_contains($goodHostPage, 'property="og:url" content="http://gallery.example.test:8080/'));
 // One photo can be shown again inside a hidden folder.
 [, $bAdmin] = http_get("$baseFam/?admin&folder=Birthday", $famHdrs);
 [, $r] = user_submit("$baseFam/?admin&folder=Birthday", $bAdmin, 'name="file" value="cake.jpg"', ['restriction' => 'public'], $famHdrs);

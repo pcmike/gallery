@@ -55,6 +55,13 @@ A large release, built and tested in phases on one branch and shipped as one ver
 - View counts are debounced per browser (30 minutes, per photo), so reloading a photo no longer inflates it. A debounced request still returns the current total.
 - The SQLite view-stats store keys its rows by a SHA-256 of each photo's path rather than the filename, because that binary file can be fetched by URL and can't carry the PHP guard the JSON files do. Hidden items are counted like any other; no filename appears in the file.
 
+### Security
+- **Hidden photos and videos are never cacheable** (`Cache-Control: private, no-store`), as are pages rendered for a revealed viewer (with `Vary: Cookie`) — previously every photo, hidden or not, was `public, immutable`, so a CDN or proxy could have kept a hidden photo and served it to anyone.
+- Admin and private-view responses send `Cache-Control: no-store`, `X-Frame-Options: DENY` and a CSP (`frame-ancestors 'none'; form-action 'self'; base-uri 'none'; object-src 'none'`); every response sends `X-Content-Type-Options: nosniff`.
+- The admin session has its own cookie name (it no longer shares `PHPSESSID` with a host site) and rejects session ids the server didn't issue (`session.use_strict_mode`).
+- A malformed `Host` header is no longer echoed into absolute URLs.
+- Verified by a cross-site-scripting canary test (payloads planted in every admin field, notes, file and folder names, query strings and headers; no raw payload came back on ~290 pages) and by PHPStan static analysis (no real findings). The `README`'s new "Security notes" lists what is and isn't protected.
+
 ### Fixed
 - **A pasted `?folder=` link now previews with the cover photo chosen in the admin** (it used the folder's first file). One shared function picks the cover for both the card and the preview.
 - **Two galleries on one domain no longer sign each other's viewers out.** The "Private view" cookie used one fixed name for the whole domain; it is now named and signed from each copy's own folder, so every gallery keeps its own (and one gallery's cookie is no longer valid in another that merely shares the password).

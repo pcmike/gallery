@@ -53,6 +53,10 @@ if (PHP_VERSION_ID < 80100) {
     exit;
 }
 
+// Never let a browser second-guess a declared content type: a photo is an
+// image and a page is a page, whatever bytes a file happens to contain.
+header('X-Content-Type-Options: nosniff');
+
 // Version shown on the "?about" page and stamped in the page source.
 define('GALLERY_VERSION', '2.0.0');
 
@@ -1034,6 +1038,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         http_response_code(404);
         return;
     }
+    $cacheControl = file_cache_control($dir, $filename, $itemsData);
     $maxDims = ['thumb' => 480, 'share' => 1200, 'full' => 2400];
     $maxDim = $maxDims[$variant] ?? 480;
 
@@ -1053,7 +1058,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     // Non-HEIC files at full size are served untouched — no need to
     // resize or re-encode the original the lightbox already opens fine.
     if (!$isHeic && $variant === 'full') {
-        header('Cache-Control: public, max-age=31536000, immutable');
+        header('Cache-Control: ' . $cacheControl);
         serve_original_file($srcPath, $filename, guess_mime($ext));
         return;
     }
@@ -1061,7 +1066,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     $cachePath = image_cache_path($cacheDir, $filename, $variant, $srcPath);
     if ($cachePath && file_exists($cachePath) && filemtime($cachePath) >= @filemtime($srcPath)) {
         header('Content-Type: image/jpeg');
-        header('Cache-Control: public, max-age=31536000, immutable');
+        header('Cache-Control: ' . $cacheControl);
         readfile($cachePath);
         return;
     }
@@ -1069,7 +1074,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     $ok = $cachePath ? generate_resized_jpeg($srcPath, $cachePath, $maxDim) : false;
     if ($ok) {
         header('Content-Type: image/jpeg');
-        header('Cache-Control: public, max-age=31536000, immutable');
+        header('Cache-Control: ' . $cacheControl);
         readfile($cachePath);
         return;
     }
@@ -1080,6 +1085,11 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     if ($isHeic) {
         http_response_code(415);
         return;
+    }
+    // Ordinary photos keep the headers they have always had on this path
+    // (none); a hidden one must still never be stored by a shared cache.
+    if ($cacheControl === 'private, no-store') {
+        header('Cache-Control: private, no-store');
     }
     serve_original_file($srcPath, $filename, guess_mime($ext));
 }
@@ -1120,6 +1130,7 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
         http_response_code(404);
         return;
     }
+    $cacheControl = file_cache_control($dir, $filename, $itemsData);
     $srcPath = resolve_real_path($dir, $filename);
     $size = @filesize($srcPath);
     if ($size === false) {
@@ -1134,13 +1145,13 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
     // upgrade over the plain-PHP handling below, which stays as the
     // baseline that works on any host regardless.
     if (NGINX_ACCEL_REDIRECT_PREFIX !== '') {
-        header('Cache-Control: public, max-age=31536000, immutable');
+        header('Cache-Control: ' . $cacheControl);
         serve_original_file($srcPath, $filename, guess_mime($ext));
         return;
     }
 
     header('Content-Type: ' . guess_mime($ext));
-    header('Cache-Control: public, max-age=31536000, immutable');
+    header('Cache-Control: ' . $cacheControl);
     header('Accept-Ranges: bytes');
 
     $start = 0;
@@ -1808,9 +1819,33 @@ function login_throttle_record_success($rootDir, $realm, $ip) {
  *  use, or until the browser closes, whichever comes first. Only ever
  *  called for ?admin requests — an ordinary visitor's page load never
  *  starts a session or sets this cookie. */
+/** Headers for every admin / private-view response: it can't be put in
+ *  someone else's frame (clickjacking a "Hide folder" button), must never
+ *  be cached (it lists everything, hidden items included), and its forms
+ *  may only post back to this site. */
+function send_sensitive_page_headers() {
+    header('Cache-Control: no-store');
+    header('X-Frame-Options: DENY');
+    header("Content-Security-Policy: frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'");
+}
+/** For pages whose content differs by who is asking (the public gallery,
+ *  the map, ?track): tell caches so, and never let one keep a copy made
+ *  for a trusted viewer — it would list hidden items to the next
+ *  anonymous request for the same URL. */
+function send_viewer_aware_cache_headers() {
+    header('Vary: Cookie');
+    if (is_revealed()) {
+        header('Cache-Control: private, no-store');
+    }
+}
 function admin_start_session() {
     if (session_status() === PHP_SESSION_ACTIVE) return;
     ini_set('session.gc_maxlifetime', 14400);
+    // Reject a session id the server never issued (blocks fixation), and give
+    // the admin session its own name: a gallery living inside another PHP
+    // site would otherwise share — and clobber — that site's PHPSESSID.
+    ini_set('session.use_strict_mode', '1');
+    session_name('gallery_admin_' . substr(hash('sha256', __DIR__), 0, 10));
     // Secure matches is_https_request() rather than being hardcoded true
     // — the one exception this feature already makes for localhost
     // testing over plain HTTP would otherwise never get the cookie back
@@ -1979,6 +2014,18 @@ function file_is_hidden($dir, $file, $itemsData) {
     return false;
 }
 
+/** Cache-Control for a photo/video response. Ordinary files are immutable
+ *  and public (the URL changes when the file does not, and a CDN is welcome
+ *  to hold them). A *hidden* item is only ever served to a trusted viewer,
+ *  and a shared cache or CDN keys on the URL, not the cookie: letting one
+ *  store it would hand it to the next anonymous request for the same URL.
+ *  So hidden items are private and never stored. */
+function file_cache_control($dir, $file, $itemsData) {
+    return file_is_hidden($dir, $file, $itemsData)
+        ? 'private, no-store'
+        : 'public, max-age=31536000, immutable';
+}
+
 /** One folder's own restriction, read once per request — file_is_hidden()
  *  asks about every ancestor of every file, so without this a deep tree
  *  would re-read the same small JSON files thousands of times.
@@ -2096,6 +2143,7 @@ function order_folder_children($dir, $prefix, $names) {
  * link afterward" is literally true.
  */
 function run_reveal_route($dir) {
+    send_sensitive_page_headers();
     if (PRIVATE_VIEW_PASSWORD === '') {
         http_response_code(404);
         return;
@@ -2352,6 +2400,7 @@ function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary) 
  * instead, same honesty standard as the video placeholder.
  */
 function render_map_page($points, $legend, $pageTitle, $baseUrl) {
+    send_viewer_aware_cache_headers();
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $title = htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8');
     $ogUrl = htmlspecialchars($baseUrl . '/?map', ENT_QUOTES, 'UTF-8');
@@ -3446,6 +3495,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
  * script either way; nothing below this ever runs for an admin request.
  */
 function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $galleryNotices) {
+    send_sensitive_page_headers();
     if (ADMIN_PASSWORD === '') {
         http_response_code(404);
         return;
@@ -3852,6 +3902,7 @@ if (isset($_GET['track'])) {
         }
     }
     header('Content-Type: application/json');
+    send_viewer_aware_cache_headers();
     echo json_encode($response);
     exit;
 }
@@ -3915,6 +3966,13 @@ foreach ($mdFiles as $mdFile) {
 // accurate, just not renamed. $groups/$files themselves are scoped down
 // separately, later, after that .md has run.
 $currentFolderPath = null;
+// Defined up front so no later template line can ever hit an undefined
+// variable, whatever order the folder code above/below is rearranged into.
+$currentFolderFiles = [];
+$currentFolderMeta = ['label' => '', 'cover' => null, 'description' => '', 'dates' => '', 'sortOrder' => null];
+$currentFolderName = '';
+$currentFolderFileCount = 0;
+$folderCrumbs = [];
 if (isset($_GET['folder'])) {
     $requestedFolder = $_GET['folder'];
     // Valid only if the script's own (already hiding-filtered) file list
@@ -4787,7 +4845,14 @@ function gallery_root_href() {
 /** Builds the current request's scheme://host/path, for absolute OG image URLs. */
 function current_base_url() {
     $scheme = is_https_request() ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+    // The Host header is whatever the client sent. It ends up in absolute
+    // URLs (link previews), so only accept something shaped like a host
+    // (name or IP, optional port, IPv6 in brackets) and otherwise fall back
+    // to the server's own name — never echo arbitrary text into a URL.
+    $host = $_SERVER['HTTP_HOST'] ?? '';
+    if (!preg_match('/^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/', $host)) {
+        $host = $_SERVER['SERVER_NAME'] ?? 'localhost';
+    }
     $path = isset($_SERVER['PHP_SELF']) ? rtrim(str_replace('\\', '/', dirname($_SERVER['PHP_SELF'])), '/') : '';
     return $scheme . '://' . $host . $path;
 }
@@ -4991,6 +5056,7 @@ if ($requestedPhoto) {
         $ogTitle = $photoGroupKey . ' — ' . $pageTitle;
     }
 }
+send_viewer_aware_cache_headers();
 ?>
 <!-- Drop-in Photo Gallery v<?= htmlspecialchars(GALLERY_VERSION) ?> — github.com/pcmike -->
 <?php if (!empty($galleryNotices)): ?>

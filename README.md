@@ -6,7 +6,7 @@ Built for sharing "for sale" listings (Reddit, Discord, etc.) as much as for pla
 
 **Everything beyond the basic gallery is opt-in.** With no settings changed, this script writes nothing to your folder, makes no requests to any third party, and doesn't show a single subfolder, video, or photo location. (It does peek into subfolders, read-only and capped at 40 of them, purely to warn you if photos in there are being skipped — see [Folders](#folders).)
 
-**Contents:** [Quick start](#quick-start) · [Recipes](#recipes--start-here) · [What affects what](#what-affects-what) · [Features](#features) · [Troubleshooting](#troubleshooting) · [Configuration](#configuration) · [Directive syntax](#directive-syntax) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [The admin editor](#the-admin-editor) · [Hiding items and private view](#hiding-items-and-private-view) · [Locking down the files themselves](#locking-down-the-files-themselves) · [The trip map](#the-trip-map) · [Sharing and previews](#sharing-and-previews) · [Keeping runtime data out of git](#keeping-runtime-data-out-of-git) · [Upgrading to 2.0](#upgrading-to-20)
+**Contents:** [Quick start](#quick-start) · [Recipes](#recipes--start-here) · [What affects what](#what-affects-what) · [Features](#features) · [Troubleshooting](#troubleshooting) · [Configuration](#configuration) · [Directive syntax](#directive-syntax) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [The admin editor](#the-admin-editor) · [Hiding items and private view](#hiding-items-and-private-view) · [Locking down the files themselves](#locking-down-the-files-themselves) · [The trip map](#the-trip-map) · [Sharing and previews](#sharing-and-previews) · [Security notes](#security-notes) · [Keeping runtime data out of git](#keeping-runtime-data-out-of-git) · [Upgrading to 2.0](#upgrading-to-20)
 
 ## Quick start
 
@@ -542,6 +542,27 @@ Dropping the new `index.php` over a 1.x copy leaves your gallery looking the sam
 - **You may see one new setup notice.** If your folder has subfolders containing photos and `AUTO_GROUP_BY_FOLDER` is off, the collapsed "setup notices" banner now says how many photos in subfolders aren't being shown (a count, never a name). Turn the setting on to show them, or ignore it — it's addressed to you, not your visitors.
 
 Everything else is opt-in. Copy your own settings across by editing the constants in the new file. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+
+## Security notes
+
+What the script does to protect you, and the limits worth knowing.
+
+**What it protects, by default**
+- **Everything it writes is private.** The generated data files (captions, locations, hide flags, stats, login throttle) answer 404 if requested by URL, on any host that runs PHP — see [The admin editor](#the-admin-editor). Output is HTML-escaped everywhere, captions are written with `<`/`>` escaped in those files, and a request can only ever *select* among files the script found itself, never name a path (`..`, symlinks, wrong-case spellings and NUL bytes are all refused).
+- **Logins:** HTTP Basic Auth compared in constant time; the admin and private view refuse to load over plain HTTP (except from `localhost`); a failed-login throttle; CSRF tokens on every admin write; a stale-edit check; and an admin session cookie that is `HttpOnly`, `SameSite=Strict`, uniquely named (it won't collide with another PHP app's `PHPSESSID` on the same domain) and rejects a session id the server never issued.
+- **Admin and private-view pages** are sent with `Cache-Control: no-store`, `X-Frame-Options: DENY` and a policy that stops them being framed or their forms being posted elsewhere. Every response carries `X-Content-Type-Options: nosniff`.
+- **Hidden items stay out of caches.** A hidden photo or video, even when served to a trusted viewer, is `Cache-Control: private, no-store`, and a page rendered for a viewer is too — so a CDN or shared proxy in front of the gallery can't keep one and hand it to the next visitor. Ordinary photos stay cacheable.
+- **The Host header** is used in absolute URLs (link previews) only if it looks like a real host name.
+
+**Limits, stated plainly**
+- **A web server hands out any file it can see.** Hiding keeps hidden items out of every page, but the files themselves still answer to their exact address unless you add the [server rules](#locking-down-the-files-themselves).
+- **Original photos keep their embedded GPS** (see [Captions and locations](#captions-and-locations)).
+- **`ADMIN_PASSWORD` and `PRIVATE_VIEW_PASSWORD` live in `index.php`.** Pick long random ones, and redact them before sharing your copy of the file.
+- **Behind a reverse proxy, the script believes what the server tells PHP.** It reads the client address from `REMOTE_ADDR` (used for the login throttle and for allowing plain HTTP only from `localhost`) and treats a request as secure if `HTTPS` is set, the port is 443, or `X-Forwarded-Proto` is `https`. With php-fpm and the standard `fastcgi_param`s this is right. If instead you `proxy_pass` to a PHP web server on the same machine, *every* visitor looks like `127.0.0.1` — the HTTPS requirement then protects nothing and the throttle is shared — so pass the real client address and protocol through, or keep PHP behind FastCGI.
+- **Photos are cached by browsers for up to a year** (`immutable`), and their address doesn't change when you replace a file. If you swap a photo for a new one *under the same name*, visitors who've seen it may keep the old copy; give the new file a new name instead.
+- Images and Markdown are processed from folders **you** control. The script isn't built to accept uploads from strangers, and doesn't.
+
+Found a security problem? Please open a GitHub issue, or contact the author privately if it's something that shouldn't be public yet.
 
 ## Project status
 
