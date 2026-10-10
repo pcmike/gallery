@@ -110,6 +110,72 @@ function make_jpeg($path, $w, $h, $r, $g, $b) {
 // skipped over by size) followed by a moov box containing a single mvhd
 // (version 0) child with a real duration. No mdat/track data at all —
 // not meant to actually play, only to parse.
+/* --- "act like a browser" helpers, for the recipe/walkthrough tests ---------
+ * The earlier admin tests POST hand-crafted field lists. A real user clicks
+ * the page's own forms, which send *every* field with its current value (and
+ * carry the stale-edit fingerprint, CSRF token, pre-filled GPS, ...). These
+ * parse a rendered page the way a browser would, so a walkthrough can change
+ * just what a person would type and submit the rest untouched. */
+
+/** Attributes of a tag's inside as name => decoded value (flags => ''). */
+function html_attrs($s) {
+    $out = [];
+    preg_match_all('#([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+)))?#', $s, $m, PREG_SET_ORDER);
+    foreach ($m as $a) {
+        $v = $a[2] ?? ''; if ($v === '' && isset($a[3])) $v = $a[3]; if ($v === '' && isset($a[4])) $v = $a[4];
+        $out[strtolower($a[1])] = html_entity_decode($v, ENT_QUOTES, 'UTF-8');
+    }
+    return $out;
+}
+
+/** Every <form method="post"> on a page, as ['attrs' =>, 'html' =>]. */
+function html_post_forms($html) {
+    preg_match_all('#<form\b([^>]*)>(.*?)</form>#s', $html, $m, PREG_SET_ORDER);
+    $forms = [];
+    foreach ($m as $f) if (stripos($f[1], 'method="post"') !== false) $forms[] = ['attrs' => $f[1], 'html' => $f[2]];
+    return $forms;
+}
+
+/** What a browser would submit for a form left untouched: every named,
+ *  enabled control with its current value (a checkbox/radio only if
+ *  checked, a select's chosen or first option, a textarea's text). */
+function form_default_fields($formHtml) {
+    $f = [];
+    preg_match_all('#<input\b([^>]*)>#i', $formHtml, $ins);
+    foreach ($ins[1] as $raw) {
+        $a = html_attrs($raw);
+        if (!isset($a['name']) || array_key_exists('disabled', $a)) continue;
+        $type = strtolower($a['type'] ?? 'text');
+        if (in_array($type, ['submit', 'button', 'file', 'image', 'reset'], true)) continue;
+        if ($type === 'checkbox' || $type === 'radio') { if (array_key_exists('checked', $a)) $f[$a['name']] = $a['value'] ?? 'on'; continue; }
+        $f[$a['name']] = $a['value'] ?? '';
+    }
+    preg_match_all('#<textarea\b([^>]*)>(.*?)</textarea>#is', $formHtml, $tas, PREG_SET_ORDER);
+    foreach ($tas as $ta) { $a = html_attrs($ta[1]); if (isset($a['name']) && !array_key_exists('disabled', $a)) $f[$a['name']] = html_entity_decode($ta[2], ENT_QUOTES, 'UTF-8'); }
+    preg_match_all('#<select\b([^>]*)>(.*?)</select>#is', $formHtml, $sels, PREG_SET_ORDER);
+    foreach ($sels as $sel) {
+        $a = html_attrs($sel[1]); if (!isset($a['name']) || array_key_exists('disabled', $a)) continue;
+        preg_match_all('#<option\b([^>]*)>#i', $sel[2], $opts); $chosen = null;
+        foreach ($opts[1] as $i => $raw) { $o = html_attrs($raw); if ($chosen === null || array_key_exists('selected', $o)) $chosen = $o['value'] ?? ''; if (array_key_exists('selected', $o)) break; }
+        $f[$a['name']] = $chosen ?? '';
+    }
+    return $f;
+}
+
+/** "Click the button" on the first form on $pageHtml containing $needle,
+ *  changing only $overrides. $postUrl is the page's own URL (these forms
+ *  have no action, so a browser posts them back to it). Returns
+ *  [status, body, headers, fieldsSent]. */
+function user_submit($postUrl, $pageHtml, $needle, $overrides = [], $headers = []) {
+    foreach (html_post_forms($pageHtml) as $form) {
+        if (!str_contains($form['html'], $needle)) continue;
+        $fields = array_merge(form_default_fields($form['html']), $overrides);
+        [$st, $body, $hd] = http_post($postUrl, $fields, $headers);
+        return [$st, $body, $hd, $fields];
+    }
+    return [0, "NO FORM CONTAINING: $needle", [], []];
+}
+
 /** The generated data files start with a PHP guard line (see
  *  data_file_guard_line() in index.php) so a direct request for one
  *  answers 404 with nothing else. These read/write that exact format. */
@@ -1856,6 +1922,238 @@ if ($heicOk) {
     check('a HEIC\'s EXIF GPS pre-fills the admin\'s location fields too', str_contains($gpsCard($gpsAdmin, 'phone.heic'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'phone.heic'), '2.2945'));
 } else {
     echo "  skip  HEIC GPS auto-fill (this PHP's Imagick can't write HEIC to build a fixture)\n";
+}
+
+/* ======================================================================= *
+ * RECIPE: a trip album. Followed as a person would, through the page's own
+ * forms (see the "act like a browser" helpers): turn on the settings the
+ * README names, sign in to ?admin, fill in a folder's settings, caption a
+ * photo with its auto-filled GPS, opt a folder into location sharing, pick
+ * a cover, and check what a visitor — and a pasted link — then sees.
+ * ======================================================================= */
+
+echo "== recipe: trip album (folders, admin forms, GPS, map, video, share links) ==\n";
+
+$fxTrip = new_fixture_dir('recipe-trip');
+mkdir("$fxTrip/Paris"); mkdir("$fxTrip/Lisbon");
+make_gps_jpeg("$fxTrip/Paris/eiffel.jpg", 'N', [[48, 1], [51, 1], [3024, 100]], 'E', [[2, 1], [17, 1], [402, 10]]);
+make_jpeg("$fxTrip/Paris/louvre.jpg", 60, 60, 200, 100, 50);
+make_minimal_mp4("$fxTrip/Paris/seine.mp4", 5);
+make_gps_jpeg("$fxTrip/Lisbon/tram.jpg", 'N', [[38, 1], [42, 1], [0, 1]], 'W', [[9, 1], [8, 1], [0, 1]]);
+make_jpeg("$fxTrip/Lisbon/castle.jpg", 60, 60, 50, 100, 200);
+make_jpeg("$fxTrip/hello.jpg", 60, 60, 90, 90, 90);
+write_patched_index("$fxTrip/index.php", $indexContents, [
+    'AUTO_GROUP_BY_FOLDER' => 'true', 'ENABLE_PHOTO_LOCATION' => 'true', 'ENABLE_MAP' => 'true',
+    'ENABLE_VIDEO' => 'true', 'ENABLE_THUMBNAIL_CACHE' => 'true', 'ADMIN_PASSWORD' => "'trip-admin-pw'",
+]);
+$portTrip = find_free_port(); start_server($fxTrip, $portTrip); $baseTrip = "http://127.0.0.1:$portTrip";
+$tripAuth = 'Authorization: Basic ' . base64_encode('admin:trip-admin-pw');
+
+// 1. A visitor's first look: one cover card per folder, natural order, and no map yet
+// (nothing has a visible location until a folder opts in).
+[, $tripHome] = http_get("$baseTrip/");
+check('[trip] the root shows a cover card per folder, Lisbon before Paris (natural order)', strpos($tripHome, 'id="group-lisbon"') !== false && strpos($tripHome, 'id="group-lisbon"') < strpos($tripHome, 'id="group-paris"'));
+check('[trip] ...and the loose photo as its own card', str_contains($tripHome, 'alt="hello.jpg"'));
+check('[trip] no map yet: ENABLE_MAP is on, but no photo has a *visible* location', !str_contains($tripHome, 'trip-map-preview'));
+
+// 2. Sign in and open a folder.
+[, $pAdmin, $pAdminHd] = http_get("$baseTrip/?admin&folder=Paris", [$tripAuth]);
+$tripCookie = extract_cookie_header($pAdminHd); $tripHdrs = [$tripAuth, "Cookie: $tripCookie"];
+$parisUrl = "$baseTrip/?admin&folder=Paris";
+check('[trip] the folder admin page shows the settings form, the location switch, and its photos', str_contains($pAdmin, 'Save folder settings') && str_contains($pAdmin, 'Show photo locations publicly for this folder') && str_contains($pAdmin, 'eiffel.jpg') && str_contains($pAdmin, 'seine.mp4'));
+
+// 3. Fill in the folder's own settings: name, dates, description, position.
+[, $r] = user_submit($parisUrl, $pAdmin, 'value="save_folder_identity"', ['display_name' => 'Paris, France', 'dates' => 'May 3–7, 2026', 'description' => 'Five days of croissants.', 'sort_order' => '1'], $tripHdrs);
+check('[trip] saving the folder settings form succeeds', str_contains($r, 'class="flash ok"'));
+[, $tripHome2] = http_get("$baseTrip/");
+check('[trip] the cover card now shows the display name, dates and description', str_contains($tripHome2, 'folder-cover-label">Paris, France<') && str_contains($tripHome2, 'folder-cover-dates">May 3–7, 2026<') && str_contains($tripHome2, 'folder-cover-desc">Five days of croissants.<'));
+check('[trip] ...and Position 1 moved Paris ahead of Lisbon', strpos($tripHome2, 'id="group-paris"') < strpos($tripHome2, 'id="group-lisbon"'));
+
+// 4. Opt the folder into location sharing, then caption a photo. The admin must
+// pre-fill the photo's coordinates from its EXIF without being asked.
+[, $pAdmin] = http_get($parisUrl, $tripHdrs);
+[, $r] = user_submit($parisUrl, $pAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $tripHdrs);
+check('[trip] ticking "Show photo locations publicly for this folder" saves', str_contains($r, 'class="flash ok"'));
+[, $pAdmin] = http_get($parisUrl, $tripHdrs);
+$eiffelForm = '';
+foreach (html_post_forms($pAdmin) as $form) { if (str_contains($form['html'], 'name="file" value="eiffel.jpg"') && str_contains($form['html'], 'save_item')) $eiffelForm = $form['html']; }
+$eiffelFields = form_default_fields($eiffelForm);
+check('[trip] the admin pre-fills the photo\'s location from its EXIF GPS (48.8584, 2.2945) before anything is typed', abs((float) ($eiffelFields['lat'] ?? 0) - 48.8584) < 0.0001 && abs((float) ($eiffelFields['lng'] ?? 0) - 2.2945) < 0.0001);
+[, $r] = user_submit($parisUrl, $pAdmin, 'name="file" value="eiffel.jpg"', ['caption' => 'The iron lady', 'web' => 'https://en.wikipedia.org/wiki/Eiffel_Tower', 'loc_label' => 'Champ de Mars'], $tripHdrs);
+check('[trip] saving the photo (caption + link, untouched pre-filled GPS) succeeds', str_contains($r, 'class="flash ok"'));
+[, $parisPub] = http_get("$baseTrip/?folder=Paris");
+check('[trip] visitors see the caption badge, the location badge (OpenStreetMap link) and the web-link badge', str_contains($parisPub, 'caption-badge" title="The iron lady"') && (bool) preg_match('#class="item-badge location-badge" href="https://www\.openstreetmap\.org/[^"]*48\.8584#', $parisPub) && str_contains($parisPub, 'href="https://en.wikipedia.org/wiki/Eiffel_Tower"'));
+check('[trip] the lightbox caption data carries the caption, never the filename', str_contains($parisPub, '"The iron lady"') && !preg_match('/captions = \[[^\]]*eiffel/', $parisPub));
+
+// 5. The map appears, with only what has opted in; a second folder opts in separately.
+[, $tripHome3] = http_get("$baseTrip/");
+preg_match('/var clusters = (\[.*?\]);/s', $tripHome3, $cm); $clusters3 = json_decode($cm[1] ?? '[]', true);
+check('[trip] the root now has a trip-map preview with exactly one pin (Paris\'s eiffel.jpg)', str_contains($tripHome3, 'id="trip-map-preview"') && count($clusters3) === 1 && ($clusters3[0][0]['file'] ?? '') === 'Paris/eiffel.jpg');
+check('[trip] ...whose legend uses the folder\'s display name', str_contains($tripHome3, 'map-legend-item"><span class="map-legend-swatch" style="background:#e6194b;"></span>Paris, France'));
+[$tripMapStatus, $tripMapPage] = http_get("$baseTrip/?map");
+check('[trip] the shareable ?map page loads and has its own link preview', $tripMapStatus === 200 && str_contains($tripMapPage, 'property="og:image"') && str_contains($tripMapPage, '?mapicon'));
+[, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
+check('[trip] Lisbon\'s tram photo has GPS pre-filled too, but Lisbon has not opted in so it is not on the map', abs((float) (form_default_fields((function ($h) { foreach (html_post_forms($h) as $f) if (str_contains($f['html'], 'name="file" value="tram.jpg"') && str_contains($f['html'], 'save_item')) return $f['html']; return ''; })($lAdmin))['lat'] ?? 0) - 38.7) < 0.01 && count($clusters3) === 1);
+[, $r] = user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $tripHdrs);
+[, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
+user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'name="file" value="tram.jpg"', ['caption' => 'Tram 28'], $tripHdrs);
+[, $tripHome4] = http_get("$baseTrip/");
+preg_match('/var clusters = (\[.*?\]);/s', $tripHome4, $cm4); $clusters4 = json_decode($cm4[1] ?? '[]', true);
+check('[trip] once Lisbon opts in and the tram photo is saved, the map has two pins', count($clusters4) === 2);
+
+// 6. Pick a cover photo with the page's own "Set as cover" button.
+[, $pAdmin] = http_get($parisUrl, $tripHdrs);
+foreach (html_post_forms($pAdmin) as $form) { if (str_contains($form['html'], 'value="set_cover"') && str_contains($form['html'], 'value="louvre.jpg"')) { [, $r] = http_post($parisUrl, form_default_fields($form['html']), $tripHdrs); } }
+[, $tripHome5] = http_get("$baseTrip/");
+check('[trip] after "Set as cover" on louvre.jpg, Paris\'s cover card shows the Louvre photo', (bool) preg_match('#id="group-paris">.*?src="\?img=Paris%2Flouvre\.jpg&amp;size=thumb"#s', $tripHome5));
+
+// 7. Video: duration badge, in the gallery and the lightbox list.
+check('[trip] the 5-second video shows a duration badge and is in the lightbox list', str_contains($parisPub, 'video-duration">0:05<') && str_contains($parisPub, 'Paris\/seine.mp4'));
+
+// 8. Pasting the folder\'s link somewhere: title, description and the *chosen cover* as the preview image.
+check('[trip] a pasted ?folder=Paris link previews with the folder\'s name and description', str_contains($parisPub, 'property="og:title" content="Paris, France — ') && str_contains($parisPub, 'property="og:description" content="Five days of croissants."'));
+check('[trip] ...and the preview image is the cover photo chosen in the admin (louvre.jpg), not just the first file', (bool) preg_match('#property="og:image" content="[^"]*img=Paris%2Flouvre\.jpg#', http_get("$baseTrip/?folder=Paris")[1]));
+
+// 9. The whole tree exports as one backup file carrying everything typed.
+$exportPage = http_get($parisUrl, $tripHdrs)[1];
+[, $treeJson] = user_submit($parisUrl, $exportPage, 'value="export_tree"', [], $tripHdrs);
+$tree = json_decode($treeJson, true);
+check('[trip] "Export the whole tree as JSON" contains the typed settings and captions for both folders', ($tree['Paris']['displayName'] ?? '') === 'Paris, France' && ($tree['Paris']['dates'] ?? '') === 'May 3–7, 2026' && ($tree['Paris']['items']['eiffel.jpg']['caption'] ?? '') === 'The iron lady' && ($tree['Lisbon']['items']['tram.jpg']['caption'] ?? '') === 'Tram 28');
+
+/* ======================================================================= *
+ * RECIPE: a "for sale" listing — using the notes file the repo ships
+ * (examples/example-forsale.md), untouched, exactly as its own text tells a
+ * new user to: turn on AUTO_GROUP_BY_FILENAME and name the photos to match.
+ * ======================================================================= */
+
+echo "== recipe: for-sale listing (the shipped example file, as written) ==\n";
+
+$fxSale = new_fixture_dir('recipe-forsale');
+foreach (['alpha_01' => 10, 'alpha_02' => 20, 'bravo_01' => 30, 'charlie_01' => 40, 'charlie_02' => 50, 'unrelated' => 60] as $n => $c) make_jpeg("$fxSale/$n.jpg", 60, 60, $c, $c, $c);
+copy(__DIR__ . '/../examples/example-forsale.md', "$fxSale/forsale.md");
+write_patched_index("$fxSale/index.php", $indexContents, [
+    'AUTO_GROUP_BY_FILENAME' => 'true', 'TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'false', 'ENABLE_THUMBNAIL_CACHE' => 'true',
+]);
+$portSale = find_free_port(); start_server($fxSale, $portSale); $baseSale = "http://127.0.0.1:$portSale";
+[, $sale] = http_get("$baseSale/");
+check('[sale] the example\'s "# heading" becomes the page title', str_contains($sale, '<title>Example listing — replace this with your own — Gallery</title>'));
+check('[sale] the shipped example raises no setup notices on a fresh install', !str_contains($sale, 'setup notice'));
+check('[sale] "alpha" (2 photos) and "charlie" (2 photos) become boxes; "bravo" (1 photo) stays a single card', str_contains($sale, 'id="group-alpha"') && str_contains($sale, 'id="group-charlie"') && !str_contains($sale, 'class="group-box" id="group-bravo"') && str_contains($sale, 'alt="bravo_01.jpg"'));
+check('[sale] each paragraph gets its photos attached because its text contains the filename prefix (View 2 photos / 1 photo / 2 photos)', substr_count($sale, 'linked-photos-jump" href="#group-alpha">View 2 photos') === 1 && substr_count($sale, 'linked-photos-jump" href="#group-bravo">View 1 photo') === 1 && substr_count($sale, 'linked-photos-jump" href="#group-charlie">View 2 photos') === 1);
+check('[sale] {sold} on item (3) greys its photos and ribbons its box; {reserved} on (2) tags it; {color:} on (1) colors its box', (bool) preg_match('#class="group-box sold"[^>]*id="group-charlie"#', $sale) && str_contains($sale, 'reserved') && str_contains($sale, 'border-left-color: #5865f2'));
+check('[sale] a photo that no paragraph mentions still appears, as a plain card', str_contains($sale, 'alt="unrelated.jpg"'));
+check('[sale] directives written inside `inline code` in the example\'s explanation are shown literally, never acted on', str_contains($sale, '<code>{photos: a.jpg, b.jpg, ...}</code>') && str_contains($sale, '<code>{group: Name}</code>'));
+// View stats: tracked for the owner, hidden from buyers.
+$trackSale = json_decode(http_get("$baseSale/?track=alpha_01.jpg")[1], true);
+check('[sale] TRACK_VIEWS on: a view is counted (the ?track ping answers with the new total)', ($trackSale['photoViews'] ?? null) === 1);
+[, $saleAfter] = http_get("$baseSale/");
+check('[sale] SHOW_VIEW_COUNTS_PUBLICLY off: the count is kept but every public badge stays hidden', (bool) preg_match('#class="view-badge hidden" data-photo="alpha_01.jpg"#', $saleAfter) && !preg_match('#class="view-badge" data-photo#', $saleAfter));
+check('[sale] ...and the stats file is not readable by URL', (function () use ($baseSale, $fxSale) { foreach (['.gallery-stats.php', '.gallery-stats.sqlite', '.gallery-stats.json'] as $f) { [$st, $b] = http_get("$baseSale/$f"); if (is_file("$fxSale/$f") && $f === '.gallery-stats.php' && !($st === 404 && $b === '')) return false; } return true; })());
+// Pasting a photo link into Discord/Reddit.
+[, $salePhoto] = http_get("$baseSale/?photo=alpha_01.jpg");
+check('[sale] a pasted ?photo= link previews with an absolute share-size image and the group in its title', (bool) preg_match('#property="og:image" content="http://127\.0\.0\.1:\d+/\?img=alpha_01\.jpg&amp;size=share"#', $salePhoto) && str_contains($salePhoto, 'property="og:title" content="alpha — Example listing'));
+http_get("$baseSale/?img=alpha_01.jpg&size=thumb");
+check('[sale] ENABLE_THUMBNAIL_CACHE on: thumbnails are cached in .gallery-cache next to the photos', is_dir("$fxSale/.gallery-cache") && count(glob("$fxSale/.gallery-cache/*.jpg")) > 0);
+check('[sale] the admin does not exist (ADMIN_PASSWORD unset): ?admin is a 404', http_get("$baseSale/?admin")[0] === 404);
+
+/* ======================================================================= *
+ * RECIPE: private family photos — hide an item and a whole folder through
+ * the admin's own forms, share a viewer password, and see what each kind
+ * of visitor gets.
+ * ======================================================================= */
+
+echo "== recipe: private family photos (hide via the admin forms, Private view) ==\n";
+
+$fxFam = new_fixture_dir('recipe-family');
+mkdir("$fxFam/Birthday"); mkdir("$fxFam/Vacation");
+make_jpeg("$fxFam/park.jpg", 60, 60, 10, 100, 10); make_jpeg("$fxFam/kids.jpg", 60, 60, 100, 10, 10);
+make_jpeg("$fxFam/Birthday/cake.jpg", 60, 60, 150, 50, 50); make_jpeg("$fxFam/Birthday/candles.jpg", 60, 60, 200, 50, 50);
+make_jpeg("$fxFam/Vacation/beach.jpg", 60, 60, 50, 50, 200);
+write_patched_index("$fxFam/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ADMIN_PASSWORD' => "'fam-admin'", 'PRIVATE_VIEW_PASSWORD' => "'fam-view'"]);
+$portFam = find_free_port(); start_server($fxFam, $portFam); $baseFam = "http://127.0.0.1:$portFam";
+$famAuth = 'Authorization: Basic ' . base64_encode('admin:fam-admin');
+[, $famHome] = http_get("$baseFam/");
+check('[family] everyone sees everything at first, plus a discreet "Private view" footer link', str_contains($famHome, 'alt="kids.jpg"') && str_contains($famHome, 'id="group-birthday"') && str_contains($famHome, 'href="?reveal">Private view</a>') && str_contains($famHome, '5 photos'));
+[, $fAdmin, $fHd] = http_get("$baseFam/?admin", [$famAuth]); $famCookie = extract_cookie_header($fHd); $famHdrs = [$famAuth, "Cookie: $famCookie"];
+[, $r] = user_submit("$baseFam/?admin", $fAdmin, 'name="file" value="kids.jpg"', ['restriction' => 'private'], $famHdrs);
+check('[family] choosing Visibility → "Always hide" on kids.jpg and saving works', str_contains($r, 'class="flash ok"'));
+[, $famHome2] = http_get("$baseFam/");
+check('[family] kids.jpg is gone from the public page, the lightbox list and the photo count (4 now)', !str_contains($famHome2, 'kids.jpg') && str_contains($famHome2, '4 photos'));
+[, $bAdmin] = http_get("$baseFam/?admin&folder=Birthday", $famHdrs);
+[, $r] = user_submit("$baseFam/?admin&folder=Birthday", $bAdmin, 'value="toggle_folder_restriction"', [], $famHdrs);
+check('[family] the "Hide this entire folder from public view" button works', str_contains($r, 'class="flash ok"'));
+[, $famHome3] = http_get("$baseFam/");
+check('[family] the Birthday folder disappears entirely (no card, count now 2), and typing its address gives a 404', !str_contains($famHome3, 'birthday') && !str_contains($famHome3, 'Birthday') && str_contains($famHome3, '2 photos') && http_get("$baseFam/?folder=Birthday")[0] === 404);
+check('[family] its photos are refused by URL too (?img= 404)', http_get("$baseFam/?img=Birthday%2Fcake.jpg&size=thumb")[0] === 404);
+[, $hiddenSum] = http_get("$baseFam/?admin&hidden", $famHdrs);
+check('[family] the admin\'s "Hidden items" summary lists the folder and the photo, with the not-a-lock warning', str_contains($hiddenSum, 'Birthday') && str_contains($hiddenSum, 'kids.jpg') && str_contains((string) http_get("$baseFam/?admin", $famHdrs)[1], 'servable directly'));
+// A trusted viewer.
+[$noPwStatus] = http_get("$baseFam/?reveal");
+[$badPwStatus] = http_get("$baseFam/?reveal", ['Authorization: Basic ' . base64_encode('x:wrong')]);
+[$goodPwStatus, , $goodPwHd] = http_get("$baseFam/?reveal", ['Authorization: Basic ' . base64_encode('x:fam-view')], false);
+$famViewer = extract_cookie_header($goodPwHd);
+$loc = ''; foreach ($goodPwHd as $h) if (stripos($h, 'Location:') === 0) $loc = trim(substr($h, 9));
+check('[family] "Private view": no password / wrong password get 401, the right one redirects back to the plain gallery link', $noPwStatus === 401 && $badPwStatus === 401 && $goodPwStatus === 302 && ($loc === './' || $loc === '/'));
+[, $famViewed] = http_get("$baseFam/", ["Cookie: $famViewer"]);
+check('[family] with the viewer cookie, the whole gallery is back (5 photos, Birthday card, kids.jpg)', str_contains($famViewed, 'alt="kids.jpg"') && str_contains($famViewed, 'id="group-birthday"') && str_contains($famViewed, '5 photos') && http_get("$baseFam/?folder=Birthday", ["Cookie: $famViewer"])[0] === 200);
+// One photo can be shown again inside a hidden folder.
+[, $bAdmin] = http_get("$baseFam/?admin&folder=Birthday", $famHdrs);
+[, $r] = user_submit("$baseFam/?admin&folder=Birthday", $bAdmin, 'name="file" value="cake.jpg"', ['restriction' => 'public'], $famHdrs);
+[, $famHome4] = http_get("$baseFam/");
+check('[family] choosing "Always show" on cake.jpg inside the hidden folder shows just that photo (a Birthday card, 1 photo, without the candles)', (bool) preg_match('#id="group-birthday">.*?1 photo#s', $famHome4) && !str_contains($famHome4, 'candles') && http_get("$baseFam/?img=Birthday%2Fcake.jpg&size=thumb")[0] === 200 && http_get("$baseFam/?img=Birthday%2Fcandles.jpg&size=thumb")[0] === 404);
+
+// `inline code` in a notes file is documentation, never a directive.
+$fxCode = new_fixture_dir('inlinecode');
+make_jpeg("$fxCode/real.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxCode/other.jpg", 60, 60, 20, 20, 20);
+file_put_contents("$fxCode/notes.md", "{gallery}\n# Docs & `{sold}` demo\n\nWrite `{photos: ghost.jpg}` or `{sold}` or `{group: Nope}` to use them. The real one: {photos: real.jpg} {group: Real Box}\n\nAlso a `lone { brace` and a `}` here.\n");
+write_patched_index("$fxCode/index.php", $indexContents, []);
+$portCode = find_free_port(); start_server($fxCode, $portCode);
+[, $codeBody] = http_get("http://127.0.0.1:$portCode/");
+check('[inline code] directive examples inside `backticks` raise no notices and are not acted on (no "unknown file" warning, no sold ribbon)', !str_contains($codeBody, 'setup notice') && !str_contains($codeBody, 'Unknown file'));
+check('[inline code] ...they are shown literally, as code', str_contains($codeBody, '<code>{photos: ghost.jpg}</code>') && str_contains($codeBody, '<code>{sold}</code>') && str_contains($codeBody, '<code>{group: Nope}</code>'));
+check('[inline code] ...while a real directive in the same paragraph still works (Real Box holds real.jpg)', str_contains($codeBody, 'Real Box') && str_contains($codeBody, 'alt="real.jpg"') && !str_contains($codeBody, 'class="group-box sold"'));
+check('[inline code] ...unbalanced braces inside code do not swallow the text around them', str_contains($codeBody, '<code>lone { brace</code>') && str_contains($codeBody, '<code>}</code>'));
+check('[inline code] ...and a heading containing a code span keeps its braces in the page title', str_contains($codeBody, '<title>Docs &amp; `{sold}` demo — Gallery</title>'));
+
+/* ======================================================================= *
+ * RECIPES: the default install, and iPhone (HEIC) photos.
+ * ======================================================================= */
+
+echo "== recipe: the plain default install, and HEIC photos ==\n";
+
+$fxPlain = new_fixture_dir('recipe-plain');
+make_jpeg("$fxPlain/one.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxPlain/two.jpg", 60, 60, 20, 20, 20);
+mkdir("$fxPlain/Subfolder"); make_jpeg("$fxPlain/Subfolder/three.jpg", 60, 60, 30, 30, 30);
+copy(__DIR__ . '/../index.php', "$fxPlain/index.php");
+$before = array_diff(scandir($fxPlain), ['.', '..']); sort($before);
+$portPlain = find_free_port(); start_server($fxPlain, $portPlain); $basePlain = "http://127.0.0.1:$portPlain";
+[, $plain] = http_get("$basePlain/");
+foreach (['/', '/?photo=one.jpg', '/?about', '/?img=one.jpg&size=thumb', '/?track=one.jpg', '/?map', '/?folder=Subfolder', '/?admin', '/?reveal'] as $u) http_get("$basePlain$u");
+$after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
+check('[plain] a copy of index.php with no settings changed shows the root photos, and not the ones in the subfolder', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && !str_contains($plain, 'three.jpg') && !str_contains($plain, 'Subfolder'));
+check('[plain] ...writes nothing into the folder, whatever is requested (no cache, stats or data files)', $before === $after);
+check('[plain] ...makes no request to any third party (no external host in any src/href except github)', !preg_match('#(src|href)="https?://(?!github\.com|127\.0\.0\.1)#', $plain));
+check('[plain] ...?admin, ?reveal, ?map, ?folder= are all inert (404 / the normal page)', http_get("$basePlain/?admin")[0] === 404 && http_get("$basePlain/?reveal")[0] === 404 && http_get("$basePlain/?folder=Subfolder")[0] === 404 && !str_contains(http_get("$basePlain/?map")[1], 'cdnjs.cloudflare.com'));
+check('[plain] ...and says (in the collapsed notices banner) that a photo in a subfolder is being skipped', str_contains($plain, '1 photo/video was found in subfolders but isn&#039;t shown'));
+
+if (class_exists('Imagick') && count(Imagick::queryFormats('HEIC')) > 0) {
+    foreach (['off' => false, 'on' => true] as $mode => $cache) {
+        $fxHeic = new_fixture_dir("recipe-heic-$mode");
+        $src = new Imagick(); $src->newImage(60, 60, new ImagickPixel('rgb(200,120,40)')); $src->setImageFormat('heic'); $src->writeImage("$fxHeic/iphone.heic");
+        make_jpeg("$fxHeic/normal.jpg", 60, 60, 10, 10, 10);
+        write_patched_index("$fxHeic/index.php", $indexContents, $cache ? ['ENABLE_THUMBNAIL_CACHE' => 'true'] : []);
+        $portHeic = find_free_port(); start_server($fxHeic, $portHeic); $baseHeic = "http://127.0.0.1:$portHeic";
+        [, $heicPage] = http_get("$baseHeic/");
+        if (!$cache) {
+            check('[heic] ENABLE_THUMBNAIL_CACHE off: the iPhone .heic photo is not in the gallery at all (as the README says)', !str_contains($heicPage, 'iphone.heic') && str_contains($heicPage, 'normal.jpg'));
+        } else {
+            [$hThumbStatus, $hThumb, $hThumbHd] = http_get("$baseHeic/?img=iphone.heic&size=thumb");
+            [$hFullStatus, $hFull] = http_get("$baseHeic/?img=iphone.heic&size=full");
+            check('[heic] ENABLE_THUMBNAIL_CACHE on: the .heic photo appears, with a real JPEG thumbnail and a converted full-size image', str_contains($heicPage, 'alt="iphone.heic"') && $hThumbStatus === 200 && str_starts_with($hThumb, "\xFF\xD8") && $hFullStatus === 200 && str_starts_with($hFull, "\xFF\xD8"));
+        }
+    }
+} else {
+    echo "  skip  HEIC recipe (this PHP's Imagick can't write HEIC)\n";
 }
 
 /* ======================================================================= *

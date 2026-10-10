@@ -1,13 +1,13 @@
 {gallery}
 # Example listing — replace this with your own
 
-(1) Widget Model A — brand new, all original accessories included.
+(1) Widget **Alpha** — brand new, all original accessories included.
 **Price: $100 USD** {color: #5865f2}
 
-(2) Widget Model B — lightly used, works perfectly.
+(2) Widget **Bravo** — lightly used, works perfectly.
 **Price: $75 USD** {reserved}
 
-(3) Widget Model C — already gone.
+(3) Widget **Charlie** — already gone.
 **Price: $50 USD** {sold}
 
 Shipping available anywhere, buyer covers insurance.
@@ -16,25 +16,24 @@ Shipping available anywhere, buyer covers insurance.
 
 ---
 
-### How this maps to your photo filenames
+### How this maps to your photo filenames (delete this section from your own file)
 
-Two ways to group multiple photos under one item — pick whichever fits your files.
+Two ways to put several photos under one item — pick whichever fits your files.
 
-**Filename-based (what this example uses):** turn on `AUTO_GROUP_BY_FILENAME` in `index.php`, then name your photos so each item's filename prefix matches a word used in its paragraph:
-
-```
-widgeta_01.jpg, widgeta_02.jpg   -> matches "Widget Model A" via the word "widgeta"
-widgetb_01.jpg                   -> matches "Widget Model B" via "widgetb"
-widgetc_01.jpg, widgetc_02.jpg   -> matches "Widget Model C" via "widgetc"
-```
-
-The match is a plain, case-insensitive, whole-word search — no special tagging needed, just make sure the filename prefix appears somewhere in that item's paragraph text. `AUTO_GROUP_BY_FILENAME` is off by default, since it can falsely merge unrelated photos in a folder with no naming convention (see the README) — it's worth turning on specifically because this example relies on it.
-
-**Explicit (works with any filenames, no convention needed):** add `{group: Name}` and `{photos: a.jpg, b.jpg, ...}` directives instead, e.g. replacing item (1)'s line with:
+**Filename-based (what this example uses):** turn on `AUTO_GROUP_BY_FILENAME` in `index.php`, then name your photos so each item's filename prefix is a word that appears in that item's paragraph:
 
 ```
-(1) Widget Model A — brand new, all original accessories included.
-**Price: $100 USD** {color: #5865f2} {group: Widget Model A} {photos: img_0234.jpg, img_0891.jpg}
+alpha_01.jpg, alpha_02.jpg    -> attach to (1), because "Alpha" is in its text
+bravo_01.jpg                  -> attaches to (2), because "Bravo" is in its text
+charlie_01.jpg, charlie_02.jpg -> attach to (3), because "Charlie" is in its text
 ```
 
-This works no matter what your photos happen to be named. See the README's "Directive syntax" section for the full behavior — including how to attach photos to a paragraph without boxing them into a named group at all.
+The match is a plain, case-insensitive, whole-word search — no special tagging needed. The word has to be the *whole* filename prefix, exactly: a paragraph that says "Widget Model A" would **not** match `widgeta_01.jpg`; it would need the word `widgeta` in it. `AUTO_GROUP_BY_FILENAME` is off by default, since it can falsely merge unrelated photos in a folder with no naming convention (see the README) — it's worth turning on specifically because this example relies on it.
+
+**Explicit (works with any filenames, no convention needed):** add `{group: Name}` and `{photos: a.jpg, b.jpg, ...}` directives instead, e.g. replacing item (1)'s price line with:
+
+```
+**Price: $100 USD** {color: #5865f2} {group: Widget Alpha} {photos: img_0234.jpg, img_0891.jpg}
+```
+
+This works no matter what your photos happen to be named. (Directives written inside `inline code` or a code block, like the ones in this section, are shown as text and never acted on.) See the README's "Directive syntax" section for the full behavior — including how to attach photos to a paragraph without boxing them into a named group at all.

@@ -1245,7 +1245,7 @@ foreach ($mdFiles as $idx => $mdFile) {
         foreach ($lines as $li => $l) {
             if (trim($l) === '') continue;
             if (preg_match('/^#\s+(.+)$/', trim($l), $m)) {
-                $pageTitle = trim($m[1]);
+                $pageTitle = unprotect_inline_code(trim($m[1]));
                 unset($lines[$li]);
                 $content = implode("\n", $lines);
             }
@@ -3950,7 +3950,7 @@ function markdown_to_plaintext($text, $maxLen = 160) {
     } elseif (strlen($text) > $maxLen) {
         $text = substr($text, 0, $maxLen - 1) . '…';
     }
-    return $text;
+    return unprotect_inline_code($text);
 }
 
 /**
@@ -4078,6 +4078,26 @@ function mask_directives($text) {
 }
 
 /**
+ * Makes `inline code` inert to the directive parser. A notes file that
+ * *documents* directive syntax (like the shipped example, or anyone
+ * writing "use `{photos: a.jpg}` to ...") must not have that example
+ * parsed as a real directive — it would raise "unknown file" notices and
+ * could attach photos. Braces inside a same-line backtick span are
+ * swapped for two control bytes, byte for byte, so every character offset
+ * the ordering logic relies on is unchanged; unprotect_inline_code()
+ * turns them back wherever text is shown. Applied once, where the notes
+ * file is read. (Fenced ``` blocks are already skipped by the parser.)
+ */
+function protect_inline_code($text) {
+    return preg_replace_callback('/`[^`\n]*`/', function ($m) {
+        return strtr($m[0], ['{' => "\x01", '}' => "\x02"]);
+    }, (string) $text);
+}
+function unprotect_inline_code($text) {
+    return strtr((string) $text, ["\x01" => '{', "\x02" => '}']);
+}
+
+/**
  * True if this .md content's first non-blank line is exactly the
  * required "{gallery}" marker (case-insensitive). A file without it is
  * left completely alone — not parsed, not rendered — which is what lets
@@ -4138,7 +4158,7 @@ function scan_gallery_md_files($realFolderPath) {
         $raw = file_get_contents("$realFolderPath/$candidate");
         if (has_gallery_marker($raw)) {
             $files[] = $candidate;
-            $contents[$candidate] = strip_gallery_marker($raw);
+            $contents[$candidate] = protect_inline_code(strip_gallery_marker($raw));
         } else {
             $rejectedCount++;
         }
@@ -4509,7 +4529,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
     if ($inCode && $codeBuf !== '') {
         $html .= '<pre><code>' . htmlspecialchars(rtrim($codeBuf, "\n"), ENT_QUOTES, 'UTF-8') . '</code></pre>';
     }
-    return $html;
+    return unprotect_inline_code($html);
 }
 
 /** One clickable gallery card. Shows a live-updatable view-count badge
@@ -4584,6 +4604,26 @@ function status_accent_color($status, $customColor) {
 }
 
 /**
+ * A folder's highlight photo: the one the admin chose with "Set as cover"
+ * (matched by filename among the folder's recursive files), else the
+ * first actual photo — a video's generic placeholder makes a flat,
+ * uninteresting highlight, so a video is used only if the folder has no
+ * photos at all. Shared by the cover card and the folder's link preview
+ * so the two can never disagree about which photo represents a folder.
+ */
+function pick_folder_cover($recursiveFiles, $manualCover = null) {
+    if ($manualCover !== null) {
+        foreach ($recursiveFiles as $f) {
+            if (basename($f) === $manualCover) return $f;
+        }
+    }
+    foreach ($recursiveFiles as $f) {
+        if (!is_video_file($f)) return $f;
+    }
+    return $recursiveFiles[0] ?? null;
+}
+
+/**
  * A folder-group's cover card in 'overview' mode: one highlight photo
  * (the first in natural order — $recursiveFiles is already sorted this
  * way by the scan), the label, and the recursive photo count across the
@@ -4597,30 +4637,7 @@ function status_accent_color($status, $customColor) {
  */
 function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualCover = null, $idKey = null, $meta = null) {
     $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
-    $coverFile = null;
-    if ($manualCover !== null) {
-        foreach ($recursiveFiles as $f) {
-            if (basename($f) === $manualCover) {
-                $coverFile = $f;
-                break;
-            }
-        }
-    }
-    // The automatic fallback prefers an actual photo over a video, even
-    // if a video sorts first — a video's generic placeholder graphic
-    // makes a flat, uninteresting highlight. Only fall back to a video
-    // if the folder has no photos at all.
-    if ($coverFile === null) {
-        foreach ($recursiveFiles as $f) {
-            if (!is_video_file($f)) {
-                $coverFile = $f;
-                break;
-            }
-        }
-    }
-    if ($coverFile === null) {
-        $coverFile = $recursiveFiles[0] ?? null;
-    }
+    $coverFile = pick_folder_cover($recursiveFiles, $manualCover);
     $count = count($recursiveFiles);
     $slug = slugify($idKey ?? $folderPath);
     $html = '<div class="folder-cover" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
@@ -4927,7 +4944,7 @@ if ($currentFolderPath !== null) {
         $ogDescription = markdown_to_plaintext($earlyFolderMdScan['contents'][$earlyFolderMdScan['files'][0]]);
     }
     if (!empty($folderMemberFiles)) {
-        $ogImageUrl = $baseUrl . '/' . img_url($folderMemberFiles[0], 'share');
+        $ogImageUrl = $baseUrl . '/' . img_url(pick_folder_cover($folderMemberFiles, $currentFolderMeta['cover']), 'share');
     }
 }
 if ($requestedPhoto) {
