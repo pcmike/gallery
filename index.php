@@ -1016,6 +1016,9 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim) {
  *  with or without that extra step, and nothing resembling "../" can
  *  survive that match regardless of how many segments the path has. */
 function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
+    // ?size[]=x arrives as an array; anything that isn't a plain string
+    // is just the default size.
+    if (!is_string($variant)) $variant = 'thumb';
     if (!in_array($filename, $validFiles, true)) {
         http_response_code(404);
         return;
@@ -2095,7 +2098,14 @@ function run_reveal_route($dir) {
     }
     $pass = $_SERVER['PHP_AUTH_PW'] ?? null;
     if (!is_string($pass) || !hash_equals(PRIVATE_VIEW_PASSWORD, $pass)) {
-        login_throttle_record_failure($dir, 'reveal', $ip);
+        // Only *supplied* credentials that were wrong count against the
+        // throttle. A request with none is the normal first step of any
+        // Basic Auth login (the browser asks, gets this 401, then
+        // prompts) and tells us nothing about guessing — counting it
+        // would let five bare requests lock out everyone behind one IP.
+        if (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW'])) {
+            login_throttle_record_failure($dir, 'reveal', $ip);
+        }
         header('WWW-Authenticate: Basic realm="Gallery Private View"');
         http_response_code(401);
         header('Content-Type: text/plain; charset=UTF-8');
@@ -2685,6 +2695,13 @@ function admin_clean_text($value, $maxLen) {
 }
 
 function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups) {
+    // Normalize every posted value once, up front: a field sent as an
+    // array (name[]=x) is dropped to '' rather than reaching code that
+    // expects a string, and NUL bytes — which make file functions throw —
+    // are removed. No admin field is ever legitimately either.
+    foreach ($_POST as $postKey => $postValue) {
+        $_POST[$postKey] = is_string($postValue) ? str_replace("\0", '', $postValue) : '';
+    }
     if (!admin_csrf_valid($_POST['csrf_token'] ?? '')) {
         return ['type' => 'error', 'text' => 'Your session expired — please try again.'];
     }
@@ -3425,7 +3442,11 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     if (!admin_credentials_valid()) {
-        login_throttle_record_failure($dir, 'admin', $ip);
+        // Same rule as ?reveal: only wrong credentials that were actually
+        // sent count; the bare first request of a login does not.
+        if (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW'])) {
+            login_throttle_record_failure($dir, 'admin', $ip);
+        }
         admin_send_auth_challenge();
         return;
     }

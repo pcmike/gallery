@@ -1296,6 +1296,12 @@ check('...but ?reveal is on a separate throttle realm and still works', $revealS
 [$revealInertStatus] = http_get("$base1/?reveal");
 check('?reveal 404s outright when PRIVATE_VIEW_PASSWORD is unset (the default)', $revealInertStatus === 404);
 
+// A bare request (no credentials) is just the first step of a Basic Auth
+// login, so any number of them must never lock anyone out.
+$bareStatuses = [];
+for ($i = 0; $i < 8; $i++) { [$bareStatuses[]] = http_get("$basePrivate/?reveal"); }
+check('eight bare ?reveal requests all just get the 401 challenge (no lockout from missing credentials)', $bareStatuses === array_fill(0, 8, 401));
+
 // ENABLE_MAP off (the default): ?map is simply ignored, not a crash or a
 // special endpoint — the normal gallery page renders, with no map
 // preview section and no Leaflet request of any kind.
@@ -1624,6 +1630,18 @@ check('...and round-trips through the file exactly', ($evilRoundTrip['items']['l
 file_put_contents("$fxDepth/Asia/.gallery-items.php", json_encode(['items' => ['tokyo.jpg' => ['caption' => 'plain json, no guard']]]));
 [, $plainJsonPage] = http_get("$baseDepth/?folder=Asia");
 check('an unguarded plain-JSON data file is still read', str_contains($plainJsonPage, 'plain json, no guard'));
+
+// Fuzz-found crashes (each was a fatal error or warning from a crafted
+// request): ?size[]= on ?img=, an array-valued admin field, a NUL byte in
+// a notes filename.
+[$arraySizeStatus] = http_get("$baseDepth/?img=loose.jpg&size[]=x");
+check('?img= with an array-valued size no longer crashes (falls back to the default size)', $arraySizeStatus === 200);
+$lyonQuery = '&folder=' . rawurlencode('Europe/France/Lyon');
+[$arrayFieldStatus, $arrayFieldBody] = $depthPost($lyonQuery, ['action' => 'save_item', 'file' => ['a', 'b'], 'caption' => ['x'], 'web' => ['y']]);
+check('an admin form field sent as an array is refused cleanly (no PHP warning, no crash)', $arrayFieldStatus === 200 && str_contains($arrayFieldBody, 'class="flash error"') && !str_contains($arrayFieldBody, 'Warning') && !str_contains($arrayFieldBody, 'Fatal'));
+[$nulStatus, $nulBody] = $depthPost($lyonQuery, ['action' => 'save_notes', 'md_file' => "evil\0.md", 'content' => "{gallery}\nhi"]);
+check('a NUL byte in a notes filename no longer crashes the admin', $nulStatus === 200 && !str_contains($nulBody, 'Fatal'));
+check('...and the NUL was stripped, not used to truncate the name (no bare "evil" file)', !file_exists("$fxDepth/Europe/France/Lyon/evil"));
 
 // Two admin "tabs" on one record: a stale save is refused, not silently
 // overwritten; a save to a *different* record in the same folder is fine.
