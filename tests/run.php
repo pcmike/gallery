@@ -2405,6 +2405,37 @@ $noCsrf = []; foreach (html_post_forms($sAdmin8) as $f) if (str_contains($f['htm
 $noCsrf['csrf_token'] = 'wrong'; $noCsrf['set_ENABLE_VIDEO'] = '1'; $beforeCsrf = (string) file_get_contents($siteCfg);
 [, $rCsrf] = http_post("$baseSite/?admin", $noCsrf, $siteHdrs2);
 check('[site settings] a save without a valid CSRF token is refused and writes nothing', str_contains($rCsrf, 'session expired') && (string) file_get_contents($siteCfg) === $beforeCsrf);
+// Saving in place: the page's own script posts one setting at a time and gets JSON back.
+$ajaxHdrs = array_merge($siteHdrs2, ['X-Requested-With: gallery-fetch']);
+[, $pgA] = http_get("$baseSite/?admin", $siteHdrs2); $fa = form_default_fields($siteForm($pgA));
+$snapAjaxBefore = $siteSnap(); $cfgAjaxBefore = cfg_read($siteCfg);
+[$jst, $jb, $jhd] = http_post("$baseSite/?admin", ['csrf_token' => $fa['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $fa['config_hash'], 'set_ENABLE_VIDEO' => '1'], $ajaxHdrs);
+$j = json_decode($jb, true);
+check('[autosave] one setting posted by the page\'s script is answered with JSON, "Saved.", and the new fingerprint of the file', $jst === 200 && (bool) array_filter($jhd, fn($h) => stripos($h, 'Content-Type: application/json') === 0) && ($j['ok'] ?? null) === true && ($j['text'] ?? '') === 'Saved.' && ($j['hash'] ?? '') === md5_file($siteCfg));
+$cfgAjaxAfter = cfg_read($siteCfg);
+$expectedAjax = $cfgAjaxBefore + ['ENABLE_VIDEO' => true]; ksort($expectedAjax); $gotAjax = $cfgAjaxAfter; ksort($gotAjax);
+check('[autosave] only that one setting changed in the file; everything else in it is exactly as it was', $gotAjax === $expectedAjax);
+check('[autosave] ...and no data file changed', $siteSnap() === $snapAjaxBefore);
+check('[autosave] ...and no "Settings saved" message is left waiting to appear on the next page load', !str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], 'Settings saved'));
+[$jst2, $jb2] = http_post("$baseSite/?admin", ['csrf_token' => $fa['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $fa['config_hash'], 'set_TRACK_VIEWS' => '1'], $ajaxHdrs);
+$j2 = json_decode($jb2, true);
+check('[autosave] a request carrying the file\'s OLD fingerprint (it changed since) is refused as JSON and writes nothing', ($j2['ok'] ?? null) === false && str_contains((string) ($j2['text'] ?? ''), 'was changed somewhere else') && cfg_read($siteCfg) == $cfgAjaxAfter);
+[$jst3, $jb3] = http_post("$baseSite/?admin", ['csrf_token' => $fa['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $j['hash'], 'set_TRACK_VIEWS' => '1'], $ajaxHdrs);
+$j3 = json_decode($jb3, true);
+check('[autosave] ...while one carrying the fingerprint it was just given succeeds, so consecutive changes chain', ($j3['ok'] ?? null) === true && (cfg_read($siteCfg)['TRACK_VIEWS'] ?? null) === true && (cfg_read($siteCfg)['ENABLE_VIDEO'] ?? null) === true);
+[, $jb4] = http_post("$baseSite/?admin", ['csrf_token' => 'wrong', 'action' => 'save_site_settings', 'config_hash' => $j3['hash'], 'set_ENABLE_MAP' => '1'], $ajaxHdrs);
+$j4 = json_decode($jb4, true); $cfgNow = cfg_read($siteCfg);
+check('[autosave] a request without a valid CSRF token is refused as JSON and writes nothing', ($j4['ok'] ?? null) === false && str_contains((string) ($j4['text'] ?? ''), 'session expired') && !isset($cfgNow['ENABLE_MAP']));
+[, $jb5] = http_post("$baseSite/?admin", ['csrf_token' => $fa['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $j3['hash'], 'set_PHOTO_SORT_ORDER' => 'random'], $ajaxHdrs);
+$j5 = json_decode($jb5, true);
+check('[autosave] a value that isn\'t an allowed choice is refused as JSON with the reason, and nothing is written', ($j5['ok'] ?? null) === false && str_contains((string) ($j5['text'] ?? ''), 'Photo order') && !isset(cfg_read($siteCfg)['PHOTO_SORT_ORDER']));
+[, $jb6] = http_post("$baseSite/?admin", ['csrf_token' => $fa['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $j3['hash'], 'set_TRACK_VIEWS' => '1'], $ajaxHdrs);
+check('[autosave] saving a value the file already has says there is nothing to change, and gives the same fingerprint', (json_decode($jb6, true)['ok'] ?? null) === true && !empty(json_decode($jb6, true)['unchanged']) && (json_decode($jb6, true)['hash'] ?? '') === $j3['hash']);
+[$jst7, , $jhd7] = http_post("$baseSite/?admin", ['csrf_token' => $fa['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $j3['hash'], 'set_ENABLE_VIDEO' => '0'], $siteHdrs2, false);
+$loc7 = ''; foreach ($jhd7 as $h) if (stripos($h, 'Location:') === 0) $loc7 = trim(substr($h, 9));
+check('[autosave] the ordinary form post (what a browser without JavaScript sends) still saves and redirects back to Site settings, as before', $jst7 === 303 && str_ends_with($loc7, '#site') && !isset(cfg_read($siteCfg)['ENABLE_VIDEO']));
+check('[autosave] a visitor who is not signed in gets nothing from the endpoint: no JSON, no change', !str_contains(http_post("$baseSite/?admin", ['action' => 'save_site_settings', 'set_ENABLE_MAP' => '1'], ['X-Requested-With: gallery-fetch'])[1], '"ok"') && !isset(cfg_read($siteCfg)['ENABLE_MAP']));
+
 // An unwritable gallery folder: say so, and hand over the exact text.
 $fxSiteRo = new_fixture_dir('sitesettings-ro');
 make_jpeg("$fxSiteRo/a.jpg", 60, 60, 1, 2, 3);

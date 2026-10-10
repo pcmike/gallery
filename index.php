@@ -3150,6 +3150,14 @@ function admin_clean_text($value, $maxLen) {
     return substr($text, 0, $maxLen);
 }
 
+/** Answers a request made by the admin page's own script (a switch saved in
+ *  place) with JSON, and ends the request. */
+function admin_json_exit($payload) {
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode($payload, JSON_HEX_TAG | JSON_HEX_AMP);
+    exit;
+}
+
 function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups) {
     // Normalize every posted value once, up front: a field sent as an
     // array (name[]=x) is dropped to '' rather than reaching code that
@@ -3158,7 +3166,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     foreach ($_POST as $postKey => $postValue) {
         $_POST[$postKey] = is_string($postValue) ? str_replace("\0", '', $postValue) : '';
     }
+    $isFetch = ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch';
     if (!admin_csrf_valid($_POST['csrf_token'] ?? '')) {
+        if ($isFetch) admin_json_exit(['ok' => false, 'text' => 'Your session expired — reload the page and sign in again.']);
         return ['type' => 'error', 'text' => 'Your session expired — please try again.'];
     }
     $action = $_POST['action'] ?? '';
@@ -3168,7 +3178,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
 
     if ($action === 'save_site_settings') {
-        return site_settings_save();
+        $result = site_settings_save($isFetch);
+        if ($isFetch) {
+            admin_json_exit(['ok' => ($result['type'] ?? '') === 'ok', 'text' => (string) ($result['text'] ?? ''), 'hash' => $result['hash'] ?? null, 'manual' => $result['manual'] ?? null, 'unchanged' => !empty($result['unchanged'])]);
+        }
+        return $result;
     }
 
     if ($action === 'save_item') {
@@ -3575,13 +3589,15 @@ function gallery_setting_definitions() {
         ['title' => 'What is shown', 'items' => [
             ['name' => 'AUTO_GROUP_BY_FOLDER', 'type' => 'bool', 'label' => 'Show subfolders',
              'help' => 'Each subfolder becomes its own group, to any depth (a trip with Paris/, Lisbon/ …). Off by default because this script is often dropped into a folder that already holds other things.',
-             'risk' => 'shows every photo in every subfolder to visitors'],
+             'risk' => 'shows every photo in every subfolder to visitors',
+             'offwarn' => 'Visitors will stop seeing the subfolders, and links to them will stop working. Nothing is deleted: the folders, photos, captions and settings all stay exactly as they are, and come back when you turn this on again.'],
             ['name' => 'FOLDER_DISPLAY_MODE', 'type' => 'enum', 'label' => 'Folder style',
              'options' => ['overview' => 'Cover cards (click to open)', 'inline' => 'Inline (all on one page)'],
              'help' => 'Only used when subfolders are shown.'],
             ['name' => 'ENABLE_VIDEO', 'type' => 'bool', 'label' => 'Show videos (.mov, .mp4)',
              'help' => 'Videos are served exactly as recorded, with no conversion, so big clips use real bandwidth and some phone formats don\'t play in every browser.',
-             'risk' => 'shows every .mov and .mp4 in the gallery folders to visitors'],
+             'risk' => 'shows every .mov and .mp4 in the gallery folders to visitors',
+             'offwarn' => 'Videos will disappear from the gallery, and links to them will stop working. Nothing is deleted: the files and their captions, locations and hide settings stay, and come back when you turn this on again.'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
              'help' => 'alpha_01.jpg and alpha_02.jpg become one group, "alpha". Handy for for-sale listings; on a camera roll it can merge unrelated photos. Folders are better for trips.'],
             ['name' => 'PHOTO_SORT_ORDER', 'type' => 'enum', 'label' => 'Photo order',
@@ -3590,7 +3606,8 @@ function gallery_setting_definitions() {
         ]],
         ['title' => 'Thumbnails and counting', 'items' => [
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
-             'help' => 'Small thumbnails kept in a .gallery-cache folder, so pages load fast and iPhone photos can be shown. If the folder can\'t be written, the original photo is sent instead. Off sends every photo at full size.'],
+             'help' => 'Small thumbnails kept in a .gallery-cache folder, so pages load fast and iPhone photos can be shown. If the folder can\'t be written, the original photo is sent instead. Off sends every photo at full size.',
+             'offwarn' => 'Every photo will be sent at full size, so pages get slow, and iPhone (HEIC) photos can\'t be shown at all. Nothing is deleted; thumbnails already made are left in place.'],
             ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
              'help' => 'Counts page loads and photo views in a stats file in the gallery folder. You always see the numbers in this admin.'],
             ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
@@ -3599,10 +3616,12 @@ function gallery_setting_definitions() {
         ['title' => 'Locations and the map', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
              'help' => 'Needed before any location can show. Each folder still has its own switch in its settings, and any photo can opt out.',
-             'risk' => 'GPS coordinates can reveal where you live or were; they stay private until a folder\'s own switch is turned on'],
+             'risk' => 'GPS coordinates can reveal where you live or were; they stay private until a folder\'s own switch is turned on',
+             'offwarn' => 'Photo locations and the map will disappear for visitors. Nothing is deleted: every saved location stays and comes back when you turn this on again.'],
             ['name' => 'ENABLE_MAP', 'type' => 'bool', 'label' => 'Trip map',
              'help' => 'A map of every photo that has a visible location. Needs "Allow photo locations".',
-             'risk' => 'the map loads Leaflet (cdnjs) and map tiles (OpenStreetMap) in each visitor\'s browser, so those sites see the visit'],
+             'risk' => 'the map loads Leaflet (cdnjs) and map tiles (OpenStreetMap) in each visitor\'s browser, so those sites see the visit',
+             'offwarn' => 'The trip map will disappear. Nothing is deleted: every photo location stays saved.'],
             ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 1, 'max' => 10000,
              'help' => 'Photos closer together than this share one numbered pin. 50 suits most trips; a dense city trip wants less.'],
         ]],
@@ -3626,7 +3645,7 @@ function gallery_config_render($cfg) {
 /** Validates the Site settings form and rewrites .gallery-config.php, and
  *  nothing else: captions, locations, hide flags, stats and notes are never
  *  read or written here. Returns an admin result array. */
-function site_settings_save() {
+function site_settings_save($ajax = false) {
     $state = gallery_config_load();
     $path = gallery_config_path();
     if (!in_array($state['status'], ['absent', 'ok'], true)) {
@@ -3681,7 +3700,7 @@ function site_settings_save() {
     }
     $a = $cfg; $b = $state['cfg']; ksort($a); ksort($b);
     if ($a === $b) {
-        return ['type' => 'ok', 'text' => 'Nothing to change: those are the settings already in use.'];
+        return ['type' => 'ok', 'text' => 'Nothing to change: those are the settings already in use.', 'hash' => md5($currentRaw), 'unchanged' => true];
     }
     $content = gallery_config_render($cfg);
     if ($content === null) {
@@ -3689,7 +3708,7 @@ function site_settings_save() {
     }
     $fail = function ($why) use ($content) {
         $GLOBALS['__site_settings_manual'] = $content;
-        return ['type' => 'error', 'text' => 'Nothing was saved: ' . $why . ' The text below is the settings file; put it in a file named .gallery-config.php next to index.php yourself.'];
+        return ['type' => 'error', 'text' => 'Nothing was saved: ' . $why . ' The text below is the settings file; put it in a file named .gallery-config.php next to index.php yourself.', 'manual' => $content];
     };
     if (!is_writable(__DIR__)) return $fail('the gallery\'s folder isn\'t writable by the web server.');
     $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
@@ -3703,6 +3722,10 @@ function site_settings_save() {
     // Changing the admin password must not log the person who just changed it out.
     if ($newAdmin !== null) $_SESSION['admin_auth'] = hash('sha256', 'admin|' . $newAdmin . '|' . __DIR__);
     $n = count($cfg);
+    if ($ajax) {
+        // The page updates in place, so there is no "next page" to carry a message: say it now, and hand back the new file fingerprint.
+        return ['type' => 'ok', 'text' => ($newAdmin !== null ? 'Admin password changed; you stay signed in.' : 'Saved.'), 'hash' => md5_file($path), 'differing' => $n];
+    }
     $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Settings saved' . ($newAdmin !== null ? ' (admin password changed; you stay signed in)' : '') . '. ' . ($n === 0 ? 'Everything is on its default.' : $n . ' setting' . ($n === 1 ? '' : 's') . ' differ' . ($n === 1 ? 's' : '') . ' from the defaults and will survive updating index.php.') . ' Your photos, captions, locations and counts were not touched.'];
     return ['type' => 'redirect'];
 }
@@ -3720,7 +3743,7 @@ function render_admin_site_settings($csrfToken) {
 ?>
     <section class="panel site-settings">
       <h2 class="section-title">Site settings</h2>
-      <p class="muted" style="margin-top:0;">These apply to the whole gallery. They are saved in <code>.gallery-config.php</code> beside <code>index.php</code>, which survives replacing <code>index.php</code> with a newer version. <strong>Saving here only changes that file</strong>: your photos, captions, locations, hide flags, notes and view counts are never touched, and switching a setting off hides things without deleting anything.</p>
+      <p class="muted" style="margin-top:0;">These apply to the whole gallery, and <strong>each change saves the moment you make it</strong>. They are saved in <code>.gallery-config.php</code> beside <code>index.php</code>, which survives replacing <code>index.php</code> with a newer version. <strong>Saving here only changes that file</strong>: your photos, captions, locations, hide flags, notes and view counts are never touched, and switching a setting off hides things without deleting anything.</p>
       <?php if ($broken): ?>
         <div class="flash error">The settings file exists but can't be read as settings, so this screen won't change it (that could overwrite what's in it). Fix or delete <code>.gallery-config.php</code>, then reload.</div>
       <?php endif; ?>
@@ -3728,6 +3751,7 @@ function render_admin_site_settings($csrfToken) {
         <p class="muted">Create a file named <code>.gallery-config.php</code> next to <code>index.php</code> containing exactly this:</p>
         <textarea readonly rows="12" style="width:100%; font-family:ui-monospace,monospace;" onfocus="this.select()"><?= $esc($GLOBALS['__site_settings_manual']) ?></textarea>
       <?php endif; ?>
+      <p class="muted sitesync" hidden>Saved. The other screens (the sidebar, photo counts) refresh when you leave this one.</p>
       <form method="post" class="site-settings-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_site_settings">
@@ -3745,13 +3769,14 @@ function render_admin_site_settings($csrfToken) {
               <div class="ctl">
                 <?php if ($d['type'] === 'bool'): ?>
                   <input type="hidden" name="set_<?= $esc($name) ?>" value="0">
-                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>"<?php if (!empty($d['risk'])): ?> data-risk="<?= $esc($d['label'] . ' — ' . $d['risk']) ?>"<?php endif; ?>><span class="slider"></span></label>
+                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['risk'])): ?> data-risk="<?= $esc($d['risk']) ?>"<?php endif; ?><?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
                 <?php elseif ($d['type'] === 'enum'): ?>
                   <select name="set_<?= $esc($name) ?>"><?php foreach ($d['options'] as $val => $lab): ?><option value="<?= $esc($val) ?>" <?= (string) $now === (string) $val ? 'selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?></select>
                 <?php else: ?>
                   <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="1" value="<?= $esc($now) ?>" style="max-width:110px;">
                 <?php endif; ?>
                 <span class="meta">default: <?= $esc($show($def)) ?></span>
+                <span class="rowstate" role="status" aria-live="polite"></span>
               </div>
             </div>
           <?php endforeach; ?>
@@ -3766,6 +3791,7 @@ function render_admin_site_settings($csrfToken) {
           <div class="ctl col">
             <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password">
             <input type="password" name="pw_admin2" autocomplete="new-password" placeholder="Type it again">
+            <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="admin">Change admin password</button><span class="rowstate" role="status" aria-live="polite"></span></span>
           </div>
         </div>
         <div class="site-row">
@@ -3776,7 +3802,9 @@ function render_admin_site_settings($csrfToken) {
           <div class="ctl col">
             <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password">
             <input type="password" name="pw_private2" autocomplete="new-password" placeholder="Type it again">
-            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><label class="muted"><input type="checkbox" name="pw_private_remove" value="1"> Remove it (turn private view off)</label><?php endif; ?>
+            <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private">Set private-view password</button><span class="rowstate" role="status" aria-live="polite"></span></span>
+            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private-remove" data-confirm="Remove the private-view password? Anyone you gave it to will no longer be able to see the hidden items. The hidden items themselves stay hidden and nothing is deleted.">Remove it (turn private view off)</button><span class="rowstate" role="status" aria-live="polite"></span></span>
+            <label class="muted nojs-only"><input type="checkbox" name="pw_private_remove" value="1"> Remove it (turn private view off)</label><?php endif; ?>
           </div>
         </div>
 
@@ -3789,10 +3817,10 @@ function render_admin_site_settings($csrfToken) {
           <div><div class="name">nginx internal redirect</div><div class="help"><code>NGINX_ACCEL_REDIRECT_PREFIX</code>: <?= NGINX_ACCEL_REDIRECT_PREFIX === '' ? 'off' : $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?></div></div>
         </div>
 
-        <div class="item-actions" style="margin-top:14px;">
+        <div class="item-actions nojs-only" style="margin-top:14px;">
           <button type="submit"<?= $broken ? ' disabled' : '' ?>>Save site settings</button>
-          <span class="muted">Only settings that differ from the defaults are stored, so a future update's better defaults still reach you.</span>
         </div>
+        <p class="muted" style="margin-top:14px;"><span class="js-only">Changes save as you make them.</span> Only settings that differ from the defaults are stored, so a future update's better defaults still reach you.</p>
       </form>
     </section>
 <?php
@@ -4007,6 +4035,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .admin-main .site-row { grid-template-columns:1fr; }
     .admin-main .site-row .ctl { justify-content:flex-start; }
   }
+  /* The status text has its own reserved space, so a switch doesn't shift sideways while it says "Saved."; an error gets a line of its own. */
+  .rowstate { font-size:0.78rem; color:var(--muted); min-width:3.6em; }
+  .rowstate:empty { display:inline-block; }
+  .rowstate.ok { color:var(--ok); }
+  .rowstate.err { color:var(--err); flex-basis:100%; text-align:right; min-width:0; }
+  .pwline .rowstate.err { text-align:left; }
+  .pwline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .pw-btn, .js-only { display:none; }
+  .js-tabs .pw-btn { display:inline-block; }
+  .js-tabs .js-only { display:inline; }
+  .js-tabs .nojs-only { display:none !important; }
+  .manual-box { margin:0 0 14px; }
   .photos-hint { margin:0 0 12px; }
   .thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(124px, 1fr)); gap:10px; }
   .thumb { position:relative; padding:0; border:2px solid transparent; background:var(--card); border-radius:9px; cursor:pointer; overflow:hidden; text-align:left; color:var(--text); display:flex; flex-direction:column; font:inherit; }
@@ -4503,7 +4543,15 @@ foreach ($adminFiles as $file) {
     tabs.forEach(function (t) {
       t.addEventListener('click', function (ev) {
         ev.preventDefault();
-        var name = show(t.getAttribute('data-tab'));
+        var target = t.getAttribute('data-tab');
+        if (window.__siteDirty && target !== 'site') {
+          // Something in Site settings changed what the gallery shows: reload so the sidebar, counts and photos are current.
+          if (target !== 'hidden') { try { sessionStorage.setItem(KEY, target); } catch (e) {} }
+          if (history.replaceState) history.replaceState(null, '', '#' + target);
+          location.reload();
+          return;
+        }
+        var name = show(target);
         if (history.replaceState) history.replaceState(null, '', '#' + name);
         window.scrollTo(0, 0);
       });
@@ -4524,14 +4572,81 @@ foreach ($adminFiles as $file) {
       });
     });
   })();
-  // Site settings: ask before saving if something that publishes content or
-  // contacts a third party is being switched on.
+  // Site settings: every change saves the moment it is made (one request at a time, so the file's
+  // fingerprint never races), and anything that publishes content, contacts a third party, or removes
+  // something visitors see asks first. The other screens refresh when you leave this one.
   [].forEach.call(document.querySelectorAll('.site-settings-form'), function (form) {
-    form.addEventListener('submit', function (ev) {
-      var risky = [].filter.call(form.querySelectorAll('input[type=checkbox][data-risk]'), function (c) {
-        return c.checked && c.getAttribute('data-initial') !== '1';
-      }).map(function (c) { return '\u2022 ' + c.getAttribute('data-risk'); });
-      if (risky.length && !confirm('You are turning on:\n\n' + risky.join('\n') + '\n\nSave these settings?')) ev.preventDefault();
+    var hashInput = form.querySelector('input[name=config_hash]');
+    var csrf = form.querySelector('input[name=csrf_token]').value;
+    var chain = Promise.resolve();
+    var sync = document.querySelector('.sitesync');
+    form.addEventListener('submit', function (ev) { ev.preventDefault(); });   // no submit button without JavaScript: Enter must not post the whole form
+    function say(node, text, kind) {
+      if (!node) return;
+      node.textContent = text; node.className = 'rowstate ' + (kind || '');
+      clearTimeout(node._t);
+      if (kind === 'ok') node._t = setTimeout(function () { node.textContent = ''; node.className = 'rowstate'; }, 3000);
+    }
+    function stateOf(el) { var holder = el.closest('.pwline') || el.closest('.ctl'); return holder ? holder.querySelector('.rowstate') : null; }
+    function showManual(text) {
+      var box = form.querySelector('.manual-box');
+      if (!box) {
+        box = document.createElement('div'); box.className = 'manual-box';
+        box.innerHTML = '<p class="muted">The gallery\'s folder isn\'t writable, so nothing could be saved. Create a file named <code>.gallery-config.php</code> next to <code>index.php</code> containing exactly this:</p><textarea readonly rows="10" style="width:100%;font-family:ui-monospace,monospace;"></textarea>';
+        form.insertBefore(box, form.firstChild.nextSibling);
+      }
+      box.querySelector('textarea').value = text;
+    }
+    function post(fields, node, onFail, onOk) {
+      chain = chain.then(function () {
+        say(node, 'Saving…', 'busy');
+        var body = new URLSearchParams();
+        body.set('csrf_token', csrf); body.set('action', 'save_site_settings'); body.set('config_hash', hashInput.value);
+        Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+        return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+            headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+          .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+          .then(function (j) {
+            if (j.ok && j.hash) hashInput.value = j.hash;
+            if (j.ok) { say(node, j.text, 'ok'); window.__siteDirty = true; if (sync) sync.hidden = false; if (onOk) onOk(j); }
+            else { say(node, j.text, 'err'); if (onFail) onFail(); if (j.manual) showManual(j.manual); }
+          })
+          .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.', 'err'); if (onFail) onFail(); });
+      });
+    }
+    [].forEach.call(form.querySelectorAll('input[type=checkbox][data-label]'), function (cb) {
+      cb.addEventListener('change', function () {
+        var on = cb.checked, label = cb.getAttribute('data-label'), risk = cb.getAttribute('data-risk'), off = cb.getAttribute('data-offwarn');
+        var msg = on && risk ? 'Turn on "' + label + '"?\n\nThis ' + risk + '.' : (!on && off ? 'Turn off "' + label + '"?\n\n' + off : '');
+        if (msg && !confirm(msg)) { cb.checked = !on; return; }
+        var f = {}; f[cb.name] = on ? '1' : '0';
+        post(f, stateOf(cb), function () { cb.checked = !on; });
+      });
+    });
+    [].forEach.call(form.querySelectorAll('select[name^=set_], input[type=number][name^=set_]'), function (el) {
+      el.setAttribute('data-prev', el.value);
+      el.addEventListener('change', function () {
+        var f = {}; f[el.name] = el.value;
+        post(f, stateOf(el), function () { el.value = el.getAttribute('data-prev'); }, function () { el.setAttribute('data-prev', el.value); });
+      });
+    });
+    [].forEach.call(form.querySelectorAll('.pw-btn'), function (btn) {
+      function go() {
+        var kind = btn.getAttribute('data-pw'), node = stateOf(btn), f = {}, els = form.elements;
+        if (kind === 'admin') { f.pw_admin = els['pw_admin'].value; f.pw_admin2 = els['pw_admin2'].value; }
+        else if (kind === 'private') { f.pw_private = els['pw_private'].value; f.pw_private2 = els['pw_private2'].value; }
+        else { if (!confirm(btn.getAttribute('data-confirm'))) return; f.pw_private_remove = '1'; }
+        if ((kind === 'admin' && !f.pw_admin) || (kind === 'private' && !f.pw_private)) { say(node, 'Type the new password first.', 'err'); return; }
+        post(f, node, null, function () {
+          ['pw_admin', 'pw_admin2', 'pw_private', 'pw_private2'].forEach(function (n) { if (els[n]) els[n].value = ''; });
+        });
+      }
+      btn.addEventListener('click', go);
+      if (btn.getAttribute('data-pw') === 'private-remove') return;
+      // Enter in a password box does what the button next to it does.
+      [].forEach.call(btn.closest('.ctl').querySelectorAll('input[type=password]'), function (input) {
+        input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); btn.click(); } });
+      });
     });
   });
   function admConfirmSaveAs(form) {

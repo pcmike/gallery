@@ -347,18 +347,19 @@ A setting in the file beats the same setting edited into `index.php`.
 
 ### Site settings in the admin
 
-The sidebar's **Site settings** shows every setting that is safe to change from a web page, as switches and choices, each with a one-line explanation and its default:
+The sidebar's **Site settings** shows every setting that is safe to change from a web page, as switches and choices, each with a one-line explanation and its default. **There is no Save button: each change saves the moment you make it**, with a small "Saved." beside it (a browser without JavaScript gets a Save button instead):
 
 - **What is shown:** subfolders, folder style, videos, grouping by filename, photo order.
 - **Thumbnails and counting:** thumbnails, counting views, showing counts to visitors.
 - **Locations and the map:** allowing photo locations, the trip map, how close photos must be to share a pin.
-- **Passwords:** change the admin password (typed twice, at least 12 characters; you stay signed in) and set or remove the private-view password. Neither password is ever shown back to you.
+- **Passwords:** change the admin password (typed twice, at least 12 characters; you stay signed in) and set or remove the private-view password, each with its own button beside the fields. Neither password is ever shown back to you.
 
 How it behaves:
 
 - **It only ever writes `.gallery-config.php`.** Your photos, captions, locations, hide flags, notes, folder settings and view counts are never read or changed by it, and switching a setting *off* only hides things: the data stays and comes back when you switch it on again. (This is tested by comparing every file in the gallery before and after a save, and by switching settings off and on around real captions, GPS data and view counts. The save itself was also run end to end in a real browser and on nginx 1.26 and Apache 2.4 with PHP-FPM, where the page after saving shows the new value immediately.)
 - **Only settings that differ from the defaults are stored**, so a better default in a later release still reaches you for everything you haven't changed. Put a setting back to its default and it leaves the file.
-- **Switching on something that publishes content or contacts a third party asks first**, naming it: subfolders, videos, photo locations, the map.
+- **It asks before anything that matters.** Switching **on** something that publishes content or contacts a third party (subfolders, videos, photo locations, the map) asks first, naming what it exposes. Switching **off** something visitors see (subfolders, videos, locations, the map, thumbnails) asks too, and says plainly that nothing is deleted: the folders, files, captions and locations stay and come back when you switch it on again. Answer no and the switch goes back and nothing is written.
+- **Changes are saved one at a time and built on each other**, so quick successive changes can't overwrite one another. The other screens (the sidebar's folder list, photo counts) are refreshed when you leave Site settings after a change, so they never show stale information. A change that can't be saved (an invalid value, an unwritable folder, an expired session, or the file changed elsewhere) puts the switch back and says why next to it.
 - **The server-level settings stay in the file only:** `EXTRA_FOLDERS` (paths elsewhere on the server) and `NGINX_ACCEL_REDIRECT_PREFIX` (needs matching nginx config). The screen lists them read-only, and a save keeps them, and any other key you added by hand, exactly as they were.
 - **It won't overwrite what it can't read.** If the settings file isn't valid, saving is refused until you fix or delete it. If the file was changed since the page loaded (another tab, or by hand), the save is refused rather than overwriting that change. The new file is written to a temporary name, read back to check it holds exactly what was intended, and only then moved into place.
 - **If the gallery's folder isn't writable** it says so, changes nothing, and shows you the exact text to put in `.gallery-config.php` yourself.
