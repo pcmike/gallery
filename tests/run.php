@@ -1358,7 +1358,7 @@ check('a valid admin login also sets the reveal cookie, unlocking the public pag
 // The admin tool itself always sees everything, regardless of hiding.
 [, $adminGridBody] = http_get("$basePrivate/?admin", [$adminAuth, "Cookie: $sessCookie"]);
 check('the admin tool\'s own grid always shows a hidden item, hide flag and all', str_contains($adminGridBody, 'loose1.jpg'));
-check('the admin tool shows a persistent lockdown warning while hidden items exist', str_contains($adminGridBody, 'Hidden items exist'));
+check('the admin shows a red Hidden tab, with the not-a-lock explanation, while hidden items exist', str_contains($adminGridBody, 'class="tab-hidden"') && str_contains($adminGridBody, 'data-tab="hidden"') && str_contains($adminGridBody, "Hidden isn't locked") && str_contains($adminGridBody, 'servable directly'));
 
 // Hidden-items summary: three tiers, not a flat list.
 [, $hiddenSummaryBody] = http_get("$basePrivate/?admin&hidden=1", [$adminAuth, "Cookie: $sessCookie"]);
@@ -2014,7 +2014,7 @@ $portGps = find_free_port();
 start_server($fxGps, $portGps);
 [, $gpsAdmin] = http_get("http://127.0.0.1:$portGps/?admin", ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')]);
 $gpsCard = function ($body, $name) {
-    return preg_match('/<div class="item-card">(?:(?!<div class="item-card">).)*?' . preg_quote($name, '/') . '.*?<\/form>/s', $body, $m) ? $m[0] : '';
+    return preg_match('/<div class="item-card"[^>]*>(?:(?!<div class="item-card").)*?' . preg_quote($name, '/') . '.*?<\/form>/s', $body, $m) ? $m[0] : '';
 };
 check('a JPEG\'s EXIF GPS pre-fills the admin\'s location fields (N/E)', str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '2.2945'));
 check('southern and western hemispheres come out negative', str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-33.85') && str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-151.2'));
@@ -2079,6 +2079,24 @@ check('[gps import] ...and then it is', substr_count(http_get("$baseGps/?folder=
 [, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '0'], $gpsHdrs);
 check('[gps import] turning it off hides every location again but keeps the stored coordinates', str_contains($r, 'Saved coordinates are kept') && substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 0 && abs((read_data_file("$fxGps/Rome/.gallery-items.php")['items']['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001);
 
+echo "== counts: photos and videos are counted separately ==\n";
+
+$fxCount = new_fixture_dir('counts');
+mkdir("$fxCount/Pics"); mkdir("$fxCount/Clips"); mkdir("$fxCount/Mixed");
+make_jpeg("$fxCount/Pics/one.jpg", 60, 60, 10, 10, 10);
+make_minimal_mp4("$fxCount/Clips/clip.mp4", 2);
+make_jpeg("$fxCount/Mixed/a.jpg", 60, 60, 20, 20, 20); make_jpeg("$fxCount/Mixed/b.jpg", 60, 60, 30, 30, 30); make_minimal_mp4("$fxCount/Mixed/c.mp4", 2);
+write_patched_index("$fxCount/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ENABLE_VIDEO' => 'true']);
+$portCount = find_free_port(); start_server($fxCount, $portCount); $baseCount = "http://127.0.0.1:$portCount";
+[, $countHome] = http_get("$baseCount/");
+check('[counts] the root header says "3 photos · 2 videos" (not "5 photos") for 3 photos and 2 videos spread over three folders', str_contains($countHome, '<p>3 photos · 2 videos'));
+check('[counts] a folder holding one photo says "1 photo" on its cover card', (bool) preg_match('#id="group-pics".*?folder-cover-count">1 photo</span>#s', $countHome));
+check('[counts] a folder holding only a video says "1 video", not "1 photo"', (bool) preg_match('#id="group-clips".*?folder-cover-count">1 video</span>#s', $countHome));
+check('[counts] a mixed folder says "2 photos · 1 video"', (bool) preg_match('#id="group-mixed".*?folder-cover-count">2 photos · 1 video</span>#s', $countHome));
+[, $clipsPage] = http_get("$baseCount/?folder=Clips");
+check('[counts] the video-only folder\'s own page header says "1 video"', str_contains($clipsPage, '<p>1 video') && !str_contains($clipsPage, '<p>1 photo'));
+check('[counts] the shared-link preview text uses the same wording', str_contains($countHome, 'property="og:description" content="3 photos · 2 videos"') && str_contains($clipsPage, 'property="og:description" content="1 video"'));
+
 echo "== login: a password form, not a browser pop-up; discreet entry; empty notes box ==\n";
 
 $fxLogin = new_fixture_dir('login');
@@ -2099,9 +2117,10 @@ check('[login] the right password redirects to the very URL asked for, and sets 
 [$s3, $b3] = http_get("$baseLogin/?admin&folder=Sub", ["Cookie: $loginCookie"]);
 check('[login] with just that cookie (no Authorization header) the admin page opens, on the right folder', $s3 === 200 && str_contains($b3, 'Gallery Admin') && str_contains($b3, 'Editing: Sub'));
 check('[admin layout] a sticky top bar carries the title, the folder being edited, section links and Log out', str_contains($b3, '<header class="admin-bar">') && str_contains($b3, 'Editing: Sub') && str_contains($b3, 'href="#photos"') && str_contains($b3, 'href="#settings"') && str_contains($b3, 'value="logout"'));
-check('[admin layout] folders are a tree beside the content, with the current one marked', str_contains($b3, 'class="admin-folder-nav"') && str_contains($b3, 'class="current" aria-current="page"') && str_contains($b3, '<main class="admin-main">'));
-check('[admin layout] the long, rarely-used parts start collapsed (Notes with no files, Export) and each photo\'s location fields sit in their own disclosure', str_contains($b3, '<details class="panel" id="notes" >') && str_contains($b3, '<details class="panel" id="export"') && str_contains($b3, '<details class="item-more"'));
-check('[admin layout] the section anchors the top bar links to exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="photos"') && str_contains($b3, 'id="notes"') && str_contains($b3, 'id="export"'));
+check('[admin layout] folders are a tree beside the content, with the current one marked', str_contains($b3, 'class="admin-folder-nav"') && str_contains($b3, 'class="current" aria-current="page"') && str_contains($b3, '<main class="admin-main"'));
+check('[admin layout] the sections are real tabs (Photos, Folder settings, Notes, Export), each with its own panel; no Hidden tab when nothing is hidden', str_contains($b3, 'role="tablist"') && str_contains($b3, 'data-tab="photos"') && str_contains($b3, 'data-tab="settings"') && str_contains($b3, 'data-tab="notes"') && str_contains($b3, 'data-tab="export"') && str_contains($b3, '<div class="tab-panel" data-tab="export">') && !str_contains($b3, 'data-tab="hidden"'));
+check('[admin layout] each photo\'s location fields sit in their own disclosure, and its card has a stable id to link to', str_contains($b3, '<details class="item-more"') || !str_contains($b3, 'class="item-card"'));
+check('[admin layout] the anchors inside the panels still exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="photos"') && str_contains($b3, 'id="notes"') && str_contains($b3, 'id="export"'));
 check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="login_password"'));
 check('[login] a login also counts as private view (the viewer cookie is set too)', str_contains($loginCookie, '=') && substr_count($loginCookie, '=') >= 2);
 // A saved change from an expired session must not be saved, and must say why.
@@ -2312,6 +2331,10 @@ check('[family] the Birthday folder disappears entirely (no card, count now 2), 
 check('[family] its photos are refused by URL too (?img= 404)', http_get("$baseFam/?img=Birthday%2Fcake.jpg&size=thumb")[0] === 404);
 [, $hiddenSum] = http_get("$baseFam/?admin&hidden", $famHdrs);
 check('[family] the admin\'s "Hidden items" summary lists the folder and the photo, with the not-a-lock warning', str_contains($hiddenSum, 'Birthday') && str_contains($hiddenSum, 'kids.jpg') && str_contains((string) http_get("$baseFam/?admin", $famHdrs)[1], 'servable directly'));
+[, $famAdminPage] = http_get("$baseFam/?admin", $famHdrs);
+check('[family] the Hidden tab links each hidden folder to its settings, and each hidden photo to its own card', str_contains($famAdminPage, 'href="?admin&amp;folder=Birthday#settings"') && str_contains($famAdminPage, 'href="?admin#photo-' . md5('kids.jpg') . '"'));
+check('[family] ...and the card that link points at really exists on that page, so the link lands on it', str_contains($famAdminPage, 'id="photo-' . md5('kids.jpg') . '"'));
+check('[family] the old ?admin&hidden address still works: it goes to the Hidden tab', (function () use ($baseFam, $famHdrs) { [$st, , $hd] = http_get("$baseFam/?admin&hidden=1", $famHdrs, false); $loc = ''; foreach ($hd as $h) if (stripos($h, 'Location:') === 0) $loc = trim(substr($h, 9)); return $st === 302 && $loc === '?admin#hidden'; })());
 // A trusted viewer.
 [$noPwStatus] = http_get("$baseFam/?reveal");
 [$badPwStatus] = http_get("$baseFam/?reveal", ['Authorization: Basic ' . base64_encode('x:wrong')]);

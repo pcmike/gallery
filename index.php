@@ -3229,16 +3229,16 @@ function admin_any_hidden($dir, $files, $folderGroupKeys) {
 }
 
 /**
- * The admin tool's "Hidden items" summary — across the *whole* tree in
- * one place, since confirming "nothing is exposed that shouldn't be" by
- * clicking into every folder individually doesn't scale once depth is
- * arbitrary. Three tiers, not a flat "hidden" list — folders hidden
- * entirely, individual items hidden inside an otherwise-public folder,
- * and individual items deliberately shown despite sitting inside a
- * hidden folder — blurring them into one list risks reading as complete
- * when it isn't.
+ * Everything hidden, across the whole tree, in one place — since
+ * confirming "nothing is exposed that shouldn't be" by clicking into every
+ * folder individually doesn't scale once depth is arbitrary. Three tiers,
+ * not a flat "hidden" list — folders hidden entirely, individual items
+ * hidden inside an otherwise-public folder, and individual items
+ * deliberately shown despite sitting inside a hidden folder — blurring
+ * them into one list risks reading as complete when it isn't. Feeds the
+ * admin's "Hidden" tab.
  */
-function render_admin_hidden_summary($dir, $files, $folderGroupKeys) {
+function admin_hidden_data($dir, $files) {
     $hiddenFolders = [];
     foreach (all_folder_paths($files) as $folderKey) {
         if (item_restriction(items_read(resolve_real_path($dir, $folderKey))) === 'private') {
@@ -3267,64 +3267,47 @@ function render_admin_hidden_summary($dir, $files, $folderGroupKeys) {
         }
     }
 
-    $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
+    return ['folders' => $hiddenFolders, 'items' => $hiddenItems, 'shown' => $shownDespiteHiddenFolder];
+}
+
+/** Where an item lives in the admin: its folder's page, Photos tab, scrolled
+ *  to its own card. */
+function admin_item_href($file) {
+    $folder = dirname($file);
+    return '?admin' . ($folder === '.' ? '' : '&amp;folder=' . htmlspecialchars(rawurlencode($folder), ENT_QUOTES, 'UTF-8'))
+         . '#photo-' . md5($file);
+}
+
+/** The Hidden tab: the plain-English warning, then every hidden thing with
+ *  a link to where it can be changed. */
+function render_admin_hidden_panel($data) {
+    $listFolders = function ($paths) {
+        foreach ($paths as $f) {
+            echo '<li><a href="?admin&amp;folder=' . htmlspecialchars(rawurlencode($f), ENT_QUOTES, 'UTF-8') . '#settings">' . htmlspecialchars($f, ENT_QUOTES, 'UTF-8') . '</a> <span class="muted">&mdash; open its settings</span></li>';
+        }
+    };
+    $listItems = function ($paths) {
+        foreach ($paths as $f) {
+            echo '<li><a href="' . admin_item_href($f) . '">' . htmlspecialchars($f, ENT_QUOTES, 'UTF-8') . '</a> <span class="muted">&mdash; open it</span></li>';
+        }
+    };
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="robots" content="noindex, nofollow">
-<title>Hidden items — Gallery Admin v<?= $version ?></title>
-<style>
-  :root { --bg:#0f0f10; --card:#1a1a1c; --text:#eaeaea; --muted:#8a8a8f; --accent:#5865f2; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; }
-  .wrap { max-width:720px; margin:0 auto; padding:24px 16px 64px; }
-  h1 { font-size:1.4rem; }
-  h2 { font-size:1rem; margin:24px 0 8px; }
-  .muted { color:var(--muted); font-size:0.85rem; }
-  .panel { background:var(--card); border-radius:10px; padding:16px; margin-bottom:14px; }
-  ul { margin:0; padding-left:20px; }
-  li { margin-bottom:4px; font-size:0.9rem; }
-  a { color:#8ab4ff; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <a href="?admin" class="muted">&larr; Back to admin</a>
-  <h1>Hidden items</h1>
-  <p class="muted">Across the whole tree, in one place.</p>
-
-  <div class="panel">
-    <h2 style="margin-top:0;">Folders hidden entirely (<?= count($hiddenFolders) ?>)</h2>
-    <?php if (empty($hiddenFolders)): ?>
-      <p class="muted">None.</p>
-    <?php else: ?>
-      <ul><?php foreach ($hiddenFolders as $f): ?><li><a href="?admin&folder=<?= rawurlencode($f) ?>"><?= htmlspecialchars($f, ENT_QUOTES, 'UTF-8') ?></a></li><?php endforeach; ?></ul>
-    <?php endif; ?>
-  </div>
-
-  <div class="panel">
-    <h2 style="margin-top:0;">Individual items hidden (<?= count($hiddenItems) ?>)</h2>
-    <?php if (empty($hiddenItems)): ?>
-      <p class="muted">None.</p>
-    <?php else: ?>
-      <ul><?php foreach ($hiddenItems as $f): ?><li><?= htmlspecialchars($f, ENT_QUOTES, 'UTF-8') ?></li><?php endforeach; ?></ul>
-    <?php endif; ?>
-  </div>
-
-  <div class="panel">
-    <h2 style="margin-top:0;">Items shown despite a hidden folder (<?= count($shownDespiteHiddenFolder) ?>)</h2>
-    <?php if (empty($shownDespiteHiddenFolder)): ?>
-      <p class="muted">None.</p>
-    <?php else: ?>
-      <ul><?php foreach ($shownDespiteHiddenFolder as $f): ?><li><?= htmlspecialchars($f, ENT_QUOTES, 'UTF-8') ?></li><?php endforeach; ?></ul>
-    <?php endif; ?>
-  </div>
-</div>
-</body>
-</html>
+    <div class="flash error hidden-warning">
+      <strong>Hidden isn't locked.</strong>
+      Hiding only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level (see the README for the nginx/<code>X-Accel-Redirect</code> or Apache <code>.htaccess</code> setup).
+    </div>
+    <section class="panel">
+      <h2 class="section-title">Folders hidden entirely (<?= count($data['folders']) ?>)</h2>
+      <?php if (empty($data['folders'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listFolders($data['folders']); ?></ul><?php endif; ?>
+    </section>
+    <section class="panel">
+      <h2 class="section-title">Individual items hidden (<?= count($data['items']) ?>)</h2>
+      <?php if (empty($data['items'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listItems($data['items']); ?></ul><?php endif; ?>
+    </section>
+    <section class="panel">
+      <h2 class="section-title">Items shown despite a hidden folder (<?= count($data['shown']) ?>)</h2>
+      <?php if (empty($data['shown'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listItems($data['shown']); ?></ul><?php endif; ?>
+    </section>
 <?php
 }
 
@@ -3340,6 +3323,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $csrfToken = htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8');
     $folderLabel = $adminFolderPath ?? 'Root';
     import_folder_gps($dir, $adminFolderReal, $adminFiles);
+    $adminHidden = admin_any_hidden($dir, $files, $folderGroupKeys) ? admin_hidden_data($dir, $files) : null;
+    // After saving a photo, bring that photo's card back into view.
+    $focusCard = ($resultMessage && isset($_POST['file']) && is_string($_POST['file']))
+        ? 'photo-' . md5(($adminFolderPath === null ? '' : $adminFolderPath . '/') . basename($_POST['file'])) : '';
     $itemsHere = items_read($adminFolderReal);
     $adminViews = TRACK_VIEWS ? stats_get_all_photo_views($dir, $adminFiles) : [];
     // Photos whose GPS the gallery can read from the file but that have no
@@ -3388,11 +3375,28 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-bar h1 { font-size:1.05rem; margin:0; }
   .admin-bar .crumb { color:var(--muted); font-size:0.85rem; margin-right:auto; }
   .admin-bar a.back { color:var(--muted); text-decoration:none; font-size:0.85rem; }
-  .admin-jump { display:flex; gap:4px; overflow-x:auto; }
-  .admin-jump a { color:var(--muted); text-decoration:none; font-size:0.85rem; padding:5px 10px; border-radius:6px; white-space:nowrap; }
-  .admin-jump a:hover { color:var(--text); background:var(--card); }
+  .admin-tabs-wrap { max-width:1180px; margin:0 auto; padding:0 16px; }
+  .admin-tabs { display:flex; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .admin-tabs::-webkit-scrollbar { display:none; }
+  .admin-tabs a { color:var(--muted); text-decoration:none; font-size:0.9rem; padding:10px 16px; border-bottom:3px solid transparent; border-radius:8px 8px 0 0; white-space:nowrap; display:flex; align-items:center; gap:7px; }
+  .admin-tabs a:hover { color:var(--text); background:rgba(255,255,255,0.04); }
+  .admin-tabs a.active { color:#fff; background:rgba(88,101,242,0.16); border-bottom-color:var(--accent); font-weight:600; }
+  .admin-tabs a .count { font-size:0.72rem; font-weight:600; background:rgba(255,255,255,0.09); color:var(--muted); padding:1px 7px; border-radius:10px; }
+  .admin-tabs a.active .count { background:rgba(88,101,242,0.45); color:#fff; }
+  .admin-tabs a.tab-hidden { color:#ff7b7d; }
+  .admin-tabs a.tab-hidden .count { background:rgba(237,66,69,0.25); color:#ff9a9c; }
+  .admin-tabs a.tab-hidden:hover { background:rgba(237,66,69,0.08); }
+  .admin-tabs a.tab-hidden.active { color:#fff; background:rgba(237,66,69,0.2); border-bottom-color:var(--err); }
+  .admin-tabs a.tab-hidden.active .count { background:rgba(237,66,69,0.6); color:#fff; }
+  .js-tabs .tab-panel { display:none; }
+  .js-tabs .tab-panel.active { display:block; }
+  .tab-panel > .panel + .panel, .tab-panel > .flash + .panel { margin-top:0; }
+  .hidden-list { margin:0; padding-left:20px; }
+  .hidden-list li { margin-bottom:6px; font-size:0.9rem; }
+  .hidden-list a { color:#8ab4ff; }
+  .item-card.flash-target { outline:2px solid var(--accent); outline-offset:2px; transition:outline-color 1.5s; }
   .admin-layout { max-width:1180px; margin:0 auto; padding:18px 16px 64px; display:grid; grid-template-columns:210px minmax(0,1fr); gap:22px; align-items:start; }
-  .admin-side { position:sticky; top:62px; max-height:calc(100vh - 80px); overflow-y:auto; }
+  .admin-side { position:sticky; top:118px; max-height:calc(100vh - 136px); overflow-y:auto; }
   .admin-folders > summary { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; cursor:pointer; list-style:none; }
   .admin-folders > summary::-webkit-details-marker { display:none; }
   .admin-folders > summary .here { text-transform:none; letter-spacing:0; display:none; color:var(--text); }
@@ -3401,7 +3405,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-folder-nav a:hover { color:var(--text); background:var(--card); }
   .admin-folder-nav a.current { color:var(--text); background:var(--accent); }
   .admin-main { min-width:0; }
-  .admin-main section, .admin-main details.panel { scroll-margin-top:70px; }
+  .admin-main section, .admin-main details.panel { scroll-margin-top:124px; }
   .admin-main h2.section-title { font-size:1.05rem; margin:0 0 12px; }
   .admin-main details.panel > summary { cursor:pointer; font-weight:600; font-size:1.05rem; list-style:none; display:flex; align-items:center; gap:10px; }
   .admin-main details.panel > summary::-webkit-details-marker { display:none; }
@@ -3417,12 +3421,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .settings-grid .wide { grid-column:1 / -1; }
   .privacy-row { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
   .privacy-row form { margin:0; }
-  .hidden-warning { font-size:0.85rem; }
-  .hidden-warning details { margin-top:6px; }
-  .hidden-warning summary { cursor:pointer; opacity:0.9; }
+  .hidden-warning { font-size:0.9rem; line-height:1.55; }
   @media (max-width: 800px) {
     .admin-bar-inner { gap:6px 10px; padding:8px 12px; }
-    .admin-jump { order:5; flex-basis:100%; }
     .admin-folders > summary { background:var(--card); padding:9px 12px; border-radius:8px; font-size:0.85rem; text-transform:none; letter-spacing:0; color:var(--muted); margin:0; }
     .admin-folders > summary::before { content:"\25B8  "; }
     .admin-folders[open] > summary::before { content:"\25BE  "; }
@@ -3430,6 +3431,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .admin-folders[open] > summary { margin-bottom:6px; }
     .admin-layout { grid-template-columns:1fr; gap:12px; }
     .admin-side { position:static; max-height:none; }
+    .admin-tabs a { padding:9px 12px; }
     .admin-folder-nav { max-height:220px; overflow-y:auto; }
     .settings-grid { grid-template-columns:1fr; }
   }
@@ -3490,17 +3492,20 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <a class="back" href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; Gallery</a>
     <h1>Gallery Admin</h1>
     <span class="crumb">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span>
-    <nav class="admin-jump" aria-label="Sections">
-      <a href="#settings"><?= $adminFolderPath !== null ? 'Folder settings' : 'Settings' ?></a>
-      <a href="#notes">Notes</a>
-      <a href="#photos">Photos</a>
-      <a href="#export">Export</a>
-    </nav>
     <form method="post" style="margin:0;">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="logout">
       <button type="submit" class="secondary">Log out</button>
     </form>
+  </div>
+  <div class="admin-tabs-wrap">
+    <nav class="admin-tabs" role="tablist" aria-label="Sections">
+      <?php if ($adminHidden): ?><a href="#hidden" role="tab" data-tab="hidden" class="tab-hidden">Hidden <span class="count"><?= count($adminHidden['folders']) + count($adminHidden['items']) ?></span></a><?php endif; ?>
+      <a href="#photos" role="tab" data-tab="photos">Photos <span class="count"><?= count($adminFiles) ?></span></a>
+      <a href="#settings" role="tab" data-tab="settings"><?= $adminFolderPath !== null ? 'Folder settings' : 'Settings' ?></a>
+      <a href="#notes" role="tab" data-tab="notes">Notes <span class="count"><?= count($mdCandidates) ?></span></a>
+      <a href="#export" role="tab" data-tab="export">Export</a>
+    </nav>
   </div>
 </header>
 <div class="admin-layout">
@@ -3510,25 +3515,131 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <?= render_admin_folder_nav($files, $adminFolderPath) ?: '<p class="muted">No subfolders.</p>' ?>
   </details>
 </aside>
-<main class="admin-main">
-  <?php if (TRACK_VIEWS): ?>
-    <p class="muted" style="margin-top:0;">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> page loads in total. Per-photo counts are listed under each photo below. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
-  <?php endif; ?>
-
-  <?php if (admin_any_hidden($dir, $files, $folderGroupKeys)): ?>
-    <div class="flash error hidden-warning">
-      <strong>Hidden items exist.</strong> <a href="?admin&hidden=1">Review hidden items &rarr;</a>
-      <details>
-        <summary>Why this isn't a lock</summary>
-        Hiding only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level (see the README for the nginx/<code>X-Accel-Redirect</code> or Apache <code>.htaccess</code> setup). This warning reappears every time this screen loads — it isn't a one-time check.
-      </details>
-    </div>
-  <?php endif; ?>
-
+<main class="admin-main" data-focus-card="<?= htmlspecialchars($focusCard, ENT_QUOTES, 'UTF-8') ?>">
   <?php if ($resultMessage): ?>
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
+<?php if ($adminHidden): ?>
+  <div class="tab-panel" data-tab="hidden">
+<?php render_admin_hidden_panel($adminHidden); ?>
+  </div>
+<?php endif; ?>
+  <div class="tab-panel" data-tab="photos">
+  <?php if (TRACK_VIEWS): ?>
+    <p class="muted" style="margin-top:0;">&#128202; <?= number_format(stats_get_pageviews($dir)) ?> page loads in total. Per-photo counts are listed under each photo below. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
+  <?php endif; ?>
+
+  <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
+    <div class="panel loc-unsaved-summary">
+      <?php if (!empty($itemsHere['locationEnabled'])): ?>
+        <strong>&#9888; <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS that isn't saved yet.</strong>
+        <span class="muted">It couldn't be stored automatically (is this folder writable by the web server?). Click <em>Save</em> on each photo to publish its location.</span>
+      <?php else: ?>
+        <strong>&#9888; <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS in the file.</strong>
+        <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos you set to <em>Always hide</em>.</span>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
+
+  <h2 class="section-title" id="photos" style="margin-top:0; scroll-margin-top:120px;">Photos &amp; video <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
+  <div class="grid">
+    <?php foreach ($adminFiles as $file): $bare = basename($file);
+      $entry = $itemsHere['items'][$bare] ?? [];
+      $loc = $entry['location'] ?? ($adminAutoLoc[$file] ?? null);
+      $locUnsaved = isset($adminAutoLoc[$file]);
+    ?>
+      <?php
+        $rest = item_restriction($entry);
+        $vis = $entry['locationVisibility'] ?? 'inherit';
+        $moreOpen = $loc !== null || $vis !== 'inherit' || $rest !== 'inherit' || $locUnsaved;
+        $coverFormId = 'cover-' . md5($file);
+      ?>
+      <div class="item-card" id="photo-<?= md5($file) ?>">
+        <div class="item-head">
+          <?php if (is_video_file($file)): ?>
+            <div class="item-thumb-placeholder">&#9654; video<?php if (isset($videoDurations[$file])): ?><br><?= htmlspecialchars(format_duration($videoDurations[$file]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></div>
+          <?php else: ?>
+            <img src="<?= htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8') ?>" alt="">
+          <?php endif; ?>
+          <div class="item-meta">
+            <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
+            <div class="item-sub">
+              <?php if (TRACK_VIEWS): ?>&#128065; <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
+              <?php if ($rest === 'private'): ?> &middot; hidden<?php endif; ?>
+              <?php if (!empty($itemsHere['cover']) && $itemsHere['cover'] === $bare): ?> &middot; folder cover<?php endif; ?>
+            </div>
+          </div>
+        </div>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+          <input type="hidden" name="action" value="save_item">
+          <input type="hidden" name="loaded_hash" value="<?= admin_record_hash($entry) ?>">
+          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
+          <div class="field">
+            <label>Caption</label>
+            <input type="text" name="caption" value="<?= htmlspecialchars($entry['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+          </div>
+          <div class="field">
+            <label>Web link</label>
+            <input type="url" name="web" value="<?= htmlspecialchars($entry['web'] ?? '', ENT_QUOTES, 'UTF-8') ?>" placeholder="https://&hellip;">
+          </div>
+          <details class="item-more" <?= $moreOpen ? 'open' : '' ?>>
+            <summary>Location &amp; visibility<?php if ($loc !== null): ?> <span class="item-flags">&middot; &#128205; <?= htmlspecialchars((string) ($loc['label'] ?? '') !== '' ? $loc['label'] : round((float) $loc['lat'], 2) . ', ' . round((float) $loc['lng'], 2), ENT_QUOTES, 'UTF-8') ?></span><?php endif; ?></summary>
+            <div class="loc-row" style="margin-top:8px;">
+              <div class="field">
+                <label>Latitude</label>
+                <input type="text" name="lat" value="<?= htmlspecialchars($loc['lat'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+              </div>
+              <div class="field">
+                <label>Longitude</label>
+                <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+              </div>
+            </div>
+          <?php if ($locUnsaved): ?>
+            <p class="muted loc-unsaved" style="margin:0 0 8px;">&#9888; <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (set <em>Always hide</em> to keep it out)." ?></p>
+          <?php endif; ?>
+            <div class="field">
+              <label>Location label (optional)</label>
+              <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
+            </div>
+            <div class="field">
+              <label>Location visibility</label>
+              <select name="loc_visibility">
+                <option value="inherit" <?= $vis === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
+                <option value="show" <?= $vis === 'show' ? 'selected' : '' ?>>Always show</option>
+                <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Visibility</label>
+              <select name="restriction">
+                <option value="inherit" <?= $rest === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
+                <option value="public" <?= $rest === 'public' ? 'selected' : '' ?>>Always show (even if this folder is hidden)</option>
+                <option value="private" <?= $rest === 'private' ? 'selected' : '' ?>>Always hide</option>
+              </select>
+            </div>
+          </details>
+          <div class="item-actions">
+            <button type="submit">Save</button>
+            <?php if ($adminFolderPath !== null): ?>
+              <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
+            <?php endif; ?>
+          </div>
+        </form>
+        <?php if ($adminFolderPath !== null): ?>
+          <form method="post" id="<?= $coverFormId ?>">
+            <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+            <input type="hidden" name="action" value="set_cover">
+            <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
+          </form>
+        <?php endif; ?>
+      </div>
+    <?php endforeach; ?>
+  </div>
+
+  </div>
+  <div class="tab-panel" data-tab="settings">
   <?php if ($adminFolderPath !== null): ?>
   <section class="panel" id="settings">
     <h2 class="section-title">This folder's own settings</h2>
@@ -3622,8 +3733,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   </div>
   <?php endif; ?>
 
-  <details class="panel" id="notes" <?= !empty($mdCandidates) ? 'open' : '' ?>>
-    <summary>Notes <span class="count">(<?= count($mdCandidates) ?> .md file<?= count($mdCandidates) === 1 ? '' : 's' ?> in this folder)</span></summary>
+  </div>
+  <div class="tab-panel" data-tab="notes">
+  <section class="panel" id="notes">
+    <h2 class="section-title">Notes <span class="muted">(<?= count($mdCandidates) ?> .md file<?= count($mdCandidates) === 1 ? '' : 's' ?> in this folder)</span></h2>
     <?php if (empty($mdCandidates)): ?>
       <p class="muted">No .md files here yet. A notes file is a short text box (with optional sold/reserved markers) shown above the photos.</p>
     <?php endif; ?>
@@ -3685,118 +3798,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         </div>
       </form>
     </details>
-  </details>
+  </section>
 
-  <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
-    <div class="panel loc-unsaved-summary">
-      <?php if (!empty($itemsHere['locationEnabled'])): ?>
-        <strong>&#9888; <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS that isn't saved yet.</strong>
-        <span class="muted">It couldn't be stored automatically (is this folder writable by the web server?). Click <em>Save</em> on each photo to publish its location.</span>
-      <?php else: ?>
-        <strong>&#9888; <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS in the file.</strong>
-        <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos you set to <em>Always hide</em>.</span>
-      <?php endif; ?>
-    </div>
-  <?php endif; ?>
-
-  <h2 class="section-title" id="photos" style="margin-top:26px; scroll-margin-top:70px;">Photos &amp; video <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
-  <div class="grid">
-    <?php foreach ($adminFiles as $file): $bare = basename($file);
-      $entry = $itemsHere['items'][$bare] ?? [];
-      $loc = $entry['location'] ?? ($adminAutoLoc[$file] ?? null);
-      $locUnsaved = isset($adminAutoLoc[$file]);
-    ?>
-      <?php
-        $rest = item_restriction($entry);
-        $vis = $entry['locationVisibility'] ?? 'inherit';
-        $moreOpen = $loc !== null || $vis !== 'inherit' || $rest !== 'inherit' || $locUnsaved;
-        $coverFormId = 'cover-' . md5($file);
-      ?>
-      <div class="item-card">
-        <div class="item-head">
-          <?php if (is_video_file($file)): ?>
-            <div class="item-thumb-placeholder">&#9654; video<?php if (isset($videoDurations[$file])): ?><br><?= htmlspecialchars(format_duration($videoDurations[$file]), ENT_QUOTES, 'UTF-8') ?><?php endif; ?></div>
-          <?php else: ?>
-            <img src="<?= htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8') ?>" alt="">
-          <?php endif; ?>
-          <div class="item-meta">
-            <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
-            <div class="item-sub">
-              <?php if (TRACK_VIEWS): ?>&#128065; <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
-              <?php if ($rest === 'private'): ?> &middot; hidden<?php endif; ?>
-              <?php if (!empty($itemsHere['cover']) && $itemsHere['cover'] === $bare): ?> &middot; folder cover<?php endif; ?>
-            </div>
-          </div>
-        </div>
-        <form method="post">
-          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-          <input type="hidden" name="action" value="save_item">
-          <input type="hidden" name="loaded_hash" value="<?= admin_record_hash($entry) ?>">
-          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
-          <div class="field">
-            <label>Caption</label>
-            <input type="text" name="caption" value="<?= htmlspecialchars($entry['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-          </div>
-          <div class="field">
-            <label>Web link</label>
-            <input type="url" name="web" value="<?= htmlspecialchars($entry['web'] ?? '', ENT_QUOTES, 'UTF-8') ?>" placeholder="https://&hellip;">
-          </div>
-          <details class="item-more" <?= $moreOpen ? 'open' : '' ?>>
-            <summary>Location &amp; visibility<?php if ($loc !== null): ?> <span class="item-flags">&middot; &#128205; <?= htmlspecialchars((string) ($loc['label'] ?? '') !== '' ? $loc['label'] : round((float) $loc['lat'], 2) . ', ' . round((float) $loc['lng'], 2), ENT_QUOTES, 'UTF-8') ?></span><?php endif; ?></summary>
-            <div class="loc-row" style="margin-top:8px;">
-              <div class="field">
-                <label>Latitude</label>
-                <input type="text" name="lat" value="<?= htmlspecialchars($loc['lat'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-              </div>
-              <div class="field">
-                <label>Longitude</label>
-                <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-              </div>
-            </div>
-          <?php if ($locUnsaved): ?>
-            <p class="muted loc-unsaved" style="margin:0 0 8px;">&#9888; <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (set <em>Always hide</em> to keep it out)." ?></p>
-          <?php endif; ?>
-            <div class="field">
-              <label>Location label (optional)</label>
-              <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-            </div>
-            <div class="field">
-              <label>Location visibility</label>
-              <select name="loc_visibility">
-                <option value="inherit" <?= $vis === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
-                <option value="show" <?= $vis === 'show' ? 'selected' : '' ?>>Always show</option>
-                <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Visibility</label>
-              <select name="restriction">
-                <option value="inherit" <?= $rest === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
-                <option value="public" <?= $rest === 'public' ? 'selected' : '' ?>>Always show (even if this folder is hidden)</option>
-                <option value="private" <?= $rest === 'private' ? 'selected' : '' ?>>Always hide</option>
-              </select>
-            </div>
-          </details>
-          <div class="item-actions">
-            <button type="submit">Save</button>
-            <?php if ($adminFolderPath !== null): ?>
-              <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
-            <?php endif; ?>
-          </div>
-        </form>
-        <?php if ($adminFolderPath !== null): ?>
-          <form method="post" id="<?= $coverFormId ?>">
-            <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-            <input type="hidden" name="action" value="set_cover">
-            <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
-          </form>
-        <?php endif; ?>
-      </div>
-    <?php endforeach; ?>
   </div>
-
-  <details class="panel" id="export" style="margin-top:20px;">
-    <summary>Export</summary>
+  <div class="tab-panel" data-tab="export">
+  <section class="panel" id="export">
+    <h2 class="section-title">Export</h2>
     <p class="muted">Downloads this folder's captions, locations, web links, display name, and chosen cover as JSON — the only backup this data has.</p>
     <p class="muted"><strong>Handle the file with care:</strong> it also records which items and folders you've hidden, and any GPS coordinates you've entered. Pasting it into a support email or leaving it somewhere public would reveal both, regardless of what's actually hidden on the gallery.</p>
     <form method="post">
@@ -3809,7 +3816,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       <input type="hidden" name="action" value="export_tree">
       <button type="submit" class="secondary">Export the whole tree as JSON</button>
     </form>
-  </details>
+  </section>
+  </div>
 </main>
 </div>
 <script>
@@ -3832,6 +3840,57 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       textarea.selectionStart = textarea.selectionEnd = start + snippet.length;
     });
   });
+  // Tabs: only the selected section is shown. #name in the address picks one
+  // (so a link can point straight at a tab, or at one photo's card), the last
+  // choice is remembered while moving between folders, and without JavaScript
+  // every section simply stays visible.
+  (function () {
+    var main = document.querySelector('.admin-main');
+    if (!main) return;
+    var tabs = [].slice.call(document.querySelectorAll('.admin-tabs a[data-tab]'));
+    var panels = [].slice.call(document.querySelectorAll('.tab-panel'));
+    var names = tabs.map(function (t) { return t.getAttribute('data-tab'); });
+    var KEY = 'galleryAdminTab';
+    function show(name) {
+      if (names.indexOf(name) < 0) name = names.indexOf('photos') >= 0 ? 'photos' : names[0];
+      panels.forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-tab') === name); });
+      tabs.forEach(function (t) {
+        var on = t.getAttribute('data-tab') === name;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      try { sessionStorage.setItem(KEY, name); } catch (e) {}
+      return name;
+    }
+    function focusCard(id) {
+      var el = id && document.getElementById(id);
+      if (!el) return;
+      el.classList.add('flash-target');
+      el.scrollIntoView({ block: 'center' });
+      setTimeout(function () { el.classList.remove('flash-target'); }, 2500);
+    }
+    function fromLocation() {
+      var h = decodeURIComponent((location.hash || '').slice(1));
+      if (h.indexOf('photo-') === 0) { show('photos'); focusCard(h); return; }
+      if (names.indexOf(h) >= 0) { show(h); return; }
+      var card = main.getAttribute('data-focus-card');
+      if (card) { show('photos'); focusCard(card); return; }
+      var saved = null;
+      try { saved = sessionStorage.getItem(KEY); } catch (e) {}
+      show(saved);
+    }
+    main.classList.add('js-tabs');
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        var name = show(t.getAttribute('data-tab'));
+        if (history.replaceState) history.replaceState(null, '', '#' + name);
+        window.scrollTo(0, 0);
+      });
+    });
+    window.addEventListener('hashchange', fromLocation);
+    fromLocation();
+  })();
   function admConfirmSaveAs(form) {
     const newNameField = form.querySelector('.adm-newname');
     if (newNameField && newNameField.value.trim() !== '') {
@@ -3910,7 +3969,8 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     admin_start_session();
 
     if (isset($_GET['hidden'])) {
-        render_admin_hidden_summary($dir, $files, $folderGroupKeys);
+        // Older link: the hidden-items summary is the "Hidden" tab now.
+        header('Location: ?admin#hidden', true, 302);
         return;
     }
 
@@ -4474,7 +4534,7 @@ function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status,
     // its jump link opens the folder's own page instead.
     $folderHref = $GLOBALS['folderMentionLinks'][$key] ?? null;
     $html .= '<a class="linked-photos-jump" href="' . ($folderHref !== null ? htmlspecialchars($folderHref, ENT_QUOTES, 'UTF-8') : '#group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8')) . '">View '
-            . $count . ' photo' . ($count === 1 ? '' : 's') . ($folderHref !== null ? ' &rarr;' : ' &darr;') . '</a>';
+            . htmlspecialchars(media_count_label($groupFiles), ENT_QUOTES, 'UTF-8') . ($folderHref !== null ? ' &rarr;' : ' &darr;') . '</a>';
     $html .= '<span class="group-views' . $viewsHidden . '" data-group="' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">&middot; '
             . number_format($groupTotal) . ' view' . ($groupTotal === 1 ? '' : 's') . '</span>';
     $html .= $permalinkHtml;
@@ -5132,6 +5192,19 @@ function pick_folder_cover($recursiveFiles, $manualCover = null) {
  * overrides the automatic choice when it's still a real member of this
  * folder's own recursive file list.
  */
+/** What a set of items is called when counted for a person: "3 photos",
+ *  "1 video", or "2 photos · 1 video". A video is not a photo, and a folder
+ *  of clips said "1 photo" before this. */
+function media_count_label($files) {
+    $videos = 0;
+    foreach ($files as $f) { if (is_video_file($f)) $videos++; }
+    $photos = count($files) - $videos;
+    $parts = [];
+    if ($photos > 0) $parts[] = number_format($photos) . ' photo' . ($photos === 1 ? '' : 's');
+    if ($videos > 0) $parts[] = number_format($videos) . ' video' . ($videos === 1 ? '' : 's');
+    return $parts ? implode(' · ', $parts) : '0 photos';
+}
+
 function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualCover = null, $idKey = null, $meta = null) {
     $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
     $coverFile = pick_folder_cover($recursiveFiles, $manualCover);
@@ -5150,7 +5223,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if (!empty($meta['description'])) {
         $html .= '<span class="folder-cover-desc">' . htmlspecialchars($meta['description'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
-    $html .= '<span class="folder-cover-count">' . number_format($count) . ' photo' . ($count === 1 ? '' : 's') . '</span>';
+    $html .= '<span class="folder-cover-count">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</span>';
     $html .= '</a>';
     $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">&#128279;</a>';
     $html .= '</div>';
@@ -5426,7 +5499,7 @@ $ogTitle = $pageTitle;
 $ogUrl = $baseUrl . '/';
 $ogDescription = !empty($mdFiles)
     ? markdown_to_plaintext($mdContents[$mdFiles[0]])
-    : (count($files) . ' photo' . (count($files) === 1 ? '' : 's'));
+    : media_count_label($files);
 $ogImageUrl = !empty($files) ? $baseUrl . '/' . img_url($files[0], 'share') : '';
 if ($currentFolderPath !== null) {
     // $pageTitle is already folder-prefixed (see the ?folder= validation
@@ -5434,7 +5507,7 @@ if ($currentFolderPath !== null) {
     // url/description/image need their own folder-scoped values here.
     $ogUrl = $baseUrl . '/?folder=' . rawurlencode($currentFolderPath);
     $folderMemberFiles = $currentFolderFiles;
-    $ogDescription = count($folderMemberFiles) . ' photo' . (count($folderMemberFiles) === 1 ? '' : 's');
+    $ogDescription = media_count_label($folderMemberFiles);
     if ($currentFolderMeta['description'] !== '') {
         $ogDescription = $currentFolderMeta['description'];
     }
@@ -5518,6 +5591,22 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     cursor: inherit;
     -webkit-tap-highlight-color: transparent;
   }
+  /* Breadcrumb: a row of pills (the separators in the markup are hidden)
+     with a chevron before each level after the first. */
+  header p.breadcrumb {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 6px;
+    font-size: 0; margin: 0 0 14px;
+  }
+  header p.breadcrumb a {
+    font-size: 0.82rem; line-height: 1;
+    color: var(--muted); text-decoration: none;
+    background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07);
+    padding: 7px 13px; border-radius: 999px;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  header p.breadcrumb a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  header p.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  header p.breadcrumb a + a::before { content: "\203A"; margin-right: 9px; opacity: 0.55; }
   header h1 {
     margin: 0 0 4px;
     font-size: 1.6rem;
@@ -6003,8 +6092,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   <?php if ($currentFolderPath !== null && $currentFolderMeta['dates'] !== ''): ?>
     <p class="folder-dates"><?= htmlspecialchars($currentFolderMeta['dates']) ?></p>
   <?php endif; ?>
-  <?php $headerPhotoCount = $currentFolderPath !== null ? $currentFolderFileCount : count($files); ?>
-  <p><?= $headerPhotoCount ?> photo<?= $headerPhotoCount === 1 ? '' : 's' ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
+  <p><?= htmlspecialchars(media_count_label($currentFolderPath !== null ? $currentFolderFiles : $files), ENT_QUOTES, 'UTF-8') ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
 </header>
 
 <?php if ($currentFolderPath === null && empty($mdFiles) && !empty($galleryNotices)): ?>

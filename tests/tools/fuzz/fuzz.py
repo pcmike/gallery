@@ -105,7 +105,7 @@ for i in range(900):
 for name,h in sess:
     for p in ['/','/?map','/?folder=Europe','/?folder=Asia','/?admin','/?admin&hidden']:
         s,b,_=req(p,headers=h,label=f"AFTER STORM [{name}] {p}")
-        if s not in (200,401): problems.append((f"AFTER STORM [{name}] {p}",f"unexpected status {s}"))
+        if s not in (200,302,401): problems.append((f"AFTER STORM [{name}] {p}",f"unexpected status {s}"))
 srv.terminate(); srv.wait()
 errs = open(log).read().strip()
 print(f"requests: {n}   problems in responses: {len(problems)}   lines in PHP error log: {len(errs.splitlines()) if errs else 0}")
