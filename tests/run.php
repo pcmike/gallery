@@ -3872,7 +3872,7 @@ $fxArU = new_fixture_dir('archiveunit');
 file_put_contents("$fxArU/one.bin", random_bytes(3000)); file_put_contents("$fxArU/two.bin", ''); file_put_contents("$fxArU/three.bin", random_bytes(2500000));
 $unitEntries = [];
 foreach (['one.bin' => 'top/one.bin', 'two.bin' => 'top/sub/empty.bin', 'three.bin' => 'top/sub/Tür ünï.bin'] as $f => $n) $unitEntries[] = ['name' => $n, 'path' => "$fxArU/$f", 'size' => filesize("$fxArU/$f"), 'mtime' => filemtime("$fxArU/$f")];
-check('[archive] entry names can\'t climb out of the folder they are unpacked into, and keep their folders', zip_entry_name('../../etc/passwd') === 'etc/passwd' && zip_entry_name('/a//b/./c') === 'a/b/c' && zip_entry_name("a\\b") === 'a_b' && zip_entry_name("Tür/ünï.jpg") === "Tür/ünï.jpg");
+check('[archive] entry names can\'t climb out of the folder they are unpacked into, and keep their folders', archive_entry_name('../../etc/passwd') === 'etc/passwd' && archive_entry_name('/a//b/./c') === 'a/b/c' && archive_entry_name("a\\b") === 'a_b' && archive_entry_name("Tür/ünï.jpg") === "Tür/ünï.jpg");
 foreach ([false, true] as $z64) {
     ob_start(); archive_stream($unitEntries, $z64); $zbytes = ob_get_clean();
     $zf = "$fxArU/" . ($z64 ? 'z64' : 'z32') . '.zip'; file_put_contents($zf, $zbytes);
@@ -3921,6 +3921,96 @@ $arPageAdmin = http_get("$baseAr2/", $arAdmin)[1]; $arPageFolder = http_get("$ba
 check('[archive] the owner and the private-view visitor have a line-drawing archive button beside the gallery icon, saying how many originals and how big', (bool) preg_match('#class="map-combo-btn page-archive" href="\?archive" data-bytes="\d+" data-ask="Download all 7 originals \([^)]+\) as one ZIP"#', $arPageAdmin) && str_contains(http_get("$baseAr2/", $arViewer)[1], 'class="map-combo-btn page-archive"'));
 check('[archive] on a folder\'s page it is that folder\'s archive, with that folder\'s count', str_contains($arPageFolder, 'href="?archive&amp;folder=Paris"') && str_contains($arPageFolder, 'Download all 3 originals'));
 check('[archive] a visitor who is not signed in has no archive button', !str_contains(http_get("$baseAr2/")[1], 'class="map-combo-btn page-archive"') && !str_contains(http_get("$baseAr2/?folder=Paris")[1], 'page-archive" href'));
+
+/* --------------------------------------------------------------------- */
+
+echo "== a real picture for each video (ffmpeg, when the server has it) ==\n";
+
+$fxVt = new_fixture_dir('videopics');
+$vtFrame = "$fxVt/_frame.jpg"; make_jpeg($vtFrame, 800, 600, 210, 30, 30);   // what the pretend ffmpeg "takes" from every video: red
+$vtLog = "$fxVt/_ffmpeg.log";
+$vtMakeBin = function ($path, $exit) use ($vtFrame, $vtLog) {
+    file_put_contents($path, "#!/bin/sh\necho \"\$@\" >> " . escapeshellarg($vtLog) . "\nif [ \"\$1\" = \"-version\" ]; then echo 'ffmpeg version pretend'; exit 0; fi\n"
+        . ($exit === 0 ? "for a; do last=\"\$a\"; done\ncp " . escapeshellarg($vtFrame) . " \"\$last\"\nexit 0\n" : "exit $exit\n"));
+    chmod($path, 0755);
+};
+$vtOk = "$fxVt/_ffmpeg-ok"; $vtMakeBin($vtOk, 0);
+$vtFail = "$fxVt/_ffmpeg-fail"; $vtMakeBin($vtFail, 1);
+$vtSite = function ($label, $settings, $videos) use ($vtLog) {
+    $d = new_fixture_dir('vp-' . $label);
+    foreach ($videos as $name => $secs) { if (str_contains($name, '/')) @mkdir(dirname("$d/$name"), 0777, true); make_minimal_mp4("$d/$name", $secs); }
+    file_put_contents("$d/.gallery-config.php", cfg_text($settings + ['ENABLE_VIDEO' => true]));
+    copy(__DIR__ . '/../index.php', "$d/index.php");
+    $port = find_free_port(); start_server($d, $port);
+    return [$d, "http://127.0.0.1:$port"];
+};
+$vtCount = fn () => (int) trim((string) shell_exec('grep -c -e "-frames:v" ' . escapeshellarg($vtLog) . ' 2>/dev/null'));
+$vtCenter = function ($body) { $im = @imagecreatefromstring($body); if (!$im) return null; $c = imagecolorat($im, (int) (imagesx($im) * 0.9), (int) (imagesy($im) * 0.9)); /* near a corner: the placeholder's play triangle is in the middle */ $r = ($c >> 16) & 255; $g = ($c >> 8) & 255; $b = $c & 255; return [$r, $g, $b, imagesx($im), imagesy($im)]; };
+[$vtDir, $vtBase] = $vtSite('ok', ['FFMPEG_PATH' => $vtOk, 'AUTO_GROUP_BY_FOLDER' => true], ['clip.mp4' => 3, "we ird';touch HACKED;.mp4" => 3, 'Sub/inner.mp4' => 3]);
+[$vSt, $vBody, $vHd] = http_get("$vtBase/?img=clip.mp4&size=thumb");
+$vC = $vtCenter($vBody);
+check('[video pictures] with ffmpeg, a video\'s thumbnail is the frame taken from it (here the pretend ffmpeg\'s red picture), cut to the usual thumbnail size, not the dark placeholder', $vSt === 200 && $vC !== null && $vC[0] > 150 && $vC[1] < 80 && max($vC[3], $vC[4]) === 480);
+check('[video pictures] ffmpeg was started once, with the video, a seek, one frame and no metadata, never through a shell', $vtCount() === 1 && str_contains((string) file_get_contents($vtLog), '-ss') && str_contains((string) file_get_contents($vtLog), "$vtDir/clip.mp4") && str_contains((string) file_get_contents($vtLog), '-map_metadata -1'));
+$vShare = $vtCenter(http_get("$vtBase/?img=clip.mp4&size=share")[1]); $vCover = $vtCenter(http_get("$vtBase/?img=clip.mp4&size=cover")[1]);
+check('[video pictures] the share preview and the folder cover come from the same frame (one ffmpeg run for all of them), the cover a square cut', $vShare !== null && $vShare[0] > 150 && max($vShare[3], $vShare[4]) <= 1200 && $vCover !== null && $vCover[0] > 150 && $vCover[3] === $vCover[4] && $vtCount() === 1);
+http_get("$vtBase/?img=clip.mp4&size=thumb");
+check('[video pictures] it is kept: asking again runs nothing', $vtCount() === 1);
+$vPageBefore = array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']);
+$vHome = http_get("$vtBase/")[1];
+$vPageAfter = array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']);
+check('[video pictures] loading the gallery doesn\'t clear them away (the tidy-up of old thumbnails knows them), and the tiles are the plain picture with no browser-frame video laid over them', $vPageBefore === $vPageAfter && count($vPageAfter) >= 4 && !str_contains($vHome, 'class="tile-video"'));
+http_get("$vtBase/?img=" . rawurlencode("we ird';touch HACKED;.mp4") . "&size=thumb");
+check('[video pictures] a video with quotes, spaces and a semicolon in its name works and nothing it says is run', $vtCount() === 2 && !file_exists("$vtDir/HACKED") && !file_exists("HACKED"));
+http_get("$vtBase/?img=Sub%2Finner.mp4&size=thumb");
+check('[video pictures] a video in a folder gets its own picture, kept in that folder\'s cache', $vtCount() === 3 && is_dir("$vtDir/Sub/.gallery-cache") && count(glob("$vtDir/Sub/.gallery-cache/*.jpg")) >= 2);
+touch("$vtDir/clip.mp4", time() + 5);
+http_get("$vtBase/?img=clip.mp4&size=thumb");
+check('[video pictures] a video that is replaced gets a new picture', $vtCount() === 4);
+check('[video pictures] nobody can have it for a private video (the gate is before ffmpeg), and ffmpeg is not run for the asking', (function () use ($vtDir, $vtBase, $vtCount) { write_data_file("$vtDir/.gallery-items.php", ['items' => ['clip.mp4' => ['restriction' => 'private']], 'groups' => []]); $n = $vtCount(); return http_get("$vtBase/?img=clip.mp4&size=thumb")[0] === 404 && $vtCount() === $n; })());
+// A failing ffmpeg: the placeholder, and not tried over and over.
+file_put_contents($vtLog, '');
+[$vfDir, $vfBase] = $vtSite('fail', ['FFMPEG_PATH' => $vtFail], ['clip.mp4' => 3]);
+[$fSt, $fBody] = http_get("$vfBase/?img=clip.mp4&size=thumb"); $fC = $vtCenter($fBody);
+$tries = $vtCount();
+http_get("$vfBase/?img=clip.mp4&size=thumb"); http_get("$vfBase/?img=clip.mp4&size=share");
+check('[video pictures] when ffmpeg can\'t read the video the generic placeholder is sent as before (a dark picture, with its play triangle), and it is not tried again every time', $fSt === 200 && $fC !== null && $fC[0] < 80 && $tries >= 1 && $vtCount() === $tries && count(glob("$vfDir/.gallery-cache/*.failed")) === 1);
+check('[video pictures] ...and then the browser\'s own first frame is laid over the placeholder in the tile where it can be shown', str_contains(http_get("$vfBase/")[1], 'class="tile-video"'));
+// Off, and no ffmpeg at all.
+file_put_contents($vtLog, '');
+[, $voBase] = $vtSite('off', ['FFMPEG_PATH' => $vtOk, 'ENABLE_VIDEO_THUMBNAILS' => false], ['clip.mp4' => 3]);
+$vOff = $vtCenter(http_get("$voBase/?img=clip.mp4&size=thumb")[1]);
+check('[video pictures] switched off, it is the placeholder and ffmpeg is never started', $vOff !== null && $vOff[0] < 80 && $vtCount() === 0 && !str_contains((string) file_get_contents($vtLog), '-version'));
+[, $vnBase] = $vtSite('none', ['FFMPEG_PATH' => '/nonexistent/ffmpeg'], ['clip.mp4' => 3]);
+$vNone = $vtCenter(http_get("$vnBase/?img=clip.mp4&size=thumb")[1]);
+check('[video pictures] with no ffmpeg there it is the placeholder, the video file is never sent as a picture, and the tile gets the browser\'s first frame', $vNone !== null && $vNone[0] < 80 && str_contains(http_get("$vnBase/")[1], 'class="tile-video"'));
+// Site settings.
+[$vsDir, $vsBase] = $vtSite('settings', ['FFMPEG_PATH' => $vtOk, 'ADMIN_PASSWORD' => 'vp-admin-pw-1'], ['clip.mp4' => 3]);
+[, , $vsHd] = http_post("$vsBase/?admin", ['login_password' => 'vp-admin-pw-1'], [], false);
+$vsPage = http_get("$vsBase/?admin", ['Cookie: ' . extract_cookie_header($vsHd)])[1];
+check('[video pictures] Site settings has a "Video thumbnails" switch, on, with its warning, shown only while videos are on', str_contains($vsPage, 'name="set_ENABLE_VIDEO_THUMBNAILS"') && str_contains($vsPage, 'Runs ffmpeg on your server') && (bool) preg_match('#data-requires="set_ENABLE_VIDEO"[^>]*>(?:(?!</div>).)*set_ENABLE_VIDEO_THUMBNAILS#s', $vsPage) || str_contains($vsPage, 'Video thumbnails'));
+// The real thing, when this machine has ffmpeg.
+$realFf = getenv('FFMPEG_TEST_BIN') ?: trim((string) shell_exec('command -v ffmpeg'));
+if ($realFf !== '' && is_executable($realFf)) {
+    $rfDir = new_fixture_dir('vp-real');
+    shell_exec(escapeshellarg($realFf) . ' -y -loglevel error -f lavfi -i testsrc=duration=3:size=640x360:rate=24 -pix_fmt yuv420p ' . escapeshellarg("$rfDir/real.mp4") . ' 2>&1');
+    file_put_contents("$rfDir/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'FFMPEG_PATH' => $realFf]));
+    copy(__DIR__ . '/../index.php', "$rfDir/index.php");
+    $rfPort = find_free_port(); start_server($rfDir, $rfPort);
+    $rf = $vtCenter(http_get("http://127.0.0.1:$rfPort/?img=real.mp4&size=thumb")[1]);
+    check('[video pictures] with the real ffmpeg: a 640x360 clip gives a 480x270 thumbnail that is a picture of the video (not the placeholder)', is_file("$rfDir/real.mp4") && $rf !== null && $rf[3] === 480 && $rf[4] === 270 && $rf[0] > 150 && $rf[1] > 150);
+} else {
+    echo "  (no ffmpeg on this machine: the real-ffmpeg check was skipped; set FFMPEG_TEST_BIN to run it)\n";
+}
+
+/* --------------------------------------------------------------------- */
+
+echo "== function names: nothing in index.php may share a name with a function PHP or one of its extensions provides ==\n";
+// (zip_entry_name() once did, and was a fatal error on every host that has the zip extension.)
+preg_match_all('/^function\s+([A-Za-z0-9_]+)\s*\(/m', (string) file_get_contents(__DIR__ . '/../index.php'), $fnm);
+$fnClash = array_values(array_filter(array_unique($fnm[1]), fn ($f) => in_array($f, get_defined_functions()['internal'], true)));
+$fnReserved = array_values(array_filter(array_unique($fnm[1]), fn ($f) => preg_match('/^(zip_|gz[a-z]|bz[a-z]|curl_|mb_|imagick|iconv_|ctype_|openssl_|sodium_|ftp_|finfo_)/', $f)));
+check('[names] no function declared in index.php is also a function of PHP or of an extension loaded here', $fnClash === []);
+check('[names] ...and none uses a name reserved by an extension that may be loaded on another server (zip_, gz, bz, curl_, mb_, ...)', $fnReserved === []);
 
 /* --------------------------------------------------------------------- */
 

@@ -230,7 +230,7 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 
 **Trips and larger galleries** (all opt-in — see the sections below)
 - [Nested folders](#folders) to any depth, each a cover card that opens its own page, with a breadcrumb and a recursive photo count
-- [Video](#video) (`.mov`/`.mp4`) with seeking, a duration badge, and a placeholder tile
+- [Video](#video) (`.mov`/`.mp4`) with seeking, a duration badge, and a real picture from each video (with ffmpeg)
 - [Per-photo captions, web links, and locations](#captions-and-locations), shown as small badges and in the lightbox
 - An owner-only [admin editor](#the-admin-editor) for all of that, plus your notes `.md` files — usable from a phone
 - [Private items](#private-items-and-the-private-view): photos, videos and whole folders kept off the public link, with a separate viewer password
@@ -444,11 +444,11 @@ A few details worth knowing:
 
 ## Video
 
-Set `ENABLE_VIDEO` and `.mov` / `.mp4` files (an iPhone's two formats) become gallery items alongside photos, eligible for grouping, ordering, captions and everything else a photo is. The file is served exactly as it was recorded: no transcoding, no frame extraction.
+Set `ENABLE_VIDEO` and `.mov` / `.mp4` files (an iPhone's two formats) become gallery items alongside photos, eligible for grouping, ordering, captions and everything else a photo is. The file is served exactly as it was recorded: no transcoding.
 
 **It's off by default, and videos are invisible while it is.** A folder holding only videos (say a `Videos/` folder for a trip) doesn't appear at all, because as far as the gallery is concerned it has nothing in it. So you aren't left guessing, a collapsed "setup notices" banner on the main page says how many `.mov`/`.mp4` files it found and ignored, and that `ENABLE_VIDEO` is the switch (a count only, never a folder or file name; the search is capped at 40 folders).
 
-- Tiles and share previews use one generic placeholder graphic (a play triangle), not a frame from the clip. A shared video link previews as a plain icon and title, not a playable embed.
+- **A real picture for each video.** If the server has **ffmpeg** (nothing to install for the gallery itself; most VPS and many hosts have it), one frame is taken from each video the first time its thumbnail is needed, kept with the photo thumbnails, and used for the grid tile, a folder's cover and the shared-link preview. It is the `ENABLE_VIDEO_THUMBNAILS` setting (**on** by default; it does nothing if ffmpeg isn't there). The gallery looks for `ffmpeg` on the usual paths; if yours is elsewhere, give the full path as `"FFMPEG_PATH"` in the settings file. How it is run: a fixed list of arguments, never through a shell, with a 25-second limit, **one at a time** (a request that arrives while one is running gets the placeholder, and the next one the picture), once per video (a replaced video gets a new one), and what it writes carries no metadata. If ffmpeg can't read a video it isn't tried again for six hours. Without ffmpeg, or for a video it can't read, the tile shows the generic placeholder (a play triangle) with **the browser's own first frame laid over it** where the browser can play that video (a phone's HEVC `.mov` plays in Safari, not in every desktop browser); share previews then stay the placeholder. A shared video link previews as a picture and title, not a playable embed. The frame comes from where the video is a third of a second in (or the first frame of a very short clip). ffmpeg's presence is looked up once a day; if you install it later, a day passes or delete `gallery-ffmpeg-*.txt` from the server's temp folder to see it at once.
 - The lightbox plays it in the browser's own player; there is no autoplay.
 - Seeking works (the gallery honors HTTP `Range` requests), and a **duration badge** is read from the file's container.
 

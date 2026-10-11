@@ -241,6 +241,29 @@ try:
     ok(gs["w"] <= gs["nw"] + 1 and gs["w"] < gs["cw"], "[zoom] a photo smaller than the window is never blown up past its own size", str(gs))
     b.js("closeLightbox()")
     srv6.terminate(); srv6.wait()
+    # ---------------- a video's own first frame in its tile (no ffmpeg on the server) ----------------
+    print("== video tiles: the browser's first frame")
+    FFBIN = os.environ.get("FFMPEG_TEST_BIN") or shutil.which("ffmpeg")
+    if not FFBIN:
+        skips += 1; print("  skip  no ffmpeg here to make a test video (set FFMPEG_TEST_BIN) - the video tile check was skipped")
+    else:
+        SITE8 = WORK + "/site8"; os.makedirs(SITE8)
+        shutil.copy(HERE + "/../../../index.php", SITE8 + "/index.php"); os.utime(SITE8 + "/index.php", (time.time() - 3600,) * 2)
+        # a VP9 picture in an .mp4 (Chromium without the H.264 licence plays this); the first second is red, then green
+        subprocess.run([FFBIN, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:size=320x180:rate=10:duration=1", "-f", "lavfi", "-i", "color=c=green:size=320x180:rate=10:duration=1",
+                        "-filter_complex", "[0][1]concat=n=2:v=1:a=0", "-c:v", "libvpx-vp9", "-b:v", "200k", SITE8 + "/clip.mp4"], check=True)
+        open(SITE8 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"ENABLE_VIDEO": true, "FFMPEG_PATH": "/nonexistent/ffmpeg"}\n')
+        s8 = socket.socket(); s8.bind(("127.0.0.1", 0)); PORT8 = s8.getsockname()[1]; s8.close(); B8 = f"http://127.0.0.1:{PORT8}"
+        srv8 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT8}", "-t", SITE8], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        b.viewport(1280, 720); b.goto(B8 + "/", 3.0)
+        vt = b.js("""(() => { const v = document.querySelector('.card .tile-video'); if (!v) return null; const c = document.createElement('canvas'); c.width = 32; c.height = 18;
+            let px = null; try { c.getContext('2d').drawImage(v, 0, 0, 32, 18); px = Array.from(c.getContext('2d').getImageData(16, 9, 1, 1).data); } catch (e) { px = String(e); }
+            return {ready: v.classList.contains('ready'), w: v.videoWidth, opacity: getComputedStyle(v).opacity, px: px}; })()""")
+        ok(vt is not None and vt["ready"] and vt["w"] == 320 and float(vt["opacity"]) == 1 and isinstance(vt["px"], list) and vt["px"][0] > 150 and vt["px"][1] < 80,
+           "[video tile] with no ffmpeg on the server, the tile shows the video's own first frame (red) over the placeholder, once the browser has it", str(vt))
+        shot(b, "21-video-tile")
+        srv8.terminate(); srv8.wait()
     b.viewport(1280, 900)
     # ---------------- a folder opens on its chosen cover photo ----------------
     print("== folder opens on its cover photo")
@@ -532,7 +555,7 @@ try:
     tog("TRACK_VIEWS"); b.drain(1.0)
     ok('"TRACK_VIEWS": true' in cfg() and state("TRACK_VIEWS") == "Saved." and b.js("window.__confirms.length") == 0, "flipping a harmless switch saves it on the spot, with no Save button and no question", f"{state('TRACK_VIEWS')!r} {cfg()!r}")
     ok(b.js("window.__stay") == "same page", "...without reloading the page")
-    lefts = b.js("[...document.querySelectorAll('.site-row .switch')].map(e => Math.round(e.getBoundingClientRect().left))")
+    lefts = b.js("[...document.querySelectorAll('.site-row .switch')].filter(e => e.getBoundingClientRect().width > 0).map(e => Math.round(e.getBoundingClientRect().left))")   # (only the rows showing: some are hidden while their parent switch is off)
     ok(max(lefts) - min(lefts) <= 2, "...and the status message doesn't push that switch out of line with the others", str(lefts))
     # something that publishes content has its warning in orange text on the row, never in a dialog
     ok(b.js("(() => { const r = document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row'); const w = r.querySelector('.risk'); return !!w && getComputedStyle(w).display !== 'none' && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('becomes visible to visitors'); })()"), "turning on videos is explained by orange text already on its row, naming what it publishes")

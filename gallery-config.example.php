@@ -29,6 +29,8 @@
     // "ENABLE_THUMBNAIL_CACHE": true,      // default true: small thumbnails in .gallery-cache (false = never write)
     // "TRACK_VIEWS": true,                 // default false: count views (writes a stats file)
     // "SHOW_VIEW_COUNTS_PUBLICLY": true,   // default false: show the counts to visitors
+    // "ENABLE_VIDEO_THUMBNAILS": false,    // default true: a real picture for each video (needs ffmpeg on the server; does nothing without it)
+    // "FFMPEG_PATH": "/usr/local/bin/ffmpeg",   // only if ffmpeg is somewhere the gallery doesn't look
     // "ENABLE_PUBLIC_DOWNLOAD": true,      // default false: a download-original button for every visitor (signed-in ones always have it)
 
     // --- Locations and the map ---------------------------------------------

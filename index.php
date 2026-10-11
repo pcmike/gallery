@@ -348,6 +348,14 @@ define('EXTRA_FOLDERS', gallery_setting('EXTRA_FOLDERS', []));
 // from an iPhone video the way it does from a photo.
 define('ENABLE_VIDEO', gallery_setting('ENABLE_VIDEO', false));
 
+// A real picture for each video (in the grid, on a folder's cover and in shared-link previews) instead of the generic
+// placeholder: one frame is taken from the video with ffmpeg, when this server has it, once per video, and kept with the
+// photo thumbnails. Does nothing if ffmpeg isn't there (and then the browser's own first frame is shown where it can
+// play the video). Needs ENABLE_VIDEO and the thumbnail cache.
+define('ENABLE_VIDEO_THUMBNAILS', gallery_setting('ENABLE_VIDEO_THUMBNAILS', true));
+// Where ffmpeg is, if it isn't found by itself (it is looked for on the usual paths). A full path, in the settings file.
+define('FFMPEG_PATH', gallery_setting('FFMPEG_PATH', ''));
+
 // Password for the admin editor, reached via ?admin — captions, per-item
 // location/web link, display names, and raw .md editing. Empty by
 // default, and that's not merely "unauthenticated": with no password
@@ -1464,13 +1472,13 @@ function human_bytes($n) {
 }
 
 /** [dosTime, dosDate] for a ZIP entry. */
-function zip_dos_time($ts) {
+function archive_dos_time($ts) {
     $d = getdate(max(315532800, $ts));
     return [($d['hours'] << 11) | ($d['minutes'] << 5) | intdiv($d['seconds'], 2), (($d['year'] - 1980) << 9) | ($d['mon'] << 5) | $d['mday']];
 }
 
 /** A path as a ZIP entry name: UTF-8, forward slashes, nothing that could climb out of the folder it is unpacked into. */
-function zip_entry_name($name) {
+function archive_entry_name($name) {
     if (!preg_match('//u', $name)) $name = mb_convert_encoding($name, 'UTF-8', 'ISO-8859-1');
     $name = preg_replace('/[\x00-\x1F\x7F\\\\]/', '_', $name);
     $parts = array_filter(explode('/', $name), function ($p) { return $p !== '' && $p !== '.' && $p !== '..'; });
@@ -1499,7 +1507,7 @@ function archive_stream($entries, $zip64) {
     foreach ($entries as $e) {
         if (connection_aborted()) return;
         $name = $e['name']; $size = $e['size'];
-        [$time, $date] = zip_dos_time($e['mtime']);
+        [$time, $date] = archive_dos_time($e['mtime']);
         $at = $offset;
         $emit(pack('VvvvvvVVVvv', 0x04034b50, $zip64 ? 45 : 20, 0x0808, 0, $time, $date, 0, $zip64 ? 0xFFFFFFFF : 0, $zip64 ? 0xFFFFFFFF : 0, strlen($name), $zip64 ? 20 : 0)
             . $name . ($zip64 ? pack('vvPP', 1, 16, 0, 0) : ''));
@@ -1565,11 +1573,11 @@ function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
         echo 'That is more files than one archive can hold. Download a folder at a time.';
         return;
     }
-    $root = zip_entry_name($folder === null ? $rootTitle : $folderName);
+    $root = archive_entry_name($folder === null ? $rootTitle : $folderName);
     if ($root === '') $root = 'gallery';
     $prefix = $folder === null ? '' : $folder . '/';
     foreach ($entries as $i => $e) {
-        $entries[$i]['name'] = $root . '/' . zip_entry_name($prefix !== '' && strncmp($e['rel'], $prefix, strlen($prefix)) === 0 ? substr($e['rel'], strlen($prefix)) : $e['rel']);
+        $entries[$i]['name'] = $root . '/' . archive_entry_name($prefix !== '' && strncmp($e['rel'], $prefix, strlen($prefix)) === 0 ? substr($e['rel'], strlen($prefix)) : $e['rel']);
     }
     $sizes = array_column($entries, 'size'); $names = array_column($entries, 'name');
     $zip64 = count($entries) >= 0xFFFF || max($sizes) >= 0xFFFFFFFF || archive_total_size($sizes, $names, false) >= 0xFFFFFFF0;
@@ -1625,6 +1633,92 @@ function serve_original_download($dir, $filename, $validFiles, $itemsData = []) 
     header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
     header('X-Content-Type-Options: nosniff');
     if (!send_original_for_visitor($srcPath, $filename, $itemsData)) http_response_code(404);
+}
+
+/* -----------------------------------------------------------------------
+ * A picture for a video. ffmpeg, when this server has it, takes one frame
+ * (about a third of a second in, or the first frame of a very short clip),
+ * once per video; that frame is kept in the thumbnail cache and everything
+ * else (the grid thumbnail, the folder cover, the share preview) is cut from
+ * it exactly as for a photo. ffmpeg is started with a fixed list of
+ * arguments (never through a shell), with a time limit, one at a time, and
+ * what it writes carries no metadata. A video it can't read, or no ffmpeg,
+ * gives the generic placeholder as before.
+ * ----------------------------------------------------------------------- */
+
+/** Where ffmpeg is on this server, or '' if it can't be used: the setting is off, the functions to start a program are
+ *  not available, or no ffmpeg answers. Looked up once a day and remembered outside the web folder. */
+function ffmpeg_binary() {
+    static $found = null;
+    if ($found !== null) return $found;
+    $found = '';
+    if (!ENABLE_VIDEO_THUMBNAILS || !function_exists('proc_open')) return $found;
+    $remember = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__ . '|' . FFMPEG_PATH), 0, 10) . '.txt';
+    if (is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
+        return $found = trim((string) @file_get_contents($remember));
+    }
+    $candidates = FFMPEG_PATH !== '' ? [FFMPEG_PATH] : ['ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg', '/snap/bin/ffmpeg'];
+    foreach ($candidates as $c) {
+        if ($c !== 'ffmpeg' && !is_executable($c)) continue;
+        if (run_quietly([$c, '-version'], 5) === 0) { $found = $c; break; }
+    }
+    @file_put_contents($remember, $found, LOCK_EX);
+    return $found;
+}
+
+/** Runs a program (the arguments as a list, no shell), with a time limit; its exit code, or null if it couldn't be run
+ *  or was stopped for taking too long. Whatever it prints is thrown away. */
+function run_quietly($args, $seconds) {
+    $proc = @proc_open($args, [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+    if (!is_resource($proc)) return null;
+    $deadline = microtime(true) + $seconds;
+    while (true) {
+        $st = proc_get_status($proc);
+        if (!$st['running']) { $code = $st['exitcode']; proc_close($proc); return $code; }
+        if (microtime(true) > $deadline) { proc_terminate($proc, 9); proc_close($proc); return null; }
+        usleep(20000);
+    }
+}
+
+/** The path of the frame taken from this video (a JPEG up to 1600 pixels), making it first if need be; null if it can't
+ *  be had now (no ffmpeg, a video it can't read, someone else's frame is being taken, a cache that can't be written). */
+function video_poster_path($srcPath, $cacheDir, $filename) {
+    if (!ENABLE_VIDEO_THUMBNAILS || !ENABLE_THUMBNAIL_CACHE) return null;
+    $poster = image_cache_path($cacheDir, $filename, 'poster', $srcPath);
+    if ($poster === null) return null;
+    if (is_file($poster) && filesize($poster) > 0) return $poster;
+    $failed = $poster . '.failed';
+    if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;   // it didn't work lately; not again for a few hours
+    $bin = ffmpeg_binary();
+    if ($bin === '') return null;
+    $lock = @fopen(sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__), 0, 10) . '.lock', 'c');
+    if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) return null;   // one at a time: this request gets the placeholder, a later one the picture
+    try {
+        $duration = video_duration_seconds($srcPath);
+        $tmp = $poster . '.tmp' . bin2hex(random_bytes(3));
+        foreach ([$duration !== null ? max(0, min(1.0, $duration / 3)) : 0, 0] as $at) {
+            $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $at), '-i', $srcPath, '-map_metadata', '-1', '-frames:v', '1',
+                '-vf', "scale='min(1600,iw)':'min(1600,ih)':force_original_aspect_ratio=decrease", '-q:v', '3', '-f', 'image2', $tmp], 25);
+            if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $poster)) return $poster; }
+            @unlink($tmp);
+        }
+        @touch($failed);
+        return null;
+    } finally {
+        flock($lock, LOCK_UN); fclose($lock);
+    }
+}
+
+/** True when a picture couldn't be taken from this video lately (ffmpeg is there but couldn't read it). */
+function video_poster_failed($file) {
+    $srcPath = resolve_real_path($GLOBALS['dir'], $file);
+    $poster = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'poster', $srcPath);
+    return $poster !== null && !is_file($poster) && is_file($poster . '.failed');
+}
+
+/** True when this server can make a real picture of a video, so the page can leave the browser's own first frame out. */
+function video_pictures_expected() {
+    return ENABLE_VIDEO_THUMBNAILS && ENABLE_THUMBNAIL_CACHE && ffmpeg_binary() !== '';
 }
 
 /**
@@ -1819,6 +1913,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
             $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
             $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
+            if (is_video_file($file)) $variants[] = 'poster';   // the frame taken from a video (see video_poster_path)
             $mtime = @filemtime(resolve_real_path($dir, $file));
             foreach ($variants as $variant) {
                 $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
@@ -1826,6 +1921,9 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
         }
         foreach (scandir($cacheDir) as $entry) {
             if ($entry === '.' || $entry === '..') continue;
+            // A video's "didn't work lately" note and a picture still being written belong to a current video.
+            $base = preg_replace('/\.(failed|tmp[0-9a-f]*)$/', '', $entry);
+            if ($base !== $entry && isset($valid[$base]) && ($base === $entry || time() - (int) @filemtime($cacheDir . '/' . $entry) < 21600)) continue;
             if (!isset($valid[$entry])) {
                 @unlink($cacheDir . '/' . $entry);
             }
@@ -1980,13 +2078,24 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     // No frame extraction (see ENABLE_VIDEO's doc comment) — every size
     // of a video's "thumbnail," grid tile or Open Graph share preview
     // alike, gets the same generic placeholder graphic instead.
-    if (is_video_file($filename)) {
-        render_video_placeholder_image($maxDim);
-        return;
-    }
-
     $srcPath = resolve_real_path($dir, $filename);
     $cacheDir = containing_folder_real_path($dir, $filename) . '/.gallery-cache';
+    $pictureSrc = $srcPath;   // where the pixels come from: the file itself, or for a video the frame taken from it
+    if (is_video_file($filename)) {
+        // A real frame from the video when ffmpeg can take one; everything below then treats that picture as the source.
+        $poster = video_poster_path($srcPath, $cacheDir, $filename);
+        if ($poster === null) {
+            render_video_placeholder_image($maxDim);
+            return;
+        }
+        if ($variant === 'full') {
+            header('Content-Type: image/jpeg');
+            header('Cache-Control: ' . $cacheControl);
+            readfile($poster);
+            return;
+        }
+        $pictureSrc = $poster;
+    }
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
     $isHeic = in_array($ext, ['heic', 'heif'], true);
 
@@ -2008,11 +2117,15 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
 
     // A folder's cover card is a square cut from the original photo (not from its small thumbnail), so it stays sharp.
     $isCover = $variant === 'cover' || $variant === 'coverlg';
-    $ok = $cachePath ? ($isCover ? generate_cover_jpeg($srcPath, $cachePath, $maxDim) : generate_resized_jpeg($srcPath, $cachePath, $maxDim)) : false;
+    $ok = $cachePath ? ($isCover ? generate_cover_jpeg($pictureSrc, $cachePath, $maxDim) : generate_resized_jpeg($pictureSrc, $cachePath, $maxDim)) : false;
     if ($ok) {
         header('Content-Type: image/jpeg');
         header('Cache-Control: ' . $cacheControl);
         readfile($cachePath);
+        return;
+    }
+    if ($pictureSrc !== $srcPath) {
+        render_video_placeholder_image($maxDim);   // the frame couldn't be cut down: the placeholder, never the video file as a picture
         return;
     }
 
@@ -4926,6 +5039,10 @@ function gallery_setting_definitions() {
              'help' => 'Videos are served exactly as recorded, with no conversion, so big clips use real bandwidth and some phone formats don\'t play in every browser.',
              'risk' => 'Every .mov and .mp4 in the gallery folders becomes visible to visitors.',
              'offwarn' => 'Videos will disappear from the gallery, and links to them will stop working. Nothing is deleted: the files and their captions, locations and hide settings stay, and come back when you turn this on again.'],
+            ['name' => 'ENABLE_VIDEO_THUMBNAILS', 'type' => 'bool', 'label' => 'Video thumbnails', 'requires' => 'ENABLE_VIDEO',
+             'help' => 'A real picture from each video instead of the generic video icon, taken once with ffmpeg if this server has it (nothing happens if it doesn\'t, and the browser\'s own first frame is shown where it can). Needs "Thumbnails".',
+             'risk' => 'Runs ffmpeg on your server, once for each new video, with a time limit and one at a time.',
+             'offwarn' => 'Videos go back to the generic video icon (or the browser\'s first frame). Pictures already taken are left in place.'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
              'help' => 'alpha_01.jpg and alpha_02.jpg become one group, "alpha". Handy for for-sale listings; on a camera roll it can merge unrelated photos. Folders are better for trips.'],
             ['name' => 'ENABLE_PUBLIC_DOWNLOAD', 'type' => 'bool', 'label' => 'Let visitors download originals',
@@ -7933,9 +8050,13 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // single card; only a box's own container carried that id before,
     // leaving the link dead for a single.
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
+    // Where the server can't take a frame from a video, the browser's own first frame is laid over the placeholder (it
+    // appears only if the browser can play the video; otherwise the placeholder stays).
+    $tileVideo = is_video_file($file) && (!video_pictures_expected() || video_poster_failed($file))
+        ? '<video class="tile-video" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="?video=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '#t=0.1"></video>' : '';
     return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $durationBadge . $statusBadge
+         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $tileVideo . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . (isset($GLOBALS['__cover_file']) && $GLOBALS['__cover_file'] === $file ? '<span id="folder-cover" class="cover-anchor" aria-hidden="true"></span>' : '') . '</div>';
 }
@@ -8830,7 +8951,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .card:hover img {
     transform: scale(1.05);
   }
-  .card.sold img { filter: grayscale(1) brightness(0.6); }
+  /* A video's own first frame, over the placeholder, only once the browser has it. */
+  .card .tile-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.25s ease; }
+  .card .tile-video.ready { opacity: 1; }
+  .card:hover .tile-video { transform: scale(1.05); }
+  .card.sold img, .card.sold .tile-video { filter: grayscale(1) brightness(0.6); }
   .sold-badge-corner, .reserved-badge-corner {
     position: absolute;
     top: 6px;
@@ -9499,6 +9624,13 @@ if (ENABLE_MAP && $mapPoints) {
     current = set[(at + delta + set.length) % set.length];
     updateImage();
   }
+  // A video's own first frame over its placeholder, once the browser has one; if it can't play the video, nothing changes.
+  document.querySelectorAll('.tile-video').forEach(function (v) {
+    const ready = function () { v.classList.add('ready'); };
+    v.addEventListener('loadeddata', ready);
+    v.addEventListener('error', function () { v.remove(); });
+    if (v.readyState >= 2) ready();
+  });
   // A big archive asks first (it is a long download); a small one just starts.
   document.querySelectorAll('.page-archive').forEach(function (a) {
     a.addEventListener('click', function (e) {
