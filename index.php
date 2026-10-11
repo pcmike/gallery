@@ -7970,8 +7970,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .page-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; color: var(--muted); font-size: 0.85rem; }
   .page-visits { white-space: nowrap; }
-  .page-about { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 8px; color: var(--muted); font-size: 1.15rem; text-decoration: none; }
-  .page-about:hover, .page-about:focus-visible { color: var(--text); background: #26262a; }
   /* Same column as the photo grid below it (max-width and side padding
      match .gallery), so the map lines up with the tiles instead of
      running to the edges of the window. */
@@ -8403,7 +8401,7 @@ if (ENABLE_MAP && $mapPoints) {
       <?php endif; ?>
       <span class="page-tools">
         <?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?><span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?>
-        <a class="page-about" href="?about" title="About this gallery" aria-label="About this gallery"><?= ui_icon('gallery') ?></a>
+        <span class="map-combo"><a class="map-combo-btn page-about" href="?about" title="About this gallery software" aria-label="About this gallery software"><?= ui_icon('gallery') ?></a></span>
       </span>
     </div>
     <?php if ($hasMap): ?>
