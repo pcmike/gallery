@@ -7537,8 +7537,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     padding: 32px 24px 16px;
     text-align: center;
   }
-  header h1 a.title-admin { color: inherit; text-decoration: none; }
-  header h1 a.title-admin:hover, header h1 a.title-admin:focus-visible { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 6px; }
+  /* For the signed-in owner the title leads back to the admin, and looks and behaves exactly like plain text: no underline,
+     colour, cursor or tooltip change, on hover or otherwise (keyboard focus still shows the browser's normal ring). */
+  header h1 a.title-admin { color: inherit; text-decoration: none; cursor: inherit; -webkit-tap-highlight-color: transparent; }
   /* The lock beside the title: quiet until pointed at. */
   header h1 .lock-form { display: inline; margin: 0; }
   header h1 .lock-link { display: inline-block; margin-left: 3px; padding: 0; vertical-align: 0.1em; background: none; border: 0; cursor: pointer; font-size: 0.62em; color: var(--muted); opacity: 0.7; line-height: 1; text-decoration: none; }
@@ -8135,7 +8136,7 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
   <?php endif; ?>
   <?php if (ADMIN_PASSWORD !== '' && is_admin_browser()): ?>
     <?php // Signed in as the owner: the title leads back to the admin page for wherever you are (a folder's own admin on its page). ?>
-    <h1><a class="title-admin" rel="nofollow" title="Back to the admin" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a><?= $lockHtml ?></h1>
+    <h1><a class="title-admin" rel="nofollow" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a><?= $lockHtml ?></h1>
   <?php else: ?>
     <h1><?= htmlspecialchars($pageTitle) ?><?= $lockHtml ?></h1>
   <?php endif; ?>

@@ -2489,7 +2489,7 @@ check('[lock] ...and that really is a signed-in admin session (the admin page op
 [$lkVwSt, , $lkVwHd] = http_post("$baseLk2/?reveal", ['login_password' => 'view-only'], [], false);
 check('[lock] the private-view password typed into the same box shows the private items, and is not the admin', $lkVwSt === 302 && (bool) array_filter($lkVwHd, fn($h) => stripos($h, 'Location: ./') === 0) && !str_contains(http_get("$baseLk2/?admin", ['Cookie: ' . (string) extract_cookie_header($lkVwHd)])[1], 'Gallery Admin'));
 [, $lkOwnerHome] = http_get("$baseLk2/?folder=Sub", ['Cookie: ' . $lkOwnerCookie]);
-check('[lock] a signed-in owner has no Admin link in the footer (there is no footer any more); the title is the way back to the admin, for the folder they are in', !str_contains($lkOwnerHome, '>Admin</a>') && !str_contains($lkOwnerHome, '<footer') && str_contains($lkOwnerHome, '<a class="title-admin" rel="nofollow" title="Back to the admin" href="?admin&amp;folder=Sub">'));
+check('[lock] a signed-in owner has no Admin link in the footer (there is no footer any more); the title is the way back to the admin, for the folder they are in', !str_contains($lkOwnerHome, '>Admin</a>') && !str_contains($lkOwnerHome, '<footer') && str_contains($lkOwnerHome, '<a class="title-admin" rel="nofollow" href="?admin&amp;folder=Sub">'));
 [, , $lkOutHd] = http_post("$baseLk2/?reveal", ['logout' => '1', 'folder' => 'Sub', 'photo' => 'Sub/b.jpg', 'map' => '1'], ['Cookie: ' . $lkOwnerCookie], false);
 check('[lock] signing out returns to the very same page, not just the same folder: the open photo and the open map are kept', (bool) array_filter($lkOutHd, fn($h) => stripos($h, 'Location: ./?folder=Sub&photo=Sub%2Fb.jpg&map') === 0));
 [, $lkPageHome] = http_get("$baseLk2/?folder=Sub&photo=Sub%2Fb.jpg");
@@ -2506,7 +2506,8 @@ check('[lock] the admin\'s own Log out from a folder lands on that folder\'s gal
 check('[lock] the sign-in has a grey "Go Back" button that returns to the page the visitor came from, placed before Continue on the same row (a curious visitor with no password is not stuck)', (bool) preg_match('#<div class="actions">\s*<a class="cancel" id="goback" href="./">&larr; Go Back</a>\s*<button type="submit">Continue</button>#', $lkCancelRoot) && str_contains($lkCancelRoot, '.cancel { background:#2a2a2e; color:#c8c8cd; }') && str_contains($lkCancelFolder, 'class="cancel" id="goback" href="./?folder=Sub&amp;photo=Sub%2Fb.jpg">&larr; Go Back</a>') && str_contains($lkCancelAdmin, 'class="cancel" id="goback" href="./?folder=Sub">&larr; Go Back</a>'));
 check('[lock] a visitor\'s title is still plain text: it leads to the admin only for the signed-in owner', !str_contains(http_get("$baseLk2/")[1], 'class="title-admin"') && !str_contains(http_get("$baseLk2/?folder=Sub")[1], 'class="title-admin"'));
 [, $lkOwnerRoot] = http_get("$baseLk2/", ['Cookie: ' . $lkOwnerCookie]);
-check('[lock] ...and at the top of the gallery it leads to the admin\'s own front page', str_contains($lkOwnerRoot, '<a class="title-admin" rel="nofollow" title="Back to the admin" href="?admin">'));
+check('[lock] ...and it looks and behaves exactly like plain text: no hover, focus or cursor rule, and no tooltip', (bool) preg_match('/header h1 a\\.title-admin \\{ color: inherit; text-decoration: none; cursor: inherit;/', $lkOwnerRoot) && !str_contains($lkOwnerRoot, 'title-admin:hover') && !str_contains($lkOwnerRoot, 'title-admin:focus') && !str_contains($lkOwnerRoot, 'title="Back to the admin"'));
+check('[lock] ...and at the top of the gallery it leads to the admin\'s own front page', str_contains($lkOwnerRoot, '<a class="title-admin" rel="nofollow" href="?admin">'));
 
 echo "== a folder opens on its chosen cover photo ==\n";
 $fxCv = new_fixture_dir('covertarget');

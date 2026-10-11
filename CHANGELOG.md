@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Versions correspond to 
 
 ### Changed
 - **The footer is gone.** The gallery icon that leads to the about page (hover: "About this gallery software") now sits at the right end of the same row as the map buttons, in the same bordered button style, and the visit count (when it is shown to visitors) sits just before it. The footer's "Admin" link for a signed-in owner is gone too.
-- **Signed in as the owner, the gallery title is the way back to the admin**, for wherever you are: on the front page it opens the admin, on a folder's page that folder's admin. To everyone else the title is plain text, as before.
+- **Signed in as the owner, the gallery title is the way back to the admin**, for wherever you are: on the front page it opens the admin, on a folder's page that folder's admin. The link looks and behaves exactly like plain text (no underline, colour, cursor or tooltip, on hover or otherwise). To everyone else the title is plain text, as before.
 
 ## [2.0.2] - 2026-10-11
 
