@@ -1144,12 +1144,12 @@ $authHeader = 'Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')
 $wrongAuthHeader = 'Authorization: Basic ' . base64_encode('admin:wrong-password');
 
 [$noAuthStatus, $noAuthBody, $noAuthHeaders] = http_get("$baseAdmin/?admin");
-check('?admin with no credentials shows a password form (200), not a browser Basic-Auth pop-up', $noAuthStatus === 200 && str_contains($noAuthBody, 'name="login_password"') && !array_filter($noAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0));
+check('?admin with no credentials shows a password form (200), not a browser Basic-Auth pop-up', $noAuthStatus === 200 && str_contains($noAuthBody, 'name="access_code"') && !array_filter($noAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0));
 check('?admin\'s login form is never indexed or cached', str_contains($noAuthBody, 'noindex') && (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'X-Robots-Tag: noindex') === 0) && (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'Cache-Control: no-store') === 0));
 check('...and asking for it starts no session (no Set-Cookie for an anonymous visitor)', !array_filter($noAuthHeaders, fn($h) => stripos($h, 'Set-Cookie:') === 0));
 
 [$wrongAuthStatus, $wrongAuthBody, $wrongAuthHeaders] = http_get("$baseAdmin/?admin", [$wrongAuthHeader]);
-check('?admin with a wrong password in a Basic header (a script, or a browser re-sending an old saved one) returns 401 and the login form, and NEVER a WWW-Authenticate challenge (that is what opens the browser\'s own dialog)', $wrongAuthStatus === 401 && !array_filter($wrongAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0) && str_contains($wrongAuthBody, 'name="login_password"') && (str_contains($wrongAuthBody, 'saved password') ));
+check('?admin with a wrong password in a Basic header (a script, or a browser re-sending an old saved one) returns 401 and the login form, and NEVER a WWW-Authenticate challenge (that is what opens the browser\'s own dialog)', $wrongAuthStatus === 401 && !array_filter($wrongAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0) && str_contains($wrongAuthBody, 'name="access_code"') && (str_contains($wrongAuthBody, 'saved password') ));
 
 [$okStatus, $adminBody, $adminHeaders] = http_get("$baseAdmin/?admin", [$authHeader]);
 check('?admin with the correct password returns 200', $okStatus === 200);
@@ -1409,7 +1409,7 @@ check('[lock] pressing it forgets this browser\'s private-view cookie and goes b
 check('[lock] the owner (signed in to the admin) sees it open too, and it is the same sign-out button', str_contains($lockAdminBody, 'class="lock-form"') && str_contains($lockAdminBody, 'name="logout"') && str_contains($lockAdminBody, 'signed in as the owner'));
 [$lockAdminOutStatus, , $lockAdminOutHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => ''], ["Cookie: $sessCookie"], false);
 [, $afterOwnerOut] = http_get("$basePrivate/?admin", ["Cookie: $sessCookie"]);
-check('[lock] pressing it as the owner signs the owner out completely: the admin session is gone (the old cookie opens the login form, not the admin) and both its cookies are expired, so the private items lock again', $lockAdminOutStatus === 303 && str_contains($afterOwnerOut, 'name="login_password"') && !str_contains($afterOwnerOut, 'Gallery Admin') && count(array_filter($lockAdminOutHd, fn($h) => stripos($h, 'Set-Cookie:') === 0 && (stripos($h, '1970') !== false || stripos($h, 'Max-Age=0') !== false))) >= 2);
+check('[lock] pressing it as the owner signs the owner out completely: the admin session is gone (the old cookie opens the login form, not the admin) and both its cookies are expired, so the private items lock again', $lockAdminOutStatus === 303 && str_contains($afterOwnerOut, 'name="access_code"') && !str_contains($afterOwnerOut, 'Gallery Admin') && count(array_filter($lockAdminOutHd, fn($h) => stripos($h, 'Set-Cookie:') === 0 && (stripos($h, '1970') !== false || stripos($h, 'Max-Age=0') !== false))) >= 2);
 [, $adminLoginBody, $adminLoginHeadersFirst] = http_get("$basePrivate/?admin", [$adminAuth]);
 $sessCookie = extract_cookie_header($adminLoginHeadersFirst);
 $adminCsrf = extract_csrf_token($adminLoginBody);
@@ -2329,7 +2329,7 @@ file_put_contents("$fxSetup/.gallery-setup", '');
 [, $loginAgain] = http_get("$baseSetup/?admin");
 $beforeSecond = (string) file_get_contents($setupCfg);
 [, $second] = http_post("$baseSetup/?admin", ['setup_password' => 'an-attackers-password-1', 'setup_password2' => 'an-attackers-password-1']);
-check('[setup] once a password exists, setup never appears again, even with a fresh index.php and a .gallery-setup file: it is the login form', str_contains($loginAgain, 'name="login_password"') && !str_contains($loginAgain, 'name="setup_password"'));
+check('[setup] once a password exists, setup never appears again, even with a fresh index.php and a .gallery-setup file: it is the login form', str_contains($loginAgain, 'name="access_code"') && !str_contains($loginAgain, 'name="setup_password"'));
 check('[setup] ...and a second visitor posting a new password changes nothing', !str_contains($second, 'Your admin password is set') && (string) file_get_contents($setupCfg) === $beforeSecond && pw_stored_ok(cfg_read($setupCfg)['ADMIN_PASSWORD'] ?? null, $claimPw));
 check('[setup] ...the chosen password (with quotes, slashes, a comma and a brace in it) logs in through the form', http_post("$baseSetup/?admin", ['login_password' => $claimPw], [], false)[0] === 303 && http_post("$baseSetup/?admin", ['login_password' => 'an-attackers-password-1'], [], false)[0] === 200);
 unlink("$fxSetup/.gallery-setup");
@@ -2508,7 +2508,7 @@ $lkHome = http_get("$baseLk/")[1];
 check('[lock] ...and once a photo is private the closed lock appears', str_contains($lkHome, 'class="lock-link" href="?reveal"') && !str_contains($lkHome, 'alt="b.jpg"'));
 [, $lkForm] = http_get("$baseLk/?reveal");
 $lkFormText = preg_replace('#<(script|style)\b.*?</\1>#s', '', $lkForm);
-check('[lock] the sign-in just says "Enter your password" (once, as its heading): no mention that there are two kinds of password', substr_count($lkFormText, 'Enter your password') === 2 && str_contains($lkForm, '<h1>Enter your password</h1>') && !str_contains($lkForm, 'Sign in') && str_contains($lkForm, 'name="login_password"') && !str_contains($lkFormText, 'admin') && !str_contains($lkFormText, 'private-view') && !str_contains($lkFormText, 'Private view'));
+check('[lock] the sign-in just says "Enter your password" (once, as its heading): no mention that there are two kinds of password', substr_count($lkFormText, 'Enter your password') === 2 && str_contains($lkForm, '<h1 id="gate-heading">Enter your password</h1>') && !str_contains($lkForm, 'Sign in') && str_contains($lkForm, 'name="access_code"') && !str_contains($lkFormText, 'admin') && !str_contains($lkFormText, 'private-view') && !str_contains($lkFormText, 'Private view'));
 [$lkBadSt, $lkBad] = http_post("$baseLk/?reveal", ['login_password' => 'nope'], [], false);
 check('[lock] a wrong password is refused with a message', $lkBadSt === 200 && str_contains($lkBad, "isn't right") || str_contains($lkBad, 'isn&#039;t right'));
 $fxLk2 = new_fixture_dir('lockboth');
@@ -3128,7 +3128,7 @@ $cookieOf = fn ($hd) => extract_cookie_header($hd);
 
 // Wrong password: the form again, with a message, and nothing logged in.
 [$s1, $b1, $h1] = http_post("$baseLogin/?admin", ['login_password' => 'nope']);
-check('[login] a wrong password re-shows the form with a plain message (200), and sets no session', $s1 === 200 && str_contains($b1, 'That password isn&#039;t right') && str_contains($b1, 'name="login_password"') && !array_filter($h1, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0));
+check('[login] a wrong password re-shows the form with a plain message (200), and sets no session', $s1 === 200 && str_contains($b1, 'That password isn&#039;t right') && str_contains($b1, 'name="access_code"') && !array_filter($h1, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0));
 // Right password: redirected back to the same admin URL, with a session cookie; no Authorization header needed afterwards.
 [$s2, , $h2] = http_post("$baseLogin/?admin&folder=Sub", ['login_password' => 'login-pw'], [], false);
 $loginCookie = $cookieOf($h2); $loc2 = ''; foreach ($h2 as $h) if (stripos($h, 'Location:') === 0) $loc2 = trim(substr($h, 9));
@@ -3141,7 +3141,7 @@ check('[admin layout] the sections are real tabs (Photos, Folder settings, Notes
 check('[admin layout] the Photos tab is a grid of thumbnails with one editor panel above it (every photo\'s own form is in the page, shown only when selected)', str_contains($b3, 'class="photo-editor" id="photo-editor"') && str_contains($b3, 'class="thumb-grid"') && substr_count($b3, 'class="thumb"') === substr_count($b3, 'class="item-editor"') && substr_count($b3, 'class="thumb"') >= 1 && strpos($b3, 'id="photo-editor"') < strpos($b3, 'class="thumb-grid"'));
 check('[admin layout] each thumbnail has a stable id to link to and points at its editor', (bool) preg_match('#<button type="button" class="thumb" id="photo-([0-9a-f]{32})" data-edit="edit-\1"#', $b3) && (bool) preg_match('#<div class="item-editor" id="edit-[0-9a-f]{32}">#', $b3));
 check('[admin layout] the anchors inside the panels still exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="photos"') && str_contains($b3, 'id="notes"') && str_contains($b3, 'id="export"'));
-check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="login_password"'));
+check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="access_code"'));
 check('[login] a login also counts as private view (the viewer cookie is set too)', str_contains($loginCookie, '=') && substr_count($loginCookie, '=') >= 2);
 // A saved change from an expired session must not be saved, and must say why.
 [$s4, $b4] = http_post("$baseLogin/?admin", ['action' => 'save_item', 'file' => 'one.jpg', 'caption' => 'should not stick']);
@@ -3154,10 +3154,10 @@ $logoutForm = ''; foreach (html_post_forms($b5) as $f) if (str_contains($f['html
 check('[login] the admin page has a Log out button', $logoutForm !== '');
 [$s6, , $h6] = http_post("$baseLogin/?admin", form_default_fields($logoutForm), ["Cookie: $loginCookie"], false);
 check('[login] logging out redirects away and expires the cookies', $s6 === 303 && (bool) array_filter($h6, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0 && stripos($h, 'expires=Thu, 01 Jan 1970') !== false));
-check('[login] after logging out, the old cookie no longer opens the admin', str_contains(http_get("$baseLogin/?admin", ["Cookie: $loginCookie"])[1], 'name="login_password"'));
+check('[login] after logging out, the old cookie no longer opens the admin', str_contains(http_get("$baseLogin/?admin", ["Cookie: $loginCookie"])[1], 'name="access_code"'));
 // The private view uses the same kind of form.
 [$sv1, $bv1] = http_get("$baseLogin/?reveal");
-check('[login] ?reveal (the sign-in the lock leads to) shows a one-field password form headed "Enter your password"', $sv1 === 200 && str_contains($bv1, 'name="login_password"') && str_contains($bv1, '<h1>Enter your password</h1>'));
+check('[login] ?reveal (the sign-in the lock leads to) shows a one-field password form headed "Enter your password"', $sv1 === 200 && str_contains($bv1, 'name="access_code"') && str_contains($bv1, '<h1 id="gate-heading">Enter your password</h1>'));
 [$sv2, , $hv2] = http_post("$baseLogin/?reveal", ['login_password' => 'view-pw'], [], false);
 check('[login] the right private-view password redirects to the plain gallery and sets the viewer cookie', $sv2 === 302 && str_contains($cookieOf($hv2), '='));
 // Five wrong passwords lock the next attempt for a minute, even a right one.
@@ -3184,7 +3184,7 @@ foreach (['?admin', '?reveal', '?admin&folder=Sub', '?admin&hidden=1', '?map', '
     foreach ($stHd as $h) if (stripos($h, 'WWW-Authenticate') === 0) $challenges[] = "$route: $h";
 }
 check('[stale password] no route ever answers with a WWW-Authenticate challenge, even when the browser re-sends an old saved password', $challenges === [], implode(' | ', $challenges));
-check('[stale password] ?admin and ?reveal answer such a request with 401 and the ordinary login form, saying the saved password doesn\'t match', $stA === 401 && $stR === 401 && str_contains($stBodyA, 'name="login_password"') && str_contains($stBodyR, 'name="login_password"') && str_contains($stBodyA, 'saved password') && str_contains($stBodyR, 'saved password'));
+check('[stale password] ?admin and ?reveal answer such a request with 401 and the ordinary login form, saying the saved password doesn\'t match', $stA === 401 && $stR === 401 && str_contains($stBodyA, 'name="access_code"') && str_contains($stBodyR, 'name="access_code"') && str_contains($stBodyA, 'saved password') && str_contains($stBodyR, 'saved password'));
 check('[stale password] typing the current password into the form still logs you in while the browser keeps sending the old one', $stLoginStatus === 302);
 check('[stale password] the source never sends a WWW-Authenticate header at all (a guard against it creeping back)', !preg_match('/header\(\s*[\'"]WWW-Authenticate/i', $indexContents));
 
@@ -3955,6 +3955,36 @@ $vShare = $vtCenter(http_get("$vtBase/?img=clip.mp4&size=share")[1]); $vCover = 
 check('[video pictures] the share preview and the folder cover come from the same frame (one ffmpeg run for all of them), the cover a square cut', $vShare !== null && $vShare[0] > 150 && max($vShare[3], $vShare[4]) <= 1200 && $vCover !== null && $vCover[0] > 150 && $vCover[3] === $vCover[4] && $vtCount() === 1);
 http_get("$vtBase/?img=clip.mp4&size=thumb");
 check('[video pictures] it is kept: asking again runs nothing', $vtCount() === 1);
+// The short hover clip.
+$vtClips = fn () => (int) trim((string) shell_exec('grep -c -e " -t 3 " ' . escapeshellarg($vtLog) . ' 2>/dev/null'));
+$vtHome = http_get("$vtBase/")[1];
+check('[video previews] with ffmpeg, a video\'s tile carries the address of its hover clip (and a photo\'s does not)', str_contains($vtHome, 'data-preview="?preview=clip.mp4&amp;v=') && substr_count($vtHome, 'data-preview=') === 2);
+[$pvSt, $pvBody, $pvHd] = http_get("$vtBase/?preview=clip.mp4");
+$pvH = fn ($n) => (function () use ($pvHd, $n) { foreach ($pvHd as $h) if (stripos($h, "$n:") === 0) return trim(substr($h, strlen($n) + 1)); return ''; })();
+$pvLog = (string) file_get_contents($vtLog);
+check('[video previews] the clip is made once, a few seconds, no sound, no metadata, never through a shell, and sent as video/mp4 with its length', $pvSt === 200 && $pvH('Content-Type') === 'video/mp4' && (int) $pvH('Content-Length') === strlen($pvBody) && $pvBody === file_get_contents($vtFrame) && $vtClips() === 1 && str_contains($pvLog, ' -an ') && str_contains($pvLog, 'libx264') && str_contains($pvLog, '-t 3 -i ' . "$vtDir/clip.mp4"));
+[$pvSt2, $pvBody2, $pvHd2] = http_get("$vtBase/?preview=clip.mp4", ['Range: bytes=0-9']);
+check('[video previews] it can be fetched in parts (Safari plays nothing from a server that can\'t), and asking again makes nothing new', $pvSt2 === 206 && strlen($pvBody2) === 10 && $pvBody2 === substr($pvBody, 0, 10) && (bool) array_filter($pvHd2, fn ($h) => stripos($h, 'Content-Range: bytes 0-9/' . strlen($pvBody)) === 0) && $vtClips() === 1);
+$pvListing = array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']); http_get("$vtBase/");
+check('[video previews] loading the gallery doesn\'t clear the clips away, and the clip is the only .mp4 in the cache', array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']) === $pvListing && count(glob("$vtDir/.gallery-cache/*.mp4")) === 1);
+// While another clip or picture is being made, a request waits its turn instead of being refused.
+make_minimal_mp4("$vtDir/late.mp4", 3);
+$vtLockPath = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', realpath($vtDir)), 0, 10) . '.lock';
+$vtHolder = proc_open([PHP_BINARY, '-r', '$h = fopen($argv[1], "c"); flock($h, LOCK_EX); echo "held\n"; sleep(2);', $vtLockPath], [1 => ['pipe', 'w']], $vtHoldPipes);
+fgets($vtHoldPipes[1]);   // it has the turn now
+$vtT0 = microtime(true); [$lateSt, $lateBody] = http_get("$vtBase/?preview=late.mp4"); $vtWaited = microtime(true) - $vtT0;
+proc_close($vtHolder);
+check('[video previews] a request that comes while another is being made waits its turn (here about two seconds) and then gets its clip, instead of being refused', $lateSt === 200 && $lateBody === file_get_contents($vtFrame) && $vtWaited > 1.2 && $vtWaited < 10);
+// Warming: the page asks quietly for the clips of the tiles in view, with nothing to download.
+make_minimal_mp4("$vtDir/warm.mp4", 3);
+$vtBefore = $vtClips();
+[$wSt, $wBody] = http_get("$vtBase/?preview=warm.mp4&v=x&warm=1");
+check('[video previews] a warm-up request (what the page sends for a tile whose clip isn\'t made) makes the clip and answers 204 with nothing to download', $wSt === 204 && $wBody === '' && $vtClips() === $vtBefore + 1 && count(glob("$vtDir/.gallery-cache/*.mp4")) === 3);
+http_get("$vtBase/?preview=warm.mp4&warm=1");
+$vtHome2 = http_get("$vtBase/")[1];
+check('[video previews] asking again makes nothing, and a tile whose clip exists says so (so a page of ready clips sends no warm-up at all)', $vtClips() === $vtBefore + 1 && str_contains($vtHome2, 'data-preview="?preview=warm.mp4') && (bool) preg_match('#data-preview="\\?preview=warm\\.mp4[^"]*" data-preview-ready="1"#', $vtHome2));
+check('[video previews] a warm-up for a video that can\'t be had is a 404 and a missing one too', http_get("$vtBase/?preview=nope.mp4&warm=1")[0] === 404);
+check('[video previews] not a photo, a path outside the gallery or a missing video', http_get("$vtBase/?preview=nope.mp4")[0] === 404 && http_get("$vtBase/?preview=../index.php")[0] === 404 && http_get("$vtBase/?preview[]=clip.mp4")[0] === 404);
 $vPageBefore = array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']);
 $vHome = http_get("$vtBase/")[1];
 $vPageAfter = array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']);
@@ -3966,6 +3996,7 @@ check('[video pictures] a video in a folder gets its own picture, kept in that f
 touch("$vtDir/clip.mp4", time() + 5);
 http_get("$vtBase/?img=clip.mp4&size=thumb");
 check('[video pictures] a video that is replaced gets a new picture', $vtCount() === 4);
+check('[video previews] a private video has no clip for anyone who is not signed in either (the gate is before ffmpeg)', (function () use ($vtDir, $vtBase, $vtClips) { write_data_file("$vtDir/.gallery-items.php", ['items' => ['clip.mp4' => ['restriction' => 'private']], 'groups' => []]); $n = $vtClips(); return http_get("$vtBase/?preview=clip.mp4")[0] === 404 && $vtClips() === $n; })());
 check('[video pictures] nobody can have it for a private video (the gate is before ffmpeg), and ffmpeg is not run for the asking', (function () use ($vtDir, $vtBase, $vtCount) { write_data_file("$vtDir/.gallery-items.php", ['items' => ['clip.mp4' => ['restriction' => 'private']], 'groups' => []]); $n = $vtCount(); return http_get("$vtBase/?img=clip.mp4&size=thumb")[0] === 404 && $vtCount() === $n; })());
 // A failing ffmpeg: the placeholder, and not tried over and over.
 file_put_contents($vtLog, '');
@@ -3974,12 +4005,16 @@ file_put_contents($vtLog, '');
 $tries = $vtCount();
 http_get("$vfBase/?img=clip.mp4&size=thumb"); http_get("$vfBase/?img=clip.mp4&size=share");
 check('[video pictures] when ffmpeg can\'t read the video the generic placeholder is sent as before (a dark picture, with its play triangle), and it is not tried again every time', $fSt === 200 && $fC !== null && $fC[0] < 80 && $tries >= 1 && $vtCount() === $tries && count(glob("$vfDir/.gallery-cache/*.failed")) === 1);
+http_get("$vfBase/?preview=clip.mp4"); $clipTries = $vtClips(); http_get("$vfBase/?preview=clip.mp4");
+check('[video previews] when ffmpeg can\'t make the clip it is a 404 (the tile just stays as it is), and not tried again every time', http_get("$vfBase/?preview=clip.mp4")[0] === 404 && $clipTries >= 1 && $vtClips() === $clipTries && count(glob("$vfDir/.gallery-cache/*.mp4.failed")) === 1);
+check('[video previews] ...and a tile whose clip couldn\'t be made lately no longer promises one (no hover address, so nothing is asked for again)', !str_contains(http_get("$vfBase/")[1], 'data-preview='));
 check('[video pictures] ...and then the browser\'s own first frame is laid over the placeholder in the tile where it can be shown', str_contains(http_get("$vfBase/")[1], 'class="tile-video"'));
 // Off, and no ffmpeg at all.
 file_put_contents($vtLog, '');
-[, $voBase] = $vtSite('off', ['FFMPEG_PATH' => $vtOk, 'ENABLE_VIDEO_THUMBNAILS' => false], ['clip.mp4' => 3]);
+[, $voBase] = $vtSite('off', ['FFMPEG_PATH' => $vtOk, 'ENABLE_VIDEO_THUMBNAILS' => false, 'ENABLE_VIDEO_PREVIEWS' => false], ['clip.mp4' => 3]);
 $vOff = $vtCenter(http_get("$voBase/?img=clip.mp4&size=thumb")[1]);
 check('[video pictures] switched off, it is the placeholder and ffmpeg is never started', $vOff !== null && $vOff[0] < 80 && $vtCount() === 0 && !str_contains((string) file_get_contents($vtLog), '-version'));
+check('[video previews] switched off, there is no clip, no address on the tile, and ffmpeg is not started', http_get("$voBase/?preview=clip.mp4")[0] === 404 && !str_contains(http_get("$voBase/")[1], 'data-preview=') && $vtClips() === 0);
 [, $vnBase] = $vtSite('none', ['FFMPEG_PATH' => '/nonexistent/ffmpeg'], ['clip.mp4' => 3]);
 $vNone = $vtCenter(http_get("$vnBase/?img=clip.mp4&size=thumb")[1]);
 check('[video pictures] with no ffmpeg there it is the placeholder, the video file is never sent as a picture, and the tile gets the browser\'s first frame', $vNone !== null && $vNone[0] < 80 && str_contains(http_get("$vnBase/")[1], 'class="tile-video"'));
@@ -3987,6 +4022,7 @@ check('[video pictures] with no ffmpeg there it is the placeholder, the video fi
 [$vsDir, $vsBase] = $vtSite('settings', ['FFMPEG_PATH' => $vtOk, 'ADMIN_PASSWORD' => 'vp-admin-pw-1'], ['clip.mp4' => 3]);
 [, , $vsHd] = http_post("$vsBase/?admin", ['login_password' => 'vp-admin-pw-1'], [], false);
 $vsPage = http_get("$vsBase/?admin", ['Cookie: ' . extract_cookie_header($vsHd)])[1];
+check('[video previews] Site settings has a "Video previews" switch next to it, on, with its warning', str_contains($vsPage, 'name="set_ENABLE_VIDEO_PREVIEWS"') && str_contains($vsPage, 'Hovering over a video plays a short, silent, looping clip'));
 check('[video pictures] Site settings has a "Video thumbnails" switch, on, with its warning, shown only while videos are on', str_contains($vsPage, 'name="set_ENABLE_VIDEO_THUMBNAILS"') && str_contains($vsPage, 'Runs ffmpeg on your server') && (bool) preg_match('#data-requires="set_ENABLE_VIDEO"[^>]*>(?:(?!</div>).)*set_ENABLE_VIDEO_THUMBNAILS#s', $vsPage) || str_contains($vsPage, 'Video thumbnails'));
 // The real thing, when this machine has ffmpeg.
 $realFf = getenv('FFMPEG_TEST_BIN') ?: trim((string) shell_exec('command -v ffmpeg'));
@@ -3997,6 +4033,8 @@ if ($realFf !== '' && is_executable($realFf)) {
     copy(__DIR__ . '/../index.php', "$rfDir/index.php");
     $rfPort = find_free_port(); start_server($rfDir, $rfPort);
     $rf = $vtCenter(http_get("http://127.0.0.1:$rfPort/?img=real.mp4&size=thumb")[1]);
+    [$rpSt, $rpBody] = http_get("http://127.0.0.1:$rfPort/?preview=real.mp4");
+    check('[video previews] with the real ffmpeg the clip is a small silent MP4 (an ftyp box at the start, under 400 KB for a 3-second 360-pixel clip)', $rpSt === 200 && substr($rpBody, 4, 4) === 'ftyp' && strlen($rpBody) < 400000 && strlen($rpBody) > 1000 && !str_contains($rpBody, 'mp4a'));
     check('[video pictures] with the real ffmpeg: a 640x360 clip gives a 480x270 thumbnail that is a picture of the video (not the placeholder)', is_file("$rfDir/real.mp4") && $rf !== null && $rf[3] === 480 && $rf[4] === 270 && $rf[0] > 150 && $rf[1] > 150);
 } else {
     echo "  (no ffmpeg on this machine: the real-ffmpeg check was skipped; set FFMPEG_TEST_BIN to run it)\n";
@@ -4011,6 +4049,60 @@ $fnClash = array_values(array_filter(array_unique($fnm[1]), fn ($f) => in_array(
 $fnReserved = array_values(array_filter(array_unique($fnm[1]), fn ($f) => preg_match('/^(zip_|gz[a-z]|bz[a-z]|curl_|mb_|imagick|iconv_|ctype_|openssl_|sodium_|ftp_|finfo_)/', $f)));
 check('[names] no function declared in index.php is also a function of PHP or of an extension loaded here', $fnClash === []);
 check('[names] ...and none uses a name reserved by an extension that may be loaded on another server (zip_, gz, bz, curl_, mb_, ...)', $fnReserved === []);
+
+/* --------------------------------------------------------------------- */
+
+echo "== the sign-in box is not a password field (so no password-manager pop-up or save prompt) ==\n";
+
+$fxQ = new_fixture_dir('gate');
+make_jpeg("$fxQ/a.jpg", 40, 30, 1, 2, 3);
+file_put_contents("$fxQ/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'gate-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'gate view']));
+copy(__DIR__ . '/../index.php', "$fxQ/index.php");
+$portQ = find_free_port(); start_server($fxQ, $portQ); $baseQ = "http://127.0.0.1:$portQ";
+$qForm = http_get("$baseQ/?reveal")[1]; $qAdminForm = http_get("$baseQ/?admin")[1];
+foreach (['?reveal' => $qForm, '?admin' => $qAdminForm] as $label => $html) {
+    check("[sign-in box] $label: the box is an ordinary text box (never type=password), called access_code, with every common password manager told to leave it alone, and the form asks the browser not to remember it", str_contains($html, 'type="text" class="gate"') && !str_contains($html, 'type="password"') && str_contains($html, 'name="access_code"') && !str_contains($html, 'login_password')
+        && str_contains($html, 'autocomplete="off"') && str_contains($html, 'data-lpignore="true"') && str_contains($html, 'data-1p-ignore="true"') && str_contains($html, 'data-bwignore="true"') && str_contains($html, 'data-form-type="other"') && str_contains($html, '<form method="post" action="" autocomplete="off">'));
+    check("[sign-in box] $label: what is typed is drawn as dots (CSS), with autocorrect, capitals and spell-check off, and a script falls back to a real password box where the browser can't draw dots", str_contains($html, '-webkit-text-security:disc') && str_contains($html, 'autocapitalize="off"') && str_contains($html, 'autocorrect="off"') && str_contains($html, 'spellcheck="false"') && str_contains($html, "box.type = 'password'"));
+}
+[$qs1, , $qh1] = http_post("$baseQ/?reveal", ['access_code' => 'gate view'], [], false);
+[$qs2] = http_post("$baseQ/?reveal", ['login_password' => 'gate view'], [], false);
+[$qs3, , $qh3] = http_post("$baseQ/?admin", ['access_code' => 'gate-admin-pw-1'], [], false);
+check('[sign-in box] the new field name signs in (the viewer password through the lock, the admin password through ?admin), and the old name still does, for scripts', $qs1 === 302 && $qs2 === 302 && $qs3 === 303 && http_post("$baseQ/?admin", ['access_code' => 'nope'], [], false)[0] === 200);
+check('[sign-in box] the first-run setup page keeps real password fields, since choosing a password is where a manager should help (and its boxes accept the 8 characters the rule allows: they wrongly demanded 12)', (function () { $d = new_fixture_dir('gate-setup'); make_jpeg("$d/a.jpg", 40, 30, 1, 2, 3); copy(__DIR__ . '/../index.php', "$d/index.php"); $p = find_free_port(); start_server($d, $p); touch("$d/index.php", time()); $h = http_get("http://127.0.0.1:$p/?admin")[1]; return str_contains($h, 'type="password" id="setup_password" name="setup_password"') && str_contains($h, 'minlength="8"') && !str_contains($h, 'minlength="12"'); })());
+
+/* --------------------------------------------------------------------- */
+
+echo "== a video's own location is read, so its tile shows a pin ==\n";
+
+// (the reader and the coordinate check, taken out of index.php to be tried on small files)
+foreach (['function is_valid_coordinate(', 'function extract_video_gps('] as $fnHead) {
+    $fnAt = strpos($scrubSrc, $fnHead); eval(substr($scrubSrc, $fnAt, strpos($scrubSrc, "\n}\n", $fnAt) + 3 - $fnAt));
+}
+$fxVg = new_fixture_dir('videogps');
+$vgIso = fn ($s) => $box("\xA9xyz", pack('nn', strlen($s), 0x15C7) . $s);
+$vgQt = fn ($s) => $box('meta', $box('hdlr', "\0\0\0\0\0\0\0\0mdta" . str_repeat("\0", 13)) . $box('keys', "\0\0\0\0" . pack('N', 2) . $keyName('com.apple.quicktime.make') . $keyName('com.apple.quicktime.location.ISO6709')) . $box('ilst', $ilstItem(1, 'Apple') . $ilstItem(2, $s)));
+$vgFile = fn ($extra) => $box('ftyp', 'isom' . pack('N', 0)) . $box('moov', $mvhd . $extra) . $box('mdat', 'VIDEO');
+file_put_contents("$fxVg/iphone.mov", $vgFile($vgQt('+48.8584+002.2945+035.000/')));      // QuickTime's item, with an altitude
+file_put_contents("$fxVg/android.mp4", $vgFile($box('udta', $vgIso('-33.8688+151.2093/'))));   // the location atom, south and east
+file_put_contents("$fxVg/plain.mp4", $vgFile(''));
+file_put_contents("$fxVg/nonsense.mp4", $vgFile($box('udta', $vgIso('not a place'))));
+file_put_contents("$fxVg/outside.mp4", $vgFile($box('udta', $vgIso('+91.0000+002.0000/'))));
+check('[video gps] iPhone\'s QuickTime item and Android\'s location atom are both read (signs, decimals and an altitude handled); a video without one, with text that isn\'t a place, or with a latitude off the earth gives nothing', (function () use ($fxVg) {
+    $got = []; foreach (['iphone.mov', 'android.mp4', 'plain.mp4', 'nonsense.mp4', 'outside.mp4'] as $f) $got[$f] = extract_video_gps("$fxVg/$f");
+    return $got['iphone.mov'] === ['lat' => 48.8584, 'lng' => 2.2945] && $got['android.mp4'] === ['lat' => -33.8688, 'lng' => 151.2093] && $got['plain.mp4'] === null && $got['nonsense.mp4'] === null && $got['outside.mp4'] === null;
+})());
+write_data_file("$fxVg/.gallery-items.php", ['items' => [], 'groups' => [], 'locationEnabled' => true]);
+file_put_contents("$fxVg/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'videogps-admin-1', 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+copy(__DIR__ . '/../index.php', "$fxVg/index.php");
+$portVg = find_free_port(); start_server($fxVg, $portVg); $baseVg = "http://127.0.0.1:$portVg";
+$vgBadges = fn () => substr_count(http_get("$baseVg/")[1], 'class="item-badge location-badge"');
+$vgBefore = $vgBadges();
+[, , $vgHd] = http_post("$baseVg/?admin", ['access_code' => 'videogps-admin-1'], [], false);
+http_get("$baseVg/?admin", ['Cookie: ' . extract_cookie_header($vgHd)]);   // the owner opens the folder: its photos' and videos' locations are read once
+$vgItems = json_decode(substr((string) file_get_contents("$fxVg/.gallery-items.php"), strpos((string) file_get_contents("$fxVg/.gallery-items.php"), "\n") + 1), true)['items'] ?? [];
+check('[video gps] the owner opening the folder stores the two locations (and marks every video as read), and a video without one gets none', ($vgItems['iphone.mov']['location']['lat'] ?? null) === 48.8584 && ($vgItems['android.mp4']['location']['lng'] ?? null) === 151.2093 && !isset($vgItems['plain.mp4']['location']) && !empty($vgItems['plain.mp4']['gpsChecked']));
+check('[video gps] the tiles of those two videos now show a location badge (before, none did)', $vgBefore === 0 && $vgBadges() === 2);
 
 /* --------------------------------------------------------------------- */
 

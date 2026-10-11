@@ -355,6 +355,9 @@ define('ENABLE_VIDEO', gallery_setting('ENABLE_VIDEO', false));
 define('ENABLE_VIDEO_THUMBNAILS', gallery_setting('ENABLE_VIDEO_THUMBNAILS', true));
 // Where ffmpeg is, if it isn't found by itself (it is looked for on the usual paths). A full path, in the settings file.
 define('FFMPEG_PATH', gallery_setting('FFMPEG_PATH', ''));
+// A short silent looping clip of each video (about 3 seconds, small), played when a visitor hovers over its tile. Made with
+// ffmpeg once per video and kept with the thumbnails; does nothing without ffmpeg. Needs ENABLE_VIDEO and the thumbnail cache.
+define('ENABLE_VIDEO_PREVIEWS', gallery_setting('ENABLE_VIDEO_PREVIEWS', true));
 
 // Password for the admin editor, reached via ?admin — captions, per-item
 // location/web link, display names, and raw .md editing. Empty by
@@ -779,6 +782,14 @@ if (isset($_GET['original'])) {
     $claimed = $_GET['original'];
     $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
     serve_original_download($dir, $claimed, $claimedList, $claimedList ? items_get_all_for_files($dir, $claimedList) : []);
+    exit;
+}
+
+// ?preview=<video>: the short hover clip of a video.
+if (isset($_GET['preview'])) {
+    $claimed = $_GET['preview'];
+    $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
+    serve_video_preview($dir, $claimed, $claimedList, $claimedList ? items_get_all_for_files($dir, $claimedList) : []);
     exit;
 }
 
@@ -1652,7 +1663,7 @@ function ffmpeg_binary() {
     static $found = null;
     if ($found !== null) return $found;
     $found = '';
-    if (!ENABLE_VIDEO_THUMBNAILS || !function_exists('proc_open')) return $found;
+    if (!function_exists('proc_open')) return $found;
     $remember = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__ . '|' . FFMPEG_PATH), 0, 10) . '.txt';
     if (is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
         return $found = trim((string) @file_get_contents($remember));
@@ -1680,6 +1691,19 @@ function run_quietly($args, $seconds) {
     }
 }
 
+/** Takes the one ffmpeg place (only one runs at a time), waiting up to $seconds for whoever has it to finish, so a request
+ *  that arrives during another's work is served in its turn rather than refused. Null if it never came free. */
+function ffmpeg_take_turn($seconds) {
+    $lock = @fopen(sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__), 0, 10) . '.lock', 'c');
+    if (!$lock) return null;
+    $deadline = microtime(true) + $seconds;
+    while (!flock($lock, LOCK_EX | LOCK_NB)) {
+        if (microtime(true) > $deadline) { fclose($lock); return null; }
+        usleep(100000);
+    }
+    return $lock;
+}
+
 /** The path of the frame taken from this video (a JPEG up to 1600 pixels), making it first if need be; null if it can't
  *  be had now (no ffmpeg, a video it can't read, someone else's frame is being taken, a cache that can't be written). */
 function video_poster_path($srcPath, $cacheDir, $filename) {
@@ -1691,8 +1715,9 @@ function video_poster_path($srcPath, $cacheDir, $filename) {
     if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;   // it didn't work lately; not again for a few hours
     $bin = ffmpeg_binary();
     if ($bin === '') return null;
-    $lock = @fopen(sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__), 0, 10) . '.lock', 'c');
-    if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) return null;   // one at a time: this request gets the placeholder, a later one the picture
+    $lock = ffmpeg_take_turn(20);   // one at a time, in turn
+    if (!$lock) return null;
+    if (is_file($poster) && filesize($poster) > 0) { flock($lock, LOCK_UN); fclose($lock); return $poster; }   // made by whoever had the turn before
     try {
         $duration = video_duration_seconds($srcPath);
         $tmp = $poster . '.tmp' . bin2hex(random_bytes(3));
@@ -1714,6 +1739,95 @@ function video_poster_failed($file) {
     $srcPath = resolve_real_path($GLOBALS['dir'], $file);
     $poster = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'poster', $srcPath);
     return $poster !== null && !is_file($poster) && is_file($poster . '.failed');
+}
+
+/** The short clip for a video (a small silent H.264 .mp4), making it first if need be; null if it can't be had now. Same
+ *  care as video_poster_path(): fixed arguments, no shell, a time limit, one ffmpeg at a time, and not retried for hours
+ *  after a failure. */
+function video_preview_path($srcPath, $cacheDir, $filename) {
+    if (!ENABLE_VIDEO_PREVIEWS || !ENABLE_THUMBNAIL_CACHE) return null;
+    $base = image_cache_path($cacheDir, $filename, 'preview', $srcPath);
+    if ($base === null) return null;
+    $clip = substr($base, 0, -4) . '.mp4';
+    if (is_file($clip) && filesize($clip) > 0) return $clip;
+    $failed = $clip . '.failed';
+    if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;
+    $bin = ffmpeg_binary();
+    if ($bin === '') return null;
+ 
+    $lock = ffmpeg_take_turn(15);
+    if (!$lock) return null;
+    if (is_file($clip) && filesize($clip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $clip; }
+    try {
+        $duration = video_duration_seconds($srcPath);
+        $start = $duration !== null && $duration > 3.5 ? min($duration / 3, $duration - 3) : 0;
+        $tmp = $clip . '.tmp' . bin2hex(random_bytes(3));
+        $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $start), '-t', '3', '-i', $srcPath, '-an', '-map_metadata', '-1',
+            '-vf', 'scale=w=min(360\\,iw):h=-2,fps=12', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '30', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-f', 'mp4', $tmp], 45);
+        if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $clip)) return $clip; }
+        @unlink($tmp);
+        @touch($failed);
+        return null;
+    } finally {
+        flock($lock, LOCK_UN); fclose($lock);
+    }
+}
+
+/** Where this video's clip is (or would be) kept, or null if the cache can't be used. */
+function video_preview_file($file) {
+    $base = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'preview', resolve_real_path($GLOBALS['dir'], $file));
+    return $base === null ? null : substr($base, 0, -4) . '.mp4';
+}
+
+/** True when a hover over a video tile can play a made clip. */
+function video_previews_expected() {
+    return ENABLE_VIDEO_PREVIEWS && ENABLE_THUMBNAIL_CACHE && ffmpeg_binary() !== '';
+}
+
+/** ?preview=<video>: the short clip, for anyone who may see the video (the same gates as the video itself), with Range
+ *  support (Safari plays nothing without it). Nothing is sent that wasn't made by ffmpeg from the video: no metadata. */
+function serve_video_preview($dir, $filename, $validFiles, $itemsData = []) {
+    if (!is_string($filename) || !in_array($filename, $validFiles, true) || !is_video_file($filename)
+        || (file_is_hidden($dir, $filename, $itemsData) && !is_revealed())) {
+        http_response_code(404);
+        return;
+    }
+    $srcPath = resolve_real_path($dir, $filename);
+    $clip = video_preview_path($srcPath, containing_folder_real_path($dir, $filename) . '/.gallery-cache', $filename);
+    if (isset($_GET['warm'])) {
+        // Only make it (the page asks quietly for the clips of the tiles in view, one at a time): no body to download.
+        http_response_code($clip === null ? 404 : 204);
+        header('Cache-Control: no-store');
+        return;
+    }
+    $size = $clip === null ? false : @filesize($clip);
+    if ($size === false || $size < 1) {
+        http_response_code(404);
+        return;
+    }
+    $start = 0; $end = $size - 1;
+    if (preg_match('/^bytes=(\d*)-(\d*)$/', trim($_SERVER['HTTP_RANGE'] ?? ''), $m) && ($m[1] !== '' || $m[2] !== '')) {
+        if ($m[1] === '') { $start = max(0, $size - (int) $m[2]); }
+        else { $start = (int) $m[1]; $end = $m[2] === '' ? $size - 1 : min((int) $m[2], $size - 1); }
+        if ($start >= $size || $start > $end) { http_response_code(416); header('Content-Range: bytes */' . $size); return; }
+        http_response_code(206);
+        header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
+    }
+    header('Content-Type: video/mp4');
+    header('Accept-Ranges: bytes');
+    header('Cache-Control: ' . file_cache_control($dir, $filename, $itemsData));
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . ($end - $start + 1));
+    $fh = @fopen($clip, 'rb');
+    if (!$fh) return;
+    fseek($fh, $start);
+    for ($left = $end - $start + 1; $left > 0 && !feof($fh);) {
+        $chunk = fread($fh, min(65536, $left));
+        if ($chunk === false || $chunk === '') break;
+        echo $chunk;
+        $left -= strlen($chunk);
+    }
+    fclose($fh);
 }
 
 /** True when this server can make a real picture of a video, so the page can leave the browser's own first frame out. */
@@ -1915,6 +2029,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
             if (is_video_file($file)) $variants[] = 'poster';   // the frame taken from a video (see video_poster_path)
             $mtime = @filemtime(resolve_real_path($dir, $file));
+            if (is_video_file($file)) $valid[md5($file . '|preview|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
                 $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
             }
@@ -3078,6 +3193,16 @@ function login_return_query() {
     return $parts ? '?' . implode('&', $parts) : '';
 }
 
+/** The password typed into the sign-in form, or null if this request isn't that form being sent. The box is called
+ *  access_code (not a name a password manager recognises); login_password is still read, for scripts and older pages. */
+function login_form_password() {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') return null;
+    foreach (['access_code', 'login_password'] as $name) {
+        if (isset($_POST[$name]) && is_string($_POST[$name])) return $_POST[$name];
+    }
+    return null;
+}
+
 function render_login_page($heading, $blurb, $error = '') {
     header('Content-Type: text/html; charset=UTF-8');
     header('X-Robots-Tag: noindex, nofollow');
@@ -3095,8 +3220,8 @@ function render_login_page($heading, $blurb, $error = '') {
   .wrap { max-width:360px; margin:0 auto; padding:72px 24px; }
   h1 { font-size:1.3rem; margin:0 0 6px; }
   p { color:#9a9aa0; font-size:0.9rem; margin:0 0 18px; }
-  input[type=password] { width:100%; box-sizing:border-box; padding:10px 12px; font-size:1rem; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:8px; }
-  input[type=password]:focus { outline:2px solid #5865f2; outline-offset:1px; }
+  input.gate { width:100%; box-sizing:border-box; padding:10px 12px; font-size:1rem; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:8px; -webkit-text-security:disc; text-security:disc; }
+  input.gate:focus { outline:2px solid #5865f2; outline-offset:1px; }
   .actions { display:flex; gap:10px; margin-top:12px; }
   button, .cancel { flex:1; box-sizing:border-box; padding:10px 12px; font-size:1rem; border:0; border-radius:8px; cursor:pointer; text-align:center; text-decoration:none; font-family:inherit; line-height:1.4; }
   button { background:#5865f2; color:#fff; }
@@ -3107,11 +3232,15 @@ function render_login_page($heading, $blurb, $error = '') {
 </head>
 <body>
 <div class="wrap">
-  <h1><?= htmlspecialchars($heading, ENT_QUOTES, 'UTF-8') ?></h1>
+  <h1 id="gate-heading"><?= htmlspecialchars($heading, ENT_QUOTES, 'UTF-8') ?></h1>
   <?php if ($blurb !== ''): ?><p><?= htmlspecialchars($blurb, ENT_QUOTES, 'UTF-8') ?></p><?php endif; ?>
   <?php if ($error !== ''): ?><div class="err" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
-  <form method="post" action="">
-    <input type="password" name="login_password" autocomplete="current-password" autofocus required aria-label="Password">
+  <form method="post" action="" autocomplete="off">
+    <?php // Deliberately not a password field: a browser or password manager offers to fill, and to save, whatever is typed
+          // into one. The box is an ordinary text box drawn as dots (a script puts the real password type back where the
+          // browser can't draw dots), told in every dialect the common managers understand to leave it alone. ?>
+    <input type="text" class="gate" id="gate" name="access_code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus required aria-labelledby="gate-heading"
+           data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other">
     <div class="actions">
       <a class="cancel" id="goback" href="./<?= htmlspecialchars(login_return_query(), ENT_QUOTES, 'UTF-8') ?>">&larr; Go Back</a>
       <button type="submit">Continue</button>
@@ -3119,6 +3248,11 @@ function render_login_page($heading, $blurb, $error = '') {
   </form>
 </div>
 <script>
+  // Where the browser can't draw a text box as dots, a real password box is safer than showing what is typed.
+  (function () {
+    var box = document.getElementById('gate');
+    if (!(window.CSS && CSS.supports && (CSS.supports('-webkit-text-security', 'disc') || CSS.supports('text-security', 'disc')))) box.type = 'password';
+  })();
   // "Go Back" really goes back to where the visitor was (same scroll position, same open photo), when they came from a
   // page of this site; otherwise (a typed address, or after a wrong password) its link takes them to that page.
   document.getElementById('goback').addEventListener('click', function (e) {
@@ -3470,7 +3604,7 @@ function run_reveal_route($dir) {
     // actually *supplied* and wrong counts against the throttle: a plain
     // visit to the form tells us nothing about guessing.
     $pass = $_SERVER['PHP_AUTH_PW'] ?? null;
-    $formPass = ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_password']) && is_string($_POST['login_password'])) ? $_POST['login_password'] : null;
+    $formPass = login_form_password();
     $supplied = $formPass ?? $pass;
     // Both passwords are guessed at through this one box, so a visitor who keeps failing is held back from the admin
     // sign-in as well (per address), and the admin's own lockout holds here too. Only an attempt is refused: just
@@ -3894,12 +4028,13 @@ function photo_location_visible($itemEntry) {
 
 /** Whether this PHP can read embedded GPS out of this kind of file at all
  *  (JPEG needs the exif extension, HEIC/HEIF needs Imagick). Anything else
- *  — PNG, GIF, WEBP, video — has no GPS block, so there is nothing to wait
+ *  — PNG, GIF, WEBP — has no GPS block, so there is nothing to wait
  *  for or to mark as checked. */
 function gps_readable_file($file) {
     $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
     if ($ext === 'jpg' || $ext === 'jpeg') return function_exists('exif_read_data');
     if ($ext === 'heic' || $ext === 'heif') return class_exists('Imagick');
+    if ($ext === 'mov' || $ext === 'mp4') return true;   // read from the file's own location tag (see extract_video_gps)
     return false;
 }
 
@@ -3981,7 +4116,79 @@ function extract_photo_gps($realPath) {
     if (in_array($ext, ['heic', 'heif'], true)) {
         return extract_heic_gps($realPath);
     }
+    if (in_array($ext, ['mov', 'mp4'], true)) {
+        return extract_video_gps($realPath);
+    }
     return extract_jpeg_gps($realPath);
+}
+
+/** A video's location, from the tag phones write into it: QuickTime's "location.ISO6709" item (iPhone) or the
+ *  \xA9xyz atom (Android and most others), both a string like "+48.8584+002.2945+035.000/". Null if it has none. */
+function extract_video_gps($realPath) {
+    $size = @filesize($realPath);
+    $fh = $size === false ? false : @fopen($realPath, 'rb');
+    if (!$fh) return null;
+    $strings = [];
+    try {
+        $walk = function ($from, $to, $depth) use (&$walk, &$strings, $fh) {
+            $boxes = scrub_boxes($fh, $from, $to);
+            if ($boxes === null) return;
+            foreach ($boxes as $b) {
+                $type = $b['type'];
+                if ($type === "\xA9xyz") {
+                    $v = scrub_read($fh, $b['data'], min(64, $b['end'] - $b['data']));
+                    if ($v !== null && strlen($v) > 4) $strings[] = substr($v, 4);   // 2 bytes length + 2 bytes language, then the text
+                } elseif (in_array($type, ['moov', 'trak', 'udta'], true) && $depth < 6) {
+                    $walk($b['data'], $b['end'], $depth + 1);
+                } elseif ($type === 'meta' && $depth < 6) {
+                    $probe = scrub_read($fh, $b['data'] + 4, 4);
+                    $inner = $probe === 'hdlr' ? $b['data'] : $b['data'] + 4;
+                    $kids = scrub_boxes($fh, $inner, $b['end']);
+                    if ($kids === null) continue;
+                    $locationKeys = [];
+                    foreach ($kids as $k) {
+                        if ($k['type'] !== 'keys') continue;
+                        $head = scrub_read($fh, $k['data'], 8);
+                        if ($head === null) continue;
+                        $entries = unpack('N', $head, 4)[1];
+                        $at = $k['data'] + 8;
+                        for ($i = 1; $i <= $entries && $i < 512; $i++) {
+                            $eh = scrub_read($fh, $at, 8);
+                            if ($eh === null) break;
+                            $elen = unpack('N', $eh)[1];
+                            if ($elen < 8 || $at + $elen > $k['end']) break;
+                            $name = scrub_read($fh, $at + 8, $elen - 8);
+                            if ($name !== null && stripos($name, 'location.ISO6709') !== false) $locationKeys[$i] = true;
+                            $at += $elen;
+                        }
+                    }
+                    foreach ($kids as $k) {
+                        if ($k['type'] !== 'ilst' || !$locationKeys) continue;
+                        foreach (scrub_boxes($fh, $k['data'], $k['end']) ?? [] as $item) {
+                            if (!isset($locationKeys[unpack('N', $item['type'])[1]])) continue;
+                            foreach (scrub_boxes($fh, $item['data'], $item['end']) ?? [] as $d) {
+                                if ($d['type'] === 'data' && $d['end'] - $d['data'] > 8) {
+                                    $v = scrub_read($fh, $d['data'] + 8, min(64, $d['end'] - $d['data'] - 8));
+                                    if ($v !== null) $strings[] = $v;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        $walk(0, $size, 0);
+    } catch (Throwable $e) {
+        $strings = [];
+    } finally {
+        fclose($fh);
+    }
+    foreach ($strings as $str) {
+        if (preg_match('/^\s*([+-]\d{1,2}(?:\.\d+)?)([+-]\d{1,3}(?:\.\d+)?)/', $str, $m) && is_valid_coordinate($m[1], $m[2])) {
+            return ['lat' => round((float) $m[1], 6), 'lng' => round((float) $m[2], 6)];
+        }
+    }
+    return null;
 }
 
 /** HEIC/HEIF carry the same EXIF GPS tags, but exif_read_data() can't
@@ -5043,6 +5250,10 @@ function gallery_setting_definitions() {
              'help' => 'A real picture from each video instead of the generic video icon, taken once with ffmpeg if this server has it (nothing happens if it doesn\'t, and the browser\'s own first frame is shown where it can). Needs "Thumbnails".',
              'risk' => 'Runs ffmpeg on your server, once for each new video, with a time limit and one at a time.',
              'offwarn' => 'Videos go back to the generic video icon (or the browser\'s first frame). Pictures already taken are left in place.'],
+            ['name' => 'ENABLE_VIDEO_PREVIEWS', 'type' => 'bool', 'label' => 'Video previews', 'requires' => 'ENABLE_VIDEO',
+             'help' => 'Hovering over a video plays a short, silent, looping clip of it (about 3 seconds), made once with ffmpeg and kept with the thumbnails. Needs ffmpeg on the server; without it, hovering plays the video itself where the browser can.',
+             'risk' => 'Runs ffmpeg on your server, once for each new video, and each clip takes a little disk space.',
+             'offwarn' => 'Hovering no longer plays a clip. Clips already made are left in place.'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
              'help' => 'alpha_01.jpg and alpha_02.jpg become one group, "alpha". Handy for for-sale listings; on a camera roll it can merge unrelated photos. Folders are better for trips.'],
             ['name' => 'ENABLE_PUBLIC_DOWNLOAD', 'type' => 'bool', 'label' => 'Let visitors download originals',
@@ -5390,7 +5601,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     // and each is flagged below and counted in the folder panel.
     $adminAutoLoc = [];
     foreach ($adminFiles as $adminFile) {
-        if (is_video_file($adminFile)) continue;
         $adminEntry = $itemsHere['items'][basename($adminFile)] ?? [];
         if (($adminEntry['location'] ?? null) !== null || !empty($adminEntry['gpsChecked'])) continue;
         $autoLoc = extract_photo_gps(resolve_real_path($dir, $adminFile));
@@ -6593,9 +6803,9 @@ function render_setup_page($error = '', $manual = '') {
   <?php if ($manual !== ''): ?><textarea readonly rows="8" onfocus="this.select()"><?= htmlspecialchars($manual, ENT_QUOTES, 'UTF-8') ?></textarea><?php endif; ?>
   <form method="post" action="">
     <label for="setup_password">Admin password (8 or more characters, with letters and numbers)</label>
-    <input type="password" id="setup_password" name="setup_password" autocomplete="new-password" autofocus required minlength="12">
+    <input type="password" id="setup_password" name="setup_password" autocomplete="new-password" autofocus required minlength="8">
     <label for="setup_password2">Type it again</label>
-    <input type="password" id="setup_password2" name="setup_password2" autocomplete="new-password" required minlength="12">
+    <input type="password" id="setup_password2" name="setup_password2" autocomplete="new-password" required minlength="8">
     <button type="submit">Set password and sign in</button>
   </form>
 </div>
@@ -6671,7 +6881,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     $sessionAuthed = session_status() === PHP_SESSION_ACTIVE && admin_session_authed();
     if (!$sessionAuthed) {
         $basicSupplied = isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']);
-        $formPass = ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action']) && isset($_POST['login_password']) && is_string($_POST['login_password'])) ? $_POST['login_password'] : null;
+        $formPass = !isset($_POST['action']) ? login_form_password() : null;
         if ($basicSupplied && $formPass === null) {
             if (!admin_credentials_valid()) {
                 login_throttle_record_failure($dir, 'admin', $ip);
@@ -8054,7 +8264,17 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // appears only if the browser can play the video; otherwise the placeholder stays).
     $tileVideo = is_video_file($file) && (!video_pictures_expected() || video_poster_failed($file))
         ? '<video class="tile-video" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="?video=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '#t=0.1"></video>' : '';
-    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    // A tile carries its clip's address unless ffmpeg couldn't make one lately; "ready" says it already exists (so nothing
+    // needs preparing when the page is opened).
+    $previewAttr = '';
+    if (is_video_file($file) && video_previews_expected()) {
+        $clipFile = video_preview_file($file);
+        if ($clipFile !== null && !(is_file($clipFile . '.failed') && !is_file($clipFile))) {
+            $previewAttr = ' data-preview="?preview=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '"'
+                . (is_file($clipFile) ? ' data-preview-ready="1"' : '');
+        }
+    }
+    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $previewAttr . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $tileVideo . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -8335,8 +8555,14 @@ function render_about_page() {
     display: flex; align-items: center; justify-content: space-between;
     flex-wrap: wrap; gap: 12px; margin-bottom: 28px;
   }
-  .back-link { color: var(--muted); text-decoration: none; font-size: 0.9rem; }
-  .back-link:hover { color: var(--text); text-decoration: underline; }
+  .back-link {
+    font-size: 0.82rem; line-height: 1; color: var(--muted); text-decoration: none;
+    background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07);
+    padding: 7px 13px; border-radius: 999px;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .back-link:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  .back-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .version-tag { color: var(--muted); font-size: 0.8rem; }
   h1 { font-size: 1.5rem; margin: 0 0 6px; }
   .subtitle { color: var(--muted); margin: 0 0 24px; }
@@ -8954,6 +9180,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* A video's own first frame, over the placeholder, only once the browser has it. */
   .card .tile-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.25s ease; }
   .card .tile-video.ready { opacity: 1; }
+  .card .tile-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
+  .card .tile-preview.ready { opacity: 1; }
   .card:hover .tile-video { transform: scale(1.05); }
   .card.sold img, .card.sold .tile-video { filter: grayscale(1) brightness(0.6); }
   .sold-badge-corner, .reserved-badge-corner {
@@ -9624,6 +9852,72 @@ if (ENABLE_MAP && $mapPoints) {
     current = set[(at + delta + set.length) % set.length];
     updateImage();
   }
+  // Hovering over a video tile plays a short silent loop: the made clip where the server has one, otherwise the video itself
+  // (the first-frame element below) where the browser can play it. Only for a real pointer that hovers (not a touch screen).
+  // The pointer has to rest on a tile for a moment, so sweeping across a row starts nothing; only one tile ever plays, and
+  // starting one (or leaving, scrolling, switching tab) stops the previous completely, download included.
+  if (window.matchMedia && window.matchMedia('(hover: hover)').matches) {
+    let active = null, pending = null;
+    const halt = function () {
+      if (pending) { clearTimeout(pending); pending = null; }
+      if (active) { const a = active; active = null; a.stop(); }
+    };
+    const attach = function (card, start) {
+      card.addEventListener('mouseenter', function () {
+        halt();
+        pending = setTimeout(function () { pending = null; active = start(card); }, 250);
+      });
+      card.addEventListener('mouseleave', halt);
+    };
+    document.querySelectorAll('.card[data-preview]').forEach(function (card) {
+      attach(card, function () {
+        const el = document.createElement('video');
+        el.className = 'tile-preview'; el.muted = true; el.loop = true; el.playsInline = true; el.preload = 'auto'; el.setAttribute('aria-hidden', 'true'); el.tabIndex = -1;
+        const handle = {
+          el: el,
+          stop: function () { el.pause(); el.removeAttribute('src'); try { el.load(); } catch (e) {} el.remove(); }
+        };
+        el.addEventListener('error', function () { if (active === handle) active = null; handle.stop(); });
+        el.addEventListener('playing', function () { el.classList.add('ready'); });
+        el.src = card.dataset.preview;
+        card.appendChild(el);
+        const p = el.play(); if (p && p.catch) p.catch(function () {});
+        return handle;
+      });
+    });
+    document.querySelectorAll('.card:not([data-preview]) .tile-video').forEach(function (v) {
+      attach(v.closest('.card'), function () {
+        if (!v.classList.contains('ready')) return null;
+        v.loop = true; const p = v.play(); if (p && p.catch) p.catch(function () {});
+        return { el: v, stop: function () { v.pause(); try { v.currentTime = 0.1; } catch (e) {} } };
+      });
+    });
+    window.addEventListener('blur', halt);
+    window.addEventListener('scroll', halt, { passive: true });
+    document.addEventListener('visibilitychange', halt);
+  }
+  // Getting the clips ready before anyone hovers: once the page is up, the tiles in view whose clip isn't made yet are asked
+  // to make it, one request at a time, a few at a time at most, with nothing to download. Stops at the first refusal.
+  (function () {
+    const cards = Array.prototype.slice.call(document.querySelectorAll('.card[data-preview]:not([data-preview-ready])'));
+    if (!cards.length || typeof IntersectionObserver === 'undefined' || typeof fetch === 'undefined') return;
+    let queue = [], running = false, done = 0, dead = false;
+    const next = function () {
+      if (running || dead || done >= 12 || !queue.length || document.hidden) return;
+      running = true;
+      const card = queue.shift();
+      fetch(card.dataset.preview + '&warm=1', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { if (r.status === 204) { card.setAttribute('data-preview-ready', '1'); done++; } else { dead = true; } })
+        .catch(function () { dead = true; })
+        .then(function () { running = false; setTimeout(next, 300); });
+    };
+    const io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { io.unobserve(e.target); queue.push(e.target); } });
+      setTimeout(next, 800);
+    }, { rootMargin: '200px' });
+    cards.forEach(function (c) { io.observe(c); });
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) next(); });
+  })();
   // A video's own first frame over its placeholder, once the browser has one; if it can't play the video, nothing changes.
   document.querySelectorAll('.tile-video').forEach(function (v) {
     const ready = function () { v.classList.add('ready'); };

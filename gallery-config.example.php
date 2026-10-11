@@ -30,6 +30,7 @@
     // "TRACK_VIEWS": true,                 // default false: count views (writes a stats file)
     // "SHOW_VIEW_COUNTS_PUBLICLY": true,   // default false: show the counts to visitors
     // "ENABLE_VIDEO_THUMBNAILS": false,    // default true: a real picture for each video (needs ffmpeg on the server; does nothing without it)
+    // "ENABLE_VIDEO_PREVIEWS": false,      // default true: hovering over a video plays a short silent clip (needs ffmpeg)
     // "FFMPEG_PATH": "/usr/local/bin/ffmpeg",   // only if ffmpeg is somewhere the gallery doesn't look
     // "ENABLE_PUBLIC_DOWNLOAD": true,      // default false: a download-original button for every visitor (signed-in ones always have it)
 

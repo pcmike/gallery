@@ -15,7 +15,7 @@ Needs python3, php (gd + imagick, for the fixture) and Chromium. The map check a
 needs internet access for Leaflet (cdnjs); without it that check is skipped, not failed.
 Exit status 0 only if every check passes.
 """
-import re, json, os, sys, time, subprocess, tempfile, shutil, socket, base64, urllib.request, urllib.parse
+import glob, re, json, os, sys, time, subprocess, tempfile, shutil, socket, base64, urllib.request, urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 from cdp import Browser
 SHOTS = sys.argv[sys.argv.index("--shots") + 1] if "--shots" in sys.argv else None
@@ -66,7 +66,7 @@ try:
     b.js("document.getElementById('goback').click()"); b.drain(1.0)
     ok(b.js("location.search") == "?folder=Asia", "[sign-in] opened directly, with no earlier page, Go Back still lands on the gallery page it belongs to", b.js("location.href"))
     b.goto(B + "/?reveal", 1.0)
-    b.js("document.querySelector('input[name=login_password]').focus()"); b.call("Input.insertText", {"text": "viewer-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
+    b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "viewer-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
     ok(b.js("document.querySelector('h1 .lock-link.open') !== null") and b.js("document.querySelector('h1 .lock-form button') !== null") and "reveal" not in b.js("location.search"), "[lock] after entering the password the lock shows open, on the plain gallery address", b.js("location.href"))
     shot(b, "01c-lock-open")
     b.js("document.querySelector('h1 .lock-form button').click()"); b.drain(1.5)
@@ -243,6 +243,8 @@ try:
     srv6.terminate(); srv6.wait()
     # ---------------- a video's own first frame in its tile (no ffmpeg on the server) ----------------
     print("== video tiles: the browser's first frame")
+    # A headless Chromium has no mouse and so says "(hover: none)"; a person at a desktop has one. Say so, for the hover checks.
+    b.call("Page.addScriptToEvaluateOnNewDocument", {"source": "(() => { const mm = window.matchMedia.bind(window); window.matchMedia = q => /hover:\\s*hover/.test(q) ? {matches: true, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}} : mm(q); })()"})
     FFBIN = os.environ.get("FFMPEG_TEST_BIN") or shutil.which("ffmpeg")
     if not FFBIN:
         skips += 1; print("  skip  no ffmpeg here to make a test video (set FFMPEG_TEST_BIN) - the video tile check was skipped")
@@ -263,7 +265,51 @@ try:
         ok(vt is not None and vt["ready"] and vt["w"] == 320 and float(vt["opacity"]) == 1 and isinstance(vt["px"], list) and vt["px"][0] > 150 and vt["px"][1] < 80,
            "[video tile] with no ffmpeg on the server, the tile shows the video's own first frame (red) over the placeholder, once the browser has it", str(vt))
         shot(b, "21-video-tile")
+        b.js("document.querySelector('.card').dispatchEvent(new MouseEvent('mouseenter'))"); b.drain(1.5)
+        hv = b.js("(() => { const v = document.querySelector('.card .tile-video'); return {paused: v.paused, hover: matchMedia('(hover: hover)').matches}; })()")
+        ok(hv["hover"] and not hv["paused"], "[video tile] hovering over it plays the video itself (muted, looping) where there is no made clip", str(hv))
+        b.js("document.querySelector('.card').dispatchEvent(new MouseEvent('mouseleave'))"); b.drain(0.5)
+        ok(b.js("document.querySelector('.card .tile-video').paused"), "...and moving away stops it")
         srv8.terminate(); srv8.wait()
+        # with ffmpeg on the server: a made clip, started by hovering
+        SITE9 = WORK + "/site9"; os.makedirs(SITE9)
+        shutil.copy(HERE + "/../../../index.php", SITE9 + "/index.php"); os.utime(SITE9 + "/index.php", (time.time() - 3600,) * 2)
+        shutil.copy(SITE8 + "/clip.mp4", SITE9 + "/clip.mp4"); shutil.copy(SITE8 + "/clip.mp4", SITE9 + "/clip2.mp4")
+        open(SITE9 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ENABLE_VIDEO": True, "FFMPEG_PATH": FFBIN}) + "\n")
+        s9 = socket.socket(); s9.bind(("127.0.0.1", 0)); PORT9 = s9.getsockname()[1]; s9.close(); B9 = f"http://127.0.0.1:{PORT9}"
+        srv9 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT9}", "-t", SITE9], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        b.goto(B9 + "/", 2.5)
+        ok(b.js("document.querySelector('.card').dataset.preview") is not None and b.js("document.querySelector('.card .tile-video')") is None, "[video clip] with ffmpeg on the server the tile carries the address of its hover clip and no browser-frame video", str(b.js("document.querySelector('.card').outerHTML.slice(0, 200)")))
+        b.drain(7.0)   # the page prepares the clips of the tiles in view by itself, one at a time
+        warm = b.js("[...document.querySelectorAll('.card[data-preview]')].map(c => c.hasAttribute('data-preview-ready'))")
+        ok(warm == [True, True] and len(glob.glob(SITE9 + "/.gallery-cache/*.mp4")) == 2, "[video clip] opening the page prepares the clips of the video tiles in view before anyone hovers", str(warm))
+        b.js("document.querySelector('.card').dispatchEvent(new MouseEvent('mouseenter'))"); b.drain(1.5)
+        pv = b.js("(() => { const v = document.querySelector('.card .tile-preview'); return v ? {src: v.getAttribute('src'), ready: v.classList.contains('ready'), err: !!v.error, playable: !!document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.42E01E\"')} : null; })()")
+        ok(pv is not None and pv["src"].startswith("?preview=clip.mp4"), "[video clip] hovering starts the clip's video element over the tile", str(pv))
+        if pv and pv["playable"]:
+            ok(pv["ready"] and not pv["err"], "[video clip] ...and, in a browser that can play H.264, it is playing over the tile", str(pv))
+        else:
+            skips += 1; print("  skip  this Chromium can't play H.264, so the clip's playback was not checked (the made file is checked in the server tests)")
+        b.js("document.querySelector('.card').dispatchEvent(new MouseEvent('mouseleave'))"); b.drain(0.4)
+        ok(b.js("document.querySelector('.card .tile-preview')") is None, "[video clip] ...and moving away removes it")
+        # sweeping across tiles: nothing half-started, one clip at a time, nothing left playing
+        cnt = lambda: b.js("document.querySelectorAll('.tile-preview').length")
+        which = lambda: b.js("[...document.querySelectorAll('.card')].map(c => c.querySelectorAll('.tile-preview').length)")
+        fire = lambda i, ev: b.js(f"document.querySelectorAll('.card')[{i}].dispatchEvent(new MouseEvent('{ev}'))")
+        fire(0, "mouseenter"); b.drain(0.1); fire(0, "mouseleave"); b.drain(0.8)
+        ok(cnt() == 0, "[video clip] a pointer that only brushes past a tile starts nothing (no clip, no request)", str(which()))
+        fire(0, "mouseenter"); b.drain(0.1); fire(0, "mouseleave"); fire(1, "mouseenter"); b.drain(0.1); fire(1, "mouseleave"); b.drain(0.8)
+        ok(cnt() == 0, "[video clip] ...nor does sweeping across two in a row")
+        fire(0, "mouseenter"); b.drain(0.7)
+        ok(which()[0] == 1 and cnt() == 1, "[video clip] resting on a tile starts its clip", str(which()))
+        fire(1, "mouseenter"); b.drain(0.7)
+        ok(which() == [0, 1] and cnt() == 1, "[video clip] moving on to the next tile (even with no leave in between) ends the first one completely and starts only the second", str(which()))
+        fire(1, "mouseleave"); fire(0, "mouseenter"); fire(0, "mouseleave"); fire(1, "mouseenter"); b.drain(0.7)
+        ok(which() == [0, 1] and cnt() == 1, "[video clip] a quick in-and-out on one tile then resting on the next leaves just the last one", str(which()))
+        b.js("window.dispatchEvent(new Event('blur'))"); b.drain(0.3)
+        ok(cnt() == 0, "[video clip] leaving the window stops it")
+        srv9.terminate(); srv9.wait()
     b.viewport(1280, 900)
     # ---------------- a folder opens on its chosen cover photo ----------------
     print("== folder opens on its cover photo")
@@ -327,9 +373,9 @@ try:
     b.viewport(1280, 900); b.goto(B + "/?admin", 1.2)
     challenged = any("www-authenticate" in {k.lower() for k in e.get("params", {}).get("response", {}).get("headers", {})} for e in b.events if e.get("method") == "Network.responseReceived")
     ok(not challenged, "a stale saved password gets no WWW-Authenticate challenge, so the browser has nothing to open its own login dialog with")
-    ok(b.js("document.querySelector('input[name=login_password]') !== null") and "saved password" in b.js("document.body.innerText"), "...it gets the ordinary password form, which says the saved password doesn't match", b.js("document.body.innerText")[:150])
+    ok(b.js("document.querySelector('input[name=access_code]') !== null") and "saved password" in b.js("document.body.innerText"), "...it gets the ordinary password form, which says the saved password doesn't match", b.js("document.body.innerText")[:150])
     b.goto(B + "/?reveal", 1.0)
-    ok(b.js("document.querySelector('input[name=login_password]') !== null") and not any("www-authenticate" in {k.lower() for k in e.get("params", {}).get("response", {}).get("headers", {})} for e in b.events if e.get("method") == "Network.responseReceived"), "the private view does the same")
+    ok(b.js("document.querySelector('input[name=access_code]') !== null") and not any("www-authenticate" in {k.lower() for k in e.get("params", {}).get("response", {}).get("headers", {})} for e in b.events if e.get("method") == "Network.responseReceived"), "the private view does the same")
     b.call("Network.setExtraHTTPHeaders", {"headers": {}})
     print("== logging in (a real person: press the lock, type the password)")
     b.viewport(1280, 900); b.goto(B + "/", 1.5)
@@ -340,11 +386,11 @@ try:
         b.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": st["x"], "y": st["y"], "button": "left", "clickCount": 1})
         b.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": st["x"], "y": st["y"], "button": "left", "clickCount": 1}); b.drain(1.0)
         ok("?reveal" in b.js("location.href"), "pressing the lock goes to the sign-in", b.js("location.href"))
-        ok(b.js("document.querySelector('input[type=password][name=login_password]') !== null") and b.js("document.activeElement && document.activeElement.type") == "password", "...which is a plain password form with the field already focused (no browser pop-up)")
+        ok(b.js("document.querySelector('input[type=text][name=access_code]') !== null && document.querySelector('input[type=password]') === null") and b.js("document.activeElement && document.activeElement.name") == "access_code" and b.js("getComputedStyle(document.activeElement).webkitTextSecurity") == "disc", "...which is a one-box form with the box already focused, drawn as dots but NOT a password field (so no browser or password-manager pop-up or save prompt)")
         shot(b, "login-form")
         b.call("Input.insertText", {"text": "wrong-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.0)
-        ok("isn" in b.js("document.body.innerText") and b.js("document.querySelector('input[name=login_password]') !== null"), "a wrong password shows a message and the form again")
-        b.js("document.querySelector('input[name=login_password]').focus()"); b.call("Input.insertText", {"text": "adm-pw"})
+        ok("isn" in b.js("document.body.innerText") and b.js("document.querySelector('input[name=access_code]') !== null"), "a wrong password shows a message and the form again")
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "adm-pw"})
         b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
         ok(b.js("document.querySelector('h1') && document.querySelector('h1').textContent") == "Gallery Admin", "the admin password typed into that same box lands on the admin page", b.js("location.href"))
         ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
@@ -362,7 +408,7 @@ try:
         b.js("document.querySelector('h1 .lock-form button').click()"); b.drain(1.5)
         ok(b.js("document.querySelector('h1 a.lock-link:not(.open)') !== null") and "?admin" not in b.js("location.href"), "pressing the open lock signs the owner out and stays on the same page", b.js("location.href"))
         b.goto(B + "/?admin", 1.0)
-        ok(b.js("document.querySelector('input[name=login_password]') !== null"), "...and ?admin asks for the password again")
+        ok(b.js("document.querySelector('input[name=access_code]') !== null"), "...and ?admin asks for the password again")
 
     b.viewport(390, 844, mobile=True)   # back to the phone the admin checks below are about
     b.call("Network.setExtraHTTPHeaders", {"headers": {"Authorization": "Basic " + auth}})
@@ -539,7 +585,7 @@ try:
     srv2 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT2}", "-t", SITE2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
     b.viewport(1280, 900); b.goto(B2 + "/?admin", 1.0)
-    b.js("document.querySelector('input[name=login_password]').focus()"); b.call("Input.insertText", {"text": "site-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
+    b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "site-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
     b.js("document.querySelector('.side-link').click()"); b.drain(0.4); shot(b, "14-site-settings")
     vis2 = "[...document.querySelectorAll('.tab-panel')].filter(p => getComputedStyle(p).display !== 'none').map(p => p.dataset.tab)"
     cfg = lambda: open(cfgfile).read()
@@ -788,7 +834,7 @@ try:
     ok(b.js("document.querySelector('h1').textContent") == "Gallery Admin", "reloading stays signed in")
     b.js("[...document.querySelectorAll('button')].find(x => x.textContent.trim() == 'Log out').click()"); b.drain(1.5)
     b.goto(B3 + "/?admin", 1.0)
-    ok(b.js("document.querySelector('input[name=login_password]') !== null") and b.js("document.querySelector('input[name=setup_password]') === null"), "once logged out, ?admin is the login form and setup never comes back, though the file is still brand new")
+    ok(b.js("document.querySelector('input[name=access_code]') !== null") and b.js("document.querySelector('input[name=setup_password]') === null"), "once logged out, ?admin is the login form and setup never comes back, though the file is still brand new")
     srv3.terminate(); srv3.wait()
     b.viewport(1280, 900)
 except Exception as e:
