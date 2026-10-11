@@ -2464,6 +2464,17 @@ check('[flags] "Show its location" on, while the folder\'s location switch is of
 $r = flag_post("$baseFl/?admin&folder=Trip", $flPage2, $flHdrs, 'location', false, ['b.jpg']);
 check('[flags] ...and off is stored as Always hide, so it stays off if the folder is switched on later', ($flItems()['b.jpg']['locationVisibility'] ?? null) === 'hide');
 check('[flags] an unknown setting name is refused', (flag_post("$baseFl/?admin&folder=Trip", $flPage2, $flHdrs, 'caption', true, ['b.jpg'])['ok'] ?? null) === false);
+// The cover photo is highlighted in the photo grid, and mentioned there rather than in the settings.
+$coverSet = user_submit("$baseFl/?admin&folder=Trip", $flPage2, 'value="set_cover"', ['file' => 'c.jpg'], $flHdrs);
+[, $flCoverPage] = http_get("$baseFl/?admin&folder=Trip", $flHdrs);
+check('[cover mark] the grid highlights exactly the photo that is the folder\'s cover, with a Cover label, and nothing else', substr_count($flCoverPage, 'class="thumb is-cover"') === 1 && substr_count($flCoverPage, 'class="thumb-cover"') === 1 && (bool) preg_match('#class="thumb is-cover" id="photo-' . md5('Trip/c.jpg') . '"#', $flCoverPage));
+check('[cover mark] that photo\'s editor says it already is the cover instead of offering to set it again, and every other photo can still be set', str_contains($flCoverPage, 'This is the cover') && substr_count($flCoverPage, '>Set as cover</button>') === 3);
+check('[cover mark] the Photos tab explains the cover, and the folder\'s settings no longer carry a cover paragraph', str_contains($flCoverPage, 'highlighted one is the cover now') && !str_contains($flCoverPage, 'click "Set as cover" on any photo below') && !str_contains($flCoverPage, 'Shared links use the first photo as their picture'));
+[, $flRootAdmin] = http_get("$baseFl/?admin", $flHdrs);
+check('[cover mark] nor does the gallery\'s own settings page', !str_contains($flRootAdmin, 'Shared links use the first photo as their picture') && !str_contains($flRootAdmin, 'Cover photo (the picture in shared-link previews)'));
+check('[rules] the Private page offers ready-made nginx and Apache rules, collapsed, written for this gallery\'s address, with copy buttons', str_contains($flCoverPage, '<h2 class="section-title">Lock the files themselves</h2>') && substr_count($flCoverPage, 'class="secondary copy-rules"') >= 2);
+check('[rules] Site settings carries the same rules in its Server setup section', str_contains($flRootAdmin, 'class="site-rules"') && str_contains($flRootAdmin, '<summary><strong>nginx</strong>') && str_contains($flRootAdmin, '<summary><strong>Apache</strong>') && str_contains($flRootAdmin, 'location ~* ^/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$') && str_contains($flRootAdmin, 'FilesMatch') && str_contains($flRootAdmin, 'class="secondary copy-rules"'));
+check('[pin grouping] in Site settings the pin-grouping row is set in under the map and hidden while the map is off', (bool) preg_match('#<div class="site-row sub-row" data-requires="set_ENABLE_MAP" hidden>#', $flRootAdmin));
 // Passwords.
 $flFields = fn ($pw) => user_submit("$baseFl/?admin", http_get("$baseFl/?admin#site", $flHdrs)[1], 'value="save_site_settings"', ['pw_admin' => $pw, 'pw_admin2' => $pw], $flHdrs)[1];
 foreach (['abcdefghijkl' => 'letters only', '1234567890' => 'numbers only', 'abc123' => 'under 8', '          ' => 'spaces'] as $pw => $why) {
@@ -2987,6 +2998,12 @@ $jOff = $mapAjax('&folder=Paris', ['map_enabled' => '0']);
 check('[instant] switching a folder\'s map off by itself (the page\'s script posts just that switch) answers JSON and leaves its pin grouping alone', ($jOff['ok'] ?? null) === true && str_contains((string) $jOff['text'], 'no longer shows') && ($parisData()['mapEnabled'] ?? null) === false && ($parisData()['mapRadius'] ?? null) === 7);
 $jOn = $mapAjax('&folder=Paris', ['map_enabled' => '1']);
 check('[instant] ...and switching it back on does not touch the radius either', ($jOn['ok'] ?? null) === true && ($parisData()['mapEnabled'] ?? null) === true && ($parisData()['mapRadius'] ?? null) === 7);
+[, $mapSubOn] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
+check('[pin grouping] with the folder\'s map on, its pin grouping is shown, set in under the map switch, with its explanation at full width', str_contains($mapSubOn, '<div class="map-sub">') && preg_match('#<div class="map-sub">.*?name="map_radius".*?</div>\s*<p class="hint">Photos closer together#s', $mapSubOn) === 1);
+$mapAjax('&folder=Paris', ['map_enabled' => '0']);
+[, $mapSubOff] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
+check('[pin grouping] with the folder\'s map off, the pin grouping is hidden (and comes back with the switch)', str_contains($mapSubOff, '<div class="map-sub" hidden>'));
+$mapAjax('&folder=Paris', ['map_enabled' => '1']);
 $jRad = $mapAjax('&folder=Paris', ['map_radius' => '12']);
 check('[instant] changing only the pin grouping leaves the switch as it was', ($jRad['ok'] ?? null) === true && ($parisData()['mapRadius'] ?? null) === 12 && ($parisData()['mapEnabled'] ?? null) === true);
 $jBlank = $mapAjax('&folder=Paris', ['map_radius' => '']);

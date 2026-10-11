@@ -3897,6 +3897,43 @@ function admin_item_href($file) {
          . '#photo-' . md5($file);
 }
 
+/** Ready-to-use web server rules that keep the photo files themselves from being fetched by address (private items are
+ *  only private through this script otherwise), written out for this gallery's own address, in two collapsed blocks:
+ *  nginx and Apache. Shown on the Private page and in Site settings so nobody has to leave the admin to set it up. */
+function render_server_rules_help() {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    $loc = $base === '' ? '/' : $base . '/';
+    $nginx = "# The gallery's generated data files (captions, GPS, privacy flags, stats, login throttle, thumbnail cache):\n"
+        . "# never public. (A second layer: the .php ones already answer 404 on their own.)\n"
+        . "location ~ /\\.gallery- {\n    return 404;\n}\n\n"
+        . "# The photo and video files themselves: reachable only through index.php.\n"
+        . "location ~* ^" . $loc . ".*\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$ {\n    internal;\n}\n";
+    $apache = "# The photo and video files themselves: reachable only through index.php.\n"
+        . "# ((?i) matters: camera files are often IMG_0412.JPG.)\n"
+        . "<FilesMatch \"(?i)\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$\">\n    Require all denied\n</FilesMatch>\n\n"
+        . "# The gallery's generated data files (a second layer).\n"
+        . "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>\n";
+    ob_start();
+?>
+    <div class="rules-help">
+      <details>
+        <summary><strong>nginx</strong> (strongest; needs shell access to the server)</summary>
+        <p>Add this inside the site's <code>server { }</code> block (keep the first location above the second), then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. It is written for this gallery's address, <code><?= $esc($loc) ?></code>.<?= $base === '' ? ' <strong>This gallery is at the top of the site, so the second rule would also block every image elsewhere on the site: narrow its path first.</strong>' : '' ?></p>
+        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
+        <p>Then set <em>nginx internal redirect</em> (Site settings, Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>, so the gallery hands files to nginx itself. Check it works with <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code>: it should answer 404.</p>
+      </details>
+      <details>
+        <summary><strong>Apache</strong> (blunter, but works on FTP-only hosting)</summary>
+        <p>Save this as a file named <code>.htaccess</code> in the gallery's folder.</p>
+        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
+        <p>A bare photo address then answers 403, and the gallery works as before. It only counts if the server reads <code>.htaccess</code> for this folder (<code>AllowOverride All</code>): on a host that doesn't, the rules are silently ignored, so check with <code>curl -I</code> on a photo's address. If you script logins with an <code>Authorization</code> header on Apache with PHP-FPM, also add the line <code>CGIPassAuth On</code>. The ordinary sign-in form needs nothing.</p>
+      </details>
+    </div>
+<?php
+    return ob_get_clean();
+}
+
 /** The Hidden tab: the plain-English warning, then every hidden thing with
  *  a link to where it can be changed. */
 function render_admin_hidden_panel($data) {
@@ -3913,8 +3950,13 @@ function render_admin_hidden_panel($data) {
 ?>
     <div class="flash error hidden-warning">
       <strong>Private isn't locked.</strong>
-      Making something private only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level (see the README for the nginx/<code>X-Accel-Redirect</code> or Apache <code>.htaccess</code> setup).
+      Making something private only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level. The rules below do that.
     </div>
+    <section class="panel">
+      <h2 class="section-title">Lock the files themselves</h2>
+      <p class="muted" style="margin-top:0;">Pick the server you use and copy the rules: they stop a private photo from being fetched by its direct address.</p>
+      <?= render_server_rules_help() ?>
+    </section>
     <section class="panel">
       <h2 class="section-title">Folders that are private (<?= count($data['folders']) ?>)</h2>
       <?php if (empty($data['folders'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listFolders($data['folders']); ?></ul><?php endif; ?>
@@ -3974,10 +4016,13 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
         </div>
         <div class="warn-note">A map makes each visitor's browser load its code from cdnjs and its tiles from OpenStreetMap, so those two sites can see that someone visited this page. It only plots photos whose location is visible.</div>
         <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'The map covers every photo in the gallery with a visible location.' : 'The map covers the photos in this folder and its subfolders that have a visible location (this folder\'s own location switch above must be on).' ?></p>
-        <div class="field" style="max-width:300px;">
-          <label>Pin grouping (miles)</label>
-          <input type="number" name="map_radius" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?> (site-wide)">
-          <span class="rowstate" role="status" aria-live="polite"></span>
+        <?php // Pin grouping is part of the map: set in under it, and only there while the map is on. ?>
+        <div class="map-sub"<?= $on ? '' : ' hidden' ?>>
+          <div class="field" style="max-width:300px;">
+            <label>Pin grouping (miles)</label>
+            <input type="number" name="map_radius" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?> (site-wide)">
+            <span class="rowstate" role="status" aria-live="polite"></span>
+          </div>
           <p class="hint">Photos closer together than this share one numbered pin; pressing a numbered pin zooms in and splits it into its photos' own pins. Fractions are fine (0.1), and <strong>0 turns grouping off</strong>, so every photo is its own pin, which suits a very dense city. Leave blank to use the site-wide setting (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>). A road trip wants a big number.</p>
         </div>
         <div class="nojs-only"><button type="submit" class="secondary">Save map settings</button></div>
@@ -4122,7 +4167,7 @@ function gallery_setting_definitions() {
              'help' => 'A map of every photo that has a visible location. Needs "Allow photo locations".',
              'risk' => 'The map loads its code from cdnjs and its map tiles from OpenStreetMap in each visitor\'s browser, so those two sites can see that someone visited.',
              'offwarn' => 'The maps will disappear. Nothing is deleted: every photo location stays saved.'],
-            ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any',
+            ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any', 'requires' => 'ENABLE_MAP',
              'help' => 'Photos closer together than this share one numbered pin, and pressing a numbered pin zooms in to its photos. 50 suits most trips; a dense city wants far less (fractions such as 0.1 are fine), and 0 turns grouping off so every photo is its own pin. This is the default: each folder, and the gallery front page, can set its own in its settings.'],
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
@@ -4338,7 +4383,8 @@ function render_admin_site_settings($csrfToken) {
         <?php foreach (gallery_setting_definitions() as $group): ?>
           <h3 class="subhead"><?= $esc($group['title']) ?></h3>
           <?php foreach ($group['items'] as $d): $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null; ?>
-            <div class="site-row">
+            <?php $reqOn = empty($d['requires']) || (defined($d['requires']) && constant($d['requires'])); ?>
+            <div class="site-row<?= !empty($d['requires']) ? ' sub-row' : '' ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn ? '' : ' hidden') : '' ?>>
               <div>
                 <div class="name"><?= $esc($d['label']) ?>
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
@@ -4373,6 +4419,9 @@ function render_admin_site_settings($csrfToken) {
               </div>
             </div>
           <?php endforeach; ?>
+          <?php if ($group['title'] === 'Server setup (advanced)'): ?>
+            <div class="site-rules"><div class="name">Keep private photos from being fetched by address</div><div class="help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help() ?></div>
+          <?php endif; ?>
         <?php endforeach; ?>
 
         <h3 class="subhead">Passwords</h3>
@@ -4627,6 +4676,20 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .side-link.active { color:#04201c; font-weight:600; background:#2dd4bf; border-color:#2dd4bf; }
   .site-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(190px,260px); gap:6px 22px; padding:12px 0; border-top:1px solid #26262a; align-items:start; }
   .site-settings h3.subhead + .site-row, .site-settings .muted + .site-row { border-top:0; }
+  .rules-help details { border:1px solid #2c2c30; border-radius:8px; padding:8px 12px; margin:8px 0; background:#18181b; }
+  .rules-help summary { cursor:pointer; }
+  .rules-help p { font-size:0.82rem; color:#cfcfd4; margin:8px 0; }
+  .rules-box { position:relative; }
+  .rules-box pre { background:#101012; border-radius:6px; padding:10px 12px; margin:6px 0; overflow:auto; font-size:0.78rem; line-height:1.45; }
+  .rules-box .copy-rules { position:absolute; top:12px; right:10px; padding:3px 10px; font-size:0.75rem; }
+  .site-rules { padding:12px 0; border-top:1px solid #26262a; }
+  .site-rules .name { font-weight:600; font-size:0.92rem; }
+  .site-rules .help { color:var(--muted); font-size:0.8rem; margin-top:3px; }
+  .site-row[hidden], .map-sub[hidden] { display:none; }
+  .map-sub { margin:4px 0 10px 26px; padding-left:16px; border-left:2px solid #2c2c30; }
+  .map-sub .hint { max-width:none; margin:2px 0 0; }
+  /* A setting that only matters when another is on sits under it, set in, so it reads as a part of it. */
+  .site-row.sub-row { margin-left:26px; padding-left:16px; border-left:2px solid #2c2c30; border-top:0; }
   .site-row .name { font-weight:600; font-size:0.92rem; }
   .site-row .src { font-weight:500; font-size:0.68rem; color:#9bb0ff; background:rgba(88,101,242,0.18); padding:1px 7px; border-radius:9px; margin-left:6px; }
   .site-row .help { color:var(--muted); font-size:0.8rem; margin-top:3px; }
@@ -4681,6 +4744,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .thumb-badges { position:absolute; top:5px; right:5px; display:flex; gap:3px; font-size:0.7rem; }
   .thumb-badges span { background:rgba(0,0,0,0.68); padding:1px 5px; border-radius:8px; line-height:1.4; }
   .thumb-badges .warn { color:#f5a623; }
+  .thumb.is-cover { border-color:#f5c542; box-shadow:0 0 0 2px rgba(245,197,66,0.28); }
+  .thumb.is-cover.selected { border-color:#f5c542; }
+  .thumb-cover { position:absolute; left:5px; bottom:26px; display:inline-flex; align-items:center; gap:4px; background:#f5c542; color:#1a1a1c; font-size:0.68rem; font-weight:700; padding:2px 7px; border-radius:8px; line-height:1.3; }
+  .thumb-cover .ico { width:0.95em; height:0.95em; }
   .thumb-badges .hid { color:#ff9a9c; }
   .item-flags { display:flex; gap:28px; flex-wrap:wrap; margin:0 0 14px; padding:12px 14px; background:#18181b; border:1px solid #26262a; border-radius:9px; }
   .item-flags .instant-form { flex:1 1 250px; margin:0; }
@@ -4889,7 +4956,11 @@ foreach ($adminFiles as $file) {
           <?php endif; ?>
         <div class="item-actions">
           <button type="submit">Save</button>
-          <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
+          <?php if ($isCover): ?>
+            <button type="button" class="secondary" disabled title="This photo is already the cover"><?= ui_icon('star') ?> This is the cover</button>
+          <?php else: ?>
+            <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
+          <?php endif; ?>
         </div>
       </form>
       <form method="post" id="<?= $coverFormId ?>">
@@ -4903,7 +4974,7 @@ foreach ($adminFiles as $file) {
     $thumbTitle = $file . (($entry['caption'] ?? '') !== '' ? ' — ' . $entry['caption'] : '');
     ob_start();
 ?>
-    <button type="button" class="thumb" id="photo-<?= $hid ?>" data-edit="edit-<?= $hid ?>" data-file="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($thumbTitle, ENT_QUOTES, 'UTF-8') ?>">
+    <button type="button" class="thumb<?= $isCover ? ' is-cover' : '' ?>" id="photo-<?= $hid ?>" data-edit="edit-<?= $hid ?>" data-file="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($thumbTitle, ENT_QUOTES, 'UTF-8') ?>">
       <?php if ($isVideo): ?>
         <span class="thumb-img thumb-video"><?= ui_icon('play') ?><?php if ($durationText !== ''): ?><small><?= $durationText ?></small><?php endif; ?></span>
       <?php else: ?>
@@ -4913,9 +4984,9 @@ foreach ($adminFiles as $file) {
         <?php if (($entry['caption'] ?? '') !== ''): ?><span title="Has a caption"><?= ui_icon('caption') ?></span><?php endif; ?>
         <?php if ($loc !== null && !$locUnsaved): ?><span title="Has a location"><?= ui_icon('pin') ?></span><?php endif; ?>
         <?php if ($locUnsaved): ?><span class="warn" title="GPS found in the file, not saved"><?= ui_icon('warn') ?></span><?php endif; ?>
-        <?php if ($isCover): ?><span title="Folder cover"><?= ui_icon('star') ?></span><?php endif; ?>
         <span class="hid" title="Private: visitors need the private-view password"<?= $isPrivate ? '' : ' hidden' ?>>private</span>
       </span>
+      <?php if ($isCover): ?><span class="thumb-cover" title="This photo is the cover: the picture on the folder's card and in shared links"><?= ui_icon('star') ?> Cover</span><?php endif; ?>
       <span class="thumb-name"><?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?></span>
       <span class="thumb-check" aria-hidden="true"><?= ui_icon('check') ?></span>
     </button>
@@ -4926,7 +4997,7 @@ foreach ($adminFiles as $file) {
   <?php if (empty($adminFiles)): ?>
     <p class="muted">No photos or videos in this folder.</p>
   <?php else: ?>
-    <p class="muted photos-hint">Click a photo to edit its caption, link and location, and to make it private. To change several at once, use <em>Select photos</em>.</p>
+    <p class="muted photos-hint">Click a photo to edit its caption, link and location, to make it private, or to set it as the <?= $adminFolderPath === null ? "gallery's cover (the highlighted one is the cover now: the picture in shared links)" : "folder's cover (the highlighted one is the cover now: the picture on the folder's card and in shared links)" ?>. To change several at once, use <em>Select photos</em>.</p>
     <div class="photo-editor" id="photo-editor"><?= $editorsHtml ?></div>
     <div class="bulk-bar" id="bulk-bar" data-csrf="<?= $csrfToken ?>" hidden>
       <button type="button" class="secondary" id="bulk-start">Select photos</button>
@@ -4959,19 +5030,11 @@ foreach ($adminFiles as $file) {
     </form>
     </div>
     <?php render_admin_map_form($itemsHere, $csrfToken, false); ?>
-    <?php if (!empty($itemsHere['cover'])): ?>
-      <p class="muted" style="margin-top:10px;">Cover photo: <?= htmlspecialchars($itemsHere['cover'], ENT_QUOTES, 'UTF-8') ?> — click "Set as cover" on any photo below to change it.</p>
-    <?php endif; ?>
   </section>
   <?php else: ?>
   <section class="panel" id="settings">
     <h2 class="section-title">Gallery settings</h2>
     <?php render_admin_identity_form($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files)); ?>
-    <?php if (!empty($itemsHere['cover'])): ?>
-      <p class="muted" style="margin-top:10px;">Cover photo (the picture in shared-link previews): <?= htmlspecialchars($itemsHere['cover'], ENT_QUOTES, 'UTF-8') ?> &mdash; choose another with "Set as cover" on a photo in the Photos tab.</p>
-    <?php else: ?>
-      <p class="muted" style="margin-top:10px;">Shared links use the first photo as their picture. To choose one, select a photo in the Photos tab and use "Set as cover".</p>
-    <?php endif; ?>
     <h3 class="subhead">Privacy</h3>
     <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (ENABLE_PHOTO_LOCATION is off: nothing shows regardless)' : ''), $locWarn); ?>
     <?php render_admin_map_form($itemsHere, $csrfToken, true); ?>
@@ -5314,6 +5377,16 @@ foreach ($adminFiles as $file) {
     });
   }
   initFolderTree();
+  // The "Copy" buttons on the web-server rules.
+  [].forEach.call(document.querySelectorAll('.copy-rules'), function (btn) {
+    btn.addEventListener('click', function () {
+      var text = btn.parentNode.querySelector('pre').textContent;
+      function done() { var old = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = old; }, 1400); }
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); return; }
+      var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
+    });
+  });
   // "Use these dates": copies the suggestion into the Dates box; nothing is saved until the form is.
   [].forEach.call(document.querySelectorAll('.date-suggest'), function (btn) {
     btn.addEventListener('click', function () {
@@ -5341,10 +5414,12 @@ foreach ($adminFiles as $file) {
       if (!isBox) el.setAttribute('data-prev', el.value);
       el.addEventListener('change', function () {
         var holder = el.closest('.instant-row, .field') || form, node = holder.querySelector('.rowstate');
+        var sub = form.querySelector('.map-sub');
+        if (el.name === 'map_enabled' && sub) sub.hidden = !el.checked;
         var body = new URLSearchParams();
         body.set('csrf_token', csrf); body.set('action', action); body.set(el.name, isBox ? (el.checked ? '1' : '0') : el.value);
         [].forEach.call(form.querySelectorAll('input[type=hidden][data-send]'), function (h) { body.set(h.name, h.value); });
-        var revert = function () { if (isBox) el.checked = !el.checked; else el.value = el.getAttribute('data-prev'); };
+        var revert = function () { if (isBox) el.checked = !el.checked; else el.value = el.getAttribute('data-prev'); if (el.name === 'map_enabled' && sub) sub.hidden = !el.checked; };
         say(node, 'Saving…', 'busy');
         fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
@@ -5424,8 +5499,11 @@ foreach ($adminFiles as $file) {
         var on = cb.checked, off = cb.getAttribute('data-offwarn');
         var row = cb.closest('.site-row'), note = row ? row.querySelector('.offnote') : null;
         var f = {}; f[cb.name] = on ? '1' : '0';
+        // Settings that only matter while this one is on (the pin grouping, under the map) follow it.
+        function follow(shown) { [].forEach.call(form.querySelectorAll('.site-row[data-requires="' + cb.name + '"]'), function (r) { r.hidden = !shown; }); }
+        follow(on);
         // What switching it off does appears beside the switch once it is off (and goes when it is back on), instead of in a dialog.
-        post(f, stateOf(cb), function () { cb.checked = !on; }, function () { if (note) note.hidden = on || !off; });
+        post(f, stateOf(cb), function () { cb.checked = !on; follow(!on); }, function () { if (note) note.hidden = on || !off; });
       });
     });
     [].forEach.call(form.querySelectorAll('select[name^=set_], input[type=number][name^=set_]'), function (el) {
