@@ -1280,8 +1280,10 @@ http_post("$baseAdmin/?admin", [
     'action' => 'save_item', 'file' => 'orphan-soon.jpg', 'caption' => 'about to vanish', 'csrf_token' => $csrf,
 ], [$authHeader, "Cookie: $sessionCookie"]);
 unlink("$fxAdmin/orphan-soon.jpg");
-[, $bodyAfterOrphan] = http_get("$baseAdmin/");
+[, $bodyAfterOrphan] = http_get("$baseAdmin/", [$authHeader, "Cookie: $sessionCookie"]);   // (setup notices are for the signed-in owner)
+$bodyAfterOrphanPublic = http_get("$baseAdmin/")[1];
 check('a stale caption entry for a deleted photo is reported in the notices', str_contains($bodyAfterOrphan, 'was cleaned up'));
+check('...but only to the signed-in owner: once an admin password exists, the banner and the comment in the page source are not sent to anyone else', !str_contains($bodyAfterOrphanPublic, 'was cleaned up') && !str_contains($bodyAfterOrphanPublic, '<details class="gallery-notices"') && !str_contains($bodyAfterOrphanPublic, 'gallery notices (also shown'));
 $itemsAfterGc = read_data_file("$fxAdmin/.gallery-items.php");
 check('the orphaned entry is actually removed from .gallery-items.php', !isset($itemsAfterGc['items']['orphan-soon.jpg']));
 check('a surviving file\'s own entry is left alone by the same GC pass', isset($itemsAfterGc['items']['loose.jpg']));
@@ -2852,7 +2854,8 @@ make_jpeg("$rootsSrc/loose.jpg", 60, 60, 40, 40, 40);
 $cfgBeforeRoots = (string) file_get_contents($siteCfg);
 $r1 = $siteAjax(['set_EXTRA_FOLDERS' => $exJson([], [$rootsSrcReal])]);
 check('[extra roots] a place added without a name is accepted and stored as a path in its own list, not as a named folder', ($r1['ok'] ?? null) === true && (cfg_read($siteCfg)['EXTRA_ROOTS'] ?? null) === [$rootsSrcReal] && !isset(cfg_read($siteCfg)['EXTRA_FOLDERS']) && (array) ($r1['extra']['roots'] ?? []) === [$rootsSrcReal]);
-$homeRoots = http_get("$baseSite/", $siteHdrs2)[1];
+[, , $hrHd] = http_get("$baseSite/?admin", [$siteAuth2]);   // (the owner signs in afresh: the settings file was rewritten above, and setup notices are for the signed-in owner)
+$homeRoots = http_get("$baseSite/", [$siteAuth2, 'Cookie: ' . extract_cookie_header($hrHd)])[1];
 check('[extra roots] its folders appear AT THE TOP of the gallery under their own names, with no wrapper folder named after the place', str_contains($homeRoots, 'id="group-paris"') && str_contains($homeRoots, 'id="group-sttropez"') && !str_contains($homeRoots, basename($rootsSrcReal)));
 check('[extra roots] ...with thumbnails that load, and their own pages', http_get("$baseSite/?img=Paris%2Fp.jpg&size=thumb")[0] === 200 && str_contains(http_get("$baseSite/?folder=StTropez")[1], 's.jpg'));
 check('[extra roots] a real folder of the same name wins over one from the added place (Sub keeps its own photos, not shadowed.jpg)', !str_contains(http_get("$baseSite/?folder=Sub")[1], 'shadowed.jpg') && http_get("$baseSite/?img=Sub%2Fshadowed.jpg&size=thumb")[0] === 404);

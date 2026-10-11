@@ -7104,6 +7104,13 @@ function note_box_is_empty($html) {
     return trim(html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8')) === '';
 }
 
+/** Setup notices are for the owner. Once an admin password exists they are shown only to the owner signed in; before
+ *  that (a fresh install, where there is nobody to sign in as) they are shown to whoever opens the page, since that is
+ *  the person setting it up. */
+function notices_visible() {
+    return ADMIN_PASSWORD === '' || is_admin_browser();
+}
+
 /**
  * A collapsed-by-default banner surfacing $galleryNotices directly on
  * the page, not just in the HTML-comment fallback in the page source —
@@ -7112,7 +7119,7 @@ function note_box_is_empty($html) {
  * out of curiosity can see right away it isn't meant for them.
  */
 function render_gallery_notices_banner($notices, $open = false) {
-    if (empty($notices)) return '';
+    if (empty($notices) || !notices_visible()) return '';
     $count = count($notices);
     $html = '<details class="gallery-notices"' . ($open ? ' open' : '') . '>';
     $html .= '<summary>' . ui_icon('warn') . ' ' . $count . ' setup notice' . ($count === 1 ? '' : 's') . ' for the gallery owner</summary>';
@@ -8224,7 +8231,7 @@ if (!empty($openMapOnLoad)) {
 send_viewer_aware_cache_headers();
 ?>
 <!-- Drop-in Photo Gallery v<?= htmlspecialchars(GALLERY_VERSION) ?> — github.com/pcmike -->
-<?php if (!empty($galleryNotices)): ?>
+<?php if (!empty($galleryNotices) && notices_visible()): ?>
 <!--
 gallery notices (also shown on the page itself, in a collapsed banner):
 <?php foreach ($galleryNotices as $notice): ?>
@@ -8888,7 +8895,7 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
   </div>
 <?php endif; ?>
 
-<?php if ($currentFolderPath === null && empty($mdFiles) && !empty($galleryNotices)): ?>
+<?php if ($currentFolderPath === null && empty($mdFiles) && !empty($galleryNotices) && notices_visible()): ?>
   <div class="notes">
     <?= render_gallery_notices_banner($galleryNotices, empty($files)) ?>
   </div>
@@ -9086,7 +9093,7 @@ if ($currentFolderPath !== null) {
     }
 }
 ?>
-<?php if ($currentFolderPath !== null && empty($folderMdFiles) && !empty($folderGalleryNotices)): ?>
+<?php if ($currentFolderPath !== null && empty($folderMdFiles) && !empty($folderGalleryNotices) && notices_visible()): ?>
   <div class="notes">
     <?= render_gallery_notices_banner($folderGalleryNotices) ?>
   </div>
