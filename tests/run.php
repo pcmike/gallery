@@ -1722,9 +1722,24 @@ check('saving a folder\'s description, dates and position succeeds', str_contain
 check('the description is NOT on the folder\'s cover card (it lives on the folder\'s own page), and nothing from it leaks unescaped into the root page', !str_contains($fieldsRoot, 'folder-cover-desc') && !str_contains($fieldsRoot, 'Three weeks') && !str_contains($fieldsRoot, '<script>alert(1)'));
 check('the dates show on the folder\'s cover card', str_contains($fieldsRoot, 'folder-cover-dates">June 12-15, 2026<'));
 [, $fieldsPage] = http_get("$baseDepth/?folder=Europe");
-check('the dates sit under the folder\'s title, and the description is a centered note box (not loose text in the header)', str_contains($fieldsPage, '<p class="folder-dates">June 12-15, 2026</p>') && str_contains($fieldsPage, '<div class="notes">' . "\n" . '    <div class="note-box folder-description">Three weeks, two &lt;script&gt;') && !preg_match('#<header>.*folder-description.*</header>#s', $fieldsPage));
+check('the dates sit under the folder\'s title, and the description is a centered note box (not loose text in the header)', str_contains($fieldsPage, '<p class="folder-dates">June 12-15, 2026</p>') && str_contains($fieldsPage, '<div class="notes">' . "\n" . '    <div class="note-box folder-description"><p>Three weeks,<br>two &lt;script&gt;') && !preg_match('#<header>.*folder-description.*</header>#s', $fieldsPage));
 check('the folder\'s page title uses its display name', (bool) preg_match('/<title>Europe 2026 — /', $fieldsPage));
-check('the folder\'s Open Graph description uses its description', str_contains($fieldsPage, 'property="og:description" content="Three weeks, two &lt;script&gt;'));
+check('the folder\'s Open Graph description uses its description (as plain text, escaped)', str_contains($fieldsPage, 'property="og:description" content="Three weeks, two &lt;script') && !str_contains($fieldsPage, 'content="Three weeks, two <script'));
+$mdDesc = "**Bold** and *italic* with a [link](https://example.com) and `{center}` as text\n\nSecond paragraph {left}\n\n- one\n- two\n\n## Heading {right}\n\nBad [link](javascript:alert(1)) and <b>raw</b>";
+[, $mdSave] = $depthPost($europeAdminQuery, ['action' => 'save_folder_identity', 'display_name' => 'Europe 2026', 'description' => $mdDesc, 'dates' => 'June 12-15, 2026', 'sort_order' => '2']);
+[, $mdPage] = http_get("$baseDepth/?folder=Europe");
+preg_match('#<div class="note-box folder-description">(.*?)</div>#s', $mdPage, $mdBox);
+$mdHtml = $mdBox[1] ?? '';
+check('[description] it accepts the notes\' small Markdown: bold, italic, a link, a list and a heading', str_contains($mdHtml, '<strong>Bold</strong>') && str_contains($mdHtml, '<em>italic</em>') && str_contains($mdHtml, '<a href="https://example.com"') && str_contains($mdHtml, '<ul><li>one</li><li>two</li></ul>') && str_contains($mdHtml, '<h2'));
+check('[description] {left}, {center} and {right} align just their own paragraph or heading, and are never shown', str_contains($mdHtml, '<p style="text-align: left;">Second paragraph</p>') && str_contains($mdHtml, '<h2 style="text-align: right;">Heading</h2>') && !str_contains(str_replace('{center}</code>', '', $mdHtml), '{left}') && !str_contains($mdHtml, '{right}'));
+check('[description] a directive written in backticks is just text, not acted on', str_contains($mdHtml, '<code>{center}</code>'));
+check('[description] the box centres its text by default (a paragraph can override that)', str_contains($mdPage, '.note-box.folder-description { text-align: center; }'));
+check('[description] raw HTML and a javascript: link stay inert', !str_contains($mdHtml, '<b>raw</b>') && str_contains($mdHtml, '&lt;b&gt;raw&lt;/b&gt;') && !str_contains($mdHtml, 'href="javascript:'));
+[, $mdAdmin] = http_get("$baseDepth/?admin&folder=Europe", $depthHdrs ?? []);
+check('[description] the admin keeps the line breaks you typed (it is stored as written, not flattened to one line)', str_contains(read_data_file("$fxDepth/Europe/.gallery-items.php")['description'] ?? '', "\n\nSecond paragraph {left}\n\n- one") );
+check('[description] the share preview text is plain: no asterisks, brackets or braces', (bool) preg_match('#property="og:description" content="Bold and italic with a link#', $mdPage) && !preg_match('#property="og:description" content="[^"]*[*\[\]]#', $mdPage));
+// put the original text back for the tests that follow
+$depthPost($europeAdminQuery, ['action' => 'save_folder_identity', 'display_name' => 'Europe 2026', 'description' => "Three weeks,\n  two <script>alert(1)</script> countries.", 'dates' => 'June 12-15, 2026', 'sort_order' => '2']);
 
 // Position: Asia first, then Europe (position 2); positions beat natural
 // order. (The root notes' mention of Europe is what the mention check
@@ -2880,7 +2895,7 @@ check('[root identity] saving the gallery settings works', str_contains($r, 'cla
 [, $rHome1] = http_get("$baseRoot/");
 check('[root identity] the form\'s title beats the "# Heading" (page title, tab and h1)', str_contains($rHome1, '<title>Summer 2026 — Gallery</title>') && preg_match('#<h1>Summer 2026(<form|<a class="lock-link"|</h1>)#', $rHome1) === 1 && !str_contains($rHome1, 'From The Heading'));
 check('[root identity] the dates show under the title, like a folder\'s', str_contains($rHome1, '<p class="folder-dates">June 1–9</p>'));
-check('[root identity] the description is a centered note box above the notes box, like a folder\'s', (bool) preg_match('#</header>\s*<div class="notes">\s*<div class="note-box folder-description">Two weeks of nothing but sun\.</div>.*?Some longer notes\.#s', $rHome1));
+check('[root identity] the description is a centered note box above the notes box, like a folder\'s', (bool) preg_match('#</header>\s*<div class="notes">\s*<div class="note-box folder-description"><p>Two weeks of nothing but sun\.</p></div>.*?Some longer notes\.#s', $rHome1));
 check('[root identity] shared-link previews use the title and the description', str_contains($rHome1, 'property="og:title" content="Summer 2026"') && str_contains($rHome1, 'property="og:description" content="Two weeks of nothing but sun."'));
 [, $rFolder] = http_get("$baseRoot/?folder=Sub");
 check('[root identity] a folder\'s way back uses the gallery title', str_contains($rFolder, '&larr; Summer 2026</a>') || str_contains($rFolder, '← Summer 2026</a>'));

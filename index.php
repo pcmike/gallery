@@ -3324,6 +3324,8 @@ function render_admin_notes_reference() {
           <p>Marks the item <strong>sold</strong>: dimmed, struck-through text, grayscale photos and a red SOLD ribbon.</p></div>
         <div class="ref-card"><div class="ref-card-head"><?= $ins('Reserved', '{reserved}') ?> <?= $c('{reserved}') ?> or <?= $c('{held}') ?></div>
           <p>Marks it <strong>reserved</strong>: an orange tag; the photos stay in colour.</p></div>
+        <div class="ref-card"><div class="ref-card-head"><?= $c('{left}') ?> <?= $c('{center}') ?> <?= $c('{right}') ?></div>
+          <p>Aligns that paragraph's text (or a heading's, written at the end of its line). Notes are left-aligned; a folder's or the gallery's description box is centred unless you say otherwise.</p></div>
       </div>
       <p class="hint insert-hint" hidden>Click inside the note you want to add it to first, then press the button.</p>
       <p class="hint">If an item has both, sold wins over reserved, and either one overrides a custom colour, so the signal is never ambiguous.</p>
@@ -3424,6 +3426,25 @@ function admin_stale_message() {
  *  dropped, whitespace runs collapsed, length capped. Output is always
  *  HTML-escaped where it's shown, so this is about tidiness and bounding
  *  what a .gallery-items.php can grow to, not about escaping. */
+/** Like admin_clean_text() but keeps line breaks and blank lines (a folder's description is a little Markdown, so
+ *  paragraphs and lists must survive): carriage returns and control characters dropped, runs of blank lines
+ *  collapsed to one, trailing spaces trimmed, length capped. */
+function admin_clean_description($value, $maxLen) {
+    $text = str_replace(["\r\n", "\r"], "\n", (string) $value);
+    $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text);
+    $text = preg_replace('/\t/', ' ', (string) $text);
+    $text = preg_replace('/[ ]+\n/', "\n", (string) $text);
+    $text = trim(preg_replace('/\n{3,}/', "\n\n", (string) $text));
+    return function_exists('mb_substr') ? mb_substr($text, 0, $maxLen, 'UTF-8') : substr($text, 0, $maxLen);
+}
+
+/** A folder's (or the gallery's) description as HTML: the same small Markdown as the notes (bold, italic, links, lists,
+ *  headings), centred by default; {left}, {center} or {right} in a paragraph sets that paragraph's alignment. */
+function render_description_html($text) {
+    $colors = []; $status = []; $labels = []; $claims = [];
+    return markdown_to_html(protect_inline_code((string) $text), [], [], $colors, $status, $labels, $claims, []);
+}
+
 function admin_clean_text($value, $maxLen) {
     $text = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) $value);
     $text = trim(preg_replace('/\s+/u', ' ', (string) $text));
@@ -3599,7 +3620,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         // wipes the other three.
         $updates = ['displayName' => $displayName !== '' ? $displayName : null];
         if (array_key_exists('description', $_POST)) {
-            $text = admin_clean_text($_POST['description'], 500);
+            $text = admin_clean_description($_POST['description'], 1000);
             $updates['description'] = $text !== '' ? $text : null;
         }
         if (array_key_exists('dates', $_POST)) {
@@ -4045,8 +4066,8 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <?php endif; ?>
         <div class="field wide">
           <label>Description</label>
-          <textarea name="description" maxlength="500" style="min-height:70px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
-          <p class="hint"><?= $isRoot ? 'A sentence or two, shown in a box at the top of the page and in shared-link previews. For anything longer or richer, use a notes file.' : 'A sentence or two, shown in a box at the top of its page and in shared-link previews.' ?></p>
+          <textarea name="description" maxlength="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
+          <p class="hint"><?= $isRoot ? 'Shown in a box at the top of the page and in shared-link previews' : 'Shown in a box at the top of its page and in shared-link previews' ?>, centred. A little Markdown works: <code>**bold**</code>, <code>*italic*</code>, <code>[words](https://example.com)</code>, <code>- a list</code>, <code>## a heading</code>. Put <code>{left}</code>, <code>{center}</code> or <code>{right}</code> in a paragraph to align just that paragraph. A blank line starts a new paragraph.</p>
         </div>
       </div>
       <button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button>
@@ -6729,6 +6750,7 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
         $status = '';
         $explicitGroupName = null;
         $explicitPhotosRaw = null;
+        $align = null;   // {left} / {center} / {right}: how this paragraph's text is aligned
         $cleanLines = [];
         foreach ($paraLines as $l) {
             if ($colorValue === null && preg_match('/\{\s*color\s*:\s*([^}]+)\}/i', $l, $cm)) {
@@ -6748,9 +6770,12 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
             if ($explicitPhotosRaw === null && preg_match('/\{\s*photos\s*:\s*([^}]+)\}/i', $l, $ppm)) {
                 $explicitPhotosRaw = $ppm[1];
             }
+            if ($align === null && preg_match('/\{\s*(left|center|centre|right)\s*\}/i', $l, $am)) {
+                $align = strtolower($am[1]) === 'centre' ? 'center' : strtolower($am[1]);
+            }
             $l = trim(preg_replace(
                 ['/\{\s*color\s*:\s*[^}]+\}/i', '/\{\s*sold\s*\}/i', '/\{\s*(reserved|held)\s*\}/i',
-                 '/\{\s*group\s*:\s*[^}]+\}/i', '/\{\s*photos\s*:\s*[^}]+\}/i'],
+                 '/\{\s*group\s*:\s*[^}]+\}/i', '/\{\s*photos\s*:\s*[^}]+\}/i', '/\{\s*(left|center|centre|right)\s*\}/i'],
                 '', $l
             ));
             if ($l !== '') $cleanLines[] = $l;
@@ -6831,15 +6856,18 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
         $idAttr = $itemId ? (' id="' . htmlspecialchars($itemId, ENT_QUOTES, 'UTF-8') . '"') : '';
 
         $inner = implode('<br>', array_map('inline_markdown', $cleanLines));
+        $alignCss = $align !== null ? 'text-align: ' . $align . ';' : '';
+        $alignAttr = $alignCss !== '' ? ' style="' . $alignCss . '"' : '';
         if ($status === 'sold') {
-            $html .= '<div class="sold-item"' . $idAttr . '><span class="sold-badge">SOLD</span><p>' . $inner . '</p></div>';
+            $html .= '<div class="sold-item"' . $idAttr . $alignAttr . '><span class="sold-badge">SOLD</span><p>' . $inner . '</p></div>';
         } elseif ($status === 'reserved') {
-            $html .= '<div class="reserved-item"' . $idAttr . '><span class="reserved-badge">RESERVED</span><p>' . $inner . '</p></div>';
+            $html .= '<div class="reserved-item"' . $idAttr . $alignAttr . '><span class="reserved-badge">RESERVED</span><p>' . $inner . '</p></div>';
         } else {
             // A {color:} always accents its own paragraph with a bar, so the text and the photos or folder it colours
             // read as one item (and with nothing to put a box round it still does something visible).
             $accent = ($colorValue !== null)
-                ? ' class="accent-note" style="--bar: ' . htmlspecialchars($colorValue, ENT_QUOTES, 'UTF-8') . ';"' : '';
+                ? ' class="accent-note" style="--bar: ' . htmlspecialchars($colorValue, ENT_QUOTES, 'UTF-8') . ';' . $alignCss . '"'
+                : $alignAttr;
             $html .= '<p' . $idAttr . $accent . '>' . $inner . '</p>';
         }
 
@@ -6906,7 +6934,13 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
             $flushPara();
             $closeList();
             $level = strlen($m[1]);
-            $html .= "<h{$level}>" . inline_markdown($m[2]) . "</h{$level}>";
+            $headingText = $m[2];
+            $headingAlign = '';
+            if (preg_match('/\{\s*(left|center|centre|right)\s*\}/i', $headingText, $hm)) {
+                $headingAlign = ' style="text-align: ' . (strtolower($hm[1]) === 'centre' ? 'center' : strtolower($hm[1])) . ';"';
+                $headingText = trim(preg_replace('/\{\s*(left|center|centre|right)\s*\}/i', '', $headingText));
+            }
+            $html .= "<h{$level}{$headingAlign}>" . inline_markdown($headingText) . "</h{$level}>";
             continue;
         }
 
@@ -7441,7 +7475,7 @@ if (ENABLE_MAP && isset($_GET['map'])) {
 
 $ogTitle = $pageTitle;
 $ogUrl = $baseUrl . '/';
-$ogDescription = $rootMeta['description'] !== '' ? $rootMeta['description'] : (!empty($mdFiles)
+$ogDescription = $rootMeta['description'] !== '' ? markdown_to_plaintext($rootMeta['description']) : (!empty($mdFiles)
     ? markdown_to_plaintext($mdContents[$mdFiles[0]])
     : media_count_label($files));
 // The cover chosen in the admin, if it is still a visible root-level photo.
@@ -7455,7 +7489,7 @@ if ($currentFolderPath !== null) {
     $folderMemberFiles = $currentFolderFiles;
     $ogDescription = media_count_label($folderMemberFiles);
     if ($currentFolderMeta['description'] !== '') {
-        $ogDescription = $currentFolderMeta['description'];
+        $ogDescription = markdown_to_plaintext($currentFolderMeta['description']);
     }
     // A subfolder's own notes .md (see the full scan further down, once
     // $groups/$files are actually scoped to it) can supply a real
@@ -7841,7 +7875,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .folder-dates { margin:2px 0 0; color:var(--muted); font-size:0.9rem; }
-  .note-box.folder-description { white-space: pre-line; }
+  .note-box.folder-description { text-align: center; }
+  .note-box.folder-description ul, .note-box.folder-description ol { display: inline-block; text-align: left; margin: 4px 0 10px; }
   /* A straight bar drawn inside the paragraph (a border curved whenever the paragraph was the target of a link). */
   .note-box p.accent-note { box-shadow: inset 4px 0 0 var(--bar); padding-left: 14px; border-radius: 0; }
   .note-box p.accent-note:target { border-radius: 0; }
@@ -8149,7 +8184,7 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
 
 <?php if ($headerMeta['description'] !== ''): ?>
   <div class="notes">
-    <div class="note-box folder-description"><?= htmlspecialchars($headerMeta['description']) ?></div>
+    <div class="note-box folder-description"><?= render_description_html($headerMeta['description']) ?></div>
   </div>
 <?php endif; ?>
 

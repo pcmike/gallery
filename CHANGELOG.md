@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Versions correspond to 
 
 ## [2.0.3] - 2026-10-11
 
+### Added
+- **Folder and gallery descriptions take Markdown and alignment, and are centred.** The description box used to show its text left-aligned and flattened to one line. It is now centred by default, keeps the paragraphs and line breaks you type, and accepts the notes' small Markdown (bold, italic, links, lists, headings). A new `{left}`, `{center}` or `{right}` in a paragraph aligns just that paragraph (or a heading, written at the end of its line); it works in notes too. The limit is now 1,000 characters (it was 500), and link previews use the description as plain text.
+
 ### Changed
 - **The footer is gone.** The gallery icon that leads to the about page (hover: "About this gallery software") now sits at the right end of the same row as the map buttons, in the same bordered button style, and the visit count (when it is shown to visitors) sits just before it. The footer's "Admin" link for a signed-in owner is gone too.
 - **Signed in as the owner, the gallery title is the way back to the admin**, for wherever you are: on the front page it opens the admin, on a folder's page that folder's admin. The link looks and behaves exactly like plain text (no underline, colour, cursor or tooltip, on hover or otherwise). To everyone else the title is plain text, as before.

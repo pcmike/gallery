@@ -243,7 +243,7 @@ try:
         subprocess.run(["php", "-r", "$i=imagecreatetruecolor(800,600); imagejpeg($i,$argv[1]);", SITE7 + "/Trip/p%02d.jpg" % k], check=True)
     for k in range(1, 15):
         subprocess.run(["php", "-r", "$i=imagecreatetruecolor(800,600); imagejpeg($i,$argv[1]);", SITE7 + "/Rome/q%02d.jpg" % k], check=True)
-    open(SITE7 + "/Trip/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"items":{},"groups":[],"cover":"p14.jpg"}')
+    open(SITE7 + "/Trip/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"items":{},"groups":[],"cover":"p14.jpg","description":"A week of **sun**, sea and a very long lunch that goes on and on so this line wraps across the box.\\n\\nThis paragraph is left {left}"}')
     s7 = socket.socket(); s7.bind(("127.0.0.1", 0)); PORT7 = s7.getsockname()[1]; s7.close(); B7 = f"http://127.0.0.1:{PORT7}"
     srv7 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT7}", "-t", SITE7], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
@@ -251,6 +251,9 @@ try:
     b.js("document.querySelector('a.folder-cover-link[href*=Trip]').click()"); b.drain(2.0); shot(b, "20-cover-jump")
     jump = b.js("(() => { const a = document.getElementById('folder-cover'); if (!a) return null; const r = a.parentElement.getBoundingClientRect(); return {hash: location.hash, y: Math.round(window.scrollY), top: Math.round(r.top), bottom: Math.round(r.bottom), vh: window.innerHeight, file: a.parentElement.querySelector('img').alt}; })()")
     ok(jump is not None and jump["hash"] == "#folder-cover" and jump["y"] > 100 and 0 <= jump["top"] < jump["vh"] - 50 and jump["file"].endswith("p14.jpg"), "[cover jump] opening a folder whose owner chose a cover photo scrolls straight to that photo, which is then on the screen", str(jump))
+    ds = b.js("(() => { const ps = document.querySelectorAll('.folder-description p'); if (ps.length < 2) return null; const box = document.querySelector('.folder-description'); return {first: getComputedStyle(ps[0]).textAlign, second: getComputedStyle(ps[1]).textAlign, bold: !!box.querySelector('strong'), shown: ps[1].textContent.includes('{left}')}; })()")
+    shot(b, "20b-description")
+    ok(ds is not None and ds["first"] == "center" and ds["second"] == "left" and ds["bold"] and not ds["shown"], "[description] the description box centres its text by default, a {left} paragraph is left-aligned, and Markdown works", str(ds))
     b.goto(B7 + "/", 1.2)
     b.js("document.querySelector('a.folder-cover-link[href*=Rome]').click()"); b.drain(1.5)
     ok(b.js("Math.round(window.scrollY)") == 0 and b.js("location.hash") == "", "[cover jump] a folder without a chosen cover opens at the top, as before")
