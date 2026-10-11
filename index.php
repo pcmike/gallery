@@ -7687,7 +7687,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* A few folder cards and nothing else: larger on a wide screen, centred. Narrower screens keep the normal grid. */
   .card .cover-anchor { position: absolute; top: 0; left: 0; width: 0; height: 0; scroll-margin-top: 14px; }
   .card:has(.cover-anchor:target) { animation: item-flash 2.4s ease-out; outline: 2px solid var(--accent); outline-offset: 2px; }
-  .gallery[class*="covers-"] .folder-cover-link img { aspect-ratio: 4 / 3; }
+  .gallery[class*="covers-"] .folder-cover-link img { aspect-ratio: 3 / 2; }
   .gallery[class*="covers-"] .folder-cover-label { font-size: 1.1rem; }
   /* The box is as wide as its cards need, so the map buttons above (same class) share the first card's left edge. */
   .gallery.covers-1, .map-preview.covers-1 { max-width: 608px; }
@@ -7762,8 +7762,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .folder-cover-link img {
     width: 100%;
-    aspect-ratio: 1 / 1;
+    aspect-ratio: 4 / 3;            /* a landscape frame crops far less than a square, and most photos are landscape */
     object-fit: cover;
+    object-position: 50% 38%;       /* when a photo is cropped, keep the upper-middle (faces, horizons), not the dead centre */
     display: block;
     transition: transform 0.25s ease;
   }
