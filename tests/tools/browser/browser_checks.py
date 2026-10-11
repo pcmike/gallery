@@ -663,7 +663,7 @@ try:
     left = lambda sel: b.js(f"Math.round(document.querySelector('{sel}').getBoundingClientRect().left)")
     ok(abs(left('.map-combo') - left('.folder-cover')) <= 1, "[few folders] the map buttons sit exactly above the first cover photo's left edge", f"{left('.map-combo')} vs {left('.folder-cover')}")
     big = b.js("(() => { const i = document.querySelector('.folder-cover img'); return {srcset: i.srcset, loaded: i.complete && i.naturalWidth > 0, cur: i.currentSrc}; })()")
-    ok("1200w" in big["srcset"] and "size=share" in big["cur"] and big["loaded"], "[few folders] the big cards load the larger (1200px) picture, not the small thumbnail", str(big))
+    ok("1200w" in big["srcset"] and "size=coverlg" in big["cur"] and big["loaded"], "[few folders] the big cards load the larger (1200px square) picture, not the small one", str(big))
     b.viewport(390, 844, mobile=True); b.goto(B4 + "/", 1.2); shot(b, "18b-two-folders-phone")
     wp = b.js(cardw)
     ok(300 <= wp <= 360 and b.js(overflow), "[few folders] on a phone the same page keeps the normal phone layout (one card across the screen), with no sideways scrolling", str(wp))

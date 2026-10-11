@@ -2518,6 +2518,18 @@ check('[cover jump] a folder whose owner chose a cover photo links to it: openin
 check('[cover jump] a folder with no chosen cover opens at the top, as before', str_contains($cvRoot, 'class="folder-cover-link" href="?folder=Rome"') && !str_contains($cvRoot, 'href="?folder=Rome#'));
 [, $cvTrip] = http_get("$baseCv/?folder=Trip");
 check('[cover jump] the folder page marks exactly the chosen photo\'s card as the place to land', substr_count($cvTrip, 'id="folder-cover"') === 1 && (bool) preg_match('#<div class="card"[^>]*>(?:(?!</div></div>).)*?Trip/c\.jpg(?:(?!<div class="card").)*?id="folder-cover"#s', $cvTrip));
+// A cover card's picture is a square cut from the original photo, so it is sharp however big the card is.
+$cvSrc = imagecreatetruecolor(1200, 1800); imagefill($cvSrc, 0, 0, imagecolorallocate($cvSrc, 0, 0, 255)); imagefilledrectangle($cvSrc, 0, 0, 1199, 150, imagecolorallocate($cvSrc, 255, 0, 0)); imagejpeg($cvSrc, "$fxCv/Rome/tall.jpg", 95);
+$cvLand = imagecreatetruecolor(1800, 1200); imagejpeg($cvLand, "$fxCv/Rome/wide.jpg", 95);
+$cvPx = function ($url) { [, $b] = http_get($url); $im = @imagecreatefromstring($b); return $im ? [imagesx($im), imagesy($im), imagecolorat($im, imagesx($im) / 2, 2) >> 16 & 255] : null; };
+$cvSmall = $cvPx("$baseCv/?img=Rome%2Ftall.jpg&size=cover");
+$cvLarge = $cvPx("$baseCv/?img=Rome%2Fwide.jpg&size=coverlg");
+check('[cover square] the cover picture of a portrait photo is a 640-pixel square, cut from the original', $cvSmall !== null && $cvSmall[0] === 640 && $cvSmall[1] === 640);
+check('[cover square] ...taken from the upper-middle, not the very top: the red strip along the top of the original is cropped away', $cvSmall !== null && $cvSmall[2] < 100);
+check('[cover square] the large cover picture of a landscape photo is a 1200-pixel square', $cvLarge !== null && $cvLarge[0] === 1200 && $cvLarge[1] === 1200);
+[, $cvPage] = http_get("$baseCv/");
+check('[cover square] a cover card offers both sizes, and the page asks for the square, not the thumbnail', str_contains($cvPage, 'size=cover&amp;') && str_contains($cvPage, 'size=coverlg&amp;') && str_contains($cvPage, '640w') && str_contains($cvPage, '1200w') && !preg_match('#class="folder-cover-link"[^>]*><img src="\?img=[^"]*size=thumb#', $cvPage));
+check('[cover square] a hidden photo\'s cover cut is refused to a visitor like every other size', http_get("$baseCv/?img=Rome%2Fnope.jpg&size=cover")[0] === 404);
 check('[cover jump] the copy-link icon on the cover card still shares the plain folder address', str_contains($cvRoot, 'folder-permalink-copy" href="?folder=Trip"'));
 
 echo "== dates suggested from the photos ==\n";
@@ -3227,7 +3239,7 @@ user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'name="file" value="tram.
 [, $pAdmin] = http_get($parisUrl, $tripHdrs);
 foreach (html_post_forms($pAdmin) as $form) { if (str_contains($form['html'], 'value="set_cover"') && str_contains($form['html'], 'value="louvre.jpg"')) { [, $r] = http_post($parisUrl, form_default_fields($form['html']), $tripHdrs); } }
 [, $tripHome5] = http_get("$baseTrip/");
-check('[trip] after "Set as cover" on louvre.jpg, Paris\'s cover card shows the Louvre photo', (bool) preg_match('#id="group-paris">.*?src="\?img=Paris%2Flouvre\.jpg&amp;size=thumb&amp;v=[0-9a-f]{10}"#s', $tripHome5));
+check('[trip] after "Set as cover" on louvre.jpg, Paris\'s cover card shows the Louvre photo', (bool) preg_match('#id="group-paris">.*?src="\?img=Paris%2Flouvre\.jpg&amp;size=cover&amp;v=[0-9a-f]{10}"#s', $tripHome5));
 
 // 7. Video: duration badge, in the gallery and the lightbox list.
 check('[trip] the 5-second video shows a duration badge and is in the lightbox list', str_contains($parisPub, 'video-duration">0:05<') && str_contains($parisPub, 'Paris\/seine.mp4'));

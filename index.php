@@ -1164,7 +1164,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
         foreach ($folderFiles as $file) {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
             $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
-            $variants = $isHeic ? ['thumb', 'share', 'full'] : ['thumb', 'share'];
+            $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
             $mtime = @filemtime(resolve_real_path($dir, $file));
             foreach ($variants as $variant) {
                 $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
@@ -1237,6 +1237,63 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim) {
     return false;
 }
 
+/**
+ * A square cut of a photo for a folder's cover card, taken from the original so it stays sharp at any card size. The
+ * square is the largest one that fits; its position keeps the middle across a landscape photo, and the upper-middle
+ * (38% of the way down the spare height) of a portrait one, where faces and horizons usually are, so most of the scene
+ * survives the crop. $dim is the side of the finished square.
+ */
+function generate_cover_jpeg($srcPath, $destPath, $dim) {
+    if (class_exists('Imagick')) {
+        try {
+            $img = new Imagick();
+            $img->readImage($srcPath);
+            if (method_exists($img, 'autoOrient')) $img->autoOrient();
+            $img->setImageFormat('jpeg');
+            $img->setImageCompressionQuality(84);
+            $w = $img->getImageWidth();
+            $h = $img->getImageHeight();
+            $side = min($w, $h);
+            $img->cropImage($side, $side, (int) round(($w - $side) / 2), (int) round(($h - $side) * 0.38));
+            $img->setImagePage(0, 0, 0, 0);
+            if ($side > $dim) $img->thumbnailImage($dim, $dim);
+            $img->stripImage();
+            $ok = $img->writeImage($destPath);
+            $img->clear();
+            $img->destroy();
+            if ($ok) return true;
+        } catch (Exception $e) {
+            // Fall through to GD.
+        }
+    }
+    if (extension_loaded('gd')) {
+        $data = @file_get_contents($srcPath);
+        if ($data === false) return false;
+        $src = @imagecreatefromstring($data);
+        if (!$src) return false;
+        $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
+        if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
+            $exif = @exif_read_data($srcPath);
+            if (!empty($exif['Orientation'])) {
+                if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
+                if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
+                if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
+            }
+        }
+        $w = imagesx($src);
+        $h = imagesy($src);
+        $side = min($w, $h);
+        $out = min($dim, $side);
+        $dst = imagecreatetruecolor($out, $out);
+        imagecopyresampled($dst, $src, 0, 0, (int) round(($w - $side) / 2), (int) round(($h - $side) * 0.38), $out, $out, $side, $side);
+        $ok = imagejpeg($dst, $destPath, 84);
+        imagedestroy($src);
+        imagedestroy($dst);
+        return $ok;
+    }
+    return false;
+}
+
 /** Serves ?img=<filename-or-relative-path>&size=thumb|share|full,
  *  resizing/caching/converting as needed. $filename is validated by exact
  *  match against $validFiles — the real list this script's own scan
@@ -1263,7 +1320,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         return;
     }
     $cacheControl = file_cache_control($dir, $filename, $itemsData);
-    $maxDims = ['thumb' => 480, 'share' => 1200, 'full' => 2400];
+    $maxDims = ['thumb' => 480, 'share' => 1200, 'full' => 2400, 'cover' => 640, 'coverlg' => 1200];
     $maxDim = $maxDims[$variant] ?? 480;
 
     // No frame extraction (see ENABLE_VIDEO's doc comment) — every size
@@ -1295,7 +1352,9 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         return;
     }
 
-    $ok = $cachePath ? generate_resized_jpeg($srcPath, $cachePath, $maxDim) : false;
+    // A folder's cover card is a square cut from the original photo (not from its small thumbnail), so it stays sharp.
+    $isCover = $variant === 'cover' || $variant === 'coverlg';
+    $ok = $cachePath ? ($isCover ? generate_cover_jpeg($srcPath, $cachePath, $maxDim) : generate_resized_jpeg($srcPath, $cachePath, $maxDim)) : false;
     if ($ok) {
         header('Content-Type: image/jpeg');
         header('Cache-Control: ' . $cacheControl);
@@ -7068,16 +7127,13 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     if ($coverFile !== null) {
-        // On a page of only a few folders the cards are large: offer the bigger picture too, and let the browser take it only
-        // when the card is wide enough to need it (a phone keeps the small one).
-        $srcset = !empty($GLOBALS['__big_covers'])
-            ? '" srcset="' . htmlspecialchars(img_url($coverFile, 'thumb'), ENT_QUOTES, 'UTF-8') . ' 480w, ' . htmlspecialchars(img_url($coverFile, 'share'), ENT_QUOTES, 'UTF-8') . ' 1200w" sizes="(min-width: 640px) 520px, 100vw'
-            : '';
-        // The whole photo is shown, never cropped: a frame of one fixed shape (so the cards line up), the photo inside it
-        // at its own proportions, and the rest of the frame filled with a blurred, darkened copy of the same photo.
-        $thumbUrl = htmlspecialchars(img_url($coverFile, 'thumb'), ENT_QUOTES, 'UTF-8');
-        $html .= '<span class="cover-frame" style="--cover-bg: url(&quot;' . $thumbUrl . '&quot;)"><img src="' . $thumbUrl . $srcset
-                . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '"></span>';
+        // The picture is a square cut from the original photo (see generate_cover_jpeg): a small one for ordinary cards, and
+        // a larger one offered too so a big card, or a sharp screen, takes it. The browser picks by the card's width.
+        $coverSmall = htmlspecialchars(img_url($coverFile, 'cover'), ENT_QUOTES, 'UTF-8');
+        $coverLarge = htmlspecialchars(img_url($coverFile, 'coverlg'), ENT_QUOTES, 'UTF-8');
+        $sizes = !empty($GLOBALS['__big_covers']) ? '(min-width: 640px) 520px, 100vw' : '(min-width: 640px) 330px, 100vw';
+        $html .= '<img src="' . $coverSmall . '" srcset="' . $coverSmall . ' 640w, ' . $coverLarge . ' 1200w" sizes="' . $sizes
+                . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">';
     }
     $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
     if (!empty($meta['dates'])) {
@@ -7762,17 +7818,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     text-decoration: none;
     color: inherit;
   }
-  .cover-frame { display: block; position: relative; aspect-ratio: 3 / 2; overflow: hidden; background: #101012; }
-  .cover-frame::before {   /* what fills the frame around a photo that is not 3:2: the same photo, blurred and darkened */
-    content: ""; position: absolute; inset: -24px; background: var(--cover-bg) center / cover no-repeat;
-    filter: blur(22px) brightness(0.55); transform: scale(1.1);
-  }
   .folder-cover-link img {
-    position: relative; width: 100%; height: 100%; object-fit: contain; display: block;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    display: block;
     transition: transform 0.25s ease;
   }
   .folder-cover-link:hover img { transform: scale(1.05); }
-  .folder-cover.sold .cover-frame { filter: grayscale(1) brightness(0.6); }
+  .folder-cover.sold img { filter: grayscale(1) brightness(0.6); }
   /* The sold picture has a filter, which makes it paint over an earlier, positioned sibling: lift the ribbon above it. */
   .folder-cover .sold-badge-corner, .folder-cover .reserved-badge-corner { z-index: 2; }
   .folder-cover-label {
