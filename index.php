@@ -358,11 +358,6 @@ define('FFMPEG_PATH', gallery_setting('FFMPEG_PATH', ''));
 // A short silent looping clip of each video (about 3 seconds, small), played when a visitor hovers over its tile. Made with
 // ffmpeg once per video and kept with the thumbnails; does nothing without ffmpeg. Needs ENABLE_VIDEO and the thumbnail cache.
 define('ENABLE_VIDEO_PREVIEWS', gallery_setting('ENABLE_VIDEO_PREVIEWS', true));
-// A video tile's finger-scrub strip holds a frame about every second and a half (a video of 18 seconds or less gets 12, a
-// minute or more gets 40: on a tile a couple of hundred pixels wide, more than 40 could not be told apart).
-function video_strip_frames($duration) {
-    return (int) max(12, min(40, round($duration / 1.5)));
-}
 
 // Password for the admin editor, reached via ?admin — captions, per-item
 // location/web link, display names, and raw .md editing. Empty by
@@ -787,14 +782,6 @@ if (isset($_GET['original'])) {
     $claimed = $_GET['original'];
     $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
     serve_original_download($dir, $claimed, $claimedList, $claimedList ? items_get_all_for_files($dir, $claimedList) : []);
-    exit;
-}
-
-// ?strip=<video>: the row of frames a finger scrubs through on a video's tile.
-if (isset($_GET['strip'])) {
-    $claimed = $_GET['strip'];
-    $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
-    serve_video_strip($dir, $claimed, $claimedList, $claimedList ? items_get_all_for_files($dir, $claimedList) : []);
     exit;
 }
 
@@ -1792,62 +1779,6 @@ function video_preview_file($file) {
     return $base === null ? null : substr($base, 0, -4) . '.mp4';
 }
 
-/** The strip of frames for a video (one JPEG of small square frames side by side, spread over the whole video),
- *  which a finger dragged across a video's tile scrubs through. Made once with ffmpeg, like the clip; null if it can't be had. */
-function video_strip_path($srcPath, $cacheDir, $filename) {
-    if (!ENABLE_VIDEO_PREVIEWS || !ENABLE_THUMBNAIL_CACHE) return null;
-    $strip = image_cache_path($cacheDir, $filename, 'strip', $srcPath);
-    if ($strip === null) return null;
-    if (is_file($strip) && filesize($strip) > 0) return $strip;
-    $failed = $strip . '.failed';
-    if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;
-    $duration = video_duration_seconds($srcPath);
-    if ($duration === null || $duration < 1) return null;
-    $bin = ffmpeg_binary();
-    if ($bin === '') return null;
-    $lock = ffmpeg_take_turn(30);
-    if (!$lock) return null;
-    if (is_file($strip) && filesize($strip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $strip; }
-    try {
-        $tmp = $strip . '.tmp' . bin2hex(random_bytes(3));
-        $n = video_strip_frames($duration);
-        $args = [$bin, '-v', 'error', '-nostdin', '-y'];
-        if ($duration > 20) array_push($args, '-skip_frame', 'nokey');   // a long video: only its key frames are read, which is much quicker
-        array_push($args, '-i', $srcPath, '-an', '-map_metadata', '-1', '-vf', sprintf('fps=%.5F,crop=min(iw\\,ih):min(iw\\,ih),scale=200:200,tile=%dx1', $n / $duration * 1.05, $n), '-frames:v', '1', '-q:v', '5', '-f', 'image2', $tmp);
-        $code = run_quietly($args, 90);
-        if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $strip)) return $strip; }
-        @unlink($tmp);
-        @touch($failed);
-        return null;
-    } finally {
-        flock($lock, LOCK_UN); fclose($lock);
-    }
-}
-
-/** ?strip=<video>: that strip, for anyone who may see the video (same gates as the video itself); &warm only makes it. */
-function serve_video_strip($dir, $filename, $validFiles, $itemsData = []) {
-    if (!is_string($filename) || !in_array($filename, $validFiles, true) || !is_video_file($filename)
-        || (file_is_hidden($dir, $filename, $itemsData) && !is_revealed())) {
-        http_response_code(404);
-        return;
-    }
-    $strip = video_strip_path(resolve_real_path($dir, $filename), containing_folder_real_path($dir, $filename) . '/.gallery-cache', $filename);
-    if (isset($_GET['warm'])) {
-        http_response_code($strip === null ? 404 : 204);
-        header('Cache-Control: no-store');
-        return;
-    }
-    if ($strip === null) {
-        http_response_code(404);
-        return;
-    }
-    header('Content-Type: image/jpeg');
-    header('Cache-Control: ' . file_cache_control($dir, $filename, $itemsData));
-    header('X-Content-Type-Options: nosniff');
-    header('Content-Length: ' . filesize($strip));
-    readfile($strip);
-}
-
 /** True when a hover over a video tile can play a made clip. */
 function video_previews_expected() {
     return ENABLE_VIDEO_PREVIEWS && ENABLE_THUMBNAIL_CACHE && ffmpeg_binary() !== '';
@@ -2096,7 +2027,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
             $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
             $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
-            if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip'; }   // the frame taken from a video, and its strip of frames
+            if (is_video_file($file)) $variants[] = 'poster';   // the frame taken from a video (see video_poster_path)
             $mtime = @filemtime(resolve_real_path($dir, $file));
             if (is_video_file($file)) $valid[md5($file . '|preview|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
@@ -5576,7 +5507,7 @@ function render_admin_site_settings($csrfToken) {
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
-                <div class="help ffstatus"><strong>ffmpeg on this server:</strong> <?= $ffFound !== '' ? 'found (' . $esc($ffFound) . '). Real thumbnails, hover clips and scrubbing are available.' : 'not found. Videos show the browser\'s own first frame where it can play them. If it is installed somewhere unusual, put its full path as "FFMPEG_PATH" in .gallery-config.php.' ?></div>
+                <div class="help ffstatus"><strong>ffmpeg on this server:</strong> <?= $ffFound !== '' ? 'found (' . $esc($ffFound) . '). Real thumbnails and short preview clips are available.' : 'not found. Videos show the browser\'s own first frame where it can play them. If it is installed somewhere unusual, put its full path as "FFMPEG_PATH" in .gallery-config.php.' ?></div>
                 <?php endif; ?>
                 <?php if (!empty($d['risk'])): ?><div class="risk"><?= $esc($d['risk']) ?></div><?php endif; ?>
                 <?php if (!empty($d['offwarn'])): ?><div class="warn-note offnote" hidden><?= $esc($d['offwarn']) ?></div><?php endif; ?>
@@ -8348,15 +8279,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
                 . (is_file($clipFile) ? ' data-preview-ready="1"' : '');
         }
     }
-    $stripAttr = '';
-    if (is_video_file($file) && ENABLE_VIDEO_PREVIEWS && $videoDuration !== null && $videoDuration >= 1 && video_previews_expected()) {
-        $stripBase = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'strip', resolve_real_path($GLOBALS['dir'], $file));
-        if ($stripBase !== null && !(is_file($stripBase . '.failed') && !is_file($stripBase))) {
-            $stripAttr = ' data-strip="?strip=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '" data-strip-frames="' . video_strip_frames($videoDuration) . '"'
-                . (is_file($stripBase) ? ' data-strip-ready="1"' : '');
-        }
-    }
-    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $previewAttr . $stripAttr . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $previewAttr . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $tileVideo . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -9264,9 +9187,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .card .tile-video.ready { opacity: 1; }
   .card .tile-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
   .card .tile-preview.ready { opacity: 1; }
-  /* Dragging a finger sideways across a video tile scrubs through it; up and down still scrolls the page. */
-  .card[data-strip], .card:has(.tile-video) { touch-action: pan-y; }
-  .card .tile-strip { position: absolute; inset: 0; background-repeat: no-repeat; pointer-events: none; }
   .card:hover .tile-video { transform: scale(1.05); }
   .card.sold img, .card.sold .tile-video { filter: grayscale(1) brightness(0.6); }
   .sold-badge-corner, .reserved-badge-corner {
@@ -9916,7 +9836,7 @@ if (ENABLE_MAP && $mapPoints) {
   });
 
   function openLightbox(index) {
-    if (window.__scrubbedAt && Date.now() - window.__scrubbedAt < 600) return;   // the tap that ends a finger-scrub of a video tile is not a tap
+    if (window.__previewHalt) window.__previewHalt();   // a clip playing on a tile stops while the viewer is open
     current = index;
     updateImage();
     lightbox.classList.add('open');
@@ -9926,6 +9846,7 @@ if (ENABLE_MAP && $mapPoints) {
     if (typeof setZoom === 'function' && zoomMode !== 'fit') setZoom('fit');
     lightbox.classList.remove('open');
     lightboxVideo.pause();
+    if (window.__previewResume) window.__previewResume();
   }
   // The arrows stay inside the folder the open photo is in: a folder is its own set, however the page lays
   // folders out, so Next from the last photo of one folder goes back to that folder's first, not into another's.
@@ -9943,16 +9864,34 @@ if (ENABLE_MAP && $mapPoints) {
     current = set[(at + delta + set.length) % set.length];
     updateImage();
   }
-  // Hovering over a video tile plays a short silent loop: the made clip where the server has one, otherwise the video itself
-  // (the first-frame element below) where the browser can play it. Only for a real pointer that hovers (not a touch screen).
-  // The pointer has to rest on a tile for a moment, so sweeping across a row starts nothing; only one tile ever plays, and
-  // starting one (or leaving, scrolling, switching tab) stops the previous completely, download included.
-  if (window.matchMedia && window.matchMedia('(hover: hover)').matches) {
-    let active = null, pending = null;
-    const halt = function () {
-      if (pending) { clearTimeout(pending); pending = null; }
-      if (active) { const a = active; active = null; a.stop(); }
+  // Video tile clips. A made clip (a few seconds, silent, looping) plays over the tile: on a desktop when the pointer rests on
+  // it, on a touch screen for the tile nearest the middle of the screen once the page has stopped moving. Only one plays at a
+  // time, and starting another (or scrolling, leaving, switching tab, opening the viewer) stops the previous completely,
+  // download included. Where the server has no clip, a desktop hover plays the video itself where the browser can. Nothing
+  // plays by itself for someone who asked their device for reduced motion or for less data.
+  const hoverish = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+  const calmDevice = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) || !!(navigator.connection && navigator.connection.saveData);
+  let active = null, pending = null;
+  const halt = function () {
+    if (pending) { clearTimeout(pending); pending = null; }
+    if (active) { const a = active; active = null; a.stop(); }
+  };
+  window.__previewHalt = halt;
+  const makeClip = function (card) {
+    const el = document.createElement('video');
+    el.className = 'tile-preview'; el.muted = true; el.loop = true; el.playsInline = true; el.preload = 'auto'; el.setAttribute('aria-hidden', 'true'); el.tabIndex = -1;
+    const handle = {
+      card: card, el: el,
+      stop: function () { el.pause(); el.removeAttribute('src'); try { el.load(); } catch (e) {} el.remove(); }
     };
+    el.addEventListener('error', function () { if (active === handle) active = null; handle.stop(); });
+    el.addEventListener('playing', function () { el.classList.add('ready'); });
+    el.src = card.dataset.preview;
+    card.appendChild(el);
+    const p = el.play(); if (p && p.catch) p.catch(function () { if (active === handle) active = null; handle.stop(); });
+    return handle;
+  };
+  if (hoverish) {
     const attach = function (card, start) {
       card.addEventListener('mouseenter', function () {
         halt();
@@ -9960,38 +9899,47 @@ if (ENABLE_MAP && $mapPoints) {
       });
       card.addEventListener('mouseleave', halt);
     };
-    document.querySelectorAll('.card[data-preview]').forEach(function (card) {
-      attach(card, function () {
-        const el = document.createElement('video');
-        el.className = 'tile-preview'; el.muted = true; el.loop = true; el.playsInline = true; el.preload = 'auto'; el.setAttribute('aria-hidden', 'true'); el.tabIndex = -1;
-        const handle = {
-          el: el,
-          stop: function () { el.pause(); el.removeAttribute('src'); try { el.load(); } catch (e) {} el.remove(); }
-        };
-        el.addEventListener('error', function () { if (active === handle) active = null; handle.stop(); });
-        el.addEventListener('playing', function () { el.classList.add('ready'); });
-        el.src = card.dataset.preview;
-        card.appendChild(el);
-        const p = el.play(); if (p && p.catch) p.catch(function () {});
-        return handle;
-      });
-    });
+    document.querySelectorAll('.card[data-preview]').forEach(function (card) { attach(card, makeClip); });
     document.querySelectorAll('.card:not([data-preview]) .tile-video').forEach(function (v) {
       attach(v.closest('.card'), function () {
         if (!v.classList.contains('ready')) return null;
         v.loop = true; const p = v.play(); if (p && p.catch) p.catch(function () {});
-        return { el: v, stop: function () { v.pause(); try { v.currentTime = 0.1; } catch (e) {} } };
+        return { card: v.closest('.card'), el: v, stop: function () { v.pause(); try { v.currentTime = 0.1; } catch (e) {} } };
       });
     });
     window.addEventListener('blur', halt);
     window.addEventListener('scroll', halt, { passive: true });
     document.addEventListener('visibilitychange', halt);
+  } else if (!calmDevice) {
+    const cards = Array.prototype.slice.call(document.querySelectorAll('.card[data-preview]'));
+    if (cards.length) {
+      let timer = null;
+      const choose = function () {
+        timer = null;
+        if (document.hidden || lightbox.classList.contains('open')) { halt(); return; }
+        const mid = window.innerHeight / 2;
+        let best = null, bestDist = Infinity;
+        cards.forEach(function (card) {
+          const r = card.getBoundingClientRect();
+          if (Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0) < r.height * 0.65) return;   // mostly on screen
+          const d = Math.abs((r.top + r.bottom) / 2 - mid);
+          if (d < bestDist) { best = card; bestDist = d; }
+        });
+        if (best && active && active.card === best) return;
+        halt();
+        if (best) active = makeClip(best);
+      };
+      const schedule = function () { if (timer) clearTimeout(timer); timer = setTimeout(choose, 400); };
+      window.addEventListener('scroll', function () { halt(); schedule(); }, { passive: true });   // stops while the page moves, picks again when it settles
+      window.addEventListener('resize', schedule);
+      document.addEventListener('visibilitychange', function () { halt(); schedule(); });
+      window.addEventListener('pageshow', schedule);
+      window.__previewResume = schedule;
+      schedule();
+    }
   }
-  // Getting the clips (and, on a touch screen, the scrub strips) ready before anyone needs them: once the page is up, the
-  // tiles in view whose file isn't made yet are asked to make it, one request at a time, a dozen at most, with nothing to
-  // download. Stops at the first refusal.
-  const touchy = (navigator.maxTouchPoints || 0) > 0 || !(window.matchMedia && window.matchMedia('(hover: hover)').matches);
-  const hoverish = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+  // Getting the clips ready before anyone needs them: once the page is up, the tiles in view whose clip isn't made yet are
+  // asked to make it, one request at a time, a dozen at most, with nothing to download. Stops at the first refusal.
   function warmUp(attr) {
     const cards = Array.prototype.slice.call(document.querySelectorAll('.card[' + attr + ']:not([' + attr + '-ready])'));
     if (!cards.length || typeof IntersectionObserver === 'undefined' || typeof fetch === 'undefined') return;
@@ -10012,61 +9960,7 @@ if (ENABLE_MAP && $mapPoints) {
     cards.forEach(function (c) { io.observe(c); });
     document.addEventListener('visibilitychange', function () { if (!document.hidden) next(); });
   }
-  if (hoverish) warmUp('data-preview');
-  if (touchy) warmUp('data-strip');
-  // Scrubbing a video tile with a finger: a horizontal drag across it shows the frame under the finger (from the strip the
-  // server made, or, where there is no strip, by seeking the browser's own copy of the video); a vertical drag is still the
-  // page scrolling, and a drag never opens the viewer.
-  function scrubbable(card, source) {
-    let sx = 0, sy = 0, tracking = false, scrubbing = false, overlay = null, img = null;
-    const frac = function (x) { const r = card.getBoundingClientRect(); return Math.min(0.999, Math.max(0, (x - r.left) / r.width)); };
-    const show = function (x) {
-      if (source.strip) {
-        const r = card.getBoundingClientRect(), n = source.frames;
-        const i = Math.floor(frac(x) * n), scale = r.height / img.naturalHeight, cell = img.naturalWidth / n * scale;
-        overlay.style.backgroundSize = (img.naturalWidth * scale) + 'px ' + r.height + 'px';
-        overlay.style.backgroundPosition = (-(i * cell) + (r.width - cell) / 2) + 'px 0';
-      } else if (source.video.duration) {
-        try { source.video.currentTime = frac(x) * source.video.duration; } catch (e) {}
-      }
-    };
-    card.addEventListener('touchstart', function (e) {
-      if (e.touches.length !== 1) { tracking = false; return; }
-      tracking = true; scrubbing = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-      if (source.strip && !img) { img = new Image(); img.src = source.strip; }
-    }, { passive: true });
-    card.addEventListener('touchmove', function (e) {
-      if (!tracking) return;
-      const t = e.touches[0];
-      if (!scrubbing) {
-        const dx = Math.abs(t.clientX - sx), dy = Math.abs(t.clientY - sy);
-        if (dx < 8 && dy < 8) return;
-        if (dy > dx) { tracking = false; return; }
-        if (source.strip) {
-          if (!img.complete || !img.naturalWidth) return;
-          overlay = document.createElement('div'); overlay.className = 'tile-strip';
-          overlay.style.backgroundImage = 'url("' + img.src.replace(/"/g, '%22') + '")';
-          card.appendChild(overlay);
-        } else if (!source.video.classList.contains('ready')) { tracking = false; return; }
-        scrubbing = true;
-      }
-      e.preventDefault();
-      show(t.clientX);
-    }, { passive: false });
-    const end = function () {
-      tracking = false;
-      if (scrubbing) { scrubbing = false; window.__scrubbedAt = Date.now(); }
-      if (overlay) { overlay.remove(); overlay = null; }
-    };
-    card.addEventListener('touchend', end);
-    card.addEventListener('touchcancel', end);
-  }
-  document.querySelectorAll('.card[data-strip]').forEach(function (card) {
-    scrubbable(card, { strip: card.getAttribute('data-strip'), frames: Number(card.getAttribute('data-strip-frames')) || 12 });
-  });
-  document.querySelectorAll('.card:not([data-strip]) .tile-video').forEach(function (v) {
-    scrubbable(v.closest('.card'), { strip: null, video: v });
-  });
+  warmUp('data-preview');
   // A video's own first frame over its placeholder, once the browser has one; if it can't play the video, nothing changes.
   document.querySelectorAll('.tile-video').forEach(function (v) {
     const ready = function () { v.classList.add('ready'); };

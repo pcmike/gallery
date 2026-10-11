@@ -3975,26 +3975,6 @@ fgets($vtHoldPipes[1]);   // it has the turn now
 $vtT0 = microtime(true); [$lateSt, $lateBody] = http_get("$vtBase/?preview=late.mp4"); $vtWaited = microtime(true) - $vtT0;
 proc_close($vtHolder);
 check('[video previews] a request that comes while another is being made waits its turn (here about two seconds) and then gets its clip, instead of being refused', $lateSt === 200 && $lateBody === file_get_contents($vtFrame) && $vtWaited > 1.2 && $vtWaited < 10);
-// The strip a finger scrubs through on a phone.
-if (!is_file("$vtDir/warm.mp4")) make_minimal_mp4("$vtDir/warm.mp4", 3);
-$vtStrips = fn () => (int) trim((string) shell_exec('grep -c -e "tile=12x1" ' . escapeshellarg($vtLog) . ' 2>/dev/null'));
-$stBefore = $vtStrips();
-$stHome = http_get("$vtBase/")[1];
-check('[video scrub] with ffmpeg a video tile carries the address of its strip of frames (and how many), a photo\'s does not', (bool) preg_match('#data-strip="\\?strip=clip\\.mp4&amp;v=[0-9a-f]+" data-strip-frames="12"#', $stHome));
-[$sSt, $sBody, $sHd] = http_get("$vtBase/?strip=clip.mp4");
-$sType = ''; foreach ($sHd as $h) if (stripos($h, 'Content-Type:') === 0) $sType = trim(substr($h, 13));
-$sLog = (string) file_get_contents($vtLog);
-check('[video scrub] the strip is made once, as one JPEG of twelve square frames across a short video, with no sound and no metadata, never through a shell', $sSt === 200 && $sType === 'image/jpeg' && $sBody === file_get_contents($vtFrame) && $vtStrips() === $stBefore + 1 && str_contains($sLog, 'fps=') && str_contains($sLog, 'crop=min(iw') && str_contains($sLog, 'scale=200:200,tile=12x1') && str_contains($sLog, '-an') && str_contains($sLog, '-map_metadata -1'));
-http_get("$vtBase/?strip=clip.mp4");
-check('[video scrub] it is kept: asking again makes nothing, and a warm-up for a video without one makes it and answers 204 with no body', $vtStrips() === $stBefore + 1 && http_get("$vtBase/?strip=warm.mp4&warm=1")[0] === 204 && $vtStrips() === $stBefore + 2 && count(glob("$vtDir/.gallery-cache/*.jpg")) > 0);
-check('[video scrub] a tile whose strip exists says so, so a page of ready strips asks for nothing', (bool) preg_match('#data-strip="\\?strip=clip\\.mp4[^"]*" data-strip-frames="12" data-strip-ready="1"#', http_get("$vtBase/")[1]));
-make_minimal_mp4("$vtDir/long.mp4", 60); make_minimal_mp4("$vtDir/medium.mp4", 30);
-$stLongBefore = (int) trim((string) shell_exec('grep -c -e "tile=40x1" ' . escapeshellarg($vtLog) . ' 2>/dev/null'));
-http_get("$vtBase/?strip=long.mp4&warm=1"); http_get("$vtBase/?strip=medium.mp4&warm=1");
-$stLogNow = (string) file_get_contents($vtLog);
-$stHomeLong = http_get("$vtBase/")[1];
-check('[video scrub] a longer video gets more frames (about one every second and a half: 12 up to 18 seconds, 20 for 30 seconds, 40 from a minute), and the tile says how many', substr_count($stLogNow, 'tile=40x1') === $stLongBefore + 1 && str_contains($stLogNow, 'tile=20x1') && (bool) preg_match('#data-strip="\\?strip=long\\.mp4[^"]*" data-strip-frames="40"#', $stHomeLong) && (bool) preg_match('#data-strip="\\?strip=medium\\.mp4[^"]*" data-strip-frames="20"#', $stHomeLong));
-check('[video scrub] not a photo, a missing video or a path outside the gallery', http_get("$vtBase/?strip=nope.mp4")[0] === 404 && http_get("$vtBase/?strip=../index.php")[0] === 404 && http_get("$vtBase/?strip[]=clip.mp4")[0] === 404);
 // Warming: the page asks quietly for the clips of the tiles in view, with nothing to download.
 $vtWarmFile = "$vtDir/warm.mp4"; if (!is_file($vtWarmFile)) make_minimal_mp4($vtWarmFile, 3);
 $vtBefore = $vtClips();
@@ -4016,7 +3996,6 @@ check('[video pictures] a video in a folder gets its own picture, kept in that f
 touch("$vtDir/clip.mp4", time() + 5);
 http_get("$vtBase/?img=clip.mp4&size=thumb");
 check('[video pictures] a video that is replaced gets a new picture', $vtCount() === 4);
-check('[video scrub] a private video has no strip for anyone who is not signed in either, and ffmpeg is not run for the asking', (function () use ($vtDir, $vtBase, $vtStrips) { write_data_file("$vtDir/.gallery-items.php", ['items' => ['clip.mp4' => ['restriction' => 'private']], 'groups' => []]); $n = $vtStrips(); return http_get("$vtBase/?strip=clip.mp4")[0] === 404 && http_get("$vtBase/?strip=clip.mp4&warm=1")[0] === 404 && $vtStrips() === $n; })());
 check('[video previews] a private video has no clip for anyone who is not signed in either (the gate is before ffmpeg)', (function () use ($vtDir, $vtBase, $vtClips) { write_data_file("$vtDir/.gallery-items.php", ['items' => ['clip.mp4' => ['restriction' => 'private']], 'groups' => []]); $n = $vtClips(); return http_get("$vtBase/?preview=clip.mp4")[0] === 404 && $vtClips() === $n; })());
 check('[video pictures] nobody can have it for a private video (the gate is before ffmpeg), and ffmpeg is not run for the asking', (function () use ($vtDir, $vtBase, $vtCount) { write_data_file("$vtDir/.gallery-items.php", ['items' => ['clip.mp4' => ['restriction' => 'private']], 'groups' => []]); $n = $vtCount(); return http_get("$vtBase/?img=clip.mp4&size=thumb")[0] === 404 && $vtCount() === $n; })());
 // A failing ffmpeg: the placeholder, and not tried over and over.
@@ -4035,7 +4014,6 @@ file_put_contents($vtLog, '');
 [, $voBase] = $vtSite('off', ['FFMPEG_PATH' => $vtOk, 'ENABLE_VIDEO_THUMBNAILS' => false, 'ENABLE_VIDEO_PREVIEWS' => false], ['clip.mp4' => 3]);
 $vOff = $vtCenter(http_get("$voBase/?img=clip.mp4&size=thumb")[1]);
 check('[video pictures] switched off, it is the placeholder and ffmpeg is never started', $vOff !== null && $vOff[0] < 80 && $vtCount() === 0 && !str_contains((string) file_get_contents($vtLog), '-version'));
-check('[video scrub] switched off there is no strip either: no address on the tile, a 404, and ffmpeg is not started', http_get("$voBase/?strip=clip.mp4")[0] === 404 && !str_contains(http_get("$voBase/")[1], 'data-strip='));
 check('[video previews] switched off, there is no clip, no address on the tile, and ffmpeg is not started', http_get("$voBase/?preview=clip.mp4")[0] === 404 && !str_contains(http_get("$voBase/")[1], 'data-preview=') && $vtClips() === 0);
 [, $vnBase] = $vtSite('none', ['FFMPEG_PATH' => '/nonexistent/ffmpeg'], ['clip.mp4' => 3]);
 $vNone = $vtCenter(http_get("$vnBase/?img=clip.mp4&size=thumb")[1]);
@@ -4057,8 +4035,6 @@ if ($realFf !== '' && is_executable($realFf)) {
     $rfPort = find_free_port(); start_server($rfDir, $rfPort);
     $rf = $vtCenter(http_get("http://127.0.0.1:$rfPort/?img=real.mp4&size=thumb")[1]);
     [$rpSt, $rpBody] = http_get("http://127.0.0.1:$rfPort/?preview=real.mp4");
-    [$rsSt, $rsBody] = http_get("http://127.0.0.1:$rfPort/?strip=real.mp4"); $rsSize = @getimagesizefromstring($rsBody);
-    check('[video scrub] with the real ffmpeg the strip is one JPEG of twelve 200-pixel square frames (2400 x 200, each cut from the middle of the picture), and its twelfth frame is a picture, not padding', $rsSt === 200 && $rsSize !== false && $rsSize[0] === 2400 && $rsSize[1] === 200 && (function () use ($rsBody) { $im = imagecreatefromstring($rsBody); $c = imagecolorat($im, 2400 - 100, 100); return (($c >> 16) & 255) + (($c >> 8) & 255) + ($c & 255) > 60; })());
     check('[video previews] with the real ffmpeg the clip is a small silent MP4 (an ftyp box at the start, under 400 KB for a 3-second 360-pixel clip)', $rpSt === 200 && substr($rpBody, 4, 4) === 'ftyp' && strlen($rpBody) < 400000 && strlen($rpBody) > 1000 && !str_contains($rpBody, 'mp4a'));
     check('[video pictures] with the real ffmpeg: a 640x360 clip gives a 480x270 thumbnail that is a picture of the video (not the placeholder)', is_file("$rfDir/real.mp4") && $rf !== null && $rf[3] === 480 && $rf[4] === 270 && $rf[0] > 150 && $rf[1] > 150);
 } else {
