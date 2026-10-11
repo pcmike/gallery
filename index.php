@@ -7002,7 +7002,12 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     if ($coverFile !== null) {
-        $html .= '<img src="' . htmlspecialchars(img_url($coverFile, 'thumb'), ENT_QUOTES, 'UTF-8')
+        // On a page of only a few folders the cards are large: offer the bigger picture too, and let the browser take it only
+        // when the card is wide enough to need it (a phone keeps the small one).
+        $srcset = !empty($GLOBALS['__big_covers'])
+            ? '" srcset="' . htmlspecialchars(img_url($coverFile, 'thumb'), ENT_QUOTES, 'UTF-8') . ' 480w, ' . htmlspecialchars(img_url($coverFile, 'share'), ENT_QUOTES, 'UTF-8') . ' 1200w" sizes="(min-width: 640px) 520px, 100vw'
+            : '';
+        $html .= '<img src="' . htmlspecialchars(img_url($coverFile, 'thumb'), ENT_QUOTES, 'UTF-8') . $srcset
                 . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">';
     }
     $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
@@ -7411,7 +7416,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
      change). Keyboard focus still shows the browser's normal ring. */
   /* The lock beside the title: quiet until pointed at. */
   header h1 .lock-form { display: inline; margin: 0; }
-  header h1 .lock-link { display: inline-block; margin-left: 6px; padding: 0; vertical-align: 0.1em; background: none; border: 0; cursor: pointer; font-size: 0.62em; color: var(--muted); opacity: 0.7; line-height: 1; text-decoration: none; }
+  header h1 .lock-link { display: inline-block; margin-left: 3px; padding: 0; vertical-align: 0.1em; background: none; border: 0; cursor: pointer; font-size: 0.62em; color: var(--muted); opacity: 0.7; line-height: 1; text-decoration: none; }
   header h1 .lock-link:hover, header h1 .lock-link:focus-visible { opacity: 1; color: var(--text); }
   header h1 .lock-link.open { color: #3ba55c; opacity: 0.85; }
   header h1 a.title-admin {
@@ -7625,15 +7630,20 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* A few folder cards and nothing else: larger on a wide screen, centred. Narrower screens keep the normal grid. */
   .gallery[class*="covers-"] .folder-cover-link img { aspect-ratio: 4 / 3; }
   .gallery[class*="covers-"] .folder-cover-label { font-size: 1.1rem; }
+  /* The box is as wide as its cards need, so the map buttons above (same class) share the first card's left edge. */
+  .gallery.covers-1, .map-preview.covers-1 { max-width: 608px; }
+  .gallery.covers-2, .map-preview.covers-2 { max-width: 1106px; }
+  .gallery.covers-3, .map-preview.covers-3 { max-width: 1280px; }
+  .gallery.covers-4, .map-preview.covers-4 { max-width: 1290px; }
   @media (min-width: 640px) {
-    .gallery.covers-1 { grid-template-columns: minmax(0, 560px); justify-content: center; }
-    .gallery.covers-2 { grid-template-columns: repeat(2, minmax(0, 520px)); justify-content: center; gap: 18px; }
+    .gallery.covers-1 { grid-template-columns: minmax(0, 1fr); }
+    .gallery.covers-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   }
   @media (min-width: 860px) {
-    .gallery.covers-3 { grid-template-columns: repeat(3, minmax(0, 400px)); justify-content: center; gap: 16px; }
+    .gallery.covers-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
   }
   @media (min-width: 1080px) {
-    .gallery.covers-4 { grid-template-columns: repeat(4, minmax(0, 300px)); justify-content: center; gap: 14px; }
+    .gallery.covers-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
   }
   .group-box {
     grid-column: 1 / -1;
@@ -7981,11 +7991,11 @@ $lockHtml = '';
 if (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems) {
     $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
     if (is_admin_browser()) {
-        $lockHtml = ' <a class="lock-link open" href="?admin' . $lockFolderQuery . '" rel="nofollow" title="You are signed in as the owner, so private items show. Open the admin." aria-label="Private items are showing (owner). Open the admin.">' . ui_icon('unlock') . '</a>';
+        $lockHtml = '<a class="lock-link open" href="?admin' . $lockFolderQuery . '" rel="nofollow" title="You are signed in as the owner, so private items show. Open the admin." aria-label="Private items are showing (owner). Open the admin.">' . ui_icon('unlock') . '</a>';
     } elseif (is_revealed()) {
-        $lockHtml = ' <form method="post" action="?reveal" class="lock-form"><input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '"><button type="submit" name="logout" value="1" class="lock-link open" title="Private items are showing. Press to lock them again." aria-label="Private items are showing. Press to lock them again.">' . ui_icon('unlock') . '</button></form>';
+        $lockHtml = '<form method="post" action="?reveal" class="lock-form"><input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '"><button type="submit" name="logout" value="1" class="lock-link open" title="Private items are showing. Press to lock them again." aria-label="Private items are showing. Press to lock them again.">' . ui_icon('unlock') . '</button></form>';
     } else {
-        $lockHtml = ' <a class="lock-link" href="?reveal' . $lockFolderQuery . '" rel="nofollow" title="This gallery has private items. Enter the password to see them." aria-label="This gallery has private items. Enter the password to see them.">' . ui_icon('lock') . '</a>';
+        $lockHtml = '<a class="lock-link" href="?reveal' . $lockFolderQuery . '" rel="nofollow" title="This gallery has private items. Enter the password to see them." aria-label="This gallery has private items. Enter the password to see them.">' . ui_icon('lock') . '</a>';
     }
 }
 ?>
@@ -8227,6 +8237,14 @@ if ($currentFolderPath !== null) {
 <?php endif; ?>
 
 <?php
+// A page of nothing but a few folder cards gets bigger cards on a wide screen (two folders shouldn't be two small tiles
+// in a big empty page). The map buttons above them use the same width, so they line up with the first card's corner.
+// Anything else, and every phone, keeps the usual grid.
+$coverCount = FOLDER_DISPLAY_MODE === 'overview' ? count($folderGroupKeys) : 0;
+$fewCovers = ($coverCount >= 1 && $coverCount <= 4 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
+$GLOBALS['__big_covers'] = $fewCovers !== '';
+?>
+<?php
 // A note can colour a group or folder ({color:}) or mark it sold/reserved: its photos' pins follow.
 if (ENABLE_MAP && $mapPoints) {
     $mapPoints = apply_note_colors_to_points($mapPoints, $groups, $groupColors, $groupStatus, $groupLabels);
@@ -8234,7 +8252,7 @@ if (ENABLE_MAP && $mapPoints) {
 }
 ?>
 <?php if ($mapShown && !empty($mapPoints)): ?>
-  <section class="map-preview" id="map-preview">
+  <section class="map-preview<?= $fewCovers ?>" id="map-preview">
     <h2 class="map-preview-heading">
       <span class="map-combo">
         <button type="button" class="map-combo-btn" id="map-toggle" title="Show map" aria-expanded="false" aria-controls="map-preview-body"><?= ui_icon('map') ?><span class="map-toggle-label">Show map</span></button>
@@ -8258,12 +8276,6 @@ if (ENABLE_MAP && $mapPoints) {
 <?php if (empty($files)): ?>
   <div class="empty">No photos found in this folder.</div>
 <?php else: ?>
-  <?php
-  // A page of nothing but a few folder cards gets bigger cards on a wide screen (two folders shouldn't be two small
-  // tiles in a big empty page). Anything else, and every phone, keeps the usual grid.
-  $coverCount = FOLDER_DISPLAY_MODE === 'overview' ? count($folderGroupKeys) : 0;
-  $fewCovers = ($coverCount >= 1 && $coverCount <= 4 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
-  ?>
   <div class="gallery<?= $fewCovers ?>">
     <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix) ?>
   </div>
