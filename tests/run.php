@@ -2471,7 +2471,8 @@ write_data_file("$fxLk/.gallery-items.php", ['items' => ['b.jpg' => ['restrictio
 $lkHome = http_get("$baseLk/")[1];
 check('[lock] ...and once a photo is private the closed lock appears', str_contains($lkHome, 'class="lock-link" href="?reveal"') && !str_contains($lkHome, 'alt="b.jpg"'));
 [, $lkForm] = http_get("$baseLk/?reveal");
-check('[lock] the sign-in just says "Enter your password.": no mention that there are two kinds of password', str_contains($lkForm, 'Enter your password.') && str_contains($lkForm, 'name="login_password"') && !str_contains($lkForm, 'admin') && !str_contains($lkForm, 'private-view') && !str_contains($lkForm, 'Private view'));
+$lkFormText = preg_replace('#<(script|style)\b.*?</\1>#s', '', $lkForm);
+check('[lock] the sign-in just says "Enter your password" (once, as its heading): no mention that there are two kinds of password', substr_count($lkFormText, 'Enter your password') === 2 && str_contains($lkForm, '<h1>Enter your password</h1>') && !str_contains($lkForm, 'Sign in') && str_contains($lkForm, 'name="login_password"') && !str_contains($lkFormText, 'admin') && !str_contains($lkFormText, 'private-view') && !str_contains($lkFormText, 'Private view'));
 [$lkBadSt, $lkBad] = http_post("$baseLk/?reveal", ['login_password' => 'nope'], [], false);
 check('[lock] a wrong password is refused with a message', $lkBadSt === 200 && str_contains($lkBad, "isn't right") || str_contains($lkBad, 'isn&#039;t right'));
 $fxLk2 = new_fixture_dir('lockboth');
@@ -2501,7 +2502,7 @@ check('[lock] the admin\'s own Log out from a folder lands on that folder\'s gal
 [, $lkCancelRoot] = http_get("$baseLk2/?reveal");
 [, $lkCancelFolder] = http_get("$baseLk2/?reveal&folder=Sub&photo=Sub%2Fb.jpg");
 [, $lkCancelAdmin] = http_get("$baseLk2/?admin&folder=Sub");
-check('[lock] the sign-in has a Cancel link back to the page the visitor came from (a curious visitor with no password is not stuck)', str_contains($lkCancelRoot, 'class="cancel" href="./">Cancel</a>') && str_contains($lkCancelFolder, 'class="cancel" href="./?folder=Sub&amp;photo=Sub%2Fb.jpg">Cancel</a>') && str_contains($lkCancelAdmin, 'class="cancel" href="./?folder=Sub">Cancel</a>'));
+check('[lock] the sign-in has a grey "Go Back" button that returns to the page the visitor came from, placed before Continue on the same row (a curious visitor with no password is not stuck)', (bool) preg_match('#<div class="actions">\s*<a class="cancel" id="goback" href="./">&larr; Go Back</a>\s*<button type="submit">Continue</button>#', $lkCancelRoot) && str_contains($lkCancelRoot, '.cancel { background:#2a2a2e; color:#c8c8cd; }') && str_contains($lkCancelFolder, 'class="cancel" id="goback" href="./?folder=Sub&amp;photo=Sub%2Fb.jpg">&larr; Go Back</a>') && str_contains($lkCancelAdmin, 'class="cancel" id="goback" href="./?folder=Sub">&larr; Go Back</a>'));
 check('[lock] the gallery title is no longer a link to the admin for anyone', !str_contains($lkOwnerHome, 'title-admin') && !str_contains(http_get("$baseLk2/")[1], 'title-admin'));
 
 echo "== a folder opens on its chosen cover photo ==\n";
@@ -3098,7 +3099,7 @@ check('[login] logging out redirects away and expires the cookies', $s6 === 303 
 check('[login] after logging out, the old cookie no longer opens the admin', str_contains(http_get("$baseLogin/?admin", ["Cookie: $loginCookie"])[1], 'name="login_password"'));
 // The private view uses the same kind of form.
 [$sv1, $bv1] = http_get("$baseLogin/?reveal");
-check('[login] ?reveal (the sign-in the lock leads to) shows a one-field password form, headed Sign in because both passwords exist', $sv1 === 200 && str_contains($bv1, 'name="login_password"') && str_contains($bv1, 'Sign in'));
+check('[login] ?reveal (the sign-in the lock leads to) shows a one-field password form headed "Enter your password"', $sv1 === 200 && str_contains($bv1, 'name="login_password"') && str_contains($bv1, '<h1>Enter your password</h1>'));
 [$sv2, , $hv2] = http_post("$baseLogin/?reveal", ['login_password' => 'view-pw'], [], false);
 check('[login] the right private-view password redirects to the plain gallery and sets the viewer cookie', $sv2 === 302 && str_contains($cookieOf($hv2), '='));
 // Five wrong passwords lock the next attempt for a minute, even a right one.

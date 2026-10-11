@@ -2133,7 +2133,7 @@ function admin_credentials_valid() {
  *  and a stale saved password must not bring that dialog back. */
 function admin_reject_saved_credentials() {
     http_response_code(401);
-    render_login_page('Sign in', 'Enter your password.', 'Your browser sent a saved password that doesn\'t match the current one. Type your current password below.');
+    render_login_page('Enter your password', '', 'Your browser sent a saved password that doesn\'t match the current one. Type your current password below.');
 }
 
 /** The password form for ?admin and ?reveal: one field, no username, no
@@ -2169,23 +2169,37 @@ function render_login_page($heading, $blurb, $error = '') {
   p { color:#9a9aa0; font-size:0.9rem; margin:0 0 18px; }
   input[type=password] { width:100%; box-sizing:border-box; padding:10px 12px; font-size:1rem; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:8px; }
   input[type=password]:focus { outline:2px solid #5865f2; outline-offset:1px; }
-  button { margin-top:12px; width:100%; padding:10px 12px; font-size:1rem; background:#5865f2; color:#fff; border:0; border-radius:8px; cursor:pointer; }
+  .actions { display:flex; gap:10px; margin-top:12px; }
+  button, .cancel { flex:1; box-sizing:border-box; padding:10px 12px; font-size:1rem; border:0; border-radius:8px; cursor:pointer; text-align:center; text-decoration:none; font-family:inherit; line-height:1.4; }
+  button { background:#5865f2; color:#fff; }
   .err { background:rgba(237,66,69,0.15); color:#ff8a8c; padding:8px 12px; border-radius:8px; font-size:0.9rem; margin-bottom:12px; }
-  .cancel { display:block; margin-top:16px; text-align:center; color:#9a9aa0; font-size:0.9rem; text-decoration:none; }
-  .cancel:hover { color:#eaeaea; text-decoration:underline; }
+  .cancel { background:#2a2a2e; color:#c8c8cd; }
+  .cancel:hover { background:#34343a; color:#eaeaea; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1><?= htmlspecialchars($heading, ENT_QUOTES, 'UTF-8') ?></h1>
-  <p><?= htmlspecialchars($blurb, ENT_QUOTES, 'UTF-8') ?></p>
+  <?php if ($blurb !== ''): ?><p><?= htmlspecialchars($blurb, ENT_QUOTES, 'UTF-8') ?></p><?php endif; ?>
   <?php if ($error !== ''): ?><div class="err" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
   <form method="post" action="">
     <input type="password" name="login_password" autocomplete="current-password" autofocus required aria-label="Password">
-    <button type="submit">Continue</button>
+    <div class="actions">
+      <a class="cancel" id="goback" href="./<?= htmlspecialchars(login_return_query(), ENT_QUOTES, 'UTF-8') ?>">&larr; Go Back</a>
+      <button type="submit">Continue</button>
+    </div>
   </form>
-  <a class="cancel" href="./<?= htmlspecialchars(login_return_query(), ENT_QUOTES, 'UTF-8') ?>">Cancel</a>
 </div>
+<script>
+  // "Go Back" really goes back to where the visitor was (same scroll position, same open photo), when they came from a
+  // page of this site; otherwise (a typed address, or after a wrong password) its link takes them to that page.
+  document.getElementById('goback').addEventListener('click', function (e) {
+    try {
+      var ref = document.referrer ? new URL(document.referrer) : null;
+      if (ref && ref.origin === location.origin && history.length > 1 && !/[?&](reveal|admin)\b/.test(ref.search)) { e.preventDefault(); history.back(); }
+    } catch (x) {}
+  });
+</script>
 </body>
 </html>
 <?php
@@ -2519,8 +2533,8 @@ function run_reveal_route($dir) {
     }
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
     // One plain prompt, whichever password it turns out to be.
-    $heading = 'Sign in';
-    $prompt = 'Enter your password.';
+    $heading = 'Enter your password';
+    $prompt = '';
     // The form is the normal way in; a Basic Authorization header (a script,
     // a bookmarked login) is still honored. Only a password that was
     // actually *supplied* and wrong counts against the throttle: a plain
@@ -5554,7 +5568,7 @@ function run_admin_setup() {
             $manual = (string) ($result['manual'] ?? '');
             if (!empty($result['taken'])) {
                 // Someone else got there first: this is a login page now.
-                render_login_page('Sign in', 'Enter your password.', $error);
+                render_login_page('Enter your password', '', $error);
                 return;
             }
         }
@@ -5602,7 +5616,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         } elseif ($formPass !== null) {
             if (!hash_equals(ADMIN_PASSWORD, $formPass)) {
                 login_throttle_record_failure($dir, 'admin', $ip);
-                render_login_page('Sign in', 'Enter your password.', 'That password isn\'t right.');
+                render_login_page('Enter your password', '', 'That password isn\'t right.');
                 return;
             }
             // A fresh session id at the moment of login, so nothing issued
@@ -5615,7 +5629,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin'), true, 303);
             return;
         } else {
-            render_login_page('Sign in', 'Enter your password.', $_SERVER['REQUEST_METHOD'] === 'POST' ? 'Your session expired. Sign in again, then repeat that change.' : '');
+            render_login_page('Enter your password', '', $_SERVER['REQUEST_METHOD'] === 'POST' ? 'Your session expired. Sign in again, then repeat that change.' : '');
             return;
         }
     }
