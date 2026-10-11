@@ -217,6 +217,10 @@ function read_data_file($path) {
 /** The settings file (.gallery-config.php): the 404 guard line, then JSON. */
 $cfgGuard = "<?php http_response_code(404); exit; ?>\n";
 function cfg_text($settings) { return $GLOBALS['cfgGuard'] . json_encode($settings === [] ? new stdClass() : $settings, JSON_HEX_TAG) . "\n"; }
+/** The settings file keeps passwords as hashes: does $stored belong to $plain? */
+function pw_stored_ok($stored, $plain) { return is_string($stored) && str_starts_with($stored, '$2y$') && password_verify($plain, $stored); }
+/** The settings, with a password that is stored as a hash of the given plain one shown as that plain one (so a whole file can be compared). */
+function cfg_plain($cfg, $known) { foreach ($known as $name => $plain) if (pw_stored_ok($cfg[$name] ?? null, $plain)) $cfg[$name] = $plain; return $cfg; }
 function cfg_read($path) { $raw = (string) file_get_contents($path); $raw = substr($raw, (int) strpos($raw, "\n") + 1); return json_decode($raw, true); }
 
 function write_data_file($path, $data) {
@@ -1531,6 +1535,7 @@ write_patched_index("$fxMap/index.php", $indexContents, [
     'ENABLE_MAP' => 'true',
     'ENABLE_PHOTO_LOCATION' => 'true',
     'AUTO_GROUP_BY_FOLDER' => 'true',
+    'MAP_CLUSTER_RADIUS_MILES' => '50',   // wide, so Paris's two photos merge (the default is 1 mile)
 ]);
 
 $portMap = find_free_port();
@@ -2312,7 +2317,7 @@ $claimLoc = ''; foreach ($chd as $h) if (stripos($h, 'Location:') === 0) $claimL
 $claimCookie = extract_cookie_header($chd);
 check('[setup] choosing a password redirects into the admin\'s Site settings, already signed in (a session cookie)', $cst === 303 && $claimLoc === '?admin#site' && str_contains($claimCookie, 'gallery_admin_'));
 $claimCfg = cfg_read($setupCfg); ksort($claimCfg);
-check('[setup] the password is stored in the settings file next to the settings that were already there, and nowhere else', $claimCfg === ['ADMIN_PASSWORD' => $claimPw, 'ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true] && (fileperms($setupCfg) & 0o077) === 0 && str_starts_with((string) file_get_contents($setupCfg), $cfgGuard));
+check('[setup] the password is stored in the settings file next to the settings that were already there, and nowhere else', pw_stored_ok($claimCfg['ADMIN_PASSWORD'] ?? null, $claimPw) && !str_contains((string) file_get_contents($setupCfg), 'first') && array_diff_key($claimCfg, ['ADMIN_PASSWORD' => 1]) === ['ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true] && (fileperms($setupCfg) & 0o077) === 0 && str_starts_with((string) file_get_contents($setupCfg), $cfgGuard));
 [, $claimedPage] = http_get("$baseSetup/?admin", ["Cookie: $claimCookie"]);
 check('[setup] with that session the admin opens with no further password, and says it is set and where it is kept', str_contains($claimedPage, 'Gallery Admin') && str_contains($claimedPage, 'Your admin password is set'));
 check('[setup] the .gallery-setup file has done its job and is removed', !file_exists("$fxSetup/.gallery-setup"));
@@ -2323,7 +2328,7 @@ file_put_contents("$fxSetup/.gallery-setup", '');
 $beforeSecond = (string) file_get_contents($setupCfg);
 [, $second] = http_post("$baseSetup/?admin", ['setup_password' => 'an-attackers-password-1', 'setup_password2' => 'an-attackers-password-1']);
 check('[setup] once a password exists, setup never appears again, even with a fresh index.php and a .gallery-setup file: it is the login form', str_contains($loginAgain, 'name="login_password"') && !str_contains($loginAgain, 'name="setup_password"'));
-check('[setup] ...and a second visitor posting a new password changes nothing', !str_contains($second, 'Your admin password is set') && (string) file_get_contents($setupCfg) === $beforeSecond && cfg_read($setupCfg)['ADMIN_PASSWORD'] === $claimPw);
+check('[setup] ...and a second visitor posting a new password changes nothing', !str_contains($second, 'Your admin password is set') && (string) file_get_contents($setupCfg) === $beforeSecond && pw_stored_ok(cfg_read($setupCfg)['ADMIN_PASSWORD'] ?? null, $claimPw));
 check('[setup] ...the chosen password (with quotes, slashes, a comma and a brace in it) logs in through the form', http_post("$baseSetup/?admin", ['login_password' => $claimPw], [], false)[0] === 303 && http_post("$baseSetup/?admin", ['login_password' => 'an-attackers-password-1'], [], false)[0] === 200);
 unlink("$fxSetup/.gallery-setup");
 // An unwritable folder: say so and hand over the exact file.
@@ -2335,7 +2340,7 @@ touch("$fxSetupRo/index.php", time());
 chmod($fxSetupRo, 0555);
 [, $roSetup] = http_post("http://127.0.0.1:$portSetupRo/?admin", ['setup_password' => 'read-only-folder-password-1', 'setup_password2' => 'read-only-folder-password-1']);
 chmod($fxSetupRo, 0775);
-check('[setup] when the folder can\'t be written it says so, saves nothing, and shows the exact settings file to create by hand', str_contains($roSetup, 'isn&#039;t writable') && str_contains($roSetup, '&quot;ADMIN_PASSWORD&quot;: &quot;read-only-folder-password-1&quot;') && !file_exists("$fxSetupRo/.gallery-config.php"));
+check('[setup] when the folder can\'t be written it says so, saves nothing, and shows the exact settings file to create by hand', str_contains($roSetup, 'isn&#039;t writable') && str_contains($roSetup, '&quot;ADMIN_PASSWORD&quot;: &quot;$2y$') && !str_contains($roSetup, 'read-only-folder-password-1') && !file_exists("$fxSetupRo/.gallery-config.php"));
 
 echo "== settings file: .gallery-config.php overrides the defaults and survives an update ==\n";
 
@@ -2484,7 +2489,7 @@ foreach (['abcdefghijkl' => 'letters only', '1234567890' => 'numbers only', 'abc
     check("[passwords] an admin password that is $why is refused with the rule", str_contains($out, 'at least 8 characters') && str_contains($out, 'letter') && str_contains($out, 'number'));
 }
 $onePw = user_submit("$baseFl/?admin", http_get("$baseFl/?admin#site", $flHdrs)[1], 'value="save_site_settings"', ['pw_private' => 'x', 'pw_private2' => 'x'], $flHdrs)[1];
-check('[passwords] the private-view password may be any length: a single character is accepted', str_contains($onePw, 'class="flash ok"') && (cfg_read("$fxFl/.gallery-config.php")['PRIVATE_VIEW_PASSWORD'] ?? null) === 'x');
+check('[passwords] the private-view password may be any length: a single character is accepted', str_contains($onePw, 'class="flash ok"') && pw_stored_ok(cfg_read("$fxFl/.gallery-config.php")['PRIVATE_VIEW_PASSWORD'] ?? null, 'x'));
 $okOut = $flFields('Ab3defgh');
 check('[passwords] eight characters with a letter (either case) and a number is accepted for the admin', str_contains($okOut, 'Settings saved') || str_contains($okOut, 'class="flash ok"'));
 check('[passwords] ...and it logs in', (http_post("$baseFl/?admin", ['login_password' => 'Ab3defgh'], [], false)[0] ?? 0) === 303);
@@ -2682,7 +2687,7 @@ $snapBefore = $siteSnap();
 check('[site settings] a save redirects back and then shows a confirmation that says nothing else was touched', str_contains($r, 'Settings saved') && str_contains($r, 'were not touched') && str_contains($r, 'class="flash ok"'));
 $snapAfterSave = $siteSnap();   // before any public page is viewed (a view is counted, legitimately)
 $written = (string) file_get_contents($siteCfg);
-$loadedCfg = cfg_read($siteCfg);
+$loadedCfg = cfg_plain(cfg_read($siteCfg), ['ADMIN_PASSWORD' => 'first-admin-pw-123']);
 $expectedCfg = ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'ENABLE_VIDEO' => true, 'FOLDER_DISPLAY_MODE' => 'inline', 'MAP_CLUSTER_RADIUS_MILES' => 25, 'PHOTO_SORT_ORDER' => 'mtime', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true];
 ksort($loadedCfg);
 check('[site settings] the settings file is the 404 guard plus JSON holding exactly the intended settings, keeping the ones already there', str_starts_with($written, $siteHead) && $loadedCfg === $expectedCfg);
@@ -2694,8 +2699,8 @@ check('[site settings] NOTHING ELSE changed: every caption, location, hide flag,
 // Setting something back to its default removes it from the file.
 [, $sAdmin2] = http_get("$baseSite/?admin", $siteHdrs);
 $snapBaseline2 = $siteSnap();
-user_submit("$baseSite/?admin", $sAdmin2, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '0', 'set_AUTO_GROUP_BY_FOLDER' => '0', 'set_ENABLE_THUMBNAIL_CACHE' => '1', 'set_FOLDER_DISPLAY_MODE' => 'overview', 'set_PHOTO_SORT_ORDER' => 'filename', 'set_MAP_CLUSTER_RADIUS_MILES' => '50'], $siteHdrs);
-$backCfg = cfg_read($siteCfg); ksort($backCfg);
+user_submit("$baseSite/?admin", $sAdmin2, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '0', 'set_AUTO_GROUP_BY_FOLDER' => '0', 'set_ENABLE_THUMBNAIL_CACHE' => '1', 'set_FOLDER_DISPLAY_MODE' => 'overview', 'set_PHOTO_SORT_ORDER' => 'filename', 'set_MAP_CLUSTER_RADIUS_MILES' => '1'], $siteHdrs);
+$backCfg = cfg_plain(cfg_read($siteCfg), ['ADMIN_PASSWORD' => 'first-admin-pw-123']); ksort($backCfg);
 check('[site settings] putting settings back to their defaults removes them from the file, so later default improvements still reach you', $backCfg == ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true]);
 check('[site settings] ...and, again, no data file changed (compared with a baseline taken after the public page was viewed)', $siteSnap() === $snapBaseline2);
 // Settings the screen doesn't manage, and hand-added keys, are kept.
@@ -2719,12 +2724,12 @@ $nasty = str_replace("\n", '', $nasty);
 [, $rPw] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => $nasty, 'pw_admin2' => $nasty], $siteHdrs);
 check('[site settings] changing the admin password works, and you stay signed in (the session still opens the admin, no password asked)', str_contains($rPw, 'admin password changed') && str_contains(http_get("$baseSite/?admin", [$siteHdrs[1]])[1], 'Gallery Admin'));
 $pwCfg = cfg_read($siteCfg);
-check('[site settings] a password full of quotes, backslashes, $ and PHP tags is stored as plain data and reads back exactly', ($pwCfg['ADMIN_PASSWORD'] ?? null) === $nasty);
+check('[site settings] a password full of quotes, backslashes, $ and PHP tags is stored as a hash that verifies exactly (and none of its text is in the file)', pw_stored_ok($pwCfg['ADMIN_PASSWORD'] ?? null, $nasty) && !str_contains((string) file_get_contents($siteCfg), 'system'));
 check('[site settings] the new password logs in through the form (a redirect into the admin); the old one no longer does (the form again)', http_post("$baseSite/?admin", ['login_password' => $nasty], [], false)[0] === 303 && http_post("$baseSite/?admin", ['login_password' => 'first-admin-pw-123'], [], false)[0] === 200);
 // Hostile text can't be injected through any value: only typed, allow-listed values are ever written.
 $cfgFileText = (string) file_get_contents($siteCfg);
 $cfgAfterGuard = substr($cfgFileText, strpos($cfgFileText, "\n") + 1);
-check('[site settings] the written file is the 404 guard plus plain JSON data, never code: one PHP tag in the whole file even though the password contained "system(\'id\')" and a PHP tag, and the rest decodes as JSON', substr_count($cfgFileText, '<?php') === 1 && str_starts_with($cfgFileText, $cfgGuard) && is_array(json_decode($cfgAfterGuard, true)) && (json_decode($cfgAfterGuard, true)['ADMIN_PASSWORD'] ?? null) === $nasty);
+check('[site settings] the written file is the 404 guard plus plain JSON data, never code: one PHP tag in the whole file even though the password contained "system(\'id\')" and a PHP tag, and the rest decodes as JSON', substr_count($cfgFileText, '<?php') === 1 && str_starts_with($cfgFileText, $cfgGuard) && is_array(json_decode($cfgAfterGuard, true)) && pw_stored_ok(json_decode($cfgAfterGuard, true)['ADMIN_PASSWORD'] ?? null, $nasty));
 // A fresh login for the rest (the password changed).
 $siteAuth2 = 'Authorization: Basic ' . base64_encode('x:' . $nasty);
 [, $sAdmin5, $sAdmin5Hd] = http_get("$baseSite/?admin", [$siteAuth2]);
@@ -2732,7 +2737,7 @@ $siteHdrs2 = [$siteAuth2, 'Cookie: ' . extract_cookie_header($sAdmin5Hd)];
 // Private-view password and removing it.
 user_submit("$baseSite/?admin", $sAdmin5, 'value="save_site_settings"', ['pw_private' => 'viewme', 'pw_private2' => 'viewme'], $siteHdrs2);
 $pv = cfg_read($siteCfg);
-check('[site settings] the private-view password can be set from here', ($pv['PRIVATE_VIEW_PASSWORD'] ?? null) === 'viewme');
+check('[site settings] the private-view password can be set from here', pw_stored_ok($pv['PRIVATE_VIEW_PASSWORD'] ?? null, 'viewme'));
 [, $sAdmin6] = http_get("$baseSite/?admin", $siteHdrs2);
 check('[site settings] ...and the screen never shows it back, offering "Remove it" instead', !str_contains($sAdmin6, 'value="viewme"') && str_contains($sAdmin6, 'name="pw_private_remove"'));
 user_submit("$baseSite/?admin", $sAdmin6, 'value="save_site_settings"', ['pw_private_remove' => '1'], $siteHdrs2);
@@ -2943,7 +2948,7 @@ write_data_file("$fxMapF/Paris/.gallery-items.php", ['items' => ['a.jpg' => $map
 write_data_file("$fxMapF/Paris/Montmartre/.gallery-items.php", ['items' => ['m.jpg' => $mapLoc(48.886, 2.343)], 'groups' => [], 'locationEnabled' => true, 'displayName' => 'The Hill']);
 write_data_file("$fxMapF/Lisbon/.gallery-items.php", ['items' => ['l.jpg' => $mapLoc(38.72, -9.14)], 'groups' => [], 'locationEnabled' => true]);
 write_data_file("$fxMapF/NoLoc/.gallery-items.php", ['items' => ['n.jpg' => $mapLoc(10.0, 10.0)], 'groups' => [], 'locationEnabled' => false]);
-file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_MAP' => true]));
+file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_MAP' => true, 'MAP_CLUSTER_RADIUS_MILES' => 50]));
 copy(__DIR__ . '/../index.php', "$fxMapF/index.php");
 $portMapF = find_free_port(); start_server($fxMapF, $portMapF); $baseMapF = "http://127.0.0.1:$portMapF";
 $mapAuth = 'Authorization: Basic ' . base64_encode('x:map-admin-pw-123');
@@ -3621,6 +3626,228 @@ check(
     'the rejected .md\'s filename is never revealed here either',
     !str_contains($body, 'notes.md')
 );
+
+/* --------------------------------------------------------------------- */
+
+echo "== passwords are kept as hashes in the settings file ==\n";
+
+$fxHp = new_fixture_dir('pwhash');
+mkdir("$fxHp/Paris");
+make_jpeg("$fxHp/Paris/open.jpg", 600, 400, 200, 80, 60); make_jpeg("$fxHp/Paris/closed.jpg", 600, 400, 60, 80, 200);
+write_data_file("$fxHp/Paris/.gallery-items.php", ['items' => ['closed.jpg' => ['restriction' => 'private', 'caption' => 'the private one']], 'groups' => []]);
+$hpCfg = "$fxHp/.gallery-config.php";
+file_put_contents($hpCfg, cfg_text(['ADMIN_PASSWORD' => 'plain-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'plain view pw', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy(__DIR__ . '/../index.php', "$fxHp/index.php");
+$portHp = find_free_port(); start_server($fxHp, $portHp); $baseHp = "http://127.0.0.1:$portHp";
+$hpPrivThumb = "$baseHp/?img=Paris%2Fclosed.jpg&size=thumb";
+// A password written in plain text (an older file, or by hand) still works, and a script's Basic header too.
+check('[pw hash] a password still in plain text in the settings file works for a script (Basic header)', http_get("$baseHp/?admin", ['Authorization: Basic ' . base64_encode('x:plain-admin-pw-1')])[0] === 200);
+check('[pw hash] ...a script signing in does not rewrite the file: the plain text stays until someone signs in through the form', cfg_read($hpCfg)['ADMIN_PASSWORD'] === 'plain-admin-pw-1');
+check('[pw hash] a wrong password is refused', http_post("$baseHp/?reveal", ['login_password' => 'plain view pw '], [], false)[0] === 200);
+// The first sign-in with either password turns every plain-text password in the file into a hash.
+[$hpSt, , $hpHd] = http_post("$baseHp/?reveal", ['login_password' => 'plain view pw'], [], false);
+$hpViewerCookie = extract_cookie_header($hpHd);
+$hpAfter = cfg_read($hpCfg);
+check('[pw hash] signing in with the private-view password succeeds', $hpSt === 302 && $hpViewerCookie !== '');
+check('[pw hash] ...and both passwords in the settings file are now hashes of what they were (the other settings are untouched)', pw_stored_ok($hpAfter['ADMIN_PASSWORD'] ?? null, 'plain-admin-pw-1') && pw_stored_ok($hpAfter['PRIVATE_VIEW_PASSWORD'] ?? null, 'plain view pw') && ($hpAfter['AUTO_GROUP_BY_FOLDER'] ?? null) === true && count($hpAfter) === 3);
+check('[pw hash] ...neither plain password appears anywhere in the file, and it is still private to the web server user', !str_contains((string) file_get_contents($hpCfg), 'plain-admin-pw-1') && !str_contains((string) file_get_contents($hpCfg), 'plain view pw') && (fileperms($hpCfg) & 0o077) === 0 && str_starts_with((string) file_get_contents($hpCfg), $cfgGuard));
+$hpSecretText = (string) @file_get_contents("$fxHp/.gallery-secret.php");
+check('[pw hash] a secret of this install now exists, in a guarded private file that a direct request cannot read', str_starts_with($hpSecretText, $cfgGuard) && (bool) preg_match('/^[0-9a-f]{64}$/m', $hpSecretText) && ((fileperms("$fxHp/.gallery-secret.php") ?: 0) & 0o077) === 0 && http_get("$baseHp/.gallery-secret.php")[0] === 404);
+check('[pw hash] the cookie the sign-in set shows the private items', http_get($hpPrivThumb)[0] === 404 && http_get($hpPrivThumb, ["Cookie: $hpViewerCookie"])[0] === 200);
+// Both passwords keep working, with the same words, once hashed.
+[$hpS2, , $hpHd2] = http_post("$baseHp/?reveal", ['login_password' => 'plain view pw'], [], false);
+check('[pw hash] the private-view password still works once hashed', $hpS2 === 302 && http_get($hpPrivThumb, ['Cookie: ' . extract_cookie_header($hpHd2)])[0] === 200);
+[$hpS3, , $hpHd3] = http_post("$baseHp/?reveal", ['login_password' => 'plain-admin-pw-1'], [], false);
+check('[pw hash] the admin password still works once hashed, through the lock, and opens the admin', $hpS3 === 303 && str_contains(http_get("$baseHp/?admin", ['Cookie: ' . extract_cookie_header($hpHd3)])[1], 'Gallery Admin'));
+check('[pw hash] ...and through ?admin\'s own form and a script\'s Basic header', http_post("$baseHp/?admin", ['login_password' => 'plain-admin-pw-1'], [], false)[0] === 303 && http_get("$baseHp/?admin", ['Authorization: Basic ' . base64_encode('x:plain-admin-pw-1')])[0] === 200);
+// What someone holding a copy of the file has is no password.
+$hpStoredAdmin = cfg_read($hpCfg)['ADMIN_PASSWORD']; $hpStoredView = cfg_read($hpCfg)['PRIVATE_VIEW_PASSWORD'];
+check('[pw hash] the hash from the file is not itself a password: typed into either form it is refused', http_post("$baseHp/?reveal", ['login_password' => $hpStoredAdmin], [], false)[0] === 200 && http_post("$baseHp/?reveal", ['login_password' => $hpStoredView], [], false)[0] === 200 && http_post("$baseHp/?admin", ['login_password' => $hpStoredAdmin], [], false)[0] === 200);
+check('[pw hash] ...and neither is a Basic header carrying it', http_get("$baseHp/?admin", ['Authorization: Basic ' . base64_encode('x:' . $hpStoredAdmin)])[0] === 401);
+// ...nor can the cookie be made from it: the token is keyed with the secret, which is not in that file.
+$hpRevealName = 'gallery_reveal_' . substr(hash('sha256', realpath($fxHp)), 0, 10);
+$hpForged = [hash('sha256', $hpStoredView . '|' . realpath($fxHp)), hash_hmac('sha256', 'reveal|' . $hpStoredView . '|' . realpath($fxHp), ''), hash('sha256', 'admin-reveal|' . $hpStoredAdmin . '|' . realpath($fxHp)), hash_hmac('sha256', 'admin-reveal|' . $hpStoredAdmin . '|' . realpath($fxHp), '')];
+$hpForgedOk = false; foreach ($hpForged as $f) if (http_get($hpPrivThumb, ["Cookie: $hpRevealName=$f"])[0] === 200) $hpForgedOk = true;
+check('[pw hash] a cookie made from the hashes in the file (the old way, or with no secret) shows nothing', !$hpForgedOk);
+// A hash put in the file by hand is accepted as it is, and left alone.
+$hpHandHash = password_hash('pasted-by-hand-9', PASSWORD_DEFAULT);
+file_put_contents($hpCfg, cfg_text(['ADMIN_PASSWORD' => $hpHandHash, 'AUTO_GROUP_BY_FOLDER' => true]));
+$hpBytes = (string) file_get_contents($hpCfg);
+check('[pw hash] a hash pasted into the settings file by hand is accepted, the plain words are not the hash, and signing in leaves the file exactly as it was', http_post("$baseHp/?admin", ['login_password' => 'pasted-by-hand-9'], [], false)[0] === 303 && http_post("$baseHp/?admin", ['login_password' => $hpHandHash], [], false)[0] === 200 && (string) file_get_contents($hpCfg) === $hpBytes);
+// A folder the server can't write to: the plain text keeps working and nothing is touched.
+file_put_contents($hpCfg, cfg_text(['ADMIN_PASSWORD' => 'plain-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+$hpBytes = (string) file_get_contents($hpCfg);
+chmod($fxHp, 0555);
+$hpRo = http_post("$baseHp/?admin", ['login_password' => 'plain-admin-pw-1'], [], false)[0];
+chmod($fxHp, 0775);
+check('[pw hash] when the folder can\'t be written, signing in still works and the file is left as it was (the plain text stays until it can be replaced)', $hpRo === 303 && (string) file_get_contents($hpCfg) === $hpBytes);
+// Changing a password from Site settings stores a hash, keeps the owner signed in, and signs the viewers out.
+[$hpS4, , $hpHd4] = http_post("$baseHp/?admin", ['login_password' => 'plain-admin-pw-1'], [], false);
+$hpAdminCookie = extract_cookie_header($hpHd4);
+[, $hpAdminPg] = http_get("$baseHp/?admin", ["Cookie: $hpAdminCookie"]);
+check('[pw hash] (setup) the owner is signed in, and the plain password that was left in the file is a hash by now', $hpS4 === 303 && pw_stored_ok(cfg_read($hpCfg)['ADMIN_PASSWORD'] ?? null, 'plain-admin-pw-1'));
+user_submit("$baseHp/?admin", $hpAdminPg, 'value="save_site_settings"', ['pw_admin' => 'changed-admin-pw-2', 'pw_admin2' => 'changed-admin-pw-2', 'pw_private' => 'new view pw', 'pw_private2' => 'new view pw'], ["Cookie: $hpAdminCookie"]);
+$hpNow = cfg_read($hpCfg);
+check('[pw hash] changing both passwords in Site settings stores two new hashes, and nothing readable', pw_stored_ok($hpNow['ADMIN_PASSWORD'] ?? null, 'changed-admin-pw-2') && pw_stored_ok($hpNow['PRIVATE_VIEW_PASSWORD'] ?? null, 'new view pw') && !str_contains((string) file_get_contents($hpCfg), 'changed-admin-pw-2'));
+check('[pw hash] ...the new ones work and the old admin password does not', http_post("$baseHp/?admin", ['login_password' => 'changed-admin-pw-2'], [], false)[0] === 303 && http_post("$baseHp/?admin", ['login_password' => 'plain-admin-pw-1'], [], false)[0] === 200 && http_post("$baseHp/?reveal", ['login_password' => 'new view pw'], [], false)[0] === 302);
+check('[pw hash] ...a viewer who had the old private-view cookie is shut out again', http_get($hpPrivThumb, ["Cookie: $hpViewerCookie"])[0] === 404);
+
+/* --------------------------------------------------------------------- */
+
+echo "== downloading the original (signed-in visitors), with a hidden location taken out of the copy ==\n";
+
+// The code that finds and blanks a location, taken out of index.php so every file format can be tried directly.
+$scrubSrc = (string) file_get_contents(__DIR__ . '/../index.php');
+$scrubFrom = strpos($scrubSrc, "/* -----------------------------------------------------------------------\n * A copy of an original without its location.");
+$scrubTo = strpos($scrubSrc, '/** ?original=');
+eval(substr($scrubSrc, $scrubFrom, $scrubTo - $scrubFrom));
+/** What would be sent for $path: the file with its plan laid over it (null if it may not be sent). */
+$scrubbed = function ($path) {
+    $plan = location_scrub_plan($path);
+    if ($plan === null) return null;
+    $fh = fopen($path, 'rb'); $out = '';
+    stream_with_patches($fh, filesize($path), $plan, function ($c) use (&$out) { $out .= $c; });
+    fclose($fh);
+    return $out;
+};
+$latBytes = pack('VV', 3042, 100); $lngBytes = pack('VV', 1507, 100);   // the minutes of the test photos' coordinates
+$fxSc = new_fixture_dir('scrubunit');
+$gpsDMS = ['N', [[48, 1], [51, 1], [3042, 100]], 'E', [[2, 1], [21, 1], [1507, 100]]];
+$box = fn ($type, $body) => pack('N', 8 + strlen($body)) . $type . $body;
+$tiffOf = function ($jpeg) { $at = strpos($jpeg, "Exif\0\0"); $len = unpack('n', $jpeg, $at - 2)[1]; return substr($jpeg, $at + 6, $len - 8); };
+make_gps_jpeg("$fxSc/gps.jpg", ...$gpsDMS);
+$gpsJpeg = (string) file_get_contents("$fxSc/gps.jpg");
+$gpsScrubbed = $scrubbed("$fxSc/gps.jpg");
+$sosAt = strrpos($gpsJpeg, "\xFF\xDA");
+check('[scrub] (setup) the test photo carries its coordinates', str_contains($gpsJpeg, $latBytes) && str_contains($gpsJpeg, $lngBytes));
+check('[scrub] JPEG: the coordinates are gone from the copy, which is exactly as long as the original and has the picture byte for byte', is_string($gpsScrubbed) && !str_contains($gpsScrubbed, $latBytes) && !str_contains($gpsScrubbed, $lngBytes) && strlen($gpsScrubbed) === strlen($gpsJpeg) && substr($gpsScrubbed, $sosAt) === substr($gpsJpeg, $sosAt));
+file_put_contents("$fxSc/out.jpg", (string) $gpsScrubbed);
+$exifBefore = @exif_read_data("$fxSc/gps.jpg", 'GPS', true); $exifAfter = @exif_read_data("$fxSc/out.jpg", 'GPS', true);
+check('[scrub] JPEG: an EXIF reader finds GPS in the original and none in the copy, and the copy is still a valid picture', isset($exifBefore['GPS']['GPSLatitude']) && !isset($exifAfter['GPS']['GPSLatitude']) && @imagecreatefromjpeg("$fxSc/out.jpg") !== false);
+check('[scrub] the file on disk is not changed by any of this', (string) file_get_contents("$fxSc/gps.jpg") === $gpsJpeg);
+make_jpeg("$fxSc/plain.jpg", 40, 30, 5, 6, 7);
+check('[scrub] a JPEG with no metadata needs nothing: nothing to replace, so it is sent as it is', location_scrub_plan("$fxSc/plain.jpg") === []);
+// XMP and IPTC place fields.
+$xmp = 'http://ns.adobe.com/xap/1.0/' . "\0" . '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description exif:GPSLatitude="48,51.5N" exif:GPSLongitude=\'2,21.2E\' photoshop:City="Paris"><exif:GPSAltitude>35/1</exif:GPSAltitude><dc:title>Kept title</dc:title></rdf:Description></rdf:RDF></x:xmpmeta>';
+$iptcRec = fn ($tag, $val) => "\x1C\x02" . chr($tag) . pack('n', strlen($val)) . $val;
+$iptc = $iptcRec(90, 'Paris') . $iptcRec(101, 'France') . $iptcRec(120, 'A caption that stays');
+$iptcBlock = "Photoshop 3.0\0" . '8BIM' . pack('n', 0x0404) . "\0\0" . pack('N', strlen($iptc)) . $iptc . (strlen($iptc) % 2 ? "\0" : '');
+$withMeta = substr($gpsJpeg, 0, 2) . "\xFF\xE1" . pack('n', strlen($xmp) + 2) . $xmp . "\xFF\xED" . pack('n', strlen($iptcBlock) + 2) . $iptcBlock . substr($gpsJpeg, 2);
+file_put_contents("$fxSc/meta.jpg", $withMeta);
+$metaScrubbed = (string) $scrubbed("$fxSc/meta.jpg");
+check('[scrub] XMP: the GPS and city properties are blanked (attribute and element forms), the other properties are kept, and the length is unchanged', strlen($metaScrubbed) === strlen($withMeta) && !str_contains($metaScrubbed, '48,51.5N') && !str_contains($metaScrubbed, '2,21.2E') && !str_contains($metaScrubbed, 'Paris') && !str_contains($metaScrubbed, '35/1') && str_contains($metaScrubbed, 'Kept title') && !str_contains($metaScrubbed, $latBytes));
+check('[scrub] IPTC: the city and country are blanked, the caption is kept', !str_contains($metaScrubbed, 'France') && str_contains($metaScrubbed, 'A caption that stays'));
+// A file that can't be read safely is refused, not sent as it is.
+file_put_contents("$fxSc/bad.jpg", substr($gpsJpeg, 0, 2) . "\xFF\xE1" . pack('n', 5000) . "Exif\0\0II*\0" . substr($gpsJpeg, 2, 40));
+check('[scrub] a JPEG whose metadata runs past the end of the file is refused (null), not passed through with its coordinates', location_scrub_plan("$fxSc/bad.jpg") === null);
+file_put_contents("$fxSc/notajpeg.jpg", 'this is not a picture');
+check('[scrub] ...and so is a file that is not a JPEG at all', location_scrub_plan("$fxSc/notajpeg.jpg") === null);
+// PNG (eXIf chunk with a checksum) and WebP.
+$im = imagecreatetruecolor(8, 8); ob_start(); imagepng($im); $png = ob_get_clean(); imagedestroy($im);
+$tiff = $tiffOf($gpsJpeg);
+$pngChunk = fn ($type, $data) => pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));
+$pngWith = substr($png, 0, 33) . $pngChunk('eXIf', $tiff) . substr($png, 33);
+file_put_contents("$fxSc/gps.png", $pngWith);
+$pngScrubbed = (string) $scrubbed("$fxSc/gps.png");
+$crcOk = true; $pp = 8; while ($pp + 12 <= strlen($pngScrubbed)) { $l = unpack('N', $pngScrubbed, $pp)[1]; $t = substr($pngScrubbed, $pp + 4, 4); if (unpack('N', $pngScrubbed, $pp + 8 + $l)[1] !== crc32($t . substr($pngScrubbed, $pp + 8, $l))) $crcOk = false; $pp += 12 + $l; }
+check('[scrub] PNG: the coordinates in its eXIf chunk are gone, every chunk\'s checksum still matches, and it is still a picture', str_contains($pngWith, $latBytes) && !str_contains($pngScrubbed, $latBytes) && strlen($pngScrubbed) === strlen($pngWith) && $crcOk && (function () use ($pngScrubbed, $fxSc) { file_put_contents("$fxSc/o.png", $pngScrubbed); return @imagecreatefrompng("$fxSc/o.png") !== false; })());
+$webpBody = 'WEBP' . 'VP8L' . pack('V', 4) . "\0\0\0\0" . 'EXIF' . pack('V', strlen($tiff)) . $tiff . (strlen($tiff) % 2 ? "\0" : '');
+file_put_contents("$fxSc/gps.webp", 'RIFF' . pack('V', strlen($webpBody)) . $webpBody);
+$webpScrubbed = (string) $scrubbed("$fxSc/gps.webp");
+check('[scrub] WebP: the coordinates in its EXIF chunk are gone and the length is unchanged', str_contains((string) file_get_contents("$fxSc/gps.webp"), $latBytes) && !str_contains($webpScrubbed, $latBytes) && strlen($webpScrubbed) === filesize("$fxSc/gps.webp"));
+// HEIC: the EXIF block lives in an item the file's index points to.
+$heic = function () use ($box, $tiff) {
+    $ftyp = $box('ftyp', 'heic' . pack('N', 0) . 'mif1heic');
+    $item = pack('N', 0) . $tiff;
+    $mk = function ($offset) use ($box, $item) {
+        $infe = $box('infe', "\x02\0\0\0" . pack('n', 1) . pack('n', 0) . 'Exif' . "Exif\0");
+        $iinf = $box('iinf', "\0\0\0\0" . pack('n', 1) . $infe);
+        $iloc = $box('iloc', "\0\0\0\0" . "\x44\x00" . pack('n', 1) . pack('n', 1) . pack('n', 0) . pack('n', 1) . pack('N', $offset) . pack('N', strlen($item)));
+        return $box('meta', "\0\0\0\0" . $iinf . $iloc);
+    };
+    $meta = $mk(0);
+    $offset = strlen($ftyp) + strlen($meta) + 8;
+    return $ftyp . $mk($offset) . $box('mdat', $item . 'PIXELS-OF-THE-PICTURE');
+};
+file_put_contents("$fxSc/gps.heic", $heic());
+$heicScrubbed = (string) $scrubbed("$fxSc/gps.heic");
+check('[scrub] HEIC: the coordinates in the EXIF item are gone, the pixels and the length are untouched', str_contains($heic(), $latBytes) && !str_contains($heicScrubbed, $latBytes) && !str_contains($heicScrubbed, $lngBytes) && strlen($heicScrubbed) === strlen($heic()) && str_ends_with($heicScrubbed, 'PIXELS-OF-THE-PICTURE'));
+// MP4/MOV: the location atom and QuickTime's keyed location.
+$iso = '+48.8584+002.2945/';
+$xyz = $box("\xA9xyz", pack('nn', strlen($iso), 0x15C7) . $iso);
+$keyName = fn ($n) => pack('N', 8 + strlen($n)) . 'mdta' . $n;
+$keys = $box('keys', "\0\0\0\0" . pack('N', 2) . $keyName('com.apple.quicktime.make') . $keyName('com.apple.quicktime.location.ISO6709'));
+$ilstItem = fn ($index, $value) => $box(pack('N', $index), $box('data', pack('N', 1) . pack('N', 0) . $value));
+$qtMeta = $box('meta', $box('hdlr', "\0\0\0\0\0\0\0\0mdta" . str_repeat("\0", 13)) . $keys . $box('ilst', $ilstItem(1, 'Apple') . $ilstItem(2, $iso)));
+$mvhd = $box('mvhd', pack('N', 0) . pack('N', 0) . pack('N', 0) . pack('N', 1) . pack('N', 3));
+$mp4 = $box('ftyp', 'isom' . pack('N', 0)) . $box('moov', $mvhd . $box('udta', $xyz) . $qtMeta) . $box('mdat', 'VIDEO-BYTES');
+file_put_contents("$fxSc/gps.mov", $mp4);
+$mp4Scrubbed = (string) $scrubbed("$fxSc/gps.mov");
+check('[scrub] MP4/MOV: both the location atom and QuickTime\'s location item are blanked, the other items and the video are untouched, and the length is unchanged', substr_count($mp4, '48.8584') === 2 && !str_contains($mp4Scrubbed, '48.8584') && !str_contains($mp4Scrubbed, '2.2945') && str_contains($mp4Scrubbed, 'Apple') && str_ends_with($mp4Scrubbed, 'VIDEO-BYTES') && strlen($mp4Scrubbed) === strlen($mp4));
+
+// Through the server.
+$fxDl = new_fixture_dir('download');
+copy("$fxSc/gps.jpg", "$fxDl/hidden.jpg"); copy("$fxSc/gps.jpg", "$fxDl/shown.jpg"); copy("$fxSc/gps.jpg", "$fxDl/not set.jpg"); copy("$fxSc/gps.jpg", "$fxDl/secret.jpg"); copy("$fxSc/plain.jpg", "$fxDl/plain.jpg"); copy("$fxSc/bad.jpg", "$fxDl/bad.jpg"); copy("$fxSc/gps.mov", "$fxDl/clip.mov");
+$dlLoc = fn ($vis) => ['location' => ['lat' => 48.85, 'lng' => 2.35, 'label' => ''], 'locationVisibility' => $vis];
+write_data_file("$fxDl/.gallery-items.php", ['items' => ['hidden.jpg' => $dlLoc('hide'), 'shown.jpg' => $dlLoc('show'), 'clip.mov' => $dlLoc('hide'), 'secret.jpg' => ['restriction' => 'private']], 'groups' => [], 'locationEnabled' => true]);
+$dlCfg = fn ($public) => cfg_text(['ADMIN_PASSWORD' => 'download-admin-1', 'PRIVATE_VIEW_PASSWORD' => 'download view', 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_VIDEO' => true] + ($public ? ['ENABLE_PUBLIC_DOWNLOAD' => true] : []));
+file_put_contents("$fxDl/.gallery-config.php", $dlCfg(false));
+copy(__DIR__ . '/../index.php', "$fxDl/index.php");
+$portDl = find_free_port(); start_server($fxDl, $portDl); $baseDl = "http://127.0.0.1:$portDl";
+[, , $dlAdminHd] = http_post("$baseDl/?admin", ['login_password' => 'download-admin-1'], [], false);
+$dlAdmin = ['Cookie: ' . extract_cookie_header($dlAdminHd)];
+[, , $dlViewerHd] = http_post("$baseDl/?reveal", ['login_password' => 'download view'], [], false);
+$dlViewer = ['Cookie: ' . extract_cookie_header($dlViewerHd)];
+$dlOrig = (string) file_get_contents("$fxDl/hidden.jpg");
+$dlMov = (string) file_get_contents("$fxDl/clip.mov");
+check('[download] with the setting off (the default), a visitor who is not signed in gets nothing (404), for every photo, and a cookie that merely has the right name changes nothing', http_get("$baseDl/?original=plain.jpg")[0] === 404 && http_get("$baseDl/?original=shown.jpg")[0] === 404 && http_get("$baseDl/?original=plain.jpg", ['Cookie: gallery_reveal_x=1'])[0] === 404);
+[$dlSt, $dlBody, $dlHd] = http_get("$baseDl/?original=hidden.jpg", $dlAdmin);
+$dlDisp = ''; foreach ($dlHd as $h) if (stripos($h, 'Content-Disposition:') === 0) $dlDisp = $h;
+check('[download] the owner is sent the original as a download (an attachment with its own name)', $dlSt === 200 && str_contains($dlDisp, 'attachment') && str_contains($dlDisp, 'filename="hidden.jpg"'));
+check('[download] ...exactly as it is on disk, GPS and all, even for a photo whose location is hidden', $dlBody === $dlOrig && str_contains($dlBody, $latBytes));
+check('[download] someone with the private-view password is trusted with the same: the file exactly as it is, location included, photos and videos alike', http_get("$baseDl/?original=hidden.jpg", $dlViewer)[1] === $dlOrig && http_get("$baseDl/?original=not%20set.jpg", $dlViewer)[1] === $dlOrig && http_get("$baseDl/?original=clip.mov", $dlViewer)[1] === $dlMov);
+check('[download] ...including a private photo, which only they can have', http_get("$baseDl/?original=secret.jpg", $dlViewer)[0] === 200 && http_get("$baseDl/?original=secret.jpg", $dlAdmin)[0] === 200);
+$dlPageOff = http_get("$baseDl/")[1];
+check('[download] with the setting off the viewer\'s download button is not on the public page', !str_contains($dlPageOff, 'id="lightbox-download"'));
+// Switched on: everyone may download; a visitor who isn't signed in gets the location taken out where the gallery hides it.
+file_put_contents("$fxDl/.gallery-config.php", $dlCfg(true));
+// (The settings file was written afresh with the passwords in plain text, so everyone signs in again.)
+[, , $dlAdminHd] = http_post("$baseDl/?admin", ['login_password' => 'download-admin-1'], [], false);
+$dlAdmin = ['Cookie: ' . extract_cookie_header($dlAdminHd)];
+[, , $dlViewerHd] = http_post("$baseDl/?reveal", ['login_password' => 'download view'], [], false);
+$dlViewer = ['Cookie: ' . extract_cookie_header($dlViewerHd)];
+[$aSt, $aBody] = http_get("$baseDl/?original=hidden.jpg");
+check('[download] with the setting on, a visitor who is not signed in is sent a photo whose location is hidden with the location taken out: the same length, the picture untouched', $aSt === 200 && strlen($aBody) === strlen($dlOrig) && !str_contains($aBody, $latBytes) && !str_contains($aBody, $lngBytes) && substr($aBody, $sosAt) === substr($dlOrig, $sosAt));
+check('[download] ...also a photo that has no location setting at all (its folder\'s switch is on, but it has none)', !str_contains(http_get("$baseDl/?original=not%20set.jpg")[1], $latBytes));
+check('[download] ...a photo whose location the gallery shows, and one with nothing to remove, are sent as they are', http_get("$baseDl/?original=shown.jpg")[1] === $dlOrig && http_get("$baseDl/?original=plain.jpg")[1] === (string) file_get_contents("$fxDl/plain.jpg"));
+[$badSt, $badBody] = http_get("$baseDl/?original=bad.jpg");
+check('[download] ...a damaged file whose location can\'t be removed safely is refused (422), and the owner can still have it', $badSt === 422 && !str_contains($badBody, 'Exif') && http_get("$baseDl/?original=bad.jpg", $dlAdmin)[0] === 200);
+[$clipSt, $clipBody] = http_get("$baseDl/?original=clip.mov");
+check('[download] a video is treated the same way: its location is taken out for a visitor who is not signed in and left in for the owner', $clipSt === 200 && strlen($clipBody) === strlen($dlMov) && !str_contains($clipBody, '48.8584') && http_get("$baseDl/?original=clip.mov", $dlAdmin)[1] === $dlMov);
+check('[download] a private photo is still a 404 for a visitor who is not signed in, whatever the setting', http_get("$baseDl/?original=secret.jpg")[0] === 404);
+check('[download] a path outside the gallery, a folder and a missing file are all 404', http_get("$baseDl/?original=../index.php")[0] === 404 && http_get("$baseDl/?original=index.php", $dlAdmin)[0] === 404 && http_get("$baseDl/?original=nope.jpg", $dlAdmin)[0] === 404 && http_get("$baseDl/?original[]=plain.jpg", $dlAdmin)[0] === 404);
+check('[download] the viewer\'s download button is on the public page now, and on the signed-in pages', str_contains(http_get("$baseDl/")[1], 'id="lightbox-download"') && str_contains(http_get("$baseDl/", $dlViewer)[1], 'id="lightbox-download"') && str_contains(http_get("$baseDl/", $dlAdmin)[1], 'id="lightbox-download"'));
+// Locations the gallery hides from visitors are not hidden from people who are signed in.
+$dlBadges = fn ($headers) => substr_count(http_get("$baseDl/", $headers)[1], 'class="item-badge location-badge"');
+check('[locations] a visitor who is not signed in sees the location badge only on the photo whose location is shown (the two with the location switched off show none)', $dlBadges([]) === 1);
+check('[locations] the owner, and anyone with the private-view password, see every saved location (the hidden photo and the hidden video too)', $dlBadges($dlAdmin) === 3 && $dlBadges($dlViewer) === 3);
+check('[locations] a cookie that merely has the right name changes nothing', $dlBadges(['Cookie: gallery_reveal_x=1']) === 1);
+// The picture the viewer shows is the original too, so it is held to the same rule.
+[$fSt, $fBody, $fHd] = http_get("$baseDl/?img=hidden.jpg&size=full");
+$fCache = ''; foreach ($fHd as $h) if (stripos($h, 'Cache-Control:') === 0) $fCache = $h;
+check('[viewer image] the full-size picture is the original file, so a visitor who is not signed in is sent it with a hidden location taken out, and kept out of shared caches', $fSt === 200 && strlen($fBody) === strlen($dlOrig) && !str_contains($fBody, $latBytes) && str_contains($fCache, 'private'));
+check('[viewer image] ...a signed-in visitor is sent it as it is, and so is anyone for a photo whose location is shown', http_get("$baseDl/?img=hidden.jpg&size=full", $dlViewer)[1] === $dlOrig && http_get("$baseDl/?img=hidden.jpg&size=full", $dlAdmin)[1] === $dlOrig && http_get("$baseDl/?img=shown.jpg&size=full")[1] === $dlOrig);
+check('[viewer image] ...and a photo whose location can\'t be removed is never sent with it', !str_contains(http_get("$baseDl/?img=bad.jpg&size=full")[1], 'Exif'));
+check('[viewer image] ...the little pictures were never the original, so they carry no location either', !str_contains(http_get("$baseDl/?img=hidden.jpg&size=thumb")[1], $latBytes));
+[$vSt, $vBody] = http_get("$baseDl/?video=clip.mov");
+check('[viewer video] the video itself is held to the same rule: a visitor who is not signed in is sent it with the location blanked, a signed-in one as it is', $vSt === 200 && strlen($vBody) === strlen($dlMov) && !str_contains($vBody, '48.8584') && http_get("$baseDl/?video=clip.mov", $dlViewer)[1] === $dlMov && http_get("$baseDl/?video=clip.mov", $dlAdmin)[1] === $dlMov);
+$atomAt = strpos($dlMov, '48.8584');
+[$rSt, $rBody] = http_get("$baseDl/?video=clip.mov", ['Range: bytes=' . ($atomAt - 10) . '-' . ($atomAt + 30)]);
+check('[viewer video] ...and so is a part of it fetched with a Range request (what a player does when seeking): the same bytes as that part of the whole, blanked', $rSt === 206 && $rBody === substr($vBody, $atomAt - 10, 41) && !str_contains($rBody, '48.8584'));
+check('[download] the files on the server were not changed by any of it', (string) file_get_contents("$fxDl/hidden.jpg") === $dlOrig && (string) file_get_contents("$fxDl/clip.mov") === $dlMov);
+// Site settings offers the switch, off, with its warning.
+[, $dlSettings] = http_get("$baseDl/?admin", $dlAdmin);
+check('[download] Site settings has the "Let visitors download originals" switch, with its orange warning', str_contains($dlSettings, 'name="set_ENABLE_PUBLIC_DOWNLOAD"') && str_contains($dlSettings, 'Anyone can save every photo at full resolution'));
 
 /* --------------------------------------------------------------------- */
 

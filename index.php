@@ -250,6 +250,12 @@ define('TRACK_VIEWS', gallery_setting('TRACK_VIEWS', false));
 // effect unless TRACK_VIEWS is also on.
 define('SHOW_VIEW_COUNTS_PUBLICLY', gallery_setting('SHOW_VIEW_COUNTS_PUBLICLY', false));
 
+// Whether a visitor who isn't signed in is offered a button to download the original of a photo. Off by default: it
+// hands out every picture at full resolution. Someone signed in (the owner, or with the private-view password) always
+// has the button. Where the gallery doesn't show a photo's location, a visitor who isn't signed in is given the file
+// with the location blanked out (see location_scrub_plan).
+define('ENABLE_PUBLIC_DOWNLOAD', gallery_setting('ENABLE_PUBLIC_DOWNLOAD', false));
+
 // Thumbnail generation/caching. On by default: without it every photo is
 // served at full original resolution as its own "thumbnail" (real
 // bandwidth cost — a page of phone photos can be hundreds of megabytes),
@@ -367,7 +373,10 @@ define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 // default, always show, or always hide — three states, not a checkbox)
 // doesn't override it to "hide." The admin tool itself can always see
 // and edit location data regardless of this constant — it only gates
-// what an ordinary visitor is ever shown. Real coverage is narrower than
+// what a visitor is ever shown. (A visitor who is signed in, the owner or
+// someone with the private-view password, sees every photo's saved
+// location while this is on, whatever the folder and photo switches say:
+// those switches decide what visitors who aren't signed in are shown.) Real coverage is narrower than
 // it sounds: EXIF GPS auto-fill works for JPEG (via exif_read_data) and,
 // where Imagick can read HEIC (the same condition HEIC display already
 // has), for HEIC/HEIF — PNG, GIF, WEBP, and BMP generally carry no GPS
@@ -428,11 +437,12 @@ define('ENABLE_MAP', gallery_setting('ENABLE_MAP', false));
 
 // How close together (in miles) two photos' locations have to be before
 // the map merges them into a single cluster pin instead of showing each
-// individually. 50 is a reasonable middle ground out of the box — a
-// dense city trip and a cross-country road trip want very different
-// values, so this is deliberately tunable per deployment rather than a
-// fixed constant buried in code.
-define('MAP_CLUSTER_RADIUS_MILES', gallery_setting('MAP_CLUSTER_RADIUS_MILES', 50));
+// individually. 1 is a neighbourhood: photos of one sight share a pin and a
+// trip across a city doesn't collapse into one. A dense city trip and a
+// cross-country road trip want very different values, so this is
+// deliberately tunable per deployment (and per folder) rather than a fixed
+// constant buried in code. 0 turns grouping off.
+define('MAP_CLUSTER_RADIUS_MILES', gallery_setting('MAP_CLUSTER_RADIUS_MILES', 1));
 gallery_setting(null, null);   // done asking: report any name in the settings file that isn't a setting
 
 $dir = __DIR__;
@@ -755,6 +765,15 @@ function containing_folder_real_path($dir, $relPath) {
     return resolve_real_path($dir, substr($relPath, 0, $slash));
 }
 
+// ?original=<file> hands a signed-in visitor (the owner, or someone with the private-view password) the original file
+// itself, as a download. Everyone else gets 404, as for any other thing that isn't there.
+if (isset($_GET['original'])) {
+    $claimed = $_GET['original'];
+    $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
+    serve_original_download($dir, $claimed, $claimedList, $claimedList ? items_get_all_for_files($dir, $claimedList) : []);
+    exit;
+}
+
 // ?img= and ?video= answer here, before the tree is scanned: one
 // direct path validation (see valid_media_path) instead of walking every
 // folder for every thumbnail. serve_image()/serve_video() still run
@@ -971,6 +990,471 @@ function serve_original_file($srcPath, $relativePath, $mimeType) {
         return;
     }
     readfile($srcPath);
+}
+
+/* -----------------------------------------------------------------------
+ * A copy of an original without its location. A photo whose location the
+ * gallery does not show is downloaded with the coordinates blanked out
+ * of the file, never re-encoded: location_scrub_plan() finds where the
+ * location sits (EXIF's GPS block, the XMP and IPTC place fields, a
+ * video's location atom) and returns same-length replacements, so the
+ * picture is byte-for-byte what it was and the file keeps its size.
+ * Null means the file couldn't be read safely, and then nothing is sent.
+ * ----------------------------------------------------------------------- */
+
+/** $len bytes at $off, or null if they aren't there (or the block is absurdly large for metadata). */
+function scrub_read($fh, $off, $len) {
+    if ($len < 0 || $off < 0 || $len > 33554432) return null;
+    if ($len === 0) return '';
+    if (fseek($fh, $off) !== 0) return null;
+    $b = fread($fh, $len);
+    return is_string($b) && strlen($b) === $len ? $b : null;
+}
+
+/** The GPS block of a TIFF (the shape EXIF uses), zeroed: [[fileOffset, bytes], ...], or null if it doesn't parse.
+ *  $base is where the TIFF starts in the file. */
+function scrub_tiff_gps($tiff, $base) {
+    $n = strlen($tiff);
+    if ($n < 8) return null;
+    $le = substr($tiff, 0, 2) === 'II';
+    if (!$le && substr($tiff, 0, 2) !== 'MM') return null;
+    $u16 = function ($o) use ($tiff, $n, $le) { return $o >= 0 && $o + 2 <= $n ? unpack($le ? 'v' : 'n', $tiff, $o)[1] : null; };
+    $u32 = function ($o) use ($tiff, $n, $le) { return $o >= 0 && $o + 4 <= $n ? unpack($le ? 'V' : 'N', $tiff, $o)[1] : null; };
+    if ($u16(2) !== 42) return null;
+    $sizes = [1 => 1, 2 => 1, 3 => 2, 4 => 4, 5 => 8, 6 => 1, 7 => 1, 8 => 2, 9 => 4, 10 => 8, 11 => 4, 12 => 8, 13 => 4, 16 => 8, 17 => 4, 18 => 4];
+    $patches = [];
+    $zero = function ($off, $len) use (&$patches, $base, $n) {
+        if ($off < 0 || $len < 0 || $off + $len > $n) return false;
+        if ($len > 0) $patches[] = [$base + $off, str_repeat("\0", $len)];
+        return true;
+    };
+    $ifd = $u32(4);
+    for ($guard = 0; $ifd !== null && $ifd !== 0 && $guard < 4; $guard++) {
+        $count = $u16($ifd);
+        if ($count === null || $count > 1000) return null;
+        for ($i = 0; $i < $count; $i++) {
+            $e = $ifd + 2 + 12 * $i;
+            $tag = $u16($e);
+            if ($tag === null) return null;
+            if ($tag !== 0x8825) continue;
+            $gps = $u32($e + 8);
+            $g = $gps === null ? null : $u16($gps);
+            if ($g === null || $g > 256) return null;
+            for ($j = 0; $j < $g; $j++) {
+                $ge = $gps + 2 + 12 * $j;
+                $type = $u16($ge + 2); $cnt = $u32($ge + 4);
+                if ($type === null || $cnt === null) return null;
+                $size = ($sizes[$type] ?? 1) * $cnt;
+                if ($size > 4) { $at = $u32($ge + 8); if ($at === null || !$zero($at, $size)) return null; }
+            }
+            if (!$zero($gps, 2 + 12 * $g + 4)) return null;
+        }
+        $ifd = $u32($ifd + 2 + 12 * $count);
+    }
+    return $patches;
+}
+
+/** XMP text: the values of GPS and place-name properties, replaced by spaces of the same length. */
+function scrub_xmp_patches($xml, $base) {
+    $patches = [];
+    $names = 'exif:GPS[A-Za-z]+|photoshop:(?:City|State|Country)|Iptc4xmpCore:(?:Location|CountryCode)';
+    foreach (['/\b(?:' . $names . ')\s*=\s*(["\'])(.*?)\1/s' => 2, '/<(' . $names . ')(?:\s[^>]*)?>(.*?)<\/\1\s*>/s' => 2] as $re => $group) {
+        if (!preg_match_all($re, $xml, $m, PREG_OFFSET_CAPTURE)) continue;
+        foreach ($m[$group] as [$text, $off]) {
+            if ($text !== '') $patches[] = [$base + $off, str_repeat(' ', strlen($text))];
+        }
+    }
+    return $patches;
+}
+
+/** IPTC (inside a Photoshop APP13 block): the city, sub-location, state and country fields, blanked. */
+function scrub_iptc_patches($d, $base) {
+    $patches = [];
+    $n = strlen($d);
+    $p = 0;
+    while ($p + 12 <= $n && substr($d, $p, 4) === '8BIM') {
+        $id = unpack('n', $d, $p + 4)[1];
+        $nameLen = ord($d[$p + 6]);
+        $q = $p + 7 + $nameLen; if (($nameLen + 1) % 2) $q++;
+        if ($q + 4 > $n) break;
+        $len = unpack('N', $d, $q)[1];
+        $dataAt = $q + 4;
+        if ($id === 0x0404) {
+            $r = $dataAt; $end = min($n, $dataAt + $len);
+            while ($r + 5 <= $end && $d[$r] === "\x1C") {
+                $rec = ord($d[$r + 1]); $tag = ord($d[$r + 2]); $l = unpack('n', $d, $r + 3)[1];
+                if ($l & 0x8000 || $r + 5 + $l > $end) break;
+                if ($rec === 2 && in_array($tag, [90, 92, 95, 100, 101], true) && $l > 0) $patches[] = [$base + $r + 5, str_repeat(' ', $l)];
+                $r += 5 + $l;
+            }
+        }
+        $p = $dataAt + $len + ($len % 2);
+    }
+    return $patches;
+}
+
+function scrub_plan_jpeg($fh, $size) {
+    if (scrub_read($fh, 0, 2) !== "\xFF\xD8") return null;
+    $patches = [];
+    $pos = 2;
+    while (true) {
+        if ($pos + 2 > $size) return null;
+        $h = scrub_read($fh, $pos, 2);
+        if ($h === null || $h[0] !== "\xFF") return null;
+        $m = ord($h[1]);
+        if ($m === 0xFF) { $pos++; continue; }
+        if ($m === 0xD8 || $m === 0x01 || ($m >= 0xD0 && $m <= 0xD7)) { $pos += 2; continue; }
+        if ($m === 0xDA || $m === 0xD9) break;   // the picture itself starts: every piece of metadata is before this
+        $lenBytes = scrub_read($fh, $pos + 2, 2);
+        if ($lenBytes === null) return null;
+        $len = unpack('n', $lenBytes)[1];
+        if ($len < 2) return null;
+        $dataOff = $pos + 4; $dataLen = $len - 2;
+        if ($m === 0xE1 || $m === 0xED) {
+            $data = scrub_read($fh, $dataOff, $dataLen);
+            if ($data === null) return null;
+            if ($m === 0xE1 && strncmp($data, "Exif\0\0", 6) === 0) {
+                $t = scrub_tiff_gps(substr($data, 6), $dataOff + 6);
+                if ($t === null) return null;
+                $patches = array_merge($patches, $t);
+            } elseif ($m === 0xE1 && strncmp($data, 'http://ns.adobe.com/', 20) === 0) {
+                $patches = array_merge($patches, scrub_xmp_patches($data, $dataOff));
+            } elseif ($m === 0xED && strncmp($data, "Photoshop 3.0\0", 14) === 0) {
+                $patches = array_merge($patches, scrub_iptc_patches(substr($data, 14), $dataOff + 14));
+            }
+        }
+        $pos += 2 + $len;
+    }
+    return $patches;
+}
+
+function scrub_plan_png($fh, $size) {
+    if (scrub_read($fh, 0, 8) !== "\x89PNG\r\n\x1a\n") return null;
+    $patches = [];
+    $pos = 8;
+    while ($pos + 12 <= $size) {
+        $h = scrub_read($fh, $pos, 8);
+        if ($h === null) return null;
+        $len = unpack('N', $h)[1]; $type = substr($h, 4, 4);
+        if ($pos + 12 + $len > $size) return null;
+        if ($type === 'eXIf' || $type === 'iTXt') {
+            $data = scrub_read($fh, $pos + 8, $len);
+            if ($data === null) return null;
+            $local = null;
+            if ($type === 'eXIf') $local = scrub_tiff_gps($data, 0);
+            elseif (strncmp($data, 'XML:com.adobe.xmp', 17) === 0) $local = scrub_xmp_patches($data, 0);
+            else $local = [];
+            if ($local === null) return null;
+            if ($local) {
+                foreach ($local as [$o, $b]) $data = substr_replace($data, $b, $o, strlen($b));
+                $patches[] = [$pos + 8, $data];
+                $patches[] = [$pos + 8 + $len, pack('N', crc32($type . $data))];   // the chunk's checksum
+            }
+        }
+        if ($type === 'IEND') break;
+        $pos += 12 + $len;
+    }
+    return $patches;
+}
+
+function scrub_plan_webp($fh, $size) {
+    $h = scrub_read($fh, 0, 12);
+    if ($h === null || substr($h, 0, 4) !== 'RIFF' || substr($h, 8, 4) !== 'WEBP') return null;
+    $patches = [];
+    $pos = 12;
+    while ($pos + 8 <= $size) {
+        $c = scrub_read($fh, $pos, 8);
+        if ($c === null) return null;
+        $type = substr($c, 0, 4); $len = unpack('V', $c, 4)[1];
+        if ($pos + 8 + $len > $size) return null;
+        if ($type === 'EXIF' || $type === 'XMP ') {
+            $data = scrub_read($fh, $pos + 8, $len);
+            if ($data === null) return null;
+            if ($type === 'EXIF') {
+                $skip = strncmp($data, "Exif\0\0", 6) === 0 ? 6 : 0;
+                $t = scrub_tiff_gps(substr($data, $skip), $pos + 8 + $skip);
+                if ($t === null) return null;
+                $patches = array_merge($patches, $t);
+            } else {
+                $patches = array_merge($patches, scrub_xmp_patches($data, $pos + 8));
+            }
+        }
+        $pos += 8 + $len + ($len % 2);
+    }
+    return $patches;
+}
+
+/** The boxes (size, type) laid end to end between $from and $to of an MP4/MOV/HEIC file. */
+function scrub_boxes($fh, $from, $to) {
+    $out = [];
+    $pos = $from;
+    while ($pos + 8 <= $to && count($out) < 4096) {
+        $h = scrub_read($fh, $pos, 8);
+        if ($h === null) return null;
+        $len = unpack('N', $h)[1]; $type = substr($h, 4, 4); $head = 8;
+        if ($len === 1) {
+            $big = scrub_read($fh, $pos + 8, 8);
+            if ($big === null) return null;
+            $len = unpack('J', $big)[1]; $head = 16;
+        } elseif ($len === 0) {
+            $len = $to - $pos;
+        }
+        if ($len < $head || $pos + $len > $to) return null;
+        $out[] = ['at' => $pos, 'type' => $type, 'data' => $pos + $head, 'end' => $pos + $len];
+        $pos += $len;
+    }
+    return $out;
+}
+
+function scrub_plan_mp4($fh, $size) {
+    $patches = [];
+    $walk = function ($from, $to, $depth) use (&$walk, &$patches, $fh) {
+        $boxes = scrub_boxes($fh, $from, $to);
+        if ($boxes === null) return false;
+        foreach ($boxes as $b) {
+            $type = $b['type'];
+            if ($type === "\xA9xyz" || $type === 'loci') {
+                if ($b['end'] > $b['data']) $patches[] = [$b['data'], str_repeat("\0", $b['end'] - $b['data'])];
+            } elseif (in_array($type, ['moov', 'trak', 'udta'], true) && $depth < 6) {
+                if (!$walk($b['data'], $b['end'], $depth + 1)) return false;
+            } elseif ($type === 'meta' && $depth < 6) {
+                // ISO's meta box has a 4-byte version first; QuickTime's doesn't.
+                $probe = scrub_read($fh, $b['data'] + 4, 4);
+                $inner = $probe === 'hdlr' ? $b['data'] : $b['data'] + 4;
+                $kids = scrub_boxes($fh, $inner, $b['end']);
+                if ($kids === null) return false;
+                $locationKeys = [];
+                foreach ($kids as $k) {
+                    if ($k['type'] !== 'keys') continue;
+                    $head = scrub_read($fh, $k['data'], 8);
+                    if ($head === null) return false;
+                    $entries = unpack('N', $head, 4)[1];
+                    $at = $k['data'] + 8;
+                    for ($i = 1; $i <= $entries && $i < 512; $i++) {
+                        $eh = scrub_read($fh, $at, 8);
+                        if ($eh === null) return false;
+                        $elen = unpack('N', $eh)[1];
+                        if ($elen < 8 || $at + $elen > $k['end']) return false;
+                        $name = scrub_read($fh, $at + 8, $elen - 8);
+                        if ($name !== null && stripos($name, 'location') !== false) $locationKeys[$i] = true;
+                        $at += $elen;
+                    }
+                }
+                foreach ($kids as $k) {
+                    if ($k['type'] !== 'ilst' || !$locationKeys) continue;
+                    $items = scrub_boxes($fh, $k['data'], $k['end']);
+                    if ($items === null) return false;
+                    foreach ($items as $item) {
+                        if (!isset($locationKeys[unpack('N', $item['type'])[1]])) continue;
+                        $datas = scrub_boxes($fh, $item['data'], $item['end']);
+                        if ($datas === null) return false;
+                        foreach ($datas as $d) {
+                            if ($d['type'] === 'data' && $d['end'] - $d['data'] > 8) $patches[] = [$d['data'] + 8, str_repeat(' ', $d['end'] - $d['data'] - 8)];
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    };
+    return $walk(0, $size, 0) ? $patches : null;
+}
+
+function scrub_plan_heif($fh, $size) {
+    $top = scrub_boxes($fh, 0, $size);
+    if ($top === null) return null;
+    $meta = null;
+    foreach ($top as $b) if ($b['type'] === 'meta') $meta = $b;
+    if ($meta === null) return [];
+    $kids = scrub_boxes($fh, $meta['data'] + 4, $meta['end']);
+    if ($kids === null) return null;
+    $items = [];   // item id => 'exif' | 'xmp'
+    foreach ($kids as $k) {
+        if ($k['type'] !== 'iinf') continue;
+        $ver = scrub_read($fh, $k['data'], 1);
+        $skip = $ver === "\0" ? 6 : 8;
+        $infes = scrub_boxes($fh, $k['data'] + $skip, $k['end']);
+        if ($infes === null) return null;
+        foreach ($infes as $inf) {
+            if ($inf['type'] !== 'infe') continue;
+            $body = scrub_read($fh, $inf['data'], min(256, $inf['end'] - $inf['data']));
+            if ($body === null || strlen($body) < 12) continue;
+            $v = ord($body[0]);
+            if ($v < 2) continue;
+            $id = $v === 2 ? unpack('n', $body, 4)[1] : unpack('N', $body, 4)[1];
+            $o = $v === 2 ? 8 : 10;
+            $itemType = substr($body, $o, 4);
+            if ($itemType === 'Exif') $items[$id] = 'exif';
+            elseif ($itemType === 'mime' && stripos(substr($body, $o + 4), 'rdf+xml') !== false) $items[$id] = 'xmp';
+        }
+    }
+    if (!$items) return [];
+    $patches = [];
+    foreach ($kids as $k) {
+        if ($k['type'] !== 'iloc') continue;
+        $h = scrub_read($fh, $k['data'], 8);
+        if ($h === null) return null;
+        $ver = ord($h[0]);
+        $offSize = ord($h[4]) >> 4; $lenSize = ord($h[4]) & 15; $baseSize = ord($h[5]) >> 4; $idxSize = $ver > 0 ? ord($h[5]) & 15 : 0;
+        $count = $ver < 2 ? unpack('n', $h, 6)[1] : unpack('N', scrub_read($fh, $k['data'] + 6, 4))[1];
+        $at = $k['data'] + ($ver < 2 ? 8 : 10);
+        $num = function ($len) use ($fh, &$at) {
+            if ($len === 0) return 0;
+            $b = scrub_read($fh, $at, $len); $at += $len;
+            if ($b === null) return null;
+            $v = 0; for ($i = 0; $i < $len; $i++) $v = ($v << 8) | ord($b[$i]);
+            return $v;
+        };
+        for ($i = 0; $i < $count && $i < 4096; $i++) {
+            $id = $num($ver < 2 ? 2 : 4);
+            $method = 0;
+            if ($ver > 0) { $m = $num(2); if ($m === null) return null; $method = $m & 15; }
+            $num(2);
+            $base = $num($baseSize); $ext = $num(2);
+            if ($id === null || $base === null || $ext === null || $ext > 64) return null;
+            $extents = [];
+            for ($e = 0; $e < $ext; $e++) {
+                if ($idxSize) $num($idxSize);
+                $eo = $num($offSize); $el = $num($lenSize);
+                if ($eo === null || $el === null) return null;
+                $extents[] = [$base + $eo, $el];
+            }
+            if (!isset($items[$id])) continue;
+            if ($method !== 0 || count($extents) !== 1) return null;   // not where it can be safely reached
+            [$eo, $el] = $extents[0];
+            $data = scrub_read($fh, $eo, $el);
+            if ($data === null) return null;
+            if ($items[$id] === 'exif') {
+                if (strlen($data) < 12) return null;
+                $skip = 4 + unpack('N', $data)[1];
+                $t = scrub_tiff_gps(substr($data, $skip), $eo + $skip);
+                if ($t === null) return null;
+                $patches = array_merge($patches, $t);
+            } else {
+                $patches = array_merge($patches, scrub_xmp_patches($data, $eo));
+            }
+        }
+    }
+    return $patches;
+}
+
+/** What to overwrite in this file to take its location out: [[fileOffset, bytes], ...] sorted, not overlapping, each
+ *  replacing as many bytes as it holds; [] when there is nothing to remove; null when the file can't be read
+ *  safely (a damaged or unusual one), in which case it must not be handed out. */
+function location_scrub_plan($path) {
+    $size = @filesize($path);
+    $fh = $size === false ? false : @fopen($path, 'rb');
+    if (!$fh) return null;
+    try {
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if ($ext === 'jpg' || $ext === 'jpeg') $plan = scrub_plan_jpeg($fh, $size);
+        elseif ($ext === 'png') $plan = scrub_plan_png($fh, $size);
+        elseif ($ext === 'webp') $plan = scrub_plan_webp($fh, $size);
+        elseif ($ext === 'heic' || $ext === 'heif') $plan = scrub_plan_heif($fh, $size);
+        elseif ($ext === 'mp4' || $ext === 'mov') $plan = scrub_plan_mp4($fh, $size);
+        else $plan = [];   // gif, bmp: nothing in them that says where
+    } catch (Throwable $e) {
+        $plan = null;
+    } finally {
+        fclose($fh);
+    }
+    if ($plan === null) return null;
+    usort($plan, function ($a, $b) { return $a[0] <=> $b[0]; });
+    $merged = [];
+    foreach ($plan as [$o, $b]) {
+        $last = count($merged) - 1;
+        if ($last >= 0 && $o <= $merged[$last][0] + strlen($merged[$last][1])) {
+            $rel = $o - $merged[$last][0];
+            $merged[$last][1] = substr($merged[$last][1], 0, $rel) . $b . substr($merged[$last][1], $rel + strlen($b));
+        } else {
+            $merged[] = [$o, $b];
+        }
+    }
+    return $merged;
+}
+
+/** $chunk, which starts at byte $pos of the file, with whatever part of $patches falls inside it laid over it. */
+function apply_patches_to_chunk($chunk, $pos, $patches) {
+    $end = $pos + strlen($chunk);
+    foreach ($patches as [$o, $b]) {
+        if ($o >= $end || $o + strlen($b) <= $pos) continue;
+        $from = max($o, $pos); $to = min($o + strlen($b), $end);
+        $chunk = substr_replace($chunk, substr($b, $from - $o, $to - $from), $from - $pos, $to - $from);
+    }
+    return $chunk;
+}
+
+/** Sends $fh's bytes (from its current start, $size of them) to the visitor with $patches laid over them. */
+function stream_with_patches($fh, $size, $patches, $emit) {
+    $pos = 0;
+    while ($pos < $size) {
+        $chunk = fread($fh, min(1048576, $size - $pos));
+        if ($chunk === false || $chunk === '') break;
+        $emit(apply_patches_to_chunk($chunk, $pos, $patches));
+        $pos += strlen($chunk);
+    }
+}
+
+/** What to overwrite in the original at $srcPath before it is given to this visitor: [] for nothing (a signed-in
+ *  visitor, the owner or someone with the private-view password, gets the file exactly as it is, and so does anyone for
+ *  a photo whose location the gallery shows), a plan for a visitor who isn't signed in and a photo whose location is
+ *  hidden, or null when that can't be done safely, in which case the file must not be given out. */
+function visitor_scrub_plan($srcPath, $filename, $itemsData) {
+    if (is_revealed() || photo_location_visible($itemsData[$filename] ?? [])) return [];
+    return location_scrub_plan($srcPath);
+}
+
+/** Sends the original file to this visitor (see visitor_scrub_plan). False, with nothing sent, when it may not be.
+ *  $cacheControl is sent with a file that is the same for everyone; a file made differently for different visitors is
+ *  kept out of shared caches. */
+function send_original_for_visitor($srcPath, $filename, $itemsData, $cacheControl = null) {
+    $plan = visitor_scrub_plan($srcPath, $filename, $itemsData);
+    if ($plan === null) return false;
+    $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+    if ($plan === []) {
+        if ($cacheControl !== null) header('Cache-Control: ' . $cacheControl);
+        serve_original_file($srcPath, $filename, guess_mime($ext));
+        return true;
+    }
+    $size = @filesize($srcPath);
+    $fh = $size === false ? false : @fopen($srcPath, 'rb');
+    if (!$fh) return false;
+    header('Content-Type: ' . guess_mime($ext));
+    header('Content-Length: ' . $size);
+    header('Cache-Control: private, max-age=86400');
+    header('Vary: Cookie');
+    stream_with_patches($fh, $size, $plan, function ($chunk) { echo $chunk; flush(); });
+    fclose($fh);
+    return true;
+}
+
+/** ?original=: the original file as a download. Offered to anyone signed in, and to everyone when ENABLE_PUBLIC_DOWNLOAD is
+ *  on; a visitor who isn't signed in gets a photo whose location the gallery hides with the location blanked out. */
+function serve_original_download($dir, $filename, $validFiles, $itemsData = []) {
+    send_sensitive_page_headers();
+    if (!is_string($filename) || !in_array($filename, $validFiles, true) || (!is_revealed() && !ENABLE_PUBLIC_DOWNLOAD)
+        || (file_is_hidden($dir, $filename, $itemsData) && !is_revealed())) {
+        http_response_code(404);
+        return;
+    }
+    $srcPath = resolve_real_path($dir, $filename);
+    $size = @filesize($srcPath);
+    if (!is_file($srcPath) || $size === false) {
+        http_response_code(404);
+        return;
+    }
+    $name = basename($filename);
+    $ascii = preg_replace('/[^A-Za-z0-9._ -]/', '_', $name);
+    // Checked before anything is sent: a file whose location can't be removed safely is not handed out.
+    if (visitor_scrub_plan($srcPath, $filename, $itemsData) === null) {
+        http_response_code(422);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo "This file's location can't be removed safely, so it isn't offered as a download.";
+        return;
+    }
+    header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
+    header('X-Content-Type-Options: nosniff');
+    if (!send_original_for_visitor($srcPath, $filename, $itemsData)) http_response_code(404);
 }
 
 /**
@@ -1338,10 +1822,10 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
 
     // Non-HEIC files at full size are served untouched — no need to
     // resize or re-encode the original the lightbox already opens fine.
+    // (Except for a visitor who isn't signed in and a photo whose location is hidden: the file is the original, with its
+    // GPS, so that visitor is sent it with the location blanked out, or the re-encoded copy below if that can't be done.)
     if (!$isHeic && $variant === 'full') {
-        header('Cache-Control: ' . $cacheControl);
-        serve_original_file($srcPath, $filename, guess_mime($ext));
-        return;
+        if (send_original_for_visitor($srcPath, $filename, $itemsData, $cacheControl)) return;
     }
 
     $cachePath = image_cache_path($cacheDir, $filename, $variant, $srcPath);
@@ -1371,10 +1855,9 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     }
     // Ordinary photos keep the headers they have always had on this path
     // (none); a hidden one must still never be stored by a shared cache.
-    if ($cacheControl === 'private, no-store') {
-        header('Cache-Control: private, no-store');
+    if (!send_original_for_visitor($srcPath, $filename, $itemsData, $cacheControl === 'private, no-store' ? $cacheControl : null)) {
+        http_response_code(404);
     }
-    serve_original_file($srcPath, $filename, guess_mime($ext));
 }
 
 /**
@@ -1441,13 +1924,20 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
         return;
     }
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+    // A visitor who isn't signed in, and a video whose location is hidden: the location is blanked out of what is sent.
+    $plan = visitor_scrub_plan($srcPath, $filename, $itemsData);
+    if ($plan === null) {
+        http_response_code(404);
+        return;
+    }
+    if ($plan !== []) $cacheControl = 'private, max-age=86400';
 
     // Once nginx is configured for this (see serve_original_file()),
     // hand the whole request to its own static serving instead — nginx
     // already handles Range requests correctly on its own, a free
     // upgrade over the plain-PHP handling below, which stays as the
     // baseline that works on any host regardless.
-    if (NGINX_ACCEL_REDIRECT_PREFIX !== '') {
+    if (NGINX_ACCEL_REDIRECT_PREFIX !== '' && $plan === []) {
         header('Cache-Control: ' . $cacheControl);
         serve_original_file($srcPath, $filename, guess_mime($ext));
         return;
@@ -1455,6 +1945,7 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
 
     header('Content-Type: ' . guess_mime($ext));
     header('Cache-Control: ' . $cacheControl);
+    if ($plan !== []) header('Vary: Cookie');
     header('Accept-Ranges: bytes');
 
     $start = 0;
@@ -1496,12 +1987,14 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
 
     fseek($fh, $start);
     $remaining = $length;
+    $at = $start;
     $chunkSize = 8192;
     while ($remaining > 0 && !feof($fh)) {
         $chunk = fread($fh, min($chunkSize, $remaining));
         if ($chunk === false || $chunk === '') break;
-        echo $chunk;
+        echo $plan === [] ? $chunk : apply_patches_to_chunk($chunk, $at, $plan);
         $remaining -= strlen($chunk);
+        $at += strlen($chunk);
     }
     fclose($fh);
 }
@@ -2132,8 +2625,101 @@ function admin_session_name() {
 /** What a logged-in admin session carries. Derived from the password and
  *  this install's folder, so changing ADMIN_PASSWORD logs every existing
  *  session out, and a session from another gallery means nothing here. */
-function admin_session_marker() {
-    return hash('sha256', 'admin|' . ADMIN_PASSWORD . '|' . __DIR__);
+function admin_session_marker($stored = null) {
+    return hash('sha256', 'admin|' . ($stored ?? ADMIN_PASSWORD) . '|' . __DIR__);
+}
+
+/* -----------------------------------------------------------------------
+ * Passwords at rest. The settings file keeps each password as a bcrypt hash
+ * (password_hash), so a copy of that file — a backup, a zip, a repository, a
+ * server that sends .php files as text — does not hand over the password
+ * itself, only something that has to be guessed at one try at a time. A
+ * password written there in plain text still works (hand-edited files, older
+ * versions); the first successful sign-in replaces it with its hash.
+ * ----------------------------------------------------------------------- */
+
+/** True if $v is a password hash made by password_hash(), not a password. */
+function password_is_hashed($v) {
+    return is_string($v) && $v !== '' && (password_get_info($v)['algo'] ?? null) !== null;
+}
+
+/** Does $supplied match the stored password: a hash (checked with
+ *  password_verify) or, for a file not yet upgraded, the plain text. */
+function password_matches($stored, $supplied) {
+    if (!is_string($stored) || $stored === '' || !is_string($supplied)) return false;
+    return password_is_hashed($stored) ? password_verify($supplied, $stored) : hash_equals($stored, $supplied);
+}
+
+/** What the settings file keeps for a new password. */
+function password_for_storage($plain) {
+    return password_hash($plain, PASSWORD_DEFAULT);
+}
+
+/** A random secret that belongs to this install, kept in its own small data
+ *  file (.gallery-secret.php, answers 404 like the others). The sign-in
+ *  cookies are keyed with it, so someone who only has a copy of the settings
+ *  file (and so the password hashes) still can't make a valid cookie. $create
+ *  makes it if it doesn't exist (at a sign-in); without it, a missing secret
+ *  is just ''. If the folder can't be written the cookies fall back to being
+ *  derived from the stored password alone. */
+function install_secret($create = false) {
+    static $secret = null;
+    if ($secret !== null && ($secret !== '' || !$create)) return $secret;
+    $path = __DIR__ . '/.gallery-secret.php';
+    $read = function () use ($path) {
+        $raw = is_file($path) ? (string) @file_get_contents($path) : '';
+        return preg_match('/^[0-9a-f]{64}$/m', $raw, $m) ? $m[0] : '';
+    };
+    $secret = $read();
+    if ($secret !== '' || !$create || !is_writable(__DIR__)) return $secret;
+    $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, data_file_guard_line() . bin2hex(random_bytes(32)) . "\n", LOCK_EX) === false) { @unlink($tmp); return $secret; }
+    @chmod($tmp, 0600);
+    // link() refuses to replace a file that appeared meanwhile, so two first sign-ins can't end up with different secrets.
+    if (!@link($tmp, $path) && !is_file($path)) @rename($tmp, $path);
+    @unlink($tmp);
+    return $secret = $read();
+}
+
+/** After a successful sign-in: any password the settings file still holds in
+ *  plain text is replaced there by its hash (both at once, so one write).
+ *  Returns the values now in force, name => stored value, for the passwords
+ *  it changed ([] if none, or if the file can't be rewritten: then nothing
+ *  changes and the plain text keeps working). */
+function upgrade_plaintext_passwords() {
+    $state = gallery_config_load();
+    if ($state['status'] !== 'ok') return [];
+    $names = [];
+    foreach (['ADMIN_PASSWORD', 'PRIVATE_VIEW_PASSWORD'] as $n) {
+        if (isset($state['cfg'][$n]) && is_string($state['cfg'][$n]) && $state['cfg'][$n] !== '' && !password_is_hashed($state['cfg'][$n])) $names[] = $n;
+    }
+    if (!$names || !is_writable(__DIR__)) return [];
+    $lock = @fopen(__FILE__, 'r');
+    if ($lock) flock($lock, LOCK_EX);
+    try {
+        $path = gallery_config_path();
+        $raw = @file_get_contents($path);
+        if ($raw === false) return [];
+        [$status, $cfg] = gallery_config_parse($raw);
+        if ($status !== 'ok') return [];
+        $changed = [];
+        foreach ($names as $n) {
+            // Only what the file still holds, unchanged since this request began.
+            if (($cfg[$n] ?? null) === $state['cfg'][$n]) { $cfg[$n] = password_for_storage($state['cfg'][$n]); $changed[$n] = $cfg[$n]; }
+        }
+        if (!$changed) return [];
+        $content = gallery_config_render($cfg);
+        if ($content === null) return [];
+        $tmp = $path . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmp, $content, LOCK_EX) === false) { @unlink($tmp); return []; }
+        @chmod($tmp, 0600);
+        [$roundStatus, $roundTrip] = gallery_config_parse((string) @file_get_contents($tmp));
+        ksort($roundTrip); ksort($cfg);
+        if ($roundStatus !== 'ok' || $roundTrip !== $cfg || !@rename($tmp, $path)) { @unlink($tmp); return []; }
+        return $changed;
+    } finally {
+        if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+    }
 }
 
 function admin_session_authed() {
@@ -2181,7 +2767,7 @@ function admin_csrf_valid($submittedToken) {
 function admin_credentials_valid() {
     $pass = $_SERVER['PHP_AUTH_PW'] ?? null;
     if (!is_string($pass)) return false;
-    return hash_equals(ADMIN_PASSWORD, $pass);
+    return password_matches(ADMIN_PASSWORD, $pass);
 }
 
 /** A request carried an HTTP Basic password that is wrong: a script's typo, or
@@ -2313,11 +2899,11 @@ function render_https_required_page() {
  * addition, not a rewrite of the flag itself.
  * ----------------------------------------------------------------------- */
 
-function reveal_cookie_value() {
+function reveal_cookie_value($stored = null) {
     // Mixed with this install's folder: the cookie is a bearer token for
     // *this* gallery only, not a bare hash of the password that another
     // gallery sharing the same password would also accept.
-    return hash('sha256', PRIVATE_VIEW_PASSWORD . '|' . __DIR__);
+    return hash_hmac('sha256', 'reveal|' . ($stored ?? PRIVATE_VIEW_PASSWORD) . '|' . __DIR__, install_secret());
 }
 
 /** Sets the private-view cookie, after a successful ?reveal login. A year-long
@@ -2325,9 +2911,10 @@ function reveal_cookie_value() {
  *  session-based login already has, just via a plain cookie instead of a
  *  PHP session, since this has to survive on the *public*, unauthenticated
  *  page view, not just inside ?admin/?reveal themselves. */
-function set_reveal_cookie() {
+function set_reveal_cookie($stored = null) {
     if (PRIVATE_VIEW_PASSWORD === '') return;
-    setcookie(REVEAL_COOKIE_NAME, reveal_cookie_value(), [
+    install_secret(true);
+    setcookie(REVEAL_COOKIE_NAME, reveal_cookie_value($stored), [
         'expires' => time() + 31536000,
         'path' => '/',
         'secure' => is_https_request(),
@@ -2344,13 +2931,14 @@ function set_reveal_cookie() {
  *  credential, and without needing a private-view password to exist. */
 function admin_reveal_cookie_value($password = null) {
     $pw = $password ?? ADMIN_PASSWORD;
-    return $pw === '' ? '' : hash('sha256', 'admin-reveal|' . $pw . '|' . __DIR__);
+    return $pw === '' ? '' : hash_hmac('sha256', 'admin-reveal|' . $pw . '|' . __DIR__, install_secret());
 }
 
 /** Sets that cookie on every authenticated admin request. $password is passed
  *  only right after the password was just set or changed, when the constant
  *  still holds the old value. */
 function set_admin_reveal_cookie($password = null) {
+    install_secret(true);
     $value = admin_reveal_cookie_value($password);
     if ($value === '') return;
     setcookie(REVEAL_COOKIE_NAME, $value, [
@@ -2611,8 +3199,8 @@ function run_reveal_route($dir) {
         echo 'Too many failed attempts. Try again in a moment.';
         return;
     }
-    $asAdmin = is_string($supplied) && ADMIN_PASSWORD !== '' && hash_equals(ADMIN_PASSWORD, $supplied);
-    $asViewer = is_string($supplied) && PRIVATE_VIEW_PASSWORD !== '' && hash_equals(PRIVATE_VIEW_PASSWORD, $supplied);
+    $asAdmin = is_string($supplied) && ADMIN_PASSWORD !== '' && password_matches(ADMIN_PASSWORD, $supplied);
+    $asViewer = !$asAdmin && is_string($supplied) && PRIVATE_VIEW_PASSWORD !== '' && password_matches(PRIVATE_VIEW_PASSWORD, $supplied);
     if (!$asAdmin && !$asViewer) {
         if (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']) || $formPass !== null) {
             login_throttle_record_failure($dir, 'reveal', $ip);
@@ -2628,18 +3216,20 @@ function run_reveal_route($dir) {
         return;
     }
     login_throttle_record_success($dir, 'reveal', $ip);
+    // A password still in plain text in the settings file becomes a hash now (everything below uses what is stored).
+    $upgraded = upgrade_plaintext_passwords();
     if ($asAdmin) {
         // The owner: a fresh admin session, exactly as the admin's own sign-in makes one, then into the admin (on the
         // folder they were looking at).
         admin_start_session();
         session_regenerate_id(true);
-        $_SESSION['admin_auth'] = admin_session_marker();
+        $_SESSION['admin_auth'] = admin_session_marker($upgraded['ADMIN_PASSWORD'] ?? null);
         login_throttle_record_success($dir, 'admin', $ip);
-        set_admin_reveal_cookie();
+        set_admin_reveal_cookie($upgraded['ADMIN_PASSWORD'] ?? null);
         header('Location: ?admin' . ($backFolder !== '' ? '&folder=' . substr($backFolder, strlen('?folder=')) : ''), true, 303);
         return;
     }
-    set_reveal_cookie();
+    set_reveal_cookie($upgraded['PRIVATE_VIEW_PASSWORD'] ?? null);
     header('Location: ./' . $backPage, true, 302);
 }
 
@@ -2998,14 +3588,21 @@ function items_get_all_for_files($dir, $files) {
     return $result;
 }
 
-/** The three-gate check (global constant, folder toggle, per-photo
- *  tri-state) that decides whether an unrevealed visitor ever sees this
- *  photo's location — see ENABLE_PHOTO_LOCATION's own doc comment for
- *  the full reasoning. The admin tool itself ignores all three; it can
- *  always see and edit location data for its own authenticated owner. */
+/** The gates (global constant, folder toggle, per-photo tri-state) that
+ *  decide whether a visitor sees this photo's location — see
+ *  ENABLE_PHOTO_LOCATION's own doc comment for the full reasoning. Someone
+ *  signed in (the owner, or with the private-view password) sees the
+ *  location of every photo that has one, whatever its folder or its own
+ *  switch says: those switches are about what visitors who aren't signed
+ *  in are shown. The global constant still switches the whole feature off
+ *  for everyone. The admin tool itself ignores all of it; it can always
+ *  see and edit location data for its own authenticated owner. */
 function photo_location_visible($itemEntry) {
     if (!ENABLE_PHOTO_LOCATION) return false;
     if (empty($itemEntry['location'])) return false;
+    static $trusted = null;
+    if ($trusted === null) $trusted = is_revealed();
+    if ($trusted) return true;
     $visibility = $itemEntry['locationVisibility'] ?? 'inherit';
     if ($visibility === 'hide') return false;
     if ($visibility === 'show') return true;
@@ -4161,6 +4758,10 @@ function gallery_setting_definitions() {
              'offwarn' => 'Videos will disappear from the gallery, and links to them will stop working. Nothing is deleted: the files and their captions, locations and hide settings stay, and come back when you turn this on again.'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
              'help' => 'alpha_01.jpg and alpha_02.jpg become one group, "alpha". Handy for for-sale listings; on a camera roll it can merge unrelated photos. Folders are better for trips.'],
+            ['name' => 'ENABLE_PUBLIC_DOWNLOAD', 'type' => 'bool', 'label' => 'Let visitors download originals',
+             'help' => 'Adds a download button to the photo viewer for everyone. You, and anyone with the private-view password, always have it. Where a photo\'s location is hidden, a visitor\'s copy has the location taken out of the file.',
+             'risk' => 'Anyone can save every photo at full resolution.',
+             'offwarn' => 'The download button disappears for visitors who aren\'t signed in. Nothing is deleted.'],
             ['name' => 'PHOTO_SORT_ORDER', 'type' => 'enum', 'label' => 'Photo order',
              'options' => ['filename' => 'By filename', 'mtime' => 'By date modified (oldest first)'],
              'help' => 'Date order is only reliable if your upload method keeps the original file dates.'],
@@ -4184,7 +4785,7 @@ function gallery_setting_definitions() {
              'risk' => 'The map loads its code from cdnjs and its map tiles from OpenStreetMap in each visitor\'s browser, so those two sites can see that someone visited.',
              'offwarn' => 'The maps will disappear. Nothing is deleted: every photo location stays saved.'],
             ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any', 'requires' => 'ENABLE_MAP',
-             'help' => 'Photos closer together than this share one numbered pin, and pressing a numbered pin zooms in to its photos. 50 suits most trips; a dense city wants far less (fractions such as 0.1 are fine), and 0 turns grouping off so every photo is its own pin. This is the default: each folder, and the gallery front page, can set its own in its settings.'],
+             'help' => 'Photos closer together than this share one numbered pin, and pressing a numbered pin zooms in to its photos. 1 mile suits most city trips; a road trip wants a larger number, a dense city a smaller one (fractions such as 0.1 are fine), and 0 turns grouping off so every photo is its own pin. This is the default: each folder, and the gallery front page, can set its own in its settings.'],
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
@@ -4322,7 +4923,7 @@ function site_settings_save($ajax = false) {
         if ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
         elseif (!admin_password_ok($adminPw)) $errors[] = 'The admin password needs at least 8 characters, with at least one letter and one number: it is the one credential that can change your gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $adminPw)) $errors[] = 'The admin password can\'t contain control characters.';
-        else { $setOrUnset('ADMIN_PASSWORD', $adminPw); $newAdmin = $adminPw; }
+        else { $newAdmin = password_for_storage($adminPw); $setOrUnset('ADMIN_PASSWORD', $newAdmin); }
     }
     $viewPw = (string) ($_POST['pw_private'] ?? '');
     if (!empty($_POST['pw_private_remove'])) {
@@ -4330,7 +4931,7 @@ function site_settings_save($ajax = false) {
     } elseif ($viewPw !== '') {
         if ($viewPw !== (string) ($_POST['pw_private2'] ?? '')) $errors[] = 'The two private-view passwords you typed don\'t match.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $viewPw)) $errors[] = 'The private-view password can\'t contain control characters.';
-        else $setOrUnset('PRIVATE_VIEW_PASSWORD', $viewPw);
+        else $setOrUnset('PRIVATE_VIEW_PASSWORD', password_for_storage($viewPw));
     }
     if ($errors) {
         return ['type' => 'error', 'text' => 'Nothing was saved. ' . implode(' ', $errors)];
@@ -4358,8 +4959,8 @@ function site_settings_save($ajax = false) {
     if (!@rename($tmp, $path)) { @unlink($tmp); return $fail('the settings file couldn\'t be replaced.'); }
     // Changing the admin password must not log the person who just changed it out.
     if ($newAdmin !== null) {
-        $_SESSION['admin_auth'] = hash('sha256', 'admin|' . $newAdmin . '|' . __DIR__);
-        set_admin_reveal_cookie($newAdmin);   // the reveal token is derived from the password too
+        $_SESSION['admin_auth'] = admin_session_marker($newAdmin);
+        set_admin_reveal_cookie($newAdmin);   // the reveal token is derived from the stored password too
     }
     $n = count($cfg);
     if ($ajax) {
@@ -4441,6 +5042,7 @@ function render_admin_site_settings($csrfToken) {
         <?php endforeach; ?>
 
         <h3 class="subhead">Passwords</h3>
+        <p class="muted" style="margin:0 0 6px;">Passwords are saved as hashes in <code>.gallery-config.php</code>: not even this page can show them again, and a copy of that file doesn't contain them. Forgotten? Delete the <code>ADMIN_PASSWORD</code> line from that file and put an empty file named <code>.gallery-setup</code> beside <code>index.php</code>: the admin then asks you to choose a new one.</p>
         <div class="site-row">
           <div>
             <div class="name">Admin password <?php if (isset($fromFile['ADMIN_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
@@ -4512,7 +5114,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $locWarn = 'Turning this on makes the GPS location of ' . ($gpsCount > 0
         ? $gpsCount . ' photo' . ($gpsCount === 1 ? ' here' : 's here') . ' visible to visitors, on the gallery and on the map.'
         : 'any photo here that has one visible to visitors, on the gallery and on the map.')
-        . ' The location of a single photo can be kept private with its own "Show its location" switch.';
+        . ' The location of a single photo can be kept from visitors with its own "Show its location" switch. You, and anyone with the private-view password, always see every saved location.';
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
 ?>
@@ -5650,7 +6252,8 @@ function admin_setup_claim($password) {
         if (isset($cfg['ADMIN_PASSWORD']) && is_string($cfg['ADMIN_PASSWORD']) && $cfg['ADMIN_PASSWORD'] !== '') {
             return ['error' => 'An admin password has just been set by someone else. If that wasn\'t you, delete .gallery-config.php and set it again.', 'taken' => true];
         }
-        $cfg['ADMIN_PASSWORD'] = $password;
+        $stored = password_for_storage($password);
+        $cfg['ADMIN_PASSWORD'] = $stored;
         $content = gallery_config_render($cfg);
         if ($content === null) return ['error' => 'That password has characters that can\'t be stored. Try a different one.'];
         $manual = ['error' => 'The gallery\'s folder isn\'t writable by the web server, so the password couldn\'t be saved. Create a file named .gallery-config.php next to index.php containing exactly the text below, then reload this page.', 'manual' => $content];
@@ -5659,9 +6262,9 @@ function admin_setup_claim($password) {
         if (@file_put_contents($tmp, $content, LOCK_EX) === false) { @unlink($tmp); return $manual; }
         @chmod($tmp, 0600);
         [$roundStatus, $roundTrip] = gallery_config_parse((string) @file_get_contents($tmp));
-        if ($roundStatus !== 'ok' || ($roundTrip['ADMIN_PASSWORD'] ?? null) !== $password) { @unlink($tmp); return ['error' => 'The settings file didn\'t read back correctly, so it was not installed.']; }
+        if ($roundStatus !== 'ok' || ($roundTrip['ADMIN_PASSWORD'] ?? null) !== $stored) { @unlink($tmp); return ['error' => 'The settings file didn\'t read back correctly, so it was not installed.']; }
         if (!@rename($tmp, $path)) { @unlink($tmp); return $manual; }
-        return ['ok' => true];
+        return ['ok' => true, 'stored' => $stored];
     } finally {
         if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
     }
@@ -5732,8 +6335,8 @@ function run_admin_setup() {
                 // Signed in as part of setting it up, and the setup file (if any) has done its job.
                 admin_start_session();
                 session_regenerate_id(true);
-                $_SESSION['admin_auth'] = hash('sha256', 'admin|' . $pw . '|' . __DIR__);
-                set_admin_reveal_cookie($pw);
+                $_SESSION['admin_auth'] = admin_session_marker($result['stored']);
+                set_admin_reveal_cookie($result['stored']);
                 $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Your admin password is set and you\'re signed in. Site settings (left) is where the gallery-wide settings live; the password is kept in .gallery-config.php, which survives updating index.php.'];
                 @unlink(__DIR__ . '/.gallery-setup');
                 header('Location: ?admin#site', true, 303);
@@ -5789,7 +6392,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
                 return;
             }
         } elseif ($formPass !== null) {
-            if (!hash_equals(ADMIN_PASSWORD, $formPass)) {
+            if (!password_matches(ADMIN_PASSWORD, $formPass)) {
                 login_throttle_record_failure($dir, 'admin', $ip);
                 render_login_page('Enter your password', '', 'That password isn\'t right.');
                 return;
@@ -5798,9 +6401,10 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             // before it can ever be a logged-in session.
             admin_start_session();
             session_regenerate_id(true);
-            $_SESSION['admin_auth'] = admin_session_marker();
+            $upgraded = upgrade_plaintext_passwords();
+            $_SESSION['admin_auth'] = admin_session_marker($upgraded['ADMIN_PASSWORD'] ?? null);
             login_throttle_record_success($dir, 'admin', $ip);
-            set_admin_reveal_cookie();
+            set_admin_reveal_cookie($upgraded['ADMIN_PASSWORD'] ?? null);
             header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin'), true, 303);
             return;
         } else {
@@ -7169,6 +7773,7 @@ function ui_icon_paths() {
         'lock'    => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
         'unlock'  => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/>',
         'expand'  => '<path d="M15 3h6v6M9 21H3v-6M21 3l-7.5 7.5M3 21l7.5-7.5"/>',
+        'download' => '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
     ];
 }
 function ui_icon($name) {
@@ -8177,7 +8782,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     background: linear-gradient(transparent, rgba(0,0,0,0.78));
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
-  .lightbox-web { text-decoration: none; font-size: 1rem; }
+  .lightbox-web, .lightbox-download { text-decoration: none; font-size: 1rem; }
   .lightbox-map-toggle.off { opacity: 0.35; filter: grayscale(1); }
   /* The little map in the viewer: over the photo's top left corner; click to enlarge. */
   .lightbox-map {
@@ -8575,6 +9180,9 @@ if (ENABLE_MAP && $mapPoints) {
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
     <button class="lightbox-copy lightbox-zoom" id="lightbox-zoom" type="button" title="Fill the width of the screen" aria-label="Fill the width of the screen"><?= ui_icon('zoom-in') ?></button>
+<?php if (is_revealed() || ENABLE_PUBLIC_DOWNLOAD): ?>
+    <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
+<?php endif; ?>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link to this photo"><?= ui_icon('link') ?></button>
     <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
 <?php if (ENABLE_MAP): ?>
@@ -8699,6 +9307,7 @@ if (ENABLE_MAP && $mapPoints) {
     current = set[(at + delta + set.length) % set.length];
     updateImage();
   }
+  const downloadLink = document.getElementById('lightbox-download');   // only on a page made for a signed-in visitor
   function updateImage() {
     const file = files[current];
     if (isVideoFile(file)) {
@@ -8717,6 +9326,7 @@ if (ENABLE_MAP && $mapPoints) {
     const captionText = captions[current];
     const set = siblingsOf(current);
     caption.textContent = (captionText ? captionText + ' — ' : '') + (set.indexOf(current) + 1) + ' / ' + set.length;
+    if (downloadLink) downloadLink.href = '?original=' + encodeURIComponent(file);
     applyZoom();
     updateLightboxExtras();
     trackView(file);

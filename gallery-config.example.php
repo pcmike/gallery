@@ -29,14 +29,17 @@
     // "ENABLE_THUMBNAIL_CACHE": true,      // default true: small thumbnails in .gallery-cache (false = never write)
     // "TRACK_VIEWS": true,                 // default false: count views (writes a stats file)
     // "SHOW_VIEW_COUNTS_PUBLICLY": true,   // default false: show the counts to visitors
+    // "ENABLE_PUBLIC_DOWNLOAD": true,      // default false: a download-original button for every visitor (signed-in ones always have it)
 
     // --- Locations and the map ---------------------------------------------
     // "ENABLE_PHOTO_LOCATION": true,       // default false: allow photo locations to be shown (per-folder switch in the admin)
     // "ENABLE_MAP": true,                  // default false: the maps (load Leaflet and OpenStreetMap tiles)
-    // "MAP_CLUSTER_RADIUS_MILES": 50,      // how close photos must be to share one pin
+    // "MAP_CLUSTER_RADIUS_MILES": 1,       // how close photos must be to share one pin
 
     // --- Passwords ---------------------------------------------------------
-    // "ADMIN_PASSWORD": "a-long-random-string",   // empty = no password yet (first-run setup is open for 5 minutes after upload)
+    // "ADMIN_PASSWORD": "a-long-random-string",   // empty = no password yet (first-run setup is open for 5 minutes after upload).
+    //   Plain text is fine here: the first sign-in replaces it with a hash. To write a hash yourself:
+    //   php -r 'echo password_hash("the password", PASSWORD_DEFAULT), "\n";'
     // "PRIVATE_VIEW_PASSWORD": "something-to-share",   // empty = no private view
 
     // --- Server setup (advanced) ----------------------------------------

@@ -15,7 +15,7 @@ Needs python3, php (gd + imagick, for the fixture) and Chromium. The map check a
 needs internet access for Leaflet (cdnjs); without it that check is skipped, not failed.
 Exit status 0 only if every check passes.
 """
-import json, os, sys, time, subprocess, tempfile, shutil, socket, base64, urllib.request
+import re, json, os, sys, time, subprocess, tempfile, shutil, socket, base64, urllib.request, urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 from cdp import Browser
 SHOTS = sys.argv[sys.argv.index("--shots") + 1] if "--shots" in sys.argv else None
@@ -25,6 +25,14 @@ s = socket.socket(); s.bind(("127.0.0.1", 0)); PORT = s.getsockname()[1]; s.clos
 subprocess.run(["php", HERE + "/../fuzz/build_fixture.php", SITE], check=True, stdout=subprocess.DEVNULL)
 srv = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT}", "-t", SITE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 fails = 0; skips = 0
+def stored_password_is(cfg_text, name, plain):
+    """The settings file keeps passwords as bcrypt hashes: does the one stored under NAME belong to PLAIN? (PHP checks it.)"""
+    m = re.search(r'"' + name + r'":\s*"([^"]*)"', cfg_text)
+    if not m:
+        return False
+    r = subprocess.run(["php", "-r", "exit(password_verify($argv[1], $argv[2]) ? 0 : 1);", "--", plain, m.group(1).replace("\\/", "/")], capture_output=True)
+    return r.returncode == 0
+
 def ok(cond, msg, detail=""):
     global fails
     print(("  ok    " if cond else "  FAIL  ") + msg + ("" if cond else (f"  [{detail}]" if detail else "")))
@@ -547,7 +555,7 @@ try:
     # a password has its own button
     b.js("document.querySelector('input[name=pw_private]').focus()"); b.call("Input.insertText", {"text": "viewer-pass"}); b.js("document.querySelector('input[name=pw_private2]').focus()"); b.call("Input.insertText", {"text": "viewer-pass"})
     b.js("document.querySelector('.pw-btn[data-pw=private]').click()"); b.drain(1.0)
-    ok('"PRIVATE_VIEW_PASSWORD": "viewer-pass"' in cfg() and b.js("document.querySelector('input[name=pw_private]').value") == "", "setting the private-view password saves from the button beside it, and the boxes are cleared")
+    ok(stored_password_is(cfg(), "PRIVATE_VIEW_PASSWORD", "viewer-pass") and b.js("document.querySelector('input[name=pw_private]').value") == "", "setting the private-view password saves from the button beside it, and the boxes are cleared")
     b.js("document.querySelector('.pw-btn[data-pw=admin]').click()"); b.drain(0.6)
     ok("Type the new password first" in b.js("document.querySelector('.pw-btn[data-pw=admin]').parentNode.querySelector('.rowstate').textContent"), "pressing a password button with nothing typed says so")
     # enabling folders changes what the rest of the admin shows: it refreshes when you leave
@@ -652,7 +660,7 @@ try:
     ok(b.js("document.querySelector('input[name=dates]').value") == sug and b.js("document.querySelector('.date-suggest') === null"), "[dates] one click puts them in the Dates box (nothing is saved until the form is)")
     ok(b.js("getComputedStyle(document.querySelector('input[type=number]')).colorScheme") == "dark", "[admin] number boxes use the dark control style, so their little arrows are visible")
     cfg_now = cfg()
-    ok(cfg_now.startswith(guard) and '"ADMIN_PASSWORD": "site-admin-pw-1"' in cfg_now, "the settings file is still the 404 guard plus JSON, and the admin password in it is untouched")
+    ok(cfg_now.startswith(guard) and stored_password_is(cfg_now, "ADMIN_PASSWORD", "site-admin-pw-1"), "the settings file is still the 404 guard plus JSON, and the admin password in it is untouched")
     ok(open(SITE2 + "/.gallery-items.php").read() == before_items, "none of it touched the captions and titles stored for the photos")
     # a folder marked sold or reserved by the notes keeps its ribbon on top of the (greyed) picture
     open(SITE2 + "/n.md", "w").write("{gallery}\n\nThe Sub folder {sold}\n")
@@ -662,6 +670,14 @@ try:
         return {top: e === r, imgLoaded: img.complete && img.naturalWidth > 0}; })()""")
     ok(isinstance(rib, dict) and rib["top"] and rib["imgLoaded"], "[cover card] a folder marked {sold} still shows its SOLD ribbon once the picture has loaded (the grey filter used to paint over it)", str(rib))
     os.remove(SITE2 + "/n.md")
+    # signed in as the owner, the photo viewer offers the original as a download, for whichever photo is open
+    b.goto(B2 + "/", 1.5); b.js("openLightbox(0)"); b.drain(0.8)
+    dl = b.js("""(() => { const a = document.getElementById('lightbox-download'); if (!a) return null; const r = a.getBoundingClientRect(); const z = document.getElementById('lightbox-zoom').getBoundingClientRect();
+        return {href: a.getAttribute('href'), file: files[current], shown: r.width > 10 && getComputedStyle(a).visibility !== 'hidden', rightOfZoom: r.left > z.left, hasAttr: a.hasAttribute('download')}; })()""")
+    ok(dl is not None and dl["shown"] and dl["hasAttr"] and dl["href"] == "?original=" + urllib.parse.quote(dl["file"], safe=""), "[download] signed in as the owner, the viewer's caption bar has a download button pointing at the original of the open photo", str(dl))
+    b.js("navigate(1)"); b.drain(0.5)
+    ok(b.js("document.getElementById('lightbox-download').getAttribute('href')") == "?original=" + urllib.parse.quote(b.js("files[current]"), safe=""), "[download] ...and it follows the photo when you move to the next one")
+    b.js("closeLightbox()")
     # a colour on a single photo is a visible ring above the picture, and a link copied on a folder's page keeps the folder
     open(SITE2 + "/Sub/n.md", "w").write("{gallery}\n\nCheck out q {photos: q.jpg}{color: gold}\n")
     b.goto(B2 + "/?folder=Sub", 2.0)
@@ -739,7 +755,7 @@ try:
     ok(b.js("[...document.querySelectorAll('.tab-panel')].filter(p => getComputedStyle(p).display !== 'none').map(p => p.dataset.tab)") == ["site"], "...on Site settings, where the rest of the gallery-wide settings are")
     guard = "<?php http_response_code(404); exit; ?>\n"
     cfg3 = open(SITE3 + "/.gallery-config.php").read()
-    ok(cfg3.startswith(guard) and '"ADMIN_PASSWORD": "my first admin pw 1"' in cfg3, "the password is in the settings file (the 404 guard plus JSON)", cfg3.replace("\n", " ")[:200])
+    ok(cfg3.startswith(guard) and stored_password_is(cfg3, "ADMIN_PASSWORD", "my first admin pw 1") and "my first admin pw 1" not in cfg3, "the password is in the settings file (the 404 guard plus JSON)", cfg3.replace("\n", " ")[:200])
     b.goto(B3 + "/?admin", 1.0)
     ok(b.js("document.querySelector('h1').textContent") == "Gallery Admin", "reloading stays signed in")
     b.js("[...document.querySelectorAll('button')].find(x => x.textContent.trim() == 'Log out').click()"); b.drain(1.5)
