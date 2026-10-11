@@ -2307,10 +2307,13 @@ function file_is_hidden($dir, $file, $itemsData) {
     $own = item_restriction($itemsData[$file] ?? null);
     if ($own === 'private') return true;
     if ($own === 'public') return false;
+    return folder_above_is_private($dir, $file);
+}
+
+/** Whether any folder $file sits in, at any depth, is private (what an item with no setting of its own inherits). A folder
+ *  made private at any depth hides everything beneath it, the same way a private top-level folder always has. */
+function folder_above_is_private($dir, $file) {
     if (AUTO_GROUP_BY_FOLDER && strpos($file, '/') !== false) {
-        // Every ancestor, not just the top-level one: a folder hidden at
-        // any depth hides everything beneath it, the same way a hidden
-        // top-level folder always has.
         $path = '';
         foreach (explode('/', dirname($file)) as $segment) {
             $path = $path === '' ? $segment : $path . '/' . $segment;
@@ -2494,10 +2497,10 @@ function run_reveal_route($dir) {
         if ($formPass === null && (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']))) {
             // A wrong saved Basic password (see admin_reject_saved_credentials): the form, never a challenge.
             http_response_code(401);
-            render_login_page('Private view', 'Enter the password to see the hidden items.', 'Your browser sent a saved password that doesn\'t match the current one. Type the current private-view password below.');
+            render_login_page('Private view', 'Enter the password to see the private items.', 'Your browser sent a saved password that doesn\'t match the current one. Type the current private-view password below.');
             return;
         }
-        render_login_page('Private view', 'Enter the password to see the hidden items.', $formPass !== null ? 'That password isn\'t right.' : '');
+        render_login_page('Private view', 'Enter the password to see the private items.', $formPass !== null ? 'That password isn\'t right.' : '');
         return;
     }
     login_throttle_record_success($dir, 'reveal', $ip);
@@ -2916,7 +2919,7 @@ function import_folder_gps($dir, $folderReal, $looseFiles) {
             $entry['gpsChecked'] = true;
             if ($loc !== null) {
                 $entry['location'] = ['lat' => $loc['lat'], 'lng' => $loc['lng'], 'label' => ''];
-                $imported++;
+                if (($entry['locationVisibility'] ?? 'inherit') !== 'hide') $imported++;   // one switched off is stored, not shown
             }
             $d['items'][$bare] = $entry;
         }
@@ -3256,6 +3259,13 @@ function admin_record_hash($record) {
     return md5(json_encode($record));
 }
 
+/** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
+ *  by themselves, so they are left out: flipping one must not make the photo's caption form look out of date. */
+function admin_item_record_hash($entry) {
+    unset($entry['restriction'], $entry['locationVisibility']);
+    return admin_record_hash($entry);
+}
+
 /** The folder-level fields the "This folder's own settings" form edits,
  *  normalized so the render-time and save-time fingerprints match. */
 function folder_identity_record($data) {
@@ -3284,6 +3294,12 @@ function admin_clean_text($value, $maxLen) {
         return mb_substr($text, 0, $maxLen, 'UTF-8');
     }
     return substr($text, 0, $maxLen);
+}
+
+/** The admin password rule: at least 8 characters, with a letter (either case) and a number. It is the one credential
+ *  that can change the gallery. (The private-view password may be any length: it only unlocks looking.) */
+function admin_password_ok($pw) {
+    return strlen($pw) >= 8 && preg_match('/[A-Za-z]/', $pw) && preg_match('/\d/', $pw);
 }
 
 /** Answers a request made by the admin page's own script (a switch saved in
@@ -3332,10 +3348,12 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $lat = trim((string) ($_POST['lat'] ?? ''));
         $lng = trim((string) ($_POST['lng'] ?? ''));
         $locLabel = trim((string) ($_POST['loc_label'] ?? ''));
-        $visibility = $_POST['loc_visibility'] ?? 'inherit';
-        if (!in_array($visibility, ['inherit', 'show', 'hide'], true)) $visibility = 'inherit';
-        $restriction = $_POST['restriction'] ?? 'inherit';
-        if (!in_array($restriction, ['inherit', 'public', 'private'], true)) $restriction = 'inherit';
+        // The privacy and location-visibility switches save themselves (set_item_flag); a form that does post them (an
+        // older page, a script) still sets them, and one that doesn't leaves them as they are.
+        $visibility = isset($_POST['loc_visibility']) ? (string) $_POST['loc_visibility'] : null;
+        if ($visibility !== null && !in_array($visibility, ['inherit', 'show', 'hide'], true)) $visibility = 'inherit';
+        $restriction = isset($_POST['restriction']) ? (string) $_POST['restriction'] : null;
+        if ($restriction !== null && !in_array($restriction, ['inherit', 'public', 'private'], true)) $restriction = 'inherit';
         if ($web !== '' && !preg_match('#^https?://#i', $web)) {
             return ['type' => 'error', 'text' => 'The web link needs to start with http:// or https://.'];
         }
@@ -3346,7 +3364,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $stale = false;
         items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility, $restriction, $loadedHash, &$stale) {
             $entry = $data['items'][$bare] ?? [];
-            if ($loadedHash !== null && !hash_equals(admin_record_hash($entry), $loadedHash)) {
+            if ($loadedHash !== null && !hash_equals(admin_item_record_hash($entry), $loadedHash)) {
                 $stale = true;
                 return;
             }
@@ -3360,14 +3378,62 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             // Saved by the owner, so whatever location it has (or deliberately
             // doesn't) stands: never auto-import GPS over it later.
             $entry['gpsChecked'] = true;
-            $entry['locationVisibility'] = $visibility;
-            if ($restriction === 'inherit') { unset($entry['restriction']); } else { $entry['restriction'] = $restriction; }
+            if ($visibility !== null) $entry['locationVisibility'] = $visibility;
+            if ($restriction === 'inherit') { unset($entry['restriction']); } elseif ($restriction !== null) { $entry['restriction'] = $restriction; }
             $data['items'][$bare] = $entry;
         });
         if ($stale) {
             return ['type' => 'error', 'text' => '"' . $bare . '"' . admin_stale_message()];
         }
         return ['type' => 'ok', 'text' => 'Saved "' . $bare . '".'];
+    }
+
+    // Making photos private (or public again), and showing or not showing their location, one switch or many at a time.
+    // What is posted is the state wanted ("on"). Switching privacy ON, or a location OFF, is always stored on the photo itself,
+    // so the protection survives the folder's own setting changing later; switching the other way is stored only when the
+    // photo has to differ from what its folder gives it (otherwise it simply follows the folder again).
+    if ($action === 'set_item_flag' || $action === 'bulk_item_flag') {
+        $flag = (string) ($_POST['flag'] ?? '');
+        if (!in_array($flag, ['private', 'location'], true)) return ['type' => 'error', 'text' => 'Unknown setting.'];
+        $on = ($_POST['on'] ?? '') === '1';
+        if ($action === 'set_item_flag') {
+            $names = [basename((string) ($_POST['file'] ?? ''))];
+        } else {
+            $decoded = json_decode((string) ($_POST['files'] ?? ''), true);
+            if (!is_array($decoded) || !array_is_list($decoded) || !$decoded) return ['type' => 'error', 'text' => 'Choose at least one photo first.'];
+            if (count($decoded) > 2000) return ['type' => 'error', 'text' => 'That is more photos at once than the gallery allows (2000).'];
+            $names = array_values(array_unique(array_map(function ($f) { return basename((string) $f); }, $decoded)));
+        }
+        foreach ($names as $bare) {
+            $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
+            if ($bare === '' || !in_array($fullPath, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
+        }
+        $changed = 0;
+        items_update($adminFolderReal, function (&$data) use ($names, $flag, $on, $dir, $adminFolderPath, &$changed) {
+            $folderLocationOn = !empty($data['locationEnabled']);
+            foreach ($names as $bare) {
+                $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
+                $entry = $data['items'][$bare] ?? [];
+                $before = $entry;
+                if ($flag === 'private') {
+                    if ($on) { $entry['restriction'] = 'private'; }
+                    elseif (folder_above_is_private($dir, $fullPath)) { $entry['restriction'] = 'public'; }
+                    else { unset($entry['restriction']); }
+                } else {
+                    if (!$on) { $entry['locationVisibility'] = 'hide'; }
+                    elseif ($folderLocationOn) { unset($entry['locationVisibility']); }
+                    else { $entry['locationVisibility'] = 'show'; }
+                }
+                if ($entry !== $before) { $data['items'][$bare] = $entry; $changed++; }
+            }
+        });
+        $n = count($names);
+        $what = $flag === 'private' ? ($on ? 'private' : 'public') : ($on ? 'showing its location' : 'not showing its location');
+        $text = $n === 1
+            ? ($flag === 'private' ? '"' . $names[0] . '" is now ' . $what . '.' : '"' . $names[0] . '" is now ' . $what . '.')
+            : $n . ' photos are now ' . $what . '.';
+        if ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
+        return ['type' => 'ok', 'text' => $text];
     }
 
     if ($action === 'save_group_label') {
@@ -3432,13 +3498,13 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
 
     if ($action === 'toggle_folder_restriction') {
         if ($adminFolderPath === null) {
-            return ['type' => 'error', 'text' => 'Not applicable at the root — hide individual items instead.'];
+            return ['type' => 'error', 'text' => 'Not applicable at the root — make individual items private instead.'];
         }
         $hidden = !empty($_POST['hidden']);
         items_update($adminFolderReal, function (&$data) use ($hidden) {
             if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction']); }
         });
-        return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'hidden from public view.' : 'public again.')];
+        return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'private: visitors need the private-view password to see it.' : 'public again.')];
     }
 
     if ($action === 'set_cover') {
@@ -3504,7 +3570,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (!ENABLE_PHOTO_LOCATION) {
             $text .= ' Nothing shows yet, because ENABLE_PHOTO_LOCATION is off in index.php.';
         } elseif ($imported > 0) {
-            $text .= ' ' . $imported . ' photo' . ($imported === 1 ? ' has' : 's have') . ' GPS in the file and now show' . ($imported === 1 ? 's' : '') . ' a location to visitors and on the map. To keep one private, set its Location visibility to "Always hide" (or clear its coordinates) and Save.';
+            $text .= ' ' . $imported . ' photo' . ($imported === 1 ? ' has' : 's have') . ' GPS in the file and now show' . ($imported === 1 ? 's' : '') . ' a location to visitors and on the map. To keep one private, switch off its "Show its location" (or clear its coordinates and Save).';
         } else {
             $text .= ' None of its photos has GPS to show; add coordinates by hand on any photo.';
         }
@@ -3688,19 +3754,19 @@ function render_admin_hidden_panel($data) {
     };
 ?>
     <div class="flash error hidden-warning">
-      <strong>Hidden isn't locked.</strong>
-      Hiding only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level (see the README for the nginx/<code>X-Accel-Redirect</code> or Apache <code>.htaccess</code> setup).
+      <strong>Private isn't locked.</strong>
+      Making something private only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level (see the README for the nginx/<code>X-Accel-Redirect</code> or Apache <code>.htaccess</code> setup).
     </div>
     <section class="panel">
-      <h2 class="section-title">Folders hidden entirely (<?= count($data['folders']) ?>)</h2>
+      <h2 class="section-title">Folders that are private (<?= count($data['folders']) ?>)</h2>
       <?php if (empty($data['folders'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listFolders($data['folders']); ?></ul><?php endif; ?>
     </section>
     <section class="panel">
-      <h2 class="section-title">Individual items hidden (<?= count($data['items']) ?>)</h2>
+      <h2 class="section-title">Photos and videos made private (<?= count($data['items']) ?>)</h2>
       <?php if (empty($data['items'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listItems($data['items']); ?></ul><?php endif; ?>
     </section>
     <section class="panel">
-      <h2 class="section-title">Items shown despite a hidden folder (<?= count($data['shown']) ?>)</h2>
+      <h2 class="section-title">Items public inside a private folder (<?= count($data['shown']) ?>)</h2>
       <?php if (empty($data['shown'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listItems($data['shown']); ?></ul><?php endif; ?>
     </section>
 <?php
@@ -4035,7 +4101,7 @@ function site_settings_save($ajax = false) {
     $adminPw = (string) ($_POST['pw_admin'] ?? '');
     if ($adminPw !== '') {
         if ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
-        elseif (strlen($adminPw) < 12) $errors[] = 'The admin password needs at least 12 characters — it is the one credential that can change your gallery.';
+        elseif (!admin_password_ok($adminPw)) $errors[] = 'The admin password needs at least 8 characters, with at least one letter and one number: it is the one credential that can change your gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $adminPw)) $errors[] = 'The admin password can\'t contain control characters.';
         else { $setOrUnset('ADMIN_PASSWORD', $adminPw); $newAdmin = $adminPw; }
     }
@@ -4044,7 +4110,6 @@ function site_settings_save($ajax = false) {
         $setOrUnset('PRIVATE_VIEW_PASSWORD', '');
     } elseif ($viewPw !== '') {
         if ($viewPw !== (string) ($_POST['pw_private2'] ?? '')) $errors[] = 'The two private-view passwords you typed don\'t match.';
-        elseif (strlen($viewPw) < 6) $errors[] = 'The private-view password needs at least 6 characters.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $viewPw)) $errors[] = 'The private-view password can\'t contain control characters.';
         else $setOrUnset('PRIVATE_VIEW_PASSWORD', $viewPw);
     }
@@ -4156,7 +4221,7 @@ function render_admin_site_settings($csrfToken) {
         <div class="site-row">
           <div>
             <div class="name">Admin password <?php if (isset($fromFile['ADMIN_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
-            <div class="help">Currently set. Leave blank to keep it. At least 12 characters; you stay signed in after changing it. It can't be removed here, since that would lock this screen away.</div>
+            <div class="help">Currently set. Leave blank to keep it. At least 8 characters with a letter and a number; you stay signed in after changing it. It can't be removed here, since that would lock this screen away.</div>
           </div>
           <div class="ctl col">
             <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password">
@@ -4167,8 +4232,8 @@ function render_admin_site_settings($csrfToken) {
         <div class="site-row">
           <div>
             <div class="name">Private-view password <?php if (isset($fromFile['PRIVATE_VIEW_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
-            <div class="help"><?= PRIVATE_VIEW_PASSWORD === '' ? 'Not set, so hidden items stay hidden from everyone but you.' : 'Currently set.' ?> What you tell someone so they can see the hidden items (at least 6 characters). Leave blank to keep it as it is.</div>
-            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><div class="warn-note">Removing it means anyone you gave it to can no longer see the hidden items. The items stay hidden and nothing is deleted.</div><?php endif; ?>
+            <div class="help"><?= PRIVATE_VIEW_PASSWORD === '' ? 'Not set, so private items stay private to everyone but you.' : 'Currently set.' ?> What you tell someone so they can see the private items (any length). Leave blank to keep it as it is.</div>
+            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><div class="warn-note">Removing it means anyone you gave it to can no longer see the private items. The items stay private and nothing is deleted.</div><?php endif; ?>
           </div>
           <div class="ctl col">
             <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password">
@@ -4224,7 +4289,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $locWarn = 'Turning this on makes the GPS location of ' . ($gpsCount > 0
         ? $gpsCount . ' photo' . ($gpsCount === 1 ? ' here' : 's here') . ' visible to visitors, on the gallery and on the map.'
         : 'any photo here that has one visible to visitors, on the gallery and on the map.')
-        . ' A single photo can be kept private by setting its Location visibility to Always hide.';
+        . ' The location of a single photo can be kept private with its own "Show its location" switch.';
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
 ?>
@@ -4459,6 +4524,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .thumb-badges span { background:rgba(0,0,0,0.68); padding:1px 5px; border-radius:8px; line-height:1.4; }
   .thumb-badges .warn { color:#f5a623; }
   .thumb-badges .hid { color:#ff9a9c; }
+  .item-flags { display:flex; gap:28px; flex-wrap:wrap; margin:0 0 14px; padding:12px 14px; background:#18181b; border:1px solid #26262a; border-radius:9px; }
+  .item-flags .instant-form { flex:1 1 250px; margin:0; }
+  .item-flags .hint { margin:6px 0 0; }
+  .bulk-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 10px; }
+  .bulk-controls { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .bulk-controls[hidden], #bulk-start[hidden] { display:none; }
+  .bulk-count { font-weight:600; font-size:0.85rem; min-width:84px; }
+  .thumb .thumb-check { display:none; position:absolute; left:6px; top:6px; width:22px; height:22px; border-radius:50%; background:rgba(0,0,0,0.6); border:2px solid #fff; color:#fff; align-items:center; justify-content:center; font-size:0.8rem; }
+  .thumb-grid.selecting .thumb .thumb-check { display:flex; }
+  .thumb-grid.selecting .thumb.picked { border-color:var(--accent); }
+  .thumb-grid.selecting .thumb.picked .thumb-check { background:var(--accent); }
+  .thumb-grid.selecting .thumb:not(.picked) .thumb-check .ico { display:none; }
   .thumb-name { font-size:0.72rem; color:var(--muted); padding:5px 7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .thumb.dirty::after { content:""; position:absolute; left:6px; top:6px; width:10px; height:10px; border-radius:50%; background:#f5a623; box-shadow:0 0 0 2px rgba(0,0,0,0.6); }
   .thumb.flash-target { outline:2px solid var(--accent); outline-offset:2px; }
@@ -4513,7 +4590,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <div class="admin-layout">
 <aside class="admin-side">
   <?php if ($adminHidden): ?>
-    <a href="#hidden" data-tab="hidden" class="side-hidden">Hidden <span class="count"><?= count($adminHidden['folders']) + count($adminHidden['items']) ?></span></a>
+    <a href="#hidden" data-tab="hidden" class="side-hidden">Private <span class="count"><?= count($adminHidden['folders']) + count($adminHidden['items']) ?></span></a>
   <?php endif; ?>
   <a href="#site" data-tab="site" class="side-link">Site settings</a>
   <details class="admin-folders" open>
@@ -4559,6 +4636,9 @@ foreach ($adminFiles as $file) {
     $locUnsaved = isset($adminAutoLoc[$file]);
     $rest = item_restriction($entry);
     $vis = $entry['locationVisibility'] ?? 'inherit';
+    $folderIsPrivate = folder_above_is_private($dir, $file);
+    $isPrivate = $rest === 'private' || ($rest === 'inherit' && $folderIsPrivate);
+    $locShown = $vis === 'show' || ($vis === 'inherit' && !empty($itemsHere['locationEnabled']));
     $isVideo = is_video_file($file);
     $isCover = !empty($itemsHere['cover']) && $itemsHere['cover'] === $bare;
     $hid = md5($file);
@@ -4578,7 +4658,7 @@ foreach ($adminFiles as $file) {
           <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
           <div class="item-sub">
             <?php if (TRACK_VIEWS): ?><?= ui_icon('eye') ?> <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
-            <?php if ($rest === 'private'): ?> &middot; hidden<?php endif; ?>
+            <?php if ($isPrivate): ?> &middot; private<?php endif; ?>
             <?php if ($isCover): ?> &middot; folder cover<?php endif; ?>
           </div>
         </div>
@@ -4588,10 +4668,41 @@ foreach ($adminFiles as $file) {
           <button type="button" class="secondary" data-close title="Close the editor">Close</button>
         </div>
       </div>
+      <?php // Two switches that save themselves: the photo's own privacy and whether its location is shown. ?>
+      <div class="item-flags">
+        <form method="post" class="instant-form flag-form" data-thumb="photo-<?= $hid ?>" data-flag="private">
+          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+          <input type="hidden" name="action" value="set_item_flag">
+          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" data-send>
+          <input type="hidden" name="flag" value="private" data-send>
+          <input type="hidden" name="on" value="0">
+          <div class="instant-row">
+            <label class="switch"><input type="checkbox" name="on" value="1" <?= $isPrivate ? 'checked' : '' ?>><span class="slider"></span></label>
+            <span class="instant-label">Private</span>
+            <span class="rowstate" role="status" aria-live="polite"></span>
+          </div>
+          <p class="hint">Visitors don't see a private photo unless you give them the private-view password.<?= $folderIsPrivate ? ' Its folder is private, so it is private too until you switch this off.' : '' ?></p>
+          <div class="nojs-only"><button type="submit" class="secondary">Save</button></div>
+        </form>
+        <form method="post" class="instant-form flag-form" data-flag="location">
+          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+          <input type="hidden" name="action" value="set_item_flag">
+          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" data-send>
+          <input type="hidden" name="flag" value="location" data-send>
+          <input type="hidden" name="on" value="0">
+          <div class="instant-row">
+            <label class="switch"><input type="checkbox" name="on" value="1" <?= $locShown ? 'checked' : '' ?>><span class="slider"></span></label>
+            <span class="instant-label">Show its location</span>
+            <span class="rowstate" role="status" aria-live="polite"></span>
+          </div>
+          <p class="hint"><?= !ENABLE_PHOTO_LOCATION ? 'Locations are switched off for the whole gallery (Site settings), so nothing shows yet.' : (!empty($itemsHere['locationEnabled']) ? 'This folder shows its photos\' locations; switch this off to keep this one private.' : 'This folder doesn\'t show locations; switch this on to show just this one.') ?></p>
+          <div class="nojs-only"><button type="submit" class="secondary">Save</button></div>
+        </form>
+      </div>
       <form method="post">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_item">
-        <input type="hidden" name="loaded_hash" value="<?= admin_record_hash($entry) ?>">
+        <input type="hidden" name="loaded_hash" value="<?= admin_item_record_hash($entry) ?>">
         <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
         <div class="editor-grid">
           <div class="field wide2">
@@ -4614,25 +4725,9 @@ foreach ($adminFiles as $file) {
             <label>Location label (optional)</label>
             <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
           </div>
-          <div class="field wide2">
-            <label>Location visibility</label>
-            <select name="loc_visibility">
-              <option value="inherit" <?= $vis === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
-              <option value="show" <?= $vis === 'show' ? 'selected' : '' ?>>Always show</option>
-              <option value="hide" <?= $vis === 'hide' ? 'selected' : '' ?>>Always hide</option>
-            </select>
-          </div>
-          <div class="field wide2">
-            <label>Visibility</label>
-            <select name="restriction">
-              <option value="inherit" <?= $rest === 'inherit' ? 'selected' : '' ?>>Inherit folder setting</option>
-              <option value="public" <?= $rest === 'public' ? 'selected' : '' ?>>Always show (even if this folder is hidden)</option>
-              <option value="private" <?= $rest === 'private' ? 'selected' : '' ?>>Always hide</option>
-            </select>
-          </div>
         </div>
         <?php if ($locUnsaved): ?>
-            <p class="muted loc-unsaved" style="margin:0 0 8px;"><?= ui_icon('warn') ?> <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (set <em>Always hide</em> to keep it out)." ?></p>
+            <p class="muted loc-unsaved" style="margin:0 0 8px;"><?= ui_icon('warn') ?> <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (switch off its <em>Show its location</em> to keep it out)." ?></p>
           <?php endif; ?>
         <div class="item-actions">
           <button type="submit">Save</button>
@@ -4650,7 +4745,7 @@ foreach ($adminFiles as $file) {
     $thumbTitle = $file . (($entry['caption'] ?? '') !== '' ? ' — ' . $entry['caption'] : '');
     ob_start();
 ?>
-    <button type="button" class="thumb" id="photo-<?= $hid ?>" data-edit="edit-<?= $hid ?>" title="<?= htmlspecialchars($thumbTitle, ENT_QUOTES, 'UTF-8') ?>">
+    <button type="button" class="thumb" id="photo-<?= $hid ?>" data-edit="edit-<?= $hid ?>" data-file="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($thumbTitle, ENT_QUOTES, 'UTF-8') ?>">
       <?php if ($isVideo): ?>
         <span class="thumb-img thumb-video"><?= ui_icon('play') ?><?php if ($durationText !== ''): ?><small><?= $durationText ?></small><?php endif; ?></span>
       <?php else: ?>
@@ -4661,9 +4756,10 @@ foreach ($adminFiles as $file) {
         <?php if ($loc !== null && !$locUnsaved): ?><span title="Has a location"><?= ui_icon('pin') ?></span><?php endif; ?>
         <?php if ($locUnsaved): ?><span class="warn" title="GPS found in the file, not saved"><?= ui_icon('warn') ?></span><?php endif; ?>
         <?php if ($isCover): ?><span title="Folder cover"><?= ui_icon('star') ?></span><?php endif; ?>
-        <?php if ($rest === 'private'): ?><span class="hid" title="Hidden from visitors">hidden</span><?php endif; ?>
+        <span class="hid" title="Private: visitors need the private-view password"<?= $isPrivate ? '' : ' hidden' ?>>private</span>
       </span>
       <span class="thumb-name"><?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?></span>
+      <span class="thumb-check" aria-hidden="true"><?= ui_icon('check') ?></span>
     </button>
 <?php
     $thumbsHtml .= ob_get_clean();
@@ -4672,8 +4768,20 @@ foreach ($adminFiles as $file) {
   <?php if (empty($adminFiles)): ?>
     <p class="muted">No photos or videos in this folder.</p>
   <?php else: ?>
-    <p class="muted photos-hint">Select a photo to edit its caption, link, location and visibility.</p>
+    <p class="muted photos-hint">Click a photo to edit its caption, link and location, and to make it private. To change several at once, use <em>Select photos</em>.</p>
     <div class="photo-editor" id="photo-editor"><?= $editorsHtml ?></div>
+    <div class="bulk-bar" id="bulk-bar" data-csrf="<?= $csrfToken ?>" hidden>
+      <button type="button" class="secondary" id="bulk-start">Select photos</button>
+      <span class="bulk-controls" hidden>
+        <span class="bulk-count" role="status" aria-live="polite">0 selected</span>
+        <button type="button" class="secondary" data-bulk="all">Select all</button>
+        <button type="button" class="secondary" data-bulk="none">Clear</button>
+        <button type="button" data-bulk-do="private">Make private</button>
+        <button type="button" class="secondary" data-bulk-do="public">Make public</button>
+        <button type="button" class="secondary" data-bulk="done">Done</button>
+        <span class="rowstate" role="status" aria-live="polite"></span>
+      </span>
+    </div>
     <div class="thumb-grid"><?= $thumbsHtml ?></div>
   <?php endif; ?>
   </div>
@@ -4689,7 +4797,7 @@ foreach ($adminFiles as $file) {
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_folder_restriction">
       <input type="hidden" name="hidden" value="<?= !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private' ? '0' : '1' ?>">
-      <button type="submit" class="<?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'secondary' : 'danger' ?>"><?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'Make this folder public again' : 'Hide this entire folder from public view' ?></button>
+      <button type="submit" class="<?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'secondary' : 'danger' ?>"><?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'Make this folder public again' : 'Make this entire folder private' ?></button>
     </form>
     </div>
     <?php render_admin_map_form($itemsHere, $csrfToken, false); ?>
@@ -4822,7 +4930,7 @@ foreach ($adminFiles as $file) {
   <section class="panel" id="export">
     <h2 class="section-title">Export</h2>
     <p class="muted">Downloads this folder's captions, locations, web links, display name, and chosen cover as JSON — the only backup this data has.</p>
-    <p class="muted"><strong>Handle the file with care:</strong> it also records which items and folders you've hidden, and any GPS coordinates you've entered. Pasting it into a support email or leaving it somewhere public would reveal both, regardless of what's actually hidden on the gallery.</p>
+    <p class="muted"><strong>Handle the file with care:</strong> it also records which items and folders you've made private, and any GPS coordinates you've entered. Pasting it into a support email or leaving it somewhere public would reveal both, regardless of what's actually hidden on the gallery.</p>
     <form method="post">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="export_items">
@@ -4924,12 +5032,67 @@ foreach ($adminFiles as $file) {
       if (slot) slot.classList.toggle('has-open', any);
       if (any && scroll && slot) slot.scrollIntoView({ block: 'start' });
     }
+    var selecting = false;
     thumbs.forEach(function (t) {
-      t.addEventListener('click', function () { openEditor(t.getAttribute('data-edit'), true); });
+      t.addEventListener('click', function () {
+        if (selecting) { t.classList.toggle('picked'); countPicked(); return; }
+        openEditor(t.getAttribute('data-edit'), true);
+      });
+    });
+    // Select several photos and make them all private (or public) in one go.
+    var bar = document.getElementById('bulk-bar');
+    function picked() { return thumbs.filter(function (t) { return t.classList.contains('picked'); }); }
+    function countPicked() {
+      if (!bar) return;
+      var n = picked().length;
+      bar.querySelector('.bulk-count').textContent = n + ' selected';
+    }
+    if (bar && thumbs.length) {
+      bar.hidden = false;
+      var controls = bar.querySelector('.bulk-controls'), start = document.getElementById('bulk-start'), grid = document.querySelector('.thumb-grid'), note = bar.querySelector('.rowstate');
+      function mode(on) {
+        selecting = on; controls.hidden = !on; start.hidden = on;
+        if (grid) grid.classList.toggle('selecting', on);
+        if (on) openEditor(null);
+        if (!on) thumbs.forEach(function (t) { t.classList.remove('picked'); });
+        countPicked(); note.textContent = ''; note.className = 'rowstate';
+      }
+      start.addEventListener('click', function () { mode(true); });
+      bar.addEventListener('click', function (e) {
+        var b = e.target.closest && e.target.closest('[data-bulk], [data-bulk-do]');
+        if (!b) return;
+        var act = b.getAttribute('data-bulk');
+        if (act === 'all') { thumbs.forEach(function (t) { t.classList.add('picked'); }); countPicked(); return; }
+        if (act === 'none') { thumbs.forEach(function (t) { t.classList.remove('picked'); }); countPicked(); return; }
+        if (act === 'done') { mode(false); return; }
+        var want = b.getAttribute('data-bulk-do') === 'private', files = picked().map(function (t) { return t.getAttribute('data-file'); });
+        if (!files.length) { note.textContent = 'Choose at least one photo first.'; note.className = 'rowstate err'; return; }
+        var body = new URLSearchParams();
+        body.set('csrf_token', bar.getAttribute('data-csrf')); body.set('action', 'bulk_item_flag'); body.set('flag', 'private');
+        body.set('on', want ? '1' : '0'); body.set('files', JSON.stringify(files));
+        note.textContent = 'Saving…'; note.className = 'rowstate busy';
+        fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+            headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+          .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+          .then(function (j) {
+            if (j.ok) { note.textContent = j.text; note.className = 'rowstate ok'; location.hash = 'photos'; location.reload(); }
+            else { note.textContent = j.text; note.className = 'rowstate err'; }
+          })
+          .catch(function (e) { note.textContent = e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.'; note.className = 'rowstate err'; });
+      });
+    }
+    // Switching one photo private: its thumbnail's badge follows at once, and the page is refreshed shortly after so the
+    // Private list and the sidebar count are right too (back on the same photo).
+    document.addEventListener('instant-saved', function (e) {
+      var f = e.target; if (!f || !f.classList || !f.classList.contains('flag-form') || f.getAttribute('data-flag') !== 'private') return;
+      var t = document.getElementById(f.getAttribute('data-thumb')), badge = t && t.querySelector('.hid'), on = f.querySelector('input[type=checkbox]').checked;
+      if (badge) badge.hidden = !on;
+      clearTimeout(window.__flagReload);
+      window.__flagReload = setTimeout(function () { location.hash = f.getAttribute('data-thumb'); location.reload(); }, 1200);
     });
     editors.forEach(function (e, i) {
       var thumb = document.querySelector('.thumb[data-edit="' + e.id + '"]');
-      e.addEventListener('input', function () { if (thumb) thumb.classList.add('dirty'); });
+      e.addEventListener('input', function (ev) { if (ev.target.closest && ev.target.closest('.item-flags')) return; if (thumb) thumb.classList.add('dirty'); });
       [].forEach.call(e.querySelectorAll('[data-nav]'), function (b) {
         b.addEventListener('click', function () {
           var n = i + parseInt(b.getAttribute('data-nav'), 10);
@@ -5022,13 +5185,14 @@ foreach ($adminFiles as $file) {
         var holder = el.closest('.instant-row, .field') || form, node = holder.querySelector('.rowstate');
         var body = new URLSearchParams();
         body.set('csrf_token', csrf); body.set('action', action); body.set(el.name, isBox ? (el.checked ? '1' : '0') : el.value);
+        [].forEach.call(form.querySelectorAll('input[type=hidden][data-send]'), function (h) { body.set(h.name, h.value); });
         var revert = function () { if (isBox) el.checked = !el.checked; else el.value = el.getAttribute('data-prev'); };
         say(node, 'Saving…', 'busy');
         fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
-            if (j.ok) { say(node, j.text, 'ok'); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); }
+            if (j.ok) { say(node, j.text, 'ok'); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); form.dispatchEvent(new CustomEvent('instant-saved', { bubbles: true, detail: j })); }
             else { say(node, j.text, 'err'); revert(); }
           })
           .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.', 'err'); revert(); });
@@ -5285,7 +5449,7 @@ function render_setup_page($error = '', $manual = '') {
   <?php if ($error !== ''): ?><div class="err" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
   <?php if ($manual !== ''): ?><textarea readonly rows="8" onfocus="this.select()"><?= htmlspecialchars($manual, ENT_QUOTES, 'UTF-8') ?></textarea><?php endif; ?>
   <form method="post" action="">
-    <label for="setup_password">Admin password (at least 12 characters)</label>
+    <label for="setup_password">Admin password (8 or more characters, with letters and numbers)</label>
     <input type="password" id="setup_password" name="setup_password" autocomplete="new-password" autofocus required minlength="12">
     <label for="setup_password2">Type it again</label>
     <input type="password" id="setup_password2" name="setup_password2" autocomplete="new-password" required minlength="12">
@@ -5307,7 +5471,7 @@ function run_admin_setup() {
         $pw = str_replace("\0", '', $_POST['setup_password']);
         $pw2 = is_string($_POST['setup_password2'] ?? null) ? str_replace("\0", '', $_POST['setup_password2']) : '';
         if ($pw !== $pw2) $error = 'The two passwords you typed don\'t match.';
-        elseif (strlen($pw) < 12) $error = 'Use at least 12 characters: this one password can change your whole gallery.';
+        elseif (!admin_password_ok($pw)) $error = 'Use at least 8 characters with at least one letter and one number: this one password can change your whole gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $pw)) $error = 'The password can\'t contain control characters.';
         else {
             $result = admin_setup_claim($pw);
@@ -7020,10 +7184,10 @@ function render_about_page() {
   <h2>What the owner gets</h2>
   <ul>
     <li>Set up in the browser: upload the file, open <code>?admin</code> and choose a password. A sign-in form, not a browser pop-up</li>
-    <li>An admin with tabs and a thumbnail grid: captions, locations, web links, hide flags, covers, folder names, descriptions, and dates that it can suggest from the photos' own</li>
+    <li>An admin with tabs and a thumbnail grid: captions, locations, web links, privacy flags, covers, folder names, descriptions, and dates that it can suggest from the photos' own</li>
     <li>Site settings you flip on a page (each one saves at once and says what it exposes), kept in a small settings file that survives replacing <code>index.php</code></li>
     <li>Markdown notes boxes, at the top and inside any folder: <code>{photos}</code>, <code>{group}</code>, <code>{color}</code>, <code>{sold}</code> and <code>{reserved}</code> for trip journals or for-sale listings, explained in the admin as you write</li>
-    <li>Items you can hide from the public link and still reach yourself, an optional private-view password, and visit counts (people, not page loads)</li>
+    <li>Photos, videos and whole folders you can make private (still yours to see, and visible to anyone you give the private-view password), and visit counts (people, not page loads)</li>
   </ul>
 
   <h2>Careful by default</h2>
