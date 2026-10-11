@@ -39,7 +39,8 @@
     // "ADMIN_PASSWORD": "a-long-random-string",   // empty = no password yet (first-run setup is open for 5 minutes after upload)
     // "PRIVATE_VIEW_PASSWORD": "something-to-share",   // empty = no private view
 
-    // --- Server setup (file only: not editable in the admin) ---------------
-    // "EXTRA_FOLDERS": { "OldTrip2020": "/mnt/archive/trip-2020" },
+    // --- Server setup (advanced) ----------------------------------------
+    // "EXTRA_ROOTS": ["/space/trip"],         // the folders inside each place appear at the top of the gallery (editable in the admin)
+    // "EXTRA_FOLDERS": { "OldTrip2020": "/mnt/archive/trip-2020" },   // or one place shown as one folder with this name
     // "NGINX_ACCEL_REDIRECT_PREFIX": "/kb",   // only once the matching nginx config is in place (README)
 }

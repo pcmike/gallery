@@ -131,14 +131,15 @@ define('PRIVATE_VIEW_PASSWORD', 'something-you-can-tell-people');   // lets hidi
 
 ### Recipe: an archive on another disk
 
-Old trips on a different drive, shown inside the gallery without copying them.
+Old trips on a different drive, shown inside the gallery without copying them. The simplest way is in the admin: **Site settings → Folders from elsewhere**, paste the path, press *Add*. The folders inside that place then appear **at the top of the gallery**, as if they lived in it: if `/space/trip` holds `Paris` and `StTropez`, the gallery gets `Paris` and `StTropez`, with no folder named `trip` in between. (Photos lying directly in `/space/trip` aren't shown; a setup notice counts them. Put them in a folder.) A real folder of the same name always wins.
 
 ```php
 define('AUTO_GROUP_BY_FOLDER', true);
-define('EXTRA_FOLDERS', ['OldTrip2020' => '/mnt/archive/trip-photos-2020']);
+define('EXTRA_ROOTS', ['/space/trip']);                              // its folders appear at the top
+define('EXTRA_FOLDERS', ['OldTrip2020' => '/mnt/archive/trip-photos-2020']);   // or: this one place, shown as one folder with this name
 ```
 
-`OldTrip2020` then appears as an album alongside your real folders, and works exactly like one (captions, hiding, map…) — its saved captions and settings live in a `.gallery-items.php` inside *that* folder on the other disk, so for admin edits PHP needs write access there (viewing needs only read). It exists because the gallery refuses symlinked folders (a link could point anywhere on the server); naming the real path in this file, which only you can edit, is the safe alternative. A real folder with the same name wins.
+With a **name**, the whole place shows as one album instead: `OldTrip2020` then appears alongside your real folders, and works exactly like one (captions, hiding, map…) — its saved captions and settings live in a `.gallery-items.php` inside *that* folder on the other disk, so for admin edits PHP needs write access there (viewing needs only read). It exists because the gallery refuses symlinked folders (a link could point anywhere on the server); naming the real path in this file, which only you can edit, is the safe alternative. A real folder with the same name wins.
 
 ### Recipe: iPhone (HEIC) photos
 
@@ -161,7 +162,8 @@ That's the whole recipe — it also needs the **Imagick** PHP extension with HEI
 | `SHOW_VIEW_COUNTS_PUBLICLY` | **off** | `true` to show visitors the view counts (you always see them in the admin) | needs `TRACK_VIEWS` |
 | `PHOTO_SORT_ORDER` | `'filename'` | `'mtime'` to sort photos *and* folders by date | |
 | `FOLDER_DISPLAY_MODE` | `'overview'` | `'inline'` to show a folder's photos in a box instead of a cover card | needs `AUTO_GROUP_BY_FOLDER` |
-| `EXTRA_FOLDERS` | none | add `'Name' => '/real/path'` pairs | needs `AUTO_GROUP_BY_FOLDER` |
+| `EXTRA_ROOTS` | none | a list of `'/real/path'` places whose folders appear at the top of the gallery | needs `AUTO_GROUP_BY_FOLDER` |
+| `EXTRA_FOLDERS` | none | add `'Name' => '/real/path'` pairs: one place shown as one named folder | needs `AUTO_GROUP_BY_FOLDER` |
 | `ENABLE_VIDEO` | off | `true` for `.mov` / `.mp4` | |
 | `ADMIN_PASSWORD` | none | choose it in the browser right after upload ([First-run setup](#first-run-setup)), or put a long random string in the settings file — turns the admin on | everything in the next table |
 | `ENABLE_PHOTO_LOCATION` | off | `true` to allow locations to be shown | per-folder switch + per-photo setting in the admin |
@@ -292,6 +294,7 @@ define('FOLDER_DISPLAY_MODE', 'overview');
 
 // Empty by default. Virtual folders pointing at real paths elsewhere on
 // the server, e.g. ['OldTrip2020' => '/mnt/archive/trip-photos-2020'].
+define('EXTRA_ROOTS', []);     // e.g. ['/space/trip']: the folders inside it appear at the top of the gallery
 define('EXTRA_FOLDERS', []);
 
 // Off by default. Recognize .mov and .mp4 files as gallery items.
@@ -363,7 +366,7 @@ How it behaves:
 - **Only settings that differ from the defaults are stored**, so a better default in a later release still reaches you for everything you haven't changed. Put a setting back to its default and it leaves the file.
 - **Warnings are written on the page, not asked in dialogs.** A setting that publishes content or contacts a third party (subfolders, videos, photo locations, the map, an extra folder) has its warning in orange under it, in plain words, before you touch it. Flipping it saves at once. Switching one **off** shows an orange note beside the switch saying what that does and that nothing is deleted: the folders, files, captions and locations stay and come back when you switch it on again. Nothing in Site settings asks you to confirm.
 - **Changes are saved one at a time and built on each other**, so quick successive changes can't overwrite one another. The other screens (the sidebar's folder list, photo counts) are refreshed when you leave Site settings after a change, so they never show stale information. A change that can't be saved (an invalid value, an unwritable folder, an expired session, or the file changed elsewhere) puts the switch back and says why next to it.
-- **The server-level settings are editable too:** `EXTRA_FOLDERS` (paths elsewhere on the server, each checked to be a real, readable folder before it is stored) and `NGINX_ACCEL_REDIRECT_PREFIX` (a warning says it needs matching nginx config). A save keeps any other key you added by hand exactly as it was.
+- **The server-level settings are editable too:** places elsewhere on the server (a path alone adds its folders at the top of the gallery; with a name it is shown as one folder; each path is checked to be a real, readable folder before it is stored) and `NGINX_ACCEL_REDIRECT_PREFIX` (a warning says it needs matching nginx config). A save keeps any other key you added by hand exactly as it was.
 - **It won't overwrite what it can't read.** If the settings file isn't valid, saving is refused until you fix or delete it. If the file was changed since the page loaded (another tab, or by hand), the save is refused rather than overwriting that change. The new file is written to a temporary name, read back to check it holds exactly what was intended, and only then moved into place.
 - **If the gallery's folder isn't writable** it says so, changes nothing, and shows you the exact text to put in `.gallery-config.php` yourself.
 - **Saving rewrites the file**, so any `//` notes you added by hand are not kept.
@@ -430,7 +433,7 @@ A few details worth knowing:
 - **Notes work the same in every folder.** A notes file affects the page it sits on, and its `{photos:}`, `{group:}`, `{color:}`, `{sold}` and `{reserved}` apply to the photos **directly in its own folder**, spelled as in that folder. Write a subfolder's name as a whole word in a paragraph and `{sold}`, `{reserved}` and `{color:}` style that folder's cover card (in `inline` mode its box, with its photos shown under the paragraph); `{group: Name}` there renames it on that page. A top-level `{photos:}` cannot reach a photo inside a folder: a setup notice says so, rather than reporting an "unknown file". Mentioning a photo's name (`eiffel` for `eiffel.jpg`) works in any folder's notes.
 - **Everything about a folder lives in that folder.** Stats, the thumbnail cache, and the admin's saved data sit inside the folder they describe, so two cameras' `IMG_0001.jpg` in different folders never collide.
 - **Renaming a folder keeps its data; making a new folder and moving photos into it does not.** A real rename (FTP client, file manager, `mv`) carries the folder's data file along. Creating a *new* folder under a different name is, from the gallery's point of view, a different, empty folder.
-- **Symlinked folders are refused**, so a link can't make the gallery list files outside itself. To include a folder from elsewhere (an archive on another disk), name it in `EXTRA_FOLDERS` instead.
+- **Symlinked folders are refused**, so a link can't make the gallery list files outside itself. To include a folder from elsewhere (an archive on another disk), add it under *Site settings → Folders from elsewhere* (or `EXTRA_ROOTS` / `EXTRA_FOLDERS`) instead.
 - If photos exist in subfolders but `AUTO_GROUP_BY_FOLDER` is off, a setup notice says so (a count only, never a name; the search is capped at 40 folders so a gallery dropped into a big existing site never walks all of it).
 - Sibling folders order by an admin-set position first, then naturally by name (Day 2 before Day 10, case-insensitive) — or by the folder's own modification time if `PHOTO_SORT_ORDER` is `'mtime'`.
 - **The viewer stays in the folder.** Opening a photo and pressing the arrows cycles through that folder's own photos (and counts them), never into a neighbouring folder.

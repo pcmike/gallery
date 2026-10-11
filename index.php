@@ -61,7 +61,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.1');
+define('GALLERY_VERSION', '2.0.2');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -201,6 +201,41 @@ function gallery_setting($name, $default, $allowed = null) {
     return $v;
 }
 
+/** The folders that really get mounted: every named EXTRA_FOLDERS entry, then each folder found inside every
+ *  EXTRA_ROOTS path under its own name (the first to claim a name keeps it). Never follows a link. */
+function gallery_mounts() {
+    static $mounts = null;
+    if ($mounts !== null) return $mounts;
+    $named = EXTRA_FOLDERS;
+    $roots = EXTRA_ROOTS;
+    $mounts = [];
+    foreach ((array) $named as $name => $path) {
+        if (is_string($name) && is_string($path)) $mounts[$name] = $path;
+    }
+    foreach ((array) $roots as $root) {
+        if (!is_string($root) || !is_dir($root) || is_link($root)) continue;
+        foreach ((@scandir($root) ?: []) as $entry) {
+            if ($entry[0] === '.' || isset($mounts[$entry])) continue;
+            $path = rtrim($root, '/') . '/' . $entry;
+            if (is_dir($path) && !is_link($path)) $mounts[$entry] = $path;
+        }
+    }
+    return $mounts;
+}
+
+/** How many photos and videos lie directly in the EXTRA_ROOTS paths: those are not shown (only their folders are). */
+function count_loose_media_in_roots() {
+    global $mediaExtensions;
+    $n = 0;
+    foreach (EXTRA_ROOTS as $root) {
+        if (!is_string($root) || !is_dir($root) || is_link($root)) continue;
+        foreach ((@scandir($root) ?: []) as $entry) {
+            if ($entry[0] !== '.' && is_file($root . '/' . $entry) && in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), $mediaExtensions, true)) $n++;
+        }
+    }
+    return $n;
+}
+
 // Turn photo/group/page view tracking on or off. Off by default — this
 // script writes nothing to the folder's disk unless you turn something
 // on. Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
@@ -282,6 +317,12 @@ define('FOLDER_DISPLAY_MODE', gallery_setting('FOLDER_DISPLAY_MODE', 'overview',
 // path into the one file they control," the same category of trust as
 // ADMIN_PASSWORD — not something inferred from the filesystem. Empty by
 // default.
+// EXTRA_ROOTS is the simpler way to use a place elsewhere on the server: a list of paths whose *folders* appear at
+// the top of the gallery as if they sat in it (['/space/trip'] puts /space/trip/Paris and /space/trip/StTropez at the
+// top, named Paris and StTropez). EXTRA_FOLDERS above is the "show this one place as a folder with this name" form.
+// A real folder of the same name always wins, then EXTRA_FOLDERS, then the first path listed here. Photos lying
+// directly in such a path aren't shown (put them in a folder); a setup notice says how many.
+define('EXTRA_ROOTS', gallery_setting('EXTRA_ROOTS', []));
 define('EXTRA_FOLDERS', gallery_setting('EXTRA_FOLDERS', []));
 
 // Recognize .mov and .mp4 (iPhone's two video formats) as media items,
@@ -547,7 +588,7 @@ function count_ignored_videos($realDir, $maxDirs = 40) {
     $visited = 0;
     $truncated = false;
     $queue = [$realDir];
-    foreach (EXTRA_FOLDERS as $extraPath) {
+    foreach (gallery_mounts() as $extraPath) {
         if (is_string($extraPath) && is_dir($extraPath) && !is_link($extraPath)) $queue[] = $extraPath;
     }
     while ($queue) {
@@ -579,7 +620,7 @@ function count_ignored_videos($realDir, $maxDirs = 40) {
  * the same name already found during the normal scan always wins.
  */
 function merge_extra_folders($rootNode, $mediaExtensions, $self) {
-    foreach (EXTRA_FOLDERS as $virtualName => $realPath) {
+    foreach (gallery_mounts() as $virtualName => $realPath) {
         if (!is_string($virtualName) || $virtualName === '' || strpbrk($virtualName, "/\\") !== false) continue;
         if (isset($rootNode['subdirs'][$virtualName])) continue;
         if (!is_dir($realPath) || is_link($realPath)) continue;
@@ -669,7 +710,7 @@ function valid_media_path($dir, $rel, $mediaExtensions, $self) {
         if (strcasecmp($seg, '.gallery-cache') === 0) return false;
         $next = $current . '/' . $seg;
         if ($i === 0 && !(is_dir($next) && !is_link($next))) {
-            $mount = EXTRA_FOLDERS[$seg] ?? null;
+            $mount = gallery_mounts()[$seg] ?? null;
             if (!is_string($mount) || strpbrk($seg, "/\\") !== false || !is_dir($mount) || is_link($mount)) return false;
             $next = $mount;
             $root = realpath($mount);
@@ -698,9 +739,10 @@ function valid_media_path($dir, $rel, $mediaExtensions, $self) {
 function resolve_real_path($dir, $relPath) {
     $slash = strpos($relPath, '/');
     $first = $slash === false ? $relPath : substr($relPath, 0, $slash);
-    if (isset(EXTRA_FOLDERS[$first]) && is_dir(EXTRA_FOLDERS[$first])) {
+    $mounts = gallery_mounts();
+    if (isset($mounts[$first]) && is_dir($mounts[$first])) {
         $rest = $slash === false ? '' : substr($relPath, $slash + 1);
-        return rtrim(EXTRA_FOLDERS[$first], '/') . ($rest === '' ? '' : '/' . $rest);
+        return rtrim($mounts[$first], '/') . ($rest === '' ? '' : '/' . $rest);
     }
     return $dir . '/' . $relPath;
 }
@@ -1433,6 +1475,12 @@ if (!ENABLE_VIDEO) {
             . ' found but ' . ($ignoredVideoCount === 1 ? 'isn\'t' : 'aren\'t')
             . ' shown, because ENABLE_VIDEO is off — set it to true to include them (see the README\'s "Video" section).';
     }
+}
+
+if (AUTO_GROUP_BY_FOLDER && EXTRA_ROOTS && ($looseInRoots = count_loose_media_in_roots()) > 0) {
+    $galleryNotices[] = $looseInRoots . ' photo' . ($looseInRoots === 1 ? ' or video lies' : 's or videos lie')
+        . ' directly in a place added from elsewhere on the server. Only the folders inside such a place are shown at the top of the gallery, so move '
+        . ($looseInRoots === 1 ? 'it' : 'them') . ' into a folder to include ' . ($looseInRoots === 1 ? 'it' : 'them') . '.';
 }
 
 // Only a .md file whose first non-blank line is exactly "{gallery}" is
@@ -3855,7 +3903,7 @@ function gallery_setting_definitions() {
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
-             'help' => 'Show a folder that lives somewhere else on the server (an archive on another disk) as one more subfolder, under the name you give it. Needs "Show subfolders". Photos stay where they are; only a path is stored here.',
+             'help' => 'Bring in a place that lives somewhere else on the server (an archive on another disk). By default its folders appear at the top of the gallery as if they were in it: /space/trip with Paris and StTropez inside it adds Paris and StTropez. Give the place a name and it shows as one folder with that name instead. Needs "Show subfolders". Photos stay where they are; only a path is stored here.',
              'risk' => 'Every photo and video in that folder, and in its subfolders, becomes visible to visitors.'],
             ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect',
              'help' => 'Hands photo and video files to nginx instead of reading them with PHP, which is what makes a hidden photo unreachable at its direct address. Leave empty unless nginx already has the matching "internal" location (see the README), for example /kb.',
@@ -3864,43 +3912,55 @@ function gallery_setting_definitions() {
     ];
 }
 
-/** Checks the map of extra folders the Site settings screen posts (JSON, name =>
- *  path) before it is ever stored. A path must be a real, readable folder,
- *  written as the real path (no symlink anywhere in it, since the scan refuses
- *  to follow them), outside this gallery's own folder and not one that
- *  contains it. Returns the clean map, or null with reasons in $errors. */
+/** Checks the places from elsewhere that the Site settings screen posts (JSON: {"named": {name: path}, "roots": [path]})
+ *  before anything is stored. A path must be a real, readable folder, written as the real path (no symlink anywhere in
+ *  it, since the scan refuses to follow them), outside this gallery's own folder and not one that contains it. Returns
+ *  ['named' => ..., 'roots' => ...] clean, or null with reasons in $errors. */
 function site_settings_validate_extra_folders($raw, &$errors) {
-    $map = json_decode((string) $raw, true);
-    if (!is_array($map) || ($map !== [] && array_is_list($map))) { $errors[] = 'The list of folders from elsewhere wasn\'t understood.'; return null; }
-    if (count($map) > 50) { $errors[] = 'That is more folders from elsewhere than the gallery allows (50).'; return null; }
+    $in = json_decode((string) $raw, true);
+    if (!is_array($in) || !isset($in['named'], $in['roots']) || !is_array($in['named']) || !is_array($in['roots']) || !array_is_list($in['roots'])) { $errors[] = 'The list of folders from elsewhere wasn\'t understood.'; return null; }
+    if (count($in['named']) + count($in['roots']) > 50) { $errors[] = 'That is more folders from elsewhere than the gallery allows (50).'; return null; }
     $gallery = realpath(__DIR__);
-    $out = []; $seen = []; $bad = false;
-    foreach ($map as $name => $path) {
+    $bad = false;
+    // One path check for both kinds; $q names the entry in any message.
+    $checkPath = function ($path, $q) use ($gallery, &$errors, &$bad) {
+        if (!is_string($path)) { $errors[] = "The path for $q isn't text."; $bad = true; return null; }
+        $p = rtrim($path, '/\\');
+        if ($p === '' || preg_match('#[\x00-\x1F\x7F]#', $path) || !preg_match('#^(/|[A-Za-z]:[\\\\/])#', $p) || preg_grep('#^\.\.?$#', preg_split('#[\\\\/]+#', $p))) {
+            $errors[] = "The path for $q must be a full path starting with / (no .. in it)."; $bad = true; return null;
+        }
+        if (!@is_dir($p) || !@is_readable($p)) {
+            $errors[] = "The path for $q ($p) isn't a folder this server can read. Check it exists and that the web server may open it (and, on shared hosting, that PHP is allowed outside the website's folder)."; $bad = true; return null;
+        }
+        $real = realpath($p);
+        if (is_link($p) || $real === false || $real !== $p) {
+            $errors[] = "The path for $q goes through a link or isn't written as its real path" . ($real ? " (it is $real)" : '') . ". The gallery doesn't follow links, so give the real path."; $bad = true; return null;
+        }
+        if ($gallery !== false && ($real === $gallery || str_starts_with($real . '/', $gallery . '/') || str_starts_with($gallery . '/', $real . '/'))) {
+            $errors[] = "The path for $q overlaps this gallery's own folder (inside it, or containing it), which would show things twice or expose too much."; $bad = true; return null;
+        }
+        return $real;
+    };
+    $named = []; $seen = [];
+    foreach ($in['named'] as $name => $path) {
         $name = (string) $name; $q = '"' . $name . '"';
-        if (!is_string($path)) { $errors[] = "The path for $q isn't text."; $bad = true; continue; }
         if ($name === '' || $name !== trim($name) || strlen($name) > 60 || $name[0] === '.' || preg_match('#[/\\\\\x00-\x1F\x7F]#', $name)) {
             $errors[] = "$q isn't a usable folder name: 1 to 60 characters, no slashes, no leading dot or space."; $bad = true; continue;
         }
         if (isset($seen[strtolower($name)])) { $errors[] = "The name $q is used twice."; $bad = true; continue; }
         $seen[strtolower($name)] = true;
         if (is_dir(__DIR__ . '/' . $name)) { $errors[] = "A folder called $q already exists in the gallery, so that name is taken."; $bad = true; continue; }
-        $p = rtrim($path, '/\\');
-        if ($p === '' || preg_match('#[\x00-\x1F\x7F]#', $path) || !preg_match('#^(/|[A-Za-z]:[\\\\/])#', $p) || preg_grep('#^\.\.?$#', preg_split('#[\\\\/]+#', $p))) {
-            $errors[] = "The path for $q must be a full path starting with / (no .. in it)."; $bad = true; continue;
-        }
-        if (!@is_dir($p) || !@is_readable($p)) {
-            $errors[] = "The path for $q ($p) isn't a folder this server can read. Check it exists and that the web server may open it (and, on shared hosting, that PHP is allowed outside the website's folder)."; $bad = true; continue;
-        }
-        $real = realpath($p);
-        if (is_link($p) || $real === false || $real !== $p) {
-            $errors[] = "The path for $q goes through a link or isn't written as its real path" . ($real ? " (it is $real)" : '') . ". The gallery doesn't follow links, so give the real path."; $bad = true; continue;
-        }
-        if ($gallery !== false && ($real === $gallery || str_starts_with($real . '/', $gallery . '/') || str_starts_with($gallery . '/', $real . '/'))) {
-            $errors[] = "The path for $q overlaps this gallery's own folder (inside it, or containing it), which would show things twice or expose too much."; $bad = true; continue;
-        }
-        $out[$name] = $real;
+        $real = $checkPath($path, $q);
+        if ($real !== null) $named[$name] = $real;
     }
-    return $bad ? null : $out;
+    $roots = [];
+    foreach ($in['roots'] as $path) {
+        $real = $checkPath($path, is_string($path) ? '"' . $path . '"' : 'a folder');
+        if ($real === null) continue;
+        if (in_array($real, $roots, true)) { $errors[] = '"' . $real . '" is listed twice.'; $bad = true; continue; }
+        $roots[] = $real;
+    }
+    return $bad ? null : ['named' => $named, 'roots' => $roots];
 }
 
 /** The nginx prefix: empty, or a plain URL path such as /kb. */
@@ -3919,7 +3979,7 @@ function site_settings_valid_nginx_prefix($value) {
 function gallery_config_render($cfg) {
     $order = [];
     foreach (gallery_setting_definitions() as $group) foreach ($group['items'] as $d) $order[] = $d['name'];
-    foreach (['ADMIN_PASSWORD', 'PRIVATE_VIEW_PASSWORD', 'EXTRA_FOLDERS', 'NGINX_ACCEL_REDIRECT_PREFIX'] as $n) $order[] = $n;
+    foreach (['ADMIN_PASSWORD', 'PRIVATE_VIEW_PASSWORD', 'EXTRA_FOLDERS', 'EXTRA_ROOTS', 'NGINX_ACCEL_REDIRECT_PREFIX'] as $n) $order[] = $n;
     $keys = array_values(array_unique(array_merge(array_values(array_intersect($order, array_keys($cfg))), array_keys($cfg))));
     $ordered = [];
     foreach ($keys as $k) $ordered[$k] = $cfg[$k];
@@ -3956,6 +4016,8 @@ function site_settings_save($ajax = false) {
             } elseif ($d['type'] === 'folders') {
                 $value = site_settings_validate_extra_folders($raw, $errors);
                 if ($value === null) continue;
+                $setOrUnset('EXTRA_ROOTS', $value['roots']);
+                $value = $value['named'];
             } elseif ($d['type'] === 'text') {
                 if (!site_settings_valid_nginx_prefix($raw)) { $errors[] = '"' . $d['label'] . '" must be empty or a plain path like /kb (starting with /, no trailing slash, letters, digits and . _ ~ - only).'; continue; }
                 $value = $raw;
@@ -4018,7 +4080,7 @@ function site_settings_save($ajax = false) {
     $n = count($cfg);
     if ($ajax) {
         // The page updates in place, so there is no "next page" to carry a message: say it now, and hand back the new file fingerprint.
-        return ['type' => 'ok', 'text' => ($newAdmin !== null ? 'Admin password changed; you stay signed in.' : 'Saved.'), 'hash' => md5_file($path), 'differing' => $n, 'extra' => (object) ($cfg['EXTRA_FOLDERS'] ?? [])];
+        return ['type' => 'ok', 'text' => ($newAdmin !== null ? 'Admin password changed; you stay signed in.' : 'Saved.'), 'hash' => md5_file($path), 'differing' => $n, 'extra' => ['named' => (object) ($cfg['EXTRA_FOLDERS'] ?? []), 'roots' => array_values($cfg['EXTRA_ROOTS'] ?? [])]];
     }
     $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Settings saved' . ($newAdmin !== null ? ' (admin password changed; you stay signed in)' : '') . '. ' . ($n === 0 ? 'Everything is on its default.' : $n . ' setting' . ($n === 1 ? '' : 's') . ' differ' . ($n === 1 ? 's' : '') . ' from the defaults and will survive updating index.php.') . ' Your photos, captions, locations and counts were not touched.'];
     return ['type' => 'redirect'];
@@ -4069,15 +4131,16 @@ function render_admin_site_settings($csrfToken) {
                   <select name="set_<?= $esc($name) ?>"><?php foreach ($d['options'] as $val => $lab): ?><option value="<?= $esc($val) ?>" <?= (string) $now === (string) $val ? 'selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?></select>
                 <?php elseif ($d['type'] === 'text'): ?>
                   <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
-                <?php elseif ($d['type'] === 'folders'): ?>
-                  <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode((object) $now, JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>">
-                    <ul class="extra-list"><?php foreach ($now as $fname => $fpath): ?><li><strong><?= $esc($fname) ?></strong> <span class="muted">&rarr;</span> <code><?= $esc($fpath) ?></code> <button type="button" class="extra-remove secondary" data-name="<?= $esc($fname) ?>">Remove</button></li><?php endforeach; ?></ul>
-                    <p class="muted extra-none"<?= $now ? ' hidden' : '' ?>>None added.</p>
+                <?php elseif ($d['type'] === 'folders'): $extraNamed = (array) EXTRA_FOLDERS; $extraRoots = array_values((array) EXTRA_ROOTS); ?>
+                  <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode(['named' => (object) $extraNamed, 'roots' => $extraRoots], JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>">
+                    <ul class="extra-list"><?php foreach ($extraRoots as $rpath): ?><li><code><?= $esc($rpath) ?></code> <span class="muted">&rarr; its folders are at the top of the gallery</span> <button type="button" class="extra-remove secondary" data-kind="root" data-name="<?= $esc($rpath) ?>">Remove</button></li><?php endforeach; ?><?php foreach ($extraNamed as $fname => $fpath): ?><li><strong><?= $esc($fname) ?></strong> <span class="muted">&rarr;</span> <code><?= $esc($fpath) ?></code> <button type="button" class="extra-remove secondary" data-kind="named" data-name="<?= $esc($fname) ?>">Remove</button></li><?php endforeach; ?></ul>
+                    <p class="muted extra-none"<?= ($extraNamed || $extraRoots) ? ' hidden' : '' ?>>None added.</p>
                     <div class="extra-add">
-                      <input type="text" class="extra-name" placeholder="Name, e.g. OldTrip2020" maxlength="60" autocomplete="off">
-                      <input type="text" class="extra-path" placeholder="/full/path/to/the/folder" autocomplete="off" spellcheck="false">
-                      <button type="button" class="extra-add-btn secondary">Add folder</button>
+                      <input type="text" class="extra-path" placeholder="/full/path/to/the/place" autocomplete="off" spellcheck="false">
+                      <input type="text" class="extra-name" placeholder="Optional: show it as one folder with this name, e.g. OldTrip2020" maxlength="60" autocomplete="off">
+                      <button type="button" class="extra-add-btn secondary">Add</button>
                     </div>
+                    <p class="hint">Without a name, the folders inside that place appear at the top of the gallery (<code>/space/trip</code> holding <code>Paris</code> and <code>StTropez</code> gives you Paris and StTropez). With a name, the whole place shows as that one folder.</p>
                   </div>
                 <?php else: ?>
                   <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="1" value="<?= $esc($now) ?>" style="max-width:110px;">
@@ -5059,35 +5122,39 @@ foreach ($adminFiles as $file) {
       });
     });
     [].forEach.call(form.querySelectorAll('.extra-folders'), function (box) {
-      var map = {};
-      try { map = JSON.parse(box.getAttribute('data-map')) || {}; } catch (e) {}
+      var state = { named: {}, roots: [] };
+      try { var parsed = JSON.parse(box.getAttribute('data-map')) || {}; state.named = parsed.named || {}; state.roots = parsed.roots || []; } catch (e) {}
       var list = box.querySelector('.extra-list'), none = box.querySelector('.extra-none'), status = stateOf(box);
+      function item(parts, kind, key) {
+        var li = document.createElement('li'), btn = document.createElement('button');
+        parts.forEach(function (p) { li.appendChild(p); li.appendChild(document.createTextNode(' ')); });
+        btn.type = 'button'; btn.className = 'extra-remove secondary'; btn.textContent = 'Remove'; btn.setAttribute('data-kind', kind); btn.setAttribute('data-name', key);
+        li.appendChild(btn); list.appendChild(li);
+      }
+      function el(tag, text, cls) { var e = document.createElement(tag); e.textContent = text; if (cls) e.className = cls; return e; }
       function draw() {
         list.textContent = '';
-        Object.keys(map).forEach(function (name) {
-          var li = document.createElement('li'), strong = document.createElement('strong'), arrow = document.createElement('span'), code = document.createElement('code'), btn = document.createElement('button');
-          strong.textContent = name; arrow.className = 'muted'; arrow.textContent = '\u2192'; code.textContent = map[name];
-          btn.type = 'button'; btn.className = 'extra-remove secondary'; btn.textContent = 'Remove'; btn.setAttribute('data-name', name);
-          li.appendChild(strong); li.appendChild(document.createTextNode(' ')); li.appendChild(arrow); li.appendChild(document.createTextNode(' ')); li.appendChild(code); li.appendChild(document.createTextNode(' ')); li.appendChild(btn);
-          list.appendChild(li);
-        });
-        none.hidden = Object.keys(map).length > 0;
+        state.roots.forEach(function (p) { item([el('code', p), el('span', '\u2192 its folders are at the top of the gallery', 'muted')], 'root', p); });
+        Object.keys(state.named).forEach(function (name) { item([el('strong', name), el('span', '\u2192', 'muted'), el('code', state.named[name])], 'named', name); });
+        none.hidden = state.roots.length + Object.keys(state.named).length > 0;
       }
+      function copy() { var n = {}; Object.keys(state.named).forEach(function (k) { n[k] = state.named[k]; }); return { named: n, roots: state.roots.slice() }; }
       function send(next, onOk) {
         var f = {}; f[box.getAttribute('data-name')] = JSON.stringify(next);
-        post(f, status, null, function (j) { map = (j.extra && typeof j.extra === 'object') ? j.extra : next; draw(); if (onOk) onOk(); });
+        post(f, status, null, function (j) { state = (j.extra && typeof j.extra === 'object') ? { named: j.extra.named || {}, roots: j.extra.roots || [] } : next; draw(); if (onOk) onOk(); });
       }
       box.querySelector('.extra-add-btn').addEventListener('click', function () {
         var n = box.querySelector('.extra-name').value.trim(), p = box.querySelector('.extra-path').value.trim();
-        if (!n || !p) { say(status, 'Give it a name and a full path.', 'err'); return; }
-        var next = {}; Object.keys(map).forEach(function (k) { next[k] = map[k]; }); next[n] = p;
+        if (!p) { say(status, 'Give the full path of the place to add.', 'err'); return; }
+        var next = copy();
+        if (n) next.named[n] = p; else next.roots.push(p);
         send(next, function () { box.querySelector('.extra-name').value = ''; box.querySelector('.extra-path').value = ''; });
       });
       list.addEventListener('click', function (ev) {
         var b = ev.target.closest ? ev.target.closest('.extra-remove') : null;
         if (!b) return;
-        var n = b.getAttribute('data-name');
-        var next = {}; Object.keys(map).forEach(function (k) { if (k !== n) next[k] = map[k]; });
+        var n = b.getAttribute('data-name'), next = copy();
+        if (b.getAttribute('data-kind') === 'root') next.roots = next.roots.filter(function (r) { return r !== n; }); else delete next.named[n];
         send(next, function () { say(status, 'Removed. Nothing was deleted: its photos and their captions stay where they are.', 'ok'); });
       });
       draw();

@@ -2629,24 +2629,52 @@ $bad = [
     'a name starting with a dot' => ['.hidden' => $extraSrcReal],
     'a name already used by a real folder' => ['Sub' => $extraSrcReal],
 ];
+$exJson = function (array $named = [], array $roots = []) { return json_encode(['named' => (object) $named, 'roots' => $roots]); };
 foreach ($bad as $why => $map) {
-    $r = $siteAjax(['set_EXTRA_FOLDERS' => json_encode($map)]);
+    $r = $siteAjax(['set_EXTRA_FOLDERS' => $exJson($map)]);
     check("[extra folders] $why is refused with a reason, and the settings file is untouched", ($r['ok'] ?? null) === false && ($r['text'] ?? '') !== '' && (string) file_get_contents($siteCfg) === $cfgBeforeExtra);
 }
-$dup = $siteAjax(['set_EXTRA_FOLDERS' => '{"Same":"' . $extraSrcReal . '","same":"' . $extraSrcReal . '"}']);
+$dup = $siteAjax(['set_EXTRA_FOLDERS' => '{"named":{"Same":"' . $extraSrcReal . '","same":"' . $extraSrcReal . '"},"roots":[]}']);
 check('[extra folders] the same name twice (ignoring case) is refused', ($dup['ok'] ?? null) === false && str_contains((string) $dup['text'], 'twice'));
 check('[extra folders] something that is not a list of folders is refused', ($siteAjax(['set_EXTRA_FOLDERS' => 'not json'])['ok'] ?? null) === false && ($siteAjax(['set_EXTRA_FOLDERS' => '["a","b"]'])['ok'] ?? null) === false);
 // A good one, end to end.
 $siteAjax(['set_AUTO_GROUP_BY_FOLDER' => '1']);
 $extraPhotoMd5 = md5_file("$extraSrc/archive1.jpg");
-$good = $siteAjax(['set_EXTRA_FOLDERS' => json_encode(['OldTrip' => $extraSrcReal])]);
-check('[extra folders] a real, readable folder elsewhere on the server is accepted, and handed back as stored', ($good['ok'] ?? null) === true && (array) ($good['extra'] ?? []) === ['OldTrip' => $extraSrcReal] && (cfg_read($siteCfg)['EXTRA_FOLDERS'] ?? null) === ['OldTrip' => $extraSrcReal]);
+$good = $siteAjax(['set_EXTRA_FOLDERS' => $exJson(['OldTrip' => $extraSrcReal])]);
+check('[extra folders] a real, readable folder elsewhere on the server is accepted, and handed back as stored', ($good['ok'] ?? null) === true && (array) ($good['extra']['named'] ?? []) === ['OldTrip' => $extraSrcReal] && (cfg_read($siteCfg)['EXTRA_FOLDERS'] ?? null) === ['OldTrip' => $extraSrcReal]);
 $homeExtra = http_get("$baseSite/", $siteHdrs2)[1];
 check('[extra folders] its photos then appear in the gallery as a folder under that name, with thumbnails that load', str_contains($homeExtra, 'id="group-oldtrip"') && http_get("$baseSite/?img=OldTrip%2Farchive1.jpg&size=thumb")[0] === 200 && str_contains(http_get("$baseSite/?folder=OldTrip")[1], 'archive1.jpg'));
 check('[extra folders] the sidebar list in the admin includes it', str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], 'folder=OldTrip'));
-$rm = $siteAjax(['set_EXTRA_FOLDERS' => '{}']);
+$rm = $siteAjax(['set_EXTRA_FOLDERS' => $exJson()]);
 check('[extra folders] removing it takes it out of the gallery and out of the settings file (back to the default)', ($rm['ok'] ?? null) === true && !isset(cfg_read($siteCfg)['EXTRA_FOLDERS']) && !str_contains(http_get("$baseSite/")[1], 'id="group-oldtrip"'));
 check('[extra folders] and nothing in that other folder was lost: the photo is byte-for-byte as it was and the caption saved there is intact (the gallery only adds its standard empty fields to a data file the first time it visits the folder)', md5_file("$extraSrc/archive1.jpg") === $extraPhotoMd5 && (read_data_file("$extraSrc/.gallery-items.php")['items'] ?? null) === ['archive1.jpg' => ['caption' => 'From the archive disk']]);
+// A place whose FOLDERS belong at the top of the gallery (no wrapper folder): /space/trip holding Paris and StTropez.
+$rootsSrc = new_fixture_dir('extra-roots'); $rootsSrcReal = realpath($rootsSrc);
+mkdir("$rootsSrc/Paris"); mkdir("$rootsSrc/StTropez"); mkdir("$rootsSrc/Sub");
+make_jpeg("$rootsSrc/Paris/p.jpg", 60, 60, 10, 10, 10);
+make_jpeg("$rootsSrc/StTropez/s.jpg", 60, 60, 20, 20, 20);
+make_jpeg("$rootsSrc/Sub/shadowed.jpg", 60, 60, 30, 30, 30);
+make_jpeg("$rootsSrc/loose.jpg", 60, 60, 40, 40, 40);
+$cfgBeforeRoots = (string) file_get_contents($siteCfg);
+$r1 = $siteAjax(['set_EXTRA_FOLDERS' => $exJson([], [$rootsSrcReal])]);
+check('[extra roots] a place added without a name is accepted and stored as a path in its own list, not as a named folder', ($r1['ok'] ?? null) === true && (cfg_read($siteCfg)['EXTRA_ROOTS'] ?? null) === [$rootsSrcReal] && !isset(cfg_read($siteCfg)['EXTRA_FOLDERS']) && (array) ($r1['extra']['roots'] ?? []) === [$rootsSrcReal]);
+$homeRoots = http_get("$baseSite/", $siteHdrs2)[1];
+check('[extra roots] its folders appear AT THE TOP of the gallery under their own names, with no wrapper folder named after the place', str_contains($homeRoots, 'id="group-paris"') && str_contains($homeRoots, 'id="group-sttropez"') && !str_contains($homeRoots, basename($rootsSrcReal)));
+check('[extra roots] ...with thumbnails that load, and their own pages', http_get("$baseSite/?img=Paris%2Fp.jpg&size=thumb")[0] === 200 && str_contains(http_get("$baseSite/?folder=StTropez")[1], 's.jpg'));
+check('[extra roots] a real folder of the same name wins over one from the added place (Sub keeps its own photos, not shadowed.jpg)', !str_contains(http_get("$baseSite/?folder=Sub")[1], 'shadowed.jpg') && http_get("$baseSite/?img=Sub%2Fshadowed.jpg&size=thumb")[0] === 404);
+check('[extra roots] photos lying directly in the added place are not shown, and a setup notice says how many (a count, never a name)', !str_contains($homeRoots, 'loose.jpg') && str_contains($homeRoots, '1 photo or video lies directly in a place added from elsewhere'));
+check('[extra roots] the admin sidebar lists the folders too', str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], 'folder=StTropez'));
+check('[extra roots] the Site settings row lists the place and says its folders are at the top', str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], 'its folders are at the top of the gallery') && str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], htmlspecialchars($rootsSrcReal)));
+$both = $siteAjax(['set_EXTRA_FOLDERS' => $exJson(['OldTrip' => $extraSrcReal], [$rootsSrcReal])]);
+$homeBoth = http_get("$baseSite/", $siteHdrs2)[1];
+check('[extra roots] a named place and an unnamed one live together: one wrapper folder, plus the other place\'s folders at the top', ($both['ok'] ?? null) === true && str_contains($homeBoth, 'id="group-oldtrip"') && str_contains($homeBoth, 'id="group-paris"') && (cfg_read($siteCfg)['EXTRA_FOLDERS'] ?? null) === ['OldTrip' => $extraSrcReal] && (cfg_read($siteCfg)['EXTRA_ROOTS'] ?? null) === [$rootsSrcReal]);
+$cfgBothText = (string) file_get_contents($siteCfg);
+foreach (['a path that does not exist' => ['/no/such/place'], 'the gallery itself' => [$fxSite], 'a relative path' => ['photos/x'], 'the same place twice' => [$rootsSrcReal, $rootsSrcReal], 'a file' => ["$rootsSrcReal/loose.jpg"]] as $why => $roots) {
+    $rr = $siteAjax(['set_EXTRA_FOLDERS' => $exJson([], $roots)]);
+    check("[extra roots] $why is refused with a reason, and nothing changes", ($rr['ok'] ?? null) === false && ($rr['text'] ?? '') !== '' && (string) file_get_contents($siteCfg) === $cfgBothText);
+}
+$gone = $siteAjax(['set_EXTRA_FOLDERS' => $exJson()]);
+check('[extra roots] removing the place takes its folders off the top of the gallery and out of the settings file; nothing in it was touched', ($gone['ok'] ?? null) === true && !isset(cfg_read($siteCfg)['EXTRA_ROOTS']) && !isset(cfg_read($siteCfg)['EXTRA_FOLDERS']) && !str_contains(http_get("$baseSite/")[1], 'id="group-paris"') && file_exists("$rootsSrc/Paris/p.jpg") && file_exists("$rootsSrc/loose.jpg"));
 @unlink("$extraSrc-link");
 // The nginx prefix.
 foreach (['kb' => 'no leading slash', '/kb/' => 'a trailing slash', '/a b' => 'a space', '//x' => 'a double slash', '/../x' => 'a ..', '/kb?x=1' => 'a query', '/kb;x' => 'a semicolon'] as $value => $why) {

@@ -454,6 +454,15 @@ try:
     ok("isn't a folder this server can read" in b.js("document.body.innerText") and "Bad" not in b.js("document.querySelector('.extra-list').textContent"), "a path that doesn't exist is refused with the reason, and isn't added")
     b.js("window.__confirms.length = 0"); b.js("document.querySelector('.extra-remove').click()"); b.drain(1.2)
     ok(b.js("window.__confirms.length") == 0 and "Nothing was deleted" in b.js("document.querySelector('.extra-folders').closest('.site-row').innerText") and '"EXTRA_FOLDERS"' not in cfg() and b.js("document.querySelector('.admin-folder-nav a[href*=OldTrip]') === null"), "removing it asks nothing, says nothing was deleted, takes it out of the file, and the sidebar drops it at once")
+    # a place whose folders belong at the top of the gallery: a path and no name
+    EXTRA_ROOT = WORK + "/extra-root"; os.makedirs(EXTRA_ROOT + "/Lisbon")
+    subprocess.run(["php", "-r", "$i=imagecreatetruecolor(80,60); imagejpeg($i, $argv[1]);", EXTRA_ROOT + "/Lisbon/l.jpg"], check=True)
+    b.js("document.querySelector('.extra-name').value = ''; document.querySelector('.extra-path').value = %s;" % repr(EXTRA_ROOT).replace("'", '"'))
+    b.js("document.querySelector('.extra-add-btn').click()"); b.drain(1.2)
+    ok('"EXTRA_ROOTS"' in cfg() and '"EXTRA_FOLDERS"' not in cfg() and "its folders are at the top of the gallery" in b.js("document.querySelector('.extra-list').textContent"), "[extra roots] a path with no name adds the place's folders at the top, and is listed as such", cfg()[:200])
+    ok(b.js("document.querySelector('.admin-folder-nav a[href*=Lisbon]') !== null") and b.js("document.querySelector('.admin-folder-nav a[href*=OldTrip]') === null"), "[extra roots] ...and the sidebar shows Lisbon itself, with no wrapper folder")
+    b.js("document.querySelector('.extra-remove').click()"); b.drain(1.2)
+    ok('"EXTRA_ROOTS"' not in cfg() and b.js("document.querySelector('.admin-folder-nav a[href*=Lisbon]') === null"), "[extra roots] removing it takes its folders off the sidebar and out of the file")
     # the nginx prefix
     b.js("window.__confirms.length = 0; (() => { const i = document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]'); i.value = 'kb'; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     ok('NGINX_ACCEL_REDIRECT_PREFIX' not in cfg() and b.js("document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]').value") == "", "an nginx prefix that isn't a plain path (no leading slash) is refused and the field clears back")

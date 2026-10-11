@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.2] - 2026-10-11
+
+### Changed
+- **Adding a place from elsewhere on the server now puts its folders at the top of the gallery.** Adding `/space/trip` (holding `Paris` and `StTropez`) used to create a folder named after what you typed, with Paris and StTropez nested inside it. With only a path, the folders inside it now appear at the top, as if they lived in the gallery: Paris and StTropez, nothing in between. Give the place a name and it still shows as one folder with that name, as before. A real folder of the same name wins; photos lying directly in the added place are not shown (a setup notice counts them). In Site settings the row now takes a path and an optional name; in the settings file the new list is `EXTRA_ROOTS` (`EXTRA_FOLDERS` keeps its named form, so existing settings work unchanged).
+
 ## [2.0.1] - 2026-10-10
 
 ### Added
