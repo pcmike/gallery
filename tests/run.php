@@ -203,6 +203,9 @@ function flag_post($url, $page, array $hdrs, $flag, $on, array $names) {
     return json_decode($body, true) ?? ['ok' => null, 'text' => $body];
 }
 
+/** The markup of the lock or unlock drawing (see ui_icon in index.php). */
+function ui_lock_probe($name) { return ico($name); }
+
 function read_data_file($path) {
     $raw = (string) file_get_contents($path);
     if (strncmp($raw, '<?php', 5) === 0) {
@@ -1331,7 +1334,7 @@ $revealWrongAuth = 'Authorization: Basic ' . base64_encode('x:wrong');
 
 // Public baseline: everything visible, footer carries the Private view link.
 [, $privateBaselineBody] = http_get("$basePrivate/");
-check('the "Private view" footer link appears once PRIVATE_VIEW_PASSWORD is set', str_contains($privateBaselineBody, 'href="?reveal">Private view</a>'));
+check('with a private-view password but nothing private yet there is no lock and no "Private view" link anywhere (nothing to unlock)', !str_contains($privateBaselineBody, 'class="lock-link') && !str_contains($privateBaselineBody, '>Private view</a>'));
 check('nothing is hidden yet — loose1.jpg is visible', str_contains($privateBaselineBody, 'loose1.jpg'));
 
 // Log into admin, flag loose1.jpg hidden.
@@ -1344,6 +1347,7 @@ http_post("$basePrivate/?admin", [
 
 [, $afterHideBody] = http_get("$basePrivate/");
 check('a hidden item is omitted from the public page entirely', !str_contains($afterHideBody, 'loose1.jpg'));
+check('[lock] once something is private, a closed lock appears to the right of the title and links to the password form; the old footer link is gone', str_contains($afterHideBody, 'class="lock-link" href="?reveal"') && preg_match('#<h1>(.*?)</h1>#s', $afterHideBody, $lockH1) === 1 && strpos($lockH1[1], 'class="lock-link"') > strpos($lockH1[1], '</a>') && str_contains($afterHideBody, ui_lock_probe('lock')) && !str_contains($afterHideBody, '>Private view</a>'));
 [$hiddenImgStatus] = http_get("$basePrivate/?img=loose1.jpg&size=thumb");
 check('?img= refuses a hidden item to an unrevealed visitor', $hiddenImgStatus === 404);
 [, $hiddenPhotoBody] = http_get("$basePrivate/?photo=loose1.jpg");
@@ -1391,6 +1395,18 @@ check('the redirect drops back to the bare URL, not leaving ?reveal in it', (boo
 $revealCookie = extract_cookie_header($revealHeaders);
 check('?reveal sets a cookie', $revealCookie !== null);
 [, $revealedBody] = http_get("$basePrivate/", ["Cookie: $revealCookie"]);
+check('[lock] a viewer who has the password sees the lock open: a button in a small form that posts to ?reveal', str_contains($revealedBody, 'class="lock-form"') && str_contains($revealedBody, 'name="logout"') && str_contains($revealedBody, ui_lock_probe('unlock')) && !str_contains($revealedBody, 'href="?reveal"'));
+[$lockOutStatus, , $lockOutHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => ''], ["Cookie: $revealCookie"], false);
+$lockOutCookie = (string) extract_cookie_header($lockOutHd);
+check('[lock] pressing it forgets this browser\'s private-view cookie and goes back to the page, which is then locked again', $lockOutStatus === 303 && (bool) array_filter($lockOutHd, fn($h) => stripos($h, 'Location: ./') === 0) && !str_contains(http_get("$basePrivate/", ['Cookie: ' . ($lockOutCookie !== '' ? $lockOutCookie : 'x=y')])[1], 'loose1.jpg'));
+[, $lockAdminBody] = http_get("$basePrivate/", ["Cookie: $sessCookie"]);
+check('[lock] the owner (signed in to the admin) sees it open too, and it leads to the admin rather than logging out', str_contains($lockAdminBody, 'class="lock-link open" href="?admin"') && !str_contains($lockAdminBody, 'name="logout"'));
+[, $lockFolderBody] = http_get("$basePrivate/?folder=Paris", ["Cookie: $revealCookie"]);
+check('[lock] on a folder\'s page the lock remembers the folder, so locking or unlocking brings you back to it', str_contains($lockFolderBody, 'name="folder" value="Paris"'));
+[, , $lockBackHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => 'Paris'], ["Cookie: $revealCookie"], false);
+check('[lock] ...pressing it there returns to that folder', (bool) array_filter($lockBackHd, fn($h) => stripos($h, 'Location: ./?folder=Paris') === 0));
+[, , $loginBackHd] = http_get("$basePrivate/?reveal&folder=Paris", [$revealAuth], false);
+check('[lock] ...and unlocking from a folder\'s page returns there too', (bool) array_filter($loginBackHd, fn($h) => stripos($h, 'Location: ./?folder=Paris') === 0));
 check('once revealed, every hidden item is visible again — including the entirely-hidden folder', str_contains($revealedBody, 'loose1.jpg') && str_contains($revealedBody, '<div class="folder-cover"'));
 // A revealed viewer opening a hidden item IS counted (the owner wants to
 // know), but no file a web server could hand out may contain its name:
@@ -3217,7 +3233,7 @@ write_patched_index("$fxFam/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' 
 $portFam = find_free_port(); start_server($fxFam, $portFam); $baseFam = "http://127.0.0.1:$portFam";
 $famAuth = 'Authorization: Basic ' . base64_encode('admin:fam-admin');
 [, $famHome] = http_get("$baseFam/");
-check('[family] everyone sees everything at first, plus a discreet "Private view" footer link', str_contains($famHome, 'alt="kids.jpg"') && str_contains($famHome, 'id="group-birthday"') && str_contains($famHome, 'href="?reveal">Private view</a>') && str_contains($famHome, '5 photos'));
+check('[family] everyone sees everything at first, and there is no lock yet because nothing is private', str_contains($famHome, 'alt="kids.jpg"') && str_contains($famHome, 'id="group-birthday"') && !str_contains($famHome, 'class="lock-link') && str_contains($famHome, '5 photos'));
 [, $fAdmin, $fHd] = http_get("$baseFam/?admin", [$famAuth]); $famCookie = extract_cookie_header($fHd); $famHdrs = [$famAuth, "Cookie: $famCookie"];
 $r = flag_post("$baseFam/?admin", $fAdmin, $famHdrs, 'private', true, ['kids.jpg']);
 check('[family] switching "Private" on for kids.jpg works, in place', ($r['ok'] ?? null) === true && str_contains((string) $r['text'], 'now private'));

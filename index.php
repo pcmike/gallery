@@ -1824,6 +1824,11 @@ if (isset($_GET['admin'])) {
 // flag (and its cached thumbnails) the next time an unrevealed visitor
 // just loads the page — the opposite of what hiding is supposed to do.
 $allFiles = $files;
+// Whether anything in the gallery is private: the lock beside the title only appears when there is something to unlock.
+$hasPrivateItems = false;
+foreach ($allFiles as $privateProbe) {
+    if (file_is_hidden($dir, $privateProbe, $itemsData)) { $hasPrivateItems = true; break; }
+}
 
 // Private view, for everything from here on (the public page, ?track=,
 // ?folder=): a hidden item — or an entirely-hidden folder-group — is
@@ -2472,6 +2477,18 @@ function run_reveal_route($dir) {
         http_response_code(404);
         return;
     }
+    // Back to the page the visitor came from (a folder's page stays on that folder).
+    $backFolder = isset($_REQUEST['folder']) && is_string($_REQUEST['folder']) && $_REQUEST['folder'] !== '' && strlen($_REQUEST['folder']) < 1024 && strpbrk($_REQUEST['folder'], "\0\r\n") === false
+        ? '?folder=' . rawurlencode($_REQUEST['folder']) : '';
+    // The lock beside the title, when it is open, locks the private items again: it only forgets this browser's
+    // private-view password cookie (the owner's own sign-in is left alone).
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
+        if (!is_admin_browser()) {
+            setcookie(REVEAL_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+        }
+        header('Location: ./' . $backFolder, true, 303);
+        return;
+    }
     if (!is_https_request() && !is_local_request()) {
         render_https_required_page();
         return;
@@ -2505,7 +2522,7 @@ function run_reveal_route($dir) {
     }
     login_throttle_record_success($dir, 'reveal', $ip);
     set_reveal_cookie();
-    header('Location: ./', true, 302);
+    header('Location: ./' . $backFolder, true, 302);
 }
 
 /* -----------------------------------------------------------------------
@@ -6897,6 +6914,8 @@ function ui_icon_paths() {
         'play'    => '<path d="M8 5.5v13l10.5-6.5z"/>',
         'star'    => '<path d="m12 3.5 2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8z"/>',
         'chart'   => '<path d="M5 20V11M12 20V4M19 20v-6"/>',
+        'lock'    => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+        'unlock'  => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/>',
         'expand'  => '<path d="M15 3h6v6M9 21H3v-6M21 3l-7.5 7.5M3 21l7.5-7.5"/>',
     ];
 }
@@ -7390,6 +7409,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* The title is also the way into ?admin, deliberately unmarked: it looks
      and behaves like plain text (no underline, colour, cursor or hover
      change). Keyboard focus still shows the browser's normal ring. */
+  /* The lock beside the title: quiet until pointed at. */
+  header h1 .lock-form { display: inline; margin: 0; }
+  header h1 .lock-link { display: inline-block; margin-left: 6px; padding: 0; vertical-align: 0.1em; background: none; border: 0; cursor: pointer; font-size: 0.62em; color: var(--muted); opacity: 0.7; line-height: 1; text-decoration: none; }
+  header h1 .lock-link:hover, header h1 .lock-link:focus-visible { opacity: 1; color: var(--text); }
+  header h1 .lock-link.open { color: #3ba55c; opacity: 0.85; }
   header h1 a.title-admin {
     color: inherit;
     text-decoration: none;
@@ -7949,14 +7973,30 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 <body>
 <?= ui_icon_sprite() ?>
 
+<?php
+// The lock beside the title, when there is a private-view password and something private to unlock. Closed: a link to
+// enter the password. Open: this browser has it; pressing it locks the private items again. The owner (signed in to
+// the admin) sees it open too, and it leads to the admin, which has the real Log out.
+$lockHtml = '';
+if (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems) {
+    $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
+    if (is_admin_browser()) {
+        $lockHtml = ' <a class="lock-link open" href="?admin' . $lockFolderQuery . '" rel="nofollow" title="You are signed in as the owner, so private items show. Open the admin." aria-label="Private items are showing (owner). Open the admin.">' . ui_icon('unlock') . '</a>';
+    } elseif (is_revealed()) {
+        $lockHtml = ' <form method="post" action="?reveal" class="lock-form"><input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '"><button type="submit" name="logout" value="1" class="lock-link open" title="Private items are showing. Press to lock them again." aria-label="Private items are showing. Press to lock them again.">' . ui_icon('unlock') . '</button></form>';
+    } else {
+        $lockHtml = ' <a class="lock-link" href="?reveal' . $lockFolderQuery . '" rel="nofollow" title="This gallery has private items. Enter the password to see them." aria-label="This gallery has private items. Enter the password to see them.">' . ui_icon('lock') . '</a>';
+    }
+}
+?>
 <header>
   <?php if ($currentFolderPath !== null): ?>
     <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
   <?php endif; ?>
   <?php if (ADMIN_PASSWORD !== ''): ?>
-    <h1><a class="title-admin" rel="nofollow" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a></h1>
+    <h1><a class="title-admin" rel="nofollow" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a><?= $lockHtml ?></h1>
   <?php else: ?>
-    <h1><?= htmlspecialchars($pageTitle) ?></h1>
+    <h1><?= htmlspecialchars($pageTitle) ?><?= $lockHtml ?></h1>
   <?php endif; ?>
   <?php $headerMeta = $currentFolderPath !== null ? $currentFolderMeta : $rootMeta; ?>
   <?php if ($headerMeta['dates'] !== ''): ?>
@@ -8230,7 +8270,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php endif; ?>
 
 <footer>
-  <a href="?about">gallery</a><?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?> · <?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?><?php endif; ?><?php if (PRIVATE_VIEW_PASSWORD !== ''): ?> · <a href="?reveal">Private view</a><?php endif; ?>
+  <a href="?about">gallery</a><?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?> · <?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?><?php endif; ?>
 </footer>
 
 <div class="lightbox" id="lightbox">
