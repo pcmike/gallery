@@ -1400,7 +1400,13 @@ check('[lock] a viewer who has the password sees the lock open: a button in a sm
 $lockOutCookie = (string) extract_cookie_header($lockOutHd);
 check('[lock] pressing it forgets this browser\'s private-view cookie and goes back to the page, which is then locked again', $lockOutStatus === 303 && (bool) array_filter($lockOutHd, fn($h) => stripos($h, 'Location: ./') === 0) && !str_contains(http_get("$basePrivate/", ['Cookie: ' . ($lockOutCookie !== '' ? $lockOutCookie : 'x=y')])[1], 'loose1.jpg'));
 [, $lockAdminBody] = http_get("$basePrivate/", ["Cookie: $sessCookie"]);
-check('[lock] the owner (signed in to the admin) sees it open too, and it leads to the admin rather than logging out', str_contains($lockAdminBody, 'class="lock-link open" href="?admin"') && !str_contains($lockAdminBody, 'name="logout"'));
+check('[lock] the owner (signed in to the admin) sees it open too, and it is the same sign-out button', str_contains($lockAdminBody, 'class="lock-form"') && str_contains($lockAdminBody, 'name="logout"') && str_contains($lockAdminBody, 'signed in as the owner'));
+[$lockAdminOutStatus, , $lockAdminOutHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => ''], ["Cookie: $sessCookie"], false);
+[, $afterOwnerOut] = http_get("$basePrivate/?admin", ["Cookie: $sessCookie"]);
+check('[lock] pressing it as the owner signs the owner out completely: the admin session is gone (the old cookie opens the login form, not the admin) and both its cookies are expired, so the private items lock again', $lockAdminOutStatus === 303 && str_contains($afterOwnerOut, 'name="login_password"') && !str_contains($afterOwnerOut, 'Gallery Admin') && count(array_filter($lockAdminOutHd, fn($h) => stripos($h, 'Set-Cookie:') === 0 && (stripos($h, '1970') !== false || stripos($h, 'Max-Age=0') !== false))) >= 2);
+[, $adminLoginBody, $adminLoginHeadersFirst] = http_get("$basePrivate/?admin", [$adminAuth]);
+$sessCookie = extract_cookie_header($adminLoginHeadersFirst);
+$adminCsrf = extract_csrf_token($adminLoginBody);
 [, $lockFolderBody] = http_get("$basePrivate/?folder=Paris", ["Cookie: $revealCookie"]);
 check('[lock] on a folder\'s page the lock remembers the folder, so locking or unlocking brings you back to it', str_contains($lockFolderBody, 'name="folder" value="Paris"'));
 [, , $lockBackHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => 'Paris'], ["Cookie: $revealCookie"], false);

@@ -2480,12 +2480,18 @@ function run_reveal_route($dir) {
     // Back to the page the visitor came from (a folder's page stays on that folder).
     $backFolder = isset($_REQUEST['folder']) && is_string($_REQUEST['folder']) && $_REQUEST['folder'] !== '' && strlen($_REQUEST['folder']) < 1024 && strpbrk($_REQUEST['folder'], "\0\r\n") === false
         ? '?folder=' . rawurlencode($_REQUEST['folder']) : '';
-    // The lock beside the title, when it is open, locks the private items again: it only forgets this browser's
-    // private-view password cookie (the owner's own sign-in is left alone).
+    // The lock beside the title, when it is open, locks the private items again: whoever is signed in (a viewer with the
+    // private-view password, or the owner signed in to the admin) is signed out of this browser.
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
-        if (!is_admin_browser()) {
-            setcookie(REVEAL_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+        if (is_admin_browser()) {
+            admin_start_session();
+            $_SESSION = [];
+            if (ini_get('session.use_cookies')) {
+                setcookie(session_name(), '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Strict']);
+            }
+            session_destroy();
         }
+        setcookie(REVEAL_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
         header('Location: ./' . $backFolder, true, 303);
         return;
     }
@@ -7985,15 +7991,14 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 
 <?php
 // The lock beside the title, when there is a private-view password and something private to unlock. Closed: a link to
-// enter the password. Open: this browser has it; pressing it locks the private items again. The owner (signed in to
-// the admin) sees it open too, and it leads to the admin, which has the real Log out.
+// enter the password. Open: this browser is signed in (with the password, or as the owner); pressing it signs out and
+// locks the private items again.
 $lockHtml = '';
 if (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems) {
     $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
-    if (is_admin_browser()) {
-        $lockHtml = '<a class="lock-link open" href="?admin' . $lockFolderQuery . '" rel="nofollow" title="You are signed in as the owner, so private items show. Open the admin." aria-label="Private items are showing (owner). Open the admin.">' . ui_icon('unlock') . '</a>';
-    } elseif (is_revealed()) {
-        $lockHtml = '<form method="post" action="?reveal" class="lock-form"><input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '"><button type="submit" name="logout" value="1" class="lock-link open" title="Private items are showing. Press to lock them again." aria-label="Private items are showing. Press to lock them again.">' . ui_icon('unlock') . '</button></form>';
+    if (is_admin_browser() || is_revealed()) {
+        $lockWho = is_admin_browser() ? 'You are signed in as the owner, so private items show. Press to sign out and lock them.' : 'Private items are showing. Press to lock them again.';
+        $lockHtml = '<form method="post" action="?reveal" class="lock-form"><input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '"><button type="submit" name="logout" value="1" class="lock-link open" title="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '" aria-label="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('unlock') . '</button></form>';
     } else {
         $lockHtml = '<a class="lock-link" href="?reveal' . $lockFolderQuery . '" rel="nofollow" title="This gallery has private items. Enter the password to see them." aria-label="This gallery has private items. Enter the password to see them.">' . ui_icon('lock') . '</a>';
     }
