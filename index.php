@@ -1428,6 +1428,176 @@ function send_original_for_visitor($srcPath, $filename, $itemsData, $cacheContro
     return true;
 }
 
+/* -----------------------------------------------------------------------
+ * ?archive: every original in the gallery (or in one folder and below) as
+ * one ZIP, for the owner and for visitors with the private-view password.
+ * It is written to the visitor's connection as it is built, so nothing is
+ * stored on the server however big the gallery is: each file is read once,
+ * in small pieces, and sent. Files are stored, not compressed (photos and
+ * videos are already compressed, so it would only cost time), each with a
+ * "data descriptor" after it carrying its checksum and size, which is what
+ * lets the header go out before the file has been read. The total size is
+ * known in advance (nothing is compressed), so the download has a real
+ * progress bar and an interrupted one is noticed as incomplete. Over 4 GB or
+ * 65,535 files it switches to the ZIP64 variant, which every current unzip
+ * tool reads. Only a couple of archives are made at the same time.
+ * ----------------------------------------------------------------------- */
+
+/** The files an archive of $files would hold: [{rel, path, size, mtime}], skipping anything unreadable. */
+function archive_entries($dir, $files) {
+    $out = [];
+    foreach ($files as $rel) {
+        $path = resolve_real_path($dir, $rel);
+        $st = is_file($path) && is_readable($path) ? @stat($path) : false;
+        if ($st) $out[] = ['rel' => $rel, 'path' => $path, 'size' => (int) $st['size'], 'mtime' => (int) $st['mtime']];
+    }
+    return $out;
+}
+
+/** "1.4 GB" */
+function human_bytes($n) {
+    if ($n < 1024) return $n . ' bytes';
+    foreach (['KB', 'MB', 'GB', 'TB'] as $i => $unit) {
+        $n /= 1024;
+        if ($n < 1024 || $unit === 'TB') return ($n >= 100 ? number_format($n, 0) : number_format($n, 1)) . ' ' . $unit;
+    }
+}
+
+/** [dosTime, dosDate] for a ZIP entry. */
+function zip_dos_time($ts) {
+    $d = getdate(max(315532800, $ts));
+    return [($d['hours'] << 11) | ($d['minutes'] << 5) | intdiv($d['seconds'], 2), (($d['year'] - 1980) << 9) | ($d['mon'] << 5) | $d['mday']];
+}
+
+/** A path as a ZIP entry name: UTF-8, forward slashes, nothing that could climb out of the folder it is unpacked into. */
+function zip_entry_name($name) {
+    if (!preg_match('//u', $name)) $name = mb_convert_encoding($name, 'UTF-8', 'ISO-8859-1');
+    $name = preg_replace('/[\x00-\x1F\x7F\\\\]/', '_', $name);
+    $parts = array_filter(explode('/', $name), function ($p) { return $p !== '' && $p !== '.' && $p !== '..'; });
+    return implode('/', $parts);
+}
+
+/** The exact size of the ZIP that archive_stream() will send. */
+function archive_total_size($sizes, $names, $zip64) {
+    $total = 0;
+    foreach ($sizes as $i => $size) {
+        $n = strlen($names[$i]);
+        $total += 30 + $n + ($zip64 ? 20 : 0) + $size + ($zip64 ? 24 : 16) + 46 + $n + ($zip64 ? 28 : 0);
+    }
+    return $total + 22 + ($zip64 ? 56 + 20 : 0);
+}
+
+/** Sends the ZIP of $entries ([{name, path, size, mtime}]) to the visitor. Returns false (having sent nothing) if the
+ *  total size is beyond what a ZIP can describe. */
+function archive_stream($entries, $zip64) {
+    $offset = 0;
+    $central = '';
+    $emit = function ($bytes) use (&$offset) {
+        echo $bytes;
+        $offset += strlen($bytes);
+    };
+    foreach ($entries as $e) {
+        if (connection_aborted()) return;
+        $name = $e['name']; $size = $e['size'];
+        [$time, $date] = zip_dos_time($e['mtime']);
+        $at = $offset;
+        $emit(pack('VvvvvvVVVvv', 0x04034b50, $zip64 ? 45 : 20, 0x0808, 0, $time, $date, 0, $zip64 ? 0xFFFFFFFF : 0, $zip64 ? 0xFFFFFFFF : 0, strlen($name), $zip64 ? 20 : 0)
+            . $name . ($zip64 ? pack('vvPP', 1, 16, 0, 0) : ''));
+        $fh = @fopen($e['path'], 'rb');
+        if (!$fh) return;   // the connection ends short of its length, so the download shows as failed, never as a good file
+        $ctx = hash_init('crc32b');
+        for ($left = $size; $left > 0;) {
+            $chunk = fread($fh, min(1048576, $left));
+            if ($chunk === false || $chunk === '') { fclose($fh); return; }
+            hash_update($ctx, $chunk);
+            $emit($chunk);
+            $left -= strlen($chunk);
+            if (connection_aborted()) { fclose($fh); return; }
+            flush();
+        }
+        fclose($fh);
+        $crc = hexdec(hash_final($ctx));
+        $emit(pack('VV', 0x08074b50, $crc) . ($zip64 ? pack('PP', $size, $size) : pack('VV', $size, $size)));
+        $central .= pack('VvvvvvvVVVvvvvvVV', 0x02014b50, 0x0300 | ($zip64 ? 45 : 20), $zip64 ? 45 : 20, 0x0808, 0, $time, $date, $crc,
+                $zip64 ? 0xFFFFFFFF : $size, $zip64 ? 0xFFFFFFFF : $size, strlen($name), $zip64 ? 28 : 0, 0, 0, 0, 0x81A40000, $zip64 ? 0xFFFFFFFF : $at)
+            . $name . ($zip64 ? pack('vvPPP', 1, 24, $size, $size, $at) : '');
+    }
+    $n = count($entries);
+    $cdAt = $offset;
+    $emit($central);
+    if ($zip64) {
+        $emit(pack('VPvvVVPPPP', 0x06064b50, 44, 45, 45, 0, 0, $n, $n, strlen($central), $cdAt));
+        $emit(pack('VVPV', 0x07064b50, 0, $cdAt + strlen($central), 1));
+        $emit(pack('VvvvvVVv', 0x06054b50, 0, 0, 0xFFFF, 0xFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0));
+    } else {
+        $emit(pack('VvvvvVVv', 0x06054b50, 0, 0, $n, $n, strlen($central), $cdAt, 0));
+    }
+    flush();
+}
+
+/** One of a couple of places to make an archive at once, or null if they are all taken. The lock goes when the request ends. */
+function archive_take_slot() {
+    $base = sys_get_temp_dir() . '/gallery-archive-' . substr(hash('sha256', __DIR__), 0, 10) . '-';
+    for ($i = 1; $i <= 2; $i++) {
+        $fh = @fopen($base . $i . '.lock', 'c');
+        if ($fh && flock($fh, LOCK_EX | LOCK_NB)) return $fh;
+        if ($fh) fclose($fh);
+    }
+    return null;
+}
+
+/** ?archive[&folder=...]: the originals of this gallery or folder as one ZIP. $files is every file the visitor may see;
+ *  $folder is the folder asked for (null for the whole gallery). Signed-in visitors only, files exactly as they are. */
+function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
+    send_sensitive_page_headers();
+    if (!is_revealed()) {
+        http_response_code(404);
+        return;
+    }
+    $entries = archive_entries($dir, $files);
+    if (!$entries) {
+        http_response_code(404);
+        return;
+    }
+    if (count($entries) > 100000) {
+        http_response_code(413);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'That is more files than one archive can hold. Download a folder at a time.';
+        return;
+    }
+    $root = zip_entry_name($folder === null ? $rootTitle : $folderName);
+    if ($root === '') $root = 'gallery';
+    $prefix = $folder === null ? '' : $folder . '/';
+    foreach ($entries as $i => $e) {
+        $entries[$i]['name'] = $root . '/' . zip_entry_name($prefix !== '' && strncmp($e['rel'], $prefix, strlen($prefix)) === 0 ? substr($e['rel'], strlen($prefix)) : $e['rel']);
+    }
+    $sizes = array_column($entries, 'size'); $names = array_column($entries, 'name');
+    $zip64 = count($entries) >= 0xFFFF || max($sizes) >= 0xFFFFFFFF || archive_total_size($sizes, $names, false) >= 0xFFFFFFF0;
+    $total = archive_total_size($sizes, $names, $zip64);
+    $slot = archive_take_slot();
+    if ($slot === null) {
+        http_response_code(503);
+        header('Retry-After: 30');
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'An archive is already being made for someone else. Try again in a minute.';
+        return;
+    }
+    $ascii = preg_replace('/[^A-Za-z0-9._-]+/', '_', $root); $ascii = trim($ascii, '_') !== '' ? $ascii : 'gallery';
+    @set_time_limit(0);
+    ignore_user_abort(false);
+    @ini_set('zlib.output_compression', '0');
+    if (function_exists('apache_setenv')) @apache_setenv('no-gzip', '1');
+    while (ob_get_level() > 0) @ob_end_clean();
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="' . $ascii . '.zip"; filename*=UTF-8\'\'' . rawurlencode($root . '.zip'));
+    header('Content-Length: ' . $total);
+    header('X-Content-Type-Options: nosniff');
+    header('X-Accel-Buffering: no');
+    header('Cache-Control: no-store');
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;
+    archive_stream($entries, $zip64);
+}
+
 /** ?original=: the original file as a download. Offered to anyone signed in, and to everyone when ENABLE_PUBLIC_DOWNLOAD is
  *  on; a visitor who isn't signed in gets a photo whose location the gallery hides with the location blanked out. */
 function serve_original_download($dir, $filename, $validFiles, $itemsData = []) {
@@ -6974,6 +7144,17 @@ if (isset($_GET['folder'])) {
     }
 }
 
+// ?archive: the originals of the gallery or of this folder as one ZIP (signed-in visitors only).
+if (isset($_GET['archive'])) {
+    run_archive_route($dir, $currentFolderPath === null ? $files : $currentFolderFiles, $currentFolderPath, $rootPageTitle, $currentFolderName);
+    exit;
+}
+// ...and the button for it, with what it would send, for a signed-in visitor.
+$archiveCount = 0; $archiveBytes = 0;
+if (is_revealed()) {
+    foreach (archive_entries($dir, $currentFolderPath === null ? $files : $currentFolderFiles) as $archiveEntry) { $archiveCount++; $archiveBytes += $archiveEntry['size']; }
+}
+
 /**
  * Minimal Markdown -> HTML converter covering the formatting people
  * actually use in a Discord message: headers, bold, italic, underline,
@@ -7781,6 +7962,7 @@ function ui_icon_paths() {
         'unlock'  => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/>',
         'expand'  => '<path d="M15 3h6v6M9 21H3v-6M21 3l-7.5 7.5M3 21l7.5-7.5"/>',
         'download' => '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
+        'archive' => '<path d="M3 7.5 5 4h14l2 3.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 7.5h18M12 11v5.5M9.4 14l2.6 2.6 2.6-2.6"/>',
     ];
 }
 function ui_icon($name) {
@@ -9144,6 +9326,9 @@ if (ENABLE_MAP && $mapPoints) {
       <?php endif; ?>
       <span class="page-tools">
         <?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?><span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?>
+        <?php if ($archiveCount > 0): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
+        <span class="map-combo"><a class="map-combo-btn page-archive" href="?archive<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" data-bytes="<?= (int) $archiveBytes ?>" data-ask="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('archive') ?></a></span>
+        <?php endif; ?>
         <span class="map-combo"><a class="map-combo-btn page-about" href="?about" title="About this gallery software" aria-label="About this gallery software"><?= ui_icon('gallery') ?></a></span>
       </span>
     </div>
@@ -9314,6 +9499,12 @@ if (ENABLE_MAP && $mapPoints) {
     current = set[(at + delta + set.length) % set.length];
     updateImage();
   }
+  // A big archive asks first (it is a long download); a small one just starts.
+  document.querySelectorAll('.page-archive').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      if (Number(a.dataset.bytes) > 500 * 1024 * 1024 && !confirm(a.dataset.ask + '?\n\nIt is sent as it is built and can take a while.')) e.preventDefault();
+    });
+  });
   const downloadLink = document.getElementById('lightbox-download');   // only on a page made for a signed-in visitor
   function updateImage() {
     const file = files[current];

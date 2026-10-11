@@ -3702,7 +3702,7 @@ echo "== downloading the original (signed-in visitors), with a hidden location t
 // The code that finds and blanks a location, taken out of index.php so every file format can be tried directly.
 $scrubSrc = (string) file_get_contents(__DIR__ . '/../index.php');
 $scrubFrom = strpos($scrubSrc, "/* -----------------------------------------------------------------------\n * A copy of an original without its location.");
-$scrubTo = strpos($scrubSrc, '/** ?original=');
+$scrubTo = strpos($scrubSrc, "/* -----------------------------------------------------------------------\n * ?archive: every original");
 eval(substr($scrubSrc, $scrubFrom, $scrubTo - $scrubFrom));
 /** What would be sent for $path: the file with its plan laid over it (null if it may not be sent). */
 $scrubbed = function ($path) {
@@ -3851,6 +3851,76 @@ check('[download] the files on the server were not changed by any of it', (strin
 // Site settings offers the switch, off, with its warning.
 [, $dlSettings] = http_get("$baseDl/?admin", $dlAdmin);
 check('[download] Site settings has the "Let visitors download originals" switch, with its orange warning', str_contains($dlSettings, 'name="set_ENABLE_PUBLIC_DOWNLOAD"') && str_contains($dlSettings, 'Anyone can save every photo at full resolution'));
+
+/* --------------------------------------------------------------------- */
+
+echo "== archive: every original as one streamed ZIP (signed-in visitors only) ==\n";
+
+$haveUnzip = trim((string) shell_exec('command -v unzip')) !== '';
+$haveZipPy = trim((string) shell_exec('command -v python3')) !== '';
+$zipTest = function ($file) { return (string) shell_exec('unzip -tq ' . escapeshellarg($file) . ' 2>&1'); };
+$zipNames = function ($file) { $o = trim((string) shell_exec('unzip -Z1 ' . escapeshellarg($file) . ' 2>/dev/null')); return $o === '' ? [] : explode("\n", $o); };
+$zipPy = function ($file) { return trim((string) shell_exec('python3 -c ' . escapeshellarg('import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); print(z.testzip() or "OK", len(z.namelist()))') . ' ' . escapeshellarg($file) . ' 2>&1')); };
+$zipEntry = function ($file, $name) { return (string) shell_exec('unzip -p ' . escapeshellarg($file) . ' ' . escapeshellarg($name) . ' 2>/dev/null'); };
+
+// The archive code taken out of index.php, so the ZIP64 form (for a gallery over 4 GB) can be tried on small files.
+$arSrc = (string) file_get_contents(__DIR__ . '/../index.php');
+$arFrom = strpos($arSrc, "/* -----------------------------------------------------------------------\n * ?archive: every original");
+$arTo = strpos($arSrc, '/** ?original=: the original file as a download.');
+eval(substr($arSrc, $arFrom, $arTo - $arFrom));
+$fxArU = new_fixture_dir('archiveunit');
+file_put_contents("$fxArU/one.bin", random_bytes(3000)); file_put_contents("$fxArU/two.bin", ''); file_put_contents("$fxArU/three.bin", random_bytes(2500000));
+$unitEntries = [];
+foreach (['one.bin' => 'top/one.bin', 'two.bin' => 'top/sub/empty.bin', 'three.bin' => 'top/sub/Tür ünï.bin'] as $f => $n) $unitEntries[] = ['name' => $n, 'path' => "$fxArU/$f", 'size' => filesize("$fxArU/$f"), 'mtime' => filemtime("$fxArU/$f")];
+check('[archive] entry names can\'t climb out of the folder they are unpacked into, and keep their folders', zip_entry_name('../../etc/passwd') === 'etc/passwd' && zip_entry_name('/a//b/./c') === 'a/b/c' && zip_entry_name("a\\b") === 'a_b' && zip_entry_name("Tür/ünï.jpg") === "Tür/ünï.jpg");
+foreach ([false, true] as $z64) {
+    ob_start(); archive_stream($unitEntries, $z64); $zbytes = ob_get_clean();
+    $zf = "$fxArU/" . ($z64 ? 'z64' : 'z32') . '.zip'; file_put_contents($zf, $zbytes);
+    $label = $z64 ? 'ZIP64' : 'ZIP';
+    check("[archive] $label: the size worked out in advance is exactly the size sent", strlen($zbytes) === archive_total_size(array_column($unitEntries, 'size'), array_column($unitEntries, 'name'), $z64));
+    if ($haveUnzip) check("[archive] $label: unzip finds no errors, every checksum matches, the names (a folder, an empty file, accents) and the contents are right", str_contains($zipTest($zf), 'No errors detected') && $zipNames($zf) === array_column($unitEntries, 'name') && $zipEntry($zf, 'top/one.bin') === file_get_contents("$fxArU/one.bin") && md5($zipEntry($zf, 'top/sub/Tür ünï.bin')) === md5_file("$fxArU/three.bin"));
+    if ($haveZipPy) check("[archive] $label: a second reader (Python's zipfile) agrees", $zipPy($zf) === 'OK 3');
+}
+$fxAr2 = new_fixture_dir('archive');
+mkdir("$fxAr2/Paris/Louvre", 0777, true); mkdir("$fxAr2/Rome");
+copy("$fxSc/gps.jpg", "$fxAr2/top.jpg"); make_jpeg("$fxAr2/priv.jpg", 70, 50, 9, 8, 7); make_jpeg("$fxAr2/Paris/b.jpg", 60, 40, 1, 2, 3); make_jpeg("$fxAr2/Paris/Louvre/c.jpg", 50, 50, 4, 5, 6);
+make_jpeg("$fxAr2/Paris/Nice dé.jpg", 50, 50, 7, 7, 7); make_jpeg("$fxAr2/Rome/r.jpg", 50, 50, 8, 8, 8); copy("$fxSc/gps.mov", "$fxAr2/clip.mov");
+write_data_file("$fxAr2/.gallery-items.php", ['items' => ['priv.jpg' => ['restriction' => 'private'], 'top.jpg' => $dlLoc('hide')], 'groups' => [], 'locationEnabled' => true]);
+file_put_contents("$fxAr2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'archive-admin-1', 'PRIVATE_VIEW_PASSWORD' => 'archive view', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+copy(__DIR__ . '/../index.php', "$fxAr2/index.php");
+$portAr2 = find_free_port(); start_server($fxAr2, $portAr2); $baseAr2 = "http://127.0.0.1:$portAr2";
+[, , $arAdminHd] = http_post("$baseAr2/?admin", ['login_password' => 'archive-admin-1'], [], false); $arAdmin = ['Cookie: ' . extract_cookie_header($arAdminHd)];
+[, , $arViewerHd] = http_post("$baseAr2/?reveal", ['login_password' => 'archive view'], [], false); $arViewer = ['Cookie: ' . extract_cookie_header($arViewerHd)];
+check('[archive] a visitor who is not signed in gets nothing (404), and a cookie that merely has the right name changes nothing', http_get("$baseAr2/?archive")[0] === 404 && http_get("$baseAr2/?archive&folder=Paris")[0] === 404 && http_get("$baseAr2/?archive", ['Cookie: gallery_reveal_x=1'])[0] === 404);
+[$aSt, $aBody, $aHd] = http_get("$baseAr2/?archive", $arViewer);
+$aH = fn ($name) => (function () use ($aHd, $name) { foreach ($aHd as $h) if (stripos($h, "$name:") === 0) return trim(substr($h, strlen($name) + 1)); return ''; })();
+check('[archive] someone with the private-view password is sent a ZIP, as a download, whose announced length is its real length', $aSt === 200 && $aH('Content-Type') === 'application/zip' && str_contains($aH('Content-Disposition'), 'attachment') && str_contains($aH('Content-Disposition'), '.zip') && (int) $aH('Content-Length') === strlen($aBody));
+$arZip = "$fxAr2/../" . basename($fxAr2) . '-root.zip'; file_put_contents($arZip, $aBody);
+if ($haveUnzip) {
+    $names = $zipNames($arZip); sort($names);
+    $root = explode('/', $names[0])[0];
+    $expect = ["$root/Paris/Louvre/c.jpg", "$root/Paris/Nice dé.jpg", "$root/Paris/b.jpg", "$root/Rome/r.jpg", "$root/clip.mov", "$root/priv.jpg", "$root/top.jpg"]; sort($expect);
+    check('[archive] unzip finds no errors, and it holds every photo and video in its folders, the private photo too (they are trusted with it), under one top folder', str_contains($zipTest($arZip), 'No errors detected') && $names === $expect);
+    check('[archive] every file in it is byte for byte the original, including a photo whose location the gallery hides and a video with a location (nothing is cleaned for someone trusted)', md5($zipEntry($arZip, "$root/top.jpg")) === md5_file("$fxAr2/top.jpg") && str_contains($zipEntry($arZip, "$root/top.jpg"), $latBytes) && md5($zipEntry($arZip, "$root/clip.mov")) === md5_file("$fxAr2/clip.mov") && md5($zipEntry($arZip, "$root/Paris/Nice dé.jpg")) === md5_file("$fxAr2/Paris/Nice dé.jpg"));
+}
+if ($haveZipPy) check('[archive] a second reader (Python\'s zipfile) agrees: every checksum matches', $zipPy($arZip) === 'OK 7');
+[$fSt, $fBody] = http_get("$baseAr2/?archive&folder=Paris", $arAdmin);
+file_put_contents($arZip, $fBody);
+if ($haveUnzip) { $fn = $zipNames($arZip); sort($fn); check('[archive] a folder\'s archive (the owner this time) holds that folder and what is below it, named from the folder', $fSt === 200 && str_contains($zipTest($arZip), 'No errors detected') && $fn === ['Paris/Louvre/c.jpg', 'Paris/Nice dé.jpg', 'Paris/b.jpg']); }
+check('[archive] a folder that doesn\'t exist, a path out of the gallery and a file are all 404', http_get("$baseAr2/?archive&folder=Nope", $arAdmin)[0] === 404 && http_get("$baseAr2/?archive&folder=../", $arAdmin)[0] === 404 && http_get("$baseAr2/?archive&folder=top.jpg", $arAdmin)[0] === 404);
+// Only two at a time: with both places taken the answer is "try again", and it works as soon as one is free.
+$arLockBase = sys_get_temp_dir() . '/gallery-archive-' . substr(hash('sha256', realpath($fxAr2)), 0, 10) . '-';
+$arHeld = []; foreach ([1, 2] as $i) { $h = fopen($arLockBase . $i . '.lock', 'c'); flock($h, LOCK_EX | LOCK_NB); $arHeld[] = $h; }
+[$busySt, $busyBody, $busyHd] = http_get("$baseAr2/?archive", $arViewer);
+check('[archive] with two archives already being made, a third is told to try again (503, with Retry-After) instead of tying up the server', $busySt === 503 && (bool) array_filter($busyHd, fn ($h) => stripos($h, 'Retry-After:') === 0) && str_contains($busyBody, 'Try again'));
+flock($arHeld[1], LOCK_UN); fclose($arHeld[1]);
+check('[archive] ...and it goes through as soon as one is free', http_get("$baseAr2/?archive", $arViewer)[0] === 200);
+flock($arHeld[0], LOCK_UN); fclose($arHeld[0]);
+// The button.
+$arPageAdmin = http_get("$baseAr2/", $arAdmin)[1]; $arPageFolder = http_get("$baseAr2/?folder=Paris", $arViewer)[1];
+check('[archive] the owner and the private-view visitor have a line-drawing archive button beside the gallery icon, saying how many originals and how big', (bool) preg_match('#class="map-combo-btn page-archive" href="\?archive" data-bytes="\d+" data-ask="Download all 7 originals \([^)]+\) as one ZIP"#', $arPageAdmin) && str_contains(http_get("$baseAr2/", $arViewer)[1], 'class="map-combo-btn page-archive"'));
+check('[archive] on a folder\'s page it is that folder\'s archive, with that folder\'s count', str_contains($arPageFolder, 'href="?archive&amp;folder=Paris"') && str_contains($arPageFolder, 'Download all 3 originals'));
+check('[archive] a visitor who is not signed in has no archive button', !str_contains(http_get("$baseAr2/")[1], 'class="map-combo-btn page-archive"') && !str_contains(http_get("$baseAr2/?folder=Paris")[1], 'page-archive" href'));
 
 /* --------------------------------------------------------------------- */
 

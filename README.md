@@ -531,6 +531,19 @@ The same rule holds for the picture the viewer itself shows (it is the original 
 
 **Cost.** Photos that need no cleaning are sent as before (and still by your web server directly if you set `NGINX_ACCEL_REDIRECT_PREFIX`). Only a hidden-location file for a visitor who isn't signed in goes through PHP, and those responses are kept out of shared caches, because the same address gives different bytes to different people.
 
+### Download everything as one ZIP
+
+Signed in as the owner, or with the private-view password, a small line-drawing **archive** button sits beside the gallery icon (right-hand end of the row with the map buttons). It saves **every original in the gallery as one ZIP**, or, on a folder's page, that folder and everything below it. The button's hover text says how many files and how big (`Download all 214 originals (3.2 GB) as one ZIP`), and a download over 500 MB asks first. Visitors who aren't signed in have neither the button nor `?archive` (a 404), whatever `ENABLE_PUBLIC_DOWNLOAD` says. The files are exactly as they are on the server, locations included, private photos too (the people who can use this are the ones trusted with them).
+
+**It never fills the server's disk.** The ZIP is written to the visitor's connection while it is being built: each file is read once, in 1 MB pieces, and sent, so nothing is stored and memory use stays flat whatever the size (a 1.2 GB archive was measured at 38 MB for the whole server process, about what an idle one uses). Files are *stored*, not compressed (photos and videos are already compressed, so it would only cost time), so the total size is known before the first byte and the browser shows real progress; if a download is cut off, the browser reports it as incomplete rather than leaving a broken file that looks fine. Over 4 GB or 65,535 files it switches to the ZIP64 form, which current unzip tools (including macOS, Windows and `unzip`) read.
+
+**Limits, stated plainly.**
+- **One download runs for as long as it takes**, tying up one PHP worker. So **only two archives are made at once**; a third visitor is told to try again in a minute (503).
+- **Your host must let a request run that long.** The script lifts PHP's own time limit for this one request, but a shared host, a reverse proxy or PHP-FPM's `request_terminate_timeout` may cut a long download off. With nginx and PHP-FPM also set `fastcgi_buffering off;` for the gallery's location (the script sends `X-Accel-Buffering: no`, which nginx honours, so this is usually already covered). On Apache, `mod_deflate` is switched off for it.
+- **No resume.** An interrupted download starts again from the beginning.
+- **A very large archive costs bandwidth** like any download; the folder-by-folder button on each folder page is the gentler way to take a big gallery.
+- **More than 100,000 files** in one archive is refused (download a folder at a time).
+
 ## Private items and the private view
 
 For the photos or clips that shouldn't be on the public link — people who didn't agree to be, say — but that you still want trusted viewers to see in the same gallery:
