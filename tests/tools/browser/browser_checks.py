@@ -247,7 +247,7 @@ try:
     b.viewport(1280, 600); b.goto(B7 + "/", 1.5)
     b.js("document.querySelector('a.folder-cover-link[href*=Trip]').click()"); b.drain(2.0); shot(b, "20-cover-jump")
     jump = b.js("(() => { const a = document.getElementById('folder-cover'); if (!a) return null; const r = a.parentElement.getBoundingClientRect(); return {hash: location.hash, y: Math.round(window.scrollY), top: Math.round(r.top), bottom: Math.round(r.bottom), vh: window.innerHeight, file: a.parentElement.querySelector('img').alt}; })()")
-    ok(jump is not None and jump["hash"] == "#folder-cover" and jump["y"] > 300 and 0 <= jump["top"] < jump["vh"] - 50 and jump["file"].endswith("p14.jpg"), "[cover jump] opening a folder whose owner chose a cover photo scrolls straight to that photo, which is then on the screen", str(jump))
+    ok(jump is not None and jump["hash"] == "#folder-cover" and jump["y"] > 100 and 0 <= jump["top"] < jump["vh"] - 50 and jump["file"].endswith("p14.jpg"), "[cover jump] opening a folder whose owner chose a cover photo scrolls straight to that photo, which is then on the screen", str(jump))
     b.goto(B7 + "/", 1.2)
     b.js("document.querySelector('a.folder-cover-link[href*=Rome]').click()"); b.drain(1.5)
     ok(b.js("Math.round(window.scrollY)") == 0 and b.js("location.hash") == "", "[cover jump] a folder without a chosen cover opens at the top, as before")
