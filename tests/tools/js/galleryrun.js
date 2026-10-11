@@ -55,6 +55,24 @@ if (li >= 0 && mapBox) {
 }
 if (wi >= 0) { api.openLightbox(wi); ok(webEl.hidden === false && webEl.href === webLinks[wi] && webEl.title === 'Information link: ' + webLinks[wi], 'a photo with a web link shows it beside the permalink icon'); api.openLightbox(webLinks.findIndex(w => !w)); ok(webEl.hidden === true, '...and one without shows no link'); }
 api.openLightbox(sameDir(B0)[0]);
+// zoom: fit -> fill the width -> actual size -> fit, never on a video, and Escape steps back before it closes
+const zoomBtn = doc.byId['lightbox-zoom'];
+ok(!!zoomBtn, 'the viewer has a zoom button');
+const firstImg = files.findIndex(f => !api.isVideoFile(f));
+api.openLightbox(firstImg);
+ok(!lb.classList.contains('zoom-width') && !lb.classList.contains('zoom-actual'), 'a photo opens fitted to the screen');
+zoomBtn.fire('click'); ok(lb.classList.contains('zoom-width') && !lb.classList.contains('zoom-actual'), 'the zoom button fills the width of the window');
+ok(String(zoomBtn.title).includes('actual size'), '...and now offers actual size');
+zoomBtn.fire('click'); ok(lb.classList.contains('zoom-actual') && !lb.classList.contains('zoom-width'), 'pressing again shows the photo at its real pixel size');
+zoomBtn.fire('click'); ok(!lb.classList.contains('zoom-actual') && !lb.classList.contains('zoom-width'), 'and once more is back to fitting the screen');
+img.fire('click'); ok(lb.classList.contains('zoom-width'), 'pressing the photo itself zooms too');
+api.navigate(1); ok(lb.classList.contains('zoom-width'), 'moving to the next photo keeps the zoom');
+doc.fire('keydown', { key: 'Escape' }); ok(lb.classList.contains('open') && !lb.classList.contains('zoom-width'), 'Escape first steps back to fitting the screen, and leaves the viewer open');
+doc.fire('keydown', { key: 'z' }); ok(lb.classList.contains('zoom-width'), 'the z key zooms too');
+if (vi >= 0) { api.openLightbox(vi); ok(lb.classList.contains('is-video') && !lb.classList.contains('zoom-width'), 'a video is never zoomed (the zoom button is hidden for it)'); api.openLightbox(firstImg); ok(lb.classList.contains('zoom-width') && !lb.classList.contains('is-video'), '...and the next photo is zoomed again'); }
+doc.fire('keydown', { key: 'Escape' }); doc.fire('keydown', { key: 'Escape' }); ok(!lb.classList.contains('open'), 'a second Escape closes it');
+ok(!lb.classList.contains('zoom-width'), 'closing leaves the viewer ready to open fitted again');
+api.openLightbox(sameDir(B0)[0]);
 // keyboard
 doc.fire('keydown', { key: 'ArrowRight' }); ok(cap.textContent.includes('2 / ' + M0), 'ArrowRight advances');
 doc.fire('keydown', { key: 'ArrowLeft' }); ok(cap.textContent.includes('1 / ' + M0), 'ArrowLeft goes back');

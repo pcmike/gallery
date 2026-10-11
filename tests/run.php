@@ -2471,7 +2471,7 @@ write_data_file("$fxLk/.gallery-items.php", ['items' => ['b.jpg' => ['restrictio
 $lkHome = http_get("$baseLk/")[1];
 check('[lock] ...and once a photo is private the closed lock appears', str_contains($lkHome, 'class="lock-link" href="?reveal"') && !str_contains($lkHome, 'alt="b.jpg"'));
 [, $lkForm] = http_get("$baseLk/?reveal");
-check('[lock] with no admin password the sign-in is headed Private view and only knows the private-view password', str_contains($lkForm, 'Private view') && str_contains($lkForm, 'name="login_password"'));
+check('[lock] the sign-in just says "Enter your password.": no mention that there are two kinds of password', str_contains($lkForm, 'Enter your password.') && str_contains($lkForm, 'name="login_password"') && !str_contains($lkForm, 'admin') && !str_contains($lkForm, 'private-view') && !str_contains($lkForm, 'Private view'));
 [$lkBadSt, $lkBad] = http_post("$baseLk/?reveal", ['login_password' => 'nope'], [], false);
 check('[lock] a wrong password is refused with a message', $lkBadSt === 200 && str_contains($lkBad, "isn't right") || str_contains($lkBad, 'isn&#039;t right'));
 $fxLk2 = new_fixture_dir('lockboth');
@@ -2498,6 +2498,10 @@ $lkOwnerCookie = (string) extract_cookie_header($lkAdHd2);
 $lkAdmOutHd = [];
 foreach (html_post_forms($lkAdmForm) as $lkF) if (str_contains($lkF['html'], 'value="logout"')) { [, , $lkAdmOutHd] = http_post("$baseLk2/?admin&folder=Sub", form_default_fields($lkF['html']), ['Cookie: ' . $lkOwnerCookie], false); break; }
 check('[lock] the admin\'s own Log out from a folder lands on that folder\'s gallery page, signed out', (bool) array_filter($lkAdmOutHd, fn($h) => stripos($h, 'Location: ?folder=Sub') === 0));
+[, $lkCancelRoot] = http_get("$baseLk2/?reveal");
+[, $lkCancelFolder] = http_get("$baseLk2/?reveal&folder=Sub&photo=Sub%2Fb.jpg");
+[, $lkCancelAdmin] = http_get("$baseLk2/?admin&folder=Sub");
+check('[lock] the sign-in has a Cancel link back to the page the visitor came from (a curious visitor with no password is not stuck)', str_contains($lkCancelRoot, 'class="cancel" href="./">Cancel</a>') && str_contains($lkCancelFolder, 'class="cancel" href="./?folder=Sub&amp;photo=Sub%2Fb.jpg">Cancel</a>') && str_contains($lkCancelAdmin, 'class="cancel" href="./?folder=Sub">Cancel</a>'));
 check('[lock] the gallery title is no longer a link to the admin for anyone', !str_contains($lkOwnerHome, 'title-admin') && !str_contains(http_get("$baseLk2/")[1], 'title-admin'));
 
 echo "== dates suggested from the photos ==\n";

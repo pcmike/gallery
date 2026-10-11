@@ -2133,12 +2133,23 @@ function admin_credentials_valid() {
  *  and a stale saved password must not bring that dialog back. */
 function admin_reject_saved_credentials() {
     http_response_code(401);
-    render_login_page('Gallery admin', 'Enter the admin password.', 'Your browser sent a saved password that doesn\'t match the current one. Type the current admin password below.');
+    render_login_page('Sign in', 'Enter your password.', 'Your browser sent a saved password that doesn\'t match the current one. Type your current password below.');
 }
 
 /** The password form for ?admin and ?reveal: one field, no username, no
  *  browser pop-up. Never indexed or cached or framed. $error is shown above
  *  the field after a wrong password. */
+/** The query string of the page a visitor was on when they asked to sign in or out ("?folder=Paris&photo=...&map"), so they
+ *  can be brought back to it. Only these three are carried; anything odd is dropped. */
+function login_return_query() {
+    $ok = function ($k) { return isset($_REQUEST[$k]) && is_string($_REQUEST[$k]) && $_REQUEST[$k] !== '' && strlen($_REQUEST[$k]) < 1024 && strpbrk($_REQUEST[$k], "\0\r\n") === false; };
+    $parts = [];
+    if ($ok('folder')) $parts[] = 'folder=' . rawurlencode($_REQUEST['folder']);
+    if ($ok('photo')) $parts[] = 'photo=' . rawurlencode($_REQUEST['photo']);
+    if (isset($_REQUEST['map'])) $parts[] = 'map';
+    return $parts ? '?' . implode('&', $parts) : '';
+}
+
 function render_login_page($heading, $blurb, $error = '') {
     header('Content-Type: text/html; charset=UTF-8');
     header('X-Robots-Tag: noindex, nofollow');
@@ -2160,6 +2171,8 @@ function render_login_page($heading, $blurb, $error = '') {
   input[type=password]:focus { outline:2px solid #5865f2; outline-offset:1px; }
   button { margin-top:12px; width:100%; padding:10px 12px; font-size:1rem; background:#5865f2; color:#fff; border:0; border-radius:8px; cursor:pointer; }
   .err { background:rgba(237,66,69,0.15); color:#ff8a8c; padding:8px 12px; border-radius:8px; font-size:0.9rem; margin-bottom:12px; }
+  .cancel { display:block; margin-top:16px; text-align:center; color:#9a9aa0; font-size:0.9rem; text-decoration:none; }
+  .cancel:hover { color:#eaeaea; text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -2171,6 +2184,7 @@ function render_login_page($heading, $blurb, $error = '') {
     <input type="password" name="login_password" autocomplete="current-password" autofocus required aria-label="Password">
     <button type="submit">Continue</button>
   </form>
+  <a class="cancel" href="./<?= htmlspecialchars(login_return_query(), ENT_QUOTES, 'UTF-8') ?>">Cancel</a>
 </div>
 </body>
 </html>
@@ -2480,14 +2494,10 @@ function run_reveal_route($dir) {
         return;
     }
     // Back to the page the visitor came from (a folder's page stays on that folder).
-    $okParam = function ($k) { return isset($_REQUEST[$k]) && is_string($_REQUEST[$k]) && $_REQUEST[$k] !== '' && strlen($_REQUEST[$k]) < 1024 && strpbrk($_REQUEST[$k], "\0\r\n") === false; };
-    $backFolder = $okParam('folder') ? '?folder=' . rawurlencode($_REQUEST['folder']) : '';
+    $backFolder = isset($_REQUEST['folder']) && is_string($_REQUEST['folder']) && $_REQUEST['folder'] !== '' && strlen($_REQUEST['folder']) < 1024 && strpbrk($_REQUEST['folder'], "\0\r\n") === false
+        ? '?folder=' . rawurlencode($_REQUEST['folder']) : '';
     // ...and to the very same page: a folder, an open photo, the open map.
-    $backParts = [];
-    if ($okParam('folder')) $backParts[] = 'folder=' . rawurlencode($_REQUEST['folder']);
-    if ($okParam('photo')) $backParts[] = 'photo=' . rawurlencode($_REQUEST['photo']);
-    if (isset($_REQUEST['map'])) $backParts[] = 'map';
-    $backPage = $backParts ? '?' . implode('&', $backParts) : '';
+    $backPage = login_return_query();
     // The lock beside the title, when it is open, locks the private items again: whoever is signed in (a viewer with the
     // private-view password, or the owner signed in to the admin) is signed out of this browser.
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
@@ -2508,9 +2518,9 @@ function run_reveal_route($dir) {
         return;
     }
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-    $heading = ADMIN_PASSWORD !== '' && PRIVATE_VIEW_PASSWORD !== '' ? 'Sign in' : (ADMIN_PASSWORD !== '' ? 'Gallery admin' : 'Private view');
-    $prompt = ADMIN_PASSWORD !== '' && PRIVATE_VIEW_PASSWORD !== '' ? 'Enter your password: the private-view password shows the private items, the admin password opens the admin.'
-        : (ADMIN_PASSWORD !== '' ? 'Enter the admin password.' : 'Enter the password to see the private items.');
+    // One plain prompt, whichever password it turns out to be.
+    $heading = 'Sign in';
+    $prompt = 'Enter your password.';
     // The form is the normal way in; a Basic Authorization header (a script,
     // a bookmarked login) is still honored. Only a password that was
     // actually *supplied* and wrong counts against the throttle: a plain
@@ -5544,7 +5554,7 @@ function run_admin_setup() {
             $manual = (string) ($result['manual'] ?? '');
             if (!empty($result['taken'])) {
                 // Someone else got there first: this is a login page now.
-                render_login_page('Gallery admin', 'Enter the admin password.', $error);
+                render_login_page('Sign in', 'Enter your password.', $error);
                 return;
             }
         }
@@ -5592,7 +5602,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         } elseif ($formPass !== null) {
             if (!hash_equals(ADMIN_PASSWORD, $formPass)) {
                 login_throttle_record_failure($dir, 'admin', $ip);
-                render_login_page('Gallery admin', 'Enter the admin password.', 'That password isn\'t right.');
+                render_login_page('Sign in', 'Enter your password.', 'That password isn\'t right.');
                 return;
             }
             // A fresh session id at the moment of login, so nothing issued
@@ -5605,7 +5615,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin'), true, 303);
             return;
         } else {
-            render_login_page('Gallery admin', 'Enter the admin password.', $_SERVER['REQUEST_METHOD'] === 'POST' ? 'Your session expired. Sign in again, then repeat that change.' : '');
+            render_login_page('Sign in', 'Enter your password.', $_SERVER['REQUEST_METHOD'] === 'POST' ? 'Your session expired. Sign in again, then repeat that change.' : '');
             return;
         }
     }
@@ -6950,6 +6960,8 @@ function ui_icon_paths() {
         'play'    => '<path d="M8 5.5v13l10.5-6.5z"/>',
         'star'    => '<path d="m12 3.5 2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8z"/>',
         'chart'   => '<path d="M5 20V11M12 20V4M19 20v-6"/>',
+        'zoom-in' => '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2M11 8.5v5M8.5 11h5"/>',
+        'zoom-out' => '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2M8.5 11h5"/>',
         'lock'    => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
         'unlock'  => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/>',
         'expand'  => '<path d="M15 3h6v6M9 21H3v-6M21 3l-7.5 7.5M3 21l7.5-7.5"/>',
@@ -7949,6 +7961,22 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     opacity: 0.75;
   }
   .lightbox-copy:hover { opacity: 1; }
+  /* Zoom: the photo is shown to fit the screen; one press fills the width of the window (scroll up and down, never
+     distorted, from the original file), another shows it at its real pixel size (scroll both ways). */
+  .lightbox img { cursor: zoom-in; }
+  .lightbox.zoom-width, .lightbox.zoom-actual { overflow: auto; justify-content: flex-start; color-scheme: dark; }
+  .lightbox.zoom-width { touch-action: pan-y; }
+  .lightbox.zoom-actual { touch-action: pan-x pan-y; }
+  .lightbox.zoom-width img, .lightbox.zoom-actual img {
+    flex: none; max-height: none; height: auto; margin: auto; border-radius: 0; box-shadow: none;
+  }
+  .lightbox.zoom-width img { width: 100%; max-width: var(--nat, 100%); }
+  .lightbox.zoom-actual img { width: var(--act, auto); max-width: none; cursor: zoom-out; }
+  .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
+    position: fixed; left: 0; right: 0; bottom: 0; margin: 0; padding: 22px 12px 8px; justify-content: center; z-index: 6;
+    background: linear-gradient(transparent, rgba(0,0,0,0.78));
+  }
+  .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-web { text-decoration: none; font-size: 1rem; }
   .lightbox-map-toggle.off { opacity: 0.35; filter: grayscale(1); }
   /* The little map in the viewer: over the photo's top left corner; click to enlarge. */
@@ -7987,7 +8015,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
   .lightbox .close,
   .lightbox .nav {
-    position: absolute;
+    position: fixed;
     background: none;
     border: none;
     color: var(--text);
@@ -8327,6 +8355,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php endif; ?>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
+    <button class="lightbox-copy lightbox-zoom" id="lightbox-zoom" type="button" title="Fill the width of the screen" aria-label="Fill the width of the screen"><?= ui_icon('zoom-in') ?></button>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link to this photo"><?= ui_icon('link') ?></button>
     <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
 <?php if (ENABLE_MAP): ?>
@@ -8431,6 +8460,7 @@ if (ENABLE_MAP && $mapPoints) {
   }
   function closeLightbox() {
     if (typeof collapseMiniMap === 'function') collapseMiniMap();
+    if (typeof setZoom === 'function' && zoomMode !== 'fit') setZoom('fit');
     lightbox.classList.remove('open');
     lightboxVideo.pause();
   }
@@ -8468,9 +8498,47 @@ if (ENABLE_MAP && $mapPoints) {
     const captionText = captions[current];
     const set = siblingsOf(current);
     caption.textContent = (captionText ? captionText + ' — ' : '') + (set.indexOf(current) + 1) + ' / ' + set.length;
+    applyZoom();
     updateLightboxExtras();
     trackView(file);
   }
+  // ---- Zoom: 'fit' (the whole photo on the screen), 'width' (fills the width of the window, scroll up and down) and
+  // 'actual' (real pixels, scroll both ways). Always the original file at its own proportions, never stretched.
+  let zoomMode = 'fit';
+  const zoomBtn = document.getElementById('lightbox-zoom');
+  const ZOOM_TEXT = { fit: 'Fill the width of the screen', width: 'Show at actual size', actual: 'Back to fitting the screen' };
+  function sizeZoomImage() {
+    const w = lightboxImg.naturalWidth;
+    if (!w || !lightboxImg.style.setProperty) return;
+    lightboxImg.style.setProperty('--nat', w + 'px');
+    lightboxImg.style.setProperty('--act', (w / (window.devicePixelRatio || 1)) + 'px');
+  }
+  function applyZoom() {
+    const video = isVideoFile(files[current]);
+    lightbox.classList.toggle('is-video', video);
+    lightbox.classList.toggle('zoom-width', !video && zoomMode === 'width');
+    lightbox.classList.toggle('zoom-actual', !video && zoomMode === 'actual');
+    if (zoomBtn) {
+      zoomBtn.title = ZOOM_TEXT[zoomMode];
+      zoomBtn.setAttribute('aria-label', ZOOM_TEXT[zoomMode]);
+      zoomBtn.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (zoomMode === 'actual' ? 'zoom-out' : 'zoom-in') + '"></use></svg>';
+    }
+    lightbox.scrollTop = 0;
+    lightbox.scrollLeft = 0;
+    sizeZoomImage();
+    if (typeof placeMiniMap === 'function') placeMiniMap();
+  }
+  function setZoom(mode) { zoomMode = mode; applyZoom(); }
+  function cycleZoom() {
+    if (isVideoFile(files[current])) return;
+    let next = zoomMode === 'fit' ? 'width' : (zoomMode === 'width' ? 'actual' : 'fit');
+    // Nothing more to see at real size when the photo is no wider than the window already shows it.
+    if (next === 'actual' && lightboxImg.naturalWidth && lightboxImg.naturalWidth / (window.devicePixelRatio || 1) <= lightbox.clientWidth) next = 'fit';
+    setZoom(next);
+  }
+  if (zoomBtn) zoomBtn.addEventListener('click', cycleZoom);
+  lightboxImg.addEventListener('click', cycleZoom);
+  lightboxImg.addEventListener('load', sizeZoomImage);
 <?php if (ENABLE_MAP): ?>
   // ---- Maps: Leaflet is fetched only when a visitor asks for one (the overview's "Show map" button, or the little
   // map in the viewer), so a page that nobody opens a map on contacts no third party.
@@ -8574,6 +8642,7 @@ if (ENABLE_MAP && $mapPoints) {
   function miniWanted() { return remembered('galleryLightboxMap') !== '0'; }
   function placeMiniMap() {
     if (!mapBox || mapBox.hidden || miniExpanded) return;
+    if (zoomMode !== 'fit') { mapBox.style.left = '12px'; mapBox.style.top = '12px'; return; }
     const shown = lightboxImg.style.display === 'none' ? lightboxVideo : lightboxImg;
     const r = shown.getBoundingClientRect();
     mapBox.style.left = Math.round(Math.max(8, r.left + 10)) + 'px';
@@ -8667,7 +8736,8 @@ if (ENABLE_MAP && $mapPoints) {
 <?php endif; ?>
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
-    if (e.key === 'Escape') { if (miniExpanded) { collapseMiniMap(); return; } closeLightbox(); return; }
+    if (e.key === 'Escape') { if (miniExpanded) { collapseMiniMap(); return; } if (zoomMode !== 'fit') { setZoom('fit'); return; } closeLightbox(); return; }
+    if (e.key === 'z' || e.key === 'Z') { cycleZoom(); return; }
     // A focused <video>'s native controls already use arrow keys (seek)
     // and spacebar (play/pause) — don't also fire our own nav on top of
     // that, or an arrow press would both seek the clip and jump to a
@@ -8695,10 +8765,11 @@ if (ENABLE_MAP && $mapPoints) {
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
     const threshold = 50;
+    if (zoomMode === 'actual') return;   // dragging pans the photo
     if (absX > absY && absX > threshold) {
       navigate(deltaX < 0 ? 1 : -1);
-    } else if (absY > absX && deltaY > threshold) {
-      closeLightbox();
+    } else if (absY > absX && deltaY > threshold && zoomMode === 'fit') {
+      closeLightbox();   // (when the photo fills the width, swiping down scrolls it instead)
     }
   }, { passive: true });
 

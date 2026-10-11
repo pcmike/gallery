@@ -2,7 +2,7 @@
 export const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 export class El {
   constructor(tag, id) { this.tagName=(tag||'div').toUpperCase(); this.id=id||''; this.attrs={}; this.children=[]; this.parent=null; this._l={}; this._text=''; this._html=null; this.style={}; this.dataset={}; this._cls=new Set(); this.hidden=false; this.src=''; this.href=''; this.hash='';
-    const s=this._cls; this.classList={add:(...c)=>c.forEach(x=>s.add(x)),remove:(...c)=>c.forEach(x=>s.delete(x)),contains:(c)=>s.has(c),toggle:(c)=>{s.has(c)?s.delete(c):s.add(c)}}; }
+    const s=this._cls; this.classList={add:(...c)=>c.forEach(x=>s.add(x)),remove:(...c)=>c.forEach(x=>s.delete(x)),contains:(c)=>s.has(c),toggle:(c,f)=>{const on=f===undefined?!s.has(c):!!f; on?s.add(c):s.delete(c); return on}}; }
   get className(){return [...this._cls].join(' ')} set className(v){this._cls=new Set(String(v).split(/\s+/).filter(Boolean)); const s=this._cls; this.classList.add=(...c)=>c.forEach(x=>s.add(x)); this.classList.remove=(...c)=>c.forEach(x=>s.delete(x)); this.classList.contains=(c)=>s.has(c);}
   get textContent(){ return this.children.length ? this.children.map(c=>c.textContent).join('') : this._text } set textContent(v){this._text=String(v); this.children=[]; this._html=null}
   get innerHTML(){ return this._html!==null ? this._html : esc(this.textContent) } set innerHTML(v){this._html=String(v); this._text=''; this.children=[]}
