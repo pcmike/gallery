@@ -358,6 +358,11 @@ define('FFMPEG_PATH', gallery_setting('FFMPEG_PATH', ''));
 // A short silent looping clip of each video (about 3 seconds, small), played when a visitor hovers over its tile. Made with
 // ffmpeg once per video and kept with the thumbnails; does nothing without ffmpeg. Needs ENABLE_VIDEO and the thumbnail cache.
 define('ENABLE_VIDEO_PREVIEWS', gallery_setting('ENABLE_VIDEO_PREVIEWS', true));
+// A video tile's finger-scrub strip holds a frame about every second and a half (a video of 18 seconds or less gets 12, a
+// minute or more gets 40: on a tile a couple of hundred pixels wide, more than 40 could not be told apart).
+function video_strip_frames($duration) {
+    return (int) max(12, min(40, round($duration / 1.5)));
+}
 
 // Password for the admin editor, reached via ?admin — captions, per-item
 // location/web link, display names, and raw .md editing. Empty by
@@ -782,6 +787,14 @@ if (isset($_GET['original'])) {
     $claimed = $_GET['original'];
     $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
     serve_original_download($dir, $claimed, $claimedList, $claimedList ? items_get_all_for_files($dir, $claimedList) : []);
+    exit;
+}
+
+// ?strip=<video>: the row of frames a finger scrubs through on a video's tile.
+if (isset($_GET['strip'])) {
+    $claimed = $_GET['strip'];
+    $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
+    serve_video_strip($dir, $claimed, $claimedList, $claimedList ? items_get_all_for_files($dir, $claimedList) : []);
     exit;
 }
 
@@ -1779,6 +1792,62 @@ function video_preview_file($file) {
     return $base === null ? null : substr($base, 0, -4) . '.mp4';
 }
 
+/** The strip of frames for a video (one JPEG of small square frames side by side, spread over the whole video),
+ *  which a finger dragged across a video's tile scrubs through. Made once with ffmpeg, like the clip; null if it can't be had. */
+function video_strip_path($srcPath, $cacheDir, $filename) {
+    if (!ENABLE_VIDEO_PREVIEWS || !ENABLE_THUMBNAIL_CACHE) return null;
+    $strip = image_cache_path($cacheDir, $filename, 'strip', $srcPath);
+    if ($strip === null) return null;
+    if (is_file($strip) && filesize($strip) > 0) return $strip;
+    $failed = $strip . '.failed';
+    if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;
+    $duration = video_duration_seconds($srcPath);
+    if ($duration === null || $duration < 1) return null;
+    $bin = ffmpeg_binary();
+    if ($bin === '') return null;
+    $lock = ffmpeg_take_turn(30);
+    if (!$lock) return null;
+    if (is_file($strip) && filesize($strip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $strip; }
+    try {
+        $tmp = $strip . '.tmp' . bin2hex(random_bytes(3));
+        $n = video_strip_frames($duration);
+        $args = [$bin, '-v', 'error', '-nostdin', '-y'];
+        if ($duration > 20) array_push($args, '-skip_frame', 'nokey');   // a long video: only its key frames are read, which is much quicker
+        array_push($args, '-i', $srcPath, '-an', '-map_metadata', '-1', '-vf', sprintf('fps=%.5F,crop=min(iw\\,ih):min(iw\\,ih),scale=200:200,tile=%dx1', $n / $duration * 1.05, $n), '-frames:v', '1', '-q:v', '5', '-f', 'image2', $tmp);
+        $code = run_quietly($args, 90);
+        if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $strip)) return $strip; }
+        @unlink($tmp);
+        @touch($failed);
+        return null;
+    } finally {
+        flock($lock, LOCK_UN); fclose($lock);
+    }
+}
+
+/** ?strip=<video>: that strip, for anyone who may see the video (same gates as the video itself); &warm only makes it. */
+function serve_video_strip($dir, $filename, $validFiles, $itemsData = []) {
+    if (!is_string($filename) || !in_array($filename, $validFiles, true) || !is_video_file($filename)
+        || (file_is_hidden($dir, $filename, $itemsData) && !is_revealed())) {
+        http_response_code(404);
+        return;
+    }
+    $strip = video_strip_path(resolve_real_path($dir, $filename), containing_folder_real_path($dir, $filename) . '/.gallery-cache', $filename);
+    if (isset($_GET['warm'])) {
+        http_response_code($strip === null ? 404 : 204);
+        header('Cache-Control: no-store');
+        return;
+    }
+    if ($strip === null) {
+        http_response_code(404);
+        return;
+    }
+    header('Content-Type: image/jpeg');
+    header('Cache-Control: ' . file_cache_control($dir, $filename, $itemsData));
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . filesize($strip));
+    readfile($strip);
+}
+
 /** True when a hover over a video tile can play a made clip. */
 function video_previews_expected() {
     return ENABLE_VIDEO_PREVIEWS && ENABLE_THUMBNAIL_CACHE && ffmpeg_binary() !== '';
@@ -2027,7 +2096,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
             $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
             $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
-            if (is_video_file($file)) $variants[] = 'poster';   // the frame taken from a video (see video_poster_path)
+            if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip'; }   // the frame taken from a video, and its strip of frames
             $mtime = @filemtime(resolve_real_path($dir, $file));
             if (is_video_file($file)) $valid[md5($file . '|preview|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
@@ -3176,7 +3245,7 @@ function admin_credentials_valid() {
  *  and a stale saved password must not bring that dialog back. */
 function admin_reject_saved_credentials() {
     http_response_code(401);
-    render_login_page('Enter your password', '', 'Your browser sent a saved password that doesn\'t match the current one. Type your current password below.');
+    render_login_page('Enter your access code', '', 'Your browser sent a saved login that no longer matches. Type your current access code.');
 }
 
 /** The password form for ?admin and ?reveal: one field, no username, no
@@ -3198,7 +3267,7 @@ function login_return_query() {
 function login_form_password() {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') return null;
     foreach (['access_code', 'login_password'] as $name) {
-        if (isset($_POST[$name]) && is_string($_POST[$name])) return $_POST[$name];
+        if (isset($_POST[$name]) && is_string($_POST[$name])) return $name === 'access_code' ? str_replace(["\r", "\n"], '', $_POST[$name]) : $_POST[$name];
     }
     return null;
 }
@@ -3206,6 +3275,8 @@ function login_form_password() {
 function render_login_page($heading, $blurb, $error = '') {
     header('Content-Type: text/html; charset=UTF-8');
     header('X-Robots-Tag: noindex, nofollow');
+    // (This page is deliberately bare: one large line drawing and one box. A heading, a "Continue" button or the words
+    // "password" and "sign in" are what make a phone's Autofill decide it is a login form and offer a saved one.)
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -3213,48 +3284,48 @@ function render_login_page($heading, $blurb, $error = '') {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
-<title><?= htmlspecialchars($heading, ENT_QUOTES, 'UTF-8') ?></title>
+<title>Access</title>
 <style>
   :root { color-scheme: dark; }
+  html, body { height:100%; }
   body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; margin:0; }
-  .wrap { max-width:360px; margin:0 auto; padding:72px 24px; }
-  h1 { font-size:1.3rem; margin:0 0 6px; }
-  p { color:#9a9aa0; font-size:0.9rem; margin:0 0 18px; }
-  input.gate { width:100%; box-sizing:border-box; padding:10px 12px; font-size:1rem; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:8px; -webkit-text-security:disc; text-security:disc; }
-  input.gate:focus { outline:2px solid #5865f2; outline-offset:1px; }
-  .actions { display:flex; gap:10px; margin-top:12px; }
-  button, .cancel { flex:1; box-sizing:border-box; padding:10px 12px; font-size:1rem; border:0; border-radius:8px; cursor:pointer; text-align:center; text-decoration:none; font-family:inherit; line-height:1.4; }
-  button { background:#5865f2; color:#fff; }
-  .err { background:rgba(237,66,69,0.15); color:#ff8a8c; padding:8px 12px; border-radius:8px; font-size:0.9rem; margin-bottom:12px; }
-  .cancel { background:#2a2a2e; color:#c8c8cd; }
-  .cancel:hover { background:#34343a; color:#eaeaea; }
+  .wrap { box-sizing:border-box; min-height:100%; max-width:360px; margin:0 auto; padding:0 24px 12vh; display:flex; flex-direction:column; justify-content:center; }
+  .mark { display:block; width:112px; height:112px; margin:0 auto 34px; color:#8a8a93; transition:color .2s; }
+  .mark:hover, .mark:focus-visible { color:#eaeaea; outline:none; }
+  .mark svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.1; stroke-linecap:round; stroke-linejoin:round; }
+  p { color:#9a9aa0; font-size:0.9rem; margin:0 0 18px; text-align:center; }
+  .gate { display:block; width:100%; box-sizing:border-box; padding:12px 14px; font:inherit; font-size:1.05rem; text-align:center; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:10px; -webkit-text-security:disc; text-security:disc; }
+  .gate:focus { outline:2px solid #5865f2; outline-offset:1px; }
+  /* Safari's own key / contacts Autofill button inside a field */
+  .gate::-webkit-credentials-auto-fill-button, .gate::-webkit-contacts-auto-fill-button, .gate::-webkit-autofill-button { display:none !important; visibility:hidden !important; pointer-events:none !important; }
+  .err { background:rgba(237,66,69,0.15); color:#ff8a8c; padding:8px 12px; border-radius:8px; font-size:0.9rem; margin-bottom:14px; text-align:center; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1 id="gate-heading"><?= htmlspecialchars($heading, ENT_QUOTES, 'UTF-8') ?></h1>
+  <a class="mark" id="goback" href="./<?= htmlspecialchars(login_return_query(), ENT_QUOTES, 'UTF-8') ?>" aria-label="Back to the gallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="M12 14.6v2.8"/></svg></a>
   <?php if ($blurb !== ''): ?><p><?= htmlspecialchars($blurb, ENT_QUOTES, 'UTF-8') ?></p><?php endif; ?>
   <?php if ($error !== ''): ?><div class="err" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
   <form method="post" action="" autocomplete="off">
-    <?php // Deliberately not a password field: a browser or password manager offers to fill, and to save, whatever is typed
-          // into one. The box is an ordinary text box drawn as dots (a script puts the real password type back where the
-          // browser can't draw dots), told in every dialect the common managers understand to leave it alone. ?>
-    <input type="text" class="gate" id="gate" name="access_code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus required aria-labelledby="gate-heading"
+    <?php // Not a password field (a browser or manager offers to fill, and to save, whatever is typed into one): a text box
+          // drawn as dots, named nothing a manager recognises, every common manager told to leave it alone, and read-only
+          // until it is focused, which keeps iOS Safari's Autofill from picking it up when the page loads. Return sends it. ?>
+    <input type="text" class="gate" id="gate" name="access_code" readonly onfocus="this.removeAttribute('readonly');" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" autofocus required
            data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other">
-    <div class="actions">
-      <a class="cancel" id="goback" href="./<?= htmlspecialchars(login_return_query(), ENT_QUOTES, 'UTF-8') ?>">&larr; Go Back</a>
-      <button type="submit">Continue</button>
-    </div>
   </form>
 </div>
 <script>
-  // Where the browser can't draw a text box as dots, a real password box is safer than showing what is typed.
   (function () {
     var box = document.getElementById('gate');
-    if (!(window.CSS && CSS.supports && (CSS.supports('-webkit-text-security', 'disc') || CSS.supports('text-security', 'disc')))) box.type = 'password';
+    // Where the browser can't draw text as dots, showing what is typed would be worse than a manager's pop-up: use a real password box.
+    if (!(window.CSS && CSS.supports && (CSS.supports('-webkit-text-security', 'disc') || CSS.supports('text-security', 'disc')))) {
+      var pw = document.createElement('input');
+      pw.type = 'password'; pw.name = box.name; pw.id = box.id; pw.className = box.className; pw.required = true; pw.autocomplete = 'current-password';
+      box.parentNode.replaceChild(pw, box); pw.focus();
+    }
   })();
-  // "Go Back" really goes back to where the visitor was (same scroll position, same open photo), when they came from a
-  // page of this site; otherwise (a typed address, or after a wrong password) its link takes them to that page.
+  // The lock drawing is the way back, and really goes back to where the visitor was (same scroll position, same open photo)
+  // when they came from a page of this site; otherwise its link takes them to that page.
   document.getElementById('goback').addEventListener('click', function (e) {
     try {
       var ref = document.referrer ? new URL(document.referrer) : null;
@@ -3597,7 +3668,7 @@ function run_reveal_route($dir) {
     }
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
     // One plain prompt, whichever password it turns out to be.
-    $heading = 'Enter your password';
+    $heading = 'Enter your access code';
     $prompt = '';
     // The form is the normal way in; a Basic Authorization header (a script,
     // a bookmarked login) is still honored. Only a password that was
@@ -3626,10 +3697,10 @@ function run_reveal_route($dir) {
         if ($formPass === null && (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']))) {
             // A wrong saved Basic password (see admin_reject_saved_credentials): the form, never a challenge.
             http_response_code(401);
-            render_login_page($heading, $prompt, 'Your browser sent a saved password that doesn\'t match the current one. Type the current password below.');
+            render_login_page($heading, $prompt, 'Your browser sent a saved login that no longer matches. Type the current access code.');
             return;
         }
-        render_login_page($heading, $prompt, $formPass !== null ? 'That password isn\'t right.' : '');
+        render_login_page($heading, $prompt, $formPass !== null ? 'That code isn\'t right.' : '');
         return;
     }
     login_throttle_record_success($dir, 'reveal', $ip);
@@ -5246,7 +5317,7 @@ function gallery_setting_definitions() {
              'help' => 'Videos are served exactly as recorded, with no conversion, so big clips use real bandwidth and some phone formats don\'t play in every browser.',
              'risk' => 'Every .mov and .mp4 in the gallery folders becomes visible to visitors.',
              'offwarn' => 'Videos will disappear from the gallery, and links to them will stop working. Nothing is deleted: the files and their captions, locations and hide settings stay, and come back when you turn this on again.'],
-            ['name' => 'ENABLE_VIDEO_THUMBNAILS', 'type' => 'bool', 'label' => 'Video thumbnails', 'requires' => 'ENABLE_VIDEO',
+            ['name' => 'ENABLE_VIDEO_THUMBNAILS', 'type' => 'bool', 'label' => 'Video thumbnails', 'requires' => 'ENABLE_VIDEO', 'status' => 'ffmpeg',
              'help' => 'A real picture from each video instead of the generic video icon, taken once with ffmpeg if this server has it (nothing happens if it doesn\'t, and the browser\'s own first frame is shown where it can). Needs "Thumbnails".',
              'risk' => 'Runs ffmpeg on your server, once for each new video, with a time limit and one at a time.',
              'offwarn' => 'Videos go back to the generic video icon (or the browser\'s first frame). Pictures already taken are left in place.'],
@@ -5504,6 +5575,9 @@ function render_admin_site_settings($csrfToken) {
                 <div class="name"><?= $esc($d['label']) ?>
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
+                <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
+                <div class="help ffstatus"><strong>ffmpeg on this server:</strong> <?= $ffFound !== '' ? 'found (' . $esc($ffFound) . '). Real thumbnails, hover clips and scrubbing are available.' : 'not found. Videos show the browser\'s own first frame where it can play them. If it is installed somewhere unusual, put its full path as "FFMPEG_PATH" in .gallery-config.php.' ?></div>
+                <?php endif; ?>
                 <?php if (!empty($d['risk'])): ?><div class="risk"><?= $esc($d['risk']) ?></div><?php endif; ?>
                 <?php if (!empty($d['offwarn'])): ?><div class="warn-note offnote" hidden><?= $esc($d['offwarn']) ?></div><?php endif; ?>
               </div>
@@ -6843,7 +6917,7 @@ function run_admin_setup() {
             $manual = (string) ($result['manual'] ?? '');
             if (!empty($result['taken'])) {
                 // Someone else got there first: this is a login page now.
-                render_login_page('Enter your password', '', $error);
+                render_login_page('Enter your access code', '', $error);
                 return;
             }
         }
@@ -6891,7 +6965,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         } elseif ($formPass !== null) {
             if (!password_matches(ADMIN_PASSWORD, $formPass)) {
                 login_throttle_record_failure($dir, 'admin', $ip);
-                render_login_page('Enter your password', '', 'That password isn\'t right.');
+                render_login_page('Enter your access code', '', 'That code isn\'t right.');
                 return;
             }
             // A fresh session id at the moment of login, so nothing issued
@@ -6905,7 +6979,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin'), true, 303);
             return;
         } else {
-            render_login_page('Enter your password', '', $_SERVER['REQUEST_METHOD'] === 'POST' ? 'Your session expired. Sign in again, then repeat that change.' : '');
+            render_login_page('Enter your access code', '', $_SERVER['REQUEST_METHOD'] === 'POST' ? 'Your session expired. Sign in again, then repeat that change.' : '');
             return;
         }
     }
@@ -8274,7 +8348,15 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
                 . (is_file($clipFile) ? ' data-preview-ready="1"' : '');
         }
     }
-    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $previewAttr . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    $stripAttr = '';
+    if (is_video_file($file) && ENABLE_VIDEO_PREVIEWS && $videoDuration !== null && $videoDuration >= 1 && video_previews_expected()) {
+        $stripBase = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'strip', resolve_real_path($GLOBALS['dir'], $file));
+        if ($stripBase !== null && !(is_file($stripBase . '.failed') && !is_file($stripBase))) {
+            $stripAttr = ' data-strip="?strip=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '" data-strip-frames="' . video_strip_frames($videoDuration) . '"'
+                . (is_file($stripBase) ? ' data-strip-ready="1"' : '');
+        }
+    }
+    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $previewAttr . $stripAttr . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $tileVideo . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -9182,6 +9264,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .card .tile-video.ready { opacity: 1; }
   .card .tile-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
   .card .tile-preview.ready { opacity: 1; }
+  /* Dragging a finger sideways across a video tile scrubs through it; up and down still scrolls the page. */
+  .card[data-strip], .card:has(.tile-video) { touch-action: pan-y; }
+  .card .tile-strip { position: absolute; inset: 0; background-repeat: no-repeat; pointer-events: none; }
   .card:hover .tile-video { transform: scale(1.05); }
   .card.sold img, .card.sold .tile-video { filter: grayscale(1) brightness(0.6); }
   .sold-badge-corner, .reserved-badge-corner {
@@ -9273,6 +9358,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     display: none;
     position: fixed;
     inset: 0;
+    height: 100vh; height: 100dvh;   /* dvh: what is really visible, so the phone browser's own bars never cover the caption and buttons */
     background: rgba(0,0,0,0.92);
     z-index: 100;
     align-items: center;
@@ -9284,6 +9370,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox img, .lightbox video {
     max-width: 90vw;
     max-height: 82vh;
+    max-height: min(82vh, calc(100dvh - 130px - env(safe-area-inset-bottom, 0px)));   /* a tall photo leaves room for its caption row */
     border-radius: 6px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.5);
   }
@@ -9320,12 +9407,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox.zoom-width img { width: 100%; max-width: var(--nat, 100%); }
   .lightbox.zoom-actual img { width: var(--act, auto); max-width: none; cursor: zoom-out; }
   .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
-    position: fixed; left: 0; right: 0; bottom: 0; margin: 0; padding: 22px 12px 8px; justify-content: center; z-index: 6;
+    position: fixed; left: 0; right: 0; bottom: 0; margin: 0; padding: 22px 12px 8px; padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); justify-content: center; z-index: 6;
     background: linear-gradient(transparent, rgba(0,0,0,0.78));
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-web, .lightbox-download { text-decoration: none; font-size: 1rem; }
   .lightbox-map-toggle.off { opacity: 0.35; filter: grayscale(1); }
+  .lightbox-map-toggle.nudge { opacity: 1; filter: none; color: var(--accent); animation: map-nudge 1.4s ease-in-out 3; }
+  @keyframes map-nudge { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.45); } }
+  @media (prefers-reduced-motion: reduce) { .lightbox-map-toggle.nudge { animation: none; } }
   /* The little map in the viewer: over the photo's top left corner; click to enlarge. */
   .lightbox-map {
     position: fixed; z-index: 5; width: 170px; height: 130px;
@@ -9335,7 +9425,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox-map[hidden] { display: none; }
   .lightbox-map.expanded {
     left: 50% !important; top: 50% !important; transform: translate(-50%, -50%);
-    width: min(88vw, 900px); height: min(70vh, 640px); cursor: auto;
+    width: min(88vw, 900px); height: min(70vh, 640px); height: min(70dvh, 640px); cursor: auto;
   }
   .lightbox-map img { max-width: none !important; max-height: none !important; border-radius: 0; box-shadow: none; }
   .lbmap-close, .lbmap-osm { display: none; position: absolute; z-index: 1000; }
@@ -9374,7 +9464,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .lightbox .close:hover,
   .lightbox .nav:hover { opacity: 1; }
-  .lightbox .close { top: 10px; right: 14px; font-size: 2.2rem; }
+  .lightbox .close { top: 10px; top: calc(10px + env(safe-area-inset-top, 0px)); right: 14px; font-size: 2.2rem; }
   .lightbox .prev { left: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   .lightbox .next { right: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   @media (max-width: 600px) {
@@ -9826,6 +9916,7 @@ if (ENABLE_MAP && $mapPoints) {
   });
 
   function openLightbox(index) {
+    if (window.__scrubbedAt && Date.now() - window.__scrubbedAt < 600) return;   // the tap that ends a finger-scrub of a video tile is not a tap
     current = index;
     updateImage();
     lightbox.classList.add('open');
@@ -9896,18 +9987,21 @@ if (ENABLE_MAP && $mapPoints) {
     window.addEventListener('scroll', halt, { passive: true });
     document.addEventListener('visibilitychange', halt);
   }
-  // Getting the clips ready before anyone hovers: once the page is up, the tiles in view whose clip isn't made yet are asked
-  // to make it, one request at a time, a few at a time at most, with nothing to download. Stops at the first refusal.
-  (function () {
-    const cards = Array.prototype.slice.call(document.querySelectorAll('.card[data-preview]:not([data-preview-ready])'));
+  // Getting the clips (and, on a touch screen, the scrub strips) ready before anyone needs them: once the page is up, the
+  // tiles in view whose file isn't made yet are asked to make it, one request at a time, a dozen at most, with nothing to
+  // download. Stops at the first refusal.
+  const touchy = (navigator.maxTouchPoints || 0) > 0 || !(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+  const hoverish = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+  function warmUp(attr) {
+    const cards = Array.prototype.slice.call(document.querySelectorAll('.card[' + attr + ']:not([' + attr + '-ready])'));
     if (!cards.length || typeof IntersectionObserver === 'undefined' || typeof fetch === 'undefined') return;
     let queue = [], running = false, done = 0, dead = false;
     const next = function () {
       if (running || dead || done >= 12 || !queue.length || document.hidden) return;
       running = true;
       const card = queue.shift();
-      fetch(card.dataset.preview + '&warm=1', { credentials: 'same-origin', cache: 'no-store' })
-        .then(function (r) { if (r.status === 204) { card.setAttribute('data-preview-ready', '1'); done++; } else { dead = true; } })
+      fetch(card.getAttribute(attr) + '&warm=1', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { if (r.status === 204) { card.setAttribute(attr + '-ready', '1'); done++; } else { dead = true; } })
         .catch(function () { dead = true; })
         .then(function () { running = false; setTimeout(next, 300); });
     };
@@ -9917,7 +10011,62 @@ if (ENABLE_MAP && $mapPoints) {
     }, { rootMargin: '200px' });
     cards.forEach(function (c) { io.observe(c); });
     document.addEventListener('visibilitychange', function () { if (!document.hidden) next(); });
-  })();
+  }
+  if (hoverish) warmUp('data-preview');
+  if (touchy) warmUp('data-strip');
+  // Scrubbing a video tile with a finger: a horizontal drag across it shows the frame under the finger (from the strip the
+  // server made, or, where there is no strip, by seeking the browser's own copy of the video); a vertical drag is still the
+  // page scrolling, and a drag never opens the viewer.
+  function scrubbable(card, source) {
+    let sx = 0, sy = 0, tracking = false, scrubbing = false, overlay = null, img = null;
+    const frac = function (x) { const r = card.getBoundingClientRect(); return Math.min(0.999, Math.max(0, (x - r.left) / r.width)); };
+    const show = function (x) {
+      if (source.strip) {
+        const r = card.getBoundingClientRect(), n = source.frames;
+        const i = Math.floor(frac(x) * n), scale = r.height / img.naturalHeight, cell = img.naturalWidth / n * scale;
+        overlay.style.backgroundSize = (img.naturalWidth * scale) + 'px ' + r.height + 'px';
+        overlay.style.backgroundPosition = (-(i * cell) + (r.width - cell) / 2) + 'px 0';
+      } else if (source.video.duration) {
+        try { source.video.currentTime = frac(x) * source.video.duration; } catch (e) {}
+      }
+    };
+    card.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) { tracking = false; return; }
+      tracking = true; scrubbing = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      if (source.strip && !img) { img = new Image(); img.src = source.strip; }
+    }, { passive: true });
+    card.addEventListener('touchmove', function (e) {
+      if (!tracking) return;
+      const t = e.touches[0];
+      if (!scrubbing) {
+        const dx = Math.abs(t.clientX - sx), dy = Math.abs(t.clientY - sy);
+        if (dx < 8 && dy < 8) return;
+        if (dy > dx) { tracking = false; return; }
+        if (source.strip) {
+          if (!img.complete || !img.naturalWidth) return;
+          overlay = document.createElement('div'); overlay.className = 'tile-strip';
+          overlay.style.backgroundImage = 'url("' + img.src.replace(/"/g, '%22') + '")';
+          card.appendChild(overlay);
+        } else if (!source.video.classList.contains('ready')) { tracking = false; return; }
+        scrubbing = true;
+      }
+      e.preventDefault();
+      show(t.clientX);
+    }, { passive: false });
+    const end = function () {
+      tracking = false;
+      if (scrubbing) { scrubbing = false; window.__scrubbedAt = Date.now(); }
+      if (overlay) { overlay.remove(); overlay = null; }
+    };
+    card.addEventListener('touchend', end);
+    card.addEventListener('touchcancel', end);
+  }
+  document.querySelectorAll('.card[data-strip]').forEach(function (card) {
+    scrubbable(card, { strip: card.getAttribute('data-strip'), frames: Number(card.getAttribute('data-strip-frames')) || 12 });
+  });
+  document.querySelectorAll('.card:not([data-strip]) .tile-video').forEach(function (v) {
+    scrubbable(v.closest('.card'), { strip: null, video: v });
+  });
   // A video's own first frame over its placeholder, once the browser has one; if it can't play the video, nothing changes.
   document.querySelectorAll('.tile-video').forEach(function (v) {
     const ready = function () { v.classList.add('ready'); };
@@ -10090,9 +10239,12 @@ if (ENABLE_MAP && $mapPoints) {
   const mapBox = document.getElementById('lightbox-map');
   const mapToggle = document.getElementById('lightbox-map-toggle');
   const webLink = document.getElementById('lightbox-web');
-  let miniMap = null, miniMarker = null, miniExpanded = false;
+  let miniMap = null, miniMarker = null, miniExpanded = false, sessionNudged = false;
   const MINI_ZOOM = 15;
-  function miniWanted() { return remembered('galleryLightboxMap') !== '0'; }
+  // On a phone the little map would cover a good part of the photo, so it starts off there (and stays wherever the viewer
+  // puts it after that); the pin button beside the caption turns it on, and says so with a short pulse the first time.
+  const phoneish = function () { return !!(window.matchMedia && window.matchMedia('(max-width: 700px), (hover: none) and (pointer: coarse)').matches); };
+  function miniWanted() { const r = remembered('galleryLightboxMap'); return r === null || r === undefined ? !phoneish() : r !== '0'; }
   function placeMiniMap() {
     if (!mapBox || mapBox.hidden || miniExpanded) return;
     if (zoomMode !== 'fit') { mapBox.style.left = '12px'; mapBox.style.top = '12px'; return; }
@@ -10155,6 +10307,8 @@ if (ENABLE_MAP && $mapPoints) {
     const loc = locations[current];
     mapToggle.hidden = !loc;
     mapToggle.classList.toggle('off', !miniWanted());
+    mapToggle.title = miniWanted() ? 'Hide the little map' : 'Show where this was taken';
+    if (!loc ? false : (!miniWanted() && remembered('galleryLightboxMap') === null && !sessionNudged)) { sessionNudged = true; mapToggle.classList.add('nudge'); setTimeout(function () { mapToggle.classList.remove('nudge'); }, 4200); }
     if (!loc || !miniWanted()) { collapseMiniMap(); mapBox.hidden = true; return; }
     mapBox.hidden = false;
     placeMiniMap();
@@ -10163,6 +10317,7 @@ if (ENABLE_MAP && $mapPoints) {
   if (mapBox && mapToggle) {
     mapToggle.addEventListener('click', function () {
       remembered('galleryLightboxMap', miniWanted() ? '0' : '1');
+      mapToggle.classList.remove('nudge');
       updateLightboxExtras();
     });
     mapBox.addEventListener('click', function (e) {
