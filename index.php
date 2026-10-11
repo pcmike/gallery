@@ -6942,7 +6942,8 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $durationBadge . $statusBadge
-         . '<div class="card-badges">' . $itemBadges . $badge . '</div></div>';
+         . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
+         . (isset($GLOBALS['__cover_file']) && $GLOBALS['__cover_file'] === $file ? '<span id="folder-cover" class="cover-anchor" aria-hidden="true"></span>' : '') . '</div>';
 }
 
 /** The small line drawings used instead of emoji (so every device shows the same, clear picture): one set, drawn
@@ -7046,7 +7047,10 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // The paragraph that mentions a folder can mark it sold or reserved, or give it a colour, like any other group.
     $style = $accentColor ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($accentColor, ENT_QUOTES, 'UTF-8') . ';"' : '';
     $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
-    $html .= '<a class="folder-cover-link" href="' . $folderUrl . '">';
+    // When the owner chose this folder's cover photo and it sits right in the folder, opening the folder lands on it
+    // (the folder page marks that card with #folder-cover) instead of at the top of a long page.
+    $toCover = $manualCover !== null && $coverFile !== null && basename($coverFile) === $manualCover && dirname($coverFile) === $folderPath ? '#folder-cover' : '';
+    $html .= '<a class="folder-cover-link" href="' . $folderUrl . $toCover . '">';
     if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     if ($coverFile !== null) {
@@ -7667,6 +7671,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     gap: 10px;
   }
   /* A few folder cards and nothing else: larger on a wide screen, centred. Narrower screens keep the normal grid. */
+  .card .cover-anchor { position: absolute; top: 0; left: 0; width: 0; height: 0; scroll-margin-top: 14px; }
+  .card:has(.cover-anchor:target) { animation: item-flash 2.4s ease-out; outline: 2px solid var(--accent); outline-offset: 2px; }
   .gallery[class*="covers-"] .folder-cover-link img { aspect-ratio: 4 / 3; }
   .gallery[class*="covers-"] .folder-cover-label { font-size: 1.1rem; }
   /* The box is as wide as its cards need, so the map buttons above (same class) share the first card's left edge. */
@@ -8300,6 +8306,12 @@ if ($currentFolderPath !== null) {
 $coverCount = FOLDER_DISPLAY_MODE === 'overview' ? count($folderGroupKeys) : 0;
 $fewCovers = ($coverCount >= 1 && $coverCount <= 4 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
 $GLOBALS['__big_covers'] = $fewCovers !== '';
+// The photo the owner chose as this folder's cover, so the card for it can be jumped to (see render_folder_cover_card).
+$GLOBALS['__cover_file'] = null;
+if ($currentFolderPath !== null && !empty($currentFolderMeta['cover'])) {
+    $coverCandidate = $currentFolderPath . '/' . $currentFolderMeta['cover'];
+    if (in_array($coverCandidate, $files, true)) $GLOBALS['__cover_file'] = $coverCandidate;
+}
 ?>
 <?php
 // A note can colour a group or folder ({color:}) or mark it sold/reserved: its photos' pins follow.

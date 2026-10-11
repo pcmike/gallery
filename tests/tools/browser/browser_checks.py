@@ -221,6 +221,28 @@ try:
     b.js("closeLightbox()")
     srv6.terminate(); srv6.wait()
     b.viewport(1280, 900)
+    # ---------------- a folder opens on its chosen cover photo ----------------
+    print("== folder opens on its cover photo")
+    SITE7 = WORK + "/site7"; os.makedirs(SITE7 + "/Trip"); os.makedirs(SITE7 + "/Rome")
+    shutil.copy(HERE + "/../../../index.php", SITE7 + "/index.php"); os.utime(SITE7 + "/index.php", (time.time() - 3600,) * 2)
+    open(SITE7 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"AUTO_GROUP_BY_FOLDER": true}\n')
+    for k in range(1, 15):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(800,600); imagejpeg($i,$argv[1]);", SITE7 + "/Trip/p%02d.jpg" % k], check=True)
+    for k in range(1, 15):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(800,600); imagejpeg($i,$argv[1]);", SITE7 + "/Rome/q%02d.jpg" % k], check=True)
+    open(SITE7 + "/Trip/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"items":{},"groups":[],"cover":"p14.jpg"}')
+    s7 = socket.socket(); s7.bind(("127.0.0.1", 0)); PORT7 = s7.getsockname()[1]; s7.close(); B7 = f"http://127.0.0.1:{PORT7}"
+    srv7 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT7}", "-t", SITE7], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    b.viewport(1280, 600); b.goto(B7 + "/", 1.5)
+    b.js("document.querySelector('a.folder-cover-link[href*=Trip]').click()"); b.drain(2.0); shot(b, "20-cover-jump")
+    jump = b.js("(() => { const a = document.getElementById('folder-cover'); if (!a) return null; const r = a.parentElement.getBoundingClientRect(); return {hash: location.hash, y: Math.round(window.scrollY), top: Math.round(r.top), bottom: Math.round(r.bottom), vh: window.innerHeight, file: a.parentElement.querySelector('img').alt}; })()")
+    ok(jump is not None and jump["hash"] == "#folder-cover" and jump["y"] > 300 and 0 <= jump["top"] < jump["vh"] - 50 and jump["file"].endswith("p14.jpg"), "[cover jump] opening a folder whose owner chose a cover photo scrolls straight to that photo, which is then on the screen", str(jump))
+    b.goto(B7 + "/", 1.2)
+    b.js("document.querySelector('a.folder-cover-link[href*=Rome]').click()"); b.drain(1.5)
+    ok(b.js("Math.round(window.scrollY)") == 0 and b.js("location.hash") == "", "[cover jump] a folder without a chosen cover opens at the top, as before")
+    srv7.terminate(); srv7.wait()
+    b.viewport(1280, 900)
     print("== phone width (390x844)"); b.viewport(390, 844, mobile=True)
     for name, path in (("gallery", "/"), ("folder", "/?folder=Europe"), ("nested", "/?folder=Europe%2FFrance%2FParis"), ("about", "/?about")):
         b.goto(B + path, 1.5); shot(b, f"06-mobile-{name}")

@@ -2504,6 +2504,21 @@ check('[lock] the admin\'s own Log out from a folder lands on that folder\'s gal
 check('[lock] the sign-in has a Cancel link back to the page the visitor came from (a curious visitor with no password is not stuck)', str_contains($lkCancelRoot, 'class="cancel" href="./">Cancel</a>') && str_contains($lkCancelFolder, 'class="cancel" href="./?folder=Sub&amp;photo=Sub%2Fb.jpg">Cancel</a>') && str_contains($lkCancelAdmin, 'class="cancel" href="./?folder=Sub">Cancel</a>'));
 check('[lock] the gallery title is no longer a link to the admin for anyone', !str_contains($lkOwnerHome, 'title-admin') && !str_contains(http_get("$baseLk2/")[1], 'title-admin'));
 
+echo "== a folder opens on its chosen cover photo ==\n";
+$fxCv = new_fixture_dir('covertarget');
+mkdir("$fxCv/Trip"); mkdir("$fxCv/Rome");
+foreach (['a', 'b', 'c'] as $i => $n) make_jpeg("$fxCv/Trip/$n.jpg", 60, 60, 10 * $i, 10, 10);
+make_jpeg("$fxCv/Rome/r.jpg", 60, 60, 1, 2, 3);
+write_data_file("$fxCv/Trip/.gallery-items.php", ['items' => [], 'groups' => [], 'cover' => 'c.jpg']);
+write_patched_index("$fxCv/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true']);
+$portCv = find_free_port(); start_server($fxCv, $portCv); $baseCv = "http://127.0.0.1:$portCv";
+[, $cvRoot] = http_get("$baseCv/");
+check('[cover jump] a folder whose owner chose a cover photo links to it: opening the folder goes straight to that photo', str_contains($cvRoot, 'class="folder-cover-link" href="?folder=Trip#folder-cover"'));
+check('[cover jump] a folder with no chosen cover opens at the top, as before', str_contains($cvRoot, 'class="folder-cover-link" href="?folder=Rome"') && !str_contains($cvRoot, 'href="?folder=Rome#'));
+[, $cvTrip] = http_get("$baseCv/?folder=Trip");
+check('[cover jump] the folder page marks exactly the chosen photo\'s card as the place to land', substr_count($cvTrip, 'id="folder-cover"') === 1 && (bool) preg_match('#<div class="card"[^>]*>(?:(?!</div></div>).)*?Trip/c\.jpg(?:(?!<div class="card").)*?id="folder-cover"#s', $cvTrip));
+check('[cover jump] the copy-link icon on the cover card still shares the plain folder address', str_contains($cvRoot, 'folder-permalink-copy" href="?folder=Trip"'));
+
 echo "== dates suggested from the photos ==\n";
 $fxDates = new_fixture_dir('datesug');
 mkdir("$fxDates/Trip"); mkdir("$fxDates/Trip/Day2");
