@@ -3900,7 +3900,7 @@ function admin_item_href($file) {
 /** Ready-to-use web server rules that keep the photo files themselves from being fetched by address (private items are
  *  only private through this script otherwise), written out for this gallery's own address, in two collapsed blocks:
  *  nginx and Apache. Shown on the Private page and in Site settings so nobody has to leave the admin to set it up. */
-function render_server_rules_help() {
+function render_server_rules_help($withTidyLinks = false) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
     $loc = $base === '' ? '/' : $base . '/';
@@ -3914,6 +3914,8 @@ function render_server_rules_help() {
         . "<FilesMatch \"(?i)\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$\">\n    Require all denied\n</FilesMatch>\n\n"
         . "# The gallery's generated data files (a second layer).\n"
         . "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>\n";
+    $prettyNginx = "location ~ ^" . $loc . ".+/\$ {\n    rewrite ^" . $loc . "(.+)/\$ " . $loc . "index.php?folder=\$1 last;\n}\n";
+    $prettyApache = "RewriteEngine On\nRewriteRule ^(.+)/\$ index.php?folder=\$1 [B,L,QSA]\n";
     ob_start();
 ?>
     <div class="rules-help">
@@ -3921,7 +3923,7 @@ function render_server_rules_help() {
         <summary><strong>nginx</strong> (strongest; needs shell access to the server)</summary>
         <p>Add this inside the site's <code>server { }</code> block (keep the first location above the second), then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. It is written for this gallery's address, <code><?= $esc($loc) ?></code>.<?= $base === '' ? ' <strong>This gallery is at the top of the site, so the second rule would also block every image elsewhere on the site: narrow its path first.</strong>' : '' ?></p>
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
-        <p>Then set <em>nginx internal redirect</em> (Site settings, Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>, so the gallery hands files to nginx itself. Check it works with <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code>: it should answer 404.</p>
+        <p>Then set <em>nginx internal redirect</em> (Site settings, Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>, so the gallery hands files to nginx itself. Check it works with <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code>: it should answer 404. (If PHP sits behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol to it, or every visitor looks like 127.0.0.1.)</p>
       </details>
       <details>
         <summary><strong>Apache</strong> (blunter, but works on FTP-only hosting)</summary>
@@ -3929,6 +3931,19 @@ function render_server_rules_help() {
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
         <p>A bare photo address then answers 403, and the gallery works as before. It only counts if the server reads <code>.htaccess</code> for this folder (<code>AllowOverride All</code>): on a host that doesn't, the rules are silently ignored, so check with <code>curl -I</code> on a photo's address. If you script logins with an <code>Authorization</code> header on Apache with PHP-FPM, also add the line <code>CGIPassAuth On</code>. The ordinary sign-in form needs nothing.</p>
       </details>
+      <?php if ($withTidyLinks): ?>
+      <p class="rules-sub">Optional: tidy folder links. Without these, folders are reached as <code><?= $esc($loc) ?>?folder=Europe/France</code>, which always works and is what the gallery itself shares. With them, <code><?= $esc($loc) ?>Europe/France/</code> works too.</p>
+      <details>
+        <summary><strong>nginx</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
+        <p>Add inside the <code>server { }</code> block, next to the rules above. It only matches a path ending in <code>/</code>, so it can never catch <code>index.php</code> or a photo, and it needs php-fpm to pass the original request address (the standard <code>fastcgi_param REQUEST_URI $request_uri;</code> does).<?= $base === '' ? ' <strong>This gallery is at the top of the site, so this would also catch every other folder address on the site: narrow its path first.</strong>' : '' ?></p>
+        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyNginx) ?></code></pre></div>
+      </details>
+      <details>
+        <summary><strong>Apache</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
+        <p>Add to the gallery's <code>.htaccess</code> (needs <code>mod_rewrite</code> and <code>AllowOverride</code> for <code>FileInfo</code>). The <code>B</code> flag is required: without it a folder name with a space, <code>&amp;</code>, <code>+</code> or <code>#</code> fails.</p>
+        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyApache) ?></code></pre></div>
+      </details>
+      <?php endif; ?>
     </div>
 <?php
     return ob_get_clean();
@@ -3956,6 +3971,7 @@ function render_admin_hidden_panel($data) {
       <h2 class="section-title">Lock the files themselves</h2>
       <p class="muted" style="margin-top:0;">Pick the server you use and copy the rules: they stop a private photo from being fetched by its direct address.</p>
       <?= render_server_rules_help() ?>
+      <p class="muted">There are also optional rules for tidy folder links such as <code>/kb/Europe/France/</code>, and the setting that hands files to nginx: both are in <a href="#site" onclick="var l=document.querySelector('.side-link'); if (l) { l.click(); return false; }">Site settings, Server setup</a>.</p>
     </section>
     <section class="panel">
       <h2 class="section-title">Folders that are private (<?= count($data['folders']) ?>)</h2>
@@ -4420,7 +4436,7 @@ function render_admin_site_settings($csrfToken) {
             </div>
           <?php endforeach; ?>
           <?php if ($group['title'] === 'Server setup (advanced)'): ?>
-            <div class="site-rules"><div class="name">Keep private photos from being fetched by address</div><div class="help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help() ?></div>
+            <div class="site-rules"><div class="name">Keep private photos from being fetched by address</div><div class="help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help(true) ?></div>
           <?php endif; ?>
         <?php endforeach; ?>
 
@@ -4679,6 +4695,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .rules-help details { border:1px solid #2c2c30; border-radius:8px; padding:8px 12px; margin:8px 0; background:#18181b; }
   .rules-help summary { cursor:pointer; }
   .rules-help p { font-size:0.82rem; color:#cfcfd4; margin:8px 0; }
+  .rules-help p.rules-sub { margin:16px 0 4px; color:var(--muted); }
   .rules-box { position:relative; }
   .rules-box pre { background:#101012; border-radius:6px; padding:10px 12px; margin:6px 0; overflow:auto; font-size:0.78rem; line-height:1.45; }
   .rules-box .copy-rules { position:absolute; top:12px; right:10px; padding:3px 10px; font-size:0.75rem; }

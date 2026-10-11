@@ -604,7 +604,7 @@ try:
     ok(s2 is not None and s2["hidden"], "[pin grouping] and goes again when the map is switched off", str(s2))
     # the web-server rules, collapsed, with a working copy button
     b.js("Object.defineProperty(navigator, 'clipboard', {value: {writeText: t => { window.__rules = t; return Promise.resolve(); }}, configurable: true})")
-    ok(b.js("[...document.querySelectorAll('.site-rules details')].every(d => !d.open)") and b.js("document.querySelectorAll('.site-rules details').length") == 2, "[rules] the nginx and Apache rules are two collapsed drop-downs in Site settings")
+    ok(b.js("[...document.querySelectorAll('.site-rules details')].every(d => !d.open)") and b.js("document.querySelectorAll('.site-rules details').length") == 4, "[rules] the nginx and Apache rules (and the two optional tidy-link ones) are collapsed drop-downs in Site settings")
     b.js("document.querySelector('.site-rules details summary').click()"); b.drain(0.3)
     b.js("document.querySelector('.site-rules details .copy-rules').click()"); b.drain(0.4)
     ok(b.js("document.querySelector('.site-rules details').open") and "internal;" in (b.js("window.__rules") or "") and b.js("document.querySelector('.site-rules details .copy-rules').textContent") == "Copied", "[rules] opening one shows the rules for this gallery's address and Copy puts them on the clipboard", str(b.js("window.__rules"))[:80])
