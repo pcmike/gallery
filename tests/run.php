@@ -1334,7 +1334,7 @@ $revealWrongAuth = 'Authorization: Basic ' . base64_encode('x:wrong');
 
 // Public baseline: everything visible, footer carries the Private view link.
 [, $privateBaselineBody] = http_get("$basePrivate/");
-check('with a private-view password but nothing private yet there is no lock and no "Private view" link anywhere (nothing to unlock)', !str_contains($privateBaselineBody, 'class="lock-link') && !str_contains($privateBaselineBody, '>Private view</a>'));
+check('with an admin password the closed lock is there from the start (it is the way to the admin), and there is no "Private view" footer link', str_contains($privateBaselineBody, 'class="lock-link" href="?reveal"') && !str_contains($privateBaselineBody, '>Private view</a>'));
 check('nothing is hidden yet — loose1.jpg is visible', str_contains($privateBaselineBody, 'loose1.jpg'));
 
 // Log into admin, flag loose1.jpg hidden.
@@ -1347,7 +1347,7 @@ http_post("$basePrivate/?admin", [
 
 [, $afterHideBody] = http_get("$basePrivate/");
 check('a hidden item is omitted from the public page entirely', !str_contains($afterHideBody, 'loose1.jpg'));
-check('[lock] once something is private, a closed lock appears to the right of the title and links to the password form; the old footer link is gone', str_contains($afterHideBody, 'class="lock-link" href="?reveal"') && preg_match('#<h1>(.*?)</h1>#s', $afterHideBody, $lockH1) === 1 && strpos($lockH1[1], 'class="lock-link"') > strpos($lockH1[1], '</a>') && str_contains($afterHideBody, ui_lock_probe('lock')) && !str_contains($afterHideBody, '>Private view</a>'));
+check('[lock] once something is private, a closed lock appears to the right of the title and links to the password form; the old footer link is gone', str_contains($afterHideBody, 'class="lock-link" href="?reveal"') && preg_match('#<h1>(.*?)</h1>#s', $afterHideBody, $lockH1) === 1 && strpos($lockH1[1], 'class="lock-link"') > 0 && !str_contains($lockH1[1], 'title-admin') && str_contains($afterHideBody, ui_lock_probe('lock')) && !str_contains($afterHideBody, '>Private view</a>'));
 [$hiddenImgStatus] = http_get("$basePrivate/?img=loose1.jpg&size=thumb");
 check('?img= refuses a hidden item to an unrevealed visitor', $hiddenImgStatus === 404);
 [, $hiddenPhotoBody] = http_get("$basePrivate/?photo=loose1.jpg");
@@ -1464,7 +1464,7 @@ for ($i = 0; $i < 5; $i++) {
 [$adminLockedStatus] = http_get("$basePrivate/?admin", [$adminAuth]);
 check('5 failed admin attempts lock out the admin login', $adminLockedStatus === 429);
 [$revealStillWorksStatus] = http_get("$basePrivate/?reveal", [$revealAuth], false);
-check('...but ?reveal is on a separate throttle realm and still works', $revealStillWorksStatus === 302);
+check('...and the shared sign-in box holds it too (429 for that address, even with the right private-view password), so it can\'t be used to keep guessing the admin password', $revealStillWorksStatus === 429 && http_get("$basePrivate/?reveal")[0] === 200);
 
 // Neither password feature does anything when unset (the default).
 [$revealInertStatus] = http_get("$base1/?reveal");
@@ -2335,7 +2335,7 @@ $h0 = $cfgHome();
 check('[settings file] with no settings file, the defaults apply (video off, no admin, no subfolders, no title link to the admin)', !str_contains($h0, 'clip.mp4') && http_get("$baseCfg/?admin")[0] === 404 && !str_contains($h0, 'href="?admin"'));
 file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true]));
 $h1 = $cfgHome();
-check('[settings file] a .gallery-config.php beside index.php overrides the defaults (video shown, folders on, admin exists, title links to it)', str_contains($h1, 'alt="clip.mp4"') && str_contains($h1, 'id="group-sub"') && str_contains($h1, 'href="?admin"') && http_get("$baseCfg/?admin")[0] === 200);
+check('[settings file] a .gallery-config.php beside index.php overrides the defaults (video shown, folders on, admin exists, a lock beside the title leads to the sign-in)', str_contains($h1, 'alt="clip.mp4"') && str_contains($h1, 'id="group-sub"') && str_contains($h1, 'class="lock-link" href="?reveal"') && http_get("$baseCfg/?admin")[0] === 200);
 check('[settings file] ...and the password in it really works for the admin login', str_contains(http_post("$baseCfg/?admin", ['login_password' => 'cfg-pw-123'])[1] . http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')])[1], 'Gallery Admin'));
 check('[settings file] a direct request for the file answers 404 and shows nothing', (function () use ($baseCfg) { [$st, $b] = http_get("$baseCfg/.gallery-config.php"); return $st === 404 && !str_contains($b, 'cfg-pw-123') && !str_contains($b, 'ADMIN_PASSWORD'); })());
 // An update: index.php is replaced by a fresh copy. The settings stay.
@@ -2459,6 +2459,46 @@ check('[passwords] the private-view password may be any length: a single charact
 $okOut = $flFields('Ab3defgh');
 check('[passwords] eight characters with a letter (either case) and a number is accepted for the admin', str_contains($okOut, 'Settings saved') || str_contains($okOut, 'class="flash ok"'));
 check('[passwords] ...and it logs in', (http_post("$baseFl/?admin", ['login_password' => 'Ab3defgh'], [], false)[0] ?? 0) === 303);
+
+echo "== the lock's two jobs ==\n";
+$fxLk = new_fixture_dir('lockonly');
+make_jpeg("$fxLk/a.jpg", 60, 60, 1, 2, 3); make_jpeg("$fxLk/b.jpg", 60, 60, 4, 5, 6);
+file_put_contents("$fxLk/.gallery-config.php", cfg_text(['PRIVATE_VIEW_PASSWORD' => 'only-viewers']));
+copy(__DIR__ . '/../index.php', "$fxLk/index.php"); touch("$fxLk/index.php", time() - 3600);
+$portLk = find_free_port(); start_server($fxLk, $portLk); $baseLk = "http://127.0.0.1:$portLk";
+check('[lock] with only a private-view password and nothing private there is nothing to unlock, so no lock', !str_contains(http_get("$baseLk/")[1], 'class="lock-link'));
+write_data_file("$fxLk/.gallery-items.php", ['items' => ['b.jpg' => ['restriction' => 'private']], 'groups' => []]);
+$lkHome = http_get("$baseLk/")[1];
+check('[lock] ...and once a photo is private the closed lock appears', str_contains($lkHome, 'class="lock-link" href="?reveal"') && !str_contains($lkHome, 'alt="b.jpg"'));
+[, $lkForm] = http_get("$baseLk/?reveal");
+check('[lock] with no admin password the sign-in is headed Private view and only knows the private-view password', str_contains($lkForm, 'Private view') && str_contains($lkForm, 'name="login_password"'));
+[$lkBadSt, $lkBad] = http_post("$baseLk/?reveal", ['login_password' => 'nope'], [], false);
+check('[lock] a wrong password is refused with a message', $lkBadSt === 200 && str_contains($lkBad, "isn't right") || str_contains($lkBad, 'isn&#039;t right'));
+$fxLk2 = new_fixture_dir('lockboth');
+make_jpeg("$fxLk2/a.jpg", 60, 60, 1, 2, 3); mkdir("$fxLk2/Sub"); make_jpeg("$fxLk2/Sub/b.jpg", 60, 60, 4, 5, 6);
+file_put_contents("$fxLk2/.gallery-config.php", cfg_text(['PRIVATE_VIEW_PASSWORD' => 'view-only', 'ADMIN_PASSWORD' => 'owner-pw-12345', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy(__DIR__ . '/../index.php', "$fxLk2/index.php"); touch("$fxLk2/index.php", time() - 3600);
+$portLk2 = find_free_port(); start_server($fxLk2, $portLk2); $baseLk2 = "http://127.0.0.1:$portLk2";
+[$lkAdSt, , $lkAdHd] = http_post("$baseLk2/?reveal&folder=Sub", ['login_password' => 'owner-pw-12345'], [], false);
+check('[lock] the admin password typed into the same box signs in to the admin, on the folder the lock was pressed in', $lkAdSt === 303 && (bool) array_filter($lkAdHd, fn($h) => stripos($h, 'Location: ?admin&folder=Sub') === 0));
+$lkOwnerCookie = (string) extract_cookie_header($lkAdHd);
+[, $lkAdminPage] = http_get("$baseLk2/?admin&folder=Sub", ['Cookie: ' . $lkOwnerCookie]);
+check('[lock] ...and that really is a signed-in admin session (the admin page opens with no further password)', str_contains($lkAdminPage, 'Gallery Admin'));
+[$lkVwSt, , $lkVwHd] = http_post("$baseLk2/?reveal", ['login_password' => 'view-only'], [], false);
+check('[lock] the private-view password typed into the same box shows the private items, and is not the admin', $lkVwSt === 302 && (bool) array_filter($lkVwHd, fn($h) => stripos($h, 'Location: ./') === 0) && !str_contains(http_get("$baseLk2/?admin", ['Cookie: ' . (string) extract_cookie_header($lkVwHd)])[1], 'Gallery Admin'));
+[, $lkOwnerHome] = http_get("$baseLk2/?folder=Sub", ['Cookie: ' . $lkOwnerCookie]);
+check('[lock] a signed-in owner sees a small Admin link in the footer (the open lock signs out, so this is the way back into the admin)', str_contains($lkOwnerHome, '>Admin</a>') && str_contains($lkOwnerHome, 'href="?admin&amp;folder=Sub"') && !str_contains(http_get("$baseLk2/")[1], '>Admin</a>'));
+[, , $lkOutHd] = http_post("$baseLk2/?reveal", ['logout' => '1', 'folder' => 'Sub', 'photo' => 'Sub/b.jpg', 'map' => '1'], ['Cookie: ' . $lkOwnerCookie], false);
+check('[lock] signing out returns to the very same page, not just the same folder: the open photo and the open map are kept', (bool) array_filter($lkOutHd, fn($h) => stripos($h, 'Location: ./?folder=Sub&photo=Sub%2Fb.jpg&map') === 0));
+[, $lkPageHome] = http_get("$baseLk2/?folder=Sub&photo=Sub%2Fb.jpg");
+check('[lock] the closed lock on such a page carries the photo too, so signing in brings you back to it', str_contains($lkPageHome, 'href="?reveal&amp;folder=Sub&amp;photo=Sub%2Fb.jpg"'));
+[, , $lkAdHd2] = http_post("$baseLk2/?reveal&folder=Sub", ['login_password' => 'owner-pw-12345'], [], false);
+$lkOwnerCookie = (string) extract_cookie_header($lkAdHd2);
+[, $lkAdmForm] = http_get("$baseLk2/?admin&folder=Sub", ['Cookie: ' . $lkOwnerCookie]);
+$lkAdmOutHd = [];
+foreach (html_post_forms($lkAdmForm) as $lkF) if (str_contains($lkF['html'], 'value="logout"')) { [, , $lkAdmOutHd] = http_post("$baseLk2/?admin&folder=Sub", form_default_fields($lkF['html']), ['Cookie: ' . $lkOwnerCookie], false); break; }
+check('[lock] the admin\'s own Log out from a folder lands on that folder\'s gallery page, signed out', (bool) array_filter($lkAdmOutHd, fn($h) => stripos($h, 'Location: ?folder=Sub') === 0));
+check('[lock] the gallery title is no longer a link to the admin for anyone', !str_contains($lkOwnerHome, 'title-admin') && !str_contains(http_get("$baseLk2/")[1], 'title-admin'));
 
 echo "== dates suggested from the photos ==\n";
 $fxDates = new_fixture_dir('datesug');
@@ -2802,7 +2842,7 @@ check('[root identity] before anything is set, the "# Heading" in the notes file
 [, $r] = user_submit("$baseRoot/?admin", $rAdmin, 'value="save_folder_identity"', ['display_name' => 'Summer 2026', 'dates' => 'June 1–9', 'description' => 'Two weeks of nothing but sun.'], $rootHdrs);
 check('[root identity] saving the gallery settings works', str_contains($r, 'class="flash ok"') && str_contains($r, 'Gallery settings saved.'));
 [, $rHome1] = http_get("$baseRoot/");
-check('[root identity] the form\'s title beats the "# Heading" (page title, tab and h1)', str_contains($rHome1, '<title>Summer 2026 — Gallery</title>') && str_contains($rHome1, 'Summer 2026</a></h1>') && !str_contains($rHome1, 'From The Heading'));
+check('[root identity] the form\'s title beats the "# Heading" (page title, tab and h1)', str_contains($rHome1, '<title>Summer 2026 — Gallery</title>') && preg_match('#<h1>Summer 2026(<form|<a class="lock-link"|</h1>)#', $rHome1) === 1 && !str_contains($rHome1, 'From The Heading'));
 check('[root identity] the dates show under the title, like a folder\'s', str_contains($rHome1, '<p class="folder-dates">June 1–9</p>'));
 check('[root identity] the description is a centered note box above the notes box, like a folder\'s', (bool) preg_match('#</header>\s*<div class="notes">\s*<div class="note-box folder-description">Two weeks of nothing but sun\.</div>.*?Some longer notes\.#s', $rHome1));
 check('[root identity] shared-link previews use the title and the description', str_contains($rHome1, 'property="og:title" content="Summer 2026"') && str_contains($rHome1, 'property="og:description" content="Two weeks of nothing but sun."'));
@@ -3037,15 +3077,16 @@ check('[login] the admin page has a Log out button', $logoutForm !== '');
 [$s6, , $h6] = http_post("$baseLogin/?admin", form_default_fields($logoutForm), ["Cookie: $loginCookie"], false);
 check('[login] logging out redirects away and expires the cookies', $s6 === 303 && (bool) array_filter($h6, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0 && stripos($h, 'expires=Thu, 01 Jan 1970') !== false));
 check('[login] after logging out, the old cookie no longer opens the admin', str_contains(http_get("$baseLogin/?admin", ["Cookie: $loginCookie"])[1], 'name="login_password"'));
+// The private view uses the same kind of form.
+[$sv1, $bv1] = http_get("$baseLogin/?reveal");
+check('[login] ?reveal (the sign-in the lock leads to) shows a one-field password form, headed Sign in because both passwords exist', $sv1 === 200 && str_contains($bv1, 'name="login_password"') && str_contains($bv1, 'Sign in'));
+[$sv2, , $hv2] = http_post("$baseLogin/?reveal", ['login_password' => 'view-pw'], [], false);
+check('[login] the right private-view password redirects to the plain gallery and sets the viewer cookie', $sv2 === 302 && str_contains($cookieOf($hv2), '='));
 // Five wrong passwords lock the next attempt for a minute, even a right one.
 for ($i = 0; $i < 5; $i++) http_post("$baseLogin/?admin", ['login_password' => 'bad' . $i]);
 [$s7] = http_post("$baseLogin/?admin", ['login_password' => 'login-pw']);
 check('[login] five wrong passwords lock the next attempt (429), even with the right password', $s7 === 429);
-// The private view uses the same kind of form.
-[$sv1, $bv1] = http_get("$baseLogin/?reveal");
-check('[login] ?reveal shows a one-field password form too', $sv1 === 200 && str_contains($bv1, 'name="login_password"') && str_contains($bv1, 'Private view'));
-[$sv2, , $hv2] = http_post("$baseLogin/?reveal", ['login_password' => 'view-pw'], [], false);
-check('[login] the right private-view password redirects to the plain gallery and sets the viewer cookie', $sv2 === 302 && str_contains($cookieOf($hv2), '='));
+check('[login] ...and the shared sign-in box holds that address too: the right private-view password is refused (429) until the lockout passes, while just opening the form is not', http_post("$baseLogin/?reveal", ['login_password' => 'view-pw'], [], false)[0] === 429 && http_get("$baseLogin/?reveal")[0] === 200);
 
 // A browser that saved a Basic password from an older version keeps sending it. That must never bring the
 // browser's own dialog back: a 401 with the form, no WWW-Authenticate, and the form still logs you in.
@@ -3055,24 +3096,25 @@ file_put_contents("$fxStale/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 
 copy(__DIR__ . '/../index.php', "$fxStale/index.php");
 $portStale = find_free_port(); start_server($fxStale, $portStale); $baseStale = "http://127.0.0.1:$portStale";
 $staleHdr = ['Authorization: Basic ' . base64_encode('admin:a-password-saved-long-ago')];
+// (These three come first: every request that carries a wrong password counts against the sign-in throttle, which is shared.)
+[$stA, $stBodyA] = http_get("$baseStale/?admin", $staleHdr);
+[$stR, $stBodyR] = http_get("$baseStale/?reveal", $staleHdr);
+$stLoginStatus = http_post("$baseStale/?reveal", ['login_password' => 'view-pw'], $staleHdr, false)[0];
 $challenges = [];
 foreach (['?admin', '?reveal', '?admin&folder=Sub', '?admin&hidden=1', '?map', ''] as $route) {
     [$stSt, , $stHd] = http_get("$baseStale/$route", $staleHdr, false);
     foreach ($stHd as $h) if (stripos($h, 'WWW-Authenticate') === 0) $challenges[] = "$route: $h";
 }
-[$stA, $stBodyA] = http_get("$baseStale/?admin", $staleHdr);
-[$stR, $stBodyR] = http_get("$baseStale/?reveal", $staleHdr);
 check('[stale password] no route ever answers with a WWW-Authenticate challenge, even when the browser re-sends an old saved password', $challenges === [], implode(' | ', $challenges));
 check('[stale password] ?admin and ?reveal answer such a request with 401 and the ordinary login form, saying the saved password doesn\'t match', $stA === 401 && $stR === 401 && str_contains($stBodyA, 'name="login_password"') && str_contains($stBodyR, 'name="login_password"') && str_contains($stBodyA, 'saved password') && str_contains($stBodyR, 'saved password'));
-check('[stale password] typing the current password into the form still logs you in while the browser keeps sending the old one', http_post("$baseStale/?reveal", ['login_password' => 'view-pw'], $staleHdr, false)[0] === 302);
+check('[stale password] typing the current password into the form still logs you in while the browser keeps sending the old one', $stLoginStatus === 302);
 check('[stale password] the source never sends a WWW-Authenticate header at all (a guard against it creeping back)', !preg_match('/header\(\s*[\'"]WWW-Authenticate/i', $indexContents));
 
 // The gallery title is the (unmarked) way to the admin.
 [, $homeLogin] = http_get("$baseLogin/");
-check('[login] the gallery title links to ?admin', str_contains($homeLogin, '<h1><a class="title-admin" rel="nofollow" href="?admin">Summer in Lisbon</a></h1>'));
-check('[login] ...and the link carries no styling that would give it away (no underline, colour, cursor or hover rule)', (bool) preg_match('/header h1 a\.title-admin \{\s*color: inherit;\s*text-decoration: none;\s*cursor: inherit;/', $homeLogin) && !str_contains($homeLogin, 'title-admin:hover'));
+check('[login] the gallery title is plain text with a lock beside it that leads to the sign-in (the title no longer links to the admin)', str_contains($homeLogin, '<h1>Summer in Lisbon<a class="lock-link" href="?reveal"') && !str_contains($homeLogin, 'title-admin'));
 [, $subLogin] = http_get("$baseLogin/?folder=Sub");
-check('[login] on a folder page the title leads to that folder\'s admin', str_contains($subLogin, 'href="?admin&amp;folder=Sub"'));
+check('[login] on a folder page the lock remembers the folder, so signing in as the owner opens that folder\'s admin', str_contains($subLogin, 'class="lock-link" href="?reveal&amp;folder=Sub"'));
 $fxPlainTitle = new_fixture_dir('plaintitle'); make_jpeg("$fxPlainTitle/a.jpg", 60, 60, 1, 2, 3); copy(__DIR__ . '/../index.php', "$fxPlainTitle/index.php");
 $portPlainTitle = find_free_port(); start_server($fxPlainTitle, $portPlainTitle);
 $plainTitle = http_get("http://127.0.0.1:$portPlainTitle/")[1];
@@ -3239,7 +3281,7 @@ write_patched_index("$fxFam/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' 
 $portFam = find_free_port(); start_server($fxFam, $portFam); $baseFam = "http://127.0.0.1:$portFam";
 $famAuth = 'Authorization: Basic ' . base64_encode('admin:fam-admin');
 [, $famHome] = http_get("$baseFam/");
-check('[family] everyone sees everything at first, and there is no lock yet because nothing is private', str_contains($famHome, 'alt="kids.jpg"') && str_contains($famHome, 'id="group-birthday"') && !str_contains($famHome, 'class="lock-link') && str_contains($famHome, '5 photos'));
+check('[family] everyone sees everything at first (the lock is already there, as the way to the admin)', str_contains($famHome, 'alt="kids.jpg"') && str_contains($famHome, 'id="group-birthday"') && str_contains($famHome, 'class="lock-link" href="?reveal"') && str_contains($famHome, '5 photos'));
 [, $fAdmin, $fHd] = http_get("$baseFam/?admin", [$famAuth]); $famCookie = extract_cookie_header($fHd); $famHdrs = [$famAuth, "Cookie: $famCookie"];
 $r = flag_post("$baseFam/?admin", $fAdmin, $famHdrs, 'private', true, ['kids.jpg']);
 check('[family] switching "Private" on for kids.jpg works, in place', ($r['ok'] ?? null) === true && str_contains((string) $r['text'], 'now private'));

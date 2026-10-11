@@ -925,7 +925,7 @@ if (ENABLE_MAP && isset($_GET['mapicon'])) {
     exit;
 }
 
-// ?reveal — the "Private view" link in the footer. See run_reveal_route()
+// ?reveal — the lock beside the gallery title (the one sign-in). See run_reveal_route()
 // for the full HTTPS/throttle/auth flow; checked early, like ?about/
 // ?download, since it's a distinct mode of this one file, not something
 // that needs $groups or any of the scan below.
@@ -2473,13 +2473,21 @@ function order_folder_children($dir, $prefix, $names) {
  */
 function run_reveal_route($dir) {
     send_sensitive_page_headers();
-    if (PRIVATE_VIEW_PASSWORD === '') {
+    // One sign-in for the lock beside the title: the private-view password shows the private items, the admin password
+    // signs in to the admin. Either alone is enough for the form to exist.
+    if (PRIVATE_VIEW_PASSWORD === '' && ADMIN_PASSWORD === '') {
         http_response_code(404);
         return;
     }
     // Back to the page the visitor came from (a folder's page stays on that folder).
-    $backFolder = isset($_REQUEST['folder']) && is_string($_REQUEST['folder']) && $_REQUEST['folder'] !== '' && strlen($_REQUEST['folder']) < 1024 && strpbrk($_REQUEST['folder'], "\0\r\n") === false
-        ? '?folder=' . rawurlencode($_REQUEST['folder']) : '';
+    $okParam = function ($k) { return isset($_REQUEST[$k]) && is_string($_REQUEST[$k]) && $_REQUEST[$k] !== '' && strlen($_REQUEST[$k]) < 1024 && strpbrk($_REQUEST[$k], "\0\r\n") === false; };
+    $backFolder = $okParam('folder') ? '?folder=' . rawurlencode($_REQUEST['folder']) : '';
+    // ...and to the very same page: a folder, an open photo, the open map.
+    $backParts = [];
+    if ($okParam('folder')) $backParts[] = 'folder=' . rawurlencode($_REQUEST['folder']);
+    if ($okParam('photo')) $backParts[] = 'photo=' . rawurlencode($_REQUEST['photo']);
+    if (isset($_REQUEST['map'])) $backParts[] = 'map';
+    $backPage = $backParts ? '?' . implode('&', $backParts) : '';
     // The lock beside the title, when it is open, locks the private items again: whoever is signed in (a viewer with the
     // private-view password, or the owner signed in to the admin) is signed out of this browser.
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
@@ -2492,7 +2500,7 @@ function run_reveal_route($dir) {
             session_destroy();
         }
         setcookie(REVEAL_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
-        header('Location: ./' . $backFolder, true, 303);
+        header('Location: ./' . $backPage, true, 303);
         return;
     }
     if (!is_https_request() && !is_local_request()) {
@@ -2500,12 +2508,9 @@ function run_reveal_route($dir) {
         return;
     }
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-    if (!login_throttle_allows($dir, 'reveal', $ip)) {
-        http_response_code(429);
-        header('Content-Type: text/plain; charset=UTF-8');
-        echo 'Too many failed attempts. Try again in a moment.';
-        return;
-    }
+    $heading = ADMIN_PASSWORD !== '' && PRIVATE_VIEW_PASSWORD !== '' ? 'Sign in' : (ADMIN_PASSWORD !== '' ? 'Gallery admin' : 'Private view');
+    $prompt = ADMIN_PASSWORD !== '' && PRIVATE_VIEW_PASSWORD !== '' ? 'Enter your password: the private-view password shows the private items, the admin password opens the admin.'
+        : (ADMIN_PASSWORD !== '' ? 'Enter the admin password.' : 'Enter the password to see the private items.');
     // The form is the normal way in; a Basic Authorization header (a script,
     // a bookmarked login) is still honored. Only a password that was
     // actually *supplied* and wrong counts against the throttle: a plain
@@ -2513,22 +2518,46 @@ function run_reveal_route($dir) {
     $pass = $_SERVER['PHP_AUTH_PW'] ?? null;
     $formPass = ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_password']) && is_string($_POST['login_password'])) ? $_POST['login_password'] : null;
     $supplied = $formPass ?? $pass;
-    if (!is_string($supplied) || !hash_equals(PRIVATE_VIEW_PASSWORD, $supplied)) {
+    // Both passwords are guessed at through this one box, so a visitor who keeps failing is held back from the admin
+    // sign-in as well (per address), and the admin's own lockout holds here too. Only an attempt is refused: just
+    // looking at the form never is.
+    $attempting = $formPass !== null || isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']);
+    if ($attempting && (!login_throttle_allows($dir, 'reveal', $ip) || (ADMIN_PASSWORD !== '' && !login_throttle_allows($dir, 'admin', $ip)))) {
+        http_response_code(429);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'Too many failed attempts. Try again in a moment.';
+        return;
+    }
+    $asAdmin = is_string($supplied) && ADMIN_PASSWORD !== '' && hash_equals(ADMIN_PASSWORD, $supplied);
+    $asViewer = is_string($supplied) && PRIVATE_VIEW_PASSWORD !== '' && hash_equals(PRIVATE_VIEW_PASSWORD, $supplied);
+    if (!$asAdmin && !$asViewer) {
         if (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']) || $formPass !== null) {
             login_throttle_record_failure($dir, 'reveal', $ip);
+            if (ADMIN_PASSWORD !== '') login_throttle_record_failure($dir, 'admin', $ip);
         }
         if ($formPass === null && (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']))) {
             // A wrong saved Basic password (see admin_reject_saved_credentials): the form, never a challenge.
             http_response_code(401);
-            render_login_page('Private view', 'Enter the password to see the private items.', 'Your browser sent a saved password that doesn\'t match the current one. Type the current private-view password below.');
+            render_login_page($heading, $prompt, 'Your browser sent a saved password that doesn\'t match the current one. Type the current password below.');
             return;
         }
-        render_login_page('Private view', 'Enter the password to see the private items.', $formPass !== null ? 'That password isn\'t right.' : '');
+        render_login_page($heading, $prompt, $formPass !== null ? 'That password isn\'t right.' : '');
         return;
     }
     login_throttle_record_success($dir, 'reveal', $ip);
+    if ($asAdmin) {
+        // The owner: a fresh admin session, exactly as the admin's own sign-in makes one, then into the admin (on the
+        // folder they were looking at).
+        admin_start_session();
+        session_regenerate_id(true);
+        $_SESSION['admin_auth'] = admin_session_marker();
+        login_throttle_record_success($dir, 'admin', $ip);
+        set_admin_reveal_cookie();
+        header('Location: ?admin' . ($backFolder !== '' ? '&folder=' . substr($backFolder, strlen('?folder=')) : ''), true, 303);
+        return;
+    }
     set_reveal_cookie();
-    header('Location: ./' . $backFolder, true, 302);
+    header('Location: ./' . $backPage, true, 302);
 }
 
 /* -----------------------------------------------------------------------
@@ -5631,7 +5660,8 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             }
             session_destroy();
             setcookie(REVEAL_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
-            header('Location: ' . gallery_root_href(), true, 303);
+            // Back on the gallery page of the folder being edited, now signed out.
+            header('Location: ' . ($adminFolderPath !== null ? '?folder=' . rawurlencode($adminFolderPath) : gallery_root_href()), true, 303);
             return;
         }
         if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch' && in_array($resultMessage['type'] ?? '', ['ok', 'error'], true)) {
@@ -7417,20 +7447,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     padding: 32px 24px 16px;
     text-align: center;
   }
-  /* The title is also the way into ?admin, deliberately unmarked: it looks
-     and behaves like plain text (no underline, colour, cursor or hover
-     change). Keyboard focus still shows the browser's normal ring. */
   /* The lock beside the title: quiet until pointed at. */
   header h1 .lock-form { display: inline; margin: 0; }
   header h1 .lock-link { display: inline-block; margin-left: 3px; padding: 0; vertical-align: 0.1em; background: none; border: 0; cursor: pointer; font-size: 0.62em; color: var(--muted); opacity: 0.7; line-height: 1; text-decoration: none; }
   header h1 .lock-link:hover, header h1 .lock-link:focus-visible { opacity: 1; color: var(--text); }
   header h1 .lock-link.open { color: #3ba55c; opacity: 0.85; }
-  header h1 a.title-admin {
-    color: inherit;
-    text-decoration: none;
-    cursor: inherit;
-    -webkit-tap-highlight-color: transparent;
-  }
   /* Breadcrumb: a row of pills (the separators in the markup are hidden)
      with a chevron before each level after the first. */
   header p.breadcrumb {
@@ -7990,17 +8011,24 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 <?= ui_icon_sprite() ?>
 
 <?php
-// The lock beside the title, when there is a private-view password and something private to unlock. Closed: a link to
-// enter the password. Open: this browser is signed in (with the password, or as the owner); pressing it signs out and
-// locks the private items again.
+// The lock beside the title: the one way in. Shown when there is an admin password, or a private-view password and
+// something private to unlock. Closed: a link to the sign-in (the private-view password shows the private items, the
+// admin password opens the admin). Open: this browser is signed in (with either); pressing it signs out and locks the
+// private items again.
 $lockHtml = '';
-if (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems) {
+if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)) {
     $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
+    // The open photo and the open map are part of "the page you are on" too: signing in or out brings you back to them.
+    $lockPhoto = isset($_GET['photo']) && is_string($_GET['photo']) && $_GET['photo'] !== '' && strlen($_GET['photo']) < 1024 ? $_GET['photo'] : '';
+    $lockHere = $lockFolderQuery . ($lockPhoto !== '' ? '&amp;photo=' . htmlspecialchars(rawurlencode($lockPhoto), ENT_QUOTES, 'UTF-8') : '') . (isset($_GET['map']) ? '&amp;map' : '');
+    $lockHidden = '<input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '">'
+        . ($lockPhoto !== '' ? '<input type="hidden" name="photo" value="' . htmlspecialchars($lockPhoto, ENT_QUOTES, 'UTF-8') . '">' : '')
+        . (isset($_GET['map']) ? '<input type="hidden" name="map" value="1">' : '');
     if (is_admin_browser() || is_revealed()) {
         $lockWho = is_admin_browser() ? 'You are signed in as the owner, so private items show. Press to sign out and lock them.' : 'Private items are showing. Press to lock them again.';
-        $lockHtml = '<form method="post" action="?reveal" class="lock-form"><input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '"><button type="submit" name="logout" value="1" class="lock-link open" title="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '" aria-label="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('unlock') . '</button></form>';
+        $lockHtml = '<form method="post" action="?reveal" class="lock-form">' . $lockHidden . '<button type="submit" name="logout" value="1" class="lock-link open" title="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '" aria-label="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('unlock') . '</button></form>';
     } else {
-        $lockHtml = '<a class="lock-link" href="?reveal' . $lockFolderQuery . '" rel="nofollow" title="This gallery has private items. Enter the password to see them." aria-label="This gallery has private items. Enter the password to see them.">' . ui_icon('lock') . '</a>';
+        $lockHtml = '<a class="lock-link" href="?reveal' . $lockHere . '" rel="nofollow" title="Sign in: a private-view password shows private items, the admin password opens the admin." aria-label="Sign in">' . ui_icon('lock') . '</a>';
     }
 }
 ?>
@@ -8008,11 +8036,7 @@ if (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems) {
   <?php if ($currentFolderPath !== null): ?>
     <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
   <?php endif; ?>
-  <?php if (ADMIN_PASSWORD !== ''): ?>
-    <h1><a class="title-admin" rel="nofollow" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a><?= $lockHtml ?></h1>
-  <?php else: ?>
-    <h1><?= htmlspecialchars($pageTitle) ?><?= $lockHtml ?></h1>
-  <?php endif; ?>
+  <h1><?= htmlspecialchars($pageTitle) ?><?= $lockHtml ?></h1>
   <?php $headerMeta = $currentFolderPath !== null ? $currentFolderMeta : $rootMeta; ?>
   <?php if ($headerMeta['dates'] !== ''): ?>
     <p class="folder-dates"><?= htmlspecialchars($headerMeta['dates']) ?></p>
@@ -8287,7 +8311,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php endif; ?>
 
 <footer>
-  <a href="?about">gallery</a><?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?> · <?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?><?php endif; ?>
+  <a href="?about">gallery</a><?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?> · <?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?><?php endif; ?><?php if (ADMIN_PASSWORD !== '' && is_admin_browser()): ?> · <a href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" rel="nofollow">Admin</a><?php endif; ?>
 </footer>
 
 <div class="lightbox" id="lightbox">
