@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Versions correspond to 
 
 ## [2.0.2] - 2026-10-11
 
+### Added
+- **Select several photos and make them private (or public) in one go.** A **Select photos** button above the thumbnail grid turns on a selection mode: pick thumbnails (or *Select all*), then **Make private** or **Make public**. Choosing none, or a photo that isn't there, changes nothing and says why.
+- **Map pin grouping can be turned off, and goes below one mile.** `0` means no grouping (every photo its own pin), and fractions such as `0.1` are accepted, both site-wide and per folder, for very dense cities where photos are taken metres apart. Pressing a numbered pin now zooms in as far as street level (it stopped at a zoom where close photos still overlapped).
+- **A page of only a few folders shows larger cover cards on a wide screen.** One to four folders and nothing else: one to four big cards, centred, instead of small tiles in an empty page. Phones and narrow windows keep the normal grid, and a page with loose photos or more folders is unchanged.
+
+### Changed
+- **"Hide" is now "private" everywhere** in the admin and docs (Private switch, "Make this entire folder private", the red **Private** entry and page), matching the private-view password it pairs with.
+- **A photo's privacy and location visibility are switches that save themselves**, in place of two dropdowns plus a Save button. **Private** is on when the photo is private (including by its folder); **Show its location** is on when its location is shown. Turning Private on, or a location off, is always stored on the photo itself, so it stays that way even if its folder's setting changes later. Flipping a switch no longer makes the caption form look out of date.
+- **Password rules.** The admin password needs at least 8 characters with a letter and a number (it was 12 characters of anything); the private-view password may be any length (it was 6 or more).
+
 ### Changed
 - **Adding a place from elsewhere on the server now puts its folders at the top of the gallery.** Adding `/space/trip` (holding `Paris` and `StTropez`) used to create a folder named after what you typed, with Paris and StTropez nested inside it. With only a path, the folders inside it now appear at the top, as if they lived in the gallery: Paris and StTropez, nothing in between. Give the place a name and it still shows as one folder with that name, as before. A real folder of the same name wins; photos lying directly in the added place are not shown (a setup notice counts them). In Site settings the row now takes a path and an optional name; in the settings file the new list is `EXTRA_ROOTS` (`EXTRA_FOLDERS` keeps its named form, so existing settings work unchanged).
 

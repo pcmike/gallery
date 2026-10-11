@@ -2533,6 +2533,8 @@ function haversine_miles($lat1, $lng1, $lat2, $lng2) {
  *  tightest possible grouping, which is fine for "nearby photos read as
  *  one pin," not a precision clustering problem. */
 function cluster_map_points($points, $radiusMiles) {
+    // 0 means no grouping at all: every photo is its own pin (for a dense city, where even a tenth of a mile is too much).
+    if ($radiusMiles <= 0) return array_map(function ($p) { return [$p]; }, array_values($points));
     $clusters = [];
     $used = array_fill(0, count($points), false);
     for ($i = 0; $i < count($points); $i++) {
@@ -2590,7 +2592,7 @@ function folder_map_enabled($dir, $folderPath) {
 function folder_map_radius($dir, $folderPath) {
     $data = items_read($folderPath === null ? $dir : resolve_real_path($dir, $folderPath));
     $r = $data['mapRadius'] ?? null;
-    return (is_int($r) || is_float($r)) && $r >= 1 && $r <= 10000 ? $r : MAP_CLUSTER_RADIUS_MILES;
+    return (is_int($r) || is_float($r)) && $r >= 0 && $r <= 10000 ? $r : MAP_CLUSTER_RADIUS_MILES;
 }
 
 /** The points for one folder's map: just those inside it (and its subfolders),
@@ -2774,7 +2776,7 @@ function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, 
       map.removeLayer(marker);
       var bounds = members.map(function (m) { return [m.lat, m.lng]; });
       members.forEach(addSingle);
-      map.fitBounds(bounds, { maxZoom: 15, padding: [30, 30] });
+      map.fitBounds(bounds, { maxZoom: 18, padding: [30, 30] });
     });
   });
 
@@ -3526,10 +3528,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $rawRadius = trim((string) $_POST['map_radius']);
             if ($rawRadius === '') {
                 $updates['mapRadius'] = null;
-            } elseif (is_numeric($rawRadius) && (float) $rawRadius >= 1 && (float) $rawRadius <= 10000) {
+            } elseif (is_numeric($rawRadius) && (float) $rawRadius >= 0 && (float) $rawRadius <= 10000) {
                 $updates['mapRadius'] = (float) $rawRadius == (int) $rawRadius ? (int) $rawRadius : (float) $rawRadius;
             } else {
-                return ['type' => 'error', 'text' => 'Pin grouping must be a number of miles from 1 to 10000, or blank to use the site-wide setting.'];
+                return ['type' => 'error', 'text' => 'Pin grouping must be a number of miles from 0 (no grouping) to 10000, or blank to use the site-wide setting.'];
             }
         }
         if (!$updates) return ['type' => 'error', 'text' => 'Nothing to save.'];
@@ -3818,9 +3820,9 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
         <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'The map covers every photo in the gallery with a visible location.' : 'The map covers the photos in this folder and its subfolders that have a visible location (this folder\'s own location switch above must be on).' ?></p>
         <div class="field" style="max-width:300px;">
           <label>Pin grouping (miles)</label>
-          <input type="number" name="map_radius" min="1" max="10000" step="1" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?> (site-wide)">
+          <input type="number" name="map_radius" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?> (site-wide)">
           <span class="rowstate" role="status" aria-live="polite"></span>
-          <p class="hint">Photos closer together than this share one numbered pin. Leave blank to use the site-wide setting (<?= (int) MAP_CLUSTER_RADIUS_MILES ?>). A city trip wants a small number, a road trip a big one.</p>
+          <p class="hint">Photos closer together than this share one numbered pin; pressing a numbered pin zooms in and splits it into its photos' own pins. Fractions are fine (0.1), and <strong>0 turns grouping off</strong>, so every photo is its own pin, which suits a very dense city. Leave blank to use the site-wide setting (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>). A road trip wants a big number.</p>
         </div>
         <div class="nojs-only"><button type="submit" class="secondary">Save map settings</button></div>
       </form>
@@ -3964,8 +3966,8 @@ function gallery_setting_definitions() {
              'help' => 'A map of every photo that has a visible location. Needs "Allow photo locations".',
              'risk' => 'The map loads its code from cdnjs and its map tiles from OpenStreetMap in each visitor\'s browser, so those two sites can see that someone visited.',
              'offwarn' => 'The maps will disappear. Nothing is deleted: every photo location stays saved.'],
-            ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 1, 'max' => 10000,
-             'help' => 'Photos closer together than this share one numbered pin. 50 suits most trips; a dense city trip wants less. This is the default: each folder, and the gallery front page, can set its own in its settings.'],
+            ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any',
+             'help' => 'Photos closer together than this share one numbered pin, and pressing a numbered pin zooms in to its photos. 50 suits most trips; a dense city wants far less (fractions such as 0.1 are fine), and 0 turns grouping off so every photo is its own pin. This is the default: each folder, and the gallery front page, can set its own in its settings.'],
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
@@ -4208,7 +4210,7 @@ function render_admin_site_settings($csrfToken) {
                     <p class="hint">Without a name, the folders inside that place appear at the top of the gallery (<code>/space/trip</code> holding <code>Paris</code> and <code>StTropez</code> gives you Paris and StTropez). With a name, the whole place shows as that one folder.</p>
                   </div>
                 <?php else: ?>
-                  <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="1" value="<?= $esc($now) ?>" style="max-width:110px;">
+                  <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="<?= $esc($d['step'] ?? '1') ?>" value="<?= $esc($now) ?>" style="max-width:110px;">
                 <?php endif; ?>
                 <span class="meta">default: <?= $esc($show($def)) ?></span>
                 <span class="rowstate" role="status" aria-live="polite"></span>
@@ -7596,6 +7598,19 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 10px;
   }
+  /* A few folder cards and nothing else: larger on a wide screen, centred. Narrower screens keep the normal grid. */
+  .gallery[class*="covers-"] .folder-cover-link img { aspect-ratio: 4 / 3; }
+  .gallery[class*="covers-"] .folder-cover-label { font-size: 1.1rem; }
+  @media (min-width: 640px) {
+    .gallery.covers-1 { grid-template-columns: minmax(0, 560px); justify-content: center; }
+    .gallery.covers-2 { grid-template-columns: repeat(2, minmax(0, 520px)); justify-content: center; gap: 18px; }
+  }
+  @media (min-width: 860px) {
+    .gallery.covers-3 { grid-template-columns: repeat(3, minmax(0, 400px)); justify-content: center; gap: 16px; }
+  }
+  @media (min-width: 1080px) {
+    .gallery.covers-4 { grid-template-columns: repeat(4, minmax(0, 300px)); justify-content: center; gap: 14px; }
+  }
   .group-box {
     grid-column: 1 / -1;
     margin: 6px 0;
@@ -8203,7 +8218,13 @@ if (ENABLE_MAP && $mapPoints) {
 <?php if (empty($files)): ?>
   <div class="empty">No photos found in this folder.</div>
 <?php else: ?>
-  <div class="gallery">
+  <?php
+  // A page of nothing but a few folder cards gets bigger cards on a wide screen (two folders shouldn't be two small
+  // tiles in a big empty page). Anything else, and every phone, keeps the usual grid.
+  $coverCount = FOLDER_DISPLAY_MODE === 'overview' ? count($folderGroupKeys) : 0;
+  $fewCovers = ($coverCount >= 1 && $coverCount <= 4 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
+  ?>
+  <div class="gallery<?= $fewCovers ?>">
     <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix) ?>
   </div>
 <?php endif; ?>

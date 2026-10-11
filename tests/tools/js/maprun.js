@@ -34,6 +34,6 @@ for (const m of rec.markers) {
   m.handlers.click();
   ok(m.removed === true, `clicking a ${n}-point cluster removes its numbered marker`);
   ok(rec.circles.length - before === n, `...and adds its ${n} individual pins`);
-  ok(rec.bounds[rec.bounds.length - 1][1].maxZoom === 15, '...and zooms to them (maxZoom 15)');
+  ok(rec.bounds[rec.bounds.length - 1][1].maxZoom === 18, '...and zooms to them (as far as street level, maxZoom 18)');
 }
 print(fails ? `\n${fails} FAILED` : '\nmap script: all checks passed'); std.exit(fails ? 1 : 0);

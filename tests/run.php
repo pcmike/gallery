@@ -2380,7 +2380,9 @@ $pinCols = function ($body) { preg_match_all('/"color":"(#[0-9a-f]+|[a-z]+)"/i',
 [, $pinPage] = http_get("http://127.0.0.1:$portPin/?map");
 check('[pin colours] a note\'s {color:} on a folder colours that folder\'s pins on the page map, and {sold} turns its pins red', in_array('#ff0000', $pinCols($pinHome), true) && in_array('#e5484d', $pinCols($pinHome), true));
 check('[pin colours] ...and the full map (the page with ?map, overlay open) agrees, with the legend using the same colours', in_array('#ff0000', $pinCols($pinPage), true) && in_array('#e5484d', $pinCols($pinPage), true) && str_contains($pinPage, 'map-legend-swatch" style="background:#ff0000;"') && str_contains($pinPage, 'id="trip-map-modal"'));
-check('[pin colours] ?map is the gallery page itself with the map overlay set to open, previewing as the map (title, description and the map icon), and exactly one document', str_contains($pinPage, 'class="gallery"') && str_contains($pinPage, 'if (true) show();') && str_contains($pinPage, '<meta property="og:title" content="') && str_contains($pinPage, ' — Map">') && str_contains($pinPage, 'og:image" content="http://127.0.0.1:' . $portPin . '/?mapicon"') && str_contains($pinPage, '2 locations plotted') && substr_count($pinPage, '<!DOCTYPE html>') === 1 && str_contains($pinHome, 'if (false) show();'));
+check('[pin colours] ?map is the gallery page itself with the map overlay set to open, previewing as the map (title, description and the map icon), and exactly one document', str_contains($pinPage, 'class="gallery') && str_contains($pinPage, 'if (true) show();') && str_contains($pinPage, '<meta property="og:title" content="') && str_contains($pinPage, ' — Map">') && str_contains($pinPage, 'og:image" content="http://127.0.0.1:' . $portPin . '/?mapicon"') && str_contains($pinPage, '2 locations plotted') && substr_count($pinPage, '<!DOCTYPE html>') === 1 && str_contains($pinHome, 'if (false) show();'));
+check('[cover size] a page of nothing but two folders gets the larger-card layout (covers-2)', str_contains($pinHome, '<div class="gallery covers-2">') && str_contains($pinHome, '.gallery.covers-2 { grid-template-columns: repeat(2, minmax(0, 520px))'));
+check('[cover size] a page that also has a loose photo keeps the normal grid', str_contains($fnRoot, '<div class="gallery">') && !str_contains($fnRoot, 'class="gallery covers-'));
 file_put_contents("$fxPin/n.md", "{gallery}\n\nNothing coloured here.\n");
 usleep(300000);
 [, $pinPlain] = http_get("http://127.0.0.1:$portPin/?map");
@@ -2841,9 +2843,16 @@ check('[folder maps] ...without touching any other page: the root map, on the si
 [, $mapOnly] = http_get("$baseMapF/?map&folder=Paris");
 check('[folder maps] the folder has its own shareable map link: the page of the folder with the map open, only its photos, its own link in the share preview, and the breadcrumb back', str_contains($mapOnly, 'og:url" content="http://127.0.0.1:' . $portMapF . '/?map&amp;folder=Paris"') && $mapFiles($mapOnly)['files'] === ['Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg'] && str_contains($mapOnly, 'if (true) show();') && str_contains($mapOnly, 'class="breadcrumb"'));
 check('[folder maps] a folder that has not switched its map on, or that does not exist, has no map page (404)', http_get("$baseMapF/?map&folder=Lisbon")[0] === 404 && http_get("$baseMapF/?map&folder=Nope")[0] === 404);
-[, $badR] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '0'], $mapHdrs);
+[, $badR] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '-1'], $mapHdrs);
 [, $badR2] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => 'abc'], $mapHdrs);
-check('[folder maps] a pin grouping that is not a number from 1 to 10000 is refused with the reason, and the saved one stays', str_contains($badR, 'from 1 to 10000') && str_contains($badR2, 'from 1 to 10000') && ($mapFiles(http_get("$baseMapF/?folder=Paris")[1])['clusters'] ?? 0) === 3);
+check('[folder maps] a pin grouping that is not a number from 0 to 10000 is refused with the reason, and the saved one stays', str_contains($badR, 'from 0 (no grouping) to 10000') && str_contains($badR2, 'from 0 (no grouping) to 10000') && ($mapFiles(http_get("$baseMapF/?folder=Paris")[1])['clusters'] ?? 0) === 3);
+// 0 means no grouping at all, and fractions of a mile are allowed.
+user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '0'], $mapHdrs);
+$noGroup = $mapFiles(http_get("$baseMapF/?folder=Paris")[1]);
+check('[folder maps] a pin grouping of 0 is accepted and means no grouping: every photo is its own pin, however close', (read_data_file("$fxMapF/Paris/.gallery-items.php")['mapRadius'] ?? null) === 0 && ($noGroup['clusters'] ?? 0) === count($noGroup['files'] ?? []) && count($noGroup['files'] ?? []) === 3);
+user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '0.1'], $mapHdrs);
+check('[folder maps] a fraction of a mile is accepted too (0.1)', (read_data_file("$fxMapF/Paris/.gallery-items.php")['mapRadius'] ?? null) === 0.1);
+user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '1'], $mapHdrs);
 $rootMapAdmin = http_get("$baseMapF/?admin", $mapHdrs)[1];
 $rootMapFields = form_default_fields($mapForm($rootMapAdmin)); $rootMapFields['map_enabled'] = '0'; $rootMapFields['map_radius'] = '10';   // the hidden 0 is what an unchecked switch sends
 http_post("$baseMapF/?admin", $rootMapFields, $mapHdrs);
@@ -2870,7 +2879,7 @@ check('[instant] changing only the pin grouping leaves the switch as it was', ($
 $jBlank = $mapAjax('&folder=Paris', ['map_radius' => '']);
 check('[instant] clearing the pin grouping goes back to the site-wide setting, and says so', ($jBlank['ok'] ?? null) === true && str_contains((string) $jBlank['text'], 'site-wide') && array_key_exists('mapRadius', $parisData()) && $parisData()['mapRadius'] === null);
 $jBad = $mapAjax('&folder=Paris', ['map_radius' => '-4']);
-check('[instant] an invalid pin grouping answers JSON with the reason and changes nothing', ($jBad['ok'] ?? null) === false && str_contains((string) $jBad['text'], 'from 1 to 10000') && array_key_exists('mapRadius', $parisData()) && $parisData()['mapRadius'] === null);
+check('[instant] an invalid pin grouping answers JSON with the reason and changes nothing', ($jBad['ok'] ?? null) === false && str_contains((string) $jBad['text'], 'from 0 (no grouping) to 10000') && array_key_exists('mapRadius', $parisData()) && $parisData()['mapRadius'] === null);
 $locAjax = function ($path, $on) use ($baseMapF, $mapHdrs, $mapForm) {
     [, $pg] = http_get("$baseMapF/?admin$path", $mapHdrs); $ff = form_default_fields($mapForm($pg));
     [, $body] = http_post("$baseMapF/?admin$path", ['csrf_token' => $ff['csrf_token'], 'action' => 'toggle_location_enabled', 'enabled' => $on ? '1' : '0'], array_merge($mapHdrs, ['X-Requested-With: gallery-fetch']));

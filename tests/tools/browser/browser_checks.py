@@ -564,6 +564,37 @@ try:
     b.viewport(390, 844, mobile=True); b.goto(B2 + "/?admin#site", 1.2); shot(b, "15-site-settings-phone")
     ok(b.js(overflow), "[site settings] no horizontal scrolling on a phone", f"scrollWidth={b.js('document.documentElement.scrollWidth')}")
     srv2.terminate(); srv2.wait()
+    # ---------------- a page of only a few folders ----------------
+    print("== a few folders only")
+    SITE4 = WORK + "/site4"; os.makedirs(SITE4)
+    shutil.copy(HERE + "/../../../index.php", SITE4 + "/index.php"); os.utime(SITE4 + "/index.php", (time.time() - 3600,) * 2)
+    open(SITE4 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"AUTO_GROUP_BY_FOLDER": true}\n')
+    for nme in ("Paris", "Lisbon", "Rome", "Oslo", "Bern"):
+        os.makedirs(SITE4 + "/" + nme)
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(400,300); imagejpeg($i, $argv[1]);", SITE4 + "/" + nme + "/x.jpg"], check=True)
+    s4 = socket.socket(); s4.bind(("127.0.0.1", 0)); PORT4 = s4.getsockname()[1]; s4.close(); B4 = f"http://127.0.0.1:{PORT4}"
+    srv4 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT4}", "-t", SITE4], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    cardw = "Math.round(document.querySelector('.folder-cover').getBoundingClientRect().width)"
+    b.viewport(1280, 900)
+    shutil.rmtree(SITE4 + "/Rome"); shutil.rmtree(SITE4 + "/Oslo"); shutil.rmtree(SITE4 + "/Bern")
+    b.goto(B4 + "/", 1.5); shot(b, "18-two-folders-desktop")
+    w2 = b.js(cardw)
+    ok(w2 >= 450, "[few folders] with only two folders a desktop shows large cover cards, not two small tiles", str(w2))
+    b.viewport(390, 844, mobile=True); b.goto(B4 + "/", 1.2); shot(b, "18b-two-folders-phone")
+    wp = b.js(cardw)
+    ok(120 <= wp <= 200 and b.js(overflow), "[few folders] on a phone the same page keeps the normal two-up grid, with no sideways scrolling", str(wp))
+    os.makedirs(SITE4 + "/Rome"); subprocess.run(["php", "-r", "$i=imagecreatetruecolor(400,300); imagejpeg($i, $argv[1]);", SITE4 + "/Rome/x.jpg"], check=True)
+    b.viewport(1280, 900); b.goto(B4 + "/", 1.2)
+    w3 = b.js(cardw)
+    ok(300 <= w3 <= 410, "[few folders] three folders get medium-large cards", str(w3))
+    for nme in ("Oslo", "Bern"):
+        os.makedirs(SITE4 + "/" + nme); subprocess.run(["php", "-r", "$i=imagecreatetruecolor(400,300); imagejpeg($i, $argv[1]);", SITE4 + "/" + nme + "/x.jpg"], check=True)
+    b.goto(B4 + "/", 1.2)
+    w5 = b.js(cardw)
+    ok(w5 < 260, "[few folders] five folders are back to the normal grid", str(w5))
+    srv4.terminate(); srv4.wait()
+    b.viewport(1280, 900)
     # ---------------- first-run setup (a gallery that was just uploaded) ----------------
     print("== first-run setup")
     SITE3 = WORK + "/site3"; os.makedirs(SITE3)
