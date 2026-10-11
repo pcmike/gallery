@@ -785,6 +785,14 @@ if (isset($_GET['original'])) {
     exit;
 }
 
+// ?strip=<video>: the grid of frames a finger scrubs through on a video's tile.
+if (isset($_GET['strip'])) {
+    $claimed = $_GET['strip'];
+    $claimedList = valid_media_path($dir, $claimed, $mediaExtensions, $self) ? [$claimed] : [];
+    serve_video_strip($dir, $claimed, $claimedList, $claimedList ? items_get_all_for_files($dir, $claimedList) : []);
+    exit;
+}
+
 // ?preview=<video>: the short hover clip of a video.
 if (isset($_GET['preview'])) {
     $claimed = $_GET['preview'];
@@ -1779,6 +1787,70 @@ function video_preview_file($file) {
     return $base === null ? null : substr($base, 0, -4) . '.mp4';
 }
 
+/** The grid of frames a video's scrub sprite holds: ten columns and one row for every five seconds (1 to 6 rows), so a frame
+ *  about every half second for a video of half a minute or more, spread over its whole length. [columns, rows]. */
+function video_strip_layout($duration) {
+    return [10, (int) max(1, min(6, ceil($duration / 5)))];
+}
+
+/** The sprite of frames for a video (one JPEG, small square frames in a grid, spread over the whole video), which a finger
+ *  dragged across a video's tile scrubs through. Made once with ffmpeg, like the clip; null if it can't be had. */
+function video_strip_path($srcPath, $cacheDir, $filename) {
+    if (!ENABLE_VIDEO_PREVIEWS || !ENABLE_THUMBNAIL_CACHE) return null;
+    $strip = image_cache_path($cacheDir, $filename, 'strip', $srcPath);
+    if ($strip === null) return null;
+    if (is_file($strip) && filesize($strip) > 0) return $strip;
+    $failed = $strip . '.failed';
+    if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;
+    $duration = video_duration_seconds($srcPath);
+    if ($duration === null || $duration < 1) return null;
+    $bin = ffmpeg_binary();
+    if ($bin === '') return null;
+    $lock = ffmpeg_take_turn(30);
+    if (!$lock) return null;
+    if (is_file($strip) && filesize($strip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $strip; }
+    try {
+        $tmp = $strip . '.tmp' . bin2hex(random_bytes(3));
+        [$cols, $rows] = video_strip_layout($duration);
+        $args = [$bin, '-v', 'error', '-nostdin', '-y'];
+        if ($duration > 20) array_push($args, '-skip_frame', 'nokey');   // a long video: only its key frames are read, which is much quicker
+        array_push($args, '-i', $srcPath, '-an', '-map_metadata', '-1', '-vf',
+            sprintf('fps=%.5F,crop=min(iw\\,ih):min(iw\\,ih),scale=200:200,tile=%dx%d', $cols * $rows / $duration * 1.05, $cols, $rows),
+            '-frames:v', '1', '-q:v', '5', '-f', 'image2', $tmp);
+        $code = run_quietly($args, 90);
+        if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $strip)) return $strip; }
+        @unlink($tmp);
+        @touch($failed);
+        return null;
+    } finally {
+        flock($lock, LOCK_UN); fclose($lock);
+    }
+}
+
+/** ?strip=<video>: that sprite, for anyone who may see the video (same gates as the video itself); &warm only makes it. */
+function serve_video_strip($dir, $filename, $validFiles, $itemsData = []) {
+    if (!is_string($filename) || !in_array($filename, $validFiles, true) || !is_video_file($filename)
+        || (file_is_hidden($dir, $filename, $itemsData) && !is_revealed())) {
+        http_response_code(404);
+        return;
+    }
+    $strip = video_strip_path(resolve_real_path($dir, $filename), containing_folder_real_path($dir, $filename) . '/.gallery-cache', $filename);
+    if (isset($_GET['warm'])) {
+        http_response_code($strip === null ? 404 : 204);
+        header('Cache-Control: no-store');
+        return;
+    }
+    if ($strip === null) {
+        http_response_code(404);
+        return;
+    }
+    header('Content-Type: image/jpeg');
+    header('Cache-Control: ' . file_cache_control($dir, $filename, $itemsData));
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . filesize($strip));
+    readfile($strip);
+}
+
 /** True when a hover over a video tile can play a made clip. */
 function video_previews_expected() {
     return ENABLE_VIDEO_PREVIEWS && ENABLE_THUMBNAIL_CACHE && ffmpeg_binary() !== '';
@@ -2027,7 +2099,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
             $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
             $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
-            if (is_video_file($file)) $variants[] = 'poster';   // the frame taken from a video (see video_poster_path)
+            if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip'; }   // the frame taken from a video, and its sprite of frames
             $mtime = @filemtime(resolve_real_path($dir, $file));
             if (is_video_file($file)) $valid[md5($file . '|preview|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
@@ -5507,7 +5579,7 @@ function render_admin_site_settings($csrfToken) {
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
-                <div class="help ffstatus"><strong>ffmpeg on this server:</strong> <?= $ffFound !== '' ? 'found (' . $esc($ffFound) . '). Real thumbnails and short preview clips are available.' : 'not found. Videos show the browser\'s own first frame where it can play them. If it is installed somewhere unusual, put its full path as "FFMPEG_PATH" in .gallery-config.php.' ?></div>
+                <div class="help ffstatus"><strong>ffmpeg on this server:</strong> <?= $ffFound !== '' ? 'found (' . $esc($ffFound) . '). Real thumbnails, short preview clips and finger-scrubbing on a phone are available.' : 'not found. Videos show the browser\'s own first frame where it can play them. If it is installed somewhere unusual, put its full path as "FFMPEG_PATH" in .gallery-config.php.' ?></div>
                 <?php endif; ?>
                 <?php if (!empty($d['risk'])): ?><div class="risk"><?= $esc($d['risk']) ?></div><?php endif; ?>
                 <?php if (!empty($d['offwarn'])): ?><div class="warn-note offnote" hidden><?= $esc($d['offwarn']) ?></div><?php endif; ?>
@@ -8279,7 +8351,16 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
                 . (is_file($clipFile) ? ' data-preview-ready="1"' : '');
         }
     }
-    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $previewAttr . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    $stripAttr = '';
+    if (is_video_file($file) && ENABLE_VIDEO_PREVIEWS && $videoDuration !== null && $videoDuration >= 1 && video_previews_expected()) {
+        $stripBase = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'strip', resolve_real_path($GLOBALS['dir'], $file));
+        if ($stripBase !== null && !(is_file($stripBase . '.failed') && !is_file($stripBase))) {
+            [$stripCols, $stripRows] = video_strip_layout($videoDuration);
+            $stripAttr = ' data-strip="?strip=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '" data-strip-cols="' . $stripCols . '" data-strip-rows="' . $stripRows . '"'
+                . (is_file($stripBase) ? ' data-strip-ready="1"' : '');
+        }
+    }
+    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $previewAttr . $stripAttr . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $tileVideo . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -9187,6 +9268,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .card .tile-video.ready { opacity: 1; }
   .card .tile-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
   .card .tile-preview.ready { opacity: 1; }
+  /* Dragging a finger sideways across a video tile scrubs through it; up and down still scrolls the page. */
+  .card[data-strip] { touch-action: pan-y; }
+  .card .tile-strip { position: absolute; inset: 0; background-repeat: no-repeat; pointer-events: none; }
   .card:hover .tile-video { transform: scale(1.05); }
   .card.sold img, .card.sold .tile-video { filter: grayscale(1) brightness(0.6); }
   .sold-badge-corner, .reserved-badge-corner {
@@ -9332,9 +9416,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-web, .lightbox-download { text-decoration: none; font-size: 1rem; }
-  .lightbox-map-toggle.off { opacity: 0.35; filter: grayscale(1); }
-  .lightbox-map-toggle.nudge { opacity: 1; filter: none; color: var(--accent); animation: map-nudge 1.4s ease-in-out 3; }
-  @keyframes map-nudge { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.45); } }
+  /* The map button reads like the other caption icons when the map is off, and in the accent colour when it is on. */
+  .lightbox-map-toggle.on { opacity: 1; color: var(--accent); }
+  .lightbox-map-toggle.nudge { opacity: 1; color: var(--accent); animation: map-nudge 0.6s ease-in-out 2; }
+  @keyframes map-nudge { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.5); } }
   @media (prefers-reduced-motion: reduce) { .lightbox-map-toggle.nudge { animation: none; } }
   /* The little map in the viewer: over the photo's top left corner; click to enlarge. */
   .lightbox-map {
@@ -9836,6 +9921,7 @@ if (ENABLE_MAP && $mapPoints) {
   });
 
   function openLightbox(index) {
+    if (window.__scrubbedAt && Date.now() - window.__scrubbedAt < 600) return;   // the tap that ends a finger-scrub of a video tile is not a tap
     if (window.__previewHalt) window.__previewHalt();   // a clip playing on a tile stops while the viewer is open
     current = index;
     updateImage();
@@ -9961,6 +10047,52 @@ if (ENABLE_MAP && $mapPoints) {
     document.addEventListener('visibilitychange', function () { if (!document.hidden) next(); });
   }
   warmUp('data-preview');
+  if ((navigator.maxTouchPoints || 0) > 0 || !hoverish) warmUp('data-strip');
+  // Scrubbing a video tile with a finger: a horizontal drag across it shows the frame under the finger (frames from the
+  // whole video, left edge = the start, right edge = the end), following the finger back and forth; a vertical drag is still
+  // the page scrolling, a plain tap still opens the viewer, and a drag never opens it. A tile whose sprite isn't made yet
+  // simply doesn't scrub (it is prepared in the background), and a playing clip gives way to the scrub.
+  document.querySelectorAll('.card[data-strip]').forEach(function (card) {
+    const cols = Number(card.getAttribute('data-strip-cols')) || 10, rows = Number(card.getAttribute('data-strip-rows')) || 1;
+    let sx = 0, sy = 0, tracking = false, scrubbing = false, overlay = null, img = null;
+    const show = function (x) {
+      const r = card.getBoundingClientRect();
+      const f = Math.min(cols * rows - 1, Math.max(0, Math.floor(Math.min(0.999, Math.max(0, (x - r.left) / r.width)) * cols * rows)));
+      const col = f % cols, row = Math.floor(f / cols);
+      const cell = r.height;   // each frame is shown as tall as the tile (the frames are square)
+      overlay.style.backgroundSize = (cell * cols) + 'px ' + (cell * rows) + 'px';
+      overlay.style.backgroundPosition = (-(col * cell) + (r.width - cell) / 2) + 'px ' + (-(row * cell)) + 'px';
+    };
+    card.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) { tracking = false; return; }
+      tracking = true; scrubbing = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      if (!img) { img = new Image(); img.src = card.getAttribute('data-strip'); }
+    }, { passive: true });
+    card.addEventListener('touchmove', function (e) {
+      if (!tracking) return;
+      const t = e.touches[0];
+      if (!scrubbing) {
+        const dx = Math.abs(t.clientX - sx), dy = Math.abs(t.clientY - sy);
+        if (dx < 8 && dy < 8) return;
+        if (dy > dx) { tracking = false; return; }
+        if (!img.complete || !img.naturalWidth) return;
+        if (window.__previewHalt) window.__previewHalt();
+        overlay = document.createElement('div'); overlay.className = 'tile-strip';
+        overlay.style.backgroundImage = 'url("' + img.src.replace(/"/g, '%22') + '")';
+        card.appendChild(overlay);
+        scrubbing = true;
+      }
+      e.preventDefault();
+      show(t.clientX);
+    }, { passive: false });
+    const end = function () {
+      tracking = false;
+      if (scrubbing) { scrubbing = false; window.__scrubbedAt = Date.now(); if (window.__previewResume) window.__previewResume(); }
+      if (overlay) { overlay.remove(); overlay = null; }
+    };
+    card.addEventListener('touchend', end);
+    card.addEventListener('touchcancel', end);
+  });
   // A video's own first frame over its placeholder, once the browser has one; if it can't play the video, nothing changes.
   document.querySelectorAll('.tile-video').forEach(function (v) {
     const ready = function () { v.classList.add('ready'); };
@@ -10133,7 +10265,7 @@ if (ENABLE_MAP && $mapPoints) {
   const mapBox = document.getElementById('lightbox-map');
   const mapToggle = document.getElementById('lightbox-map-toggle');
   const webLink = document.getElementById('lightbox-web');
-  let miniMap = null, miniMarker = null, miniExpanded = false, sessionNudged = false;
+  let miniMap = null, miniMarker = null, miniExpanded = false;
   const MINI_ZOOM = 15;
   // On a phone the little map would cover a good part of the photo, so it starts off there (and stays wherever the viewer
   // puts it after that); the pin button beside the caption turns it on, and says so with a short pulse the first time.
@@ -10202,7 +10334,11 @@ if (ENABLE_MAP && $mapPoints) {
     mapToggle.hidden = !loc;
     mapToggle.classList.toggle('off', !miniWanted());
     mapToggle.title = miniWanted() ? 'Hide the little map' : 'Show where this was taken';
-    if (!loc ? false : (!miniWanted() && remembered('galleryLightboxMap') === null && !sessionNudged)) { sessionNudged = true; mapToggle.classList.add('nudge'); setTimeout(function () { mapToggle.classList.remove('nudge'); }, 4200); }
+    mapToggle.classList.toggle('on', miniWanted());
+    // A reminder that the map is there, on every photo that has a location, for as long as the viewer hasn't pressed the button
+    // (either way): a short pulse, restarted for each photo.
+    mapToggle.classList.remove('nudge');
+    if (loc && !miniWanted() && remembered('galleryLightboxMap') === null) { void mapToggle.offsetWidth; mapToggle.classList.add('nudge'); }
     if (!loc || !miniWanted()) { collapseMiniMap(); mapBox.hidden = true; return; }
     mapBox.hidden = false;
     placeMiniMap();
