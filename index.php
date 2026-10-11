@@ -9631,10 +9631,10 @@ if (ENABLE_MAP && $mapPoints) {
     v.addEventListener('error', function () { v.remove(); });
     if (v.readyState >= 2) ready();
   });
-  // A big archive asks first (it is a long download); a small one just starts.
+  // The archive always asks first, saying how many files and how big: it is a long, heavy download, and nothing is done on the server until the answer is yes.
   document.querySelectorAll('.page-archive').forEach(function (a) {
     a.addEventListener('click', function (e) {
-      if (Number(a.dataset.bytes) > 500 * 1024 * 1024 && !confirm(a.dataset.ask + '?\n\nIt is sent as it is built and can take a while.')) e.preventDefault();
+      if (!confirm(a.dataset.ask + '?\n\nIt is sent as it is built, and a big one can take a while.')) e.preventDefault();
     });
   });
   const downloadLink = document.getElementById('lightbox-download');   // only on a page made for a signed-in visitor

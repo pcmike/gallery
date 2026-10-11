@@ -701,6 +701,11 @@ try:
     b.js("navigate(1)"); b.drain(0.5)
     ok(b.js("document.getElementById('lightbox-download').getAttribute('href')") == "?original=" + urllib.parse.quote(b.js("files[current]"), safe=""), "[download] ...and it follows the photo when you move to the next one")
     b.js("closeLightbox()")
+    # the archive button asks first, saying how many files and how big, and does nothing if the answer is no
+    b.js("window.__asked = []; window.confirm = m => { window.__asked.push(m); return false; };")
+    b.js("document.querySelector('.page-archive').click()"); b.drain(0.5)
+    asked = b.js("window.__asked")
+    ok(len(asked) == 1 and "originals" in asked[0] and "ZIP" in asked[0] and b.js("location.search") == "", "[archive] pressing the archive button asks first (how many files, how big) and, when the answer is no, stays on the page and downloads nothing", str(asked))
     # a colour on a single photo is a visible ring above the picture, and a link copied on a folder's page keeps the folder
     open(SITE2 + "/Sub/n.md", "w").write("{gallery}\n\nCheck out q {photos: q.jpg}{color: gold}\n")
     b.goto(B2 + "/?folder=Sub", 2.0)
