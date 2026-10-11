@@ -9,7 +9,7 @@
  * notes, {color}/{sold}/{reserved}/{group}/{photos} directives, view
  * stats, deep linking, image caching, etc.) lives in the repo's README: github.com/pcmike/gallery. The
  * "?about" page this script serves itself (open any deployed gallery and
- * click "about" in the footer, or visit "?about" directly) is a short
+ * press the small gallery icon above the photos, or visit "?about" directly) is a short
  * in-app pitch that links to the GitHub repo, including a "Get it on
  * GitHub" button — ?download used to serve this file's own bytes
  * directly, but no longer exists; see the ?download handler below.
@@ -61,7 +61,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.2');
+define('GALLERY_VERSION', '2.0.3');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -7036,6 +7036,7 @@ function ui_icon_paths() {
         'chart'   => '<path d="M5 20V11M12 20V4M19 20v-6"/>',
         'zoom-in' => '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2M11 8.5v5M8.5 11h5"/>',
         'zoom-out' => '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2M8.5 11h5"/>',
+        'gallery' => '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.7"/><path d="m21 16-5-5L7 20"/>',
         'lock'    => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
         'unlock'  => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/>',
         'expand'  => '<path d="M15 3h6v6M9 21H3v-6M21 3l-7.5 7.5M3 21l7.5-7.5"/>',
@@ -7536,6 +7537,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     padding: 32px 24px 16px;
     text-align: center;
   }
+  header h1 a.title-admin { color: inherit; text-decoration: none; }
+  header h1 a.title-admin:hover, header h1 a.title-admin:focus-visible { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 6px; }
   /* The lock beside the title: quiet until pointed at. */
   header h1 .lock-form { display: inline; margin: 0; }
   header h1 .lock-link { display: inline-block; margin-left: 3px; padding: 0; vertical-align: 0.1em; background: none; border: 0; cursor: pointer; font-size: 0.62em; color: var(--muted); opacity: 0.7; line-height: 1; text-decoration: none; }
@@ -7965,20 +7968,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     color: var(--muted);
     padding: 60px 20px;
   }
-  footer {
-    text-align: center;
-    padding: 0 24px 40px;
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-  footer a {
-    color: var(--muted);
-    text-decoration: none;
-  }
-  footer a:hover {
-    color: var(--text);
-    text-decoration: underline;
-  }
+  .page-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; color: var(--muted); font-size: 0.85rem; }
+  .page-visits { white-space: nowrap; }
+  .page-about { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 8px; color: var(--muted); font-size: 1.15rem; text-decoration: none; }
+  .page-about:hover, .page-about:focus-visible { color: var(--text); background: #26262a; }
   /* Same column as the photo grid below it (max-width and side padding
      match .gallery), so the map lines up with the tiles instead of
      running to the edges of the window. */
@@ -8142,7 +8135,12 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
   <?php if ($currentFolderPath !== null): ?>
     <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
   <?php endif; ?>
-  <h1><?= htmlspecialchars($pageTitle) ?><?= $lockHtml ?></h1>
+  <?php if (ADMIN_PASSWORD !== '' && is_admin_browser()): ?>
+    <?php // Signed in as the owner: the title leads back to the admin page for wherever you are (a folder's own admin on its page). ?>
+    <h1><a class="title-admin" rel="nofollow" title="Back to the admin" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a><?= $lockHtml ?></h1>
+  <?php else: ?>
+    <h1><?= htmlspecialchars($pageTitle) ?><?= $lockHtml ?></h1>
+  <?php endif; ?>
   <?php $headerMeta = $currentFolderPath !== null ? $currentFolderMeta : $rootMeta; ?>
   <?php if ($headerMeta['dates'] !== ''): ?>
     <p class="folder-dates"><?= htmlspecialchars($headerMeta['dates']) ?></p>
@@ -8392,18 +8390,29 @@ if (ENABLE_MAP && $mapPoints) {
     $mapLegend = map_legend_from_points($mapPoints);
 }
 ?>
-<?php if ($mapShown && !empty($mapPoints)): ?>
+<?php $hasMap = $mapShown && !empty($mapPoints); ?>
+  <?php // The bar above the photos: the map buttons on the left (when there is a map), and on the right the visit count (when
+        // it is shown to visitors) and the small gallery icon, which leads to the page about this gallery. ?>
   <section class="map-preview<?= $fewCovers ?>" id="map-preview">
-    <h2 class="map-preview-heading">
+    <div class="map-preview-heading">
+      <?php if ($hasMap): ?>
       <span class="map-combo">
         <button type="button" class="map-combo-btn" id="map-toggle" title="Show map" aria-expanded="false" aria-controls="map-preview-body"><?= ui_icon('map') ?><span class="map-toggle-label">Show map</span></button>
         <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-combo-btn" id="map-full" title="View full map"><?= ui_icon('expand') ?><span class="map-toggle-label">View full map</span></a>
       </span>
-    </h2>
+      <?php endif; ?>
+      <span class="page-tools">
+        <?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?><span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?>
+        <a class="page-about" href="?about" title="About this gallery" aria-label="About this gallery"><?= ui_icon('gallery') ?></a>
+      </span>
+    </div>
+    <?php if ($hasMap): ?>
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
       <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius, true) ?>
     </div>
+    <?php endif; ?>
   </section>
+<?php if ($hasMap): ?>
   <?php // The full map opens over the page: click outside it, press Escape or use the cross to close it. ?>
   <div class="map-modal" id="map-modal" data-map="trip-map-modal" role="dialog" aria-modal="true" aria-label="Map" hidden>
     <div class="map-modal-card">
@@ -8422,9 +8431,6 @@ if (ENABLE_MAP && $mapPoints) {
   </div>
 <?php endif; ?>
 
-<footer>
-  <a href="?about">gallery</a><?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?> · <?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?><?php endif; ?><?php if (ADMIN_PASSWORD !== '' && is_admin_browser()): ?> · <a href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" rel="nofollow">Admin</a><?php endif; ?>
-</footer>
 
 <div class="lightbox" id="lightbox">
   <button class="close" onclick="closeLightbox()">&times;</button>

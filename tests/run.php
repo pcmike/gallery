@@ -1483,7 +1483,7 @@ check('eight bare ?reveal requests all just get the password form (no lockout fr
 check('?map with ENABLE_MAP off just renders the normal page', $mapOffStatus === 200 && str_contains($mapOffBody, 'Defaults Fixture'));
 [, $mapIconOffBody] = http_get("$base1/?mapicon");
 check('?mapicon is ignored (normal page) when ENABLE_MAP is off', str_contains($mapIconOffBody, 'Defaults Fixture'));
-check('no map preview or Leaflet library loads when ENABLE_MAP is off', !str_contains($mapOffBody, '<section class="map-preview"') && !str_contains($mapOffBody, 'cdnjs.cloudflare.com/ajax/libs/leaflet'));
+check('no map preview or Leaflet library loads when ENABLE_MAP is off', !str_contains($mapOffBody, 'id="map-toggle"') && !str_contains($mapOffBody, 'id="map-preview-body"') && !str_contains($mapOffBody, 'cdnjs.cloudflare.com/ajax/libs/leaflet'));
 
 /* ======================================================================= *
  * FIXTURE: "map" — ENABLE_MAP + ENABLE_PHOTO_LOCATION both on. Covers
@@ -2108,7 +2108,7 @@ if (strlen($v1Source) < 1000) {
         write_patched_index("$fxReal/index.php", $indexContents, ['TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true']);   // the upgrade: same folder, same data
         [, $v2Page] = http_get("$baseReal/");
         check("[real 1.1.1, $v1Flavour] after swapping in 2.0.0, both per-photo counts carry over exactly (5 and 2)", str_contains($v2Page, 'data-photo="a.jpg">' . ico('eye') . ' 5<') && str_contains($v2Page, 'data-photo="b.jpg">' . ico('eye') . ' 2<'));
-        check("[real 1.1.1, $v1Flavour] ...and the sitewide total carries over (4 loads under 1.1.1, plus this one visit)", str_contains($v2Page, '· 5 visits'));
+        check("[real 1.1.1, $v1Flavour] ...and the sitewide total carries over (4 loads under 1.1.1, plus this one visit)", str_contains($v2Page, '<span class="page-visits">5 visits</span>'));
         $leftover = ''; foreach (scandir($fxReal) as $f) if (str_starts_with($f, '.gallery-stats') && !str_ends_with($f, '.php')) $leftover .= (string) file_get_contents("$fxReal/$f");
         check("[real 1.1.1, $v1Flavour] ...with no readable photo name left in any stats file, and the old JSON file gone", !str_contains($leftover, 'a.jpg') && !str_contains($leftover, 'b.jpg') && !is_file("$fxReal/.gallery-stats.json"));
     }
@@ -2402,6 +2402,7 @@ $pinCols = function ($body) { preg_match_all('/"color":"(#[0-9a-f]+|[a-z]+)"/i',
 [, $pinPage] = http_get("http://127.0.0.1:$portPin/?map");
 check('[pin colours] a note\'s {color:} on a folder colours that folder\'s pins on the page map, and {sold} turns its pins red', in_array('#ff0000', $pinCols($pinHome), true) && in_array('#e5484d', $pinCols($pinHome), true));
 check('[pin colours] ...and the full map (the page with ?map, overlay open) agrees, with the legend using the same colours', in_array('#ff0000', $pinCols($pinPage), true) && in_array('#e5484d', $pinCols($pinPage), true) && str_contains($pinPage, 'map-legend-swatch" style="background:#ff0000;"') && str_contains($pinPage, 'id="trip-map-modal"'));
+check('[page bar] the bar above the photos holds the map buttons on the left and, on the right, the gallery icon that leads to ?about; there is no footer', (bool) preg_match('#<div class="map-preview-heading">\\s*<span class="map-combo">.*?</span>\\s*<span class="page-tools">.*?<a class="page-about" href="\\?about"[^>]*>' . preg_quote(ico('gallery'), '#') . '</a>#s', $pinHome) && !str_contains($pinHome, '<footer'));
 check('[pin colours] ?map is the gallery page itself with the map overlay set to open, previewing as the map (title, description and the map icon), and exactly one document', str_contains($pinPage, 'class="gallery') && str_contains($pinPage, 'if (true) show();') && str_contains($pinPage, '<meta property="og:title" content="') && str_contains($pinPage, ' — Map">') && str_contains($pinPage, 'og:image" content="http://127.0.0.1:' . $portPin . '/?mapicon"') && str_contains($pinPage, '2 locations plotted') && substr_count($pinPage, '<!DOCTYPE html>') === 1 && str_contains($pinHome, 'if (false) show();'));
 check('[cover size] a page of nothing but two folders gets the larger-card layout (covers-2)', str_contains($pinHome, '<div class="gallery covers-2">') && str_contains($pinHome, '.gallery.covers-2, .map-preview.covers-2 { max-width: 1106px; }') && str_contains($pinHome, '<section class="map-preview covers-2"') && str_contains($pinHome, '1200w'));
 check('[cover size] a page that also has a loose photo keeps the normal grid', str_contains($fnRoot, '<div class="gallery">') && !str_contains($fnRoot, 'class="gallery covers-'));
@@ -2488,7 +2489,7 @@ check('[lock] ...and that really is a signed-in admin session (the admin page op
 [$lkVwSt, , $lkVwHd] = http_post("$baseLk2/?reveal", ['login_password' => 'view-only'], [], false);
 check('[lock] the private-view password typed into the same box shows the private items, and is not the admin', $lkVwSt === 302 && (bool) array_filter($lkVwHd, fn($h) => stripos($h, 'Location: ./') === 0) && !str_contains(http_get("$baseLk2/?admin", ['Cookie: ' . (string) extract_cookie_header($lkVwHd)])[1], 'Gallery Admin'));
 [, $lkOwnerHome] = http_get("$baseLk2/?folder=Sub", ['Cookie: ' . $lkOwnerCookie]);
-check('[lock] a signed-in owner sees a small Admin link in the footer (the open lock signs out, so this is the way back into the admin)', str_contains($lkOwnerHome, '>Admin</a>') && str_contains($lkOwnerHome, 'href="?admin&amp;folder=Sub"') && !str_contains(http_get("$baseLk2/")[1], '>Admin</a>'));
+check('[lock] a signed-in owner has no Admin link in the footer (there is no footer any more); the title is the way back to the admin, for the folder they are in', !str_contains($lkOwnerHome, '>Admin</a>') && !str_contains($lkOwnerHome, '<footer') && str_contains($lkOwnerHome, '<a class="title-admin" rel="nofollow" title="Back to the admin" href="?admin&amp;folder=Sub">'));
 [, , $lkOutHd] = http_post("$baseLk2/?reveal", ['logout' => '1', 'folder' => 'Sub', 'photo' => 'Sub/b.jpg', 'map' => '1'], ['Cookie: ' . $lkOwnerCookie], false);
 check('[lock] signing out returns to the very same page, not just the same folder: the open photo and the open map are kept', (bool) array_filter($lkOutHd, fn($h) => stripos($h, 'Location: ./?folder=Sub&photo=Sub%2Fb.jpg&map') === 0));
 [, $lkPageHome] = http_get("$baseLk2/?folder=Sub&photo=Sub%2Fb.jpg");
@@ -2503,7 +2504,9 @@ check('[lock] the admin\'s own Log out from a folder lands on that folder\'s gal
 [, $lkCancelFolder] = http_get("$baseLk2/?reveal&folder=Sub&photo=Sub%2Fb.jpg");
 [, $lkCancelAdmin] = http_get("$baseLk2/?admin&folder=Sub");
 check('[lock] the sign-in has a grey "Go Back" button that returns to the page the visitor came from, placed before Continue on the same row (a curious visitor with no password is not stuck)', (bool) preg_match('#<div class="actions">\s*<a class="cancel" id="goback" href="./">&larr; Go Back</a>\s*<button type="submit">Continue</button>#', $lkCancelRoot) && str_contains($lkCancelRoot, '.cancel { background:#2a2a2e; color:#c8c8cd; }') && str_contains($lkCancelFolder, 'class="cancel" id="goback" href="./?folder=Sub&amp;photo=Sub%2Fb.jpg">&larr; Go Back</a>') && str_contains($lkCancelAdmin, 'class="cancel" id="goback" href="./?folder=Sub">&larr; Go Back</a>'));
-check('[lock] the gallery title is no longer a link to the admin for anyone', !str_contains($lkOwnerHome, 'title-admin') && !str_contains(http_get("$baseLk2/")[1], 'title-admin'));
+check('[lock] a visitor\'s title is still plain text: it leads to the admin only for the signed-in owner', !str_contains(http_get("$baseLk2/")[1], 'class="title-admin"') && !str_contains(http_get("$baseLk2/?folder=Sub")[1], 'class="title-admin"'));
+[, $lkOwnerRoot] = http_get("$baseLk2/", ['Cookie: ' . $lkOwnerCookie]);
+check('[lock] ...and at the top of the gallery it leads to the admin\'s own front page', str_contains($lkOwnerRoot, '<a class="title-admin" rel="nofollow" title="Back to the admin" href="?admin">'));
 
 echo "== a folder opens on its chosen cover photo ==\n";
 $fxCv = new_fixture_dir('covertarget');
@@ -3004,7 +3007,7 @@ $vGet = function ($path, &$jar, $headers = []) use ($baseVis) {
     foreach ($hd as $h) if (preg_match('/^Set-Cookie:\s*([^=]+)=([^;]*)/i', $h, $m)) $jar[trim($m[1])] = $m[2];
     return [$st, $body, $hd];
 };
-$vCount = fn($body) => preg_match('/· ([0-9,]+) visits?/', $body, $m) ? (int) str_replace(',', '', $m[1]) : null;
+$vCount = fn($body) => preg_match('#<span class="page-visits">([0-9,]+) visits?</span>#', $body, $m) ? (int) str_replace(',', '', $m[1]) : null;
 $alice = [];
 [, $v1, $vh1] = $vGet('/', $alice);
 $counts = [$vCount($v1)];
@@ -3013,7 +3016,7 @@ check('[visits] one visitor opening the front page, a folder, a shared photo lin
 $visitCookie = ''; foreach ($vh1 as $h) if (stripos($h, 'Set-Cookie: gallery_visit=') === 0) $visitCookie = $h;
 check('[visits] the visit is remembered in a small first-party cookie: HttpOnly, SameSite=Lax, and expiring in about half an hour', $visitCookie !== '' && stripos($visitCookie, 'httponly') !== false && stripos($visitCookie, 'samesite=lax') !== false && (bool) preg_match('/expires=/i', $visitCookie));
 $bob = [];
-check('[visits] a different visitor (a browser with no cookie) is a second visit, and the footer says "visits"', $vCount($vGet('/', $bob)[1]) === 2 && str_contains($vGet('/', $bob)[1], '· 2 visits'));
+check('[visits] a different visitor (a browser with no cookie) is a second visit, and the page bar says "visits"', $vCount($vGet('/', $bob)[1]) === 2 && str_contains($vGet('/', $bob)[1], '<span class="page-visits">2 visits</span>'));
 $late = ['gallery_visit' => (string) (time() - 1801)]; $justIn = ['gallery_visit' => (string) (time() - 1700)];
 check('[visits] someone who comes back after more than half an hour is a new visit; within half an hour is still the same one', $vCount($vGet('/', $late)[1]) === 3 && $vCount($vGet('/', $justIn)[1]) === 3);
 check('[visits] a visit keeps going as long as they keep clicking: the half hour slides forward with each page', (function () use ($vGet, $vCount) { $j = ['gallery_visit' => (string) (time() - 1700)]; $vGet('/?folder=Paris', $j); return (int) $j['gallery_visit'] >= time() - 2 && $vCount($vGet('/', $j)[1]) === 3; })());
@@ -3144,7 +3147,7 @@ check('[stale password] the source never sends a WWW-Authenticate header at all 
 
 // The gallery title is the (unmarked) way to the admin.
 [, $homeLogin] = http_get("$baseLogin/");
-check('[login] the gallery title is plain text with a lock beside it that leads to the sign-in (the title no longer links to the admin)', str_contains($homeLogin, '<h1>Summer in Lisbon<a class="lock-link" href="?reveal"') && !str_contains($homeLogin, 'title-admin'));
+check('[login] to a visitor the gallery title is plain text with a lock beside it that leads to the sign-in', str_contains($homeLogin, '<h1>Summer in Lisbon<a class="lock-link" href="?reveal"') && !str_contains($homeLogin, 'class="title-admin"'));
 [, $subLogin] = http_get("$baseLogin/?folder=Sub");
 check('[login] on a folder page the lock remembers the folder, so signing in as the owner opens that folder\'s admin', str_contains($subLogin, 'class="lock-link" href="?reveal&amp;folder=Sub"'));
 $fxPlainTitle = new_fixture_dir('plaintitle'); make_jpeg("$fxPlainTitle/a.jpg", 60, 60, 1, 2, 3); copy(__DIR__ . '/../index.php', "$fxPlainTitle/index.php");
@@ -3289,8 +3292,8 @@ check('[sale] ...and the stats file is not readable by URL', (function () use ($
 check('[sale] a pasted ?photo= link previews with an absolute share-size image and the group in its title', (bool) preg_match('#property="og:image" content="http://127\.0\.0\.1:\d+/\?img=alpha_01\.jpg&amp;size=share&amp;v=[0-9a-f]{10}"#', $salePhoto) && str_contains($salePhoto, 'property="og:title" content="alpha — Example listing'));
 http_get("$baseSale/?img=alpha_01.jpg&size=thumb");
 check('[sale] ENABLE_THUMBNAIL_CACHE on: thumbnails are cached in .gallery-cache next to the photos', is_dir("$fxSale/.gallery-cache") && count(glob("$fxSale/.gallery-cache/*.jpg")) > 0);
-preg_match('#<footer>(.*?)</footer>#s', $saleAfter, $saleFooter);
-check('[sale] ...and the sitewide "N views" total is hidden from the public footer too', isset($saleFooter[1]) && !preg_match('/\d+ views/', $saleFooter[1]) && str_contains($saleFooter[1], 'href="?about"'));
+preg_match('#<span class="page-tools">(.*?)</span>\s*</div>#s', $saleAfter, $saleFooter);
+check('[sale] ...and the sitewide "N views" total is hidden from the public page bar too', isset($saleFooter[1]) && !preg_match('/\d+ views/', $saleFooter[1]) && str_contains($saleFooter[1], 'href="?about"') && !str_contains($saleAfter, '<footer'));
 // ...but the seller can see every count in the admin.
 [, $saleAdmin] = http_get("$baseSale/?admin", ['Authorization: Basic ' . base64_encode('admin:sale-admin')]);
 check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'visit in total') || str_contains($saleAdmin, 'visits in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-sub">\s*<svg class="ico"[^>]*><use href="\#i-eye"></use></svg> 1 view\b#', $saleAdmin));

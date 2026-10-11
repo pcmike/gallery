@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.3] - 2026-10-11
+
+### Changed
+- **The footer is gone.** The small gallery icon that leads to the about page now sits at the right end of the same row as the map buttons, and the visit count (when it is shown to visitors) sits just before it. The footer's "Admin" link for a signed-in owner is gone too.
+- **Signed in as the owner, the gallery title is the way back to the admin**, for wherever you are: on the front page it opens the admin, on a folder's page that folder's admin. To everyone else the title is plain text, as before.
+
 ## [2.0.2] - 2026-10-11
 
 ### Added
