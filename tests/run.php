@@ -1126,7 +1126,7 @@ write_patched_index("$fxSo/index.php", $indexContents, ['ENABLE_VIDEO' => 'true'
 $portSo = find_free_port(); start_server($fxSo, $portSo); $baseSo = "http://127.0.0.1:$portSo";
 $soOrder = function ($query = '', $headers = []) use ($baseSo) {
     [, $body] = http_get("$baseSo/" . $query, $headers);
-    preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $m);
+    preg_match_all('#<div class="card[^>]*><img src="[^"]*"(?: srcset="[^"]*")?(?: sizes="[^"]*")? loading="lazy" alt="([^"]+)"#', $body, $m);
     return $m[1];
 };
 $soAdminAuth = 'Authorization: Basic ' . base64_encode('admin:so-admin-pw');
@@ -1184,6 +1184,69 @@ write_patched_index("$fxSo1/index.php", $indexContents, []);
 $portSo1 = find_free_port(); start_server($fxSo1, $portSo1);
 check('[sort] a folder with a single photo has no sort button', !str_contains(http_get("http://127.0.0.1:$portSo1/")[1], 'id="sort-combo"'));
 
+// The tile pictures (a square at two sizes, chosen by the browser), made ahead of time by "prepare thumbnails", the viewer that keeps one size,
+// and the full-screen app mode the owner can try.
+$fxTh = new_fixture_dir('thumbhd');
+make_jpeg("$fxTh/land.jpg", 3000, 2000, 200, 80, 60);
+make_jpeg("$fxTh/port.jpg", 1800, 2400, 60, 80, 200);
+make_jpeg("$fxTh/pano.jpg", 6000, 1000, 60, 200, 80);
+make_jpeg("$fxTh/small.jpg", 300, 200, 90, 90, 90);
+make_minimal_mp4("$fxTh/clip.mp4", 5, 1);
+write_patched_index("$fxTh/index.php", $indexContents, ['ENABLE_VIDEO' => 'true', 'ADMIN_PASSWORD' => "'th-admin-pw'"]);
+$portTh = find_free_port(); start_server($fxTh, $portTh); $baseTh = "http://127.0.0.1:$portTh";
+[, $thPage] = http_get("$baseTh/");
+check('[tile] a tile offers the 560 pixel picture for ordinary screens and the 1080 one for a phone, and tells the browser how wide a tile is (src stays the small thumbnail)', preg_match('#<div class="card[^>]*><img src="\?img=land\.jpg&amp;size=thumb&amp;v=[0-9a-f]{10}" srcset="\?img=land\.jpg&amp;size=tile&amp;v=[0-9a-f]{10} 560w, \?img=land\.jpg&amp;size=tilehd&amp;v=[0-9a-f]{10} 1080w" sizes="\(max-width: 417px\) calc\(100vw - 48px\), 250px"#', $thPage) === 1);
+$thSize = function ($file, $size) use ($baseTh) { [$st, $body] = http_get("$baseTh/?img=$file&size=$size"); $d = @getimagesizefromstring($body); return [$st, $d ? [$d[0], $d[1]] : null, $body]; };
+[$st1, $d1, $b1] = $thSize('land.jpg', 'tile'); [$st2, $d2, $b2] = $thSize('land.jpg', 'tilehd');
+check('[tile] a landscape photo gives a square from its middle at each size: 560x560 and 1080x1080', $st1 === 200 && $d1 === [560, 560] && $st2 === 200 && $d2 === [1080, 1080], json_encode([$d1, $d2]));
+[, $d3] = $thSize('port.jpg', 'tile'); [, $d4] = $thSize('port.jpg', 'tilehd');
+check('[tile] and so does a portrait one (a tile crops it that way anyway, so nothing visible is lost, and the whole width is sharp)', $d3 === [560, 560] && $d4 === [1080, 1080], json_encode([$d3, $d4]));
+[, $d5] = $thSize('pano.jpg', 'tilehd');
+check('[tile] a picture is never enlarged: the 6000x1000 panorama\'s square is 1000, not 1080', $d5 === [1000, 1000], json_encode($d5));
+[, $d6] = $thSize('small.jpg', 'tilehd');
+check('[tile] ...and a 300x200 photo gives a 200 square', $d6 === [200, 200], json_encode($d6));
+// the square is taken from the middle: left and right thirds of a landscape photo are cut away
+$thMid = imagecreatefromstring($b1);
+check('[tile] the square is the middle of the photo (the plain test photo keeps its colour right across)', $thMid && ($rgb = imagecolorat($thMid, 280, 280)) && (($rgb >> 16) & 255) > 150 && (($rgb & 255) < 100));
+check('[tile] the pictures are progressive JPEGs (they paint coarse to fine as they load)', str_contains($b1, "\xFF\xC2") && str_contains($b2, "\xFF\xC2") && !str_contains($b1, "\xFF\xC0"));
+check('[tile] the big one is not a heavy one (under 150 KB for this plain test picture)', strlen($b2) < 150000, (string) strlen($b2));
+[$st7, $d7] = $thSize('land.jpg', 'thumb');
+check('[tile] the ordinary thumbnail is as it was (480 on its long side), for the strips and the admin', $st7 === 200 && $d7 === [480, 320], json_encode($d7));
+$thCacheBefore = count(glob("$fxTh/.gallery-cache/*.jpg"));
+http_get("$baseTh/"); http_get("$baseTh/?folder=nothing");
+check('[tile] the cache clean-up keeps the tile pictures (it knows they belong to a photo)', count(glob("$fxTh/.gallery-cache/*.jpg")) === $thCacheBefore && $thCacheBefore >= 5);
+check('[tile] with thumbnails switched off a tile has no srcset (there is only the original)', !str_contains(http_get("http://127.0.0.1:$portNoCache/")[1], 'srcset='));
+// prepare thumbnails
+[, $thAdminBody, $thAdminHd] = http_get("$baseTh/?admin", ['Authorization: Basic ' . base64_encode('admin:th-admin-pw')]);
+$thCookie = extract_cookie_header($thAdminHd);
+$thAuthH = ['Authorization: Basic ' . base64_encode('admin:th-admin-pw'), "Cookie: $thCookie", 'X-Requested-With: gallery-fetch'];
+$thTok = (json_decode(http_get("$baseTh/?admin&csrf=1", $thAuthH)[1], true)['token'] ?? '');
+check('[prepare thumbnails] the Site tab says how many photos are ready, and offers to make the rest', preg_match('#id="warm-panel"#', $thAdminBody) === 1 && str_contains($thAdminBody, 'of 4 photos are ready') && str_contains($thAdminBody, 'warm-go'), substr(strip_tags(substr($thAdminBody, strpos($thAdminBody, 'id="warm-panel"'), 900)), 0, 200));
+foreach (glob("$fxTh/.gallery-cache/*.jpg") as $f) @unlink($f);
+[, $warmBody] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
+$warm = json_decode($warmBody, true);
+check('[prepare thumbnails] one request makes both tile sizes of every photo (the video is left alone) and says it is done', ($warm['ok'] ?? false) === true && ($warm['done'] ?? false) === true && $warm['total'] === 4 && $warm['made'] === 8 && $warm['failed'] === 0 && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8, $warmBody);
+[, $warm2Body] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
+check('[prepare thumbnails] a second run finds nothing left to make', (json_decode($warm2Body, true)['made'] ?? -1) === 0);
+[, $warm3Body] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '2'], $thAuthH);
+check('[prepare thumbnails] it can carry on from where it stopped', (json_decode($warm3Body, true)['next'] ?? 0) === 4);
+[, $warmNoTok] = http_post("$baseTh/?admin", ['action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
+check('[prepare thumbnails] without the admin\'s token nothing happens', (json_decode($warmNoTok, true)['ok'] ?? true) === false);
+check('[prepare thumbnails] a visitor cannot run it', !isset(json_decode(http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], ['X-Requested-With: gallery-fetch'])[1] ?? '', true)['made']));
+[, $thAdminBody2] = http_get("$baseTh/?admin", $thAuthH);
+check('[prepare thumbnails] once everything is made the panel says all photos are ready', str_contains($thAdminBody2, 'All 4 photos are ready.'));
+// the viewer and the download
+check('[viewer] on a touch screen the viewer is laid out against the whole screen and its row of buttons is lifted from the bottom edge', str_contains($thPage, '@media (pointer: coarse)') && str_contains($thPage, '100lvh') && str_contains($thPage, 'translateY(-58px)'));
+[, $thOwnerPage] = http_get("$baseTh/", $thAuthH);
+check('[viewer] the download button takes the photo the viewer already holds (from the browser\'s memory), so the share sheet can open on the first tap', str_contains($thOwnerPage, "cache: 'force-cache'") && str_contains($thOwnerPage, 'lightboxImg.getAttribute(\'src\')'));
+// full-screen app mode (owner only, for now)
+check('[app mode] the owner\'s pages carry what "Add to Home Screen" needs to open with no browser bars', str_contains($thOwnerPage, 'name="apple-mobile-web-app-capable" content="yes"') && preg_match('#<link rel="manifest" href="\./\?manifest&amp;name=#', $thOwnerPage) === 1 && str_contains($thOwnerPage, 'rel="apple-touch-icon" href="./?appicon"'));
+check('[app mode] a visitor\'s pages carry none of it (an ordinary tab is unchanged)', !str_contains($thPage, 'apple-mobile-web-app') && !str_contains($thPage, 'rel="manifest"'));
+[$mfSt, $mfBody, $mfHd] = http_get("$baseTh/?manifest&name=" . rawurlencode('My <b>Trip</b>'));
+$mf = json_decode($mfBody, true);
+check('[app mode] the manifest is JSON that opens the gallery full screen, from its own address, with icons', $mfSt === 200 && ($mf['display'] ?? '') === 'standalone' && ($mf['start_url'] ?? '') === '/' && ($mf['scope'] ?? '') === '/' && count($mf['icons'] ?? []) === 2 && $mf['name'] === 'My <b>Trip</b>' && stripos(implode("\n", $mfHd), 'application/manifest+json') !== false, $mfBody);
+foreach ([['?appicon', 180], ['?appicon&size=large', 512]] as [$q, $px]) { [$iSt, $iBody] = http_get("$baseTh/$q"); $di = @getimagesizefromstring($iBody); check("[app mode] the home screen icon ($px px) is a PNG", $iSt === 200 && $di && $di[0] === $px && $di[1] === $px && $di[2] === IMAGETYPE_PNG); }
+
 // A place from elsewhere that has gone missing is reported to the owner instead of silently showing nothing.
 $fxGone = new_fixture_dir('extragone');
 make_jpeg("$fxGone/here.jpg", 40, 40, 1, 2, 3);
@@ -1216,7 +1279,7 @@ file_put_contents("$fxSd/c.mp4", substr_replace($sdMp4, pack('N', gmmktime(0, 0,
 foreach (['a-late.heic', 'b-early.jpg', 'c.mp4'] as $sdF) touch("$fxSd/$sdF", strtotime('2026-10-10'));
 write_patched_index("$fxSd/index.php", $indexContents, ['ENABLE_VIDEO' => 'true']);
 $portSd = find_free_port(); start_server($fxSd, $portSd);
-$sdOrder = function ($q) use ($portSd) { [, $body] = http_get("http://127.0.0.1:$portSd/$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $mm); return $mm[1]; };
+$sdOrder = function ($q) use ($portSd) { [, $body] = http_get("http://127.0.0.1:$portSd/$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*"(?: srcset="[^"]*")?(?: sizes="[^"]*")? loading="lazy" alt="([^"]+)"#', $body, $mm); return $mm[1]; };
 if (class_exists('Imagick')) {
     check('[sort] date order reads the capture date out of a HEIC photo, a JPEG and a video (all three files have the same modified date, so only the dates inside them can order these)', $sdOrder('?sort=name') === ['a-late.heic', 'b-early.jpg', 'c.mp4'] && $sdOrder('?sort=taken') === ['b-early.jpg', 'c.mp4', 'a-late.heic'] && $sdOrder('?sort=taken.desc') === ['a-late.heic', 'c.mp4', 'b-early.jpg'], json_encode([$sdOrder('?sort=name'), $sdOrder('?sort=taken')]));
 } else {
@@ -1230,8 +1293,8 @@ make_minimal_mp4("$fxSf/Trip/z.mp4", 5, 1);
 make_jpeg("$fxSf/Trip/Day2/d.jpg", 40, 40, 1, 2, 3); make_minimal_mp4("$fxSf/Trip/Day2/y.mp4", 5, 1);
 write_patched_index("$fxSf/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ENABLE_VIDEO' => 'true']);
 $portSf = find_free_port(); start_server($fxSf, $portSf);
-$sfOrder = function ($q) use ($portSf) { [, $body] = http_get("http://127.0.0.1:$portSf/?folder=Trip$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $m); return array_map('basename', $m[1]); };
-$sfDay = function ($q) use ($portSf) { [, $body] = http_get("http://127.0.0.1:$portSf/?folder=Trip%2FDay2$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $m); return array_map('basename', $m[1]); };
+$sfOrder = function ($q) use ($portSf) { [, $body] = http_get("http://127.0.0.1:$portSf/?folder=Trip$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*"(?: srcset="[^"]*")?(?: sizes="[^"]*")? loading="lazy" alt="([^"]+)"#', $body, $m); return array_map('basename', $m[1]); };
+$sfDay = function ($q) use ($portSf) { [, $body] = http_get("http://127.0.0.1:$portSf/?folder=Trip%2FDay2$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*"(?: srcset="[^"]*")?(?: sizes="[^"]*")? loading="lazy" alt="([^"]+)"#', $body, $m); return array_map('basename', $m[1]); };
 check('[sort] on a folder\'s page the photos run in the chosen order: by default, last first, and videos first', $sfOrder('') === ['a.jpg', 'b.jpg', 'c.jpg', 'z.mp4'] && $sfOrder('&sort=name.desc') === ['z.mp4', 'c.jpg', 'b.jpg', 'a.jpg'] && $sfOrder('&sort=name.video') === ['z.mp4', 'a.jpg', 'b.jpg', 'c.jpg'], json_encode([$sfOrder(''), $sfOrder('&sort=name.desc'), $sfOrder('&sort=name.video')]));
 check('[sort] ...and on a subfolder\'s own page too', $sfDay('') === ['d.jpg', 'y.mp4'] && $sfDay('&sort=name.video') === ['y.mp4', 'd.jpg'], json_encode([$sfDay(''), $sfDay('&sort=name.video')]));
 
@@ -1271,7 +1334,7 @@ write_patched_index("$fxSe/index.php", $indexContents, ['ENABLE_VIDEO' => 'true'
 file_put_contents("$fxSe/.gallery-config.php", cfg_text(['AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_ROOTS' => [$fxSeX], 'ENABLE_VIDEO' => true]));
 $portSe = find_free_port(); start_server($fxSe, $portSe);
 [, $seBody] = http_get("http://127.0.0.1:$portSe/?folder=Paris&sort=name.video");
-preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $seBody, $seM);
+preg_match_all('#<div class="card[^>]*><img src="[^"]*"(?: srcset="[^"]*")?(?: sizes="[^"]*")? loading="lazy" alt="([^"]+)"#', $seBody, $seM);
 check('[sort] the order also holds inside a folder brought in from elsewhere on the server', array_map('basename', $seM[1]) === ['z.mp4', 'a.jpg'], json_encode($seM[1]));
 
 // A video looks like a video wherever it is shown: the admin's grid and editor, a strip of group thumbnails, a folder's cover.

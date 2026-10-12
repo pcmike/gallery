@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Versions correspond to 
 
 ## [2.0.7] - 2026-10-12
 
+### Added
+- **Sharper tiles.** Each photo's tile is now a square cut from its middle at two sizes (560 and 1080 pixels) and the browser picks by how wide the tile is and how dense the screen is, so a phone gets enough pixels for every one of its own (before, a 480 pixel thumbnail was stretched across a column about 1000 pixels wide, and a portrait photo had even fewer across). Progressive JPEGs. Only tiles near the screen load.
+- **Prepare thumbnails** (Site settings): makes every photo's tile pictures ahead of time, a few seconds' worth at a time, with a count and a progress bar; stop and carry on whenever you like.
+- **A lock on every tile for the owner**: red "Private" on a private photo, a faint open lock on a public one; press it to flip the photo. Visitors never see it.
+- **Add to Home Screen as an app** (owner only for now): the pages carry a manifest and an icon so the gallery can open full screen with no Safari bars.
+
+### Changed
+- **On a phone the viewer no longer resizes** when Safari's bars come and go (it is laid out against the whole screen), and its row of buttons sits well clear of the bottom edge, over the photo's lower edge, because a tap near the edge made Safari bring the toolbar back and cost a second tap.
+- **The download button takes the photo from the browser's memory** (the viewer is already showing that exact file), so the share sheet opens at once.
+
 ### Fixed
 - **On a phone the button row keeps its places.** The map and sort buttons stay at the left and the download and about buttons at the right, as on a desktop, on one line that never wraps (the buttons get a little narrower if there are many). 2.0.5 had pushed them all to the left.
 

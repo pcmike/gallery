@@ -204,6 +204,16 @@ Inside a folder, photos run by **name** or by **date** (when it was taken: read 
 - The viewer's next and previous follow the order. Photos placed with `{photos:}` or a group keep your order.
 - Dates found in files are cached in the folder's `.gallery-cache`, so they are read only once.
 
+## Thumbnails and phones
+
+**Sharp tiles.** A tile is a square cut from the middle of the photo, and each photo gets it at two sizes, 560 and 1080 pixels, both kept in `.gallery-cache`. The page tells the browser how wide a tile is, and the browser takes the small one for an ordinary screen and the big one for a phone (a portrait iPhone shows one column, about 350 points wide, which at 3x needs about 1080 pixels). Only tiles near the screen load, so the bigger picture costs bandwidth only for what you scroll past. The pictures are progressive JPEGs. The older 480 pixel thumbnail is still what the small strips and the admin use. With `ENABLE_THUMBNAIL_CACHE` off there is only the original.
+
+**Prepare thumbnails.** A photo's tile pictures are otherwise made the first time it is shown, which makes the first visit to a big folder slow. **Site settings → Thumbnails** says how many photos are ready and has a button that makes the rest, a few seconds' worth at a time with a progress bar, one reading of each photo for both sizes. Stop whenever you like; what's done stays done, and a damaged file is counted and passed over. (Videos are left to the first time they are shown.)
+
+**The viewer on a phone.** It is laid out against the whole screen, so the photo keeps its size whether or not Safari's bars are showing, and its row of buttons sits well above the bottom edge, resting over the photo's lower edge: a tap close to the bottom edge makes Safari bring its toolbar back, which costs a second tap. The download button takes the photo from the browser's own memory (the viewer already holds that very file), so the share sheet can open on the first tap; HEIC photos and videos are fetched.
+
+**Opening the gallery with no browser bars.** A web page can't hide an iPhone's address bar and toolbar, but a site added to the Home Screen opens without them. While you are signed in as the owner the gallery offers that (**Share → Add to Home Screen**; it needs the manifest at `?manifest` and the icon at `?appicon`, both public and harmless). Other visitors' pages don't carry it yet. You may need to sign in once inside the app.
+
 ## The admin
 
 ### First run and signing in
@@ -214,6 +224,7 @@ After that, press the **lock** beside the gallery's title (or visit `?admin`) an
 The sign-in box is deliberately **not a password field**, so browsers and password managers don't offer to fill or save it: a text box drawn as dots, named `access_code`, read-only until tapped, on a bare page with a large lock drawing (which goes back) and no heading, button or word "password". Return sends it. The admin refuses plain HTTP (except on `localhost`), uses a fresh session on login (up to 4 hours; Log out also clears private view), protects every save with a CSRF token and throttles guesses (5 wrong from one address in 15 minutes means a 60-second delay). Scripts may send an `Authorization: Basic` header instead.
 
 ### What the admin has
+- **A lock on every tile** of the gallery itself, for you only (never visitors or private-view viewers): red and labelled *Private* when the photo is private (including by its folder), a faint open lock when it's public (on a desktop it appears on hover). Press it and the photo flips between private and public, with a short message; it doesn't open the viewer. If the admin session has ended it says so. It uses the same save as the admin's switch, so nothing else is touched.
 - **Photos** (called **Media** once video is on): a thumbnail grid. Select one for its *Private* and *Show its location* switches (they save as you flip them), *Caption*, *Web link*, location fields and **Set as cover**. **Select photos** makes several private or public at once.
 - **Settings** (*Folder settings* in a folder): the title or display name, dates, description, order, location and privacy switches and the map section. The gallery's top has the same form, so a notes file isn't needed just to name it.
 - **Notes**: every `.md` in the folder, edited as raw text and saved byte-for-byte; *Save*, *Save As* and *Delete* are separate (the latter two ask first) and locked to `.md` names. A file missing `{gallery}` is shown as not active with a one-click fix.

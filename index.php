@@ -267,6 +267,10 @@ define('ENABLE_PUBLIC_DOWNLOAD', gallery_setting('ENABLE_PUBLIC_DOWNLOAD', false
 // before. Set to false for a gallery that must never write to its folder.
 // See the README for details.
 define('ENABLE_THUMBNAIL_CACHE', gallery_setting('ENABLE_THUMBNAIL_CACHE', true));
+// The two pictures a tile can show (size=tile and size=tilehd), both square cuts from the middle of the photo, which is all
+// a tile ever shows of it: [side in pixels, JPEG quality]. A tile is 180 to 250 points wide (a phone in portrait with one
+// column: about 350), so 560 is right for an ordinary screen and 1080 for a 3x phone.
+const TILE_SIZES = ['tile' => [560, 82], 'tilehd' => [1080, 80]];
 
 // Auto-group photos by filename (stripping a trailing "_01"/"-02" style
 // suffix, e.g. "dp104_01.jpg" + "dp104_02.jpg" -> "dp104"). Off by
@@ -983,6 +987,33 @@ if (isset($_GET['about'])) {
 // render_map_icon_image()). Inert unless ENABLE_MAP is on, like ?map.
 if (ENABLE_MAP && isset($_GET['mapicon'])) {
     render_map_icon_image();
+    exit;
+}
+
+// ?appicon and ?manifest — what "Add to Home Screen" needs for the gallery to open as an app with no browser bars (the
+// page only points at them for the signed-in owner for now; see home_screen_app_tags()). Nothing private in either.
+if (isset($_GET['appicon'])) {
+    render_app_icon_image(isset($_GET['size']) && $_GET['size'] === 'large' ? 512 : 180);
+    exit;
+}
+if (isset($_GET['manifest'])) {
+    $name = trim(preg_replace('/[\x00-\x1f]+/', ' ', (string) ($_GET['name'] ?? '')));
+    $name = $name === '' ? 'Gallery' : (function_exists('mb_substr') ? mb_substr($name, 0, 40) : substr($name, 0, 40));
+    $start = gallery_root_href();
+    if ($start === './') {
+        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+        $start = is_string($path) ? preg_replace('#[^/]*$#', '', $path) : '/';
+    }
+    header('Content-Type: application/manifest+json; charset=UTF-8');
+    header('Cache-Control: no-cache');
+    echo json_encode([
+        'name' => $name, 'short_name' => $name, 'start_url' => $start, 'scope' => $start, 'display' => 'standalone',
+        'background_color' => '#0f0f10', 'theme_color' => '#0f0f10',
+        'icons' => [
+            ['src' => $start . '?appicon', 'sizes' => '180x180', 'type' => 'image/png'],
+            ['src' => $start . '?appicon&size=large', 'sizes' => '512x512', 'type' => 'image/png'],
+        ],
+    ], JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP);
     exit;
 }
 
@@ -1994,6 +2025,23 @@ function render_map_icon_image() {
     imagedestroy($img);
 }
 
+/** The home-screen icon: a dark square with a small mountain-and-sun picture, as a PNG of $px pixels. */
+function render_app_icon_image($px) {
+    $img = imagecreatetruecolor($px, $px);
+    $bg = imagecolorallocate($img, 15, 15, 16);
+    $blue = imagecolorallocate($img, 88, 101, 242);
+    $light = imagecolorallocate($img, 225, 228, 255);
+    imagefilledrectangle($img, 0, 0, $px, $px, $bg);
+    $u = $px / 100;
+    imagefilledellipse($img, (int) round(70 * $u), (int) round(32 * $u), (int) round(16 * $u), (int) round(16 * $u), $light);
+    imagefilledpolygon($img, [(int) round(14 * $u), (int) round(76 * $u), (int) round(42 * $u), (int) round(34 * $u), (int) round(62 * $u), (int) round(76 * $u)], $blue);
+    imagefilledpolygon($img, [(int) round(44 * $u), (int) round(76 * $u), (int) round(64 * $u), (int) round(48 * $u), (int) round(86 * $u), (int) round(76 * $u)], $light);
+    header('Content-Type: image/png');
+    header('Cache-Control: public, max-age=31536000, immutable');
+    imagepng($img);
+    imagedestroy($img);
+}
+
 /**
  * Reads a clip's duration (in seconds) straight out of its MP4/MOV
  * container's mvhd box — no transcoding, no external dependency, just
@@ -2122,7 +2170,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
         foreach ($folderFiles as $file) {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
             $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
-            $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
+            $variants = $isHeic ? ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'tile', 'tilehd', 'share', 'cover', 'coverlg'];
             if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
             $mtime = @filemtime(resolve_real_path($dir, $file));
             $valid['taken2.json'] = true;   // the capture dates found for sorting (see media_taken_times)
@@ -2144,8 +2192,9 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
 }
 
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
- *  available, otherwise GD. Returns true on success. */
-function generate_resized_jpeg($srcPath, $destPath, $maxDim) {
+ *  available, otherwise GD. Returns true on success. The long side ends up at most $maxDim (a picture is never enlarged).
+ *  The JPEG is progressive: it paints coarse-to-fine while it loads. */
+function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
     if (class_exists('Imagick')) {
         try {
             $img = new Imagick();
@@ -2154,12 +2203,14 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim) {
                 $img->autoOrient();
             }
             $img->setImageFormat('jpeg');
-            $img->setImageCompressionQuality(82);
+            $img->setImageCompressionQuality($quality);
             $w = $img->getImageWidth();
             $h = $img->getImageHeight();
             if (max($w, $h) > $maxDim) {
                 $img->thumbnailImage($maxDim, $maxDim, true);
+                if (max($w, $h) > $maxDim * 2 && method_exists($img, 'unsharpMaskImage')) $img->unsharpMaskImage(0, 0.5, 0.5, 0.02);   // a picture shrunk a lot comes out a touch soft
             }
+            if (defined('Imagick::INTERLACE_PLANE')) $img->setInterlaceScheme(Imagick::INTERLACE_PLANE);
             $img->stripImage();
             $ok = $img->writeImage($destPath);
             $img->clear();
@@ -2193,7 +2244,8 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim) {
         $nh = max(1, (int) round($h * $scale));
         $dst = imagecreatetruecolor($nw, $nh);
         imagecopyresampled($dst, $src, 0, 0, 0, 0, $nw, $nh, $w, $h);
-        $ok = imagejpeg($dst, $destPath, 82);
+        imageinterlace($dst, true);
+        $ok = imagejpeg($dst, $destPath, $quality);
         imagedestroy($src);
         imagedestroy($dst);
         return $ok;
@@ -2258,6 +2310,137 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
     return false;
 }
 
+/** The longest side, in pixels, a size of picture is cut to. */
+function image_variant_dim($variant) {
+    if (isset(TILE_SIZES[$variant])) return TILE_SIZES[$variant][0];
+    return ['thumb' => 480, 'share' => 1200, 'full' => 2400, 'cover' => 640, 'coverlg' => 1200][$variant] ?? 480;
+}
+
+/** Makes the cached picture of one size ($variant) of a photo, whatever way that size is cut. True when it was written. */
+function make_image_variant($pictureSrc, $cachePath, $variant) {
+    // A folder's cover card is a square cut from the original photo (not from its small thumbnail), so it stays sharp.
+    if ($variant === 'cover' || $variant === 'coverlg') return generate_cover_jpeg($pictureSrc, $cachePath, image_variant_dim($variant));
+    if (isset(TILE_SIZES[$variant])) return generate_tile_jpegs($pictureSrc, [$variant => $cachePath]);
+    return generate_resized_jpeg($pictureSrc, $cachePath, image_variant_dim($variant));
+}
+
+/** The square cut from the middle of a photo that a tile shows (the tile crops the same way, so nothing it would show is
+ *  lost), made at each size asked for from one reading of the photo: $targets is [variant => where to write it].
+ *  Never enlarged: a small photo gives a smaller square. Progressive JPEGs, touched up a little after shrinking. True
+ *  when every one was written. */
+function generate_tile_jpegs($srcPath, $targets) {
+    $done = 0;
+    if (class_exists('Imagick')) {
+        try {
+            $img = new Imagick();
+            $img->readImage($srcPath);
+            if (method_exists($img, 'autoOrient')) $img->autoOrient();
+            $img->setImageFormat('jpeg');
+            $w = $img->getImageWidth();
+            $h = $img->getImageHeight();
+            $side = min($w, $h);
+            $img->cropImage($side, $side, (int) round(($w - $side) / 2), (int) round(($h - $side) / 2));
+            $img->setImagePage(0, 0, 0, 0);
+            $img->stripImage();
+            foreach ($targets as $variant => $dest) {
+                [$dim, $quality] = TILE_SIZES[$variant];
+                $one = clone $img;
+                $one->setImageCompressionQuality($quality);
+                if ($side > $dim) {
+                    $one->thumbnailImage($dim, $dim);
+                    if ($side > $dim * 2 && method_exists($one, 'unsharpMaskImage')) $one->unsharpMaskImage(0, 0.5, 0.5, 0.02);
+                }
+                if (defined('Imagick::INTERLACE_PLANE')) $one->setInterlaceScheme(Imagick::INTERLACE_PLANE);
+                if ($one->writeImage($dest)) $done++;
+                $one->clear(); $one->destroy();
+            }
+            $img->clear(); $img->destroy();
+            if ($done === count($targets)) return true;
+        } catch (Exception $e) {
+            // Fall through to GD for whatever is left.
+        }
+        $targets = array_filter($targets, function ($dest) { return !is_file($dest) || filesize($dest) === 0; });
+        $done = 0;
+        if (!$targets) return true;
+    }
+    if (extension_loaded('gd')) {
+        $data = @file_get_contents($srcPath);
+        if ($data === false) return false;
+        $src = @imagecreatefromstring($data);
+        if (!$src) return false;
+        $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
+        if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
+            $exif = @exif_read_data($srcPath);
+            if (!empty($exif['Orientation'])) {
+                if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
+                if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
+                if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
+            }
+        }
+        $w = imagesx($src);
+        $h = imagesy($src);
+        $side = min($w, $h);
+        foreach ($targets as $variant => $dest) {
+            [$dim, $quality] = TILE_SIZES[$variant];
+            $out = min($dim, $side);
+            $dst = imagecreatetruecolor($out, $out);
+            imagecopyresampled($dst, $src, 0, 0, (int) round(($w - $side) / 2), (int) round(($h - $side) / 2), $out, $out, $side, $side);
+            imageinterlace($dst, true);
+            if (imagejpeg($dst, $dest, $quality)) $done++;
+            imagedestroy($dst);
+        }
+        imagedestroy($src);
+        return $done === count($targets);
+    }
+    return false;
+}
+
+/** How many photos have every tile size ready in the cache, and how many photos there are (videos are left to the
+ *  moment they are first shown: cutting a frame out of one is heavy). */
+function thumbnail_readiness($dir, $files) {
+    $ready = 0; $total = 0;
+    foreach ($files as $file) {
+        if (is_video_file($file)) continue;
+        $total++;
+        $src = resolve_real_path($dir, $file);
+        $cacheDir = containing_folder_real_path($dir, $file) . '/.gallery-cache';
+        $all = true;
+        foreach (array_keys(TILE_SIZES) as $variant) {
+            $mtime = @filemtime($src);
+            $path = $cacheDir . '/' . md5($file . '|' . $variant . '|' . $mtime) . '.jpg';
+            if (!is_file($path)) { $all = false; break; }
+        }
+        if ($all) $ready++;
+    }
+    return [$ready, $total];
+}
+
+/** Makes the tile pictures of the photos from number $from onward, for about $budget seconds, then says where to carry on
+ *  (a photo that can't be made, such as a damaged file, is counted and passed over rather than tried forever). */
+function warm_thumbnail_batch($dir, $files, $from, $budget) {
+    $photos = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
+    $total = count($photos);
+    $start = microtime(true);
+    $made = 0; $failed = 0; $i = max(0, (int) $from);
+    for (; $i < $total; $i++) {
+        if ($made + $failed > 0 && microtime(true) - $start > $budget) break;
+        $file = $photos[$i];
+        $src = resolve_real_path($dir, $file);
+        $cacheDir = containing_folder_real_path($dir, $file) . '/.gallery-cache';
+        $missing = [];
+        foreach (array_keys(TILE_SIZES) as $variant) {
+            $cachePath = image_cache_path($cacheDir, $file, $variant, $src);
+            if ($cachePath === null) { $failed++; continue; }
+            if (is_file($cachePath) && filemtime($cachePath) >= @filemtime($src)) continue;
+            $missing[$variant] = $cachePath;
+        }
+        if ($missing) {   // one reading of the photo makes every size that is missing
+            if (generate_tile_jpegs($src, $missing)) $made += count($missing); else $failed += count($missing);
+        }
+    }
+    return ['next' => $i, 'total' => $total, 'made' => $made, 'failed' => $failed, 'done' => $i >= $total];
+}
+
 /** Serves ?img=<filename-or-relative-path>&size=thumb|share|full,
  *  resizing/caching/converting as needed. $filename is validated by exact
  *  match against $validFiles — the real list this script's own scan
@@ -2284,8 +2467,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         return;
     }
     $cacheControl = file_cache_control($dir, $filename, $itemsData);
-    $maxDims = ['thumb' => 480, 'share' => 1200, 'full' => 2400, 'cover' => 640, 'coverlg' => 1200];
-    $maxDim = $maxDims[$variant] ?? 480;
+    $maxDim = image_variant_dim($variant);
 
     // No frame extraction (see ENABLE_VIDEO's doc comment) — every size
     // of a video's "thumbnail," grid tile or Open Graph share preview
@@ -2297,7 +2479,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         // A real frame from the video when ffmpeg can take one; everything below then treats that picture as the source.
         $poster = video_poster_path($srcPath, $cacheDir, $filename);
         if ($poster === null) {
-            render_video_placeholder_image($maxDim);
+            render_video_placeholder_image(min($maxDim, 640));
             return;
         }
         if ($variant === 'full') {
@@ -2327,9 +2509,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         return;
     }
 
-    // A folder's cover card is a square cut from the original photo (not from its small thumbnail), so it stays sharp.
-    $isCover = $variant === 'cover' || $variant === 'coverlg';
-    $ok = $cachePath ? ($isCover ? generate_cover_jpeg($pictureSrc, $cachePath, $maxDim) : generate_resized_jpeg($pictureSrc, $cachePath, $maxDim)) : false;
+    $ok = $cachePath ? make_image_variant($pictureSrc, $cachePath, $variant) : false;
     if ($ok) {
         header('Content-Type: image/jpeg');
         header('Cache-Control: ' . $cacheControl);
@@ -2337,7 +2517,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         return;
     }
     if ($pictureSrc !== $srcPath) {
-        render_video_placeholder_image($maxDim);   // the frame couldn't be cut down: the placeholder, never the video file as a picture
+        render_video_placeholder_image(min($maxDim, 640));   // the frame couldn't be cut down: the placeholder, never the video file as a picture
         return;
     }
 
@@ -2377,6 +2557,15 @@ function file_version($file) {
 function img_url($file, $size) {
     $v = file_version($file);
     return '?img=' . rawurlencode($file) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '');
+}
+
+/** The extra attributes that let the browser choose a tile's picture by how big the tile really is and how dense the screen
+ *  is: the 560 pixel one for an ordinary screen, the 1080 one for a phone. (The tile is one column wide on a phone in
+ *  portrait, otherwise 180 to 250 points.) Where thumbnails are off there is only the one picture. */
+function tile_srcset_attrs($file) {
+    if (!ENABLE_THUMBNAIL_CACHE) return '';
+    return ' srcset="' . htmlspecialchars(img_url($file, 'tile') . ' ' . TILE_SIZES['tile'][0] . 'w, ' . img_url($file, 'tilehd') . ' ' . TILE_SIZES['tilehd'][0] . 'w', ENT_QUOTES, 'UTF-8')
+         . '" sizes="(max-width: 417px) calc(100vw - 48px), 250px"';
 }
 
 /** A location-pin badge's link target — OpenStreetMap needs no API key
@@ -4969,6 +5158,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return $result;
     }
 
+    // Makes the tile pictures ahead of time, a few seconds' worth per request; the page asks again until it is done.
+    if ($action === 'warm_thumbnails') {
+        if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'Thumbnails are switched off in the site settings.']);
+        @set_time_limit(60);
+        $r = warm_thumbnail_batch($dir, $files, (int) ($_POST['from'] ?? 0), 8);
+        $r['ok'] = true; $r['text'] = '';
+        admin_json_exit($r);
+    }
+
     if ($action === 'save_item') {
         $bare = basename((string) ($_POST['file'] ?? ''));
         $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
@@ -6071,6 +6269,23 @@ function render_admin_health_panel() {
 <?php
 }
 
+/** The thumbnails panel: how many photos have their tile pictures ready, and a button that makes the rest now. */
+function render_admin_thumbnails_panel($csrfToken) {
+    if (!ENABLE_THUMBNAIL_CACHE) return;
+    [$ready, $total] = thumbnail_readiness($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
+    $left = $total - $ready;
+?>
+    <section class="panel warm-panel" id="warm-panel" data-csrf="<?= $csrfToken ?>">
+      <h2 class="section-title">Thumbnails</h2>
+      <p class="muted" style="margin-top:0;">A photo's tile pictures are made the first time it is shown, so the first visit to a big folder is slower. Prepare them all now and every visit is quick. It works through the photos a few seconds at a time and you can stop whenever you like; what is done stays done.</p>
+      <p class="warm-line"><strong class="warm-count <?= $left === 0 ? 'ok-text' : '' ?>"><?= $left === 0 ? 'All ' . number_format($total) . ' photos are ready.' : number_format($ready) . ' of ' . number_format($total) . ' photos are ready.' ?></strong>
+        <button type="button" class="secondary warm-go"<?= $left === 0 ? ' hidden' : '' ?>>Prepare the rest</button>
+        <button type="button" class="secondary warm-stop" hidden>Stop</button></p>
+      <div class="warm-bar" hidden><span></span></div>
+    </section>
+<?php
+}
+
 /** The Site settings panel. */
 function render_admin_site_settings($csrfToken) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
@@ -6373,6 +6588,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-panel:not(.show-all) .health-row.quiet, .health-panel:not(.show-all) .health-group.all-quiet, .health-panel:not(.show-all) .health-intro { display:none; }
   .health-panel.is-checking .health-toggle { display:none; }
   .health-toggle { padding:3px 12px; font-size:0.8rem; }
+  .warm-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 8px; }
+  .warm-bar { height:6px; border-radius:3px; background:#26262a; overflow:hidden; }
+  .warm-bar span { display:block; height:100%; width:0; background:#5865f2; transition:width .3s; }
   .health-mark .ico { width:1.1em; height:1.1em; }
   .health-summary .secondary { padding:3px 12px; font-size:0.8rem; }
   .accel-status:empty { display:none; }
@@ -6944,7 +7162,7 @@ foreach ($adminFiles as $file) {
   </div>
   </div>
   <div class="tab-panel" data-tab="site">
-<?php render_admin_health_panel(); render_admin_site_settings($csrfToken); ?>
+<?php render_admin_health_panel(); render_admin_thumbnails_panel($csrfToken); render_admin_site_settings($csrfToken); ?>
   </div>
   <div class="tab-panel" data-tab="export">
   <section class="panel" id="export">
@@ -7043,6 +7261,35 @@ foreach ($adminFiles as $file) {
       text.textContent = loud ? loud + ' thing' + (loud === 1 ? '' : 's') + ' to look at.' : pending ? 'Checking\u2026' : 'Everything checked looks right.';
       text.className = 'health-summary-text ' + (loud ? (red ? 'warn-text' : 'note-text') : pending ? 'muted' : 'ok-text');
     };
+    (function () {
+      const panel = document.getElementById('warm-panel');
+      if (!panel) return;
+      const go = panel.querySelector('.warm-go'), stop = panel.querySelector('.warm-stop'), count = panel.querySelector('.warm-count'), bar = panel.querySelector('.warm-bar'), fill = bar.firstElementChild;
+      let running = false, failed = 0;
+      const step = function (from) {
+        if (!running) { count.textContent = 'Stopped. Press the button to carry on; what is done stays done.'; go.hidden = false; go.textContent = 'Carry on'; stop.hidden = true; return; }
+        const body = new URLSearchParams();
+        body.set('csrf_token', panel.dataset.csrf); body.set('action', 'warm_thumbnails'); body.set('from', String(from));
+        fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (!j.ok) throw new Error(j.text || 'failed');
+            failed += j.failed;
+            fill.style.width = (j.total ? Math.round(100 * j.next / j.total) : 100) + '%';
+            if (j.done) {
+              running = false; stop.hidden = true; bar.hidden = true;
+              count.textContent = failed ? 'Finished. ' + failed + ' picture' + (failed === 1 ? '' : 's') + ' could not be made (a damaged file, or a folder the web server cannot write to).' : 'All ' + j.total.toLocaleString() + ' photos are ready.';
+              count.className = 'warm-count ' + (failed ? 'note-text' : 'ok-text');
+              return;
+            }
+            count.textContent = 'Prepared ' + j.next.toLocaleString() + ' of ' + j.total.toLocaleString() + ' photos\u2026';
+            setTimeout(function () { step(j.next); }, 300);
+          })
+          .catch(function (err) { running = false; stop.hidden = true; go.hidden = false; go.textContent = 'Try again'; count.textContent = 'Stopped: ' + (err && err.message ? err.message : 'the server did not answer') + '.'; count.className = 'warm-count warn-text'; });
+      };
+      go.addEventListener('click', function () { running = true; failed = 0; go.hidden = true; stop.hidden = false; bar.hidden = false; fill.style.width = '0'; count.className = 'warm-count'; count.textContent = 'Starting\u2026'; step(0); });
+      stop.addEventListener('click', function () { running = false; stop.disabled = true; setTimeout(function () { stop.disabled = false; }, 1000); });
+    })();
     const toggle = document.querySelector('.health-toggle');
     if (toggle) toggle.addEventListener('click', function () {
       const panel = document.getElementById('health-panel');
@@ -9475,7 +9722,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     }
     return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
+         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . (isset($GLOBALS['__cover_file']) && $GLOBALS['__cover_file'] === $file ? '<span id="folder-cover" class="cover-anchor" aria-hidden="true"></span>' : '') . '</div>';
 }
@@ -9699,6 +9946,22 @@ function gallery_root_href() {
         return './';
     }
     return implode('/', array_map('rawurlencode', explode('/', $scriptDir)));
+}
+
+/** What makes "Add to Home Screen" open the gallery as an app with no browser bars at all (the phone's address bar and
+ *  toolbar, which on an iPhone can't be hidden from a web page, are what keep popping up). For now only the signed-in
+ *  owner's pages carry it, so it can be tried out before anyone else sees it; nothing changes in an ordinary browser tab. */
+function home_screen_app_tags($title) {
+    if (!is_admin_browser()) return '';
+    $t = htmlspecialchars($title, ENT_QUOTES, 'UTF-8');
+    $root = htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8');
+    return '<meta name="apple-mobile-web-app-capable" content="yes">' . "\n"
+         . '<meta name="mobile-web-app-capable" content="yes">' . "\n"
+         . '<meta name="apple-mobile-web-app-status-bar-style" content="black">' . "\n"
+         . '<meta name="apple-mobile-web-app-title" content="' . $t . '">' . "\n"
+         . '<meta name="theme-color" content="#0f0f10">' . "\n"
+         . '<link rel="apple-touch-icon" href="' . $root . '?appicon">' . "\n"
+         . '<link rel="manifest" href="' . $root . '?manifest&amp;name=' . htmlspecialchars(rawurlencode($title), ENT_QUOTES, 'UTF-8') . '">' . "\n";
 }
 
 /** Builds the current request's scheme://host/path, for absolute OG image URLs. */
@@ -9990,6 +10253,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= htmlspecialchars($pageTitle) ?> — Gallery</title>
 <meta name="description" content="<?= htmlspecialchars($ogDescription) ?>">
+<?= home_screen_app_tags($rootPageTitle) ?>
 <?php if ($currentFolderPath !== null): ?><meta name="gallery-folder" content="<?= htmlspecialchars($currentFolderPath) ?>">
 <?php endif; ?>
 <meta property="og:type" content="website">
@@ -10564,6 +10828,18 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     background: linear-gradient(transparent, rgba(0,0,0,0.78));
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
+  /* On a touch screen, with the phone browser's own bars: the viewer is laid out against the whole screen, so the photo
+     keeps one size whether the bars are showing or not (100vh is the whole screen there; the old 100dvh made the photo
+     shrink and grow every time they came and went). And the row of buttons sits well above the bottom edge: a tap down
+     there makes Safari bring its toolbar back, which costs a second tap. It is lifted, not moved out of the layout, so the
+     photo stays exactly where it was; the row rests over the photo's lower edge, on a soft dark pill. */
+  @media (pointer: coarse) {
+    .lightbox { height: 100vh; height: 100lvh; }
+    .lightbox img, .lightbox video { max-height: min(82vh, calc(100lvh - 130px - env(safe-area-inset-bottom, 0px))); }
+    .lightbox .caption-row { transform: translateY(-58px); padding: 4px 12px; border-radius: 999px; background: rgba(0,0,0,0.5); position: relative; z-index: 3; }
+    .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row { transform: none; border-radius: 0; padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)); background: linear-gradient(transparent, rgba(0,0,0,0.78)); position: fixed; }
+    .lightbox-toast { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+  }
   .lightbox-web, .lightbox-download { text-decoration: none; font-size: 1rem; }
   .lightbox-copy.busy { opacity: 0.35; pointer-events: none; }
   .lightbox-copy.ready { color: var(--accent); opacity: 1; }
@@ -11274,7 +11550,11 @@ if (ENABLE_MAP && $mapPoints) {
         return;
       }
       downloadLink.classList.add('busy'); say('Getting the original\u2026');
-      fetch(href, { credentials: 'same-origin' })
+      // An ordinary photo on the screen IS the original file (the viewer shows it untouched), so the browser already holds
+      // it: asking for that same address again is answered from its memory, at once, while the tap still counts. (A HEIC
+      // photo is shown as a converted copy and a video isn't a picture, so those fetch the original.)
+      const shown = files[current], fromMemory = !isVideoFile(shown) && !/\.hei[cf]$/i.test(shown) && lightboxImg.getAttribute('src');
+      fetch(fromMemory || href, fromMemory ? { credentials: 'same-origin', cache: 'force-cache' } : { credentials: 'same-origin' })
         .then(function (r) {
           if (!r.ok) throw new Error('status');
           if ((Number(r.headers.get('content-length')) || 0) > 150 * 1024 * 1024) throw new Error('too big to hold in the browser');
