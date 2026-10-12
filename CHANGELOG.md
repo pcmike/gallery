@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Versions correspond to 
 
 ## [2.0.6] - 2026-10-12
 
+### Changed
+- **The gallery link's preview picture is now one of your folders' covers** (the cover you chose for that folder, else its first photo), picked from the folders the public can see and the same all day, instead of a random photo. Never a video or a private folder; a gallery with no folders still uses one of its photos. A cover you set for the whole gallery still wins.
+
 ### Fixed
 - **The way back and the folders beside this one are now ONE line**, not two: the way-back pill, a small dot, then the sibling pills, all the same size. On a phone the row swipes while the way back stays in view; on a wide screen it is centred.
 

@@ -1229,7 +1229,9 @@ $ogOf = function ($port, $headers = []) { [, $body] = http_get("http://127.0.0.1
 $ogSeen = []; for ($i = 0; $i < 3; $i++) $ogSeen[] = $ogOf($portSo);
 check('[preview] the gallery link\'s picture is a photo (never a private one or a video), and the same on every request that day', count(array_unique($ogSeen)) === 1 && $ogSeen[0] !== null && !in_array($ogSeen[0], ['p-private.jpg', 'm.mp4'], true) && is_file("$fxSo/{$ogSeen[0]}"), json_encode($ogSeen));
 $ogFolder = $ogOf($portSf);
-check('[preview] ...and with photos only inside folders it is one of those photos, not a video', in_array($ogFolder, ['Trip/a.jpg', 'Trip/b.jpg', 'Trip/c.jpg', 'Trip/Day2/d.jpg'], true), json_encode($ogFolder));
+check('[preview] with folders, the gallery link\'s picture is a folder\'s cover (here the only folder\'s first photo, never the video)', $ogFolder === 'Trip/a.jpg', json_encode($ogFolder));
+write_data_file("$fxSf/Trip/.gallery-items.php", ['items' => [], 'groups' => [], 'displayName' => null, 'cover' => 'c.jpg', 'locationEnabled' => false]);
+check('[preview] ...and when the owner chose that folder\'s cover, that is the picture', $ogOf($portSf) === 'Trip/c.jpg', json_encode($ogOf($portSf)));
 
 // Quick links to the folders beside the one you're in.
 $fxPl = new_fixture_dir('folderpills');
@@ -1249,6 +1251,8 @@ $plEnd = $plPills('Many%2FF14');
 check('[folder pills] ...and at the end of a long row the window stays full', $plEnd !== null && array_column(array_slice($plEnd, 0, 9), 0)[0] === 'F06' && in_array(['F14', true, false], $plEnd, true));
 check('[folder pills] the gallery front page has none', !str_contains(http_get("http://127.0.0.1:$portPl/")[1], 'class="folder-pills"'));
 check('[folder pills] a folder with no siblings has none', !str_contains(http_get("http://127.0.0.1:$portPl/?folder=Solo%2FOnly")[1], 'class="folder-pills"'));
+$plOg = []; for ($i = 0; $i < 3; $i++) $plOg[] = $ogOf($portPl);
+check('[preview] among several folders it is one of their covers, never a private folder\'s, and the same on every request that day', count(array_unique($plOg)) === 1 && preg_match('#^(Alpha|Bravo|Charlie|Many|Solo)/(.+/)?x\.jpg$#', (string) $plOg[0]) === 1 && !str_starts_with((string) $plOg[0], 'Secret/'), json_encode($plOg));
 
 $fxSe = new_fixture_dir('sortextra'); $fxSeX = new_fixture_dir('sortextra2'); mkdir("$fxSeX/Paris");
 make_jpeg("$fxSeX/Paris/a.jpg", 40, 40, 5, 5, 5); make_minimal_mp4("$fxSeX/Paris/z.mp4", 5, 1);

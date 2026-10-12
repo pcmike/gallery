@@ -9903,12 +9903,20 @@ $ogDescription = $rootMeta['description'] !== '' ? markdown_to_plaintext($rootMe
     ? markdown_to_plaintext($mdContents[$mdFiles[0]])
     : media_count_label($files));
 // The cover chosen in the admin, if it is still a visible root-level photo.
-// With no cover chosen, a photo from anywhere in the gallery: picked from what this requester may see (a link-preview crawler
-// has no cookie, so never a private one), never a video, and the same one all day so the link doesn't show a different
-// picture in every chat.
-$ogCandidates = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
+// With no cover chosen: the cover of one of the gallery's folders (the cover its owner chose, else its first photo), picked from the
+// folders this requester may see (a link-preview crawler has no cookie, so never a private one) and the same one all day, so the
+// link doesn't show a different picture in every chat. A gallery without folders uses one of its photos the same way. Never a video.
+$ogVisible = array_flip($files);
+$ogCovers = [];
+foreach ($folderGroups as $ogTop => $ogMembers) {
+    $ogMembers = array_values(array_filter($ogMembers, function ($f) use ($ogVisible) { return isset($ogVisible[$f]); }));
+    $ogCover = $ogMembers ? pick_folder_cover($ogMembers, folder_display_meta($dir, $ogTop)['cover']) : null;
+    if ($ogCover !== null && !is_video_file($ogCover)) $ogCovers[] = $ogCover;
+}
+$ogPhotos = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
+$ogPool = $ogCovers ?: $ogPhotos;
 $ogRootPhoto = ($rootMeta['cover'] !== null && in_array($rootMeta['cover'], $files, true)) ? $rootMeta['cover']
-    : ($ogCandidates ? $ogCandidates[crc32(gmdate('Y-m-d') . '|' . $dir) % count($ogCandidates)] : ($files[0] ?? null));
+    : ($ogPool ? $ogPool[crc32(gmdate('Y-m-d') . '|' . $dir) % count($ogPool)] : ($files[0] ?? null));
 $ogImageUrl = $ogRootPhoto !== null ? $baseUrl . '/' . img_url($ogRootPhoto, 'share') : '';
 if ($currentFolderPath !== null) {
     // $pageTitle is already folder-prefixed (see the ?folder= validation

@@ -312,7 +312,7 @@ A bare photo address then answers 403 while the gallery works as before. **It de
 
 ## Sharing and previews
 
-Every link you'd paste gets a correct Open Graph preview: `?photo=`, `?folder=` (display name, description or notes, and cover photo) and `?map`. The gallery's own link shows the cover you chose, else a photo picked from anywhere in the gallery (never a video or a private one, and the same all day). Private items are nonexistent to a crawler, so pasting one never previews it. A shared video previews as picture and title, not a playable embed.
+Every link you'd paste gets a correct Open Graph preview: `?photo=`, `?folder=` (display name, description or notes, and cover photo) and `?map`. The gallery's own link shows the cover you set for it, else the cover of one of its folders (the cover you chose for that folder, else its first photo; never a video or a private folder, and the same all day); a gallery without folders uses one of its photos. Private items are nonexistent to a crawler, so pasting one never previews it. A shared video previews as picture and title, not a playable embed.
 
 `?folder=Europe/France/Paris` needs no server setup and is what the gallery itself shares. To also type `/kb/Europe/France/Paris/`, map it onto the script. The admin's Site settings checks whether this works.
 
