@@ -61,7 +61,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.4');
+define('GALLERY_VERSION', '2.0.5');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -295,6 +295,8 @@ define('PHOTO_SORT_DESC', gallery_setting('PHOTO_SORT_DESC', false));
 define('SORT_VIDEOS_FIRST', gallery_setting('SORT_VIDEOS_FIRST', false));
 define('SORT_LOCATED_FIRST', gallery_setting('SORT_LOCATED_FIRST', false));
 define('SORT_PRIVATE_FIRST', gallery_setting('SORT_PRIVATE_FIRST', false));
+// Whether visitors get the sort button (it is also left out of a page that a notes file lays out, see the page template).
+define('SHOW_SORT_BUTTON', gallery_setting('SHOW_SORT_BUTTON', true));
 
 // Scan subfolders recursively (to any depth) and group photos by which
 // one they're in. Off by default — a flat folder behaves exactly as it
@@ -2123,7 +2125,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
             if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
             $mtime = @filemtime(resolve_real_path($dir, $file));
-            $valid['taken.json'] = true;   // the capture dates found for sorting (see media_taken_times)
+            $valid['taken2.json'] = true;   // the capture dates found for sorting (see media_taken_times)
             if (is_video_file($file)) $valid[md5($file . '|preview2|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
                 $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
@@ -4197,28 +4199,167 @@ function media_sort_spec_for_folder($folderReal) {
     return $spec;
 }
 
-/** When each photo of a folder was taken, as a number to sort by: the capture date inside a JPEG, else its modified time.
- *  Reading dates out of many photos is slow, so what is found is kept (by file name, size and modified time) in the folder's cache. */
+/** The capture time in a TIFF block (the shape EXIF uses): the original date in the Exif part, else the digitized date, else
+ *  the file's date field; null when there is none. Read by hand, so it needs no PHP extension and works for JPEG and HEIC alike.
+ *  An offset the camera recorded (iPhones do) makes it exact; without one it is taken as UTC, good enough to order by. */
+function tiff_capture_time($tiff) {
+    $n = strlen($tiff);
+    if ($n < 8) return null;
+    $le = substr($tiff, 0, 2) === 'II';
+    if (!$le && substr($tiff, 0, 2) !== 'MM') return null;
+    $u16 = function ($o) use ($tiff, $n, $le) { return $o >= 0 && $o + 2 <= $n ? unpack($le ? 'v' : 'n', $tiff, $o)[1] : null; };
+    $u32 = function ($o) use ($tiff, $n, $le) { return $o >= 0 && $o + 4 <= $n ? unpack($le ? 'V' : 'N', $tiff, $o)[1] : null; };
+    if ($u16(2) !== 42) return null;
+    $entries = function ($ifd) use ($u16) {   // tag => offset of its 12-byte entry
+        $out = [];
+        $count = $ifd === null ? null : $u16($ifd);
+        if ($count === null || $count > 400) return $out;
+        for ($i = 0; $i < $count; $i++) { $e = $ifd + 2 + 12 * $i; $tag = $u16($e); if ($tag !== null) $out[$tag] = $e; }
+        return $out;
+    };
+    $text = function ($e) use ($tiff, $n, $u32) {
+        $cnt = $u32($e + 4);
+        if ($cnt === null || $cnt < 1 || $cnt > 64) return null;
+        $at = $cnt <= 4 ? $e + 8 : $u32($e + 8);
+        return $at !== null && $at + $cnt <= $n ? rtrim(substr($tiff, $at, $cnt), "\0 ") : null;
+    };
+    $ifd0 = $entries($u32(4));
+    $exifAt = isset($ifd0[0x8769]) ? $u32($ifd0[0x8769] + 8) : null;
+    $exif = $exifAt !== null ? $entries($exifAt) : [];
+    foreach ([[$exif, 0x9003], [$exif, 0x9004], [$ifd0, 0x0132]] as [$map, $tag]) {
+        if (!isset($map[$tag])) continue;
+        $t = $text($map[$tag]);
+        if ($t === null || !preg_match('/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)$/', $t, $m) || (int) $m[1] < 1971) continue;
+        $ts = gmmktime((int) $m[4], (int) $m[5], (int) $m[6], (int) $m[2], (int) $m[3], (int) $m[1]);
+        if ($tag === 0x9003 && isset($exif[0x9011]) && preg_match('/^([+-])(\d\d):(\d\d)$/', (string) $text($exif[0x9011]), $o)) {
+            $ts -= ($o[1] === '-' ? -1 : 1) * ((int) $o[2] * 3600 + (int) $o[3] * 60);
+        }
+        return $ts;
+    }
+    return null;
+}
+
+/** When a photo or video was taken, from the file itself: a JPEG's or HEIC's EXIF, a video's creation time. Null when the file
+ *  doesn't say (a PNG, a screenshot, a stripped copy). */
+function media_capture_time($path) {
+    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    $size = (int) @filesize($path);
+    $fh = $size > 12 ? @fopen($path, 'rb') : false;
+    if (!$fh) return null;
+    try {
+        if ($ext === 'jpg' || $ext === 'jpeg') {
+            if (scrub_read($fh, 0, 2) !== "\xFF\xD8") return null;
+            $pos = 2;
+            for ($guard = 0; $guard < 40 && $pos + 4 <= $size; $guard++) {
+                $h = scrub_read($fh, $pos, 4);
+                if ($h === null || $h[0] !== "\xFF") return null;
+                $marker = ord($h[1]); $len = unpack('n', $h, 2)[1];
+                if ($marker === 0xDA || $marker === 0xD9) return null;
+                if ($marker === 0xE1 && $len >= 8 && $len < 1048576) {
+                    $d = scrub_read($fh, $pos + 4, $len - 2);
+                    if ($d !== null && substr($d, 0, 6) === "Exif\0\0") return tiff_capture_time(substr($d, 6));
+                }
+                $pos += 2 + $len;
+            }
+            return null;
+        }
+        $top = scrub_boxes($fh, 0, $size);
+        if ($top === null) return null;
+        if ($ext === 'mov' || $ext === 'mp4' || $ext === 'm4v') {
+            foreach ($top as $b) {
+                if ($b['type'] !== 'moov') continue;
+                $kids = scrub_boxes($fh, $b['data'], $b['end']);
+                foreach ($kids ?? [] as $k) {
+                    if ($k['type'] !== 'mvhd') continue;
+                    $body = scrub_read($fh, $k['data'], 12);
+                    if ($body === null) return null;
+                    $created = ord($body[0]) === 1 ? unpack('J', scrub_read($fh, $k['data'] + 4, 8) ?? str_repeat("\0", 8))[1] : unpack('N', $body, 4)[1];
+                    $ts = $created - 2082844800;   // QuickTime counts from 1904
+                    return $ts > 31536000 && $ts < time() + 172800 ? $ts : null;
+                }
+            }
+            return null;
+        }
+        if ($ext === 'heic' || $ext === 'heif') {
+            $meta = null;
+            foreach ($top as $b) if ($b['type'] === 'meta') $meta = $b;
+            $kids = $meta === null ? null : scrub_boxes($fh, $meta['data'] + 4, $meta['end']);
+            if ($kids === null) return null;
+            $exifId = null;
+            foreach ($kids as $k) {
+                if ($k['type'] !== 'iinf') continue;
+                $skip = scrub_read($fh, $k['data'], 1) === "\0" ? 6 : 8;
+                foreach (scrub_boxes($fh, $k['data'] + $skip, $k['end']) ?? [] as $inf) {
+                    if ($inf['type'] !== 'infe') continue;
+                    $body = scrub_read($fh, $inf['data'], min(64, $inf['end'] - $inf['data']));
+                    if ($body === null || strlen($body) < 12 || ord($body[0]) < 2) continue;
+                    $v = ord($body[0]);
+                    $id = $v === 2 ? unpack('n', $body, 4)[1] : unpack('N', $body, 4)[1];
+                    if (substr($body, $v === 2 ? 8 : 10, 4) === 'Exif') $exifId = $id;
+                }
+            }
+            if ($exifId === null) return null;
+            foreach ($kids as $k) {
+                if ($k['type'] !== 'iloc') continue;
+                $h = scrub_read($fh, $k['data'], 8);
+                if ($h === null) return null;
+                $ver = ord($h[0]);
+                $offSize = ord($h[4]) >> 4; $lenSize = ord($h[4]) & 15; $baseSize = ord($h[5]) >> 4; $idxSize = $ver > 0 ? ord($h[5]) & 15 : 0;
+                $count = $ver < 2 ? unpack('n', $h, 6)[1] : unpack('N', scrub_read($fh, $k['data'] + 6, 4) ?? "\0\0\0\0")[1];
+                $at = $k['data'] + ($ver < 2 ? 8 : 10);
+                $num = function ($len) use ($fh, &$at) {
+                    if ($len === 0) return 0;
+                    $bytes = scrub_read($fh, $at, $len); $at += $len;
+                    if ($bytes === null) return null;
+                    $x = 0; for ($i = 0; $i < $len; $i++) $x = ($x << 8) | ord($bytes[$i]);
+                    return $x;
+                };
+                for ($i = 0; $i < $count && $i < 4096; $i++) {
+                    $id = $num($ver < 2 ? 2 : 4);
+                    if ($ver > 0) $num(2);
+                    $num(2);
+                    $base = $num($baseSize); $ext2 = $num(2);
+                    if ($id === null || $base === null || $ext2 === null || $ext2 > 64) return null;
+                    $first = null;
+                    for ($e = 0; $e < $ext2; $e++) {
+                        if ($idxSize) $num($idxSize);
+                        $eo = $num($offSize); $el = $num($lenSize);
+                        if ($eo === null || $el === null) return null;
+                        if ($first === null) $first = [$base + $eo, $el];
+                    }
+                    if ($id !== $exifId || $first === null || $first[1] < 12 || $first[1] > 1048576) continue;
+                    $data = scrub_read($fh, $first[0], $first[1]);
+                    return $data === null ? null : tiff_capture_time(substr($data, 4 + unpack('N', $data)[1]));
+                }
+            }
+        }
+        return null;
+    } catch (\Throwable $e) {
+        return null;
+    } finally {
+        fclose($fh);
+    }
+}
+
+/** When each photo of a folder was taken, as a number to sort by: the capture date in the file (see media_capture_time), else
+ *  its modified time. Reading dates out of many files is slow, so what is found is kept (by file name, size and modified
+ *  time) in the folder's cache. */
 function media_taken_times($folderReal, $names) {
-    $cachePath = $folderReal . '/.gallery-cache/taken.json';
+    $cachePath = $folderReal . '/.gallery-cache/taken2.json';
     $known = [];
     $raw = is_file($cachePath) ? json_decode((string) @file_get_contents($cachePath), true) : null;
     if (is_array($raw)) $known = $raw;
-    $out = []; $changed = false; $budget = 4000;
+    $out = []; $changed = false; $budget = 20000;
     foreach ($names as $name) {
         $path = $folderReal . '/' . $name;
         $mtime = (int) @filemtime($path); $size = (int) @filesize($path);
         $hit = $known[$name] ?? null;
         if (is_array($hit) && ($hit[0] ?? null) === $mtime && ($hit[1] ?? null) === $size && is_int($hit[2] ?? null)) { $out[$name] = $hit[2]; continue; }
         $when = $mtime;
-        if ($budget > 0 && function_exists('exif_read_data') && preg_match('/\.jpe?g$/i', $name)) {
+        if ($budget > 0) {
             $budget--;
-            $exif = @exif_read_data($path, 'EXIF', false);
-            foreach (['DateTimeOriginal', 'DateTimeDigitized', 'DateTime'] as $field) {
-                $text = is_array($exif) ? ($exif[$field] ?? null) : null;
-                $dt = is_string($text) ? DateTime::createFromFormat('Y:m:d H:i:s', trim($text), new DateTimeZone('UTC')) : false;
-                if ($dt instanceof DateTime && (int) $dt->format('Y') > 1970) { $when = $dt->getTimestamp(); break; }
-            }
+            $found = media_capture_time($path);
+            if ($found !== null) $when = $found;
         }
         $out[$name] = $when;
         $known[$name] = [$mtime, $size, $when];
@@ -5594,6 +5735,8 @@ function gallery_setting_definitions() {
              'help' => 'Photos whose location is shown come first (after videos).'],
             ['name' => 'SORT_PRIVATE_FIRST', 'type' => 'bool', 'label' => 'Private items first',
              'help' => 'For you and private-view visitors; nobody else sees private items.'],
+            ['name' => 'SHOW_SORT_BUTTON', 'type' => 'bool', 'label' => 'Sort button',
+             'help' => 'Lets visitors reorder the photos. Left out automatically on a listing laid out by a notes file, with no folders.'],
         ]],
         ['title' => 'Thumbnails and counting', 'items' => [
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
@@ -8202,6 +8345,8 @@ $currentFolderMeta = ['label' => '', 'cover' => null, 'description' => '', 'date
 $currentFolderName = '';
 $currentFolderFileCount = 0;
 $folderCrumbs = [];
+$folderPills = [];       // quick links to the folders beside this one: [href, label, is this one]
+$folderPillsAll = null;  // where "All" goes when only some of them are shown
 if (isset($_GET['folder'])) {
     $requestedFolder = $_GET['folder'];
     // Valid only if the script's own (already hiding-filtered) file list
@@ -8215,6 +8360,31 @@ if (isset($_GET['folder'])) {
         exit;
     }
     $currentFolderPath = $requestedFolder;
+    // Quick links to the folders beside this one (same level), in the order the parent's page shows them: up to ten, else a
+    // window of nine around this one plus "All" back to the parent.
+    $pillParent = strpos($currentFolderPath, '/') === false ? '' : dirname($currentFolderPath);
+    $pillPrefix = $pillParent === '' ? '' : $pillParent . '/';
+    $pillNames = array_keys(split_folder_level($pillParent === '' ? $files : folder_files_under($files, $pillParent), $pillPrefix)['folders']);
+    if ($pillParent === '' && !empty($groupOrder)) {
+        $mainOrder = array_values(array_filter($groupOrder, function ($k) use ($pillNames) { return in_array($k, $pillNames, true); }));
+        $pillNames = count($mainOrder) === count($pillNames) ? $mainOrder : order_folder_children($dir, '', $pillNames);
+    } else {
+        $pillNames = order_folder_children($dir, $pillPrefix, $pillNames);
+    }
+    if (count($pillNames) >= 2) {
+        $pillHere = basename($currentFolderPath);
+        $pillAt = array_search($pillHere, $pillNames, true);
+        $pillShown = $pillNames;
+        if (count($pillNames) > 10) {
+            $pillStart = max(0, min(($pillAt === false ? 0 : $pillAt) - 4, count($pillNames) - 9));
+            $pillShown = array_slice($pillNames, $pillStart, 9);
+            $folderPillsAll = $pillParent === '' ? gallery_root_href() : '?folder=' . rawurlencode($pillParent);
+        }
+        foreach ($pillShown as $pillName) {
+            $pillLabel = folder_display_meta($dir, $pillPrefix . $pillName)['label'];
+            $folderPills[] = ['?folder=' . rawurlencode($pillPrefix . $pillName), $pillLabel !== '' ? $pillLabel : $pillName, $pillName === $pillHere];
+        }
+    }
     $currentFolderMeta = folder_display_meta($dir, $currentFolderPath);
     $currentFolderName = $currentFolderMeta['label'] !== '' ? $currentFolderMeta['label'] : basename($currentFolderPath);
     $pageTitle = $currentFolderName . ' — ' . $pageTitle;
@@ -9733,7 +9903,12 @@ $ogDescription = $rootMeta['description'] !== '' ? markdown_to_plaintext($rootMe
     ? markdown_to_plaintext($mdContents[$mdFiles[0]])
     : media_count_label($files));
 // The cover chosen in the admin, if it is still a visible root-level photo.
-$ogRootPhoto = ($rootMeta['cover'] !== null && in_array($rootMeta['cover'], $files, true)) ? $rootMeta['cover'] : ($files[0] ?? null);
+// With no cover chosen, a photo from anywhere in the gallery: picked from what this requester may see (a link-preview crawler
+// has no cookie, so never a private one), never a video, and the same one all day so the link doesn't show a different
+// picture in every chat.
+$ogCandidates = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
+$ogRootPhoto = ($rootMeta['cover'] !== null && in_array($rootMeta['cover'], $files, true)) ? $rootMeta['cover']
+    : ($ogCandidates ? $ogCandidates[crc32(gmdate('Y-m-d') . '|' . $dir) % count($ogCandidates)] : ($files[0] ?? null));
 $ogImageUrl = $ogRootPhoto !== null ? $baseUrl . '/' . img_url($ogRootPhoto, 'share') : '';
 if ($currentFolderPath !== null) {
     // $pageTitle is already folder-prefixed (see the ?folder= validation
@@ -9851,6 +10026,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   header p.breadcrumb a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
   header p.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   header p.breadcrumb a + a::before { content: "\203A"; margin-right: 9px; opacity: 0.55; }
+  /* The folders beside this one: one swipeable row (it never wraps into a block), the current one lit. */
+  header nav.folder-pills { position: relative; display: flex; gap: 6px; overflow-x: auto; margin: -4px 0 14px; padding: 2px 2px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  header nav.folder-pills::-webkit-scrollbar { display: none; }
+  header nav.folder-pills > :first-child { margin-left: auto; }
+  header nav.folder-pills > :last-child { margin-right: auto; }
+  header nav.folder-pills a { flex: none; font-size: 0.78rem; line-height: 1; color: var(--muted); text-decoration: none; background: transparent; border: 1px solid rgba(255, 255, 255, 0.1); padding: 6px 12px; border-radius: 999px; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }
+  header nav.folder-pills a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  header nav.folder-pills a.current { color: #fff; background: var(--accent); border-color: var(--accent); }
+  header nav.folder-pills a.all { border-style: dashed; }
   header h1 {
     margin: 0 0 4px;
     font-size: 1.6rem;
@@ -10348,6 +10532,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-web, .lightbox-download { text-decoration: none; font-size: 1rem; }
+  .lightbox-copy.busy { opacity: 0.35; pointer-events: none; }
+  .lightbox-copy.ready { color: var(--accent); opacity: 1; }
+  .lightbox-toast { position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); max-width: calc(100vw - 40px); padding: 8px 14px; background: rgba(30,30,34,0.96); color: var(--text); border: 1px solid #3a3a42; border-radius: 999px; font-size: 0.85rem; text-align: center; z-index: 110; pointer-events: none; }
+  .lightbox-toast[hidden] { display: none; }
   /* The map button reads like the other caption icons when the map is off, and in the accent colour when it is on. */
   .lightbox-map-toggle.on { opacity: 1; color: var(--accent); }
   .lightbox-map-toggle.nudge { opacity: 1; color: var(--accent); animation: map-nudge 0.6s ease-in-out 2; }
@@ -10394,6 +10582,12 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .sort-pop-row button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
   .sort-reset { background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 0.8rem; text-decoration: none; border-radius: 3px; cursor: pointer; }
   .sort-reset:hover { color: var(--text); }
+  /* On a phone the map, sort, download and about buttons sit together in one row. */
+  @media (max-width: 600px) {
+    .map-preview-heading { gap: 4px; }
+    .map-combo-btn { width: 36px; }
+    .page-tools { margin-left: 0; gap: 4px; }
+  }
   .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
@@ -10447,6 +10641,12 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
 <header>
   <?php if ($currentFolderPath !== null): ?>
     <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
+    <?php if (count($folderPills) >= 2): ?>
+    <nav class="folder-pills" aria-label="Other folders here">
+      <?php foreach ($folderPills as [$pillHref, $pillText, $pillCurrent]): ?><a href="<?= htmlspecialchars($pillHref, ENT_QUOTES, 'UTF-8') ?>"<?= $pillCurrent ? ' class="current" aria-current="page"' : '' ?>><?= htmlspecialchars($pillText, ENT_QUOTES, 'UTF-8') ?></a><?php endforeach; ?>
+      <?php if ($folderPillsAll !== null): ?><a class="all" href="<?= htmlspecialchars($folderPillsAll, ENT_QUOTES, 'UTF-8') ?>">All</a><?php endif; ?>
+    </nav>
+    <?php endif; ?>
   <?php endif; ?>
   <?php if (ADMIN_PASSWORD !== '' && is_admin_browser()): ?>
     <?php // Signed in as the owner: the title leads back to the admin page for wherever you are (a folder's own admin on its page). ?>
@@ -10711,7 +10911,7 @@ if (ENABLE_MAP && $mapPoints) {
       if (FOLDER_DISPLAY_MODE !== 'overview' || !AUTO_GROUP_BY_FOLDER) return true;
       return ($currentFolderPath === null ? '' : $currentFolderPath) === (strpos($f, '/') === false ? '' : dirname($f));
   }));
-  $sortShown = count($sortScope) >= 2;
+  $sortShown = SHOW_SORT_BUTTON && count($sortScope) >= 2 && !(!AUTO_GROUP_BY_FOLDER && !empty($mdFiles));   // (a notes-file listing sets its own order)
   $sortHasVideo = false; $sortHasLocated = false; $sortHasPrivate = false;
   if ($sortShown) {
       $sortRevealed = is_revealed();
@@ -10794,6 +10994,7 @@ if (ENABLE_MAP && $mapPoints) {
     <a class="lbmap-osm" href="https://www.openstreetmap.org/" target="_blank" rel="noopener noreferrer">Open in OpenStreetMap &#8599;</a>
   </div>
 <?php endif; ?>
+  <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
     <button class="lightbox-copy lightbox-zoom" id="lightbox-zoom" type="button" title="Fill the width of the screen" aria-label="Fill the width of the screen"><?= ui_icon('zoom-in') ?></button>
@@ -10970,6 +11171,11 @@ if (ENABLE_MAP && $mapPoints) {
     resetBtn.addEventListener('click', function () { go(null); });
     paint();
   })();
+  // The row of sibling folders starts with the current one in view.
+  (function () {
+    const nav = document.querySelector('.folder-pills'), cur = nav && nav.querySelector('.current');
+    if (cur) nav.scrollLeft = cur.offsetLeft - (nav.clientWidth - cur.offsetWidth) / 2;
+  })();
   // The archive always asks first, saying how many files and how big: it is a long, heavy download, and nothing is done on the server until the answer is yes.
   document.querySelectorAll('.page-archive').forEach(function (a) {
     a.addEventListener('click', function (e) {
@@ -10977,6 +11183,50 @@ if (ENABLE_MAP && $mapPoints) {
     });
   });
   const downloadLink = document.getElementById('lightbox-download');   // only on a page made for a signed-in visitor
+  // The download button on a phone: the original goes to the share sheet, which offers "Save Image" / "Save Video" straight into
+  // Photos (a plain download would land in Files). Where sharing a file isn't possible, or anything goes wrong, it is a plain
+  // download as before. Safari only allows the share sheet right after a tap, so if the fetch took too long the button lights up
+  // and the next tap opens it.
+  if (downloadLink && navigator.share && navigator.canShare && (navigator.maxTouchPoints || 0) > 0) {
+    let ready = null, toastTimer = null;
+    const toast = document.getElementById('lightbox-toast');
+    const say = function (text) {
+      if (!toast) return;
+      toast.textContent = text; toast.hidden = false;
+      clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.hidden = true; }, 4000);
+    };
+    const plain = function (href) { const a = document.createElement('a'); a.href = href; a.download = ''; document.body.appendChild(a); a.click(); a.remove(); };
+    downloadLink.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (downloadLink.classList.contains('busy')) return;
+      const href = downloadLink.getAttribute('href');
+      if (ready && ready.href === href) {
+        const file = ready.file; ready = null; downloadLink.classList.remove('ready');
+        navigator.share({ files: [file] }).catch(function (err) { if (!err || err.name !== 'AbortError') plain(href); });
+        return;
+      }
+      downloadLink.classList.add('busy'); say('Getting the original\u2026');
+      fetch(href, { credentials: 'same-origin' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('status');
+          if ((Number(r.headers.get('content-length')) || 0) > 150 * 1024 * 1024) throw new Error('too big to hold in the browser');
+          return r.blob();
+        })
+        .then(function (blob) {
+          const name = decodeURIComponent((href.split('original=')[1] || 'photo').split('&')[0]).split('/').pop();
+          const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+          if (!navigator.canShare({ files: [file] })) throw new Error('unsupported');
+          toast && (toast.hidden = true);
+          return navigator.share({ files: [file] }).catch(function (err) {
+            if (err && err.name === 'AbortError') return;
+            if (err && err.name === 'NotAllowedError') { ready = { href: href, file: file }; downloadLink.classList.add('ready'); say('Ready: tap the button again to save'); return; }
+            throw err;
+          });
+        })
+        .catch(function () { if (toast) toast.hidden = true; plain(href); })
+        .then(function () { downloadLink.classList.remove('busy'); });
+    });
+  }
   function updateImage() {
     const file = files[current];
     if (isVideoFile(file)) {
@@ -10996,7 +11246,7 @@ if (ENABLE_MAP && $mapPoints) {
     const captionText = captions[current];
     const set = siblingsOf(current);
     caption.textContent = (captionText ? captionText + ' — ' : '') + (set.indexOf(current) + 1) + ' / ' + set.length;
-    if (downloadLink) downloadLink.href = '?original=' + encodeURIComponent(file);
+    if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file); downloadLink.classList.remove('ready'); }
     applyZoom();
     updateLightboxExtras();
     trackView(file);

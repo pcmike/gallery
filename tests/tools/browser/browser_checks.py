@@ -453,7 +453,7 @@ try:
         subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE13 + "/" + nm], check=True)
     has_clip = os.path.exists(SITE8 + "/clip.mp4") if "SITE8" in globals() else False
     if has_clip: shutil.copy(SITE8 + "/clip.mp4", SITE13 + "/0-clip.mp4")
-    open(SITE13 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ENABLE_VIDEO": True}) + "\n")
+    open(SITE13 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ENABLE_VIDEO": True, "ENABLE_PUBLIC_DOWNLOAD": True}) + "\n")
     s13 = socket.socket(); s13.bind(("127.0.0.1", 0)); P13 = s13.getsockname()[1]; s13.close(); B13 = f"http://127.0.0.1:{P13}"
     srv13 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P13}", "-t", SITE13], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
@@ -486,13 +486,62 @@ try:
         b.js("document.getElementById('sort-menu-btn').click()"); b.drain(0.2)
         b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))"); b.drain(0.2)
         ok(b.js("document.getElementById('sort-pop').hidden"), "[sort] Escape closes the menu")
+        # the download button on a phone hands the original to the share sheet (which can save it to Photos)
+        stub = """(() => { Object.defineProperty(navigator, 'canShare', {value: d => !!(d && d.files && d.files.length), configurable: true});
+            Object.defineProperty(navigator, 'share', {configurable: true, value: async d => { window.__shares = (window.__shares || []).concat([d.files.map(f => [f.name, f.type, f.size])]);
+              if (sessionStorage.getItem('__denyFirst') === '1' && window.__shares.length === 1) { const e = new Error('needs a tap'); e.name = 'NotAllowedError'; throw e; } }}); })()"""
+        sid = b.call("Page.addScriptToEvaluateOnNewDocument", {"source": stub})["identifier"]
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5}); b.viewport(390, 844, mobile=True)
+        b.goto(B13 + "/", 1.5); b.js("openLightbox(0)"); b.drain(0.6)
+        b.js("document.getElementById('lightbox-download').click()"); b.drain(1.5)
+        sh = b.js("window.__shares || null")
+        ok(sh is not None and len(sh) == 1 and sh[0][0][0].endswith((".jpg", ".mp4")) and sh[0][0][1] in ("image/jpeg", "video/mp4") and sh[0][0][2] > 0, "[download] on a phone the original goes to the share sheet as a file (so it can be saved to Photos)", str(sh))
+        ok(not b.js("document.getElementById('lightbox-download').classList.contains('busy')") and not b.js("document.getElementById('lightbox-download').classList.contains('ready')"), "[download] ...and the button is back to normal afterwards")
+        b.js("sessionStorage.setItem('__denyFirst', '1'); window.__shares = []"); b.js("document.getElementById('lightbox-download').click()"); b.drain(1.5)
+        rd = b.js("({ready: document.getElementById('lightbox-download').classList.contains('ready'), toast: document.getElementById('lightbox-toast').textContent, n: (window.__shares || []).length})")
+        ok(rd["ready"] and "tap" in rd["toast"].lower() and rd["n"] == 1, "[download] if Safari refuses the share sheet because the fetch took too long, the button lights up and says to tap again", str(rd))
+        b.js("document.getElementById('lightbox-download').click()"); b.drain(0.8)
+        ok(b.js("(window.__shares || []).length") == 2 and not b.js("document.getElementById('lightbox-download').classList.contains('ready')"), "[download] ...and that second tap opens it")
+        b.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": sid}); b.js("sessionStorage.clear()")
+        b.js("closeLightbox()")
         b.viewport(390, 844, mobile=True); b.goto(B13 + "/", 1.5)
         b.js("document.getElementById('sort-menu-btn').click()"); b.drain(0.3)
         pm = b.js("(() => { const r = document.getElementById('sort-pop').getBoundingClientRect(); return {l: r.left, r: r.right, w: innerWidth, over: document.documentElement.scrollWidth > innerWidth + 1}; })()")
         ok(pm["l"] >= 0 and pm["r"] <= pm["w"] and not pm["over"], "[sort] on a phone the menu fits the screen and the page does not scroll sideways", str(pm))
         shot(b, "41-sort-menu-phone")
+        row = b.js("""(() => { const bs = [...document.querySelectorAll('.map-preview-heading .map-combo-btn')].map(e => { const r = e.getBoundingClientRect(); return {top: Math.round(r.top), left: Math.round(r.left), right: Math.round(r.right)}; }); return {n: bs.length, tops: [...new Set(bs.map(x => x.top))], rightMost: Math.max(...bs.map(x => x.right)), vw: innerWidth}; })()""")
+        ok(row["n"] >= 3 and len(row["tops"]) == 1 and row["rightMost"] <= row["vw"] - 8, "[buttons] on a phone the sort, about and other buttons sit together in a single row", str(row))
     finally:
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": False})
         srv13.terminate(); srv13.wait()
+        b.viewport(1280, 900)
+    # ---------------- the row of sibling folders in a folder's header ----------------
+    print("== sibling folder pills")
+    SITE14 = WORK + "/site14"; os.makedirs(SITE14)
+    shutil.copy(HERE + "/../../../index.php", SITE14 + "/index.php"); os.utime(SITE14 + "/index.php", (time.time() - 3600,) * 2)
+    for fn in ["Many/F%02d" % i for i in range(1, 15)] + ["Few/One", "Few/Two", "Few/Three"]:
+        os.makedirs(SITE14 + "/" + fn)
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(60,40); imagejpeg($i,$argv[1]);", SITE14 + "/" + fn + "/x.jpg"], check=True)
+    open(SITE14 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    s14 = socket.socket(); s14.bind(("127.0.0.1", 0)); P14 = s14.getsockname()[1]; s14.close()
+    srv14 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P14}", "-t", SITE14], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    pillq = """(() => { const n = document.querySelector('.folder-pills'); if (!n) return null; const nr = n.getBoundingClientRect(), c = n.querySelector('.current').getBoundingClientRect(), a = [...n.querySelectorAll('a')].map(e => e.getBoundingClientRect());
+        return {h: Math.round(nr.height), scrolls: n.scrollWidth > n.clientWidth + 1, curIn: c.left >= nr.left - 1 && c.right <= nr.right + 1, tops: [...new Set(a.map(r => Math.round(r.top)))], count: a.length, first: Math.round(a[0].left - nr.left), last: Math.round(nr.right - a[a.length - 1].right), over: document.documentElement.scrollWidth > innerWidth + 1}; })()"""
+    try:
+        b.call("Network.setExtraHTTPHeaders", {"headers": {}})
+        b.viewport(390, 844, mobile=True); b.goto(B14 := f"http://127.0.0.1:{P14}", 0.2); b.goto(B14 + "/?folder=Many%2FF10", 1.5)
+        pm = b.js(pillq)
+        shot(b, "42-folder-pills-phone")
+        ok(pm is not None and pm["count"] == 10 and len(pm["tops"]) == 1 and pm["h"] < 48 and pm["scrolls"] and pm["curIn"] and not pm["over"], "[folder pills] on a phone the folders beside this one are a single swipeable row with the current one in view, and the page doesn't scroll sideways", str(pm))
+        b.viewport(1280, 900); b.goto(B14 + "/?folder=Few%2FTwo", 1.2)
+        pd = b.js(pillq)
+        ok(pd is not None and pd["count"] == 3 and len(pd["tops"]) == 1 and not pd["scrolls"] and abs(pd["first"] - pd["last"]) <= 6, "[folder pills] a short row of siblings is centred and doesn't scroll", str(pd))
+        ok(b.js("(() => { const a = document.querySelector('.folder-pills a:not(.current)'); a.click(); return true; })()"), "[folder pills] (clicked a sibling)")
+        b.drain(1.2)
+        ok("Few" in b.js("location.search") and "Two" not in b.js("location.search"), "[folder pills] pressing one opens that folder", b.js("location.search"))
+    finally:
+        srv14.terminate(); srv14.wait()
         b.viewport(1280, 900)
     # ---------------- the "private isn't locked" warning goes away once the server really refuses direct requests ----------------
     print("== private lock check (the warning on the Hidden tab)")

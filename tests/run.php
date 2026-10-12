@@ -1150,11 +1150,24 @@ $soStored = json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo
 check('[sort] saved, the folder keeps only what was chosen (order, direction, videos on, private off; "the site\'s" choices are not stored)', ($soStored['photoSort'] ?? null) == ['order' => 'taken', 'desc' => true, 'video' => true, 'private' => false] && isset($soStored['items']['z-located.jpg']) && true && $soStored['locationEnabled'] === true, json_encode($soStored));
 check('[sort] ...and it is the order visitors get in that folder', $soOrder() === ['m.mp4', 'z-located.jpg', 'b-late.jpg', 'c-mid.jpg', 'a-early.jpg'], json_encode($soOrder()));
 check('[sort] ...but a visitor\'s own choice still beats the folder\'s', $soOrder('?sort=name') === ['a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg']);
-check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken.json") && count(json_decode(file_get_contents("$fxSo/.gallery-cache/taken.json"), true)) >= 5);
+check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken2.json") && count(json_decode(file_get_contents("$fxSo/.gallery-cache/taken2.json"), true)) >= 5);
 [, $soPage] = http_get("$baseSo/");
 check('[sort] the page has the sort button, with only the toggles that apply here (videos, located; private only for the owner)', str_contains($soPage, 'id="sort-menu-btn"') && str_contains($soPage, 'data-flag="video"') && str_contains($soPage, 'data-flag="located"') && !str_contains($soPage, 'data-flag="private"'));
 [, $soPageOwner] = http_get("$baseSo/", ["Cookie: $soSess"]);
 check('[sort] ...the owner also gets the private toggle', str_contains($soPageOwner, 'data-flag="private"'));
+// The sort button is left out of a listing laid out by a notes file (the for-sale pattern), and can be switched off.
+$fxSl = new_fixture_dir('sortlisting');
+make_jpeg("$fxSl/alpha_01.jpg", 40, 40, 1, 2, 3); make_jpeg("$fxSl/bravo_01.jpg", 40, 40, 3, 2, 1);
+file_put_contents("$fxSl/forsale.md", "{gallery}\n# Listing\nAlpha thing {sold}\nBravo thing\n");
+write_patched_index("$fxSl/index.php", $indexContents, []);
+$portSl = find_free_port(); start_server($fxSl, $portSl);
+check('[sort] a listing laid out by a notes file (no folders) has no sort button', !str_contains(http_get("http://127.0.0.1:$portSl/")[1], 'id="sort-combo"'));
+$fxSs = new_fixture_dir('sortswitch'); make_jpeg("$fxSs/a.jpg", 40, 40, 1, 2, 3); make_jpeg("$fxSs/b.jpg", 40, 40, 3, 2, 1);
+write_patched_index("$fxSs/index.php", $indexContents, []);
+$portSs = find_free_port(); start_server($fxSs, $portSs);
+check('[sort] a plain gallery of two photos has the sort button', str_contains(http_get("http://127.0.0.1:$portSs/")[1], 'id="sort-combo"'));
+file_put_contents("$fxSs/.gallery-config.php", cfg_text(['SHOW_SORT_BUTTON' => false]));
+check('[sort] and the Site setting "Sort button" switches it off', !str_contains(http_get("http://127.0.0.1:$portSs/")[1], 'id="sort-combo"'));
 $fxSo1 = new_fixture_dir('sortone'); make_jpeg("$fxSo1/only.jpg", 40, 40, 1, 2, 3);
 write_patched_index("$fxSo1/index.php", $indexContents, []);
 $portSo1 = find_free_port(); start_server($fxSo1, $portSo1);
@@ -1169,6 +1182,36 @@ $portGone = find_free_port(); start_server($fxGone, $portGone);
 [, $goneBody] = http_get("http://127.0.0.1:$portGone/");
 check('[setup notice] a folder from elsewhere that is missing is reported (without naming its path) instead of silently showing nothing', str_contains($goneBody, 'A folder from elsewhere on the server is missing or can&#039;t be read') && !str_contains($goneBody, '/nonexistent/space/trip'));
 
+// Capture dates also come from HEIC photos and videos (and an iPhone's recorded UTC offset makes them exact), not only from JPEGs.
+$fxSd = new_fixture_dir('sortdates');
+$sdBox = fn ($type, $data) => pack('N', 8 + strlen($data)) . $type . $data;
+$sdTiff = function ($dateText) { $d = $dateText . "\0"; $ex = 8 + 2 + 12 + 4; $at = $ex + 2 + 12 + 4; return 'MM' . pack('n', 42) . pack('N', 8) . pack('n', 1) . pack('nnNN', 0x8769, 4, 1, $ex) . pack('N', 0) . pack('n', 1) . pack('nnNN', 0x9003, 2, strlen($d), $at) . pack('N', 0) . $d; };
+$sdHeic = function ($dateText) use ($sdBox, $sdTiff) {
+    $ftyp = $sdBox('ftyp', 'heic' . pack('N', 0) . 'mif1heic'); $item = pack('N', 0) . $sdTiff($dateText);
+    $mk = function ($off) use ($sdBox, $item) {
+        $infe = $sdBox('infe', "\x02\0\0\0" . pack('n', 1) . pack('n', 0) . 'Exif' . "Exif\0");
+        $iinf = $sdBox('iinf', "\0\0\0\0" . pack('n', 1) . $infe);
+        $iloc = $sdBox('iloc', "\0\0\0\0" . "\x44\x00" . pack('n', 1) . pack('n', 1) . pack('n', 0) . pack('n', 1) . pack('N', $off) . pack('N', strlen($item)));
+        return $sdBox('meta', "\0\0\0\0" . $iinf . $iloc);
+    };
+    $off = strlen($ftyp) + strlen($mk(0)) + 8;
+    return $ftyp . $mk($off) . $sdBox('mdat', $item . 'PIXELS');
+};
+file_put_contents("$fxSd/a-late.heic", $sdHeic('2024:06:01 10:00:00'));
+make_dated_jpeg("$fxSd/b-early.jpg", '2020:01:01 10:00:00');
+make_minimal_mp4("$fxSd/c.mp4", 5, 1);
+$sdMp4 = file_get_contents("$fxSd/c.mp4"); $sdAt = strpos($sdMp4, 'mvhd');
+file_put_contents("$fxSd/c.mp4", substr_replace($sdMp4, pack('N', gmmktime(0, 0, 0, 1, 1, 2022) + 2082844800), $sdAt + 8, 4));
+foreach (['a-late.heic', 'b-early.jpg', 'c.mp4'] as $sdF) touch("$fxSd/$sdF", strtotime('2026-10-10'));
+write_patched_index("$fxSd/index.php", $indexContents, ['ENABLE_VIDEO' => 'true']);
+$portSd = find_free_port(); start_server($fxSd, $portSd);
+$sdOrder = function ($q) use ($portSd) { [, $body] = http_get("http://127.0.0.1:$portSd/$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $mm); return $mm[1]; };
+if (class_exists('Imagick')) {
+    check('[sort] date order reads the capture date out of a HEIC photo, a JPEG and a video (all three files have the same modified date, so only the dates inside them can order these)', $sdOrder('?sort=name') === ['a-late.heic', 'b-early.jpg', 'c.mp4'] && $sdOrder('?sort=taken') === ['b-early.jpg', 'c.mp4', 'a-late.heic'] && $sdOrder('?sort=taken.desc') === ['a-late.heic', 'c.mp4', 'b-early.jpg'], json_encode([$sdOrder('?sort=name'), $sdOrder('?sort=taken')]));
+} else {
+    echo "  (no Imagick here: the HEIC date check was skipped)\n";
+}
+
 // The order also holds on a folder's own page (the first version only reordered the photos at the top of the gallery).
 $fxSf = new_fixture_dir('sortfolder'); mkdir("$fxSf/Trip"); mkdir("$fxSf/Trip/Day2");
 foreach (['a', 'b', 'c'] as $n) make_jpeg("$fxSf/Trip/$n.jpg", 40, 40, 10, 20, 30);
@@ -1180,6 +1223,32 @@ $sfOrder = function ($q) use ($portSf) { [, $body] = http_get("http://127.0.0.1:
 $sfDay = function ($q) use ($portSf) { [, $body] = http_get("http://127.0.0.1:$portSf/?folder=Trip%2FDay2$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $m); return array_map('basename', $m[1]); };
 check('[sort] on a folder\'s page the photos run in the chosen order: by default, last first, and videos first', $sfOrder('') === ['a.jpg', 'b.jpg', 'c.jpg', 'z.mp4'] && $sfOrder('&sort=name.desc') === ['z.mp4', 'c.jpg', 'b.jpg', 'a.jpg'] && $sfOrder('&sort=name.video') === ['z.mp4', 'a.jpg', 'b.jpg', 'c.jpg'], json_encode([$sfOrder(''), $sfOrder('&sort=name.desc'), $sfOrder('&sort=name.video')]));
 check('[sort] ...and on a subfolder\'s own page too', $sfDay('') === ['d.jpg', 'y.mp4'] && $sfDay('&sort=name.video') === ['y.mp4', 'd.jpg'], json_encode([$sfDay(''), $sfDay('&sort=name.video')]));
+
+// The preview picture of the gallery's own link: a photo from anywhere in it (not a video, not a private one), steady for the day.
+$ogOf = function ($port, $headers = []) { [, $body] = http_get("http://127.0.0.1:$port/", $headers); return preg_match('#<meta property="og:image" content="[^"]*\?img=([^&"]+)#', $body, $mm) ? rawurldecode(html_entity_decode($mm[1])) : null; };
+$ogSeen = []; for ($i = 0; $i < 3; $i++) $ogSeen[] = $ogOf($portSo);
+check('[preview] the gallery link\'s picture is a photo (never a private one or a video), and the same on every request that day', count(array_unique($ogSeen)) === 1 && $ogSeen[0] !== null && !in_array($ogSeen[0], ['p-private.jpg', 'm.mp4'], true) && is_file("$fxSo/{$ogSeen[0]}"), json_encode($ogSeen));
+$ogFolder = $ogOf($portSf);
+check('[preview] ...and with photos only inside folders it is one of those photos, not a video', in_array($ogFolder, ['Trip/a.jpg', 'Trip/b.jpg', 'Trip/c.jpg', 'Trip/Day2/d.jpg'], true), json_encode($ogFolder));
+
+// Quick links to the folders beside the one you're in.
+$fxPl = new_fixture_dir('folderpills');
+foreach (['Alpha', 'Bravo', 'Charlie'] as $pn) { mkdir("$fxPl/$pn"); make_jpeg("$fxPl/$pn/x.jpg", 30, 30, 1, 2, 3); }
+mkdir("$fxPl/Secret"); make_jpeg("$fxPl/Secret/x.jpg", 30, 30, 9, 9, 9);
+write_data_file("$fxPl/Secret/.gallery-items.php", ['items' => [], 'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => false, 'restriction' => 'private']);
+mkdir("$fxPl/Solo"); mkdir("$fxPl/Solo/Only"); make_jpeg("$fxPl/Solo/Only/x.jpg", 30, 30, 1, 2, 3);
+mkdir("$fxPl/Many"); foreach (range(1, 14) as $pi) { $pd = sprintf("$fxPl/Many/F%02d", $pi); mkdir($pd); make_jpeg("$pd/x.jpg", 30, 30, 1, 2, 3); }
+write_patched_index("$fxPl/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ADMIN_PASSWORD' => "'pills-pw-123456'"]);
+$portPl = find_free_port(); start_server($fxPl, $portPl);
+$plPills = function ($q) use ($portPl) { [, $b] = http_get("http://127.0.0.1:$portPl/?folder=$q"); if (!preg_match('#<nav class="folder-pills"[^>]*>(.*?)</nav>#s', $b, $nm)) return null; preg_match_all('#<a ([^>]*)>([^<]*)</a>#', $nm[1], $am, PREG_SET_ORDER); return array_map(fn ($a) => [html_entity_decode($a[2]), str_contains($a[1], 'class="current"'), str_contains($a[1], 'class="all"')], $am); };
+$plA = $plPills('Bravo');
+check('[folder pills] inside a folder, the other folders at that level are quick links (in the order the main page shows them), the current one marked, and a private folder is not among them', $plA !== null && array_column($plA, 0) === ['Alpha', 'Bravo', 'Charlie', 'Many', 'Solo'] && array_column($plA, 1) === [false, true, false, false, false], json_encode($plA));
+$plM = $plPills('Many%2FF08');
+check('[folder pills] with more than ten siblings it shows a window of nine around the current one, plus "All" back to the parent', $plM !== null && count($plM) === 10 && $plM[9][2] === true && in_array(['F08', true, false], $plM, true) && array_column($plM, 0)[0] === 'F04' && array_column(array_slice($plM, 0, 9), 0)[8] === 'F12', json_encode($plM));
+$plEnd = $plPills('Many%2FF14');
+check('[folder pills] ...and at the end of a long row the window stays full', $plEnd !== null && array_column(array_slice($plEnd, 0, 9), 0)[0] === 'F06' && in_array(['F14', true, false], $plEnd, true));
+check('[folder pills] the gallery front page has none', !str_contains(http_get("http://127.0.0.1:$portPl/")[1], 'class="folder-pills"'));
+check('[folder pills] a folder with no siblings has none', !str_contains(http_get("http://127.0.0.1:$portPl/?folder=Solo%2FOnly")[1], 'class="folder-pills"'));
 
 $fxSe = new_fixture_dir('sortextra'); $fxSeX = new_fixture_dir('sortextra2'); mkdir("$fxSeX/Paris");
 make_jpeg("$fxSeX/Paris/a.jpg", 40, 40, 5, 5, 5); make_minimal_mp4("$fxSeX/Paris/z.mp4", 5, 1);

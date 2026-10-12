@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.5] - 2026-10-12
+
+### Changed
+- **On a phone, the viewer's download button saves to Photos.** It hands the original to the share sheet ("Save Image" / "Save Video") instead of a download that lands in Files. If Safari insists on another tap the button lights up and says so; anywhere sharing a file isn't possible (or a file is over 150 MB) it is the plain download as before.
+- **On a phone the map, sort, download and about buttons sit together in one row.**
+- **Quick links to the folders beside the one you're in.** A swipeable row of pills under the breadcrumb on a folder's page, in the order the parent page shows them, the current folder lit (up to ten; with more, a window around it plus an "All" pill back to the parent). Private folders stay hidden from visitors.
+- **The sort button is left out of a listing laid out by a notes file** (a for-sale page with no folders, where your notes set the order), and there is a *Sort button* switch in Site settings to hide it everywhere.
+- **The gallery link's preview picture** (when you haven't chosen a cover) is a photo picked from anywhere in the gallery, never a video or anything private, and the same one all day, instead of whichever photo happened to come first.
+
+### Fixed
+- **Ordering by date didn't use the capture date for most files.** It read dates only from JPEGs, and only where PHP's EXIF extension was installed; HEIC photos and videos fell back to the file's modified date. It now reads the capture date from JPEG and HEIC photos and the creation time of videos, with no extension needed, and uses the camera's recorded time zone when there is one.
+
 ## [2.0.4] - 2026-10-12
 
 The 2.0.3 release page was withdrawn a few hours after it went up, because the photo order did nothing inside folders; 2.0.4 is that release with the fix, so everything under 2.0.3 below is in it too.

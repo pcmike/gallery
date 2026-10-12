@@ -90,6 +90,7 @@ Changed in **Site settings** (no Save button: each change saves as you make it) 
 | `PHOTO_SORT_ORDER` | `filename` | `filename` or `taken` (date taken, else the file's date; the older `mtime` still works) |
 | `PHOTO_SORT_DESC` | off | Last first (Z to A, newest first) |
 | `SORT_VIDEOS_FIRST` / `SORT_LOCATED_FIRST` / `SORT_PRIVATE_FIRST` | off | What goes first, whatever the order |
+| `SHOW_SORT_BUTTON` | on | The visitors' sort button (always left out of a listing laid out by a notes file with no folders) |
 | `TRACK_VIEWS` | off | Count visits and photo views |
 | `SHOW_VIEW_COUNTS_PUBLICLY` | off | Show visitors the counts (you always see them) |
 | `ENABLE_PUBLIC_DOWNLOAD` | off | A download-original button for every visitor |
@@ -165,6 +166,7 @@ With `AUTO_GROUP_BY_FOLDER`, subfolders work to any depth, and each becomes a gr
 - **A folder can have its own notes** (a `{gallery}` `.md` inside it, scoped to its photos).
 - **Everything about a folder lives in that folder**: stats, thumbnails and saved data, so two cameras' `IMG_0001.jpg` never collide. A real rename (FTP, `mv`) carries the data along; a new folder with photos moved into it starts blank.
 - **Symlinked folders are refused** so a link can't expose files outside the gallery; use [Archive elsewhere](#archive-elsewhere).
+- A swipeable row of pills under the breadcrumb links to the folders beside the one you're in (in the parent page's order; with more than ten, a window around the current one plus "All").
 - The viewer's arrows stay inside the folder you opened, and the header shows "Last updated" from the newest file.
 
 ## Video
@@ -195,12 +197,12 @@ These gates decide what **visitors who aren't signed in** see. You, and anyone w
 
 ## Photo order
 
-Inside a folder, photos run by **name** or by **date** (when the photo was taken; a video or PNG without one uses its file date), either way round. On top, three things can go first and they stack: **private items** (owner and private-view only), then **videos**, then **photos with a location** (counted only where that visitor can see the location, so the order never gives away a hidden one).
+Inside a folder, photos run by **name** or by **date** (when it was taken: read from a JPEG or HEIC photo, or a video's creation time; a file that doesn't say, such as a PNG or screenshot, uses its file date), either way round. On top, three things can go first and they stack: **private items** (owner and private-view only), then **videos**, then **photos with a location** (counted only where that visitor can see the location, so the order never gives away a hidden one).
 
 - **You set the defaults** in Site settings and, per folder (or for the gallery's top), in *Order of the photos here*.
 - **Visitors change it for themselves** with the sort button (two arrows) after the map buttons, plus line-drawing toggles for videos, location and private (shown only when they apply; the button is hidden for fewer than two photos). The choice is kept in a cookie across folders until *Use this gallery's order*. A link can carry one: `?sort=taken.desc.video` (the order, then any of `desc`, `video`, `located`, `private`).
 - The viewer's next and previous follow the order. Photos placed with `{photos:}` or a group keep your order.
-- Dates found in photos are cached in the folder's `.gallery-cache/taken.json`.
+- Dates found in files are cached in the folder's `.gallery-cache`, so they are read only once.
 
 ## The admin
 
@@ -242,7 +244,7 @@ A private item is removed outright for anyone without the password: absent from 
 
 ## Downloads
 
-**Original.** The viewer's caption bar has a download button that saves the file exactly as it sits on the server (a HEIC stays HEIC).
+**Original.** The viewer's caption bar has a download button that saves the file exactly as it sits on the server (a HEIC stays HEIC). On a phone it opens the share sheet, so **Save Image** / **Save Video** puts it straight into Photos (anywhere that isn't possible it is a normal download).
 
 | Visitor | Button | File |
 |---|---|---|
@@ -310,7 +312,7 @@ A bare photo address then answers 403 while the gallery works as before. **It de
 
 ## Sharing and previews
 
-Every link you'd paste gets a correct Open Graph preview: `?photo=`, `?folder=` (display name, description or notes, and cover photo) and `?map`. Private items are nonexistent to a crawler, so pasting one never previews it. A shared video previews as picture and title, not a playable embed.
+Every link you'd paste gets a correct Open Graph preview: `?photo=`, `?folder=` (display name, description or notes, and cover photo) and `?map`. The gallery's own link shows the cover you chose, else a photo picked from anywhere in the gallery (never a video or a private one, and the same all day). Private items are nonexistent to a crawler, so pasting one never previews it. A shared video previews as picture and title, not a playable embed.
 
 `?folder=Europe/France/Paris` needs no server setup and is what the gallery itself shares. To also type `/kb/Europe/France/Paris/`, map it onto the script. The admin's Site settings checks whether this works.
 
