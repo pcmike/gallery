@@ -299,6 +299,7 @@ define('PHOTO_SORT_DESC', gallery_setting('PHOTO_SORT_DESC', false));
 define('SORT_VIDEOS_FIRST', gallery_setting('SORT_VIDEOS_FIRST', false));
 define('SORT_LOCATED_FIRST', gallery_setting('SORT_LOCATED_FIRST', false));
 define('SORT_PRIVATE_FIRST', gallery_setting('SORT_PRIVATE_FIRST', false));
+define('SORT_PRIORITY', gallery_setting('SORT_PRIORITY', 'private,video,located'));   // the order the "first" choices stack in
 // Whether visitors get the sort button (it is also left out of a page that a notes file lays out, see the page template).
 define('SHOW_SORT_BUTTON', gallery_setting('SHOW_SORT_BUTTON', true));
 
@@ -4337,6 +4338,35 @@ function photo_location_visible($itemEntry) {
  * example "taken.desc.video.located".
  * ----------------------------------------------------------------------- */
 
+/** The three "put first" kinds in the order they stack in (the site's SORT_PRIORITY; anything missing or unknown is put back in the default order). */
+function sort_priority_list() {
+    static $list = null;
+    if ($list !== null) return $list;
+    $all = ['private', 'video', 'located'];
+    $list = [];
+    foreach (explode(',', (string) SORT_PRIORITY) as $k) {
+        $k = strtolower(trim($k));
+        if (in_array($k, $all, true) && !in_array($k, $list, true)) $list[] = $k;
+    }
+    foreach ($all as $k) if (!in_array($k, $list, true)) $list[] = $k;
+    return $list;
+}
+
+/** What each kind is called, in the settings and in the sentence that sums them up. */
+function sort_priority_names() {
+    return ['private' => ['Private items', 'private items', 'SORT_PRIVATE_FIRST'], 'video' => ['Videos', 'videos', 'SORT_VIDEOS_FIRST'], 'located' => ['Located photos', 'photos with a location', 'SORT_LOCATED_FIRST']];
+}
+
+/** The one sentence that says what the "put first" list does, e.g. "Videos, then photos with a location, then the rest." */
+function sort_priority_summary($order, $on) {
+    $names = sort_priority_names();
+    $parts = [];
+    foreach ($order as $k) if (!empty($on[$k])) $parts[] = $names[$k][1];
+    if (!$parts) return 'Nothing is put first: photos follow the order above.';
+    $text = implode(', then ', $parts) . ', then the rest.';
+    return ucfirst($text);
+}
+
 /** The site's own spec, from the settings. */
 function media_sort_site_spec() {
     return ['order' => PHOTO_SORT_ORDER === 'mtime' ? 'modified' : (PHOTO_SORT_ORDER === 'taken' ? 'taken' : 'name'), 'desc' => (bool) PHOTO_SORT_DESC,
@@ -4589,7 +4619,7 @@ function media_sort_apply($files, $dir) {
             ];
         }
         usort($list, function ($a, $b) use ($info, $spec) {
-            foreach (['private', 'video', 'located'] as $k) {
+            foreach (sort_priority_list() as $k) {
                 if ($spec[$k]) { $d = ($info[$a][$k] ? 0 : 1) <=> ($info[$b][$k] ? 0 : 1); if ($d !== 0) return $d; }
             }
             $c = $spec['order'] === 'name' ? 0 : $info[$a]['t'] <=> $info[$b]['t'];
@@ -5868,11 +5898,11 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <div class="sort-rows">
             <div class="sort-row"><span class="sort-label">Order</span><?= ui_segmented('photo_sort_order', ['' => "Site's", 'name' => 'Name', 'taken' => 'Date'], ($ps['order'] ?? '') === 'modified' ? 'taken' : (string) ($ps['order'] ?? ''), 'Order') ?></div>
             <div class="sort-row"><span class="sort-label">Direction</span><?= ui_segmented('photo_sort_dir', ['' => "Site's", 'asc' => 'First to last', 'desc' => 'Last to first'], $dirNow, 'Direction') ?></div>
-            <?php foreach (['video' => 'Videos first', 'located' => 'Located first', 'private' => 'Private first'] as $kind => $lab): ?>
+            <?php $kindLabels = ['video' => 'Videos first', 'located' => 'Located first', 'private' => 'Private first']; foreach (sort_priority_list() as $kind): $lab = $kindLabels[$kind]; ?>
               <div class="sort-row"><span class="sort-label"><?= $esc($lab) ?></span><?= ui_segmented('photo_sort_' . $kind, $triState, $psSel($kind), $lab) ?></div>
             <?php endforeach; ?>
           </div>
-          <p class="hint">The "first" choices stack (private, then videos, then located) before the order itself. Visitors can change it with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
+          <p class="hint">The "first" choices stack in the order set in Site settings (now: <?= $esc(implode(', then ', array_map(function ($k) { return sort_priority_names()[$k][1]; }, sort_priority_list()))) ?>) before the order itself. Visitors can change it with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
         </details>
         <div class="field wide">
           <label>Description</label>
@@ -5927,11 +5957,13 @@ function gallery_setting_definitions() {
              'help' => 'Inside each folder. Date is when the photo was taken, else the file\'s date. A folder can override it; visitors can change it with the sort button.'],
             ['name' => 'PHOTO_SORT_DESC', 'type' => 'bool', 'label' => 'Last first',
              'help' => 'Z to A, or newest first.'],
-            ['name' => 'SORT_VIDEOS_FIRST', 'type' => 'bool', 'label' => 'Videos first',
+            ['name' => 'SORT_PRIORITY', 'type' => 'sortfirst', 'label' => 'Put first',
+             'help' => 'Switch on what should come first, and drag (or use the arrows) to set the order they stack in. Then come the rest, in the order above.'],
+            ['name' => 'SORT_VIDEOS_FIRST', 'in' => 'SORT_PRIORITY', 'type' => 'bool', 'label' => 'Videos first',
              'help' => 'Videos at the front of each folder.'],
-            ['name' => 'SORT_LOCATED_FIRST', 'type' => 'bool', 'label' => 'Photos with a location first',
+            ['name' => 'SORT_LOCATED_FIRST', 'in' => 'SORT_PRIORITY', 'type' => 'bool', 'label' => 'Photos with a location first',
              'help' => 'Photos whose location is shown come first (after videos).'],
-            ['name' => 'SORT_PRIVATE_FIRST', 'type' => 'bool', 'label' => 'Private items first',
+            ['name' => 'SORT_PRIVATE_FIRST', 'in' => 'SORT_PRIORITY', 'type' => 'bool', 'label' => 'Private items first',
              'help' => 'For you and private-view visitors; nobody else sees private items.'],
             ['name' => 'SHOW_SORT_BUTTON', 'type' => 'bool', 'label' => 'Sort button',
              'help' => 'Lets visitors reorder the photos. Left out automatically on a listing laid out by a notes file, with no folders.'],
@@ -6077,6 +6109,11 @@ function site_settings_save($ajax = false) {
             } elseif ($d['type'] === 'text') {
                 if (!site_settings_valid_nginx_prefix($raw)) { $errors[] = '"' . $d['label'] . '" must be empty or a plain path like /kb (starting with /, no trailing slash, letters, digits and . _ ~ - only).'; continue; }
                 $value = $raw;
+            } elseif ($d['type'] === 'sortfirst') {
+                $kinds = array_map('trim', explode(',', $raw));
+                $want = ['private', 'video', 'located']; $sorted = $kinds; sort($sorted); sort($want);
+                if ($sorted !== $want) { $errors[] = '"' . $d['label'] . '" must list private, video and located, each once.'; continue; }
+                $value = implode(',', $kinds);
             } elseif ($d['type'] === 'enum') {
                 if (!array_key_exists($raw, $d['options'])) { $errors[] = '"' . $d['label'] . '" must be one of the choices offered.'; continue; }
                 $value = $raw;
@@ -6314,8 +6351,8 @@ function render_admin_site_settings($csrfToken) {
         <input type="hidden" name="config_hash" value="<?= $esc($hash) ?>">
         <?php $groupNo = 0; foreach (gallery_setting_definitions() as $group): $groupNo++; ?>
           <details class="site-group"<?= $groupNo === 1 ? ' open' : '' ?><?= $group['title'] === 'Server setup (advanced)' ? ' id="server-setup"' : '' ?>>
-          <summary><span class="site-group-title"><?= $esc($group['title']) ?></span> <span class="muted"><?= count($group['items']) ?> setting<?= count($group['items']) === 1 ? '' : 's' ?></span></summary>
-          <?php foreach ($group['items'] as $d): $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null; ?>
+          <summary><span class="site-group-title"><?= $esc($group['title']) ?></span> <span class="muted"><?php $nShown = count(array_filter($group['items'], function ($i) { return empty($i['in']); })); echo $nShown; ?> setting<?= $nShown === 1 ? '' : 's' ?></span></summary>
+          <?php foreach ($group['items'] as $d): if (!empty($d['in'])) continue; $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null; ?>
             <?php $reqOn = empty($d['requires']) || (defined($d['requires']) && constant($d['requires'])); ?>
             <div class="site-row<?= !empty($d['requires']) ? ' sub-row' : '' ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn ? '' : ' hidden') : '' ?>>
               <div>
@@ -6335,6 +6372,22 @@ function render_admin_site_settings($csrfToken) {
                 <?php if ($d['type'] === 'bool'): ?>
                   <input type="hidden" name="set_<?= $esc($name) ?>" value="0">
                   <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
+                <?php elseif ($d['type'] === 'sortfirst'): $sfNames = sort_priority_names(); $sfOrder = sort_priority_list(); $sfOn = []; foreach ($sfNames as $k => $nm) $sfOn[$k] = (bool) constant($nm[2]); ?>
+                  <div class="sortfirst" data-name="set_<?= $esc($name) ?>" data-order="<?= $esc(implode(',', $sfOrder)) ?>">
+                    <ol class="sf-list">
+                    <?php foreach ($sfOrder as $k): $nm = $sfNames[$k]; ?>
+                      <li data-kind="<?= $esc($k) ?>">
+                        <span class="sf-grip" title="Drag to reorder" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg></span>
+                        <span class="sf-name"><?= $esc($nm[0]) ?></span>
+                        <button type="button" class="sf-move sf-up secondary" aria-label="Move <?= $esc($nm[1]) ?> earlier" title="Earlier">&#9650;</button>
+                        <button type="button" class="sf-move sf-down secondary" aria-label="Move <?= $esc($nm[1]) ?> later" title="Later">&#9660;</button>
+                        <input type="hidden" name="set_<?= $esc($nm[2]) ?>" value="0">
+                        <label class="switch"><input type="checkbox" name="set_<?= $esc($nm[2]) ?>" value="1" <?= $sfOn[$k] ? 'checked' : '' ?> data-initial="<?= $sfOn[$k] ? '1' : '0' ?>" data-label="<?= $esc($nm[0]) ?> first" aria-label="<?= $esc($nm[0]) ?> first"><span class="slider"></span></label>
+                      </li>
+                    <?php endforeach; ?>
+                    </ol>
+                    <p class="sf-summary" aria-live="polite"><?= $esc(sort_priority_summary($sfOrder, $sfOn)) ?></p>
+                  </div>
                 <?php elseif ($d['type'] === 'enum'): ?>
                   <?= ui_segmented('set_' . $name, $d['options'], ($name === 'PHOTO_SORT_ORDER' && $now === 'mtime') ? 'taken' : $now, $d['label']) ?>
                 <?php elseif ($d['type'] === 'text'): ?>
@@ -6353,7 +6406,7 @@ function render_admin_site_settings($csrfToken) {
                 <?php else: ?>
                   <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="<?= $esc($d['step'] ?? '1') ?>" value="<?= $esc($now) ?>" style="max-width:110px;">
                 <?php endif; ?>
-                <span class="meta">default: <?= $esc($show($def)) ?></span>
+                <span class="meta"><?= $d['type'] === 'sortfirst' ? 'default: all off, private then videos then located' : 'default: ' . $esc($show($def)) ?></span>
                 <span class="rowstate" role="status" aria-live="polite"></span>
               </div>
             </div>
@@ -6742,6 +6795,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .js-tabs .js-only { display:inline; }
   .js-tabs .nojs-only { display:none !important; }
   .manual-box { margin:0 0 14px; }
+  .site-row .ctl:has(.sortfirst) { flex-direction:column; align-items:stretch; justify-content:flex-start; }
+  .sortfirst { width:100%; max-width:420px; }
+  .sf-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+  .sf-list li { display:flex; align-items:center; gap:8px; padding:6px 10px; background:#1a1a1e; border:1px solid #2c2c30; border-radius:8px; }
+  .sf-list li.dragging { opacity:0.45; }
+  .sf-list li.drop-before { box-shadow:0 -2px 0 var(--accent); }
+  .sf-list li.drop-after { box-shadow:0 2px 0 var(--accent); }
+  .sf-grip { color:var(--muted); cursor:grab; display:inline-flex; touch-action:none; }
+  .sf-name { flex:1; font-size:0.9rem; }
+  .sf-move { padding:2px 8px; font-size:0.7rem; line-height:1.6; min-width:0; }
+  .sf-list li:first-child .sf-up, .sf-list li:last-child .sf-down { visibility:hidden; }
+  .sf-summary { margin:8px 0 0; font-size:0.82rem; color:var(--muted); }
   .site-row .ctl:has(.extra-folders) { flex-direction:column; align-items:stretch; justify-content:flex-start; }
   .extra-folders { width:100%; }
   .extra-list { list-style:none; margin:0 0 8px; padding:0; }
@@ -7747,6 +7812,56 @@ foreach ($adminFiles as $file) {
         follow(on);
         // What switching it off does appears beside the switch once it is off (and goes when it is back on), instead of in a dialog.
         post(f, stateOf(cb), function () { cb.checked = !on; follow(!on); }, function () { if (note) note.hidden = on || !off; });
+      });
+    });
+    // "Put first": the three kinds are rows you drag (or move with the arrows) into the order they stack in; each row's switch
+    // is one of the SORT_*_FIRST settings, saved by the checkbox code above, and the order is saved here.
+    [].forEach.call(form.querySelectorAll('.sortfirst'), function (box) {
+      var list = box.querySelector('.sf-list'), summary = box.querySelector('.sf-summary'), status = stateOf(box);
+      var NAMES = { private: 'private items', video: 'videos', located: 'photos with a location' };
+      function order() { return [].map.call(list.children, function (li) { return li.getAttribute('data-kind'); }); }
+      function sum() {
+        var parts = [].filter.call(list.children, function (li) { return li.querySelector('input[type=checkbox]').checked; }).map(function (li) { return NAMES[li.getAttribute('data-kind')]; });
+        var t = parts.length ? parts.join(', then ') + ', then the rest.' : 'Nothing is put first: photos follow the order above.';
+        summary.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+      }
+      var saved = order();
+      function put(arr) { arr.forEach(function (k) { var li = list.querySelector('[data-kind="' + k + '"]'); if (li) list.appendChild(li); }); sum(); }
+      function save() {
+        var f = {}, now = order(); f[box.getAttribute('data-name')] = now.join(',');
+        sum();
+        post(f, status, function () { put(saved); }, function () { saved = now; });
+      }
+      [].forEach.call(list.querySelectorAll('input[type=checkbox]'), function (cb) { cb.addEventListener('change', sum); });
+      list.addEventListener('click', function (ev) {
+        var b = ev.target.closest('.sf-move'); if (!b) return;
+        var li = b.closest('li');
+        if (b.classList.contains('sf-up') && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling);
+        else if (b.classList.contains('sf-down') && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li);
+        else return;
+        save();
+      });
+      var dragging = null;
+      [].forEach.call(list.children, function (li) {
+        var grip = li.querySelector('.sf-grip');
+        grip.addEventListener('mousedown', function () { li.draggable = true; });
+        li.addEventListener('dragstart', function (ev) { dragging = li; li.classList.add('dragging'); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', li.getAttribute('data-kind')); } catch (e) {} });
+        li.addEventListener('dragend', function () { li.draggable = false; li.classList.remove('dragging'); [].forEach.call(list.children, function (x) { x.classList.remove('drop-before', 'drop-after'); }); dragging = null; });
+        li.addEventListener('dragover', function (ev) {
+          if (!dragging || dragging === li) return;
+          ev.preventDefault();
+          var r = li.getBoundingClientRect(), before = ev.clientY < r.top + r.height / 2;
+          li.classList.toggle('drop-before', before); li.classList.toggle('drop-after', !before);
+        });
+        li.addEventListener('dragleave', function () { li.classList.remove('drop-before', 'drop-after'); });
+        li.addEventListener('drop', function (ev) {
+          if (!dragging || dragging === li) return;
+          ev.preventDefault();
+          var r = li.getBoundingClientRect();
+          if (ev.clientY < r.top + r.height / 2) list.insertBefore(dragging, li); else list.insertBefore(dragging, li.nextElementSibling);
+          li.classList.remove('drop-before', 'drop-after');
+          save();
+        });
       });
     });
     [].forEach.call(form.querySelectorAll('select[name^=set_], input[type=number][name^=set_]'), function (el) {

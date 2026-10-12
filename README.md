@@ -89,7 +89,8 @@ Changed in **Site settings** (no Save button: each change saves as you make it) 
 | `ENABLE_THUMBNAIL_CACHE` | on | Thumbnails in `.gallery-cache`; off = originals, no HEIC |
 | `PHOTO_SORT_ORDER` | `filename` | `filename` or `taken` (date taken, else the file's date; the older `mtime` still works) |
 | `PHOTO_SORT_DESC` | off | Last first (Z to A, newest first) |
-| `SORT_VIDEOS_FIRST` / `SORT_LOCATED_FIRST` / `SORT_PRIVATE_FIRST` | off | What goes first, whatever the order |
+| `SORT_VIDEOS_FIRST` / `SORT_LOCATED_FIRST` / `SORT_PRIVATE_FIRST` | off | What goes first, whatever the order; they stack |
+| `SORT_PRIORITY` | `private,video,located` | The order those three stack in (the admin shows them as a list you drag) |
 | `SHOW_SORT_BUTTON` | on | The visitors' sort button (always left out of a listing laid out by a notes file with no folders) |
 | `TRACK_VIEWS` | off | Count visits and photo views |
 | `SHOW_VIEW_COUNTS_PUBLICLY` | off | Show visitors the counts (you always see them) |
