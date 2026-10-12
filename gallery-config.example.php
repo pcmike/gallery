@@ -14,16 +14,19 @@
 //
 // Only the names below are settings. A name that isn't (a typo), a value of
 // the wrong kind, or a file that isn't valid JSON is ignored and reported in
-// the gallery's setup notices; it never breaks the site. This file holds your
-// passwords in plain text: don't put it in git or leave it where it can be
-// downloaded (the first line makes a direct request for it answer 404).
+// the gallery's setup notices; it never breaks the site. Keep it out of git:
+// it holds your passwords (the gallery stores them as hashes once you sign in).
 {
     // --- What gets shown ---------------------------------------------------
     // "AUTO_GROUP_BY_FOLDER": true,        // default false: show subfolders, each as a group (README: Folders)
     // "FOLDER_DISPLAY_MODE": "overview",   // "overview" (one cover card per folder) or "inline"
     // "ENABLE_VIDEO": true,                // default false: show .mov / .mp4 files
     // "AUTO_GROUP_BY_FILENAME": true,      // default false: group photos named alpha_01.jpg, alpha_02.jpg
-    // "PHOTO_SORT_ORDER": "filename",      // "filename" or "mtime"
+    // "PHOTO_SORT_ORDER": "filename",      // "filename", "taken" (the date in the photo) or "mtime" (date modified)
+    // "PHOTO_SORT_DESC": true,             // default false: last first (Z to A, newest first)
+    // "SORT_VIDEOS_FIRST": true,           // default false: videos at the front of each folder
+    // "SORT_LOCATED_FIRST": true,          // default false: photos whose location is shown come first
+    // "SORT_PRIVATE_FIRST": true,          // default false: private items first (owner and private-view only)
 
     // --- Thumbnails and counts ---------------------------------------------
     // "ENABLE_THUMBNAIL_CACHE": true,      // default true: small thumbnails in .gallery-cache (false = never write)

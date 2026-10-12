@@ -2523,6 +2523,17 @@ if (AUTO_GROUP_BY_FOLDER && EXTRA_ROOTS && ($looseInRoots = count_loose_media_in
         . ($looseInRoots === 1 ? 'it' : 'them') . ' into a folder to include ' . ($looseInRoots === 1 ? 'it' : 'them') . '.';
 }
 
+// A place from elsewhere on the server (EXTRA_ROOTS / EXTRA_FOLDERS) that has gone missing or can't be read just shows nothing;
+// say so (without naming the path: a fresh install shows these notices to whoever opens the page).
+$unreadableExtra = 0;
+foreach (array_merge(array_values((array) EXTRA_ROOTS), array_values((array) EXTRA_FOLDERS)) as $extraPath) {
+    if (is_string($extraPath) && (!is_dir($extraPath) || !is_readable($extraPath))) $unreadableExtra++;
+}
+if (AUTO_GROUP_BY_FOLDER && $unreadableExtra > 0) {
+    $galleryNotices[] = ($unreadableExtra === 1 ? 'A folder from elsewhere on the server is missing or can\'t be read' : $unreadableExtra . ' folders from elsewhere on the server are missing or can\'t be read')
+        . ', so nothing from ' . ($unreadableExtra === 1 ? 'it is' : 'them is') . ' shown. The Health check in Site settings names ' . ($unreadableExtra === 1 ? 'it' : 'them') . '.';
+}
+
 // Only a .md file whose first non-blank line is exactly "{gallery}" is
 // treated as content for this script — anything else in the folder (a
 // personal notes.md, a leftover README, etc.) is left completely alone.
@@ -3310,8 +3321,8 @@ function render_login_page($heading, $blurb, $error = '') {
   :root { color-scheme: dark; }
   html, body { height:100%; }
   body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; margin:0; }
-  .wrap { box-sizing:border-box; min-height:100%; max-width:360px; margin:0 auto; padding:0 24px 12vh; display:flex; flex-direction:column; justify-content:center; }
-  .mark { display:block; width:112px; height:112px; margin:0 auto 34px; color:#8a8a93; transition:color .2s; }
+  .wrap { box-sizing:border-box; min-height:100%; max-width:360px; margin:0 auto; padding:12vh 24px 0; display:flex; flex-direction:column; justify-content:flex-start; }
+  .mark { display:block; width:104px; height:104px; margin:0 auto 14px; color:#8a8a93; transition:color .2s; }
   .mark:hover, .mark:focus-visible { color:#eaeaea; outline:none; }
   .mark svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.1; stroke-linecap:round; stroke-linejoin:round; }
   p { color:#9a9aa0; font-size:0.9rem; margin:0 0 18px; text-align:center; }
@@ -3378,7 +3389,8 @@ function render_https_required_page() {
   body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.6; margin:0; }
   .wrap { max-width:560px; margin:0 auto; padding:48px 24px; }
   h1 { font-size:1.4rem; }
-  a { color:#8ab4ff; }
+  a { color:#aab2ff; text-decoration:none; border-radius:3px; }
+  p a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
   code { background:rgba(255,255,255,0.08); padding:1px 6px; border-radius:4px; }
 </style>
 </head>
@@ -5272,29 +5284,29 @@ function render_server_rules_help($withTidyLinks = false) {
       <div data-lock-rules>
       <details>
         <summary><strong>nginx</strong> (strongest; needs shell access to the server)</summary>
-        <p>Add this inside the site's <code>server { }</code> block (keep the first location above the second), then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. It is written for this gallery's address, <code><?= $esc($loc) ?></code>.<?= $base === '' ? ' <strong>This gallery is at the top of the site, so the second rule would also block every image elsewhere on the site: narrow its path first.</strong>' : '' ?></p>
+        <p>Add inside the site's <code>server { }</code> block, first location above the second, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>.<?= $base === '' ? ' <strong>At the top of the site the second rule would block every image on it: narrow its path first.</strong>' : '' ?></p>
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
-        <p>Then set <em>nginx internal redirect</em> (Site settings, Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>, so the gallery hands files to nginx itself. Check it works with <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code>: it should answer 404. (If PHP sits behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol to it, or every visitor looks like 127.0.0.1.)</p>
+        <p>Then set <em>nginx internal redirect</em> (Site settings → Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>. Test: <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code> should answer 404. Behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol on.</p>
       </details>
       <details>
         <summary><strong>Apache</strong> (blunter, but works on FTP-only hosting)</summary>
-        <p>Save this as a file named <code>.htaccess</code> in the gallery's folder.</p>
+        <p>Save as <code>.htaccess</code> in the gallery's folder.</p>
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
-        <p>A bare photo address then answers 403, and the gallery works as before. It only counts if the server reads <code>.htaccess</code> for this folder (<code>AllowOverride All</code>): on a host that doesn't, the rules are silently ignored, so check with <code>curl -I</code> on a photo's address. If you script logins with an <code>Authorization</code> header on Apache with PHP-FPM, also add the line <code>CGIPassAuth On</code>. The ordinary sign-in form needs nothing.</p>
+        <p>A bare photo address then answers 403. It only works if the server reads <code>.htaccess</code> here (<code>AllowOverride All</code>), so check with <code>curl -I</code>. Scripts that log in with an <code>Authorization</code> header on PHP-FPM also need <code>CGIPassAuth On</code>.</p>
       </details>
       </div>
       <?php if ($withTidyLinks): ?>
       <div class="lock-result" data-tidy-status></div>
       <div data-tidy-rules>
-      <p class="rules-sub">Optional: tidy folder links. Without these, folders are reached as <code><?= $esc($loc) ?>?folder=Europe/France</code>, which always works and is what the gallery itself shares. With them, <code><?= $esc($loc) ?>Europe/France/</code> works too.</p>
+      <p class="rules-sub">Optional tidy folder links: <code><?= $esc($loc) ?>?folder=Europe/France</code> always works; with these, <code><?= $esc($loc) ?>Europe/France/</code> does too.</p>
       <details>
         <summary><strong>nginx</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
-        <p>Add inside the <code>server { }</code> block, next to the rules above. It only matches a path ending in <code>/</code>, so it can never catch <code>index.php</code> or a photo, and it needs php-fpm to pass the original request address (the standard <code>fastcgi_param REQUEST_URI $request_uri;</code> does).<?= $base === '' ? ' <strong>This gallery is at the top of the site, so this would also catch every other folder address on the site: narrow its path first.</strong>' : '' ?></p>
+        <p>Add inside <code>server { }</code>, next to the rules above. It matches only paths ending in <code>/</code> and needs php-fpm to pass the original <code>REQUEST_URI</code> (the standard <code>fastcgi_param</code> does).<?= $base === '' ? ' <strong>At the top of the site it would catch every folder address: narrow its path first.</strong>' : '' ?></p>
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyNginx) ?></code></pre></div>
       </details>
       <details>
         <summary><strong>Apache</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
-        <p>Add to the gallery's <code>.htaccess</code> (needs <code>mod_rewrite</code> and <code>AllowOverride</code> for <code>FileInfo</code>). The <code>B</code> flag is required: without it a folder name with a space, <code>&amp;</code>, <code>+</code> or <code>#</code> fails.</p>
+        <p>Add to <code>.htaccess</code> (needs <code>mod_rewrite</code> and <code>AllowOverride FileInfo</code>). Keep the <code>B</code> flag: it escapes spaces, <code>&amp;</code>, <code>+</code> and <code>#</code>.</p>
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyApache) ?></code></pre></div>
       </details>
       </div>
@@ -5319,26 +5331,17 @@ function render_admin_hidden_panel($data) {
     };
 ?>
     <div class="flash error hidden-warning" id="lock-banner">
-      <div class="lock-open-text">
-        <strong>Private isn't locked.</strong>
-        Making something private only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level. The rules below do that.
-      </div>
-      <div class="lock-locked-text" hidden>
-        <strong>Private is locked.</strong>
-        Just now this browser asked the server for a photo<span class="lock-cache-part"> and for a thumbnail</span> by their direct addresses, and it refused. Hidden items can only be reached through the gallery. Rules that stop working (a server change, a different host) bring this warning back, so check again after changing the server.
-      </div>
-      <div class="lock-outside-text" hidden>
-        <strong>Private is locked.</strong>
-        Every photo and video here lives in a folder outside the gallery's own address (folders from elsewhere on the server), so none of them can be fetched by its address: they are only ever sent by the gallery, which checks who is asking.
-      </div>
-      <div class="lock-result" data-lock-status></div>
+      <div class="lock-open-text"><strong>Private isn't locked.</strong> Making something private hides it from the gallery's pages, but the photo files can still be opened by their direct address. Add the rules below to stop that.</div>
+      <div class="lock-locked-text" hidden><strong>Private is locked.</strong> Direct requests for photos are refused (checked just now from this browser). <button type="button" class="linklike show-rules-btn">Show the rules</button></div>
+      <div class="lock-outside-text" hidden><strong>Private is locked.</strong> These photos live outside the gallery's own address, so only the gallery can send them. <button type="button" class="linklike show-rules-btn">Show the rules</button></div>
+      <div class="lock-result" data-lock-detail></div>
       <button type="button" class="secondary lock-recheck" hidden>Check again</button>
     </div>
     <section class="panel" data-lock-rules-panel>
       <h2 class="section-title">Lock the files themselves</h2>
-      <p class="muted" style="margin-top:0;">Pick the server you use and copy the rules: they stop a private photo from being fetched by its direct address.</p>
+      <p class="muted" style="margin-top:0;">Copy the rules for your server. They stop photo files being fetched by their direct address.</p>
       <?= render_server_rules_help() ?>
-      <p class="muted" data-tidy-rules>There are also optional rules for tidy folder links such as <code>/kb/Europe/France/</code>, and the setting that hands files to nginx: both are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Site settings, Server setup</a>.</p>
+      <p class="muted" data-tidy-rules>Optional tidy folder links and the nginx redirect setting are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Site settings → Server setup</a>.</p>
     </section>
     <section class="panel">
       <h2 class="section-title">Folders that are private (<?= count($data['folders']) ?>)</h2>
@@ -5397,16 +5400,16 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
           <span class="instant-label">Show a map of <?= $isRoot ? 'the whole gallery on its front page' : 'this folder\'s photos on its page' ?></span>
           <span class="rowstate" role="status" aria-live="polite"></span>
         </div>
-        <div class="warn-note">A map makes each visitor's browser load its code from cdnjs and its tiles from OpenStreetMap, so those two sites can see that someone visited this page. It only plots photos whose location is visible.</div>
-        <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'The map covers every photo in the gallery with a visible location.' : 'The map covers the photos in this folder and its subfolders that have a visible location (this folder\'s own location switch above must be on).' ?></p>
+        <div class="warn-note">Visitors' browsers load code from cdnjs and tiles from OpenStreetMap, so those sites see the visit. Only photos with a visible location are plotted.</div>
+        <p class="hint" style="margin:0 0 10px;"><?= $isRoot ? 'Covers every photo in the gallery with a visible location.' : 'Covers this folder\'s photos and subfolders with a visible location (needs this folder\'s location switch).' ?></p>
         <?php // Pin grouping is part of the map: set in under it, and only there while the map is on. ?>
         <div class="map-sub"<?= $on ? '' : ' hidden' ?>>
           <div class="field" style="max-width:300px;">
             <label>Pin grouping (miles)</label>
-            <input type="number" name="map_radius" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?> (site-wide)">
+            <input type="number" name="map_radius" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?>">
             <span class="rowstate" role="status" aria-live="polite"></span>
           </div>
-          <p class="hint">Photos closer together than this share one numbered pin; pressing a numbered pin zooms in and splits it into its photos' own pins. Fractions are fine (0.1), and <strong>0 turns grouping off</strong>, so every photo is its own pin, which suits a very dense city. Leave blank to use the site-wide setting (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>). A road trip wants a big number.</p>
+          <p class="hint">Photos closer than this share one numbered pin; pressing it zooms in. <strong>0 turns grouping off.</strong> Blank uses the site setting (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).</p>
         </div>
         <div class="nojs-only"><button type="submit" class="secondary">Save map settings</button></div>
       </form>
@@ -5417,12 +5420,22 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
 /** The identity form — title, dates, description (and position, for a
  *  folder) — shared by a folder's settings and the gallery's own, so the root
  *  is configured the same way a folder is. */
-/** "05/02/2026" for one day, "05/02/2026–05/09/2026" for a span (numeric and without spaces, so it stays on one line
- *  on a cover card). */
+/** A date span as a person would write it: "Oct 11th, 2026" for one day, "Oct 1-11th, 2026" inside one month, and
+ *  "12/30/2025 - 10/09/2026" when it crosses a month. */
 function format_date_range($min, $max) {
-    $first = gmdate('m/d/Y', $min);
-    $last = gmdate('m/d/Y', $max);
-    return $first === $last ? $first : $first . "\u{2013}" . $last;
+    $ordinal = function ($n) {
+        $n = (int) $n;
+        $suffix = ($n % 100 >= 11 && $n % 100 <= 13) ? 'th' : ([1 => 'st', 2 => 'nd', 3 => 'rd'][$n % 10] ?? 'th');
+        return $n . $suffix;
+    };
+    if (gmdate('Y-m', $min) === gmdate('Y-m', $max)) {
+        $month = gmdate('M', $min);
+        $year = gmdate('Y', $min);
+        $d1 = (int) gmdate('j', $min);
+        $d2 = (int) gmdate('j', $max);
+        return $d1 === $d2 ? $month . ' ' . $ordinal($d1) . ', ' . $year : $month . ' ' . $d1 . '-' . $ordinal($d2) . ', ' . $year;
+    }
+    return gmdate('m/d/Y', $min) . ' - ' . gmdate('m/d/Y', $max);
 }
 
 /**
@@ -5458,6 +5471,17 @@ function suggest_folder_dates($dir, $fileList, $cap = 300) {
     ];
 }
 
+/** A row of choices drawn as one segmented control (radio buttons underneath, so it posts like any form field and works
+ *  without JavaScript). $options is value => label. */
+function ui_segmented($name, $options, $current, $label = '') {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $out = '<div class="seg" role="radiogroup" aria-label="' . $esc($label) . '">';
+    foreach ($options as $value => $text) {
+        $out .= '<label><input type="radio" name="' . $esc($name) . '" value="' . $esc($value) . '"' . ((string) $current === (string) $value ? ' checked' : '') . '><span>' . $esc($text) . '</span></label>';
+    }
+    return $out . '</div>';
+}
+
 function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $dateSuggestion = null) {
     $isRoot = $adminFolderPath === null;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
@@ -5479,7 +5503,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         </div>
         <div class="field">
           <label>Dates (optional)</label>
-          <input type="text" name="dates" maxlength="80" placeholder="06/12/2026&ndash;06/15/2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
+          <input type="text" name="dates" maxlength="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
           <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
             <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
               <button type="button" class="secondary date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
@@ -5493,27 +5517,22 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         </div>
         <?php endif; ?>
         <?php $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : []; $psSel = function ($key) use ($ps) { return isset($ps[$key]) && is_bool($ps[$key]) ? ($ps[$key] ? 'on' : 'off') : ''; }; ?>
-        <div class="field wide">
-          <label>Order of the photos here</label>
-          <div class="sort-fields">
-            <select name="photo_sort_order" aria-label="Order">
-              <?php foreach (['' => "The site's order", 'name' => 'By filename', 'taken' => 'By date taken', 'modified' => 'By date modified'] as $val => $lab): ?><option value="<?= $esc($val) ?>"<?= (string) ($ps['order'] ?? '') === (string) $val ? ' selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?>
-            </select>
-            <select name="photo_sort_dir" aria-label="Direction">
-              <?php $dirSel = isset($ps['desc']) && is_bool($ps['desc']) ? ($ps['desc'] ? 'desc' : 'asc') : ''; foreach (['' => "The site's direction", 'asc' => 'First to last (A to Z, oldest first)', 'desc' => 'Last to first (Z to A, newest first)'] as $val => $lab): ?><option value="<?= $esc($val) ?>"<?= $dirSel === $val ? ' selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?>
-            </select>
+        <details class="field wide sort-details"<?= $ps ? ' open' : '' ?>>
+          <summary>Order of the photos here <span class="muted"><?= $ps ? '&middot; custom' : "&middot; the site's order" ?></span></summary>
+          <?php $dirNow = isset($ps['desc']) && is_bool($ps['desc']) ? ($ps['desc'] ? 'desc' : 'asc') : ''; $triState = ['' => "Site's", 'on' => 'On', 'off' => 'Off']; ?>
+          <div class="sort-rows">
+            <div class="sort-row"><span class="sort-label">Order</span><?= ui_segmented('photo_sort_order', ['' => "Site's", 'name' => 'Name', 'taken' => 'Date'], ($ps['order'] ?? '') === 'modified' ? 'taken' : (string) ($ps['order'] ?? ''), 'Order') ?></div>
+            <div class="sort-row"><span class="sort-label">Direction</span><?= ui_segmented('photo_sort_dir', ['' => "Site's", 'asc' => 'First to last', 'desc' => 'Last to first'], $dirNow, 'Direction') ?></div>
             <?php foreach (['video' => 'Videos first', 'located' => 'Located first', 'private' => 'Private first'] as $kind => $lab): ?>
-              <select name="photo_sort_<?= $kind ?>" aria-label="<?= $esc($lab) ?>">
-                <option value="">Site: <?= $esc($lab) ?></option><option value="on"<?= $psSel($kind) === 'on' ? ' selected' : '' ?>><?= $esc($lab) ?>: on</option><option value="off"<?= $psSel($kind) === 'off' ? ' selected' : '' ?>><?= $esc($lab) ?>: off</option>
-              </select>
+              <div class="sort-row"><span class="sort-label"><?= $esc($lab) ?></span><?= ui_segmented('photo_sort_' . $kind, $triState, $psSel($kind), $lab) ?></div>
             <?php endforeach; ?>
           </div>
-          <p class="hint">How the photos in <?= $isRoot ? 'the top of the gallery' : 'this folder' ?> are ordered. Videos, located and private first stack, in that order of importance (private, then videos, then located), before the order itself. Visitors can change it for themselves with the sort button above the photos. Photos you place with <code>{photos:}</code> or a group keep the order you gave.</p>
-        </div>
+          <p class="hint">The "first" choices stack (private, then videos, then located) before the order itself. Visitors can change it with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
+        </details>
         <div class="field wide">
           <label>Description</label>
           <textarea name="description" maxlength="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
-          <p class="hint"><?= $isRoot ? 'Shown in a box at the top of the page and in shared-link previews' : 'Shown in a box at the top of its page and in shared-link previews' ?>, centred. A little Markdown works: <code>**bold**</code>, <code>*italic*</code>, <code>[words](https://example.com)</code>, <code>- a list</code>, <code>## a heading</code>. Put <code>{left}</code>, <code>{center}</code> or <code>{right}</code> in a paragraph to align just that paragraph. A blank line starts a new paragraph.</p>
+          <p class="hint">Centred box at the top of <?= $isRoot ? 'the page' : 'its page' ?>, also used in shared-link previews. A little Markdown works (<code>**bold**</code>, <code>*italic*</code>, <code>[words](https://…)</code>, <code>- list</code>, <code>## heading</code>); <code>{left}</code>, <code>{center}</code> or <code>{right}</code> aligns a paragraph.</p>
         </div>
       </div>
       <button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button>
@@ -5534,70 +5553,70 @@ function gallery_setting_definitions() {
     return [
         ['title' => 'What is shown', 'items' => [
             ['name' => 'AUTO_GROUP_BY_FOLDER', 'type' => 'bool', 'label' => 'Show subfolders',
-             'help' => 'Each subfolder becomes its own group, to any depth (a trip with Paris/, Lisbon/ …). Off by default because this script is often dropped into a folder that already holds other things.',
-             'risk' => 'Every photo in every subfolder becomes visible to visitors.',
-             'offwarn' => 'Visitors will stop seeing the subfolders, and links to them will stop working. Nothing is deleted: the folders, photos, captions and settings all stay exactly as they are, and come back when you turn this on again.'],
+             'help' => 'Each subfolder becomes its own album, to any depth.',
+             'risk' => 'Every photo in every subfolder becomes visible.',
+             'offwarn' => 'Subfolders and links to them disappear. Nothing is deleted.'],
             ['name' => 'FOLDER_DISPLAY_MODE', 'type' => 'enum', 'label' => 'Folder style',
-             'options' => ['overview' => 'Cover cards (click to open)', 'inline' => 'Inline (all on one page)'],
-             'help' => 'Only used when subfolders are shown.'],
+             'options' => ['overview' => 'Cover cards', 'inline' => 'Inline'],
+             'help' => 'Cover cards open each folder; inline shows all on one page. Only used when subfolders are shown.'],
             ['name' => 'ENABLE_VIDEO', 'type' => 'bool', 'label' => 'Show videos (.mov, .mp4)',
-             'help' => 'Videos are served exactly as recorded, with no conversion, so big clips use real bandwidth and some phone formats don\'t play in every browser.',
-             'risk' => 'Every .mov and .mp4 in the gallery folders becomes visible to visitors.',
-             'offwarn' => 'Videos will disappear from the gallery, and links to them will stop working. Nothing is deleted: the files and their captions, locations and hide settings stay, and come back when you turn this on again.'],
+             'help' => 'Sent as recorded, with no conversion: big clips use real bandwidth.',
+             'risk' => 'Every .mov and .mp4 becomes visible.',
+             'offwarn' => 'Videos disappear. Nothing is deleted.'],
             ['name' => 'ENABLE_VIDEO_THUMBNAILS', 'type' => 'bool', 'label' => 'Video thumbnails', 'requires' => 'ENABLE_VIDEO', 'status' => 'ffmpeg',
-             'help' => 'A real picture from each video instead of the generic video icon, taken once with ffmpeg if this server has it (nothing happens if it doesn\'t, and the browser\'s own first frame is shown where it can). Needs "Thumbnails".',
-             'risk' => 'Runs ffmpeg on your server, once for each new video, with a time limit and one at a time.',
-             'offwarn' => 'Videos go back to the generic video icon (or the browser\'s first frame). Pictures already taken are left in place.'],
+             'help' => 'A real picture from each video, taken once with ffmpeg. Needs "Thumbnails".',
+             'risk' => 'Runs ffmpeg on your server, once per new video.',
+             'offwarn' => 'Videos show the generic icon again.'],
             ['name' => 'ENABLE_VIDEO_PREVIEWS', 'type' => 'bool', 'label' => 'Video previews', 'requires' => 'ENABLE_VIDEO',
-             'help' => 'Hovering over a video plays a short, silent, looping clip of it (about 3 seconds), made once with ffmpeg and kept with the thumbnails. Needs ffmpeg on the server; without it, hovering plays the video itself where the browser can.',
-             'risk' => 'Runs ffmpeg on your server, once for each new video, and each clip takes a little disk space.',
-             'offwarn' => 'Hovering no longer plays a clip. Clips already made are left in place.'],
+             'help' => 'Hovering or scrubbing a video plays a short silent clip, made once with ffmpeg.',
+             'risk' => 'Runs ffmpeg once per new video; each clip uses a little disk.',
+             'offwarn' => 'Hover clips and scrubbing stop.'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
-             'help' => 'alpha_01.jpg and alpha_02.jpg become one group, "alpha". Handy for for-sale listings; on a camera roll it can merge unrelated photos. Folders are better for trips.'],
+             'help' => 'alpha_01.jpg and alpha_02.jpg become one group. Good for listings; on a camera roll it can merge unrelated photos.'],
             ['name' => 'ENABLE_PUBLIC_DOWNLOAD', 'type' => 'bool', 'label' => 'Let visitors download originals',
-             'help' => 'Adds a download button to the photo viewer for everyone. You, and anyone with the private-view password, always have it. Where a photo\'s location is hidden, a visitor\'s copy has the location taken out of the file.',
+             'help' => 'A download button in the viewer for everyone (you always have it). Hidden locations are removed from a visitor\'s copy.',
              'risk' => 'Anyone can save every photo at full resolution.',
-             'offwarn' => 'The download button disappears for visitors who aren\'t signed in. Nothing is deleted.'],
+             'offwarn' => 'Visitors lose the download button.'],
             ['name' => 'PHOTO_SORT_ORDER', 'type' => 'enum', 'label' => 'Photo order',
-             'options' => ['filename' => 'By filename', 'taken' => 'By date taken (from the photo, else date modified)', 'mtime' => 'By date modified'],
-             'help' => 'The order of the photos inside a folder. Each folder can choose its own in its settings, and visitors can change it for themselves with the sort button above the photos. Date modified is only reliable if your upload method keeps the original file dates.'],
+             'options' => ['filename' => 'Name', 'taken' => 'Date'],
+             'help' => 'Inside each folder. Date is when the photo was taken, else the file\'s date. A folder can override it; visitors can change it with the sort button.'],
             ['name' => 'PHOTO_SORT_DESC', 'type' => 'bool', 'label' => 'Last first',
-             'help' => 'Runs the order the other way: Z to A, or newest first.'],
+             'help' => 'Z to A, or newest first.'],
             ['name' => 'SORT_VIDEOS_FIRST', 'type' => 'bool', 'label' => 'Videos first',
-             'help' => 'Puts the videos at the front of each folder, whatever the order.'],
+             'help' => 'Videos at the front of each folder.'],
             ['name' => 'SORT_LOCATED_FIRST', 'type' => 'bool', 'label' => 'Photos with a location first',
-             'help' => 'Puts photos that show a location at the front (after videos, if that is on too). A location counts only where it is shown to the visitor.'],
+             'help' => 'Photos whose location is shown come first (after videos).'],
             ['name' => 'SORT_PRIVATE_FIRST', 'type' => 'bool', 'label' => 'Private items first',
-             'help' => 'For you and anyone with the private-view password: private items come first. Visitors never see them, so nothing changes for them.'],
+             'help' => 'For you and private-view visitors; nobody else sees private items.'],
         ]],
         ['title' => 'Thumbnails and counting', 'items' => [
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
-             'help' => 'Small thumbnails kept in a .gallery-cache folder, so pages load fast and iPhone photos can be shown. If the folder can\'t be written, the original photo is sent instead. Off sends every photo at full size.',
-             'offwarn' => 'Every photo will be sent at full size, so pages get slow, and iPhone (HEIC) photos can\'t be shown at all. Nothing is deleted; thumbnails already made are left in place.'],
+             'help' => 'Small copies kept in .gallery-cache so pages load fast and iPhone photos show. If it can\'t write, originals are sent.',
+             'offwarn' => 'Photos are sent at full size and iPhone (HEIC) photos can\'t show. Nothing is deleted.'],
             ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
-             'help' => 'Counts visits (one per visitor per half hour, however many pages they open; not you, and not bots) and views of each photo, in a stats file in the gallery folder. You always see the numbers in this admin.'],
+             'help' => 'Visits (one per visitor per half hour) and each photo\'s views. You always see them here.'],
             ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
              'help' => 'Needs "Count views". Off keeps the numbers to yourself.'],
         ]],
         ['title' => 'Locations and the map', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
-             'help' => 'Needed before any location can show. Each folder still has its own switch in its settings, and any photo can opt out.',
-             'risk' => 'GPS coordinates can reveal where you live or where you were. They stay private until a folder\'s own location switch is turned on.',
-             'offwarn' => 'Photo locations and the map will disappear for visitors. Nothing is deleted: every saved location stays and comes back when you turn this on again.'],
+             'help' => 'Required before any location shows. Each folder and photo still has its own switch.',
+             'risk' => 'GPS can reveal where you live or have been. Nothing shows until a folder opts in.',
+             'offwarn' => 'Locations and maps disappear. Nothing is deleted.'],
             ['name' => 'ENABLE_MAP', 'type' => 'bool', 'label' => 'Map',
-             'help' => 'A map of every photo that has a visible location. Needs "Allow photo locations".',
-             'risk' => 'The map loads its code from cdnjs and its map tiles from OpenStreetMap in each visitor\'s browser, so those two sites can see that someone visited.',
-             'offwarn' => 'The maps will disappear. Nothing is deleted: every photo location stays saved.'],
+             'help' => 'A map of photos with a visible location. Needs "Allow photo locations".',
+             'risk' => 'Visitors\' browsers load code from cdnjs and tiles from OpenStreetMap, so those sites see the visit.',
+             'offwarn' => 'Maps disappear. Locations stay saved.'],
             ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any', 'requires' => 'ENABLE_MAP',
-             'help' => 'Photos closer together than this share one numbered pin, and pressing a numbered pin zooms in to its photos. 1 mile suits most city trips; a road trip wants a larger number, a dense city a smaller one (fractions such as 0.1 are fine), and 0 turns grouping off so every photo is its own pin. This is the default: each folder, and the gallery front page, can set its own in its settings.'],
+             'help' => 'Photos closer than this share one numbered pin. 1 suits a city trip, more a road trip, 0 turns grouping off. Folders can override it.'],
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
-             'help' => 'Bring in a place that lives somewhere else on the server (an archive on another disk). By default its folders appear at the top of the gallery as if they were in it: /space/trip with Paris and StTropez inside it adds Paris and StTropez. Give the place a name and it shows as one folder with that name instead. Needs "Show subfolders". Photos stay where they are; only a path is stored here.',
-             'risk' => 'Every photo and video in that folder, and in its subfolders, becomes visible to visitors.'],
+             'help' => 'Show a place elsewhere on the server (an archive on another disk). Without a name its folders appear at the top; with one it shows as a single folder. Needs "Show subfolders".',
+             'risk' => 'Every photo and video there becomes visible.'],
             ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect', 'status' => 'accel',
-             'help' => 'Hands photo and video files to nginx instead of reading them with PHP: faster, and nginx handles seeking in videos. It works only with the matching "internal" location (the rules on the Private tab), and the value is the gallery\'s own address on the site, for example /kb. Leave empty otherwise. Photos and videos brought in from elsewhere on the server (Folders from elsewhere, below) are always sent by the gallery itself: nginx can only send files that sit under the gallery\'s own address.',
-             'risk' => 'Unless nginx already has the matching internal location, every photo and video will stop loading until you clear this again.'],
+             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (see the Private tab) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
+             'risk' => 'Without the matching nginx location, photos and videos stop loading.'],
         ]],
     ];
 }
@@ -5796,7 +5815,7 @@ function health_checks($dir, $files) {
     $rec = health_version_record($dir);
     if ($rec === null) $add('This install', 'warn', 'Running ' . GALLERY_VERSION, 'The folder is not writable by the web server, so the version history can\'t be kept.');
     elseif (($rec['from'] ?? '') !== '') $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'Upgraded from ' . $rec['from'] . ' on ' . $rec['at'] . ' (first recorded ' . $rec['first'] . ').');
-    else $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'First recorded on ' . ($rec['first'] ?? $rec['at'] ?? '') . '; the next upgrade will be noted here.');
+    else $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'First recorded ' . ($rec['first'] ?? $rec['at'] ?? '') . '; upgrades are noted here.');
     $add('This install', PHP_VERSION_ID >= 80300 ? 'ok' : 'bad', 'PHP ' . PHP_VERSION, PHP_VERSION_ID >= 80300 ? '' : 'This gallery needs PHP 8.3 or newer.');
     $hasGd = extension_loaded('gd'); $hasImagick = class_exists('Imagick');
     $add('This install', ($hasGd || $hasImagick) ? 'ok' : 'bad', 'Picture resizing: ' . ($hasImagick && $hasGd ? 'GD and Imagick' : ($hasImagick ? 'Imagick' : ($hasGd ? 'GD' : 'none')) ),
@@ -5851,7 +5870,7 @@ function health_checks($dir, $files) {
     $add('Folders and files', $unwritable ? 'warn' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
         $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '');
     $add('Folders and files', $badData ? 'bad' : 'ok', $badData ? count($badData) . ' folder data file' . (count($badData) === 1 ? '' : 's') . ' can\'t be read' : 'Folder data files all read fine (' . $withData . ' folder' . ($withData === 1 ? '' : 's') . ', ' . $entries . ' photo' . ($entries === 1 ? '' : 's') . ' with saved details)',
-        $badData ? 'Treated as empty, and the next change you save in that folder would overwrite the file. Restore .gallery-items.php from a backup first: ' . implode(', ', array_map($rel, array_slice($badData, 0, 5))) : 'Each folder keeps its own captions, locations, privacy flags and view counts inside it: wiping a folder wipes those, including its private flag.');
+        $badData ? 'Treated as empty, so the next save there would overwrite it. Restore .gallery-items.php from a backup first: ' . implode(', ', array_map($rel, array_slice($badData, 0, 5))) : 'Wiping a folder wipes its captions, locations and private flags.');
     $videos = 0; foreach ($files as $f) if (is_video_file($f)) $videos++;
     $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
 
@@ -5878,7 +5897,7 @@ function render_admin_health_panel() {
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong>
         <button type="button" class="secondary health-toggle">Show all checks</button> <button type="button" class="secondary" onclick="location.reload()">Check again</button></p>
-      <p class="muted health-intro" style="margin-top:0;">What this install looks like right now, found by looking, never by changing anything (except noting the version). When everything is fine this stays folded away; anything that isn't is shown here.</p>
+      <p class="muted health-intro" style="margin-top:0;">Looks only; nothing is changed (apart from noting the running version).</p>
       <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn') $allQuiet = false; ?>
         <div class="health-group<?= $allQuiet ? ' all-quiet' : '' ?>">
           <h3 class="subhead"><?= $esc($g) ?></h3>
@@ -5892,7 +5911,7 @@ function render_admin_health_panel() {
       <?php endforeach; ?>
       <div class="health-group all-quiet" data-health-group="web">
         <h3 class="subhead">Web server (tested by your browser, just now)</h3>
-        <?php foreach ([['lock', 'Direct requests for photos are refused'], ['tidy', 'Tidy folder links work'], ['accel', 'nginx internal redirect']] as [$key, $label]): ?>
+        <?php foreach ([['lock', 'Direct photo requests refused'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']] as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>">
             <span class="health-mark muted">&bull;</span>
             <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div></div>
@@ -5916,7 +5935,7 @@ function render_admin_site_settings($csrfToken) {
 ?>
     <section class="panel site-settings">
       <h2 class="section-title">Site settings</h2>
-      <p class="muted" style="margin-top:0;">These apply to the whole gallery, and <strong>each change saves the moment you make it</strong>. They are saved in <code>.gallery-config.php</code> beside <code>index.php</code>, which survives replacing <code>index.php</code> with a newer version. <strong>Saving here only changes that file</strong>: your photos, captions, locations, hide flags, notes and view counts are never touched, and switching a setting off hides things without deleting anything.</p>
+      <p class="muted" style="margin-top:0;">Whole-gallery settings. <strong>Each change saves as you make it</strong>, in <code>.gallery-config.php</code> (it survives replacing <code>index.php</code>). Your photos, captions and stats are never touched.</p>
       <?php if ($broken): ?>
         <div class="flash error">The settings file exists but can't be read as settings, so this screen won't change it (that could overwrite what's in it). Fix or delete <code>.gallery-config.php</code>, then reload.</div>
       <?php endif; ?>
@@ -5924,13 +5943,14 @@ function render_admin_site_settings($csrfToken) {
         <p class="muted">Create a file named <code>.gallery-config.php</code> next to <code>index.php</code> containing exactly this:</p>
         <textarea readonly rows="12" style="width:100%; font-family:ui-monospace,monospace;" onfocus="this.select()"><?= $esc($GLOBALS['__site_settings_manual']) ?></textarea>
       <?php endif; ?>
-      <p class="muted sitesync" hidden>Saved. The folder list is already up to date; the photo grids and other tabs refresh when you leave this one.</p>
+      <p class="muted sitesync" hidden>Saved. Other tabs refresh when you leave this one.</p>
       <form method="post" class="site-settings-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_site_settings">
         <input type="hidden" name="config_hash" value="<?= $esc($hash) ?>">
-        <?php foreach (gallery_setting_definitions() as $group): ?>
-          <h3 class="subhead"<?= $group['title'] === 'Server setup (advanced)' ? ' id="server-setup"' : '' ?>><?= $esc($group['title']) ?></h3>
+        <?php $groupNo = 0; foreach (gallery_setting_definitions() as $group): $groupNo++; ?>
+          <details class="site-group"<?= $groupNo === 1 ? ' open' : '' ?><?= $group['title'] === 'Server setup (advanced)' ? ' id="server-setup"' : '' ?>>
+          <summary><span class="site-group-title"><?= $esc($group['title']) ?></span> <span class="muted"><?= count($group['items']) ?> setting<?= count($group['items']) === 1 ? '' : 's' ?></span></summary>
           <?php foreach ($group['items'] as $d): $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null; ?>
             <?php $reqOn = empty($d['requires']) || (defined($d['requires']) && constant($d['requires'])); ?>
             <div class="site-row<?= !empty($d['requires']) ? ' sub-row' : '' ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn ? '' : ' hidden') : '' ?>>
@@ -5939,7 +5959,7 @@ function render_admin_site_settings($csrfToken) {
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
-                <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . '). Real thumbnails, hover clips and scrubbing with a mouse or finger are available.' : 'Videos show the browser\'s own first frame where it can play them. If it is installed somewhere unusual, put its full path as "FFMPEG_PATH" in .gallery-config.php.' ?></div>
+                <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Set "FFMPEG_PATH" in .gallery-config.php.' ?></div>
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
                 <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
@@ -5952,7 +5972,7 @@ function render_admin_site_settings($csrfToken) {
                   <input type="hidden" name="set_<?= $esc($name) ?>" value="0">
                   <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
                 <?php elseif ($d['type'] === 'enum'): ?>
-                  <select name="set_<?= $esc($name) ?>"><?php foreach ($d['options'] as $val => $lab): ?><option value="<?= $esc($val) ?>" <?= (string) $now === (string) $val ? 'selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?></select>
+                  <?= ui_segmented('set_' . $name, $d['options'], ($name === 'PHOTO_SORT_ORDER' && $now === 'mtime') ? 'taken' : $now, $d['label']) ?>
                 <?php elseif ($d['type'] === 'text'): ?>
                   <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
                 <?php elseif ($d['type'] === 'folders'): $extraNamed = (array) EXTRA_FOLDERS; $extraRoots = array_values((array) EXTRA_ROOTS); ?>
@@ -5977,14 +5997,16 @@ function render_admin_site_settings($csrfToken) {
           <?php if ($group['title'] === 'Server setup (advanced)'): ?>
             <div class="site-rules"><div class="name">Keep private photos from being fetched by address</div><div class="lock-result" data-lock-status></div><div class="help lock-help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help(true) ?></div>
           <?php endif; ?>
+          </details>
         <?php endforeach; ?>
 
-        <h3 class="subhead">Passwords</h3>
-        <p class="muted" style="margin:0 0 6px;">Passwords are saved as hashes in <code>.gallery-config.php</code>: not even this page can show them again, and a copy of that file doesn't contain them. Forgotten? Delete the <code>ADMIN_PASSWORD</code> line from that file and put an empty file named <code>.gallery-setup</code> beside <code>index.php</code>: the admin then asks you to choose a new one.</p>
+        <details class="site-group">
+        <summary><span class="site-group-title">Passwords</span> <span class="muted">admin and private view</span></summary>
+        <p class="muted" style="margin:0 0 6px;">Stored as hashes, so they can't be shown again. Forgotten? Delete the <code>ADMIN_PASSWORD</code> line in <code>.gallery-config.php</code>, add an empty file <code>.gallery-setup</code> beside <code>index.php</code>, and open <code>?admin</code>.</p>
         <div class="site-row">
           <div>
             <div class="name">Admin password <?php if (isset($fromFile['ADMIN_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
-            <div class="help">Currently set. Leave blank to keep it. At least 8 characters with a letter and a number; you stay signed in after changing it. It can't be removed here, since that would lock this screen away.</div>
+            <div class="help">Set. Leave blank to keep it; to change it use 8+ characters with a letter and a number. It can't be removed here.</div>
           </div>
           <div class="ctl col">
             <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password">
@@ -5995,8 +6017,8 @@ function render_admin_site_settings($csrfToken) {
         <div class="site-row">
           <div>
             <div class="name">Private-view password <?php if (isset($fromFile['PRIVATE_VIEW_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
-            <div class="help"><?= PRIVATE_VIEW_PASSWORD === '' ? 'Not set, so private items stay private to everyone but you.' : 'Currently set.' ?> What you tell someone so they can see the private items (any length). Leave blank to keep it as it is.</div>
-            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><div class="warn-note">Removing it means anyone you gave it to can no longer see the private items. The items stay private and nothing is deleted.</div><?php endif; ?>
+            <div class="help"><?= PRIVATE_VIEW_PASSWORD === '' ? 'Not set: only you can see private items.' : 'Set.' ?> Give it to people who may see private items. Leave blank to keep it.</div>
+            <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><div class="warn-note">Removing it ends private view for everyone you gave it to. Nothing is deleted.</div><?php endif; ?>
           </div>
           <div class="ctl col">
             <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password">
@@ -6007,10 +6029,12 @@ function render_admin_site_settings($csrfToken) {
           </div>
         </div>
 
+        </details>
+
         <div class="item-actions nojs-only" style="margin-top:14px;">
           <button type="submit"<?= $broken ? ' disabled' : '' ?>>Save site settings</button>
         </div>
-        <p class="muted" style="margin-top:14px;"><span class="js-only">Changes save as you make them.</span> Only settings that differ from the defaults are stored, so a future update's better defaults still reach you.</p>
+        <p class="muted nojs-only" style="margin-top:14px;">Only settings that differ from the defaults are stored.</p>
       </form>
     </section>
 <?php
@@ -6050,10 +6074,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     // The warning shown beside the location switch (turning it on publishes places, so say how many and how to keep one back).
     $gpsCount = count($adminAutoLoc);
-    $locWarn = 'Turning this on makes the GPS location of ' . ($gpsCount > 0
-        ? $gpsCount . ' photo' . ($gpsCount === 1 ? ' here' : 's here') . ' visible to visitors, on the gallery and on the map.'
-        : 'any photo here that has one visible to visitors, on the gallery and on the map.')
-        . ' The location of a single photo can be kept from visitors with its own "Show its location" switch. You, and anyone with the private-view password, always see every saved location.';
+    $locWarn = 'Turning this on shows the location of ' . ($gpsCount > 0
+        ? $gpsCount . ' photo' . ($gpsCount === 1 ? '' : 's') . ' here'
+        : 'any photo here that has one')
+        . ' to visitors, on the gallery and the map. A photo can opt out with its own "Show its location" switch. You and private-view visitors always see every location.';
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
 ?>
@@ -6069,6 +6093,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; }
   .wrap { max-width:960px; margin:0 auto; padding:24px 16px 64px; }  /* (hidden-items page) */
+  a { color:#aab2ff; text-decoration:none; }
   h1 { font-size:1.4rem; margin:0 0 4px; }
   h2 { font-size:1.1rem; margin:28px 0 10px; }
   .muted { color:var(--muted); font-size:0.85rem; }
@@ -6100,12 +6125,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .tab-panel > .panel + .panel, .tab-panel > .flash + .panel { margin-top:0; }
   .hidden-list { margin:0; padding-left:20px; }
   .hidden-list li { margin-bottom:6px; font-size:0.9rem; }
-  .hidden-list a { color:#8ab4ff; }
+  .hidden-list a { color:#aab2ff; }
   .admin-layout { max-width:1180px; margin:0 auto; padding:18px 16px 64px; display:grid; grid-template-columns:210px minmax(0,1fr); gap:22px; align-items:start; }
   .admin-side { position:sticky; top:76px; max-height:calc(100vh - 92px); overflow-y:auto; }
   .admin-folders > summary { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px; padding-left:12px; cursor:pointer; list-style:none; }
   .admin-side .muted { padding-left:12px; }
   .admin-folders > summary::-webkit-details-marker { display:none; }
+  .admin-folders > summary, .site-group > summary { position:relative; padding-right:30px; }
+  .admin-folders > summary::after, .site-group > summary::after { content:""; position:absolute; right:12px; top:50%; width:7px; height:7px; border-right:2px solid var(--muted); border-bottom:2px solid var(--muted); transform:translateY(-70%) rotate(45deg); transition:transform .15s; }
+  .admin-folders[open] > summary::after, .site-group[open] > summary::after { transform:translateY(-30%) rotate(-135deg); }
+  .admin-folders > summary:hover::after, .site-group > summary:hover::after { border-color:var(--text); }
+  .site-group > summary { list-style:none; }
+  .site-group > summary::-webkit-details-marker { display:none; }
   .admin-folders > summary .here { text-transform:none; letter-spacing:0; display:none; color:var(--text); }
   .admin-folder-nav ul { list-style:none; margin:0; padding:0; }
   .admin-folder-nav li { position:relative; margin:1px 0; }
@@ -6146,10 +6177,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .lock-result { margin-top:6px; font-size:0.85rem; }
   .lock-result:empty { display:none; }
   /* Links in the admin's running text: the teal of the sidebar link, not the browser's default blue. */
-  .admin-main p a, .admin-main li a, .admin-main .help a, .admin-main .muted a { color:#5eead4; text-decoration-color:rgba(94,234,212,0.45); text-underline-offset:2px; }
-  .admin-main p a:hover, .admin-main li a:hover, .admin-main .help a:hover, .admin-main .muted a:hover { color:#99f6e4; text-decoration-color:currentColor; }
+  .admin-main p a, .admin-main li a, .admin-main .help a, .admin-main .muted a { color:#aab2ff; border-radius:3px; transition:color .15s, background .15s, box-shadow .15s; }
+  .admin-main p a:hover, .admin-main li a:hover, .admin-main .help a:hover, .admin-main .muted a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
   .admin-main .flash a, .admin-main .flash a:hover { color:inherit; }
+  .admin-main .flash a:hover { background:rgba(255,255,255,0.14); box-shadow:0 0 0 3px rgba(255,255,255,0.14); }
   .subhead { scroll-margin-top:70px; }
+  .site-group.flash-target { outline:2px solid var(--accent); outline-offset:3px; }
   .subhead.flash-target { outline:2px solid var(--accent); outline-offset:4px; border-radius:4px; }
   .note-text, .help.note-text, .site-row .help.note-text { color:#f5a623; }
   .health-row { display:flex; gap:10px; align-items:flex-start; padding:6px 0; border-top:1px solid #26262a; font-size:0.88rem; }
@@ -6157,18 +6190,47 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-mark { flex:none; width:1.3em; text-align:center; line-height:1.5; }
   .health-label { font-weight:600; }
   .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
-  .health-summary { margin:0 0 6px; }
-  .sort-fields { display:flex; flex-wrap:wrap; gap:8px; }
+  .health-summary { margin:0 0 6px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .site-group { scroll-margin-top:70px; margin:0 0 10px; border:1px solid #26262a; border-radius:9px; padding:0 12px; }
+  .site-group[open] { padding-bottom:6px; }
+  .site-group > summary { cursor:pointer; padding:10px 30px 10px 0; font-weight:600; font-size:0.95rem; }
+  .site-group > summary .muted { font-weight:400; font-size:0.8rem; margin-left:6px; }
+  /* Choices drawn as pills: the chosen one is lit, the others stay quiet. (Radio buttons underneath.) */
+  .seg { display:inline-flex; flex-wrap:wrap; gap:6px; max-width:100%; }
+  .seg > label { position:relative; display:block; margin:0; cursor:pointer; font-size:0.85rem; }
+  .seg > label input { position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:pointer; }
+  .seg > label span { display:block; padding:6px 14px; border:1px solid #34343a; border-radius:999px; color:var(--muted); background:transparent; white-space:nowrap; transition:background .12s, color .12s, border-color .12s; }
+  .seg > label:hover span { color:var(--text); border-color:#4a4a52; }
+  .seg > label input:checked + span { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .seg > label input:focus-visible + span { outline:2px solid #fff; outline-offset:2px; }
+  input[type=number] { -moz-appearance:textfield; appearance:textfield; }
+  input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  .site-row input[type=number], .settings-grid input[type=number], .map-sub input[type=number] { width:96px; max-width:100%; }
+  .export-cards { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
+  .export-card { flex:1 1 220px; display:flex; flex-direction:column; align-items:flex-start; gap:2px; padding:12px 14px; border:1px solid #2c2c30; border-radius:10px; }
+  .export-card .export-scope { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); }
+  .export-card .export-name { font-weight:600; margin:0 0 8px; overflow-wrap:anywhere; }
+  .export-card.export-all { border-color:rgba(88,101,242,0.55); background:rgba(88,101,242,0.08); }
+  .export-card.export-all .export-scope { color:#aab2ff; }
+  .md-actions { margin-top:8px; align-items:flex-end; }
+  .md-actions .field { max-width:260px; margin-bottom:0; }
+  .sort-rows { margin-top:8px; }
+  .sort-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; margin:0 0 8px; }
+  .sort-label { min-width:96px; font-size:0.85rem; color:var(--muted); }
+  .sort-details > summary { cursor:pointer; font-size:0.85rem; color:var(--muted); margin:0 0 6px; }
+  .sort-details > summary .muted { font-size:0.8rem; }
+  .sort-fields { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
   .sort-fields select { max-width:100%; }
   .health-panel:not(.show-all) .health-row.quiet, .health-panel:not(.show-all) .health-group.all-quiet, .health-panel:not(.show-all) .health-intro { display:none; }
   .health-panel.is-checking .health-toggle { display:none; }
-  .health-toggle { margin-left:10px; padding:3px 12px; font-size:0.8rem; }
+  .health-toggle { padding:3px 12px; font-size:0.8rem; }
   .health-mark .ico { width:1.1em; height:1.1em; }
-  .health-summary .secondary { margin-left:10px; padding:3px 12px; font-size:0.8rem; }
+  .health-summary .secondary { padding:3px 12px; font-size:0.8rem; }
   .accel-status:empty { display:none; }
   .ok-text, .help.ok-text, .site-row .help.ok-text { color:var(--ok); }
   .warn-text, .help.warn-text, .site-row .help.warn-text { color:var(--err); }
-  .linklike { background:none; border:0; padding:0; color:inherit; font:inherit; text-decoration:underline; cursor:pointer; }
+  .linklike { background:none; border:0; padding:0; color:inherit; font:inherit; text-decoration:none; border-radius:3px; cursor:pointer; transition:background .15s, box-shadow .15s; }
+  .linklike:hover { background:rgba(255,255,255,0.14); box-shadow:0 0 0 3px rgba(255,255,255,0.14); }
   .lock-recheck { margin-top:8px; padding:3px 12px; font-size:0.8rem; }
   [hidden] { display:none !important; }
   @media (max-width: 960px) {
@@ -6181,8 +6243,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   }
   @media (max-width: 800px) {
     .admin-folders > summary { background:var(--card); padding:9px 12px; border-radius:8px; font-size:0.85rem; text-transform:none; letter-spacing:0; color:var(--muted); margin:0; }
-    .admin-folders > summary::before { content:"\25B8  "; }
-    .admin-folders[open] > summary::before { content:"\25BE  "; }
     .admin-folders > summary .here { display:inline; }
     .admin-folders[open] > summary { margin-bottom:6px; }
     .admin-layout { grid-template-columns:1fr; gap:12px; }
@@ -6198,7 +6258,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .flash { padding:10px 14px; border-radius:8px; margin:14px 0; font-size:0.9rem; }
   .flash.ok { background:rgba(59,165,92,0.15); color:var(--ok); }
   .flash.error { background:rgba(237,66,69,0.15); color:var(--err); }
-  .flash a { color:inherit; font-weight:600; text-decoration:underline; }
+  .flash a { color:inherit; font-weight:600; text-decoration:none; border-radius:3px; }
   .panel { background:var(--card); border-radius:10px; padding:16px; margin-bottom:16px; }
   label { display:block; font-size:0.8rem; color:var(--muted); margin-bottom:3px; }
   input[type=text], input[type=url], input[type=number], textarea, select {
@@ -6249,16 +6309,16 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .notes-reference .ref-card p { margin:5px 0 0; color:#cfcfd4; }
   .notes-reference .ref-card-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .notes-reference .ref-card-head .admin-insert-btn { margin:0; }
-  .notes-reference button.linklike { background:none; color:var(--accent); padding:0 2px; font-size:inherit; text-decoration:underline; }
+  .notes-reference button.linklike { background:none; color:var(--accent); padding:0 2px; font-size:inherit; text-decoration:none; }
   @media (max-width: 1100px) { .notes-layout { grid-template-columns:1fr; } .notes-reference { position:static; max-height:none; } }
   /* Photos tab: a grid of thumbnails, and one editor panel above it that
      opens with the selected photo's own form (every photo's real form is in
      the page; only the selected one is shown). */
   /* The left column's text all starts at the same place: 12px in, counting a pill's 1px border, so the pills,
      the FOLDERS label and every folder name line up. Site settings is teal (blue is "selected", red is Hidden). */
-  .side-link { display:flex; align-items:center; margin:0 0 10px; padding:6px 10px 6px 11px; border-radius:6px; font-size:0.85rem; color:#5eead4; text-decoration:none; background:rgba(45,212,191,0.09); border:1px solid rgba(45,212,191,0.3); }
-  .side-link:hover { background:rgba(45,212,191,0.17); }
-  .side-link.active { color:#04201c; font-weight:600; background:#2dd4bf; border-color:#2dd4bf; }
+  .side-link { display:flex; align-items:center; margin:0 0 10px; padding:6px 10px 6px 11px; border-radius:6px; font-size:0.85rem; color:var(--text); text-decoration:none; background:#1a1a1e; border:1px solid #2c2c30; }
+  .side-link:hover { background:#222228; border-color:#3a3a42; }
+  .side-link.active { color:#fff; font-weight:600; background:var(--accent); border-color:var(--accent); }
   .site-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(190px,260px); gap:6px 22px; padding:12px 0; border-top:1px solid #26262a; align-items:start; }
   .site-settings h3.subhead + .site-row, .site-settings .muted + .site-row { border-top:0; }
   .rules-help details { border:1px solid #2c2c30; border-radius:8px; padding:8px 12px; margin:8px 0; background:#18181b; }
@@ -6496,7 +6556,7 @@ foreach ($adminFiles as $file) {
             <span class="instant-label">Private</span>
             <span class="rowstate" role="status" aria-live="polite"></span>
           </div>
-          <p class="hint">Visitors don't see a private photo unless you give them the private-view password.<?= $folderIsPrivate ? ' Its folder is private, so it is private too until you switch this off.' : '' ?></p>
+          <p class="hint">Hidden from visitors unless they have the private-view password.<?= $folderIsPrivate ? ' Its folder is private, so it is too until you switch this off.' : '' ?></p>
           <div class="nojs-only"><button type="submit" class="secondary">Save</button></div>
         </form>
         <form method="post" class="instant-form flag-form" data-flag="location">
@@ -6585,9 +6645,9 @@ foreach ($adminFiles as $file) {
 }
 ?>
   <?php if (empty($adminFiles)): ?>
-    <p class="muted">No photos or videos in this folder.</p>
+    <p class="muted">No media here yet.</p>
   <?php else: ?>
-    <p class="muted photos-hint">Click a photo to edit its caption, link and location, to make it private, or to set it as the <?= $adminFolderPath === null ? "gallery's cover (the highlighted one is the cover now: the picture in shared links)" : "folder's cover (the highlighted one is the cover now: the picture on the folder's card and in shared links)" ?>. To change several at once, use <em>Select photos</em>.</p>
+    <p class="muted photos-hint">Click a photo to edit its caption, link, location and privacy, or to make it the <?= $adminFolderPath === null ? "gallery's" : "folder's" ?> cover (highlighted; it is the picture in shared links). <em>Select photos</em> changes several at once.</p>
     <div class="photo-editor" id="photo-editor"><?= $editorsHtml ?></div>
     <div class="bulk-bar" id="bulk-bar" data-csrf="<?= $csrfToken ?>" hidden>
       <button type="button" class="secondary" id="bulk-start">Select photos</button>
@@ -6610,7 +6670,7 @@ foreach ($adminFiles as $file) {
     <h2 class="section-title">This folder's own settings</h2>
     <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, suggest_folder_dates($dir, folder_files_under($files, $adminFolderPath))); ?>
     <h3 class="subhead">Privacy</h3>
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (ENABLE_PHOTO_LOCATION is off: nothing shows regardless)' : ''), $locWarn); ?>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : ''), $locWarn); ?>
     <div class="privacy-row">
     <form method="post">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
@@ -6626,7 +6686,7 @@ foreach ($adminFiles as $file) {
     <h2 class="section-title">Gallery settings</h2>
     <?php render_admin_identity_form($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files)); ?>
     <h3 class="subhead">Privacy</h3>
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (ENABLE_PHOTO_LOCATION is off: nothing shows regardless)' : ''), $locWarn); ?>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : ''), $locWarn); ?>
     <?php render_admin_map_form($itemsHere, $csrfToken, true); ?>
   </section>
   <?php endif; ?>
@@ -6696,8 +6756,8 @@ foreach ($adminFiles as $file) {
           <input type="hidden" name="action" value="save_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
           <textarea name="content" class="adm-textarea"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
-          <div class="field-row" style="margin-top:8px; align-items:flex-end;">
-            <div class="field" style="max-width:260px;">
+          <div class="field-row md-actions">
+            <div class="field">
               <label>Save as a different filename (optional)</label>
               <input type="text" name="new_name" class="adm-newname" placeholder="leave blank to overwrite this file">
             </div>
@@ -6720,8 +6780,8 @@ foreach ($adminFiles as $file) {
         <input type="hidden" name="md_file" value="">
         <textarea name="content" class="adm-textarea">{gallery}
 </textarea>
-        <div class="field-row" style="margin-top:8px; align-items:flex-end;">
-          <div class="field" style="max-width:260px;">
+        <div class="field-row md-actions">
+          <div class="field">
             <label>Filename</label>
             <input type="text" name="new_name" class="adm-newname" placeholder="notes.md" required>
           </div>
@@ -6740,18 +6800,23 @@ foreach ($adminFiles as $file) {
   <div class="tab-panel" data-tab="export">
   <section class="panel" id="export">
     <h2 class="section-title">Export</h2>
-    <p class="muted">Downloads this folder's captions, locations, web links, display name, and chosen cover as JSON — the only backup this data has.</p>
-    <p class="muted"><strong>Handle the file with care:</strong> it also records which items and folders you've made private, and any GPS coordinates you've entered. Pasting it into a support email or leaving it somewhere public would reveal both, regardless of what's actually hidden on the gallery.</p>
-    <form method="post">
-      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-      <input type="hidden" name="action" value="export_items">
-      <button type="submit" class="secondary">Export as JSON</button>
-    </form>
-    <form method="post" style="margin-top:8px;">
-      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-      <input type="hidden" name="action" value="export_tree">
-      <button type="submit" class="secondary">Export the whole tree as JSON</button>
-    </form>
+    <p class="muted">The only backup of what you've typed: captions, locations, web links, names, covers and private flags, as JSON. <strong>Handle the file with care:</strong> it records which items and folders are hidden, and any GPS you've entered.</p>
+    <div class="export-cards">
+      <form method="post" class="export-card">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="export_items">
+        <span class="export-scope">This folder</span>
+        <span class="export-name"><?= htmlspecialchars($adminFolderPath ?? 'Top of the gallery', ENT_QUOTES, 'UTF-8') ?></span>
+        <button type="submit" class="secondary">Export this folder</button>
+      </form>
+      <form method="post" class="export-card export-all">
+        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+        <input type="hidden" name="action" value="export_tree">
+        <span class="export-scope">Entire gallery</span>
+        <span class="export-name">Every folder, one file</span>
+        <button type="submit" class="secondary">Export entire gallery</button>
+      </form>
+    </div>
   </section>
   </div>
 </main>
@@ -6766,6 +6831,7 @@ foreach ($adminFiles as $file) {
     if (id) setTimeout(function () {
       var e = document.getElementById(id);
       if (!e) return;
+      if (e.tagName === 'DETAILS') e.open = true;
       e.scrollIntoView({ behavior: 'smooth', block: 'start' });
       e.classList.add('flash-target');
       setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
@@ -6853,13 +6919,16 @@ foreach ($adminFiles as $file) {
         banner.querySelector('.lock-open-text').hidden = locked;
         banner.querySelector('.lock-locked-text').hidden = !(locked && !outside);
         banner.querySelector('.lock-outside-text').hidden = !outside;
-        banner.querySelector('.lock-cache-part').hidden = !cache;
         banner.querySelector('.lock-recheck').hidden = false;
       }
       hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', locked);
       if (outside) mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
       else mirror('lock', locked ? 'ok-text' : state === 'open' ? 'warn-text' : '', locked ? 'Yes: a photo and a cached thumbnail asked for by their plain addresses were refused, so private items can only be reached through the gallery.'
         : state === 'open' ? 'No: ' + detail + ' was handed out to a plain request, so a private photo can be fetched by its address. Use the rules on the Private tab.' : 'Couldn\'t tell (the request failed or was redirected).');
+      document.querySelectorAll('[data-lock-detail]').forEach(function (el) {
+        el.className = 'lock-result warn-text';
+        el.textContent = locked ? '' : state === 'open' ? 'The server handed out ' + detail + ' to a plain request.' : 'Couldn\'t check from this browser just now.';
+      });
       report('[data-lock-status]', locked, outside ? 'Nothing to ask the server for: no photo or video has an address of its own here.' : locked ? 'Checked just now from this browser: direct requests for photos are refused.'
         : state === 'open' ? 'Checked just now from this browser: the server handed out ' + detail + ' to a plain request, so a private photo could be fetched by its address. Use the rules below.'
         : 'Couldn\'t check from this browser just now (the request failed or was redirected).', '.lock-help, [data-lock-rules], [data-lock-rules-panel]');
@@ -6933,6 +7002,7 @@ foreach ($adminFiles as $file) {
         });
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
+    document.querySelectorAll('.show-rules-btn').forEach(function (btn) { btn.addEventListener('click', function () { hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', false); btn.remove(); }); });
     mirrorLater();
     runLock();
     runTidy();
@@ -7282,6 +7352,17 @@ foreach ($adminFiles as $file) {
       el.addEventListener('change', function () {
         var f = {}; f[el.name] = el.value;
         post(f, stateOf(el), function () { el.value = el.getAttribute('data-prev'); }, function () { el.setAttribute('data-prev', el.value); });
+      });
+    });
+    [].forEach.call(form.querySelectorAll('.seg'), function (seg) {
+      var radios = seg.querySelectorAll('input[type=radio][name^=set_]');
+      if (!radios.length) return;
+      var prev = (seg.querySelector('input:checked') || {}).value;
+      [].forEach.call(radios, function (r) {
+        r.addEventListener('change', function () {
+          var f = {}; f[r.name] = r.value;
+          post(f, stateOf(r), function () { [].forEach.call(radios, function (x) { x.checked = x.value === prev; }); }, function () { prev = r.value; });
+        });
       });
     });
     [].forEach.call(form.querySelectorAll('input[type=text][name^=set_]'), function (el) {
@@ -9505,13 +9586,15 @@ function render_about_page() {
   .download-btn:hover { opacity: 0.9; }
   h2 { font-size: 1.15rem; margin: 32px 0 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 24px; }
   p, li { color: #d5d5d8; font-size: 0.95rem; }
+  p a { border-radius: 3px; transition: color .15s, background .15s, box-shadow .15s; }
+  p a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
   ul { padding-left: 22px; }
   li { margin-bottom: 6px; }
   code {
     background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 4px;
     font-size: 0.88em; color: #eaeaea;
   }
-  a { color: #8ab4ff; }
+  a { color:#aab2ff; text-decoration:none; }
 </style>
 </head>
 <body>
@@ -9523,36 +9606,34 @@ function render_about_page() {
   </div>
 
   <h1>Drop-in Photo Gallery</h1>
-  <p class="subtitle">A single PHP file, no dependencies, no build step. Drop it into any folder of photos.</p>
+  <p class="subtitle">One PHP file. No dependencies, no build step. Drop it into a folder of photos.</p>
   <a class="download-btn" href="<?= htmlspecialchars($repoUrl, ENT_QUOTES, 'UTF-8') ?>">&#11015; Get it on GitHub</a>
 
-  <h2>What visitors get</h2>
+  <h2>For visitors</h2>
   <ul>
-    <li>A clean grid of photos and videos, with a full-screen viewer: keyboard arrows, phone swipe, captions, and a link icon for a photo's web page</li>
-    <li>Trips as folders: a cover card per folder with its dates and photo count, nested to any depth, and a viewer that stays inside the folder you opened</li>
-    <li>Where it was taken, if you choose to share it: a small map in the corner of the photo that opens bigger, and an optional page map, both loaded only when someone asks for them</li>
-    <li>Shareable links to a photo, a folder or a map, with correct previews when pasted into a chat</li>
+    <li>A grid of photos and videos with a full-screen viewer: arrow keys, swipe, captions; video tiles preview on hover or a drag</li>
+    <li>Trips as folders: cover cards with dates and counts, to any depth, and a viewer that stays inside the folder</li>
+    <li>Optional maps, loaded only when someone opens one</li>
+    <li>Sorting by name or date, with videos or located photos first</li>
+    <li>Shareable links to a photo, folder or map, with proper previews</li>
   </ul>
 
-  <h2>What the owner gets</h2>
+  <h2>For the owner</h2>
   <ul>
-    <li>Set up in the browser: upload the file, open <code>?admin</code> and choose a password. A sign-in form, not a browser pop-up</li>
-    <li>An admin with tabs and a thumbnail grid: captions, locations, web links, privacy flags, covers, folder names, descriptions, and dates that it can suggest from the photos' own</li>
-    <li>Site settings you flip on a page (each one saves at once and says what it exposes), kept in a small settings file that survives replacing <code>index.php</code></li>
-    <li>Markdown notes boxes, at the top and inside any folder: <code>{photos}</code>, <code>{group}</code>, <code>{color}</code>, <code>{sold}</code> and <code>{reserved}</code> for trip journals or for-sale listings, explained in the admin as you write</li>
-    <li>Photos, videos and whole folders you can make private (still yours to see, and visible to anyone you give the private-view password), and visit counts (people, not page loads)</li>
+    <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
+    <li>An admin for captions, locations, links, privacy, covers, folder names and dates, and Site settings that save as you flip them</li>
+    <li>Markdown notes with <code>{photos}</code>, <code>{group}</code>, <code>{sold}</code> and <code>{reserved}</code>, for trips or for-sale listings</li>
+    <li>Private photos and folders behind a separate viewer password, and visit counts</li>
   </ul>
 
   <h2>Careful by default</h2>
   <ul>
-    <li>One PHP file, no dependencies, no build step. It writes only small files of its own (thumbnails, your settings, captions), never touches your photos, and keeps those files private</li>
-    <li>Photo locations, the map, video, subfolders and passwords are all off until you enable them, and the admin tells you what each one publishes</li>
-    <li>Your captions, locations and stats are never deleted by changing a setting</li>
-    <li>Also: HEIC (iPhone) photos once thumbnails are on, video with duration tiles, and deep links to any photo, group or note</li>
+    <li>Writes only its own small files (thumbnails, settings, captions) and never touches your photos</li>
+    <li>Locations, maps, video, subfolders and passwords stay off until you turn them on, and the admin says what each one publishes</li>
   </ul>
 
-  <h2>Full documentation &amp; source</h2>
-  <p>This page is just the pitch — setup, configuration, directive syntax, and every feature in depth are documented on GitHub: <a href="<?= htmlspecialchars($repoUrl) ?>" target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($repoUrl) ?></a>.</p>
+  <h2>Documentation</h2>
+  <p>Setup, settings and every feature: <a href="<?= htmlspecialchars($repoUrl) ?>" target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($repoUrl) ?></a></p>
 
 </div>
 </body>
@@ -9858,7 +9939,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     border-left: 3px solid var(--muted);
     color: var(--muted);
   }
-  .note-box a { color: #8ab4ff; }
+  .note-box a { color: #aab2ff; border-radius: 3px; transition: color .15s, background .15s, box-shadow .15s; }
+  .note-box a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
   .note-box u { text-decoration: underline; }
   .note-box del { color: var(--muted); }
   .sold-item p { opacity: 0.55; text-decoration: line-through; margin-bottom: 6px; }
@@ -9935,11 +10017,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     gap: 10px;
   }
   .linked-photos-jump {
-    color: #8ab4ff;
+    color: #aab2ff;
     font-size: 0.8rem;
     text-decoration: none;
+    border-radius: 3px;
+    transition: color .15s, background .15s, box-shadow .15s;
   }
-  .linked-photos-jump:hover { text-decoration: underline; }
+  .linked-photos-jump:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
 
   /* Gallery */
   .gallery {
@@ -10087,6 +10171,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 10px;
   }
+  /* Any link without a style of its own looks like this (never the browser's blue and purple). */
+  a { color:#aab2ff; text-decoration:none; }
   .card {
     background: var(--card);
     border-radius: 10px;
@@ -10296,12 +10382,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .sort-pop { position: absolute; top: 40px; left: 0; z-index: 30; min-width: 230px; max-width: calc(100vw - 32px); padding: 10px; background: var(--card); border: 1px solid #2c2c30; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-size: 0.85rem; }
   .sort-pop[hidden] { display: none; }
   .sort-pop-title { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 6px; }
-  .sort-pop-row { display: flex; gap: 0; margin: 0 0 8px; border: 1px solid #2c2c30; border-radius: 8px; overflow: hidden; }
-  .sort-pop-row button { flex: 1 1 0; padding: 7px 8px; background: none; border: 0; color: var(--text); font: inherit; cursor: pointer; }
-  .sort-pop-row button + button { border-left: 1px solid #2c2c30; }
-  .sort-pop-row button:hover { background: #26262a; }
-  .sort-pop-row button[aria-pressed="true"] { background: var(--accent); color: #fff; }
-  .sort-reset { background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 0.8rem; text-decoration: underline; cursor: pointer; }
+  .sort-pop-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+  .sort-pop-row button { padding: 6px 12px; background: none; border: 1px solid #34343a; border-radius: 999px; color: var(--muted); font: inherit; cursor: pointer; }
+  .sort-pop-row button:hover { color: var(--text); border-color: #4a4a52; }
+  .sort-pop-row button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sort-reset { background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 0.8rem; text-decoration: none; border-radius: 3px; cursor: pointer; }
   .sort-reset:hover { color: var(--text); }
   .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }
@@ -10653,7 +10738,7 @@ if (ENABLE_MAP && $mapPoints) {
       </span>
       <div class="sort-pop" id="sort-pop" hidden role="dialog" aria-label="Order of the photos">
         <div class="sort-pop-title">Order</div>
-        <div class="sort-pop-row"><button type="button" data-order="name">Filename</button><button type="button" data-order="taken">Date taken</button><button type="button" data-order="modified">Date modified</button></div>
+        <div class="sort-pop-row"><button type="button" data-order="name">Name</button><button type="button" data-order="taken">Date</button></div>
         <div class="sort-pop-row"><button type="button" data-dir="asc"></button><button type="button" data-dir="desc"></button></div>
         <button type="button" class="sort-reset">Use this gallery's order</button>
       </div>
@@ -10684,7 +10769,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php endif; ?>
 
 <?php if (empty($files)): ?>
-  <div class="empty">No photos found in this folder.</div>
+  <div class="empty">No media here yet.</div>
 <?php else: ?>
   <div class="gallery<?= $fewCovers ?>">
     <?= build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $groupLabels, $explicitGroupKeys, $folderGroupKeys, $videoDurations, $folderCovers, $itemsData, $folderMeta, $folderLinkPrefix) ?>
@@ -10854,7 +10939,7 @@ if (ENABLE_MAP && $mapPoints) {
     const encode = function (s) { return [s.order].concat(['desc', 'private', 'video', 'located'].filter(function (k) { return s[k]; })).join('.'); };
     let spec = parse(combo.getAttribute('data-spec'));
     const paint = function () {
-      pop.querySelectorAll('[data-order]').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-order') === spec.order ? 'true' : 'false'); });
+      pop.querySelectorAll('[data-order]').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-order') === (spec.order === 'modified' ? 'taken' : spec.order) ? 'true' : 'false'); });
       const dates = spec.order !== 'name';
       pop.querySelector('[data-dir="asc"]').textContent = dates ? 'Oldest first' : 'A to Z';
       pop.querySelector('[data-dir="desc"]').textContent = dates ? 'Newest first' : 'Z to A';

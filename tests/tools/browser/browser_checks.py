@@ -479,6 +479,7 @@ try:
             b.js("document.querySelector('#sort-combo .sort-flag[data-flag=video]').click()"); b.drain(1.5)
             vf = b.js(allcards)
             ok(vf[0] == "0-clip.mp4" and vf[1:4] == ["c.jpg", "b.jpg", "a.jpg"] and b.js("document.querySelector('#sort-combo .sort-flag[data-flag=video]').getAttribute('aria-pressed')") == "true", "[sort] videos first adds to the order instead of replacing it: the video, then the photos Z to A", str(vf))
+        ok(b.js("(() => { const a = document.createElement('a'); a.href = 'https://example.com/'; a.textContent = 'x'; document.body.appendChild(a); const c = getComputedStyle(a).color; a.remove(); return c; })()") == "rgb(170, 178, 255)", "[links] a plain link on a gallery page is the soft periwinkle, never the browser's blue or purple")
         b.js("document.getElementById('sort-menu-btn').click()"); b.drain(0.3)
         b.js("document.querySelector('#sort-pop .sort-reset').click()"); b.drain(1.5)
         ok(b.js(cards)[:3] == ["a.jpg", "b.jpg", "c.jpg"] and "gallery_sort" not in b.js("document.cookie"), "[sort] \"Use this gallery's order\" puts it back and forgets the choice")
@@ -519,14 +520,14 @@ try:
             b.viewport(1280, 900); b.goto(B11 + "/trip/?admin", 2.5); b.drain(2.0)
             st = b.js("""(() => { const x = document.getElementById('lock-banner'), pr = document.getElementById('server-probe'); if (!x || !pr) return null;
                 const vis = sel => [...document.querySelectorAll(sel)].some(e => e.offsetParent !== null || (e.closest('.tab-panel:not(.active)') && !e.hidden && !e.closest('[hidden]')));
-                return {cls: x.className, open: !x.querySelector('.lock-open-text').hidden, locked: !x.querySelector('.lock-locked-text').hidden, status: x.querySelector('[data-lock-status]').textContent,
+                return {cls: x.className, open: !x.querySelector('.lock-open-text').hidden, locked: !x.querySelector('.lock-locked-text').hidden, status: x.querySelector('[data-lock-detail]').textContent + '|' + x.querySelector('.lock-locked-text').textContent,
                   photo: pr.dataset.photo, cache: pr.dataset.cache, folderUrl: pr.dataset.folderUrl, again: !x.querySelector('.lock-recheck').hidden,
                   lockRulesHidden: [...document.querySelectorAll('[data-lock-rules]')].every(e => e.hidden), panelHidden: [...document.querySelectorAll('[data-lock-rules-panel]')].every(e => e.hidden),
                   accel: (document.querySelector('[data-accel-status]') || {}).textContent, accelCls: (document.querySelector('[data-accel-status]') || {}).className,
                   tidyRulesHidden: [...document.querySelectorAll('[data-tidy-rules]')].every(e => e.hidden), tidyStatus: [...document.querySelectorAll('[data-tidy-status]')].map(e => e.className + '|' + e.textContent.slice(0, 40))}; })()""")
             ok(st is not None and st["photo"].endswith(".jpg") and "/.gallery-cache/" in st["cache"] and st["folderUrl"] == "/trip/Trips/", f"[lock check, {variant}] the admin page hands the browser a photo address, a cached thumbnail address and a folder's tidy address to try", str(st))
             if expect:
-                ok(st is not None and st["locked"] and not st["open"] and "ok" in st["cls"].split() and "refused" in st["status"] and st["again"], "[lock check] with the server refusing direct requests for photos and cache files, the warning is replaced by a plain \"Private is locked\" note", str(st))
+                ok(st is not None and st["locked"] and not st["open"] and "ok" in st["cls"].split() and "are refused" in st["status"] and st["again"], "[lock check] with the server refusing direct requests for photos and cache files, the warning is replaced by a plain \"Private is locked\" note", str(st))
                 ok(st["lockRulesHidden"] and st["panelHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => h.hidden)"), "[lock check] ...and the nginx/Apache rules and the warning text in Site settings go away, as does the Hidden tab's rules panel", str(st))
                 ok("note-text" in st["accelCls"] and "Not using it yet" in st["accel"] and "/trip" in st["accel"], "[nginx redirect check] with the nginx location in place but the setting empty, Site settings points that out and offers to set it", str([st["accelCls"], st["accel"]]))
                 b.js("[...document.querySelectorAll('[data-accel-status] button')][0].click()"); b.drain(2.0)
@@ -536,6 +537,21 @@ try:
             else:
                 ok(st is not None and st["open"] and not st["locked"] and "error" in st["cls"].split() and "handed out" in st["status"], "[lock check] with nothing in place (the photo is served as a plain file) the warning stays, and says which address was handed out", str(st))
                 ok(not st["lockRulesHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => !h.hidden)"), "[lock check] ...and the rules and the Site settings text stay too", str(st))
+                # layout of a few admin controls (this site has no notes files, so the "new notes file" form is open)
+                tabgo = lambda t: (b.js("document.querySelector('[data-tab=%s]').click()" % t), b.drain(0.5))
+                tabgo("notes")
+                al = b.js("""(() => { const row = document.querySelector('.md-actions'); const i = row.querySelector('input[type=text]').getBoundingClientRect(), bt = row.querySelector('button').getBoundingClientRect();
+                    return {inputBottom: i.bottom, buttonBottom: bt.bottom, inputH: i.height, buttonH: bt.height}; })()""")
+                ok(abs(al["inputBottom"] - al["buttonBottom"]) <= 1.5, "[notes] the Create button lines up with the filename box beside it", str(al))
+                tabgo("export")
+                ex = b.js("""(() => { const c = [...document.querySelectorAll('.export-card')].map(e => { const r = e.getBoundingClientRect(); return {top: Math.round(r.top), left: Math.round(r.left), scope: e.querySelector('.export-scope').textContent, btn: e.querySelector('button').textContent}; });
+                    return {cards: c, distinct: getComputedStyle(document.querySelectorAll('.export-card')[1]).backgroundColor !== getComputedStyle(document.querySelectorAll('.export-card')[0]).backgroundColor}; })()""")
+                ok(len(ex["cards"]) == 2 and ex["cards"][0]["top"] == ex["cards"][1]["top"] and ex["cards"][0]["left"] < ex["cards"][1]["left"] and ex["cards"][0]["scope"] == "This folder" and ex["cards"][1]["scope"] == "Entire gallery" and ex["distinct"], "[export] the two exports sit on one line, one for this folder and one for the entire gallery, drawn differently", str(ex))
+                tabgo("site")
+                nm = b.js("""(() => { const n = document.querySelector('input[name=set_MAP_CLUSTER_RADIUS_MILES]'), cs = getComputedStyle(n); const sp = document.querySelector('.seg > label span'); return {appearance: cs.appearance || cs.webkitAppearance, width: cs.width, pill: parseFloat(getComputedStyle(sp).borderTopLeftRadius)}; })()""")
+                ok(nm["appearance"] == "textfield" and float(nm["width"].replace("px", "")) <= 120, "[inputs] a typed number has no up/down arrows and a small box", str(nm))
+                ok(nm["pill"] >= 20, "[inputs] choices are drawn as pills", str(nm))
+                ok(b.js("(() => { const a = document.createElement('a'); a.href = 'https://example.com/'; a.textContent = 'x'; document.body.appendChild(a); const c = getComputedStyle(a).color; a.remove(); return c; })()") == "rgb(170, 178, 255)", "[links] a plain link in the admin is the same periwinkle")
                 ok(not st["tidyRulesHidden"] and any(t.startswith("lock-result warn-text|Tidy folder links are not set up") for t in st["tidyStatus"]), "[tidy check] with nothing in place, Site settings says in red that tidy folder links aren't set up (and keeps the rules)", str(st["tidyStatus"]))
                 ff = b.js("(() => { const e = document.querySelector('.ffstatus'); return e ? {cls: e.className, text: e.textContent.slice(0, 40), color: getComputedStyle(e).color} : null; })()")
                 ok(ff is not None and "warn-text" in ff["cls"] and "not found" in ff["text"] and ff["color"] == "rgb(237, 66, 69)", "Site settings says in red that ffmpeg was not found", str(ff))
@@ -546,7 +562,7 @@ try:
                 b.js("document.querySelector('[data-tab=hidden].side-hidden, .admin-tabs a[data-tab=hidden]').click()"); b.drain(0.5)
                 b.js("document.querySelector('p[data-tidy-rules] a').click()"); b.drain(1.5)
                 jump = b.js("(() => { const e = document.getElementById('server-setup'), r = e && e.getBoundingClientRect(); return {site: document.querySelector('.tab-panel[data-tab=site]').classList.contains('active'), top: r ? r.top : null, h: innerHeight}; })()")
-                ok(jump["site"] and jump["top"] is not None and 0 <= jump["top"] < jump["h"] * 0.5, "the link on the Hidden tab opens Site settings and scrolls straight to Server setup", str(jump))
+                ok(jump["site"] and jump["top"] is not None and -2 <= jump["top"] < jump["h"] * 0.5, "the link on the Hidden tab opens Site settings and scrolls straight to Server setup", str(jump))
                 col = b.js("(() => { const a = document.querySelector('p[data-tidy-rules] a'); return a ? getComputedStyle(a).color : null; })()")
                 ok(col is not None and col != "rgb(0, 0, 238)" and col != "rgb(138, 180, 255)", "links in the admin's running text use the admin's own colour, not the browser's default blue", str(col))
             if expect:
@@ -736,7 +752,7 @@ try:
     texts = b.js("(() => { const t = el => { const r = el.getBoundingClientRect(), c = getComputedStyle(el); return Math.round(r.left + parseFloat(c.borderLeftWidth) + parseFloat(c.paddingLeft)); }; const q = s => document.querySelector(s); return [t(q('.side-hidden')), t(q('.side-link')), t(q('.admin-folders > summary')), t(q('.admin-folder-nav a'))]; })()")
     ok(max(texts) - min(texts) <= 1, "the Hidden entry, Site settings, the FOLDERS label and the folder names all start in the same column", str(texts))
     sc = b.js("getComputedStyle(document.querySelector('.side-link')).color")
-    ok(sc != b.js("getComputedStyle(document.querySelector('.admin-folder-nav a')).color") and sc.startswith("rgb(94, 234, 212)"), "Site settings is its own colour (teal), distinct from the folders and from Hidden's red", sc)
+    ok(sc == "rgb(234, 234, 234)" and not sc.startswith("rgb(94, 234, 212)"), "Site settings is a neutral entry (the page's own text colour, no teal); it turns the admin's accent colour only while open", sc)
 
     # ---------------- the photo editor: grid of thumbnails, one panel above ----------------
     print("== photo editor")
@@ -866,6 +882,9 @@ try:
     tog = lambda name: b.js(f"document.querySelector('input[name=set_{name}][type=checkbox]').closest('.switch').querySelector('.slider').click()")
     chk = lambda name: b.js(f"document.querySelector('input[name=set_{name}][type=checkbox]').checked")
     state = lambda name: b.js(f"document.querySelector('input[name=set_{name}][type=checkbox]').closest('.ctl').querySelector('.rowstate').textContent")
+    groups = b.js("[...document.querySelectorAll('.site-group')].map(d => d.open)")
+    ok(len(groups) >= 5 and groups[0] is True and not any(groups[1:]), "[site settings] the groups fold: the first is open, the rest closed until opened", str(groups))
+    b.js("document.querySelectorAll('.site-group').forEach(d => { d.open = true; })")   # (a person opens a group to use it)
     # a harmless switch saves by itself
     tog("TRACK_VIEWS"); b.drain(1.0)
     ok('"TRACK_VIEWS": true' in cfg() and state("TRACK_VIEWS") == "Saved." and b.js("window.__confirms.length") == 0, "flipping a harmless switch saves it on the spot, with no Save button and no question", f"{state('TRACK_VIEWS')!r} {cfg()!r}")
@@ -873,7 +892,7 @@ try:
     lefts = b.js("[...document.querySelectorAll('.site-row .switch')].filter(e => e.getBoundingClientRect().width > 0).map(e => Math.round(e.getBoundingClientRect().left))")   # (only the rows showing: some are hidden while their parent switch is off)
     ok(max(lefts) - min(lefts) <= 2, "...and the status message doesn't push that switch out of line with the others", str(lefts))
     # something that publishes content has its warning in orange text on the row, never in a dialog
-    ok(b.js("(() => { const r = document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row'); const w = r.querySelector('.risk'); return !!w && getComputedStyle(w).display !== 'none' && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('becomes visible to visitors'); })()"), "turning on videos is explained by orange text already on its row, naming what it publishes")
+    ok(b.js("(() => { const r = document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row'); const w = r.querySelector('.risk'); return !!w && getComputedStyle(w).display !== 'none' && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('becomes visible'); })()"), "turning on videos is explained by orange text already on its row, naming what it publishes")
     tog("ENABLE_VIDEO"); b.drain(1.0)
     ok(chk("ENABLE_VIDEO") is True and '"ENABLE_VIDEO": true' in cfg() and '"TRACK_VIEWS": true' in cfg() and b.js("window.__confirms.length") == 0, "flipping it saves at once with no question, and the earlier change is still there (each save builds on the last)")
     ok(b.js("document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row').querySelector('.offnote').hidden"), "the 'what turning it off does' note stays out of the way while it is on")
@@ -885,9 +904,9 @@ try:
     ok(b.js("document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row').querySelector('.offnote').hidden"), "...and goes away when it is switched back on")
     tog("ENABLE_VIDEO"); b.drain(1.0)
     # choices and numbers save on change
-    b.js("(() => { const s = document.querySelector('select[name=set_PHOTO_SORT_ORDER]'); s.value = 'mtime'; s.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
+    b.js("(() => { const s = document.querySelector('input[name=set_PHOTO_SORT_ORDER][value=taken]'); s.checked = true; s.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     b.js("(() => { const n = document.querySelector('input[name=set_MAP_CLUSTER_RADIUS_MILES]'); n.value = '25'; n.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
-    ok('"PHOTO_SORT_ORDER": "mtime"' in cfg() and '"MAP_CLUSTER_RADIUS_MILES": 25' in cfg(), "a choice and a number save as soon as they change")
+    ok('"PHOTO_SORT_ORDER": "taken"' in cfg() and '"MAP_CLUSTER_RADIUS_MILES": 25' in cfg(), "a choice and a number save as soon as they change")
     b.js("(() => { const n = document.querySelector('input[name=set_MAP_CLUSTER_RADIUS_MILES]'); n.value = '-5'; n.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     ok(b.js("document.querySelector('input[name=set_MAP_CLUSTER_RADIUS_MILES]').value") == "25" and '"MAP_CLUSTER_RADIUS_MILES": 25' in cfg(), "an invalid value is refused with the reason and the field goes back to what is saved")
     # a password has its own button
@@ -898,14 +917,14 @@ try:
     ok("Type the new password first" in b.js("document.querySelector('.pw-btn[data-pw=admin]').parentNode.querySelector('.rowstate').textContent"), "pressing a password button with nothing typed says so")
     # enabling folders changes what the rest of the admin shows: it refreshes when you leave
     tog("AUTO_GROUP_BY_FOLDER"); b.drain(1.0)
-    ok(chk("AUTO_GROUP_BY_FOLDER") is True and '"AUTO_GROUP_BY_FOLDER": true' in cfg() and b.js("window.__confirms.length") == 0 and "visible to visitors" in b.js("document.querySelector('input[name=set_AUTO_GROUP_BY_FOLDER][type=checkbox]').closest('.site-row').querySelector('.risk').textContent"), "turning subfolders on saves at once, with the orange note on its row saying what it publishes and no question")
+    ok(chk("AUTO_GROUP_BY_FOLDER") is True and '"AUTO_GROUP_BY_FOLDER": true' in cfg() and b.js("window.__confirms.length") == 0 and "becomes visible" in b.js("document.querySelector('input[name=set_AUTO_GROUP_BY_FOLDER][type=checkbox]').closest('.site-row').querySelector('.risk').textContent"), "turning subfolders on saves at once, with the orange note on its row saying what it publishes and no question")
     ok(b.js("!document.querySelector('.sitesync').hidden"), "after a change the panel says the other screens refresh when you leave it")
     b.drain(0.8)
     ok(b.js("document.querySelector('.admin-folder-nav a[href*=Sub]') !== null") and b.js("window.__stay") == "same page" and b.js(vis2) == ["site"], "the folder list on the left updates the moment subfolders are turned on, without leaving this screen or reloading the page", str(b.js(vis2)))
     # folders from elsewhere on the server: add and remove from the screen
     b.js("document.querySelector('.extra-name').value = 'OldTrip'; document.querySelector('.extra-path').value = %s;" % repr(EXTRA).replace("'", '"'))
     b.js("window.__confirms.length = 0"); b.js("document.querySelector('.extra-add-btn').click()"); b.drain(1.2)
-    ok(b.js("window.__confirms.length") == 0 and "photo and video in that folder" in b.js("document.querySelector('.extra-folders').closest('.site-row').querySelector('.risk').textContent"), "adding a folder from elsewhere asks nothing: the orange note on the row already says it shows everything in it")
+    ok(b.js("window.__confirms.length") == 0 and "photo and video there" in b.js("document.querySelector('.extra-folders').closest('.site-row').querySelector('.risk').textContent"), "adding a folder from elsewhere asks nothing: the orange note on the row already says it shows everything in it")
     ok("OldTrip" in b.js("document.querySelector('.extra-list').textContent") and EXTRA in b.js("document.querySelector('.extra-list').textContent") and '"EXTRA_FOLDERS"' in cfg(), "...then lists it on the screen and saves it", cfg()[:200])
     ok(b.js("document.querySelector('.admin-folder-nav a[href*=OldTrip]') !== null"), "...and the sidebar shows it straight away")
     b.js("document.querySelector('.extra-name').value = 'Bad'; document.querySelector('.extra-path').value = '/no/such/folder'; document.querySelector('.extra-add-btn').click()"); b.drain(1.0)
@@ -925,7 +944,7 @@ try:
     b.js("window.__confirms.length = 0; (() => { const i = document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]'); i.value = 'kb'; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     ok('NGINX_ACCEL_REDIRECT_PREFIX' not in cfg() and b.js("document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]').value") == "", "an nginx prefix that isn't a plain path (no leading slash) is refused and the field clears back")
     b.js("window.__confirms.length = 0; (() => { const i = document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]'); i.value = '/kb'; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
-    ok(b.js("window.__confirms.length") == 0 and '"NGINX_ACCEL_REDIRECT_PREFIX": "/kb"' in cfg() and "every photo and video will stop loading" in b.js("document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]').closest('.site-row').querySelector('.risk').textContent"), "setting it saves at once; the orange note on its row already warns that photos and videos stop loading without the matching nginx setup")
+    ok(b.js("window.__confirms.length") == 0 and '"NGINX_ACCEL_REDIRECT_PREFIX": "/kb"' in cfg() and "stop loading" in b.js("document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]').closest('.site-row').querySelector('.risk').textContent"), "setting it saves at once; the orange note on its row already warns that photos and videos stop loading without the matching nginx setup")
     b.js("(() => { const i = document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]'); i.value = ''; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     ok('NGINX_ACCEL_REDIRECT_PREFIX' not in cfg(), "clearing it needs no question and takes it out of the file")
     b.js("document.querySelector('.admin-tabs a[data-tab=photos]').click()"); b.drain(1.8)
@@ -933,7 +952,7 @@ try:
     # removing the private password: orange text on the row, no dialog
     b.js("document.querySelector('.admin-tabs a[data-tab=site]') ? document.querySelector('.admin-tabs a[data-tab=site]').click() : document.querySelector('.side-link').click()"); b.drain(0.5)
     b.js("window.__confirms = []; window.confirm = m => { window.__confirms.push(m); return true; };")
-    ok(b.js("(() => { const w = document.querySelector('.pw-btn[data-pw=private-remove]').closest('.site-row').querySelector('.warn-note'); return !!w && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('nothing is deleted'); })()"), "the private-view row carries an orange note about what removing the password does")
+    ok(b.js("(() => { const w = document.querySelector('.pw-btn[data-pw=private-remove]').closest('.site-row').querySelector('.warn-note'); return !!w && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('Nothing is deleted'); })()"), "the private-view row carries an orange note about what removing the password does")
     b.js("document.querySelector('.pw-btn[data-pw=private-remove]').click()"); b.drain(1.0)
     ok(b.js("window.__confirms.length") == 0 and 'PRIVATE_VIEW_PASSWORD' not in cfg(), "removing the private-view password saves at once with no question")
     # a hidden photo's thumbnail must load in the admin, even with no private-view password

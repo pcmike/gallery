@@ -1160,6 +1160,15 @@ write_patched_index("$fxSo1/index.php", $indexContents, []);
 $portSo1 = find_free_port(); start_server($fxSo1, $portSo1);
 check('[sort] a folder with a single photo has no sort button', !str_contains(http_get("http://127.0.0.1:$portSo1/")[1], 'id="sort-combo"'));
 
+// A place from elsewhere that has gone missing is reported to the owner instead of silently showing nothing.
+$fxGone = new_fixture_dir('extragone');
+make_jpeg("$fxGone/here.jpg", 40, 40, 1, 2, 3);
+write_patched_index("$fxGone/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true']);
+file_put_contents("$fxGone/.gallery-config.php", cfg_text(['AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_ROOTS' => ['/nonexistent/space/trip']]));
+$portGone = find_free_port(); start_server($fxGone, $portGone);
+[, $goneBody] = http_get("http://127.0.0.1:$portGone/");
+check('[setup notice] a folder from elsewhere that is missing is reported (without naming its path) instead of silently showing nothing', str_contains($goneBody, 'A folder from elsewhere on the server is missing or can&#039;t be read') && !str_contains($goneBody, '/nonexistent/space/trip'));
+
 // A video looks like a video wherever it is shown: the admin's grid and editor, a strip of group thumbnails, a folder's cover.
 $fxVm = new_fixture_dir('videomark'); mkdir("$fxVm/Reels");
 make_jpeg("$fxVm/photo.jpg", 60, 60, 80, 80, 80);
@@ -1580,7 +1589,7 @@ check('a valid admin login also sets the reveal cookie, unlocking the public pag
 // The admin tool itself always sees everything, regardless of hiding.
 [, $adminGridBody] = http_get("$basePrivate/?admin", [$adminAuth, "Cookie: $sessCookie"]);
 check('the admin tool\'s own grid always shows a hidden item, hide flag and all', str_contains($adminGridBody, 'loose1.jpg'));
-check('the admin shows a red Hidden entry in the sidebar, above the folder list, with the not-a-lock explanation, while hidden items exist', str_contains($adminGridBody, 'class="side-hidden"') && strpos($adminGridBody, 'class="side-hidden"') < strpos($adminGridBody, 'class="admin-folder-nav"') && str_contains($adminGridBody, 'data-tab="hidden"') && str_contains($adminGridBody, "Private isn't locked") && str_contains($adminGridBody, 'servable directly'));
+check('the admin shows a red Hidden entry in the sidebar, above the folder list, with the not-a-lock explanation, while hidden items exist', str_contains($adminGridBody, 'class="side-hidden"') && strpos($adminGridBody, 'class="side-hidden"') < strpos($adminGridBody, 'class="admin-folder-nav"') && str_contains($adminGridBody, 'data-tab="hidden"') && str_contains($adminGridBody, "Private isn't locked") && str_contains($adminGridBody, 'by their direct address'));
 check('...and the top tabs stay the same four sections (Hidden is not one of them)', (bool) preg_match('#<nav class="admin-tabs".*?</nav>#s', $adminGridBody, $tabNav) && !str_contains($tabNav[0], 'hidden'));
 check('...with the tabs in the same bar as the title and Log out (one header row), in that order', (function ($b) { $p1 = strpos($b, '<h1>Gallery Admin</h1>'); $p2 = strpos($b, '<nav class="admin-tabs"'); $p3 = strpos($b, 'class="logout-form"'); return $p1 !== false && $p1 < $p2 && $p2 < $p3 && substr_count(substr($b, 0, $p3), '<header') === 1 && strpos($b, '</header>') > $p3; })($adminGridBody));
 
@@ -2607,13 +2616,13 @@ $coverSet = user_submit("$baseFl/?admin&folder=Trip", $flPage2, 'value="set_cove
 [, $flCoverPage] = http_get("$baseFl/?admin&folder=Trip", $flHdrs);
 check('[cover mark] the grid highlights exactly the photo that is the folder\'s cover, with a Cover label, and nothing else', substr_count($flCoverPage, 'class="thumb is-cover"') === 1 && substr_count($flCoverPage, 'class="thumb-cover"') === 1 && (bool) preg_match('#class="thumb is-cover" id="photo-' . md5('Trip/c.jpg') . '"#', $flCoverPage));
 check('[cover mark] that photo\'s editor says it already is the cover instead of offering to set it again, and every other photo can still be set', str_contains($flCoverPage, 'This is the cover') && substr_count($flCoverPage, '>Set as cover</button>') === 3);
-check('[cover mark] the Photos tab explains the cover, and the folder\'s settings no longer carry a cover paragraph', str_contains($flCoverPage, 'highlighted one is the cover now') && !str_contains($flCoverPage, 'click "Set as cover" on any photo below') && !str_contains($flCoverPage, 'Shared links use the first photo as their picture'));
+check('[cover mark] the Photos tab explains the cover, and the folder\'s settings no longer carry a cover paragraph', str_contains($flCoverPage, 'highlighted; it is the picture in shared links') && !str_contains($flCoverPage, 'click "Set as cover" on any photo below') && !str_contains($flCoverPage, 'Shared links use the first photo as their picture'));
 [, $flRootAdmin] = http_get("$baseFl/?admin", $flHdrs);
 check('[cover mark] nor does the gallery\'s own settings page', !str_contains($flRootAdmin, 'Shared links use the first photo as their picture') && !str_contains($flRootAdmin, 'Cover photo (the picture in shared-link previews)'));
 check('[rules] the Private page offers ready-made nginx and Apache rules, collapsed, written for this gallery\'s address, with copy buttons', str_contains($flCoverPage, '<h2 class="section-title">Lock the files themselves</h2>') && substr_count($flCoverPage, 'class="secondary copy-rules"') >= 2);
 check('[rules] Site settings carries the same rules in its Server setup section', str_contains($flRootAdmin, 'class="site-rules"') && str_contains($flRootAdmin, '<summary><strong>nginx</strong>') && str_contains($flRootAdmin, '<summary><strong>Apache</strong>') && str_contains($flRootAdmin, 'location ~* ^/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$') && str_contains($flRootAdmin, 'FilesMatch') && str_contains($flRootAdmin, 'class="secondary copy-rules"'));
 check('[rules] Site settings also has the optional tidy-folder-link rules for nginx and Apache, exactly as the README gives them', str_contains($flRootAdmin, 'rewrite ^/(.+)/$ /index.php?folder=$1 last;') && str_contains($flRootAdmin, 'RewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]') && substr_count($flRootAdmin, '<summary><strong>') >= 4);
-check('[rules] the Private page keeps to the privacy rules (two drop-downs) and points to Site settings for the optional ones and the nginx redirect setting', (preg_match('#Lock the files themselves.*?</section>#s', $flCoverPage, $lockSec) === 1 && substr_count($lockSec[0], '<summary><strong>') === 2) && str_contains($lockSec[0] ?? '', 'tidy folder links such as') && !str_contains($lockSec[0] ?? '', 'RewriteRule ^(.+)/$') && !str_contains($lockSec[0] ?? '', 'rewrite ^'));
+check('[rules] the Private page keeps to the privacy rules (two drop-downs) and points to Site settings for the optional ones and the nginx redirect setting', (preg_match('#Lock the files themselves.*?</section>#s', $flCoverPage, $lockSec) === 1 && substr_count($lockSec[0], '<summary><strong>') === 2) && str_contains($lockSec[0] ?? '', 'tidy folder links and the nginx redirect') && !str_contains($lockSec[0] ?? '', 'RewriteRule ^(.+)/$') && !str_contains($lockSec[0] ?? '', 'rewrite ^'));
 check('[pin grouping] in Site settings the pin-grouping row is set in under the map and hidden while the map is off', (bool) preg_match('#<div class="site-row sub-row" data-requires="set_ENABLE_MAP" hidden>#', $flRootAdmin));
 // Passwords.
 $flFields = fn ($pw) => user_submit("$baseFl/?admin", http_get("$baseFl/?admin#site", $flHdrs)[1], 'value="save_site_settings"', ['pw_admin' => $pw, 'pw_admin2' => $pw], $flHdrs)[1];
@@ -2715,12 +2724,14 @@ write_patched_index("$fxDates/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER
 $portDates = find_free_port(); start_server($fxDates, $portDates);
 $datesAuth = ['Authorization: Basic ' . base64_encode('x:dates-pw-123456')];
 [, $datesAdmin] = http_get("http://127.0.0.1:$portDates/?admin&folder=Trip", $datesAuth);
-check('[dates] a folder\'s settings offer the span of its photos (here from file dates, subfolders included) with a one-click button, and say where the dates come from', str_contains($datesAdmin, 'span <strong>10/03/2026' . "\u{2013}" . '10/09/2026</strong>') && str_contains($datesAdmin, 'class="secondary date-suggest" data-dates="10/03/2026' . "\u{2013}" . '10/09/2026"') && str_contains($datesAdmin, 'modified dates') && !str_contains($datesAdmin, 'Only what you save is shown') && !str_contains($datesAdmin, 'the dates the photos were taken'));
+check('[dates] a folder\'s settings offer the span of its photos (here from file dates, subfolders included) with a one-click button, and say where the dates come from', str_contains($datesAdmin, 'span <strong>Oct 3-9th, 2026</strong>') && str_contains($datesAdmin, 'class="secondary date-suggest" data-dates="Oct 3-9th, 2026"') && str_contains($datesAdmin, 'placeholder="Oct 1-11th, 2026"') && str_contains($datesAdmin, 'modified dates') && !str_contains($datesAdmin, 'Only what you save is shown') && !str_contains($datesAdmin, 'the dates the photos were taken'));
 [, $datesRoot] = http_get("http://127.0.0.1:$portDates/?admin", $datesAuth);
-check('[dates] the gallery root suggests a range across years', str_contains($datesRoot, '12/30/2025' . "\u{2013}" . '10/09/2026'));
-check('[dates] nothing is stored or shown to visitors until the form is saved', !str_contains(http_get("http://127.0.0.1:$portDates/?folder=Trip")[1], '10/03/2026'));
-write_data_file("$fxDates/Trip/.gallery-items.php", ['dates' => "10/03/2026" . "\u{2013}" . "10/09/2026", 'items' => [], 'groups' => []]);
+check('[dates] the gallery root suggests a range across years', str_contains($datesRoot, '12/30/2025 - 10/09/2026'));
+check('[dates] nothing is stored or shown to visitors until the form is saved', !str_contains(http_get("http://127.0.0.1:$portDates/?folder=Trip")[1], 'Oct 3-9th'));
+write_data_file("$fxDates/Trip/.gallery-items.php", ['dates' => 'Oct 3-9th, 2026', 'items' => [], 'groups' => []]);
 [, $datesSaved] = http_get("http://127.0.0.1:$portDates/?admin&folder=Trip", $datesAuth);
+[, $datesDay] = http_get("http://127.0.0.1:$portDates/?admin&folder=Trip%2FDay2", $datesAuth);
+check('[dates] a single day reads "Oct 9th, 2026", with its ordinal', str_contains($datesDay, 'span <strong>Oct 9th, 2026</strong>'));
 check('[dates] once the dates field already holds the suggestion, the suggestion is not offered again', !str_contains($datesSaved, 'class="secondary date-suggest"'));
 
 echo "== settings never destroy data: captions, locations, hide flags and stats survive any setting being switched ==\n";
@@ -2815,13 +2826,13 @@ $snapBefore = $siteSnap();
 // A real save: turn video, folders and the map on, thumbnails off, change two enums and the number.
 [, $r] = user_submit("$baseSite/?admin", $sAdmin, 'value="save_site_settings"', [
     'set_ENABLE_VIDEO' => '1', 'set_AUTO_GROUP_BY_FOLDER' => '1', 'set_ENABLE_THUMBNAIL_CACHE' => '0', 'set_FOLDER_DISPLAY_MODE' => 'inline',
-    'set_PHOTO_SORT_ORDER' => 'mtime', 'set_MAP_CLUSTER_RADIUS_MILES' => '25',
+    'set_PHOTO_SORT_ORDER' => 'taken', 'set_MAP_CLUSTER_RADIUS_MILES' => '25',
 ], $siteHdrs);
 check('[site settings] a save redirects back and then shows a confirmation that says nothing else was touched', str_contains($r, 'Settings saved') && str_contains($r, 'were not touched') && str_contains($r, 'class="flash ok"'));
 $snapAfterSave = $siteSnap();   // before any public page is viewed (a view is counted, legitimately)
 $written = (string) file_get_contents($siteCfg);
 $loadedCfg = cfg_plain(cfg_read($siteCfg), ['ADMIN_PASSWORD' => 'first-admin-pw-123']);
-$expectedCfg = ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'ENABLE_VIDEO' => true, 'FOLDER_DISPLAY_MODE' => 'inline', 'MAP_CLUSTER_RADIUS_MILES' => 25, 'PHOTO_SORT_ORDER' => 'mtime', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true];
+$expectedCfg = ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'ENABLE_VIDEO' => true, 'FOLDER_DISPLAY_MODE' => 'inline', 'MAP_CLUSTER_RADIUS_MILES' => 25, 'PHOTO_SORT_ORDER' => 'taken', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true];
 ksort($loadedCfg);
 check('[site settings] the settings file is the 404 guard plus JSON holding exactly the intended settings, keeping the ones already there', str_starts_with($written, $siteHead) && $loadedCfg === $expectedCfg);
 check('[site settings] the file is private to the web server user (not world-readable), since it holds the passwords', (fileperms($siteCfg) & 0o077) === 0);
@@ -3140,7 +3151,7 @@ check('[instant] switching a folder\'s map off by itself (the page\'s script pos
 $jOn = $mapAjax('&folder=Paris', ['map_enabled' => '1']);
 check('[instant] ...and switching it back on does not touch the radius either', ($jOn['ok'] ?? null) === true && ($parisData()['mapEnabled'] ?? null) === true && ($parisData()['mapRadius'] ?? null) === 7);
 [, $mapSubOn] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
-check('[pin grouping] with the folder\'s map on, its pin grouping is shown, set in under the map switch, with its explanation at full width', str_contains($mapSubOn, '<div class="map-sub">') && preg_match('#<div class="map-sub">.*?name="map_radius".*?</div>\s*<p class="hint">Photos closer together#s', $mapSubOn) === 1);
+check('[pin grouping] with the folder\'s map on, its pin grouping is shown, set in under the map switch, with its explanation at full width', str_contains($mapSubOn, '<div class="map-sub">') && preg_match('#<div class="map-sub">.*?name="map_radius".*?</div>\s*<p class="hint">Photos closer than this#s', $mapSubOn) === 1);
 $mapAjax('&folder=Paris', ['map_enabled' => '0']);
 [, $mapSubOff] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
 check('[pin grouping] with the folder\'s map off, the pin grouping is hidden (and comes back with the switch)', str_contains($mapSubOff, '<div class="map-sub" hidden>'));
@@ -3161,7 +3172,7 @@ check('[instant] the folder location switch works in place too: off answers JSON
 $jLocOn = $locAjax('&folder=Lisbon', true);
 check('[instant] ...and on answers JSON and turns it back on', ($jLocOn['ok'] ?? null) === true && !empty(read_data_file("$fxMapF/Lisbon/.gallery-items.php")['locationEnabled']));
 [, $mapAdminAgain] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
-check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">A map makes each visitor') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 2);
+check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 2);
 
 // The whole map feature off: nothing anywhere.
 file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
@@ -3404,7 +3415,7 @@ check('[trip] the shareable ?map page loads and has its own link preview', $trip
 [, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
 check('[trip] Lisbon\'s tram photo has GPS pre-filled too, but Lisbon has not opted in so it is not on the map', abs((float) (form_default_fields((function ($h) { foreach (html_post_forms($h) as $f) if (str_contains($f['html'], 'name="file" value="tram.jpg"') && str_contains($f['html'], 'save_item')) return $f['html']; return ''; })($lAdmin))['lat'] ?? 0) - 38.7) < 0.01 && count($clusters3) === 1);
 check('[trip] ...and Lisbon\'s admin warns that its GPS stays private until the switch is turned on, naming what turning it on does', str_contains($lAdmin, 'Nothing is public while this folder') && str_contains($lAdmin, 'Private for now') && str_contains($lAdmin, 'Always hide'));
-check('[trip] ...the location switch is an instant toggle with the warning beside it in orange (naming how many photos it will publish), not a dialog', str_contains($lAdmin, 'class="instant-form"') && (bool) preg_match('#<div class="warn-note">Turning this on makes the GPS location of 1 photo here visible to visitors#', $lAdmin) && !str_contains($lAdmin, 'confirm(&quot;Turn on public locations'));
+check('[trip] ...the location switch is an instant toggle with the warning beside it in orange (naming how many photos it will publish), not a dialog', str_contains($lAdmin, 'class="instant-form"') && (bool) preg_match('#<div class="warn-note">Turning this on shows the location of 1 photo here to visitors#', $lAdmin) && !str_contains($lAdmin, 'confirm(&quot;Turn on public locations'));
 [, $r] = user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $tripHdrs);
 [, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
 [, $tripHome4] = http_get("$baseTrip/");
@@ -3503,7 +3514,7 @@ check('[family] the "Hide this entire folder from public view" button works', st
 check('[family] the Birthday folder disappears entirely (no card, count now 2), and typing its address gives a 404', !str_contains($famHome3, 'birthday') && !str_contains($famHome3, 'Birthday') && str_contains($famHome3, '2 photos') && http_get("$baseFam/?folder=Birthday")[0] === 404);
 check('[family] its photos are refused by URL too (?img= 404)', http_get("$baseFam/?img=Birthday%2Fcake.jpg&size=thumb")[0] === 404);
 [, $hiddenSum] = http_get("$baseFam/?admin&hidden", $famHdrs);
-check('[family] the admin\'s "Hidden items" summary lists the folder and the photo, with the not-a-lock warning', str_contains($hiddenSum, 'Birthday') && str_contains($hiddenSum, 'kids.jpg') && str_contains((string) http_get("$baseFam/?admin", $famHdrs)[1], 'servable directly'));
+check('[family] the admin\'s "Hidden items" summary lists the folder and the photo, with the not-a-lock warning', str_contains($hiddenSum, 'Birthday') && str_contains($hiddenSum, 'kids.jpg') && str_contains((string) http_get("$baseFam/?admin", $famHdrs)[1], 'by their direct address'));
 [, $famAdminPage] = http_get("$baseFam/?admin", $famHdrs);
 check('[family] the Hidden tab links each hidden folder to its settings, and each hidden photo to its own card', str_contains($famAdminPage, 'href="?admin&amp;folder=Birthday#settings"') && str_contains($famAdminPage, 'href="?admin#photo-' . md5('kids.jpg') . '"'));
 check('[family] ...and the card that link points at really exists on that page, so the link lands on it', str_contains($famAdminPage, 'id="photo-' . md5('kids.jpg') . '"'));
@@ -4174,7 +4185,7 @@ check('[video pictures] with no ffmpeg there it is the placeholder, the video fi
 [, , $vsHd] = http_post("$vsBase/?admin", ['login_password' => 'vp-admin-pw-1'], [], false);
 $vsPage = http_get("$vsBase/?admin", ['Cookie: ' . extract_cookie_header($vsHd)])[1];
 check('[video previews] Site settings says whether ffmpeg was found (and where), so a missing one is easy to spot', str_contains($vsPage, 'ffmpeg on this server: found') && str_contains($vsPage, '(' . htmlspecialchars($vtOk, ENT_QUOTES, 'UTF-8') . ')') && str_contains($vsPage, 'ffstatus ok-text'));
-check('[video previews] Site settings has a "Video previews" switch next to it, on, with its warning', str_contains($vsPage, 'name="set_ENABLE_VIDEO_PREVIEWS"') && str_contains($vsPage, 'Hovering over a video plays a short, silent, looping clip'));
+check('[video previews] Site settings has a "Video previews" switch next to it, on, with its warning', str_contains($vsPage, 'name="set_ENABLE_VIDEO_PREVIEWS"') && str_contains($vsPage, 'Hovering or scrubbing a video plays a short silent clip'));
 check('[video pictures] Site settings has a "Video thumbnails" switch, on, with its warning, shown only while videos are on', str_contains($vsPage, 'name="set_ENABLE_VIDEO_THUMBNAILS"') && str_contains($vsPage, 'Runs ffmpeg on your server') && (bool) preg_match('#data-requires="set_ENABLE_VIDEO"[^>]*>(?:(?!</div>).)*set_ENABLE_VIDEO_THUMBNAILS#s', $vsPage) || str_contains($vsPage, 'Video thumbnails'));
 // The real thing, when this machine has ffmpeg.
 $realFf = getenv('FFMPEG_TEST_BIN') ?: trim((string) shell_exec('command -v ffmpeg'));
