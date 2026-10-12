@@ -9967,6 +9967,8 @@ function ui_icon_paths() {
         'lock'    => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
         'unlock'  => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/>',
         'expand'  => '<path d="M15 3h6v6M9 21H3v-6M21 3l-7.5 7.5M3 21l7.5-7.5"/>',
+        'chev-left'  => '<path d="M15.25 5.5 8.75 12l6.5 6.5"/>',
+        'chev-right' => '<path d="M8.75 5.5 15.25 12l-6.5 6.5"/>',
         'close'   => '<circle cx="12" cy="12" r="9"/><path d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2"/>',
         'download' => '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
         'archive' => '<path d="M3 7.5 5 4h14l2 3.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 7.5h18M12 11v5.5M9.4 14l2.6 2.6 2.6-2.6"/>',
@@ -11045,13 +11047,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
     position: fixed; left: 50%; right: auto; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); margin: 0;
     width: max-content; max-width: calc(100vw - 40px); padding: 3px 14px; justify-content: center; z-index: 6;
-    border-radius: 999px; background: rgba(0,0,0,0.5); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);   /* a soft dark pill: the controls stay readable and usable over the photo */
+    border-radius: 999px; background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);   /* a soft dark pill: the controls stay readable and usable over the photo */
   }
   .lightbox.zoom-width .caption-row .caption, .lightbox.zoom-actual .caption-row .caption { color: #e4e4e8; }
   .lightbox.zoom-width .caption-row .lightbox-copy, .lightbox.zoom-actual .caption-row .lightbox-copy { color: #e4e4e8; opacity: 0.95; }
   /* Zoomed in, the photo runs under the other controls too: the same soft backing for the close button and the arrows. */
   .lightbox.zoom-width .close, .lightbox.zoom-actual .close, .lightbox.zoom-width .nav, .lightbox.zoom-actual .nav {
-    background: rgba(0,0,0,0.5); border-radius: 999px; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); opacity: 0.9;
+    background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); opacity: 0.9;
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-close-row { display: none; }
@@ -11155,12 +11157,16 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .lightbox .close:hover,
   .lightbox .nav:hover { opacity: 1; }
+  /* The close button and the arrows are drawn icons in identical square boxes, centred by the box (not by a text glyph's metrics). */
+  .lightbox .close, .lightbox .nav { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; padding: 0; line-height: 1; border-radius: 50%; }
+  .lightbox .nav .ico { width: 1em; height: 1em; vertical-align: 0; stroke-width: 2; }
   .lightbox .close { top: 10px; top: calc(10px + env(safe-area-inset-top, 0px)); right: 14px; font-size: 2.2rem; }
   .lightbox .close .ico { width: 0.85em; height: 0.85em; vertical-align: 0; stroke-width: 1.6; }
   .lightbox .prev { left: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   .lightbox .next { right: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   @media (max-width: 600px) {
     .lightbox .prev, .lightbox .next { font-size: 2.2rem; }
+    .lightbox .nav { width: 44px; height: 44px; }
   }
 </style>
 </head>
@@ -11539,7 +11545,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php if (is_admin_browser()): ?><div class="lightbox-toast" id="owner-toast" role="status" aria-live="polite" hidden></div><?php endif; ?>
 <div class="lightbox" id="lightbox">
   <button class="close" type="button" onclick="closeLightbox()" aria-label="Close"><?= ui_icon('close') ?></button>
-  <button class="nav prev" onclick="navigate(-1)">&#10094;</button>
+  <button class="nav prev" type="button" onclick="navigate(-1)" aria-label="Previous"><?= ui_icon('chev-left') ?></button>
   <img id="lightbox-img" src="" alt="">
   <video id="lightbox-video" controls playsinline style="display:none;"></video>
 <?php if (ENABLE_MAP): ?>
@@ -11562,7 +11568,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php endif; ?>
     <button class="lightbox-copy lightbox-close-row" type="button" onclick="closeLightbox()" title="Close" aria-label="Close"><?= ui_icon('close') ?></button>
   </div>
-  <button class="nav next" onclick="navigate(1)">&#10095;</button>
+  <button class="nav next" type="button" onclick="navigate(1)" aria-label="Next"><?= ui_icon('chev-right') ?></button>
 </div>
 
 <script>
