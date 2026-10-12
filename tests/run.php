@@ -344,6 +344,7 @@ function start_server($docroot, $port) {
 /** GET request. Returns [statusCode, body, headerLines]. Pass
  *  $followRedirects = false to inspect a redirect response itself
  *  (status + Location header) instead of transparently following it. */
+function data_file_guard_line_for_tests() { return "<?php http_response_code(404); exit; ?>\n"; }
 function http_get($url, $headers = [], $followRedirects = true) {
     $opts = ['http' => ['method' => 'GET', 'ignore_errors' => true, 'timeout' => 5]];
     if (!$followRedirects) {
@@ -1067,6 +1068,41 @@ $brokenCardEnd = $brokenCardStart === false ? false : strpos($videoPageBody, '</
 $brokenCardHtml = ($brokenCardStart !== false && $brokenCardEnd !== false) ? substr($videoPageBody, $brokenCardStart, $brokenCardEnd - $brokenCardStart) : '';
 check('a "video" that doesn\'t parse as a real container still renders, with no duration badge', $brokenCardStart !== false && !str_contains($brokenCardHtml, 'video-duration'));
 
+$videoMarks = substr_count($videoPageBody, 'class="video-mark"');
+$videoCards = preg_match_all('#<div class="card[^>]*><img src="\?img=[^"]*\.(mp4|mov|webm|m4v)#i', $videoPageBody);
+check('[video mark] every video tile carries the big play mark over the whole tile (one per video)', $videoCards >= 2 && $videoMarks === $videoCards && $brokenCardStart !== false && str_contains(substr($videoPageBody, $brokenCardStart, 600), 'video-mark'));
+
+// A video looks like a video wherever it is shown: the admin's grid and editor, a strip of group thumbnails, a folder's cover.
+$fxVm = new_fixture_dir('videomark'); mkdir("$fxVm/Reels");
+make_jpeg("$fxVm/photo.jpg", 60, 60, 80, 80, 80);
+make_minimal_mp4("$fxVm/clip.mp4", 20, 1);
+make_minimal_mp4("$fxVm/Reels/reel.mp4", 9, 1);
+file_put_contents("$fxVm/trip.md", "{gallery}\nClips. {group: Clips} {photos: clip.mp4, photo.jpg}\n");
+write_patched_index("$fxVm/index.php", $indexContents, ['ENABLE_VIDEO' => 'true', 'ADMIN_PASSWORD' => "'vm-admin-pw'", 'AUTO_GROUP_BY_FOLDER' => 'true']);
+$portVm = find_free_port(); start_server($fxVm, $portVm); $baseVm = "http://127.0.0.1:$portVm";
+[, $vmAdmin] = http_get("$baseVm/?admin", ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')]);
+check('[video mark] in the admin a video shows its real thumbnail address with the play mark and its length, not a text box saying "video"', preg_match('#<span class="thumb-media vtile"[^>]*><img class="thumb-img" src="\?img=clip\.mp4&amp;size=thumb[^"]*"[^>]*>(<video[^>]*></video>)?<span class="video-mark"#', $vmAdmin) === 1 && str_contains($vmAdmin, 'thumb-duration') && !str_contains($vmAdmin, 'item-thumb-placeholder') && preg_match('#<span class="editor-thumb vtile"[^>]*><img src="\?img=clip\.mp4#', $vmAdmin) === 1);
+$vmAuth = ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')];
+check('[health] Site settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . '2.0.3') && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php"));
+$vmHealthGuard = (string) @file_get_contents("$fxVm/.gallery-health.php");
+check('[health] the version file is a guarded data file (a direct request for it answers 404 with nothing else)', str_starts_with($vmHealthGuard, "<?php http_response_code(404); exit; ?>\n") && http_get("$baseVm/.gallery-health.php")[0] === 404);
+file_put_contents("$fxVm/.gallery-health.php", data_file_guard_line_for_tests() . json_encode(['version' => '2.0.1', 'from' => '', 'at' => '2026-01-02', 'first' => '2026-01-02']));
+[, $vmHealthUp] = http_get("$baseVm/?admin", $vmAuth);
+check('[health] after an upgrade the panel says what it was upgraded from, and the file is brought up to date', str_contains($vmHealthUp, 'Upgraded from 2.0.1') && str_contains((string) file_get_contents("$fxVm/.gallery-health.php"), '"from":"2.0.1"'));
+file_put_contents("$fxVm/Reels/.gallery-items.php", data_file_guard_line_for_tests() . '{"items": {"reel.mp4": {"caption": "unfinished');
+[, $vmHealthBad] = http_get("$baseVm/?admin", $vmAuth);
+check('[health] a folder data file that is not valid JSON is called out with its folder (it would otherwise be read as empty and overwritten by the next save)', str_contains($vmHealthBad, '1 folder data file can&#039;t be read') && str_contains($vmHealthBad, 'Reels') && str_contains($vmHealthBad, 'would overwrite'));
+unlink("$fxVm/Reels/.gallery-items.php");
+@chmod("$fxVm/Reels", 0555);
+[, $vmHealthRo] = http_get("$baseVm/?admin", $vmAuth);
+@chmod("$fxVm/Reels", 0755);
+check('[health] a folder the web server can\'t write to is called out, with what that costs', function_exists('posix_geteuid') && posix_geteuid() === 0 ? true : (str_contains($vmHealthRo, '1 of 2 folders are not writable') && str_contains($vmHealthRo, 'Reels')));
+[, $vmPage] = http_get("$baseVm/");
+check('[video mark] a video in a strip of group thumbnails is wrapped as a video tile with the play mark and opens the viewer; a photo there stays a bare picture', preg_match('#<span class="vthumb vtile"[^>]* onclick="openLightbox\(\d+\)"><img src="\?img=clip\.mp4[^>]*>(<video[^>]*></video>)?<span class="video-mark"#', $vmPage) === 1 && preg_match('#<img src="\?img=photo\.jpg[^>]* onclick="openLightbox#', $vmPage) === 1);
+[, $vmFolder] = http_get("$baseVm/?folder=Reels");
+check('[video mark] a video card on a folder page is a video tile and the page carries the video-tile script', str_contains($vmFolder, 'class="card vtile"') && str_contains($vmFolder, 'vtile[data-strip]') && str_contains($vmFolder, 'tile-strip'));
+check('[video mark] a folder whose cover is a video shows the play mark on its cover card', preg_match('#<a class="folder-cover-link vtile"[^>]*>.*?class="video-mark"#s', $vmPage) === 1);
+
 [$placeholderStatus, , $placeholderHeaders] = http_get("$baseVideo/?img=" . rawurlencode('clip.mp4') . '&size=thumb');
 check('?img= on a video file returns 200', $placeholderStatus === 200);
 check('?img= on a video file serves image/jpeg (the generic placeholder, not the video itself)', (bool) array_filter($placeholderHeaders, fn($h) => stripos($h, 'Content-Type: image/jpeg') === 0));
@@ -1152,6 +1188,13 @@ check('...and asking for it starts no session (no Set-Cookie for an anonymous vi
 check('?admin with a wrong password in a Basic header (a script, or a browser re-sending an old saved one) returns 401 and the login form, and NEVER a WWW-Authenticate challenge (that is what opens the browser\'s own dialog)', $wrongAuthStatus === 401 && !array_filter($wrongAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0) && str_contains($wrongAuthBody, 'name="access_code"') && (str_contains($wrongAuthBody, 'saved login') ));
 
 [$okStatus, $adminBody, $adminHeaders] = http_get("$baseAdmin/?admin", [$authHeader]);
+[$acSt, $acBody, $acHd] = http_get("$baseAdmin/?admin&accelcheck=1&prefix=%2Fkb", [$authHeader]);
+$acH = function ($hd, $name) { foreach ($hd as $h) if (stripos($h, "$name:") === 0) return trim(substr($h, strlen($name) + 1)); return null; };
+check('[nginx redirect check] the admin can ask the gallery to answer as it would with the setting on: no body, an X-Accel-Redirect to one of its photos under the prefix, never cached', $acSt === 200 && $acBody === '' && preg_match('#^/kb/[^/]+\.jpe?g$#i', (string) $acH($acHd, 'X-Accel-Redirect')) === 1 && str_contains((string) $acH($acHd, 'Cache-Control'), 'no-store'));
+[$ac2St, , $ac2Hd] = http_get("$baseAdmin/?admin&accelcheck=1&prefix=kb%2F..%2Fetc", [$authHeader]);
+[$ac3St, , $ac3Hd] = http_get("$baseAdmin/?admin&accelcheck=1&prefix=%2Fkb");
+check('[nginx redirect check] a prefix that is not a plain path is refused, and without signing in no X-Accel-Redirect is ever sent', $ac2St === 404 && $acH($ac2Hd, 'X-Accel-Redirect') === null && $acH($ac3Hd, 'X-Accel-Redirect') === null);
+
 check('?admin with the correct password returns 200', $okStatus === 200);
 check('the admin page actually renders', str_contains($adminBody, 'Gallery Admin'));
 $sessionCookie = extract_cookie_header($adminHeaders);
@@ -3984,7 +4027,7 @@ check('[video scrub] with ffmpeg a video tile carries the address of its sprite 
 [$sSt, $sBody, $sHd] = http_get("$vtBase/?strip=clip.mp4");
 $sType = ''; foreach ($sHd as $h) if (stripos($h, 'Content-Type:') === 0) $sType = trim(substr($h, 13));
 $sLog = (string) file_get_contents($vtLog);
-check('[video scrub] the sprite is made once, as one JPEG of square frames across the video, with no sound and no metadata, never through a shell', $sSt === 200 && $sType === 'image/jpeg' && $sBody === file_get_contents($vtFrame) && $vtStrips() === $stBefore + 1 && str_contains($sLog, 'fps=') && str_contains($sLog, 'crop=min(iw') && str_contains($sLog, 'scale=200:200,tile=10x1') && str_contains($sLog, '-an') && str_contains($sLog, '-map_metadata -1'));
+check('[video scrub] the sprite is made once, as one JPEG of square frames across the video, with no sound and no metadata, never through a shell', $sSt === 200 && $sType === 'image/jpeg' && $sBody === file_get_contents($vtFrame) && $vtStrips() === $stBefore + 1 && str_contains($sLog, 'fps=') && str_contains($sLog, 'crop=min(iw') && str_contains($sLog, 'scale=320:320,tile=10x1') && str_contains($sLog, '-an') && str_contains($sLog, '-map_metadata -1'));
 http_get("$vtBase/?strip=clip.mp4");
 check('[video scrub] it is kept: asking again makes nothing, and a warm-up for a video without one makes it and answers 204 with no body', $vtStrips() === $stBefore + 1 && http_get("$vtBase/?strip=warm.mp4&warm=1")[0] === 204 && $vtStrips() === $stBefore + 2);
 check('[video scrub] a tile whose sprite exists says so, so a page of ready sprites asks for nothing', (bool) preg_match('#data-strip="\\?strip=clip\\.mp4[^"]*" data-strip-cols="10" data-strip-rows="1" data-strip-ready="1"#', http_get("$vtBase/")[1]));
@@ -4042,7 +4085,7 @@ check('[video pictures] with no ffmpeg there it is the placeholder, the video fi
 [$vsDir, $vsBase] = $vtSite('settings', ['FFMPEG_PATH' => $vtOk, 'ADMIN_PASSWORD' => 'vp-admin-pw-1'], ['clip.mp4' => 3]);
 [, , $vsHd] = http_post("$vsBase/?admin", ['login_password' => 'vp-admin-pw-1'], [], false);
 $vsPage = http_get("$vsBase/?admin", ['Cookie: ' . extract_cookie_header($vsHd)])[1];
-check('[video previews] Site settings says whether ffmpeg was found (and where), so a missing one is easy to spot', str_contains($vsPage, 'ffmpeg on this server:') && str_contains($vsPage, 'found (' . htmlspecialchars($vtOk, ENT_QUOTES, 'UTF-8') . ')'));
+check('[video previews] Site settings says whether ffmpeg was found (and where), so a missing one is easy to spot', str_contains($vsPage, 'ffmpeg on this server: found') && str_contains($vsPage, '(' . htmlspecialchars($vtOk, ENT_QUOTES, 'UTF-8') . ')') && str_contains($vsPage, 'ffstatus ok-text'));
 check('[video previews] Site settings has a "Video previews" switch next to it, on, with its warning', str_contains($vsPage, 'name="set_ENABLE_VIDEO_PREVIEWS"') && str_contains($vsPage, 'Hovering over a video plays a short, silent, looping clip'));
 check('[video pictures] Site settings has a "Video thumbnails" switch, on, with its warning, shown only while videos are on', str_contains($vsPage, 'name="set_ENABLE_VIDEO_THUMBNAILS"') && str_contains($vsPage, 'Runs ffmpeg on your server') && (bool) preg_match('#data-requires="set_ENABLE_VIDEO"[^>]*>(?:(?!</div>).)*set_ENABLE_VIDEO_THUMBNAILS#s', $vsPage) || str_contains($vsPage, 'Video thumbnails'));
 // The real thing, when this machine has ffmpeg.
@@ -4056,8 +4099,8 @@ if ($realFf !== '' && is_executable($realFf)) {
     $rf = $vtCenter(http_get("http://127.0.0.1:$rfPort/?img=real.mp4&size=thumb")[1]);
     [$rpSt, $rpBody] = http_get("http://127.0.0.1:$rfPort/?preview=real.mp4");
     [$rsSt, $rsBody] = http_get("http://127.0.0.1:$rfPort/?strip=real.mp4"); $rsSize = @getimagesizefromstring($rsBody);
-    check('[video scrub] with the real ffmpeg the sprite is one JPEG of ten 200-pixel square frames (2000 x 200 for a 3-second video, each cut from the middle of the picture), and its last frame is a picture, not padding', $rsSt === 200 && $rsSize !== false && $rsSize[0] === 2000 && $rsSize[1] === 200 && (function () use ($rsBody) { $im = imagecreatefromstring($rsBody); $c = imagecolorat($im, 2000 - 100, 100); return (($c >> 16) & 255) + (($c >> 8) & 255) + ($c & 255) > 60; })());
-    check('[video previews] with the real ffmpeg the clip is a small silent MP4 (an ftyp box at the start, under 400 KB for a 3-second 360-pixel clip)', $rpSt === 200 && substr($rpBody, 4, 4) === 'ftyp' && strlen($rpBody) < 400000 && strlen($rpBody) > 1000 && !str_contains($rpBody, 'mp4a'));
+    check('[video scrub] with the real ffmpeg the sprite is one JPEG of ten 320-pixel square frames (3200 x 320 for a 3-second video, each cut from the middle of the picture), and its last frame is a picture, not padding', $rsSt === 200 && $rsSize !== false && $rsSize[0] === 3200 && $rsSize[1] === 320 && (function () use ($rsBody) { $im = imagecreatefromstring($rsBody); $c = imagecolorat($im, 3200 - 160, 160); return (($c >> 16) & 255) + (($c >> 8) & 255) + ($c & 255) > 60; })());
+    check('[video previews] with the real ffmpeg the clip is a small silent MP4 (an ftyp box at the start, under 400 KB for a 3-second 640-pixel clip)', $rpSt === 200 && substr($rpBody, 4, 4) === 'ftyp' && strlen($rpBody) < 400000 && strlen($rpBody) > 1000 && !str_contains($rpBody, 'mp4a'));
     check('[video pictures] with the real ffmpeg: a 640x360 clip gives a 480x270 thumbnail that is a picture of the video (not the placeholder)', is_file("$rfDir/real.mp4") && $rf !== null && $rf[3] === 480 && $rf[4] === 270 && $rf[0] > 150 && $rf[1] > 150);
 } else {
     echo "  (no ffmpeg on this machine: the real-ffmpeg check was skipped; set FFMPEG_TEST_BIN to run it)\n";

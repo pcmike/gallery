@@ -351,6 +351,41 @@ try:
         ok(which() == [0, 1] and cnt() == 1, "[video clip] a quick in-and-out on one tile then resting on the next leaves just the last one", str(which()))
         b.js("window.dispatchEvent(new Event('blur'))"); b.drain(0.3)
         ok(cnt() == 0, "[video clip] leaving the window stops it")
+        # a desktop mouse: resting plays the clip, moving sideways across the tile scrubs through the video instead
+        b.goto(B9 + "/", 2.0); b.drain(1.0)
+        mr = b.js("(() => { const r = document.querySelector('.card').getBoundingClientRect(); return {l: r.left, t: r.top, w: r.width, h: r.height}; })()")
+        my = mr["t"] + mr["h"] / 2
+        vm = b.js("(() => { const c = document.querySelector('.card'), m = c.querySelector('.video-mark'); if (!m) return null; const a = c.getBoundingClientRect(), r = m.getBoundingClientRect(); return {dx: (r.left + r.width / 2) - (a.left + a.width / 2), dy: (r.top + r.height / 2) - (a.top + a.height / 2), frac: r.width / a.width, shown: getComputedStyle(m).display !== 'none'}; })()")
+        ok(vm is not None and vm["shown"] and abs(vm["dx"]) < 2 and abs(vm["dy"]) < 2 and 0.2 < vm["frac"] < 0.5, "[video mark] a video tile has a big play mark in the middle of it", str(vm))
+        mm = lambda x, y=None: (b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": my if y is None else y}), b.drain(0.15))
+        mpos = lambda: b.js("(() => { const o = document.querySelector('.card .tile-strip'); return o ? parseFloat(getComputedStyle(o).backgroundPositionX) : null; })()")
+        mm(mr["l"] + mr["w"] * 0.1); b.drain(6.0)   # (entering asks the server for the frames the first time; it makes them)
+        ok(b.js("document.querySelector('.card').hasAttribute('data-strip')") and len(glob.glob(SITE9 + "/.gallery-cache/*.jpg")) >= 1, "[mouse scrub] pointing at a video tile gets its frames made on a desktop too")
+        b.js("document.querySelector('.card').dispatchEvent(new MouseEvent('mouseleave'))"); b.drain(0.3)
+        mm(5, 5); mm(mr["l"] + mr["w"] * 0.1); b.drain(0.05)
+        for dx in (8, 16, 24):
+            mm(mr["l"] + mr["w"] * 0.1 + dx)
+        early = mpos(); during = b.js("document.querySelectorAll('.tile-preview').length")
+        mm(mr["l"] + mr["w"] * 0.9); late = mpos()
+        mm(mr["l"] + mr["w"] * 0.5); mid = mpos()
+        mm(mr["l"] + mr["w"] * 0.2); back = mpos()
+        ok(early is not None and late is not None and late < mid < early and abs(back - early) < abs(late - early), "[mouse scrub] moving the mouse sideways across a video tile shows the frame under it, and follows it back and forth", f"{early} {mid} {late} back={back}")
+        ok(during == 0, "[mouse scrub] a scrub never has a clip playing over it", str(during))
+        b.drain(0.8)
+        ok(mpos() is not None and b.js("document.querySelectorAll('.tile-preview').length") == 0, "[mouse scrub] pausing on a frame keeps the frame (the clip doesn't start)")
+        b.js("document.querySelector('.card').dispatchEvent(new MouseEvent('mouseleave'))"); b.drain(0.3)
+        ok(mpos() is None, "[mouse scrub] moving off the tile puts it back")
+        mm(5, 5); mm(mr["l"] + mr["w"] * 0.3); b.drain(1.0)
+        ok(mpos() is None and b.js("document.querySelectorAll('.tile-preview').length") == 1, "[mouse scrub] a pointer that comes to rest still starts the clip")
+        mm(mr["l"] + mr["w"] * 0.3 + 5); b.drain(0.2)
+        ok(mpos() is None and b.js("document.querySelectorAll('.tile-preview').length") == 1, "[mouse scrub] a small jitter while the clip plays does not stop it")
+        mm(mr["l"] + mr["w"] * 0.8); b.drain(0.2)
+        ok(mpos() is not None and b.js("document.querySelectorAll('.tile-preview').length") == 0, "[mouse scrub] a real sideways move while the clip plays swaps it for the frames")
+        b.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": mr["l"] + mr["w"] * 0.8, "y": my, "button": "left", "clickCount": 1})
+        b.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": mr["l"] + mr["w"] * 0.8, "y": my, "button": "left", "clickCount": 1}); b.drain(0.8)
+        ok(b.js("document.getElementById('lightbox').classList.contains('open')"), "[mouse scrub] clicking a scrubbed tile still opens the viewer")
+        b.js("closeLightbox()")
+        b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 5, "y": 5}); b.drain(0.3)
         # a phone: no hovering, so the clip of the tile nearest the middle of the screen plays by itself, one at a time
         for extra in ("clip3.mp4", "clip4.mp4"): shutil.copy(SITE8 + "/clip.mp4", SITE9 + "/" + extra)
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5}); b.viewport(390, 800, mobile=True)
@@ -409,6 +444,63 @@ try:
         b.js("localStorage.removeItem('__noHover')")
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
         srv9.terminate(); srv9.wait()
+    b.viewport(1280, 900)
+    # ---------------- the "private isn't locked" warning goes away once the server really refuses direct requests ----------------
+    print("== private lock check (the warning on the Hidden tab)")
+    SITE11 = WORK + "/site11"; os.makedirs(SITE11 + "/Trips"); os.makedirs(WORK + "/site11root"); os.symlink(SITE11, WORK + "/site11root/trip")   # (the gallery lives at /trip/ on this server)
+    shutil.copy(HERE + "/../../../index.php", SITE11 + "/index.php"); os.utime(SITE11 + "/index.php", (time.time() - 3600,) * 2)
+    for nm in ("photo.jpg", "secret.jpg", "Trips/pic.jpg"):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE11 + "/" + nm], check=True)
+    open(SITE11 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": "lock-admin-pw", "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    open(SITE11 + "/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"items": {"secret.jpg": {"restriction": "private"}}, "groups": [], "displayName": None, "cover": None, "locationEnabled": False}) + "\n")
+    # a stand-in for the web server rules: direct photo and data-file requests refused, and /Folder/ sent to the gallery (what the nginx and Apache rules do)
+    open(WORK + "/lockrouter.php", "w").write("<?php $p = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);\n"
+        "if (preg_match('/\\.(jpe?g|png|gif|webp|mp4|mov)$/i', $p) || strpos($p, '/.gallery-') !== false) { http_response_code(404); return true; }\n"
+        "if ($p === '/trip/' && isset($_GET['accelcheck']) && ($_GET['prefix'] ?? '') === '/trip') { header('Content-Type: image/jpeg'); readfile(" + json.dumps(SITE11 + "/photo.jpg") + "); return true; }\n"   # (what nginx does with the gallery's X-Accel-Redirect)
+        "if (preg_match('#^/trip/(.+)/$#', $p, $m)) { $_GET['folder'] = rawurldecode($m[1]); $_SERVER['QUERY_STRING'] = 'folder=' . $m[1]; $_SERVER['SCRIPT_NAME'] = '/trip/index.php'; $_SERVER['PHP_SELF'] = '/trip/index.php'; chdir(" + json.dumps(SITE11) + "); require " + json.dumps(SITE11 + "/index.php") + "; return true; }\n"
+        "return false;\n")
+    lockauth = {"Authorization": "Basic " + base64.b64encode(b"admin:lock-admin-pw").decode()}
+    for variant, router, expect in (("open", None, False), ("refused", WORK + "/lockrouter.php", True)):
+        s11 = socket.socket(); s11.bind(("127.0.0.1", 0)); P11 = s11.getsockname()[1]; s11.close(); B11 = f"http://127.0.0.1:{P11}"
+        srv11 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P11}", "-t", WORK + "/site11root"] + ([router] if router else []), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        try:
+            b.call("Network.setExtraHTTPHeaders", {"headers": {}})
+            b.goto(B11 + "/trip/", 2.5)   # (this makes a thumbnail in the cache folder, so the check has one to ask for)
+            b.call("Network.setExtraHTTPHeaders", {"headers": lockauth})
+            b.viewport(1280, 900); b.goto(B11 + "/trip/?admin", 2.5); b.drain(2.0)
+            st = b.js("""(() => { const x = document.getElementById('lock-banner'), pr = document.getElementById('server-probe'); if (!x || !pr) return null;
+                const vis = sel => [...document.querySelectorAll(sel)].some(e => e.offsetParent !== null || (e.closest('.tab-panel:not(.active)') && !e.hidden && !e.closest('[hidden]')));
+                return {cls: x.className, open: !x.querySelector('.lock-open-text').hidden, locked: !x.querySelector('.lock-locked-text').hidden, status: x.querySelector('[data-lock-status]').textContent,
+                  photo: pr.dataset.photo, cache: pr.dataset.cache, folderUrl: pr.dataset.folderUrl, again: !x.querySelector('.lock-recheck').hidden,
+                  lockRulesHidden: [...document.querySelectorAll('[data-lock-rules]')].every(e => e.hidden), panelHidden: [...document.querySelectorAll('[data-lock-rules-panel]')].every(e => e.hidden),
+                  accel: (document.querySelector('[data-accel-status]') || {}).textContent, accelCls: (document.querySelector('[data-accel-status]') || {}).className,
+                  tidyRulesHidden: [...document.querySelectorAll('[data-tidy-rules]')].every(e => e.hidden), tidyStatus: [...document.querySelectorAll('[data-tidy-status]')].map(e => e.className + '|' + e.textContent.slice(0, 40))}; })()""")
+            ok(st is not None and st["photo"].endswith(".jpg") and "/.gallery-cache/" in st["cache"] and st["folderUrl"] == "/trip/Trips/", f"[lock check, {variant}] the admin page hands the browser a photo address, a cached thumbnail address and a folder's tidy address to try", str(st))
+            if expect:
+                ok(st is not None and st["locked"] and not st["open"] and "ok" in st["cls"].split() and "refused" in st["status"] and st["again"], "[lock check] with the server refusing direct requests for photos and cache files, the warning is replaced by a plain \"Private is locked\" note", str(st))
+                ok(st["lockRulesHidden"] and st["panelHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => h.hidden)"), "[lock check] ...and the nginx/Apache rules and the warning text in Site settings go away, as does the Hidden tab's rules panel", str(st))
+                ok("note-text" in st["accelCls"] and "Not using it yet" in st["accel"] and "/trip" in st["accel"], "[nginx redirect check] with the nginx location in place but the setting empty, Site settings points that out and offers to set it", str([st["accelCls"], st["accel"]]))
+                b.js("[...document.querySelectorAll('[data-accel-status] button')][0].click()"); b.drain(2.0)
+                saved = open(SITE11 + "/.gallery-config.php").read()
+                ok("NGINX_ACCEL_REDIRECT_PREFIX" in saved and "trip" in saved.split("NGINX_ACCEL_REDIRECT_PREFIX")[1][:20], "[nginx redirect check] its button fills in and saves the setting", saved[:300])
+                ok(st["tidyRulesHidden"] and any(t.startswith("lock-result ok-text|Tidy folder links work") for t in st["tidyStatus"]), "[tidy check] with /Folder/ sent to the gallery, Site settings says in green that tidy folder links work and hides their rules", str(st["tidyStatus"]))
+            else:
+                ok(st is not None and st["open"] and not st["locked"] and "error" in st["cls"].split() and "handed out" in st["status"], "[lock check] with nothing in place (the photo is served as a plain file) the warning stays, and says which address was handed out", str(st))
+                ok(not st["lockRulesHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => !h.hidden)"), "[lock check] ...and the rules and the Site settings text stay too", str(st))
+                ok(not st["tidyRulesHidden"] and any(t.startswith("lock-result warn-text|Tidy folder links are not set up") for t in st["tidyStatus"]), "[tidy check] with nothing in place, Site settings says in red that tidy folder links aren't set up (and keeps the rules)", str(st["tidyStatus"]))
+                ff = b.js("(() => { const e = document.querySelector('.ffstatus'); return e ? {cls: e.className, text: e.textContent.slice(0, 40), color: getComputedStyle(e).color} : null; })()")
+                ok(ff is not None and "warn-text" in ff["cls"] and "not found" in ff["text"] and ff["color"] == "rgb(237, 66, 69)", "Site settings says in red that ffmpeg was not found", str(ff))
+                # the link on the Hidden tab goes straight to the Server setup part of Site settings
+                b.js("document.querySelector('[data-tab=hidden].side-hidden, .admin-tabs a[data-tab=hidden]').click()"); b.drain(0.5)
+                b.js("document.querySelector('p[data-tidy-rules] a').click()"); b.drain(1.5)
+                jump = b.js("(() => { const e = document.getElementById('server-setup'), r = e && e.getBoundingClientRect(); return {site: document.querySelector('.tab-panel[data-tab=site]').classList.contains('active'), top: r ? r.top : null, h: innerHeight}; })()")
+                ok(jump["site"] and jump["top"] is not None and 0 <= jump["top"] < jump["h"] * 0.5, "the link on the Hidden tab opens Site settings and scrolls straight to Server setup", str(jump))
+                col = b.js("(() => { const a = document.querySelector('p[data-tidy-rules] a'); return a ? getComputedStyle(a).color : null; })()")
+                ok(col is not None and col != "rgb(0, 0, 238)" and col != "rgb(138, 180, 255)", "links in the admin's running text use the admin's own colour, not the browser's default blue", str(col))
+        finally:
+            srv11.terminate(); srv11.wait()
+    b.call("Network.setExtraHTTPHeaders", {"headers": {}})
     b.viewport(1280, 900)
     # ---------------- a folder opens on its chosen cover photo ----------------
     print("== folder opens on its cover photo")

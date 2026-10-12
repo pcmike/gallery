@@ -1754,7 +1754,7 @@ function video_poster_failed($file) {
  *  after a failure. */
 function video_preview_path($srcPath, $cacheDir, $filename) {
     if (!ENABLE_VIDEO_PREVIEWS || !ENABLE_THUMBNAIL_CACHE) return null;
-    $base = image_cache_path($cacheDir, $filename, 'preview', $srcPath);
+    $base = image_cache_path($cacheDir, $filename, 'preview2', $srcPath);
     if ($base === null) return null;
     $clip = substr($base, 0, -4) . '.mp4';
     if (is_file($clip) && filesize($clip) > 0) return $clip;
@@ -1771,7 +1771,7 @@ function video_preview_path($srcPath, $cacheDir, $filename) {
         $start = $duration !== null && $duration > 3.5 ? min($duration / 3, $duration - 3) : 0;
         $tmp = $clip . '.tmp' . bin2hex(random_bytes(3));
         $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $start), '-t', '3', '-i', $srcPath, '-an', '-map_metadata', '-1',
-            '-vf', 'scale=w=min(360\\,iw):h=-2,fps=12', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '30', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-f', 'mp4', $tmp], 45);
+            '-vf', 'scale=w=min(640\\,iw):h=-2,fps=15', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '27', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-f', 'mp4', $tmp], 45);
         if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $clip)) return $clip; }
         @unlink($tmp);
         @touch($failed);
@@ -1783,7 +1783,7 @@ function video_preview_path($srcPath, $cacheDir, $filename) {
 
 /** Where this video's clip is (or would be) kept, or null if the cache can't be used. */
 function video_preview_file($file) {
-    $base = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'preview', resolve_real_path($GLOBALS['dir'], $file));
+    $base = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'preview2', resolve_real_path($GLOBALS['dir'], $file));
     return $base === null ? null : substr($base, 0, -4) . '.mp4';
 }
 
@@ -1797,7 +1797,7 @@ function video_strip_layout($duration) {
  *  dragged across a video's tile scrubs through. Made once with ffmpeg, like the clip; null if it can't be had. */
 function video_strip_path($srcPath, $cacheDir, $filename) {
     if (!ENABLE_VIDEO_PREVIEWS || !ENABLE_THUMBNAIL_CACHE) return null;
-    $strip = image_cache_path($cacheDir, $filename, 'strip', $srcPath);
+    $strip = image_cache_path($cacheDir, $filename, 'strip2', $srcPath);
     if ($strip === null) return null;
     if (is_file($strip) && filesize($strip) > 0) return $strip;
     $failed = $strip . '.failed';
@@ -1815,8 +1815,8 @@ function video_strip_path($srcPath, $cacheDir, $filename) {
         $args = [$bin, '-v', 'error', '-nostdin', '-y'];
         if ($duration > 20) array_push($args, '-skip_frame', 'nokey');   // a long video: only its key frames are read, which is much quicker
         array_push($args, '-i', $srcPath, '-an', '-map_metadata', '-1', '-vf',
-            sprintf('fps=%.5F,crop=min(iw\\,ih):min(iw\\,ih),scale=200:200,tile=%dx%d', $cols * $rows / $duration * 1.05, $cols, $rows),
-            '-frames:v', '1', '-q:v', '5', '-f', 'image2', $tmp);
+            sprintf('fps=%.5F,crop=min(iw\\,ih):min(iw\\,ih),scale=320:320,tile=%dx%d', $cols * $rows / $duration * 1.05, $cols, $rows),
+            '-frames:v', '1', '-q:v', '4', '-f', 'image2', $tmp);
         $code = run_quietly($args, 90);
         if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $strip)) return $strip; }
         @unlink($tmp);
@@ -2099,9 +2099,9 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
             $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
             $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
-            if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip'; }   // the frame taken from a video, and its sprite of frames
+            if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
             $mtime = @filemtime(resolve_real_path($dir, $file));
-            if (is_video_file($file)) $valid[md5($file . '|preview|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
+            if (is_video_file($file)) $valid[md5($file . '|preview2|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
                 $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
             }
@@ -5058,6 +5058,29 @@ function admin_item_href($file) {
          . '#photo-' . md5($file);
 }
 
+/** Addresses for the owner's browser to try, to see whether the web server rules in render_server_rules_help are in place:
+ *  one photo and one thumbnail from the cache folder (which the server should refuse), and one folder's tidy link. Only
+ *  paths, in the same folder as this script; the browser makes the requests, so nothing is fetched from the server side. */
+function lock_probe_targets($dir, $files) {
+    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
+    $enc = function ($path) { return implode('/', array_map('rawurlencode', explode('/', $path))); };
+    $out = ['photo' => '', 'cache' => '', 'folder' => '', 'folderUrl' => '', 'file' => ''];
+    foreach ($files as $f) {
+        if (preg_match('/\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$/i', $f)) { $out['photo'] = $base . $enc($f); $out['file'] = $f; break; }
+    }
+    foreach ($files as $f) {   // a folder anyone may open, for the tidy-link check (/kb/Folder/)
+        $slash = strpos($f, '/');
+        if ($slash === false) continue;
+        $top = substr($f, 0, $slash);
+        if (folder_restriction_cached($dir, $top) === 'private' || folder_above_is_private($dir, $f)) continue;
+        $out['folder'] = $top; $out['folderUrl'] = $base . $enc($top) . '/';
+        break;
+    }
+    $cached = @glob(rtrim($dir, '/') . '/.gallery-cache/*.jpg');
+    if (!empty($cached)) $out['cache'] = $base . '.gallery-cache/' . rawurlencode(basename($cached[0]));
+    return $out;
+}
+
 /** Ready-to-use web server rules that keep the photo files themselves from being fetched by address (private items are
  *  only private through this script otherwise), written out for this gallery's own address, in two collapsed blocks:
  *  nginx and Apache. Shown on the Private page and in Site settings so nobody has to leave the admin to set it up. */
@@ -5080,6 +5103,7 @@ function render_server_rules_help($withTidyLinks = false) {
     ob_start();
 ?>
     <div class="rules-help">
+      <div data-lock-rules>
       <details>
         <summary><strong>nginx</strong> (strongest; needs shell access to the server)</summary>
         <p>Add this inside the site's <code>server { }</code> block (keep the first location above the second), then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. It is written for this gallery's address, <code><?= $esc($loc) ?></code>.<?= $base === '' ? ' <strong>This gallery is at the top of the site, so the second rule would also block every image elsewhere on the site: narrow its path first.</strong>' : '' ?></p>
@@ -5092,7 +5116,10 @@ function render_server_rules_help($withTidyLinks = false) {
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
         <p>A bare photo address then answers 403, and the gallery works as before. It only counts if the server reads <code>.htaccess</code> for this folder (<code>AllowOverride All</code>): on a host that doesn't, the rules are silently ignored, so check with <code>curl -I</code> on a photo's address. If you script logins with an <code>Authorization</code> header on Apache with PHP-FPM, also add the line <code>CGIPassAuth On</code>. The ordinary sign-in form needs nothing.</p>
       </details>
+      </div>
       <?php if ($withTidyLinks): ?>
+      <div class="lock-result" data-tidy-status></div>
+      <div data-tidy-rules>
       <p class="rules-sub">Optional: tidy folder links. Without these, folders are reached as <code><?= $esc($loc) ?>?folder=Europe/France</code>, which always works and is what the gallery itself shares. With them, <code><?= $esc($loc) ?>Europe/France/</code> works too.</p>
       <details>
         <summary><strong>nginx</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
@@ -5104,6 +5131,7 @@ function render_server_rules_help($withTidyLinks = false) {
         <p>Add to the gallery's <code>.htaccess</code> (needs <code>mod_rewrite</code> and <code>AllowOverride</code> for <code>FileInfo</code>). The <code>B</code> flag is required: without it a folder name with a space, <code>&amp;</code>, <code>+</code> or <code>#</code> fails.</p>
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyApache) ?></code></pre></div>
       </details>
+      </div>
       <?php endif; ?>
     </div>
 <?php
@@ -5124,15 +5152,23 @@ function render_admin_hidden_panel($data) {
         }
     };
 ?>
-    <div class="flash error hidden-warning">
-      <strong>Private isn't locked.</strong>
-      Making something private only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level. The rules below do that.
+    <div class="flash error hidden-warning" id="lock-banner">
+      <div class="lock-open-text">
+        <strong>Private isn't locked.</strong>
+        Making something private only stops a visitor from reaching an item <em>through this gallery</em> — the file itself still sits on disk as an ordinary static file, servable directly by the webserver if its bare URL is known or guessed, unless you've separately locked that down at the webserver level. The rules below do that.
+      </div>
+      <div class="lock-locked-text" hidden>
+        <strong>Private is locked.</strong>
+        Just now this browser asked the server for a photo<span class="lock-cache-part"> and for a thumbnail</span> by their direct addresses, and it refused. Hidden items can only be reached through the gallery. Rules that stop working (a server change, a different host) bring this warning back, so check again after changing the server.
+      </div>
+      <div class="lock-result" data-lock-status></div>
+      <button type="button" class="secondary lock-recheck" hidden>Check again</button>
     </div>
-    <section class="panel">
+    <section class="panel" data-lock-rules-panel>
       <h2 class="section-title">Lock the files themselves</h2>
       <p class="muted" style="margin-top:0;">Pick the server you use and copy the rules: they stop a private photo from being fetched by its direct address.</p>
       <?= render_server_rules_help() ?>
-      <p class="muted">There are also optional rules for tidy folder links such as <code>/kb/Europe/France/</code>, and the setting that hands files to nginx: both are in <a href="#site" onclick="var l=document.querySelector('.side-link'); if (l) { l.click(); return false; }">Site settings, Server setup</a>.</p>
+      <p class="muted" data-tidy-rules>There are also optional rules for tidy folder links such as <code>/kb/Europe/France/</code>, and the setting that hands files to nginx: both are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Site settings, Server setup</a>.</p>
     </section>
     <section class="panel">
       <h2 class="section-title">Folders that are private (<?= count($data['folders']) ?>)</h2>
@@ -5180,7 +5216,7 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
 ?>
     <h3 class="subhead">Map</h3>
     <?php if (!ENABLE_MAP): ?>
-      <p class="muted" style="margin-top:0;">The map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="var l=document.querySelector('.side-link'); if (l) { l.click(); return false; }">Site settings</a> first; then each folder can show its own map.</p>
+      <p class="muted" style="margin-top:0;">The map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="return adminGoTo('site');">Site settings</a> first; then each folder can show its own map.</p>
     <?php else: ?>
       <form method="post" class="instant-form map-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
@@ -5363,7 +5399,7 @@ function gallery_setting_definitions() {
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
              'help' => 'Bring in a place that lives somewhere else on the server (an archive on another disk). By default its folders appear at the top of the gallery as if they were in it: /space/trip with Paris and StTropez inside it adds Paris and StTropez. Give the place a name and it shows as one folder with that name instead. Needs "Show subfolders". Photos stay where they are; only a path is stored here.',
              'risk' => 'Every photo and video in that folder, and in its subfolders, becomes visible to visitors.'],
-            ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect',
+            ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect', 'status' => 'accel',
              'help' => 'Hands photo and video files to nginx instead of reading them with PHP, which is what makes a hidden photo unreachable at its direct address. Leave empty unless nginx already has the matching "internal" location (see the README), for example /kb.',
              'risk' => 'Unless nginx already has the matching internal location, every photo and video will stop loading until you clear this again.'],
         ]],
@@ -5543,6 +5579,126 @@ function site_settings_save($ajax = false) {
     return ['type' => 'redirect'];
 }
 
+/** Remembers which version of this script last ran against this install (a small guarded data file beside index.php), so
+ *  the health panel can say "upgraded from X on Y". Written only when the version changes; null if it can't be kept. */
+function health_version_record($dir) {
+    $path = rtrim($dir, '/') . '/.gallery-health.php';
+    $data = json_file_read($path, ['version' => '', 'from' => '', 'at' => '', 'first' => '']);
+    if (($data['version'] ?? '') === GALLERY_VERSION) return $data;
+    $new = ['version' => GALLERY_VERSION, 'from' => (string) ($data['version'] ?? ''), 'at' => gmdate('Y-m-d'),
+            'first' => ($data['first'] ?? '') !== '' ? (string) $data['first'] : gmdate('Y-m-d')];
+    return @file_put_contents($path, data_file_encode($new), LOCK_EX) !== false ? $new : null;
+}
+
+/** The server-side half of the health panel: rows of [group, status (ok|warn|bad|info), label, detail], and nothing is
+ *  changed by looking. Folders are sampled (the first 300 that hold media) so a huge gallery stays quick. */
+function health_checks($dir, $files) {
+    $rows = [];
+    $add = function ($group, $status, $label, $detail = '') use (&$rows) { $rows[] = [$group, $status, $label, $detail]; };
+
+    // --- this install
+    $rec = health_version_record($dir);
+    if ($rec === null) $add('This install', 'warn', 'Running ' . GALLERY_VERSION, 'The folder is not writable by the web server, so the version history can\'t be kept.');
+    elseif (($rec['from'] ?? '') !== '') $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'Upgraded from ' . $rec['from'] . ' on ' . $rec['at'] . ' (first recorded ' . $rec['first'] . ').');
+    else $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'First recorded on ' . ($rec['first'] ?? $rec['at'] ?? '') . '; the next upgrade will be noted here.');
+    $add('This install', PHP_VERSION_ID >= 80300 ? 'ok' : 'bad', 'PHP ' . PHP_VERSION, PHP_VERSION_ID >= 80300 ? '' : 'This gallery needs PHP 8.3 or newer.');
+    $hasGd = extension_loaded('gd'); $hasImagick = class_exists('Imagick');
+    $add('This install', ($hasGd || $hasImagick) ? 'ok' : 'bad', 'Picture resizing: ' . ($hasImagick && $hasGd ? 'GD and Imagick' : ($hasImagick ? 'Imagick' : ($hasGd ? 'GD' : 'none')) ),
+        ($hasGd || $hasImagick) ? '' : 'Neither GD nor Imagick is installed, so thumbnails can\'t be made.');
+    $heic = 0; foreach ($files as $f) if (preg_match('/\.hei[cf]$/i', $f)) $heic++;
+    if ($heic > 0 && !$hasImagick) $add('This install', 'warn', 'HEIC photos can\'t be shown', $heic . ' HEIC photo' . ($heic === 1 ? '' : 's') . ' found, and HEIC needs the Imagick extension (it isn\'t installed).');
+    $add('This install', function_exists('exif_read_data') ? 'ok' : 'warn', 'Photo details (EXIF): ' . (function_exists('exif_read_data') ? 'available' : 'missing'),
+        function_exists('exif_read_data') ? '' : 'Without the exif extension, a photo\'s location and date can\'t be read from the file.');
+
+    // --- settings and passwords
+    $state = gallery_config_load();
+    $cfgPath = gallery_config_path();
+    if ($state['status'] === 'absent') $add('Settings and passwords', 'info', 'No settings file yet', 'Everything runs on the defaults; .gallery-config.php appears when you change something here.');
+    elseif ($state['status'] === 'ok') $add('Settings and passwords', is_writable($cfgPath) ? 'ok' : 'warn', 'Settings file readable' . (is_writable($cfgPath) ? ' and writable' : ' but not writable'), is_writable($cfgPath) ? '' : 'Changes in Site settings can\'t be saved until the web server may write .gallery-config.php.');
+    else $add('Settings and passwords', 'bad', 'Settings file can\'t be read as settings', 'Fix or delete .gallery-config.php; until then the settings in index.php apply.');
+    foreach (($GLOBALS['__gallery_config_problems'] ?? []) as $problem) $add('Settings and passwords', 'warn', 'Settings problem', $problem);
+    $pwRow = function ($label, $value, $emptyStatus, $emptyDetail) use ($add) {
+        if ($value === '') $add('Settings and passwords', $emptyStatus, $label . ': not set', $emptyDetail);
+        elseif (password_is_hashed($value)) $add('Settings and passwords', 'ok', $label . ': stored as a hash', '');
+        else $add('Settings and passwords', 'warn', $label . ': stored as plain text', 'It is changed to a hash by the next successful sign-in with it.');
+    };
+    $pwRow('Admin password', ADMIN_PASSWORD, 'warn', 'Without one the admin is not available (it can be set during the first minutes after upload).');
+    $pwRow('Private-view password', PRIVATE_VIEW_PASSWORD, 'info', 'Fine if you have no private items to share.');
+    $add('Settings and passwords', is_file(rtrim($dir, '/') . '/.gallery-secret.php') ? 'ok' : 'info', is_file(rtrim($dir, '/') . '/.gallery-secret.php') ? 'Sign-in key present' : 'Sign-in key not made yet', is_file(rtrim($dir, '/') . '/.gallery-secret.php') ? '' : 'It is made the first time someone signs in.');
+
+    // --- where the gallery's folders live
+    $named = is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [];
+    $roots = is_array(EXTRA_ROOTS) ? EXTRA_ROOTS : [];
+    $extraBad = [];
+    foreach ($named as $name => $path) if (!is_string($path) || !is_dir($path) || !is_readable($path)) $extraBad[] = (is_string($name) ? $name . ' = ' : '') . (is_string($path) ? $path : '?');
+    foreach ($roots as $path) if (!is_string($path) || !is_dir($path) || !is_readable($path)) $extraBad[] = is_string($path) ? $path : '?';
+    if ($named || $roots) {
+        $total = count($named) + count($roots);
+        $add('Folders and files', $extraBad ? 'bad' : 'ok', $extraBad ? count($extraBad) . ' of ' . $total . ' folders from elsewhere are missing or unreadable' : 'All ' . $total . ' folders from elsewhere on the server exist and can be read',
+            $extraBad ? 'Missing: ' . implode(', ', array_slice($extraBad, 0, 5)) . '. Their photos are not shown until the path exists again.' : '');
+    }
+    $folders = [rtrim($dir, '/') => true];
+    foreach ($files as $f) { $folders[containing_folder_real_path($dir, $f)] = true; if (count($folders) >= 300) break; }
+    $unwritable = []; $badData = []; $withData = 0; $entries = 0;
+    foreach (array_keys($folders) as $folder) {
+        if (!is_writable($folder)) $unwritable[] = $folder;
+        $itemsFile = items_path($folder);
+        if (!is_file($itemsFile)) continue;
+        $withData++;
+        $raw = trim(data_file_strip_guard(@file_get_contents($itemsFile)));
+        $decoded = $raw === '' ? [] : json_decode($raw, true);
+        if (!is_array($decoded)) { $badData[] = $folder; continue; }
+        $entries += count($decoded['items'] ?? []);
+    }
+    $sampled = count($folders) >= 300 ? ' (the first 300 folders with media)' : '';
+    $rel = function ($p) use ($dir) { $d = rtrim($dir, '/'); return $p === $d ? '(top folder)' : (strncmp($p, $d . '/', strlen($d) + 1) === 0 ? substr($p, strlen($d) + 1) : $p); };
+    $add('Folders and files', $unwritable ? 'warn' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
+        $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '');
+    $add('Folders and files', $badData ? 'bad' : 'ok', $badData ? count($badData) . ' folder data file' . (count($badData) === 1 ? '' : 's') . ' can\'t be read' : 'Folder data files all read fine (' . $withData . ' folder' . ($withData === 1 ? '' : 's') . ', ' . $entries . ' photo' . ($entries === 1 ? '' : 's') . ' with saved details)',
+        $badData ? 'Treated as empty, and the next change you save in that folder would overwrite the file. Restore .gallery-items.php from a backup first: ' . implode(', ', array_map($rel, array_slice($badData, 0, 5))) : 'Each folder keeps its own captions, locations, privacy flags and view counts inside it: wiping a folder wipes those, including its private flag.');
+    $videos = 0; foreach ($files as $f) if (is_video_file($f)) $videos++;
+    $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
+
+    // --- videos
+    if (ENABLE_VIDEO) {
+        $ff = ffmpeg_binary();
+        $add('Videos', $ff !== '' ? 'ok' : 'warn', 'ffmpeg ' . ($ff !== '' ? 'found' : 'not found'), $ff !== '' ? $ff . ' — real thumbnails, hover clips and scrubbing are available.' : 'Videos show the browser\'s own first frame; no hover clips or scrubbing.');
+    }
+    return $rows;
+}
+
+/** The health panel at the top of Site settings: the server-side rows from health_checks(), then three the browser fills in
+ *  (see the script: the web server rules can only be tested by asking for addresses the way a visitor would). */
+function render_admin_health_panel() {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $rows = health_checks($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
+    $bad = 0; $warn = 0;
+    foreach ($rows as $r) { if ($r[1] === 'bad') $bad++; elseif ($r[1] === 'warn') $warn++; }
+    $summary = $bad + $warn === 0 ? 'Everything checked here looks right.' : ($bad ? $bad . ' problem' . ($bad === 1 ? '' : 's') : '') . ($bad && $warn ? ' and ' : '') . ($warn ? $warn . ' thing' . ($warn === 1 ? '' : 's') . ' to look at' : '') . '.';
+    $mark = ['ok' => 'check', 'warn' => 'warn', 'bad' => 'warn'];
+?>
+    <section class="panel health-panel">
+      <h2 class="section-title">Health check</h2>
+      <p class="health-summary <?= $bad ? 'warn-text' : ($warn ? 'note-text' : 'ok-text') ?>"><strong><?= $esc($summary) ?></strong> <button type="button" class="secondary" onclick="location.reload()">Check again</button></p>
+      <p class="muted" style="margin-top:0;">What this install looks like right now, found by looking, never by changing anything (except noting the version above). Safe to open after an upgrade, a move, or replacing folders.</p>
+      <?php $group = null; foreach ($rows as [$g, $status, $label, $detail]): ?>
+        <?php if ($g !== $group): $group = $g; ?><h3 class="subhead"><?= $esc($g) ?></h3><?php endif; ?>
+        <div class="health-row health-<?= $esc($status) ?>">
+          <span class="health-mark <?= $status === 'ok' ? 'ok-text' : ($status === 'bad' ? 'warn-text' : ($status === 'warn' ? 'note-text' : 'muted')) ?>"><?= isset($mark[$status]) ? ui_icon($mark[$status]) : '&bull;' ?></span>
+          <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?></div><?php endif; ?></div>
+        </div>
+      <?php endforeach; ?>
+      <h3 class="subhead">Web server (tested by your browser, just now)</h3>
+      <?php foreach ([['lock', 'Direct requests for photos are refused'], ['tidy', 'Tidy folder links work'], ['accel', 'nginx internal redirect']] as [$key, $label]): ?>
+        <div class="health-row health-info" data-health-row="<?= $key ?>">
+          <span class="health-mark muted">&bull;</span>
+          <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div></div>
+        </div>
+      <?php endforeach; ?>
+    </section>
+<?php
+}
+
 /** The Site settings panel. */
 function render_admin_site_settings($csrfToken) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
@@ -5570,7 +5726,7 @@ function render_admin_site_settings($csrfToken) {
         <input type="hidden" name="action" value="save_site_settings">
         <input type="hidden" name="config_hash" value="<?= $esc($hash) ?>">
         <?php foreach (gallery_setting_definitions() as $group): ?>
-          <h3 class="subhead"><?= $esc($group['title']) ?></h3>
+          <h3 class="subhead"<?= $group['title'] === 'Server setup (advanced)' ? ' id="server-setup"' : '' ?>><?= $esc($group['title']) ?></h3>
           <?php foreach ($group['items'] as $d): $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null; ?>
             <?php $reqOn = empty($d['requires']) || (defined($d['requires']) && constant($d['requires'])); ?>
             <div class="site-row<?= !empty($d['requires']) ? ' sub-row' : '' ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn ? '' : ' hidden') : '' ?>>
@@ -5579,7 +5735,10 @@ function render_admin_site_settings($csrfToken) {
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
                 <div class="help"><?= $esc($d['help']) ?></div>
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
-                <div class="help ffstatus"><strong>ffmpeg on this server:</strong> <?= $ffFound !== '' ? 'found (' . $esc($ffFound) . '). Real thumbnails, short preview clips and finger-scrubbing on a phone are available.' : 'not found. Videos show the browser\'s own first frame where it can play them. If it is installed somewhere unusual, put its full path as "FFMPEG_PATH" in .gallery-config.php.' ?></div>
+                <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . '). Real thumbnails, hover clips and scrubbing with a mouse or finger are available.' : 'Videos show the browser\'s own first frame where it can play them. If it is installed somewhere unusual, put its full path as "FFMPEG_PATH" in .gallery-config.php.' ?></div>
+                <?php endif; ?>
+                <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
+                <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
                 <?php endif; ?>
                 <?php if (!empty($d['risk'])): ?><div class="risk"><?= $esc($d['risk']) ?></div><?php endif; ?>
                 <?php if (!empty($d['offwarn'])): ?><div class="warn-note offnote" hidden><?= $esc($d['offwarn']) ?></div><?php endif; ?>
@@ -5612,7 +5771,7 @@ function render_admin_site_settings($csrfToken) {
             </div>
           <?php endforeach; ?>
           <?php if ($group['title'] === 'Server setup (advanced)'): ?>
-            <div class="site-rules"><div class="name">Keep private photos from being fetched by address</div><div class="help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help(true) ?></div>
+            <div class="site-rules"><div class="name">Keep private photos from being fetched by address</div><div class="lock-result" data-lock-status></div><div class="help lock-help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help(true) ?></div>
           <?php endif; ?>
         <?php endforeach; ?>
 
@@ -5666,6 +5825,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $folderLabel = $adminFolderPath ?? 'Root';
     import_folder_gps($dir, $adminFolderReal, $adminFiles);
     $adminHidden = admin_any_hidden($dir, $files, $folderGroupKeys) ? admin_hidden_data($dir, $files) : null;
+    $GLOBALS['__lock_probe'] = lock_probe_targets($dir, $files);
+    $GLOBALS['__admin_files'] = $files;
     // After saving a photo, bring that photo's card back into view.
     $focusCard = ($resultMessage && isset($_POST['file']) && is_string($_POST['file']))
         ? 'photo-' . md5(($adminFolderPath === null ? '' : $adminFolderPath . '/') . basename($_POST['file'])) : '';
@@ -5778,6 +5939,28 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .privacy-row { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
   .privacy-row form { margin:0; }
   .hidden-warning { font-size:0.9rem; line-height:1.55; }
+  .lock-result { margin-top:6px; font-size:0.85rem; }
+  .lock-result:empty { display:none; }
+  /* Links in the admin's running text: the teal of the sidebar link, not the browser's default blue. */
+  .admin-main p a, .admin-main li a, .admin-main .help a, .admin-main .muted a { color:#5eead4; text-decoration-color:rgba(94,234,212,0.45); text-underline-offset:2px; }
+  .admin-main p a:hover, .admin-main li a:hover, .admin-main .help a:hover, .admin-main .muted a:hover { color:#99f6e4; text-decoration-color:currentColor; }
+  .admin-main .flash a, .admin-main .flash a:hover { color:inherit; }
+  .subhead { scroll-margin-top:70px; }
+  .subhead.flash-target { outline:2px solid var(--accent); outline-offset:4px; border-radius:4px; }
+  .note-text, .help.note-text, .site-row .help.note-text { color:#f5a623; }
+  .health-row { display:flex; gap:10px; align-items:flex-start; padding:6px 0; border-top:1px solid #26262a; font-size:0.88rem; }
+  .health-row:first-of-type { border-top:0; }
+  .health-mark { flex:none; width:1.3em; text-align:center; line-height:1.5; }
+  .health-label { font-weight:600; }
+  .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
+  .health-summary { margin:0 0 6px; }
+  .health-summary .secondary { margin-left:10px; padding:3px 12px; font-size:0.8rem; }
+  .accel-status:empty { display:none; }
+  .ok-text, .help.ok-text, .site-row .help.ok-text { color:var(--ok); }
+  .warn-text, .help.warn-text, .site-row .help.warn-text { color:var(--err); }
+  .linklike { background:none; border:0; padding:0; color:inherit; font:inherit; text-decoration:underline; cursor:pointer; }
+  .lock-recheck { margin-top:8px; padding:3px 12px; font-size:0.8rem; }
+  [hidden] { display:none !important; }
   @media (max-width: 960px) {
     .admin-bar-inner { flex-wrap:wrap; gap:0 10px; padding:8px 12px 0; }
     .admin-bar .crumb { flex:1 1 0; }
@@ -5927,13 +6110,17 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .extra-list code { word-break:break-all; }
   .extra-add { display:flex; flex-direction:column; gap:6px; }
   .photos-hint { margin:0 0 12px; }
+  <?= video_tile_css() ?>
   .thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(124px, 1fr)); gap:10px; }
   .thumb { position:relative; padding:0; border:2px solid transparent; background:var(--card); border-radius:9px; cursor:pointer; overflow:hidden; text-align:left; color:var(--text); display:flex; flex-direction:column; font:inherit; }
   .thumb:hover { border-color:#3a3a42; }
   .thumb.selected { border-color:var(--accent); box-shadow:0 0 0 2px rgba(88,101,242,0.35); }
   .thumb .thumb-img { width:100%; aspect-ratio:1/1; object-fit:cover; display:block; background:#101012; }
-  .thumb .thumb-video { display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:1.6rem; color:var(--muted); }
-  .thumb .thumb-video small { font-size:0.7rem; }
+  .thumb .thumb-media { display:block; position:relative; }
+  .thumb .thumb-duration { position:absolute; left:5px; bottom:5px; background:rgba(0,0,0,0.65); color:#eaeaea; font-size:0.68rem; padding:1px 6px; border-radius:9px; pointer-events:none; }
+  .editor-thumb { position:relative; display:block; width:96px; height:96px; flex:none; border-radius:8px; overflow:hidden; }
+  .editor-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .editor-thumb .video-mark { width:40px; }
   .thumb-badges { position:absolute; top:5px; right:5px; display:flex; gap:3px; font-size:0.7rem; }
   .thumb-badges span { background:rgba(0,0,0,0.68); padding:1px 5px; border-radius:8px; line-height:1.4; }
   .thumb-badges .warn { color:#f5a623; }
@@ -5965,8 +6152,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .js-tabs .item-editor { display:none; }
   .js-tabs .item-editor.open { display:block; }
   .editor-head { display:flex; gap:14px; align-items:center; margin-bottom:14px; }
-  .editor-head img, .editor-head .item-thumb-placeholder { width:96px; height:96px; flex:none; object-fit:cover; border-radius:8px; background:#101012; }
-  .item-thumb-placeholder { display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:0.75rem; text-align:center; }
+  .editor-head img { width:96px; height:96px; flex:none; object-fit:cover; border-radius:8px; background:#101012; }
   .item-meta { min-width:0; }
   .item-filename { font-size:0.9rem; color:var(--text); word-break:break-all; }
   .item-sub { font-size:0.78rem; color:var(--muted); margin-top:3px; }
@@ -6021,6 +6207,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
+  <div id="server-probe" hidden data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></div>
 <?php if ($adminHidden): ?>
   <div class="tab-panel" data-tab="hidden">
 <?php render_admin_hidden_panel($adminHidden); ?>
@@ -6067,8 +6254,8 @@ foreach ($adminFiles as $file) {
 ?>
     <div class="item-editor" id="edit-<?= $hid ?>">
       <div class="editor-head">
-        <?php if ($isVideo): ?>
-          <div class="item-thumb-placeholder"><?= ui_icon('play') ?> video<?php if ($durationText !== ''): ?><br><?= $durationText ?><?php endif; ?></div>
+        <?php if ($isVideo): $vt = video_tile_parts($file, $videoDurations[$file] ?? null); ?>
+          <span class="editor-thumb vtile"<?= $vt['attrs'] ?>><img src="<?= $thumbUrl ?>" alt=""><?= $vt['inner'] ?></span>
         <?php else: ?>
           <img src="<?= $thumbUrl ?>" alt="">
         <?php endif; ?>
@@ -6168,8 +6355,8 @@ foreach ($adminFiles as $file) {
     ob_start();
 ?>
     <button type="button" class="thumb<?= $isCover ? ' is-cover' : '' ?>" id="photo-<?= $hid ?>" data-edit="edit-<?= $hid ?>" data-file="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($thumbTitle, ENT_QUOTES, 'UTF-8') ?>">
-      <?php if ($isVideo): ?>
-        <span class="thumb-img thumb-video"><?= ui_icon('play') ?><?php if ($durationText !== ''): ?><small><?= $durationText ?></small><?php endif; ?></span>
+      <?php if ($isVideo): $vt = video_tile_parts($file, $videoDurations[$file] ?? null); ?>
+        <span class="thumb-media vtile"<?= $vt['attrs'] ?>><img class="thumb-img" src="<?= $thumbUrl ?>" loading="lazy" alt=""><?= $vt['inner'] ?><?php if ($durationText !== ''): ?><small class="thumb-duration"><?= $durationText ?></small><?php endif; ?></span>
       <?php else: ?>
         <img class="thumb-img" src="<?= $thumbUrl ?>" loading="lazy" alt="">
       <?php endif; ?>
@@ -6338,7 +6525,7 @@ foreach ($adminFiles as $file) {
   </div>
   </div>
   <div class="tab-panel" data-tab="site">
-<?php render_admin_site_settings($csrfToken); ?>
+<?php render_admin_health_panel(); render_admin_site_settings($csrfToken); ?>
   </div>
   <div class="tab-panel" data-tab="export">
   <section class="panel" id="export">
@@ -6360,6 +6547,156 @@ foreach ($adminFiles as $file) {
 </main>
 </div>
 <script>
+  <?= video_tile_script() ?>
+  // A link inside the admin that opens one of its tabs and, if given, scrolls to (and briefly marks) a place in it.
+  function adminGoTo(tab, id) {
+    var t = document.querySelector('.side-link[data-tab="' + tab + '"], .side-hidden[data-tab="' + tab + '"], .admin-tabs a[data-tab="' + tab + '"]');
+    if (!t) return true;
+    t.click();
+    if (id) setTimeout(function () {
+      var e = document.getElementById(id);
+      if (!e) return;
+      e.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      e.classList.add('flash-target');
+      setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
+    }, 60);
+    return false;
+  }
+  // Are the web server rules in place (the ones on the Hidden tab and in Site settings)? This browser asks, without any
+  // sign-in: for a photo and a cached thumbnail by their plain addresses (a refusal means locked, a picture coming back
+  // means not; HEAD, so nothing is downloaded), and for a folder by its tidy address (the gallery's own page for that folder
+  // means the tidy links work). A warning only goes away on a clear answer; any doubt leaves it, and the rules, standing.
+  (function () {
+    const probe = document.getElementById('server-probe');
+    if (!probe || typeof fetch === 'undefined') return;
+    const photo = probe.getAttribute('data-photo'), cache = probe.getAttribute('data-cache');
+    const folderUrl = probe.getAttribute('data-folder-url');
+    const banner = document.getElementById('lock-banner');
+    const mirrorLater = function () {
+      if (!photo) ['lock', 'tidy', 'accel'].forEach(function (k) { document.querySelectorAll('[data-health="' + k + '"]').forEach(function (el) { el.textContent = 'Nothing to test with yet (no photos).'; }); });
+      else if (!folderUrl) document.querySelectorAll('[data-health="tidy"]').forEach(function (el) { el.textContent = 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'; });
+    };
+    mirrorLater();
+    const hideAll = function (sel, on) { document.querySelectorAll(sel).forEach(function (el) { el.hidden = on; }); };
+    const report = function (selector, ok, text, rulesSel) {
+      document.querySelectorAll(selector).forEach(function (el) {
+        el.className = 'lock-result ' + (ok ? 'ok-text' : 'warn-text');
+        el.textContent = text;
+        if (ok) {
+          const more = document.createElement('button');
+          more.type = 'button'; more.className = 'linklike'; more.textContent = 'Show the rules';
+          more.addEventListener('click', function () { hideAll(rulesSel, false); more.remove(); });
+          el.appendChild(document.createTextNode(' ')); el.appendChild(more);
+        }
+      });
+    };
+    const ask = function (url) {
+      const target = url + (url.indexOf('?') < 0 ? '?' : '&') + 'lockcheck=' + Date.now();   // (a server that won't answer HEAD gets a one-byte GET)
+      return fetch(target, { method: 'HEAD', cache: 'no-store', credentials: 'omit', redirect: 'manual' })
+        .then(function (r) { return r.status === 405 || r.status === 501 ? fetch(target, { headers: { Range: 'bytes=0-0' }, cache: 'no-store', credentials: 'omit', redirect: 'manual' }) : r; })
+        .then(function (r) {
+          if (r.type === 'opaqueredirect') return 'unknown';
+          if (r.status === 401 || r.status === 403 || r.status === 404 || r.status === 410) return 'blocked';
+          if (r.status >= 200 && r.status < 300) return 'open';
+          return 'unknown';
+        })
+        .catch(function () { return 'unknown'; });
+    };
+    const mirror = function (key, cls, text) {
+      document.querySelectorAll('[data-health="' + key + '"]').forEach(function (el) { el.textContent = text; el.className = 'health-detail ' + cls; });
+      document.querySelectorAll('[data-health-row="' + key + '"] .health-mark').forEach(function (m) {
+        m.className = 'health-mark ' + (cls === 'ok-text' ? 'ok-text' : cls === 'warn-text' ? 'warn-text' : cls === 'note-text' ? 'note-text' : 'muted');
+        m.textContent = cls === 'ok-text' ? '\u2713' : cls === 'warn-text' || cls === 'note-text' ? '!' : '\u2022';
+      });
+    };
+    const lockShow = function (state, detail) {
+      const locked = state === 'locked';
+      if (banner) {
+        banner.classList.toggle('ok', locked); banner.classList.toggle('error', !locked);
+        banner.querySelector('.lock-open-text').hidden = locked;
+        banner.querySelector('.lock-locked-text').hidden = !locked;
+        banner.querySelector('.lock-cache-part').hidden = !cache;
+        banner.querySelector('.lock-recheck').hidden = false;
+      }
+      hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', locked);
+      mirror('lock', locked ? 'ok-text' : state === 'open' ? 'warn-text' : '', locked ? 'Yes: a photo and a cached thumbnail asked for by their plain addresses were refused, so private items can only be reached through the gallery.'
+        : state === 'open' ? 'No: ' + detail + ' was handed out to a plain request, so a private photo can be fetched by its address. Use the rules on the Private tab.' : 'Couldn\'t tell (the request failed or was redirected).');
+      report('[data-lock-status]', locked, locked ? 'Checked just now from this browser: direct requests for photos are refused.'
+        : state === 'open' ? 'Checked just now from this browser: the server handed out ' + detail + ' to a plain request, so a private photo could be fetched by its address. Use the rules below.'
+        : 'Couldn\'t check from this browser just now (the request failed or was redirected).', '.lock-help, [data-lock-rules], [data-lock-rules-panel]');
+    };
+    const runLock = function () {
+      if (!photo) return;
+      Promise.all([ask(photo), cache ? ask(cache) : Promise.resolve('skipped')]).then(function (r) {
+        if (r[0] === 'open') return lockShow('open', photo);
+        if (r[1] === 'open') return lockShow('open', cache);
+        if (r[0] === 'blocked' && (r[1] === 'blocked' || r[1] === 'skipped')) return lockShow('locked');
+        lockShow('unknown');
+      });
+    };
+    const runTidy = function () {
+      if (!folderUrl) return;
+      fetch(folderUrl, { cache: 'no-store', credentials: 'omit', redirect: 'manual' })
+        .then(function (r) {
+          if (r.type === 'opaqueredirect') return 'unknown';
+          if (r.status === 200) return r.text().then(function (t) { return t.indexOf('name="gallery-folder"') >= 0 ? 'works' : 'no'; });
+          return r.status >= 400 && r.status < 500 ? 'no' : 'unknown';
+        })
+        .catch(function () { return 'unknown'; })
+        .then(function (state) {
+          mirror('tidy', state === 'works' ? 'ok-text' : state === 'no' ? 'note-text' : '', state === 'works' ? folderUrl + ' opens that folder.'
+            : state === 'no' ? 'Not set up (optional): ' + folderUrl + ' doesn\'t open that folder; the ?folder= links work regardless.' : 'Couldn\'t tell (the request failed or was redirected).');
+          if (state === 'works') {
+            hideAll('[data-tidy-rules]', true);
+            report('[data-tidy-status]', true, 'Tidy folder links work: ' + folderUrl + ' opens that folder (checked just now from this browser).', '[data-tidy-rules]');
+          } else {
+            hideAll('[data-tidy-rules]', false);
+            report('[data-tidy-status]', false, state === 'no' ? 'Tidy folder links are not set up (optional): ' + folderUrl + ' does not open that folder yet. The gallery works without them, with ?folder= links. Rules to add are below.'
+              : 'Couldn\'t check tidy folder links from this browser just now.', '[data-tidy-rules]');
+          }
+        });
+    };
+    // "nginx internal redirect": asks the gallery to answer a request the way it would with that setting, and sees whether
+    // nginx turns the answer into the picture. With it set, that says whether it works; empty, whether setting it would.
+    const accel = document.querySelector('[data-accel-status]');
+    const runAccel = function () {
+      if (!accel || !photo) return;
+      const current = accel.getAttribute('data-accel-current'), candidate = accel.getAttribute('data-accel-candidate');
+      const prefix = current || candidate;
+      if (!prefix) { document.querySelectorAll('[data-health="accel"]').forEach(function (el) { el.textContent = 'Not applicable: a gallery at the very top of a site has no folder to set it to.'; }); return; }
+      fetch('?admin&accelcheck=1&prefix=' + encodeURIComponent(prefix), { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { return r.ok && /^(image|video)\//.test(r.headers.get('content-type') || '') ? r.blob().then(function (b) { return b.size > 0; }) : false; })
+        .catch(function () { return null; })
+        .then(function (works) {
+          if (works === null) return mirror('accel', '', 'Couldn\'t tell (the request failed).');
+          mirror('accel', current ? (works ? 'ok-text' : 'warn-text') : (works ? 'note-text' : ''), current
+            ? (works ? 'Set to ' + current + ' and working: nginx sends the photos and videos itself.' : 'Set to ' + current + ' but nginx did not serve a test photo through it; photos may fail to load.')
+            : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (see the Private tab).'));
+          accel.textContent = '';
+          const say = function (cls, text) { accel.className = 'help accel-status ' + cls; accel.appendChild(document.createTextNode(text)); };
+          if (current) {
+            if (works) say('ok-text', 'Working: nginx just served a test photo through ' + current + ', so photos and videos are sent by nginx itself (checked from this browser).');
+            else say('warn-text', 'Not working: with this set, nginx did not serve a test photo through ' + current + ', so photos and videos may fail to load. Clear it, or add the matching internal location to nginx (the rules on the Private tab).');
+          } else if (works) {
+            say('note-text', 'Not using it yet: nginx has the internal location for ' + candidate + ' in place (just tested), but this is empty, so the gallery reads every photo and video itself. Setting it to ' + candidate + ' lets nginx send them, which is faster and handles seeking in videos better. ');
+            const use = document.createElement('button');
+            use.type = 'button'; use.className = 'secondary'; use.textContent = 'Set it to ' + candidate;
+            use.addEventListener('click', function () {
+              const input = document.querySelector('input[name="set_NGINX_ACCEL_REDIRECT_PREFIX"]');
+              if (!input) return;
+              input.value = candidate; input.dispatchEvent(new Event('change', { bubbles: true }));
+              use.remove();
+              accel.className = 'help accel-status ok-text'; accel.textContent = 'Saved. Reload this page to check that it works.';
+            });
+            accel.appendChild(use);
+          }
+        });
+    };
+    if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
+    runLock();
+    runTidy();
+    runAccel();
+  })();
   // The directive reference starts expanded on a desktop and collapsed
   // on a phone-width screen; it's a plain <details>, so either can toggle.
   // The folder list is a sidebar on a desktop and a collapsed "Folders" bar on a phone.
@@ -6928,6 +7265,23 @@ function run_admin_setup() {
     render_setup_page($error, $manual);
 }
 
+/** ?admin&accelcheck=1&prefix=/kb: answers the way the gallery answers for a photo once "nginx internal redirect" is set to
+ *  that prefix: no body, just an X-Accel-Redirect to one of the gallery's own photos. Behind an nginx that has the matching
+ *  `internal` location the browser gets the picture; anywhere else it gets nothing, which is how the admin tells whether
+ *  setting it would work (or whether what is set does). Admin only; sends no file itself. */
+function send_accel_check($dir, $files) {
+    header('Cache-Control: no-store');
+    $prefix = (string) ($_GET['prefix'] ?? '');
+    $target = lock_probe_targets($dir, $files)['file'];
+    if ($prefix === '' || !site_settings_valid_nginx_prefix($prefix) || $target === '') {
+        http_response_code(404);
+        return;
+    }
+    $urlPath = implode('/', array_map('rawurlencode', explode('/', $target)));
+    header('Content-Type: ' . guess_mime(strtolower(pathinfo($target, PATHINFO_EXTENSION))));
+    header('X-Accel-Redirect: ' . rtrim($prefix, '/') . '/' . $urlPath);
+}
+
 /**
  * Entry point for ?admin — auth (HTTPS, Basic Auth, throttle), then
  * dispatches to a POST action handler or the page itself. Exits the
@@ -6997,6 +7351,11 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         set_admin_reveal_cookie();
     }
     admin_start_session();
+
+    if (isset($_GET['accelcheck'])) {
+        send_accel_check($dir, $files);
+        return;
+    }
 
     if (isset($_GET['hidden'])) {
         // Older link: the hidden-items summary is the "Hidden" tab now.
@@ -7627,9 +7986,11 @@ function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status,
     foreach ($groupFiles as $gf) {
         $idx = array_search($gf, $allFiles, true);
         if ($idx === false) continue;
-        $html .= '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
-                . '" loading="lazy" onclick="openLightbox(' . (int)$idx . ')" alt="'
-                . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
+        $vt = video_tile_parts($gf, $GLOBALS['videoDurations'][$gf] ?? null);
+        $img = '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
+             . '" loading="lazy" ' . ($vt['inner'] === '' ? 'onclick="openLightbox(' . (int)$idx . ')" ' : '') . 'alt="'
+             . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
+        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
     }
     $html .= '</div>';
     $html .= '<div class="linked-photos-meta">';
@@ -7657,9 +8018,11 @@ function render_photo_thumbs_plain($clusterFiles, $allFiles, $permalinkHtml = ''
     foreach ($clusterFiles as $gf) {
         $idx = array_search($gf, $allFiles, true);
         if ($idx === false) continue;
-        $html .= '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
-                . '" loading="lazy" onclick="openLightbox(' . (int)$idx . ')" alt="'
-                . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
+        $vt = video_tile_parts($gf, $GLOBALS['videoDurations'][$gf] ?? null);
+        $img = '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
+             . '" loading="lazy" ' . ($vt['inner'] === '' ? 'onclick="openLightbox(' . (int)$idx . ')" ' : '') . 'alt="'
+             . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
+        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
     }
     $html .= '</div>';
     if ($permalinkHtml !== '') {
@@ -8283,6 +8646,267 @@ function markdown_to_html($text, $groups, $files, &$groupColors, &$groupStatus, 
     return unprotect_inline_code($html);
 }
 
+/** The look of a video's picture wherever it is shown (see video_tile_parts); used by the gallery and the admin. */
+function video_tile_css() {
+    return <<<'CSS'
+  .vtile { position: relative; }
+  /* A video's own first frame, over the placeholder, only once the browser has it. */
+  .vtile .tile-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.25s ease; }
+  .vtile .tile-video.ready { opacity: 1; }
+  .vtile .tile-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
+  .vtile .tile-preview.ready { opacity: 1; }
+  /* Dragging a finger sideways across a video tile scrubs through it; up and down still scrolls the page. */
+  .vtile[data-strip] { touch-action: pan-y; }
+  .vtile .tile-strip { position: absolute; inset: 0; background-repeat: no-repeat; pointer-events: none; }
+  /* A video's picture carries a big play mark in the middle so it is told apart at a glance; the clip and the scrub frames
+     are laid over the tile after it, so they cover it while they show. */
+  .vtile .video-mark {
+    position: absolute; left: 50%; top: 50%;
+    width: clamp(48px, 30%, 92px); aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.55); border: 2px solid rgba(255,255,255,0.85); color: #fff;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.45);
+    pointer-events: none;
+  }
+  .vtile .video-mark .ico { width: 46%; height: 46%; margin-left: 6%; fill: currentColor; stroke: currentColor; stroke-linejoin: round; }
+  .linked-photos-thumbs .vthumb { display: block; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; cursor: pointer; transition: transform 0.15s ease; }
+  .linked-photos-thumbs .vthumb img { width: 100%; height: 100%; }
+  .linked-photos-thumbs .vthumb:hover { transform: scale(1.08); }
+  .linked-photos-thumbs .vthumb .video-mark { width: 26px; border-width: 1.5px; box-shadow: none; }
+CSS;
+}
+
+/** The script behind video tiles' hover clips, finger and mouse scrubbing, and first-frame pictures; shared by the gallery
+ *  and the admin (see video_tile_parts for the markup it finds). */
+function video_tile_script() {
+    return <<<'JS'
+(function () {
+  const viewerOpen = function () { const l = document.getElementById('lightbox'); return !!(l && l.classList.contains('open')); };
+  // Video tile clips. A made clip (a few seconds, silent, looping) plays over the tile: on a desktop when the pointer rests on
+  // it, on a touch screen for the tile nearest the middle of the screen once the page has stopped moving. Only one plays at a
+  // time, and starting another (or scrolling, leaving, switching tab, opening the viewer) stops the previous completely,
+  // download included. Where the server has no clip, a desktop hover plays the video itself where the browser can. Nothing
+  // plays by itself for someone who asked their device for reduced motion or for less data.
+  const hoverish = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+  const calmDevice = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) || !!(navigator.connection && navigator.connection.saveData);
+  let active = null, pending = null;
+  const halt = function () {
+    if (pending) { clearTimeout(pending); pending = null; }
+    if (active) { const a = active; active = null; a.stop(); }
+  };
+  window.__previewHalt = halt;
+  const makeClip = function (card) {
+    const el = document.createElement('video');
+    el.className = 'tile-preview'; el.muted = true; el.loop = true; el.playsInline = true; el.preload = 'auto'; el.setAttribute('aria-hidden', 'true'); el.tabIndex = -1;
+    const handle = {
+      card: card, el: el,
+      stop: function () { el.pause(); el.removeAttribute('src'); try { el.load(); } catch (e) {} el.remove(); }
+    };
+    el.addEventListener('error', function () { if (active === handle) active = null; handle.stop(); });
+    el.addEventListener('playing', function () { el.classList.add('ready'); });
+    el.src = card.dataset.preview;
+    card.appendChild(el);
+    const p = el.play(); if (p && p.catch) p.catch(function () { if (active === handle) active = null; handle.stop(); });
+    return handle;
+  };
+  if (hoverish) {
+    const attach = function (card, start) {
+      card.addEventListener('mouseenter', function () {
+        halt();
+        pending = setTimeout(function () { pending = null; active = start(card); }, 250);
+      });
+      card.addEventListener('mouseleave', halt);
+    };
+    document.querySelectorAll('.vtile[data-preview]').forEach(function (card) { attach(card, makeClip); });
+    document.querySelectorAll('.vtile:not([data-preview]) .tile-video').forEach(function (v) {
+      attach(v.closest('.vtile'), function () {
+        if (!v.classList.contains('ready')) return null;
+        v.loop = true; const p = v.play(); if (p && p.catch) p.catch(function () {});
+        return { card: v.closest('.vtile'), el: v, stop: function () { v.pause(); try { v.currentTime = 0.1; } catch (e) {} } };
+      });
+    });
+    window.addEventListener('blur', halt);
+    window.addEventListener('scroll', halt, { passive: true });
+    document.addEventListener('visibilitychange', halt);
+  } else if (!calmDevice) {
+    const cards = Array.prototype.slice.call(document.querySelectorAll('.card[data-preview]'));
+    if (cards.length) {
+      let timer = null;
+      const choose = function () {
+        timer = null;
+        if (document.hidden || viewerOpen()) { halt(); return; }
+        const mid = window.innerHeight / 2;
+        let best = null, bestDist = Infinity;
+        cards.forEach(function (card) {
+          const r = card.getBoundingClientRect();
+          if (Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0) < r.height * 0.65) return;   // mostly on screen
+          const d = Math.abs((r.top + r.bottom) / 2 - mid);
+          if (d < bestDist) { best = card; bestDist = d; }
+        });
+        if (best && active && active.card === best) return;
+        halt();
+        if (best) active = makeClip(best);
+      };
+      const schedule = function () { if (timer) clearTimeout(timer); timer = setTimeout(choose, 400); };
+      window.addEventListener('scroll', function () { halt(); schedule(); }, { passive: true });   // stops while the page moves, picks again when it settles
+      window.addEventListener('resize', schedule);
+      document.addEventListener('visibilitychange', function () { halt(); schedule(); });
+      window.addEventListener('pageshow', schedule);
+      window.__previewResume = schedule;
+      schedule();
+    }
+  }
+  // Getting the clips ready before anyone needs them: once the page is up, the tiles in view whose clip isn't made yet are
+  // asked to make it, one request at a time, a dozen at most, with nothing to download. Stops at the first refusal.
+  function warmUp(attr) {
+    const cards = Array.prototype.slice.call(document.querySelectorAll('.vtile[' + attr + ']:not([' + attr + '-ready])'));
+    if (!cards.length || typeof IntersectionObserver === 'undefined' || typeof fetch === 'undefined') return;
+    let queue = [], running = false, done = 0, dead = false;
+    const next = function () {
+      if (running || dead || done >= 12 || !queue.length || document.hidden) return;
+      running = true;
+      const card = queue.shift();
+      fetch(card.getAttribute(attr) + '&warm=1', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { if (r.status === 204) { card.setAttribute(attr + '-ready', '1'); done++; } else { dead = true; } })
+        .catch(function () { dead = true; })
+        .then(function () { running = false; setTimeout(next, 300); });
+    };
+    const io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { io.unobserve(e.target); queue.push(e.target); } });
+      setTimeout(next, 800);
+    }, { rootMargin: '200px' });
+    cards.forEach(function (c) { io.observe(c); });
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) next(); });
+  }
+  warmUp('data-preview');
+  if ((navigator.maxTouchPoints || 0) > 0 || !hoverish) warmUp('data-strip');
+  // Scrubbing a video tile with a finger: a horizontal drag across it shows the frame under the finger (frames from the
+  // whole video, left edge = the start, right edge = the end), following the finger back and forth; a vertical drag is still
+  // the page scrolling, a plain tap still opens the viewer, and a drag never opens it. A tile whose sprite isn't made yet
+  // simply doesn't scrub (it is prepared in the background), and a playing clip gives way to the scrub.
+  document.querySelectorAll('.vtile[data-strip]').forEach(function (card) {
+    const cols = Number(card.getAttribute('data-strip-cols')) || 10, rows = Number(card.getAttribute('data-strip-rows')) || 1;
+    let sx = 0, sy = 0, tracking = false, scrubbing = false, overlay = null, img = null;
+    const show = function (x) {
+      const r = card.getBoundingClientRect();
+      const f = Math.min(cols * rows - 1, Math.max(0, Math.floor(Math.min(0.999, Math.max(0, (x - r.left) / r.width)) * cols * rows)));
+      const col = f % cols, row = Math.floor(f / cols);
+      const cell = r.height;   // each frame is shown as tall as the tile (the frames are square)
+      overlay.style.backgroundSize = (cell * cols) + 'px ' + (cell * rows) + 'px';
+      overlay.style.backgroundPosition = (-(col * cell) + (r.width - cell) / 2) + 'px ' + (-(row * cell)) + 'px';
+    };
+    card.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) { tracking = false; return; }
+      tracking = true; scrubbing = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      if (!img) { img = new Image(); img.src = card.getAttribute('data-strip'); }
+    }, { passive: true });
+    card.addEventListener('touchmove', function (e) {
+      if (!tracking) return;
+      const t = e.touches[0];
+      if (!scrubbing) {
+        const dx = Math.abs(t.clientX - sx), dy = Math.abs(t.clientY - sy);
+        if (dx < 8 && dy < 8) return;
+        if (dy > dx) { tracking = false; return; }
+        if (!img.complete || !img.naturalWidth) return;
+        if (window.__previewHalt) window.__previewHalt();
+        overlay = document.createElement('div'); overlay.className = 'tile-strip';
+        overlay.style.backgroundImage = 'url("' + img.src.replace(/"/g, '%22') + '")';
+        card.appendChild(overlay);
+        scrubbing = true;
+      }
+      e.preventDefault();
+      show(t.clientX);
+    }, { passive: false });
+    const end = function () {
+      tracking = false;
+      if (scrubbing) { scrubbing = false; window.__scrubbedAt = Date.now(); if (window.__previewResume) window.__previewResume(); }
+      if (overlay) { overlay.remove(); overlay = null; }
+    };
+    card.addEventListener('touchend', end);
+    card.addEventListener('touchcancel', end);
+    // With a mouse the same frames follow the pointer sideways across the tile. A pointer that rests starts the clip as
+    // before; one that moves sideways (a few pixels, or more once a clip is playing) swaps it for the frame under it, and
+    // the tile keeps scrubbing until the pointer leaves, so a pause to look at a frame doesn't start the clip. A click
+    // still opens the viewer.
+    if (hoverish) {
+      let mx = 0, over = false, mouseScrubbing = false;
+      const leave = function () {
+        over = false; mouseScrubbing = false;
+        if (overlay) { overlay.remove(); overlay = null; }
+      };
+      card.addEventListener('mouseenter', function (e) {
+        over = true; mouseScrubbing = false; mx = e.clientX;
+        if (!img) { img = new Image(); img.src = card.getAttribute('data-strip'); }
+      });
+      card.addEventListener('mousemove', function (e) {
+        if (!over) {   // the pointer is on the tile (a move says so) though nothing announced it, e.g. after the window was left and returned to
+          over = true; mx = e.clientX;
+          if (!img) { img = new Image(); img.src = card.getAttribute('data-strip'); }
+        }
+        if (!mouseScrubbing) {
+          if (Math.abs(e.clientX - mx) < (active && active.card === card ? 15 : 6)) return;
+          if (!img || !img.complete || !img.naturalWidth) return;
+          halt();
+          overlay = document.createElement('div'); overlay.className = 'tile-strip';
+          overlay.style.backgroundImage = 'url("' + img.src.replace(/"/g, '%22') + '")';
+          card.appendChild(overlay);
+          mouseScrubbing = true;
+        }
+        show(e.clientX);
+      });
+      card.addEventListener('mouseleave', leave);
+      window.addEventListener('blur', leave);
+      document.addEventListener('visibilitychange', leave);
+    }
+  });
+  // A video's own first frame over its placeholder, once the browser has one; if it can't play the video, nothing changes.
+  document.querySelectorAll('.tile-video').forEach(function (v) {
+    const ready = function () { v.classList.add('ready'); };
+    v.addEventListener('loadeddata', ready);
+    v.addEventListener('error', function () { v.remove(); });
+    if (v.readyState >= 2) ready();
+  });
+})();
+JS;
+}
+
+/** What makes a video's picture a video's picture wherever it is shown (a gallery tile, a strip of group thumbnails, a
+ *  folder's cover, the admin's grid): the big play mark, the browser's own first frame where the server can't take one,
+ *  and the addresses of the hover clip and of the frames a pointer or finger scrubs through. 'attrs' goes on the
+ *  element that holds the picture (which also gets the class "vtile"), 'inner' inside it, after the <img>. A photo gets
+ *  nothing of this. */
+function video_tile_parts($file, $duration = null) {
+    if (!is_video_file($file)) return ['attrs' => '', 'inner' => ''];
+    $version = htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8');
+    $inner = '';
+    // Where the server can't take a frame from a video, the browser's own first frame is laid over the placeholder (it
+    // appears only if the browser can play the video; otherwise the placeholder stays).
+    if (!video_pictures_expected() || video_poster_failed($file)) {
+        $inner .= '<video class="tile-video" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="?video=' . rawurlencode($file) . '&amp;v=' . $version . '#t=0.1"></video>';
+    }
+    $inner .= '<span class="video-mark" aria-hidden="true">' . ui_icon('play') . '</span>';
+    $attrs = '';
+    // A tile carries its clip's address unless ffmpeg couldn't make one lately; "ready" says it already exists (so nothing
+    // needs preparing when the page is opened).
+    if (video_previews_expected()) {
+        $clipFile = video_preview_file($file);
+        if ($clipFile !== null && !(is_file($clipFile . '.failed') && !is_file($clipFile))) {
+            $attrs .= ' data-preview="?preview=' . rawurlencode($file) . '&amp;v=' . $version . '"' . (is_file($clipFile) ? ' data-preview-ready="1"' : '');
+        }
+    }
+    if (ENABLE_VIDEO_PREVIEWS && $duration !== null && $duration >= 1 && video_previews_expected()) {
+        $stripBase = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'strip2', resolve_real_path($GLOBALS['dir'], $file));
+        if ($stripBase !== null && !(is_file($stripBase . '.failed') && !is_file($stripBase))) {
+            [$cols, $rows] = video_strip_layout($duration);
+            $attrs .= ' data-strip="?strip=' . rawurlencode($file) . '&amp;v=' . $version . '" data-strip-cols="' . $cols . '" data-strip-rows="' . $rows . '"'
+                . (is_file($stripBase) ? ' data-strip-ready="1"' : '');
+        }
+    }
+    return ['attrs' => $attrs, 'inner' => $inner];
+}
+
 /** One clickable gallery card. Shows a live-updatable view-count badge
  *  (hidden until >0); a small corner tag for a standalone sold/reserved
  *  item ($status is '', 'sold', or 'reserved' — a grouped item's ribbon
@@ -8337,32 +8961,10 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // single card; only a box's own container carried that id before,
     // leaving the link dead for a single.
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
-    // Where the server can't take a frame from a video, the browser's own first frame is laid over the placeholder (it
-    // appears only if the browser can play the video; otherwise the placeholder stays).
-    $tileVideo = is_video_file($file) && (!video_pictures_expected() || video_poster_failed($file))
-        ? '<video class="tile-video" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="?video=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '#t=0.1"></video>' : '';
-    // A tile carries its clip's address unless ffmpeg couldn't make one lately; "ready" says it already exists (so nothing
-    // needs preparing when the page is opened).
-    $previewAttr = '';
-    if (is_video_file($file) && video_previews_expected()) {
-        $clipFile = video_preview_file($file);
-        if ($clipFile !== null && !(is_file($clipFile . '.failed') && !is_file($clipFile))) {
-            $previewAttr = ' data-preview="?preview=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '"'
-                . (is_file($clipFile) ? ' data-preview-ready="1"' : '');
-        }
-    }
-    $stripAttr = '';
-    if (is_video_file($file) && ENABLE_VIDEO_PREVIEWS && $videoDuration !== null && $videoDuration >= 1 && video_previews_expected()) {
-        $stripBase = image_cache_path(containing_folder_real_path($GLOBALS['dir'], $file) . '/.gallery-cache', $file, 'strip', resolve_real_path($GLOBALS['dir'], $file));
-        if ($stripBase !== null && !(is_file($stripBase . '.failed') && !is_file($stripBase))) {
-            [$stripCols, $stripRows] = video_strip_layout($videoDuration);
-            $stripAttr = ' data-strip="?strip=' . rawurlencode($file) . '&amp;v=' . htmlspecialchars(file_version($file), ENT_QUOTES, 'UTF-8') . '" data-strip-cols="' . $stripCols . '" data-strip-rows="' . $stripRows . '"'
-                . (is_file($stripBase) ? ' data-strip-ready="1"' : '');
-        }
-    }
-    return '<div class="card' . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $previewAttr . $stripAttr . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    $vt = video_tile_parts($file, $videoDuration);
+    return '<div class="card' . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $tileVideo . $durationBadge . $statusBadge
+         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . (isset($GLOBALS['__cover_file']) && $GLOBALS['__cover_file'] === $file ? '<span id="folder-cover" class="cover-anchor" aria-hidden="true"></span>' : '') . '</div>';
 }
@@ -8474,7 +9076,8 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // When the owner chose this folder's cover photo and it sits right in the folder, opening the folder lands on it
     // (the folder page marks that card with #folder-cover) instead of at the top of a long page.
     $toCover = $manualCover !== null && $coverFile !== null && basename($coverFile) === $manualCover && dirname($coverFile) === $folderPath ? '#folder-cover' : '';
-    $html .= '<a class="folder-cover-link" href="' . $folderUrl . $toCover . '">';
+    $coverParts = $coverFile !== null ? video_tile_parts($coverFile) : ['attrs' => '', 'inner' => ''];
+    $html .= '<a class="folder-cover-link' . ($coverParts['inner'] !== '' ? ' vtile' : '') . '" href="' . $folderUrl . $toCover . '">';
     if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     if ($coverFile !== null) {
@@ -8484,7 +9087,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
         $coverLarge = htmlspecialchars(img_url($coverFile, 'coverlg'), ENT_QUOTES, 'UTF-8');
         $sizes = !empty($GLOBALS['__big_covers']) ? '(min-width: 640px) 520px, 100vw' : '(min-width: 640px) 330px, 100vw';
         $html .= '<img src="' . $coverSmall . '" srcset="' . $coverSmall . ' 640w, ' . $coverLarge . ' 1200w" sizes="' . $sizes
-                . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">';
+                . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">' . $coverParts['inner'];
     }
     $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
     if (!empty($meta['dates'])) {
@@ -8862,6 +9465,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= htmlspecialchars($pageTitle) ?> — Gallery</title>
 <meta name="description" content="<?= htmlspecialchars($ogDescription) ?>">
+<?php if ($currentFolderPath !== null): ?><meta name="gallery-folder" content="<?= htmlspecialchars($currentFolderPath) ?>">
+<?php endif; ?>
 <meta property="og:type" content="website">
 <meta property="og:title" content="<?= htmlspecialchars($ogTitle) ?>">
 <meta property="og:description" content="<?= htmlspecialchars($ogDescription) ?>">
@@ -9263,14 +9868,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .card:hover img {
     transform: scale(1.05);
   }
-  /* A video's own first frame, over the placeholder, only once the browser has it. */
-  .card .tile-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.25s ease; }
-  .card .tile-video.ready { opacity: 1; }
-  .card .tile-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
-  .card .tile-preview.ready { opacity: 1; }
-  /* Dragging a finger sideways across a video tile scrubs through it; up and down still scrolls the page. */
-  .card[data-strip] { touch-action: pan-y; }
-  .card .tile-strip { position: absolute; inset: 0; background-repeat: no-repeat; pointer-events: none; }
+  <?= video_tile_css() ?>
   .card:hover .tile-video { transform: scale(1.05); }
   .card.sold img, .card.sold .tile-video { filter: grayscale(1) brightness(0.6); }
   .sold-badge-corner, .reserved-badge-corner {
@@ -9950,156 +10548,7 @@ if (ENABLE_MAP && $mapPoints) {
     current = set[(at + delta + set.length) % set.length];
     updateImage();
   }
-  // Video tile clips. A made clip (a few seconds, silent, looping) plays over the tile: on a desktop when the pointer rests on
-  // it, on a touch screen for the tile nearest the middle of the screen once the page has stopped moving. Only one plays at a
-  // time, and starting another (or scrolling, leaving, switching tab, opening the viewer) stops the previous completely,
-  // download included. Where the server has no clip, a desktop hover plays the video itself where the browser can. Nothing
-  // plays by itself for someone who asked their device for reduced motion or for less data.
-  const hoverish = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
-  const calmDevice = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) || !!(navigator.connection && navigator.connection.saveData);
-  let active = null, pending = null;
-  const halt = function () {
-    if (pending) { clearTimeout(pending); pending = null; }
-    if (active) { const a = active; active = null; a.stop(); }
-  };
-  window.__previewHalt = halt;
-  const makeClip = function (card) {
-    const el = document.createElement('video');
-    el.className = 'tile-preview'; el.muted = true; el.loop = true; el.playsInline = true; el.preload = 'auto'; el.setAttribute('aria-hidden', 'true'); el.tabIndex = -1;
-    const handle = {
-      card: card, el: el,
-      stop: function () { el.pause(); el.removeAttribute('src'); try { el.load(); } catch (e) {} el.remove(); }
-    };
-    el.addEventListener('error', function () { if (active === handle) active = null; handle.stop(); });
-    el.addEventListener('playing', function () { el.classList.add('ready'); });
-    el.src = card.dataset.preview;
-    card.appendChild(el);
-    const p = el.play(); if (p && p.catch) p.catch(function () { if (active === handle) active = null; handle.stop(); });
-    return handle;
-  };
-  if (hoverish) {
-    const attach = function (card, start) {
-      card.addEventListener('mouseenter', function () {
-        halt();
-        pending = setTimeout(function () { pending = null; active = start(card); }, 250);
-      });
-      card.addEventListener('mouseleave', halt);
-    };
-    document.querySelectorAll('.card[data-preview]').forEach(function (card) { attach(card, makeClip); });
-    document.querySelectorAll('.card:not([data-preview]) .tile-video').forEach(function (v) {
-      attach(v.closest('.card'), function () {
-        if (!v.classList.contains('ready')) return null;
-        v.loop = true; const p = v.play(); if (p && p.catch) p.catch(function () {});
-        return { card: v.closest('.card'), el: v, stop: function () { v.pause(); try { v.currentTime = 0.1; } catch (e) {} } };
-      });
-    });
-    window.addEventListener('blur', halt);
-    window.addEventListener('scroll', halt, { passive: true });
-    document.addEventListener('visibilitychange', halt);
-  } else if (!calmDevice) {
-    const cards = Array.prototype.slice.call(document.querySelectorAll('.card[data-preview]'));
-    if (cards.length) {
-      let timer = null;
-      const choose = function () {
-        timer = null;
-        if (document.hidden || lightbox.classList.contains('open')) { halt(); return; }
-        const mid = window.innerHeight / 2;
-        let best = null, bestDist = Infinity;
-        cards.forEach(function (card) {
-          const r = card.getBoundingClientRect();
-          if (Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0) < r.height * 0.65) return;   // mostly on screen
-          const d = Math.abs((r.top + r.bottom) / 2 - mid);
-          if (d < bestDist) { best = card; bestDist = d; }
-        });
-        if (best && active && active.card === best) return;
-        halt();
-        if (best) active = makeClip(best);
-      };
-      const schedule = function () { if (timer) clearTimeout(timer); timer = setTimeout(choose, 400); };
-      window.addEventListener('scroll', function () { halt(); schedule(); }, { passive: true });   // stops while the page moves, picks again when it settles
-      window.addEventListener('resize', schedule);
-      document.addEventListener('visibilitychange', function () { halt(); schedule(); });
-      window.addEventListener('pageshow', schedule);
-      window.__previewResume = schedule;
-      schedule();
-    }
-  }
-  // Getting the clips ready before anyone needs them: once the page is up, the tiles in view whose clip isn't made yet are
-  // asked to make it, one request at a time, a dozen at most, with nothing to download. Stops at the first refusal.
-  function warmUp(attr) {
-    const cards = Array.prototype.slice.call(document.querySelectorAll('.card[' + attr + ']:not([' + attr + '-ready])'));
-    if (!cards.length || typeof IntersectionObserver === 'undefined' || typeof fetch === 'undefined') return;
-    let queue = [], running = false, done = 0, dead = false;
-    const next = function () {
-      if (running || dead || done >= 12 || !queue.length || document.hidden) return;
-      running = true;
-      const card = queue.shift();
-      fetch(card.getAttribute(attr) + '&warm=1', { credentials: 'same-origin', cache: 'no-store' })
-        .then(function (r) { if (r.status === 204) { card.setAttribute(attr + '-ready', '1'); done++; } else { dead = true; } })
-        .catch(function () { dead = true; })
-        .then(function () { running = false; setTimeout(next, 300); });
-    };
-    const io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (e) { if (e.isIntersecting) { io.unobserve(e.target); queue.push(e.target); } });
-      setTimeout(next, 800);
-    }, { rootMargin: '200px' });
-    cards.forEach(function (c) { io.observe(c); });
-    document.addEventListener('visibilitychange', function () { if (!document.hidden) next(); });
-  }
-  warmUp('data-preview');
-  if ((navigator.maxTouchPoints || 0) > 0 || !hoverish) warmUp('data-strip');
-  // Scrubbing a video tile with a finger: a horizontal drag across it shows the frame under the finger (frames from the
-  // whole video, left edge = the start, right edge = the end), following the finger back and forth; a vertical drag is still
-  // the page scrolling, a plain tap still opens the viewer, and a drag never opens it. A tile whose sprite isn't made yet
-  // simply doesn't scrub (it is prepared in the background), and a playing clip gives way to the scrub.
-  document.querySelectorAll('.card[data-strip]').forEach(function (card) {
-    const cols = Number(card.getAttribute('data-strip-cols')) || 10, rows = Number(card.getAttribute('data-strip-rows')) || 1;
-    let sx = 0, sy = 0, tracking = false, scrubbing = false, overlay = null, img = null;
-    const show = function (x) {
-      const r = card.getBoundingClientRect();
-      const f = Math.min(cols * rows - 1, Math.max(0, Math.floor(Math.min(0.999, Math.max(0, (x - r.left) / r.width)) * cols * rows)));
-      const col = f % cols, row = Math.floor(f / cols);
-      const cell = r.height;   // each frame is shown as tall as the tile (the frames are square)
-      overlay.style.backgroundSize = (cell * cols) + 'px ' + (cell * rows) + 'px';
-      overlay.style.backgroundPosition = (-(col * cell) + (r.width - cell) / 2) + 'px ' + (-(row * cell)) + 'px';
-    };
-    card.addEventListener('touchstart', function (e) {
-      if (e.touches.length !== 1) { tracking = false; return; }
-      tracking = true; scrubbing = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-      if (!img) { img = new Image(); img.src = card.getAttribute('data-strip'); }
-    }, { passive: true });
-    card.addEventListener('touchmove', function (e) {
-      if (!tracking) return;
-      const t = e.touches[0];
-      if (!scrubbing) {
-        const dx = Math.abs(t.clientX - sx), dy = Math.abs(t.clientY - sy);
-        if (dx < 8 && dy < 8) return;
-        if (dy > dx) { tracking = false; return; }
-        if (!img.complete || !img.naturalWidth) return;
-        if (window.__previewHalt) window.__previewHalt();
-        overlay = document.createElement('div'); overlay.className = 'tile-strip';
-        overlay.style.backgroundImage = 'url("' + img.src.replace(/"/g, '%22') + '")';
-        card.appendChild(overlay);
-        scrubbing = true;
-      }
-      e.preventDefault();
-      show(t.clientX);
-    }, { passive: false });
-    const end = function () {
-      tracking = false;
-      if (scrubbing) { scrubbing = false; window.__scrubbedAt = Date.now(); if (window.__previewResume) window.__previewResume(); }
-      if (overlay) { overlay.remove(); overlay = null; }
-    };
-    card.addEventListener('touchend', end);
-    card.addEventListener('touchcancel', end);
-  });
-  // A video's own first frame over its placeholder, once the browser has one; if it can't play the video, nothing changes.
-  document.querySelectorAll('.tile-video').forEach(function (v) {
-    const ready = function () { v.classList.add('ready'); };
-    v.addEventListener('loadeddata', ready);
-    v.addEventListener('error', function () { v.remove(); });
-    if (v.readyState >= 2) ready();
-  });
+  <?= video_tile_script() ?>
   // The archive always asks first, saying how many files and how big: it is a long, heavy download, and nothing is done on the server until the answer is yes.
   document.querySelectorAll('.page-archive').forEach(function (a) {
     a.addEventListener('click', function (e) {
@@ -10113,6 +10562,7 @@ if (ENABLE_MAP && $mapPoints) {
       lightboxImg.style.display = 'none';
       lightboxImg.src = '';
       lightboxVideo.style.display = '';
+      lightboxVideo.poster = <?= video_pictures_expected() ? 'true' : 'false' ?> ? '?img=' + encodeURIComponent(file) + '&size=share' + (fileVersions[current] ? '&v=' + fileVersions[current] : '') : '';
       lightboxVideo.src = '?video=' + encodeURIComponent(file) + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
       lightboxVideo.load();
     } else {

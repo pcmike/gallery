@@ -9,7 +9,7 @@ function run(notes) {
   const hint = new El('p'); hint.hidden = true;
   doc.querySelectorAll = (s) => s === '.adm-textarea' ? tas : s === '.admin-insert-btn' ? [btn] : [];
   doc.querySelector = (s) => s === '.insert-hint' ? hint : null;
-  new Function('document', 'window', 'confirm', src + '\n;return {};')(doc, { matchMedia: () => ({ matches: false }) }, () => true);
+  new Function('document', 'window', 'confirm', 'navigator', src + '\n;return {};')(doc, { matchMedia: () => ({ matches: false }) }, () => true, { maxTouchPoints: 0 });
   return { btn, tas, hint };
 }
 let r = run(1);
@@ -29,7 +29,7 @@ ok(r.tas[0].value === 'Hello world' && r.tas[1].value === 'Hello world' && r.hin
 r.tas[1].fire('focus'); r.btn.fire('click');
 ok(r.tas[1].value === 'Hello{sold} world' && r.tas[0].value === 'Hello world' && r.hint.hidden === true, 'after clicking in the second note, the directive goes into that note, not the other, and the hint goes away');
 const form = new El('form'); const nn = new El('input'); nn._cls.add('adm-newname'); nn.value = '  copy.md '; form.appendChild(nn);
-const asked = []; const g = new Function('document', 'window', 'confirm', src + '\n;return admConfirmSaveAs;')(makeDoc(''), { matchMedia: () => ({ matches: false }) }, (m) => { asked.push(m); return false; });
+const asked = []; const g = new Function('document', 'window', 'confirm', 'navigator', src + '\n;return admConfirmSaveAs;')(makeDoc(''), { matchMedia: () => ({ matches: false }) }, (m) => { asked.push(m); return false; }, { maxTouchPoints: 0 });
 ok(g(form) === false && asked[0] === 'Save as "copy.md"? If that file already exists, it will be overwritten.', 'Save As asks for confirmation naming the trimmed file, and a "no" cancels the submit');
 nn.value = '   '; ok(g(form) === true && asked.length === 1, 'a blank new-name field (plain Save) never prompts');
 print(fails ? `\n${fails} FAILED` : '\nadmin script: all checks passed'); std.exit(fails ? 1 : 0);
