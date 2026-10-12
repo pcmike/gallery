@@ -4358,10 +4358,15 @@ function sort_priority_names() {
 }
 
 /** The one sentence that says what the "put first" list does, e.g. "Videos, then photos with a location, then the rest." */
-function sort_priority_summary($order, $on) {
+function sort_priority_summary($order, $on, $siteOrder = null, $siteOn = null) {
     $names = sort_priority_names();
     $parts = [];
     foreach ($order as $k) if (!empty($on[$k])) $parts[] = $names[$k][1];
+    if (!$parts && $siteOrder !== null) {   // a folder's list with everything off, while the site puts something first
+        $siteParts = [];
+        foreach ($siteOrder as $k) if (!empty($siteOn[$k])) $siteParts[] = $names[$k][1];
+        if ($siteParts) return 'Nothing is put first in this folder, though the site puts ' . implode(', then ', $siteParts) . ' first.';
+    }
     if (!$parts) return 'Nothing is put first: photos follow the order above.';
     $text = implode(', then ', $parts) . ', then the rest.';
     return ucfirst($text);
@@ -5362,6 +5367,13 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
                     $kinds = array_map('trim', explode(',', (string) ($_POST['photo_sort_priority'] ?? '')));
                     $want = ['private', 'video', 'located']; $sortedKinds = $kinds; sort($sortedKinds); sort($want);
                     if ($sortedKinds === $want) $own['priority'] = $kinds;
+                    // A list that would sort exactly as the site's does is not a setting of this folder's own (so it keeps following the site).
+                    if (isset($own['priority'])) {
+                        $namesMap = sort_priority_names();
+                        $ownEff = array_values(array_filter($own['priority'], function ($k) use ($own) { return !empty($own[$k]); }));
+                        $siteEff = array_values(array_filter(sort_priority_list(), function ($k) use ($namesMap) { return (bool) constant($namesMap[$k][2]); }));
+                        if ($ownEff === $siteEff) foreach (['private', 'video', 'located', 'priority'] as $drop) unset($own[$drop]);
+                    }
                 }
             } else {
                 foreach (['private', 'video', 'located'] as $kind) {
@@ -5940,7 +5952,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
               <?php endforeach; ?>
               </ol>
               <input type="hidden" name="photo_sort_priority" class="sf-order" value="<?= $esc(implode(',', $sfOrder)) ?>">
-              <p class="sf-summary" aria-live="polite"><?= $esc(sort_priority_summary($sfOrder, $sfOn)) ?></p>
+              <p class="sf-summary" aria-live="polite"><?= $esc(sort_priority_summary($sfOrder, $sfOn, $siteOrder, $siteOn)) ?></p>
             </div>
             </div>
           </div>
@@ -7800,6 +7812,12 @@ foreach ($adminFiles as $file) {
     function sum() {
       var parts = [].filter.call(list.children, function (li) { return li.querySelector('input[type=checkbox]').checked; }).map(function (li) { return NAMES[li.getAttribute('data-kind')]; });
       var t = parts.length ? parts.join(', then ') + ', then the rest.' : 'Nothing is put first: photos follow the order above.';
+      if (!parts.length && box.getAttribute('data-mode') === 'form') {   // a folder with everything off, while the site puts something first
+        var sOn = {}, sOrd = (box.getAttribute('data-site-order') || '').split(',');
+        try { sOn = JSON.parse(box.getAttribute('data-site-on')) || {}; } catch (e) {}
+        var sParts = sOrd.filter(function (k) { return sOn[k]; }).map(function (k) { return NAMES[k]; });
+        if (sParts.length) t = 'Nothing is put first in this folder, though the site puts ' + sParts.join(', then ') + ' first.';
+      }
       summary.textContent = t.charAt(0).toUpperCase() + t.slice(1);
     }
     var saved = order();
@@ -7904,8 +7922,19 @@ foreach ($adminFiles as $file) {
     }
     [].forEach.call(det_radios(), function (r) { r.addEventListener('change', label); });
     function det_radios() { var det = box.closest('details'); return det ? det.querySelectorAll('.sort-row input[type=radio]') : []; }
-    initSortFirst(box, function (now, ok) { hidden.value = now.join(','); own(true); ok(); });
-    [].forEach.call(box.querySelectorAll('input[type=checkbox]'), function (cb) { cb.addEventListener('change', function () { hidden.value = orderNow(); own(true); }); });
+    var siteOrder = (box.getAttribute('data-site-order') || '').split(','), siteOn = {};
+    try { siteOn = JSON.parse(box.getAttribute('data-site-on')) || {}; } catch (e) {}
+    function effective(arr, on) { return arr.filter(function (k) { return on[k]; }).join(','); }
+    var siteEff = effective(siteOrder, siteOn);
+    // After any change: if the list would sort exactly as the site's does, it IS the site's (the pill says so and the list shows the
+    // site's own); otherwise it is this folder's own. (All switches off is this folder's own while the site puts something first.)
+    function evaluate() {
+      var on = {}; [].forEach.call(box.querySelectorAll('.sf-list li'), function (li) { on[li.getAttribute('data-kind')] = li.querySelector('input[type=checkbox]').checked; });
+      if (effective(orderNow().split(','), on) === siteEff) { box.sfSet(siteOrder, siteOn); hidden.value = orderNow(); own(false); }
+      else { hidden.value = orderNow(); own(true); }
+    }
+    initSortFirst(box, function (now, ok) { ok(); evaluate(); });
+    [].forEach.call(box.querySelectorAll('input[type=checkbox]'), function (cb) { cb.addEventListener('change', evaluate); });
     [].forEach.call(radios, function (r) {
       r.addEventListener('change', function () {
         if (!r.checked) return;
