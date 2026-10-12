@@ -4405,6 +4405,16 @@ function media_sort_override() {
     return $memo;
 }
 
+/** The order the "first" choices stack in for one folder: its own list when it has one, else the site's. */
+function media_sort_priority_for_folder($folderReal) {
+    $own = items_read($folderReal)['photoSort']['priority'] ?? null;
+    if (is_array($own)) {
+        $want = ['private', 'video', 'located']; $sorted = array_values($own); sort($sorted); sort($want);
+        if ($sorted === $want) return array_values($own);
+    }
+    return sort_priority_list();
+}
+
 /** The spec in force for one folder (given its real path): the visitor's choice, else the folder's own setting laid over the site's. */
 function media_sort_spec_for_folder($folderReal) {
     $override = media_sort_override();
@@ -4605,6 +4615,7 @@ function media_sort_apply($files, $dir) {
     $result = [];
     foreach ($byFolder as $folderReal => $list) {
         $spec = media_sort_spec_for_folder($folderReal);
+        $prio = media_sort_priority_for_folder($folderReal);
         if (!$revealed) $spec['private'] = false;   // visitors never see private items: nothing to put first
         if (count($list) < 2 || ($spec['order'] === $scanned && !$spec['desc'] && !$spec['private'] && !$spec['video'] && !$spec['located'])) { foreach ($list as $f) $result[] = $f; continue; }
         $info = [];
@@ -4618,8 +4629,8 @@ function media_sort_apply($files, $dir) {
                 't' => $spec['order'] === 'modified' ? (int) @filemtime(resolve_real_path($dir, $f)) : ($times[basename($f)] ?? 0),
             ];
         }
-        usort($list, function ($a, $b) use ($info, $spec) {
-            foreach (sort_priority_list() as $k) {
+        usort($list, function ($a, $b) use ($info, $spec, $prio) {
+            foreach ($prio as $k) {
                 if ($spec[$k]) { $d = ($info[$a][$k] ? 0 : 1) <=> ($info[$b][$k] ? 0 : 1); if ($d !== 0) return $d; }
             }
             $c = $spec['order'] === 'name' ? 0 : $info[$a]['t'] <=> $info[$b]['t'];
@@ -5345,9 +5356,18 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             if (in_array($order, ['name', 'taken', 'modified'], true)) $own['order'] = $order;
             $dirChoice = (string) ($_POST['photo_sort_dir'] ?? '');
             if ($dirChoice === 'asc' || $dirChoice === 'desc') $own['desc'] = $dirChoice === 'desc';
-            foreach (['private', 'video', 'located'] as $kind) {
-                $choice = (string) ($_POST['photo_sort_' . $kind] ?? '');
-                if ($choice === 'on' || $choice === 'off') $own[$kind] = $choice === 'on';
+            if (array_key_exists('photo_sort_first', $_POST)) {   // the list form: "" = follow the site's, "own" = this folder's own list
+                if ((string) $_POST['photo_sort_first'] === 'own') {
+                    foreach (['private', 'video', 'located'] as $kind) $own[$kind] = ((string) ($_POST['photo_sort_' . $kind] ?? 'off')) === 'on';
+                    $kinds = array_map('trim', explode(',', (string) ($_POST['photo_sort_priority'] ?? '')));
+                    $want = ['private', 'video', 'located']; $sortedKinds = $kinds; sort($sortedKinds); sort($want);
+                    if ($sortedKinds === $want) $own['priority'] = $kinds;
+                }
+            } else {
+                foreach (['private', 'video', 'located'] as $kind) {
+                    $choice = (string) ($_POST['photo_sort_' . $kind] ?? '');
+                    if ($choice === 'on' || $choice === 'off') $own[$kind] = $choice === 'on';
+                }
             }
             $updates['photoSort'] = $own !== [] ? $own : null;
         }
@@ -5898,11 +5918,30 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <div class="sort-rows">
             <div class="sort-row"><span class="sort-label">Order</span><?= ui_segmented('photo_sort_order', ['' => "Site's", 'name' => 'Name', 'taken' => 'Date'], ($ps['order'] ?? '') === 'modified' ? 'taken' : (string) ($ps['order'] ?? ''), 'Order') ?></div>
             <div class="sort-row"><span class="sort-label">Direction</span><?= ui_segmented('photo_sort_dir', ['' => "Site's", 'asc' => 'First to last', 'desc' => 'Last to first'], $dirNow, 'Direction') ?></div>
-            <?php $kindLabels = ['video' => 'Videos first', 'located' => 'Located first', 'private' => 'Private first']; foreach (sort_priority_list() as $kind): $lab = $kindLabels[$kind]; ?>
-              <div class="sort-row"><span class="sort-label"><?= $esc($lab) ?></span><?= ui_segmented('photo_sort_' . $kind, $triState, $psSel($kind), $lab) ?></div>
-            <?php endforeach; ?>
+            <?php
+              $sfNames = sort_priority_names(); $sfOwn = isset($ps['priority']) || isset($ps['video']) || isset($ps['located']) || isset($ps['private']);
+              $sfOrder = (isset($ps['priority']) && is_array($ps['priority']) && count($ps['priority']) === 3) ? array_values($ps['priority']) : sort_priority_list();
+              foreach (array_keys($sfNames) as $k) if (!in_array($k, $sfOrder, true)) $sfOrder[] = $k;
+              $sfOn = []; foreach ($sfNames as $k => $nm) $sfOn[$k] = isset($ps[$k]) && is_bool($ps[$k]) ? $ps[$k] : (bool) constant($nm[2]);
+              $sfOrder = array_merge(array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return $sfOn[$k]; })), array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return !$sfOn[$k]; })));
+            ?>
+            <div class="sort-row"><span class="sort-label">Put first</span><?= ui_segmented('photo_sort_first', ['' => "Site's", 'own' => "This folder's own"], $sfOwn ? 'own' : '', 'Put first') ?></div>
+            <div class="sortfirst sf-form" data-mode="form"<?= $sfOwn ? '' : ' hidden' ?>>
+              <ol class="sf-list">
+              <?php foreach ($sfOrder as $k): $nm = $sfNames[$k]; ?>
+                <li data-kind="<?= $esc($k) ?>">
+                  <button type="button" class="sf-grip" aria-label="Move <?= $esc($nm[1]) ?>: drag it, or press the up and down arrow keys" title="Drag to reorder"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></g></svg></button>
+                  <span class="sf-name"><?= $esc($nm[0]) ?></span>
+                  <input type="hidden" name="photo_sort_<?= $esc($k) ?>" value="off">
+                  <label class="switch"><input type="checkbox" name="photo_sort_<?= $esc($k) ?>" value="on" <?= $sfOn[$k] ? 'checked' : '' ?> aria-label="<?= $esc($nm[0]) ?> first"><span class="slider"></span></label>
+                </li>
+              <?php endforeach; ?>
+              </ol>
+              <input type="hidden" name="photo_sort_priority" class="sf-order" value="<?= $esc(implode(',', $sfOrder)) ?>">
+              <p class="sf-summary" aria-live="polite"><?= $esc(sort_priority_summary($sfOrder, $sfOn)) ?></p>
+            </div>
           </div>
-          <p class="hint">The "first" choices stack in the order set in Site settings (now: <?= $esc(implode(', then ', array_map(function ($k) { return sort_priority_names()[$k][1]; }, sort_priority_list()))) ?>) before the order itself. Visitors can change it with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
+          <p class="hint">"Put first" works as in Site settings: switch on what comes first and drag the handles to set the order they stack in, before the order itself. <?= $esc('Following the site\'s: ' . implode(', then ', array_map(function ($k) { return sort_priority_names()[$k][1]; }, sort_priority_list())) . '.') ?> Visitors can change it with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
         </details>
         <div class="field wide">
           <label>Description</label>
@@ -7744,6 +7783,108 @@ foreach ($adminFiles as $file) {
   // Site settings: every change saves the moment it is made (one request at a time, so the file's
   // fingerprint never races), and anything that publishes content, contacts a third party, or removes
   // something visitors see asks first. The other screens refresh when you leave this one.
+  // "Put first": the three kinds are rows you drag (by the handle, with a finger or a mouse, or with the arrow keys on it) into the
+  // order they stack in; each row's switch says whether it is used at all. What is switched on always stands above what is off. The
+  // list is the same on the Site settings page (every change saved as it is made) and in a folder's own settings (written into the
+  // form, saved with it); persist(order, ok, fail) is how each one keeps a change.
+  function initSortFirst(box, persist) {
+    var list = box.querySelector('.sf-list'), summary = box.querySelector('.sf-summary');
+    var NAMES = { private: 'private items', video: 'videos', located: 'photos with a location' };
+    function order() { return [].map.call(list.children, function (li) { return li.getAttribute('data-kind'); }); }
+    function sum() {
+      var parts = [].filter.call(list.children, function (li) { return li.querySelector('input[type=checkbox]').checked; }).map(function (li) { return NAMES[li.getAttribute('data-kind')]; });
+      var t = parts.length ? parts.join(', then ') + ', then the rest.' : 'Nothing is put first: photos follow the order above.';
+      summary.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    var saved = order();
+    function put(arr) { arr.forEach(function (k) { var li = list.querySelector('[data-kind="' + k + '"]'); if (li) list.appendChild(li); }); sum(); }
+    function save() {
+      var now = order();
+      sum();
+      persist(now, function () { saved = now; }, function () { put(saved); });
+    }
+    // What is switched on always stands above what is off (the off ones do nothing, so the list and the sentence agree):
+    // switching one on brings it up under the ones already on, switching one off sends it down below them.
+    function isOn(li) { return li.querySelector('input[type=checkbox]').checked; }
+    function settle() {
+      var items = [].slice.call(list.children);
+      items.filter(isOn).concat(items.filter(function (li) { return !isOn(li); })).forEach(function (li) { list.appendChild(li); });
+    }
+    [].forEach.call(list.querySelectorAll('input[type=checkbox]'), function (cb) {
+      cb.addEventListener('change', function () { settle(); if (order().join(',') !== saved.join(',')) save(); else sum(); });
+    });
+    // Drag a row by its handle: pointer events, so a finger works as well as a mouse (the browser's own drag and drop does
+    // not run on a touch screen). While it is held, the row only follows the pointer and the rows it passes slide out of its
+    // way; the list itself is reordered once, when it is let go (moving the row in the page while it is held would make the
+    // browser let go of the pointer after the first step).
+    [].forEach.call(list.children, function (li) {
+      var grip = li.querySelector('.sf-grip'), active = false, rows, rects, startY, gap, newIdx, idx0;
+      function clear() { rows.forEach(function (r) { r.style.transform = ''; }); }
+      grip.addEventListener('pointerdown', function (ev) {
+        if (ev.button !== undefined && ev.button !== 0) return;
+        rows = [].slice.call(list.children);
+        rects = rows.map(function (r) { return r.getBoundingClientRect(); });
+        idx0 = rows.indexOf(li); newIdx = idx0; startY = ev.clientY;
+        gap = rows.length > 1 ? Math.max(0, rects[1].top - rects[0].bottom) : 0;
+        active = true; li.classList.add('dragging'); list.classList.add('is-dragging');
+        try { grip.setPointerCapture(ev.pointerId); } catch (e) {}
+        ev.preventDefault();
+      });
+      grip.addEventListener('pointermove', function (ev) {
+        if (!active) return;
+        var me = rects[idx0], dy = ev.clientY - startY;
+        var lo = rects[0].top - me.top, hi = rects[rows.length - 1].bottom - me.bottom;
+        dy = Math.max(lo, Math.min(hi, dy));   // stays inside the list
+        li.style.transform = 'translateY(' + dy + 'px)';
+        var centre = me.top + me.height / 2 + dy;
+        newIdx = 0;
+        rows.forEach(function (r, k) { if (r !== li && rects[k].top + rects[k].height / 2 < centre) newIdx++; });
+        if (dy >= hi - 1) newIdx = rows.length - 1; else if (dy <= lo + 1) newIdx = 0;   // all the way down / up is the last / first place
+        var by = me.height + gap;
+        rows.forEach(function (r, k) {
+          if (r === li) return;
+          var shift = 0;
+          if (idx0 < newIdx && k > idx0 && k <= newIdx) shift = -by; else if (idx0 > newIdx && k < idx0 && k >= newIdx) shift = by;
+          r.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
+        });
+      });
+      function end(ev, commit) {
+        if (!active) return;
+        active = false;
+        try { grip.releasePointerCapture(ev.pointerId); } catch (e) {}
+        li.classList.remove('dragging'); list.classList.remove('is-dragging');
+        li.style.transform = ''; clear();
+        grip.blur(); grip.classList.add('rest');   // no focus ring and no hover tint left behind (a touch screen keeps :hover after a tap)
+        if (!commit) return;
+        var rest = rows.filter(function (r) { return r !== li; });
+        rest.splice(newIdx, 0, li);
+        rest.forEach(function (r) { list.appendChild(r); });
+        settle();
+        if (order().join(',') !== saved.join(',')) save(); else sum();
+      }
+      grip.addEventListener('pointerleave', function () { grip.classList.remove('rest'); });
+      grip.addEventListener('pointerup', function (ev) { end(ev, true); });
+      grip.addEventListener('pointercancel', function (ev) { end(ev, false); });
+      // The keyboard: up and down arrows on the handle move the row.
+      grip.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
+        ev.preventDefault();
+        if (ev.key === 'ArrowUp' && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling);
+        else if (ev.key === 'ArrowDown' && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li);
+        else return;
+        settle(); grip.focus(); if (order().join(',') !== saved.join(',')) save(); else sum();
+      });
+    });
+    
+  }
+  // In a folder's own settings: "Put first" is the site's, or this folder's own list (kept in the form until it is saved).
+  [].forEach.call(document.querySelectorAll('.sortfirst[data-mode=form]'), function (box) {
+    var holder = box.closest('.sort-rows') || box.parentNode, hidden = box.querySelector('input.sf-order');
+    initSortFirst(box, function (now, ok) { hidden.value = now.join(','); ok(); });
+    [].forEach.call(holder.querySelectorAll('input[name=photo_sort_first]'), function (r) {
+      r.addEventListener('change', function () { if (r.checked) box.hidden = r.value !== 'own'; });
+    });
+  });
   [].forEach.call(document.querySelectorAll('.site-settings-form'), function (form) {
     var hashInput = form.querySelector('input[name=config_hash]');
     var csrf = form.querySelector('input[name=csrf_token]').value;
@@ -7815,96 +7956,10 @@ foreach ($adminFiles as $file) {
         post(f, stateOf(cb), function () { cb.checked = !on; follow(!on); }, function () { if (note) note.hidden = on || !off; });
       });
     });
-    // "Put first": the three kinds are rows you drag (or move with the arrows) into the order they stack in; each row's switch
-    // is one of the SORT_*_FIRST settings, saved by the checkbox code above, and the order is saved here.
+    // On the Site settings page: the switches are saved by the checkbox code above; the order is saved here.
     [].forEach.call(form.querySelectorAll('.sortfirst'), function (box) {
-      var list = box.querySelector('.sf-list'), summary = box.querySelector('.sf-summary'), status = stateOf(box);
-      var NAMES = { private: 'private items', video: 'videos', located: 'photos with a location' };
-      function order() { return [].map.call(list.children, function (li) { return li.getAttribute('data-kind'); }); }
-      function sum() {
-        var parts = [].filter.call(list.children, function (li) { return li.querySelector('input[type=checkbox]').checked; }).map(function (li) { return NAMES[li.getAttribute('data-kind')]; });
-        var t = parts.length ? parts.join(', then ') + ', then the rest.' : 'Nothing is put first: photos follow the order above.';
-        summary.textContent = t.charAt(0).toUpperCase() + t.slice(1);
-      }
-      var saved = order();
-      function put(arr) { arr.forEach(function (k) { var li = list.querySelector('[data-kind="' + k + '"]'); if (li) list.appendChild(li); }); sum(); }
-      function save() {
-        var f = {}, now = order(); f[box.getAttribute('data-name')] = now.join(',');
-        sum();
-        post(f, status, function () { put(saved); }, function () { saved = now; });
-      }
-      // What is switched on always stands above what is off (the off ones do nothing, so the list and the sentence agree):
-      // switching one on brings it up under the ones already on, switching one off sends it down below them.
-      function isOn(li) { return li.querySelector('input[type=checkbox]').checked; }
-      function settle() {
-        var items = [].slice.call(list.children);
-        items.filter(isOn).concat(items.filter(function (li) { return !isOn(li); })).forEach(function (li) { list.appendChild(li); });
-      }
-      [].forEach.call(list.querySelectorAll('input[type=checkbox]'), function (cb) {
-        cb.addEventListener('change', function () { settle(); if (order().join(',') !== saved.join(',')) save(); else sum(); });
-      });
-      // Drag a row by its handle: pointer events, so a finger works as well as a mouse (the browser's own drag and drop does
-      // not run on a touch screen). While it is held, the row only follows the pointer and the rows it passes slide out of its
-      // way; the list itself is reordered once, when it is let go (moving the row in the page while it is held would make the
-      // browser let go of the pointer after the first step).
-      [].forEach.call(list.children, function (li) {
-        var grip = li.querySelector('.sf-grip'), active = false, rows, rects, startY, gap, newIdx, idx0;
-        function clear() { rows.forEach(function (r) { r.style.transform = ''; }); }
-        grip.addEventListener('pointerdown', function (ev) {
-          if (ev.button !== undefined && ev.button !== 0) return;
-          rows = [].slice.call(list.children);
-          rects = rows.map(function (r) { return r.getBoundingClientRect(); });
-          idx0 = rows.indexOf(li); newIdx = idx0; startY = ev.clientY;
-          gap = rows.length > 1 ? Math.max(0, rects[1].top - rects[0].bottom) : 0;
-          active = true; li.classList.add('dragging'); list.classList.add('is-dragging');
-          try { grip.setPointerCapture(ev.pointerId); } catch (e) {}
-          ev.preventDefault();
-        });
-        grip.addEventListener('pointermove', function (ev) {
-          if (!active) return;
-          var me = rects[idx0], dy = ev.clientY - startY;
-          var lo = rects[0].top - me.top, hi = rects[rows.length - 1].bottom - me.bottom;
-          dy = Math.max(lo, Math.min(hi, dy));   // stays inside the list
-          li.style.transform = 'translateY(' + dy + 'px)';
-          var centre = me.top + me.height / 2 + dy;
-          newIdx = 0;
-          rows.forEach(function (r, k) { if (r !== li && rects[k].top + rects[k].height / 2 < centre) newIdx++; });
-          if (dy >= hi - 1) newIdx = rows.length - 1; else if (dy <= lo + 1) newIdx = 0;   // all the way down / up is the last / first place
-          var by = me.height + gap;
-          rows.forEach(function (r, k) {
-            if (r === li) return;
-            var shift = 0;
-            if (idx0 < newIdx && k > idx0 && k <= newIdx) shift = -by; else if (idx0 > newIdx && k < idx0 && k >= newIdx) shift = by;
-            r.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
-          });
-        });
-        function end(ev, commit) {
-          if (!active) return;
-          active = false;
-          try { grip.releasePointerCapture(ev.pointerId); } catch (e) {}
-          li.classList.remove('dragging'); list.classList.remove('is-dragging');
-          li.style.transform = ''; clear();
-          grip.blur(); grip.classList.add('rest');   // no focus ring and no hover tint left behind (a touch screen keeps :hover after a tap)
-          if (!commit) return;
-          var rest = rows.filter(function (r) { return r !== li; });
-          rest.splice(newIdx, 0, li);
-          rest.forEach(function (r) { list.appendChild(r); });
-          settle();
-          if (order().join(',') !== saved.join(',')) save(); else sum();
-        }
-        grip.addEventListener('pointerleave', function () { grip.classList.remove('rest'); });
-        grip.addEventListener('pointerup', function (ev) { end(ev, true); });
-        grip.addEventListener('pointercancel', function (ev) { end(ev, false); });
-        // The keyboard: up and down arrows on the handle move the row.
-        grip.addEventListener('keydown', function (ev) {
-          if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
-          ev.preventDefault();
-          if (ev.key === 'ArrowUp' && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling);
-          else if (ev.key === 'ArrowDown' && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li);
-          else return;
-          settle(); grip.focus(); if (order().join(',') !== saved.join(',')) save(); else sum();
-        });
-      });
+      var status = stateOf(box);
+      initSortFirst(box, function (now, ok, fail) { var f = {}; f[box.getAttribute('data-name')] = now.join(','); post(f, status, fail, ok); });
     });
     [].forEach.call(form.querySelectorAll('select[name^=set_], input[type=number][name^=set_]'), function (el) {
       el.setAttribute('data-prev', el.value);
@@ -10988,8 +11043,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox.zoom-width img { width: 100%; max-width: var(--nat, 100%); }
   .lightbox.zoom-actual img { width: var(--act, auto); max-width: none; cursor: zoom-out; }
   .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
-    position: fixed; left: 0; right: 0; bottom: 0; margin: 0; padding: 22px 12px 8px; padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); justify-content: center; z-index: 6;
-    background: linear-gradient(transparent, rgba(0,0,0,0.78));
+    position: fixed; left: 50%; right: auto; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); margin: 0;
+    width: max-content; max-width: calc(100vw - 40px); padding: 3px 14px; justify-content: center; z-index: 6;
+    border-radius: 999px; background: rgba(0,0,0,0.6); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);   /* a soft dark pill: the controls stay readable and usable over the photo */
+  }
+  .lightbox.zoom-width .caption-row .caption, .lightbox.zoom-actual .caption-row .caption { color: #e4e4e8; }
+  .lightbox.zoom-width .caption-row .lightbox-copy, .lightbox.zoom-actual .caption-row .lightbox-copy { color: #e4e4e8; opacity: 0.95; }
+  /* Zoomed in, the photo runs under the other controls too: the same soft backing for the close button and the arrows. */
+  .lightbox.zoom-width .close, .lightbox.zoom-actual .close, .lightbox.zoom-width .nav, .lightbox.zoom-actual .nav {
+    background: rgba(0,0,0,0.5); border-radius: 999px; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); opacity: 0.9;
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-close-row { display: none; }
@@ -11002,7 +11064,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     .lightbox { padding: calc(env(safe-area-inset-top, 0px) + 54px) 0 calc(env(safe-area-inset-bottom, 0px) + 8px); background: #000; }   /* the page behind does not show through */
     .lightbox img, .lightbox video { max-height: calc(100dvh - 62px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
     .lightbox .caption-row, .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
-      position: fixed; top: 0; left: 0; right: 0; bottom: auto; transform: none; margin: 0; z-index: 6;
+      position: fixed; top: 0; left: 0; right: 0; bottom: auto; transform: none; margin: 0; z-index: 6; width: auto; max-width: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none;
       padding: calc(env(safe-area-inset-top, 0px) + 6px) 5px 4px 16px; justify-content: flex-start; align-items: center; gap: 0;
       background: linear-gradient(rgba(0,0,0,0.7), transparent);
     }
