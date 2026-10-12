@@ -7827,6 +7827,12 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         send_accel_check($dir, $files);
         return;
     }
+    if (isset($_GET['csrf'])) {   // the owner's quick private toggle on the gallery pages asks for this before it saves
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+        echo json_encode(['token' => admin_csrf_token()]);
+        return;
+    }
 
     if (isset($_GET['hidden'])) {
         // Older link: the hidden-items summary is the "Hidden" tab now.
@@ -9460,9 +9466,16 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // leaving the link dead for a single.
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
     $vt = video_tile_parts($file, $videoDuration);
-    return '<div class="card' . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    // For the signed-in owner: a lock on the tile showing whether it is private, and pressing it flips that.
+    $ownerLock = '';
+    if (is_admin_browser()) {
+        $isPriv = file_is_hidden($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
+        $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
+            . '" title="' . ($isPriv ? 'Private: press to make it public' : 'Public: press to make it private') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($isPriv ? '<span>Private</span>' : '') . '</button>';
+    }
+    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $durationBadge . $statusBadge
+         . '" loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . (isset($GLOBALS['__cover_file']) && $GLOBALS['__cover_file'] === $file ? '<span id="folder-cover" class="cover-anchor" aria-hidden="true"></span>' : '') . '</div>';
 }
@@ -10448,6 +10461,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     border-radius: 8px; font-size: 0.85rem; line-height: 1.35;
     pointer-events: none; overflow-wrap: anywhere;
   }
+  /* The owner's lock on a tile: red and labelled when private; a faint open lock when public (on a desktop only on hover). */
+  .priv-toggle { position: absolute; top: 6px; left: 6px; z-index: 4; display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; font-size: 0.72rem; line-height: 1; cursor: pointer; opacity: 0.6; transition: opacity .15s, background .15s; }
+  .priv-toggle .ico { width: 1em; height: 1em; }
+  .priv-toggle.is-private { background: rgba(237,66,69,0.88); border-color: rgba(255,255,255,0.35); opacity: 1; }
+  .priv-toggle.busy { opacity: 0.35; pointer-events: none; }
+  @media (hover: hover) { .priv-toggle:not(.is-private) { opacity: 0; } .card:hover .priv-toggle:not(.is-private), .priv-toggle:focus-visible { opacity: 0.9; } }
+  .card.owner-card .sold-badge-corner, .card.owner-card .reserved-badge-corner { top: 40px; }
   .video-duration {
     position: absolute;
     bottom: 6px;
@@ -11001,6 +11021,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php endif; ?>
 
 
+<?php if (is_admin_browser()): ?><div class="lightbox-toast" id="owner-toast" role="status" aria-live="polite" hidden></div><?php endif; ?>
 <div class="lightbox" id="lightbox">
   <button class="close" onclick="closeLightbox()">&times;</button>
   <button class="nav prev" onclick="navigate(-1)">&#10094;</button>
@@ -11189,6 +11210,35 @@ if (ENABLE_MAP && $mapPoints) {
     resetBtn.addEventListener('click', function () { go(null); });
     paint();
   })();
+  // The owner's lock on a tile: flips that photo between private and public with the admin's own save (a token is fetched first).
+  document.addEventListener('click', function (e) {
+    const btn = e.target.closest ? e.target.closest('.priv-toggle') : null;
+    if (!btn) return;
+    e.preventDefault(); e.stopPropagation();
+    if (btn.classList.contains('busy')) return;
+    const file = btn.getAttribute('data-file'), slash = file.lastIndexOf('/'), folder = slash < 0 ? '' : file.slice(0, slash), bare = file.slice(slash + 1);
+    const goingPrivate = !btn.classList.contains('is-private');
+    const say = function (text) { const t = document.getElementById('owner-toast'); if (!t) return; t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500); };
+    btn.classList.add('busy');
+    const base = '?admin' + (folder ? '&folder=' + encodeURIComponent(folder) : '');
+    fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
+      .then(function (j) {
+        const body = new URLSearchParams();
+        body.set('csrf_token', j.token); body.set('action', 'set_item_flag'); body.set('file', bare); body.set('flag', 'private'); body.set('on', goingPrivate ? '1' : '0');
+        return fetch(base, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
+      })
+      .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
+      .then(function (j) {
+        if (!j.ok) throw new Error(j.text || 'not saved');
+        btn.classList.toggle('is-private', goingPrivate); btn.setAttribute('aria-pressed', goingPrivate ? 'true' : 'false');
+        btn.title = goingPrivate ? 'Private: press to make it public' : 'Public: press to make it private';
+        btn.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (goingPrivate ? 'lock' : 'unlock') + '"></use></svg>' + (goingPrivate ? '<span>Private</span>' : '');
+        say(goingPrivate ? 'Now private' : 'Now public');
+      })
+      .catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); })
+      .then(function () { btn.classList.remove('busy'); });
+  }, true);
   // The row of sibling folders starts with the current one in view.
   (function () {
     const row = document.querySelector('.crumb-row'), cur = row && row.querySelector('.folder-pills .current'), back = row && row.querySelector('.breadcrumb');

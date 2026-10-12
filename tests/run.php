@@ -1141,6 +1141,17 @@ check('[sort] a visitor asking for private first changes nothing (they never see
 [, , $soAdminHd] = http_get("$baseSo/?admin", [$soAdminAuth]); $soCookie = extract_cookie_header($soAdminHd);
 check('[sort] the owner sees the private item, and private first puts it in front', $soOrder('?sort=name.private', ["Cookie: $soCookie"]) === ['p-private.jpg', 'a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder('?sort=name.private', ["Cookie: $soCookie"])));
 check('[sort] a visitor\'s own choice kept in the cookie sets the order, and a link\'s ?sort= beats the cookie', $soOrder('', ['Cookie: gallery_sort=taken.desc']) === $soOrder('?sort=taken.desc') && $soOrder('?sort=name', ['Cookie: gallery_sort=taken.desc']) === $soOrder());
+// The owner's lock on each tile (private or not, and a quick way to flip it); nobody else gets it.
+[, $soOwnerPage] = http_get("$baseSo/", ["Cookie: $soCookie"]);
+check('[owner lock] the signed-in owner gets a lock on each tile: red and labelled "Private" on a private photo, an open lock on a public one', preg_match('#<button type="button" class="priv-toggle is-private" data-file="p-private\.jpg"[^>]*><svg[^>]*><use href="\#i-lock"></use></svg><span>Private</span>#', $soOwnerPage) === 1 && preg_match('#<button type="button" class="priv-toggle" data-file="a-early\.jpg"[^>]*><svg[^>]*><use href="\#i-unlock"></use></svg></button>#', $soOwnerPage) === 1 && str_contains($soOwnerPage, 'id="owner-toast"'));
+check('[owner lock] a visitor, who can\'t see private photos anyway, gets no locks', !str_contains(http_get("$baseSo/")[1], 'class="priv-toggle') && !str_contains(http_get("$baseSo/")[1], 'id="owner-toast"'));
+[, $csrfBody] = http_get("$baseSo/?admin&csrf=1", [$soAdminAuth, "Cookie: $soCookie"]);
+$csrfTok = (json_decode($csrfBody, true)['token'] ?? '');
+check('[owner lock] the lock gets a token from the admin (only for a signed-in owner)', strlen($csrfTok) >= 32 && !str_contains(http_get("$baseSo/?admin&csrf=1")[1], 'token'));
+http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' => 'set_item_flag', 'file' => 'a-early.jpg', 'flag' => 'private', 'on' => '1'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
+check('[owner lock] with that token the same save the admin uses makes the photo private (gone for visitors, locked for the owner)', !in_array('a-early.jpg', $soOrder(), true) && str_contains(http_get("$baseSo/", ["Cookie: $soCookie"])[1], 'class="priv-toggle is-private" data-file="a-early.jpg"'));
+http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' => 'set_item_flag', 'file' => 'a-early.jpg', 'flag' => 'private', 'on' => '0'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
+check('[owner lock] ...and back to public', in_array('a-early.jpg', $soOrder(), true));
 // the folder's own setting, saved through the admin form
 [, $soAdminBody, $soAdminHd2] = http_get("$baseSo/?admin", [$soAdminAuth]);
 $soSess = extract_cookie_header($soAdminHd2); $soCsrf = extract_csrf_token($soAdminBody);
