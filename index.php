@@ -11053,7 +11053,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* (not the ones in a state of their own: the map button when it is on, the pulsing pin, "copied", "ready": those keep their colour) */
   .lightbox.zoom-width .caption-row .lightbox-copy:not(.on):not(.nudge):not(.copied):not(.ready),
   .lightbox.zoom-actual .caption-row .lightbox-copy:not(.on):not(.nudge):not(.copied):not(.ready) { color: #e4e4e8; opacity: 0.95; }
-  .lightbox.zoom-width .caption-row .lightbox-map-toggle.on, .lightbox.zoom-actual .caption-row .lightbox-map-toggle.on { background: rgba(88,101,242,0.3); }
   /* Zoomed in, the photo runs under the other controls too: the same soft backing for the close button and the arrows. */
   .lightbox.zoom-width .close, .lightbox.zoom-actual .close, .lightbox.zoom-width .nav, .lightbox.zoom-actual .nav {
     background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); opacity: 0.9;
@@ -11176,7 +11175,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
       background: rgba(255,255,255,0.2); opacity: 1;
     }
     .lightbox .caption-row .lightbox-copy:not(.on):not(.nudge):not(.copied):not(.ready):hover, .lightbox .close:hover, .lightbox .nav:hover { color: #fff; }
-    .lightbox.zoom-width .caption-row .lightbox-map-toggle.on:hover, .lightbox.zoom-actual .caption-row .lightbox-map-toggle.on:hover { background: rgba(88,101,242,0.45); }
   }
   .lightbox .prev { left: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   .lightbox .next { right: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
