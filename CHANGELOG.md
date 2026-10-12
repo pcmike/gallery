@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.7] - 2026-10-12
+
+### Fixed
+- **On a phone the button row keeps its places.** The map and sort buttons stay at the left and the download and about buttons at the right, as on a desktop, on one line that never wraps (the buttons get a little narrower if there are many). 2.0.5 had pushed them all to the left.
+
 ## [2.0.6] - 2026-10-12
 
 ### Changed

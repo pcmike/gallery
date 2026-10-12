@@ -61,7 +61,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.6');
+define('GALLERY_VERSION', '2.0.7');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -10595,11 +10595,14 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .sort-pop-row button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
   .sort-reset { background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 0.8rem; text-decoration: none; border-radius: 3px; cursor: pointer; }
   .sort-reset:hover { color: var(--text); }
-  /* On a phone the map, sort, download and about buttons sit together in one row. */
+  /* On a phone the buttons keep their places (map and sort at the left, download and about at the right) and never wrap:
+     they get a little narrower if they have to. */
   @media (max-width: 600px) {
-    .map-preview-heading { gap: 4px; }
-    .map-combo-btn { width: 36px; }
-    .page-tools { margin-left: 0; gap: 4px; }
+    .map-preview-heading { gap: 4px; flex-wrap: nowrap; }
+    .map-combo { flex: 0 1 auto; min-width: 0; }
+    .map-combo-btn { width: 36px; flex: 0 1 36px; min-width: 28px; }
+    .page-tools { gap: 4px; min-width: 0; flex: 0 1 auto; }
+    .page-visits { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   }
   .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }

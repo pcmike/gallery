@@ -510,7 +510,7 @@ try:
         ok(pm["l"] >= 0 and pm["r"] <= pm["w"] and not pm["over"], "[sort] on a phone the menu fits the screen and the page does not scroll sideways", str(pm))
         shot(b, "41-sort-menu-phone")
         row = b.js("""(() => { const bs = [...document.querySelectorAll('.map-preview-heading .map-combo-btn')].map(e => { const r = e.getBoundingClientRect(); return {top: Math.round(r.top), left: Math.round(r.left), right: Math.round(r.right)}; }); return {n: bs.length, tops: [...new Set(bs.map(x => x.top))], rightMost: Math.max(...bs.map(x => x.right)), vw: innerWidth}; })()""")
-        ok(row["n"] >= 3 and len(row["tops"]) == 1 and row["rightMost"] <= row["vw"] - 8, "[buttons] on a phone the sort, about and other buttons sit together in a single row", str(row))
+        ok(row["n"] >= 3 and len(row["tops"]) == 1 and row["rightMost"] <= row["vw"] - 8 and row["rightMost"] >= row["vw"] - 30, "[buttons] on a phone the buttons stay on a single line and keep their places: the sort and map buttons at the left, the about button at the right edge", str(row))
     finally:
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False})
         srv13.terminate(); srv13.wait()
