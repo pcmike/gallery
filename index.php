@@ -10850,7 +10850,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     .lightbox .caption-row .lightbox-copy { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 11px; font-size: 0.95rem; pointer-events: auto; }
     .lightbox .caption-row .lightbox-copy .ico { width: 18px; height: 18px; vertical-align: 0; }
     .lightbox .caption-row .lightbox-close-row { display: inline-flex; }
-    .lightbox .caption-row .lightbox-close-row .ico { transform: translateY(0.34px); }   /* one device pixel on a 3x phone, to sit level with its neighbours by eye */
+    .lightbox .caption-row .lightbox-close-row .ico { transform: translateY(0.67px); }   /* two device pixels on a 3x phone, to sit level with its neighbours by eye */
     .lightbox button.close { display: none; }
   }
   .lightbox-web, .lightbox-download { text-decoration: none; font-size: 1rem; }
