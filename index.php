@@ -6513,6 +6513,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-folder-nav a:hover .fcount { color:var(--muted); }
   .admin-folder-nav a.current { color:#fff; background:var(--accent); font-weight:600; }
   .admin-folder-nav a.current .fcount { color:rgba(255,255,255,0.8); font-weight:500; }
+  /* While Site settings (or Private) is the section on show, the folder you came from is only marked, not lit like the selection. */
+  .admin-layout.off-folder .admin-folder-nav a.current { color:var(--text); background:rgba(255,255,255,0.05); box-shadow:inset 2px 0 0 #4a4a52; font-weight:500; }
+  .admin-layout.off-folder .admin-folder-nav a.current .fcount { color:#6f6f78; }
   /* The fold chevron sits in the gutter left of the name, so names stay in one column. */
   .admin-folder-nav .ftoggle { position:absolute; left:-1px; top:5px; width:14px; height:22px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; border-radius:4px; }
   .admin-folder-nav .ftoggle::before { content:"\25BE"; font-size:0.7rem; display:block; line-height:22px; text-align:center; transition:transform .12s; }
@@ -7473,6 +7476,9 @@ foreach ($adminFiles as $file) {
         t.classList.toggle('active', on);
         t.setAttribute('aria-selected', on ? 'true' : 'false');
       });
+      // On Site settings or Private nothing in the folder list is selected: the folder you came from stays marked, quietly.
+      var lay = document.querySelector('.admin-layout');
+      if (lay) lay.classList.toggle('off-folder', name === 'site' || name === 'hidden');
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
       if (name !== 'hidden' && name !== 'site') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }

@@ -15,6 +15,7 @@ All notable changes to this project are documented here. Versions correspond to 
 - **The download button takes the photo from the browser's memory** (the viewer is already showing that exact file), so the share sheet opens at once.
 
 ### Fixed
+- **In the admin, Site settings and the folder you were in are no longer both lit.** While Site settings (or Private) is showing, that folder is only quietly marked, so the one lit item is the one you are looking at.
 - **On a phone the button row keeps its places.** The map and sort buttons stay at the left and the download and about buttons at the right, as on a desktop, on one line that never wraps (the buttons get a little narrower if there are many). 2.0.5 had pushed them all to the left.
 
 ## [2.0.6] - 2026-10-12
