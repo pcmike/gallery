@@ -5928,7 +5928,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
             <?php $siteOrder = sort_priority_list(); $siteOn = []; foreach ($sfNames as $k => $nm) $siteOn[$k] = (bool) constant($nm[2]); $siteOrder = array_merge(array_values(array_filter($siteOrder, function ($k) use ($siteOn) { return $siteOn[$k]; })), array_values(array_filter($siteOrder, function ($k) use ($siteOn) { return !$siteOn[$k]; }))); ?>
             <div class="sort-row sort-row-list"><span class="sort-label">Put first</span>
             <div class="sortfirst sf-form" data-mode="form" data-site-order="<?= $esc(implode(',', $siteOrder)) ?>" data-site-on="<?= $esc(json_encode($siteOn)) ?>">
-              <input type="hidden" name="photo_sort_first" class="sf-mode" value="<?= $sfOwn ? 'own' : '' ?>">
+              <?= ui_segmented('photo_sort_first', ['' => "Site's", 'own' => "This folder's own"], $sfOwn ? 'own' : '', 'Put first') ?>
               <ol class="sf-list">
               <?php foreach ($sfOrder as $k): $nm = $sfNames[$k]; ?>
                 <li data-kind="<?= $esc($k) ?>">
@@ -5941,7 +5941,6 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
               </ol>
               <input type="hidden" name="photo_sort_priority" class="sf-order" value="<?= $esc(implode(',', $sfOrder)) ?>">
               <p class="sf-summary" aria-live="polite"><?= $esc(sort_priority_summary($sfOrder, $sfOn)) ?></p>
-              <p class="sf-state muted"><span class="sf-state-text"><?= $sfOwn ? "This folder's own order." : "Following the site's. Change a switch or drag a row to set this folder's own." ?></span> <button type="button" class="sf-reset secondary"<?= $sfOwn ? '' : ' hidden' ?>>Use the site's again</button></p>
             </div>
             </div>
           </div>
@@ -6680,8 +6679,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sort-label { min-width:96px; font-size:0.85rem; color:var(--muted); }
   .sort-row-list { align-items:flex-start; }
   .sort-row-list .sort-label { padding-top:9px; }
-  .sf-state { margin:4px 0 0; font-size:0.8rem; }
-  .sf-state .sf-reset { padding:2px 8px; font-size:0.78rem; }
+  .sortfirst .seg { margin:0 0 8px; }
   .sort-details > summary { cursor:pointer; font-size:0.85rem; color:var(--muted); margin:0 0 6px; }
   .sort-details > summary .muted { font-size:0.8rem; }
   .sort-fields { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
@@ -7893,20 +7891,31 @@ foreach ($adminFiles as $file) {
   // In a folder's own settings: the list shows what the folder uses. It follows the site's until a switch or a row is changed;
   // then it is this folder's own (kept in the form until it is saved), and one button goes back to the site's.
   [].forEach.call(document.querySelectorAll('.sortfirst[data-mode=form]'), function (box) {
-    var hidden = box.querySelector('input.sf-order'), mode = box.querySelector('input.sf-mode'), reset = box.querySelector('.sf-reset'), text = box.querySelector('.sf-state-text');
-    function own(isOwn) {
-      mode.value = isOwn ? 'own' : '';
-      reset.hidden = !isOwn;
-      text.textContent = isOwn ? "This folder's own order." : "Following the site's. Change a switch or drag a row to set this folder's own.";
+    var hidden = box.querySelector('input.sf-order'), radios = box.querySelectorAll('input[name=photo_sort_first]');
+    function orderNow() { return [].map.call(box.querySelectorAll('.sf-list li'), function (li) { return li.getAttribute('data-kind'); }).join(','); }
+    function own(isOwn) { [].forEach.call(radios, function (r) { r.checked = (r.value === 'own') === isOwn; }); label(); }
+    // The heading of the section says whether anything here is the folder's own (it follows what is on the page, not only what is saved).
+    function label() {
+      var det = box.closest('details'), tag = det && det.querySelector('summary .muted');
+      if (!tag) return;
+      var custom = false;
+      [].forEach.call(det.querySelectorAll('input[type=radio]:checked'), function (r) { if (r.value !== '') custom = true; });
+      tag.innerHTML = custom ? '&middot; custom' : '&middot; the site\'s order';
     }
+    [].forEach.call(det_radios(), function (r) { r.addEventListener('change', label); });
+    function det_radios() { var det = box.closest('details'); return det ? det.querySelectorAll('.sort-row input[type=radio]') : []; }
     initSortFirst(box, function (now, ok) { hidden.value = now.join(','); own(true); ok(); });
-    [].forEach.call(box.querySelectorAll('input[type=checkbox]'), function (cb) { cb.addEventListener('change', function () { hidden.value = [].map.call(box.querySelectorAll('.sf-list li'), function (li) { return li.getAttribute('data-kind'); }).join(','); own(true); }); });
-    reset.addEventListener('click', function () {
-      var arr = (box.getAttribute('data-site-order') || '').split(','), on = {};
-      try { on = JSON.parse(box.getAttribute('data-site-on')) || {}; } catch (e) {}
-      box.sfSet(arr, on);
-      hidden.value = [].map.call(box.querySelectorAll('.sf-list li'), function (li) { return li.getAttribute('data-kind'); }).join(',');
-      own(false);
+    [].forEach.call(box.querySelectorAll('input[type=checkbox]'), function (cb) { cb.addEventListener('change', function () { hidden.value = orderNow(); own(true); }); });
+    [].forEach.call(radios, function (r) {
+      r.addEventListener('change', function () {
+        if (!r.checked) return;
+        if (r.value === '') {   // back to the site's: its switches and its order
+          var arr = (box.getAttribute('data-site-order') || '').split(','), on = {};
+          try { on = JSON.parse(box.getAttribute('data-site-on')) || {}; } catch (e) {}
+          box.sfSet(arr, on); hidden.value = orderNow();
+        } else { hidden.value = orderNow(); }
+        label();
+      });
     });
   });
   [].forEach.call(document.querySelectorAll('.site-settings-form'), function (form) {
