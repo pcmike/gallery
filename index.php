@@ -17,7 +17,8 @@
  * Quick reference for anyone editing this file directly:
  *   - GALLERY_VERSION / TRACK_VIEWS / SHOW_VIEW_COUNTS_PUBLICLY /
  *     ENABLE_THUMBNAIL_CACHE / AUTO_GROUP_BY_FILENAME / PHOTO_SORT_ORDER /
- *     AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS /
+ *     SORT_VIDEOS_FIRST / SORT_LOCATED_FIRST / SORT_PRIVATE_FIRST /
+ *     SORT_PRIORITY / AUTO_GROUP_BY_FOLDER / FOLDER_DISPLAY_MODE / EXTRA_FOLDERS /
  *     ENABLE_VIDEO / ADMIN_PASSWORD / ENABLE_PHOTO_LOCATION /
  *     PRIVATE_VIEW_PASSWORD / NGINX_ACCEL_REDIRECT_PREFIX / ENABLE_MAP /
  *     MAP_CLUSTER_RADIUS_MILES constants are just below, and are only the
@@ -10346,25 +10347,36 @@ function render_about_page() {
 
   <h2>For visitors</h2>
   <ul>
-    <li>A grid of photos and videos with a full-screen viewer: arrow keys, swipe, captions; video tiles preview on hover or a drag</li>
+    <li><strong>Sharp thumbnails:</strong> each photo's tile is a square cut from its middle, made at two sizes so a phone gets a crisp one and a desktop a light one, loaded only as you scroll</li>
+    <li><strong>A full-screen viewer</strong> with arrow keys and swipe, captions, links, a copy-link button, and a small map when the photo has a place; click or press Z to fill the width, again for real pixels</li>
+    <li><strong>Built for phones:</strong> the counter and buttons sit in one row across the top, so the photo is as big as the screen allows and nothing needs tapping near Safari's toolbar; download opens the share sheet at once</li>
+    <li><strong>Over a zoomed photo</strong> the controls sit on a soft dark pill so they stay readable, and each lights up when you point at it</li>
+    <li>Video: length badges, silent hover clips and finger-scrubbing on the tiles, real playback in the viewer</li>
     <li>Trips as folders: cover cards with dates and counts, to any depth, and a viewer that stays inside the folder</li>
     <li>Optional maps, loaded only when someone opens one</li>
-    <li>Sorting by name or date, with videos or located photos first</li>
+    <li>Sorting by name or date either way round, with videos, located photos or private items first; visitors can re-sort for themselves with one button</li>
+    <li>Download the original (if allowed) or a whole folder as a ZIP, with hidden locations removed from what visitors get</li>
     <li>Shareable links to a photo, folder or map, with proper previews</li>
   </ul>
 
   <h2>For the owner</h2>
   <ul>
     <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
-    <li>An admin for captions, locations, links, privacy, covers, folder names and dates, and Site settings that save as you flip them</li>
+    <li>An admin for captions, locations, links, privacy, covers, folder names and dates, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
+    <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
+    <li>A lock on every tile, for you alone: one press makes a photo private or public</li>
+    <li><strong>Prepare thumbnails</strong> makes every photo's pictures ahead of time with a progress bar, so the first visit to a big folder isn't slow</li>
     <li>Markdown notes with <code>{photos}</code>, <code>{group}</code>, <code>{sold}</code> and <code>{reserved}</code>, for trips or for-sale listings</li>
     <li>Private photos and folders behind a separate viewer password, and visit counts</li>
+    <li>On an iPhone, add the gallery to your Home Screen while signed in and it opens as an app with no browser bars</li>
+    <li>Export everything you typed as JSON, the only backup you need of captions and places</li>
   </ul>
 
   <h2>Careful by default</h2>
   <ul>
     <li>Writes only its own small files (thumbnails, settings, captions) and never touches your photos</li>
     <li>Locations, maps, video, subfolders and passwords stay off until you turn them on, and the admin says what each one publishes</li>
+    <li>Private items are removed outright for anyone without the password, and the sign-in box is built so browsers don't offer to save it</li>
   </ul>
 
   <h2>Documentation</h2>

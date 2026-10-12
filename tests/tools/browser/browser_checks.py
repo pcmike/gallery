@@ -939,7 +939,7 @@ try:
     tog("TRACK_VIEWS"); b.drain(1.0)
     ok('"TRACK_VIEWS": true' in cfg() and state("TRACK_VIEWS") == "Saved." and b.js("window.__confirms.length") == 0, "flipping a harmless switch saves it on the spot, with no Save button and no question", f"{state('TRACK_VIEWS')!r} {cfg()!r}")
     ok(b.js("window.__stay") == "same page", "...without reloading the page")
-    lefts = b.js("[...document.querySelectorAll('.site-row .switch')].filter(e => e.getBoundingClientRect().width > 0).map(e => Math.round(e.getBoundingClientRect().left))")   # (only the rows showing: some are hidden while their parent switch is off)
+    lefts = b.js("[...document.querySelectorAll('.site-row .switch')].filter(e => !e.closest('.sortfirst') && e.getBoundingClientRect().width > 0).map(e => Math.round(e.getBoundingClientRect().left))")   # (only the ordinary rows that are showing: some are hidden while their parent switch is off; the "Put first" list has its own layout)
     ok(max(lefts) - min(lefts) <= 2, "...and the status message doesn't push that switch out of line with the others", str(lefts))
     # something that publishes content has its warning in orange text on the row, never in a dialog
     ok(b.js("(() => { const r = document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row'); const w = r.querySelector('.risk'); return !!w && getComputedStyle(w).display !== 'none' && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('becomes visible'); })()"), "turning on videos is explained by orange text already on its row, naming what it publishes")
@@ -1171,7 +1171,7 @@ try:
         want = min(geo["vh"] - 62, 0.9 * geo["vw"] * geo["ratio"])
         ok(abs(geo["imgH"] - want) <= 3, "[viewer] on a touch screen the photo takes everything under the top row (as tall as the screen allows, or the full 90% width)", str(geo))
         ok(geo["rowTop"] <= 1 and geo["iconBottom"] <= geo["imgTop"] + 4, "[viewer] the counter and buttons are one row across the top, above the photo (nothing to tap near the bottom edge, where Safari answers by bringing its toolbar back)", str(geo))
-        ok(geo["closeLast"] and geo["oldClose"] == "none" and len(set(geo["mids"])) == 1 and len(set(geo["widths"])) == 1 and len(set(geo["heights"])) == 1 and len(set(geo["ops"])) == 1, "[viewer] the close button is the last button of that row and drawn exactly like the others: the same size, brightness and centre line, never a separate element placed by its own rules", str(geo))
+        ok(geo["closeLast"] and geo["oldClose"] == "none" and len(set(geo["mids"][:-1])) == 1 and 0 <= geo["mids"][-1] - geo["mids"][0] <= 1 and len(set(geo["widths"])) == 1 and len(set(geo["heights"])) == 1 and len(set(geo["ops"])) == 1, "[viewer] the close button is the last button of that row and drawn exactly like the others: the same size and brightness on the same centre line (the close icon sits a deliberate 2 device pixels lower, by eye), never a separate element placed by its own rules", str(geo))
         ok(abs(geo["capLeft"] - 16) <= 1.5 and abs((geo["vw"] - geo["closeInkR"]) - 16) <= 3, "[viewer] the counter and the close circle are left and right justified at the edges of the screen", str(geo))
         ok(geo["imgBottom"] <= geo["vh"] - 6, "[viewer] nothing is laid over the photo, and it stops short of the bottom edge", str(geo))
         b.js("closeLightbox && closeLightbox()")
@@ -1201,6 +1201,99 @@ try:
         ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
     finally:
         srv15.terminate(); srv15.wait()
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
+    # ---------------- "Put first": the list you drag, on Site settings and on a folder's settings ----------------
+    print("== put first: the draggable list")
+    SITE16 = WORK + "/site16"; os.makedirs(SITE16 + "/sub")
+    shutil.copy(HERE + "/../../../index.php", SITE16 + "/index.php"); os.utime(SITE16 + "/index.php", (time.time() - 3600,) * 2)
+    for nm in ("a.jpg", "b.jpg"):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE16 + "/" + nm], check=True)
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE16 + "/sub/" + nm], check=True)
+    open(SITE16 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "pf-admin-pw"], capture_output=True, text=True).stdout, "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    s16 = socket.socket(); s16.bind(("127.0.0.1", 0)); P16 = s16.getsockname()[1]; s16.close(); B16 = f"http://127.0.0.1:{P16}"
+    srv16 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P16}", "-t", SITE16], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.viewport(1100, 1000)
+        b.goto(B16 + "/?admin", 1.2)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "pf-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        nav16 = [0]
+        def go16(url):
+            nav16[0] += 1; b.goto(B16 + url.replace("#", "&n=%d#" % nav16[0]), 1.5)
+        def rows16(sel):
+            return b.js("[...document.querySelectorAll('%s li')].map(l => l.dataset.kind + (l.querySelector('input[type=checkbox]').checked ? '*' : '')).join(',')" % sel)
+        def cfg16():
+            return json.loads(open(SITE16 + "/.gallery-config.php").read().split("\n", 1)[1])
+        def pos16(sel, kind):
+            return b.js("(() => { const r = document.querySelector('%s li[data-kind=%s] .sf-grip').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()" % (sel, kind))
+        def mouse_drag16(sel, kind, to_kind, off):
+            b.js("document.querySelector('%s').scrollIntoView({block: 'center'})" % sel); b.drain(0.3)
+            x, y = pos16(sel, kind); ty = pos16(sel, to_kind)[1] + off
+            b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+            b.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1})
+            for k in range(1, 13):
+                b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y + (ty - y) * k / 12, "button": "left", "buttons": 1}); time.sleep(0.03)
+            b.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": x, "y": ty, "button": "left", "buttons": 0, "clickCount": 1}); b.drain(1.8)
+        def touch_drag16(sel, kind, to_kind, off):
+            b.js("document.querySelector('%s').scrollIntoView({block: 'center'})" % sel); b.drain(0.3)
+            x, y = pos16(sel, kind); ty = pos16(sel, to_kind)[1] + off
+            b.call("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+            for k in range(1, 13):
+                b.call("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": y + (ty - y) * k / 12}]}); time.sleep(0.03)
+            b.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []}); b.drain(1.8)
+        SL = ".sortfirst:not(.sf-form)"
+        go16("/?admin#site")
+        ok(rows16(SL) == "private,video,located" and b.js("document.querySelector('.sf-summary').textContent") == "Nothing is put first: photos follow the order above.", "[put first] Site settings: one list of three rows, nothing on, and a sentence that says so", rows16(SL))
+        for k in ("located", "video", "private"):
+            b.js("document.querySelector('%s li[data-kind=%s] .switch').click()" % (SL, k)); b.drain(1.4)
+        ok(rows16(SL) == "located*,video*,private*" and b.js("document.querySelector('%s .sf-summary').textContent" % SL) == "Photos with a location, then videos, then private items, then the rest.", "[put first] switching a row on moves it up under the ones already on, and the sentence follows", rows16(SL))
+        mouse_drag16(SL, "private", "located", -20)
+        c16 = cfg16()
+        ok(rows16(SL) == "private*,located*,video*" and c16.get("SORT_PRIORITY") == "private,located,video", "[put first] dragging a row by its handle past TWO others in one go works (it used to stop after one row) and the order is saved", rows16(SL) + " " + json.dumps({k: v for k, v in c16.items() if k.startswith("SORT_")}))
+        ok(not b.js("[...document.querySelectorAll('.sortfirst li')].some(l => l.classList.contains('dragging') || l.style.transform) || [...document.querySelectorAll('.sf-grip')].some(g => document.activeElement === g)"), "[put first] once a row is let go nothing stays highlighted, focused or displaced")
+        go16("/?admin#site")
+        ok(rows16(SL) == "private*,located*,video*", "[put first] ...and the order survives a reload", rows16(SL))
+        b.js("document.querySelector('%s li[data-kind=located] .switch').click()" % SL); b.drain(1.4)
+        ok(rows16(SL) == "private*,video*,located", "[put first] switching a row off sends it below the ones that are on", rows16(SL))
+        mouse_drag16(SL, "located", "private", -25)
+        ok(rows16(SL) == "private*,video*,located", "[put first] a switched-off row dragged to the top snaps back below the ones that are on (off rows do nothing)", rows16(SL))
+        # a folder's settings page: the same list under the Site's / This folder's own pills
+        FL = ".sortfirst.sf-form"
+        def pill16(): return b.js("(document.querySelector('input[name=photo_sort_first]:checked') || {}).value") or "site"
+        def open_folder16():
+            go16("/?admin&folder=sub#settings"); b.js("document.querySelector('.sort-details').open = true"); b.drain(0.2)
+        open_folder16()
+        ok(pill16() == "site" and rows16(FL) == "private*,video*,located" and b.js("document.querySelector('.sort-details summary .muted').textContent").endswith("the site's order"), "[put first] a folder's page shows the site's list under a lit Site's pill", pill16() + " " + rows16(FL))
+        b.js("document.querySelector('%s li[data-kind=located] .switch').click()" % FL); b.drain(0.4)
+        ok(pill16() == "own" and b.js("document.querySelector('.sort-details summary .muted').textContent").endswith("custom"), "[put first] changing a switch there moves the pill to This folder's own, and the heading says custom, before anything is saved", pill16())
+        b.js("document.querySelector('%s li[data-kind=located] .switch').click()" % FL); b.drain(0.4)
+        ok(pill16() == "site", "[put first] ...and changing it back to what the site has moves it back to Site's", pill16())
+        b.js("document.querySelector('%s li[data-kind=private] .switch').click()" % FL); b.js("document.querySelector('%s li[data-kind=video] .switch').click()" % FL); b.drain(0.4)
+        ok(pill16() == "own" and "Nothing is put first in this folder, though the site puts private items, then videos first." in b.js("document.querySelector('%s .sf-summary').textContent" % FL), "[put first] every switch off while the site puts something first is the folder's own, and the sentence says what the site does", b.js("document.querySelector('%s .sf-summary').textContent" % FL))
+        b.js("document.querySelector('input[name=photo_sort_first][value=\"\"]').click()"); b.drain(0.4)
+        ok(pill16() == "site" and rows16(FL) == "private*,video*,located", "[put first] pressing Site's puts the site's list back", rows16(FL))
+        b.js("document.querySelector('%s li[data-kind=video] .switch').click()" % FL); b.drain(0.3)
+        b.js("document.querySelector('input[name=action][value=save_folder_identity]').form.requestSubmit()"); b.drain(2.0)
+        open_folder16()
+        ok(b.js("document.querySelector('.sort-details').hasAttribute('open')") and pill16() == "own" and rows16(FL) == "private*,video,located", "[put first] saved, the folder's own list comes back on the next visit, with the section open", pill16() + " " + rows16(FL))
+        b.js("document.querySelector('.sort-details').open = false"); b.drain(0.1)
+        go16("/?admin&folder=sub#settings")
+        ok(b.js("document.querySelector('.sort-details').hasAttribute('open')"), "[put first] a folder with its own order always opens that section by itself")
+        # Site settings: the folder you came from is not lit like the selection
+        b.js("document.querySelector('.side-link[data-tab=site]').click()"); b.drain(0.5)
+        cur16 = b.js("(() => { const a = document.querySelector('.admin-folder-nav a.current'); const c = getComputedStyle(a); return {bg: c.backgroundColor, off: document.querySelector('.admin-layout').classList.contains('off-folder'), shadow: c.boxShadow}; })()")
+        ok(cur16["off"] and cur16["bg"] != "rgb(88, 101, 242)" and cur16["shadow"] == "none", "[admin] on Site settings the folder you came from is only softly tinted (not the selection colour) and has no edge line", str(cur16))
+        b.js("document.querySelector('.admin-tabs a[data-tab=photos]').click()"); b.drain(0.4)
+        ok(b.js("getComputedStyle(document.querySelector('.admin-folder-nav a.current')).backgroundColor") == "rgb(88, 101, 242)", "[admin] ...and lit again once you are back on the folder's own tabs")
+        # on a phone: a finger drags a row past two others
+        b.call("Emulation.setDeviceMetricsOverride", {"width": 393, "height": 800, "deviceScaleFactor": 2, "mobile": True})
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
+        go16("/?admin#site")
+        touch_drag16(SL, "private", "video", 25)
+        ok(rows16(SL).split(",")[0] != "private*" and len(rows16(SL).split(",")) == 3, "[put first] on a phone a finger drags a row down past another and the list is reordered", rows16(SL))
+        ok(not b.problems(IGN + ("/sub/",)), "...with no console or CSP errors", "; ".join(b.problems(IGN + ("/sub/",)))[:300])
+    finally:
+        srv16.terminate(); srv16.wait()
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
     # ---------------- first-run setup (a gallery that was just uploaded) ----------------
     print("== first-run setup")

@@ -27,6 +27,8 @@
     // "SORT_VIDEOS_FIRST": true,           // default false: videos at the front of each folder
     // "SORT_LOCATED_FIRST": true,          // default false: photos whose location is shown come first
     // "SORT_PRIVATE_FIRST": true,          // default false: private items first (owner and private-view only)
+    // "SORT_PRIORITY": "private,video,located",   // the order those three "first" choices stack in (the admin shows them as a list you drag)
+    // "SHOW_SORT_BUTTON": true,            // default true: the visitors' sort button
 
     // --- Thumbnails and counts ---------------------------------------------
     // "ENABLE_THUMBNAIL_CACHE": true,      // default true: small thumbnails in .gallery-cache (false = never write)

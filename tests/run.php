@@ -782,6 +782,7 @@ check('?track path traversal is rejected (ok:false)', is_array($json2) && $json2
 check('GET /?about returns 200', $status === 200);
 check('?about links to the GitHub repo', str_contains($body, 'github.com/pcmike/gallery'));
 check('?about shows the current version', str_contains($body, 'v' . $currentVersion));
+check('?about covers what the gallery now does: sharp tiles, the viewer built for phones and its zoom controls, putting things first in an order you set, the lock on tiles, prepare thumbnails and the Home Screen app', str_contains($body, 'Sharp thumbnails') && str_contains($body, 'Built for phones') && str_contains($body, 'soft dark pill') && str_contains($body, 'Put first is one list you order') && str_contains($body, 'A lock on every tile') && str_contains($body, 'Prepare thumbnails') && str_contains($body, 'Home Screen'));
 
 [$status, $body, $dlHeaders] = http_get("$base1/?download", [], false);
 check('?download redirects (302), does not serve the file', $status === 302);
@@ -1166,6 +1167,67 @@ check('[sort] the dates found are kept in the folder\'s cache (and removed with 
 check('[sort] the page has the sort button, with only the toggles that apply here (videos, located; private only for the owner)', str_contains($soPage, 'id="sort-menu-btn"') && str_contains($soPage, 'data-flag="video"') && str_contains($soPage, 'data-flag="located"') && !str_contains($soPage, 'data-flag="private"'));
 [, $soPageOwner] = http_get("$baseSo/", ["Cookie: $soSess"]);
 check('[sort] ...the owner also gets the private toggle', str_contains($soPageOwner, 'data-flag="private"'));
+// ---- "Put first" as one list: the site's order of the three kinds (SORT_PRIORITY), and a folder's own list on its settings page.
+echo "== put first: one list, in an order you set ==\n";
+$fxPf = new_fixture_dir('putfirst');
+make_jpeg("$fxPf/a.jpg", 40, 40, 10, 20, 30); make_jpeg("$fxPf/b.jpg", 40, 40, 30, 20, 10);
+make_jpeg("$fxPf/z-located.jpg", 40, 40, 60, 200, 60);
+make_minimal_mp4("$fxPf/m.mp4", 5, 1);
+write_data_file("$fxPf/.gallery-items.php", ['items' => ['z-located.jpg' => ['location' => ['lat' => 1.5, 'lng' => 2.5, 'label' => 'Somewhere']]], 'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => true]);
+file_put_contents("$fxPf/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ADMIN_PASSWORD' => 'pf-admin-pw']));
+copy(__DIR__ . '/../index.php', "$fxPf/index.php");
+$portPf = find_free_port(); start_server($fxPf, $portPf); $basePf = "http://127.0.0.1:$portPf";
+$pfOrder = function ($query = '') use ($basePf) {
+    [, $body] = http_get("$basePf/" . $query);
+    preg_match_all('#<div class="card[^>]*><img src="[^"]*"(?: srcset="[^"]*")?(?: sizes="[^"]*")? loading="lazy" alt="([^"]+)"#', $body, $m);
+    return $m[1];
+};
+$pfSiteList = function ($html) { preg_match('#<div class="sortfirst" data-name.*?</ol>#s', $html, $m); preg_match_all('#<li data-kind="(\w+)">#', $m[0] ?? '', $k); return $k[1]; };
+$pfAuth = 'Authorization: Basic ' . base64_encode('admin:pf-admin-pw');
+[, $pfAdmin, $pfHd] = http_get("$basePf/?admin", [$pfAuth]);
+$pfHdrs = [$pfAuth, 'Cookie: ' . extract_cookie_header($pfHd)];
+$pfSite = fn ($page) => (function ($pg) { foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; })($page);
+check('[put first] Site settings has ONE list for the three kinds: a row each, in the stacking order, with a handle and a switch (no separate toggles)', str_contains($pfAdmin, 'class="sortfirst"') && $pfSiteList($pfAdmin) === ['private', 'video', 'located'] && substr_count($pfAdmin, 'class="sf-grip"') >= 3 && !preg_match('#<div class="name">(Videos first|Photos with a location first|Private items first)#', $pfAdmin));
+check('[put first] ...with a sentence under it, and the same list is on the folder\'s settings page under the Site\'s / This folder\'s own pills', str_contains($pfAdmin, 'Nothing is put first: photos follow the order above.') && str_contains($pfAdmin, 'class="sortfirst sf-form"') && str_contains($pfAdmin, 'name="photo_sort_first"') && str_contains($pfAdmin, 'name="photo_sort_priority"'));
+check('[put first] by default the three stack private, videos, located: with videos and located both on, the video comes first', true);
+[, $r] = user_submit("$basePf/?admin", $pfAdmin, 'value="save_site_settings"', ['set_SORT_VIDEOS_FIRST' => '1', 'set_SORT_LOCATED_FIRST' => '1'], $pfHdrs);
+check('[put first] the site\'s two switches on, in the default order: videos, then located photos, then the rest', $pfOrder() === ['m.mp4', 'z-located.jpg', 'a.jpg', 'b.jpg'], json_encode($pfOrder()));
+[, $pfAdmin] = http_get("$basePf/?admin", $pfHdrs);
+[, $r] = user_submit("$basePf/?admin", $pfAdmin, 'value="save_site_settings"', ['set_SORT_PRIORITY' => 'located,video,private'], $pfHdrs);
+$pfCfg = cfg_plain(cfg_read("$fxPf/.gallery-config.php"), ['ADMIN_PASSWORD' => 'pf-admin-pw']);
+check('[put first] saving the site\'s order (SORT_PRIORITY) keeps it, and the sort follows it: located photos now come before videos', ($pfCfg['SORT_PRIORITY'] ?? null) === 'located,video,private' && $pfOrder() === ['z-located.jpg', 'm.mp4', 'a.jpg', 'b.jpg'], json_encode([$pfCfg['SORT_PRIORITY'] ?? null, $pfOrder()]));
+[, $pfAdmin] = http_get("$basePf/?admin", $pfHdrs);
+check('[put first] ...and the list is shown in that order, switched-on kinds above the rest', array_slice($pfSiteList($pfAdmin), 0, 2) === ['located', 'video'] && str_contains($pfAdmin, 'Photos with a location, then videos, then the rest.'), json_encode($pfSiteList($pfAdmin)));
+[, $r] = user_submit("$basePf/?admin", $pfAdmin, 'value="save_site_settings"', ['set_SORT_PRIORITY' => 'video,video,private'], $pfHdrs);
+$pfCfg = cfg_plain(cfg_read("$fxPf/.gallery-config.php"), ['ADMIN_PASSWORD' => 'pf-admin-pw']);
+check('[put first] an order that does not list each kind once is refused and nothing changes', str_contains($r, 'must list private, video and located') && ($pfCfg['SORT_PRIORITY'] ?? null) === 'located,video,private');
+// A folder's own list (the root folder's settings, here).
+[, $pfAdmin2, $pfHd2] = http_get("$basePf/?admin", $pfHdrs);
+$pfFolderPost = function ($fields) use ($basePf, $pfHdrs, $pfAdmin2) {
+    return http_post("$basePf/?admin", array_merge(['action' => 'save_folder_identity', 'csrf_token' => extract_csrf_token($pfAdmin2), 'display_name' => '', 'photo_sort_order' => ''], $fields), $pfHdrs);
+};
+$pfStored = function () use ($fxPf) { $d = json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxPf/.gallery-items.php")), true); return $d['photoSort'] ?? null; };
+$pfFolderPost(['photo_sort_order' => '', 'photo_sort_first' => 'own', 'photo_sort_priority' => 'video,located,private', 'photo_sort_video' => 'on', 'photo_sort_located' => 'on', 'photo_sort_private' => 'off']);
+check('[put first] a folder\'s own list is stored with the folder (each kind on or off, and the order), and it beats the site\'s order in that folder', $pfStored() == ['video' => true, 'located' => true, 'private' => false, 'priority' => ['video', 'located', 'private']] && $pfOrder() === ['m.mp4', 'z-located.jpg', 'a.jpg', 'b.jpg'], json_encode([$pfStored(), $pfOrder()]));
+[, $pfAdmin3] = http_get("$basePf/?admin", $pfHdrs);
+check('[put first] ...and the folder\'s page opens with the section open, "custom", the pill on This folder\'s own, in the folder\'s order', str_contains($pfAdmin3, 'class="field wide sort-details" open') && str_contains($pfAdmin3, '&middot; custom') && preg_match('#name="photo_sort_first" value="own" checked#', $pfAdmin3) && str_contains($pfAdmin3, 'name="photo_sort_priority" class="sf-order" value="video,located,private"'));
+$pfFolderPost(['photo_sort_first' => 'own', 'photo_sort_priority' => 'located,video,private', 'photo_sort_video' => 'on', 'photo_sort_located' => 'on', 'photo_sort_private' => 'off']);
+check('[put first] a folder\'s own list that sorts exactly as the site\'s does (same kinds on, same order) is not stored: the folder keeps following the site', $pfStored() === null, json_encode($pfStored()));
+$pfFolderPost(['photo_sort_first' => 'own', 'photo_sort_priority' => 'located,video,private', 'photo_sort_video' => 'off', 'photo_sort_located' => 'off', 'photo_sort_private' => 'off']);
+check('[put first] with every kind off while the site puts some first, it IS the folder\'s own ("put nothing first here"): stored, and the folder is in plain order', $pfStored() == ['video' => false, 'located' => false, 'private' => false, 'priority' => ['located', 'video', 'private']] && $pfOrder() === ['a.jpg', 'b.jpg', 'm.mp4', 'z-located.jpg'], json_encode([$pfStored(), $pfOrder()]));
+[, $pfAdmin4] = http_get("$basePf/?admin", $pfHdrs);
+check('[put first] ...and its sentence says what the site does', str_contains($pfAdmin4, 'Nothing is put first in this folder, though the site puts photos with a location, then videos first.'));
+$pfFolderPost(['photo_sort_first' => '']);
+check('[put first] choosing the Site\'s pill stores nothing for the folder', $pfStored() === null && $pfOrder() === ['z-located.jpg', 'm.mp4', 'a.jpg', 'b.jpg'], json_encode([$pfStored(), $pfOrder()]));
+check('[put first] a priority list that is not a permutation of the three kinds is ignored (the kinds are still stored, the order is the site\'s)', (function () use ($pfFolderPost, $pfStored) { $pfFolderPost(['photo_sort_first' => 'own', 'photo_sort_priority' => 'video,video,private', 'photo_sort_video' => 'on', 'photo_sort_located' => 'off', 'photo_sort_private' => 'off']); return $pfStored() == ['video' => true, 'located' => false, 'private' => false]; })(), json_encode($pfStored()));
+$pfFolderPost(['photo_sort_first' => '']);
+// the owner's page chrome that goes with it
+check('[admin] while Site settings or Private is on show, the folder you came from is only softly tinted, not lit like the selection (the page marks the layout as off-folder)', str_contains($pfAdmin4, "classList.toggle('off-folder'") && str_contains($pfAdmin4, '.admin-layout.off-folder .admin-folder-nav a.current'));
+[, $pfPage] = http_get("$basePf/");
+check('[viewer] the close button and the arrows are drawn icons (a chevron each way, a circled cross) in identical round boxes, and the close button is also the last button of the touch screen\'s top row', str_contains($pfPage, '<symbol id="i-chev-left"') && str_contains($pfPage, '<symbol id="i-chev-right"') && str_contains($pfPage, '<symbol id="i-close"') && preg_match('#class="nav prev"[^>]*aria-label="Previous"><svg#', $pfPage) && preg_match('#class="nav next"[^>]*aria-label="Next"><svg#', $pfPage) && str_contains($pfPage, 'class="lightbox-copy lightbox-close-row"') && str_contains($pfPage, '.lightbox .close, .lightbox .nav { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px;'));
+check('[viewer] zoomed in on a desktop, the counter and buttons are one soft dark pill (not a strip), the close button and arrows get the same backing, and each control lights its own box on hover; a button in a state (map on, copied) keeps its colour', str_contains($pfPage, 'border-radius: 999px; background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(2px)') && str_contains($pfPage, '.lightbox.zoom-width .close, .lightbox.zoom-actual .close, .lightbox.zoom-width .nav, .lightbox.zoom-actual .nav {') && str_contains($pfPage, '@media (hover: hover) {') && str_contains($pfPage, ':not(.on):not(.nudge):not(.copied):not(.ready)'));
+check('[toolbar] the download and gallery buttons keep the same 8px gap as the map and sort controls', str_contains($pfPage, '.page-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 8px;'));
+
 // The sort button is left out of a listing laid out by a notes file (the for-sale pattern), and can be switched off.
 $fxSl = new_fixture_dir('sortlisting');
 make_jpeg("$fxSl/alpha_01.jpg", 40, 40, 1, 2, 3); make_jpeg("$fxSl/bravo_01.jpg", 40, 40, 3, 2, 1);

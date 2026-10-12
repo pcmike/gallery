@@ -2,11 +2,11 @@
 
 A single-file, drop-in PHP photo gallery. No dependencies, no build step, no database to set up: put `index.php` in a folder of photos and it shows a gallery for that folder.
 
-Made for sharing "for sale" listings (Reddit, Discord…) as much as for plain galleries, with grouping by filename or by hand, a small Markdown notes box with sold/reserved markers, opt-in view stats and links that preview properly when shared. Version 2 also does **trips**: nested folders, video, captions and locations, an owner-only admin, private items, maps and sorting.
+Made for sharing "for sale" listings (Reddit, Discord…) as much as for plain galleries, with grouping by filename or by hand, a small Markdown notes box with sold/reserved markers, opt-in view stats and links that preview properly when shared. Version 2 also does **trips**: nested folders, video, captions and locations, an owner-only admin, private items, maps and sorting, sharp thumbnails and a full-screen viewer built for phones as much as desktops.
 
 **Everything beyond the basic gallery is opt-in.** With nothing changed it writes only small thumbnails to a `.gallery-cache` folder, contacts no third party, and shows no subfolder, video or photo location. (It peeks into subfolders, read-only and capped at 40, only to warn you if photos there are being skipped.)
 
-**Contents:** [Quick start](#quick-start) · [Recipes](#recipes) · [Settings](#settings) · [Notes and directives](#notes-and-directives) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [Photo order](#photo-order) · [The admin](#the-admin) · [Private items](#private-items) · [Downloads](#downloads) · [Locking down the files](#locking-down-the-files) · [Maps](#maps) · [Sharing](#sharing-and-previews) · [Troubleshooting](#troubleshooting) · [Security](#security-notes) · [Upgrading](#upgrading-and-backups)
+**Contents:** [Quick start](#quick-start) · [Recipes](#recipes) · [Settings](#settings) · [Notes and directives](#notes-and-directives) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [Photo order](#photo-order) · [The viewer](#the-viewer) · [Thumbnails and phones](#thumbnails-and-phones) · [The admin](#the-admin) · [Private items](#private-items) · [Downloads](#downloads) · [Locking down the files](#locking-down-the-files) · [Maps](#maps) · [Sharing](#sharing-and-previews) · [Troubleshooting](#troubleshooting) · [Security](#security-notes) · [Upgrading](#upgrading-and-backups)
 
 ## Quick start
 
@@ -198,12 +198,26 @@ These gates decide what **visitors who aren't signed in** see. You, and anyone w
 
 ## Photo order
 
-Inside a folder, photos run by **name** or by **date** (when it was taken: read from a JPEG or HEIC photo, or a video's creation time; a file that doesn't say, such as a PNG or screenshot, uses its file date), either way round. On top, three things can go first and they stack: **private items** (owner and private-view only), then **videos**, then **photos with a location** (counted only where that visitor can see the location, so the order never gives away a hidden one).
+Inside a folder, photos run by **name** or by **date** (when it was taken: read from a JPEG or HEIC photo, or a video's creation time; a file that doesn't say, such as a PNG or screenshot, uses its file date), either way round. On top of that, three things can be **put first**, and they stack: **private items** (owner and private-view only), **videos**, and **photos with a location** (counted only where that visitor can see the location, so the order never gives away a hidden one).
 
-- **You set the defaults** in Site settings and, per folder (or for the gallery's top), in *Order of the photos here*.
-- **Visitors change it for themselves** with the sort button (two arrows) after the map buttons, plus line-drawing toggles for videos, location and private (shown only when they apply; the button is hidden for fewer than two photos). The choice is kept in a cookie across folders until *Use this gallery's order*. A link can carry one: `?sort=taken.desc.video` (the order, then any of `desc`, `video`, `located`, `private`).
+**Put first is one list, and you set its order.** In **Site settings** it is three rows: *Private items*, *Videos* and *Located photos*. Each row has a **switch** (is it used at all?) and a **handle**: drag a row by its handle, with a mouse or a finger, to set the order the kinds stack in (the up and down arrow keys move a focused handle). What is switched on always sits above what is off, so the list reads the way it sorts, and a sentence under it says the result: *"Videos, then photos with a location, then the rest."* A change saves as you make it. The default order is private, videos, located, so nothing re-sorts until you move a row (the setting is `SORT_PRIORITY`).
+
+**A folder can have its own.** In a folder's settings (or the gallery's top), *Order of the photos here* has the same list under a **Site's / This folder's own** choice, like the Order and Direction rows above it. It shows the site's list and follows it until you change a switch or drag a row; then the choice moves to *This folder's own* (the section's heading says *custom*, even before you save) and *Site's* puts the site's list back. A list that would sort exactly as the site's does counts as the site's and isn't stored. Every switch off while the site puts something first **is** the folder's own ("put nothing first here"), and its sentence says what the site does. A folder with its own order always opens that section by itself.
+
+- **You set the defaults** in Site settings and, per folder, in *Order of the photos here*.
+- **Visitors change it for themselves** with the sort button (two arrows) after the map buttons, plus line-drawing toggles for videos, location and private (shown only when they apply; the button is hidden for fewer than two photos). They switch the three kinds on and off; the order they stack in is the folder's, else the site's. The choice is kept in a cookie across folders until *Use this gallery's order*. A link can carry one: `?sort=taken.desc.video` (the order, then any of `desc`, `video`, `located`, `private`).
 - The viewer's next and previous follow the order. Photos placed with `{photos:}` or a group keep your order.
 - Dates found in files are cached in the folder's `.gallery-cache`, so they are read only once.
+
+## The viewer
+
+Click a photo to open it full screen. **Arrow keys** or the on-screen arrows move through the folder (they stay inside the folder you opened), **Esc** closes, on a phone you **swipe** left and right and swipe down to close. The photo's caption, if it has one, comes with a counter ("3 / 52") and a row of buttons: **zoom**, **download** the original (for you, or everyone if you allow it), **copy link**, the photo's **web link** and, where a location is shown, the **map** pin (a small map over the photo's corner; the pin turns blue when it's on).
+
+- **Zoom.** Click the photo (or press **Z**) to fill the width of the window, from the original file, and scroll up and down; again for real pixel size, scrolling both ways; again (or **Esc**) to fit the screen.
+- **Over a zoomed photo** the counter and buttons sit on a soft dark pill, and the close button and arrows get the same backing, so they stay readable when the photo runs underneath them. Each control lights its own box when the mouse is over it (so you can tell which one you are on), and the map pin stays blue and *copied* flashes green.
+- **Drawn icons.** The close button and the arrows are drawn like the rest of the icons, in identical round boxes, so they are centred exactly.
+- **On a phone** the counter and buttons are one row across the **top**, with the close button last, and the photo takes everything below it down to the bottom of the visible area (a tall photo is as tall as the screen allows), on a plain black backdrop. Nothing is left to tap near the bottom edge, where Safari answers a tap by bringing its toolbar back, which costs a second tap, and nothing is laid over the photo. The viewer is sized to what is really visible, so Safari's bars never cover the photo.
+- **Download** takes the photo from the browser's own memory (the viewer already holds that very file), so the share sheet can open on the first tap; HEIC photos and videos are fetched.
 
 ## Thumbnails and phones
 
@@ -211,7 +225,7 @@ Inside a folder, photos run by **name** or by **date** (when it was taken: read 
 
 **Prepare thumbnails.** A photo's tile pictures are otherwise made the first time it is shown, which makes the first visit to a big folder slow. **Site settings → Thumbnails** says how many photos are ready and has a button that makes the rest, a few seconds' worth at a time with a progress bar, one reading of each photo for both sizes. Stop whenever you like; what's done stays done, and a damaged file is counted and passed over. (Videos are left to the first time they are shown.)
 
-**The viewer on a phone.** The counter and buttons are a row across the top, beside the close button, and the photo takes everything below it; nothing is left to tap near the bottom edge, where Safari answers a tap by bringing its toolbar back, which costs a second tap. The download button takes the photo from the browser's own memory (the viewer already holds that very file), so the share sheet can open on the first tap; HEIC photos and videos are fetched.
+**The viewer on a phone** is described under [The viewer](#the-viewer).
 
 **Opening the gallery with no browser bars.** A web page can't hide an iPhone's address bar and toolbar, but a site added to the Home Screen opens without them. While you are signed in as the owner the gallery offers that (**Share → Add to Home Screen**; it needs the manifest at `?manifest` and the icon at `?appicon`, both public and harmless). Other visitors' pages don't carry it yet. You may need to sign in once inside the app.
 
@@ -227,10 +241,10 @@ The sign-in box is deliberately **not a password field**, so browsers and passwo
 ### What the admin has
 - **A lock on every tile** of the gallery itself, for you only (never visitors or private-view viewers): red and labelled *Private* when the photo is private (including by its folder), a faint open lock when it's public (on a desktop it appears on hover). Press it and the photo flips between private and public, with a short message; it doesn't open the viewer. If the admin session has ended it says so. It uses the same save as the admin's switch, so nothing else is touched.
 - **Photos** (called **Media** once video is on): a thumbnail grid. Select one for its *Private* and *Show its location* switches (they save as you flip them), *Caption*, *Web link*, location fields and **Set as cover**. **Select photos** makes several private or public at once.
-- **Settings** (*Folder settings* in a folder): the title or display name, dates, description, order, location and privacy switches and the map section. The gallery's top has the same form, so a notes file isn't needed just to name it.
+- **Settings** (*Folder settings* in a folder): the title or display name, dates, description, the order of the photos (including its own *Put first* list), location and privacy switches and the map section. The gallery's top has the same form, so a notes file isn't needed just to name it.
 - **Notes**: every `.md` in the folder, edited as raw text and saved byte-for-byte; *Save*, *Save As* and *Delete* are separate (the latter two ask first) and locked to `.md` names. A file missing `{gallery}` is shown as not active with a one-click fix.
 - **Export**: the folder or whole tree as JSON, the only backup of what you typed.
-- **Private** (red, only while something is private), **Site settings**, and a folder tree in the sidebar (a collapsed bar on a phone).
+- **Private** (red, only while something is private), **Site settings**, and a folder tree in the sidebar (a collapsed bar on a phone). While Site settings or Private is showing, the folder you came from is only softly tinted, so the one lit item is the one you are looking at.
 - Two tabs can't clobber each other: a save whose record changed elsewhere is refused with an explanation. The admin works at phone width.
 
 ### Health check
