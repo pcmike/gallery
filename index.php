@@ -11047,13 +11047,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
     position: fixed; left: 50%; right: auto; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); margin: 0;
     width: max-content; max-width: calc(100vw - 40px); padding: 3px 14px; justify-content: center; z-index: 6;
-    border-radius: 999px; background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);   /* a soft dark pill: the controls stay readable and usable over the photo */
+    border-radius: 999px; background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);   /* a soft dark pill: the controls stay readable and usable over the photo */
   }
   .lightbox.zoom-width .caption-row .caption, .lightbox.zoom-actual .caption-row .caption { color: #e4e4e8; }
   .lightbox.zoom-width .caption-row .lightbox-copy, .lightbox.zoom-actual .caption-row .lightbox-copy { color: #e4e4e8; opacity: 0.95; }
   /* Zoomed in, the photo runs under the other controls too: the same soft backing for the close button and the arrows. */
   .lightbox.zoom-width .close, .lightbox.zoom-actual .close, .lightbox.zoom-width .nav, .lightbox.zoom-actual .nav {
-    background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); opacity: 0.9;
+    background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); opacity: 0.9;
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-close-row { display: none; }
