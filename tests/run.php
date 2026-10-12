@@ -1072,6 +1072,22 @@ $videoMarks = substr_count($videoPageBody, 'class="video-mark"');
 $videoCards = preg_match_all('#<div class="card[^>]*><img src="\?img=[^"]*\.(mp4|mov|webm|m4v)#i', $videoPageBody);
 check('[video mark] every video tile carries the big play mark over the whole tile (one per video)', $videoCards >= 2 && $videoMarks === $videoCards && $brokenCardStart !== false && str_contains(substr($videoPageBody, $brokenCardStart, 600), 'video-mark'));
 
+// With "nginx internal redirect" set, nginx sends only files that sit under the gallery's own address; a video brought in from
+// elsewhere on the server is still sent by the gallery itself (nginx has no such file to find).
+$fxAc = new_fixture_dir('accelroot'); $fxAcExtra = new_fixture_dir('accelextra'); mkdir("$fxAcExtra/Paris");
+make_minimal_mp4("$fxAc/loose.mp4", 12, 1);
+make_minimal_mp4("$fxAcExtra/Paris/far.mp4", 12, 1);
+write_patched_index("$fxAc/index.php", $indexContents, ['ENABLE_VIDEO' => 'true']);
+file_put_contents("$fxAc/.gallery-config.php", cfg_text(['NGINX_ACCEL_REDIRECT_PREFIX' => '/trip', 'EXTRA_ROOTS' => [$fxAcExtra], 'AUTO_GROUP_BY_FOLDER' => true, 'ADMIN_PASSWORD' => 'ac-admin-pw']));
+$portAc = find_free_port(); start_server($fxAc, $portAc);
+[$acV1St, $acV1Body, $acV1Hd] = http_get("http://127.0.0.1:$portAc/?video=loose.mp4");
+[$acV2St, $acV2Body, $acV2Hd] = http_get("http://127.0.0.1:$portAc/?video=Paris%2Ffar.mp4");
+$acHdr = function ($hd, $name) { foreach ($hd as $h) if (stripos($h, "$name:") === 0) return trim(substr($h, strlen($name) + 1)); return null; };
+check('[nginx redirect] a video in the gallery\'s own folder is handed to nginx (an X-Accel-Redirect under the prefix, no body from PHP)', $acV1St === 200 && $acHdr($acV1Hd, 'X-Accel-Redirect') === '/trip/loose.mp4' && $acV1Body === '');
+check('[nginx redirect] a video brought in from elsewhere on the server is sent by the gallery itself, whole, with no X-Accel-Redirect (nginx has no file at that address)', $acV2St === 200 && $acHdr($acV2Hd, 'X-Accel-Redirect') === null && strlen($acV2Body) === filesize("$fxAcExtra/Paris/far.mp4"));
+[, $acAdmin] = http_get("http://127.0.0.1:$portAc/?admin", ['Authorization: Basic ' . base64_encode('admin:ac-admin-pw')]);
+check('[server checks] the browser is only ever sent addresses that really exist under the gallery: a photo from elsewhere on the server, and a folder that is only a mount, are not used as test targets (they would read as "refused" and "tidy links not working" for the wrong reason)', str_contains($acAdmin, 'id="server-probe" hidden data-photo="/loose.mp4"') && str_contains($acAdmin, 'data-folder="" data-folder-url=""'));
+
 // A video looks like a video wherever it is shown: the admin's grid and editor, a strip of group thumbnails, a folder's cover.
 $fxVm = new_fixture_dir('videomark'); mkdir("$fxVm/Reels");
 make_jpeg("$fxVm/photo.jpg", 60, 60, 80, 80, 80);

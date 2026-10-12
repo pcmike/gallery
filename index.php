@@ -1006,9 +1006,18 @@ function guess_mime($ext) {
  * what makes leaving it empty safe to ship as the default: zero nginx
  * config required, works correctly on any host, same as always.
  */
+/** True when a file lies where the web server itself would find it at the address the gallery shows it under: inside the
+ *  gallery's own folder, at the same relative path. Photos and videos brought in from elsewhere on the server
+ *  (EXTRA_FOLDERS, EXTRA_ROOTS) do not, so nginx cannot send them: the gallery sends those itself. */
+function file_is_under_web_root($srcPath, $relativePath) {
+    $real = @realpath($srcPath);
+    $expected = @realpath(rtrim($GLOBALS['dir'], '/') . '/' . $relativePath);
+    return $real !== false && $expected !== false && $real === $expected;
+}
+
 function serve_original_file($srcPath, $relativePath, $mimeType) {
     header('Content-Type: ' . $mimeType);
-    if (NGINX_ACCEL_REDIRECT_PREFIX !== '') {
+    if (NGINX_ACCEL_REDIRECT_PREFIX !== '' && file_is_under_web_root($srcPath, $relativePath)) {
         // Each path segment encoded separately — the slashes themselves
         // are the URL structure nginx's location block matches against,
         // not something to escape away.
@@ -2407,7 +2416,7 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
     // already handles Range requests correctly on its own, a free
     // upgrade over the plain-PHP handling below, which stays as the
     // baseline that works on any host regardless.
-    if (NGINX_ACCEL_REDIRECT_PREFIX !== '' && $plan === []) {
+    if (NGINX_ACCEL_REDIRECT_PREFIX !== '' && $plan === [] && file_is_under_web_root($srcPath, $filename)) {
         header('Cache-Control: ' . $cacheControl);
         serve_original_file($srcPath, $filename, guess_mime($ext));
         return;
@@ -5065,13 +5074,14 @@ function lock_probe_targets($dir, $files) {
     $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
     $enc = function ($path) { return implode('/', array_map('rawurlencode', explode('/', $path))); };
     $out = ['photo' => '', 'cache' => '', 'folder' => '', 'folderUrl' => '', 'file' => ''];
-    foreach ($files as $f) {
-        if (preg_match('/\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$/i', $f)) { $out['photo'] = $base . $enc($f); $out['file'] = $f; break; }
+    foreach ($files as $f) {   // (a photo brought in from elsewhere on the server has no address of its own to ask for)
+        if (preg_match('/\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$/i', $f) && file_is_under_web_root(resolve_real_path($dir, $f), $f)) { $out['photo'] = $base . $enc($f); $out['file'] = $f; break; }
     }
     foreach ($files as $f) {   // a folder anyone may open, for the tidy-link check (/kb/Folder/)
         $slash = strpos($f, '/');
         if ($slash === false) continue;
         $top = substr($f, 0, $slash);
+        if (!is_dir(rtrim($dir, '/') . '/' . $top) || @realpath(rtrim($dir, '/') . '/' . $top) !== @realpath(resolve_real_path($dir, $top))) continue;
         if (folder_restriction_cached($dir, $top) === 'private' || folder_above_is_private($dir, $f)) continue;
         $out['folder'] = $top; $out['folderUrl'] = $base . $enc($top) . '/';
         break;
@@ -5400,7 +5410,7 @@ function gallery_setting_definitions() {
              'help' => 'Bring in a place that lives somewhere else on the server (an archive on another disk). By default its folders appear at the top of the gallery as if they were in it: /space/trip with Paris and StTropez inside it adds Paris and StTropez. Give the place a name and it shows as one folder with that name instead. Needs "Show subfolders". Photos stay where they are; only a path is stored here.',
              'risk' => 'Every photo and video in that folder, and in its subfolders, becomes visible to visitors.'],
             ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect', 'status' => 'accel',
-             'help' => 'Hands photo and video files to nginx instead of reading them with PHP, which is what makes a hidden photo unreachable at its direct address. Leave empty unless nginx already has the matching "internal" location (see the README), for example /kb.',
+             'help' => 'Hands photo and video files to nginx instead of reading them with PHP: faster, and nginx handles seeking in videos. It works only with the matching "internal" location (the rules on the Private tab), and the value is the gallery\'s own address on the site, for example /kb. Leave empty otherwise. Photos and videos brought in from elsewhere on the server (Folders from elsewhere, below) are always sent by the gallery itself: nginx can only send files that sit under the gallery\'s own address.',
              'risk' => 'Unless nginx already has the matching internal location, every photo and video will stop loading until you clear this again.'],
         ]],
     ];
@@ -6660,9 +6670,10 @@ foreach ($adminFiles as $file) {
     // nginx turns the answer into the picture. With it set, that says whether it works; empty, whether setting it would.
     const accel = document.querySelector('[data-accel-status]');
     const runAccel = function () {
-      if (!accel || !photo) return;
+      if (!accel) return;
       const current = accel.getAttribute('data-accel-current'), candidate = accel.getAttribute('data-accel-candidate');
       const prefix = current || candidate;
+      if (!photo) { document.querySelectorAll('[data-health="accel"]').forEach(function (el) { el.textContent = 'Nothing to test with: no photo lies in the gallery\'s own folder (photos from elsewhere on the server are always sent by the gallery itself).'; }); return; }
       if (!prefix) { document.querySelectorAll('[data-health="accel"]').forEach(function (el) { el.textContent = 'Not applicable: a gallery at the very top of a site has no folder to set it to.'; }); return; }
       fetch('?admin&accelcheck=1&prefix=' + encodeURIComponent(prefix), { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { return r.ok && /^(image|video)\//.test(r.headers.get('content-type') || '') ? r.blob().then(function (b) { return b.size > 0; }) : false; })
@@ -6676,7 +6687,7 @@ foreach ($adminFiles as $file) {
           const say = function (cls, text) { accel.className = 'help accel-status ' + cls; accel.appendChild(document.createTextNode(text)); };
           if (current) {
             if (works) say('ok-text', 'Working: nginx just served a test photo through ' + current + ', so photos and videos are sent by nginx itself (checked from this browser).');
-            else say('warn-text', 'Not working: with this set, nginx did not serve a test photo through ' + current + ', so photos and videos may fail to load. Clear it, or add the matching internal location to nginx (the rules on the Private tab).');
+            else say('warn-text', 'Not working: with this set, nginx did not serve ' + photo + ' (a photo in the gallery\'s own folder) through ' + current + ', so photos and videos may fail to load. The internal location must match that address: for the rules on the Private tab, a location starting ' + current + '/ whose photo extensions are marked internal, in the same server block that serves this page. Try: curl -I ' + location.origin + photo + ' (it should say 404 or 403), and look in nginx\'s error log for the line about the internal redirect. Or clear this setting.');
           } else if (works) {
             say('note-text', 'Not using it yet: nginx has the internal location for ' + candidate + ' in place (just tested), but this is empty, so the gallery reads every photo and video itself. Setting it to ' + candidate + ' lets nginx send them, which is faster and handles seeking in videos better. ');
             const use = document.createElement('button');

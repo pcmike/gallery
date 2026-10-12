@@ -39,6 +39,8 @@ All notable changes to this project are documented here. Versions correspond to 
 - **Signed in as the owner, the gallery title is the way back to the admin**, for wherever you are: on the front page it opens the admin, on a folder's page that folder's admin. The link looks and behaves exactly like plain text (no underline, colour, cursor or tooltip, on hover or otherwise). To everyone else the title is plain text, as before.
 
 ### Fixed
+- **With "nginx internal redirect" set, photos and videos from folders brought in from elsewhere on the server (`EXTRA_FOLDERS`, `EXTRA_ROOTS`) failed to load.** The gallery told nginx to send `/trip/Paris/clip.mp4`, which exists only on the other disk, so nginx answered 404. Those files are now sent by the gallery itself; only files that really sit under the gallery's own address go through nginx.
+- **The web server checks in the admin could be fooled by photos from elsewhere on the server.** The check asked for the address of the first photo even if it came from such a folder, which has no address on the server, so it read as "refused" (and the nginx test as "not working") for the wrong reason. The checks now use only a photo (and a folder) that really sits under the gallery's own address, and say so when there is none.
 - **The first-run page's password boxes demanded 12 characters** although the rule is 8 (the browser refused a good 8-character password before it reached the server). They now ask for 8.
 
 ## [2.0.2] - 2026-10-11
