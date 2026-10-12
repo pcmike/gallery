@@ -61,7 +61,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.5');
+define('GALLERY_VERSION', '2.0.6');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -10026,12 +10026,17 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   header p.breadcrumb a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
   header p.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   header p.breadcrumb a + a::before { content: "\203A"; margin-right: 9px; opacity: 0.55; }
-  /* The folders beside this one: one swipeable row (it never wraps into a block), the current one lit. */
-  header nav.folder-pills { position: relative; display: flex; gap: 6px; overflow-x: auto; margin: -4px 0 14px; padding: 2px 2px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-  header nav.folder-pills::-webkit-scrollbar { display: none; }
-  header nav.folder-pills > :first-child { margin-left: auto; }
-  header nav.folder-pills > :last-child { margin-right: auto; }
-  header nav.folder-pills a { flex: none; font-size: 0.78rem; line-height: 1; color: var(--muted); text-decoration: none; background: transparent; border: 1px solid rgba(255, 255, 255, 0.1); padding: 6px 12px; border-radius: 999px; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }
+  /* The way back and the folders beside this one share ONE line: the way back stays put at the left while the sibling pills
+     swipe; the current folder is lit. When it all fits it is centred. */
+  header .crumb-row { position: relative; display: flex; align-items: center; gap: 10px; overflow-x: auto; margin: 0 0 14px; padding: 2px 2px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  header .crumb-row::-webkit-scrollbar { display: none; }
+  header .crumb-row p.breadcrumb { flex: none; flex-wrap: nowrap; margin: 0 0 0 auto; }
+  header .crumb-row p.breadcrumb:only-child { margin-right: auto; }
+  header .crumb-row nav.folder-pills { margin-right: auto; }
+  header .crumb-row p.breadcrumb:not(:only-child) { position: sticky; left: 0; z-index: 2; background: var(--bg); box-shadow: 8px 0 8px -4px var(--bg); }
+  header .crumb-row p.breadcrumb:not(:only-child)::after { content: "\2022"; font-size: 1rem; line-height: 1; color: var(--muted); opacity: 0.7; align-self: center; margin-left: 4px; margin-right: 0; }
+  header nav.folder-pills { flex: none; display: flex; gap: 6px; }
+  header nav.folder-pills a { flex: none; font-size: 0.82rem; line-height: 1; color: var(--muted); text-decoration: none; background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07); padding: 7px 13px; border-radius: 999px; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }   /* the same pill as the breadcrumb's */
   header nav.folder-pills a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
   header nav.folder-pills a.current { color: #fff; background: var(--accent); border-color: var(--accent); }
   header nav.folder-pills a.all { border-style: dashed; }
@@ -10640,6 +10645,7 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
 ?>
 <header>
   <?php if ($currentFolderPath !== null): ?>
+    <div class="crumb-row">
     <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
     <?php if (count($folderPills) >= 2): ?>
     <nav class="folder-pills" aria-label="Other folders here">
@@ -10647,6 +10653,7 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
       <?php if ($folderPillsAll !== null): ?><a class="all" href="<?= htmlspecialchars($folderPillsAll, ENT_QUOTES, 'UTF-8') ?>">All</a><?php endif; ?>
     </nav>
     <?php endif; ?>
+    </div>
   <?php endif; ?>
   <?php if (ADMIN_PASSWORD !== '' && is_admin_browser()): ?>
     <?php // Signed in as the owner: the title leads back to the admin page for wherever you are (a folder's own admin on its page). ?>
@@ -11173,8 +11180,8 @@ if (ENABLE_MAP && $mapPoints) {
   })();
   // The row of sibling folders starts with the current one in view.
   (function () {
-    const nav = document.querySelector('.folder-pills'), cur = nav && nav.querySelector('.current');
-    if (cur) nav.scrollLeft = cur.offsetLeft - (nav.clientWidth - cur.offsetWidth) / 2;
+    const row = document.querySelector('.crumb-row'), cur = row && row.querySelector('.folder-pills .current'), back = row && row.querySelector('.breadcrumb');
+    if (cur) row.scrollLeft = cur.offsetLeft - (back ? back.offsetWidth : 0) - (row.clientWidth - (back ? back.offsetWidth : 0) - cur.offsetWidth) / 2;
   })();
   // The archive always asks first, saying how many files and how big: it is a long, heavy download, and nothing is done on the server until the answer is yes.
   document.querySelectorAll('.page-archive').forEach(function (a) {

@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.6] - 2026-10-12
+
+### Fixed
+- **The way back and the folders beside this one are now ONE line**, not two: the way-back pill, a small dot, then the sibling pills, all the same size. On a phone the row swipes while the way back stays in view; on a wide screen it is centred.
+
 ## [2.0.5] - 2026-10-12
 
 ### Changed

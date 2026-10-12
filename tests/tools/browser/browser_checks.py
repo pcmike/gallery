@@ -526,17 +526,18 @@ try:
     s14 = socket.socket(); s14.bind(("127.0.0.1", 0)); P14 = s14.getsockname()[1]; s14.close()
     srv14 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P14}", "-t", SITE14], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
-    pillq = """(() => { const n = document.querySelector('.folder-pills'); if (!n) return null; const nr = n.getBoundingClientRect(), c = n.querySelector('.current').getBoundingClientRect(), a = [...n.querySelectorAll('a')].map(e => e.getBoundingClientRect());
-        return {h: Math.round(nr.height), scrolls: n.scrollWidth > n.clientWidth + 1, curIn: c.left >= nr.left - 1 && c.right <= nr.right + 1, tops: [...new Set(a.map(r => Math.round(r.top)))], count: a.length, first: Math.round(a[0].left - nr.left), last: Math.round(nr.right - a[a.length - 1].right), over: document.documentElement.scrollWidth > innerWidth + 1}; })()"""
+    pillq = """(() => { const row = document.querySelector('.crumb-row'); if (!row) return null; const rr = row.getBoundingClientRect(), all = [...row.querySelectorAll('a')], rs = all.map(e => e.getBoundingClientRect()), back = row.querySelector('.breadcrumb a').getBoundingClientRect(), cur = row.querySelector('.folder-pills .current').getBoundingClientRect();
+        return {heights: [...new Set(rs.map(r => Math.round(r.height * 10)))], tops: [...new Set(rs.map(r => Math.round(r.top)))], count: all.length, scrolls: row.scrollWidth > row.clientWidth + 1, backIn: back.left >= rr.left - 1 && back.right <= rr.right + 1, curIn: cur.left >= rr.left - 1 && cur.right <= rr.right + 1, first: Math.round(rs[0].left - rr.left), last: Math.round(rr.right - rs[rs.length - 1].right), h: Math.round(rr.height), over: document.documentElement.scrollWidth > innerWidth + 1}; })()"""
     try:
         b.call("Network.setExtraHTTPHeaders", {"headers": {}})
         b.viewport(390, 844, mobile=True); b.goto(B14 := f"http://127.0.0.1:{P14}", 0.2); b.goto(B14 + "/?folder=Many%2FF10", 1.5)
         pm = b.js(pillq)
         shot(b, "42-folder-pills-phone")
-        ok(pm is not None and pm["count"] == 10 and len(pm["tops"]) == 1 and pm["h"] < 48 and pm["scrolls"] and pm["curIn"] and not pm["over"], "[folder pills] on a phone the folders beside this one are a single swipeable row with the current one in view, and the page doesn't scroll sideways", str(pm))
+        ok("\u2022" in b.js("getComputedStyle(document.querySelector('.crumb-row .breadcrumb'), '::after').content"), "[folder pills] a small dot separates the way back from the folders beside this one")
+        ok(pm is not None and pm["count"] == 11 and len(pm["tops"]) == 1 and len(pm["heights"]) == 1 and pm["h"] < 48 and pm["scrolls"] and pm["backIn"] and pm["curIn"] and not pm["over"], "[folder pills] on a phone the way back and the folders beside this one share ONE line: it swipes, the way back stays in view and so does the current folder", str(pm))
         b.viewport(1280, 900); b.goto(B14 + "/?folder=Few%2FTwo", 1.2)
         pd = b.js(pillq)
-        ok(pd is not None and pd["count"] == 3 and len(pd["tops"]) == 1 and not pd["scrolls"] and abs(pd["first"] - pd["last"]) <= 6, "[folder pills] a short row of siblings is centred and doesn't scroll", str(pd))
+        ok(pd is not None and pd["count"] == 4 and len(pd["tops"]) == 1 and len(pd["heights"]) == 1 and not pd["scrolls"] and abs(pd["first"] - pd["last"]) <= 6, "[folder pills] on a wide screen it is one centred line and doesn't scroll", str(pd))
         ok(b.js("(() => { const a = document.querySelector('.folder-pills a:not(.current)'); a.click(); return true; })()"), "[folder pills] (clicked a sibling)")
         b.drain(1.2)
         ok("Few" in b.js("location.search") and "Two" not in b.js("location.search"), "[folder pills] pressing one opens that folder", b.js("location.search"))
