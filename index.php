@@ -5958,7 +5958,7 @@ function gallery_setting_definitions() {
             ['name' => 'PHOTO_SORT_DESC', 'type' => 'bool', 'label' => 'Last first',
              'help' => 'Z to A, or newest first.'],
             ['name' => 'SORT_PRIORITY', 'type' => 'sortfirst', 'label' => 'Put first',
-             'help' => 'Switch on what should come first, and drag (or use the arrows) to set the order they stack in. Then come the rest, in the order above.'],
+             'help' => 'Switch on what should come first, and drag the handles to set the order they stack in. Then come the rest, in the order above.'],
             ['name' => 'SORT_VIDEOS_FIRST', 'in' => 'SORT_PRIORITY', 'type' => 'bool', 'label' => 'Videos first',
              'help' => 'Videos at the front of each folder.'],
             ['name' => 'SORT_LOCATED_FIRST', 'in' => 'SORT_PRIORITY', 'type' => 'bool', 'label' => 'Photos with a location first',
@@ -6372,15 +6372,13 @@ function render_admin_site_settings($csrfToken) {
                 <?php if ($d['type'] === 'bool'): ?>
                   <input type="hidden" name="set_<?= $esc($name) ?>" value="0">
                   <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
-                <?php elseif ($d['type'] === 'sortfirst'): $sfNames = sort_priority_names(); $sfOrder = sort_priority_list(); $sfOn = []; foreach ($sfNames as $k => $nm) $sfOn[$k] = (bool) constant($nm[2]); ?>
+                <?php elseif ($d['type'] === 'sortfirst'): $sfNames = sort_priority_names(); $sfOrder = sort_priority_list(); $sfOn = []; foreach ($sfNames as $k => $nm) $sfOn[$k] = (bool) constant($nm[2]); $sfOrder = array_merge(array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return $sfOn[$k]; })), array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return !$sfOn[$k]; }))); ?>
                   <div class="sortfirst" data-name="set_<?= $esc($name) ?>" data-order="<?= $esc(implode(',', $sfOrder)) ?>">
                     <ol class="sf-list">
                     <?php foreach ($sfOrder as $k): $nm = $sfNames[$k]; ?>
                       <li data-kind="<?= $esc($k) ?>">
-                        <span class="sf-grip" title="Drag to reorder" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g></svg></span>
+                        <button type="button" class="sf-grip" aria-label="Move <?= $esc($nm[1]) ?>: drag it, or press the up and down arrow keys" title="Drag to reorder"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></g></svg></button>
                         <span class="sf-name"><?= $esc($nm[0]) ?></span>
-                        <button type="button" class="sf-move sf-up secondary" aria-label="Move <?= $esc($nm[1]) ?> earlier" title="Earlier">&#9650;</button>
-                        <button type="button" class="sf-move sf-down secondary" aria-label="Move <?= $esc($nm[1]) ?> later" title="Later">&#9660;</button>
                         <input type="hidden" name="set_<?= $esc($nm[2]) ?>" value="0">
                         <label class="switch"><input type="checkbox" name="set_<?= $esc($nm[2]) ?>" value="1" <?= $sfOn[$k] ? 'checked' : '' ?> data-initial="<?= $sfOn[$k] ? '1' : '0' ?>" data-label="<?= $esc($nm[0]) ?> first" aria-label="<?= $esc($nm[0]) ?> first"><span class="slider"></span></label>
                       </li>
@@ -6567,7 +6565,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-folder-nav a.current { color:#fff; background:var(--accent); font-weight:600; }
   .admin-folder-nav a.current .fcount { color:rgba(255,255,255,0.8); font-weight:500; }
   /* While Site settings (or Private) is the section on show, the folder you came from is only marked, not lit like the selection. */
-  .admin-layout.off-folder .admin-folder-nav a.current { color:var(--text); background:rgba(255,255,255,0.05); box-shadow:inset 2px 0 0 #4a4a52; font-weight:500; }
+  .admin-layout.off-folder .admin-folder-nav a.current { color:var(--text); background:rgba(255,255,255,0.05); font-weight:500; }
   .admin-layout.off-folder .admin-folder-nav a.current .fcount { color:#6f6f78; }
   /* The fold chevron sits in the gutter left of the name, so names stay in one column. */
   .admin-folder-nav .ftoggle { position:absolute; left:-1px; top:5px; width:14px; height:22px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; border-radius:4px; }
@@ -6799,13 +6797,16 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sortfirst { width:100%; max-width:420px; }
   .sf-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
   .sf-list li { display:flex; align-items:center; gap:8px; padding:6px 10px; background:#1a1a1e; border:1px solid #2c2c30; border-radius:8px; }
-  .sf-list li.dragging { opacity:0.45; }
-  .sf-list li.drop-before { box-shadow:0 -2px 0 var(--accent); }
-  .sf-list li.drop-after { box-shadow:0 2px 0 var(--accent); }
-  .sf-grip { color:var(--muted); cursor:grab; display:inline-flex; touch-action:none; }
+  .sf-grip { color:var(--muted); cursor:grab; display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; margin:-6px 0 -6px -8px; padding:0; background:none; border:0; border-radius:6px; touch-action:none; -webkit-tap-highlight-color:transparent; }
+  @media (hover: hover) { .sf-grip:hover { color:var(--text); background:rgba(255,255,255,0.06); } }
+  .sf-grip:focus-visible { color:var(--text); background:rgba(255,255,255,0.06); outline:2px solid var(--accent); outline-offset:1px; }
+  .sf-grip:focus:not(:focus-visible) { outline:none; }
+  .sf-grip.rest, .sf-grip.rest:hover { color:var(--muted); background:none; }
+  .sf-list li { transition:transform .12s; }
+  .sf-list.is-dragging li { user-select:none; -webkit-user-select:none; }
+  .sf-list li.dragging { transition:none; opacity:1; background:#24242a; border-color:var(--accent); box-shadow:0 6px 18px rgba(0,0,0,0.45); position:relative; z-index:2; }
+  .sf-list li.dragging .sf-grip { cursor:grabbing; }
   .sf-name { flex:1; font-size:0.9rem; }
-  .sf-move { padding:2px 8px; font-size:0.7rem; line-height:1.6; min-width:0; }
-  .sf-list li:first-child .sf-up, .sf-list li:last-child .sf-down { visibility:hidden; }
   .sf-summary { margin:8px 0 0; font-size:0.82rem; color:var(--muted); }
   .site-row .ctl:has(.extra-folders) { flex-direction:column; align-items:stretch; justify-content:flex-start; }
   .extra-folders { width:100%; }
@@ -7832,35 +7833,76 @@ foreach ($adminFiles as $file) {
         sum();
         post(f, status, function () { put(saved); }, function () { saved = now; });
       }
-      [].forEach.call(list.querySelectorAll('input[type=checkbox]'), function (cb) { cb.addEventListener('change', sum); });
-      list.addEventListener('click', function (ev) {
-        var b = ev.target.closest('.sf-move'); if (!b) return;
-        var li = b.closest('li');
-        if (b.classList.contains('sf-up') && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling);
-        else if (b.classList.contains('sf-down') && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li);
-        else return;
-        save();
+      // What is switched on always stands above what is off (the off ones do nothing, so the list and the sentence agree):
+      // switching one on brings it up under the ones already on, switching one off sends it down below them.
+      function isOn(li) { return li.querySelector('input[type=checkbox]').checked; }
+      function settle() {
+        var items = [].slice.call(list.children);
+        items.filter(isOn).concat(items.filter(function (li) { return !isOn(li); })).forEach(function (li) { list.appendChild(li); });
+      }
+      [].forEach.call(list.querySelectorAll('input[type=checkbox]'), function (cb) {
+        cb.addEventListener('change', function () { settle(); if (order().join(',') !== saved.join(',')) save(); else sum(); });
       });
-      var dragging = null;
+      // Drag a row by its handle: pointer events, so a finger works as well as a mouse (the browser's own drag and drop does
+      // not run on a touch screen). While it is held, the row only follows the pointer and the rows it passes slide out of its
+      // way; the list itself is reordered once, when it is let go (moving the row in the page while it is held would make the
+      // browser let go of the pointer after the first step).
       [].forEach.call(list.children, function (li) {
-        var grip = li.querySelector('.sf-grip');
-        grip.addEventListener('mousedown', function () { li.draggable = true; });
-        li.addEventListener('dragstart', function (ev) { dragging = li; li.classList.add('dragging'); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', li.getAttribute('data-kind')); } catch (e) {} });
-        li.addEventListener('dragend', function () { li.draggable = false; li.classList.remove('dragging'); [].forEach.call(list.children, function (x) { x.classList.remove('drop-before', 'drop-after'); }); dragging = null; });
-        li.addEventListener('dragover', function (ev) {
-          if (!dragging || dragging === li) return;
+        var grip = li.querySelector('.sf-grip'), active = false, rows, rects, startY, gap, newIdx, idx0;
+        function clear() { rows.forEach(function (r) { r.style.transform = ''; }); }
+        grip.addEventListener('pointerdown', function (ev) {
+          if (ev.button !== undefined && ev.button !== 0) return;
+          rows = [].slice.call(list.children);
+          rects = rows.map(function (r) { return r.getBoundingClientRect(); });
+          idx0 = rows.indexOf(li); newIdx = idx0; startY = ev.clientY;
+          gap = rows.length > 1 ? Math.max(0, rects[1].top - rects[0].bottom) : 0;
+          active = true; li.classList.add('dragging'); list.classList.add('is-dragging');
+          try { grip.setPointerCapture(ev.pointerId); } catch (e) {}
           ev.preventDefault();
-          var r = li.getBoundingClientRect(), before = ev.clientY < r.top + r.height / 2;
-          li.classList.toggle('drop-before', before); li.classList.toggle('drop-after', !before);
         });
-        li.addEventListener('dragleave', function () { li.classList.remove('drop-before', 'drop-after'); });
-        li.addEventListener('drop', function (ev) {
-          if (!dragging || dragging === li) return;
+        grip.addEventListener('pointermove', function (ev) {
+          if (!active) return;
+          var me = rects[idx0], dy = ev.clientY - startY;
+          var lo = rects[0].top - me.top, hi = rects[rows.length - 1].bottom - me.bottom;
+          dy = Math.max(lo, Math.min(hi, dy));   // stays inside the list
+          li.style.transform = 'translateY(' + dy + 'px)';
+          var centre = me.top + me.height / 2 + dy;
+          newIdx = 0;
+          rows.forEach(function (r, k) { if (r !== li && rects[k].top + rects[k].height / 2 < centre) newIdx++; });
+          if (dy >= hi - 1) newIdx = rows.length - 1; else if (dy <= lo + 1) newIdx = 0;   // all the way down / up is the last / first place
+          var by = me.height + gap;
+          rows.forEach(function (r, k) {
+            if (r === li) return;
+            var shift = 0;
+            if (idx0 < newIdx && k > idx0 && k <= newIdx) shift = -by; else if (idx0 > newIdx && k < idx0 && k >= newIdx) shift = by;
+            r.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
+          });
+        });
+        function end(ev, commit) {
+          if (!active) return;
+          active = false;
+          try { grip.releasePointerCapture(ev.pointerId); } catch (e) {}
+          li.classList.remove('dragging'); list.classList.remove('is-dragging');
+          li.style.transform = ''; clear();
+          grip.blur(); grip.classList.add('rest');   // no focus ring and no hover tint left behind (a touch screen keeps :hover after a tap)
+          if (!commit) return;
+          var rest = rows.filter(function (r) { return r !== li; });
+          rest.splice(newIdx, 0, li);
+          rest.forEach(function (r) { list.appendChild(r); });
+          settle();
+          if (order().join(',') !== saved.join(',')) save(); else sum();
+        }
+        grip.addEventListener('pointerleave', function () { grip.classList.remove('rest'); });
+        grip.addEventListener('pointerup', function (ev) { end(ev, true); });
+        grip.addEventListener('pointercancel', function (ev) { end(ev, false); });
+        // The keyboard: up and down arrows on the handle move the row.
+        grip.addEventListener('keydown', function (ev) {
+          if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
           ev.preventDefault();
-          var r = li.getBoundingClientRect();
-          if (ev.clientY < r.top + r.height / 2) list.insertBefore(dragging, li); else list.insertBefore(dragging, li.nextElementSibling);
-          li.classList.remove('drop-before', 'drop-after');
-          save();
+          if (ev.key === 'ArrowUp' && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling);
+          else if (ev.key === 'ArrowDown' && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li);
+          else return;
+          settle(); grip.focus(); if (order().join(',') !== saved.join(',')) save(); else sum();
         });
       });
     });

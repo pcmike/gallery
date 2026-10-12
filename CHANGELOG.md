@@ -11,12 +11,12 @@ All notable changes to this project are documented here. Versions correspond to 
 - **Add to Home Screen as an app** (owner only for now): the pages carry a manifest and an icon so the gallery can open full screen with no Safari bars.
 
 ### Changed
-- **"Put first" is one list you can order** (Site settings): Private items, Videos and Photos with a location, each with a switch, in the order they stack in, which you set by dragging a row or with its arrows; a line under it says the result ("Videos, then photos with a location, then the rest."). New setting `SORT_PRIORITY`; the default order is as before, so nothing re-sorts until you move a row. A folder's own choices and the visitors' sort button keep their switches and use the site's order.
+- **"Put first" is one list you can order** (Site settings): Private items, Videos and Photos with a location, each with a switch, in the order they stack in, which you set by dragging a row's handle (a finger works, and so do the arrow keys on a focused handle); a line under it says the result ("Videos, then photos with a location, then the rest."). New setting `SORT_PRIORITY`; the default order is as before, so nothing re-sorts until you move a row. A folder's own choices and the visitors' sort button keep their switches and use the site's order.
 - **On a phone the viewer's counter and buttons are a row across the top**, beside the close button, and the photo takes everything below it (a tall photo is as tall as the screen allows). Nothing is left to tap near the bottom edge, where Safari answers a tap by bringing its toolbar back and costing a second tap, and nothing is laid over the photo. The viewer stays sized to what is visible, so Safari's bars never cover the photo.
 - **The download button takes the photo from the browser's memory** (the viewer is already showing that exact file), so the share sheet opens at once.
 
 ### Fixed
-- **In the admin, Site settings and the folder you were in are no longer both lit.** While Site settings (or Private) is showing, that folder is only quietly marked, so the one lit item is the one you are looking at.
+- **In the admin, Site settings and the folder you were in are no longer both lit.** While Site settings (or Private) is showing, that folder is only softly tinted, so the one lit item is the one you are looking at.
 - **On a phone the button row keeps its places.** The map and sort buttons stay at the left and the download and about buttons at the right, as on a desktop, on one line that never wraps (the buttons get a little narrower if there are many). 2.0.5 had pushed them all to the left.
 
 ## [2.0.6] - 2026-10-12
