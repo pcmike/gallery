@@ -11047,13 +11047,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
     position: fixed; left: 50%; right: auto; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); margin: 0;
     width: max-content; max-width: calc(100vw - 40px); padding: 3px 14px; justify-content: center; z-index: 6;
-    border-radius: 999px; background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);   /* a soft dark pill: the controls stay readable and usable over the photo */
+    border-radius: 999px; background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);   /* a soft dark pill: the controls stay readable and usable over the photo */
   }
   .lightbox.zoom-width .caption-row .caption, .lightbox.zoom-actual .caption-row .caption { color: #e4e4e8; }
   .lightbox.zoom-width .caption-row .lightbox-copy, .lightbox.zoom-actual .caption-row .lightbox-copy { color: #e4e4e8; opacity: 0.95; }
   /* Zoomed in, the photo runs under the other controls too: the same soft backing for the close button and the arrows. */
   .lightbox.zoom-width .close, .lightbox.zoom-actual .close, .lightbox.zoom-width .nav, .lightbox.zoom-actual .nav {
-    background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); opacity: 0.9;
+    background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); opacity: 0.9;
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-close-row { display: none; }
@@ -11162,6 +11162,17 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox .nav .ico { width: 1em; height: 1em; vertical-align: 0; stroke-width: 2; }
   .lightbox .close { top: 10px; top: calc(10px + env(safe-area-inset-top, 0px)); right: 14px; font-size: 2.2rem; }
   .lightbox .close .ico { width: 0.85em; height: 0.85em; vertical-align: 0; stroke-width: 1.6; }
+  /* Hovering a control (where there is a mouse) lights its own round or rounded box, so you can see which one you are over, in the
+     plain view and on the dark pill over a zoomed photo alike. */
+  .lightbox .caption-row .lightbox-copy, .lightbox .close, .lightbox .nav { transition: background .12s, opacity .12s, color .12s; }
+  .lightbox .caption-row .lightbox-copy { border-radius: 8px; }
+  @media (hover: hover) {
+    .lightbox .caption-row .lightbox-copy:hover, .lightbox .close:hover, .lightbox .nav:hover,
+    .lightbox.zoom-width .caption-row .lightbox-copy:hover, .lightbox.zoom-actual .caption-row .lightbox-copy:hover,
+    .lightbox.zoom-width .close:hover, .lightbox.zoom-actual .close:hover, .lightbox.zoom-width .nav:hover, .lightbox.zoom-actual .nav:hover {
+      background: rgba(255,255,255,0.2); color: #fff; opacity: 1;
+    }
+  }
   .lightbox .prev { left: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   .lightbox .next { right: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   @media (max-width: 600px) {
