@@ -5925,8 +5925,10 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
               $sfOn = []; foreach ($sfNames as $k => $nm) $sfOn[$k] = isset($ps[$k]) && is_bool($ps[$k]) ? $ps[$k] : (bool) constant($nm[2]);
               $sfOrder = array_merge(array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return $sfOn[$k]; })), array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return !$sfOn[$k]; })));
             ?>
-            <div class="sort-row"><span class="sort-label">Put first</span><?= ui_segmented('photo_sort_first', ['' => "Site's", 'own' => "This folder's own"], $sfOwn ? 'own' : '', 'Put first') ?></div>
-            <div class="sortfirst sf-form" data-mode="form"<?= $sfOwn ? '' : ' hidden' ?>>
+            <?php $siteOrder = sort_priority_list(); $siteOn = []; foreach ($sfNames as $k => $nm) $siteOn[$k] = (bool) constant($nm[2]); $siteOrder = array_merge(array_values(array_filter($siteOrder, function ($k) use ($siteOn) { return $siteOn[$k]; })), array_values(array_filter($siteOrder, function ($k) use ($siteOn) { return !$siteOn[$k]; }))); ?>
+            <div class="sort-row sort-row-list"><span class="sort-label">Put first</span>
+            <div class="sortfirst sf-form" data-mode="form" data-site-order="<?= $esc(implode(',', $siteOrder)) ?>" data-site-on="<?= $esc(json_encode($siteOn)) ?>">
+              <input type="hidden" name="photo_sort_first" class="sf-mode" value="<?= $sfOwn ? 'own' : '' ?>">
               <ol class="sf-list">
               <?php foreach ($sfOrder as $k): $nm = $sfNames[$k]; ?>
                 <li data-kind="<?= $esc($k) ?>">
@@ -5939,9 +5941,11 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
               </ol>
               <input type="hidden" name="photo_sort_priority" class="sf-order" value="<?= $esc(implode(',', $sfOrder)) ?>">
               <p class="sf-summary" aria-live="polite"><?= $esc(sort_priority_summary($sfOrder, $sfOn)) ?></p>
+              <p class="sf-state muted"><span class="sf-state-text"><?= $sfOwn ? "This folder's own order." : "Following the site's. Change a switch or drag a row to set this folder's own." ?></span> <button type="button" class="sf-reset secondary"<?= $sfOwn ? '' : ' hidden' ?>>Use the site's again</button></p>
+            </div>
             </div>
           </div>
-          <p class="hint">"Put first" works as in Site settings: switch on what comes first and drag the handles to set the order they stack in, before the order itself. <?= $esc('Following the site\'s: ' . implode(', then ', array_map(function ($k) { return sort_priority_names()[$k][1]; }, sort_priority_list())) . '.') ?> Visitors can change it with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
+          <p class="hint">"Put first" is the same list as in Site settings. Until you change it here, this folder follows the site's. Visitors can change the order with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
         </details>
         <div class="field wide">
           <label>Description</label>
@@ -6674,6 +6678,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sort-rows { margin-top:8px; }
   .sort-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; margin:0 0 8px; }
   .sort-label { min-width:96px; font-size:0.85rem; color:var(--muted); }
+  .sort-row-list { align-items:flex-start; }
+  .sort-row-list .sort-label { padding-top:9px; }
+  .sf-state { margin:4px 0 0; font-size:0.8rem; }
+  .sf-state .sf-reset { padding:2px 8px; font-size:0.78rem; }
   .sort-details > summary { cursor:pointer; font-size:0.85rem; color:var(--muted); margin:0 0 6px; }
   .sort-details > summary .muted { font-size:0.8rem; }
   .sort-fields { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
@@ -7798,6 +7806,11 @@ foreach ($adminFiles as $file) {
     }
     var saved = order();
     function put(arr) { arr.forEach(function (k) { var li = list.querySelector('[data-kind="' + k + '"]'); if (li) list.appendChild(li); }); sum(); }
+    // For a caller that wants to set the whole list at once (the folder page's "use the site's again").
+    box.sfSet = function (arr, on) {
+      [].forEach.call(list.children, function (li) { li.querySelector('input[type=checkbox]').checked = !!on[li.getAttribute('data-kind')]; });
+      put(arr); settle(); saved = order(); sum();
+    };
     function save() {
       var now = order();
       sum();
@@ -7877,12 +7890,23 @@ foreach ($adminFiles as $file) {
     });
     
   }
-  // In a folder's own settings: "Put first" is the site's, or this folder's own list (kept in the form until it is saved).
+  // In a folder's own settings: the list shows what the folder uses. It follows the site's until a switch or a row is changed;
+  // then it is this folder's own (kept in the form until it is saved), and one button goes back to the site's.
   [].forEach.call(document.querySelectorAll('.sortfirst[data-mode=form]'), function (box) {
-    var holder = box.closest('.sort-rows') || box.parentNode, hidden = box.querySelector('input.sf-order');
-    initSortFirst(box, function (now, ok) { hidden.value = now.join(','); ok(); });
-    [].forEach.call(holder.querySelectorAll('input[name=photo_sort_first]'), function (r) {
-      r.addEventListener('change', function () { if (r.checked) box.hidden = r.value !== 'own'; });
+    var hidden = box.querySelector('input.sf-order'), mode = box.querySelector('input.sf-mode'), reset = box.querySelector('.sf-reset'), text = box.querySelector('.sf-state-text');
+    function own(isOwn) {
+      mode.value = isOwn ? 'own' : '';
+      reset.hidden = !isOwn;
+      text.textContent = isOwn ? "This folder's own order." : "Following the site's. Change a switch or drag a row to set this folder's own.";
+    }
+    initSortFirst(box, function (now, ok) { hidden.value = now.join(','); own(true); ok(); });
+    [].forEach.call(box.querySelectorAll('input[type=checkbox]'), function (cb) { cb.addEventListener('change', function () { hidden.value = [].map.call(box.querySelectorAll('.sf-list li'), function (li) { return li.getAttribute('data-kind'); }).join(','); own(true); }); });
+    reset.addEventListener('click', function () {
+      var arr = (box.getAttribute('data-site-order') || '').split(','), on = {};
+      try { on = JSON.parse(box.getAttribute('data-site-on')) || {}; } catch (e) {}
+      box.sfSet(arr, on);
+      hidden.value = [].map.call(box.querySelectorAll('.sf-list li'), function (li) { return li.getAttribute('data-kind'); }).join(',');
+      own(false);
     });
   });
   [].forEach.call(document.querySelectorAll('.site-settings-form'), function (form) {
