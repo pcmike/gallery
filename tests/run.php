@@ -230,6 +230,21 @@ function write_data_file($path, $data) {
 /** A JPEG whose EXIF block holds only a GPS IFD — PHP has no EXIF writer,
  *  so this hand-assembles a minimal little-endian TIFF inside an APP1
  *  segment. $latDMS/$lngDMS are three [numerator, denominator] pairs. */
+/** A JPEG whose EXIF says it was taken at $dateText ("2022:01:01 12:00:00"). */
+function make_dated_jpeg($path, $dateText) {
+    $im = imagecreatetruecolor(60, 60); imagefill($im, 0, 0, imagecolorallocate($im, 90, 90, 200));
+    ob_start(); imagejpeg($im); $jpeg = ob_get_clean(); imagedestroy($im);
+    $data = $dateText . "\0";
+    $exifIfd = 8 + 2 + 12 + 4;
+    $dataStart = $exifIfd + 2 + 12 + 4;
+    $tiff = 'II' . pack('v', 42) . pack('V', 8)
+          . pack('v', 1) . pack('vvVV', 0x8769, 4, 1, $exifIfd) . pack('V', 0)
+          . pack('v', 1) . pack('vvVV', 0x9003, 2, strlen($data), $dataStart) . pack('V', 0)
+          . $data;
+    $exif = "Exif\0\0" . $tiff;
+    file_put_contents($path, substr($jpeg, 0, 2) . "\xFF\xE1" . pack('n', strlen($exif) + 2) . $exif . substr($jpeg, 2));
+}
+
 function make_gps_jpeg($path, $latRef, $latDMS, $lngRef, $lngDMS) {
     $im = imagecreatetruecolor(60, 60);
     imagefill($im, 0, 0, imagecolorallocate($im, 10, 200, 10));
@@ -345,6 +360,7 @@ function start_server($docroot, $port) {
  *  $followRedirects = false to inspect a redirect response itself
  *  (status + Location header) instead of transparently following it. */
 function data_file_guard_line_for_tests() { return "<?php http_response_code(404); exit; ?>\n"; }
+function data_file_strip_guard_for_tests($raw) { $raw = (string) $raw; return strncmp($raw, '<?php', 5) === 0 ? substr($raw, strpos($raw, "\n") + 1) : $raw; }
 function http_get($url, $headers = [], $followRedirects = true) {
     $opts = ['http' => ['method' => 'GET', 'ignore_errors' => true, 'timeout' => 5]];
     if (!$followRedirects) {
@@ -1094,6 +1110,55 @@ copy(__DIR__ . '/../index.php', "$fxAo/index.php");
 $portAo = find_free_port(); start_server($fxAo, $portAo);
 [, $aoAdmin] = http_get("http://127.0.0.1:$portAo/?admin", ['Authorization: Basic ' . base64_encode('admin:ao-admin-pw')]);
 check('[server checks] a gallery whose photos all come from elsewhere on the server has nothing to ask a web server for (data-photo is empty, but the gallery knows it has files and a folder), so the browser can say the lock is not needed instead of "nothing to test"', str_contains($aoAdmin, 'id="server-probe" hidden data-photo=""') && str_contains($aoAdmin, 'data-files="1"') && str_contains($aoAdmin, 'data-folder="Paris"') && str_contains($aoAdmin, 'lock-outside-text'));
+
+// ---- The order of the photos inside a folder: base order, direction, and what goes first.
+echo "== the order of the photos inside a folder ==\n";
+$fxSo = new_fixture_dir('sortorder');
+make_dated_jpeg("$fxSo/a-early.jpg", '2020:01:01 10:00:00');
+make_dated_jpeg("$fxSo/b-late.jpg", '2024:06:01 10:00:00');
+make_dated_jpeg("$fxSo/c-mid.jpg", '2022:01:01 10:00:00');
+make_jpeg("$fxSo/p-private.jpg", 40, 40, 200, 60, 60);
+make_jpeg("$fxSo/z-located.jpg", 40, 40, 60, 200, 60);
+make_minimal_mp4("$fxSo/m.mp4", 5, 1);
+touch("$fxSo/m.mp4", strtotime('2025-01-01')); touch("$fxSo/z-located.jpg", strtotime('2025-02-01')); touch("$fxSo/p-private.jpg", strtotime('2025-03-01'));
+write_data_file("$fxSo/.gallery-items.php", ['items' => ['z-located.jpg' => ['location' => ['lat' => 1.5, 'lng' => 2.5, 'label' => 'Somewhere']], 'p-private.jpg' => ['restriction' => 'private']], 'groups' => [], 'displayName' => null, 'cover' => null, 'locationEnabled' => true]);
+write_patched_index("$fxSo/index.php", $indexContents, ['ENABLE_VIDEO' => 'true', 'ENABLE_PHOTO_LOCATION' => 'true', 'ADMIN_PASSWORD' => "'so-admin-pw'"]);
+$portSo = find_free_port(); start_server($fxSo, $portSo); $baseSo = "http://127.0.0.1:$portSo";
+$soOrder = function ($query = '', $headers = []) use ($baseSo) {
+    [, $body] = http_get("$baseSo/" . $query, $headers);
+    preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $m);
+    return $m[1];
+};
+$soAdminAuth = 'Authorization: Basic ' . base64_encode('admin:so-admin-pw');
+check('[sort] by default the photos run by filename', $soOrder() === ['a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder()));
+check('[sort] ?sort=taken orders by the date inside each photo (a file with none falls back to its modified date)', $soOrder('?sort=taken') === ['a-early.jpg', 'c-mid.jpg', 'b-late.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder('?sort=taken')));
+check('[sort] ...and .desc runs it the other way round', $soOrder('?sort=taken.desc') === ['z-located.jpg', 'm.mp4', 'b-late.jpg', 'c-mid.jpg', 'a-early.jpg'], json_encode($soOrder('?sort=taken.desc')));
+check('[sort] ?sort=modified orders by modified date (here the video and the located photo were touched long ago, the others just now)', array_slice($soOrder('?sort=modified'), 0, 2) === ['m.mp4', 'z-located.jpg'] && array_slice($soOrder('?sort=modified.desc'), -2) === ['z-located.jpg', 'm.mp4'], json_encode($soOrder('?sort=modified')));
+check('[sort] videos first puts the video in front of the rest, the rest keeping their order', $soOrder('?sort=name.video') === ['m.mp4', 'a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'z-located.jpg'], json_encode($soOrder('?sort=name.video')));
+check('[sort] the "first" choices stack: videos, then located photos, then the rest', $soOrder('?sort=name.located.video') === ['m.mp4', 'z-located.jpg', 'a-early.jpg', 'b-late.jpg', 'c-mid.jpg'], json_encode($soOrder('?sort=name.located.video')));
+check('[sort] a nonsense ?sort= is ignored', $soOrder('?sort=banana') === $soOrder() && $soOrder('?sort=name.bogus') === $soOrder());
+check('[sort] a visitor asking for private first changes nothing (they never see private items, so nothing can be told from the order)', $soOrder('?sort=name.private') === $soOrder() && !in_array('p-private.jpg', $soOrder('?sort=name.private'), true));
+[, , $soAdminHd] = http_get("$baseSo/?admin", [$soAdminAuth]); $soCookie = extract_cookie_header($soAdminHd);
+check('[sort] the owner sees the private item, and private first puts it in front', $soOrder('?sort=name.private', ["Cookie: $soCookie"]) === ['p-private.jpg', 'a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder('?sort=name.private', ["Cookie: $soCookie"])));
+check('[sort] a visitor\'s own choice kept in the cookie sets the order, and a link\'s ?sort= beats the cookie', $soOrder('', ['Cookie: gallery_sort=taken.desc']) === $soOrder('?sort=taken.desc') && $soOrder('?sort=name', ['Cookie: gallery_sort=taken.desc']) === $soOrder());
+// the folder's own setting, saved through the admin form
+[, $soAdminBody, $soAdminHd2] = http_get("$baseSo/?admin", [$soAdminAuth]);
+$soSess = extract_cookie_header($soAdminHd2); $soCsrf = extract_csrf_token($soAdminBody);
+check('[sort] the admin form offers the order of the photos here', str_contains($soAdminBody, 'name="photo_sort_order"') && str_contains($soAdminBody, 'name="photo_sort_video"'));
+http_post("$baseSo/?admin", ['action' => 'save_folder_identity', 'csrf_token' => $soCsrf, 'display_name' => '', 'photo_sort_order' => 'taken', 'photo_sort_dir' => 'desc', 'photo_sort_video' => 'on', 'photo_sort_located' => '', 'photo_sort_private' => 'off'], [$soAdminAuth, "Cookie: $soSess"]);
+$soStored = json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo/.gallery-items.php")), true);
+check('[sort] saved, the folder keeps only what was chosen (order, direction, videos on, private off; "the site\'s" choices are not stored)', ($soStored['photoSort'] ?? null) == ['order' => 'taken', 'desc' => true, 'video' => true, 'private' => false] && isset($soStored['items']['z-located.jpg']) && true && $soStored['locationEnabled'] === true, json_encode($soStored));
+check('[sort] ...and it is the order visitors get in that folder', $soOrder() === ['m.mp4', 'z-located.jpg', 'b-late.jpg', 'c-mid.jpg', 'a-early.jpg'], json_encode($soOrder()));
+check('[sort] ...but a visitor\'s own choice still beats the folder\'s', $soOrder('?sort=name') === ['a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg']);
+check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken.json") && count(json_decode(file_get_contents("$fxSo/.gallery-cache/taken.json"), true)) >= 5);
+[, $soPage] = http_get("$baseSo/");
+check('[sort] the page has the sort button, with only the toggles that apply here (videos, located; private only for the owner)', str_contains($soPage, 'id="sort-menu-btn"') && str_contains($soPage, 'data-flag="video"') && str_contains($soPage, 'data-flag="located"') && !str_contains($soPage, 'data-flag="private"'));
+[, $soPageOwner] = http_get("$baseSo/", ["Cookie: $soSess"]);
+check('[sort] ...the owner also gets the private toggle', str_contains($soPageOwner, 'data-flag="private"'));
+$fxSo1 = new_fixture_dir('sortone'); make_jpeg("$fxSo1/only.jpg", 40, 40, 1, 2, 3);
+write_patched_index("$fxSo1/index.php", $indexContents, []);
+$portSo1 = find_free_port(); start_server($fxSo1, $portSo1);
+check('[sort] a folder with a single photo has no sort button', !str_contains(http_get("http://127.0.0.1:$portSo1/")[1], 'id="sort-combo"'));
 
 // A video looks like a video wherever it is shown: the admin's grid and editor, a strip of group thumbnails, a folder's cover.
 $fxVm = new_fixture_dir('videomark'); mkdir("$fxVm/Reels");

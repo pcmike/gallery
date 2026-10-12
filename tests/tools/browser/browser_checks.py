@@ -445,6 +445,54 @@ try:
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
         srv9.terminate(); srv9.wait()
     b.viewport(1280, 900)
+    # ---------------- the sort button ----------------
+    print("== sort button (order of the photos)")
+    SITE13 = WORK + "/site13"; os.makedirs(SITE13)
+    shutil.copy(HERE + "/../../../index.php", SITE13 + "/index.php"); os.utime(SITE13 + "/index.php", (time.time() - 3600,) * 2)
+    for nm in ("a.jpg", "b.jpg", "c.jpg"):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE13 + "/" + nm], check=True)
+    has_clip = os.path.exists(SITE8 + "/clip.mp4") if "SITE8" in globals() else False
+    if has_clip: shutil.copy(SITE8 + "/clip.mp4", SITE13 + "/0-clip.mp4")
+    open(SITE13 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ENABLE_VIDEO": True}) + "\n")
+    s13 = socket.socket(); s13.bind(("127.0.0.1", 0)); P13 = s13.getsockname()[1]; s13.close(); B13 = f"http://127.0.0.1:{P13}"
+    srv13 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P13}", "-t", SITE13], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    cards = "[...document.querySelectorAll('.gallery .card img')].map(i => i.getAttribute('alt')).filter(n => !n.startsWith('0-clip'))"
+    allcards = "[...document.querySelectorAll('.gallery .card img')].map(i => i.getAttribute('alt'))"
+    try:
+        b.call("Network.setExtraHTTPHeaders", {"headers": {}})
+        b.viewport(1280, 900); b.goto(B13 + "/", 2.0)
+        first = b.js(cards)
+        ok(first[:3] == ["a.jpg", "b.jpg", "c.jpg"], "[sort] photos start in filename order", str(first))
+        ok(b.js("!!document.getElementById('sort-menu-btn')") and b.js("document.getElementById('sort-pop').hidden"), "[sort] the sort button is in the bar above the photos, with its menu closed")
+        b.js("document.getElementById('sort-menu-btn').click()"); b.drain(0.3)
+        pr = b.js("(() => { const r = document.getElementById('sort-pop').getBoundingClientRect(), p = document.getElementById('sort-pop'); return {open: !p.hidden, l: r.left, r: r.right, w: innerWidth, expanded: document.getElementById('sort-menu-btn').getAttribute('aria-expanded'), desc: p.querySelector('[data-dir=desc]').textContent}; })()")
+        ok(pr["open"] and pr["l"] >= 0 and pr["r"] <= pr["w"] and pr["expanded"] == "true" and pr["desc"] == "Z to A", "[sort] pressing it opens a menu that stays on the screen", str(pr))
+        shot(b, "40-sort-menu")
+        b.js("document.querySelector('#sort-pop [data-dir=desc]').click()"); b.drain(1.5)
+        after = b.js(cards)
+        ok(after[:3] == ["c.jpg", "b.jpg", "a.jpg"] and "gallery_sort=name.desc" in b.js("document.cookie"), "[sort] choosing Z to A reloads the page in that order and remembers the choice", str(after))
+        b.goto(B13 + "/?x=1", 1.5)
+        ok(b.js(cards)[:3] == ["c.jpg", "b.jpg", "a.jpg"], "[sort] ...which holds on another page load")
+        if has_clip:
+            ok(b.js("!!document.querySelector('#sort-combo .sort-flag[data-flag=video]')"), "[sort] with a video in the folder there is a videos-first toggle")
+            b.js("document.querySelector('#sort-combo .sort-flag[data-flag=video]').click()"); b.drain(1.5)
+            vf = b.js(allcards)
+            ok(vf[0] == "0-clip.mp4" and vf[1:4] == ["c.jpg", "b.jpg", "a.jpg"] and b.js("document.querySelector('#sort-combo .sort-flag[data-flag=video]').getAttribute('aria-pressed')") == "true", "[sort] videos first adds to the order instead of replacing it: the video, then the photos Z to A", str(vf))
+        b.js("document.getElementById('sort-menu-btn').click()"); b.drain(0.3)
+        b.js("document.querySelector('#sort-pop .sort-reset').click()"); b.drain(1.5)
+        ok(b.js(cards)[:3] == ["a.jpg", "b.jpg", "c.jpg"] and "gallery_sort" not in b.js("document.cookie"), "[sort] \"Use this gallery's order\" puts it back and forgets the choice")
+        b.js("document.getElementById('sort-menu-btn').click()"); b.drain(0.2)
+        b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))"); b.drain(0.2)
+        ok(b.js("document.getElementById('sort-pop').hidden"), "[sort] Escape closes the menu")
+        b.viewport(390, 844, mobile=True); b.goto(B13 + "/", 1.5)
+        b.js("document.getElementById('sort-menu-btn').click()"); b.drain(0.3)
+        pm = b.js("(() => { const r = document.getElementById('sort-pop').getBoundingClientRect(); return {l: r.left, r: r.right, w: innerWidth, over: document.documentElement.scrollWidth > innerWidth + 1}; })()")
+        ok(pm["l"] >= 0 and pm["r"] <= pm["w"] and not pm["over"], "[sort] on a phone the menu fits the screen and the page does not scroll sideways", str(pm))
+        shot(b, "41-sort-menu-phone")
+    finally:
+        srv13.terminate(); srv13.wait()
+        b.viewport(1280, 900)
     # ---------------- the "private isn't locked" warning goes away once the server really refuses direct requests ----------------
     print("== private lock check (the warning on the Hidden tab)")
     SITE11 = WORK + "/site11"; os.makedirs(SITE11 + "/Trips"); os.makedirs(WORK + "/site11root"); os.symlink(SITE11, WORK + "/site11root/trip")   # (the gallery lives at /trip/ on this server)

@@ -289,7 +289,12 @@ define('AUTO_GROUP_BY_FILENAME', gallery_setting('AUTO_GROUP_BY_FILENAME', false
 // photo was actually taken, which can make 'mtime' order effectively
 // arbitrary. Only switch to 'mtime' if you've verified your own
 // deployment method preserves the original timestamps.
-define('PHOTO_SORT_ORDER', gallery_setting('PHOTO_SORT_ORDER', 'filename', ['filename', 'mtime']));
+define('PHOTO_SORT_ORDER', gallery_setting('PHOTO_SORT_ORDER', 'filename', ['filename', 'mtime', 'taken']));
+// Which way round the photos inside a folder run, and what comes first whatever the order: see media_sort_apply().
+define('PHOTO_SORT_DESC', gallery_setting('PHOTO_SORT_DESC', false));
+define('SORT_VIDEOS_FIRST', gallery_setting('SORT_VIDEOS_FIRST', false));
+define('SORT_LOCATED_FIRST', gallery_setting('SORT_LOCATED_FIRST', false));
+define('SORT_PRIVATE_FIRST', gallery_setting('SORT_PRIVATE_FIRST', false));
 
 // Scan subfolders recursively (to any depth) and group photos by which
 // one they're in. Off by default — a flat folder behaves exactly as it
@@ -850,6 +855,9 @@ if (AUTO_GROUP_BY_FOLDER) {
     }
     $files = array_values($files);
 }
+
+// The photos inside each folder in the order chosen for it (see media_sort_apply).
+$files = array_values(media_sort_apply($files, $dir));
 
 // Snapshot of each file's position in this base sort, before any .md-
 // driven repositioning happens — used as the "natural order" anchor for
@@ -2110,6 +2118,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $variants = $isHeic ? ['thumb', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'share', 'cover', 'coverlg'];
             if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
             $mtime = @filemtime(resolve_real_path($dir, $file));
+            $valid['taken.json'] = true;   // the capture dates found for sorting (see media_taken_times)
             if (is_video_file($file)) $valid[md5($file . '|preview2|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
                 $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
@@ -4051,7 +4060,7 @@ function items_path($folderPath) {
  *  locationEnabled is this folder's own
  *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null];
 }
 
 function items_read($folderPath) {
@@ -4107,6 +4116,141 @@ function photo_location_visible($itemEntry) {
     if ($visibility === 'hide') return false;
     if ($visibility === 'show') return true;
     return !empty($itemEntry['_folderLocationEnabled']);
+}
+
+/* -----------------------------------------------------------------------
+ * The order of the photos inside a folder. A spec says: the base order (name,
+ * taken = the capture date in the photo, modified), whether it runs backwards,
+ * and which kinds go first whatever the base order (private, then videos, then
+ * photos with a location that is shown). It comes from, in turn: a link's
+ * ?sort=, the visitor's own choice (a cookie, set by the sort button), the
+ * folder's own setting, the site's setting. A spec is written as text, for
+ * example "taken.desc.video.located".
+ * ----------------------------------------------------------------------- */
+
+/** The site's own spec, from the settings. */
+function media_sort_site_spec() {
+    return ['order' => PHOTO_SORT_ORDER === 'mtime' ? 'modified' : (PHOTO_SORT_ORDER === 'taken' ? 'taken' : 'name'), 'desc' => (bool) PHOTO_SORT_DESC,
+            'private' => (bool) SORT_PRIVATE_FIRST, 'video' => (bool) SORT_VIDEOS_FIRST, 'located' => (bool) SORT_LOCATED_FIRST];
+}
+
+/** A spec written as text, or null for anything else (including "default", which means: no choice of my own). */
+function media_sort_parse($text) {
+    if (!is_string($text) || $text === '' || strlen($text) > 60) return null;
+    $spec = ['order' => 'name', 'desc' => false, 'private' => false, 'video' => false, 'located' => false];
+    $parts = explode('.', strtolower($text));
+    if (!in_array($parts[0], ['name', 'taken', 'modified'], true)) return null;
+    $spec['order'] = array_shift($parts);
+    foreach ($parts as $flag) {
+        if ($flag === 'desc') $spec['desc'] = true;
+        elseif (in_array($flag, ['private', 'video', 'located'], true)) $spec[$flag] = true;
+        elseif ($flag !== 'asc') return null;
+    }
+    return $spec;
+}
+
+function media_sort_encode($spec) {
+    $out = $spec['order'];
+    foreach (['desc', 'private', 'video', 'located'] as $k) if (!empty($spec[$k])) $out .= '.' . $k;
+    return $out;
+}
+
+/** The visitor's own choice: a link's ?sort= wins over the cookie the sort button sets. Null when there is none. */
+function media_sort_override() {
+    static $memo = false;
+    if ($memo !== false) return $memo;
+    $memo = null;
+    foreach ([$_GET['sort'] ?? null, $_COOKIE['gallery_sort'] ?? null] as $text) {
+        if (is_string($text) && $text !== '') { $memo = media_sort_parse($text); break; }
+    }
+    return $memo;
+}
+
+/** The spec in force for one folder (given its real path): the visitor's choice, else the folder's own setting laid over the site's. */
+function media_sort_spec_for_folder($folderReal) {
+    $override = media_sort_override();
+    if ($override !== null) return $override;
+    $spec = media_sort_site_spec();
+    $own = items_read($folderReal)['photoSort'] ?? null;
+    if (is_array($own)) {
+        if (in_array($own['order'] ?? null, ['name', 'taken', 'modified'], true)) $spec['order'] = $own['order'];
+        foreach (['desc', 'private', 'video', 'located'] as $k) if (isset($own[$k]) && is_bool($own[$k])) $spec[$k] = $own[$k];
+    }
+    return $spec;
+}
+
+/** When each photo of a folder was taken, as a number to sort by: the capture date inside a JPEG, else its modified time.
+ *  Reading dates out of many photos is slow, so what is found is kept (by file name, size and modified time) in the folder's cache. */
+function media_taken_times($folderReal, $names) {
+    $cachePath = $folderReal . '/.gallery-cache/taken.json';
+    $known = [];
+    $raw = is_file($cachePath) ? json_decode((string) @file_get_contents($cachePath), true) : null;
+    if (is_array($raw)) $known = $raw;
+    $out = []; $changed = false; $budget = 4000;
+    foreach ($names as $name) {
+        $path = $folderReal . '/' . $name;
+        $mtime = (int) @filemtime($path); $size = (int) @filesize($path);
+        $hit = $known[$name] ?? null;
+        if (is_array($hit) && ($hit[0] ?? null) === $mtime && ($hit[1] ?? null) === $size && is_int($hit[2] ?? null)) { $out[$name] = $hit[2]; continue; }
+        $when = $mtime;
+        if ($budget > 0 && function_exists('exif_read_data') && preg_match('/\.jpe?g$/i', $name)) {
+            $budget--;
+            $exif = @exif_read_data($path, 'EXIF', false);
+            foreach (['DateTimeOriginal', 'DateTimeDigitized', 'DateTime'] as $field) {
+                $text = is_array($exif) ? ($exif[$field] ?? null) : null;
+                $dt = is_string($text) ? DateTime::createFromFormat('Y:m:d H:i:s', trim($text), new DateTimeZone('UTC')) : false;
+                if ($dt instanceof DateTime && (int) $dt->format('Y') > 1970) { $when = $dt->getTimestamp(); break; }
+            }
+        }
+        $out[$name] = $when;
+        $known[$name] = [$mtime, $size, $when];
+        $changed = true;
+    }
+    if ($changed) {
+        $live = array_intersect_key($known, array_flip($names));
+        $dirOk = is_dir($folderReal . '/.gallery-cache') || @mkdir($folderReal . '/.gallery-cache', 0755);
+        if ($dirOk) {
+            $tmp = $cachePath . '.tmp' . bin2hex(random_bytes(3));
+            if (@file_put_contents($tmp, json_encode($live)) !== false && !@rename($tmp, $cachePath)) @unlink($tmp);
+        }
+    }
+    return $out;
+}
+
+/** $files (relative paths) with the photos of each folder put in that folder's order (see above); folders keep their places. */
+function media_sort_apply($files, $dir) {
+    if (count($files) < 2) return $files;
+    $byFolder = [];
+    foreach ($files as $f) $byFolder[containing_folder_real_path($dir, $f)][] = $f;
+    $scanned = PHOTO_SORT_ORDER === 'mtime' ? 'modified' : 'name';   // the order the scan already produced
+    $revealed = is_revealed();
+    $result = [];
+    foreach ($byFolder as $folderReal => $list) {
+        $spec = media_sort_spec_for_folder($folderReal);
+        if (!$revealed) $spec['private'] = false;   // visitors never see private items: nothing to put first
+        if (count($list) < 2 || ($spec['order'] === $scanned && !$spec['desc'] && !$spec['private'] && !$spec['video'] && !$spec['located'])) { foreach ($list as $f) $result[] = $f; continue; }
+        $info = [];
+        if ($spec['private'] || $spec['located']) $itemsData = items_get_all_for_files($dir, $list); else $itemsData = [];
+        $times = $spec['order'] === 'name' ? [] : media_taken_times($folderReal, array_map('basename', $list));
+        foreach ($list as $f) {
+            $info[$f] = [
+                'private' => $spec['private'] && file_is_hidden($dir, $f, $itemsData),
+                'video' => $spec['video'] && is_video_file($f),
+                'located' => $spec['located'] && photo_location_visible($itemsData[$f] ?? []),
+                't' => $spec['order'] === 'modified' ? (int) @filemtime(resolve_real_path($dir, $f)) : ($times[basename($f)] ?? 0),
+            ];
+        }
+        usort($list, function ($a, $b) use ($info, $spec) {
+            foreach (['private', 'video', 'located'] as $k) {
+                if ($spec[$k]) { $d = ($info[$a][$k] ? 0 : 1) <=> ($info[$b][$k] ? 0 : 1); if ($d !== 0) return $d; }
+            }
+            $c = $spec['order'] === 'name' ? 0 : $info[$a]['t'] <=> $info[$b]['t'];
+            if ($c === 0) $c = strnatcasecmp(basename($a), basename($b));
+            return $spec['desc'] ? -$c : $c;
+        });
+        foreach ($list as $f) $result[] = $f;
+    }
+    return $result;
 }
 
 /** Whether this PHP can read embedded GPS out of this kind of file at all
@@ -4583,6 +4727,7 @@ function folder_identity_record($data) {
         'description' => $data['description'] ?? null,
         'dates' => $data['dates'] ?? null,
         'sortOrder' => $data['sortOrder'] ?? null,
+        'photoSort' => $data['photoSort'] ?? null,
     ];
 }
 
@@ -4806,6 +4951,18 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             } else {
                 return ['type' => 'error', 'text' => 'Position must be a whole number (or blank for natural order).'];
             }
+        }
+        if (array_key_exists('photo_sort_order', $_POST)) {   // this folder's own order of photos: "" = the site's
+            $own = [];
+            $order = (string) $_POST['photo_sort_order'];
+            if (in_array($order, ['name', 'taken', 'modified'], true)) $own['order'] = $order;
+            $dirChoice = (string) ($_POST['photo_sort_dir'] ?? '');
+            if ($dirChoice === 'asc' || $dirChoice === 'desc') $own['desc'] = $dirChoice === 'desc';
+            foreach (['private', 'video', 'located'] as $kind) {
+                $choice = (string) ($_POST['photo_sort_' . $kind] ?? '');
+                if ($choice === 'on' || $choice === 'off') $own[$kind] = $choice === 'on';
+            }
+            $updates['photoSort'] = $own !== [] ? $own : null;
         }
         $loadedHash = isset($_POST['loaded_hash']) ? (string) $_POST['loaded_hash'] : null;
         $stale = false;
@@ -5335,6 +5492,24 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
         </div>
         <?php endif; ?>
+        <?php $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : []; $psSel = function ($key) use ($ps) { return isset($ps[$key]) && is_bool($ps[$key]) ? ($ps[$key] ? 'on' : 'off') : ''; }; ?>
+        <div class="field wide">
+          <label>Order of the photos here</label>
+          <div class="sort-fields">
+            <select name="photo_sort_order" aria-label="Order">
+              <?php foreach (['' => "The site's order", 'name' => 'By filename', 'taken' => 'By date taken', 'modified' => 'By date modified'] as $val => $lab): ?><option value="<?= $esc($val) ?>"<?= (string) ($ps['order'] ?? '') === (string) $val ? ' selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?>
+            </select>
+            <select name="photo_sort_dir" aria-label="Direction">
+              <?php $dirSel = isset($ps['desc']) && is_bool($ps['desc']) ? ($ps['desc'] ? 'desc' : 'asc') : ''; foreach (['' => "The site's direction", 'asc' => 'First to last (A to Z, oldest first)', 'desc' => 'Last to first (Z to A, newest first)'] as $val => $lab): ?><option value="<?= $esc($val) ?>"<?= $dirSel === $val ? ' selected' : '' ?>><?= $esc($lab) ?></option><?php endforeach; ?>
+            </select>
+            <?php foreach (['video' => 'Videos first', 'located' => 'Located first', 'private' => 'Private first'] as $kind => $lab): ?>
+              <select name="photo_sort_<?= $kind ?>" aria-label="<?= $esc($lab) ?>">
+                <option value="">Site: <?= $esc($lab) ?></option><option value="on"<?= $psSel($kind) === 'on' ? ' selected' : '' ?>><?= $esc($lab) ?>: on</option><option value="off"<?= $psSel($kind) === 'off' ? ' selected' : '' ?>><?= $esc($lab) ?>: off</option>
+              </select>
+            <?php endforeach; ?>
+          </div>
+          <p class="hint">How the photos in <?= $isRoot ? 'the top of the gallery' : 'this folder' ?> are ordered. Videos, located and private first stack, in that order of importance (private, then videos, then located), before the order itself. Visitors can change it for themselves with the sort button above the photos. Photos you place with <code>{photos:}</code> or a group keep the order you gave.</p>
+        </div>
         <div class="field wide">
           <label>Description</label>
           <textarea name="description" maxlength="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
@@ -5384,8 +5559,16 @@ function gallery_setting_definitions() {
              'risk' => 'Anyone can save every photo at full resolution.',
              'offwarn' => 'The download button disappears for visitors who aren\'t signed in. Nothing is deleted.'],
             ['name' => 'PHOTO_SORT_ORDER', 'type' => 'enum', 'label' => 'Photo order',
-             'options' => ['filename' => 'By filename', 'mtime' => 'By date modified (oldest first)'],
-             'help' => 'Date order is only reliable if your upload method keeps the original file dates.'],
+             'options' => ['filename' => 'By filename', 'taken' => 'By date taken (from the photo, else date modified)', 'mtime' => 'By date modified'],
+             'help' => 'The order of the photos inside a folder. Each folder can choose its own in its settings, and visitors can change it for themselves with the sort button above the photos. Date modified is only reliable if your upload method keeps the original file dates.'],
+            ['name' => 'PHOTO_SORT_DESC', 'type' => 'bool', 'label' => 'Last first',
+             'help' => 'Runs the order the other way: Z to A, or newest first.'],
+            ['name' => 'SORT_VIDEOS_FIRST', 'type' => 'bool', 'label' => 'Videos first',
+             'help' => 'Puts the videos at the front of each folder, whatever the order.'],
+            ['name' => 'SORT_LOCATED_FIRST', 'type' => 'bool', 'label' => 'Photos with a location first',
+             'help' => 'Puts photos that show a location at the front (after videos, if that is on too). A location counts only where it is shown to the visitor.'],
+            ['name' => 'SORT_PRIVATE_FIRST', 'type' => 'bool', 'label' => 'Private items first',
+             'help' => 'For you and anyone with the private-view password: private items come first. Visitors never see them, so nothing changes for them.'],
         ]],
         ['title' => 'Thumbnails and counting', 'items' => [
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
@@ -5975,6 +6158,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-label { font-weight:600; }
   .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
   .health-summary { margin:0 0 6px; }
+  .sort-fields { display:flex; flex-wrap:wrap; gap:8px; }
+  .sort-fields select { max-width:100%; }
   .health-panel:not(.show-all) .health-row.quiet, .health-panel:not(.show-all) .health-group.all-quiet, .health-panel:not(.show-all) .health-intro { display:none; }
   .health-panel.is-checking .health-toggle { display:none; }
   .health-toggle { margin-left:10px; padding:3px 12px; font-size:0.8rem; }
@@ -9030,6 +9215,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
 function ui_icon_paths() {
     return [
         'map'     => '<path d="M9 4 3 6.5V20l6-2.5 6 2.5 6-2.5V4l-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/>',
+        'sort'    => '<path d="M8 20V4M8 4 4.5 7.5M8 4l3.5 3.5M16 4v16M16 20l-3.5-3.5M16 20l3.5-3.5"/>',
         'pin'     => '<path d="M12 21s-6.5-5.4-6.5-10.5a6.5 6.5 0 1 1 13 0C18.5 15.6 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.3"/>',
         'caption' => '<path d="M20.5 15.5a2 2 0 0 1-2 2H9l-5 3.5V6.5a2 2 0 0 1 2-2h12.5a2 2 0 0 1 2 2z"/><path d="M8 9.5h8M8 13h5"/>',
         'globe'   => '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>',
@@ -10105,7 +10291,18 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-combo-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 34px; padding: 0; background: none; border: 0; color: var(--text); font-size: 1.05rem; cursor: pointer; text-decoration: none; }
   .map-combo-btn + .map-combo-btn { border-left: 1px solid #2c2c30; }
   .map-combo-btn:hover { background: #26262a; }
-  .map-combo-btn[aria-expanded="true"] { background: var(--accent); color: #fff; }
+  .map-combo-btn[aria-expanded="true"], .map-combo-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .map-preview-heading { position: relative; }
+  .sort-pop { position: absolute; top: 40px; left: 0; z-index: 30; min-width: 230px; max-width: calc(100vw - 32px); padding: 10px; background: var(--card); border: 1px solid #2c2c30; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-size: 0.85rem; }
+  .sort-pop[hidden] { display: none; }
+  .sort-pop-title { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 6px; }
+  .sort-pop-row { display: flex; gap: 0; margin: 0 0 8px; border: 1px solid #2c2c30; border-radius: 8px; overflow: hidden; }
+  .sort-pop-row button { flex: 1 1 0; padding: 7px 8px; background: none; border: 0; color: var(--text); font: inherit; cursor: pointer; }
+  .sort-pop-row button + button { border-left: 1px solid #2c2c30; }
+  .sort-pop-row button:hover { background: #26262a; }
+  .sort-pop-row button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .sort-reset { background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 0.8rem; text-decoration: underline; cursor: pointer; }
+  .sort-reset:hover { color: var(--text); }
   .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
@@ -10416,6 +10613,27 @@ if (ENABLE_MAP && $mapPoints) {
 }
 ?>
 <?php $hasMap = $mapShown && !empty($mapPoints); ?>
+<?php
+  // The sort button: for the photos shown at this level (the folder's own, or all of them when folders are shown inline), what
+  // there is to put first, and the order in force here. Hidden when there is nothing to put in order.
+  $sortScope = array_values(array_filter($files, function ($f) use ($currentFolderPath) {
+      if (FOLDER_DISPLAY_MODE !== 'overview' || !AUTO_GROUP_BY_FOLDER) return true;
+      return ($currentFolderPath === null ? '' : $currentFolderPath) === (strpos($f, '/') === false ? '' : dirname($f));
+  }));
+  $sortShown = count($sortScope) >= 2;
+  $sortHasVideo = false; $sortHasLocated = false; $sortHasPrivate = false;
+  if ($sortShown) {
+      $sortRevealed = is_revealed();
+      foreach ($sortScope as $sf) {
+          if (!$sortHasVideo && is_video_file($sf)) $sortHasVideo = true;
+          if (!$sortHasLocated && photo_location_visible($itemsData[$sf] ?? [])) $sortHasLocated = true;
+          if ($sortRevealed && !$sortHasPrivate && file_is_hidden($dir, $sf, $itemsData)) $sortHasPrivate = true;
+      }
+      $sortSpec = media_sort_spec_for_folder($currentFolderPath === null ? $dir : resolve_real_path($dir, $currentFolderPath));
+      if (!$sortRevealed) $sortSpec['private'] = false;
+      $sortCookiePath = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
+  }
+?>
   <?php // The bar above the photos: the map buttons on the left (when there is a map), and on the right the visit count (when
         // it is shown to visitors) and the small gallery icon, which leads to the page about this gallery. ?>
   <section class="map-preview<?= $fewCovers ?>" id="map-preview">
@@ -10425,6 +10643,20 @@ if (ENABLE_MAP && $mapPoints) {
         <button type="button" class="map-combo-btn" id="map-toggle" title="Show map" aria-expanded="false" aria-controls="map-preview-body"><?= ui_icon('map') ?><span class="map-toggle-label">Show map</span></button>
         <a href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" class="map-combo-btn" id="map-full" title="View full map"><?= ui_icon('expand') ?><span class="map-toggle-label">View full map</span></a>
       </span>
+      <?php endif; ?>
+      <?php if ($sortShown): ?>
+      <span class="map-combo sort-combo" id="sort-combo" data-spec="<?= htmlspecialchars(media_sort_encode($sortSpec), ENT_QUOTES, 'UTF-8') ?>" data-path="<?= htmlspecialchars($sortCookiePath, ENT_QUOTES, 'UTF-8') ?>">
+        <button type="button" class="map-combo-btn" id="sort-menu-btn" title="Order of the photos" aria-haspopup="true" aria-expanded="false" aria-controls="sort-pop"><?= ui_icon('sort') ?><span class="map-toggle-label">Order of the photos</span></button>
+        <?php if ($sortHasPrivate): ?><button type="button" class="map-combo-btn sort-flag" data-flag="private" title="Private items first" aria-pressed="false"><?= ui_icon('lock') ?><span class="map-toggle-label">Private items first</span></button><?php endif; ?>
+        <?php if ($sortHasVideo): ?><button type="button" class="map-combo-btn sort-flag" data-flag="video" title="Videos first" aria-pressed="false"><?= ui_icon('play') ?><span class="map-toggle-label">Videos first</span></button><?php endif; ?>
+        <?php if ($sortHasLocated): ?><button type="button" class="map-combo-btn sort-flag" data-flag="located" title="Photos with a location first" aria-pressed="false"><?= ui_icon('pin') ?><span class="map-toggle-label">Photos with a location first</span></button><?php endif; ?>
+      </span>
+      <div class="sort-pop" id="sort-pop" hidden role="dialog" aria-label="Order of the photos">
+        <div class="sort-pop-title">Order</div>
+        <div class="sort-pop-row"><button type="button" data-order="name">Filename</button><button type="button" data-order="taken">Date taken</button><button type="button" data-order="modified">Date modified</button></div>
+        <div class="sort-pop-row"><button type="button" data-dir="asc"></button><button type="button" data-dir="desc"></button></div>
+        <button type="button" class="sort-reset">Use this gallery's order</button>
+      </div>
       <?php endif; ?>
       <span class="page-tools">
         <?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?><span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?>
@@ -10605,6 +10837,48 @@ if (ENABLE_MAP && $mapPoints) {
     updateImage();
   }
   <?= video_tile_script() ?>
+  // The sort button: what comes first and in which order. A choice is kept in a cookie (so it follows the visitor from folder
+  // to folder) and the page is loaded again, because the server puts the photos in order, the viewer's next/previous with them.
+  (function () {
+    const combo = document.getElementById('sort-combo');
+    if (!combo) return;
+    const pop = document.getElementById('sort-pop'), menu = document.getElementById('sort-menu-btn');
+    const resetBtn = pop && pop.querySelector('.sort-reset');
+    if (!pop || !menu || !resetBtn) return;
+    const parse = function (text) {
+      const parts = String(text).split('.');
+      const s = { order: parts.shift() || 'name', desc: false, private: false, video: false, located: false };
+      parts.forEach(function (p) { if (p in s && p !== 'order') s[p] = true; });
+      return s;
+    };
+    const encode = function (s) { return [s.order].concat(['desc', 'private', 'video', 'located'].filter(function (k) { return s[k]; })).join('.'); };
+    let spec = parse(combo.getAttribute('data-spec'));
+    const paint = function () {
+      pop.querySelectorAll('[data-order]').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-order') === spec.order ? 'true' : 'false'); });
+      const dates = spec.order !== 'name';
+      pop.querySelector('[data-dir="asc"]').textContent = dates ? 'Oldest first' : 'A to Z';
+      pop.querySelector('[data-dir="desc"]').textContent = dates ? 'Newest first' : 'Z to A';
+      pop.querySelectorAll('[data-dir]').forEach(function (b) { b.setAttribute('aria-pressed', (b.getAttribute('data-dir') === 'desc') === spec.desc ? 'true' : 'false'); });
+      combo.querySelectorAll('.sort-flag').forEach(function (b) { b.setAttribute('aria-pressed', spec[b.getAttribute('data-flag')] ? 'true' : 'false'); });
+    };
+    const go = function (text) {
+      const u = new URL(location.href);
+      u.searchParams.delete('sort');
+      const cookie = 'gallery_sort=' + (text === null ? '' : text) + '; path=' + combo.getAttribute('data-path') + '; max-age=' + (text === null ? 0 : 31536000) + '; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
+      try { document.cookie = cookie; } catch (e) {}
+      if (u.toString() === location.href) location.reload(); else location.assign(u.toString());
+    };
+    const close = function () { pop.hidden = true; menu.setAttribute('aria-expanded', 'false'); };
+    menu.addEventListener('click', function (e) { e.stopPropagation(); const open = pop.hidden; pop.hidden = !open; menu.setAttribute('aria-expanded', open ? 'true' : 'false'); });
+    pop.addEventListener('click', function (e) { e.stopPropagation(); });
+    document.addEventListener('click', close);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+    pop.querySelectorAll('[data-order]').forEach(function (b) { b.addEventListener('click', function () { spec.order = b.getAttribute('data-order'); go(encode(spec)); }); });
+    pop.querySelectorAll('[data-dir]').forEach(function (b) { b.addEventListener('click', function () { spec.desc = b.getAttribute('data-dir') === 'desc'; go(encode(spec)); }); });
+    combo.querySelectorAll('.sort-flag').forEach(function (b) { b.addEventListener('click', function () { const k = b.getAttribute('data-flag'); spec[k] = !spec[k]; go(encode(spec)); }); });
+    resetBtn.addEventListener('click', function () { go(null); });
+    paint();
+  })();
   // The archive always asks first, saying how many files and how big: it is a long, heavy download, and nothing is done on the server until the answer is yes.
   document.querySelectorAll('.page-archive').forEach(function (a) {
     a.addEventListener('click', function (e) {
