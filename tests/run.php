@@ -1086,7 +1086,14 @@ $acHdr = function ($hd, $name) { foreach ($hd as $h) if (stripos($h, "$name:") =
 check('[nginx redirect] a video in the gallery\'s own folder is handed to nginx (an X-Accel-Redirect under the prefix, no body from PHP)', $acV1St === 200 && $acHdr($acV1Hd, 'X-Accel-Redirect') === '/trip/loose.mp4' && $acV1Body === '');
 check('[nginx redirect] a video brought in from elsewhere on the server is sent by the gallery itself, whole, with no X-Accel-Redirect (nginx has no file at that address)', $acV2St === 200 && $acHdr($acV2Hd, 'X-Accel-Redirect') === null && strlen($acV2Body) === filesize("$fxAcExtra/Paris/far.mp4"));
 [, $acAdmin] = http_get("http://127.0.0.1:$portAc/?admin", ['Authorization: Basic ' . base64_encode('admin:ac-admin-pw')]);
-check('[server checks] the browser is only ever sent addresses that really exist under the gallery: a photo from elsewhere on the server, and a folder that is only a mount, are not used as test targets (they would read as "refused" and "tidy links not working" for the wrong reason)', str_contains($acAdmin, 'id="server-probe" hidden data-photo="/loose.mp4"') && str_contains($acAdmin, 'data-folder="" data-folder-url=""'));
+check('[server checks] the browser is only ever sent addresses that really exist under the gallery: a photo from elsewhere on the server, and a folder that is only a mount, are not used as test targets (they would read as "refused" and "tidy links not working" for the wrong reason)', str_contains($acAdmin, 'id="server-probe" hidden data-photo="/loose.mp4"') && str_contains($acAdmin, 'data-folder="Paris" data-folder-url="/Paris/"') && str_contains($acAdmin, 'data-files="2"'));
+$fxAo = new_fixture_dir('onlyextra'); $fxAoExtra = new_fixture_dir('onlyextra2'); mkdir("$fxAoExtra/Paris");
+make_jpeg("$fxAoExtra/Paris/far.jpg", 60, 60, 90, 90, 90);
+file_put_contents("$fxAo/.gallery-config.php", cfg_text(['EXTRA_ROOTS' => [$fxAoExtra], 'AUTO_GROUP_BY_FOLDER' => true, 'ADMIN_PASSWORD' => 'ao-admin-pw']));
+copy(__DIR__ . '/../index.php', "$fxAo/index.php");
+$portAo = find_free_port(); start_server($fxAo, $portAo);
+[, $aoAdmin] = http_get("http://127.0.0.1:$portAo/?admin", ['Authorization: Basic ' . base64_encode('admin:ao-admin-pw')]);
+check('[server checks] a gallery whose photos all come from elsewhere on the server has nothing to ask a web server for (data-photo is empty, but the gallery knows it has files and a folder), so the browser can say the lock is not needed instead of "nothing to test"', str_contains($aoAdmin, 'id="server-probe" hidden data-photo=""') && str_contains($aoAdmin, 'data-files="1"') && str_contains($aoAdmin, 'data-folder="Paris"') && str_contains($aoAdmin, 'lock-outside-text'));
 
 // A video looks like a video wherever it is shown: the admin's grid and editor, a strip of group thumbnails, a folder's cover.
 $fxVm = new_fixture_dir('videomark'); mkdir("$fxVm/Reels");
@@ -1099,7 +1106,7 @@ $portVm = find_free_port(); start_server($fxVm, $portVm); $baseVm = "http://127.
 [, $vmAdmin] = http_get("$baseVm/?admin", ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')]);
 check('[video mark] in the admin a video shows its real thumbnail address with the play mark and its length, not a text box saying "video"', preg_match('#<span class="thumb-media vtile"[^>]*><img class="thumb-img" src="\?img=clip\.mp4&amp;size=thumb[^"]*"[^>]*>(<video[^>]*></video>)?<span class="video-mark"#', $vmAdmin) === 1 && str_contains($vmAdmin, 'thumb-duration') && !str_contains($vmAdmin, 'item-thumb-placeholder') && preg_match('#<span class="editor-thumb vtile"[^>]*><img src="\?img=clip\.mp4#', $vmAdmin) === 1);
 $vmAuth = ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')];
-check('[health] Site settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . '2.0.3') && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php"));
+check('[health] Site settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . '2.0.3') && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php") && !str_contains($vmAdmin, 'health-row health-bad'));
 $vmHealthGuard = (string) @file_get_contents("$fxVm/.gallery-health.php");
 check('[health] the version file is a guarded data file (a direct request for it answers 404 with nothing else)', str_starts_with($vmHealthGuard, "<?php http_response_code(404); exit; ?>\n") && http_get("$baseVm/.gallery-health.php")[0] === 404);
 file_put_contents("$fxVm/.gallery-health.php", data_file_guard_line_for_tests() . json_encode(['version' => '2.0.1', 'from' => '', 'at' => '2026-01-02', 'first' => '2026-01-02']));
@@ -1107,7 +1114,7 @@ file_put_contents("$fxVm/.gallery-health.php", data_file_guard_line_for_tests() 
 check('[health] after an upgrade the panel says what it was upgraded from, and the file is brought up to date', str_contains($vmHealthUp, 'Upgraded from 2.0.1') && str_contains((string) file_get_contents("$fxVm/.gallery-health.php"), '"from":"2.0.1"'));
 file_put_contents("$fxVm/Reels/.gallery-items.php", data_file_guard_line_for_tests() . '{"items": {"reel.mp4": {"caption": "unfinished');
 [, $vmHealthBad] = http_get("$baseVm/?admin", $vmAuth);
-check('[health] a folder data file that is not valid JSON is called out with its folder (it would otherwise be read as empty and overwritten by the next save)', str_contains($vmHealthBad, '1 folder data file can&#039;t be read') && str_contains($vmHealthBad, 'Reels') && str_contains($vmHealthBad, 'would overwrite'));
+check('[health] a folder data file that is not valid JSON is called out with its folder (it would otherwise be read as empty and overwritten by the next save)', str_contains($vmHealthBad, '1 folder data file can&#039;t be read') && str_contains($vmHealthBad, 'Reels') && str_contains($vmHealthBad, 'would overwrite') && str_contains($vmHealthBad, 'health-row health-bad loud') && str_contains($vmHealthBad, 'to look at.'));
 unlink("$fxVm/Reels/.gallery-items.php");
 @chmod("$fxVm/Reels", 0555);
 [, $vmHealthRo] = http_get("$baseVm/?admin", $vmAuth);

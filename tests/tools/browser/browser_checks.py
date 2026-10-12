@@ -451,7 +451,7 @@ try:
     shutil.copy(HERE + "/../../../index.php", SITE11 + "/index.php"); os.utime(SITE11 + "/index.php", (time.time() - 3600,) * 2)
     for nm in ("photo.jpg", "secret.jpg", "Trips/pic.jpg"):
         subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE11 + "/" + nm], check=True)
-    open(SITE11 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": "lock-admin-pw", "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    open(SITE11 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "lock-admin-pw"], capture_output=True, text=True).stdout, "AUTO_GROUP_BY_FOLDER": True}) + "\n")
     open(SITE11 + "/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"items": {"secret.jpg": {"restriction": "private"}}, "groups": [], "displayName": None, "cover": None, "locationEnabled": False}) + "\n")
     # a stand-in for the web server rules: direct photo and data-file requests refused, and /Folder/ sent to the gallery (what the nginx and Apache rules do)
     open(WORK + "/lockrouter.php", "w").write("<?php $p = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);\n"
@@ -491,6 +491,9 @@ try:
                 ok(not st["tidyRulesHidden"] and any(t.startswith("lock-result warn-text|Tidy folder links are not set up") for t in st["tidyStatus"]), "[tidy check] with nothing in place, Site settings says in red that tidy folder links aren't set up (and keeps the rules)", str(st["tidyStatus"]))
                 ff = b.js("(() => { const e = document.querySelector('.ffstatus'); return e ? {cls: e.className, text: e.textContent.slice(0, 40), color: getComputedStyle(e).color} : null; })()")
                 ok(ff is not None and "warn-text" in ff["cls"] and "not found" in ff["text"] and ff["color"] == "rgb(237, 66, 69)", "Site settings says in red that ffmpeg was not found", str(ff))
+                hp = b.js("""(() => { const p = document.getElementById('health-panel'); const vis = [...p.querySelectorAll('.health-row')].filter(r => getComputedStyle(r).display !== 'none');
+                    return {summary: p.querySelector('.health-summary-text').textContent, cls: p.querySelector('.health-summary-text').className, visible: vis.map(r => r.className.replace(/\\s+/g, ' ')), loud: p.querySelectorAll('.health-row.loud').length}; })()""")
+                ok("thing" in hp["summary"] and hp["loud"] >= 2 and len(hp["visible"]) == hp["loud"] and all("loud" in v for v in hp["visible"]) and "warn-text" in hp["cls"], "[health] with problems, the Health check shows exactly the rows that need attention (red when something is wrong) and folds the rest away", str(hp))
                 # the link on the Hidden tab goes straight to the Server setup part of Site settings
                 b.js("document.querySelector('[data-tab=hidden].side-hidden, .admin-tabs a[data-tab=hidden]').click()"); b.drain(0.5)
                 b.js("document.querySelector('p[data-tidy-rules] a').click()"); b.drain(1.5)
@@ -498,8 +501,35 @@ try:
                 ok(jump["site"] and jump["top"] is not None and 0 <= jump["top"] < jump["h"] * 0.5, "the link on the Hidden tab opens Site settings and scrolls straight to Server setup", str(jump))
                 col = b.js("(() => { const a = document.querySelector('p[data-tidy-rules] a'); return a ? getComputedStyle(a).color : null; })()")
                 ok(col is not None and col != "rgb(0, 0, 238)" and col != "rgb(138, 180, 255)", "links in the admin's running text use the admin's own colour, not the browser's default blue", str(col))
+            if expect:
+                b.goto(B11 + "/trip/?admin", 2.5); b.drain(2.5)   # (the nginx setting was saved above, the rules are in place, the password is a hash: nothing left to flag)
+                hh = b.js("""(() => { const p = document.getElementById('health-panel'); const rows = [...p.querySelectorAll('.health-row')];
+                    const web = [...p.querySelectorAll('[data-health-row] .health-mark')].map(m => ({ico: !!m.querySelector('svg use[href="#i-check"]'), cls: m.className}));
+                    return {summary: p.querySelector('.health-summary-text').textContent, cls: p.querySelector('.health-summary-text').className, shown: rows.filter(r => getComputedStyle(r).display !== 'none').length, loud: p.querySelectorAll('.health-row.loud').length, web: web, loudText: [...p.querySelectorAll('.health-row.loud .health-label')].map(e => e.textContent)}; })()""")
+                ok(hh["loud"] == 0 and hh["shown"] == 0 and hh["summary"] == "Everything checked looks right." and "ok-text" in hh["cls"], "[health] when everything checks out, the Health check folds down to one green line and shows no rows", str(hh))
+                ok(len(hh["web"]) == 3 and all(w["ico"] and "ok-text" in w["cls"] for w in hh["web"]), "[health] the web server checks get the same green check mark as the other rows", str(hh["web"]))
+                b.js("document.querySelector('.health-toggle').click()"); b.drain(0.3)
+                ok(b.js("[...document.querySelectorAll('#health-panel .health-row')].every(r => getComputedStyle(r).display !== 'none')"), "[health] \"Show all checks\" unfolds every row")
         finally:
             srv11.terminate(); srv11.wait()
+    # a gallery whose photos all live in folders from elsewhere on the server: nothing there can be fetched by an address
+    SITE12 = WORK + "/site12"; os.makedirs(SITE12); SITE12X = WORK + "/site12extra"; os.makedirs(SITE12X + "/Paris")
+    shutil.copy(HERE + "/../../../index.php", SITE12 + "/index.php"); os.utime(SITE12 + "/index.php", (time.time() - 3600,) * 2)
+    subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE12X + "/Paris/far.jpg"], check=True)
+    open(SITE12 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "out-admin-pw"], capture_output=True, text=True).stdout, "EXTRA_ROOTS": [SITE12X], "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    s12 = socket.socket(); s12.bind(("127.0.0.1", 0)); P12 = s12.getsockname()[1]; s12.close()
+    srv12 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P12}", "-t", SITE12], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.call("Network.setExtraHTTPHeaders", {"headers": {"Authorization": "Basic " + base64.b64encode(b"admin:out-admin-pw").decode()}})
+        b.goto(f"http://127.0.0.1:{P12}/?admin", 2.5); b.drain(2.0)
+        ho = b.js("""(() => { const p = document.getElementById('health-panel'); const w = [...p.querySelectorAll('[data-health-row]')].map(r => ({t: r.querySelector('[data-health]').textContent.slice(0, 40), ico: !!r.querySelector('.health-mark svg use[href="#i-check"]') || !!r.querySelector('.health-mark svg'), cls: r.className}));
+            return {summary: p.querySelector('.health-summary-text').textContent, loud: p.querySelectorAll('.health-row.loud').length, web: w}; })()""")
+        byrow = {r["cls"].split("pending")[0]: r for r in ho["web"]}
+        ok(ho["loud"] == 1 and len(ho["web"]) == 3 and ho["web"][0]["t"].startswith("Not needed") and ho["web"][2]["t"].startswith("Doesn't apply") and ho["web"][1]["t"].startswith("Not set up"), "[health] a gallery whose photos all come from elsewhere on the server is not flagged for the lock or the nginx redirect (they do not apply); only the tidy links (no rewrite rule on this plain server) are", str(ho))
+        ok(ho["web"][0]["ico"] and ho["web"][2]["ico"], "[health] ...and those two rows say why, with the green check mark", str(ho["web"]))
+    finally:
+        srv12.terminate(); srv12.wait()
     b.call("Network.setExtraHTTPHeaders", {"headers": {}})
     b.viewport(1280, 900)
     # ---------------- a folder opens on its chosen cover photo ----------------

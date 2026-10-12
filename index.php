@@ -5073,7 +5073,7 @@ function admin_item_href($file) {
 function lock_probe_targets($dir, $files) {
     $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
     $enc = function ($path) { return implode('/', array_map('rawurlencode', explode('/', $path))); };
-    $out = ['photo' => '', 'cache' => '', 'folder' => '', 'folderUrl' => '', 'file' => ''];
+    $out = ['photo' => '', 'cache' => '', 'folder' => '', 'folderUrl' => '', 'file' => '', 'count' => count($files)];
     foreach ($files as $f) {   // (a photo brought in from elsewhere on the server has no address of its own to ask for)
         if (preg_match('/\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$/i', $f) && file_is_under_web_root(resolve_real_path($dir, $f), $f)) { $out['photo'] = $base . $enc($f); $out['file'] = $f; break; }
     }
@@ -5081,7 +5081,6 @@ function lock_probe_targets($dir, $files) {
         $slash = strpos($f, '/');
         if ($slash === false) continue;
         $top = substr($f, 0, $slash);
-        if (!is_dir(rtrim($dir, '/') . '/' . $top) || @realpath(rtrim($dir, '/') . '/' . $top) !== @realpath(resolve_real_path($dir, $top))) continue;
         if (folder_restriction_cached($dir, $top) === 'private' || folder_above_is_private($dir, $f)) continue;
         $out['folder'] = $top; $out['folderUrl'] = $base . $enc($top) . '/';
         break;
@@ -5170,6 +5169,10 @@ function render_admin_hidden_panel($data) {
       <div class="lock-locked-text" hidden>
         <strong>Private is locked.</strong>
         Just now this browser asked the server for a photo<span class="lock-cache-part"> and for a thumbnail</span> by their direct addresses, and it refused. Hidden items can only be reached through the gallery. Rules that stop working (a server change, a different host) bring this warning back, so check again after changing the server.
+      </div>
+      <div class="lock-outside-text" hidden>
+        <strong>Private is locked.</strong>
+        Every photo and video here lives in a folder outside the gallery's own address (folders from elsewhere on the server), so none of them can be fetched by its address: they are only ever sent by the gallery, which checks who is asking.
       </div>
       <div class="lock-result" data-lock-status></div>
       <button type="button" class="secondary lock-recheck" hidden>Check again</button>
@@ -5682,29 +5685,37 @@ function health_checks($dir, $files) {
 function render_admin_health_panel() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $rows = health_checks($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
-    $bad = 0; $warn = 0;
-    foreach ($rows as $r) { if ($r[1] === 'bad') $bad++; elseif ($r[1] === 'warn') $warn++; }
-    $summary = $bad + $warn === 0 ? 'Everything checked here looks right.' : ($bad ? $bad . ' problem' . ($bad === 1 ? '' : 's') : '') . ($bad && $warn ? ' and ' : '') . ($warn ? $warn . ' thing' . ($warn === 1 ? '' : 's') . ' to look at' : '') . '.';
+    $loud = 0;
+    foreach ($rows as $r) if ($r[1] === 'bad' || $r[1] === 'warn') $loud++;
     $mark = ['ok' => 'check', 'warn' => 'warn', 'bad' => 'warn'];
+    $groups = [];
+    foreach ($rows as $r) $groups[$r[0]][] = $r;
 ?>
-    <section class="panel health-panel">
+    <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel">
       <h2 class="section-title">Health check</h2>
-      <p class="health-summary <?= $bad ? 'warn-text' : ($warn ? 'note-text' : 'ok-text') ?>"><strong><?= $esc($summary) ?></strong> <button type="button" class="secondary" onclick="location.reload()">Check again</button></p>
-      <p class="muted" style="margin-top:0;">What this install looks like right now, found by looking, never by changing anything (except noting the version above). Safe to open after an upgrade, a move, or replacing folders.</p>
-      <?php $group = null; foreach ($rows as [$g, $status, $label, $detail]): ?>
-        <?php if ($g !== $group): $group = $g; ?><h3 class="subhead"><?= $esc($g) ?></h3><?php endif; ?>
-        <div class="health-row health-<?= $esc($status) ?>">
-          <span class="health-mark <?= $status === 'ok' ? 'ok-text' : ($status === 'bad' ? 'warn-text' : ($status === 'warn' ? 'note-text' : 'muted')) ?>"><?= isset($mark[$status]) ? ui_icon($mark[$status]) : '&bull;' ?></span>
-          <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?></div><?php endif; ?></div>
+      <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong>
+        <button type="button" class="secondary health-toggle">Show all checks</button> <button type="button" class="secondary" onclick="location.reload()">Check again</button></p>
+      <p class="muted health-intro" style="margin-top:0;">What this install looks like right now, found by looking, never by changing anything (except noting the version). When everything is fine this stays folded away; anything that isn't is shown here.</p>
+      <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn') $allQuiet = false; ?>
+        <div class="health-group<?= $allQuiet ? ' all-quiet' : '' ?>">
+          <h3 class="subhead"><?= $esc($g) ?></h3>
+          <?php foreach ($items as [, $status, $label, $detail]): $isLoud = $status === 'bad' || $status === 'warn'; ?>
+            <div class="health-row health-<?= $esc($status) ?> <?= $isLoud ? 'loud' : 'quiet' ?>">
+              <span class="health-mark <?= $status === 'ok' ? 'ok-text' : ($status === 'bad' ? 'warn-text' : ($status === 'warn' ? 'note-text' : 'muted')) ?>"><?= isset($mark[$status]) ? ui_icon($mark[$status]) : '&bull;' ?></span>
+              <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?></div><?php endif; ?></div>
+            </div>
+          <?php endforeach; ?>
         </div>
       <?php endforeach; ?>
-      <h3 class="subhead">Web server (tested by your browser, just now)</h3>
-      <?php foreach ([['lock', 'Direct requests for photos are refused'], ['tidy', 'Tidy folder links work'], ['accel', 'nginx internal redirect']] as [$key, $label]): ?>
-        <div class="health-row health-info" data-health-row="<?= $key ?>">
-          <span class="health-mark muted">&bull;</span>
-          <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div></div>
-        </div>
-      <?php endforeach; ?>
+      <div class="health-group all-quiet" data-health-group="web">
+        <h3 class="subhead">Web server (tested by your browser, just now)</h3>
+        <?php foreach ([['lock', 'Direct requests for photos are refused'], ['tidy', 'Tidy folder links work'], ['accel', 'nginx internal redirect']] as [$key, $label]): ?>
+          <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>">
+            <span class="health-mark muted">&bull;</span>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div></div>
+          </div>
+        <?php endforeach; ?>
+      </div>
     </section>
 <?php
 }
@@ -5964,6 +5975,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-label { font-weight:600; }
   .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
   .health-summary { margin:0 0 6px; }
+  .health-panel:not(.show-all) .health-row.quiet, .health-panel:not(.show-all) .health-group.all-quiet, .health-panel:not(.show-all) .health-intro { display:none; }
+  .health-panel.is-checking .health-toggle { display:none; }
+  .health-toggle { margin-left:10px; padding:3px 12px; font-size:0.8rem; }
+  .health-mark .ico { width:1.1em; height:1.1em; }
   .health-summary .secondary { margin-left:10px; padding:3px 12px; font-size:0.8rem; }
   .accel-status:empty { display:none; }
   .ok-text, .help.ok-text, .site-row .help.ok-text { color:var(--ok); }
@@ -6217,7 +6232,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div id="server-probe" hidden data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>"></div>
+  <div id="server-probe" hidden data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>"></div>
 <?php if ($adminHidden): ?>
   <div class="tab-panel" data-tab="hidden">
 <?php render_admin_hidden_panel($adminHidden); ?>
@@ -6581,12 +6596,16 @@ foreach ($adminFiles as $file) {
     if (!probe || typeof fetch === 'undefined') return;
     const photo = probe.getAttribute('data-photo'), cache = probe.getAttribute('data-cache');
     const folderUrl = probe.getAttribute('data-folder-url');
+    const hasFiles = Number(probe.getAttribute('data-files')) > 0;
     const banner = document.getElementById('lock-banner');
     const mirrorLater = function () {
-      if (!photo) ['lock', 'tidy', 'accel'].forEach(function (k) { document.querySelectorAll('[data-health="' + k + '"]').forEach(function (el) { el.textContent = 'Nothing to test with yet (no photos).'; }); });
-      else if (!folderUrl) document.querySelectorAll('[data-health="tidy"]').forEach(function (el) { el.textContent = 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'; });
+      if (photo) { if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); return; }
+      if (hasFiles) {
+        mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
+        mirror('accel', 'ok-text', 'Doesn\'t apply here: files from outside the gallery\'s own address are always sent by the gallery itself, whatever this is set to.');
+        if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).');
+      } else ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); });
     };
-    mirrorLater();
     const hideAll = function (sel, on) { document.querySelectorAll(sel).forEach(function (el) { el.hidden = on; }); };
     const report = function (selector, ok, text, rulesSel) {
       document.querySelectorAll(selector).forEach(function (el) {
@@ -6612,31 +6631,56 @@ foreach ($adminFiles as $file) {
         })
         .catch(function () { return 'unknown'; });
     };
+    const icon = function (name) { return '<svg class="ico" aria-hidden="true"><use href="#i-' + name + '"></use></svg>'; };
+    const refreshHealth = function () {
+      const panel = document.getElementById('health-panel');
+      if (!panel) return;
+      const pending = panel.querySelectorAll('.health-row.pending').length, loud = panel.querySelectorAll('.health-row.loud').length, red = panel.querySelectorAll('.health-row.loud.red').length + panel.querySelectorAll('.health-row.health-bad').length;
+      panel.classList.toggle('is-checking', pending > 0 && loud === 0);
+      panel.querySelectorAll('.health-group').forEach(function (g) { g.classList.toggle('all-quiet', !g.querySelector('.health-row.loud')); });
+      const text = panel.querySelector('.health-summary-text');
+      if (!text) return;
+      text.textContent = loud ? loud + ' thing' + (loud === 1 ? '' : 's') + ' to look at.' : pending ? 'Checking\u2026' : 'Everything checked looks right.';
+      text.className = 'health-summary-text ' + (loud ? (red ? 'warn-text' : 'note-text') : pending ? 'muted' : 'ok-text');
+    };
+    const toggle = document.querySelector('.health-toggle');
+    if (toggle) toggle.addEventListener('click', function () {
+      const panel = document.getElementById('health-panel');
+      const on = panel.classList.toggle('show-all');
+      toggle.textContent = on ? 'Show only what needs attention' : 'Show all checks';
+    });
     const mirror = function (key, cls, text) {
       document.querySelectorAll('[data-health="' + key + '"]').forEach(function (el) { el.textContent = text; el.className = 'health-detail ' + cls; });
-      document.querySelectorAll('[data-health-row="' + key + '"] .health-mark').forEach(function (m) {
+      document.querySelectorAll('[data-health-row="' + key + '"]').forEach(function (row) {
+        const problem = cls === 'warn-text' || cls === 'note-text';
+        row.classList.remove('pending'); row.classList.toggle('loud', problem); row.classList.toggle('quiet', !problem); row.classList.toggle('red', cls === 'warn-text');
+        const m = row.querySelector('.health-mark');
         m.className = 'health-mark ' + (cls === 'ok-text' ? 'ok-text' : cls === 'warn-text' ? 'warn-text' : cls === 'note-text' ? 'note-text' : 'muted');
-        m.textContent = cls === 'ok-text' ? '\u2713' : cls === 'warn-text' || cls === 'note-text' ? '!' : '\u2022';
+        m.innerHTML = cls === 'ok-text' ? icon('check') : problem ? icon('warn') : '&bull;';
       });
+      refreshHealth();
     };
     const lockShow = function (state, detail) {
-      const locked = state === 'locked';
+      const outside = state === 'outside';
+      const locked = state === 'locked' || outside;
       if (banner) {
         banner.classList.toggle('ok', locked); banner.classList.toggle('error', !locked);
         banner.querySelector('.lock-open-text').hidden = locked;
-        banner.querySelector('.lock-locked-text').hidden = !locked;
+        banner.querySelector('.lock-locked-text').hidden = !(locked && !outside);
+        banner.querySelector('.lock-outside-text').hidden = !outside;
         banner.querySelector('.lock-cache-part').hidden = !cache;
         banner.querySelector('.lock-recheck').hidden = false;
       }
       hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', locked);
-      mirror('lock', locked ? 'ok-text' : state === 'open' ? 'warn-text' : '', locked ? 'Yes: a photo and a cached thumbnail asked for by their plain addresses were refused, so private items can only be reached through the gallery.'
+      if (outside) mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
+      else mirror('lock', locked ? 'ok-text' : state === 'open' ? 'warn-text' : '', locked ? 'Yes: a photo and a cached thumbnail asked for by their plain addresses were refused, so private items can only be reached through the gallery.'
         : state === 'open' ? 'No: ' + detail + ' was handed out to a plain request, so a private photo can be fetched by its address. Use the rules on the Private tab.' : 'Couldn\'t tell (the request failed or was redirected).');
-      report('[data-lock-status]', locked, locked ? 'Checked just now from this browser: direct requests for photos are refused.'
+      report('[data-lock-status]', locked, outside ? 'Nothing to ask the server for: no photo or video has an address of its own here.' : locked ? 'Checked just now from this browser: direct requests for photos are refused.'
         : state === 'open' ? 'Checked just now from this browser: the server handed out ' + detail + ' to a plain request, so a private photo could be fetched by its address. Use the rules below.'
         : 'Couldn\'t check from this browser just now (the request failed or was redirected).', '.lock-help, [data-lock-rules], [data-lock-rules-panel]');
     };
     const runLock = function () {
-      if (!photo) return;
+      if (!photo) { if (hasFiles) lockShow('outside'); return; }
       Promise.all([ask(photo), cache ? ask(cache) : Promise.resolve('skipped')]).then(function (r) {
         if (r[0] === 'open') return lockShow('open', photo);
         if (r[1] === 'open') return lockShow('open', cache);
@@ -6673,8 +6717,8 @@ foreach ($adminFiles as $file) {
       if (!accel) return;
       const current = accel.getAttribute('data-accel-current'), candidate = accel.getAttribute('data-accel-candidate');
       const prefix = current || candidate;
-      if (!photo) { document.querySelectorAll('[data-health="accel"]').forEach(function (el) { el.textContent = 'Nothing to test with: no photo lies in the gallery\'s own folder (photos from elsewhere on the server are always sent by the gallery itself).'; }); return; }
-      if (!prefix) { document.querySelectorAll('[data-health="accel"]').forEach(function (el) { el.textContent = 'Not applicable: a gallery at the very top of a site has no folder to set it to.'; }); return; }
+      if (!photo) return;   // (mirrorLater has said why)
+      if (!prefix) { mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); return; }
       fetch('?admin&accelcheck=1&prefix=' + encodeURIComponent(prefix), { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { return r.ok && /^(image|video)\//.test(r.headers.get('content-type') || '') ? r.blob().then(function (b) { return b.size > 0; }) : false; })
         .catch(function () { return null; })
@@ -6704,6 +6748,7 @@ foreach ($adminFiles as $file) {
         });
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
+    mirrorLater();
     runLock();
     runTidy();
     runAccel();
