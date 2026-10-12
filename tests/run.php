@@ -1236,7 +1236,7 @@ check('[prepare thumbnails] a visitor cannot run it', !isset(json_decode(http_po
 [, $thAdminBody2] = http_get("$baseTh/?admin", $thAuthH);
 check('[prepare thumbnails] once everything is made the panel says all photos are ready', str_contains($thAdminBody2, 'All 4 photos are ready.'));
 // the viewer and the download
-check('[viewer] on a touch screen the viewer is laid out against the whole screen and its row of buttons is lifted from the bottom edge', str_contains($thPage, '@media (pointer: coarse)') && str_contains($thPage, '100lvh') && str_contains($thPage, 'translateY(-58px)'));
+check('[viewer] on a touch screen the counter and buttons are a row across the top and the photo takes the rest of the visible area (dvh), nothing is laid over the photo or near the bottom edge', str_contains($thPage, '@media (pointer: coarse)') && str_contains($thPage, '100dvh') && str_contains($thPage, 'position: fixed; top: 0; left: 0; right: 0; bottom: auto') && !str_contains($thPage, 'lvh') && !str_contains($thPage, 'bars-away'));
 [, $thOwnerPage] = http_get("$baseTh/", $thAuthH);
 check('[viewer] the download button takes the photo the viewer already holds (from the browser\'s memory), so the share sheet can open on the first tap', str_contains($thOwnerPage, "cache: 'force-cache'") && str_contains($thOwnerPage, 'lightboxImg.getAttribute(\'src\')'));
 // full-screen app mode (owner only, for now)

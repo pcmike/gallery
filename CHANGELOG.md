@@ -11,7 +11,7 @@ All notable changes to this project are documented here. Versions correspond to 
 - **Add to Home Screen as an app** (owner only for now): the pages carry a manifest and an icon so the gallery can open full screen with no Safari bars.
 
 ### Changed
-- **On a phone the viewer no longer resizes** when Safari's bars come and go (it is laid out against the whole screen), and its row of buttons sits well clear of the bottom edge, over the photo's lower edge, because a tap near the edge made Safari bring the toolbar back and cost a second tap.
+- **On a phone the viewer's counter and buttons are a row across the top**, beside the close button, and the photo takes everything below it (a tall photo is as tall as the screen allows). Nothing is left to tap near the bottom edge, where Safari answers a tap by bringing its toolbar back and costing a second tap, and nothing is laid over the photo. The viewer stays sized to what is visible, so Safari's bars never cover the photo.
 - **The download button takes the photo from the browser's memory** (the viewer is already showing that exact file), so the share sheet opens at once.
 
 ### Fixed

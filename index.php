@@ -9749,6 +9749,7 @@ function ui_icon_paths() {
         'lock'    => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
         'unlock'  => '<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.6-1.7"/>',
         'expand'  => '<path d="M15 3h6v6M9 21H3v-6M21 3l-7.5 7.5M3 21l7.5-7.5"/>',
+        'close'   => '<circle cx="12" cy="12" r="9"/><path d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2"/>',
         'download' => '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
         'archive' => '<path d="M3 7.5 5 4h14l2 3.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 7.5h18M12 11v5.5M9.4 14l2.6 2.6 2.6-2.6"/>',
     ];
@@ -10828,17 +10829,29 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     background: linear-gradient(transparent, rgba(0,0,0,0.78));
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
-  /* On a touch screen, with the phone browser's own bars: the viewer is laid out against the whole screen, so the photo
-     keeps one size whether the bars are showing or not (100vh is the whole screen there; the old 100dvh made the photo
-     shrink and grow every time they came and went). And the row of buttons sits well above the bottom edge: a tap down
-     there makes Safari bring its toolbar back, which costs a second tap. It is lifted, not moved out of the layout, so the
-     photo stays exactly where it was; the row rests over the photo's lower edge, on a soft dark pill. */
+  .lightbox-close-row { display: none; }
+  /* On a touch screen the counter and buttons, the close button last among them, are a row across the TOP, and the photo takes
+     everything below it down to the bottom of the visible area (a tall photo on a phone is height-limited, so every point
+     counts). Nothing to tap near the bottom edge, where Safari answers a tap by bringing its toolbar back (which costs a
+     second tap), and nothing laid over the photo. The viewer is sized to what is really visible (dvh), so Safari's bars never
+     cover the photo. In the zoomed modes the same row stays put while the photo scrolls under it. */
   @media (pointer: coarse) {
-    .lightbox { height: 100vh; height: 100lvh; }
-    .lightbox img, .lightbox video { max-height: min(82vh, calc(100lvh - 130px - env(safe-area-inset-bottom, 0px))); }
-    .lightbox .caption-row { transform: translateY(-58px); padding: 4px 12px; border-radius: 999px; background: rgba(0,0,0,0.5); position: relative; z-index: 3; }
-    .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row { transform: none; border-radius: 0; padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px)); background: linear-gradient(transparent, rgba(0,0,0,0.78)); position: fixed; }
-    .lightbox-toast { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+    .lightbox { padding: calc(env(safe-area-inset-top, 0px) + 54px) 0 calc(env(safe-area-inset-bottom, 0px) + 8px); background: #000; }   /* the page behind does not show through */
+    .lightbox img, .lightbox video { max-height: calc(100dvh - 62px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+    .lightbox .caption-row, .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
+      position: fixed; top: 0; left: 0; right: 0; bottom: auto; transform: none; margin: 0; z-index: 6;
+      padding: calc(env(safe-area-inset-top, 0px) + 6px) 5px 4px 16px; justify-content: flex-start; align-items: center; gap: 0;
+      background: linear-gradient(rgba(0,0,0,0.7), transparent);
+    }
+    .lightbox .caption-row { pointer-events: none; }
+    .lightbox .caption-row .caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Every button of the row is the same box (44 points high) with the same drawn icon size, so the close button, which is
+       the last of them, cannot differ from its neighbours in size or in where it sits. */
+    .lightbox .caption-row .lightbox-copy { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 11px; font-size: 0.95rem; pointer-events: auto; }
+    .lightbox .caption-row .lightbox-copy .ico { width: 18px; height: 18px; vertical-align: 0; }
+    .lightbox .caption-row .lightbox-close-row { display: inline-flex; }
+    .lightbox .caption-row .lightbox-close-row .ico { transform: translateY(0.34px); }   /* one device pixel on a 3x phone, to sit level with its neighbours by eye */
+    .lightbox button.close { display: none; }
   }
   .lightbox-web, .lightbox-download { text-decoration: none; font-size: 1rem; }
   .lightbox-copy.busy { opacity: 0.35; pointer-events: none; }
@@ -10918,6 +10931,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox .close:hover,
   .lightbox .nav:hover { opacity: 1; }
   .lightbox .close { top: 10px; top: calc(10px + env(safe-area-inset-top, 0px)); right: 14px; font-size: 2.2rem; }
+  .lightbox .close .ico { width: 0.85em; height: 0.85em; vertical-align: 0; stroke-width: 1.6; }
   .lightbox .prev { left: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   .lightbox .next { right: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   @media (max-width: 600px) {
@@ -11299,7 +11313,7 @@ if (ENABLE_MAP && $mapPoints) {
 
 <?php if (is_admin_browser()): ?><div class="lightbox-toast" id="owner-toast" role="status" aria-live="polite" hidden></div><?php endif; ?>
 <div class="lightbox" id="lightbox">
-  <button class="close" onclick="closeLightbox()">&times;</button>
+  <button class="close" type="button" onclick="closeLightbox()" aria-label="Close"><?= ui_icon('close') ?></button>
   <button class="nav prev" onclick="navigate(-1)">&#10094;</button>
   <img id="lightbox-img" src="" alt="">
   <video id="lightbox-video" controls playsinline style="display:none;"></video>
@@ -11321,6 +11335,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php if (ENABLE_MAP): ?>
     <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>
 <?php endif; ?>
+    <button class="lightbox-copy lightbox-close-row" type="button" onclick="closeLightbox()" title="Close" aria-label="Close"><?= ui_icon('close') ?></button>
   </div>
   <button class="nav next" onclick="navigate(1)">&#10095;</button>
 </div>
