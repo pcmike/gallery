@@ -62,7 +62,7 @@ Videos show a play mark and length and play in the viewer. **Back up your captio
 
 ### Private photos
 Settings: an admin password and `PRIVATE_VIEW_PASSWORD`.
-1. Make a photo private with its **Private** switch (several at once with **Select photos**), or a whole folder with **Make this entire folder private**. A photo can be switched back to public inside a private folder.
+1. Make a photo private with its **Private** switch (several at once with **Select**), or a whole folder with **Make this entire folder private**. A photo can be switched back to public inside a private folder.
 2. Give the viewer password to your people. They press the **lock** beside the gallery's title and type it once; the browser remembers for a year and the link you share never changes.
 
 Visitors without the password see no trace of what's private. **Then lock the files themselves**: private only controls what the gallery serves ([Locking down the files](#locking-down-the-files)). The admin warns you on its Private tab until that's done.
@@ -212,7 +212,7 @@ After that, press the **lock** beside the gallery's title (or visit `?admin`) an
 The sign-in box is deliberately **not a password field**, so browsers and password managers don't offer to fill or save it: a text box drawn as dots, named `access_code`, read-only until tapped, on a bare page with a large lock drawing (which goes back) and no heading, button or word "password". Return sends it. The admin refuses plain HTTP (except on `localhost`), uses a fresh session on login (up to 4 hours; Log out also clears private view), protects every save with a CSRF token and throttles guesses (5 wrong from one address in 15 minutes means a 60-second delay). Scripts may send an `Authorization: Basic` header instead.
 
 ### What the admin has
-- **Photos**: a thumbnail grid. Select one for its *Private* and *Show its location* switches (they save as you flip them), *Caption*, *Web link*, location fields and **Set as cover**. **Select photos** makes several private or public at once.
+- **Photos** (called **Media** once video is on): a thumbnail grid. Select one for its *Private* and *Show its location* switches (they save as you flip them), *Caption*, *Web link*, location fields and **Set as cover**. **Select photos** makes several private or public at once.
 - **Settings** (*Folder settings* in a folder): the title or display name, dates, description, order, location and privacy switches and the map section. The gallery's top has the same form, so a notes file isn't needed just to name it.
 - **Notes**: every `.md` in the folder, edited as raw text and saved byte-for-byte; *Save*, *Save As* and *Delete* are separate (the latter two ask first) and locked to `.md` names. A file missing `{gallery}` is shown as not active with a one-click fix.
 - **Export**: the folder or whole tree as JSON, the only backup of what you typed.

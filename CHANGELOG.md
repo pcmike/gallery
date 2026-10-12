@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.4] - 2026-10-12
+
+The 2.0.3 release page was withdrawn a few hours after it went up, because the photo order did nothing inside folders; 2.0.4 is that release with the fix, so everything under 2.0.3 below is in it too.
+
+### Changed
+- **The admin says "media" once videos are switched on, and "photos" until then**: the tab, the grid heading, *Select media* and the Private tab's list. Previous/Next and copy-link titles no longer say "photo".
+
+### Fixed
+- **The photo order (and the sort button's videos / located / private first) did nothing inside a folder's own page**, only at the top of the gallery. It now holds in every folder, including folders brought in from elsewhere on the server.
+
 ## [2.0.3] - 2026-10-12
 
 ### Added

@@ -61,7 +61,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.3');
+define('GALLERY_VERSION', '2.0.4');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -477,6 +477,11 @@ $imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
 if ($imagickAvailable && ENABLE_THUMBNAIL_CACHE) {
     $imageExtensions[] = 'heic';
     $imageExtensions[] = 'heif';
+}
+
+/** What to call the gallery's contents in labels: "media" once videos are switched on, "photos" until then. */
+function media_word() {
+    return ENABLE_VIDEO ? 'media' : 'photos';
 }
 
 /** Whether a filename's extension is one of the two video formats this
@@ -2607,6 +2612,7 @@ if (AUTO_GROUP_BY_FOLDER && $folderTree !== null) {
     foreach ($folderTree['subdirs'] as $topName => $topNode) {
         $members = flatten_folder_tree($topNode, $topName);
         if (empty($members)) continue;
+        $members = media_sort_apply($members, $dir);   // each folder's photos in its own order (see media_sort_apply)
         $folderGroups[$topName] = $members;
         foreach ($members as $m) {
             $folderClaims[$m] = true;
@@ -5348,7 +5354,7 @@ function render_admin_hidden_panel($data) {
       <?php if (empty($data['folders'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listFolders($data['folders']); ?></ul><?php endif; ?>
     </section>
     <section class="panel">
-      <h2 class="section-title">Photos and videos made private (<?= count($data['items']) ?>)</h2>
+      <h2 class="section-title"><?= ucfirst(media_word()) ?> made private (<?= count($data['items']) ?>)</h2>
       <?php if (empty($data['items'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listItems($data['items']); ?></ul><?php endif; ?>
     </section>
     <section class="panel">
@@ -6449,7 +6455,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <h1>Gallery Admin</h1>
     <span class="crumb">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span>
     <nav class="admin-tabs" role="tablist" aria-label="Sections">
-      <a href="#photos" role="tab" data-tab="photos">Photos <span class="count"><?= count($adminFiles) ?></span></a>
+      <a href="#photos" role="tab" data-tab="photos"><?= ucfirst(media_word()) ?> <span class="count"><?= count($adminFiles) ?></span></a>
       <a href="#settings" role="tab" data-tab="settings"><?= $adminFolderPath !== null ? 'Folder settings' : 'Settings' ?></a>
       <a href="#notes" role="tab" data-tab="notes">Notes <span class="count"><?= count($mdCandidates) ?></span></a>
       <a href="#export" role="tab" data-tab="export">Export</a>
@@ -6500,7 +6506,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     </div>
   <?php endif; ?>
 
-  <h2 class="section-title" id="photos" style="margin-top:0; scroll-margin-top:84px;">Photos &amp; video <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
+  <h2 class="section-title" id="photos" style="margin-top:0; scroll-margin-top:84px;"><?= ucfirst(media_word()) ?> <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
 <?php
 $editorsHtml = '';
 $thumbsHtml = '';
@@ -6538,8 +6544,8 @@ foreach ($adminFiles as $file) {
           </div>
         </div>
         <div class="editor-nav">
-          <button type="button" class="secondary" data-nav="-1" title="Previous photo">&lsaquo; Prev</button>
-          <button type="button" class="secondary" data-nav="1" title="Next photo">Next &rsaquo;</button>
+          <button type="button" class="secondary" data-nav="-1" title="Previous">&lsaquo; Prev</button>
+          <button type="button" class="secondary" data-nav="1" title="Next">Next &rsaquo;</button>
           <button type="button" class="secondary" data-close title="Close the editor">Close</button>
         </div>
       </div>
@@ -6647,10 +6653,10 @@ foreach ($adminFiles as $file) {
   <?php if (empty($adminFiles)): ?>
     <p class="muted">No media here yet.</p>
   <?php else: ?>
-    <p class="muted photos-hint">Click a photo to edit its caption, link, location and privacy, or to make it the <?= $adminFolderPath === null ? "gallery's" : "folder's" ?> cover (highlighted; it is the picture in shared links). <em>Select photos</em> changes several at once.</p>
+    <p class="muted photos-hint">Click a thumbnail to edit its caption, link, location and privacy, or to make it the <?= $adminFolderPath === null ? "gallery's" : "folder's" ?> cover (highlighted; it is the picture in shared links). <em>Select <?= media_word() ?></em> changes several at once.</p>
     <div class="photo-editor" id="photo-editor"><?= $editorsHtml ?></div>
     <div class="bulk-bar" id="bulk-bar" data-csrf="<?= $csrfToken ?>" hidden>
-      <button type="button" class="secondary" id="bulk-start">Select photos</button>
+      <button type="button" class="secondary" id="bulk-start">Select <?= media_word() ?></button>
       <span class="bulk-controls" hidden>
         <span class="bulk-count" role="status" aria-live="polite">0 selected</span>
         <button type="button" class="secondary" data-bulk="all">Select all</button>
@@ -10794,7 +10800,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php if (is_revealed() || ENABLE_PUBLIC_DOWNLOAD): ?>
     <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
 <?php endif; ?>
-    <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link to this photo"><?= ui_icon('link') ?></button>
+    <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link"><?= ui_icon('link') ?></button>
     <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
 <?php if (ENABLE_MAP): ?>
     <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>

@@ -1169,6 +1169,27 @@ $portGone = find_free_port(); start_server($fxGone, $portGone);
 [, $goneBody] = http_get("http://127.0.0.1:$portGone/");
 check('[setup notice] a folder from elsewhere that is missing is reported (without naming its path) instead of silently showing nothing', str_contains($goneBody, 'A folder from elsewhere on the server is missing or can&#039;t be read') && !str_contains($goneBody, '/nonexistent/space/trip'));
 
+// The order also holds on a folder's own page (the first version only reordered the photos at the top of the gallery).
+$fxSf = new_fixture_dir('sortfolder'); mkdir("$fxSf/Trip"); mkdir("$fxSf/Trip/Day2");
+foreach (['a', 'b', 'c'] as $n) make_jpeg("$fxSf/Trip/$n.jpg", 40, 40, 10, 20, 30);
+make_minimal_mp4("$fxSf/Trip/z.mp4", 5, 1);
+make_jpeg("$fxSf/Trip/Day2/d.jpg", 40, 40, 1, 2, 3); make_minimal_mp4("$fxSf/Trip/Day2/y.mp4", 5, 1);
+write_patched_index("$fxSf/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true', 'ENABLE_VIDEO' => 'true']);
+$portSf = find_free_port(); start_server($fxSf, $portSf);
+$sfOrder = function ($q) use ($portSf) { [, $body] = http_get("http://127.0.0.1:$portSf/?folder=Trip$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $m); return array_map('basename', $m[1]); };
+$sfDay = function ($q) use ($portSf) { [, $body] = http_get("http://127.0.0.1:$portSf/?folder=Trip%2FDay2$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $body, $m); return array_map('basename', $m[1]); };
+check('[sort] on a folder\'s page the photos run in the chosen order: by default, last first, and videos first', $sfOrder('') === ['a.jpg', 'b.jpg', 'c.jpg', 'z.mp4'] && $sfOrder('&sort=name.desc') === ['z.mp4', 'c.jpg', 'b.jpg', 'a.jpg'] && $sfOrder('&sort=name.video') === ['z.mp4', 'a.jpg', 'b.jpg', 'c.jpg'], json_encode([$sfOrder(''), $sfOrder('&sort=name.desc'), $sfOrder('&sort=name.video')]));
+check('[sort] ...and on a subfolder\'s own page too', $sfDay('') === ['d.jpg', 'y.mp4'] && $sfDay('&sort=name.video') === ['y.mp4', 'd.jpg'], json_encode([$sfDay(''), $sfDay('&sort=name.video')]));
+
+$fxSe = new_fixture_dir('sortextra'); $fxSeX = new_fixture_dir('sortextra2'); mkdir("$fxSeX/Paris");
+make_jpeg("$fxSeX/Paris/a.jpg", 40, 40, 5, 5, 5); make_minimal_mp4("$fxSeX/Paris/z.mp4", 5, 1);
+write_patched_index("$fxSe/index.php", $indexContents, ['ENABLE_VIDEO' => 'true']);
+file_put_contents("$fxSe/.gallery-config.php", cfg_text(['AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_ROOTS' => [$fxSeX], 'ENABLE_VIDEO' => true]));
+$portSe = find_free_port(); start_server($fxSe, $portSe);
+[, $seBody] = http_get("http://127.0.0.1:$portSe/?folder=Paris&sort=name.video");
+preg_match_all('#<div class="card[^>]*><img src="[^"]*" loading="lazy" alt="([^"]+)"#', $seBody, $seM);
+check('[sort] the order also holds inside a folder brought in from elsewhere on the server', array_map('basename', $seM[1]) === ['z.mp4', 'a.jpg'], json_encode($seM[1]));
+
 // A video looks like a video wherever it is shown: the admin's grid and editor, a strip of group thumbnails, a folder's cover.
 $fxVm = new_fixture_dir('videomark'); mkdir("$fxVm/Reels");
 make_jpeg("$fxVm/photo.jpg", 60, 60, 80, 80, 80);
@@ -1180,7 +1201,8 @@ $portVm = find_free_port(); start_server($fxVm, $portVm); $baseVm = "http://127.
 [, $vmAdmin] = http_get("$baseVm/?admin", ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')]);
 check('[video mark] in the admin a video shows its real thumbnail address with the play mark and its length, not a text box saying "video"', preg_match('#<span class="thumb-media vtile"[^>]*><img class="thumb-img" src="\?img=clip\.mp4&amp;size=thumb[^"]*"[^>]*>(<video[^>]*></video>)?<span class="video-mark"#', $vmAdmin) === 1 && str_contains($vmAdmin, 'thumb-duration') && !str_contains($vmAdmin, 'item-thumb-placeholder') && preg_match('#<span class="editor-thumb vtile"[^>]*><img src="\?img=clip\.mp4#', $vmAdmin) === 1);
 $vmAuth = ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')];
-check('[health] Site settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . '2.0.3') && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php") && !str_contains($vmAdmin, 'health-row health-bad'));
+check('[wording] with videos switched on the admin says "media" (tab, heading and Select media); without them it says "photos"', str_contains($vmAdmin, 'data-tab="photos">Media <span') && str_contains($vmAdmin, 'id="bulk-start">Select media</button>') && str_contains($vmAdmin, 'Media <span class="muted">(') && str_contains($aoAdmin, 'data-tab="photos">Photos <span'));
+check('[health] Site settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . (preg_match("/define\('GALLERY_VERSION', '([^']+)'\)/", $indexContents, $verM) ? $verM[1] : '?')) && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php") && !str_contains($vmAdmin, 'health-row health-bad'));
 $vmHealthGuard = (string) @file_get_contents("$fxVm/.gallery-health.php");
 check('[health] the version file is a guarded data file (a direct request for it answers 404 with nothing else)', str_starts_with($vmHealthGuard, "<?php http_response_code(404); exit; ?>\n") && http_get("$baseVm/.gallery-health.php")[0] === 404);
 file_put_contents("$fxVm/.gallery-health.php", data_file_guard_line_for_tests() . json_encode(['version' => '2.0.1', 'from' => '', 'at' => '2026-01-02', 'first' => '2026-01-02']));
@@ -1596,7 +1618,7 @@ check('...with the tabs in the same bar as the title and Log out (one header row
 // Hidden-items summary: three tiers, not a flat list.
 [, $hiddenSummaryBody] = http_get("$basePrivate/?admin&hidden=1", [$adminAuth, "Cookie: $sessCookie"]);
 check('the hidden-items summary lists the entirely-hidden folder', (bool) preg_match('/Folders that are private \(1\)/', $hiddenSummaryBody) && str_contains($hiddenSummaryBody, '>Paris<'));
-check('the hidden-items summary lists the individually-hidden item', (bool) preg_match('/Photos and videos made private \(1\)/', $hiddenSummaryBody) && str_contains($hiddenSummaryBody, 'loose1.jpg'));
+check('the hidden-items summary lists the individually-hidden item', (bool) preg_match('/Photos made private \(1\)/', $hiddenSummaryBody) && str_contains($hiddenSummaryBody, 'loose1.jpg'));
 
 // Aggregate counts exclude hidden items, not just their thumbnails —
 // loose1 hidden + Paris hidden leaves only loose2 visible (1 photo).
