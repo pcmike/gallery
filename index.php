@@ -10967,7 +10967,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     color: var(--muted);
     padding: 60px 20px;
   }
-  .page-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; color: var(--muted); font-size: 0.85rem; }
+  .page-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.85rem; }
   .page-visits { white-space: nowrap; }
   /* Same column as the photo grid below it (max-width and side padding
      match .gallery), so the map lines up with the tiles instead of
@@ -11045,7 +11045,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
     position: fixed; left: 50%; right: auto; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); margin: 0;
     width: max-content; max-width: calc(100vw - 40px); padding: 3px 14px; justify-content: center; z-index: 6;
-    border-radius: 999px; background: rgba(0,0,0,0.6); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);   /* a soft dark pill: the controls stay readable and usable over the photo */
+    border-radius: 999px; background: rgba(0,0,0,0.5); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);   /* a soft dark pill: the controls stay readable and usable over the photo */
   }
   .lightbox.zoom-width .caption-row .caption, .lightbox.zoom-actual .caption-row .caption { color: #e4e4e8; }
   .lightbox.zoom-width .caption-row .lightbox-copy, .lightbox.zoom-actual .caption-row .lightbox-copy { color: #e4e4e8; opacity: 0.95; }
