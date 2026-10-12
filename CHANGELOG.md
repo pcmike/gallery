@@ -11,6 +11,7 @@ All notable changes to this project are documented here. Versions correspond to 
 - **Server checks.** The admin's browser tests whether photo files are refused by address, whether tidy folder links work and whether the nginx redirect works; warnings and rules that no longer apply go away. If nginx has the `internal` location but the setting is empty, it says so and offers to set it.
 - **Rules to copy** for nginx and Apache, on the Private tab and in Site settings.
 - **Downloads.** An original-file download in the viewer (locations blanked for visitors where hidden), and the whole gallery or a folder as one streamed ZIP for the owner and private-view visitors.
+- **A setup notice when a folder from elsewhere on the server is missing or unreadable**, instead of silently showing nothing.
 - **Passwords stored as hashes** in `.gallery-config.php` (plain-text ones are upgraded at the next sign-in); sign-in cookies are keyed per install.
 - **ffmpeg status in Site settings**, green when found and red when not.
 - **The cover photo is highlighted** in the grid, and folder and gallery descriptions take Markdown and alignment.

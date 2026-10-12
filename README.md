@@ -332,6 +332,7 @@ Keep the `B` flag: it escapes spaces, `&`, `+` and `#`.
 ## Troubleshooting
 
 - **Something in a notes file didn't work** (a misspelt file in `{photos:}`, a duplicate claim, a missing `{gallery}`, a directive cut off by a blank line): it is excluded rather than erroring, and a collapsed "⚠ N setup notices for the gallery owner" banner says what (also as a comment in the page source). Once an admin password exists only the signed-in owner gets it.
+- **A folder from elsewhere shows nothing:** the setup notices say when its path is missing or unreadable, and the Health check names it.
 - **The password form keeps appearing after the right password:** the browser isn't keeping the login cookie. Check cookies aren't blocked and you're on HTTPS (the cookie is `Secure`).
 - **"Nothing was saved: this folder isn't writable"** means PHP can't write there, the most common hosting snag. Three things write to folders: saved captions and settings, view counts and the thumbnail cache. The gallery still works without them (the cache falls back to originals). Give the web server's user write permission on the folder, including any [extra folder](#archive-elsewhere) you edit. It never says "Saved" for something it couldn't write.
 - **Not sure what's wrong with an install:** open the [Health check](#health-check).
