@@ -390,6 +390,8 @@ Found a security problem? Open a GitHub issue, or contact the author privately i
 
 **Upgrading to 2.0.8 or later** changes one default: a gallery that has never had its photo order set now runs by date taken, oldest first, so videos sit among the photos they were shot with (before, by file name). A gallery that groups photos by filename keeps name order, and an order you chose yourself is never touched; to keep the old order, pick **Name** in Site settings (or `"PHOTO_SORT_ORDER": "filename"`).
 
+**Upgrading to 2.0.9 or later** moves the lock from beside the title into the icon strip (joined to the archive icon), and signing in with it, as the owner too, returns you to the page you were on instead of the admin page; the gallery title still leads to the admin.
+
 **Upgrading to 2.0 from 1.x** leaves the gallery looking the same, with three notes: `?download` now redirects to this repository instead of serving the script (serving it would hand `ADMIN_PASSWORD` to any visitor); view counts carry over (1.x's `.gallery-stats.json` is imported on the first request with `TRACK_VIEWS` on, then removed); and you may see a new setup notice counting photos in subfolders when `AUTO_GROUP_BY_FOLDER` is off. See [CHANGELOG.md](CHANGELOG.md).
 
 **Keeping runtime data out of git.** If your deployed gallery is in git, add these to `.gitignore` (they hold GPS and passwords):
