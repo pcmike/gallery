@@ -22,7 +22,7 @@
     // "FOLDER_DISPLAY_MODE": "overview",   // "overview" (one cover card per folder) or "inline"
     // "ENABLE_VIDEO": true,                // default false: show .mov / .mp4 files
     // "AUTO_GROUP_BY_FILENAME": true,      // default false: group photos named alpha_01.jpg, alpha_02.jpg
-    // "PHOTO_SORT_ORDER": "filename",      // "filename" or "taken" (when the photo was taken, else the file's date)
+    // "PHOTO_SORT_ORDER": "taken",         // "taken" (when it was taken, else the file's date; the default) or "filename" (the default if photos are grouped by filename)
     // "PHOTO_SORT_DESC": true,             // default false: last first (Z to A, newest first)
     // "SORT_VIDEOS_FIRST": true,           // default false: videos at the front of each folder
     // "SORT_LOCATED_FIRST": true,          // default false: photos whose location is shown come first

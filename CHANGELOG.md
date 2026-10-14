@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Versions correspond to 
 
 ## [2.0.8] - 2026-10-14
 
+### Changed
+- **Photos and videos now run by date taken, oldest first, by default** (before, by file name). A gallery that has never had its photo order set changes order on upgrade; pick **Name** in Site settings (or `"PHOTO_SORT_ORDER": "filename"`) to keep the old order. A gallery that already chose one keeps it, and so does one that groups its photos by filename (the default is still name there, which keeps a group's files in sequence). A video sits among the photos it was shot with.
+
 ### Fixed
 - **Date order put iPhone videos last.** A video's date was taken from its movie header, which holds when the file was last saved or exported, not when it was shot, so a batch of videos copied off a phone hours after the photos sorted after every one of them. Date order now uses the recording time the phone keeps in the video's metadata (with its time zone) and falls back to the header only for a video that has none. Dates already worked out are read again once (the cache file is now `taken3.json`).
 

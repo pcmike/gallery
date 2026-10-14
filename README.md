@@ -87,7 +87,7 @@ Changed in **Site settings** (no Save button: each change saves as you make it) 
 | `ENABLE_VIDEO_PREVIEWS` | on | Hover clips and scrubbing (needs ffmpeg) |
 | `FFMPEG_PATH` | none | Full path, if ffmpeg is somewhere unusual (file only) |
 | `ENABLE_THUMBNAIL_CACHE` | on | Thumbnails in `.gallery-cache`; off = originals, no HEIC |
-| `PHOTO_SORT_ORDER` | `filename` | `filename` or `taken` (date taken, else the file's date; the older `mtime` still works) |
+| `PHOTO_SORT_ORDER` | `taken`, or `filename` when `AUTO_GROUP_BY_FILENAME` is on | `taken` (date taken, else the file's date; oldest first) or `filename` (the older `mtime` still works) |
 | `PHOTO_SORT_DESC` | off | Last first (Z to A, newest first) |
 | `SORT_VIDEOS_FIRST` / `SORT_LOCATED_FIRST` / `SORT_PRIVATE_FIRST` | off | What goes first, whatever the order; they stack |
 | `SORT_PRIORITY` | `private,video,located` | The order those three stack in (the admin shows them as a list you drag) |
@@ -198,7 +198,7 @@ These gates decide what **visitors who aren't signed in** see. You, and anyone w
 
 ## Photo order
 
-Inside a folder, photos run by **name** or by **date** (when it was taken: read from a JPEG or HEIC photo, or the time a video was recorded (the phone's own note of it, else the video's creation time); a file that doesn't say, such as a PNG or screenshot, uses its file date), either way round. On top of that, three things can be **put first**, and they stack: **private items** (owner and private-view only), **videos**, and **photos with a location** (counted only where that visitor can see the location, so the order never gives away a hidden one).
+Inside a folder, photos and videos run by **date** (the default, oldest first) or by **name**, either way round. Left alone it is date, except that when **Group photos by filename** is on it is name, which keeps `alpha_01`, `alpha_02` in sequence inside their box; an order you choose is kept either way. A date is when it was taken: read from a JPEG or HEIC photo, or the time a video was recorded (the phone's own note of it, else the video's creation time); a file that doesn't say, such as a PNG or screenshot, uses its file date. Dates are read once and kept in the folder's `.gallery-cache`. On top of that, three things can be **put first**, and they stack: **private items** (owner and private-view only), **videos**, and **photos with a location** (counted only where that visitor can see the location, so the order never gives away a hidden one).
 
 **Put first is one list, and you set its order.** In **Site settings** it is three rows: *Private items*, *Videos* and *Located photos*. Each row has a **switch** (is it used at all?) and a **handle**: drag a row by its handle, with a mouse or a finger, to set the order the kinds stack in (the up and down arrow keys move a focused handle). What is switched on always sits above what is off, so the list reads the way it sorts, and a sentence under it says the result: *"Videos, then photos with a location, then the rest."* A change saves as you make it. The default order is private, videos, located, so nothing re-sorts until you move a row (the setting is `SORT_PRIORITY`).
 

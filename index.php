@@ -285,16 +285,13 @@ const TILE_SIZES = ['tile' => [560, 82], 'tilehd' => [1080, 80]];
 // instead, regardless of filename.
 define('AUTO_GROUP_BY_FILENAME', gallery_setting('AUTO_GROUP_BY_FILENAME', false));
 
-// How photos are ordered before any .md-driven repositioning: 'filename'
-// (natural sort, the default) or 'mtime' (file modification time,
-// oldest first). 'filename' is the more reliable default for a script
-// meant to be copied/uploaded/backed up anywhere — many deployment
-// methods (FTP, zip/extract, a fresh git clone, cloud sync) reset a
-// file's modification time to "when it was placed here," not when the
-// photo was actually taken, which can make 'mtime' order effectively
-// arbitrary. Only switch to 'mtime' if you've verified your own
-// deployment method preserves the original timestamps.
-define('PHOTO_SORT_ORDER', gallery_setting('PHOTO_SORT_ORDER', 'filename', ['filename', 'mtime', 'taken']));
+// How photos are ordered inside a folder before any .md-driven repositioning: 'taken' (when each photo or video was
+// taken, read from the file itself, else its modified date; oldest first), 'filename' (natural sort by name) or 'mtime'
+// (file modification time, oldest first). Left unset, it is 'taken', so a video sits among the photos it was shot with,
+// except when AUTO_GROUP_BY_FILENAME is on: then it is 'filename', which keeps the files of a group (alpha_01, alpha_02…)
+// in sequence. Dates are read from the files once and kept in the folder's cache. A folder can have its own order, and
+// visitors can change it for themselves with the sort button.
+define('PHOTO_SORT_ORDER', gallery_setting('PHOTO_SORT_ORDER', AUTO_GROUP_BY_FILENAME ? 'filename' : 'taken', ['filename', 'mtime', 'taken']));
 // Which way round the photos inside a folder run, and what comes first whatever the order: see media_sort_apply().
 define('PHOTO_SORT_DESC', gallery_setting('PHOTO_SORT_DESC', false));
 define('SORT_VIDEOS_FIRST', gallery_setting('SORT_VIDEOS_FIRST', false));
@@ -6052,7 +6049,7 @@ function gallery_setting_definitions() {
              'offwarn' => 'Visitors lose the download button.'],
             ['name' => 'PHOTO_SORT_ORDER', 'type' => 'enum', 'label' => 'Photo order',
              'options' => ['filename' => 'Name', 'taken' => 'Date'],
-             'help' => 'Inside each folder. Date is when the photo was taken, else the file\'s date. A folder can override it; visitors can change it with the sort button.'],
+             'help' => 'Inside each folder. Date is when the photo was taken, else the file\'s date. Left alone it is Date, or Name when photos are grouped by filename (so a group stays in sequence). A folder can override it; visitors can change it with the sort button.'],
             ['name' => 'PHOTO_SORT_DESC', 'type' => 'bool', 'label' => 'Last first',
              'help' => 'Z to A, or newest first.'],
             ['name' => 'SORT_PRIORITY', 'type' => 'sortfirst', 'label' => 'Put first',

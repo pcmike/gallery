@@ -1131,17 +1131,18 @@ $soOrder = function ($query = '', $headers = []) use ($baseSo) {
     return $m[1];
 };
 $soAdminAuth = 'Authorization: Basic ' . base64_encode('admin:so-admin-pw');
-check('[sort] by default the photos run by filename', $soOrder() === ['a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder()));
+check('[sort] by default the photos run by the date inside each photo, oldest first (a file with none falls back to its modified date), so a video sits among the photos it was shot with', $soOrder() === ['a-early.jpg', 'c-mid.jpg', 'b-late.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder()));
+check('[sort] ...and ?sort=name runs them by file name instead', $soOrder('?sort=name') === ['a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder('?sort=name')));
 check('[sort] ?sort=taken orders by the date inside each photo (a file with none falls back to its modified date)', $soOrder('?sort=taken') === ['a-early.jpg', 'c-mid.jpg', 'b-late.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder('?sort=taken')));
 check('[sort] ...and .desc runs it the other way round', $soOrder('?sort=taken.desc') === ['z-located.jpg', 'm.mp4', 'b-late.jpg', 'c-mid.jpg', 'a-early.jpg'], json_encode($soOrder('?sort=taken.desc')));
 check('[sort] ?sort=modified orders by modified date (here the video and the located photo were touched long ago, the others just now)', array_slice($soOrder('?sort=modified'), 0, 2) === ['m.mp4', 'z-located.jpg'] && array_slice($soOrder('?sort=modified.desc'), -2) === ['z-located.jpg', 'm.mp4'], json_encode($soOrder('?sort=modified')));
 check('[sort] videos first puts the video in front of the rest, the rest keeping their order', $soOrder('?sort=name.video') === ['m.mp4', 'a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'z-located.jpg'], json_encode($soOrder('?sort=name.video')));
 check('[sort] the "first" choices stack: videos, then located photos, then the rest', $soOrder('?sort=name.located.video') === ['m.mp4', 'z-located.jpg', 'a-early.jpg', 'b-late.jpg', 'c-mid.jpg'], json_encode($soOrder('?sort=name.located.video')));
 check('[sort] a nonsense ?sort= is ignored', $soOrder('?sort=banana') === $soOrder() && $soOrder('?sort=name.bogus') === $soOrder());
-check('[sort] a visitor asking for private first changes nothing (they never see private items, so nothing can be told from the order)', $soOrder('?sort=name.private') === $soOrder() && !in_array('p-private.jpg', $soOrder('?sort=name.private'), true));
+check('[sort] a visitor asking for private first changes nothing (they never see private items, so nothing can be told from the order)', $soOrder('?sort=name.private') === $soOrder('?sort=name') && !in_array('p-private.jpg', $soOrder('?sort=name.private'), true));
 [, , $soAdminHd] = http_get("$baseSo/?admin", [$soAdminAuth]); $soCookie = extract_cookie_header($soAdminHd);
 check('[sort] the owner sees the private item, and private first puts it in front', $soOrder('?sort=name.private', ["Cookie: $soCookie"]) === ['p-private.jpg', 'a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg'], json_encode($soOrder('?sort=name.private', ["Cookie: $soCookie"])));
-check('[sort] a visitor\'s own choice kept in the cookie sets the order, and a link\'s ?sort= beats the cookie', $soOrder('', ['Cookie: gallery_sort=taken.desc']) === $soOrder('?sort=taken.desc') && $soOrder('?sort=name', ['Cookie: gallery_sort=taken.desc']) === $soOrder());
+check('[sort] a visitor\'s own choice kept in the cookie sets the order, and a link\'s ?sort= beats the cookie', $soOrder('', ['Cookie: gallery_sort=taken.desc']) === $soOrder('?sort=taken.desc') && $soOrder('?sort=name', ['Cookie: gallery_sort=taken.desc']) === $soOrder('?sort=name') && $soOrder('?sort=name', ['Cookie: gallery_sort=taken.desc']) !== $soOrder());
 // The owner's lock on each tile (private or not, and a quick way to flip it); nobody else gets it.
 [, $soOwnerPage] = http_get("$baseSo/", ["Cookie: $soCookie"]);
 check('[owner lock] the signed-in owner gets a lock on each tile: red and labelled "Private" on a private photo, an open lock on a public one', preg_match('#<button type="button" class="priv-toggle is-private" data-file="p-private\.jpg"[^>]*><svg[^>]*><use href="\#i-lock"></use></svg><span>Private</span>#', $soOwnerPage) === 1 && preg_match('#<button type="button" class="priv-toggle" data-file="a-early\.jpg"[^>]*><svg[^>]*><use href="\#i-unlock"></use></svg></button>#', $soOwnerPage) === 1 && str_contains($soOwnerPage, 'id="owner-toast"'));
@@ -1239,6 +1240,11 @@ $fxSs = new_fixture_dir('sortswitch'); make_jpeg("$fxSs/a.jpg", 40, 40, 1, 2, 3)
 write_patched_index("$fxSs/index.php", $indexContents, []);
 $portSs = find_free_port(); start_server($fxSs, $portSs);
 check('[sort] a plain gallery of two photos has the sort button', str_contains(http_get("http://127.0.0.1:$portSs/")[1], 'id="sort-combo"'));
+check('[sort] left alone, the site\'s order is by date taken', str_contains(http_get("http://127.0.0.1:$portSs/")[1], 'id="sort-combo" data-spec="taken"'));
+file_put_contents("$fxSs/.gallery-config.php", cfg_text(['AUTO_GROUP_BY_FILENAME' => true]));
+check('[sort] ...but when photos are grouped by filename it is by name, which keeps a group\'s files in sequence', str_contains(http_get("http://127.0.0.1:$portSs/")[1], 'id="sort-combo" data-spec="name"'));
+file_put_contents("$fxSs/.gallery-config.php", cfg_text(['AUTO_GROUP_BY_FILENAME' => true, 'PHOTO_SORT_ORDER' => 'taken']));
+check('[sort] ...and an order the owner chose is kept either way', str_contains(http_get("http://127.0.0.1:$portSs/")[1], 'id="sort-combo" data-spec="taken"'));
 file_put_contents("$fxSs/.gallery-config.php", cfg_text(['SHOW_SORT_BUTTON' => false]));
 check('[sort] and the Site setting "Sort button" switches it off', !str_contains(http_get("http://127.0.0.1:$portSs/")[1], 'id="sort-combo"'));
 $fxSo1 = new_fixture_dir('sortone'); make_jpeg("$fxSo1/only.jpg", 40, 40, 1, 2, 3);
@@ -3069,13 +3075,13 @@ $snapBefore = $siteSnap();
 // A real save: turn video, folders and the map on, thumbnails off, change two enums and the number.
 [, $r] = user_submit("$baseSite/?admin", $sAdmin, 'value="save_site_settings"', [
     'set_ENABLE_VIDEO' => '1', 'set_AUTO_GROUP_BY_FOLDER' => '1', 'set_ENABLE_THUMBNAIL_CACHE' => '0', 'set_FOLDER_DISPLAY_MODE' => 'inline',
-    'set_PHOTO_SORT_ORDER' => 'taken', 'set_MAP_CLUSTER_RADIUS_MILES' => '25',
+    'set_PHOTO_SORT_ORDER' => 'filename', 'set_MAP_CLUSTER_RADIUS_MILES' => '25',
 ], $siteHdrs);
 check('[site settings] a save redirects back and then shows a confirmation that says nothing else was touched', str_contains($r, 'Settings saved') && str_contains($r, 'were not touched') && str_contains($r, 'class="flash ok"'));
 $snapAfterSave = $siteSnap();   // before any public page is viewed (a view is counted, legitimately)
 $written = (string) file_get_contents($siteCfg);
 $loadedCfg = cfg_plain(cfg_read($siteCfg), ['ADMIN_PASSWORD' => 'first-admin-pw-123']);
-$expectedCfg = ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'ENABLE_VIDEO' => true, 'FOLDER_DISPLAY_MODE' => 'inline', 'MAP_CLUSTER_RADIUS_MILES' => 25, 'PHOTO_SORT_ORDER' => 'taken', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true];
+$expectedCfg = ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'ENABLE_VIDEO' => true, 'FOLDER_DISPLAY_MODE' => 'inline', 'MAP_CLUSTER_RADIUS_MILES' => 25, 'PHOTO_SORT_ORDER' => 'filename', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true];
 ksort($loadedCfg);
 check('[site settings] the settings file is the 404 guard plus JSON holding exactly the intended settings, keeping the ones already there', str_starts_with($written, $siteHead) && $loadedCfg === $expectedCfg);
 check('[site settings] the file is private to the web server user (not world-readable), since it holds the passwords', (fileperms($siteCfg) & 0o077) === 0);
@@ -3086,7 +3092,7 @@ check('[site settings] NOTHING ELSE changed: every caption, location, hide flag,
 // Setting something back to its default removes it from the file.
 [, $sAdmin2] = http_get("$baseSite/?admin", $siteHdrs);
 $snapBaseline2 = $siteSnap();
-user_submit("$baseSite/?admin", $sAdmin2, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '0', 'set_AUTO_GROUP_BY_FOLDER' => '0', 'set_ENABLE_THUMBNAIL_CACHE' => '1', 'set_FOLDER_DISPLAY_MODE' => 'overview', 'set_PHOTO_SORT_ORDER' => 'filename', 'set_MAP_CLUSTER_RADIUS_MILES' => '1'], $siteHdrs);
+user_submit("$baseSite/?admin", $sAdmin2, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '0', 'set_AUTO_GROUP_BY_FOLDER' => '0', 'set_ENABLE_THUMBNAIL_CACHE' => '1', 'set_FOLDER_DISPLAY_MODE' => 'overview', 'set_PHOTO_SORT_ORDER' => 'taken', 'set_MAP_CLUSTER_RADIUS_MILES' => '1'], $siteHdrs);
 $backCfg = cfg_plain(cfg_read($siteCfg), ['ADMIN_PASSWORD' => 'first-admin-pw-123']); ksort($backCfg);
 check('[site settings] putting settings back to their defaults removes them from the file, so later default improvements still reach you', $backCfg == ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true]);
 check('[site settings] ...and, again, no data file changed (compared with a baseline taken after the public page was viewed)', $siteSnap() === $snapBaseline2);
@@ -3937,7 +3943,7 @@ $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
 check('[plain] a copy of index.php with no settings changed shows the root photos, and not the ones in the subfolder', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && !str_contains($plain, 'three.jpg') && !str_contains($plain, 'Subfolder'));
 $newEntries = array_values(array_diff($after, $before));
 $plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
-check('[plain] ...writes only thumbnails (a .gallery-cache folder of images) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f)));
+check('[plain] ...writes only thumbnails and the dates found in the photos (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && $f !== 'taken3.json'));
 check('[plain] ...makes no request to any third party (no external host in any src/href except github)', !preg_match('#(src|href)="https?://(?!github\.com|127\.0\.0\.1)#', $plain));
 check('[plain] ...?admin, ?reveal, ?map, ?folder= are all inert (404 / the normal page)', http_get("$basePlain/?admin")[0] === 404 && http_get("$basePlain/?reveal")[0] === 404 && http_get("$basePlain/?folder=Subfolder")[0] === 404 && !str_contains(http_get("$basePlain/?map")[1], 'cdnjs.cloudflare.com'));
 check('[plain] ...and says (in the collapsed notices banner) that a photo in a subfolder is being skipped', str_contains($plain, '1 photo/video was found in subfolders but isn&#039;t shown'));

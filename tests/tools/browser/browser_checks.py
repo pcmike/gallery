@@ -463,7 +463,8 @@ try:
         b.call("Network.setExtraHTTPHeaders", {"headers": {}})
         b.viewport(1280, 900); b.goto(B13 + "/", 2.0)
         first = b.js(cards)
-        ok(first[:3] == ["a.jpg", "b.jpg", "c.jpg"], "[sort] photos start in filename order", str(first))
+        ok(first[:3] == ["a.jpg", "b.jpg", "c.jpg"], "[sort] photos start in date order (files with the same date keep name order)", str(first))
+        b.js("document.cookie = 'gallery_sort=name; path=/'"); b.goto(B13 + "/?y=1", 1.5)   # (Name, so that the menu's other way round reads A to Z)
         ok(b.js("!!document.getElementById('sort-menu-btn')") and b.js("document.getElementById('sort-pop').hidden"), "[sort] the sort button is in the bar above the photos, with its menu closed")
         b.js("document.getElementById('sort-menu-btn').click()"); b.drain(0.3)
         pr = b.js("(() => { const r = document.getElementById('sort-pop').getBoundingClientRect(), p = document.getElementById('sort-pop'); return {open: !p.hidden, l: r.left, r: r.right, w: innerWidth, expanded: document.getElementById('sort-menu-btn').getAttribute('aria-expanded'), desc: p.querySelector('[data-dir=desc]').textContent}; })()")
@@ -954,9 +955,9 @@ try:
     ok(b.js("document.querySelector('input[name=set_ENABLE_VIDEO][type=checkbox]').closest('.site-row').querySelector('.offnote').hidden"), "...and goes away when it is switched back on")
     tog("ENABLE_VIDEO"); b.drain(1.0)
     # choices and numbers save on change
-    b.js("(() => { const s = document.querySelector('input[name=set_PHOTO_SORT_ORDER][value=taken]'); s.checked = true; s.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
+    b.js("(() => { const s = document.querySelector('input[name=set_PHOTO_SORT_ORDER][value=filename]'); s.checked = true; s.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     b.js("(() => { const n = document.querySelector('input[name=set_MAP_CLUSTER_RADIUS_MILES]'); n.value = '25'; n.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
-    ok('"PHOTO_SORT_ORDER": "taken"' in cfg() and '"MAP_CLUSTER_RADIUS_MILES": 25' in cfg(), "a choice and a number save as soon as they change")
+    ok('"PHOTO_SORT_ORDER": "filename"' in cfg() and '"MAP_CLUSTER_RADIUS_MILES": 25' in cfg(), "a choice and a number save as soon as they change")
     b.js("(() => { const n = document.querySelector('input[name=set_MAP_CLUSTER_RADIUS_MILES]'); n.value = '-5'; n.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     ok(b.js("document.querySelector('input[name=set_MAP_CLUSTER_RADIUS_MILES]').value") == "25" and '"MAP_CLUSTER_RADIUS_MILES": 25' in cfg(), "an invalid value is refused with the reason and the field goes back to what is saved")
     # a password has its own button
