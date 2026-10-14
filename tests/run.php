@@ -1162,7 +1162,7 @@ $soStored = json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo
 check('[sort] saved, the folder keeps only what was chosen (order, direction, videos on, private off; "the site\'s" choices are not stored)', ($soStored['photoSort'] ?? null) == ['order' => 'taken', 'desc' => true, 'video' => true, 'private' => false] && isset($soStored['items']['z-located.jpg']) && true && $soStored['locationEnabled'] === true, json_encode($soStored));
 check('[sort] ...and it is the order visitors get in that folder', $soOrder() === ['m.mp4', 'z-located.jpg', 'b-late.jpg', 'c-mid.jpg', 'a-early.jpg'], json_encode($soOrder()));
 check('[sort] ...but a visitor\'s own choice still beats the folder\'s', $soOrder('?sort=name') === ['a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg']);
-check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken2.json") && count(json_decode(file_get_contents("$fxSo/.gallery-cache/taken2.json"), true)) >= 5);
+check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken3.json") && count(json_decode(file_get_contents("$fxSo/.gallery-cache/taken3.json"), true)) >= 5);
 [, $soPage] = http_get("$baseSo/");
 check('[sort] the page has the sort button, with only the toggles that apply here (videos, located; private only for the owner)', str_contains($soPage, 'id="sort-menu-btn"') && str_contains($soPage, 'data-flag="video"') && str_contains($soPage, 'data-flag="located"') && !str_contains($soPage, 'data-flag="private"'));
 [, $soPageOwner] = http_get("$baseSo/", ["Cookie: $soSess"]);
@@ -1338,12 +1338,24 @@ make_dated_jpeg("$fxSd/b-early.jpg", '2020:01:01 10:00:00');
 make_minimal_mp4("$fxSd/c.mp4", 5, 1);
 $sdMp4 = file_get_contents("$fxSd/c.mp4"); $sdAt = strpos($sdMp4, 'mvhd');
 file_put_contents("$fxSd/c.mp4", substr_replace($sdMp4, pack('N', gmmktime(0, 0, 0, 1, 1, 2022) + 2082844800), $sdAt + 8, 4));
-foreach (['a-late.heic', 'b-early.jpg', 'c.mp4'] as $sdF) touch("$fxSd/$sdF", strtotime('2026-10-10'));
+// A phone video: the movie header says it was made on 2026-10-09 (when the file was last saved), the metadata says it was shot on 2021-06-01.
+$sdQt = function ($key, $value) use ($sdBox) {
+    $keys = $sdBox('keys', pack('N', 0) . pack('N', 2) . pack('N', 8 + 4) . 'mdtamake' . pack('N', 8 + strlen($key)) . 'mdta' . $key);
+    $item = function ($n, $text) use ($sdBox) { return $sdBox(pack('N', $n), $sdBox('data', pack('N', 1) . pack('N', 0) . $text)); };
+    return $sdBox('meta', $sdBox('hdlr', str_repeat("\0", 8) . 'mdta' . str_repeat("\0", 13)) . $keys . $sdBox('ilst', $item(1, 'Apple') . $item(2, $value)));
+};
+make_minimal_mp4("$fxSd/d.mp4", 5, 1);
+$sdMp4 = file_get_contents("$fxSd/d.mp4"); $sdAt = strpos($sdMp4, 'mvhd');
+$sdMp4 = substr_replace($sdMp4, pack('N', gmmktime(0, 0, 0, 10, 9, 2026) + 2082844800), $sdAt + 8, 4);
+$sdMoov = strpos($sdMp4, 'moov') - 4;
+$sdMeta = $sdQt('com.apple.quicktime.creationdate', '2021-06-01T10:00:00+0200');
+file_put_contents("$fxSd/d.mp4", substr($sdMp4, 0, $sdMoov) . pack('N', unpack('N', substr($sdMp4, $sdMoov, 4))[1] + strlen($sdMeta)) . substr($sdMp4, $sdMoov + 4) . $sdMeta);
+foreach (['a-late.heic', 'b-early.jpg', 'c.mp4', 'd.mp4'] as $sdF) touch("$fxSd/$sdF", strtotime('2026-10-10'));
 write_patched_index("$fxSd/index.php", $indexContents, ['ENABLE_VIDEO' => 'true']);
 $portSd = find_free_port(); start_server($fxSd, $portSd);
 $sdOrder = function ($q) use ($portSd) { [, $body] = http_get("http://127.0.0.1:$portSd/$q"); preg_match_all('#<div class="card[^>]*><img src="[^"]*"(?: srcset="[^"]*")?(?: sizes="[^"]*")? loading="lazy" alt="([^"]+)"#', $body, $mm); return $mm[1]; };
 if (class_exists('Imagick')) {
-    check('[sort] date order reads the capture date out of a HEIC photo, a JPEG and a video (all three files have the same modified date, so only the dates inside them can order these)', $sdOrder('?sort=name') === ['a-late.heic', 'b-early.jpg', 'c.mp4'] && $sdOrder('?sort=taken') === ['b-early.jpg', 'c.mp4', 'a-late.heic'] && $sdOrder('?sort=taken.desc') === ['a-late.heic', 'c.mp4', 'b-early.jpg'], json_encode([$sdOrder('?sort=name'), $sdOrder('?sort=taken')]));
+    check('[sort] date order reads the capture date out of a HEIC photo, a JPEG and two videos, one of them a phone video whose metadata says when it was shot rather than the date its header was last saved (all four files have the same modified date, so only the dates inside them can order these)', $sdOrder('?sort=name') === ['a-late.heic', 'b-early.jpg', 'c.mp4', 'd.mp4'] && $sdOrder('?sort=taken') === ['b-early.jpg', 'd.mp4', 'c.mp4', 'a-late.heic'] && $sdOrder('?sort=taken.desc') === ['a-late.heic', 'c.mp4', 'd.mp4', 'b-early.jpg'], json_encode([$sdOrder('?sort=name'), $sdOrder('?sort=taken')]));
 } else {
     echo "  (no Imagick here: the HEIC date check was skipped)\n";
 }

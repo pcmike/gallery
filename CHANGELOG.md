@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.8] - 2026-10-14
+
+### Fixed
+- **Date order put iPhone videos last.** A video's date was taken from its movie header, which holds when the file was last saved or exported, not when it was shot, so a batch of videos copied off a phone hours after the photos sorted after every one of them. Date order now uses the recording time the phone keeps in the video's metadata (with its time zone) and falls back to the header only for a video that has none. Dates already worked out are read again once (the cache file is now `taken3.json`).
+
 ## [2.0.7] - 2026-10-12
 
 ### Added

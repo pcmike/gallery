@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.7');
+define('GALLERY_VERSION', '2.0.8');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -2175,7 +2175,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             $variants = $isHeic ? ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'tile', 'tilehd', 'share', 'cover', 'coverlg'];
             if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
             $mtime = @filemtime(resolve_real_path($dir, $file));
-            $valid['taken2.json'] = true;   // the capture dates found for sorting (see media_taken_times)
+            $valid['taken3.json'] = true;   // the capture dates found for sorting (see media_taken_times)
             if (is_video_file($file)) $valid[md5($file . '|preview2|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
                 $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
@@ -4474,6 +4474,44 @@ function tiff_capture_time($tiff) {
     return null;
 }
 
+/** The moment a QuickTime/MP4 video was really recorded, from the "creation date" an iPhone keeps in the movie's metadata
+ *  (with the time zone, e.g. 2026-10-13T12:54:49+0200), as a timestamp; null when the file has none. The movie header's own
+ *  "created" stamp is not used first because it is often when the file was last exported or copied, not when it was shot. */
+function quicktime_recorded_time($fh, $meta) {
+    if ($meta['end'] - $meta['data'] > 1048576) return null;
+    $from = $meta['data'];
+    $probe = scrub_read($fh, $from + 4, 4);
+    if ($probe !== null && !ctype_alpha($probe)) $from += 4;   // (a version field comes first in some files, not in others)
+    $kids = scrub_boxes($fh, $from, $meta['end']);
+    $keys = $items = null;
+    foreach ($kids ?? [] as $k) { if ($k['type'] === 'keys') $keys = $k; elseif ($k['type'] === 'ilst') $items = $k; }
+    if ($keys === null || $items === null) return null;
+    $head = scrub_read($fh, $keys['data'], 8);
+    if ($head === null) return null;
+    $count = unpack('N', $head, 4)[1];
+    $pos = $keys['data'] + 8; $want = null;
+    for ($i = 1; $i <= $count && $i <= 256 && $pos + 8 <= $keys['end']; $i++) {
+        $h = scrub_read($fh, $pos, 8);
+        if ($h === null) return null;
+        $len = unpack('N', $h)[1];
+        if ($len < 8 || $pos + $len > $keys['end']) return null;
+        if ($len - 8 <= 64 && scrub_read($fh, $pos + 8, $len - 8) === 'com.apple.quicktime.creationdate') { $want = $i; break; }
+        $pos += $len;
+    }
+    if ($want === null) return null;
+    foreach (scrub_boxes($fh, $items['data'], $items['end']) ?? [] as $item) {
+        if (unpack('N', $item['type'])[1] !== $want) continue;   // (an item is named by its key's number)
+        foreach (scrub_boxes($fh, $item['data'], $item['end']) ?? [] as $d) {
+            if ($d['type'] !== 'data' || $d['end'] - $d['data'] < 9 || $d['end'] - $d['data'] > 72) continue;
+            $text = scrub_read($fh, $d['data'] + 8, $d['end'] - $d['data'] - 8);
+            if ($text === null || !preg_match('/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:?\d\d)$/', $text)) return null;
+            $ts = strtotime($text);
+            return $ts !== false && $ts > 31536000 && $ts < time() + 172800 ? $ts : null;
+        }
+    }
+    return null;
+}
+
 /** When a photo or video was taken, from the file itself: a JPEG's or HEIC's EXIF, a video's creation time. Null when the file
  *  doesn't say (a PNG, a screenshot, a stripped copy). */
 function media_capture_time($path) {
@@ -4504,6 +4542,11 @@ function media_capture_time($path) {
             foreach ($top as $b) {
                 if ($b['type'] !== 'moov') continue;
                 $kids = scrub_boxes($fh, $b['data'], $b['end']);
+                foreach ($kids ?? [] as $k) {
+                    if ($k['type'] !== 'meta') continue;
+                    $recorded = quicktime_recorded_time($fh, $k);
+                    if ($recorded !== null) return $recorded;   // (when it was shot, not when the file was last saved)
+                }
                 foreach ($kids ?? [] as $k) {
                     if ($k['type'] !== 'mvhd') continue;
                     $body = scrub_read($fh, $k['data'], 12);
@@ -4580,7 +4623,7 @@ function media_capture_time($path) {
  *  its modified time. Reading dates out of many files is slow, so what is found is kept (by file name, size and modified
  *  time) in the folder's cache. */
 function media_taken_times($folderReal, $names) {
-    $cachePath = $folderReal . '/.gallery-cache/taken2.json';
+    $cachePath = $folderReal . '/.gallery-cache/taken3.json';
     $known = [];
     $raw = is_file($cachePath) ? json_decode((string) @file_get_contents($cachePath), true) : null;
     if (is_array($raw)) $known = $raw;
