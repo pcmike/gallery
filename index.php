@@ -10396,7 +10396,7 @@ function render_about_page() {
     <li>Optional maps, loaded only when someone opens one</li>
     <li>Sorting by name or date either way round, with videos, located photos or private items first; visitors can re-sort for themselves with one button</li>
     <li>Download the original (if allowed) or a whole folder as a ZIP, with hidden locations removed from what visitors get</li>
-    <li>Shareable links to a photo, folder or map, with proper previews</li>
+    <li>Shareable links to a photo, folder or map, with proper previews; end a gallery link with <code>#map</code> and it opens with the small map showing (and a link icon on that map copies it)</li>
   </ul>
 
   <h2>For the owner</h2>
@@ -10495,6 +10495,7 @@ $mapPoints = map_points_for_folder($mapPoints, $dir, $currentFolderPath);
 $mapLegend = map_legend_from_points($mapPoints);
 $mapPageHref = '?map' . ($currentFolderPath !== null ? '&folder=' . rawurlencode($currentFolderPath) : '');
 $mapPageHrefAbs = '/' . $mapPageHref;
+$mapPeekHref = ($currentFolderPath !== null ? '?folder=' . rawurlencode($currentFolderPath) : '') . '#map';   // the page with its small map already open
 $mapRadius = ENABLE_MAP ? folder_map_radius($dir, $currentFolderPath) : MAP_CLUSTER_RADIUS_MILES;
 
 // ?map — a shareable link to the map: the gallery page (?map&folder=X: that folder's page) with the map overlay open.
@@ -11258,6 +11259,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }
+  .map-preview-body { position: relative; }
+  /* Copy-link icon in the map's top right corner, built like Leaflet's own zoom buttons (top left) so the two look like a pair. */
+  .map-peek-share { position: absolute; top: 10px; right: 10px; z-index: 1000; width: 34px; height: 34px; padding: 0; display: flex; align-items: center; justify-content: center; background: #fff; color: #333; border: 2px solid rgba(0,0,0,0.2); border-radius: 4px; background-clip: padding-box; cursor: pointer; }
+  .map-peek-share .ico { width: 18px; height: 18px; }
+  @media (hover: hover) { .map-peek-share:hover { background: #f4f4f4; } }
+  .map-peek-share.copied { color: #3ba55c; }
+  .map-preview-body.peek-hit { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 10px; animation: item-flash 2s ease-out; }   /* the same mark a photo gets when a link snaps to it */
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
   .lightbox .close,
   .lightbox .nav {
@@ -11647,6 +11655,7 @@ if (ENABLE_MAP && $mapPoints) {
     <?php if ($hasMap): ?>
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
       <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius, true) ?>
+      <button type="button" class="map-peek-share" id="map-peek-share" data-href="<?= htmlspecialchars($mapPeekHref, ENT_QUOTES, 'UTF-8') ?>" title="Copy a link that opens this page with this map showing" aria-label="Copy a link that opens this page with this map showing"><?= ui_icon('link') ?></button>
     </div>
     <?php endif; ?>
   </section>
@@ -12039,12 +12048,12 @@ if (ENABLE_MAP && $mapPoints) {
     if (!label) return;
     const noun = label.textContent.replace(/^Show /, '');
     let drawn = false;
-    function set(open) {
+    function set(open, fromLink) {
       body.hidden = !open;
       btn.setAttribute('aria-expanded', open ? 'true' : 'false');
       label.textContent = (open ? 'Hide ' : 'Show ') + noun;
       btn.title = label.textContent;
-      remembered('galleryMapOpen', open ? '1' : '0');
+      if (!fromLink) remembered('galleryMapOpen', open ? '1' : '0');   // (a link opening it is not the visitor's choice to keep it open)
       if (open && !drawn) {
         loadLeaflet(function () {
           drawn = true;
@@ -12055,6 +12064,21 @@ if (ENABLE_MAP && $mapPoints) {
     }
     btn.addEventListener('click', function () { set(body.hidden); });
     if (remembered('galleryMapOpen') === '1') set(true);
+    // A link ending in #map opens the page with this small map showing (not the full-screen one, which is a lot to close
+    // on a phone), and brings it into view.
+    function peek() {
+      body.classList.toggle('peek-hit', location.hash === '#map');
+      if (location.hash !== '#map') return;
+      if (body.hidden) set(true, true);
+      const sec = document.getElementById('map-preview');
+      if (sec && sec.scrollIntoView) sec.scrollIntoView({ block: 'start' });
+    }
+    peek();
+    window.addEventListener('hashchange', peek);
+    const peekShare = document.getElementById('map-peek-share');
+    if (peekShare) peekShare.addEventListener('click', function () {
+      copyToClipboard(location.origin + location.pathname + peekShare.getAttribute('data-href')).then(function () { flashCopied(peekShare); });
+    });
   })();
 
   (function () {

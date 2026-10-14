@@ -1936,6 +1936,7 @@ $baseMap = "http://127.0.0.1:$portMap";
 [, $mapRootBody] = http_get("$baseMap/");
 check('the gallery root embeds a condensed map preview when ENABLE_MAP is on', str_contains($mapRootBody, 'id="trip-map-preview"'));
 check('the root preview links to the full ?map page', str_contains($mapRootBody, 'href="?map"'));
+check('the open preview has a link icon (copy link) for the page with that small map open (#map), not the full-screen one', str_contains($mapRootBody, 'id="map-peek-share" data-href="#map"'));
 preg_match('#<div class="map-preview-body".*?</section>#s', $mapRootBody, $mapPreviewHtml);
 check('the root preview shows a legend with one entry per distinct group', substr_count($mapPreviewHtml[0] ?? '', '<span class="map-legend-item">') === 3);
 check('the full map opens over the page: a dialog with its own copy of the map and legend, a close cross, and a button to copy its link', str_contains($mapRootBody, 'id="map-modal"') && str_contains($mapRootBody, 'class="map-modal-close"') && substr_count($mapRootBody, '<span class="map-legend-item">') === 6 && str_contains($mapRootBody, 'id="map-share" data-href="?map"') && str_contains($mapRootBody, 'id="map-full"'));
@@ -3366,6 +3367,7 @@ user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settin
 check('[folder maps] a folder\'s own pin grouping (1 mile) overrides the site-wide one: the same three photos are now three pins', ($mapFiles(http_get("$baseMapF/?folder=Paris")[1])['clusters'] ?? 0) === 3);
 check('[folder maps] ...without touching any other page: the root map, on the site-wide 50 miles, still groups Paris into one pin (three pins in all: New York, Paris, Lisbon)', ($mapFiles(http_get("$baseMapF/")[1])['clusters'] ?? 0) === 3);
 [, $mapOnly] = http_get("$baseMapF/?map&folder=Paris");
+check('[folder maps] ...and a folder\'s small map copies its own link: the folder page with #map', str_contains($mapOnly, 'id="map-peek-share" data-href="?folder=Paris#map"'));
 check('[folder maps] the folder has its own shareable map link: the page of the folder with the map open, only its photos, its own link in the share preview, and the breadcrumb back', str_contains($mapOnly, 'og:url" content="http://127.0.0.1:' . $portMapF . '/?map&amp;folder=Paris"') && $mapFiles($mapOnly)['files'] === ['Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg'] && str_contains($mapOnly, 'if (true) show();') && str_contains($mapOnly, 'class="breadcrumb"'));
 check('[folder maps] a folder that has not switched its map on, or that does not exist, has no map page (404)', http_get("$baseMapF/?map&folder=Lisbon")[0] === 404 && http_get("$baseMapF/?map&folder=Nope")[0] === 404);
 [, $badR] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '-1'], $mapHdrs);
