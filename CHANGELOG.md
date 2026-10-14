@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Versions correspond to 
 
 ### Added
 - **One tap to make a photo its folder's cover, and the same two buttons in the viewer.** For the signed-in owner each tile now has a star in its top right corner beside the lock (top left): gold on the cover photo, faint on the rest (on hover on a desktop), and pressing one makes that photo the folder's cover (the gallery's own at the top level) without opening the admin. The viewer gets the same two buttons, star then lock, just left of zoom, lit gold or red when they apply to the photo shown and keeping the tiles behind in step.
-- **The tile buttons answer the pointer.** Over the lock or the star the button itself lights up (full strength, a white ring, a little larger, the accent colour; a lit one goes lighter red or gold), and pressing sinks it, on a phone too.
+- **The tile buttons answer the pointer.** Over the lock or the star the button itself lights up (full strength, a white ring, a little larger, the accent colour; a lit one goes lighter red or gold), and pressing sinks it, on a phone too. The caption, location and link badges at the bottom of a tile answer the same way (a ring, the accent colour, a little larger), so each plainly reads as a button.
 
 ### Fixed
 - **A dead information-link button on phones.** In the viewer's row on a phone the globe button showed on every photo, link or not (the row's own layout overrode `hidden`); it now shows only when the photo has a link.

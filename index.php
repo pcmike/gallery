@@ -11071,6 +11071,14 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   a.item-badge { pointer-events: auto; }
   .item-badge.caption-badge { pointer-events: auto; cursor: pointer; }
+  /* The same answer as the owner's lock and star: over a caption, location or link badge it lights up (a ring, the accent colour, a
+     little larger), and pressing it sinks it, so it is clear it is a button. */
+  .item-badge { transition: background .15s, transform .12s, box-shadow .12s; cursor: pointer; }
+  .item-badge:active { transform: scale(0.9); }
+  @media (hover: hover) {
+    .item-badge:hover { transform: scale(1.2); box-shadow: 0 0 0 2px #fff; background: var(--accent); color: #fff; }
+    .item-badge:hover:active { transform: scale(1.04); }
+  }
   .caption-popover {
     position: absolute; left: 8px; right: 8px; bottom: 34px; z-index: 3;
     background: rgba(0,0,0,0.88); color: #fff; padding: 8px 10px;

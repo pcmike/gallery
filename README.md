@@ -185,7 +185,7 @@ Before turning it on: codec support isn't guaranteed (an iPhone's HEVC `.mov` pl
 
 ## Captions and locations
 
-Each photo or video can have a **caption**, a **web link** and a **location**, entered in the admin; they appear as small badges on the thumbnail and in the viewer (which never shows filenames). Entering a caption or link is its own opt-in.
+Each photo or video can have a **caption**, a **web link** and a **location**, entered in the admin; they appear as small badges on the thumbnail (each lights up under the pointer, as the owner's lock and star do) and in the viewer (which never shows filenames). Entering a caption or link is its own opt-in.
 
 **Location has three gates, all closed by default**, because GPS is the most sensitive thing here:
 1. `ENABLE_PHOTO_LOCATION`: off means no badges, pins or EXIF fill-in anywhere.
