@@ -1157,6 +1157,7 @@ check('[owner lock] ...and back to public', in_array('a-early.jpg', $soOrder(), 
 // The owner's star on each tile and the two buttons in the viewer: one tap to make a photo its folder's cover.
 check('[owner cover] the owner gets a star on every tile, none gold while no cover is chosen', preg_match_all('#<button type="button" class="cover-toggle" data-file="#', $soOwnerPage) === 6 && !str_contains($soOwnerPage, 'cover-toggle is-cover'));
 check('[owner cover] the viewer has a cover button and a private button for the owner, left of the zoom button', preg_match('#id="lightbox-cover"[^>]*>.*?id="lightbox-private"[^>]*>.*?id="lightbox-zoom"#s', $soOwnerPage) === 1 && str_contains($soOwnerPage, 'const ownerState = {'));
+check('[owner cover] hovering either overlay button lights it (full strength, a ring, a colour of its own), and pressing it sinks it', str_contains($soOwnerPage, '.priv-toggle:hover, .cover-toggle:hover {') && str_contains($soOwnerPage, '.priv-toggle:active, .cover-toggle:active {'));
 $soVisitorPage = http_get("$baseSo/")[1];
 check('[owner cover] a visitor gets no stars, no viewer buttons and no owner state', !str_contains($soVisitorPage, 'cover-toggle"') && !str_contains($soVisitorPage, 'id="lightbox-cover"') && !str_contains($soVisitorPage, 'id="lightbox-private"') && str_contains($soVisitorPage, 'const ownerState = null;'));
 $soCoverReply = http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' => 'set_cover', 'file' => 'c-mid.jpg'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);

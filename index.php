@@ -11089,6 +11089,16 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .cover-toggle.is-cover .ico { fill: currentColor; }
   .cover-toggle.busy { opacity: 0.35; pointer-events: none; }
   @media (hover: hover) { .cover-toggle:not(.is-cover) { opacity: 0; } .card:hover .cover-toggle:not(.is-cover), .cover-toggle:focus-visible { opacity: 0.9; } }
+  /* Over one of these two, the button itself answers: full strength, a white ring, a little larger, and a colour of its own
+     (the accent for a plain one, a lighter red or gold for one that is already lit); pressed, it sinks back. */
+  .priv-toggle, .cover-toggle { transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; }
+  .priv-toggle:active, .cover-toggle:active { transform: scale(0.92); }
+  @media (hover: hover) {
+    .priv-toggle:hover, .cover-toggle:hover { opacity: 1 !important; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; }
+    .priv-toggle.is-private:hover { background: #f4585b; }
+    .cover-toggle.is-cover:hover { background: #ffd86b; }
+    .priv-toggle:hover:active, .cover-toggle:hover:active { transform: scale(1.02); }
+  }
   .lightbox .caption-row .lightbox-copy.owner-cover.on { color: #f5c542; opacity: 1; }
   .lightbox .caption-row .lightbox-copy.owner-cover.on .ico { fill: currentColor; }
   .lightbox .caption-row .lightbox-copy.owner-priv.on { color: #ed4245; opacity: 1; }
