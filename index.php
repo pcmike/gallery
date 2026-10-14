@@ -11098,9 +11098,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-modal[hidden] { display: none; }
   .map-modal-card { position: relative; width: min(100%, 1100px); background: var(--card); border-radius: 12px; padding: 12px; box-shadow: 0 12px 48px rgba(0,0,0,0.6); max-height: 100%; overflow: auto; }
   .map-modal-close { position: absolute; top: 10px; right: 10px; z-index: 5; width: 34px; height: 34px; padding: 0; border-radius: 50%; border: none; background: rgba(0,0,0,0.7); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; }
-  .map-modal-share { display: inline-flex; align-items: center; gap: 6px; margin: 8px 2px 0; padding: 4px 8px; background: none; border: 0; font-size: 0.8rem; color: var(--muted); cursor: pointer; }
-  .map-modal-share:hover { color: var(--text); }
-  .map-modal-share.copied { color: #3ba55c; }
   .map-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.8rem; color: var(--muted); }
   .map-legend-item { display: flex; align-items: center; gap: 6px; }
   .map-legend-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
@@ -11261,10 +11258,12 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-preview-body[hidden] { display: none; }
   .map-preview-body { position: relative; }
   /* Copy-link icon in the map's top right corner, built like Leaflet's own zoom buttons (top left) so the two look like a pair. */
-  .map-peek-share { position: absolute; top: 10px; right: 10px; z-index: 1000; width: 34px; height: 34px; padding: 0; display: flex; align-items: center; justify-content: center; background: #fff; color: #333; border: 2px solid rgba(0,0,0,0.2); border-radius: 4px; background-clip: padding-box; cursor: pointer; }
-  .map-peek-share .ico { width: 18px; height: 18px; }
-  @media (hover: hover) { .map-peek-share:hover { background: #f4f4f4; } }
-  .map-peek-share.copied { color: #3ba55c; }
+  .map-corner-link { position: absolute; top: 10px; right: 10px; z-index: 1000; width: 34px; height: 34px; padding: 0; display: flex; align-items: center; justify-content: center; background: #fff; color: #333; border: 2px solid rgba(0,0,0,0.2); border-radius: 4px; background-clip: padding-box; cursor: pointer; }
+  .map-corner-link .ico { width: 18px; height: 18px; }
+  @media (hover: hover) { .map-corner-link:hover { background: #f4f4f4; } }
+  .map-corner-link.copied { color: #3ba55c; }
+  /* On the full-screen map the same icon sits in the bottom left corner (the card has 12px padding; the map is as tall as the call that draws it says). */
+  .map-modal-card .map-corner-link { top: calc(12px + min(72vh, 720px) - 44px); right: auto; left: 22px; }
   .map-preview-body.peek-hit { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 10px; animation: item-flash 2s ease-out; }   /* the same mark a photo gets when a link snaps to it */
   .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
   .lightbox .close,
@@ -11655,7 +11654,7 @@ if (ENABLE_MAP && $mapPoints) {
     <?php if ($hasMap): ?>
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
       <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius, true) ?>
-      <button type="button" class="map-peek-share" id="map-peek-share" data-href="<?= htmlspecialchars($mapPeekHref, ENT_QUOTES, 'UTF-8') ?>" title="Copy a link that opens this page with this map showing" aria-label="Copy a link that opens this page with this map showing"><?= ui_icon('link') ?></button>
+      <button type="button" class="map-corner-link" id="map-peek-share" data-href="<?= htmlspecialchars($mapPeekHref, ENT_QUOTES, 'UTF-8') ?>" title="Copy a link that opens this page with this map showing" aria-label="Copy a link that opens this page with this map showing"><?= ui_icon('link') ?></button>
     </div>
     <?php endif; ?>
   </section>
@@ -11665,7 +11664,7 @@ if (ENABLE_MAP && $mapPoints) {
     <div class="map-modal-card">
       <button type="button" class="map-modal-close" aria-label="Close the map">&times;</button>
       <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-modal', 'min(72vh, 720px)', true, $mapRadius, true) ?>
-      <button type="button" class="map-modal-share" id="map-share" data-href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('link') ?> Copy link to this map</button>
+      <button type="button" class="map-corner-link" id="map-share" data-href="<?= htmlspecialchars($mapPageHref, ENT_QUOTES, 'UTF-8') ?>" title="Copy a link to this map" aria-label="Copy a link to this map"><?= ui_icon('link') ?></button>
     </div>
   </div>
 <?php endif; ?>

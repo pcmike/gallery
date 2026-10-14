@@ -5,7 +5,7 @@ All notable changes to this project are documented here. Versions correspond to 
 ## [2.0.8] - 2026-10-14
 
 ### Added
-- **A link that opens the page with the small overview map showing.** End a gallery or folder address with `#map`: the small map opens, scrolls into view and gets the highlight border a photo gets when a link snaps to it (not the full-screen map, so nothing to close on a phone, and it isn't remembered as that visitor's choice). A small link icon in the open map's top right corner copies the address.
+- **A link that opens the page with the small overview map showing.** End a gallery or folder address with `#map`: the small map opens, scrolls into view and gets the highlight border a photo gets when a link snaps to it (not the full-screen map, so nothing to close on a phone, and it isn't remembered as that visitor's choice). A small link icon in the open map's top right corner copies the address; the full-screen map has the same icon in its bottom left corner (copying its `?map` link) instead of a text button.
 
 ### Changed
 - **Photos and videos now run by date taken, oldest first, by default** (before, by file name). A gallery that has never had its photo order set changes order on upgrade; pick **Name** in Site settings (or `"PHOTO_SORT_ORDER": "filename"`) to keep the old order. A gallery that already chose one keeps it, and so does one that groups its photos by filename (the default is still name there, which keeps a group's files in sequence). A video sits among the photos it was shot with.
