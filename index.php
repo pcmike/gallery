@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.8');
+define('GALLERY_VERSION', '2.0.9');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -1016,7 +1016,7 @@ if (isset($_GET['manifest'])) {
     exit;
 }
 
-// ?reveal — the lock beside the gallery title (the one sign-in). See run_reveal_route()
+// ?reveal — the lock in the icon strip (the one sign-in). See run_reveal_route()
 // for the full HTTPS/throttle/auth flow; checked early, like ?about/
 // ?download, since it's a distinct mode of this one file, not something
 // that needs $groups or any of the scan below.
@@ -3071,7 +3071,7 @@ if (isset($_GET['admin'])) {
 // flag (and its cached thumbnails) the next time an unrevealed visitor
 // just loads the page — the opposite of what hiding is supposed to do.
 $allFiles = $files;
-// Whether anything in the gallery is private: the lock beside the title only appears when there is something to unlock.
+// Whether anything in the gallery is private: the lock in the icon strip only appears when there is something to unlock.
 $hasPrivateItems = false;
 foreach ($allFiles as $privateProbe) {
     if (file_is_hidden($dir, $privateProbe, $itemsData)) { $hasPrivateItems = true; break; }
@@ -3865,18 +3865,15 @@ function order_folder_children($dir, $prefix, $names) {
  */
 function run_reveal_route($dir) {
     send_sensitive_page_headers();
-    // One sign-in for the lock beside the title: the private-view password shows the private items, the admin password
+    // One sign-in for the lock in the icon strip: the private-view password shows the private items, the admin password
     // signs in to the admin. Either alone is enough for the form to exist.
     if (PRIVATE_VIEW_PASSWORD === '' && ADMIN_PASSWORD === '') {
         http_response_code(404);
         return;
     }
-    // Back to the page the visitor came from (a folder's page stays on that folder).
-    $backFolder = isset($_REQUEST['folder']) && is_string($_REQUEST['folder']) && $_REQUEST['folder'] !== '' && strlen($_REQUEST['folder']) < 1024 && strpbrk($_REQUEST['folder'], "\0\r\n") === false
-        ? '?folder=' . rawurlencode($_REQUEST['folder']) : '';
-    // ...and to the very same page: a folder, an open photo, the open map.
+    // Back to the very same page the visitor came from: a folder, an open photo, the open map.
     $backPage = login_return_query();
-    // The lock beside the title, when it is open, locks the private items again: whoever is signed in (a viewer with the
+    // The lock in the icon strip, when it is open, locks the private items again: whoever is signed in (a viewer with the
     // private-view password, or the owner signed in to the admin) is signed out of this browser.
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
         if (is_admin_browser()) {
@@ -3936,14 +3933,14 @@ function run_reveal_route($dir) {
     // A password still in plain text in the settings file becomes a hash now (everything below uses what is stored).
     $upgraded = upgrade_plaintext_passwords();
     if ($asAdmin) {
-        // The owner: a fresh admin session, exactly as the admin's own sign-in makes one, then into the admin (on the
-        // folder they were looking at).
+        // The owner: a fresh admin session, exactly as the admin's own sign-in makes one, then back to the very page they
+        // were on (the title leads on to the admin).
         admin_start_session();
         session_regenerate_id(true);
         $_SESSION['admin_auth'] = admin_session_marker($upgraded['ADMIN_PASSWORD'] ?? null);
         login_throttle_record_success($dir, 'admin', $ip);
         set_admin_reveal_cookie($upgraded['ADMIN_PASSWORD'] ?? null);
-        header('Location: ?admin' . ($backFolder !== '' ? '&folder=' . substr($backFolder, strlen('?folder=')) : ''), true, 303);
+        header('Location: ./' . $backPage, true, 303);
         return;
     }
     set_reveal_cookie($upgraded['PRIVATE_VIEW_PASSWORD'] ?? null);
@@ -10626,11 +10623,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* For the signed-in owner the title leads back to the admin, and looks and behaves exactly like plain text: no underline,
      colour, cursor or tooltip change, on hover or otherwise (keyboard focus still shows the browser's normal ring). */
   header h1 a.title-admin { color: inherit; text-decoration: none; cursor: inherit; -webkit-tap-highlight-color: transparent; }
-  /* The lock beside the title: quiet until pointed at. */
-  header h1 .lock-form { display: inline; margin: 0; }
-  header h1 .lock-link { display: inline-block; margin-left: 3px; padding: 0; vertical-align: 0.1em; background: none; border: 0; cursor: pointer; font-size: 0.62em; color: var(--muted); opacity: 0.7; line-height: 1; text-decoration: none; }
-  header h1 .lock-link:hover, header h1 .lock-link:focus-visible { opacity: 1; color: var(--text); }
-  header h1 .lock-link.open { color: #3ba55c; opacity: 0.85; }
+  /* The lock is one of the icons in the strip (beside the archive icon): green while signed in. */
+  .map-combo-btn.lock-link.open { color: #3ba55c; }
   /* Breadcrumb: a row of pills (the separators in the markup are hidden)
      with a chevron before each level after the first. */
   header p.breadcrumb {
@@ -11309,11 +11303,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 <?= ui_icon_sprite() ?>
 
 <?php
-// The lock beside the title: the one way in. Shown when there is an admin password, or a private-view password and
+// The lock in the icon strip, right beside the archive icon: the one way in. Shown when there is an admin password, or a private-view password and
 // something private to unlock. Closed: a link to the sign-in (the private-view password shows the private items, the
 // admin password opens the admin). Open: this browser is signed in (with either); pressing it signs out and locks the
 // private items again.
-$lockHtml = '';
+$lockHtml = ''; $lockForm = '';
 if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)) {
     $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
     // The open photo and the open map are part of "the page you are on" too: signing in or out brings you back to them.
@@ -11324,9 +11318,10 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
         . (isset($_GET['map']) ? '<input type="hidden" name="map" value="1">' : '');
     if (is_admin_browser() || is_revealed()) {
         $lockWho = is_admin_browser() ? 'You are signed in as the owner, so private items show. Press to sign out and lock them.' : 'Private items are showing. Press to lock them again.';
-        $lockHtml = '<form method="post" action="?reveal" class="lock-form">' . $lockHidden . '<button type="submit" name="logout" value="1" class="lock-link open" title="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '" aria-label="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('unlock') . '</button></form>';
+        $lockHtml = '<button type="submit" form="lock-form" name="logout" value="1" class="map-combo-btn lock-link open" title="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '" aria-label="' . htmlspecialchars($lockWho, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('unlock') . '</button>';
+        $lockForm = '<form method="post" action="?reveal" class="lock-form" id="lock-form" hidden>' . $lockHidden . '</form>';   // (the button in the strip submits it)
     } else {
-        $lockHtml = '<a class="lock-link" href="?reveal' . $lockHere . '" rel="nofollow" title="Sign in: a private-view password shows private items, the admin password opens the admin." aria-label="Sign in">' . ui_icon('lock') . '</a>';
+        $lockHtml = '<a class="map-combo-btn lock-link" href="?reveal' . $lockHere . '" rel="nofollow" title="Sign in: a private-view password shows private items, the admin password signs you in as the owner." aria-label="Sign in">' . ui_icon('lock') . '</a>';
     }
 }
 ?>
@@ -11344,9 +11339,9 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
   <?php endif; ?>
   <?php if (ADMIN_PASSWORD !== '' && is_admin_browser()): ?>
     <?php // Signed in as the owner: the title leads back to the admin page for wherever you are (a folder's own admin on its page). ?>
-    <h1><a class="title-admin" rel="nofollow" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a><?= $lockHtml ?></h1>
+    <h1><a class="title-admin" rel="nofollow" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a></h1>
   <?php else: ?>
-    <h1><?= htmlspecialchars($pageTitle) ?><?= $lockHtml ?></h1>
+    <h1><?= htmlspecialchars($pageTitle) ?></h1>
   <?php endif; ?>
   <?php $headerMeta = $currentFolderPath !== null ? $currentFolderMeta : $rootMeta; ?>
   <?php if ($headerMeta['dates'] !== ''): ?>
@@ -11645,8 +11640,8 @@ if (ENABLE_MAP && $mapPoints) {
       <?php endif; ?>
       <span class="page-tools">
         <?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?><span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?>
-        <?php if ($archiveCount > 0): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
-        <span class="map-combo"><a class="map-combo-btn page-archive" href="?archive<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" data-bytes="<?= (int) $archiveBytes ?>" data-ask="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('archive') ?></a></span>
+        <?php if ($archiveCount > 0 || $lockHtml !== ''): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
+        <span class="map-combo"><?php if ($archiveCount > 0): ?><a class="map-combo-btn page-archive" href="?archive<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" data-bytes="<?= (int) $archiveBytes ?>" data-ask="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('archive') ?></a><?php endif; ?><?= $lockHtml ?></span>
         <?php endif; ?>
         <span class="map-combo"><a class="map-combo-btn page-about" href="?about" title="About this gallery software" aria-label="About this gallery software"><?= ui_icon('gallery') ?></a></span>
       </span>
@@ -11658,6 +11653,7 @@ if (ENABLE_MAP && $mapPoints) {
     </div>
     <?php endif; ?>
   </section>
+<?= $lockForm ?>
 <?php if ($hasMap): ?>
   <?php // The full map opens over the page: click outside it, press Escape or use the cross to close it. ?>
   <div class="map-modal" id="map-modal" data-map="trip-map-modal" role="dialog" aria-modal="true" aria-label="Map" hidden>

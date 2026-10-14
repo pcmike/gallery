@@ -63,7 +63,7 @@ Videos show a play mark and length and play in the viewer. **Back up your captio
 ### Private photos
 Settings: an admin password and `PRIVATE_VIEW_PASSWORD`.
 1. Make a photo private with its **Private** switch (several at once with **Select**), or a whole folder with **Make this entire folder private**. A photo can be switched back to public inside a private folder.
-2. Give the viewer password to your people. They press the **lock** beside the gallery's title and type it once; the browser remembers for a year and the link you share never changes.
+2. Give the viewer password to your people. They press the **lock** in the icon strip and type it once; the browser remembers for a year and the link you share never changes.
 
 Visitors without the password see no trace of what's private. **Then lock the files themselves**: private only controls what the gallery serves ([Locking down the files](#locking-down-the-files)). The admin warns you on its Private tab until that's done.
 
@@ -234,7 +234,7 @@ Click a photo to open it full screen. **Arrow keys** or the on-screen arrows mov
 ### First run and signing in
 A new gallery has no admin password, so `?admin` answers 404, except for **five minutes after `index.php` was last uploaded**: it then shows a one-time "Set up your gallery" page. Choose a password (8+ characters with a letter and a number) and you're signed in. Whoever opens that page first sets the password, hence the short window and the HTTPS requirement; if several try at once exactly one wins. To reopen it, re-upload `index.php` or create an empty `.gallery-setup` file beside it. To skip it, put `ADMIN_PASSWORD` in the settings file.
 
-After that, press the **lock** beside the gallery's title (or visit `?admin`) and type the password. The lock is the one sign-in: the admin password opens the admin, the private-view password shows private items. Signed in as the owner, the gallery's title becomes the way back to the admin (on a folder's page, that folder's admin) and the open lock signs you out.
+After that, press the **lock** in the icon strip (the line-drawn icon beside the archive download, or visit `?admin`) and type the password. The lock is the one sign-in: either password brings you back to the very page you were on, now signed in (the private-view password shows private items; the admin password makes you the owner). Signed in as the owner, the gallery's title becomes the way to the admin (on a folder's page, that folder's admin) and the open lock signs you out.
 
 The sign-in box is deliberately **not a password field**, so browsers and password managers don't offer to fill or save it: a text box drawn as dots, named `access_code`, read-only until tapped, on a bare page with a large lock drawing (which goes back) and no heading, button or word "password". Return sends it. The admin refuses plain HTTP (except on `localhost`), uses a fresh session on login (up to 4 hours; Log out also clears private view), protects every save with a CSRF token and throttles guesses (5 wrong from one address in 15 minutes means a 60-second delay). Scripts may send an `Authorization: Basic` header instead.
 
@@ -264,7 +264,7 @@ Generated files (`.gallery-items.php`, `.gallery-stats.php`, `.gallery-login-att
 For photos, videos or folders that shouldn't be on the public link but that trusted people may see in the same gallery.
 
 1. In the admin make an **item** private, or a whole **folder** (covering everything beneath it). An item can be switched back to *public* inside a private folder, or *private* inside a public one.
-2. Set `PRIVATE_VIEW_PASSWORD`. The **lock** beside the title (shown whenever there is an admin password, or a private-view password and something private) leads to `?reveal`, a one-field form accepting either password; the private-view one sets a cookie for a year and returns you to the plain link. Pressing the open lock locks private items again in that browser. It is a **password, not a secret link**: links pasted into chats get crawled and can't be revoked.
+2. Set `PRIVATE_VIEW_PASSWORD`. The **lock** in the icon strip, beside the archive icon (shown whenever there is an admin password, or a private-view password and something private) leads to `?reveal`, a one-field form accepting either password; the private-view one sets a cookie for a year and returns you to the plain link. Pressing the open lock locks private items again in that browser. It is a **password, not a secret link**: links pasted into chats get crawled and can't be revoked.
 
 A private item is removed outright for anyone without the password: absent from the grid, notes, viewer, counts, badges, map and link previews, and `?img=`, `?photo=`, `?folder=` and the video endpoint all answer "not found". A group whose members are all private disappears. The same HTTPS requirement and throttle as the admin apply. The cookie is specific to each copy of the gallery, so several galleries on one site never interfere.
 

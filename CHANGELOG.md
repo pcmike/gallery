@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.9] - 2026-10-14
+
+### Changed
+- **The lock is an icon in the strip, not beside the title.** The same line-drawn lock (closed to sign in, open and green to sign out) now sits in the row of icons under the title, joined to the archive-download icon when there is one and just before the gallery icon, so it looks and behaves like the others. The title is plain again.
+- **Signing in from the lock returns you to the same page, as the owner too.** Typing the admin password used to land on the admin page; now it brings you back to the page you were on (a folder, an open photo, the open map), signed in. The gallery title still leads to the admin (a folder's title to that folder's admin).
+
 ## [2.0.8] - 2026-10-14
 
 ### Added
