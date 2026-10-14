@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.9');
+define('GALLERY_VERSION', '2.0.10');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -10038,11 +10038,33 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
             . '" title="' . ($isPriv ? 'Private: press to make it public' : 'Public: press to make it private') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($isPriv ? '<span>Private</span>' : '') . '</button>';
     }
+    // And a star beside it: press to make this photo its folder's cover (a gold star when it already is).
+    if ($ownerLock !== '') {
+        $isCoverNow = !empty(owner_cover_flags($GLOBALS['dir'], [$file])[$file]);
+        $ownerLock .= '<button type="button" class="cover-toggle' . ($isCoverNow ? ' is-cover' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isCoverNow ? 'true' : 'false')
+            . '" title="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '">' . ui_icon('star') . '</button>';
+    }
     return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . (isset($GLOBALS['__cover_file']) && $GLOBALS['__cover_file'] === $file ? '<span id="folder-cover" class="cover-anchor" aria-hidden="true"></span>' : '') . '</div>';
+}
+
+/** For the signed-in owner: which of these files is the cover photo of the folder it sits in (file => true/false), read
+ *  from each folder's own settings, once per folder. */
+function owner_cover_flags($dir, $files) {
+    static $covers = [];
+    $out = [];
+    foreach ($files as $f) {
+        $real = containing_folder_real_path($dir, $f);
+        if (!array_key_exists($real, $covers)) {
+            $c = items_read($real)['cover'] ?? null;
+            $covers[$real] = is_string($c) && $c !== '' ? $c : null;
+        }
+        $out[$f] = $covers[$real] !== null && $covers[$real] === basename($f);
+    }
+    return $out;
 }
 
 /** The small line drawings used instead of emoji (so every device shows the same, clear picture): one set, drawn
@@ -10401,7 +10423,7 @@ function render_about_page() {
     <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
     <li>An admin for captions, locations, links, privacy, covers, folder names and dates, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
-    <li>A lock on every tile, for you alone: one press makes a photo private or public</li>
+    <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>
     <li><strong>Prepare thumbnails</strong> makes every photo's pictures ahead of time with a progress bar, so the first visit to a big folder isn't slow</li>
     <li>Markdown notes with <code>{photos}</code>, <code>{group}</code>, <code>{sold}</code> and <code>{reserved}</code>, for trips or for-sale listings</li>
     <li>Private photos and folders behind a separate viewer password, and visit counts</li>
@@ -11061,6 +11083,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .priv-toggle.is-private { background: rgba(237,66,69,0.88); border-color: rgba(255,255,255,0.35); opacity: 1; }
   .priv-toggle.busy { opacity: 0.35; pointer-events: none; }
   @media (hover: hover) { .priv-toggle:not(.is-private) { opacity: 0; } .card:hover .priv-toggle:not(.is-private), .priv-toggle:focus-visible { opacity: 0.9; } }
+  .cover-toggle { position: absolute; top: 6px; right: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.6; transition: opacity .15s, background .15s; }
+  .cover-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
+  .cover-toggle.is-cover { background: #f5c542; border-color: rgba(255,255,255,0.35); color: #1a1a1c; opacity: 1; }
+  .cover-toggle.is-cover .ico { fill: currentColor; }
+  .cover-toggle.busy { opacity: 0.35; pointer-events: none; }
+  @media (hover: hover) { .cover-toggle:not(.is-cover) { opacity: 0; } .card:hover .cover-toggle:not(.is-cover), .cover-toggle:focus-visible { opacity: 0.9; } }
+  .lightbox .caption-row .lightbox-copy.owner-cover.on { color: #f5c542; opacity: 1; }
+  .lightbox .caption-row .lightbox-copy.owner-cover.on .ico { fill: currentColor; }
+  .lightbox .caption-row .lightbox-copy.owner-priv.on { color: #ed4245; opacity: 1; }
   .card.owner-card .sold-badge-corner, .card.owner-card .reserved-badge-corner { top: 40px; }
   .video-duration {
     position: absolute;
@@ -11184,6 +11215,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
        the last of them, cannot differ from its neighbours in size or in where it sits. */
     .lightbox .caption-row .lightbox-copy { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 11px; font-size: 0.95rem; pointer-events: auto; }
     .lightbox .caption-row .lightbox-copy .ico { width: 18px; height: 18px; vertical-align: 0; }
+    .lightbox .caption-row .lightbox-copy[hidden] { display: none; }   /* the row's own display must not show a button that has nothing to do (no web link, no location) */
     .lightbox .caption-row .lightbox-close-row { display: inline-flex; }
     .lightbox .caption-row .lightbox-close-row .ico { transform: translateY(0.67px); }   /* two device pixels on a 3x phone, to sit level with its neighbours by eye */
     .lightbox button.close { display: none; }
@@ -11689,6 +11721,10 @@ if (ENABLE_MAP && $mapPoints) {
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
+<?php if (is_admin_browser()): ?>
+    <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>
+    <button class="lightbox-copy owner-priv" id="lightbox-private" type="button" data-owner="private" title="Make this private" aria-label="Make this private"><?= ui_icon('unlock') ?></button>
+<?php endif; ?>
     <button class="lightbox-copy lightbox-zoom" id="lightbox-zoom" type="button" title="Fill the width of the screen" aria-label="Fill the width of the screen"><?= ui_icon('zoom-in') ?></button>
 <?php if (is_revealed() || ENABLE_PUBLIC_DOWNLOAD): ?>
     <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
@@ -11726,6 +11762,14 @@ if (ENABLE_MAP && $mapPoints) {
       $w = $itemsData[$f]['web'] ?? '';
       return preg_match('#^https?://#i', (string) $w) ? $w : null;
   }, $files)) ?>;
+  // For the signed-in owner only: which files are private and which is its folder's cover (the tiles' stars and locks and the
+  // viewer's two buttons are drawn from this, and kept in step when one is pressed).
+  const ownerState = <?php
+      if (is_admin_browser()) {
+          $ownerPriv = []; foreach ($files as $f) $ownerPriv[$f] = file_is_hidden($dir, $f, $itemsData);
+          echo json_encode(['priv' => (object) $ownerPriv, 'cover' => (object) owner_cover_flags($dir, $files)]);
+      } else echo 'null';
+  ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
   const showCountsPublicly = <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'true' : 'false' ?>;
@@ -11864,31 +11908,69 @@ if (ENABLE_MAP && $mapPoints) {
     resetBtn.addEventListener('click', function () { go(null); });
     paint();
   })();
-  // The owner's lock on a tile: flips that photo between private and public with the admin's own save (a token is fetched first).
+  // The owner's lock and star, on every tile and in the viewer: flip a photo between private and public, or make it its folder's
+  // cover, with the admin's own save (a token is fetched first). The state lives in ownerState; every button is drawn from it.
+  function ownerPaint() {
+    if (!ownerState) return;
+    document.querySelectorAll('.priv-toggle').forEach(function (b) {
+      const on = !!ownerState.priv[b.getAttribute('data-file')];
+      b.classList.toggle('is-private', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.title = on ? 'Private: press to make it public' : 'Public: press to make it private';
+      b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (on ? '<span>Private</span>' : '');
+    });
+    document.querySelectorAll('.cover-toggle').forEach(function (b) {
+      const on = !!ownerState.cover[b.getAttribute('data-file')];
+      b.classList.toggle('is-cover', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.title = on ? 'This is the folder’s cover photo' : 'Make this the folder’s cover photo';
+    });
+    const file = files[current], lc = document.getElementById('lightbox-cover'), lp = document.getElementById('lightbox-private');
+    if (lc && file !== undefined) {
+      const on = !!ownerState.cover[file];
+      lc.classList.toggle('on', on); lc.title = on ? 'This is the folder’s cover photo' : 'Make this the folder’s cover photo'; lc.setAttribute('aria-label', lc.title);
+    }
+    if (lp && file !== undefined) {
+      const on = !!ownerState.priv[file];
+      lp.classList.toggle('on', on); lp.title = on ? 'Private: press to make it public' : 'Public: press to make it private'; lp.setAttribute('aria-label', lp.title);
+      lp.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>';
+    }
+  }
   document.addEventListener('click', function (e) {
-    const btn = e.target.closest ? e.target.closest('.priv-toggle') : null;
-    if (!btn) return;
+    const btn = e.target.closest ? e.target.closest('.priv-toggle, .cover-toggle, [data-owner]') : null;
+    if (!btn || !ownerState) return;
     e.preventDefault(); e.stopPropagation();
     if (btn.classList.contains('busy')) return;
-    const file = btn.getAttribute('data-file'), slash = file.lastIndexOf('/'), folder = slash < 0 ? '' : file.slice(0, slash), bare = file.slice(slash + 1);
-    const goingPrivate = !btn.classList.contains('is-private');
-    const say = function (text) { const t = document.getElementById('owner-toast'); if (!t) return; t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500); };
+    const act = btn.hasAttribute('data-owner') ? btn.getAttribute('data-owner') : (btn.classList.contains('cover-toggle') ? 'cover' : 'private');
+    const file = btn.hasAttribute('data-owner') ? files[current] : btn.getAttribute('data-file');
+    const slash = file.lastIndexOf('/'), folder = slash < 0 ? '' : file.slice(0, slash), bare = file.slice(slash + 1);
+    const say = function (text) {
+      const t = document.getElementById(lightbox.classList.contains('open') ? 'lightbox-toast' : 'owner-toast'); if (!t) return;
+      t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500);
+    };
+    const goingPrivate = act === 'private' && !ownerState.priv[file];
+    if (act === 'cover' && ownerState.cover[file]) { say('Already this folder’s cover photo'); return; }
     btn.classList.add('busy');
     const base = '?admin' + (folder ? '&folder=' + encodeURIComponent(folder) : '');
     fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' })
       .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
       .then(function (j) {
         const body = new URLSearchParams();
-        body.set('csrf_token', j.token); body.set('action', 'set_item_flag'); body.set('file', bare); body.set('flag', 'private'); body.set('on', goingPrivate ? '1' : '0');
+        body.set('csrf_token', j.token); body.set('file', bare);
+        if (act === 'cover') body.set('action', 'set_cover');
+        else { body.set('action', 'set_item_flag'); body.set('flag', 'private'); body.set('on', goingPrivate ? '1' : '0'); }
         return fetch(base, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
       })
       .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
       .then(function (j) {
         if (!j.ok) throw new Error(j.text || 'not saved');
-        btn.classList.toggle('is-private', goingPrivate); btn.setAttribute('aria-pressed', goingPrivate ? 'true' : 'false');
-        btn.title = goingPrivate ? 'Private: press to make it public' : 'Public: press to make it private';
-        btn.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (goingPrivate ? 'lock' : 'unlock') + '"></use></svg>' + (goingPrivate ? '<span>Private</span>' : '');
-        say(goingPrivate ? 'Now private' : 'Now public');
+        if (act === 'cover') {
+          files.forEach(function (f) { if (folderOf(f) === folder) ownerState.cover[f] = false; });
+          ownerState.cover[file] = true;
+          say('Now the folder’s cover photo');
+        } else {
+          ownerState.priv[file] = goingPrivate;
+          say(goingPrivate ? 'Now private' : 'Now public');
+        }
+        ownerPaint();
       })
       .catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); })
       .then(function () { btn.classList.remove('busy'); });
@@ -11975,6 +12057,7 @@ if (ENABLE_MAP && $mapPoints) {
     if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file); downloadLink.classList.remove('ready'); }
     applyZoom();
     updateLightboxExtras();
+    if (typeof ownerPaint === 'function') ownerPaint();
     trackView(file);
   }
   // ---- Zoom: 'fit' (the whole photo on the screen), 'width' (fills the width of the window, scroll up and down) and

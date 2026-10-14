@@ -782,7 +782,7 @@ check('?track path traversal is rejected (ok:false)', is_array($json2) && $json2
 check('GET /?about returns 200', $status === 200);
 check('?about links to the GitHub repo', str_contains($body, 'github.com/pcmike/gallery'));
 check('?about shows the current version', str_contains($body, 'v' . $currentVersion));
-check('?about covers what the gallery now does: sharp tiles, the viewer built for phones and its zoom controls, putting things first in an order you set, the lock on tiles, prepare thumbnails and the Home Screen app', str_contains($body, 'Sharp thumbnails') && str_contains($body, 'Built for phones') && str_contains($body, 'soft dark pill') && str_contains($body, 'Put first is one list you order') && str_contains($body, 'A lock on every tile') && str_contains($body, 'Prepare thumbnails') && str_contains($body, 'Home Screen'));
+check('?about covers what the gallery now does: sharp tiles, the viewer built for phones and its zoom controls, putting things first in an order you set, the lock on tiles, prepare thumbnails and the Home Screen app', str_contains($body, 'Sharp thumbnails') && str_contains($body, 'Built for phones') && str_contains($body, 'soft dark pill') && str_contains($body, 'Put first is one list you order') && str_contains($body, 'A lock and a star on every tile') && str_contains($body, 'Prepare thumbnails') && str_contains($body, 'Home Screen'));
 
 [$status, $body, $dlHeaders] = http_get("$base1/?download", [], false);
 check('?download redirects (302), does not serve the file', $status === 302);
@@ -1154,6 +1154,14 @@ http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' => 'set_item_fla
 check('[owner lock] with that token the same save the admin uses makes the photo private (gone for visitors, locked for the owner)', !in_array('a-early.jpg', $soOrder(), true) && str_contains(http_get("$baseSo/", ["Cookie: $soCookie"])[1], 'class="priv-toggle is-private" data-file="a-early.jpg"'));
 http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' => 'set_item_flag', 'file' => 'a-early.jpg', 'flag' => 'private', 'on' => '0'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
 check('[owner lock] ...and back to public', in_array('a-early.jpg', $soOrder(), true));
+// The owner's star on each tile and the two buttons in the viewer: one tap to make a photo its folder's cover.
+check('[owner cover] the owner gets a star on every tile, none gold while no cover is chosen', preg_match_all('#<button type="button" class="cover-toggle" data-file="#', $soOwnerPage) === 6 && !str_contains($soOwnerPage, 'cover-toggle is-cover'));
+check('[owner cover] the viewer has a cover button and a private button for the owner, left of the zoom button', preg_match('#id="lightbox-cover"[^>]*>.*?id="lightbox-private"[^>]*>.*?id="lightbox-zoom"#s', $soOwnerPage) === 1 && str_contains($soOwnerPage, 'const ownerState = {'));
+$soVisitorPage = http_get("$baseSo/")[1];
+check('[owner cover] a visitor gets no stars, no viewer buttons and no owner state', !str_contains($soVisitorPage, 'cover-toggle"') && !str_contains($soVisitorPage, 'id="lightbox-cover"') && !str_contains($soVisitorPage, 'id="lightbox-private"') && str_contains($soVisitorPage, 'const ownerState = null;'));
+$soCoverReply = http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' => 'set_cover', 'file' => 'c-mid.jpg'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
+[, $soOwnerPage2] = http_get("$baseSo/", ["Cookie: $soCookie"]);
+check('[owner cover] pressing a star saves that photo as the folder\'s cover (the same save as the admin\'s), and only it is gold', str_contains($soCoverReply[1] ?? '', '"ok":true') && str_contains($soOwnerPage2, 'class="cover-toggle is-cover" data-file="c-mid.jpg"') && substr_count($soOwnerPage2, 'cover-toggle is-cover') === 1 && str_contains($soOwnerPage2, '"c-mid.jpg":true') && str_contains($soOwnerPage2, '"b-late.jpg":false'));
 // the folder's own setting, saved through the admin form
 [, $soAdminBody, $soAdminHd2] = http_get("$baseSo/?admin", [$soAdminAuth]);
 $soSess = extract_cookie_header($soAdminHd2); $soCsrf = extract_csrf_token($soAdminBody);
