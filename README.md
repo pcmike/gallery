@@ -227,7 +227,7 @@ Click a photo to open it full screen. **Arrow keys** or the on-screen arrows mov
 
 **The viewer on a phone** is described under [The viewer](#the-viewer).
 
-**Opening the gallery with no browser bars.** A web page can't hide an iPhone's address bar and toolbar, but a site added to the Home Screen opens without them. While you are signed in as the owner the gallery offers that (**Share → Add to Home Screen**; it needs the manifest at `?manifest` and the icon at `?appicon`, both public and harmless). Other visitors' pages don't carry it yet. You may need to sign in once inside the app.
+**Opening the gallery with no browser bars.** A web page can't hide an iPhone's address bar and toolbar, but a site added to the Home Screen opens without them. While you are signed in as the owner the gallery offers that (**Share → Add to Home Screen**; it needs the manifest at `?manifest` and the icon at `?appicon`, both public and harmless; the icon is the same line drawing as the gallery icon in the icon strip, light on the gallery's dark background, drawn by the script itself, so there is no image file to add). Other visitors' pages don't carry it yet. You may need to sign in once inside the app.
 
 ## The admin
 

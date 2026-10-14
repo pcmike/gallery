@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.10');
+define('GALLERY_VERSION', '2.0.11');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -1009,8 +1009,8 @@ if (isset($_GET['manifest'])) {
         'name' => $name, 'short_name' => $name, 'start_url' => $start, 'scope' => $start, 'display' => 'standalone',
         'background_color' => '#0f0f10', 'theme_color' => '#0f0f10',
         'icons' => [
-            ['src' => $start . '?appicon', 'sizes' => '180x180', 'type' => 'image/png'],
-            ['src' => $start . '?appicon&size=large', 'sizes' => '512x512', 'type' => 'image/png'],
+            ['src' => $start . '?appicon&v=2', 'sizes' => '180x180', 'type' => 'image/png'],
+            ['src' => $start . '?appicon&size=large&v=2', 'sizes' => '512x512', 'type' => 'image/png'],
         ],
     ], JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP);
     exit;
@@ -2026,19 +2026,44 @@ function render_map_icon_image() {
 
 /** The home-screen icon: a dark square with a small mountain-and-sun picture, as a PNG of $px pixels. */
 function render_app_icon_image($px) {
-    $img = imagecreatetruecolor($px, $px);
+    // The same line drawing as the gallery icon in the icon strip (a rounded frame, a sun, a hill line; ui_icon_paths()'s 'gallery'),
+    // drawn here in PHP so no image file is needed. Drawn four times larger and shrunk, which smooths the edges.
+    $k = 4; $big = $px * $k;
+    $img = imagecreatetruecolor($big, $big);
     $bg = imagecolorallocate($img, 15, 15, 16);
-    $blue = imagecolorallocate($img, 88, 101, 242);
-    $light = imagecolorallocate($img, 225, 228, 255);
-    imagefilledrectangle($img, 0, 0, $px, $px, $bg);
-    $u = $px / 100;
-    imagefilledellipse($img, (int) round(70 * $u), (int) round(32 * $u), (int) round(16 * $u), (int) round(16 * $u), $light);
-    imagefilledpolygon($img, [(int) round(14 * $u), (int) round(76 * $u), (int) round(42 * $u), (int) round(34 * $u), (int) round(62 * $u), (int) round(76 * $u)], $blue);
-    imagefilledpolygon($img, [(int) round(44 * $u), (int) round(76 * $u), (int) round(64 * $u), (int) round(48 * $u), (int) round(86 * $u), (int) round(76 * $u)], $light);
-    header('Content-Type: image/png');
-    header('Cache-Control: public, max-age=31536000, immutable');
-    imagepng($img);
+    $ink = imagecolorallocate($img, 234, 234, 234);
+    imagefilledrectangle($img, 0, 0, $big, $big, $bg);
+    $u = $big * 0.58 / 18;                       // one unit of the 24-unit drawing; the frame (18 wide) fills 58% of the icon
+    $X = function ($x) use ($big, $u) { return $big / 2 + ($x - 12) * $u; };
+    $Y = function ($y) use ($big, $u) { return $big / 2 + ($y - 12) * $u; };
+    $w = 1.8 * $u;                               // the icon's stroke width
+    $rrect = function ($x1, $y1, $x2, $y2, $r, $col) use ($img) {
+        imagefilledrectangle($img, (int) round($x1 + $r), (int) round($y1), (int) round($x2 - $r), (int) round($y2), $col);
+        imagefilledrectangle($img, (int) round($x1), (int) round($y1 + $r), (int) round($x2), (int) round($y2 - $r), $col);
+        foreach ([[$x1 + $r, $y1 + $r], [$x2 - $r, $y1 + $r], [$x1 + $r, $y2 - $r], [$x2 - $r, $y2 - $r]] as [$cx, $cy]) {
+            imagefilledellipse($img, (int) round($cx), (int) round($cy), (int) round($r * 2), (int) round($r * 2), $col);
+        }
+    };
+    // the frame: x 3..21, y 4..20, corner radius 2, a stroke centred on that outline
+    $rrect($X(3) - $w / 2, $Y(4) - $w / 2, $X(21) + $w / 2, $Y(20) + $w / 2, 2 * $u + $w / 2, $ink);
+    $rrect($X(3) + $w / 2, $Y(4) + $w / 2, $X(21) - $w / 2, $Y(20) - $w / 2, max(1, 2 * $u - $w / 2), $bg);
+    // the sun: a circle of radius 1.7 at (9,10)
+    imagefilledellipse($img, (int) round($X(9)), (int) round($Y(10)), (int) round(($u * 1.7 + $w / 2) * 2), (int) round(($u * 1.7 + $w / 2) * 2), $ink);
+    imagefilledellipse($img, (int) round($X(9)), (int) round($Y(10)), (int) round(($u * 1.7 - $w / 2) * 2), (int) round(($u * 1.7 - $w / 2) * 2), $bg);
+    // the hill line: (7,20) up to (16,11) down to (21,16), round ends and corner
+    foreach ([[[7, 20], [16, 11]], [[16, 11], [21, 16]]] as [[$ax, $ay], [$bx, $by]]) {   // each segment as a filled strip of the stroke's width
+        $dx = $X($bx) - $X($ax); $dy = $Y($by) - $Y($ay); $len = sqrt($dx * $dx + $dy * $dy);
+        $nx = -$dy / $len * $w / 2; $ny = $dx / $len * $w / 2;
+        imagefilledpolygon($img, [(int) round($X($ax) + $nx), (int) round($Y($ay) + $ny), (int) round($X($bx) + $nx), (int) round($Y($by) + $ny), (int) round($X($bx) - $nx), (int) round($Y($by) - $ny), (int) round($X($ax) - $nx), (int) round($Y($ay) - $ny)], $ink);
+    }
+    foreach ([[7, 20], [16, 11], [21, 16]] as [$x, $y]) imagefilledellipse($img, (int) round($X($x)), (int) round($Y($y)), (int) round($w), (int) round($w), $ink);
+    $out = imagecreatetruecolor($px, $px);
+    imagecopyresampled($out, $img, 0, 0, 0, 0, $px, $px, $big, $big);
     imagedestroy($img);
+    header('Content-Type: image/png');
+    header('Cache-Control: public, max-age=31536000, immutable');   // the address carries a version (v=), so a new drawing is a new address
+    imagepng($out);
+    imagedestroy($out);
 }
 
 /**
@@ -10303,7 +10328,7 @@ function home_screen_app_tags($title) {
          . '<meta name="apple-mobile-web-app-status-bar-style" content="black">' . "\n"
          . '<meta name="apple-mobile-web-app-title" content="' . $t . '">' . "\n"
          . '<meta name="theme-color" content="#0f0f10">' . "\n"
-         . '<link rel="apple-touch-icon" href="' . $root . '?appicon">' . "\n"
+         . '<link rel="apple-touch-icon" href="' . $root . '?appicon&amp;v=2">' . "\n"
          . '<link rel="manifest" href="' . $root . '?manifest&amp;name=' . htmlspecialchars(rawurlencode($title), ENT_QUOTES, 'UTF-8') . '">' . "\n";
 }
 

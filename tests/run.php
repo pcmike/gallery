@@ -1318,11 +1318,14 @@ check('[viewer] on a touch screen the counter and buttons are a row across the t
 [, $thOwnerPage] = http_get("$baseTh/", $thAuthH);
 check('[viewer] the download button takes the photo the viewer already holds (from the browser\'s memory), so the share sheet can open on the first tap', str_contains($thOwnerPage, "cache: 'force-cache'") && str_contains($thOwnerPage, 'lightboxImg.getAttribute(\'src\')'));
 // full-screen app mode (owner only, for now)
-check('[app mode] the owner\'s pages carry what "Add to Home Screen" needs to open with no browser bars', str_contains($thOwnerPage, 'name="apple-mobile-web-app-capable" content="yes"') && preg_match('#<link rel="manifest" href="\./\?manifest&amp;name=#', $thOwnerPage) === 1 && str_contains($thOwnerPage, 'rel="apple-touch-icon" href="./?appicon"'));
+check('[app mode] the owner\'s pages carry what "Add to Home Screen" needs to open with no browser bars', str_contains($thOwnerPage, 'name="apple-mobile-web-app-capable" content="yes"') && preg_match('#<link rel="manifest" href="\./\?manifest&amp;name=#', $thOwnerPage) === 1 && str_contains($thOwnerPage, 'rel="apple-touch-icon" href="./?appicon&amp;v=2"'));
 check('[app mode] a visitor\'s pages carry none of it (an ordinary tab is unchanged)', !str_contains($thPage, 'apple-mobile-web-app') && !str_contains($thPage, 'rel="manifest"'));
 [$mfSt, $mfBody, $mfHd] = http_get("$baseTh/?manifest&name=" . rawurlencode('My <b>Trip</b>'));
 $mf = json_decode($mfBody, true);
 check('[app mode] the manifest is JSON that opens the gallery full screen, from its own address, with icons', $mfSt === 200 && ($mf['display'] ?? '') === 'standalone' && ($mf['start_url'] ?? '') === '/' && ($mf['scope'] ?? '') === '/' && count($mf['icons'] ?? []) === 2 && $mf['name'] === 'My <b>Trip</b>' && stripos(implode("\n", $mfHd), 'application/manifest+json') !== false, $mfBody);
+[, $iconBody] = http_get("$baseTh/?appicon&size=large&v=2"); $iconIm = @imagecreatefromstring($iconBody);
+$lum = function ($x, $y) use ($iconIm) { $c = imagecolorat($iconIm, $x, $y); return (($c >> 16 & 255) + ($c >> 8 & 255) + ($c & 255)) / 3; };
+check('[app mode] the home screen icon is the gallery icon: a light rounded frame (left edge, bottom edge) and sun ring on a dark ground, dark in the corner, the frame\'s inside and the sun\'s middle', $iconIm && $lum(2, 2) < 30 && $lum(108, 256) > 200 && $lum(256, 388) > 200 && $lum(205, 190) > 200 && $lum(300, 300) < 30 && $lum(205, 222) < 30 && $lum(150, 256) < 30);
 foreach ([['?appicon', 180], ['?appicon&size=large', 512]] as [$q, $px]) { [$iSt, $iBody] = http_get("$baseTh/$q"); $di = @getimagesizefromstring($iBody); check("[app mode] the home screen icon ($px px) is a PNG", $iSt === 200 && $di && $di[0] === $px && $di[1] === $px && $di[2] === IMAGETYPE_PNG); }
 
 // A place from elsewhere that has gone missing is reported to the owner instead of silently showing nothing.

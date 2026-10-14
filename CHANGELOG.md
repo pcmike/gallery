@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.0.11] - 2026-10-14
+
+### Changed
+- **The Home Screen icon is the gallery icon.** The app icon an owner gets from Add to Home Screen is now the same line drawing as the gallery icon in the icon strip (a rounded frame, a sun, a hill line), light on the gallery's dark background, instead of a filled mountain picture. It is still drawn by the script itself (no image file to add). An app already on a Home Screen keeps the icon it was added with; remove it and add it again to get the new one.
+
 ## [2.0.10] - 2026-10-14
 
 ### Added
