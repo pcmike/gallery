@@ -11158,7 +11158,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     padding: 60px 20px;
   }
   .page-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.85rem; }
-  .page-visits { white-space: nowrap; }
   /* Same column as the photo grid below it (max-width and side padding
      match .gallery), so the map lines up with the tiles instead of
      running to the edges of the window. */
@@ -11326,7 +11325,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     .map-combo { flex: 0 1 auto; min-width: 0; }
     .map-combo-btn { width: 36px; flex: 0 1 36px; min-width: 28px; }
     .page-tools { gap: 4px; min-width: 0; flex: 0 1 auto; }
-    .page-visits { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   }
   .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .map-preview-body[hidden] { display: none; }
@@ -11427,7 +11425,7 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
   <?php if ($headerMeta['dates'] !== ''): ?>
     <p class="folder-dates"><?= htmlspecialchars($headerMeta['dates']) ?></p>
   <?php endif; ?>
-  <p><?= htmlspecialchars(media_count_label($currentFolderPath !== null ? $currentFolderFiles : $files), ENT_QUOTES, 'UTF-8') ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
+  <p><?= htmlspecialchars(media_count_label($currentFolderPath !== null ? $currentFolderFiles : $files), ENT_QUOTES, 'UTF-8') ?><?php if ($viewCount > 0 && view_counts_shown()): ?> &middot; <span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
 </header>
 
 <?php if ($headerMeta['description'] !== ''): ?>
@@ -11719,7 +11717,6 @@ if (ENABLE_MAP && $mapPoints) {
       </div>
       <?php endif; ?>
       <span class="page-tools">
-        <?php if ($viewCount > 0 && view_counts_shown()): ?><span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?>
         <?php if ($archiveCount > 0 || $lockHtml !== ''): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
         <span class="map-combo"><?php if ($archiveCount > 0): ?><a class="map-combo-btn page-archive" href="?archive<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" data-bytes="<?= (int) $archiveBytes ?>" data-ask="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('archive') ?></a><?php endif; ?><?= $lockHtml ?></span>
         <?php endif; ?>

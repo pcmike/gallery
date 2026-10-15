@@ -3472,6 +3472,8 @@ check('[visits] one visitor opening the front page, a folder, a shared photo lin
 $visitCookie = ''; foreach ($vh1 as $h) if (stripos($h, 'Set-Cookie: gallery_visit=') === 0) $visitCookie = $h;
 check('[visits] the visit is remembered in a small first-party cookie: HttpOnly, SameSite=Lax, and expiring in about half an hour', $visitCookie !== '' && stripos($visitCookie, 'httponly') !== false && stripos($visitCookie, 'samesite=lax') !== false && (bool) preg_match('/expires=/i', $visitCookie));
 $bob = [];
+$bobPage = $vGet('/', $bob)[1]; $bobStrip = (string) substr($bobPage, (int) strpos($bobPage, '<div class="map-preview-heading"'));
+check('[visits] the total sits in the header line after the media count and before "Last updated", not in the icon strip', preg_match('#<header>.*?<p>[^<]*(photos?|media) &middot; <span class="page-visits">2 visits</span> &middot; Last updated #s', $bobPage) === 1 && !str_contains($bobStrip, 'page-visits'));
 check('[visits] a different visitor (a browser with no cookie) is a second visit, and the page bar says "visits"', $vCount($vGet('/', $bob)[1]) === 2 && str_contains($vGet('/', $bob)[1], '<span class="page-visits">2 visits</span>'));
 $late = ['gallery_visit' => (string) (time() - 1801)]; $justIn = ['gallery_visit' => (string) (time() - 1700)];
 check('[visits] someone who comes back after more than half an hour is a new visit; within half an hour is still the same one', $vCount($vGet('/', $late)[1]) === 3 && $vCount($vGet('/', $justIn)[1]) === 3);

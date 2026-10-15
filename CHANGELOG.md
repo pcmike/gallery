@@ -9,6 +9,7 @@ All notable changes to this project are documented here. Versions correspond to 
 - **The owner always sees view counts.** While signed in as the owner, each tile shows its view count (an eye and a number, left of the caption/location/link badges, a zero too), and the folder totals and the visit total show as well, even with *Show view counts to visitors* off. Visitors still see only what that setting allows.
 
 ### Changed
+- **The visit total moved out of the icon strip** into the line under the title, after the media count and before *Last updated* ("12 photos · 340 visits · Last updated October 14, 2026"), which frees the strip for the buttons.
 - **The Home Screen icon is the gallery icon.** The app icon from Add to Home Screen is now the same line drawing as the gallery icon in the icon strip (a rounded frame, a sun, a hill line), light on the gallery's dark background, instead of a filled mountain picture. It is still drawn by the script itself (no image file to add). An app already on a Home Screen keeps the icon it was added with; remove it and add it again to get the new one.
 
 ## [2.0.10] - 2026-10-14
