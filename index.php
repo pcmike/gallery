@@ -6092,7 +6092,7 @@ function gallery_setting_definitions() {
             ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
              'help' => 'Visits (one per visitor per half hour) and each photo\'s views. You always see them here.'],
             ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
-             'help' => 'Needs "Count views". Off keeps the numbers to yourself.'],
+             'help' => 'Needs "Count views". Off keeps the numbers to yourself (you still see them while signed in as the owner).'],
         ]],
         ['title' => 'Locations and the map', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
@@ -9073,7 +9073,7 @@ function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status,
     foreach ($groupFiles as $gf) {
         $groupTotal += isset($photoViews[$gf]) ? (int) $photoViews[$gf] : 0;
     }
-    $viewsHidden = ($groupTotal > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
+    $viewsHidden = (view_counts_shown() && ($groupTotal > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';
 
     $html = '<div class="linked-photos' . ($status ? ' ' . $status : '') . '">';
     $html .= '<div class="linked-photos-thumbs">';
@@ -10013,7 +10013,7 @@ function video_tile_parts($file, $duration = null) {
  *  spoken for, when $videoDuration is known. */
 function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null, $videoDuration = null, $itemEntry = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
-    $hidden = ($views > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
+    $hidden = (view_counts_shown() && ($views > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';   // the owner sees every count, a zero too
     $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('eye') . ' '
            . number_format($views) . '</span>';
     $statusBadge = '';
@@ -10090,6 +10090,11 @@ function owner_cover_flags($dir, $files) {
         $out[$f] = $covers[$real] !== null && $covers[$real] === basename($f);
     }
     return $out;
+}
+
+/** Whether view counts are shown on this page: to everyone when the site setting says so, and always to the signed-in owner. */
+function view_counts_shown() {
+    return SHOW_VIEW_COUNTS_PUBLICLY || is_admin_browser();
 }
 
 /** The small line drawings used instead of emoji (so every device shows the same, clear picture): one set, drawn
@@ -10280,7 +10285,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         foreach ($groupFiles as $gf) {
             $groupTotal += isset($photoViews[$gf]) ? (int) $photoViews[$gf] : 0;
         }
-        $viewsHidden = ($groupTotal > 0 && SHOW_VIEW_COUNTS_PUBLICLY) ? '' : ' hidden';
+        $viewsHidden = (view_counts_shown() && ($groupTotal > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';
 
         $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
         $html .= '<h2 class="group-label"' . $labelStyle . '>' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
@@ -10317,10 +10322,10 @@ function gallery_root_href() {
 }
 
 /** What makes "Add to Home Screen" open the gallery as an app with no browser bars at all (the phone's address bar and
- *  toolbar, which on an iPhone can't be hidden from a web page, are what keep popping up). For now only the signed-in
- *  owner's pages carry it, so it can be tried out before anyone else sees it; nothing changes in an ordinary browser tab. */
+ *  toolbar, which on an iPhone can't be hidden from a web page, are what keep popping up). Only the pages of someone who is
+ *  signed in (the owner, or a viewer with the private-view password) carry it; nothing changes in an ordinary visitor's tab. */
 function home_screen_app_tags($title) {
-    if (!is_admin_browser()) return '';
+    if (!is_revealed()) return '';
     $t = htmlspecialchars($title, ENT_QUOTES, 'UTF-8');
     $root = htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8');
     return '<meta name="apple-mobile-web-app-capable" content="yes">' . "\n"
@@ -11714,7 +11719,7 @@ if (ENABLE_MAP && $mapPoints) {
       </div>
       <?php endif; ?>
       <span class="page-tools">
-        <?php if ($viewCount > 0 && SHOW_VIEW_COUNTS_PUBLICLY): ?><span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?>
+        <?php if ($viewCount > 0 && view_counts_shown()): ?><span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?>
         <?php if ($archiveCount > 0 || $lockHtml !== ''): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
         <span class="map-combo"><?php if ($archiveCount > 0): ?><a class="map-combo-btn page-archive" href="?archive<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" data-bytes="<?= (int) $archiveBytes ?>" data-ask="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('archive') ?></a><?php endif; ?><?= $lockHtml ?></span>
         <?php endif; ?>
@@ -11815,7 +11820,7 @@ if (ENABLE_MAP && $mapPoints) {
   ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
-  const showCountsPublicly = <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'true' : 'false' ?>;
+  const showCountsPublicly = <?= view_counts_shown() ? 'true' : 'false' ?>;
   let current = 0;
   const lightbox = document.getElementById('lightbox');
   const lightboxImg = document.getElementById('lightbox-img');

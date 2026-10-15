@@ -2,10 +2,14 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
-## [2.0.11] - 2026-10-14
+## [2.0.11] - 2026-10-15
+
+### Added
+- **A family member can add the gallery to their Home Screen.** The Home Screen tags (so it opens as an app with no browser bars) now go to anyone signed in, the owner or a viewer with the private-view password, not only the owner. A visitor who isn't signed in doesn't get them. Signing in lasts a year; an iPhone keeps a Home Screen app's cookies apart from Safari's, so sign in once inside the app.
+- **The owner always sees view counts.** While signed in as the owner, each tile shows its view count (an eye and a number, left of the caption/location/link badges, a zero too), and the folder totals and the visit total show as well, even with *Show view counts to visitors* off. Visitors still see only what that setting allows.
 
 ### Changed
-- **The Home Screen icon is the gallery icon.** The app icon an owner gets from Add to Home Screen is now the same line drawing as the gallery icon in the icon strip (a rounded frame, a sun, a hill line), light on the gallery's dark background, instead of a filled mountain picture. It is still drawn by the script itself (no image file to add). An app already on a Home Screen keeps the icon it was added with; remove it and add it again to get the new one.
+- **The Home Screen icon is the gallery icon.** The app icon from Add to Home Screen is now the same line drawing as the gallery icon in the icon strip (a rounded frame, a sun, a hill line), light on the gallery's dark background, instead of a filled mountain picture. It is still drawn by the script itself (no image file to add). An app already on a Home Screen keeps the icon it was added with; remove it and add it again to get the new one.
 
 ## [2.0.10] - 2026-10-14
 

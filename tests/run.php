@@ -1803,6 +1803,13 @@ check('the redirect drops back to the bare URL, not leaving ?reveal in it', (boo
 $revealCookie = extract_cookie_header($revealHeaders);
 check('?reveal sets a cookie', $revealCookie !== null);
 [, $revealedBody] = http_get("$basePrivate/", ["Cookie: $revealCookie"]);
+[, $revealedHomeBody] = http_get("$basePrivate/", ["Cookie: $revealCookie"]);
+check('[app mode] a viewer signed in with the private-view password gets the Home Screen tags too (so a family member can add the gallery to their Home Screen)', str_contains($revealedHomeBody, 'name="apple-mobile-web-app-capable" content="yes"') && str_contains($revealedHomeBody, 'rel="manifest"') && str_contains($revealedHomeBody, 'rel="apple-touch-icon"'));
+check('[app mode] ...and a visitor who is not signed in gets none of it', !str_contains(http_get("$basePrivate/")[1], 'apple-mobile-web-app'));
+check('[counts] a signed-in viewer is not the owner: with public counts off, no count shows for them', str_contains($revealedHomeBody, 'const showCountsPublicly = false;') && !preg_match('#class="view-badge"[^>]*data-photo#', $revealedHomeBody));
+[, $ownerCountsBody] = http_get("$basePrivate/", ["Cookie: $sessCookie"]);
+check('[counts] the owner always sees each photo\'s view count, even with public counts off and a count of zero (loose2.jpg: no view yet)', (bool) preg_match('#<span class="view-badge" data-photo="loose2\.jpg"><svg[^>]*><use href="\#i-eye"></use></svg> 0</span>#', $ownerCountsBody) && str_contains($ownerCountsBody, 'const showCountsPublicly = true;'), substr($ownerCountsBody, 0, 0));
+check('[counts] ...and visitors still see none', (bool) preg_match('#class="view-badge hidden"[^>]*data-photo="loose2\.jpg"#', http_get("$basePrivate/")[1]));
 check('[lock] a viewer who has the password sees the lock open: a button in a small form that posts to ?reveal', str_contains($revealedBody, 'class="lock-form"') && str_contains($revealedBody, 'name="logout"') && str_contains($revealedBody, ui_lock_probe('unlock')) && !str_contains($revealedBody, 'href="?reveal"'));
 [$lockOutStatus, , $lockOutHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => ''], ["Cookie: $revealCookie"], false);
 $lockOutCookie = (string) extract_cookie_header($lockOutHd);

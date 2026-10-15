@@ -93,7 +93,7 @@ Changed in **Site settings** (no Save button: each change saves as you make it) 
 | `SORT_PRIORITY` | `private,video,located` | The order those three stack in (the admin shows them as a list you drag) |
 | `SHOW_SORT_BUTTON` | on | The visitors' sort button (always left out of a listing laid out by a notes file with no folders) |
 | `TRACK_VIEWS` | off | Count visits and photo views |
-| `SHOW_VIEW_COUNTS_PUBLICLY` | off | Show visitors the counts (you always see them) |
+| `SHOW_VIEW_COUNTS_PUBLICLY` | off | Show visitors the counts (you, signed in as the owner, always see them: a count on every tile, a zero too, and the totals) |
 | `ENABLE_PUBLIC_DOWNLOAD` | off | A download-original button for every visitor |
 | `ENABLE_PHOTO_LOCATION` | off | Allow locations to show (also needs a per-folder switch) |
 | `ENABLE_MAP` | off | The maps (loads Leaflet and OpenStreetMap tiles) |
@@ -227,7 +227,7 @@ Click a photo to open it full screen. **Arrow keys** or the on-screen arrows mov
 
 **The viewer on a phone** is described under [The viewer](#the-viewer).
 
-**Opening the gallery with no browser bars.** A web page can't hide an iPhone's address bar and toolbar, but a site added to the Home Screen opens without them. While you are signed in as the owner the gallery offers that (**Share → Add to Home Screen**; it needs the manifest at `?manifest` and the icon at `?appicon`, both public and harmless; the icon is the same line drawing as the gallery icon in the icon strip, light on the gallery's dark background, drawn by the script itself, so there is no image file to add). Other visitors' pages don't carry it yet. You may need to sign in once inside the app.
+**Opening the gallery with no browser bars.** A web page can't hide an iPhone's address bar and toolbar, but a site added to the Home Screen opens without them. While you are signed in, as the owner or as a viewer with the private-view password (so a family member can add the trip gallery to their Home Screen and follow along), the gallery offers that (**Share → Add to Home Screen**; it needs the manifest at `?manifest` and the icon at `?appicon`, both public and harmless; the icon is the same line drawing as the gallery icon in the icon strip, light on the gallery's dark background, drawn by the script itself, so there is no image file to add). A visitor who isn't signed in doesn't get it. Signing in sets a cookie that lasts a year, so it stays signed in; but an iPhone keeps a Home Screen app's cookies apart from Safari's, so sign in once inside the app (the lock in the icon strip) and it is kept from then on.
 
 ## The admin
 
