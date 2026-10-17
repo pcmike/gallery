@@ -4290,7 +4290,7 @@ function items_path($folderPath) {
  *  locationEnabled is this folder's own
  *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => []];
 }
 
 function items_read($folderPath) {
@@ -4673,7 +4673,72 @@ function media_taken_times($folderReal, $names) {
     return $out;
 }
 
-/** $files (relative paths) with the photos of each folder put in that folder's order (see above); folders keep their places. */
+/** A folder's stacks: photos the owner placed next to each other by hand, which stay together (in the order set) wherever
+ *  the sort puts them. Stored in the folder's settings as [{anchor, files: [bare names]}]; the anchor is the member whose own
+ *  place in the sort the whole stack takes. $list is that folder's photos (relative paths): returns the stacks as lists of
+ *  the paths found there, anchor first named, skipping what is gone and any stack left with fewer than two. */
+function media_stacks_resolve($folderReal, $list) {
+    $stacks = items_read($folderReal)['stacks'] ?? [];
+    if (!is_array($stacks) || !$stacks) return [];
+    $byBare = [];
+    foreach ($list as $f) $byBare[basename($f)] = $f;
+    $out = []; $used = [];
+    foreach ($stacks as $s) {
+        if (!is_array($s) || !is_array($s['files'] ?? null)) continue;
+        $members = [];
+        foreach ($s['files'] as $name) {
+            if (is_string($name) && isset($byBare[$name]) && !isset($used[$byBare[$name]])) { $members[] = $byBare[$name]; $used[$byBare[$name]] = true; }
+        }
+        if (count($members) < 2) continue;
+        $anchor = is_string($s['anchor'] ?? null) && isset($byBare[$s['anchor']]) && in_array($byBare[$s['anchor']], $members, true) ? $byBare[$s['anchor']] : $members[0];
+        $out[] = ['anchor' => $anchor, 'files' => $members];
+    }
+    return $out;
+}
+
+/** The stacks as stored, cleaned: names only, each photo in one stack at most, an anchor that is a member, and nothing left
+ *  that holds fewer than two photos. */
+function media_stacks_clean($stacks) {
+    $out = []; $used = [];
+    foreach (is_array($stacks) ? $stacks : [] as $s) {
+        if (!is_array($s) || !is_array($s['files'] ?? null)) continue;
+        $files = [];
+        foreach ($s['files'] as $n) if (is_string($n) && $n !== '' && !isset($used[$n])) { $files[] = $n; $used[$n] = true; }
+        if (count($files) < 2) { foreach ($files as $n) unset($used[$n]); continue; }
+        $anchor = is_string($s['anchor'] ?? null) && in_array($s['anchor'], $files, true) ? $s['anchor'] : $files[0];
+        $out[] = ['anchor' => $anchor, 'files' => $files];
+    }
+    return $out;
+}
+
+/** Change a folder's stacks inside its settings ($data): 'place' puts the photos $names (bare names, in the order wanted)
+ *  just before or after $target, joining its stack or starting one with it as the anchor; 'release' takes them out of their
+ *  stacks; 'reset' clears every stack. */
+function media_stacks_change(&$data, $mode, $names = [], $target = '', $side = 'after') {
+    if ($mode === 'reset') { $data['stacks'] = []; return; }
+    $stacks = media_stacks_clean($data['stacks'] ?? []);
+    foreach ($stacks as &$s) {
+        $s['files'] = array_values(array_diff($s['files'], $names));
+        if (!in_array($s['anchor'], $s['files'], true)) $s['anchor'] = $s['files'][0] ?? '';
+    }
+    unset($s);
+    if ($mode === 'place') {
+        $placed = false;
+        foreach ($stacks as &$s) {
+            $i = array_search($target, $s['files'], true);
+            if ($i === false) continue;
+            array_splice($s['files'], $side === 'before' ? $i : $i + 1, 0, $names);
+            $placed = true;
+            break;
+        }
+        unset($s);
+        if (!$placed) $stacks[] = ['anchor' => $target, 'files' => $side === 'before' ? array_merge($names, [$target]) : array_merge([$target], $names)];
+    }
+    $data['stacks'] = media_stacks_clean($stacks);
+}
+
+/** $files (relative paths) with the photos of each folder put in that folder's order (see above); folders keep their places.
+ *  A stack placed by hand is sorted as its anchor is and its members follow in the order set. */
 function media_sort_apply($files, $dir) {
     if (count($files) < 2) return $files;
     $byFolder = [];
@@ -4685,7 +4750,8 @@ function media_sort_apply($files, $dir) {
         $spec = media_sort_spec_for_folder($folderReal);
         $prio = media_sort_priority_for_folder($folderReal);
         if (!$revealed) $spec['private'] = false;   // visitors never see private items: nothing to put first
-        if (count($list) < 2 || ($spec['order'] === $scanned && !$spec['desc'] && !$spec['private'] && !$spec['video'] && !$spec['located'])) { foreach ($list as $f) $result[] = $f; continue; }
+        $stacks = count($list) < 2 ? [] : media_stacks_resolve($folderReal, $list);
+        if (count($list) < 2 || (!$stacks && $spec['order'] === $scanned && !$spec['desc'] && !$spec['private'] && !$spec['video'] && !$spec['located'])) { foreach ($list as $f) $result[] = $f; continue; }
         $info = [];
         if ($spec['private'] || $spec['located']) $itemsData = items_get_all_for_files($dir, $list); else $itemsData = [];
         $times = $spec['order'] === 'name' ? [] : media_taken_times($folderReal, array_map('basename', $list));
@@ -4697,6 +4763,12 @@ function media_sort_apply($files, $dir) {
                 't' => $spec['order'] === 'modified' ? (int) @filemtime(resolve_real_path($dir, $f)) : ($times[basename($f)] ?? 0),
             ];
         }
+        $unit = []; $follower = [];   // a stack's members by its anchor; the members that ride along with it
+        foreach ($stacks as $st) {
+            $unit[$st['anchor']] = $st['files'];
+            foreach ($st['files'] as $m) if ($m !== $st['anchor']) $follower[$m] = true;
+        }
+        $list = array_values(array_filter($list, function ($f) use ($follower) { return !isset($follower[$f]); }));
         usort($list, function ($a, $b) use ($info, $spec, $prio) {
             foreach ($prio as $k) {
                 if ($spec[$k]) { $d = ($info[$a][$k] ? 0 : 1) <=> ($info[$b][$k] ? 0 : 1); if ($d !== 0) return $d; }
@@ -4705,7 +4777,9 @@ function media_sort_apply($files, $dir) {
             if ($c === 0) $c = strnatcasecmp(basename($a), basename($b));
             return $spec['desc'] ? -$c : $c;
         });
-        foreach ($list as $f) $result[] = $f;
+        foreach ($list as $f) {
+            if (isset($unit[$f])) { foreach ($unit[$f] as $m) $result[] = $m; } else $result[] = $f;
+        }
     }
     return $result;
 }
@@ -5472,6 +5546,33 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction']); }
         });
         return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'private: visitors need the private-view password to see it.' : 'public again.')];
+    }
+
+    if ($action === 'arrange_items') {
+        // Placing photos by hand: they go next to another photo of the folder and stay with it whatever the sort (see media_stacks_change).
+        $mode = (string) ($_POST['mode'] ?? '');
+        if (!in_array($mode, ['place', 'release', 'reset'], true)) return ['type' => 'error', 'text' => 'Unknown request.'];
+        $names = []; $target = ''; $side = 'after';
+        if ($mode !== 'reset') {
+            $decoded = json_decode((string) ($_POST['files'] ?? ''), true);
+            if (!is_array($decoded) || !array_is_list($decoded) || !$decoded) return ['type' => 'error', 'text' => 'Choose at least one photo first.'];
+            if (count($decoded) > 2000) return ['type' => 'error', 'text' => 'That is more photos at once than the gallery allows (2000).'];
+            $names = array_values(array_unique(array_map(function ($f) { return basename((string) $f); }, $decoded)));
+            foreach ($names as $bare) {
+                if ($bare === '' || !in_array($adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
+            }
+        }
+        if ($mode === 'place') {
+            $target = basename((string) ($_POST['target'] ?? ''));
+            $side = (string) ($_POST['side'] ?? '') === 'before' ? 'before' : 'after';
+            if ($target === '' || !in_array($adminFolderPath === null ? $target : $adminFolderPath . '/' . $target, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
+            if (in_array($target, $names, true)) return ['type' => 'error', 'text' => 'A photo can\'t be placed next to itself.'];
+        }
+        items_update($adminFolderReal, function (&$data) use ($mode, $names, $target, $side) { media_stacks_change($data, $mode, $names, $target, $side); });
+        $n = count($names);
+        if ($mode === 'reset') return ['type' => 'ok', 'text' => 'Every photo in this folder is back in its sorted place.'];
+        if ($mode === 'release') return ['type' => 'ok', 'text' => ($n === 1 ? '"' . $names[0] . '" is' : $n . ' photos are') . ' back in the sorted place.'];
+        return ['type' => 'ok', 'text' => ($n === 1 ? '"' . $names[0] . '" now sits' : $n . ' photos now sit') . ' ' . $side . ' "' . $target . '".'];
     }
 
     if ($action === 'set_cover') {
@@ -10069,7 +10170,9 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         $ownerLock .= '<button type="button" class="cover-toggle' . ($isCoverNow ? ' is-cover' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isCoverNow ? 'true' : 'false')
             . '" title="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '">' . ui_icon('star') . '</button>';
     }
-    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
+    if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
+    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -10123,6 +10226,7 @@ function ui_icon_paths() {
         'chev-right' => '<path d="M8.75 5.5 15.25 12l-6.5 6.5"/>',
         'close'   => '<circle cx="12" cy="12" r="9"/><path d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2"/>',
         'download' => '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
+        'move'    => '<path d="M12 3v18M3 12h18M12 3 9 6M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
         'archive' => '<path d="M3 7.5 5 4h14l2 3.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 7.5h18M12 11v5.5M9.4 14l2.6 2.6 2.6-2.6"/>',
     ];
 }
@@ -10444,6 +10548,7 @@ function render_about_page() {
     <li>Trips as folders: cover cards with dates and counts, to any depth, and a viewer that stays inside the folder</li>
     <li>Optional maps, loaded only when someone opens one</li>
     <li>Sorting by name or date either way round, with videos, located photos or private items first; visitors can re-sort for themselves with one button</li>
+    <li>Drag and drop to place photos next to each other (the church shots taken on other days), kept together under every sort</li>
     <li>Download the original (if allowed) or a whole folder as a ZIP, with hidden locations removed from what visitors get</li>
     <li>Shareable links to a photo, folder or map, with proper previews; end a gallery link with <code>#map</code> and it opens with the small map showing (and a link icon on that map copies it)</li>
   </ul>
@@ -11044,6 +11149,34 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     position: relative;
     scroll-margin-top: 16px;
   }
+  /* Arrange (the owner's drag-and-drop): tiles are picked with a tap and moved by holding one and dragging it next to another. */
+  .arrange-bar { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; background: rgba(30,30,34,0.97); border: 1px solid #3a3a42; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 90; }
+  .arrange-bar[hidden] { display: none; }
+  .arrange-hint { display: block; margin: 0 0 8px; font-size: 0.85rem; color: var(--muted); }
+  .arrange-btns { display: flex; gap: 6px; }
+  .arrange-btns button { flex: 1 1 auto; padding: 7px 10px; background: none; border: 1px solid #34343a; border-radius: 999px; color: var(--text); font: inherit; font-size: 0.85rem; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; }
+  .arrange-btns button:hover:not(:disabled) { background: #26262a; border-color: #4a4a52; }
+  .arrange-btns button:active:not(:disabled) { transform: scale(0.96); }
+  .arrange-btns button:disabled { opacity: 0.4; cursor: default; }
+  .arrange-btns .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .arrange-btns .primary:hover:not(:disabled) { background: #6b77f0; border-color: #6b77f0; }
+  body.arranging { padding-bottom: 120px; }
+  .arranging .gallery > .card[data-file] { cursor: grab; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .arranging .gallery > .card[data-file] img { pointer-events: none; -webkit-user-drag: none; }
+  .arranging .gallery > .card .priv-toggle, .arranging .gallery > .card .cover-toggle { display: none; }
+  .arranging .gallery > .card .item-badge { pointer-events: none; }
+  .arranging .gallery > .card:hover img { transform: none; }
+  @media (hover: hover) { .arranging .gallery > .card[data-file]:hover { outline: 2px solid rgba(255,255,255,0.55); outline-offset: -2px; } }
+  .arranging .gallery > .card[data-file].sel { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .card .sel-mark { position: absolute; top: 8px; left: 8px; z-index: 5; display: none; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; box-shadow: 0 0 0 2px #fff; }
+  .card .sel-mark .ico { width: 15px; height: 15px; stroke-width: 2.6; }
+  .arranging .card.sel .sel-mark { display: flex; }
+  .arranging .gallery > .card.dragging { opacity: 0.35; }
+  .arranging .gallery > .card.is-stacked::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 5px; z-index: 3; background: hsl(var(--stack-hue, 220) 70% 62%); pointer-events: none; }
+  .arrange-ghost { position: fixed; left: 0; top: 0; width: 88px; height: 88px; z-index: 200; pointer-events: none; border: 2px solid var(--accent); border-radius: 10px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.6); opacity: 0.92; }
+  .arrange-ghost img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .arrange-ghost b { position: absolute; right: 4px; top: 4px; padding: 1px 7px; background: var(--accent); border-radius: 999px; color: #fff; font-size: 0.8rem; }
+  .arrange-line { position: fixed; z-index: 150; width: 4px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 2px rgba(88,101,242,0.35); pointer-events: none; }
   .card.ringed::after {
     content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
     box-shadow: inset 0 0 0 3px var(--ring);
@@ -11691,6 +11824,14 @@ if (ENABLE_MAP && $mapPoints) {
       if (!$sortRevealed) $sortSpec['private'] = false;
       $sortCookiePath = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/';
   }
+  // The owner's Arrange button: photos shown one by one here (not in a filename group or a notes file's layout, which keep their own order).
+  $arrangeShown = is_admin_browser() && !AUTO_GROUP_BY_FILENAME && count($sortScope) >= 2 && !(!AUTO_GROUP_BY_FOLDER && !empty($mdFiles));
+  $arrangeStacks = [];
+  if ($arrangeShown) {
+      $arrangeByFolder = [];
+      foreach ($sortScope as $sf) $arrangeByFolder[containing_folder_real_path($dir, $sf)][] = $sf;
+      foreach ($arrangeByFolder as $arrangeReal => $arrangeList) foreach (media_stacks_resolve($arrangeReal, $arrangeList) as $st) $arrangeStacks[] = $st['files'];
+  }
 ?>
   <?php // The bar above the photos: the map buttons on the left (when there is a map), and on the right the visit count (when
         // it is shown to visitors) and the small gallery icon, which leads to the page about this gallery. ?>
@@ -11715,6 +11856,9 @@ if (ENABLE_MAP && $mapPoints) {
         <div class="sort-pop-row"><button type="button" data-dir="asc"></button><button type="button" data-dir="desc"></button></div>
         <button type="button" class="sort-reset">Use this gallery's order</button>
       </div>
+      <?php endif; ?>
+      <?php if ($arrangeShown): ?>
+      <span class="map-combo arrange-combo"><button type="button" class="map-combo-btn" id="arrange-btn" title="Arrange: place photos next to each other" aria-pressed="false"><?= ui_icon('move') ?><span class="map-toggle-label">Arrange the photos</span></button></span>
       <?php endif; ?>
       <span class="page-tools">
         <?php if ($archiveCount > 0 || $lockHtml !== ''): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
@@ -11752,6 +11896,17 @@ if (ENABLE_MAP && $mapPoints) {
 
 
 <?php if (is_admin_browser()): ?><div class="lightbox-toast" id="owner-toast" role="status" aria-live="polite" hidden></div><?php endif; ?>
+<?php if (!empty($arrangeShown)): ?>
+<div class="arrange-bar" id="arrange-bar" role="region" aria-label="Arrange the photos" hidden>
+  <span class="arrange-hint" id="arrange-hint" aria-live="polite"></span>
+  <span class="arrange-btns">
+    <button type="button" data-arrange="clear">Clear</button>
+    <button type="button" data-arrange="release" title="Take the selected photos out of the places you gave them">Release</button>
+    <button type="button" data-arrange="reset" title="Put every photo of this folder back in its sorted place">Reset folder</button>
+    <button type="button" data-arrange="done" class="primary">Done</button>
+  </span>
+</div>
+<?php endif; ?>
 <div class="lightbox" id="lightbox">
   <button class="close" type="button" onclick="closeLightbox()" aria-label="Close"><?= ui_icon('close') ?></button>
   <button class="nav prev" type="button" onclick="navigate(-1)" aria-label="Previous"><?= ui_icon('chev-left') ?></button>
@@ -12020,6 +12175,170 @@ if (ENABLE_MAP && $mapPoints) {
       .catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); })
       .then(function () { btn.classList.remove('busy'); });
   }, true);
+  // Arrange: the owner places photos next to each other by hand. A tap picks a tile; holding one and dragging it (a long press on a
+  // touch screen, so scrolling still works) puts everything picked next to the tile it is dropped beside. The server keeps each
+  // placement as a stack that follows its anchor through every sort; the page reloads to show the result.
+  (function () {
+    const btn = document.getElementById('arrange-btn'), bar = document.getElementById('arrange-bar'), gal = document.querySelector('.gallery');
+    if (!btn || !bar || !gal || !ownerState) return;
+    if (gal.querySelectorAll(':scope > .card[data-file]').length < 2) { btn.parentNode.style.display = 'none'; return; }   // nothing here to place (all in boxes)
+    const stacks = <?= json_encode($arrangeStacks) ?>, hint = document.getElementById('arrange-hint');
+    const pageFolder = <?= json_encode($currentFolderPath === null ? '' : $currentFolderPath) ?>;
+    const stackOf = {};
+    stacks.forEach(function (list, i) { list.forEach(function (f) { stackOf[f] = i; }); });
+    let on = false, press = null, drag = null, swallow = false, pointer = { x: 0, y: 0 }, scrollTimer = 0;
+    const picked = [];   // the picked files, in the order they were picked
+    const cards = function () { return [].slice.call(gal.querySelectorAll(':scope > .card[data-file]')); };
+    const fileOf = function (c) { return c.getAttribute('data-file'); };
+    const say = function (text) {
+      const t = document.getElementById('owner-toast'); if (!t) return;
+      t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500);
+    };
+    const paint = function () {
+      cards().forEach(function (c) {
+        const f = fileOf(c), i = stackOf[f];
+        c.classList.toggle('sel', picked.indexOf(f) >= 0);
+        c.classList.toggle('is-stacked', i !== undefined);
+        if (i !== undefined) c.style.setProperty('--stack-hue', String((i * 67 + 215) % 360)); else c.style.removeProperty('--stack-hue');
+      });
+      const n = picked.length, anyStack = picked.some(function (f) { return stackOf[f] !== undefined; });
+      hint.textContent = n ? n + ' selected. Hold one and drag it beside another.' : 'Tap to select. Hold and drag a photo beside another.';
+      bar.querySelector('[data-arrange=clear]').disabled = !n;
+      bar.querySelector('[data-arrange=release]').disabled = !anyStack;
+      bar.querySelector('[data-arrange=reset]').disabled = !stacks.length;
+    };
+    const setOn = function (v) {
+      on = v; document.body.classList.toggle('arranging', v); bar.hidden = !v;
+      btn.setAttribute('aria-pressed', v ? 'true' : 'false');
+      if (!v) picked.length = 0;
+      paint();
+    };
+    const toggle = function (f) {
+      const i = picked.indexOf(f);
+      if (i >= 0) picked.splice(i, 1);
+      else { if (picked.length && folderOf(picked[0]) !== folderOf(f)) picked.length = 0; picked.push(f); }
+      paint();
+    };
+    btn.addEventListener('click', function () { setOn(!on); });
+    // The admin's own save (a token is fetched first), then the page reloads in the same place with the same photos picked.
+    const send = function (folder, fields, keep) {
+      fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
+        .then(function (j) {
+          const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'arrange_items');
+          Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+          return fetch('?admin' + (folder ? '&folder=' + encodeURIComponent(folder) : ''), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
+        })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
+        .then(function (j) {
+          if (!j.ok) throw new Error(j.text || 'not saved');
+          try { sessionStorage.setItem('gallery_arrange', JSON.stringify({ y: window.scrollY, keep: keep || [] })); } catch (e) {}
+          location.reload();
+        })
+        .catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); });
+    };
+    const bare = function (f) { return f.slice(f.lastIndexOf('/') + 1); };
+    bar.addEventListener('click', function (e) {
+      const b = e.target.closest('[data-arrange]'); if (!b || b.disabled) return;
+      const what = b.getAttribute('data-arrange');
+      if (what === 'done') setOn(false);
+      else if (what === 'clear') { picked.length = 0; paint(); }
+      else if (what === 'release') {
+        const sel = picked.filter(function (f) { return stackOf[f] !== undefined; });
+        send(folderOf(sel[0]), { mode: 'release', files: JSON.stringify(sel.map(bare)) }, picked.slice());
+      } else if (what === 'reset') {
+        const folder = picked.length ? folderOf(picked[0]) : pageFolder;
+        if (confirm('Put every photo of this folder back in its sorted place?')) send(folder, { mode: 'reset' }, []);
+      }
+    });
+    // Tapping a tile picks it instead of opening it.
+    document.addEventListener('click', function (e) {
+      if (!on) return;
+      const c = e.target.closest ? e.target.closest('.gallery > .card[data-file]') : null;
+      if (!c) return;
+      e.preventDefault(); e.stopPropagation();
+      if (swallow) return;
+      toggle(fileOf(c));
+    }, true);
+    gal.addEventListener('contextmenu', function (e) { if (on) e.preventDefault(); });
+    // Dragging
+    const line = document.createElement('div'); line.className = 'arrange-line'; line.hidden = true; document.body.appendChild(line);
+    const begin = function () {
+      const c = press.card, f = fileOf(c);
+      if (picked.indexOf(f) < 0) { picked.length = 0; picked.push(f); paint(); }
+      const set = cards().filter(function (x) { return picked.indexOf(fileOf(x)) >= 0; });
+      const ghost = document.createElement('div'); ghost.className = 'arrange-ghost';
+      ghost.innerHTML = '<img alt="" src="' + c.querySelector('img').currentSrc.replace(/"/g, '') + '">' + (set.length > 1 ? '<b>' + set.length + '</b>' : '');
+      document.body.appendChild(ghost);
+      set.forEach(function (x) { x.classList.add('dragging'); });
+      drag = { set: set, ghost: ghost, folder: folderOf(f), target: null, side: 'after' };
+      swallow = true; clearTimeout(press.timer);
+      place(); loop();
+    };
+    const place = function () {
+      if (!drag) return;
+      drag.ghost.style.transform = 'translate(' + (pointer.x + 12) + 'px,' + (pointer.y + 12) + 'px)';
+      let best = null, bestD = 1e9;
+      cards().forEach(function (c) {
+        if (drag.set.indexOf(c) >= 0 || folderOf(fileOf(c)) !== drag.folder) return;
+        const r = c.getBoundingClientRect();
+        const dx = Math.max(r.left - pointer.x, 0, pointer.x - r.right), dy = Math.max(r.top - pointer.y, 0, pointer.y - r.bottom), d = Math.hypot(dx, dy);
+        if (d < bestD) { bestD = d; best = c; }
+      });
+      if (!best || bestD > 140) { drag.target = null; line.hidden = true; return; }
+      const r = best.getBoundingClientRect();
+      drag.target = best; drag.side = pointer.x < r.left + r.width / 2 ? 'before' : 'after';
+      line.style.left = (drag.side === 'before' ? r.left - 6 : r.right + 2) + 'px'; line.style.top = r.top + 'px'; line.style.height = r.height + 'px'; line.hidden = false;
+    };
+    const loop = function () {   // scroll while the pointer is near the top or bottom edge
+      cancelAnimationFrame(scrollTimer);
+      if (!drag) return;
+      const h = window.innerHeight, top = 80, low = h - 150;   // (the bar sits at the bottom)
+      const dy = pointer.y < top ? -(top - pointer.y) / 6 : (pointer.y > low ? (pointer.y - low) / 6 : 0);
+      if (dy) { window.scrollBy(0, dy); place(); }
+      scrollTimer = requestAnimationFrame(loop);
+    };
+    const finish = function (drop) {
+      clearTimeout(press && press.timer);
+      const d = drag; drag = null; press = null; cancelAnimationFrame(scrollTimer);
+      if (!d) return;
+      d.ghost.remove(); line.hidden = true;
+      d.set.forEach(function (x) { x.classList.remove('dragging'); });
+      setTimeout(function () { swallow = false; }, 0);
+      if (drop && d.target) {
+        const files = d.set.map(function (x) { return bare(fileOf(x)); });
+        send(d.folder, { mode: 'place', files: JSON.stringify(files), target: bare(fileOf(d.target)), side: d.side }, d.set.map(fileOf));
+      }
+    };
+    gal.addEventListener('pointerdown', function (e) {
+      if (!on || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const c = e.target.closest('.card[data-file]'); if (!c || c.parentNode !== gal) return;
+      pointer = { x: e.clientX, y: e.clientY };
+      press = { card: c, x: e.clientX, y: e.clientY, id: e.pointerId, touch: e.pointerType !== 'mouse', timer: 0 };
+      if (press.touch) press.timer = setTimeout(function () { if (press && !drag) begin(); }, 380);
+    });
+    document.addEventListener('pointermove', function (e) {
+      pointer = { x: e.clientX, y: e.clientY };
+      if (drag) { place(); return; }
+      if (!press || e.pointerId !== press.id) return;
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > (press.touch ? 10 : 6)) {
+        if (press.touch) { clearTimeout(press.timer); press = null; } else begin();
+      }
+    });
+    document.addEventListener('pointerup', function () { if (drag) finish(true); else { clearTimeout(press && press.timer); press = null; } });
+    document.addEventListener('pointercancel', function () { finish(false); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && on) { if (drag) finish(false); else if (picked.length) { picked.length = 0; paint(); } } });
+    // Holding a tile on a touch screen must not scroll the page once the drag has begun.
+    document.addEventListener('touchmove', function (e) { if (drag) e.preventDefault(); }, { passive: false });
+    let back = null;
+    try { back = JSON.parse(sessionStorage.getItem('gallery_arrange') || 'null'); sessionStorage.removeItem('gallery_arrange'); } catch (e) {}
+    if (back) {
+      setOn(true);
+      (back.keep || []).forEach(function (f) { if (cards().some(function (c) { return fileOf(c) === f; })) picked.push(f); });
+      paint();
+      window.scrollTo(0, back.y || 0);
+    }
+  })();
   // The row of sibling folders starts with the current one in view.
   (function () {
     const row = document.querySelector('.crumb-row'), cur = row && row.querySelector('.folder-pills .current'), back = row && row.querySelector('.breadcrumb');

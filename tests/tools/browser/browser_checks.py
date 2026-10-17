@@ -1257,6 +1257,101 @@ try:
     finally:
         srv15.terminate(); srv15.wait()
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
+    # ---------------- Arrange: the owner places photos next to each other by drag and drop ----------------
+    print("== arrange: drag and drop")
+    SITE17 = WORK + "/site17"; os.makedirs(SITE17)
+    shutil.copy(HERE + "/../../../index.php", SITE17 + "/index.php"); os.utime(SITE17 + "/index.php", (time.time() - 3600,) * 2)
+    for i, nm in enumerate("abcdefgh"):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,300); imagefill($i,0,0,imagecolorallocate($i,40+$argv[2]*25,90,200-$argv[2]*20)); imagejpeg($i,$argv[1]);", SITE17 + "/" + nm + ".jpg", str(i)], check=True)
+        os.utime(SITE17 + "/" + nm + ".jpg", (1700000000 + i * 86400,) * 2)
+    open(SITE17 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "arr-admin-pw"], capture_output=True, text=True).stdout}) + "\n")
+    s17 = socket.socket(); s17.bind(("127.0.0.1", 0)); P17 = s17.getsockname()[1]; s17.close(); B17 = f"http://127.0.0.1:{P17}"
+    srv17 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P17}", "-t", SITE17], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.viewport(1100, 800)
+        b.goto(B17 + "/?admin", 1.2)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "arr-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.goto(B17 + "/", 1.5)
+        order17 = lambda: b.js("[...document.querySelectorAll('.gallery > .card')].map(c => c.querySelector('img').alt[0]).join('')")
+        def rect17(f): return b.js("(() => { const r = document.querySelector(\".card[data-file='" + f + ".jpg']\").getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()")
+        def mouse17(kind, x, y, down): b.call("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y, "button": "left", "buttons": 1 if down else 0, "clickCount": 1})
+        ok(order17() == "abcdefgh" and b.js("!!document.getElementById('arrange-btn')") and not b.js("document.body.classList.contains('arranging')"), "[arrange] the owner's page has the Arrange button, off to begin with, and the photos in date order")
+        b.js("document.getElementById('arrange-btn').click()"); b.drain(0.3)
+        ok(b.js("document.body.classList.contains('arranging') && !document.getElementById('arrange-bar').hidden && document.getElementById('arrange-btn').getAttribute('aria-pressed') === 'true'"), "[arrange] pressing it turns Arrange on: the bar appears and the button shows it is on")
+        for f in "cg":
+            r = rect17(f); x, y = r[0] + r[2] / 2, r[1] + r[3] / 2
+            mouse17("mouseMoved", x, y, False); mouse17("mousePressed", x, y, True); mouse17("mouseReleased", x, y, False); b.drain(0.2)
+        ok(b.js("[...document.querySelectorAll('.card.sel')].map(c => c.dataset.file[0]).join('')") == "cg" and not b.js("document.getElementById('lightbox').classList.contains('open')") and "2 selected" in b.js("document.getElementById('arrange-hint').textContent"), "[arrange] tapping tiles selects them (with a tick) instead of opening the viewer, and the bar counts them")
+        r = rect17("g"); sx, sy = r[0] + r[2] / 2, r[1] + r[3] / 2
+        ra = rect17("a"); tx, ty = ra[0] + ra[2] * 0.8, ra[1] + ra[3] / 2
+        mouse17("mouseMoved", sx, sy, False); mouse17("mousePressed", sx, sy, True)
+        for i in range(1, 13): mouse17("mouseMoved", sx + (tx - sx) * i / 12, sy + (ty - sy) * i / 12, True); b.drain(0.03)
+        drag17 = b.js("(() => { const l = document.querySelector('.arrange-line'), a = document.querySelector(\".card[data-file='a.jpg']\").getBoundingClientRect(); return {ghost: !!document.querySelector('.arrange-ghost'), n: document.querySelectorAll('.card.dragging').length, shown: !l.hidden, x: parseFloat(l.style.left), aRight: a.right}; })()")
+        ok(drag17["ghost"] and drag17["n"] == 2 and drag17["shown"] and abs(drag17["x"] - drag17["aRight"]) < 10, "[arrange] dragging a selected tile carries every selected one (a thumbnail follows the pointer) and a line shows where they will land: here, right of the first photo", str(drag17))
+        mouse17("mouseReleased", tx, ty, False)
+        for _ in range(20):
+            b.drain(0.3)
+            if order17() != "abcdefgh": break
+        ok(order17() == "acgbdefh" and b.js("document.body.classList.contains('arranging')") and b.js("[...document.querySelectorAll('.card.sel')].map(c => c.dataset.file[0]).join('')") == "cg", "[arrange] dropping puts them beside that photo, in order, the page stays in Arrange mode and they stay selected", order17())
+        ok(b.js("[...document.querySelectorAll('.card.is-stacked')].map(c => c.dataset.file[0]).join('')") == "acg" and '"anchor":"a.jpg"' in open(SITE17 + "/.gallery-items.php").read().replace('": "', '":"'), "[arrange] the three placed photos are marked as one stack, and it is stored", open(SITE17 + "/.gallery-items.php").read()[-120:])
+        b.goto(B17 + "/?sort=taken.desc", 1.0)
+        ok(order17() == "hfedbacg", "[arrange] with the date order turned round the stack still stays together, in the order set", order17())
+        b.goto(B17 + "/?sort=name", 1.0)
+        ok(order17() == "acgbdefh", "[arrange] ...and so it does under the name order", order17())
+        b.goto(B17 + "/", 1.0)
+        # a visitor (no sign-in) gets the same order but none of the controls
+        b.call("Network.clearBrowserCookies")
+        b.goto(B17 + "/", 1.0)
+        ok(order17() == "acgbdefh" and not b.js("!!document.getElementById('arrange-btn')") and not b.js("!!document.querySelector('.card[data-file]')"), "[arrange] a visitor sees the placed order and has no Arrange button")
+        # back in: release and reset from the bar, and the strip on a phone
+        b.goto(B17 + "/?admin", 1.2)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "arr-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.goto(B17 + "/", 1.2)
+        b.js("document.getElementById('arrange-btn').click()"); b.drain(0.2)
+        ok(b.js("document.querySelector('[data-arrange=release]').disabled && !document.querySelector('[data-arrange=reset]').disabled"), "[arrange] with nothing selected Release waits, and Reset folder is ready (there are placed photos)")
+        r = rect17("g"); x, y = r[0] + r[2] / 2, r[1] + r[3] / 2
+        mouse17("mouseMoved", x, y, False); mouse17("mousePressed", x, y, True); mouse17("mouseReleased", x, y, False); b.drain(0.2)
+        b.js("document.querySelector('[data-arrange=release]').click()")
+        for _ in range(20):
+            b.drain(0.3)
+            if order17() != "acgbdefh": break
+        ok(order17() == "acbdefgh", "[arrange] Release sends the selected photo back to where the sort puts it", order17())
+        b.js("window.confirm = () => true; document.querySelector('[data-arrange=reset]').click()")
+        for _ in range(20):
+            b.drain(0.3)
+            if order17() == "abcdefgh": break
+        ok(order17() == "abcdefgh" and b.js("document.querySelectorAll('.card.is-stacked').length") == 0, "[arrange] Reset folder puts everything back in its sorted place", order17())
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5}); b.viewport(375, 700, True)
+        b.goto(B17 + "/", 1.2)
+        geo = b.js("(() => { const h = document.querySelector('.map-preview-heading'); const tops = [...new Set([...h.querySelectorAll('.map-combo-btn')].map(x => Math.round(x.getBoundingClientRect().top)))]; return {tops: tops, sw: h.scrollWidth, cw: h.clientWidth}; })()")
+        ok(len(geo["tops"]) == 1 and geo["sw"] <= geo["cw"], "[arrange] on a phone the Arrange button sits in the same one-line row as the other buttons", str(geo))
+        b.js("document.querySelector(\".card[data-file='b.jpg']\").scrollIntoView({block: 'start'})"); b.drain(0.3)
+        b.js("document.getElementById('arrange-btn').click()"); b.drain(0.2)
+        r = rect17("b"); x, y = r[0] + r[2] / 2, r[1] + r[3] / 2
+        b.call("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]}); b.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []}); b.drain(0.3)
+        ok(b.js("[...document.querySelectorAll('.card.sel')].map(c => c.dataset.file[0]).join('')") == "b" and not b.js("document.getElementById('lightbox').classList.contains('open')"), "[arrange] on a touch screen a tap selects a tile too")
+        b.call("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        for i in range(1, 4): b.call("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": y - i * 15}]}); b.drain(0.02)
+        b.drain(0.6)
+        swipe17 = b.js("!!document.querySelector('.arrange-ghost')")
+        b.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []}); b.drain(0.3)
+        ok(not swipe17, "[arrange] on a touch screen a swipe over a tile scrolls (it does not start a drag)")
+        r = rect17("b"); x, y = r[0] + r[2] / 2, r[1] + r[3] / 2
+        rd = rect17("c"); tx, ty = rd[0] + rd[2] / 2, rd[1] + rd[3] / 2
+        b.call("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]}); b.drain(0.6)
+        began = b.js("!!document.querySelector('.arrange-ghost')")
+        for i in range(1, 11): b.call("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x + (tx - x) * i / 10, "y": y + (ty - y) * i / 10}]}); b.drain(0.03)
+        b.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        for _ in range(20):
+            b.drain(0.3)
+            if order17() != "abcdefgh": break
+        ok(began and order17() == "acbdefgh", "[arrange] on a touch screen holding a tile starts a drag, and dropping it beside another places it there", order17() + " began=" + str(began))
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
+        ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
+    finally:
+        srv17.terminate(); srv17.wait()
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
     # ---------------- "Put first": the list you drag, on Site settings and on a folder's settings ----------------
     print("== put first: the draggable list")
     SITE16 = WORK + "/site16"; os.makedirs(SITE16 + "/sub")

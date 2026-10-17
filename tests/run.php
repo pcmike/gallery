@@ -1164,6 +1164,47 @@ check('[owner cover] a visitor gets no stars, no viewer buttons and no owner sta
 $soCoverReply = http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' => 'set_cover', 'file' => 'c-mid.jpg'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
 [, $soOwnerPage2] = http_get("$baseSo/", ["Cookie: $soCookie"]);
 check('[owner cover] pressing a star saves that photo as the folder\'s cover (the same save as the admin\'s), and only it is gold', str_contains($soCoverReply[1] ?? '', '"ok":true') && str_contains($soOwnerPage2, 'class="cover-toggle is-cover" data-file="c-mid.jpg"') && substr_count($soOwnerPage2, 'cover-toggle is-cover') === 1 && str_contains($soOwnerPage2, '"c-mid.jpg":true') && str_contains($soOwnerPage2, '"b-late.jpg":false'));
+// Arrange: the owner places photos next to each other by hand; each placement is a stack that follows its anchor through every sort.
+check('[arrange] the owner gets the Arrange button, its bar and a file name on every tile; a visitor gets none of it', str_contains($soOwnerPage2, 'id="arrange-btn"') && str_contains($soOwnerPage2, 'id="arrange-bar"') && str_contains($soOwnerPage2, 'class="card owner-card" data-file="a-early.jpg"') && !str_contains($soVisitorPage, 'id="arrange-btn"') && !str_contains($soVisitorPage, 'id="arrange-bar"') && !str_contains($soVisitorPage, 'data-file="a-early.jpg"'));
+$soArrange = function ($fields) use ($baseSo, $soAdminAuth, $soCookie, $csrfTok) {
+    $r = http_post("$baseSo/?admin", $fields + ['csrf_token' => $csrfTok, 'action' => 'arrange_items'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
+    return json_decode($r[1] ?? '', true) ?: [];
+};
+$soStacks = function () use ($fxSo) { return json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo/.gallery-items.php")), true)['stacks'] ?? null; };
+$soBefore = $soOrder();
+$soReply = $soArrange(['mode' => 'place', 'files' => json_encode(['z-located.jpg']), 'target' => 'c-mid.jpg', 'side' => 'before']);
+check('[arrange] placing a photo before another saves a stack anchored on the one that stayed put, and the photo sits there for visitors', ($soReply['ok'] ?? false) === true && $soStacks() === [['anchor' => 'c-mid.jpg', 'files' => ['z-located.jpg', 'c-mid.jpg']]] && $soOrder() === ['a-early.jpg', 'z-located.jpg', 'c-mid.jpg', 'b-late.jpg', 'm.mp4'], json_encode([$soReply, $soStacks(), $soOrder()]));
+check('[arrange] under every sort the stack stays together, in the order set, at its anchor\'s place', $soOrder('?sort=name') === ['a-early.jpg', 'b-late.jpg', 'z-located.jpg', 'c-mid.jpg', 'm.mp4'] && $soOrder('?sort=taken.desc') === ['m.mp4', 'b-late.jpg', 'z-located.jpg', 'c-mid.jpg', 'a-early.jpg'] && $soOrder('?sort=name.desc') === ['m.mp4', 'z-located.jpg', 'c-mid.jpg', 'b-late.jpg', 'a-early.jpg'], json_encode([$soOrder('?sort=name'), $soOrder('?sort=taken.desc'), $soOrder('?sort=name.desc')]));
+check('[arrange] the "first" choices still apply (a stack goes where its anchor does)', $soOrder('?sort=name.video') === ['m.mp4', 'a-early.jpg', 'b-late.jpg', 'z-located.jpg', 'c-mid.jpg'] && $soOrder('?sort=name.located')[0] === 'a-early.jpg', json_encode([$soOrder('?sort=name.video'), $soOrder('?sort=name.located')]));
+$soArrange(['mode' => 'place', 'files' => json_encode(['m.mp4']), 'target' => 'z-located.jpg', 'side' => 'after']);
+check('[arrange] placing a photo beside a stacked one joins that stack at that spot', $soStacks() === [['anchor' => 'c-mid.jpg', 'files' => ['z-located.jpg', 'm.mp4', 'c-mid.jpg']]] && $soOrder() === ['a-early.jpg', 'z-located.jpg', 'm.mp4', 'c-mid.jpg', 'b-late.jpg'], json_encode([$soStacks(), $soOrder()]));
+$soArrange(['mode' => 'place', 'files' => json_encode(['z-located.jpg', 'm.mp4']), 'target' => 'a-early.jpg', 'side' => 'after']);
+check('[arrange] several photos move together, keeping the order sent, and a stack left with one photo is dissolved', $soStacks() === [['anchor' => 'a-early.jpg', 'files' => ['a-early.jpg', 'z-located.jpg', 'm.mp4']]] && $soOrder() === ['a-early.jpg', 'z-located.jpg', 'm.mp4', 'c-mid.jpg', 'b-late.jpg'], json_encode([$soStacks(), $soOrder()]));
+$soArrange(['mode' => 'place', 'files' => json_encode(['p-private.jpg']), 'target' => 'a-early.jpg', 'side' => 'after']);
+check('[arrange] a private photo placed in a stack shows for the owner there, and a visitor sees the rest in the same places', $soOrder() === ['a-early.jpg', 'z-located.jpg', 'm.mp4', 'c-mid.jpg', 'b-late.jpg'] && array_slice($soOrder('', ["Cookie: $soCookie"]), 0, 2) === ['a-early.jpg', 'p-private.jpg'], json_encode([$soOrder(), $soOrder('', ["Cookie: $soCookie"])]));
+$soArrange(['mode' => 'release', 'files' => json_encode(['p-private.jpg', 'm.mp4'])]);
+check('[arrange] releasing photos takes them out of their stacks, back to where the sort puts them', $soStacks() === [['anchor' => 'a-early.jpg', 'files' => ['a-early.jpg', 'z-located.jpg']]] && $soOrder() === ['a-early.jpg', 'z-located.jpg', 'c-mid.jpg', 'b-late.jpg', 'm.mp4'], json_encode([$soStacks(), $soOrder()]));
+$soBad = [
+    $soArrange(['mode' => 'place', 'files' => json_encode(['nope.jpg']), 'target' => 'a-early.jpg', 'side' => 'after']),
+    $soArrange(['mode' => 'place', 'files' => json_encode(['b-late.jpg']), 'target' => 'nope.jpg', 'side' => 'after']),
+    $soArrange(['mode' => 'place', 'files' => json_encode(['b-late.jpg']), 'target' => 'b-late.jpg', 'side' => 'after']),
+    $soArrange(['mode' => 'place', 'files' => '', 'target' => 'a-early.jpg']),
+    $soArrange(['mode' => 'sideways', 'files' => json_encode(['b-late.jpg'])]),
+    $soArrange(['mode' => 'place', 'files' => json_encode(['../index.php']), 'target' => 'a-early.jpg']),
+];
+check('[arrange] an unknown photo, an unknown target, a photo beside itself, no photos, an unknown mode: each is refused and nothing changes', count(array_filter($soBad, function ($r) { return ($r['ok'] ?? true) === false; })) === 6 && $soStacks() === [['anchor' => 'a-early.jpg', 'files' => ['a-early.jpg', 'z-located.jpg']]], json_encode($soBad));
+$soNoToken = http_post("$baseSo/?admin", ['action' => 'arrange_items', 'mode' => 'reset', 'csrf_token' => 'wrong'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
+$soNoLogin = http_post("$baseSo/?admin", ['action' => 'arrange_items', 'mode' => 'reset', 'csrf_token' => $csrfTok], ['X-Requested-With: gallery-fetch']);
+check('[arrange] it needs the owner and the token: a wrong token or a visitor changes nothing', $soStacks() === [['anchor' => 'a-early.jpg', 'files' => ['a-early.jpg', 'z-located.jpg']]] && !str_contains($soNoLogin[1] ?? '', '"ok":true') && !str_contains($soNoToken[1] ?? '', '"ok":true'));
+$soCoverKeep = http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' => 'set_cover', 'file' => 'b-late.jpg'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
+check('[arrange] other settings saved afterwards leave the stacks alone (and placing leaves the cover, captions and locations alone)', $soStacks() === [['anchor' => 'a-early.jpg', 'files' => ['a-early.jpg', 'z-located.jpg']]] && (json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo/.gallery-items.php")), true)['cover'] ?? '') === 'b-late.jpg' && isset(json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo/.gallery-items.php")), true)['items']['z-located.jpg']['location']));
+$soRaw = json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo/.gallery-items.php")), true);
+$soRaw['stacks'][] = ['anchor' => 'ghost.jpg', 'files' => ['ghost.jpg', 'c-mid.jpg']];
+$soRaw['stacks'][] = ['anchor' => 7, 'files' => 'junk'];
+write_data_file("$fxSo/.gallery-items.php", $soRaw);
+check('[arrange] a stack naming a photo that is gone (or damaged data) is quietly ignored: the page still comes up in its usual order', $soOrder() === ['a-early.jpg', 'z-located.jpg', 'c-mid.jpg', 'b-late.jpg', 'm.mp4'], json_encode($soOrder()));
+$soArrange(['mode' => 'reset']);
+check('[arrange] reset puts every photo of the folder back where the sort puts it', $soStacks() === [] && $soOrder() === $soBefore, json_encode([$soStacks(), $soOrder()]));
 // the folder's own setting, saved through the admin form
 [, $soAdminBody, $soAdminHd2] = http_get("$baseSo/?admin", [$soAdminAuth]);
 $soSess = extract_cookie_header($soAdminHd2); $soCsrf = extract_csrf_token($soAdminBody);
