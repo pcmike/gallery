@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
-## [2.0.11] - 2026-10-15
+## [2.0.11] - 2026-10-17
 
 ### Added
 - **Arrange: place photos by hand, by drag and drop.** For the signed-in owner an Arrange button (four arrows) joins the icon strip. In Arrange mode a tap selects tiles (a tick shows) and dragging one selected tile beside another photo of the same folder moves everything selected there, in order; a line shows where it will land, and on a phone a tile is picked up with a short hold so scrolling still works. The placed photos become a *stack* saved in the folder's own settings: they stay together, in the order you set, wherever the sort puts the photo they were dropped beside, so the church shots taken on other days sit with the first one under name, date, either direction and the "first" choices, for every visitor. *Release* frees the selected photos, *Reset folder* clears the folder, *Done* leaves Arrange. Not offered with grouping by filename or a notes-file layout. Other settings never touch the stacks, and a deleted or renamed photo just drops out.

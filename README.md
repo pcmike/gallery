@@ -395,6 +395,8 @@ Found a security problem? Open a GitHub issue, or contact the author privately i
 
 **Upgrading to 2.0.9 or later** moves the lock from beside the title into the icon strip (joined to the archive icon), and signing in with it, as the owner too, returns you to the page you were on instead of the admin page; the gallery title still leads to the admin.
 
+**Upgrading to 2.0.11 or later** changes a few things you will notice: the visit total moves from the icon strip into the line under the title; the strip now stays at the top of the screen while you scroll; opening a folder no longer jumps to its cover photo; and you get an **Arrange** button for placing photos by hand (nothing is stored until you use it). A Home Screen app you already added keeps its old icon until you remove it and add it again, and on an iPhone a family member may need to sign in once inside the app (the lock) because the Home Screen app keeps its own cookies.
+
 **Upgrading to 2.0 from 1.x** leaves the gallery looking the same, with three notes: `?download` now redirects to this repository instead of serving the script (serving it would hand `ADMIN_PASSWORD` to any visitor); view counts carry over (1.x's `.gallery-stats.json` is imported on the first request with `TRACK_VIEWS` on, then removed); and you may see a new setup notice counting photos in subfolders when `AUTO_GROUP_BY_FOLDER` is off. See [CHANGELOG.md](CHANGELOG.md).
 
 **Keeping runtime data out of git.** If your deployed gallery is in git, add these to `.gitignore` (they hold GPS and passwords):
