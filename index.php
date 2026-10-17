@@ -2439,14 +2439,16 @@ function thumbnail_readiness($dir, $files) {
     return [$ready, $total];
 }
 
-/** Makes the tile pictures of the photos from number $from onward, for about $budget seconds, then says where to carry on
- *  (a photo that can't be made, such as a damaged file, is counted and passed over rather than tried forever). */
-function warm_thumbnail_batch($dir, $files, $from, $budget) {
+/** Makes the tile pictures of the photos from number $from onward, taking every $step-th one (several requests can share the
+ *  work, each with its own start and the same step), for about $budget seconds, then says where to carry on. A photo that
+ *  can't be made, such as a damaged file, is counted and passed over rather than tried forever. 'worked' is how many photos
+ *  needed making (made or not) in this call. */
+function warm_thumbnail_batch($dir, $files, $from, $budget, $step = 1) {
     $photos = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
     $total = count($photos);
     $start = microtime(true);
-    $made = 0; $failed = 0; $i = max(0, (int) $from);
-    for (; $i < $total; $i++) {
+    $made = 0; $failed = 0; $worked = 0; $i = max(0, (int) $from); $step = max(1, (int) $step);
+    for (; $i < $total; $i += $step) {
         if ($made + $failed > 0 && microtime(true) - $start > $budget) break;
         $file = $photos[$i];
         $src = resolve_real_path($dir, $file);
@@ -2459,10 +2461,11 @@ function warm_thumbnail_batch($dir, $files, $from, $budget) {
             $missing[$variant] = $cachePath;
         }
         if ($missing) {   // one reading of the photo makes every size that is missing
+            $worked++;
             if (generate_tile_jpegs($src, $missing)) $made += count($missing); else $failed += count($missing);
         }
     }
-    return ['next' => $i, 'total' => $total, 'made' => $made, 'failed' => $failed, 'done' => $i >= $total];
+    return ['next' => $i, 'total' => $total, 'made' => $made, 'failed' => $failed, 'worked' => $worked, 'done' => $i >= $total];
 }
 
 /** Serves ?img=<filename-or-relative-path>&size=thumb|share|full,
@@ -5345,7 +5348,8 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'warm_thumbnails') {
         if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'Thumbnails are switched off in the site settings.']);
         @set_time_limit(60);
-        $r = warm_thumbnail_batch($dir, $files, (int) ($_POST['from'] ?? 0), 8);
+        session_write_close();   // the page runs a few of these side by side: none may wait for another's hold on the session
+        $r = warm_thumbnail_batch($dir, $files, (int) ($_POST['from'] ?? 0), 1.0, min(8, max(1, (int) ($_POST['step'] ?? 1))));
         $r['ok'] = true; $r['text'] = '';
         admin_json_exit($r);
     }
@@ -6530,9 +6534,9 @@ function render_admin_thumbnails_panel($csrfToken) {
     [$ready, $total] = thumbnail_readiness($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
     $left = $total - $ready;
 ?>
-    <section class="panel warm-panel" id="warm-panel" data-csrf="<?= $csrfToken ?>">
+    <section class="panel warm-panel" id="warm-panel" data-csrf="<?= $csrfToken ?>" data-left="<?= (int) $left ?>">
       <h2 class="section-title">Thumbnails</h2>
-      <p class="muted" style="margin-top:0;">A photo's tile pictures are made the first time it is shown, so the first visit to a big folder is slower. Prepare them all now and every visit is quick. It works through the photos a few seconds at a time and you can stop whenever you like; what is done stays done.</p>
+      <p class="muted" style="margin-top:0;">A photo's tile pictures are made the first time it is shown, so the first visit to a big folder is slower. Prepare them all now and every visit is quick. It works through the photos as fast as the server allows, with a live percentage, and you can stop whenever you like; what is done stays done.</p>
       <p class="warm-line"><strong class="warm-count <?= $left === 0 ? 'ok-text' : '' ?>"><?= $left === 0 ? 'All ' . number_format($total) . ' photos are ready.' : number_format($ready) . ' of ' . number_format($total) . ' photos are ready.' ?></strong>
         <button type="button" class="secondary warm-go"<?= $left === 0 ? ' hidden' : '' ?>>Prepare the rest</button>
         <button type="button" class="secondary warm-stop" hidden>Stop</button></p>
@@ -6864,8 +6868,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-panel.is-checking .health-toggle { display:none; }
   .health-toggle { padding:3px 12px; font-size:0.8rem; }
   .warm-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 8px; }
-  .warm-bar { height:6px; border-radius:3px; background:#26262a; overflow:hidden; }
-  .warm-bar span { display:block; height:100%; width:0; background:#5865f2; transition:width .3s; }
+  .warm-bar { height:8px; border-radius:4px; background:#26262a; overflow:hidden; }
+  .warm-bar span { display:block; height:100%; width:0; background:#5865f2; transition:width .4s ease-out; }
+  .warm-count { font-variant-numeric:tabular-nums; }
   .health-mark .ico { width:1.1em; height:1.1em; }
   .health-summary .secondary { padding:3px 12px; font-size:0.8rem; }
   .accel-status:empty { display:none; }
@@ -7555,30 +7560,61 @@ foreach ($adminFiles as $file) {
       const panel = document.getElementById('warm-panel');
       if (!panel) return;
       const go = panel.querySelector('.warm-go'), stop = panel.querySelector('.warm-stop'), count = panel.querySelector('.warm-count'), bar = panel.querySelector('.warm-bar'), fill = bar.firstElementChild;
-      let running = false, failed = 0;
-      const step = function (from) {
-        if (!running) { count.textContent = 'Stopped. Press the button to carry on; what is done stays done.'; go.hidden = false; go.textContent = 'Carry on'; stop.hidden = true; return; }
-        const body = new URLSearchParams();
-        body.set('csrf_token', panel.dataset.csrf); body.set('action', 'warm_thumbnails'); body.set('from', String(from));
-        fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
-          .then(function (r) { return r.json(); })
-          .then(function (j) {
-            if (!j.ok) throw new Error(j.text || 'failed');
-            failed += j.failed;
-            fill.style.width = (j.total ? Math.round(100 * j.next / j.total) : 100) + '%';
-            if (j.done) {
-              running = false; stop.hidden = true; bar.hidden = true;
-              count.textContent = failed ? 'Finished. ' + failed + ' picture' + (failed === 1 ? '' : 's') + ' could not be made (a damaged file, or a folder the web server cannot write to).' : 'All ' + j.total.toLocaleString() + ' photos are ready.';
-              count.className = 'warm-count ' + (failed ? 'note-text' : 'ok-text');
-              return;
-            }
-            count.textContent = 'Prepared ' + j.next.toLocaleString() + ' of ' + j.total.toLocaleString() + ' photos\u2026';
-            setTimeout(function () { step(j.next); }, 300);
-          })
-          .catch(function (err) { running = false; stop.hidden = true; go.hidden = false; go.textContent = 'Try again'; count.textContent = 'Stopped: ' + (err && err.message ? err.message : 'the server did not answer') + '.'; count.className = 'warm-count warn-text'; });
+      // Three requests work side by side, each on every third photo, and each asks again the moment it is answered; a request
+      // lasts about a second and a half, so the percentage moves several times a second. The percentage is of the photos that
+      // were missing when the page opened (or when the button was pressed again).
+      const WORKERS = 3, fmt = function (n) { return n.toLocaleString(); };
+      let running = false, stopping = false, gen = 0, active = 0, pending = Number(panel.dataset.left) || 0, worked = 0, failed = 0, total = 0, started = 0, problem = '';
+      const pct = function () { return pending > 0 ? Math.min(99, Math.floor(100 * worked / pending)) : 99; };
+      const paint = function () {
+        const p = pct(), secs = (Date.now() - started) / 1000;
+        let eta = '';
+        if (secs >= 3 && worked >= 3 && pending > worked) {
+          const left = Math.round((pending - worked) * secs / worked);
+          eta = left < 60 ? ', about ' + Math.max(5, Math.round(left / 5) * 5) + ' s left' : ', about ' + Math.round(left / 60) + ' min left';
+        }
+        fill.style.width = p + '%';
+        count.textContent = (stopping ? 'Stopping… ' : 'Preparing… ') + p + '% (' + fmt(worked) + ' of ' + fmt(pending) + ' photos made' + eta + ')';
       };
-      go.addEventListener('click', function () { running = true; failed = 0; go.hidden = true; stop.hidden = false; bar.hidden = false; fill.style.width = '0'; count.className = 'warm-count'; count.textContent = 'Starting\u2026'; step(0); });
-      stop.addEventListener('click', function () { running = false; stop.disabled = true; setTimeout(function () { stop.disabled = false; }, 1000); });
+      const finish = function () {
+        if (active > 0) return;
+        running = false; stop.hidden = true; stop.disabled = false;
+        if (problem) { go.hidden = false; go.textContent = 'Try again'; count.textContent = 'Stopped: ' + problem + '.'; count.className = 'warm-count warn-text'; return; }
+        if (stopping) {
+          stopping = false; pending = Math.max(1, pending - worked); worked = 0;
+          go.hidden = false; go.textContent = 'Carry on';
+          count.textContent = 'Stopped. Press the button to carry on; what is done stays done.';
+          return;
+        }
+        bar.hidden = true; fill.style.width = '100%';
+        count.textContent = failed ? 'Finished. ' + failed + ' picture' + (failed === 1 ? '' : 's') + ' could not be made (a damaged file, or a folder the web server cannot write to).' : 'All ' + fmt(total) + ' photos are ready.';
+        count.className = 'warm-count ' + (failed ? 'note-text' : 'ok-text');
+      };
+      const work = function (k, mine) {
+        active++;
+        const next = function (from) {
+          if (!running || stopping || mine !== gen) { active--; finish(); return; }
+          const body = new URLSearchParams();
+          body.set('csrf_token', panel.dataset.csrf); body.set('action', 'warm_thumbnails'); body.set('from', String(from)); body.set('step', String(WORKERS));
+          fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+              if (!j.ok) throw new Error(j.text || 'failed');
+              failed += j.failed; worked += j.worked || 0; total = j.total;
+              paint();
+              if (j.done) { active--; finish(); } else next(j.next);
+            })
+            .catch(function (err) { problem = problem || (err && err.message ? err.message : 'the server did not answer'); running = false; active--; finish(); });
+        };
+        next(k);
+      };
+      go.addEventListener('click', function () {
+        running = true; stopping = false; problem = ''; failed = 0; worked = 0; total = 0; gen++; started = Date.now();
+        go.hidden = true; stop.hidden = false; bar.hidden = false; fill.style.width = '0'; count.className = 'warm-count';
+        count.textContent = 'Starting…';
+        for (let k = 0; k < WORKERS; k++) work(k, gen);
+      });
+      stop.addEventListener('click', function () { if (!running || stopping) return; stopping = true; stop.disabled = true; paint(); });
     })();
     const toggle = document.querySelector('.health-toggle');
     if (toggle) toggle.addEventListener('click', function () {
@@ -10176,7 +10212,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
-         . (isset($GLOBALS['__cover_file']) && $GLOBALS['__cover_file'] === $file ? '<span id="folder-cover" class="cover-anchor" aria-hidden="true"></span>' : '') . '</div>';
+         . '</div>';
 }
 
 /** For the signed-in owner: which of these files is the cover photo of the folder it sits in (file => true/false), read
@@ -10309,11 +10345,8 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // The paragraph that mentions a folder can mark it sold or reserved, or give it a colour, like any other group.
     $style = $accentColor ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($accentColor, ENT_QUOTES, 'UTF-8') . ';"' : '';
     $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
-    // When the owner chose this folder's cover photo and it sits right in the folder, opening the folder lands on it
-    // (the folder page marks that card with #folder-cover) instead of at the top of a long page.
-    $toCover = $manualCover !== null && $coverFile !== null && basename($coverFile) === $manualCover && dirname($coverFile) === $folderPath ? '#folder-cover' : '';
     $coverParts = $coverFile !== null ? video_tile_parts($coverFile) : ['attrs' => '', 'inner' => ''];
-    $html .= '<a class="folder-cover-link' . ($coverParts['inner'] !== '' ? ' vtile' : '') . '" href="' . $folderUrl . $toCover . '">';
+    $html .= '<a class="folder-cover-link' . ($coverParts['inner'] !== '' ? ' vtile' : '') . '" href="' . $folderUrl . '">';
     if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     if ($coverFile !== null) {
@@ -11002,8 +11035,6 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     gap: 10px;
   }
   /* A few folder cards and nothing else: larger on a wide screen, centred. Narrower screens keep the normal grid. */
-  .card .cover-anchor { position: absolute; top: 0; left: 0; width: 0; height: 0; scroll-margin-top: 14px; }
-  .card:has(.cover-anchor:target) { animation: item-flash 2.4s ease-out; outline: 2px solid var(--accent); outline-offset: 2px; }
   .gallery[class*="covers-"] .folder-cover-label { font-size: 1.1rem; }
   /* The box is as wide as its cards need, so the map buttons above (same class) share the first card's left edge. */
   .gallery.covers-1, .map-preview.covers-1 { max-width: 608px; }
@@ -11295,8 +11326,12 @@ gallery notices (also shown on the page itself, in a collapsed banner):
      match .gallery), so the map lines up with the tiles instead of
      running to the edges of the window. */
   .map-preview { max-width: 1400px; margin: 8px auto 0; padding: 0 24px; }
+  /* The strip of buttons stays at the top of the screen while the photos scroll under it. */
+  .map-bar { position: sticky; top: 0; z-index: 40; margin-top: 0; padding-top: 8px; padding-bottom: 10px; background: var(--bg); transition: box-shadow .15s; }
+  .map-bar.stuck { box-shadow: 0 1px 0 #26262a, 0 10px 16px -10px rgba(0,0,0,0.9); }
+  html { scroll-padding-top: 64px; }   /* a link that scrolls to a photo or group stops below the strip, not under it */
   .map-preview-heading {
-    font-size: 1rem; margin: 0 0 10px; font-weight: 400;
+    font-size: 1rem; margin: 0; font-weight: 400;
     display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px;
   }
   .map-modal { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 20px; }
@@ -11789,12 +11824,6 @@ if ($currentFolderPath !== null) {
 $coverCount = FOLDER_DISPLAY_MODE === 'overview' ? count($folderGroupKeys) : 0;
 $fewCovers = ($coverCount >= 1 && $coverCount <= 4 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
 $GLOBALS['__big_covers'] = $fewCovers !== '';
-// The photo the owner chose as this folder's cover, so the card for it can be jumped to (see render_folder_cover_card).
-$GLOBALS['__cover_file'] = null;
-if ($currentFolderPath !== null && !empty($currentFolderMeta['cover'])) {
-    $coverCandidate = $currentFolderPath . '/' . $currentFolderMeta['cover'];
-    if (in_array($coverCandidate, $files, true)) $GLOBALS['__cover_file'] = $coverCandidate;
-}
 ?>
 <?php
 // A note can colour a group or folder ({color:}) or mark it sold/reserved: its photos' pins follow.
@@ -11835,7 +11864,7 @@ if (ENABLE_MAP && $mapPoints) {
 ?>
   <?php // The bar above the photos: the map buttons on the left (when there is a map), and on the right the visit count (when
         // it is shown to visitors) and the small gallery icon, which leads to the page about this gallery. ?>
-  <section class="map-preview<?= $fewCovers ?>" id="map-preview">
+  <div class="map-preview map-bar<?= $fewCovers ?>" id="map-bar">
     <div class="map-preview-heading">
       <?php if ($hasMap): ?>
       <span class="map-combo">
@@ -11867,13 +11896,15 @@ if (ENABLE_MAP && $mapPoints) {
         <span class="map-combo"><a class="map-combo-btn page-about" href="?about" title="About this gallery software" aria-label="About this gallery software"><?= ui_icon('gallery') ?></a></span>
       </span>
     </div>
-    <?php if ($hasMap): ?>
+  </div>
+  <?php if ($hasMap): ?>
+  <section class="map-preview<?= $fewCovers ?>" id="map-preview">
     <div class="map-preview-body" id="map-preview-body" data-map="trip-map-preview" hidden>
       <?= render_leaflet_map($mapPoints, $mapLegend, 'trip-map-preview', '300px', true, $mapRadius, true) ?>
       <button type="button" class="map-corner-link" id="map-peek-share" data-href="<?= htmlspecialchars($mapPeekHref, ENT_QUOTES, 'UTF-8') ?>" title="Copy a link that opens this page with this map showing" aria-label="Copy a link that opens this page with this map showing"><?= ui_icon('link') ?></button>
     </div>
-    <?php endif; ?>
   </section>
+  <?php endif; ?>
 <?= $lockForm ?>
 <?php if ($hasMap): ?>
   <?php // The full map opens over the page: click outside it, press Escape or use the cross to close it. ?>
@@ -12338,6 +12369,12 @@ if (ENABLE_MAP && $mapPoints) {
       paint();
       window.scrollTo(0, back.y || 0);
     }
+  })();
+  // The strip of buttons sticks to the top; once the page has scrolled under it, it gets a soft edge.
+  (function () {
+    const bar = document.getElementById('map-bar'); if (!bar) return;
+    const edge = function () { bar.classList.toggle('stuck', window.scrollY > 0 && bar.getBoundingClientRect().top <= 0.5); };
+    window.addEventListener('scroll', edge, { passive: true }); edge();
   })();
   // The row of sibling folders starts with the current one in view.
   (function () {

@@ -1342,14 +1342,34 @@ $thAuthH = ['Authorization: Basic ' . base64_encode('admin:th-admin-pw'), "Cooki
 $thTok = (json_decode(http_get("$baseTh/?admin&csrf=1", $thAuthH)[1], true)['token'] ?? '');
 check('[prepare thumbnails] the Site tab says how many photos are ready, and offers to make the rest', preg_match('#id="warm-panel"#', $thAdminBody) === 1 && str_contains($thAdminBody, 'of 4 photos are ready') && str_contains($thAdminBody, 'warm-go'), substr(strip_tags(substr($thAdminBody, strpos($thAdminBody, 'id="warm-panel"'), 900)), 0, 200));
 foreach (glob("$fxTh/.gallery-cache/*.jpg") as $f) @unlink($f);
-[, $warmBody] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
-$warm = json_decode($warmBody, true);
-check('[prepare thumbnails] one request makes both tile sizes of every photo (the video is left alone) and says it is done', ($warm['ok'] ?? false) === true && ($warm['done'] ?? false) === true && $warm['total'] === 4 && $warm['made'] === 8 && $warm['failed'] === 0 && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8, $warmBody);
+// (a request lasts about a second at most and says where to carry on, so ask again until it says it is done)
+$warm = ['ok' => true, 'done' => false, 'total' => 0, 'made' => 0, 'failed' => 0]; $warmFrom = 0;
+for ($warmTry = 0; $warmTry < 20 && empty($warm['done']); $warmTry++) {
+    [, $warmBody] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => (string) $warmFrom], $thAuthH);
+    $one = json_decode($warmBody, true) ?: ['ok' => false];
+    $warm = ['ok' => $one['ok'] ?? false, 'done' => $one['done'] ?? false, 'total' => $one['total'] ?? 0, 'made' => $warm['made'] + ($one['made'] ?? 0), 'failed' => $warm['failed'] + ($one['failed'] ?? 0)];
+    $warmFrom = $one['next'] ?? 0;
+}
+check('[prepare thumbnails] asking until it says it is done makes both tile sizes of every photo (the video is left alone)', ($warm['ok'] ?? false) === true && ($warm['done'] ?? false) === true && $warm['total'] === 4 && $warm['made'] === 8 && $warm['failed'] === 0 && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8, $warmBody);
 [, $warm2Body] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
 check('[prepare thumbnails] a second run finds nothing left to make', (json_decode($warm2Body, true)['made'] ?? -1) === 0);
 [, $warm3Body] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '2'], $thAuthH);
 check('[prepare thumbnails] it can carry on from where it stopped', (json_decode($warm3Body, true)['next'] ?? 0) === 4);
 [, $warmNoTok] = http_post("$baseTh/?admin", ['action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
+// Shared work: three requests, each taking every third photo, make everything between them with nothing done twice.
+foreach (glob("$fxTh/.gallery-cache/*.jpg") as $f) @unlink($f);
+$warmShares = [];
+foreach ([0, 1, 2] as $k) {
+    $share = ['worked' => 0, 'made' => 0, 'failed' => 0, 'done' => false]; $shareFrom = $k;
+    for ($shareTry = 0; $shareTry < 20 && !$share['done']; $shareTry++) {
+        [, $wb] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => (string) $shareFrom, 'step' => '3'], $thAuthH);
+        $one = json_decode($wb, true) ?: [];
+        $share = ['worked' => $share['worked'] + ($one['worked'] ?? 0), 'made' => $share['made'] + ($one['made'] ?? 0), 'failed' => $share['failed'] + ($one['failed'] ?? 0), 'done' => $one['done'] ?? false];
+        $shareFrom = $one['next'] ?? 0;
+    }
+    $warmShares[$k] = $share;
+}
+check('[prepare thumbnails] several requests can share the work, each taking every n-th photo: between them every photo is made once, and each says how many photos it made', ($warmShares[0]['worked'] ?? -1) === 2 && ($warmShares[1]['worked'] ?? -1) === 1 && ($warmShares[2]['worked'] ?? -1) === 1 && array_sum(array_column($warmShares, 'made')) === 8 && !array_filter($warmShares, function ($r) { return empty($r['done']) || ($r['failed'] ?? 1) !== 0; }) && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8, json_encode($warmShares));
 check('[prepare thumbnails] without the admin\'s token nothing happens', (json_decode($warmNoTok, true)['ok'] ?? true) === false);
 check('[prepare thumbnails] a visitor cannot run it', !isset(json_decode(http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], ['X-Requested-With: gallery-fetch'])[1] ?? '', true)['made']));
 [, $thAdminBody2] = http_get("$baseTh/?admin", $thAuthH);
@@ -3004,10 +3024,12 @@ write_data_file("$fxCv/Trip/.gallery-items.php", ['items' => [], 'groups' => [],
 write_patched_index("$fxCv/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true']);
 $portCv = find_free_port(); start_server($fxCv, $portCv); $baseCv = "http://127.0.0.1:$portCv";
 [, $cvRoot] = http_get("$baseCv/");
-check('[cover jump] a folder whose owner chose a cover photo links to it: opening the folder goes straight to that photo', str_contains($cvRoot, 'class="folder-cover-link" href="?folder=Trip#folder-cover"'));
+check('[cover jump] a folder whose owner chose a cover photo opens at the top like any other: its link carries no #fragment that scrolls the page to that photo', str_contains($cvRoot, 'class="folder-cover-link" href="?folder=Trip"') && !str_contains($cvRoot, '#folder-cover'));
+[, $stkPage] = http_get("$baseCv/");
+check('[sticky strip] the strip of buttons above the photos is a bar that sticks to the top of the screen while the photos scroll under it, and a link that scrolls to a photo stops below it', str_contains($stkPage, 'id="map-bar"') && str_contains($stkPage, '.map-bar { position: sticky; top: 0;') && str_contains($stkPage, 'scroll-padding-top'));
 check('[cover jump] a folder with no chosen cover opens at the top, as before', str_contains($cvRoot, 'class="folder-cover-link" href="?folder=Rome"') && !str_contains($cvRoot, 'href="?folder=Rome#'));
 [, $cvTrip] = http_get("$baseCv/?folder=Trip");
-check('[cover jump] the folder page marks exactly the chosen photo\'s card as the place to land', substr_count($cvTrip, 'id="folder-cover"') === 1 && (bool) preg_match('#<div class="card"[^>]*>(?:(?!</div></div>).)*?Trip/c\.jpg(?:(?!<div class="card").)*?id="folder-cover"#s', $cvTrip));
+check('[cover jump] the folder page no longer marks a photo to land on', !str_contains($cvTrip, 'id="folder-cover"') && !str_contains($cvTrip, 'cover-anchor'));
 // A cover card's picture is a square cut from the original photo, so it is sharp however big the card is.
 $cvSrc = imagecreatetruecolor(1200, 1800); imagefill($cvSrc, 0, 0, imagecolorallocate($cvSrc, 0, 0, 255)); imagefilledrectangle($cvSrc, 0, 0, 1199, 150, imagecolorallocate($cvSrc, 255, 0, 0)); imagejpeg($cvSrc, "$fxCv/Rome/tall.jpg", 95);
 $cvLand = imagecreatetruecolor(1800, 1200); imagejpeg($cvLand, "$fxCv/Rome/wide.jpg", 95);
