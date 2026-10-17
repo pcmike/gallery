@@ -11158,6 +11158,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-close-row { display: none; }
+  .lightbox-tools { display: contents; }   /* (on a phone it becomes a strip you can swipe: see below) */
+  .caption .cap-sep { white-space: pre; }
   /* On a touch screen the counter and buttons, the close button last among them, are a row across the TOP, and the photo takes
      everything below it down to the bottom of the visible area (a tall photo on a phone is height-limited, so every point
      counts). Nothing to tap near the bottom edge, where Safari answers a tap by bringing its toolbar back (which costs a
@@ -11172,10 +11174,23 @@ gallery notices (also shown on the page itself, in a collapsed banner):
       background: linear-gradient(rgba(0,0,0,0.7), transparent);
     }
     .lightbox .caption-row { pointer-events: none; }
-    .lightbox .caption-row .caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* The counter always shows (first, never cut off), the caption after it gives way first, then the buttons become a strip you can
+       swipe sideways; the close button stays put at the right end. */
+    .lightbox .caption-row .caption { flex: 1 1 0; min-width: 9ch; display: flex; flex-direction: row-reverse; justify-content: flex-end; white-space: nowrap; }
+    .lightbox .caption-row .caption .cap-n { flex: none; }
+    .lightbox .caption-row .caption .cap-sep { display: none; }
+    .lightbox .caption-row .caption .cap-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; }
+    .lightbox .caption-row .caption .cap-t:empty { display: none; }
+    .lightbox-tools { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; pointer-events: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    .lightbox-tools::-webkit-scrollbar { display: none; }
+    .lightbox-tools > * { flex: none; }
+    .lightbox-tools.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent); }
+    .lightbox-tools.more.start-gone { -webkit-mask-image: linear-gradient(to right, transparent, #000 22px, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to right, transparent, #000 22px, #000 calc(100% - 22px), transparent); }
+    .lightbox-tools.end { -webkit-mask-image: linear-gradient(to right, transparent, #000 22px); mask-image: linear-gradient(to right, transparent, #000 22px); }
+    .lightbox .caption-row .lightbox-close-row { flex: none; }
     /* Every button of the row is the same box (44 points high) with the same drawn icon size, so the close button, which is
        the last of them, cannot differ from its neighbours in size or in where it sits. */
-    .lightbox .caption-row .lightbox-copy { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 11px; font-size: 0.95rem; pointer-events: auto; }
+    .lightbox .caption-row .lightbox-copy { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 9px; font-size: 0.95rem; pointer-events: auto; }
     .lightbox .caption-row .lightbox-copy .ico { width: 18px; height: 18px; vertical-align: 0; }
     .lightbox .caption-row .lightbox-copy[hidden] { display: none; }   /* the row's own display must not show a button that has nothing to do (no web link, no location) */
     .lightbox .caption-row .lightbox-close-row { display: inline-flex; }
@@ -11352,7 +11367,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lbe-btn:active { transform: scale(0.97); }
   @media (hover: hover) { .lbe-btn:hover { background: #303036; } .lbe-btn.primary:hover { background: #6b77f0; } }
   /* The photo takes what the editor leaves. */
-  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-map-toggle, .lightbox.editing .lightbox-map { display: none !important; }   /* (the little map would cover most of a photo made small for the editor) */
+  .lightbox.editing .lightbox-zoom { display: none; }
   .lightbox.editing img { cursor: default; }
   .lightbox.editing.lb-side { padding-right: 360px; }
   .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }
@@ -11788,6 +11803,7 @@ if (ENABLE_MAP && $mapPoints) {
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
+    <div class="lightbox-tools" id="lightbox-tools">
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
     <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>
@@ -11802,6 +11818,7 @@ if (ENABLE_MAP && $mapPoints) {
 <?php if (ENABLE_MAP): ?>
     <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>
 <?php endif; ?>
+    </div>
     <button class="lightbox-copy lightbox-close-row" type="button" onclick="closeLightbox()" title="Close" aria-label="Close"><?= ui_icon('close') ?></button>
   </div>
   <button class="nav next" type="button" onclick="navigate(1)" aria-label="Next"><?= ui_icon('chev-right') ?></button>
@@ -12478,7 +12495,7 @@ if (ENABLE_MAP && $mapPoints) {
       ed.classList.toggle('loc-open', !sheetMq.matches);
       locRow.setAttribute('aria-expanded', ed.classList.contains('loc-open') ? 'true' : 'false');
       if (toolBtn) toolBtn.classList.add('on');
-      layout(); load();
+      layout(); load(); mapEditStart();
     };
     const close = function () {
       if (!isOpen) return;
@@ -12490,6 +12507,7 @@ if (ENABLE_MAP && $mapPoints) {
       ['--lbh', '--sheet-h', 'height', 'top', 'bottom'].forEach(function (p) { lightbox.style.removeProperty(p); });
       clearPhoto();
       if (toolBtn) toolBtn.classList.remove('on');
+      mapEditEnd();
       if (typeof placeMiniMap === 'function') placeMiniMap();
     };
     // The text fields
@@ -12703,13 +12721,33 @@ if (ENABLE_MAP && $mapPoints) {
     if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file); downloadLink.classList.remove('ready'); }
     applyZoom();
     updateLightboxExtras();
+    toolsFade();
     if (typeof ownerPaint === 'function') ownerPaint();
     if (lbEdit && lbEdit.isOpen()) lbEdit.load();
     trackView(file);
   }
   function paintCaption() {
+    // Three parts, so a phone can put the counter first and let the caption give way (see .caption in the phone rules); read in order they are "caption — 3 / 42".
     const captionText = captions[current], set = siblingsOf(current);
-    caption.textContent = (captionText ? captionText + ' — ' : '') + (set.indexOf(current) + 1) + ' / ' + set.length;
+    caption.textContent = '';
+    [['cap-t', captionText || ''], ['cap-sep', captionText ? ' — ' : ''], ['cap-n', (set.indexOf(current) + 1) + ' / ' + set.length]].forEach(function (p) {
+      const el = document.createElement('span'); el.className = p[0]; el.textContent = p[1]; caption.appendChild(el);
+    });
+    if (typeof toolsFade === 'function') toolsFade();
+  }
+  // The strip of buttons on a phone: a soft fade shows there is more to swipe to at either end. A swipe on it must not turn the page.
+  const tools = document.getElementById('lightbox-tools');
+  function toolsFade() {
+    if (!tools) return;
+    const max = tools.scrollWidth - tools.clientWidth, more = max > 2, atStart = tools.scrollLeft <= 2, atEnd = tools.scrollLeft >= max - 2;
+    tools.classList.toggle('more', more && !atEnd && atStart);
+    tools.classList.toggle('start-gone', more && !atEnd && !atStart);
+    tools.classList.toggle('end', more && atEnd);
+  }
+  if (tools) {
+    tools.addEventListener('scroll', toolsFade, { passive: true });
+    ['touchstart', 'touchend'].forEach(function (name) { tools.addEventListener(name, function (e) { e.stopPropagation(); }, { passive: true }); });
+    window.addEventListener('resize', toolsFade);
   }
   // ---- Zoom: 'fit' (the whole photo on the screen), 'width' (fills the width of the window, scroll up and down) and
   // 'actual' (real pixels, scroll both ways). Always the original file at its own proportions, never stretched.
@@ -12867,11 +12905,23 @@ if (ENABLE_MAP && $mapPoints) {
   // puts it after that); the pin button beside the caption turns it on, and says so with a short pulse the first time.
   const phoneish = function () { return !!(window.matchMedia && window.matchMedia('(max-width: 700px), (hover: none) and (pointer: coarse)').matches); };
   function miniWanted() { const r = remembered('galleryLightboxMap'); return r === null || r === undefined ? !phoneish() : r !== '0'; }
+  // While the owner's editor is up the map starts off (it would cover a photo made small for the editor) and the pin button turns it on
+  // for as long as the editor is open, without changing what the viewer chose to keep.
+  let editMap = false;
+  function mapEditing() { return !!(lbEdit && lbEdit.isOpen()); }
+  function miniShown() { return mapEditing() ? editMap : miniWanted(); }
+  function mapEditStart() { editMap = false; updateLightboxExtras(); }
+  function mapEditEnd() { editMap = false; updateLightboxExtras(); }
   function placeMiniMap() {
     if (!mapBox || mapBox.hidden || miniExpanded) return;
     if (zoomMode !== 'fit') { mapBox.style.left = '12px'; mapBox.style.top = '12px'; return; }
     const shown = lightboxImg.style.display === 'none' ? lightboxVideo : lightboxImg;
     const r = shown.getBoundingClientRect();
+    if (mapEditing()) {   // smaller, so the photo stays mostly in view
+      const w = Math.max(84, Math.min(170, Math.round(r.width * 0.42)));
+      mapBox.style.width = w + 'px'; mapBox.style.height = Math.round(w * 0.76) + 'px';
+      if (miniMap) miniMap.invalidateSize();
+    } else { mapBox.style.width = ''; mapBox.style.height = ''; }
     mapBox.style.left = Math.round(Math.max(8, r.left + 10)) + 'px';
     mapBox.style.top = Math.round(Math.max(8, r.top + 10)) + 'px';
   }
@@ -12886,7 +12936,7 @@ if (ENABLE_MAP && $mapPoints) {
     if (miniExpanded || !miniMap) return;
     miniExpanded = true;
     mapBox.classList.add('expanded');
-    mapBox.style.left = ''; mapBox.style.top = '';
+    mapBox.style.left = ''; mapBox.style.top = ''; mapBox.style.width = ''; mapBox.style.height = '';
     setMiniInteractive(true);
     miniMap.invalidateSize();
     const loc = locations[current];
@@ -12928,21 +12978,21 @@ if (ENABLE_MAP && $mapPoints) {
     if (!mapBox || !mapToggle) return;
     const loc = locations[current];
     mapToggle.hidden = !loc;
-    mapToggle.classList.toggle('off', !miniWanted());
-    mapToggle.title = miniWanted() ? 'Hide the little map' : 'Show where this was taken';
-    mapToggle.classList.toggle('on', miniWanted());
+    mapToggle.classList.toggle('off', !miniShown());
+    mapToggle.title = miniShown() ? 'Hide the little map' : 'Show where this was taken';
+    mapToggle.classList.toggle('on', miniShown());
     // A reminder that the map is there, on every photo that has a location, for as long as the viewer hasn't pressed the button
     // (either way): a short pulse, restarted for each photo.
     mapToggle.classList.remove('nudge');
-    if (loc && !miniWanted() && remembered('galleryLightboxMap') === null) { void mapToggle.offsetWidth; mapToggle.classList.add('nudge'); }
-    if (!loc || !miniWanted()) { collapseMiniMap(); mapBox.hidden = true; return; }
+    if (loc && !miniShown() && !mapEditing() && remembered('galleryLightboxMap') === null) { void mapToggle.offsetWidth; mapToggle.classList.add('nudge'); }
+    if (!loc || !miniShown()) { collapseMiniMap(); mapBox.hidden = true; return; }
     mapBox.hidden = false;
     placeMiniMap();
     loadLeaflet(function () { showMiniAt(loc); });
   }
   if (mapBox && mapToggle) {
     mapToggle.addEventListener('click', function () {
-      remembered('galleryLightboxMap', miniWanted() ? '0' : '1');
+      if (mapEditing()) editMap = !editMap; else remembered('galleryLightboxMap', miniWanted() ? '0' : '1');
       mapToggle.classList.remove('nudge');
       updateLightboxExtras();
     });
@@ -12962,6 +13012,8 @@ if (ENABLE_MAP && $mapPoints) {
   const webLink = document.getElementById('lightbox-web');
   const miniExpanded = false;
   function collapseMiniMap() {}
+  function mapEditStart() {}
+  function mapEditEnd() {}
   function updateLightboxExtras() {
     const web = webLinks[current];
     if (!webLink) return;
