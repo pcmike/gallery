@@ -11104,6 +11104,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .lightbox.open { display: flex; }
   .lightbox img, .lightbox video {
+    object-fit: contain;   /* whatever size the box ends up, the picture inside keeps its own shape (Safari clamps one side of an image in a flex box without the other) */
     max-width: 90vw;
     max-height: 82vh;
     max-height: min(82vh, calc(100dvh - 130px - env(safe-area-inset-bottom, 0px)));   /* a tall photo leaves room for its caption row */
@@ -11290,8 +11291,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lightbox.lb-sheet .lb-editor { left: 0; right: 0; bottom: 0; max-height: calc(var(--lbh, 100dvh) - 150px); border-radius: 18px 18px 0 0; box-shadow: 0 -6px 24px rgba(0,0,0,0.5); padding-bottom: env(safe-area-inset-bottom, 0px); }
   .lightbox.lb-side .lb-editor { top: 0; right: 0; bottom: 0; width: 360px; border-left: 1px solid #2c2c30; }
   @media (pointer: coarse) { .lightbox.lb-side .lb-editor { top: calc(env(safe-area-inset-top, 0px) + 54px); } }
-  .lbe-handle { display: none; align-self: center; width: 38px; height: 4px; margin: 8px 0 0; border-radius: 2px; background: #4a4a50; flex: none; }
-  .lightbox.lb-sheet .lbe-handle { display: block; }
+  .lbe-grip { display: none; align-items: center; justify-content: center; height: 24px; flex: none; touch-action: none; cursor: grab; }
+  .lightbox.lb-sheet .lbe-grip { display: flex; }
+  .lbe-handle { width: 38px; height: 4px; border-radius: 2px; background: #4a4a50; }
+  .lightbox.lb-sheet .lbe-head { touch-action: none; }
   .lbe-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 10px 16px 4px; min-height: 40px; flex: none; }
   .lbe-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
   .lbe-status { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
@@ -11334,13 +11337,22 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lbe-auto[hidden] { display: none; }
   .lb-editor.typing .lbe-pills, .lb-editor.typing .lbe-note, .lb-editor.typing .lbe-loc { display: none; }
   .lbe-foot { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 8px; padding: 8px 16px 14px; flex: none; }
+  /* On a phone the sheet is kept low, so the photo above it has room. */
+  .lightbox.lb-sheet .lbe-head { padding-top: 0; min-height: 32px; }
+  .lightbox.lb-sheet .lbe-body { gap: 9px; padding-top: 2px; padding-bottom: 8px; }
+  .lightbox.lb-sheet .lbe-field > span { margin-bottom: 3px; }
+  .lightbox.lb-sheet .lbe-field input { height: 42px; }
+  .lightbox.lb-sheet .lbe-pill { height: 40px; }
+  .lightbox.lb-sheet .lbe-locrow { min-height: 44px; }
+  .lightbox.lb-sheet .lbe-foot { padding: 6px 16px 10px; }
+  .lightbox.lb-sheet .lbe-btn { height: 42px; }
   .lbe-btn { height: 46px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 10px; border: 1px solid #34343a; background: #26262a; color: var(--text); font: inherit; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: background .12s, transform .12s; }
   .lbe-btn .ico { width: 1.1em; height: 1.1em; vertical-align: 0; }
   .lbe-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .lbe-btn:active { transform: scale(0.97); }
   @media (hover: hover) { .lbe-btn:hover { background: #303036; } .lbe-btn.primary:hover { background: #6b77f0; } }
   /* The photo takes what the editor leaves. */
-  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-map-toggle { display: none; }
+  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-map-toggle, .lightbox.editing .lightbox-map { display: none !important; }   /* (the little map would cover most of a photo made small for the editor) */
   .lightbox.editing img { cursor: default; }
   .lightbox.editing.lb-side { padding-right: 360px; }
   .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }
@@ -11795,7 +11807,7 @@ if (ENABLE_MAP && $mapPoints) {
   <button class="nav next" type="button" onclick="navigate(1)" aria-label="Next"><?= ui_icon('chev-right') ?></button>
 <?php if (is_admin_browser()): ?>
   <div class="lb-editor" id="lb-editor" role="dialog" aria-label="Edit this photo" hidden>
-    <div class="lbe-handle" aria-hidden="true"></div>
+    <div class="lbe-grip" id="lbe-grip" aria-hidden="true"><div class="lbe-handle"></div></div>
     <div class="lbe-head">
       <span class="lbe-name" id="lbe-name"></span>
       <span class="lbe-status" id="lbe-status" role="status" aria-live="polite"></span>
@@ -12417,14 +12429,33 @@ if (ENABLE_MAP && $mapPoints) {
       if (sheet && vv) { st2.setProperty('--lbh', vv.height + 'px'); st2.height = vv.height + 'px'; st2.top = vv.offsetTop + 'px'; st2.bottom = 'auto'; }
       else { st2.removeProperty('--lbh'); st2.removeProperty('height'); st2.removeProperty('top'); st2.removeProperty('bottom'); }
       st2.setProperty('--sheet-h', (sheet ? ed.offsetHeight : 0) + 'px');
+      fitPhoto(sheet);
       if (typeof placeMiniMap === 'function') placeMiniMap();
+    };
+    // Under the sheet the photo is given its exact size (width and height together, from its own shape), rather than leaving the
+    // browser to shrink it to a height limit: Safari keeps the width when it clamps the height, which squashes the picture.
+    const photoEls = [lightboxImg, lightboxVideo];
+    const clearPhoto = function () { photoEls.forEach(function (el) { ['width', 'height', 'maxWidth', 'maxHeight'].forEach(function (p) { el.style.removeProperty(p === 'maxWidth' ? 'max-width' : (p === 'maxHeight' ? 'max-height' : p)); }); }); };
+    const fitPhoto = function (sheet) {
+      clearPhoto();
+      if (!sheet) return;
+      const video = isVideoFile(files[current]), el = video ? lightboxVideo : lightboxImg;
+      const nw = video ? el.videoWidth : el.naturalWidth, nh = video ? el.videoHeight : el.naturalHeight;
+      if (!nw || !nh) return;   // (not loaded yet: this runs again when it is)
+      const cs = getComputedStyle(lightbox), row = lightbox.querySelector('.caption-row'), rowFixed = row && getComputedStyle(row).position === 'fixed';
+      const availW = lightbox.clientWidth * 0.9;
+      const availH = lightbox.clientHeight - parseFloat(cs.paddingTop) - (parseFloat(lightbox.style.getPropertyValue('--sheet-h')) || 0) - (rowFixed || !row ? 8 : row.offsetHeight + 24);
+      if (availW <= 0 || availH <= 0) return;
+      let w = Math.min(nw, availW), h = w * nh / nw;
+      if (h > availH) { h = availH; w = h * nw / nh; }
+      el.style.width = Math.round(w) + 'px'; el.style.height = Math.round(h) + 'px'; el.style.maxWidth = 'none'; el.style.maxHeight = 'none';
     };
     const setControls = function (enabled) {
       [].forEach.call(ed.querySelectorAll('input, .lbe-pill, #lbe-useauto'), function (el) { el.disabled = !enabled; });
     };
     const load = function () {
       const file = files[current], my = ++seq;
-      st = null; setControls(false);
+      st = null; setControls(false); clearPhoto();
       nameEl.textContent = bareOf(file);
       setStatus('busy', 'Loading…');
       [f.web, f.lat, f.lng].forEach(function (el) { el.classList.remove('bad'); }); webErr.textContent = ''; locErr.textContent = '';
@@ -12457,6 +12488,7 @@ if (ENABLE_MAP && $mapPoints) {
       ed.classList.remove('typing', 'kb');
       lightbox.classList.remove('editing', 'lb-sheet', 'lb-side');
       ['--lbh', '--sheet-h', 'height', 'top', 'bottom'].forEach(function (p) { lightbox.style.removeProperty(p); });
+      clearPhoto();
       if (toolBtn) toolBtn.classList.remove('on');
       if (typeof placeMiniMap === 'function') placeMiniMap();
     };
@@ -12539,6 +12571,35 @@ if (ENABLE_MAP && $mapPoints) {
     });
     // What happens on the touch screen inside the editor stays there: it must not swipe the viewer to another photo or close it.
     ['touchstart', 'touchend'].forEach(function (t) { ed.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: true }); });
+    lightboxImg.addEventListener('load', layout); lightboxVideo.addEventListener('loadedmetadata', layout);
+    // Pulling the sheet down by its handle (or its title row) closes it, like Done: it follows the finger, and past a short distance (or
+    // a quick flick) it saves and goes; otherwise it springs back.
+    let pull = null;
+    const settle = function () { ed.style.transition = ''; ed.style.transform = ''; };
+    const pullStart = function (e) {
+      if (!sheetMq.matches || !isOpen || (e.pointerType === 'mouse' && e.button !== 0) || (e.target.closest && e.target.closest('button'))) return;
+      pull = { id: e.pointerId, y: e.clientY, t: Date.now(), dy: 0 };
+      try { ed.setPointerCapture(e.pointerId); } catch (x) {}
+      ed.style.transition = 'none';
+    };
+    [$('lbe-grip'), ed.querySelector('.lbe-head')].forEach(function (el) { el.addEventListener('pointerdown', pullStart); });
+    ed.addEventListener('pointermove', function (e) {
+      if (!pull || e.pointerId !== pull.id) return;
+      pull.dy = Math.max(0, e.clientY - pull.y);
+      ed.style.transform = 'translateY(' + pull.dy + 'px)';
+    });
+    const pullEnd = function (e) {
+      if (!pull || e.pointerId !== pull.id) return;
+      const p = pull; pull = null;
+      const quick = p.dy / Math.max(1, Date.now() - p.t) > 0.6;
+      ed.style.transition = 'transform .18s ease-out';
+      if (e.type === 'pointerup' && (p.dy > 90 || (p.dy > 40 && quick))) {
+        ed.style.transform = 'translateY(' + ed.offsetHeight + 'px)';
+        beforeLeave().then(function (ok) { if (ok) { close(); settle(); } else settle(); });
+      } else ed.style.transform = '';
+      setTimeout(function () { if (!pull && isOpen) ed.style.transition = ''; }, 220);
+    };
+    ed.addEventListener('pointerup', pullEnd); ed.addEventListener('pointercancel', pullEnd);
     if (window.ResizeObserver) new ResizeObserver(layout).observe(ed);
     if (window.visualViewport) { window.visualViewport.addEventListener('resize', layout); window.visualViewport.addEventListener('scroll', layout); }
     window.addEventListener('resize', layout);

@@ -1366,6 +1366,34 @@ try:
         ok(b.js("document.activeElement.tagName") != "INPUT" and not b.js("document.getElementById('lb-editor').classList.contains('typing')") and b.js("getComputedStyle(document.getElementById('lbe-pills')).display") != "none", "[editor] Hide keyboard puts the keyboard away and the sheet is whole again")
         ok(b.js("getComputedStyle(document.getElementById('lbe-caption')).fontSize") == "16px", "[editor] its fields are 16px, so a phone does not zoom the page when one is tapped")
         b.js("document.getElementById('lbe-done').click()"); b.drain(0.3)
+        # the photo under the sheet keeps its own shape (a landscape and a portrait one, on a short screen) and is whole again afterwards
+        for nm, w_, h_ in (("w", 1200, 600), ("t", 600, 1200)):
+            subprocess.run(["php", "-r", "$i=imagecreatetruecolor($argv[2],$argv[3]); imagefill($i,0,0,imagecolorallocate($i,200,120,40)); imagejpeg($i,$argv[1]);", SITE17 + "/" + nm + ".jpg", str(w_), str(h_)], check=True)
+        b.viewport(390, 640, mobile=True); b.goto(B17 + "/", 1.5)
+        shape = "(() => { const i = document.getElementById('lightbox-img'), r = i.getBoundingClientRect(), ed = document.getElementById('lb-editor'); return {ratio: Math.round(r.width / r.height * 100) / 100, bottom: Math.round(r.bottom), sheetTop: ed.hidden ? null : Math.round(ed.getBoundingClientRect().top), sized: /(^|;| )width:/.test(i.getAttribute('style') || ''), fit: getComputedStyle(i).objectFit}; })()"
+        for nm, want in (("w", 2.0), ("t", 0.5)):
+            b.js("document.querySelector(\".card[data-file='" + nm + ".jpg']\").click()"); b.drain(1.5)
+            before = b.js(shape)
+            b.js("document.getElementById('lightbox-edit').click()"); b.drain(1.5)
+            during = b.js(shape)
+            ok(abs(during["ratio"] - want) < 0.03 and during["bottom"] <= during["sheetTop"] and during["sized"] and during["fit"] == "contain", "[editor] the photo under the sheet keeps its own shape (%s, on a short phone screen) and stays above the sheet" % ("landscape 2:1" if nm == "w" else "portrait 1:2"), str(during))
+            b.js("document.getElementById('lbe-done').click()"); b.drain(0.8)
+            after = b.js(shape)
+            ok(abs(after["ratio"] - want) < 0.03 and not after["sized"] and after["ratio"] == before["ratio"], "[editor] ...and after Done it is the same size as before the editor, with nothing left over from it", str(before) + str(after))
+            # pulling the sheet down by its handle
+            b.js("document.getElementById('lightbox-edit').click()"); b.drain(1.2)
+            g = b.js("(() => { const r = document.getElementById('lbe-grip').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()")
+            def touch(t, y): b.call("Input.dispatchTouchEvent", {"type": t, "touchPoints": [{"x": g[0], "y": y}] if t != "touchEnd" else []})
+            touch("touchStart", g[1])
+            for i in range(1, 3): touch("touchMove", g[1] + i * 10); b.drain(0.03)
+            touch("touchEnd", 0); b.drain(0.8)
+            ok(not b.js("document.getElementById('lb-editor').hidden") and b.js("document.getElementById('lb-editor').style.transform") == "", "[editor] a short pull on the handle springs back: the editor stays", nm)
+            touch("touchStart", g[1])
+            for i in range(1, 8): touch("touchMove", g[1] + i * 20); b.drain(0.03)
+            moved = b.js("document.getElementById('lb-editor').style.transform")
+            touch("touchEnd", 0); b.drain(1.0)
+            ok("translateY" in moved and b.js("document.getElementById('lb-editor').hidden") and b.js("document.getElementById('lightbox').classList.contains('open')") and not b.js(shape)["sized"], "[editor] pulling the handle down follows the finger, and past a short distance closes the editor (saved, like Done) and leaves the photo", moved)
+            b.js("document.querySelector('.lightbox-close-row').click()"); b.drain(0.5)
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
         ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
     finally:
