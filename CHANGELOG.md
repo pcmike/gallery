@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.1.0] - 2026-10-17
+
+### Added
+- **A pencil on every tile, and an editor in the viewer.** For the signed-in owner each tile has a pencil in its lower left corner (on hover on a desktop), and the viewer's toolbar has one too. It opens the viewer on that photo with its editor: *Caption*, *Information link*, the *Private*, *Location* and *Cover* switches on one row, and the place (latitude, longitude, label) below. On a phone the editor is a sheet under the photo, so the photo stays in view (above the keyboard too), with a *Hide keyboard* button; on a wide screen it is a panel beside the photo. There is no Save button: the switches save as you press them; the text saves when you leave a field, a second after you stop typing, and when you press *Prev*, *Next* or *Done*, so a folder's photos can be captioned one after another. A link without `http://`/`https://` or a bad latitude/longitude is marked and not saved (and *Next* waits). A place read from the photo's GPS but not yet kept is offered with *Keep the location from the photo*; a caption saved meanwhile never keeps it by accident. The tile's badges and the viewer's caption, link and map follow each save without a reload. `?photo=NAME&edit=1` opens a photo with its editor up.
+- **Select picks photos in every layout.** The strip's button works wherever there are photos (also in filename groups, notes layouts and inside group boxes): a bar at the bottom has *Select all*, *Clear*, **Make private**, **Make public** and *Done*, and the locks on the tiles follow at once.
+
+### Changed
+- **Select replaces Arrange.** The strip's Arrange button (four arrows) is now *Select* (a tick in a circle); placing photos next to each other by drag and drop is part of its bar, where the photos are laid out one by one (the *Release* and *Reset folder* buttons are there too). Nothing stored changes.
+- **The admin has no Photos (Media) tab any more.** Everything it did is done on the gallery itself (the pencil, the lock, the star, *Select*). Folder settings (*Settings* at the top level) is the first tab; the Private tab's links open the photo's editor; the notice about photos whose GPS isn't saved yet sits on the settings tab. The admin page loads lighter, since it no longer carries a form for every photo.
+- **The admin's save for one photo answers JSON when the page asks for it** (with the new fingerprint, or "changed somewhere else"), and `?admin&item=` returns one photo's record for the editor.
+
 ## [2.0.11] - 2026-10-17
 
 ### Added

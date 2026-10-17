@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.0.11');
+define('GALLERY_VERSION', '2.1.0');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -5317,6 +5317,49 @@ function admin_json_exit($payload) {
     exit;
 }
 
+/** One photo's own record, as the editor in the viewer shows it: caption, link, place, the two switches, whether it is the
+ *  folder's cover, and the fingerprint a later save is checked against. A place read from the photo's GPS but not saved yet
+ *  comes back as `auto` (not as `lat`/`lng`), so opening the editor never turns it into a saved location by itself. */
+function admin_item_json($dir, $files) {
+    header('Cache-Control: no-store');
+    $file = (string) $_GET['item'];
+    if ($file === '' || strpos($file, "\0") !== false || !in_array($file, $files, true)) {
+        http_response_code(404);
+        admin_json_exit(['ok' => false, 'text' => 'Unknown file.']);
+    }
+    $real = containing_folder_real_path($dir, $file);
+    $bare = basename($file);
+    $data = items_read($real);
+    $entry = $data['items'][$bare] ?? [];
+    $rest = item_restriction($entry);
+    $folderPrivate = folder_above_is_private($dir, $file);
+    $vis = $entry['locationVisibility'] ?? 'inherit';
+    $loc = $entry['location'] ?? null;
+    $auto = null;
+    if ($loc === null && empty($entry['gpsChecked']) && ENABLE_PHOTO_LOCATION && !is_video_file($file)) {
+        $auto = extract_photo_gps(resolve_real_path($dir, $file));
+    }
+    $cover = $data['cover'] ?? null;
+    admin_json_exit([
+        'ok' => true,
+        'file' => $file,
+        'caption' => (string) ($entry['caption'] ?? ''),
+        'web' => (string) ($entry['web'] ?? ''),
+        'lat' => $loc !== null ? (string) $loc['lat'] : '',
+        'lng' => $loc !== null ? (string) $loc['lng'] : '',
+        'label' => $loc !== null ? (string) ($loc['label'] ?? '') : '',
+        'auto' => $auto !== null ? ['lat' => (string) $auto['lat'], 'lng' => (string) $auto['lng']] : null,
+        'hash' => admin_item_record_hash($entry),
+        'private' => $rest === 'private' || ($rest === 'inherit' && $folderPrivate),
+        'folderPrivate' => $folderPrivate,
+        'locationShown' => $vis === 'show' || ($vis === 'inherit' && !empty($data['locationEnabled'])),
+        'folderLocationOn' => !empty($data['locationEnabled']),
+        'locationsOff' => !ENABLE_PHOTO_LOCATION,
+        'cover' => is_string($cover) && $cover !== '' && $cover === $bare,
+        'views' => TRACK_VIEWS ? (int) (stats_get_all_photo_views($dir, [$file])[$file] ?? 0) : null,
+    ]);
+}
+
 function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups) {
     // Normalize every posted value once, up front: a field sent as an
     // array (name[]=x) is dropped to '' rather than reaching code that
@@ -5378,8 +5421,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             return ['type' => 'error', 'text' => 'That latitude/longitude isn\'t a valid coordinate.'];
         }
         $loadedHash = isset($_POST['loaded_hash']) ? (string) $_POST['loaded_hash'] : null;
-        $stale = false;
-        items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility, $restriction, $loadedHash, &$stale) {
+        // The editor in the viewer saves caption and link as they are typed: with keep_loc it leaves the place alone (a place
+        // read from the photo's GPS stays "not saved yet" until the owner chooses to keep it).
+        $keepLoc = ($_POST['keep_loc'] ?? '') === '1';
+        $stale = false; $newHash = null;
+        items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility, $restriction, $loadedHash, $keepLoc, &$stale, &$newHash) {
             $entry = $data['items'][$bare] ?? [];
             if ($loadedHash !== null && !hash_equals(admin_item_record_hash($entry), $loadedHash)) {
                 $stale = true;
@@ -5387,20 +5433,30 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             }
             if ($caption !== '') { $entry['caption'] = $caption; } else { unset($entry['caption']); }
             if ($web !== '') { $entry['web'] = $web; } else { unset($entry['web']); }
-            if ($lat !== '' && $lng !== '') {
-                $entry['location'] = ['lat' => (float) $lat, 'lng' => (float) $lng, 'label' => $locLabel];
-            } else {
-                unset($entry['location']);
+            if (!$keepLoc) {
+                if ($lat !== '' && $lng !== '') {
+                    $entry['location'] = ['lat' => (float) $lat, 'lng' => (float) $lng, 'label' => $locLabel];
+                } else {
+                    unset($entry['location']);
+                }
+                // Saved by the owner, so whatever location it has (or deliberately
+                // doesn't) stands: never auto-import GPS over it later.
+                $entry['gpsChecked'] = true;
             }
-            // Saved by the owner, so whatever location it has (or deliberately
-            // doesn't) stands: never auto-import GPS over it later.
-            $entry['gpsChecked'] = true;
             if ($visibility !== null) $entry['locationVisibility'] = $visibility;
             if ($restriction === 'inherit') { unset($entry['restriction']); } elseif ($restriction !== null) { $entry['restriction'] = $restriction; }
             $data['items'][$bare] = $entry;
+            $newHash = admin_item_record_hash($entry);
         });
         if ($stale) {
+            if ($isFetch) admin_json_exit(['ok' => false, 'stale' => true, 'text' => '"' . $bare . '"' . admin_stale_message()]);
             return ['type' => 'error', 'text' => '"' . $bare . '"' . admin_stale_message()];
+        }
+        if ($isFetch) {
+            if (!empty($GLOBALS['__data_write_failed'])) admin_json_exit(['ok' => false, 'text' => 'Nothing was saved: this folder isn\'t writable by the web server.']);
+            $saved = items_read($adminFolderReal)['items'][$bare] ?? [];
+            admin_json_exit(['ok' => true, 'text' => 'Saved "' . $bare . '".', 'hash' => $newHash, 'caption' => (string) ($saved['caption'] ?? ''), 'web' => (string) ($saved['web'] ?? ''),
+                'lat' => isset($saved['location']) ? (string) $saved['location']['lat'] : '', 'lng' => isset($saved['location']) ? (string) $saved['location']['lng'] : '', 'label' => isset($saved['location']) ? (string) ($saved['location']['label'] ?? '') : '']);
         }
         return ['type' => 'ok', 'text' => 'Saved "' . $bare . '".'];
     }
@@ -5642,7 +5698,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (!ENABLE_PHOTO_LOCATION) {
             $text .= ' Nothing shows yet, because ENABLE_PHOTO_LOCATION is off in index.php.';
         } elseif ($imported > 0) {
-            $text .= ' ' . $imported . ' photo' . ($imported === 1 ? ' has' : 's have') . ' GPS in the file and now show' . ($imported === 1 ? 's' : '') . ' a location to visitors and on the map. To keep one private, switch off its "Show its location" (or clear its coordinates and Save).';
+            $text .= ' ' . $imported . ' photo' . ($imported === 1 ? ' has' : 's have') . ' GPS in the file and now show' . ($imported === 1 ? 's' : '') . ' a location to visitors and on the map. To keep one private, press its pencil and switch off Location (or clear its coordinates).';
         } else {
             $text .= ' None of its photos has GPS to show; add coordinates by hand on any photo.';
         }
@@ -5803,12 +5859,9 @@ function admin_hidden_data($dir, $files) {
     return ['folders' => $hiddenFolders, 'items' => $hiddenItems, 'shown' => $shownDespiteHiddenFolder];
 }
 
-/** Where an item lives in the admin: its folder's page, Photos tab, scrolled
- *  to its own card. */
+/** Where an item is edited: the gallery's viewer open on that photo, with the editor up (the pencil's own address). */
 function admin_item_href($file) {
-    $folder = dirname($file);
-    return '?admin' . ($folder === '.' ? '' : '&amp;folder=' . htmlspecialchars(rawurlencode($folder), ENT_QUOTES, 'UTF-8'))
-         . '#photo-' . md5($file);
+    return '?photo=' . htmlspecialchars(rawurlencode($file), ENT_QUOTES, 'UTF-8') . '&amp;edit=1';
 }
 
 /** Addresses for the owner's browser to try, to see whether the web server rules in render_server_rules_help are in place:
@@ -6692,11 +6745,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $adminHidden = admin_any_hidden($dir, $files, $folderGroupKeys) ? admin_hidden_data($dir, $files) : null;
     $GLOBALS['__lock_probe'] = lock_probe_targets($dir, $files);
     $GLOBALS['__admin_files'] = $files;
-    // After saving a photo, bring that photo's card back into view.
-    $focusCard = ($resultMessage && isset($_POST['file']) && is_string($_POST['file']))
-        ? 'photo-' . md5(($adminFolderPath === null ? '' : $adminFolderPath . '/') . basename($_POST['file'])) : '';
     $itemsHere = items_read($adminFolderReal);
-    $adminViews = TRACK_VIEWS ? stats_get_all_photo_views($dir, $adminFiles) : [];
     // Photos whose GPS the gallery can read from the file but that have no
     // *saved* location yet (and haven't been read before). With the
     // folder's switch on they were just imported above, so these are only
@@ -6714,7 +6763,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $locWarn = 'Turning this on shows the location of ' . ($gpsCount > 0
         ? $gpsCount . ' photo' . ($gpsCount === 1 ? '' : 's') . ' here'
         : 'any photo here that has one')
-        . ' to visitors, on the gallery and the map. A photo can opt out with its own "Show its location" switch. You and private-view visitors always see every location.';
+        . ' to visitors, on the gallery and the map. A photo can opt out with its own Location switch (press its pencil). You and private-view visitors always see every location.';
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
 ?>
@@ -6894,11 +6943,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .admin-folders[open] > summary { margin-bottom:6px; }
     .admin-layout { grid-template-columns:1fr; gap:12px; }
     .admin-side { position:static; max-height:none; }
-    .admin-main .editor-grid { grid-template-columns:1fr 1fr; }
-    .admin-main .editor-grid .wide2 { grid-column:1 / -1; }
-    .admin-main .editor-head { flex-wrap:wrap; }
-    .admin-main .editor-nav { margin-left:0; justify-content:flex-start; }
-    .admin-main .thumb-grid { grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:8px; }
     .admin-folder-nav { max-height:260px; overflow-y:auto; }
     .settings-grid, .settings-grid.root { grid-template-columns:1fr; }
   }
@@ -6958,9 +7002,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .notes-reference .ref-card-head .admin-insert-btn { margin:0; }
   .notes-reference button.linklike { background:none; color:var(--accent); padding:0 2px; font-size:inherit; text-decoration:none; }
   @media (max-width: 1100px) { .notes-layout { grid-template-columns:1fr; } .notes-reference { position:static; max-height:none; } }
-  /* Photos tab: a grid of thumbnails, and one editor panel above it that
-     opens with the selected photo's own form (every photo's real form is in
-     the page; only the selected one is shown). */
   /* The left column's text all starts at the same place: 12px in, counting a pill's 1px border, so the pills,
      the FOLDERS label and every folder name line up. Site settings is teal (blue is "selected", red is Hidden). */
   .side-link { display:flex; align-items:center; margin:0 0 10px; padding:6px 10px 6px 11px; border-radius:6px; font-size:0.85rem; color:var(--text); text-decoration:none; background:#1a1a1e; border:1px solid #2c2c30; }
@@ -7041,61 +7082,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .extra-list li:first-child { border-top:0; }
   .extra-list code { word-break:break-all; }
   .extra-add { display:flex; flex-direction:column; gap:6px; }
-  .photos-hint { margin:0 0 12px; }
-  <?= video_tile_css() ?>
-  .thumb-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(124px, 1fr)); gap:10px; }
-  .thumb { position:relative; padding:0; border:2px solid transparent; background:var(--card); border-radius:9px; cursor:pointer; overflow:hidden; text-align:left; color:var(--text); display:flex; flex-direction:column; font:inherit; }
-  .thumb:hover { border-color:#3a3a42; }
-  .thumb.selected { border-color:var(--accent); box-shadow:0 0 0 2px rgba(88,101,242,0.35); }
-  .thumb .thumb-img { width:100%; aspect-ratio:1/1; object-fit:cover; display:block; background:#101012; }
-  .thumb .thumb-media { display:block; position:relative; }
-  .thumb .thumb-duration { position:absolute; left:5px; bottom:5px; background:rgba(0,0,0,0.65); color:#eaeaea; font-size:0.68rem; padding:1px 6px; border-radius:9px; pointer-events:none; }
-  .editor-thumb { position:relative; display:block; width:96px; height:96px; flex:none; border-radius:8px; overflow:hidden; }
-  .editor-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
-  .editor-thumb .video-mark { width:40px; }
-  .thumb-badges { position:absolute; top:5px; right:5px; display:flex; gap:3px; font-size:0.7rem; }
-  .thumb-badges span { background:rgba(0,0,0,0.68); padding:1px 5px; border-radius:8px; line-height:1.4; }
-  .thumb-badges .warn { color:#f5a623; }
-  .thumb.is-cover { border-color:#f5c542; box-shadow:0 0 0 2px rgba(245,197,66,0.28); }
-  .thumb.is-cover.selected { border-color:#f5c542; }
-  .thumb-cover { position:absolute; left:5px; bottom:26px; display:inline-flex; align-items:center; gap:4px; background:#f5c542; color:#1a1a1c; font-size:0.68rem; font-weight:700; padding:2px 7px; border-radius:8px; line-height:1.3; }
-  .thumb-cover .ico { width:0.95em; height:0.95em; }
-  .thumb-badges .hid { color:#ff9a9c; }
-  .item-flags { display:flex; gap:28px; flex-wrap:wrap; margin:0 0 14px; padding:12px 14px; background:#18181b; border:1px solid #26262a; border-radius:9px; }
-  .item-flags .instant-form { flex:1 1 250px; margin:0; }
-  .item-flags .hint { margin:6px 0 0; }
-  .bulk-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 10px; }
-  .bulk-controls { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .bulk-controls[hidden], #bulk-start[hidden] { display:none; }
-  .bulk-count { font-weight:600; font-size:0.85rem; min-width:84px; }
-  .thumb .thumb-check { display:none; position:absolute; left:6px; top:6px; width:22px; height:22px; border-radius:50%; background:rgba(0,0,0,0.6); border:2px solid #fff; color:#fff; align-items:center; justify-content:center; font-size:0.8rem; }
-  .thumb-grid.selecting .thumb .thumb-check { display:flex; }
-  .thumb-grid.selecting .thumb.picked { border-color:var(--accent); }
-  .thumb-grid.selecting .thumb.picked .thumb-check { background:var(--accent); }
-  .thumb-grid.selecting .thumb:not(.picked) .thumb-check .ico { display:none; }
-  .thumb-name { font-size:0.72rem; color:var(--muted); padding:5px 7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .thumb.dirty::after { content:""; position:absolute; left:6px; top:6px; width:10px; height:10px; border-radius:50%; background:#f5a623; box-shadow:0 0 0 2px rgba(0,0,0,0.6); }
-  .thumb.flash-target { outline:2px solid var(--accent); outline-offset:2px; }
-  .photo-editor { background:var(--card); border-radius:10px; padding:14px; margin-bottom:16px; scroll-margin-top:84px; }
-  .js-tabs .photo-editor { display:none; }
-  .js-tabs .photo-editor.has-open { display:block; }
-  /* Only without JavaScript, where every photo's form is listed one after another. With it, one editor is shown at a time and must look identical whichever photo it is. */
-  .admin-main:not(.js-tabs) .item-editor + .item-editor { border-top:1px solid #26262a; margin-top:16px; padding-top:16px; }
-  .js-tabs .item-editor { display:none; }
-  .js-tabs .item-editor.open { display:block; }
-  .editor-head { display:flex; gap:14px; align-items:center; margin-bottom:14px; }
-  .editor-head img { width:96px; height:96px; flex:none; object-fit:cover; border-radius:8px; background:#101012; }
-  .item-meta { min-width:0; }
-  .item-filename { font-size:0.9rem; color:var(--text); word-break:break-all; }
-  .item-sub { font-size:0.78rem; color:var(--muted); margin-top:3px; }
-  .editor-nav { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
-  .editor-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:0 12px; }
-  .editor-grid .wide2 { grid-column:span 2; }
-  .item-actions { display:flex; gap:8px; align-items:center; margin-top:6px; }
-  .item-actions form { margin:0; }
-  .item-flags { color:var(--muted); font-size:0.75rem; }
-  .loc-row { display:flex; gap:6px; }
-  .loc-row .field { flex:1; }
   @media (max-width: 600px) {
     .wrap { padding:16px 10px 48px; }
     .grid { grid-template-columns:1fr; }
@@ -7111,7 +7097,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <h1>Gallery Admin</h1>
     <span class="crumb">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span>
     <nav class="admin-tabs" role="tablist" aria-label="Sections">
-      <a href="#photos" role="tab" data-tab="photos"><?= ucfirst(media_word()) ?> <span class="count"><?= count($adminFiles) ?></span></a>
       <a href="#settings" role="tab" data-tab="settings"><?= $adminFolderPath !== null ? 'Folder settings' : 'Settings' ?></a>
       <a href="#notes" role="tab" data-tab="notes">Notes <span class="count"><?= count($mdCandidates) ?></span></a>
       <a href="#export" role="tab" data-tab="export">Export</a>
@@ -7134,7 +7119,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <?= render_admin_folder_nav($files, $adminFolderPath) ?: '<p class="muted">No subfolders.</p>' ?>
   </details>
 </aside>
-<main class="admin-main" data-focus-card="<?= htmlspecialchars($focusCard, ENT_QUOTES, 'UTF-8') ?>">
+<main class="admin-main">
   <?php if ($resultMessage): ?>
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
@@ -7145,188 +7130,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <?php render_admin_hidden_panel($adminHidden); ?>
   </div>
 <?php endif; ?>
-  <div class="tab-panel" data-tab="photos">
-  <?php if (TRACK_VIEWS): ?>
-    <p class="muted" style="margin-top:0;"><?= ui_icon('chart') ?> <?= number_format(stats_get_pageviews($dir)) ?> visit<?= stats_get_pageviews($dir) === 1 ? '' : 's' ?> in total (one per visitor per half hour, not counting you or bots). Select a photo to see its own count. Visitors <?= SHOW_VIEW_COUNTS_PUBLICLY ? 'can see these counts' : 'cannot see any counts (SHOW_VIEW_COUNTS_PUBLICLY is off) — only you, here' ?>.</p>
-  <?php endif; ?>
-
+  <div class="tab-panel" data-tab="settings">
   <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
     <div class="panel loc-unsaved-summary">
       <?php if (!empty($itemsHere['locationEnabled'])): ?>
         <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS that isn't saved yet.</strong>
-        <span class="muted">It couldn't be stored automatically (is this folder writable by the web server?). Click <em>Save</em> on each photo to publish its location.</span>
+        <span class="muted">It couldn't be stored automatically (is this folder writable by the web server?). Open the photo in the gallery, press its pencil, and choose <em>Keep the location from the photo</em>.</span>
       <?php else: ?>
         <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS in the file.</strong>
-        <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos you set to <em>Always hide</em>.</span>
+        <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos whose <em>Location</em> switch (in the pencil's editor) you turn off.</span>
       <?php endif; ?>
     </div>
   <?php endif; ?>
-
-  <h2 class="section-title" id="photos" style="margin-top:0; scroll-margin-top:84px;"><?= ucfirst(media_word()) ?> <span class="muted">(<?= count($adminFiles) ?>)</span></h2>
-<?php
-$editorsHtml = '';
-$thumbsHtml = '';
-foreach ($adminFiles as $file) {
-    $bare = basename($file);
-    $entry = $itemsHere['items'][$bare] ?? [];
-    $loc = $entry['location'] ?? ($adminAutoLoc[$file] ?? null);
-    $locUnsaved = isset($adminAutoLoc[$file]);
-    $rest = item_restriction($entry);
-    $vis = $entry['locationVisibility'] ?? 'inherit';
-    $folderIsPrivate = folder_above_is_private($dir, $file);
-    $isPrivate = $rest === 'private' || ($rest === 'inherit' && $folderIsPrivate);
-    $locShown = $vis === 'show' || ($vis === 'inherit' && !empty($itemsHere['locationEnabled']));
-    $isVideo = is_video_file($file);
-    $isCover = !empty($itemsHere['cover']) && $itemsHere['cover'] === $bare;
-    $hid = md5($file);
-    $coverFormId = 'cover-' . $hid;
-    $thumbUrl = htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8');
-    $durationText = ($isVideo && isset($videoDurations[$file])) ? htmlspecialchars(format_duration($videoDurations[$file]), ENT_QUOTES, 'UTF-8') : '';
-    ob_start();
-?>
-    <div class="item-editor" id="edit-<?= $hid ?>">
-      <div class="editor-head">
-        <?php if ($isVideo): $vt = video_tile_parts($file, $videoDurations[$file] ?? null); ?>
-          <span class="editor-thumb vtile"<?= $vt['attrs'] ?>><img src="<?= $thumbUrl ?>" alt=""><?= $vt['inner'] ?></span>
-        <?php else: ?>
-          <img src="<?= $thumbUrl ?>" alt="">
-        <?php endif; ?>
-        <div class="item-meta">
-          <div class="item-filename"><?= htmlspecialchars($file, ENT_QUOTES, 'UTF-8') ?></div>
-          <div class="item-sub">
-            <?php if (TRACK_VIEWS): ?><?= ui_icon('eye') ?> <?= number_format($adminViews[$file] ?? 0) ?> view<?= ($adminViews[$file] ?? 0) === 1 ? '' : 's' ?><?php endif; ?>
-            <?php if ($isPrivate): ?> &middot; private<?php endif; ?>
-            <?php if ($isCover): ?> &middot; folder cover<?php endif; ?>
-          </div>
-        </div>
-        <div class="editor-nav">
-          <button type="button" class="secondary" data-nav="-1" title="Previous">&lsaquo; Prev</button>
-          <button type="button" class="secondary" data-nav="1" title="Next">Next &rsaquo;</button>
-          <button type="button" class="secondary" data-close title="Close the editor">Close</button>
-        </div>
-      </div>
-      <?php // Two switches that save themselves: the photo's own privacy and whether its location is shown. ?>
-      <div class="item-flags">
-        <form method="post" class="instant-form flag-form" data-thumb="photo-<?= $hid ?>" data-flag="private">
-          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-          <input type="hidden" name="action" value="set_item_flag">
-          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" data-send>
-          <input type="hidden" name="flag" value="private" data-send>
-          <input type="hidden" name="on" value="0">
-          <div class="instant-row">
-            <label class="switch"><input type="checkbox" name="on" value="1" <?= $isPrivate ? 'checked' : '' ?>><span class="slider"></span></label>
-            <span class="instant-label">Private</span>
-            <span class="rowstate" role="status" aria-live="polite"></span>
-          </div>
-          <p class="hint">Hidden from visitors unless they have the private-view password.<?= $folderIsPrivate ? ' Its folder is private, so it is too until you switch this off.' : '' ?></p>
-          <div class="nojs-only"><button type="submit" class="secondary">Save</button></div>
-        </form>
-        <form method="post" class="instant-form flag-form" data-flag="location">
-          <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-          <input type="hidden" name="action" value="set_item_flag">
-          <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" data-send>
-          <input type="hidden" name="flag" value="location" data-send>
-          <input type="hidden" name="on" value="0">
-          <div class="instant-row">
-            <label class="switch"><input type="checkbox" name="on" value="1" <?= $locShown ? 'checked' : '' ?>><span class="slider"></span></label>
-            <span class="instant-label">Show its location</span>
-            <span class="rowstate" role="status" aria-live="polite"></span>
-          </div>
-          <p class="hint"><?= !ENABLE_PHOTO_LOCATION ? 'Locations are switched off for the whole gallery (Site settings), so nothing shows yet.' : (!empty($itemsHere['locationEnabled']) ? 'This folder shows its photos\' locations; switch this off to keep this one private.' : 'This folder doesn\'t show locations; switch this on to show just this one.') ?></p>
-          <div class="nojs-only"><button type="submit" class="secondary">Save</button></div>
-        </form>
-      </div>
-      <form method="post">
-        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-        <input type="hidden" name="action" value="save_item">
-        <input type="hidden" name="loaded_hash" value="<?= admin_item_record_hash($entry) ?>">
-        <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
-        <div class="editor-grid">
-          <div class="field wide2">
-            <label>Caption</label>
-            <input type="text" name="caption" value="<?= htmlspecialchars($entry['caption'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-          </div>
-          <div class="field wide2">
-            <label>Web link</label>
-            <input type="url" name="web" value="<?= htmlspecialchars($entry['web'] ?? '', ENT_QUOTES, 'UTF-8') ?>" placeholder="https://&hellip;">
-          </div>
-          <div class="field">
-            <label>Latitude</label>
-            <input type="text" name="lat" value="<?= htmlspecialchars($loc['lat'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-          </div>
-          <div class="field">
-            <label>Longitude</label>
-            <input type="text" name="lng" value="<?= htmlspecialchars($loc['lng'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-          </div>
-          <div class="field wide2">
-            <label>Location label (optional)</label>
-            <input type="text" name="loc_label" value="<?= htmlspecialchars($loc['label'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-          </div>
-        </div>
-        <?php if ($locUnsaved): ?>
-            <p class="muted loc-unsaved" style="margin:0 0 8px;"><?= ui_icon('warn') ?> <?= !empty($itemsHere['locationEnabled']) ? "Read from this photo's GPS but <strong>not saved yet</strong> &mdash; visitors see no location for it until you click Save." : "GPS found in this photo's file. <strong>Private for now</strong> &mdash; turning on locations for this folder makes it public (switch off its <em>Show its location</em> to keep it out)." ?></p>
-          <?php endif; ?>
-        <div class="item-actions">
-          <button type="submit">Save</button>
-          <?php if ($isCover): ?>
-            <button type="button" class="secondary" disabled title="This photo is already the cover"><?= ui_icon('star') ?> This is the cover</button>
-          <?php else: ?>
-            <button type="submit" class="secondary" form="<?= $coverFormId ?>">Set as cover</button>
-          <?php endif; ?>
-        </div>
-      </form>
-      <form method="post" id="<?= $coverFormId ?>">
-        <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-        <input type="hidden" name="action" value="set_cover">
-        <input type="hidden" name="file" value="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>">
-      </form>
-    </div>
-<?php
-    $editorsHtml .= ob_get_clean();
-    $thumbTitle = $file . (($entry['caption'] ?? '') !== '' ? ' — ' . $entry['caption'] : '');
-    ob_start();
-?>
-    <button type="button" class="thumb<?= $isCover ? ' is-cover' : '' ?>" id="photo-<?= $hid ?>" data-edit="edit-<?= $hid ?>" data-file="<?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($thumbTitle, ENT_QUOTES, 'UTF-8') ?>">
-      <?php if ($isVideo): $vt = video_tile_parts($file, $videoDurations[$file] ?? null); ?>
-        <span class="thumb-media vtile"<?= $vt['attrs'] ?>><img class="thumb-img" src="<?= $thumbUrl ?>" loading="lazy" alt=""><?= $vt['inner'] ?><?php if ($durationText !== ''): ?><small class="thumb-duration"><?= $durationText ?></small><?php endif; ?></span>
-      <?php else: ?>
-        <img class="thumb-img" src="<?= $thumbUrl ?>" loading="lazy" alt="">
-      <?php endif; ?>
-      <span class="thumb-badges">
-        <?php if (($entry['caption'] ?? '') !== ''): ?><span title="Has a caption"><?= ui_icon('caption') ?></span><?php endif; ?>
-        <?php if ($loc !== null && !$locUnsaved): ?><span title="Has a location"><?= ui_icon('pin') ?></span><?php endif; ?>
-        <?php if ($locUnsaved): ?><span class="warn" title="GPS found in the file, not saved"><?= ui_icon('warn') ?></span><?php endif; ?>
-        <span class="hid" title="Private: visitors need the private-view password"<?= $isPrivate ? '' : ' hidden' ?>>private</span>
-      </span>
-      <?php if ($isCover): ?><span class="thumb-cover" title="This photo is the cover: the picture on the folder's card and in shared links"><?= ui_icon('star') ?> Cover</span><?php endif; ?>
-      <span class="thumb-name"><?= htmlspecialchars($bare, ENT_QUOTES, 'UTF-8') ?></span>
-      <span class="thumb-check" aria-hidden="true"><?= ui_icon('check') ?></span>
-    </button>
-<?php
-    $thumbsHtml .= ob_get_clean();
-}
-?>
-  <?php if (empty($adminFiles)): ?>
-    <p class="muted">No media here yet.</p>
-  <?php else: ?>
-    <p class="muted photos-hint">Click a thumbnail to edit its caption, link, location and privacy, or to make it the <?= $adminFolderPath === null ? "gallery's" : "folder's" ?> cover (highlighted; it is the picture in shared links). <em>Select <?= media_word() ?></em> changes several at once.</p>
-    <div class="photo-editor" id="photo-editor"><?= $editorsHtml ?></div>
-    <div class="bulk-bar" id="bulk-bar" data-csrf="<?= $csrfToken ?>" hidden>
-      <button type="button" class="secondary" id="bulk-start">Select <?= media_word() ?></button>
-      <span class="bulk-controls" hidden>
-        <span class="bulk-count" role="status" aria-live="polite">0 selected</span>
-        <button type="button" class="secondary" data-bulk="all">Select all</button>
-        <button type="button" class="secondary" data-bulk="none">Clear</button>
-        <button type="button" data-bulk-do="private">Make private</button>
-        <button type="button" class="secondary" data-bulk-do="public">Make public</button>
-        <button type="button" class="secondary" data-bulk="done">Done</button>
-        <span class="rowstate" role="status" aria-live="polite"></span>
-      </span>
-    </div>
-    <div class="thumb-grid"><?= $thumbsHtml ?></div>
-  <?php endif; ?>
-  </div>
-  <div class="tab-panel" data-tab="settings">
   <?php if ($adminFolderPath !== null): ?>
   <section class="panel" id="settings">
     <h2 class="section-title">This folder's own settings</h2>
@@ -7484,7 +7299,6 @@ foreach ($adminFiles as $file) {
 </main>
 </div>
 <script>
-  <?= video_tile_script() ?>
   // A link inside the admin that opens one of its tabs and, if given, scrolls to (and briefly marks) a place in it.
   function adminGoTo(tab, id) {
     var t = document.querySelector('.side-link[data-tab="' + tab + '"], .side-hidden[data-tab="' + tab + '"], .admin-tabs a[data-tab="' + tab + '"]');
@@ -7781,7 +7595,7 @@ foreach ($adminFiles as $file) {
     });
   });
   // Tabs: only the selected section is shown. #name in the address picks one
-  // (so a link can point straight at a tab, or at one photo's card), the last
+  // (so a link can point straight at a tab), the last
   // choice is remembered while moving between folders, and without JavaScript
   // every section simply stays visible.
   (function () {
@@ -7792,7 +7606,7 @@ foreach ($adminFiles as $file) {
     var names = tabs.map(function (t) { return t.getAttribute('data-tab'); });
     var KEY = 'galleryAdminTab';
     function show(name) {
-      if (names.indexOf(name) < 0) name = names.indexOf('photos') >= 0 ? 'photos' : names[0];
+      if (names.indexOf(name) < 0) name = names.indexOf('settings') >= 0 ? 'settings' : names[0];
       panels.forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-tab') === name); });
       tabs.forEach(function (t) {
         var on = t.getAttribute('data-tab') === name;
@@ -7807,102 +7621,8 @@ foreach ($adminFiles as $file) {
       if (name !== 'hidden' && name !== 'site') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
-    // The photo editor: one panel above the thumbnail grid that shows the
-    // selected photo's own form (and none at all until one is selected).
-    var slot = document.getElementById('photo-editor');
-    var editors = [].slice.call(document.querySelectorAll('.item-editor'));
-    var thumbs = [].slice.call(document.querySelectorAll('.thumb[data-edit]'));
-    function openEditor(id, scroll) {
-      var any = false;
-      editors.forEach(function (e) { var on = e.id === id; e.classList.toggle('open', on); if (on) any = true; });
-      thumbs.forEach(function (t) { t.classList.toggle('selected', t.getAttribute('data-edit') === id); });
-      if (slot) slot.classList.toggle('has-open', any);
-      if (any && scroll && slot) slot.scrollIntoView({ block: 'start' });
-    }
-    var selecting = false;
-    thumbs.forEach(function (t) {
-      t.addEventListener('click', function () {
-        if (selecting) { t.classList.toggle('picked'); countPicked(); return; }
-        openEditor(t.getAttribute('data-edit'), true);
-      });
-    });
-    // Select several photos and make them all private (or public) in one go.
-    var bar = document.getElementById('bulk-bar');
-    function picked() { return thumbs.filter(function (t) { return t.classList.contains('picked'); }); }
-    function countPicked() {
-      if (!bar) return;
-      var n = picked().length;
-      bar.querySelector('.bulk-count').textContent = n + ' selected';
-    }
-    if (bar && thumbs.length) {
-      bar.hidden = false;
-      var controls = bar.querySelector('.bulk-controls'), start = document.getElementById('bulk-start'), grid = document.querySelector('.thumb-grid'), note = bar.querySelector('.rowstate');
-      function mode(on) {
-        selecting = on; controls.hidden = !on; start.hidden = on;
-        if (grid) grid.classList.toggle('selecting', on);
-        if (on) openEditor(null);
-        if (!on) thumbs.forEach(function (t) { t.classList.remove('picked'); });
-        countPicked(); note.textContent = ''; note.className = 'rowstate';
-      }
-      start.addEventListener('click', function () { mode(true); });
-      bar.addEventListener('click', function (e) {
-        var b = e.target.closest && e.target.closest('[data-bulk], [data-bulk-do]');
-        if (!b) return;
-        var act = b.getAttribute('data-bulk');
-        if (act === 'all') { thumbs.forEach(function (t) { t.classList.add('picked'); }); countPicked(); return; }
-        if (act === 'none') { thumbs.forEach(function (t) { t.classList.remove('picked'); }); countPicked(); return; }
-        if (act === 'done') { mode(false); return; }
-        var want = b.getAttribute('data-bulk-do') === 'private', files = picked().map(function (t) { return t.getAttribute('data-file'); });
-        if (!files.length) { note.textContent = 'Choose at least one photo first.'; note.className = 'rowstate err'; return; }
-        var body = new URLSearchParams();
-        body.set('csrf_token', bar.getAttribute('data-csrf')); body.set('action', 'bulk_item_flag'); body.set('flag', 'private');
-        body.set('on', want ? '1' : '0'); body.set('files', JSON.stringify(files));
-        note.textContent = 'Saving…'; note.className = 'rowstate busy';
-        fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
-            headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
-          .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
-          .then(function (j) {
-            if (j.ok) { note.textContent = j.text; note.className = 'rowstate ok'; location.hash = 'photos'; location.reload(); }
-            else { note.textContent = j.text; note.className = 'rowstate err'; }
-          })
-          .catch(function (e) { note.textContent = e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.'; note.className = 'rowstate err'; });
-      });
-    }
-    // Switching one photo private: its thumbnail's badge follows at once, and the page is refreshed shortly after so the
-    // Private list and the sidebar count are right too (back on the same photo).
-    document.addEventListener('instant-saved', function (e) {
-      var f = e.target; if (!f || !f.classList || !f.classList.contains('flag-form') || f.getAttribute('data-flag') !== 'private') return;
-      var t = document.getElementById(f.getAttribute('data-thumb')), badge = t && t.querySelector('.hid'), on = f.querySelector('input[type=checkbox]').checked;
-      if (badge) badge.hidden = !on;
-      clearTimeout(window.__flagReload);
-      window.__flagReload = setTimeout(function () { location.hash = f.getAttribute('data-thumb'); location.reload(); }, 1200);
-    });
-    editors.forEach(function (e, i) {
-      var thumb = document.querySelector('.thumb[data-edit="' + e.id + '"]');
-      e.addEventListener('input', function (ev) { if (ev.target.closest && ev.target.closest('.item-flags')) return; if (thumb) thumb.classList.add('dirty'); });
-      [].forEach.call(e.querySelectorAll('[data-nav]'), function (b) {
-        b.addEventListener('click', function () {
-          var n = i + parseInt(b.getAttribute('data-nav'), 10);
-          if (n >= 0 && n < editors.length) { openEditor(editors[n].id, false); if (slot) slot.scrollIntoView({ block: 'nearest' }); }
-        });
-      });
-      var close = e.querySelector('[data-close]');
-      if (close) close.addEventListener('click', function () { openEditor(null); });
-    });
-    function focusCard(id) {
-      var t = id && document.getElementById(id);
-      if (!t || !t.getAttribute('data-edit')) return;
-      t.classList.add('flash-target');
-      openEditor(t.getAttribute('data-edit'), true);
-      setTimeout(function () { t.classList.remove('flash-target'); }, 2500);
-    }
     function fromLocation() {
       var h = decodeURIComponent((location.hash || '').slice(1));
-      if (h.indexOf('photo-') === 0) { show('photos'); focusCard(h); return; }
-      // Just saved a photo: its editor comes back open, whichever tab the
-      // address still names.
-      var card = main.getAttribute('data-focus-card');
-      if (card) { show('photos'); focusCard(card); return; }
       if (names.indexOf(h) >= 0) { show(h); return; }
       var saved = null;
       try { saved = sessionStorage.getItem(KEY); } catch (e) {}
@@ -8558,6 +8278,11 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         header('Content-Type: application/json; charset=UTF-8');
         header('Cache-Control: no-store');
         echo json_encode(['token' => admin_csrf_token()]);
+        return;
+    }
+
+    if (isset($_GET['item'])) {   // the owner's photo editor in the viewer asks for one photo's record before it opens
+        admin_item_json($dir, $files);
         return;
     }
 
@@ -10205,6 +9930,9 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         $isCoverNow = !empty(owner_cover_flags($GLOBALS['dir'], [$file])[$file]);
         $ownerLock .= '<button type="button" class="cover-toggle' . ($isCoverNow ? ' is-cover' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isCoverNow ? 'true' : 'false')
             . '" title="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '">' . ui_icon('star') . '</button>';
+        // And a pencil in the other lower corner: opens the viewer with the editor for this photo's caption, link, place and switches.
+        $ownerLock .= '<button type="button" class="edit-toggle" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8')
+            . '" title="Edit caption, link and location" aria-label="Edit caption, link and location">' . ui_icon('edit') . '</button>';
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
     if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
@@ -10264,6 +9992,9 @@ function ui_icon_paths() {
         'download' => '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
         'move'    => '<path d="M12 3v18M3 12h18M12 3 9 6M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
         'archive' => '<path d="M3 7.5 5 4h14l2 3.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 7.5h18M12 11v5.5M9.4 14l2.6 2.6 2.6-2.6"/>',
+        'edit'    => '<path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M14.5 6.5l3 3"/>',
+        'select'  => '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/>',
+        'chev-down' => '<path d="M5.5 8.75 12 15.25l6.5-6.5"/>',
     ];
 }
 function ui_icon($name) {
@@ -10589,7 +10320,8 @@ function render_about_page() {
   <h2>For the owner</h2>
   <ul>
     <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
-    <li>An admin for captions, locations, links, privacy, covers, folder names and dates, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
+    <li><strong>Edit right on the gallery:</strong> a pencil on every photo opens its caption, link, place, private and cover switches beside or under the photo, saved as you type; <em>Select</em> makes many photos private or public, or places them next to each other by drag and drop</li>
+    <li>An admin for folder names and dates, notes, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
     <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>
     <li><strong>Prepare thumbnails</strong> makes every photo's pictures ahead of time with a progress bar, so the first visit to a big folder isn't slow</li>
@@ -11180,30 +10912,37 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     position: relative;
     scroll-margin-top: 16px;
   }
-  /* Arrange (the owner's drag-and-drop): tiles are picked with a tap and moved by holding one and dragging it next to another. */
-  .arrange-bar { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; background: rgba(30,30,34,0.97); border: 1px solid #3a3a42; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 90; }
-  .arrange-bar[hidden] { display: none; }
-  .arrange-hint { display: block; margin: 0 0 8px; font-size: 0.85rem; color: var(--muted); }
-  .arrange-btns { display: flex; gap: 6px; }
-  .arrange-btns button { flex: 1 1 auto; padding: 7px 10px; background: none; border: 1px solid #34343a; border-radius: 999px; color: var(--text); font: inherit; font-size: 0.85rem; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; }
-  .arrange-btns button:hover:not(:disabled) { background: #26262a; border-color: #4a4a52; }
-  .arrange-btns button:active:not(:disabled) { transform: scale(0.96); }
-  .arrange-btns button:disabled { opacity: 0.4; cursor: default; }
-  .arrange-btns .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .arrange-btns .primary:hover:not(:disabled) { background: #6b77f0; border-color: #6b77f0; }
-  body.arranging { padding-bottom: 120px; }
-  .arranging .gallery > .card[data-file] { cursor: grab; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .arranging .gallery > .card[data-file] img { pointer-events: none; -webkit-user-drag: none; }
-  .arranging .gallery > .card .priv-toggle, .arranging .gallery > .card .cover-toggle { display: none; }
-  .arranging .gallery > .card .item-badge { pointer-events: none; }
-  .arranging .gallery > .card:hover img { transform: none; }
-  @media (hover: hover) { .arranging .gallery > .card[data-file]:hover { outline: 2px solid rgba(255,255,255,0.55); outline-offset: -2px; } }
-  .arranging .gallery > .card[data-file].sel { outline: 3px solid var(--accent); outline-offset: -3px; }
+  /* Select (the owner's way to act on several photos): tiles are picked with a tap; where the photos sit one by one a picked tile
+     can also be held and dragged next to another (Arrange). */
+  .select-bar { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; background: rgba(30,30,34,0.97); border: 1px solid #3a3a42; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 90; display: flex; flex-direction: column; gap: 8px; }
+  .select-bar[hidden] { display: none; }
+  .select-top { display: flex; align-items: center; gap: 4px; }
+  .select-count { flex: 1; min-width: 0; font-size: 0.95rem; font-weight: 600; }
+  .select-hint { flex: 1 1 100%; font-size: 0.8rem; color: var(--muted); line-height: 1.35; }
+  .select-btns, .select-arr { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .select-bar button { flex: 0 1 auto; padding: 7px 12px; background: none; border: 1px solid #34343a; border-radius: 999px; color: var(--text); font: inherit; font-size: 0.85rem; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .select-btns button { flex: 1 1 0; padding: 10px 12px; font-size: 0.9rem; }
+  .select-top button { border-color: transparent; color: #aab2ff; padding: 6px 9px; }
+  .select-bar button:hover:not(:disabled) { background: #26262a; border-color: #4a4a52; }
+  .select-bar button:active:not(:disabled) { transform: scale(0.96); }
+  .select-bar button:disabled { opacity: 0.4; cursor: default; }
+  .select-bar .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .select-bar .select-top .primary { color: #fff; }
+  .select-bar .primary:hover:not(:disabled) { background: #6b77f0; border-color: #6b77f0; }
+  body.selecting { padding-bottom: 190px; }
+  .selecting .card[data-file] { cursor: pointer; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .selecting.can-arrange .gallery > .card[data-file] { cursor: grab; }
+  .selecting .card[data-file] img { pointer-events: none; -webkit-user-drag: none; }
+  .selecting .card .priv-toggle, .selecting .card .cover-toggle, .selecting .card .edit-toggle { display: none; }
+  .selecting .card .item-badge { pointer-events: none; }
+  .selecting .card:hover img { transform: none; }
+  @media (hover: hover) { .selecting .card[data-file]:hover { outline: 2px solid rgba(255,255,255,0.55); outline-offset: -2px; } }
+  .selecting .card[data-file].sel { outline: 3px solid var(--accent); outline-offset: -3px; }
   .card .sel-mark { position: absolute; top: 8px; left: 8px; z-index: 5; display: none; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; box-shadow: 0 0 0 2px #fff; }
   .card .sel-mark .ico { width: 15px; height: 15px; stroke-width: 2.6; }
-  .arranging .card.sel .sel-mark { display: flex; }
-  .arranging .gallery > .card.dragging { opacity: 0.35; }
-  .arranging .gallery > .card.is-stacked::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 5px; z-index: 3; background: hsl(var(--stack-hue, 220) 70% 62%); pointer-events: none; }
+  .selecting .card.sel .sel-mark { display: flex; }
+  .selecting .gallery > .card.dragging { opacity: 0.35; }
+  .selecting .gallery > .card.is-stacked::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 5px; z-index: 3; background: hsl(var(--stack-hue, 220) 70% 62%); pointer-events: none; }
   .arrange-ghost { position: fixed; left: 0; top: 0; width: 88px; height: 88px; z-index: 200; pointer-events: none; border: 2px solid var(--accent); border-radius: 10px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.6); opacity: 0.92; }
   .arrange-ghost img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .arrange-ghost b { position: absolute; right: 4px; top: 4px; padding: 1px 7px; background: var(--accent); border-radius: 999px; color: #fff; font-size: 0.8rem; }
@@ -11291,15 +11030,22 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .cover-toggle.is-cover .ico { fill: currentColor; }
   .cover-toggle.busy { opacity: 0.35; pointer-events: none; }
   @media (hover: hover) { .cover-toggle:not(.is-cover) { opacity: 0; } .card:hover .cover-toggle:not(.is-cover), .cover-toggle:focus-visible { opacity: 0.9; } }
+  /* The pencil, in the lower left corner (opposite the caption, place and link badges it changes): opens the editor in the viewer. */
+  .edit-toggle { position: absolute; bottom: 6px; left: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.75; }
+  .edit-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
+  .edit-toggle.busy { opacity: 0.35; pointer-events: none; }
+  @media (hover: hover) { .edit-toggle { opacity: 0; } .card:hover .edit-toggle, .edit-toggle:focus-visible { opacity: 0.9; } }
+  .owner-card .video-duration { left: 38px; }
+  .priv-toggle::after, .cover-toggle::after, .edit-toggle::after { content: ''; position: absolute; inset: -6px; }   /* a bigger target for a finger */
   /* Over one of these two, the button itself answers: full strength, a white ring, a little larger, and a colour of its own
      (the accent for a plain one, a lighter red or gold for one that is already lit); pressed, it sinks back. */
-  .priv-toggle, .cover-toggle { transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; }
-  .priv-toggle:active, .cover-toggle:active { transform: scale(0.92); }
+  .priv-toggle, .cover-toggle, .edit-toggle { transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; }
+  .priv-toggle:active, .cover-toggle:active, .edit-toggle:active { transform: scale(0.92); }
   @media (hover: hover) {
-    .priv-toggle:hover, .cover-toggle:hover { opacity: 1 !important; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; }
+    .priv-toggle:hover, .cover-toggle:hover, .edit-toggle:hover { opacity: 1 !important; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; }
     .priv-toggle.is-private:hover { background: #f4585b; }
     .cover-toggle.is-cover:hover { background: #ffd86b; }
-    .priv-toggle:hover:active, .cover-toggle:hover:active { transform: scale(1.02); }
+    .priv-toggle:hover:active, .cover-toggle:hover:active, .edit-toggle:hover:active { transform: scale(1.02); }
   }
   .lightbox .caption-row .lightbox-copy.owner-cover.on { color: #f5c542; opacity: 1; }
   .lightbox .caption-row .lightbox-copy.owner-cover.on .ico { fill: currentColor; }
@@ -11537,6 +11283,73 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     }
     .lightbox .caption-row .lightbox-copy:not(.on):not(.nudge):not(.copied):not(.ready):hover, .lightbox .close:hover, .lightbox .nav:hover { color: #fff; }
   }
+  /* The owner's editor in the viewer: a sheet under the photo on a phone, a panel beside it on a wide screen. */
+  .lightbox .caption-row .lightbox-copy.owner-edit.on { color: #aab2ff; opacity: 1; }
+  .lb-editor { position: fixed; z-index: 9; box-sizing: border-box; display: flex; flex-direction: column; background: #1a1a1c; color: var(--text); touch-action: pan-y; font-size: 0.95rem; }
+  .lb-editor[hidden] { display: none; }
+  .lightbox.lb-sheet .lb-editor { left: 0; right: 0; bottom: 0; max-height: calc(var(--lbh, 100dvh) - 150px); border-radius: 18px 18px 0 0; box-shadow: 0 -6px 24px rgba(0,0,0,0.5); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .lightbox.lb-side .lb-editor { top: 0; right: 0; bottom: 0; width: 360px; border-left: 1px solid #2c2c30; }
+  @media (pointer: coarse) { .lightbox.lb-side .lb-editor { top: calc(env(safe-area-inset-top, 0px) + 54px); } }
+  .lbe-handle { display: none; align-self: center; width: 38px; height: 4px; margin: 8px 0 0; border-radius: 2px; background: #4a4a50; flex: none; }
+  .lightbox.lb-sheet .lbe-handle { display: block; }
+  .lbe-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 10px 16px 4px; min-height: 40px; flex: none; }
+  .lbe-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .lbe-status { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+  .lbe-status.ok { color: #3ba55c; }
+  .lbe-status.err { color: #ed4245; flex-basis: 100%; }
+  .lbe-hidekb { display: none; align-items: center; gap: 5px; height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid #34343a; background: #26262a; color: var(--text); font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+  .lb-editor.kb .lbe-hidekb { display: inline-flex; }
+  .lbe-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 16px 10px; display: flex; flex-direction: column; gap: 12px; }
+  .lbe-field { display: block; }
+  .lbe-field > span { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 5px; }
+  .lbe-field input { width: 100%; height: 46px; box-sizing: border-box; padding: 0 13px; border-radius: 10px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; font-size: 16px; }
+  .lbe-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,101,242,0.28); }
+  .lbe-field input.bad { border-color: #ed4245; box-shadow: 0 0 0 3px rgba(237,66,69,0.25); }
+  .lbe-field input:disabled { opacity: 0.5; }
+  @media (hover: hover) and (pointer: fine) { .lbe-field input { height: 42px; font-size: 14.5px; } }
+  .lbe-err { display: block; min-height: 0; margin-top: 4px; font-style: normal; font-size: 0.78rem; color: #ed4245; }
+  .lbe-err:empty { display: none; }
+  .lbe-pills { display: flex; gap: 8px; }
+  .lbe-pill { flex: 1 1 0; min-width: 0; height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 999px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; font-size: 0.9rem; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; }
+  .lbe-pill .ico { width: 1.1em; height: 1.1em; vertical-align: 0; }
+  .lbe-pill[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #lbe-private[aria-pressed="true"] { background: #ed4245; border-color: #ed4245; }
+  #lbe-cover[aria-pressed="true"] { background: #f5c542; border-color: #f5c542; color: #1a1a1c; }
+  #lbe-cover[aria-pressed="true"] .ico { fill: currentColor; }
+  .lbe-pill:active:not(:disabled) { transform: scale(0.97); }
+  .lbe-pill:disabled { opacity: 0.5; cursor: default; }
+  @media (hover: hover) { .lbe-pill:hover:not(:disabled) { border-color: #6b77f0; } .lbe-pill[aria-pressed="true"]:hover:not(:disabled) { filter: brightness(1.12); } }
+  .lbe-note { margin: -4px 0 0; font-size: 0.78rem; color: var(--muted); line-height: 1.35; }
+  .lbe-note[hidden] { display: none; }
+  .lbe-locrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 0 13px; border-radius: 10px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .lbe-locrow .ico { flex: none; color: #aab2ff; }
+  .lbe-locrow #lbe-locsum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
+  .lbe-locrow .lbe-chev { color: var(--muted); transition: transform .15s; }
+  .lb-editor.loc-open .lbe-chev { transform: rotate(180deg); }
+  @media (hover: hover) { .lbe-locrow:hover { border-color: #4a4a52; background: #16161a; } }
+  .lbe-locfields { display: none; margin-top: 10px; flex-direction: column; gap: 10px; }
+  .lb-editor.loc-open .lbe-locfields { display: flex; }
+  .lbe-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .lbe-auto { align-self: flex-start; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--accent); background: none; color: #aab2ff; font: inherit; font-size: 0.85rem; cursor: pointer; }
+  .lbe-auto[hidden] { display: none; }
+  .lb-editor.typing .lbe-pills, .lb-editor.typing .lbe-note, .lb-editor.typing .lbe-loc { display: none; }
+  .lbe-foot { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 8px; padding: 8px 16px 14px; flex: none; }
+  .lbe-btn { height: 46px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 10px; border: 1px solid #34343a; background: #26262a; color: var(--text); font: inherit; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: background .12s, transform .12s; }
+  .lbe-btn .ico { width: 1.1em; height: 1.1em; vertical-align: 0; }
+  .lbe-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .lbe-btn:active { transform: scale(0.97); }
+  @media (hover: hover) { .lbe-btn:hover { background: #303036; } .lbe-btn.primary:hover { background: #6b77f0; } }
+  /* The photo takes what the editor leaves. */
+  .lightbox.editing .lightbox-zoom, .lightbox.editing .lightbox-map-toggle { display: none; }
+  .lightbox.editing img { cursor: default; }
+  .lightbox.editing.lb-side { padding-right: 360px; }
+  .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }
+  .lightbox.editing.lb-side .next { right: 366px; }
+  .lightbox.editing.lb-side .close { right: 374px; }
+  .lightbox.editing.lb-sheet { padding-bottom: var(--sheet-h, 0px); }
+  .lightbox.editing.lb-sheet img, .lightbox.editing.lb-sheet video { max-height: calc(var(--lbh, 100dvh) - var(--sheet-h, 0px) - 90px); }
+  @media (pointer: coarse) { .lightbox.editing.lb-sheet img, .lightbox.editing.lb-sheet video { max-height: calc(var(--lbh, 100dvh) - var(--sheet-h, 0px) - 62px - env(safe-area-inset-top, 0px)); } }
+  .lightbox.editing.lb-sheet .prev, .lightbox.editing.lb-sheet .next { top: calc((var(--lbh, 100dvh) - var(--sheet-h, 0px)) / 2); }   /* the arrows sit level with the photo, not with the whole screen */
   .lightbox .prev { left: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   .lightbox .next { right: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
   @media (max-width: 600px) {
@@ -11855,6 +11668,7 @@ if (ENABLE_MAP && $mapPoints) {
   }
   // The owner's Arrange button: photos shown one by one here (not in a filename group or a notes file's layout, which keep their own order).
   $arrangeShown = is_admin_browser() && !AUTO_GROUP_BY_FILENAME && count($sortScope) >= 2 && !(!AUTO_GROUP_BY_FOLDER && !empty($mdFiles));
+  $selectShown = is_admin_browser() && count($sortScope) >= 1;
   $arrangeStacks = [];
   if ($arrangeShown) {
       $arrangeByFolder = [];
@@ -11886,8 +11700,8 @@ if (ENABLE_MAP && $mapPoints) {
         <button type="button" class="sort-reset">Use this gallery's order</button>
       </div>
       <?php endif; ?>
-      <?php if ($arrangeShown): ?>
-      <span class="map-combo arrange-combo"><button type="button" class="map-combo-btn" id="arrange-btn" title="Arrange: place photos next to each other" aria-pressed="false"><?= ui_icon('move') ?><span class="map-toggle-label">Arrange the photos</span></button></span>
+      <?php if ($selectShown): ?>
+      <span class="map-combo select-combo"><button type="button" class="map-combo-btn" id="select-btn" title="Select <?= media_word() ?>" aria-pressed="false"><?= ui_icon('select') ?><span class="map-toggle-label">Select <?= media_word() ?></span></button></span>
       <?php endif; ?>
       <span class="page-tools">
         <?php if ($archiveCount > 0 || $lockHtml !== ''): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
@@ -11927,15 +11741,25 @@ if (ENABLE_MAP && $mapPoints) {
 
 
 <?php if (is_admin_browser()): ?><div class="lightbox-toast" id="owner-toast" role="status" aria-live="polite" hidden></div><?php endif; ?>
+<?php if (!empty($selectShown)): ?>
+<div class="select-bar" id="select-bar" role="region" aria-label="Select <?= media_word() ?>" hidden>
+  <div class="select-top">
+    <span class="select-count" id="select-count" aria-live="polite" data-empty="Tap <?= media_word() ?> to select">Tap <?= media_word() ?> to select</span>
+    <button type="button" data-select="all">Select all</button>
+    <button type="button" data-select="clear">Clear</button>
+    <button type="button" data-select="done" class="primary">Done</button>
+  </div>
+  <div class="select-btns">
+    <button type="button" data-select="private"><?= ui_icon('lock') ?> Make private</button>
+    <button type="button" data-select="public"><?= ui_icon('unlock') ?> Make public</button>
+  </div>
 <?php if (!empty($arrangeShown)): ?>
-<div class="arrange-bar" id="arrange-bar" role="region" aria-label="Arrange the photos" hidden>
-  <span class="arrange-hint" id="arrange-hint" aria-live="polite"></span>
-  <span class="arrange-btns">
-    <button type="button" data-arrange="clear">Clear</button>
-    <button type="button" data-arrange="release" title="Take the selected photos out of the places you gave them">Release</button>
-    <button type="button" data-arrange="reset" title="Put every photo of this folder back in its sorted place">Reset folder</button>
-    <button type="button" data-arrange="done" class="primary">Done</button>
-  </span>
+  <div class="select-arr">
+    <span class="select-hint">Hold and drag a picked <?= media_word() === 'media' ? 'one' : 'photo' ?> beside another.</span>
+    <button type="button" data-select="release" title="Take the selected photos out of the places you gave them">Release</button>
+    <button type="button" data-select="reset" title="Put every photo of this folder back in its sorted place">Reset folder</button>
+  </div>
+<?php endif; ?>
 </div>
 <?php endif; ?>
 <div class="lightbox" id="lightbox">
@@ -11953,6 +11777,7 @@ if (ENABLE_MAP && $mapPoints) {
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
 <?php if (is_admin_browser()): ?>
+    <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
     <button class="lightbox-copy owner-cover" id="lightbox-cover" type="button" data-owner="cover" title="Make this the folder's cover photo" aria-label="Make this the folder's cover photo"><?= ui_icon('star') ?></button>
     <button class="lightbox-copy owner-priv" id="lightbox-private" type="button" data-owner="private" title="Make this private" aria-label="Make this private"><?= ui_icon('unlock') ?></button>
 <?php endif; ?>
@@ -11968,6 +11793,43 @@ if (ENABLE_MAP && $mapPoints) {
     <button class="lightbox-copy lightbox-close-row" type="button" onclick="closeLightbox()" title="Close" aria-label="Close"><?= ui_icon('close') ?></button>
   </div>
   <button class="nav next" type="button" onclick="navigate(1)" aria-label="Next"><?= ui_icon('chev-right') ?></button>
+<?php if (is_admin_browser()): ?>
+  <div class="lb-editor" id="lb-editor" role="dialog" aria-label="Edit this photo" hidden>
+    <div class="lbe-handle" aria-hidden="true"></div>
+    <div class="lbe-head">
+      <span class="lbe-name" id="lbe-name"></span>
+      <span class="lbe-status" id="lbe-status" role="status" aria-live="polite"></span>
+      <button type="button" class="lbe-hidekb" id="lbe-hidekb"><?= ui_icon('chev-down') ?> Hide keyboard</button>
+    </div>
+    <div class="lbe-body">
+      <label class="lbe-field"><span>Caption</span><input type="text" id="lbe-caption" maxlength="500" autocomplete="off" enterkeyhint="done"></label>
+      <label class="lbe-field"><span>Information link</span><input type="url" id="lbe-web" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://&hellip;" enterkeyhint="done"><em class="lbe-err" id="lbe-web-err"></em></label>
+      <div class="lbe-pills" id="lbe-pills">
+        <button type="button" class="lbe-pill" id="lbe-private" aria-pressed="false" title="Hidden from visitors unless they have the private-view password"><?= ui_icon('lock') ?> Private</button>
+        <button type="button" class="lbe-pill" id="lbe-loc" aria-pressed="false" title="Show this photo's location to visitors"><?= ui_icon('pin') ?> Location</button>
+        <button type="button" class="lbe-pill" id="lbe-cover" aria-pressed="false" title="Make this the folder's cover photo"><?= ui_icon('star') ?> Cover</button>
+      </div>
+      <p class="lbe-note" id="lbe-note" hidden></p>
+      <div class="lbe-loc">
+        <button type="button" class="lbe-locrow" id="lbe-locrow" aria-expanded="false"><?= ui_icon('pin') ?><span id="lbe-locsum">No location</span><span class="lbe-chev"><?= ui_icon('chev-down') ?></span></button>
+        <div class="lbe-locfields">
+          <div class="lbe-two">
+            <label class="lbe-field"><span>Latitude</span><input type="text" id="lbe-lat" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done"></label>
+            <label class="lbe-field"><span>Longitude</span><input type="text" id="lbe-lng" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done"></label>
+          </div>
+          <em class="lbe-err" id="lbe-loc-err"></em>
+          <label class="lbe-field"><span>Location label (optional)</span><input type="text" id="lbe-label" maxlength="200" autocomplete="off" enterkeyhint="done"></label>
+          <button type="button" class="lbe-auto" id="lbe-useauto" hidden>Keep the location from the photo</button>
+        </div>
+      </div>
+    </div>
+    <div class="lbe-foot">
+      <button type="button" class="lbe-btn" id="lbe-prev"><?= ui_icon('chev-left') ?> Prev</button>
+      <button type="button" class="lbe-btn primary" id="lbe-done">Done</button>
+      <button type="button" class="lbe-btn" id="lbe-next">Next <?= ui_icon('chev-right') ?></button>
+    </div>
+  </div>
+<?php endif; ?>
 </div>
 
 <script>
@@ -12005,6 +11867,7 @@ if (ENABLE_MAP && $mapPoints) {
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
   const showCountsPublicly = <?= view_counts_shown() ? 'true' : 'false' ?>;
   let current = 0;
+  let lbEdit = null;   // the owner's editor in the viewer, when signed in as the owner
   const lightbox = document.getElementById('lightbox');
   const lightboxImg = document.getElementById('lightbox-img');
   const lightboxVideo = document.getElementById('lightbox-video');
@@ -12074,6 +11937,7 @@ if (ENABLE_MAP && $mapPoints) {
     lightbox.classList.add('open');
   }
   function closeLightbox() {
+    if (lbEdit && lbEdit.isOpen()) lbEdit.close();
     if (typeof collapseMiniMap === 'function') collapseMiniMap();
     if (typeof setZoom === 'function' && zoomMode !== 'fit') setZoom('fit');
     lightbox.classList.remove('open');
@@ -12092,6 +11956,11 @@ if (ENABLE_MAP && $mapPoints) {
     return out;
   }
   function navigate(delta) {
+    // With the editor open, what was typed on this photo is saved first (and the move waits if something cannot be saved).
+    if (lbEdit && lbEdit.isOpen()) { lbEdit.beforeLeave().then(function (ok) { if (ok) step(delta); }); return; }
+    step(delta);
+  }
+  function step(delta) {
     const set = siblingsOf(current), at = set.indexOf(current);
     current = set[(at + delta + set.length) % set.length];
     updateImage();
@@ -12206,40 +12075,51 @@ if (ENABLE_MAP && $mapPoints) {
       .catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); })
       .then(function () { btn.classList.remove('busy'); });
   }, true);
-  // Arrange: the owner places photos next to each other by hand. A tap picks a tile; holding one and dragging it (a long press on a
-  // touch screen, so scrolling still works) puts everything picked next to the tile it is dropped beside. The server keeps each
-  // placement as a stack that follows its anchor through every sort; the page reloads to show the result.
+<?php if (is_admin_browser()): ?>
+  // Select: the owner picks photos with a tap and acts on all of them: make them private or public in one go, and (where the photos are
+  // laid out one by one) place them next to each other by holding one and dragging it beside another (on a touch screen a long press, so
+  // scrolling still works). The server keeps each placement as a stack that follows its anchor through every sort; the page reloads to
+  // show a placement. Privacy changes are made in place.
   (function () {
-    const btn = document.getElementById('arrange-btn'), bar = document.getElementById('arrange-bar'), gal = document.querySelector('.gallery');
-    if (!btn || !bar || !gal || !ownerState) return;
-    if (gal.querySelectorAll(':scope > .card[data-file]').length < 2) { btn.parentNode.style.display = 'none'; return; }   // nothing here to place (all in boxes)
-    const stacks = <?= json_encode($arrangeStacks) ?>, hint = document.getElementById('arrange-hint');
+    const btn = document.getElementById('select-btn'), bar = document.getElementById('select-bar'), gal = document.querySelector('.gallery');
+    if (!btn || !bar || !ownerState) return;
     const pageFolder = <?= json_encode($currentFolderPath === null ? '' : $currentFolderPath) ?>;
+    const stacks = <?= json_encode($arrangeStacks) ?>;
+    const arrRow = bar.querySelector('.select-arr');
+    const loose = function () { return gal ? [].slice.call(gal.querySelectorAll(':scope > .card[data-file]')) : []; };
+    const canArrange = !!arrRow && loose().length >= 2;   // photos shown one by one here, not only inside group boxes
+    if (arrRow && !canArrange) arrRow.hidden = true;
     const stackOf = {};
     stacks.forEach(function (list, i) { list.forEach(function (f) { stackOf[f] = i; }); });
-    let on = false, press = null, drag = null, swallow = false, pointer = { x: 0, y: 0 }, scrollTimer = 0;
+    let on = false, press = null, drag = null, swallow = false, pointer = { x: 0, y: 0 }, scrollTimer = 0, busy = false;
     const picked = [];   // the picked files, in the order they were picked
-    const cards = function () { return [].slice.call(gal.querySelectorAll(':scope > .card[data-file]')); };
+    const cards = function () { return [].slice.call(document.querySelectorAll('.card[data-file]')); };
     const fileOf = function (c) { return c.getAttribute('data-file'); };
+    const bare = function (f) { return f.slice(f.lastIndexOf('/') + 1); };
     const say = function (text) {
       const t = document.getElementById('owner-toast'); if (!t) return;
       t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500);
     };
+    const count = document.getElementById('select-count');
     const paint = function () {
       cards().forEach(function (c) {
         const f = fileOf(c), i = stackOf[f];
         c.classList.toggle('sel', picked.indexOf(f) >= 0);
-        c.classList.toggle('is-stacked', i !== undefined);
-        if (i !== undefined) c.style.setProperty('--stack-hue', String((i * 67 + 215) % 360)); else c.style.removeProperty('--stack-hue');
+        c.classList.toggle('is-stacked', canArrange && i !== undefined);
+        if (canArrange && i !== undefined) c.style.setProperty('--stack-hue', String((i * 67 + 215) % 360)); else c.style.removeProperty('--stack-hue');
       });
-      const n = picked.length, anyStack = picked.some(function (f) { return stackOf[f] !== undefined; });
-      hint.textContent = n ? n + ' selected. Hold one and drag it beside another.' : 'Tap to select. Hold and drag a photo beside another.';
-      bar.querySelector('[data-arrange=clear]').disabled = !n;
-      bar.querySelector('[data-arrange=release]').disabled = !anyStack;
-      bar.querySelector('[data-arrange=reset]').disabled = !stacks.length;
+      const n = picked.length;
+      count.textContent = n ? n + ' selected' : count.getAttribute('data-empty');
+      bar.querySelector('[data-select=clear]').disabled = !n;
+      bar.querySelector('[data-select=private]').disabled = !n || busy;
+      bar.querySelector('[data-select=public]').disabled = !n || busy;
+      if (canArrange) {
+        bar.querySelector('[data-select=release]').disabled = !picked.some(function (f) { return stackOf[f] !== undefined; });
+        bar.querySelector('[data-select=reset]').disabled = !stacks.length;
+      }
     };
     const setOn = function (v) {
-      on = v; document.body.classList.toggle('arranging', v); bar.hidden = !v;
+      on = v; document.body.classList.toggle('selecting', v); document.body.classList.toggle('can-arrange', v && canArrange); bar.hidden = !v;
       btn.setAttribute('aria-pressed', v ? 'true' : 'false');
       if (!v) picked.length = 0;
       paint();
@@ -12247,33 +12127,58 @@ if (ENABLE_MAP && $mapPoints) {
     const toggle = function (f) {
       const i = picked.indexOf(f);
       if (i >= 0) picked.splice(i, 1);
-      else { if (picked.length && folderOf(picked[0]) !== folderOf(f)) picked.length = 0; picked.push(f); }
+      else {
+        if (picked.length && folderOf(picked[0]) !== folderOf(f)) { picked.length = 0; say('A selection stays within one folder'); }
+        picked.push(f);
+      }
       paint();
     };
     btn.addEventListener('click', function () { setOn(!on); });
-    // The admin's own save (a token is fetched first), then the page reloads in the same place with the same photos picked.
-    const send = function (folder, fields, keep) {
-      fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' })
+    // The admin's own save (a token is fetched first).
+    const request = function (folder, fields) {
+      return fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
         .then(function (j) {
-          const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'arrange_items');
+          const body = new URLSearchParams(); body.set('csrf_token', j.token);
           Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
           return fetch('?admin' + (folder ? '&folder=' + encodeURIComponent(folder) : ''), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
         })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
-        .then(function (j) {
-          if (!j.ok) throw new Error(j.text || 'not saved');
-          try { sessionStorage.setItem('gallery_arrange', JSON.stringify({ y: window.scrollY, keep: keep || [] })); } catch (e) {}
-          location.reload();
-        })
-        .catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); });
+        .then(function (j) { if (!j.ok) throw new Error(j.text || 'not saved'); return j; });
     };
-    const bare = function (f) { return f.slice(f.lastIndexOf('/') + 1); };
+    const fail = function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); };
+    // A placement is saved, then the page reloads in the same place with the same photos picked.
+    const send = function (folder, fields, keep) {
+      request(folder, Object.assign({ action: 'arrange_items' }, fields)).then(function () {
+        try { sessionStorage.setItem('gallery_select', JSON.stringify({ y: window.scrollY, keep: keep || [] })); } catch (e) {}
+        location.reload();
+      }).catch(fail);
+    };
+    const bulk = function (makePrivate) {
+      if (!picked.length || busy) return;
+      const sel = picked.slice(), folder = folderOf(sel[0]);
+      busy = true; paint();
+      request(folder, { action: 'bulk_item_flag', flag: 'private', on: makePrivate ? '1' : '0', files: JSON.stringify(sel.map(bare)) }).then(function (j) {
+        sel.forEach(function (f) { ownerState.priv[f] = makePrivate; });
+        ownerPaint();
+        say(j.text || (sel.length + (makePrivate ? ' now private' : ' now public')));
+      }).catch(fail).then(function () { busy = false; paint(); });
+    };
+    const selectAll = function () {
+      const all = cards();
+      if (!all.length) return;
+      const folder = picked.length ? folderOf(picked[0]) : (all.some(function (c) { return folderOf(fileOf(c)) === pageFolder; }) ? pageFolder : folderOf(fileOf(all[0])));
+      all.forEach(function (c) { const f = fileOf(c); if (folderOf(f) === folder && picked.indexOf(f) < 0) picked.push(f); });
+      paint();
+    };
     bar.addEventListener('click', function (e) {
-      const b = e.target.closest('[data-arrange]'); if (!b || b.disabled) return;
-      const what = b.getAttribute('data-arrange');
+      const b = e.target.closest('[data-select]'); if (!b || b.disabled) return;
+      const what = b.getAttribute('data-select');
       if (what === 'done') setOn(false);
+      else if (what === 'all') selectAll();
       else if (what === 'clear') { picked.length = 0; paint(); }
+      else if (what === 'private') bulk(true);
+      else if (what === 'public') bulk(false);
       else if (what === 'release') {
         const sel = picked.filter(function (f) { return stackOf[f] !== undefined; });
         send(folderOf(sel[0]), { mode: 'release', files: JSON.stringify(sel.map(bare)) }, picked.slice());
@@ -12285,14 +12190,14 @@ if (ENABLE_MAP && $mapPoints) {
     // Tapping a tile picks it instead of opening it.
     document.addEventListener('click', function (e) {
       if (!on) return;
-      const c = e.target.closest ? e.target.closest('.gallery > .card[data-file]') : null;
+      const c = e.target.closest ? e.target.closest('.card[data-file]') : null;
       if (!c) return;
       e.preventDefault(); e.stopPropagation();
       if (swallow) return;
       toggle(fileOf(c));
     }, true);
-    gal.addEventListener('contextmenu', function (e) { if (on) e.preventDefault(); });
-    // Dragging
+    document.addEventListener('contextmenu', function (e) { if (on && e.target.closest && e.target.closest('.card[data-file]')) e.preventDefault(); });
+    // Dragging (only where the photos are laid out one by one)
     const line = document.createElement('div'); line.className = 'arrange-line'; line.hidden = true; document.body.appendChild(line);
     const begin = function () {
       const c = press.card, f = fileOf(c);
@@ -12310,7 +12215,7 @@ if (ENABLE_MAP && $mapPoints) {
       if (!drag) return;
       drag.ghost.style.transform = 'translate(' + (pointer.x + 12) + 'px,' + (pointer.y + 12) + 'px)';
       let best = null, bestD = 1e9;
-      cards().forEach(function (c) {
+      loose().forEach(function (c) {
         if (drag.set.indexOf(c) >= 0 || folderOf(fileOf(c)) !== drag.folder) return;
         const r = c.getBoundingClientRect();
         const dx = Math.max(r.left - pointer.x, 0, pointer.x - r.right), dy = Math.max(r.top - pointer.y, 0, pointer.y - r.bottom), d = Math.hypot(dx, dy);
@@ -12324,7 +12229,7 @@ if (ENABLE_MAP && $mapPoints) {
     const loop = function () {   // scroll while the pointer is near the top or bottom edge
       cancelAnimationFrame(scrollTimer);
       if (!drag) return;
-      const h = window.innerHeight, top = 80, low = h - 150;   // (the bar sits at the bottom)
+      const h = window.innerHeight, top = 80, low = h - 190;   // (the bar sits at the bottom)
       const dy = pointer.y < top ? -(top - pointer.y) / 6 : (pointer.y > low ? (pointer.y - low) / 6 : 0);
       if (dy) { window.scrollBy(0, dy); place(); }
       scrollTimer = requestAnimationFrame(loop);
@@ -12337,12 +12242,12 @@ if (ENABLE_MAP && $mapPoints) {
       d.set.forEach(function (x) { x.classList.remove('dragging'); });
       setTimeout(function () { swallow = false; }, 0);
       if (drop && d.target) {
-        const files = d.set.map(function (x) { return bare(fileOf(x)); });
-        send(d.folder, { mode: 'place', files: JSON.stringify(files), target: bare(fileOf(d.target)), side: d.side }, d.set.map(fileOf));
+        const names = d.set.map(function (x) { return bare(fileOf(x)); });
+        send(d.folder, { mode: 'place', files: JSON.stringify(names), target: bare(fileOf(d.target)), side: d.side }, d.set.map(fileOf));
       }
     };
-    gal.addEventListener('pointerdown', function (e) {
-      if (!on || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    document.addEventListener('pointerdown', function (e) {
+      if (!on || !canArrange || (e.pointerType === 'mouse' && e.button !== 0)) return;
       const c = e.target.closest('.card[data-file]'); if (!c || c.parentNode !== gal) return;
       pointer = { x: e.clientX, y: e.clientY };
       press = { card: c, x: e.clientX, y: e.clientY, id: e.pointerId, touch: e.pointerType !== 'mouse', timer: 0 };
@@ -12362,7 +12267,7 @@ if (ENABLE_MAP && $mapPoints) {
     // Holding a tile on a touch screen must not scroll the page once the drag has begun.
     document.addEventListener('touchmove', function (e) { if (drag) e.preventDefault(); }, { passive: false });
     let back = null;
-    try { back = JSON.parse(sessionStorage.getItem('gallery_arrange') || 'null'); sessionStorage.removeItem('gallery_arrange'); } catch (e) {}
+    try { back = JSON.parse(sessionStorage.getItem('gallery_select') || 'null'); sessionStorage.removeItem('gallery_select'); } catch (e) {}
     if (back) {
       setOn(true);
       (back.keep || []).forEach(function (f) { if (cards().some(function (c) { return fileOf(c) === f; })) picked.push(f); });
@@ -12370,6 +12275,287 @@ if (ENABLE_MAP && $mapPoints) {
       window.scrollTo(0, back.y || 0);
     }
   })();
+  // The owner's editor, in the viewer: caption, information link, place and the Private / Location / Cover switches of the photo
+  // being looked at. Nothing needs a Save button: the switches save the moment they are pressed; the text saves when you leave a
+  // field, a second after you stop typing, and when you move to another photo or close the editor. On a phone it is a sheet under
+  // the photo (the photo stays in view above it, above the keyboard too); on a wide screen a panel beside the photo.
+  lbEdit = (function () {
+    const ed = document.getElementById('lb-editor');
+    if (!ed || !ownerState) return null;
+    const $ = function (id) { return document.getElementById(id); };
+    const f = { caption: $('lbe-caption'), web: $('lbe-web'), lat: $('lbe-lat'), lng: $('lbe-lng'), label: $('lbe-label') };
+    const pills = { priv: $('lbe-private'), loc: $('lbe-loc'), cover: $('lbe-cover') };
+    const statusEl = $('lbe-status'), nameEl = $('lbe-name'), noteEl = $('lbe-note'), webErr = $('lbe-web-err'), locErr = $('lbe-loc-err');
+    const useAuto = $('lbe-useauto'), locRow = $('lbe-locrow'), locSum = $('lbe-locsum'), hideKb = $('lbe-hidekb'), toolBtn = $('lightbox-edit');
+    const sheetMq = window.matchMedia ? window.matchMedia('(max-width: 700px), (hover: none) and (pointer: coarse) and (orientation: portrait)') : { matches: false };
+    const MAPON = <?= ENABLE_MAP ? 'true' : 'false' ?>, LOCON = <?= ENABLE_PHOTO_LOCATION ? 'true' : 'false' ?>;
+    let isOpen = false, st = null, seq = 0, token = null;
+    const bareOf = function (file) { return file.slice(file.lastIndexOf('/') + 1); };
+    const jsonOf = function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); };
+    const setStatus = function (kind, text) {
+      statusEl.className = 'lbe-status' + (kind ? ' ' + kind : '');
+      statusEl.textContent = '';
+      if (kind === 'ok') statusEl.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg> ';
+      statusEl.appendChild(document.createTextNode(text || ''));
+    };
+    const problem = function (err) { setStatus('err', err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : (err && err.message ? err.message : 'Not saved: try again')); };
+    const csrf = function () {
+      if (token) return Promise.resolve(token);
+      return fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(jsonOf).then(function (j) { token = j.token; return token; });
+    };
+    const post = function (file, fields) {
+      return csrf().then(function (tok) {
+        const body = new URLSearchParams(); body.set('csrf_token', tok);
+        Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+        const folder = folderOf(file);
+        return fetch('?admin' + (folder ? '&folder=' + encodeURIComponent(folder) : ''), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
+      }).then(jsonOf);
+    };
+    const values = function () { return { caption: f.caption.value.trim(), web: f.web.value.trim(), lat: f.lat.value.trim(), lng: f.lng.value.trim(), label: f.label.value.trim() }; };
+    const textDirty = function (s, v) { return v.caption !== s.base.caption || v.web !== s.base.web; };
+    const locDirty = function (s, v) { return v.lat !== s.base.lat || v.lng !== s.base.lng || v.label !== s.base.label; };
+    const isNum = function (x) { return x !== '' && isFinite(Number(x)); };
+    // Marks what cannot be saved, and says so under the field; true when everything that changed is fine to save.
+    const validate = function (s, v, quiet) {
+      let ok = true;
+      const bad = function (el, err, msg) { ok = false; if (!quiet) { el.classList.add('bad'); err.textContent = msg; } };
+      if (!quiet) { f.web.classList.remove('bad'); webErr.textContent = ''; f.lat.classList.remove('bad'); f.lng.classList.remove('bad'); locErr.textContent = ''; }
+      if (textDirty(s, v) && v.web !== '' && !/^https?:\/\/\S+$/i.test(v.web)) bad(f.web, webErr, 'The link needs to start with http:// or https://');
+      if (locDirty(s, v) && (v.lat !== '' || v.lng !== '')) {
+        if (!(isNum(v.lat) && isNum(v.lng) && Math.abs(Number(v.lat)) <= 90 && Math.abs(Number(v.lng)) <= 180)) { bad(f.lat, locErr, 'That is not a valid latitude and longitude.'); if (!quiet) f.lng.classList.add('bad'); }
+      }
+      return ok;
+    };
+    const paintPills = function () {
+      if (!st) return;
+      const set = function (el, on) { el.setAttribute('aria-pressed', on ? 'true' : 'false'); };
+      set(pills.priv, st.cfg.private); set(pills.loc, st.cfg.locationShown); set(pills.cover, !!ownerState.cover[st.file]);
+      let note = '';
+      if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Site settings), so none show yet.';
+      else if (st.cfg.folderPrivate && st.cfg.private) note = 'Its folder is private, so it stays private until you switch this off.';
+      noteEl.textContent = note; noteEl.hidden = note === '';
+    };
+    const paintLoc = function () {
+      if (!st) return;
+      const v = values();
+      const place = v.lat !== '' && v.lng !== '';
+      locSum.textContent = place ? v.lat + ', ' + v.lng + (v.label ? ' · ' + v.label : '') : 'No location';
+      useAuto.hidden = !st.auto;
+      if (st.auto) locSum.textContent = 'From the photo’s GPS, not saved yet';
+    };
+    const photoBadges = function (file, v) {
+      const place = LOCON && v.lat !== '' && v.lng !== '';
+      document.querySelectorAll('.card[data-file="' + cssEscape(file) + '"]').forEach(function (card) {
+        const box = card.querySelector('.card-badges'); if (!box) return;
+        box.querySelectorAll('.caption-badge, .location-badge, .web-badge').forEach(function (b) { b.remove(); });
+        const made = [], svg = function (n) { return '<svg class="ico" aria-hidden="true"><use href="#i-' + n + '"></use></svg>'; };
+        if (v.caption) {
+          const s = document.createElement('span'); s.className = 'item-badge caption-badge'; s.title = v.caption; s.setAttribute('role', 'button'); s.tabIndex = 0; s.innerHTML = svg('caption');
+          s.addEventListener('click', function (e) { toggleCaptionPopover(s, e); });
+          s.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') toggleCaptionPopover(s, e); });
+          made.push(s);
+        }
+        if (place) {
+          const a = document.createElement('a'); a.className = 'item-badge location-badge'; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.innerHTML = svg('pin');
+          a.href = 'https://www.openstreetmap.org/?mlat=' + encodeURIComponent(v.lat) + '&mlon=' + encodeURIComponent(v.lng) + '#map=16/' + encodeURIComponent(v.lat) + '/' + encodeURIComponent(v.lng);
+          a.title = v.label || (v.lat + ', ' + v.lng); a.addEventListener('click', function (e) { e.stopPropagation(); });
+          made.push(a);
+        }
+        if (v.web) {
+          const a = document.createElement('a'); a.className = 'item-badge web-badge'; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.innerHTML = svg('globe');
+          a.href = v.web; a.title = 'Information link: ' + v.web; a.addEventListener('click', function (e) { e.stopPropagation(); });
+          made.push(a);
+        }
+        made.reverse().forEach(function (el) { box.insertBefore(el, box.firstChild); });
+      });
+    };
+    // What the page itself shows for this photo (its tile badges, the viewer's caption line, link button and little map) follows a save.
+    const applyLive = function (s, v) {
+      const i = files.indexOf(s.file); if (i < 0) return;
+      captions[i] = v.caption || null; webLinks[i] = v.web || null;
+      if (MAPON) locations[i] = (LOCON && v.lat !== '' && v.lng !== '') ? [parseFloat(v.lat), parseFloat(v.lng)] : null;
+      photoBadges(s.file, v);
+      if (i === current) { paintCaption(); updateLightboxExtras(); }
+    };
+    // Saves what changed on the photo that is open. quiet: a pause in typing, which never nags about a half-typed link. Resolves true
+    // when nothing is left unsaved (or nothing was wrong), false when something could not be saved.
+    const flush = function (quiet) {
+      const s = st; if (!s) return Promise.resolve(true);
+      clearTimeout(s.timer);
+      const v = values();
+      const run = function () {
+        const td = textDirty(s, v), ld = locDirty(s, v);
+        if (!td && !ld) return true;
+        if (s === st && !validate(s, v, !!quiet)) { if (!quiet) setStatus('err', 'Not saved yet'); return !!quiet; }
+        if (s === st) setStatus('busy', 'Saving…');
+        return csrf().then(function () {
+          return post(s.file, { action: 'save_item', file: bareOf(s.file), loaded_hash: s.hash, caption: v.caption, web: v.web, lat: v.lat, lng: v.lng, loc_label: v.label, keep_loc: ld ? '0' : '1' });
+        }).then(function (j) {
+          if (!j.ok) { if (s === st) setStatus('err', j.stale ? 'Changed somewhere else: reload this page' : (j.text || 'Not saved')); return false; }
+          s.hash = j.hash;
+          s.base.caption = v.caption; s.base.web = v.web;
+          if (ld) { s.base.lat = v.lat; s.base.lng = v.lng; s.base.label = v.label; s.auto = false; }
+          applyLive(s, { caption: v.caption, web: v.web, lat: s.auto ? '' : s.base.lat, lng: s.auto ? '' : s.base.lng, label: s.base.label });
+          if (s === st) { paintLoc(); setStatus('ok', 'Saved'); }
+          return true;
+        }).catch(function (err) { if (s === st) problem(err); return false; });
+      };
+      s.chain = s.chain.then(run, run);
+      return s.chain;
+    };
+    const focusBad = function () { const b = ed.querySelector('input.bad'); if (b) { if (b === f.lat || b === f.lng) ed.classList.add('loc-open'); b.focus(); } };
+    const beforeLeave = function () {
+      if (!isOpen) return Promise.resolve(true);
+      return flush(false).then(function (ok) { if (!ok) focusBad(); return ok; });
+    };
+    // Where the editor sits: a sheet under the photo on a phone, a panel beside it otherwise. The photo takes what is left, and
+    // follows the part of the screen that is really visible (the keyboard takes the lower part of it on a phone).
+    const layout = function () {
+      if (!isOpen) return;
+      const sheet = sheetMq.matches, vv = window.visualViewport, st2 = lightbox.style;
+      lightbox.classList.toggle('lb-sheet', sheet); lightbox.classList.toggle('lb-side', !sheet);
+      if (sheet && vv) { st2.setProperty('--lbh', vv.height + 'px'); st2.height = vv.height + 'px'; st2.top = vv.offsetTop + 'px'; st2.bottom = 'auto'; }
+      else { st2.removeProperty('--lbh'); st2.removeProperty('height'); st2.removeProperty('top'); st2.removeProperty('bottom'); }
+      st2.setProperty('--sheet-h', (sheet ? ed.offsetHeight : 0) + 'px');
+      if (typeof placeMiniMap === 'function') placeMiniMap();
+    };
+    const setControls = function (enabled) {
+      [].forEach.call(ed.querySelectorAll('input, .lbe-pill, #lbe-useauto'), function (el) { el.disabled = !enabled; });
+    };
+    const load = function () {
+      const file = files[current], my = ++seq;
+      st = null; setControls(false);
+      nameEl.textContent = bareOf(file);
+      setStatus('busy', 'Loading…');
+      [f.web, f.lat, f.lng].forEach(function (el) { el.classList.remove('bad'); }); webErr.textContent = ''; locErr.textContent = '';
+      fetch('?admin&item=' + encodeURIComponent(file), { credentials: 'same-origin', cache: 'no-store' }).then(jsonOf).then(function (j) {
+        if (my !== seq || !isOpen) return;
+        if (!j.ok) throw new Error(j.text || 'Could not load this photo');
+        const auto = !!(j.auto && j.lat === '' && j.lng === ''), shown = auto ? j.auto : j;
+        f.caption.value = j.caption; f.web.value = j.web; f.lat.value = shown.lat; f.lng.value = shown.lng; f.label.value = j.label;
+        st = { file: file, hash: j.hash, auto: auto, cfg: { private: !!j.private, locationShown: !!j.locationShown, folderPrivate: !!j.folderPrivate, locationsOff: !!j.locationsOff },
+               base: { caption: j.caption, web: j.web, lat: shown.lat, lng: shown.lng, label: j.label }, timer: 0, chain: Promise.resolve(true) };
+        ownerState.priv[file] = st.cfg.private; if (j.cover) ownerState.cover[file] = true;
+        ownerPaint(); setControls(true); paintPills(); paintLoc(); setStatus('', '');
+      }).catch(function (err) { if (my === seq) problem(err); });
+    };
+    const open = function () {
+      if (isOpen) return;
+      isOpen = true; ed.hidden = false;
+      if (zoomMode !== 'fit') setZoom('fit');
+      lightbox.classList.add('editing');
+      ed.classList.toggle('loc-open', !sheetMq.matches);
+      locRow.setAttribute('aria-expanded', ed.classList.contains('loc-open') ? 'true' : 'false');
+      if (toolBtn) toolBtn.classList.add('on');
+      layout(); load();
+    };
+    const close = function () {
+      if (!isOpen) return;
+      flush(false);
+      isOpen = false; seq++; ed.hidden = true;
+      if (ed.contains(document.activeElement)) document.activeElement.blur();
+      ed.classList.remove('typing', 'kb');
+      lightbox.classList.remove('editing', 'lb-sheet', 'lb-side');
+      ['--lbh', '--sheet-h', 'height', 'top', 'bottom'].forEach(function (p) { lightbox.style.removeProperty(p); });
+      if (toolBtn) toolBtn.classList.remove('on');
+      if (typeof placeMiniMap === 'function') placeMiniMap();
+    };
+    // The text fields
+    ['caption', 'web', 'lat', 'lng', 'label'].forEach(function (k) {
+      f[k].addEventListener('input', function () {
+        if (!st) return;
+        const s = st, v = values();
+        paintLoc();
+        if (k === 'web') { f.web.classList.remove('bad'); webErr.textContent = ''; }
+        if (k === 'lat' || k === 'lng') { f.lat.classList.remove('bad'); f.lng.classList.remove('bad'); locErr.textContent = ''; }
+        clearTimeout(s.timer);
+        if (textDirty(s, v) || locDirty(s, v)) { setStatus('', 'Unsaved changes'); s.timer = setTimeout(function () { flush(true); }, 1000); }
+        else setStatus('', '');
+      });
+      f[k].addEventListener('blur', function () { flush(false); });
+      f[k].addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); f[k].blur(); } });
+    });
+    useAuto.addEventListener('click', function () {
+      if (!st || !st.auto) return;
+      st.base.lat = ''; st.base.lng = '';   // (so the place in the fields counts as a change, and is kept)
+      flush(false);
+    });
+    locRow.addEventListener('click', function () {
+      const openNow = ed.classList.toggle('loc-open');
+      locRow.setAttribute('aria-expanded', openNow ? 'true' : 'false');
+      layout();
+    });
+    // The three switches save as they are pressed.
+    const flag = function (which, flagName) {
+      pills[which].addEventListener('click', function () {
+        if (!st) return;
+        const s = st, on = !(flagName === 'private' ? s.cfg.private : s.cfg.locationShown);
+        setStatus('busy', 'Saving…');
+        post(s.file, { action: 'set_item_flag', file: bareOf(s.file), flag: flagName, on: on ? '1' : '0' }).then(function (j) {
+          if (!j.ok) throw new Error(j.text || 'Not saved');
+          if (flagName === 'private') { s.cfg.private = on; ownerState.priv[s.file] = on; ownerPaint(); } else s.cfg.locationShown = on;
+          if (s === st) { paintPills(); setStatus('ok', 'Saved'); }
+        }).catch(function (err) { if (s === st) problem(err); });
+      });
+    };
+    flag('priv', 'private'); flag('loc', 'location');
+    pills.cover.addEventListener('click', function () {
+      if (!st) return;
+      const s = st;
+      if (ownerState.cover[s.file]) { setStatus('ok', 'Already this folder’s cover'); return; }
+      setStatus('busy', 'Saving…');
+      post(s.file, { action: 'set_cover', file: bareOf(s.file) }).then(function (j) {
+        if (!j.ok) throw new Error(j.text || 'Not saved');
+        const folder = folderOf(s.file);
+        files.forEach(function (x) { if (folderOf(x) === folder) ownerState.cover[x] = false; });
+        ownerState.cover[s.file] = true; ownerPaint();
+        if (s === st) { paintPills(); setStatus('ok', 'Now the folder’s cover'); }
+      }).catch(function (err) { if (s === st) problem(err); });
+    });
+    // Moving on, finishing
+    $('lbe-prev').addEventListener('click', function () { navigate(-1); });
+    $('lbe-next').addEventListener('click', function () { navigate(1); });
+    $('lbe-done').addEventListener('click', function () { beforeLeave().then(function (ok) { if (ok) close(); }); });
+    // These buttons must not take the focus from a field (the sheet would change shape under the finger before the press lands).
+    ['pointerdown', 'mousedown'].forEach(function (t) { ed.querySelector('.lbe-foot').addEventListener(t, function (e) { if (e.target.closest('button')) e.preventDefault(); }); });
+    ['pointerdown', 'mousedown'].forEach(function (t) { hideKb.addEventListener(t, function (e) { e.preventDefault(); if (ed.contains(document.activeElement)) document.activeElement.blur(); }); });
+    hideKb.addEventListener('click', function () { if (ed.contains(document.activeElement)) document.activeElement.blur(); });
+    // A phone's keyboard: while a text field has it, the sheet shows just the fields (the photo keeps as much room as possible).
+    // (Not at the instant of the tap: the click that follows it must still land on the field, and the sheet changing shape under it would
+    // send that click to the photo behind, which puts the keyboard straight away again.)
+    let focusAt = 0, kbTimer = 0;
+    ed.addEventListener('focusin', function (e) {
+      if (!sheetMq.matches || !e.target.matches || !e.target.matches('input')) return;
+      focusAt = Date.now();
+      const field = e.target;
+      clearTimeout(kbTimer);
+      kbTimer = setTimeout(function () {
+        if (document.activeElement !== field) return;
+        ed.classList.add('kb'); ed.classList.toggle('typing', field === f.caption || field === f.web); layout();
+      }, 320);
+    });
+    ed.addEventListener('focusout', function () {
+      setTimeout(function () { const a = document.activeElement; if (!(a && ed.contains(a) && a.matches && a.matches('input'))) { ed.classList.remove('kb', 'typing'); layout(); } }, 250);
+    });
+    // What happens on the touch screen inside the editor stays there: it must not swipe the viewer to another photo or close it.
+    ['touchstart', 'touchend'].forEach(function (t) { ed.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: true }); });
+    if (window.ResizeObserver) new ResizeObserver(layout).observe(ed);
+    if (window.visualViewport) { window.visualViewport.addEventListener('resize', layout); window.visualViewport.addEventListener('scroll', layout); }
+    window.addEventListener('resize', layout);
+    if (toolBtn) toolBtn.addEventListener('click', function () { if (isOpen) beforeLeave().then(function (ok) { if (ok) close(); }); else open(); });
+    return { open: open, close: close, load: load, beforeLeave: beforeLeave, isOpen: function () { return isOpen; }, justFocused: function () { return Date.now() - focusAt < 900; }, blur: function () { if (ed.contains(document.activeElement)) document.activeElement.blur(); } };
+  })();
+  // The pencil on a tile opens the viewer on that photo with the editor up.
+  document.addEventListener('click', function (e) {
+    const b = e.target.closest ? e.target.closest('.edit-toggle') : null;
+    if (!b || !lbEdit) return;
+    e.preventDefault(); e.stopPropagation();
+    const i = files.indexOf(b.getAttribute('data-file'));
+    if (i < 0) return;
+    openLightbox(i);
+    lbEdit.open();
+  }, true);
+<?php endif; ?>
   // The strip of buttons sticks to the top; once the page has scrolled under it, it gets a soft edge.
   (function () {
     const bar = document.getElementById('map-bar'); if (!bar) return;
@@ -12452,14 +12638,17 @@ if (ENABLE_MAP && $mapPoints) {
       lightboxImg.style.display = '';
       lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
     }
-    const captionText = captions[current];
-    const set = siblingsOf(current);
-    caption.textContent = (captionText ? captionText + ' — ' : '') + (set.indexOf(current) + 1) + ' / ' + set.length;
+    paintCaption();
     if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file); downloadLink.classList.remove('ready'); }
     applyZoom();
     updateLightboxExtras();
     if (typeof ownerPaint === 'function') ownerPaint();
+    if (lbEdit && lbEdit.isOpen()) lbEdit.load();
     trackView(file);
+  }
+  function paintCaption() {
+    const captionText = captions[current], set = siblingsOf(current);
+    caption.textContent = (captionText ? captionText + ' — ' : '') + (set.indexOf(current) + 1) + ' / ' + set.length;
   }
   // ---- Zoom: 'fit' (the whole photo on the screen), 'width' (fills the width of the window, scroll up and down) and
   // 'actual' (real pixels, scroll both ways). Always the original file at its own proportions, never stretched.
@@ -12489,7 +12678,7 @@ if (ENABLE_MAP && $mapPoints) {
   }
   function setZoom(mode) { zoomMode = mode; applyZoom(); }
   function cycleZoom() {
-    if (isVideoFile(files[current])) return;
+    if (isVideoFile(files[current]) || (lbEdit && lbEdit.isOpen())) return;
     let next = zoomMode === 'fit' ? 'width' : (zoomMode === 'width' ? 'actual' : 'fit');
     // Nothing more to see at real size when the photo is no wider than the window already shows it.
     if (next === 'actual' && lightboxImg.naturalWidth && lightboxImg.naturalWidth / (window.devicePixelRatio || 1) <= lightbox.clientWidth) next = 'fit';
@@ -12720,6 +12909,10 @@ if (ENABLE_MAP && $mapPoints) {
 <?php endif; ?>
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
+    if (lbEdit && lbEdit.isOpen()) {
+      if (e.key === 'Escape') { lbEdit.close(); return; }
+      if (e.target && e.target.closest && e.target.closest('#lb-editor')) return;   // typing: the arrows, Z and the rest belong to the field
+    }
     if (e.key === 'Escape') { if (miniExpanded) { collapseMiniMap(); return; } if (zoomMode !== 'fit') { setZoom('fit'); return; } closeLightbox(); return; }
     if (e.key === 'z' || e.key === 'Z') { cycleZoom(); return; }
     // A focused <video>'s native controls already use arrow keys (seek)
@@ -12731,7 +12924,9 @@ if (ENABLE_MAP && $mapPoints) {
     if (e.key === 'ArrowRight') navigate(1);
   });
   lightbox.addEventListener('click', (e) => {
-    if (e.target === lightbox) closeLightbox();
+    if (e.target !== lightbox) return;
+    if (lbEdit && lbEdit.isOpen()) { if (!lbEdit.justFocused()) lbEdit.blur(); return; }   // (a tap beside the photo while editing only puts the keyboard away)
+    closeLightbox();
   });
 
   // Touch gestures: swipe left/right to move between photos, swipe down to close.
@@ -12752,7 +12947,7 @@ if (ENABLE_MAP && $mapPoints) {
     if (zoomMode === 'actual') return;   // dragging pans the photo
     if (absX > absY && absX > threshold) {
       navigate(deltaX < 0 ? 1 : -1);
-    } else if (absY > absX && deltaY > threshold && zoomMode === 'fit') {
+    } else if (absY > absX && deltaY > threshold && zoomMode === 'fit' && !(lbEdit && lbEdit.isOpen())) {
       closeLightbox();   // (when the photo fills the width, swiping down scrolls it instead)
     }
   }, { passive: true });
@@ -12811,7 +13006,10 @@ if (ENABLE_MAP && $mapPoints) {
   // ?photo=<filename> deep link: open straight to that photo on load.
   if (initialPhoto) {
     const idx = files.indexOf(initialPhoto);
-    if (idx !== -1) openLightbox(idx);
+    if (idx !== -1) {
+      openLightbox(idx);
+      if (lbEdit && /[?&]edit=/.test(location.search)) lbEdit.open();   // (the owner's link from the admin: that photo, with its editor)
+    }
   }
 </script>
 

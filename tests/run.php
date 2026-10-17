@@ -203,6 +203,38 @@ function flag_post($url, $page, array $hdrs, $flag, $on, array $names) {
     return json_decode($body, true) ?? ['ok' => null, 'text' => $body];
 }
 
+/** One photo's record as the editor in the viewer asks for it. $root is the gallery's address (ending in /), $file the photo's path. */
+function item_get($root, array $hdrs, $file) {
+    $j = json_decode(http_get(rtrim($root, '/') . '/?admin&item=' . rawurlencode($file), $hdrs)[1] ?? '', true);
+    return is_array($j) ? $j : [];
+}
+
+/** The token the page asks the admin for before it saves anything. */
+function admin_token($root, array $hdrs) {
+    return json_decode(http_get(rtrim($root, '/') . '/?admin&csrf=1', $hdrs)[1] ?? '', true)['token'] ?? '';
+}
+
+/** "Save" for one photo as the editor sends it: what the photo already has (its caption, link and place, a place read from its
+ *  GPS too, and the fingerprint) with $overrides on top. $url is the admin address of its folder. Returns like user_submit. */
+function item_save($url, array $hdrs, $bare, array $overrides = []) {
+    $root = preg_replace('/\?.*$/', '', $url);
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+    $j = item_get($root, $hdrs, (($q['folder'] ?? '') !== '' ? $q['folder'] . '/' : '') . $bare);
+    $auto = $j['auto'] ?? null;
+    $fields = ['csrf_token' => admin_token($root, $hdrs), 'action' => 'save_item', 'file' => $bare, 'caption' => $j['caption'] ?? '', 'web' => $j['web'] ?? '',
+        'lat' => ($j['lat'] ?? '') !== '' ? $j['lat'] : ($auto['lat'] ?? ''), 'lng' => ($j['lng'] ?? '') !== '' ? $j['lng'] : ($auto['lng'] ?? ''),
+        'loc_label' => $j['label'] ?? '', 'loaded_hash' => $j['hash'] ?? ''];
+    $fields = array_merge($fields, $overrides);
+    [$st, $body, $hd] = http_post($url, $fields, $hdrs);
+    return [$st, $body, $hd, $fields];
+}
+
+/** Makes one photo its folder's cover, as the star and the editor's Cover button do. */
+function item_cover($url, array $hdrs, $bare) {
+    $root = preg_replace('/\?.*$/', '', $url);
+    return http_post($url, ['csrf_token' => admin_token($root, $hdrs), 'action' => 'set_cover', 'file' => $bare], $hdrs);
+}
+
 /** The markup of the lock or unlock drawing (see ui_icon in index.php). */
 function ui_lock_probe($name) { return ico($name); }
 
@@ -1157,7 +1189,7 @@ check('[owner lock] ...and back to public', in_array('a-early.jpg', $soOrder(), 
 // The owner's star on each tile and the two buttons in the viewer: one tap to make a photo its folder's cover.
 check('[owner cover] the owner gets a star on every tile, none gold while no cover is chosen', preg_match_all('#<button type="button" class="cover-toggle" data-file="#', $soOwnerPage) === 6 && !str_contains($soOwnerPage, 'cover-toggle is-cover'));
 check('[owner cover] the viewer has a cover button and a private button for the owner, left of the zoom button', preg_match('#id="lightbox-cover"[^>]*>.*?id="lightbox-private"[^>]*>.*?id="lightbox-zoom"#s', $soOwnerPage) === 1 && str_contains($soOwnerPage, 'const ownerState = {'));
-check('[owner cover] hovering either overlay button lights it (full strength, a ring, a colour of its own), and pressing it sinks it', str_contains($soOwnerPage, '.priv-toggle:hover, .cover-toggle:hover {') && str_contains($soOwnerPage, '.priv-toggle:active, .cover-toggle:active {'));
+check('[owner cover] hovering either overlay button lights it (full strength, a ring, a colour of its own), and pressing it sinks it', str_contains($soOwnerPage, '.priv-toggle:hover, .cover-toggle:hover, .edit-toggle:hover {') && str_contains($soOwnerPage, '.priv-toggle:active, .cover-toggle:active, .edit-toggle:active {'));
 check('[badges] the caption, location and link badges on a tile light up under the pointer like the owner\'s buttons, and sink when pressed', str_contains($soOwnerPage, '.item-badge:hover {') && str_contains($soOwnerPage, '.item-badge:active {'));
 $soVisitorPage = http_get("$baseSo/")[1];
 check('[owner cover] a visitor gets no stars, no viewer buttons and no owner state', !str_contains($soVisitorPage, 'cover-toggle"') && !str_contains($soVisitorPage, 'id="lightbox-cover"') && !str_contains($soVisitorPage, 'id="lightbox-private"') && str_contains($soVisitorPage, 'const ownerState = null;'));
@@ -1165,7 +1197,16 @@ $soCoverReply = http_post("$baseSo/?admin", ['csrf_token' => $csrfTok, 'action' 
 [, $soOwnerPage2] = http_get("$baseSo/", ["Cookie: $soCookie"]);
 check('[owner cover] pressing a star saves that photo as the folder\'s cover (the same save as the admin\'s), and only it is gold', str_contains($soCoverReply[1] ?? '', '"ok":true') && str_contains($soOwnerPage2, 'class="cover-toggle is-cover" data-file="c-mid.jpg"') && substr_count($soOwnerPage2, 'cover-toggle is-cover') === 1 && str_contains($soOwnerPage2, '"c-mid.jpg":true') && str_contains($soOwnerPage2, '"b-late.jpg":false'));
 // Arrange: the owner places photos next to each other by hand; each placement is a stack that follows its anchor through every sort.
-check('[arrange] the owner gets the Arrange button, its bar and a file name on every tile; a visitor gets none of it', str_contains($soOwnerPage2, 'id="arrange-btn"') && str_contains($soOwnerPage2, 'id="arrange-bar"') && str_contains($soOwnerPage2, 'class="card owner-card" data-file="a-early.jpg"') && !str_contains($soVisitorPage, 'id="arrange-btn"') && !str_contains($soVisitorPage, 'id="arrange-bar"') && !str_contains($soVisitorPage, 'data-file="a-early.jpg"'));
+check('[select] the owner gets the Select button, its bar (with the Arrange part here) and a file name on every tile; a visitor gets none of it', str_contains($soOwnerPage2, 'id="select-btn"') && str_contains($soOwnerPage2, 'id="select-bar"') && str_contains($soOwnerPage2, 'data-select="release"') && str_contains($soOwnerPage2, 'class="card owner-card" data-file="a-early.jpg"') && !str_contains($soVisitorPage, 'id="select-btn"') && !str_contains($soVisitorPage, 'id="select-bar"') && !str_contains($soVisitorPage, 'data-file="a-early.jpg"'));
+check('[select] the Select button replaces Arrange on the strip: no Arrange button any more, and the bar offers Select all, Clear, Make private, Make public and Done', !str_contains($soOwnerPage2, 'id="arrange-btn"') && !str_contains($soOwnerPage2, 'id="arrange-bar"') && preg_match('#data-select="all".*data-select="clear".*data-select="done".*data-select="private".*data-select="public"#s', $soOwnerPage2) === 1);
+// The pencil and the editor in the viewer, for the owner only.
+check('[editor] the owner gets a pencil on every tile and in the viewer, and the editor sheet with its fields, three switches and Prev, Done, Next', preg_match_all('#<button type="button" class="edit-toggle" data-file="#', $soOwnerPage2) === 6 && str_contains($soOwnerPage2, 'id="lightbox-edit"') && str_contains($soOwnerPage2, 'id="lb-editor"') && preg_match('#id="lbe-caption".*id="lbe-web".*id="lbe-private".*id="lbe-loc".*id="lbe-cover".*id="lbe-prev".*id="lbe-done".*id="lbe-next"#s', $soOwnerPage2) === 1);
+check('[editor] a visitor gets no pencil, no editor and no editor code', !str_contains($soVisitorPage, 'edit-toggle"') && !str_contains($soVisitorPage, 'id="lb-editor"') && !str_contains($soVisitorPage, 'id="lightbox-edit"') && str_contains($soVisitorPage, 'let lbEdit = null;') && !str_contains($soVisitorPage, 'lbe-caption'));
+$soItem = function ($file) use ($baseSo, $soAdminAuth, $soCookie) { return json_decode(http_get("$baseSo/?admin&item=" . rawurlencode($file), [$soAdminAuth, "Cookie: $soCookie"])[1] ?? '', true) ?: []; };
+$soItemA = $soItem('a-early.jpg');
+check('[editor] the owner\'s item request returns that photo\'s record: caption, link, place, switches, cover flag and a fingerprint', ($soItemA['ok'] ?? false) === true && ($soItemA['file'] ?? '') === 'a-early.jpg' && array_key_exists('caption', $soItemA) && array_key_exists('web', $soItemA) && array_key_exists('lat', $soItemA) && strlen((string) ($soItemA['hash'] ?? '')) === 32 && ($soItemA['private'] ?? null) === false && ($soItemA['cover'] ?? null) === false && ($soItem('c-mid.jpg')['cover'] ?? null) === true);
+check('[editor] ...and nobody else gets it: a visitor is sent to the sign-in, an unknown file is refused', !str_contains(http_get("$baseSo/?admin&item=a-early.jpg")[1], '"hash"') && ($soItem('nope.jpg')['ok'] ?? true) === false && ($soItem('../etc/passwd')['ok'] ?? true) === false);
+
 $soArrange = function ($fields) use ($baseSo, $soAdminAuth, $soCookie, $csrfTok) {
     $r = http_post("$baseSo/?admin", $fields + ['csrf_token' => $csrfTok, 'action' => 'arrange_items'], [$soAdminAuth, "Cookie: $soCookie", 'X-Requested-With: gallery-fetch']);
     return json_decode($r[1] ?? '', true) ?: [];
@@ -1500,9 +1541,11 @@ file_put_contents("$fxVm/trip.md", "{gallery}\nClips. {group: Clips} {photos: cl
 write_patched_index("$fxVm/index.php", $indexContents, ['ENABLE_VIDEO' => 'true', 'ADMIN_PASSWORD' => "'vm-admin-pw'", 'AUTO_GROUP_BY_FOLDER' => 'true']);
 $portVm = find_free_port(); start_server($fxVm, $portVm); $baseVm = "http://127.0.0.1:$portVm";
 [, $vmAdmin] = http_get("$baseVm/?admin", ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')]);
-check('[video mark] in the admin a video shows its real thumbnail address with the play mark and its length, not a text box saying "video"', preg_match('#<span class="thumb-media vtile"[^>]*><img class="thumb-img" src="\?img=clip\.mp4&amp;size=thumb[^"]*"[^>]*>(<video[^>]*></video>)?<span class="video-mark"#', $vmAdmin) === 1 && str_contains($vmAdmin, 'thumb-duration') && !str_contains($vmAdmin, 'item-thumb-placeholder') && preg_match('#<span class="editor-thumb vtile"[^>]*><img src="\?img=clip\.mp4#', $vmAdmin) === 1);
+[, , $vmAdminHd] = http_get("$baseVm/?admin", ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')]);
+[, $vmOwnerPage] = http_get("$baseVm/", ['Cookie: ' . extract_cookie_header($vmAdminHd)]);
+check('[video mark] the admin page has no thumbnail grid or per-photo forms any more; a video on the owner\'s gallery page is a video tile (play mark, length) with its pencil beside the length', !str_contains($vmAdmin, 'class="thumb-grid"') && !str_contains($vmAdmin, 'class="item-editor"') && preg_match('#class="card owner-card vtile"[^>]*data-file="clip\.mp4"|class="card owner-card vtile"[^>]*data-strip#', $vmOwnerPage) === 1 && str_contains($vmOwnerPage, 'class="edit-toggle" data-file="clip.mp4"') && str_contains($vmOwnerPage, '.owner-card .video-duration { left: 38px; }'));
 $vmAuth = ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')];
-check('[wording] with videos switched on the admin says "media" (tab, heading and Select media); without them it says "photos"', str_contains($vmAdmin, 'data-tab="photos">Media <span') && str_contains($vmAdmin, 'id="bulk-start">Select media</button>') && str_contains($vmAdmin, 'Media <span class="muted">(') && str_contains($aoAdmin, 'data-tab="photos">Photos <span'));
+check('[wording] with videos switched on the strip\'s button and bar say "media" (Select media, Tap media to select); without them "photos"', str_contains($vmOwnerPage, 'title="Select media"') && str_contains($vmOwnerPage, 'Tap media to select') && !str_contains($vmAdmin, 'data-tab="photos"') && str_contains($vmAdmin, 'data-tab="settings"'));
 check('[health] Site settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . (preg_match("/define\('GALLERY_VERSION', '([^']+)'\)/", $indexContents, $verM) ? $verM[1] : '?')) && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php") && !str_contains($vmAdmin, 'health-row health-bad'));
 $vmHealthGuard = (string) @file_get_contents("$fxVm/.gallery-health.php");
 check('[health] the version file is a guarded data file (a direct request for it answers 404 with nothing else)', str_starts_with($vmHealthGuard, "<?php http_response_code(404); exit; ?>\n") && http_get("$baseVm/.gallery-health.php")[0] === 404);
@@ -2315,13 +2358,14 @@ check('...and the NUL was stripped, not used to truncate the name (no bare "evil
 
 // Two admin "tabs" on one record: a stale save is refused, not silently
 // overwritten; a save to a *different* record in the same folder is fine.
-$hashFor = function ($body, $file) {
-    return preg_match('/item-filename">[^<]*' . preg_quote($file, '/') . '<\/div>.*?<form method="post">.*?name="loaded_hash" value="([a-f0-9]{32})"/s', $body, $m) ? $m[1] : null;
+$hashFor = function ($ignored, $file) use ($baseDepth, $depthAuth, $depthCookie) {   // (the editor in the viewer asks for a photo's record; the fingerprint is in it)
+    $j = json_decode(http_get("$baseDepth/?admin&item=" . rawurlencode('Europe/France/Paris/' . $file), [$depthAuth, "Cookie: $depthCookie"])[1] ?? '', true);
+    return is_array($j) && preg_match('/^[a-f0-9]{32}$/', (string) ($j['hash'] ?? '')) ? $j['hash'] : null;
 };
 [, $tabA] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
 $eiffelHashA = $hashFor($tabA, 'eiffel.jpg');
 $louvreHashA = $hashFor($tabA, 'louvre.jpg');
-check('the admin grid embeds a per-record fingerprint in each item form', $eiffelHashA !== null && $louvreHashA !== null && $eiffelHashA !== $louvreHashA);
+check('a photo\'s record comes with its own fingerprint (one per photo, for the stale-edit check)', $eiffelHashA !== null && $louvreHashA !== null && $eiffelHashA !== $louvreHashA);
 [, $tabBSave] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'eiffel.jpg', 'caption' => 'Saved from tab B', 'loaded_hash' => $eiffelHashA]);
 check('tab B saves eiffel with the fingerprint it loaded: accepted', str_contains($tabBSave, 'class="flash ok"'));
 [, $tabAStale] = $depthPost($parisAdminQuery, ['action' => 'save_item', 'file' => 'eiffel.jpg', 'caption' => 'Tab A overwrite attempt', 'loaded_hash' => $eiffelHashA]);
@@ -2640,18 +2684,33 @@ write_patched_index("$fxGps/index.php", $indexContents, [
 $portGps = find_free_port();
 start_server($fxGps, $portGps);
 [, $gpsAdmin] = http_get("http://127.0.0.1:$portGps/?admin", ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')]);
-$gpsCard = function ($body, $name) {
-    return preg_match('/<div class="item-editor"[^>]*>(?:(?!<div class="item-editor").)*?' . preg_quote($name, '/') . '.*?<form method="post" id="cover-/s', $body, $m) ? $m[0] : '';
+$gpsCard = function ($body, $name) use ($portGps) {   // (the photo's record, as the editor in the viewer asks for it: a place read from its GPS is `auto` until it is kept)
+    return json_encode(item_get("http://127.0.0.1:$portGps", ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')], $name));
 };
 check('a JPEG\'s EXIF GPS pre-fills the admin\'s location fields (N/E)', str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'north-east.jpg'), '2.2945'));
 check('southern and western hemispheres come out negative', str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-33.85') && str_contains($gpsCard($gpsAdmin, 'south-west.jpg'), '-151.2'));
 check('an iPhone-style (big-endian EXIF, extra tags) JPEG pre-fills too: San Francisco is 37.7749, -122.4194 (west is negative)', str_contains($gpsCard($gpsAdmin, 'iphone.jpg'), '37.7749') && str_contains($gpsCard($gpsAdmin, 'iphone.jpg'), '-122.4194'));
-check('a JPEG with no GPS block gets no pre-filled location', !preg_match('/value="-?\d+\.\d+"/', $gpsCard($gpsAdmin, 'no-gps.jpg')));
+check('a JPEG with no GPS block gets no pre-filled location', str_contains($gpsCard($gpsAdmin, 'no-gps.jpg'), '"auto":null') && str_contains($gpsCard($gpsAdmin, 'no-gps.jpg'), '"lat":""'));
 if ($heicOk) {
     check('a HEIC\'s EXIF GPS pre-fills the admin\'s location fields too', str_contains($gpsCard($gpsAdmin, 'phone.heic'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'phone.heic'), '2.2945'));
 } else {
     echo "  skip  HEIC GPS auto-fill (this PHP's Imagick can't write HEIC to build a fixture)\n";
 }
+
+// The editor in the viewer saves as it is typed: a caption saved with keep_loc leaves a place that was only read from the photo's GPS unsaved.
+[, , $gpsHd0] = http_get("http://127.0.0.1:$portGps/?admin", ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')]);
+$gpsRootHdrs = ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123'), 'Cookie: ' . extract_cookie_header($gpsHd0)];
+$gpsRoot = "http://127.0.0.1:$portGps";
+$kj0 = item_get($gpsRoot, $gpsRootHdrs, 'north-east.jpg');
+[, $keepBody] = http_post("$gpsRoot/?admin", ['csrf_token' => admin_token($gpsRoot, $gpsRootHdrs), 'action' => 'save_item', 'file' => 'north-east.jpg', 'caption' => 'Typed while the place stays unsaved', 'web' => '', 'lat' => '', 'lng' => '', 'loc_label' => '', 'loaded_hash' => $kj0['hash'] ?? '', 'keep_loc' => '1'], array_merge($gpsRootHdrs, ['X-Requested-With: gallery-fetch']));
+$keepJ = json_decode($keepBody, true) ?: []; $kj1 = item_get($gpsRoot, $gpsRootHdrs, 'north-east.jpg');
+check('[editor] saving a caption with keep_loc answers JSON with the photo\'s new fingerprint, and leaves a place read from the GPS unsaved (still offered, not stored)', ($keepJ['ok'] ?? false) === true && ($keepJ['hash'] ?? '') === ($kj1['hash'] ?? 'x') && ($kj1['caption'] ?? '') === 'Typed while the place stays unsaved' && ($kj1['lat'] ?? 'x') === '' && abs((float) ($kj1['auto']['lat'] ?? 0) - 48.8584) < 0.0001);
+[, $staleBody] = http_post("$gpsRoot/?admin", ['csrf_token' => admin_token($gpsRoot, $gpsRootHdrs), 'action' => 'save_item', 'file' => 'north-east.jpg', 'caption' => 'From a stale editor', 'lat' => '', 'lng' => '', 'loaded_hash' => $kj0['hash'] ?? '', 'keep_loc' => '1'], array_merge($gpsRootHdrs, ['X-Requested-With: gallery-fetch']));
+$staleJ = json_decode($staleBody, true) ?: [];
+check('[editor] an editor that is out of date (the record changed in another tab) is refused with JSON saying so, and nothing is overwritten', ($staleJ['ok'] ?? null) === false && ($staleJ['stale'] ?? null) === true && (item_get($gpsRoot, $gpsRootHdrs, 'north-east.jpg')['caption'] ?? '') === 'Typed while the place stays unsaved');
+[, $keepBody2] = http_post("$gpsRoot/?admin", ['csrf_token' => admin_token($gpsRoot, $gpsRootHdrs), 'action' => 'save_item', 'file' => 'north-east.jpg', 'caption' => 'Typed while the place stays unsaved', 'web' => '', 'lat' => '48.8584', 'lng' => '2.2945', 'loc_label' => 'Kept', 'loaded_hash' => $keepJ['hash'] ?? '', 'keep_loc' => '0'], array_merge($gpsRootHdrs, ['X-Requested-With: gallery-fetch']));
+$kj2 = item_get($gpsRoot, $gpsRootHdrs, 'north-east.jpg');
+check('[editor] choosing to keep the place (no keep_loc) stores it with its label, and the photo then has nothing left to offer', (json_decode($keepBody2, true)['ok'] ?? false) === true && abs((float) ($kj2['lat'] ?? 0) - 48.8584) < 0.0001 && ($kj2['label'] ?? '') === 'Kept' && array_key_exists('auto', $kj2) && $kj2['auto'] === null);
 
 /* ======================================================================= *
  * RECIPE: a trip album. Followed as a person would, through the page's own
@@ -2676,13 +2735,13 @@ $gpsAuth = 'Authorization: Basic ' . base64_encode('admin:gps-admin-pw');
 [, $gAdmin, $gAdminHd] = http_get("$baseGps/?admin&folder=Rome", [$gpsAuth]);
 $gpsHdrs = [$gpsAuth, 'Cookie: ' . extract_cookie_header($gAdminHd)];
 $romeUrl = "$baseGps/?admin&folder=Rome";
-$gpsRomeFile = fn ($page, $file) => (function ($h) use ($file) { foreach (html_post_forms($h) as $f) if (str_contains($f['html'], 'name="file" value="' . $file . '"') && str_contains($f['html'], 'save_item')) return $f['html']; return ''; })($page);
+$gpsRomeFile = fn ($page, $file) => json_encode(item_get($baseGps, $gpsHdrs, 'Rome/' . $file));
 check('[gps import] before the switch: three photos have GPS, the admin warns and nothing is public', str_contains($gAdmin, '3 photos here have GPS in the file') && !str_contains(http_get("$baseGps/")[1], 'trip-map-preview'));
 // The owner opts one photo out (hotel) and clears another (cleared) *before* turning the folder on.
 $r = flag_post($romeUrl, $gAdmin, $gpsHdrs, 'location', false, ['hotel.jpg']);
 check('[gps import] switching "Show its location" off for a photo saves, even while the folder is off (coordinates are kept, just never shown, whatever the folder later does)', ($r['ok'] ?? null) === true && (read_data_file("$fxGps/Rome/.gallery-items.php")['items']['hotel.jpg']['locationVisibility'] ?? null) === 'hide');
 [, $gAdmin] = http_get($romeUrl, $gpsHdrs);
-[, $r] = user_submit($romeUrl, $gAdmin, 'name="file" value="cleared.jpg"', ['lat' => '', 'lng' => '', 'loc_label' => ''], $gpsHdrs);
+[, $r] = item_save($romeUrl, $gpsHdrs, 'cleared.jpg', ['lat' => '', 'lng' => '', 'loc_label' => '']);
 check('[gps import] clearing a photo\'s coordinates saves', str_contains($r, 'class="flash ok"'));
 [, $gAdmin] = http_get($romeUrl, $gpsHdrs);
 [, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $gpsHdrs);
@@ -2696,7 +2755,7 @@ $mapPins = (function ($h) { preg_match('/var clusters = (\[.*?\]);/s', $h, $m); 
 check('[gps import] ...only that photo is on the map: the hidden one and the cleared one stay out', count($mapPins) === 1 && str_contains(json_encode($mapPins), 'colosseum.jpg') && !str_contains(json_encode($mapPins), 'hotel.jpg') && !str_contains(json_encode($mapPins), 'cleared.jpg'));
 // Opening the folder again (which also picks up later uploads) must not resurrect the cleared location.
 [, $gAdmin] = http_get($romeUrl, $gpsHdrs);
-check('[gps import] re-opening the folder does not bring a deliberately cleared location back', str_contains($gpsRomeFile($gAdmin, 'cleared.jpg'), 'name="lat" value=""'));
+check('[gps import] re-opening the folder does not bring a deliberately cleared location back', str_contains($gpsRomeFile($gAdmin, 'cleared.jpg'), '"lat":""') && str_contains($gpsRomeFile($gAdmin, 'cleared.jpg'), '"auto":null'));
 // A photo uploaded after the switch is on is picked up the next time the owner opens the folder.
 make_gps_jpeg("$fxGps/Rome/late.jpg", 'N', [[41, 1], [56, 1], [0, 1]], 'E', [[12, 1], [32, 1], [0, 1]]);
 check('[gps import] a photo uploaded later is not public until the owner next opens the folder...', substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 1);
@@ -2721,7 +2780,7 @@ check('[admin reveal] (setup) anonymous visitors cannot load a hidden photo\'s t
 $arCookie = extract_cookie_header($arLoginHd);
 check('[admin reveal] a logged-in admin CAN load a hidden photo\'s thumbnail even though no private-view password exists (this was a 404: broken thumbnails in the admin)', str_contains($arCookie, 'gallery_admin_') && http_get($arThumb, ["Cookie: $arCookie"])[0] === 200 && http_get("$baseAr/?img=Paris%2Fvisible.jpg&size=thumb", ["Cookie: $arCookie"])[0] === 200);
 [, $arAdminPage] = http_get("$baseAr/?admin&folder=Paris", ["Cookie: $arCookie"]);
-check('[admin reveal] ...and the admin page lists that hidden photo, marked hidden', str_contains($arAdminPage, 'hidden.jpg') && str_contains($arAdminPage, 'class="hid"'));
+check('[admin reveal] ...and the admin lists that hidden photo on its Private tab (linking to its editor), and its record says private', str_contains($arAdminPage, 'data-tab="hidden"') && str_contains($arAdminPage, 'Paris/hidden.jpg') && str_contains($arAdminPage, 'href="?photo=Paris%2Fhidden.jpg&amp;edit=1"') && (item_get($baseAr, ["Cookie: $arCookie"], 'Paris/hidden.jpg')['private'] ?? null) === true);
 check('[admin reveal] the admin also sees the hidden photo when browsing the public gallery; an anonymous visitor does not', str_contains(http_get("$baseAr/?folder=Paris", ["Cookie: $arCookie"])[1], 'hidden.jpg') && !str_contains(http_get("$baseAr/?folder=Paris")[1], 'hidden.jpg'));
 [, , $arPageHd] = http_get("$baseAr/?folder=Paris", ["Cookie: $arCookie"]);
 check('[admin reveal] a page rendered for the admin is private and uncached, like any revealed page', (bool) array_filter($arPageHd, fn($h) => stripos($h, 'Cache-Control: private, no-store') === 0));
@@ -2915,8 +2974,9 @@ $flAuth = 'Authorization: Basic ' . base64_encode('x:flag-admin-pw-1');
 [, $flPage, $flHd] = http_get("$baseFl/?admin&folder=Trip", [$flAuth]);
 $flHdrs = [$flAuth, 'Cookie: ' . extract_cookie_header($flHd)];
 $flItems = fn () => read_data_file("$fxFl/Trip/.gallery-items.php")['items'] ?? [];
-check('[flags] each photo\'s editor has Private and Show-its-location switches that save themselves, and no visibility dropdowns', substr_count($flPage, 'class="instant-form flag-form"') === 8 && !str_contains($flPage, 'name="restriction"') && !str_contains($flPage, 'name="loc_visibility"') && str_contains($flPage, '>Private</span>') && str_contains($flPage, '>Show its location</span>'));
-check('[flags] the thumbnail grid has a Select photos bar with Select all, Clear, Make private, Make public and Done', str_contains($flPage, 'id="bulk-start"') && str_contains($flPage, 'data-bulk-do="private"') && str_contains($flPage, 'data-bulk-do="public"') && str_contains($flPage, 'data-bulk="all"') && str_contains($flPage, 'data-bulk="done"'));
+[, $flOwner] = http_get("$baseFl/?folder=Trip", $flHdrs);
+check('[flags] the pencil\'s editor has Private and Location switches that save themselves (the same save as the lock), and no visibility dropdowns', str_contains($flOwner, 'id="lbe-private"') && str_contains($flOwner, 'id="lbe-loc"') && !str_contains($flOwner, 'name="restriction"') && !str_contains($flOwner, 'name="loc_visibility"') && !str_contains($flPage, 'class="instant-form flag-form"'));
+check('[flags] the gallery\'s Select bar has Select all, Clear, Make private, Make public and Done; the admin page has no thumbnail grid or Select bar of its own any more', str_contains($flOwner, 'data-select="private"') && str_contains($flOwner, 'data-select="public"') && str_contains($flOwner, 'data-select="all"') && str_contains($flOwner, 'data-select="done"') && !str_contains($flPage, 'id="bulk-start"') && !str_contains($flPage, 'class="thumb-grid"'));
 $r = flag_post("$baseFl/?admin&folder=Trip", $flPage, $flHdrs, 'private', true, ['a.jpg']);
 check('[flags] switching Private on for one photo answers JSON, stores it on the photo, and hides it from visitors', ($r['ok'] ?? null) === true && ($flItems()['a.jpg']['restriction'] ?? null) === 'private' && !str_contains(http_get("$baseFl/?folder=Trip")[1], 'alt="Trip/a.jpg"') && str_contains(http_get("$baseFl/?folder=Trip")[1], 'alt="Trip/b.jpg"'));
 $r = flag_post("$baseFl/?admin&folder=Trip", $flPage, $flHdrs, 'private', false, ['a.jpg']);
@@ -2930,11 +2990,12 @@ check('[flags] a bulk request naming a file that is not there is refused as a wh
 check('[flags] choosing none, or too many, is refused with a reason', (flag_post("$baseFl/?admin&folder=Trip", $flPage, $flHdrs, 'private', true, [])['ok'] ?? null) === false);
 $r = flag_post("$baseFl/?admin&folder=Trip", $flPage, $flHdrs, 'private', false, ['b.jpg', 'c.jpg', 'd.jpg']);
 check('[flags] and Make public undoes it for the whole selection', ($r['ok'] ?? null) === true && !isset($flItems()['b.jpg']['restriction']) && str_contains(http_get("$baseFl/?folder=Trip")[1], 'alt="Trip/d.jpg"'));
-// Stale-edit fingerprint ignores the switches: a caption form loaded before a switch was flipped still saves.
+// Stale-edit fingerprint ignores the switches: an editor opened before a switch was flipped still saves.
 [, $flPage2] = http_get("$baseFl/?admin&folder=Trip", $flHdrs);
+$flHashBefore = item_get($baseFl, $flHdrs, 'Trip/a.jpg')['hash'] ?? '';
 flag_post("$baseFl/?admin&folder=Trip", $flPage2, $flHdrs, 'private', true, ['a.jpg']);
-[, $rs] = user_submit("$baseFl/?admin&folder=Trip", $flPage2, 'name="file" value="a.jpg"', ['caption' => 'Still saves'], $flHdrs);
-check('[flags] flipping a switch does not make that photo\'s caption form look out of date', str_contains($rs, 'class="flash ok"') && ($flItems()['a.jpg']['caption'] ?? null) === 'Still saves' && ($flItems()['a.jpg']['restriction'] ?? null) === 'private');
+[, $rs] = item_save("$baseFl/?admin&folder=Trip", $flHdrs, 'a.jpg', ['caption' => 'Still saves', 'loaded_hash' => $flHashBefore]);
+check('[flags] flipping a switch does not make that photo\'s editor look out of date (its fingerprint ignores the switches)', str_contains($rs, 'class="flash ok"') && ($flItems()['a.jpg']['caption'] ?? null) === 'Still saves' && ($flItems()['a.jpg']['restriction'] ?? null) === 'private');
 check('[flags] saving a photo\'s caption form leaves its privacy as the switch set it (the form no longer carries it)', true === (($flItems()['a.jpg']['restriction'] ?? null) === 'private'));
 // Location: off is always stored on the photo; on follows the folder when the folder already shows locations.
 $r = flag_post("$baseFl/?admin&folder=Trip", $flPage2, $flHdrs, 'location', true, ['b.jpg']);
@@ -2943,11 +3004,12 @@ $r = flag_post("$baseFl/?admin&folder=Trip", $flPage2, $flHdrs, 'location', fals
 check('[flags] ...and off is stored as Always hide, so it stays off if the folder is switched on later', ($flItems()['b.jpg']['locationVisibility'] ?? null) === 'hide');
 check('[flags] an unknown setting name is refused', (flag_post("$baseFl/?admin&folder=Trip", $flPage2, $flHdrs, 'caption', true, ['b.jpg'])['ok'] ?? null) === false);
 // The cover photo is highlighted in the photo grid, and mentioned there rather than in the settings.
-$coverSet = user_submit("$baseFl/?admin&folder=Trip", $flPage2, 'value="set_cover"', ['file' => 'c.jpg'], $flHdrs);
+$coverSet = item_cover("$baseFl/?admin&folder=Trip", $flHdrs, 'c.jpg');
 [, $flCoverPage] = http_get("$baseFl/?admin&folder=Trip", $flHdrs);
-check('[cover mark] the grid highlights exactly the photo that is the folder\'s cover, with a Cover label, and nothing else', substr_count($flCoverPage, 'class="thumb is-cover"') === 1 && substr_count($flCoverPage, 'class="thumb-cover"') === 1 && (bool) preg_match('#class="thumb is-cover" id="photo-' . md5('Trip/c.jpg') . '"#', $flCoverPage));
-check('[cover mark] that photo\'s editor says it already is the cover instead of offering to set it again, and every other photo can still be set', str_contains($flCoverPage, 'This is the cover') && substr_count($flCoverPage, '>Set as cover</button>') === 3);
-check('[cover mark] the Photos tab explains the cover, and the folder\'s settings no longer carry a cover paragraph', str_contains($flCoverPage, 'highlighted; it is the picture in shared links') && !str_contains($flCoverPage, 'click "Set as cover" on any photo below') && !str_contains($flCoverPage, 'Shared links use the first photo as their picture'));
+[, $flOwner2] = http_get("$baseFl/?folder=Trip", $flHdrs);
+check('[cover mark] the owner\'s page lights exactly the photo that is the folder\'s cover (a gold star), and nothing else', substr_count($flOwner2, 'class="cover-toggle is-cover"') === 1 && str_contains($flOwner2, 'class="cover-toggle is-cover" data-file="Trip/c.jpg"') && (item_get($baseFl, $flHdrs, 'Trip/c.jpg')['cover'] ?? null) === true);
+check('[cover mark] the editor knows it already is the cover (its Cover switch is lit), and every other photo\'s is not', (item_get($baseFl, $flHdrs, 'Trip/a.jpg')['cover'] ?? null) === false && (item_get($baseFl, $flHdrs, 'Trip/b.jpg')['cover'] ?? null) === false && (item_get($baseFl, $flHdrs, 'Trip/d.jpg')['cover'] ?? null) === false);
+check('[cover mark] the folder\'s settings carry no cover paragraph (the cover is chosen with the star or the editor\'s Cover switch)', !str_contains($flCoverPage, 'click "Set as cover" on any photo below') && !str_contains($flCoverPage, 'Shared links use the first photo as their picture') && !str_contains($flCoverPage, 'data-tab="photos"'));
 [, $flRootAdmin] = http_get("$baseFl/?admin", $flHdrs);
 check('[cover mark] nor does the gallery\'s own settings page', !str_contains($flRootAdmin, 'Shared links use the first photo as their picture') && !str_contains($flRootAdmin, 'Cover photo (the picture in shared-link previews)'));
 check('[rules] the Private page offers ready-made nginx and Apache rules, collapsed, written for this gallery\'s address, with copy buttons', str_contains($flCoverPage, '<h2 class="section-title">Lock the files themselves</h2>') && substr_count($flCoverPage, 'class="secondary copy-rules"') >= 2);
@@ -3397,9 +3459,7 @@ check('[root identity] shared-link previews use the title and the description', 
 check('[root identity] a folder\'s way back uses the gallery title', str_contains($rFolder, '&larr; Summer 2026</a>') || str_contains($rFolder, '← Summer 2026</a>'));
 // A cover for shared links.
 [, $rAdmin2] = http_get("$baseRoot/?admin", $rootHdrs);
-[, $r] = user_submit("$baseRoot/?admin", $rAdmin2, 'name="file" value="two.jpg"', [], $rootHdrs);
-$coverForm = ''; foreach (html_post_forms($rAdmin2) as $f) if (str_contains($f['html'], 'value="set_cover"') && str_contains($f['html'], 'value="two.jpg"')) $coverForm = $f['html'];
-[$cs, $cb] = http_post("$baseRoot/?admin", form_default_fields($coverForm), $rootHdrs);
+[$cs, $cb] = item_cover("$baseRoot/?admin", $rootHdrs, 'two.jpg');
 check('[root identity] "Set as cover" works at the root too', $cs === 200 && str_contains($cb, 'set as the gallery') && str_contains($cb, 'class="flash ok"'));
 check('[root identity] ...and the shared-link picture is then that photo, not simply the first', (bool) preg_match('#property="og:image" content="[^"]*img=two\.jpg#', http_get("$baseRoot/")[1]));
 // Hostile text is escaped like every other field.
@@ -3560,7 +3620,7 @@ $pingCarol = json_decode($vGet('/?track=top.jpg', $carol)[1], true);
 $pingCarol2 = json_decode($vGet('/?track=top.jpg', $carol)[1], true);
 check('[visits] a visitor\'s photo views still count, once per photo per half hour as before', ($pingCarol['ok'] ?? null) === true && ($pingCarol['photoViews'] ?? 0) === 1 && ($pingCarol2['photoViews'] ?? 0) === 1);
 $adminVisits = http_get("$baseVis/?admin", array_merge(['Authorization: Basic ' . base64_encode('x:visit-admin-pw-123')]))[1];
-check('[visits] the admin says what is counted: visits in total, one per visitor per half hour, not counting you or bots', str_contains($adminVisits, 'visits in total') && str_contains($adminVisits, 'one per visitor per half hour'));
+check('[visits] the admin still says what is counted (visits: one per visitor per half hour), now in Site settings, and carries no photo list', str_contains($adminVisits, 'one per visitor per half hour') && !str_contains($adminVisits, 'class="thumb-grid"'));
 $dave = []; $vGet('/', $dave);
 check('[visits] in the end the total is exactly the number of real visits: Alice, Bob, one returning after a long gap, and Dave, which is four, with everything else (bots, prefetches, the admin, reloads) left out', $vCount($vGet('/', $dave)[1]) === 4);
 
@@ -3613,12 +3673,12 @@ $loginCookie = $cookieOf($h2); $loc2 = ''; foreach ($h2 as $h) if (stripos($h, '
 check('[login] the right password redirects to the very URL asked for, and sets the session cookie', $s2 === 303 && $loc2 === '?admin&folder=Sub' && str_contains($loginCookie, 'gallery_admin_'));
 [$s3, $b3] = http_get("$baseLogin/?admin&folder=Sub", ["Cookie: $loginCookie"]);
 check('[login] with just that cookie (no Authorization header) the admin page opens, on the right folder', $s3 === 200 && str_contains($b3, 'Gallery Admin') && str_contains($b3, 'Editing: Sub'));
-check('[admin layout] a sticky top bar carries the title, the folder being edited, section links and Log out', str_contains($b3, '<header class="admin-bar">') && str_contains($b3, 'Editing: Sub') && str_contains($b3, 'href="#photos"') && str_contains($b3, 'href="#settings"') && str_contains($b3, 'value="logout"'));
+check('[admin layout] a sticky top bar carries the title, the folder being edited, section links and Log out', str_contains($b3, '<header class="admin-bar">') && str_contains($b3, 'Editing: Sub') && !str_contains($b3, 'href="#photos"') && str_contains($b3, 'href="#settings"') && str_contains($b3, 'value="logout"'));
 check('[admin layout] folders are a tree beside the content, with the current one marked', str_contains($b3, 'class="admin-folder-nav"') && str_contains($b3, 'class="current" aria-current="page"') && str_contains($b3, '<main class="admin-main"'));
-check('[admin layout] the sections are real tabs (Photos, Folder settings, Notes, Export), each with its own panel; no Hidden tab when nothing is hidden', str_contains($b3, 'role="tablist"') && str_contains($b3, 'data-tab="photos"') && str_contains($b3, 'data-tab="settings"') && str_contains($b3, 'data-tab="notes"') && str_contains($b3, 'data-tab="export"') && str_contains($b3, '<div class="tab-panel" data-tab="export">') && !str_contains($b3, 'data-tab="hidden"'));
-check('[admin layout] the Photos tab is a grid of thumbnails with one editor panel above it (every photo\'s own form is in the page, shown only when selected)', str_contains($b3, 'class="photo-editor" id="photo-editor"') && str_contains($b3, 'class="thumb-grid"') && substr_count($b3, 'class="thumb"') === substr_count($b3, 'class="item-editor"') && substr_count($b3, 'class="thumb"') >= 1 && strpos($b3, 'id="photo-editor"') < strpos($b3, 'class="thumb-grid"'));
-check('[admin layout] each thumbnail has a stable id to link to and points at its editor', (bool) preg_match('#<button type="button" class="thumb" id="photo-([0-9a-f]{32})" data-edit="edit-\1"#', $b3) && (bool) preg_match('#<div class="item-editor" id="edit-[0-9a-f]{32}">#', $b3));
-check('[admin layout] the anchors inside the panels still exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="photos"') && str_contains($b3, 'id="notes"') && str_contains($b3, 'id="export"'));
+check('[admin layout] the sections are real tabs (Folder settings, Notes, Export; no Photos tab any more: photos are edited in the gallery), each with its own panel; no Hidden tab when nothing is hidden', str_contains($b3, 'role="tablist"') && !str_contains($b3, 'data-tab="photos"') && str_contains($b3, 'data-tab="settings"') && str_contains($b3, 'data-tab="notes"') && str_contains($b3, 'data-tab="export"') && str_contains($b3, '<div class="tab-panel" data-tab="export">') && !str_contains($b3, 'data-tab="hidden"'));
+check('[admin layout] the page has no thumbnail grid, per-photo forms or Select bar (the pencil and the Select button on the gallery do all of that)', !str_contains($b3, 'class="photo-editor"') && !str_contains($b3, 'class="thumb-grid"') && !str_contains($b3, 'class="item-editor"') && !str_contains($b3, 'id="bulk-bar"') && !str_contains($b3, 'name="loaded_hash" value="' . md5('x') . '"'));
+check('[admin layout] the Folder settings tab is the one that opens first', str_contains($b3, "names.indexOf('settings') >= 0 ? 'settings' : names[0]"));
+check('[admin layout] the anchors inside the panels still exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="notes"') && str_contains($b3, 'id="export"'));
 check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="access_code"'));
 check('[login] a login also counts as private view (the viewer cookie is set too)', str_contains($loginCookie, '=') && substr_count($loginCookie, '=') >= 2);
 // A saved change from an expired session must not be saved, and must say why.
@@ -3709,7 +3769,7 @@ check('[trip] no map yet: ENABLE_MAP is on, but no photo has a *visible* locatio
 [, $pAdmin, $pAdminHd] = http_get("$baseTrip/?admin&folder=Paris", [$tripAuth]);
 $tripCookie = extract_cookie_header($pAdminHd); $tripHdrs = [$tripAuth, "Cookie: $tripCookie"];
 $parisUrl = "$baseTrip/?admin&folder=Paris";
-check('[trip] the folder admin page shows the settings form, the location switch, and its photos', str_contains($pAdmin, 'Save folder settings') && str_contains($pAdmin, 'Show photo locations publicly for this folder') && str_contains($pAdmin, 'eiffel.jpg') && str_contains($pAdmin, 'seine.mp4'));
+check('[trip] the folder admin page shows the settings form and the location switch (its photos are edited in the gallery)', str_contains($pAdmin, 'Save folder settings') && str_contains($pAdmin, 'Show photo locations publicly for this folder') && !str_contains($pAdmin, 'class="item-editor"'));
 
 // 3. Fill in the folder's own settings: name, dates, description, position.
 [, $r] = user_submit($parisUrl, $pAdmin, 'value="save_folder_identity"', ['display_name' => 'Paris, France', 'dates' => 'May 3–7, 2026', 'description' => 'Five days of croissants.', 'sort_order' => '1'], $tripHdrs);
@@ -3724,19 +3784,15 @@ check('[trip] ...and Position 1 moved Paris ahead of Lisbon', strpos($tripHome2,
 [, $r] = user_submit($parisUrl, $pAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $tripHdrs);
 check('[trip] ticking "Show photo locations publicly for this folder" saves', str_contains($r, 'class="flash ok"'));
 [, $pAdmin] = http_get($parisUrl, $tripHdrs);
-$eiffelForm = '';
-foreach (html_post_forms($pAdmin) as $form) { if (str_contains($form['html'], 'name="file" value="eiffel.jpg"') && str_contains($form['html'], 'save_item')) $eiffelForm = $form['html']; }
-$eiffelFields = form_default_fields($eiffelForm);
-check('[trip] the admin pre-fills the photo\'s location from its EXIF GPS (48.8584, 2.2945) before anything is typed', abs((float) ($eiffelFields['lat'] ?? 0) - 48.8584) < 0.0001 && abs((float) ($eiffelFields['lng'] ?? 0) - 2.2945) < 0.0001);
-check('[trip] turning the folder\'s switch on says how many photos now show a location, and how to keep one private', str_contains($r, '1 photo has GPS in the file and now shows a location') && str_contains($r, 'Show its location'));
-check('[trip] ...the GPS was stored for that photo right then (nothing to Save first), so there is no "not saved yet" nagging', str_contains($pAdmin, 'name="lat" value="48.8584') && !str_contains($pAdmin, 'not saved yet') && !str_contains($pAdmin, 'loc-unsaved-summary'));
+$eiffelFields = item_get($baseTrip, $tripHdrs, 'Paris/eiffel.jpg');
+check('[trip] the editor has the photo\'s location from its EXIF GPS (48.8584, 2.2945) before anything is typed', abs((float) ($eiffelFields['lat'] ?? 0) - 48.8584) < 0.0001 && abs((float) ($eiffelFields['lng'] ?? 0) - 2.2945) < 0.0001);
+check('[trip] turning the folder\'s switch on says how many photos now show a location, and how to keep one private', str_contains($r, '1 photo has GPS in the file and now shows a location') && str_contains($r, 'switch off Location'));
+check('[trip] ...the GPS was stored for that photo right then (nothing to Save first), so there is no "not saved yet" nagging', array_key_exists('auto', $eiffelFields) && $eiffelFields['auto'] === null && !str_contains($pAdmin, 'loc-unsaved-summary'));
 check('[trip] ...and visitors see the map and the location badge straight away', str_contains(http_get("$baseTrip/")[1], 'trip-map-preview') && str_contains(http_get("$baseTrip/?folder=Paris")[1], 'location-badge'));
-[, $r] = user_submit($parisUrl, $pAdmin, 'name="file" value="eiffel.jpg"', ['caption' => 'The iron lady', 'web' => 'https://en.wikipedia.org/wiki/Eiffel_Tower', 'loc_label' => 'Champ de Mars'], $tripHdrs);
+[, $r] = item_save($parisUrl, $tripHdrs, 'eiffel.jpg', ['caption' => 'The iron lady', 'web' => 'https://en.wikipedia.org/wiki/Eiffel_Tower', 'loc_label' => 'Champ de Mars']);
 check('[trip] saving the photo (caption + link, untouched pre-filled GPS) succeeds', str_contains($r, 'class="flash ok"'));
 [, $pAdminSaved] = http_get($parisUrl, $tripHdrs);
-$eiffelSavedForm = '';
-foreach (html_post_forms($pAdminSaved) as $form) { if (str_contains($form['html'], 'name="file" value="eiffel.jpg"') && str_contains($form['html'], 'save_item')) $eiffelSavedForm = $form['html']; }
-check('[trip] once saved, the "not saved yet" warning is gone from that photo', $eiffelSavedForm !== '' && !str_contains($eiffelSavedForm, 'not saved yet'));
+check('[trip] once saved, the photo has no "not saved yet" place left', ($eiffelSaved = item_get($baseTrip, $tripHdrs, 'Paris/eiffel.jpg')) && array_key_exists('auto', $eiffelSaved) && $eiffelSaved['auto'] === null && ($eiffelSaved['label'] ?? '') === 'Champ de Mars' && ($eiffelSaved['caption'] ?? '') === 'The iron lady');
 [, $parisPub] = http_get("$baseTrip/?folder=Paris");
 check('[trip] visitors see the caption badge, the location badge (OpenStreetMap link) and the web-link badge', str_contains($parisPub, 'caption-badge" title="The iron lady"') && (bool) preg_match('#class="item-badge location-badge" href="https://www\.openstreetmap\.org/[^"]*48\.8584#', $parisPub) && str_contains($parisPub, 'href="https://en.wikipedia.org/wiki/Eiffel_Tower"'));
 check('[trip] the lightbox caption data carries the caption, never the filename', str_contains($parisPub, '"The iron lady"') && !preg_match('/captions = \[[^\]]*eiffel/', $parisPub));
@@ -3749,19 +3805,19 @@ check('[trip] ...whose legend uses the folder\'s display name', str_contains($tr
 [$tripMapStatus, $tripMapPage] = http_get("$baseTrip/?map");
 check('[trip] the shareable ?map page loads and has its own link preview', $tripMapStatus === 200 && str_contains($tripMapPage, 'property="og:image"') && str_contains($tripMapPage, '?mapicon'));
 [, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
-check('[trip] Lisbon\'s tram photo has GPS pre-filled too, but Lisbon has not opted in so it is not on the map', abs((float) (form_default_fields((function ($h) { foreach (html_post_forms($h) as $f) if (str_contains($f['html'], 'name="file" value="tram.jpg"') && str_contains($f['html'], 'save_item')) return $f['html']; return ''; })($lAdmin))['lat'] ?? 0) - 38.7) < 0.01 && count($clusters3) === 1);
-check('[trip] ...and Lisbon\'s admin warns that its GPS stays private until the switch is turned on, naming what turning it on does', str_contains($lAdmin, 'Nothing is public while this folder') && str_contains($lAdmin, 'Private for now') && str_contains($lAdmin, 'Always hide'));
+check('[trip] Lisbon\'s tram photo has GPS too (offered, not saved), but Lisbon has not opted in so it is not on the map', abs((float) (item_get($baseTrip, $tripHdrs, 'Lisbon/tram.jpg')['auto']['lat'] ?? 0) - 38.7) < 0.01 && count($clusters3) === 1);
+check('[trip] ...and Lisbon\'s admin warns that its GPS stays private until the switch is turned on, naming what turning it on does and how a photo opts out', str_contains($lAdmin, 'Nothing is public while this folder') && str_contains($lAdmin, '<em>Location</em> switch'));
 check('[trip] ...the location switch is an instant toggle with the warning beside it in orange (naming how many photos it will publish), not a dialog', str_contains($lAdmin, 'class="instant-form"') && (bool) preg_match('#<div class="warn-note">Turning this on shows the location of 1 photo here to visitors#', $lAdmin) && !str_contains($lAdmin, 'confirm(&quot;Turn on public locations'));
 [, $r] = user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $tripHdrs);
 [, $lAdmin] = http_get("$baseTrip/?admin&folder=Lisbon", $tripHdrs);
 [, $tripHome4] = http_get("$baseTrip/");
 preg_match('/var clusters = (\[.*?\]);/s', $tripHome4, $cm4); $clusters4 = json_decode($cm4[1] ?? '[]', true);
 check('[trip] once Lisbon opts in, its tram photo is on the map with no further Save, so the map has two pins', count($clusters4) === 2);
-user_submit("$baseTrip/?admin&folder=Lisbon", $lAdmin, 'name="file" value="tram.jpg"', ['caption' => 'Tram 28'], $tripHdrs);
+item_save("$baseTrip/?admin&folder=Lisbon", $tripHdrs, 'tram.jpg', ['caption' => 'Tram 28']);
 
 // 6. Pick a cover photo with the page's own "Set as cover" button.
 [, $pAdmin] = http_get($parisUrl, $tripHdrs);
-foreach (html_post_forms($pAdmin) as $form) { if (str_contains($form['html'], 'value="set_cover"') && str_contains($form['html'], 'value="louvre.jpg"')) { [, $r] = http_post($parisUrl, form_default_fields($form['html']), $tripHdrs); } }
+[, $r] = item_cover($parisUrl, $tripHdrs, 'louvre.jpg');
 [, $tripHome5] = http_get("$baseTrip/");
 check('[trip] after "Set as cover" on louvre.jpg, Paris\'s cover card shows the Louvre photo', (bool) preg_match('#id="group-paris">.*?src="\?img=Paris%2Flouvre\.jpg&amp;size=cover&amp;v=[0-9a-f]{10}"#s', $tripHome5));
 
@@ -3817,8 +3873,11 @@ preg_match('#<span class="page-tools">(.*?)</span>\s*</div>#s', $saleAfter, $sal
 check('[sale] ...and the sitewide "N views" total is hidden from the public page bar too', isset($saleFooter[1]) && !preg_match('/\d+ views/', $saleFooter[1]) && str_contains($saleFooter[1], 'href="?about"') && !str_contains($saleAfter, '<footer'));
 // ...but the seller can see every count in the admin.
 [, $saleAdmin] = http_get("$baseSale/?admin", ['Authorization: Basic ' . base64_encode('admin:sale-admin')]);
-check('[sale] the seller sees the counts in the admin: the page-load total, and per-photo views (alpha_01.jpg: 1 view)', str_contains($saleAdmin, 'visit in total') || str_contains($saleAdmin, 'visits in total') && str_contains($saleAdmin, 'cannot see any counts') && (bool) preg_match('#alpha_01\.jpg</div>\s*<div class="item-sub">\s*<svg class="ico"[^>]*><use href="\#i-eye"></use></svg> 1 view\b#', $saleAdmin));
-check('[sale] ...and an untouched photo reads 0 views', (bool) preg_match('#unrelated\.jpg</div>\s*<div class="item-sub">\s*<svg class="ico"[^>]*><use href="\#i-eye"></use></svg> 0 views\b#', $saleAdmin));
+[, , $saleAdminHd] = http_get("$baseSale/?admin", ['Authorization: Basic ' . base64_encode('admin:sale-admin')]);
+[, $saleOwner] = http_get("$baseSale/", ['Cookie: ' . extract_cookie_header($saleAdminHd)]);
+check('[sale] the seller sees the counts on their own gallery page, though visitors cannot: a photo with one view (alpha_01.jpg) says 1', (bool) preg_match('#<span class="view-badge" data-photo="alpha_01\.jpg"><svg[^>]*><use href="\#i-eye"></use></svg> 1</span>#', $saleOwner));
+check('[select] in a gallery grouped by filename the owner still gets Select (private/public in bulk) and the pencil, without the Arrange part that only fits photos shown one by one', str_contains($saleOwner, 'id="select-btn"') && str_contains($saleOwner, 'data-select="private"') && !str_contains($saleOwner, 'data-select="release"') && str_contains($saleOwner, 'class="edit-toggle"'));
+check('[sale] ...and an untouched photo reads 0 views', (bool) preg_match('#<span class="view-badge" data-photo="unrelated\.jpg"><svg[^>]*><use href="\#i-eye"></use></svg> 0</span>#', $saleOwner));
 
 /* ======================================================================= *
  * RECIPE: private family photos — hide an item and a whole folder through
@@ -3852,8 +3911,8 @@ check('[family] its photos are refused by URL too (?img= 404)', http_get("$baseF
 [, $hiddenSum] = http_get("$baseFam/?admin&hidden", $famHdrs);
 check('[family] the admin\'s "Hidden items" summary lists the folder and the photo, with the not-a-lock warning', str_contains($hiddenSum, 'Birthday') && str_contains($hiddenSum, 'kids.jpg') && str_contains((string) http_get("$baseFam/?admin", $famHdrs)[1], 'by their direct address'));
 [, $famAdminPage] = http_get("$baseFam/?admin", $famHdrs);
-check('[family] the Hidden tab links each hidden folder to its settings, and each hidden photo to its own card', str_contains($famAdminPage, 'href="?admin&amp;folder=Birthday#settings"') && str_contains($famAdminPage, 'href="?admin#photo-' . md5('kids.jpg') . '"'));
-check('[family] ...and the card that link points at really exists on that page, so the link lands on it', str_contains($famAdminPage, 'id="photo-' . md5('kids.jpg') . '"'));
+check('[family] the Private tab links each hidden folder to its settings, and each hidden photo to its editor in the gallery', str_contains($famAdminPage, 'href="?admin&amp;folder=Birthday#settings"') && str_contains($famAdminPage, 'href="?photo=' . rawurlencode('Birthday/kids.jpg') . '&amp;edit=1"') || str_contains($famAdminPage, 'href="?photo=kids.jpg&amp;edit=1"'));
+check('[family] ...and that link really opens the photo with its editor: the owner\'s viewer starts on it and opens the editor', (function () use ($baseFam, $famHdrs) { $p = http_get("$baseFam/?photo=kids.jpg&edit=1", $famHdrs)[1]; return str_contains($p, 'const initialPhoto = "kids.jpg"') && str_contains($p, 'lbEdit.open()'); })());
 check('[family] the old ?admin&hidden address still works: it goes to the Hidden tab', (function () use ($baseFam, $famHdrs) { [$st, , $hd] = http_get("$baseFam/?admin&hidden=1", $famHdrs, false); $loc = ''; foreach ($hd as $h) if (stripos($h, 'Location:') === 0) $loc = trim(substr($h, 9)); return $st === 302 && $loc === '?admin#hidden'; })());
 // A trusted viewer.
 [$noPwStatus] = http_get("$baseFam/?reveal");
@@ -3942,10 +4001,10 @@ check('[archive] the folder named in EXTRA_FOLDERS appears as an album next to t
 [, $arcPage] = http_get("$baseArc/?folder=OldTrip2020");
 check('[archive] opening it shows its photos, served from the other disk', str_contains($arcPage, 'alt="OldTrip2020/old1.jpg"') && http_get("$baseArc/?img=OldTrip2020%2Fold1.jpg&size=thumb")[0] === 200);
 [, $arcAdm, $arcHd] = http_get("$baseArc/?admin&folder=OldTrip2020", [$arcAuth]); $arcHdrs = [$arcAuth, "Cookie: " . extract_cookie_header($arcHd)];
-check('[archive] it is a normal folder in the admin\'s folder list', str_contains($arcAdm, 'folder=OldTrip2020') && str_contains($arcAdm, 'old1.jpg'));
+check('[archive] it is a normal folder in the admin\'s folder list', str_contains($arcAdm, 'folder=OldTrip2020'));
 [, $r] = user_submit("$baseArc/?admin&folder=OldTrip2020", $arcAdm, 'value="save_folder_identity"', ['display_name' => '2020 Archive', 'description' => 'From the old disk.'], $arcHdrs);
 [, $arcAdm] = http_get("$baseArc/?admin&folder=OldTrip2020", $arcHdrs);
-user_submit("$baseArc/?admin&folder=OldTrip2020", $arcAdm, 'name="file" value="old1.jpg"', ['caption' => 'Before everything'], $arcHdrs);
+item_save("$baseArc/?admin&folder=OldTrip2020", $arcHdrs, 'old1.jpg', ['caption' => 'Before everything']);
 [, $arcHome2] = http_get("$baseArc/"); [, $arcPage2] = http_get("$baseArc/?folder=OldTrip2020");
 check('[archive] display name, description and a caption can be saved on it; the data is kept with the archive itself, on that disk', str_contains($arcHome2, 'folder-cover-label">2020 Archive<') && str_contains($arcPage2, 'caption-badge" title="Before everything"') && is_file("$arcDisk/.gallery-items.php"));
 [, $arcAdm] = http_get("$baseArc/?admin&folder=OldTrip2020", $arcHdrs);
@@ -3964,12 +4023,12 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     $roAuth = 'Authorization: Basic ' . base64_encode('admin:ro-admin');
     [, $roPage, $roHd] = http_get("$baseRo2/?admin", [$roAuth]); $roHdrs = [$roAuth, 'Cookie: ' . extract_cookie_header($roHd)];
     chmod($fxRo2, 0555);
-    [, $roSave] = user_submit("$baseRo2/?admin", $roPage, 'name="file" value="a.jpg"', ['caption' => 'will not stick'], $roHdrs);
+    [, $roSave] = item_save("$baseRo2/?admin", $roHdrs, 'a.jpg', ['caption' => 'will not stick']);
     check('[unwritable folder] a save the server cannot write says "Nothing was saved" and why — not "Saved"', str_contains($roSave, 'class="flash error"') && str_contains($roSave, 'Nothing was saved') && str_contains($roSave, 'writable') && !str_contains($roSave, 'class="flash ok"'));
     check('[unwritable folder] ...and nothing was written', !file_exists("$fxRo2/.gallery-items.php"));
     chmod($fxRo2, 0755);
     [, $roPage] = http_get("$baseRo2/?admin", $roHdrs);
-    [, $roSaveOk] = user_submit("$baseRo2/?admin", $roPage, 'name="file" value="a.jpg"', ['caption' => 'sticks now'], $roHdrs);
+    [, $roSaveOk] = item_save("$baseRo2/?admin", $roHdrs, 'a.jpg', ['caption' => 'sticks now']);
     check('[unwritable folder] ...and once the permission is fixed, the same save works', str_contains($roSaveOk, 'class="flash ok"') && is_file("$fxRo2/.gallery-items.php"));
 }
 
