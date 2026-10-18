@@ -277,8 +277,8 @@ A private item is removed outright for anyone without the password: absent from 
 A folder you have made private hides everything in it, and nothing is stored on the photos for that: they just follow the folder. That is the way to prepare a folder before anyone sees it.
 
 1. Switch **Private folder** on in the folder's settings (or leave it on from the start).
-2. Go through the photos on the gallery. Each tile shows what it is: a dashed **Folder** lock (private only because the folder is), a solid red **Private** (kept private on its own: it stays private when the folder opens) or an open lock (public). Press the lock, or use **Select** and its *Private*, *Public* and *Folder* buttons, to set the ones that must stay private. A banner at the top of the folder's page counts what opening it would do ("3 will stay private · 39 become public when you open it") and follows every change you make.
-3. Switch **Private folder** off. It first asks, with the same counts ("3 photos stay private, 39 photos become public"), and only then opens the folder: the photos that followed it become public, those you marked stay private.
+2. Go through the photos on the gallery. Each tile shows what it is: a dashed **Folder** lock (private only because the folder is), a solid red **Private** (kept private on its own: it stays private when the folder opens) or an open lock (public). Press the lock, or use **Select** and its *Private*, *Public* and *Folder* buttons, to set the ones that must stay private. A banner at the top of the folder's page counts what opening it would do ("3 photos will stay private · 39 photos become public when you open it") and follows every change you make.
+3. Switch **Private folder** off in the folder's settings, or just press the red banner on the folder's page. Either first asks, with the same counts ("3 photos stay private, 39 photos become public"), and only then opens the folder: the photos that followed it become public, those you marked stay private.
 
 A photo that sits inside another private folder stays private too, and is counted with the ones that stay. The counts include everything beneath the folder.
 

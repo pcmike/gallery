@@ -3768,6 +3768,11 @@ function owner_lock_title($ps) {
     return $ps['own'] === 'private' ? 'Private: press to make it public' : 'Public: press to make it private';
 }
 
+/** "3 photos" (or "3 items" when videos are shown too): a count with its noun, for the private-folder counts. */
+function count_noun($n) {
+    return number_format((int) $n) . ' ' . (ENABLE_VIDEO ? 'item' : 'photo') . ((int) $n === 1 ? '' : 's');
+}
+
 /** What opening a private folder would do, for the owner: how many of the photos and videos under $folderPath would still be
  *  hidden once the folder itself is public (switched private on their own, or inside another private folder) and how many would
  *  become public. Counts everything beneath the folder, to any depth. */
@@ -6080,7 +6085,7 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
 <?php if (!$isRoot):
     $private = !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private';
 ?>
-    <form method="post" class="priv-folder-form" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>">
+    <form method="post" class="priv-folder-form" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_folder_restriction">
       <input type="hidden" name="hidden" value="<?= $private ? '0' : '1' ?>">   <?php // what the Save button (no JavaScript) sends; the page's script sends its own request ?>
@@ -6089,14 +6094,14 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
         <span class="instant-label">Private folder</span>
         <span class="rowstate" role="status" aria-live="polite"></span>
       </div>
-      <p class="hint priv-folder-note" data-on="Visitors can't see this folder or anything in it. <strong>%stay%</strong> will stay private (marked private on their own, or in another private folder); <strong>%open%</strong> become public when you switch this off. You'll be asked first." data-off="Switch it on to hide this folder and everything in it. Photos you mark private on their own stay private when you switch it off again, so you can go through them first."></p>
+      <p class="hint priv-folder-note" data-on="Visitors can't see this folder or anything in it. <strong>%stay%</strong> will stay private (marked private on their own, or in another private folder); <strong>%open%</strong> %becomes% public when you switch this off. You'll be asked first." data-off="Switch it on to hide this folder and everything in it. Photos you mark private on their own stay private when you switch it off again, so you can go through them first."></p>
       <div class="nojs-only"><button type="submit" class="<?= $private ? 'secondary' : 'danger' ?>"><?= $private ? 'Make this folder public again' : 'Make this entire folder private' ?></button></div>
     </form>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">
         <h3 id="priv-modal-title">Make this folder public?</h3>
-        <div class="pm-row pm-stay"><?= ui_icon('lock') ?><span><strong id="pm-stay">0 photos</strong> stay private</span></div>
-        <div class="pm-row pm-open"><?= ui_icon('unlock') ?><span><strong id="pm-open">0 photos</strong> become public</span></div>
+        <div class="pm-row pm-stay"><?= ui_icon('lock') ?><span><strong id="pm-stay">0 photos</strong> <span id="pm-stay-v">stay</span> private</span></div>
+        <div class="pm-row pm-open"><?= ui_icon('unlock') ?><span><strong id="pm-open">0 photos</strong> <span id="pm-open-v">become</span> public</span></div>
         <p class="hint">Anyone with the link will see those. Not right? Cancel, mark more photos private first, then come back.</p>
         <div class="pm-btns"><button type="button" class="secondary" id="pm-cancel">Cancel</button><button type="button" id="pm-ok">Make public</button></div>
       </div>
@@ -7504,7 +7509,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         let eta = '';
         if (secs >= 3 && worked >= 3 && pending > worked) {
           const left = Math.round((pending - worked) * secs / worked);
-          eta = left < 60 ? ', about ' + Math.max(5, Math.round(left / 5) * 5) + ' s left' : ', about ' + Math.round(left / 60) + ' min left';
+          const many = function (n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); };
+          if (left < 60) eta = ', about ' + many(Math.max(5, Math.round(left / 5) * 5), 'second') + ' left';
+          else if (left < 3600) eta = ', about ' + many(Math.round(left / 60), 'minute') + ' left';
+          else { let h = Math.floor(left / 3600), m = Math.round((left % 3600) / 60); if (m === 60) { h++; m = 0; } eta = ', about ' + many(h, 'hour') + (m ? ' ' + many(m, 'minute') : '') + ' left'; }
         }
         fill.style.width = p + '%';
         count.textContent = (stopping ? 'Stopping… ' : 'Preparing… ') + p + '% (' + fmt(worked) + ' of ' + fmt(pending) + ' photos made' + eta + ')';
@@ -7916,10 +7924,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     var csrf = form.querySelector('input[name=csrf_token]').value, box = form.querySelector('input[type=checkbox]'), note = form.querySelector('.priv-folder-note');
     var node = form.querySelector('.rowstate'), modal = document.getElementById('priv-modal');
     var counts = { stay: +form.getAttribute('data-stay') || 0, open: +form.getAttribute('data-open') || 0 };
-    function word(n) { return n + (n === 1 ? ' photo' : ' photos'); }
+    var noun = form.getAttribute('data-noun') || 'photo';
+    function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
     function paint() {
       if (!note) return;
-      note.innerHTML = box.checked ? note.getAttribute('data-on').replace('%stay%', counts.stay).replace('%open%', counts.open) : note.getAttribute('data-off');
+      note.innerHTML = box.checked ? note.getAttribute('data-on').replace('%stay%', word(counts.stay)).replace('%open%', word(counts.open)).replace('%becomes%', counts.open === 1 ? 'becomes' : 'become') : note.getAttribute('data-off');
     }
     function say(text, kind) {
       node.textContent = text; node.className = 'rowstate ' + (kind || ''); clearTimeout(node._t);
@@ -7947,6 +7956,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         .then(function (j) {
           if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
           document.getElementById('pm-stay').textContent = word(counts.stay); document.getElementById('pm-open').textContent = word(counts.open);
+          document.getElementById('pm-stay-v').textContent = counts.stay === 1 ? 'stays' : 'stay'; document.getElementById('pm-open-v').textContent = counts.open === 1 ? 'becomes' : 'become';
           modal.hidden = false; document.getElementById('pm-cancel').focus();
         })
         .catch(function () { say('Couldn\'t check: reload the page and try again.', 'err'); });
@@ -11189,6 +11199,23 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* In a private folder the three buttons are the three states of the lock: Private (solid), Public, Folder (dashed). */
   .folder-priv-banner { display: flex; gap: 10px; align-items: flex-start; width: calc(100% - 48px); max-width: 1352px; margin: 8px auto 0; padding: 10px 12px; border-radius: 10px; background: rgba(237,66,69,0.12); border: 1px solid rgba(237,66,69,0.45); font-size: 0.85rem; line-height: 1.4; box-sizing: border-box; }
   .folder-priv-banner > .ico { width: 1.3em; height: 1.3em; color: #ff7a7c; margin-top: 1px; flex: none; }
+  .folder-priv-banner { cursor: pointer; transition: background .15s, border-color .15s, transform .12s; -webkit-tap-highlight-color: transparent; }
+  .folder-priv-banner:hover { background: rgba(237,66,69,0.2); border-color: rgba(237,66,69,0.75); }
+  .folder-priv-banner:active { transform: scale(0.995); background: rgba(237,66,69,0.26); }
+  .folder-priv-banner:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .folder-priv-banner .fpb-hint { display: block; margin-top: 2px; font-style: normal; font-weight: 600; color: #aab2ff; }
+  .fp-modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.62); }
+  .fp-modal[hidden] { display: none; }
+  .fp-modal-card { width: min(420px, 100%); box-sizing: border-box; background: var(--card); border: 1px solid #34343a; border-radius: 14px; padding: 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); }
+  .fp-modal-card h3 { margin: 0 0 10px; font-size: 1.15rem; }
+  .fp-row { display: flex; align-items: center; gap: 9px; margin: 4px 0; font-size: 0.95rem; }
+  .fp-row .ico { width: 1.2em; height: 1.2em; flex: none; }
+  .fp-stay .ico { color: #ff7a7c; } .fp-open .ico { color: #3ba55c; }
+  .fp-hint { margin: 10px 0 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+  .fp-btns { display: flex; gap: 8px; margin-top: 16px; }
+  .fp-btns button { flex: 1; padding: 10px 14px; font: inherit; font-size: 0.9rem; border-radius: 8px; border: 1px solid #34343a; background: #26262a; color: var(--text); cursor: pointer; transition: background .12s, transform .12s; }
+  .fp-btns button:hover { background: #303036; } .fp-btns button:active { transform: scale(0.97); }
+  .fp-btns .primary { background: var(--accent); border-color: var(--accent); color: #fff; } .fp-btns .primary:hover { background: #6b77f0; }
   .folder-priv-banner strong { display: block; }
   .folder-priv-banner span { color: #c9c9ce; }
   .select-bar .sb-p { display: none; }
@@ -12045,10 +12072,20 @@ if (ENABLE_MAP && $mapPoints) {
 <?= $lockForm ?>
 <?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): $privCounts = folder_privacy_counts($dir, $files, $currentFolderPath); ?>
   <?php // For the owner, on a private folder's own page: what making the folder public would do (the lock on each tile shows which is which). ?>
-  <div class="folder-priv-banner" id="folder-priv-banner" role="note" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
+  <div class="folder-priv-banner" id="folder-priv-banner" role="button" tabindex="0" title="Make this folder public" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('lock') ?>
     <div><strong>Private folder: visitors can't see it</strong>
-      <span class="fpb-counts" aria-live="polite"><?= (int) $privCounts['stay'] ?> will stay private &middot; <?= (int) $privCounts['open'] ?> become public when you open it</span></div>
+      <span class="fpb-counts" aria-live="polite"><?= count_noun($privCounts['stay']) ?> will stay private &middot; <?= count_noun($privCounts['open']) ?> <?= (int) $privCounts['open'] === 1 ? 'becomes' : 'become' ?> public when you open it</span>
+      <em class="fpb-hint">Make it public&hellip;</em></div>
+  </div>
+  <div class="fp-modal" id="fp-modal" role="dialog" aria-modal="true" aria-labelledby="fp-modal-title" hidden>
+    <div class="fp-modal-card">
+      <h3 id="fp-modal-title">Make this folder public?</h3>
+      <div class="fp-row fp-stay"><?= ui_icon('lock') ?><span><strong id="fp-stay">0 photos</strong> <span id="fp-stay-v">stay</span> private</span></div>
+      <div class="fp-row fp-open"><?= ui_icon('unlock') ?><span><strong id="fp-open">0 photos</strong> <span id="fp-open-v">become</span> public</span></div>
+      <p class="fp-hint">Anyone with the link will see those. Not right? Cancel, mark more private first, then come back.</p>
+      <div class="fp-btns"><button type="button" id="fp-cancel">Cancel</button><button type="button" class="primary" id="fp-ok">Make public</button></div>
+    </div>
   </div>
 <?php endif; ?>
 <?php if ($hasMap): ?>
@@ -12381,7 +12418,8 @@ if (ENABLE_MAP && $mapPoints) {
         .then(function (r) { return r.ok && (r.headers.get('content-type') || '').indexOf('json') >= 0 ? r.json() : null; })
         .then(function (j) {
           const c = j && j.counts, n = el.querySelector('.fpb-counts');
-          if (c && n) n.textContent = c.stay + ' will stay private \u00b7 ' + c.open + ' become public when you open it';
+          const noun = el.getAttribute('data-noun') || 'photo', many = function (k) { return k + ' ' + noun + (k === 1 ? '' : 's'); };
+          if (c && n) n.textContent = many(c.stay) + ' will stay private \u00b7 ' + many(c.open) + (c.open === 1 ? ' becomes' : ' become') + ' public when you open it';
         }).catch(function () {});
     }, 250);
   }
@@ -13005,6 +13043,42 @@ if (ENABLE_MAP && $mapPoints) {
     openLightbox(i);
     lbEdit.open();
   }, true);
+  // The banner on a private folder's page: pressing it asks (with the counts) whether to make the folder public; only a yes does.
+  (function () {
+    const banner = document.getElementById('folder-priv-banner'), modal = document.getElementById('fp-modal');
+    if (!banner || !modal) return;
+    const folder = banner.getAttribute('data-folder'), noun = banner.getAttribute('data-noun') || 'photo', $ = function (id) { return document.getElementById(id); };
+    const many = function (k) { return k + ' ' + noun + (k === 1 ? '' : 's'); };
+    const say = function (text) {
+      const t = $('owner-toast'); if (!t) return;
+      t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500);
+    };
+    const json = function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); };
+    const closeIt = function () { modal.hidden = true; banner.focus(); };
+    const ask = function () {
+      fetch('?admin&folder=' + encodeURIComponent(folder) + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
+        const c = j.counts || { stay: 0, open: 0 };
+        $('fp-stay').textContent = many(c.stay); $('fp-open').textContent = many(c.open);
+        $('fp-stay-v').textContent = c.stay === 1 ? 'stays' : 'stay'; $('fp-open-v').textContent = c.open === 1 ? 'becomes' : 'become';
+        modal.hidden = false; $('fp-cancel').focus();
+      }).catch(function () { say('Your admin session ended: sign in again'); });
+    };
+    banner.addEventListener('click', ask);
+    banner.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ask(); } });
+    $('fp-cancel').addEventListener('click', closeIt);
+    modal.addEventListener('click', function (e) { if (e.target === modal) closeIt(); });
+    modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeIt(); } });
+    $('fp-ok').addEventListener('click', function () {
+      modal.hidden = true;
+      fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
+        const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'toggle_folder_restriction');
+        return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
+      }).then(json).then(function (j) {
+        if (!j.ok) throw new Error(j.text || 'not saved');
+        say('This folder is public now'); setTimeout(function () { location.reload(); }, 500);
+      }).catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); banner.focus(); });
+    });
+  })();
 <?php endif; ?>
   // The strip of buttons sticks to the top; once the page has scrolled under it, it gets a soft edge.
   (function () {

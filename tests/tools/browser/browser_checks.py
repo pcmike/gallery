@@ -1645,11 +1645,11 @@ try:
         # the gallery: locks in three states
         b.goto(B18 + "/?folder=Churches", 1.5)
         lock18 = lambda f: b.js("(() => { const e = document.querySelector(\".priv-toggle[data-file='Churches/%s']\"); return e.className.replace('priv-toggle', '').trim() + '|' + e.textContent.trim(); })()" % f)
-        ok("will stay private" in b.js("document.getElementById('folder-priv-banner').textContent") and "0 will stay private" in b.js("document.getElementById('folder-priv-banner').textContent") and "4 become public" in b.js("document.getElementById('folder-priv-banner').textContent"), "[privacy] on the private folder's page the owner sees a banner with what opening it would do", b.js("document.getElementById('folder-priv-banner').textContent"))
+        ok("0 photos will stay private" in b.js("document.getElementById('folder-priv-banner').textContent") and "4 photos become public" in b.js("document.getElementById('folder-priv-banner').textContent"), "[privacy] on the private folder's page the owner sees a banner with what opening it would do", b.js("document.getElementById('folder-priv-banner').textContent"))
         ok(lock18("a.jpg") == "is-private is-folder|Folder" and lock18("d.jpg") == "is-private is-folder|Folder", "[privacy] every photo is drawn with a dashed \"Folder\" lock: private only because its folder is", lock18("a.jpg"))
         b.js("document.querySelector(\".priv-toggle[data-file='Churches/a.jpg']\").click()"); b.drain(1.0)
         ok(lock18("a.jpg") == "is-private|Private" and own18("a.jpg") == "private", "[privacy] pressing it once keeps the photo private on its own: a solid lock, stored on the photo", lock18("a.jpg") + " " + own18("a.jpg"))
-        ok(wait18("document.getElementById('folder-priv-banner').textContent.includes('1 will stay private') && document.getElementById('folder-priv-banner').textContent.includes('3 become public')"), "[privacy] ...and the banner's counts follow it", b.js("document.getElementById('folder-priv-banner').textContent"))
+        ok(wait18("document.getElementById('folder-priv-banner').textContent.includes('1 photo will stay private') && document.getElementById('folder-priv-banner').textContent.includes('3 photos become public')"), "[privacy] ...and the banner's counts follow it", b.js("document.getElementById('folder-priv-banner').textContent"))
         b.js("document.querySelector(\".priv-toggle[data-file='Churches/a.jpg']\").click()"); b.drain(1.0)
         ok(lock18("a.jpg") == "|" and own18("a.jpg") == "public", "[privacy] pressing it again makes it public, even though its folder is private (an open lock)", lock18("a.jpg") + " " + own18("a.jpg"))
         b.js("document.querySelector(\".priv-toggle[data-file='Churches/a.jpg']\").click()"); b.drain(1.0)
@@ -1681,6 +1681,16 @@ try:
         b.js("document.getElementById('lbe-done').click()"); b.drain(0.8)
         # opening the folder: only what is public shows
         b.js("document.querySelector(\".priv-toggle[data-file='Churches/b.jpg']\").click()"); b.drain(0.9)   # b: kept private on its own
+        # the banner is a button: the whole red box asks (with the counts) whether to make the folder public
+        b.js("document.getElementById('folder-priv-banner').click()"); b.drain(1.0)
+        bm = b.js("(() => { const m = document.getElementById('fp-modal'); return {shown: !m.hidden, stay: document.getElementById('fp-stay').textContent + ' ' + document.getElementById('fp-stay-v').textContent, open: document.getElementById('fp-open').textContent + ' ' + document.getElementById('fp-open-v').textContent}; })()")
+        ok(bm["shown"] and bm["stay"] == "1 photo stays" and bm["open"] == "3 photos become" and own18("b.jpg") == "private" and items18().get("restriction") == "private", "[privacy] pressing the banner asks, with the counts (one photo stays private, three become public), and changes nothing yet", str(bm))
+        b.js("document.getElementById('fp-cancel').click()"); b.drain(0.3)
+        ok(not b.js("!document.getElementById('fp-modal').hidden") and items18().get("restriction") == "private", "[privacy] Cancel closes it and the folder stays private")
+        b.js("document.getElementById('folder-priv-banner').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}))"); b.drain(0.8)
+        ok(b.js("!document.getElementById('fp-modal').hidden"), "[privacy] the banner also answers the keyboard (Enter)")
+        b.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}); b.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}); b.drain(0.3)
+        ok(not b.js("!document.getElementById('fp-modal').hidden") and items18().get("restriction") == "private", "[privacy] Escape closes it too")
         b.goto(B18 + "/?admin&folder=Churches&n=4", 1.5)
         b.js("document.querySelector('.priv-folder-form input[type=checkbox]').click()"); b.drain(1.0)
         ok(b.js("document.getElementById('pm-stay').textContent") == "1 photo" and b.js("document.getElementById('pm-open').textContent") == "3 photos", "[privacy] the question before opening the folder says one photo stays private and three become public", b.js("document.getElementById('pm-stay').textContent + '/' + document.getElementById('pm-open').textContent"))
@@ -1702,6 +1712,11 @@ try:
             return {fits: r.left >= 0 && r.right <= window.innerWidth + 1, rows: new Set(bs).size, n: bs.length, banner: document.getElementById('folder-priv-banner').getBoundingClientRect().right <= window.innerWidth + 1}; })()""")
         ok(sb["fits"] and sb["rows"] == 1 and sb["n"] == 3 and sb["banner"], "[select] on a phone the three buttons sit on one row inside the bar, and the banner fits", str(sb))
         shot(b, "18-select-private-phone")
+        b.js("document.querySelector('#select-bar [data-select=done]').click()"); b.drain(0.3)
+        b.js("document.getElementById('folder-priv-banner').click()"); b.drain(1.0)
+        ok(b.js("!document.getElementById('fp-modal').hidden") and b.js("document.getElementById('fp-modal-title').getBoundingClientRect().left >= 0 && document.querySelector('.fp-modal-card').getBoundingClientRect().right <= window.innerWidth"), "[privacy] on a phone the question fits the screen")
+        b.js("document.getElementById('fp-ok').click()"); b.drain(2.5)
+        ok(b.js("!document.getElementById('folder-priv-banner')") and "restriction" not in items18() and own18("b.jpg") == "private", "[privacy] Make public in the question opens the folder from the gallery itself: the banner is gone, the photo kept private stays private", own18("b.jpg"))
         ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
     finally:
         srv18.terminate(); srv18.wait()
