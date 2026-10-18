@@ -11183,14 +11183,20 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     .lightbox .caption-row .caption .cap-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; }
     .lightbox .caption-row .caption .cap-t:empty { display: none; }
     .lightbox-tools-wrap { position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
-    .lightbox-tools { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; pointer-events: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    /* The strip itself is masked, so nothing of a scrolled-off icon is painted within 18px of an end that has an arrow (laying a dark
+       backing over it instead left a hairline of the icon showing on Safari). */
+    .lightbox-tools { --ml: -10px; --mr: -10px; display: flex; align-items: center; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; pointer-events: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+      -webkit-mask-image: linear-gradient(to right, transparent var(--ml), #000 calc(var(--ml) + 10px), #000 calc(100% - var(--mr) - 10px), transparent calc(100% - var(--mr)));
+      mask-image: linear-gradient(to right, transparent var(--ml), #000 calc(var(--ml) + 10px), #000 calc(100% - var(--mr) - 10px), transparent calc(100% - var(--mr))); }
+    .lightbox-tools-wrap.can-left .lightbox-tools { --ml: 18px; }
+    .lightbox-tools-wrap.can-right .lightbox-tools { --mr: 18px; }
     .lightbox-tools::-webkit-scrollbar { display: none; }
     .lightbox-tools > * { flex: none; }
-    /* A small arrow at whichever end has more to swipe to (on a soft dark backing, so the icon under it reads as cut off). */
-    .tools-more { position: absolute; top: 0; bottom: 0; width: 28px; align-items: center; pointer-events: none; color: #e4e4e8; }
+    /* A small arrow at whichever end has more to swipe to, in the clear zone the mask leaves there. */
+    .tools-more { position: absolute; top: 0; bottom: 0; width: 18px; align-items: center; pointer-events: none; color: #e4e4e8; }
     .tools-more .ico { width: 16px; height: 16px; stroke-width: 2.4; }
-    .tools-more-l { left: 0; justify-content: flex-start; background: linear-gradient(to right, #000 45%, rgba(0,0,0,0)); }
-    .tools-more-r { right: 0; justify-content: flex-end; background: linear-gradient(to left, #000 45%, rgba(0,0,0,0)); }
+    .tools-more-l { left: 0; justify-content: center; }
+    .tools-more-r { right: 0; justify-content: center; }
     .lightbox-tools-wrap.can-left .tools-more-l, .lightbox-tools-wrap.can-right .tools-more-r { display: flex; }
     .lightbox .caption-row .lightbox-close-row { flex: none; }
     /* Every button of the row is the same box (44 points high) with the same drawn icon size, so the close button, which is

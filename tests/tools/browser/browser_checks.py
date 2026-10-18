@@ -1413,6 +1413,21 @@ try:
         b.js("document.getElementById('lightbox-tools').scrollLeft = 0"); b.drain(0.3)
         a0 = arrows()
         ok(a0["right"] and not a0["left"], "[viewer] at the start of a strip that goes on, a small arrow at its right end says there is more (and none at the left)", str(a0))
+        # nothing of a scrolled-off icon is painted in the zone of an arrow, outside the arrow itself (a real screenshot, read pixel by pixel)
+        def zone_ok(scroll):
+            b.js("document.getElementById('lightbox-tools').scrollLeft = %s" % scroll); b.drain(0.4)
+            g = b.js("(() => { const w = document.getElementById('lightbox-tools-wrap').getBoundingClientRect(), h = document.querySelector('.caption-row').getBoundingClientRect(); return {left: w.left, right: w.right, top: h.top, h: h.height}; })()")
+            bad = []
+            for side, x0 in (("left", g["left"]), ("right", g["right"] - 18)):
+                png = b.call("Page.captureScreenshot", {"format": "png", "clip": {"x": x0, "y": g["top"], "width": 18, "height": g["h"], "scale": 4}})["data"]
+                path = WORK + "/zone_%s.png" % side; open(path, "wb").write(base64.b64decode(png))
+                # the arrow's own strokes sit in the middle (about 4px to 14px of the 18); only the two outer margins must be black
+                out = subprocess.run(["php", "-r", "$im=imagecreatefrompng($argv[1]); $m=0; for($x=0;$x<imagesx($im);$x++){ if($x>=3*4 && $x<15*4) continue; for($y=0;$y<imagesy($im);$y++){ $c=imagecolorat($im,$x,$y); $v=max(($c>>16)&255,($c>>8)&255,$c&255); if($v>$m)$m=$v; } } echo $m;", path], capture_output=True, text=True).stdout.strip()
+                visible = b.js("getComputedStyle(document.getElementById('lightbox-tools-wrap').querySelector('.tools-more-%s')).display !== 'none'" % ("l" if side == "left" else "r"))
+                if visible and out.isdigit() and int(out) > 20: bad.append((side, out))
+            return bad
+        zl = [zone_ok(v) for v in (0, 15, 30, 9999)]
+        ok(not any(zl), "[viewer] nothing of a scrolled-off icon shows in the margins beside an arrow, at the start, part-way and at the end", str(zl))
         b.js("document.getElementById('lightbox-tools').scrollLeft = 9999"); b.drain(0.4)
         a1 = arrows()
         ok(a1["left"] and not a1["right"], "[viewer] scrolled to the end, the arrow is at the left end instead, saying the first buttons are back there", str(a1))
