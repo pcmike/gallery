@@ -2300,6 +2300,78 @@ check('...and its parent no longer shows its cover card, and the count drops', !
 [, $hiddenSummary] = http_get("$baseDepth/?admin&hidden", [$depthAuth, "Cookie: $depthCookie"]);
 check('the admin\'s Hidden items summary lists nested hidden folders (Germany and Paris)', str_contains($hiddenSummary, 'folder=Europe%2FGermany') && str_contains($hiddenSummary, 'folder=Europe%2FFrance%2FParis'));
 
+// A photo's privacy in three states (private on its own / public / follows its folder), what opening a private folder would do, and
+// folder settings that save field by field.
+$p3Hdrs = [$depthAuth, "Cookie: $depthCookie", 'X-Requested-With: gallery-fetch'];
+$p3Post = function ($query, $fields) use ($baseDepth, &$depthCsrf, $p3Hdrs) {
+    [, $body] = http_post("$baseDepth/?admin$query", $fields + ['csrf_token' => $depthCsrf], $p3Hdrs);
+    return json_decode($body, true) ?? ['ok' => null, 'text' => $body];
+};
+$p3Items = function () use ($fxDepth) { return read_data_file("$fxDepth/Europe/France/Paris/.gallery-items.php")['items'] ?? []; };
+$p3Own = function ($bare) use ($p3Items) { return ($p3Items()[$bare] ?? [])['restriction'] ?? 'inherit'; };
+$p3Root = "$baseDepth/";
+$p3Item = function ($file) use ($p3Root, $depthAuth, $depthCookie) { return item_get($p3Root, [$depthAuth, "Cookie: $depthCookie"], $file); };
+$p3One = $p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'eiffel.jpg', 'flag' => 'private', 'state' => 'private']);
+check('[privacy] a photo can be kept private on its own (state=private) inside a private folder', ($p3One['ok'] ?? false) === true && $p3Own('eiffel.jpg') === 'private');
+$p3Two = $p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'eiffel.jpg', 'flag' => 'private', 'state' => 'public']);
+check('[privacy] ...or made public inside it (state=public)', ($p3Two['ok'] ?? false) === true && $p3Own('eiffel.jpg') === 'public');
+$p3Three = $p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'eiffel.jpg', 'flag' => 'private', 'state' => 'inherit']);
+check('[privacy] ...or put back to following its folder (state=inherit): nothing is stored on the photo', ($p3Three['ok'] ?? false) === true && $p3Own('eiffel.jpg') === 'inherit' && !isset($p3Items()['eiffel.jpg']['restriction']));
+$p3Bad = $p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'eiffel.jpg', 'flag' => 'private', 'state' => 'maybe']);
+check('[privacy] an unknown state is refused and changes nothing', ($p3Bad['ok'] ?? null) === false && $p3Own('eiffel.jpg') === 'inherit');
+$p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'eiffel.jpg', 'flag' => 'private', 'state' => 'private']);
+$p3Rec = $p3Item('Europe/France/Paris/eiffel.jpg'); $p3Rec2 = $p3Item('Europe/France/Paris/louvre.jpg');
+check('[privacy] the owner\'s item record says what the photo has of its own and whether its folder is private', ($p3Rec['own'] ?? null) === 'private' && ($p3Rec['private'] ?? null) === true && ($p3Rec['folderPrivate'] ?? null) === true && ($p3Rec2['own'] ?? null) === '' && ($p3Rec2['private'] ?? null) === true && ($p3Rec2['folderPrivate'] ?? null) === true);
+$p3Bulk = $p3Post($parisAdminQuery, ['action' => 'bulk_item_flag', 'flag' => 'private', 'state' => 'public', 'files' => json_encode(['louvre.jpg', 'eiffel.jpg'])]);
+check('[privacy] several photos at once take a state too, and the answer says so', ($p3Bulk['ok'] ?? false) === true && $p3Own('louvre.jpg') === 'public' && $p3Own('eiffel.jpg') === 'public' && str_contains($p3Bulk['text'] ?? '', 'public'));
+$p3Bulk2 = $p3Post($parisAdminQuery, ['action' => 'bulk_item_flag', 'flag' => 'private', 'state' => 'inherit', 'files' => json_encode(['louvre.jpg', 'eiffel.jpg'])]);
+check('[privacy] ...including back to following the folder', ($p3Bulk2['ok'] ?? false) === true && $p3Own('louvre.jpg') === 'inherit' && $p3Own('eiffel.jpg') === 'inherit' && str_contains($p3Bulk2['text'] ?? '', 'following their folder'));
+$p3Old = $p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'louvre.jpg', 'flag' => 'private', 'on' => '1']);
+$p3Old2 = $p3Own('louvre.jpg');
+$p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'louvre.jpg', 'flag' => 'private', 'on' => '0']);
+check('[privacy] the older on/off request still works: on is kept private; off inside a private folder is public', ($p3Old['ok'] ?? false) === true && $p3Old2 === 'private' && $p3Own('louvre.jpg') === 'public');
+$p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'louvre.jpg', 'flag' => 'private', 'state' => 'inherit']);
+$p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'eiffel.jpg', 'flag' => 'private', 'state' => 'private']);
+// What opening the folder would do
+[, $p3CountsBody] = http_get("$baseDepth/?admin$parisAdminQuery&privcounts=1", [$depthAuth, "Cookie: $depthCookie"]);
+$p3Counts = json_decode($p3CountsBody, true)['counts'] ?? [];
+check('[privacy] the count of what opening a private folder would do: the photo kept private stays, the one that follows the folder becomes public', ($p3Counts['stay'] ?? null) === 1 && ($p3Counts['open'] ?? null) === 1);
+[, $p3EuropeBody] = http_get("$baseDepth/?admin&folder=Europe&privcounts=1", [$depthAuth, "Cookie: $depthCookie"]);
+$p3Europe = json_decode($p3EuropeBody, true)['counts'] ?? [];
+$p3Jpgs = count(glob("$fxDepth/Europe/*.jpg")) + count(glob("$fxDepth/Europe/*/*.jpg")) + count(glob("$fxDepth/Europe/*/*/*.jpg"));
+check('[privacy] ...counted across everything beneath a folder, and a photo inside another private folder (Paris, Germany) stays private', ($p3Europe['stay'] ?? 0) >= 3 && ($p3Europe['open'] ?? 0) >= 2 && ($p3Europe['stay'] ?? 0) + ($p3Europe['open'] ?? 0) === $p3Jpgs);
+check('[privacy] ...and only the owner can ask: a visitor gets no counts', !str_contains(http_get("$baseDepth/?admin$parisAdminQuery&privcounts=1")[1], '"counts"'));
+$p3Toggle = $p3Post($parisAdminQuery, ['action' => 'toggle_folder_restriction', 'hidden' => '1']);
+check('[privacy] switching a folder private answers with the same counts, for the page to show', ($p3Toggle['ok'] ?? false) === true && ($p3Toggle['counts']['stay'] ?? null) === 1 && ($p3Toggle['counts']['open'] ?? null) === 1);
+// The owner's pages
+[, $p3Page] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France/Paris'), [$depthAuth, "Cookie: $depthCookie"]);
+check('[privacy] on a private folder\'s page the owner sees a banner with the counts, a solid lock on the photo kept private and a dashed "Folder" lock on the one that follows the folder', str_contains($p3Page, 'id="folder-priv-banner"') && str_contains($p3Page, '1 will stay private') && str_contains($p3Page, '1 become public when you open it') && preg_match('#class="priv-toggle is-private" data-file="Europe/France/Paris/eiffel.jpg"#', $p3Page) === 1 && preg_match('#class="priv-toggle is-private is-folder" data-file="Europe/France/Paris/louvre.jpg"#', $p3Page) === 1 && str_contains($p3Page, '<span>Folder</span>'));
+check('[privacy] the owner\'s page carries the three states for the script (own, inherited, effective) and the Select bar\'s third button', str_contains($p3Page, '"own":{') && str_contains($p3Page, '"inh":{') && str_contains($p3Page, 'data-select="inherit"') && str_contains($p3Page, 'class="sb-p"') && str_contains($p3Page, 'function lockKind(f)') && str_contains($p3Page, 'function nextOwn(f)'));
+[, $p3Visitor] = http_get("$baseDepth/");
+check('[privacy] a visitor gets none of it: no banner, no owner state, no Select bar', !str_contains($p3Visitor, 'id="folder-priv-banner"') && !str_contains($p3Visitor, 'data-select="inherit"') && str_contains($p3Visitor, 'const ownerState = null;') && !str_contains($p3Visitor, 'class="priv-toggle'));
+[, $p3Public] = http_get("$baseDepth/?folder=" . rawurlencode('Europe/France/Lyon'), [$depthAuth, "Cookie: $depthCookie"]);
+check('[privacy] a public folder shows no banner and no dashed locks', !str_contains($p3Public, 'id="folder-priv-banner"') && str_contains($p3Public, 'class="priv-toggle"') && preg_match('#class="priv-toggle[^"]*is-folder#', $p3Public) === 0);
+// Folder settings that save field by field
+[, $p3Settings] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
+check('[settings] the folder settings page: a form that saves by itself, a Privacy section with the folder switch, locations and the map under it, and no separate Map heading', str_contains($p3Settings, 'class="identity-form"') && str_contains($p3Settings, 'class="priv-folder-form"') && str_contains($p3Settings, 'id="priv-modal"') && str_contains($p3Settings, 'id="map-under"') && substr_count($p3Settings, '<h3 class="subhead">Privacy</h3>') === 1 && !str_contains($p3Settings, '<h3 class="subhead">Map</h3>'));
+check('[settings] ...each field has its own save note, and the Save buttons are only for a browser without JavaScript', substr_count($p3Settings, 'class="rowstate"') >= 8 && preg_match('#<div class="nojs-only"><button type="submit">Save folder settings</button></div>#', $p3Settings) === 1);
+$p3Hash = preg_match('/name="loaded_hash" value="([0-9a-f]{32})"/', $p3Settings, $m3) ? $m3[1] : '';
+$p3Desc = $p3Post($parisAdminQuery, ['action' => 'save_folder_identity', 'description' => 'Typed on its own', 'loaded_hash' => $p3Hash]);
+$p3Data = read_data_file("$fxDepth/Europe/France/Paris/.gallery-items.php");
+check('[settings] saving one field answers JSON with the record\'s new fingerprint and touches nothing else (the display name and position stay)', ($p3Desc['ok'] ?? false) === true && strlen((string) ($p3Desc['hash'] ?? '')) === 32 && $p3Desc['hash'] !== $p3Hash && ($p3Data['description'] ?? '') === 'Typed on its own' && array_key_exists('displayName', $p3Data) && ($p3Data['restriction'] ?? '') === 'private');
+$p3Before = $p3Data['displayName'] ?? null;
+$p3Next = $p3Post($parisAdminQuery, ['action' => 'save_folder_identity', 'dates' => 'May 2026', 'loaded_hash' => $p3Desc['hash']]);
+$p3Data2 = read_data_file("$fxDepth/Europe/France/Paris/.gallery-items.php");
+check('[settings] the next save carries the new fingerprint, and a field that is not sent (the display name) is not wiped', ($p3Next['ok'] ?? false) === true && ($p3Data2['dates'] ?? '') === 'May 2026' && ($p3Data2['displayName'] ?? null) === $p3Before && ($p3Data2['description'] ?? '') === 'Typed on its own');
+$p3Stale = $p3Post($parisAdminQuery, ['action' => 'save_folder_identity', 'dates' => 'Another time', 'loaded_hash' => $p3Hash]);
+check('[settings] a save made from an out-of-date page (changed in another tab) is refused with JSON saying so, and nothing is overwritten', ($p3Stale['ok'] ?? null) === false && ($p3Stale['stale'] ?? null) === true && (read_data_file("$fxDepth/Europe/France/Paris/.gallery-items.php")['dates'] ?? '') === 'May 2026');
+$p3Sort = $p3Post($parisAdminQuery, ['action' => 'save_folder_identity', 'photo_sort_order' => 'name', 'photo_sort_dir' => 'desc', 'photo_sort_first' => '', 'photo_sort_private' => 'off', 'photo_sort_video' => 'off', 'photo_sort_located' => 'off', 'photo_sort_priority' => 'private,video,located', 'loaded_hash' => $p3Next['hash']]);
+$p3Data3 = read_data_file("$fxDepth/Europe/France/Paris/.gallery-items.php");
+check('[settings] the order of the photos saves as a group of its own, leaving the other fields alone', ($p3Sort['ok'] ?? false) === true && ($p3Data3['photoSort']['order'] ?? '') === 'name' && ($p3Data3['photoSort']['desc'] ?? null) === true && ($p3Data3['dates'] ?? '') === 'May 2026');
+// (put things back as they were for the tests that follow)
+$p3Post($parisAdminQuery, ['action' => 'set_item_flag', 'file' => 'eiffel.jpg', 'flag' => 'private', 'state' => 'inherit']);
+$p3Post($parisAdminQuery, ['action' => 'save_folder_identity', 'description' => '', 'dates' => '', 'photo_sort_order' => '', 'photo_sort_dir' => '', 'photo_sort_first' => '']);
+
 // Whole-tree export.
 [$treeStatus, $treeBody] = $depthPost('', ['action' => 'export_tree']);
 $treeJson = json_decode($treeBody, true);
@@ -3446,7 +3518,7 @@ $portRoot = find_free_port(); start_server($fxRoot, $portRoot); $baseRoot = "htt
 $rootAuth = 'Authorization: Basic ' . base64_encode('x:root-pw');
 [, $rAdmin, $rAdminHd] = http_get("$baseRoot/?admin", [$rootAuth]);
 $rootHdrs = [$rootAuth, 'Cookie: ' . extract_cookie_header($rAdminHd)];
-check('[root identity] the root\'s Settings tab has the same form a folder has: title, dates, description (no position at the root)', str_contains($rAdmin, 'Gallery settings') && str_contains($rAdmin, '<label>Gallery title</label>') && str_contains($rAdmin, 'name="dates"') && str_contains($rAdmin, 'name="description"') && str_contains($rAdmin, 'Save gallery settings') && !str_contains($rAdmin, 'name="sort_order"'));
+check('[root identity] the root\'s Settings tab has the same form a folder has: title, dates, description (no position at the root)', str_contains($rAdmin, 'Gallery settings') && str_contains($rAdmin, '<label>Gallery title <span class="rowstate"') && str_contains($rAdmin, 'name="dates"') && str_contains($rAdmin, 'name="description"') && str_contains($rAdmin, 'Save gallery settings') && !str_contains($rAdmin, 'name="sort_order"'));
 [, $rHome0] = http_get("$baseRoot/");
 check('[root identity] before anything is set, the "# Heading" in the notes file is still the page title', str_contains($rHome0, '<title>From The Heading — Gallery</title>') && !str_contains($rHome0, 'class="folder-dates"'));
 [, $r] = user_submit("$baseRoot/?admin", $rAdmin, 'value="save_folder_identity"', ['display_name' => 'Summer 2026', 'dates' => 'June 1–9', 'description' => 'Two weeks of nothing but sun.'], $rootHdrs);
@@ -3474,7 +3546,7 @@ user_submit("$baseRoot/?admin", $rAdmin4, 'value="save_folder_identity"', ['disp
 check('[root identity] clearing the title falls back to the "# Heading" again', str_contains(http_get("$baseRoot/")[1], '<title>From The Heading — Gallery</title>'));
 // Folders are unchanged: they still have a position and their own form.
 [, $subAdmin] = http_get("$baseRoot/?admin&folder=Sub", $rootHdrs);
-check('[root identity] a folder\'s own form is unchanged (display name, position)', str_contains($subAdmin, '<label>Display name</label>') && str_contains($subAdmin, 'name="sort_order"') && str_contains($subAdmin, 'Save folder settings'));
+check('[root identity] a folder\'s own form is unchanged (display name, position)', str_contains($subAdmin, '<label>Display name <span class="rowstate"') && str_contains($subAdmin, 'name="sort_order"') && str_contains($subAdmin, 'Save folder settings'));
 
 echo "== maps per folder: each folder and the root can show their own map, with their own settings ==\n";
 

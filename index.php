@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.1.0');
+define('GALLERY_VERSION', '2.2.0');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -3750,6 +3750,51 @@ function folder_above_is_private($dir, $file) {
     return false;
 }
 
+/** The owner's view of one photo's privacy: its own setting ("private", "public", or "" when it has none and follows its folder),
+ *  whether a folder above it is private (what "" would give it), and what that makes it. */
+function owner_privacy_state($dir, $file, $itemsData) {
+    $own = item_restriction($itemsData[$file] ?? null);
+    $inh = folder_above_is_private($dir, $file);
+    return ['own' => $own === 'inherit' ? '' : $own, 'inh' => $inh, 'priv' => $own === 'private' || ($own === 'inherit' && $inh)];
+}
+
+/** What pressing a photo's lock does, in words (its tooltip). In a private folder the lock goes round three states; elsewhere it is two. */
+function owner_lock_title($ps) {
+    if ($ps['inh']) {
+        if ($ps['own'] === 'private') return 'Kept private on its own: press to make it public';
+        if ($ps['own'] === 'public') return 'Public, though its folder is private: press to follow the folder again';
+        return 'Private because its folder is: press to keep it private on its own';
+    }
+    return $ps['own'] === 'private' ? 'Private: press to make it public' : 'Public: press to make it private';
+}
+
+/** What opening a private folder would do, for the owner: how many of the photos and videos under $folderPath would still be
+ *  hidden once the folder itself is public (switched private on their own, or inside another private folder) and how many would
+ *  become public. Counts everything beneath the folder, to any depth. */
+function folder_privacy_counts($dir, $files, $folderPath) {
+    $stay = 0; $open = 0;
+    $prefix = $folderPath . '/';
+    $folders = [];   // each folder's items, read once
+    foreach ($files as $f) {
+        if (strncmp($f, $prefix, strlen($prefix)) !== 0) continue;
+        $where = dirname($f);
+        if (!isset($folders[$where])) $folders[$where] = items_read(resolve_real_path($dir, $where))['items'] ?? [];
+        $own = item_restriction($folders[$where][basename($f)] ?? null);
+        if ($own === 'private') { $stay++; continue; }
+        if ($own === 'public') { $open++; continue; }
+        $hiddenElsewhere = false;
+        if (AUTO_GROUP_BY_FOLDER) {
+            $path = '';
+            foreach (explode('/', $where) as $segment) {
+                $path = $path === '' ? $segment : $path . '/' . $segment;
+                if ($path !== $folderPath && folder_restriction_cached($dir, $path) === 'private') { $hiddenElsewhere = true; break; }
+            }
+        }
+        if ($hiddenElsewhere) $stay++; else $open++;
+    }
+    return ['stay' => $stay, 'open' => $open];
+}
+
 /** Cache-Control for a photo/video response. Ordinary files are immutable
  *  and public (the URL changes when the file does not, and a CDN is welcome
  *  to hold them). A *hidden* item is only ever served to a trusted viewer,
@@ -5351,6 +5396,7 @@ function admin_item_json($dir, $files) {
         'auto' => $auto !== null ? ['lat' => (string) $auto['lat'], 'lng' => (string) $auto['lng']] : null,
         'hash' => admin_item_record_hash($entry),
         'private' => $rest === 'private' || ($rest === 'inherit' && $folderPrivate),
+        'own' => $rest === 'inherit' ? '' : $rest,   // the photo's own setting: "private", "public", or "" (it follows its folder)
         'folderPrivate' => $folderPrivate,
         'locationShown' => $vis === 'show' || ($vis === 'inherit' && !empty($data['locationEnabled'])),
         'folderLocationOn' => !empty($data['locationEnabled']),
@@ -5469,6 +5515,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $flag = (string) ($_POST['flag'] ?? '');
         if (!in_array($flag, ['private', 'location'], true)) return ['type' => 'error', 'text' => 'Unknown setting.'];
         $on = ($_POST['on'] ?? '') === '1';
+        // Privacy can also be asked for as a state: "private" (kept private on the photo itself), "public" (public even inside a private
+        // folder) or "inherit" (no setting of its own: it follows its folder). Without it, "on" means private / back to public as before.
+        $state = null;
+        if ($flag === 'private' && isset($_POST['state'])) {
+            $state = (string) $_POST['state'];
+            if (!in_array($state, ['private', 'public', 'inherit'], true)) return ['type' => 'error', 'text' => 'Unknown setting.'];
+            $on = $state === 'private';
+        }
         if ($action === 'set_item_flag') {
             $names = [basename((string) ($_POST['file'] ?? ''))];
         } else {
@@ -5482,13 +5536,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             if ($bare === '' || !in_array($fullPath, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
         }
         $changed = 0;
-        items_update($adminFolderReal, function (&$data) use ($names, $flag, $on, $dir, $adminFolderPath, &$changed) {
+        items_update($adminFolderReal, function (&$data) use ($names, $flag, $on, $state, $dir, $adminFolderPath, &$changed) {
             $folderLocationOn = !empty($data['locationEnabled']);
             foreach ($names as $bare) {
                 $fullPath = $adminFolderPath === null ? $bare : $adminFolderPath . '/' . $bare;
                 $entry = $data['items'][$bare] ?? [];
                 $before = $entry;
-                if ($flag === 'private') {
+                if ($flag === 'private' && $state !== null) {
+                    if ($state === 'inherit') { unset($entry['restriction']); } else { $entry['restriction'] = $state; }
+                } elseif ($flag === 'private') {
                     if ($on) { $entry['restriction'] = 'private'; }
                     elseif (folder_above_is_private($dir, $fullPath)) { $entry['restriction'] = 'public'; }
                     else { unset($entry['restriction']); }
@@ -5501,7 +5557,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             }
         });
         $n = count($names);
-        $what = $flag === 'private' ? ($on ? 'private' : 'public') : ($on ? 'showing its location' : 'not showing its location');
+        $what = $flag === 'private' ? ($state === 'inherit' ? (count($names) === 1 ? 'following its folder' : 'following their folder') : ($on ? 'private' : 'public')) : ($on ? 'showing its location' : 'not showing its location');
         $text = $n === 1
             ? ($flag === 'private' ? '"' . $names[0] . '" is now ' . $what . '.' : '"' . $names[0] . '" is now ' . $what . '.')
             : $n . ' photos are now ' . $what . '.';
@@ -5529,11 +5585,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
 
     if ($action === 'save_folder_identity') {
-        $displayName = trim((string) ($_POST['display_name'] ?? ''));
         // Only fields actually present in the POST are touched, so a form
-        // (or an older client) that only sends the display name never
-        // wipes the other three.
-        $updates = ['displayName' => $displayName !== '' ? $displayName : null];
+        // (or an older client) that only sends one field never wipes the others
+        // (the page saves each field as it is changed).
+        $updates = [];
+        if (array_key_exists('display_name', $_POST)) {
+            $displayName = trim((string) $_POST['display_name']);
+            $updates['displayName'] = $displayName !== '' ? $displayName : null;
+        }
         if (array_key_exists('description', $_POST)) {
             $text = admin_clean_description($_POST['description'], 1000);
             $updates['description'] = $text !== '' ? $text : null;
@@ -5581,8 +5640,8 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $updates['photoSort'] = $own !== [] ? $own : null;
         }
         $loadedHash = isset($_POST['loaded_hash']) ? (string) $_POST['loaded_hash'] : null;
-        $stale = false;
-        items_update($adminFolderReal, function (&$data) use ($updates, $loadedHash, &$stale) {
+        $stale = false; $newHash = null;
+        items_update($adminFolderReal, function (&$data) use ($updates, $loadedHash, &$stale, &$newHash) {
             if ($loadedHash !== null && !hash_equals(admin_record_hash(folder_identity_record($data)), $loadedHash)) {
                 $stale = true;
                 return;
@@ -5590,11 +5649,12 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             foreach ($updates as $k => $v) {
                 $data[$k] = $v;
             }
+            $newHash = admin_record_hash(folder_identity_record($data));
         });
         if ($stale) {
-            return ['type' => 'error', 'text' => ($adminFolderPath === null ? 'The gallery\'s settings' : 'This folder\'s settings') . admin_stale_message()];
+            return ['type' => 'error', 'text' => ($adminFolderPath === null ? 'The gallery\'s settings' : 'This folder\'s settings') . admin_stale_message(), 'stale' => true];
         }
-        return ['type' => 'ok', 'text' => $adminFolderPath === null ? 'Gallery settings saved.' : 'Folder settings saved.'];
+        return ['type' => 'ok', 'text' => $adminFolderPath === null ? 'Gallery settings saved.' : 'Folder settings saved.', 'hash' => $newHash];
     }
 
     if ($action === 'toggle_folder_restriction') {
@@ -5605,7 +5665,8 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         items_update($adminFolderReal, function (&$data) use ($hidden) {
             if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction']); }
         });
-        return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'private: visitors need the private-view password to see it.' : 'public again.')];
+        return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'private: visitors need the private-view password to see it.' : 'public again.'),
+                'counts' => folder_privacy_counts($dir, $files, $adminFolderPath)];
     }
 
     if ($action === 'arrange_items') {
@@ -6007,6 +6068,48 @@ function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $
 <?php
 }
 
+/** The "Privacy" section of a folder's (or the gallery's) settings: three rows with the same switch, each saved the moment it is
+ *  pressed: the folder itself private (not at the top of the gallery), whether photo locations are public, and, under that because it
+ *  only shows photos whose location is public, the map. */
+function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, $counts, $locWarn = '') {
+    $isRoot = $adminFolderPath === null;
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $locOn = !empty($itemsHere['locationEnabled']) && ENABLE_PHOTO_LOCATION;
+?>
+    <h3 class="subhead">Privacy</h3>
+<?php if (!$isRoot):
+    $private = !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private';
+?>
+    <form method="post" class="priv-folder-form" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>">
+      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
+      <input type="hidden" name="action" value="toggle_folder_restriction">
+      <input type="hidden" name="hidden" value="<?= $private ? '0' : '1' ?>">   <?php // what the Save button (no JavaScript) sends; the page's script sends its own request ?>
+      <div class="instant-row">
+        <label class="switch"><input type="checkbox" <?= $private ? 'checked' : '' ?> aria-label="Private folder"><span class="slider"></span></label>
+        <span class="instant-label">Private folder</span>
+        <span class="rowstate" role="status" aria-live="polite"></span>
+      </div>
+      <p class="hint priv-folder-note" data-on="Visitors can't see this folder or anything in it. <strong>%stay%</strong> will stay private (marked private on their own, or in another private folder); <strong>%open%</strong> become public when you switch this off. You'll be asked first." data-off="Switch it on to hide this folder and everything in it. Photos you mark private on their own stay private when you switch it off again, so you can go through them first."></p>
+      <div class="nojs-only"><button type="submit" class="<?= $private ? 'secondary' : 'danger' ?>"><?= $private ? 'Make this folder public again' : 'Make this entire folder private' ?></button></div>
+    </form>
+    <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
+      <div class="admin-modal-card">
+        <h3 id="priv-modal-title">Make this folder public?</h3>
+        <div class="pm-row pm-stay"><?= ui_icon('lock') ?><span><strong id="pm-stay">0 photos</strong> stay private</span></div>
+        <div class="pm-row pm-open"><?= ui_icon('unlock') ?><span><strong id="pm-open">0 photos</strong> become public</span></div>
+        <p class="hint">Anyone with the link will see those. Not right? Cancel, mark more photos private first, then come back.</p>
+        <div class="pm-btns"><button type="button" class="secondary" id="pm-cancel">Cancel</button><button type="button" id="pm-ok">Make public</button></div>
+      </div>
+    </div>
+<?php endif; ?>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), $isRoot ? 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : '') : 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : ''), $locWarn); ?>
+    <div class="map-under<?= $locOn ? '' : ' no-loc' ?>" id="map-under"<?= ENABLE_PHOTO_LOCATION ? '' : ' data-global-off="1"' ?>>
+      <p class="warn-note map-loc-note">Locations are off here, so the map has nothing to show. A photo you set to show its location on its own still appears.</p>
+      <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot); ?>
+    </div>
+<?php
+}
+
 /** The "Map" section of a folder's (or the gallery's) settings: whether its page
  *  shows a map of its own photos, and how close photos must be to share a pin.
  *  Both are per page; a blank radius means the site-wide setting. */
@@ -6015,7 +6118,6 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
     $on = $isRoot ? (($itemsHere['mapEnabled'] ?? null) !== false) : (($itemsHere['mapEnabled'] ?? null) === true);
     $radius = $itemsHere['mapRadius'] ?? null;
 ?>
-    <h3 class="subhead">Map</h3>
     <?php if (!ENABLE_MAP): ?>
       <p class="muted" style="margin-top:0;">The map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="return adminGoTo('site');">Site settings</a> first; then each folder can show its own map.</p>
     <?php else: ?>
@@ -6115,13 +6217,13 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $name = $isRoot ? basename(__DIR__) : basename($adminFolderPath);
 ?>
-    <form method="post">
+    <form method="post" class="identity-form">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="save_folder_identity">
       <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
       <div class="settings-grid<?= $isRoot ? ' root' : '' ?>">
         <div class="field">
-          <label><?= $isRoot ? 'Gallery title' : 'Display name' ?></label>
+          <label><?= $isRoot ? 'Gallery title' : 'Display name' ?> <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="text" name="display_name" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
           <?php if ($isRoot): ?>
             <p class="hint">Shown at the top of the page, in the browser tab and in shared links, instead of "<?= $esc($name) ?>". If blank, a "# Heading" at the top of a notes file is used, then the folder name.</p>
@@ -6130,7 +6232,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <?php endif; ?>
         </div>
         <div class="field">
-          <label>Dates (optional)</label>
+          <label>Dates (optional) <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="text" name="dates" maxlength="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
           <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
             <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
@@ -6139,14 +6241,14 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         </div>
         <?php if (!$isRoot): ?>
         <div class="field">
-          <label>Position</label>
+          <label>Position <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="number" name="sort_order" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
           <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
         </div>
         <?php endif; ?>
         <?php $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : []; $psSel = function ($key) use ($ps) { return isset($ps[$key]) && is_bool($ps[$key]) ? ($ps[$key] ? 'on' : 'off') : ''; }; ?>
         <details class="field wide sort-details"<?= $ps ? ' open' : '' ?>>
-          <summary>Order of the photos here <span class="muted"><?= $ps ? '&middot; custom' : "&middot; the site's order" ?></span></summary>
+          <summary>Order of the photos here <span class="muted"><?= $ps ? '&middot; custom' : "&middot; the site's order" ?></span> <span class="rowstate" role="status" aria-live="polite"></span></summary>
           <?php $dirNow = isset($ps['desc']) && is_bool($ps['desc']) ? ($ps['desc'] ? 'desc' : 'asc') : ''; $triState = ['' => "Site's", 'on' => 'On', 'off' => 'Off']; ?>
           <div class="sort-rows">
             <div class="sort-row"><span class="sort-label">Order</span><?= ui_segmented('photo_sort_order', ['' => "Site's", 'name' => 'Name', 'taken' => 'Date'], ($ps['order'] ?? '') === 'modified' ? 'taken' : (string) ($ps['order'] ?? ''), 'Order') ?></div>
@@ -6180,12 +6282,13 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <p class="hint">"Put first" is the same list as in Site settings. Until you change it here, this folder follows the site's. Visitors can change the order with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
         </details>
         <div class="field wide">
-          <label>Description</label>
+          <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
           <textarea name="description" maxlength="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
           <p class="hint">Centred box at the top of <?= $isRoot ? 'the page' : 'its page' ?>, also used in shared-link previews. A little Markdown works (<code>**bold**</code>, <code>*italic*</code>, <code>[words](https://…)</code>, <code>- list</code>, <code>## heading</code>); <code>{left}</code>, <code>{center}</code> or <code>{right}</code> aligns a paragraph.</p>
         </div>
       </div>
-      <button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button>
+      <?php // Every field saves by itself as it is changed (the page's script); the button is only here for a browser without JavaScript. ?>
+      <div class="nojs-only"><button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button></div>
     </form>
 <?php
 }
@@ -7053,6 +7156,34 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .rowstate:empty { display:inline-block; }
   .rowstate.ok { color:var(--ok); }
   .rowstate.err { color:var(--err); flex-basis:100%; text-align:right; min-width:0; }
+  .rowstate.busy { color:#aab2ff; }
+  /* The folder settings save by themselves: each field says so beside its label, and an error sits on its own line under it. */
+  .identity-form .field > label .rowstate, .identity-form summary .rowstate { margin-left:8px; min-width:0; }
+  .identity-form .rowstate.err { display:block; margin:1px 0 3px; text-align:left; }
+  .identity-form input.bad, .identity-form textarea.bad { border-color:var(--err); }
+  .priv-folder-form { margin:0 0 6px; }
+  .priv-folder-note { margin:2px 0 12px 54px; max-width:68ch; line-height:1.45; }
+  .priv-folder-note strong { color:var(--text); }
+  @media (max-width: 600px) {
+    /* On a phone a switch keeps its label beside it (a long label wraps within its own column) and its status goes under the label. */
+    .instant-row { display:grid; grid-template-columns:42px minmax(0,1fr); column-gap:12px; row-gap:0; align-items:center; }
+    .instant-row .rowstate { grid-column:2; min-width:0; }
+    .instant-row .rowstate.err { text-align:left; }
+  }
+  .map-under { margin:2px 0 10px 14px; padding-left:14px; border-left:2px solid #2c2c30; }
+  .map-under .map-form { transition:opacity .15s; }
+  .map-under.no-loc .map-form { opacity:0.55; }
+  .map-under .map-loc-note { display:none; margin:6px 0 4px; }
+  .map-under.no-loc .map-loc-note { display:block; }
+  .map-under .map-sub { margin-left:26px; }
+  .admin-modal { position:fixed; inset:0; z-index:200; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,0.62); }
+  .admin-modal[hidden] { display:none; }
+  .admin-modal-card { width:min(420px,100%); background:var(--card); border:1px solid #34343a; border-radius:14px; padding:18px; box-shadow:0 12px 40px rgba(0,0,0,0.6); }
+  .admin-modal-card h3 { margin:0 0 10px; font-size:1.15rem; }
+  .pm-row { display:flex; align-items:center; gap:9px; margin:4px 0; font-size:0.95rem; }
+  .pm-row .ico { width:1.2em; height:1.2em; flex:none; }
+  .pm-stay .ico { color:#ff7a7c; } .pm-open .ico { color:var(--ok); }
+  .pm-btns { display:flex; gap:8px; margin-top:16px; } .pm-btns button { flex:1; padding:10px 14px; font-size:0.9rem; }
   .pwline .rowstate.err { text-align:left; }
   .pwline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .pw-btn, .js-only { display:none; }
@@ -7146,25 +7277,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <section class="panel" id="settings">
     <h2 class="section-title">This folder's own settings</h2>
     <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, suggest_folder_dates($dir, folder_files_under($files, $adminFolderPath))); ?>
-    <h3 class="subhead">Privacy</h3>
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : ''), $locWarn); ?>
-    <div class="privacy-row">
-    <form method="post">
-      <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
-      <input type="hidden" name="action" value="toggle_folder_restriction">
-      <input type="hidden" name="hidden" value="<?= !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private' ? '0' : '1' ?>">
-      <button type="submit" class="<?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'secondary' : 'danger' ?>"><?= (!empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private') ? 'Make this folder public again' : 'Make this entire folder private' ?></button>
-    </form>
-    </div>
-    <?php render_admin_map_form($itemsHere, $csrfToken, false); ?>
+    <?php render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, folder_privacy_counts($dir, $files, $adminFolderPath), $locWarn); ?>
   </section>
   <?php else: ?>
   <section class="panel" id="settings">
     <h2 class="section-title">Gallery settings</h2>
     <?php render_admin_identity_form($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files)); ?>
-    <h3 class="subhead">Privacy</h3>
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : ''), $locWarn); ?>
-    <?php render_admin_map_form($itemsHere, $csrfToken, true); ?>
+    <?php render_admin_privacy_section($itemsHere, $csrfToken, null, ['stay' => 0, 'open' => 0], $locWarn); ?>
   </section>
   <?php endif; ?>
 
@@ -7718,6 +7837,143 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       });
     });
   });
+  // A folder's own settings save by themselves: a text field when you leave it or stop typing for a second, the order choices as they are
+  // made. One request at a time, each checked against the record's fingerprint (so another tab's change is never overwritten), and each
+  // field says "Saving…", "Saved" or what is wrong beside its own label. Nothing else in the folder's data is touched.
+  [].forEach.call(document.querySelectorAll('.identity-form'), function (form) {
+    form.addEventListener('submit', function (ev) { ev.preventDefault(); });
+    var csrf = form.querySelector('input[name=csrf_token]').value, hashInput = form.querySelector('input[name=loaded_hash]'), chain = Promise.resolve();
+    function say(node, text, kind) {
+      if (!node) return;
+      node.textContent = text; node.className = 'rowstate ' + (kind || '');
+      clearTimeout(node._t);
+      if (kind === 'ok') node._t = setTimeout(function () { node.textContent = ''; node.className = 'rowstate'; }, 3000);
+    }
+    function stateOf(el) { var h = el.closest('.field') || el.closest('details'); return h ? h.querySelector('.rowstate') : null; }
+    function post(fields, node, onOk, onErr) {
+      chain = chain.then(function () {
+        say(node, 'Saving…', 'busy');
+        var body = new URLSearchParams();
+        body.set('csrf_token', csrf); body.set('action', 'save_folder_identity'); body.set('loaded_hash', hashInput.value);
+        fields.forEach(function (kv) { body.append(kv[0], kv[1]); });
+        return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+            headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+          .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+          .then(function (j) {
+            if (j.ok) { if (j.hash) hashInput.value = j.hash; say(node, 'Saved', 'ok'); window.__siteDirty = true; if (onOk) onOk(); }
+            else { say(node, j.text, 'err'); if (onErr) onErr(); }
+          })
+          .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); if (onErr) onErr(); });
+      });
+    }
+    [].forEach.call(form.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]'), function (el) {
+      var saved = el.value, timer = 0;
+      function go() {
+        clearTimeout(timer);
+        var node = stateOf(el), v = el.name === 'display_name' ? el.value.trim() : el.value;
+        if (v === saved) { if (node && node.classList.contains('busy')) say(node, '', ''); return; }
+        if (el.name === 'sort_order' && v.trim() !== '' && !/^-?\d{1,5}$/.test(v.trim())) {
+          el.classList.add('bad'); say(node, 'Whole numbers only, from -99999 to 99999. Not saved.', 'err'); return;
+        }
+        el.classList.remove('bad');
+        var sent = v;
+        post([[el.name, v]], node, function () { saved = sent; }, function () { el.classList.add('bad'); });
+      }
+      el.addEventListener('input', function () {
+        el.classList.remove('bad'); clearTimeout(timer);
+        var node = stateOf(el); if (node && node.classList.contains('err')) say(node, '', '');
+        timer = setTimeout(go, 1000);
+      });
+      el.addEventListener('blur', go);
+      el.addEventListener('keydown', function (e) { if (e.key === 'Enter' && el.tagName !== 'TEXTAREA') { e.preventDefault(); go(); } });
+      el.addEventListener('saved-externally', function () { saved = el.value; });
+    });
+    // "Use these dates" fills the field, which then saves like a typed one.
+    [].forEach.call(form.querySelectorAll('.date-suggest'), function (b) {
+      b.addEventListener('click', function () {
+        var inp = form.querySelector('input[name=dates]'); if (!inp) return;
+        inp.value = b.getAttribute('data-dates'); inp.dispatchEvent(new Event('input', { bubbles: true })); inp.blur();
+        var hint = b.closest('.hint'); if (hint) hint.hidden = true;
+      });
+    });
+    // The order of the photos: every choice sends the whole group (the server rebuilds the folder's own order from all of it).
+    [].forEach.call(form.querySelectorAll('details.sort-details'), function (det) {
+      var timer = 0, node = det.querySelector('summary .rowstate');
+      function send() {
+        var f = [];
+        new FormData(form).forEach(function (v, k) { if (k.indexOf('photo_sort_') === 0) f.push([k, v]); });
+        post(f, node);
+      }
+      function soon() { clearTimeout(timer); timer = setTimeout(send, 120); }
+      det.addEventListener('change', soon);
+      det.addEventListener('sf-changed', soon);
+    });
+  });
+  // Private folder: a switch like the others. Switching it on saves at once; switching it off first says what will happen (how many
+  // photos stay private, how many become public) and waits for a yes.
+  [].forEach.call(document.querySelectorAll('.priv-folder-form'), function (form) {
+    form.addEventListener('submit', function (ev) { ev.preventDefault(); });
+    var csrf = form.querySelector('input[name=csrf_token]').value, box = form.querySelector('input[type=checkbox]'), note = form.querySelector('.priv-folder-note');
+    var node = form.querySelector('.rowstate'), modal = document.getElementById('priv-modal');
+    var counts = { stay: +form.getAttribute('data-stay') || 0, open: +form.getAttribute('data-open') || 0 };
+    function word(n) { return n + (n === 1 ? ' photo' : ' photos'); }
+    function paint() {
+      if (!note) return;
+      note.innerHTML = box.checked ? note.getAttribute('data-on').replace('%stay%', counts.stay).replace('%open%', counts.open) : note.getAttribute('data-off');
+    }
+    function say(text, kind) {
+      node.textContent = text; node.className = 'rowstate ' + (kind || ''); clearTimeout(node._t);
+      if (kind === 'ok') node._t = setTimeout(function () { node.textContent = ''; node.className = 'rowstate'; }, 3000);
+    }
+    function send(hide, done) {
+      var body = new URLSearchParams();
+      body.set('csrf_token', csrf); body.set('action', 'toggle_folder_restriction'); if (hide) body.set('hidden', '1');
+      say('Saving…', 'busy');
+      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+          headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+        .then(function (j) {
+          if (!j.ok) { say(j.text, 'err'); done(false); return; }
+          if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
+          box.checked = hide; paint(); say('Saved', 'ok'); window.__siteDirty = true; done(true);
+        })
+        .catch(function (e) { say(e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); done(false); });
+    }
+    function closeModal() { if (modal) modal.hidden = true; box.focus(); }
+    function ask() {
+      say('', '');
+      fetch(location.pathname + location.search + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+        .then(function (j) {
+          if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
+          document.getElementById('pm-stay').textContent = word(counts.stay); document.getElementById('pm-open').textContent = word(counts.open);
+          modal.hidden = false; document.getElementById('pm-cancel').focus();
+        })
+        .catch(function () { say('Couldn\'t check: reload the page and try again.', 'err'); });
+    }
+    box.addEventListener('change', function () {
+      if (box.checked) { send(true, function (ok) { if (!ok) box.checked = false; }); return; }
+      box.checked = true;   // stays on until it is confirmed
+      if (modal) ask();
+    });
+    if (modal) {
+      document.getElementById('pm-cancel').addEventListener('click', closeModal);
+      modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
+      modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeModal(); } });
+      document.getElementById('pm-ok').addEventListener('click', function () {
+        modal.hidden = true;
+        send(false, function () { box.focus(); });
+      });
+    }
+    paint();
+  });
+  // The map sits under the location switch and only shows photos whose location is public, so it is dimmed (with a note) while
+  // locations are off. (The note and dimming follow the switch once it has saved; with locations off for the whole gallery they stay.)
+  (function () {
+    var under = document.getElementById('map-under'); if (!under || under.getAttribute('data-global-off')) return;
+    var box = document.querySelector('.instant-form input[type=checkbox][name=enabled]'), form = box && box.closest('form');
+    if (form) form.addEventListener('instant-saved', function () { under.classList.toggle('no-loc', !box.checked); });
+  })();
   // Site settings: every change saves the moment it is made (one request at a time, so the file's
   // fingerprint never races), and anything that publishes content, contacts a third party, or removes
   // something visitors see asks first. The other screens refresh when you leave this one.
@@ -7852,6 +8108,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var on = {}; [].forEach.call(box.querySelectorAll('.sf-list li'), function (li) { on[li.getAttribute('data-kind')] = li.querySelector('input[type=checkbox]').checked; });
       if (effective(orderNow().split(','), on) === siteEff) { box.sfSet(siteOrder, siteOn); hidden.value = orderNow(); own(false); }
       else { hidden.value = orderNow(); own(true); }
+      box.dispatchEvent(new CustomEvent('sf-changed', { bubbles: true }));
     }
     initSortFirst(box, function (now, ok) { ok(); evaluate(); });
     [].forEach.call(box.querySelectorAll('input[type=checkbox]'), function (cb) { cb.addEventListener('change', evaluate); });
@@ -8298,6 +8555,10 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     $adminFolderReal = $adminFolderPath === null ? $dir : resolve_real_path($dir, $adminFolderPath);
+    if (isset($_GET['privcounts']) && $adminFolderPath !== null) {   // what making this folder public would do, asked for fresh when the switch is turned off
+        header('Cache-Control: no-store');
+        admin_json_exit(['ok' => true, 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath)]);
+    }
     // Just what sits loose directly in this folder — its subfolders get
     // their own admin page, reached from the nav, so an edit's target path
     // is always exactly <this folder>/<bare filename>.
@@ -8331,7 +8592,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         }
         if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch' && in_array($resultMessage['type'] ?? '', ['ok', 'error'], true)) {
             // A setting flipped in place by the page's script: answer in JSON, no page.
-            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')]);
+            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1]));
         }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);
@@ -9921,9 +10182,11 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // For the signed-in owner: a lock on the tile showing whether it is private, and pressing it flips that.
     $ownerLock = '';
     if (is_admin_browser()) {
-        $isPriv = file_is_hidden($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
-        $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
-            . '" title="' . ($isPriv ? 'Private: press to make it public' : 'Public: press to make it private') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($isPriv ? '<span>Private</span>' : '') . '</button>';
+        $ps = owner_privacy_state($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
+        $isPriv = $ps['priv']; $isFolder = $ps['own'] === '' && $ps['inh'];
+        $lockTitle = owner_lock_title($ps);
+        $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . ($isFolder ? ' is-folder' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
+            . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : '')) . '</button>';
     }
     // And a star beside it: press to make this photo its folder's cover (a gold star when it already is).
     if ($ownerLock !== '') {
@@ -10321,6 +10584,7 @@ function render_about_page() {
   <ul>
     <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
     <li><strong>Edit right on the gallery:</strong> a pencil on every photo opens its caption, link, place, private and cover switches beside or under the photo, saved as you type; <em>Select</em> makes many photos private or public, or places them next to each other by drag and drop</li>
+    <li><strong>Go through a private folder before you open it:</strong> hide a folder, mark the photos that must stay private on their own, then make the folder public knowing what visitors will see; folder settings save as you change them</li>
     <li>An admin for folder names and dates, notes, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
     <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>
@@ -10922,6 +11186,20 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .select-btns, .select-arr { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .select-bar button { flex: 0 1 auto; padding: 7px 12px; background: none; border: 1px solid #34343a; border-radius: 999px; color: var(--text); font: inherit; font-size: 0.85rem; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .select-btns button { flex: 1 1 0; padding: 10px 12px; font-size: 0.9rem; }
+  /* In a private folder the three buttons are the three states of the lock: Private (solid), Public, Folder (dashed). */
+  .folder-priv-banner { display: flex; gap: 10px; align-items: flex-start; width: calc(100% - 48px); max-width: 1352px; margin: 8px auto 0; padding: 10px 12px; border-radius: 10px; background: rgba(237,66,69,0.12); border: 1px solid rgba(237,66,69,0.45); font-size: 0.85rem; line-height: 1.4; box-sizing: border-box; }
+  .folder-priv-banner > .ico { width: 1.3em; height: 1.3em; color: #ff7a7c; margin-top: 1px; flex: none; }
+  .folder-priv-banner strong { display: block; }
+  .folder-priv-banner span { color: #c9c9ce; }
+  .select-bar .sb-p { display: none; }
+  .select-bar.in-private .sb-n { display: none; }
+  .select-bar.in-private .sb-p { display: inline; }
+  .select-bar.in-private .select-btns { flex-wrap: nowrap; }
+  .select-bar.in-private .select-btns button { padding: 10px 4px; }
+  .select-bar.in-private .sb-private:not(:disabled) { background: #ed4245; border-color: rgba(255,255,255,0.3); color: #fff; }
+  .select-bar.in-private .sb-private:hover:not(:disabled) { background: #f4585b; border-color: rgba(255,255,255,0.4); }
+  .select-bar.in-private .sb-folder { border: 1.5px dashed rgba(255,120,122,0.95); background: rgba(237,66,69,0.12); color: #ff9a9c; }
+  .select-bar .sb-folder[hidden] { display: none; }
   .select-top button { border-color: transparent; color: #aab2ff; padding: 6px 9px; }
   .select-bar button:hover:not(:disabled) { background: #26262a; border-color: #4a4a52; }
   .select-bar button:active:not(:disabled) { transform: scale(0.96); }
@@ -11022,6 +11300,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .priv-toggle { position: absolute; top: 6px; left: 6px; z-index: 4; display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; font-size: 0.72rem; line-height: 1; cursor: pointer; opacity: 0.6; transition: opacity .15s, background .15s; }
   .priv-toggle .ico { width: 1em; height: 1em; }
   .priv-toggle.is-private { background: rgba(237,66,69,0.88); border-color: rgba(255,255,255,0.35); opacity: 1; }
+  /* Private only because its folder is: dashed, not solid (it becomes public when the folder opens). */
+  .priv-toggle.is-folder { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; }
   .priv-toggle.busy { opacity: 0.35; pointer-events: none; }
   @media (hover: hover) { .priv-toggle:not(.is-private) { opacity: 0; } .card:hover .priv-toggle:not(.is-private), .priv-toggle:focus-visible { opacity: 0.9; } }
   .cover-toggle { position: absolute; top: 6px; right: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.6; transition: opacity .15s, background .15s; }
@@ -11044,12 +11324,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   @media (hover: hover) {
     .priv-toggle:hover, .cover-toggle:hover, .edit-toggle:hover { opacity: 1 !important; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; }
     .priv-toggle.is-private:hover { background: #f4585b; }
+    .priv-toggle.is-folder:hover { background: rgba(237,66,69,0.38); border-color: #ff9a9c; color: #fff; }
     .cover-toggle.is-cover:hover { background: #ffd86b; }
     .priv-toggle:hover:active, .cover-toggle:hover:active, .edit-toggle:hover:active { transform: scale(1.02); }
   }
   .lightbox .caption-row .lightbox-copy.owner-cover.on { color: #f5c542; opacity: 1; }
   .lightbox .caption-row .lightbox-copy.owner-cover.on .ico { fill: currentColor; }
   .lightbox .caption-row .lightbox-copy.owner-priv.on { color: #ed4245; opacity: 1; }
+  .lightbox .caption-row .lightbox-copy.owner-priv.on.folder { color: #ff9a9c; position: relative; }
+  .lightbox .caption-row .lightbox-copy.owner-priv.on.folder::after { content: ''; position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; transform: translate(-50%, -50%); border: 1.5px dashed rgba(255,120,122,0.9); border-radius: 50%; pointer-events: none; }
   .card.owner-card .sold-badge-corner, .card.owner-card .reserved-badge-corner { top: 40px; }
   .video-duration {
     position: absolute;
@@ -11342,6 +11625,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lbe-pill { flex: 1 1 0; min-width: 0; height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 999px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; font-size: 0.9rem; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; }
   .lbe-pill .ico { width: 1.1em; height: 1.1em; vertical-align: 0; }
   .lbe-pill[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #lbe-private[aria-pressed="true"] { background: #ed4245; border-color: rgba(255,255,255,0.3); }
+  #lbe-private.is-folder, #lbe-private.is-folder[aria-pressed="false"] { background: rgba(237,66,69,0.12); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; }
   #lbe-private[aria-pressed="true"] { background: #ed4245; border-color: #ed4245; }
   #lbe-cover[aria-pressed="true"] { background: #f5c542; border-color: #f5c542; color: #1a1a1c; }
   #lbe-cover[aria-pressed="true"] .ico { fill: currentColor; }
@@ -11758,6 +12043,14 @@ if (ENABLE_MAP && $mapPoints) {
   </section>
   <?php endif; ?>
 <?= $lockForm ?>
+<?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): $privCounts = folder_privacy_counts($dir, $files, $currentFolderPath); ?>
+  <?php // For the owner, on a private folder's own page: what making the folder public would do (the lock on each tile shows which is which). ?>
+  <div class="folder-priv-banner" id="folder-priv-banner" role="note" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
+    <?= ui_icon('lock') ?>
+    <div><strong>Private folder: visitors can't see it</strong>
+      <span class="fpb-counts" aria-live="polite"><?= (int) $privCounts['stay'] ?> will stay private &middot; <?= (int) $privCounts['open'] ?> become public when you open it</span></div>
+  </div>
+<?php endif; ?>
 <?php if ($hasMap): ?>
   <?php // The full map opens over the page: click outside it, press Escape or use the cross to close it. ?>
   <div class="map-modal" id="map-modal" data-map="trip-map-modal" role="dialog" aria-modal="true" aria-label="Map" hidden>
@@ -11788,8 +12081,9 @@ if (ENABLE_MAP && $mapPoints) {
     <button type="button" data-select="done" class="primary">Done</button>
   </div>
   <div class="select-btns">
-    <button type="button" data-select="private"><?= ui_icon('lock') ?> Make private</button>
-    <button type="button" data-select="public"><?= ui_icon('unlock') ?> Make public</button>
+    <button type="button" data-select="private" class="sb-private"><?= ui_icon('lock') ?> <span class="sb-n">Make private</span><span class="sb-p">Private</span></button>
+    <button type="button" data-select="public" class="sb-public"><?= ui_icon('unlock') ?> <span class="sb-n">Make public</span><span class="sb-p">Public</span></button>
+    <button type="button" data-select="inherit" class="sb-folder" title="Back to whatever the folder is: they follow it again" hidden><?= ui_icon('lock') ?> Folder</button>
   </div>
 <?php if (!empty($arrangeShown)): ?>
   <div class="select-arr">
@@ -11903,8 +12197,9 @@ if (ENABLE_MAP && $mapPoints) {
   // viewer's two buttons are drawn from this, and kept in step when one is pressed).
   const ownerState = <?php
       if (is_admin_browser()) {
-          $ownerPriv = []; foreach ($files as $f) $ownerPriv[$f] = file_is_hidden($dir, $f, $itemsData);
-          echo json_encode(['priv' => (object) $ownerPriv, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          $ownerPriv = []; $ownerOwn = []; $ownerInh = [];
+          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; }
+          echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
@@ -12055,13 +12350,60 @@ if (ENABLE_MAP && $mapPoints) {
   })();
   // The owner's lock and star, on every tile and in the viewer: flip a photo between private and public, or make it its folder's
   // cover, with the admin's own save (a token is fetched first). The state lives in ownerState; every button is drawn from it.
+  // A photo's privacy has up to three states. Its own setting is "private", "public" or "" (none: it follows its folder). Where a folder
+  // above it is private ("inh") the lock goes round Folder (dashed) -> Private (kept on its own) -> Public -> Folder; elsewhere it is
+  // Public <-> Private. lockKind() names what is drawn: own (solid red), inh (dashed, "Folder"), pub (open lock, public inside a
+  // private folder) or none (an ordinary public photo).
+  function lockKind(f) {
+    const o = ownerState.own[f] || '';
+    if (o === 'private') return 'own';
+    if (o === 'public' && ownerState.inh[f]) return 'pub';
+    return o === '' && ownerState.inh[f] ? 'inh' : 'none';
+  }
+  function nextOwn(f) {
+    const o = ownerState.own[f] || '';
+    if (ownerState.inh[f]) return o === '' ? 'private' : (o === 'private' ? 'public' : 'inherit');
+    return o === 'private' ? 'inherit' : 'private';
+  }
+  function setOwn(f, state) {
+    ownerState.own[f] = state === 'inherit' ? '' : state;
+    ownerState.priv[f] = state === 'private' || (state === 'inherit' && !!ownerState.inh[f]);
+    privBannerRefresh();
+  }
+  // On a private folder's own page the banner says how many photos would stay private and how many would become public if it were
+  // opened; it is asked for again after each change, so it always matches the locks.
+  let bannerTimer = 0;
+  function privBannerRefresh() {
+    const el = document.getElementById('folder-priv-banner'); if (!el) return;
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(function () {
+      fetch('?admin&folder=' + encodeURIComponent(el.getAttribute('data-folder')) + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
+        .then(function (r) { return r.ok && (r.headers.get('content-type') || '').indexOf('json') >= 0 ? r.json() : null; })
+        .then(function (j) {
+          const c = j && j.counts, n = el.querySelector('.fpb-counts');
+          if (c && n) n.textContent = c.stay + ' will stay private \u00b7 ' + c.open + ' become public when you open it';
+        }).catch(function () {});
+    }, 250);
+  }
+  function lockTitle(f) {
+    const k = lockKind(f);
+    if (k === 'inh') return 'Private because its folder is: press to keep it private on its own';
+    if (k === 'pub') return 'Public, though its folder is private: press to follow the folder again';
+    if (k === 'own') return ownerState.inh[f] ? 'Kept private on its own: press to make it public' : 'Private: press to make it public';
+    return 'Public: press to make it private';
+  }
+  function lockSaid(f, state) {
+    if (state === 'private') return ownerState.inh[f] ? 'Kept private on its own' : 'Now private';
+    if (state === 'public') return ownerState.inh[f] ? 'Public, though its folder is private' : 'Now public';
+    return ownerState.inh[f] ? 'Follows its folder (private)' : 'Now public';
+  }
   function ownerPaint() {
     if (!ownerState) return;
     document.querySelectorAll('.priv-toggle').forEach(function (b) {
-      const on = !!ownerState.priv[b.getAttribute('data-file')];
-      b.classList.toggle('is-private', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.title = on ? 'Private: press to make it public' : 'Public: press to make it private';
-      b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (on ? '<span>Private</span>' : '');
+      const f = b.getAttribute('data-file'), k = lockKind(f), on = !!ownerState.priv[f];
+      b.classList.toggle('is-private', on); b.classList.toggle('is-folder', k === 'inh'); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.title = lockTitle(f);
+      b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (k === 'inh' ? '<span>Folder</span>' : (on ? '<span>Private</span>' : ''));
     });
     document.querySelectorAll('.cover-toggle').forEach(function (b) {
       const on = !!ownerState.cover[b.getAttribute('data-file')];
@@ -12075,7 +12417,7 @@ if (ENABLE_MAP && $mapPoints) {
     }
     if (lp && file !== undefined) {
       const on = !!ownerState.priv[file];
-      lp.classList.toggle('on', on); lp.title = on ? 'Private: press to make it public' : 'Public: press to make it private'; lp.setAttribute('aria-label', lp.title);
+      lp.classList.toggle('on', on); lp.classList.toggle('folder', lockKind(file) === 'inh'); lp.title = lockTitle(file); lp.setAttribute('aria-label', lp.title);
       lp.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>';
     }
   }
@@ -12091,7 +12433,7 @@ if (ENABLE_MAP && $mapPoints) {
       const t = document.getElementById(lightbox.classList.contains('open') ? 'lightbox-toast' : 'owner-toast'); if (!t) return;
       t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500);
     };
-    const goingPrivate = act === 'private' && !ownerState.priv[file];
+    const nextState = act === 'private' ? nextOwn(file) : '';
     if (act === 'cover' && ownerState.cover[file]) { say('Already this folder’s cover photo'); return; }
     btn.classList.add('busy');
     const base = '?admin' + (folder ? '&folder=' + encodeURIComponent(folder) : '');
@@ -12101,7 +12443,7 @@ if (ENABLE_MAP && $mapPoints) {
         const body = new URLSearchParams();
         body.set('csrf_token', j.token); body.set('file', bare);
         if (act === 'cover') body.set('action', 'set_cover');
-        else { body.set('action', 'set_item_flag'); body.set('flag', 'private'); body.set('on', goingPrivate ? '1' : '0'); }
+        else { body.set('action', 'set_item_flag'); body.set('flag', 'private'); body.set('state', nextState); }
         return fetch(base, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
       })
       .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); })
@@ -12112,8 +12454,8 @@ if (ENABLE_MAP && $mapPoints) {
           ownerState.cover[file] = true;
           say('Now the folder’s cover photo');
         } else {
-          ownerState.priv[file] = goingPrivate;
-          say(goingPrivate ? 'Now private' : 'Now public');
+          setOwn(file, nextState);
+          say(lockSaid(file, nextState));
         }
         ownerPaint();
       })
@@ -12158,6 +12500,11 @@ if (ENABLE_MAP && $mapPoints) {
       bar.querySelector('[data-select=clear]').disabled = !n;
       bar.querySelector('[data-select=private]').disabled = !n || busy;
       bar.querySelector('[data-select=public]').disabled = !n || busy;
+      bar.querySelector('[data-select=inherit]').disabled = !n || busy;
+      // In a private folder (the photos picked, or else the ones on the page) the bar offers the three states of the lock.
+      const first = cards()[0], ctx = picked.length ? picked[0] : (first ? fileOf(first) : null), inPriv = !!(ctx && ownerState.inh[ctx]);
+      bar.classList.toggle('in-private', inPriv);
+      bar.querySelector('[data-select=inherit]').hidden = !inPriv;
       if (canArrange) {
         bar.querySelector('[data-select=release]').disabled = !picked.some(function (f) { return stackOf[f] !== undefined; });
         bar.querySelector('[data-select=reset]').disabled = !stacks.length;
@@ -12199,14 +12546,14 @@ if (ENABLE_MAP && $mapPoints) {
         location.reload();
       }).catch(fail);
     };
-    const bulk = function (makePrivate) {
+    const bulk = function (state) {
       if (!picked.length || busy) return;
       const sel = picked.slice(), folder = folderOf(sel[0]);
       busy = true; paint();
-      request(folder, { action: 'bulk_item_flag', flag: 'private', on: makePrivate ? '1' : '0', files: JSON.stringify(sel.map(bare)) }).then(function (j) {
-        sel.forEach(function (f) { ownerState.priv[f] = makePrivate; });
+      request(folder, { action: 'bulk_item_flag', flag: 'private', state: state, files: JSON.stringify(sel.map(bare)) }).then(function (j) {
+        sel.forEach(function (f) { setOwn(f, state); });
         ownerPaint();
-        say(j.text || (sel.length + (makePrivate ? ' now private' : ' now public')));
+        say(j.text || (sel.length + (state === 'private' ? ' now private' : (state === 'public' ? ' now public' : ' follow their folder'))));
       }).catch(fail).then(function () { busy = false; paint(); });
     };
     const selectAll = function () {
@@ -12222,8 +12569,9 @@ if (ENABLE_MAP && $mapPoints) {
       if (what === 'done') setOn(false);
       else if (what === 'all') selectAll();
       else if (what === 'clear') { picked.length = 0; paint(); }
-      else if (what === 'private') bulk(true);
-      else if (what === 'public') bulk(false);
+      else if (what === 'private') bulk('private');
+      else if (what === 'public') bulk('public');
+      else if (what === 'inherit') bulk('inherit');
       else if (what === 'release') {
         const sel = picked.filter(function (f) { return stackOf[f] !== undefined; });
         send(folderOf(sel[0]), { mode: 'release', files: JSON.stringify(sel.map(bare)) }, picked.slice());
@@ -12374,10 +12722,15 @@ if (ENABLE_MAP && $mapPoints) {
     const paintPills = function () {
       if (!st) return;
       const set = function (el, on) { el.setAttribute('aria-pressed', on ? 'true' : 'false'); };
-      set(pills.priv, st.cfg.private); set(pills.loc, st.cfg.locationShown); set(pills.cover, !!ownerState.cover[st.file]);
+      const k = lockKind(st.file);
+      set(pills.priv, k === 'own'); set(pills.loc, st.cfg.locationShown); set(pills.cover, !!ownerState.cover[st.file]);
+      pills.priv.classList.toggle('is-folder', k === 'inh');
+      pills.priv.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (k === 'own' || k === 'inh' ? 'lock' : 'unlock') + '"></use></svg> ' + (k === 'inh' ? 'Folder' : (k === 'pub' ? 'Public' : 'Private'));
       let note = '';
-      if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Site settings), so none show yet.';
-      else if (st.cfg.folderPrivate && st.cfg.private) note = 'Its folder is private, so it stays private until you switch this off.';
+      if (k === 'inh') note = 'Private because its folder is. Tap to keep it private on its own.';
+      else if (k === 'own' && ownerState.inh[st.file]) note = 'Kept private on its own. Tap to make it public.';
+      else if (k === 'pub') note = 'Public, though its folder is private. Tap to follow the folder again.';
+      else if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Site settings), so none show yet.';
       noteEl.textContent = note; noteEl.hidden = note === '';
     };
     const paintLoc = function () {
@@ -12497,9 +12850,9 @@ if (ENABLE_MAP && $mapPoints) {
         if (!j.ok) throw new Error(j.text || 'Could not load this photo');
         const auto = !!(j.auto && j.lat === '' && j.lng === ''), shown = auto ? j.auto : j;
         f.caption.value = j.caption; f.web.value = j.web; f.lat.value = shown.lat; f.lng.value = shown.lng; f.label.value = j.label;
-        st = { file: file, hash: j.hash, auto: auto, cfg: { private: !!j.private, locationShown: !!j.locationShown, folderPrivate: !!j.folderPrivate, locationsOff: !!j.locationsOff },
+        st = { file: file, hash: j.hash, auto: auto, cfg: { private: !!j.private, own: j.own || '', locationShown: !!j.locationShown, folderPrivate: !!j.folderPrivate, locationsOff: !!j.locationsOff },
                base: { caption: j.caption, web: j.web, lat: shown.lat, lng: shown.lng, label: j.label }, timer: 0, chain: Promise.resolve(true) };
-        ownerState.priv[file] = st.cfg.private; if (j.cover) ownerState.cover[file] = true;
+        ownerState.own[file] = st.cfg.own; ownerState.inh[file] = st.cfg.folderPrivate; ownerState.priv[file] = st.cfg.private; if (j.cover) ownerState.cover[file] = true;
         ownerPaint(); setControls(true); paintPills(); paintLoc(); setStatus('', '');
       }).catch(function (err) { if (my === seq) problem(err); });
     };
@@ -12555,11 +12908,13 @@ if (ENABLE_MAP && $mapPoints) {
     const flag = function (which, flagName) {
       pills[which].addEventListener('click', function () {
         if (!st) return;
-        const s = st, on = !(flagName === 'private' ? s.cfg.private : s.cfg.locationShown);
+        const s = st, on = !(flagName === 'private' ? s.cfg.private : s.cfg.locationShown), next = flagName === 'private' ? nextOwn(s.file) : '';
         setStatus('busy', 'Saving…');
-        post(s.file, { action: 'set_item_flag', file: bareOf(s.file), flag: flagName, on: on ? '1' : '0' }).then(function (j) {
+        const fields = { action: 'set_item_flag', file: bareOf(s.file), flag: flagName };
+        if (flagName === 'private') fields.state = next; else fields.on = on ? '1' : '0';
+        post(s.file, fields).then(function (j) {
           if (!j.ok) throw new Error(j.text || 'Not saved');
-          if (flagName === 'private') { s.cfg.private = on; ownerState.priv[s.file] = on; ownerPaint(); } else s.cfg.locationShown = on;
+          if (flagName === 'private') { setOwn(s.file, next); s.cfg.private = ownerState.priv[s.file]; s.cfg.own = ownerState.own[s.file]; ownerPaint(); } else s.cfg.locationShown = on;
           if (s === st) { paintPills(); setStatus('ok', 'Saved'); }
         }).catch(function (err) { if (s === st) problem(err); });
       });
