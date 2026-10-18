@@ -11158,7 +11158,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   .lightbox.is-video .lightbox-zoom { display: none; }
   .lightbox-close-row { display: none; }
-  .lightbox-tools { display: contents; }   /* (on a phone it becomes a strip you can swipe: see below) */
+  .lightbox-tools-wrap, .lightbox-tools { display: contents; }   /* (on a phone they become a strip you can swipe: see below) */
+  .tools-more { display: none; }
   .caption .cap-sep { white-space: pre; }
   /* On a touch screen the counter and buttons, the close button last among them, are a row across the TOP, and the photo takes
      everything below it down to the bottom of the visible area (a tall photo on a phone is height-limited, so every point
@@ -11181,12 +11182,16 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     .lightbox .caption-row .caption .cap-sep { display: none; }
     .lightbox .caption-row .caption .cap-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; }
     .lightbox .caption-row .caption .cap-t:empty { display: none; }
+    .lightbox-tools-wrap { position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
     .lightbox-tools { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; pointer-events: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
     .lightbox-tools::-webkit-scrollbar { display: none; }
     .lightbox-tools > * { flex: none; }
-    .lightbox-tools.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent); }
-    .lightbox-tools.more.start-gone { -webkit-mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent); mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent); }
-    .lightbox-tools.end { -webkit-mask-image: linear-gradient(to right, transparent, #000 12px); mask-image: linear-gradient(to right, transparent, #000 12px); }
+    /* A small arrow at whichever end has more to swipe to (on a soft dark backing, so the icon under it reads as cut off). */
+    .tools-more { position: absolute; top: 0; bottom: 0; width: 28px; align-items: center; pointer-events: none; color: #e4e4e8; }
+    .tools-more .ico { width: 16px; height: 16px; stroke-width: 2.4; }
+    .tools-more-l { left: 0; justify-content: flex-start; background: linear-gradient(to right, #000 45%, rgba(0,0,0,0)); }
+    .tools-more-r { right: 0; justify-content: flex-end; background: linear-gradient(to left, #000 45%, rgba(0,0,0,0)); }
+    .lightbox-tools-wrap.can-left .tools-more-l, .lightbox-tools-wrap.can-right .tools-more-r { display: flex; }
     .lightbox .caption-row .lightbox-close-row { flex: none; }
     /* Every button of the row is the same box (44 points high) with the same drawn icon size, so the close button, which is
        the last of them, cannot differ from its neighbours in size or in where it sits. */
@@ -11803,6 +11808,7 @@ if (ENABLE_MAP && $mapPoints) {
   <div class="lightbox-toast" id="lightbox-toast" role="status" aria-live="polite" hidden></div>
   <div class="caption-row">
     <div class="caption" id="lightbox-caption"></div>
+    <div class="lightbox-tools-wrap" id="lightbox-tools-wrap">
     <div class="lightbox-tools" id="lightbox-tools">
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-edit" id="lightbox-edit" type="button" title="Edit caption, link and location" aria-label="Edit caption, link and location"><?= ui_icon('edit') ?></button>
@@ -11818,6 +11824,9 @@ if (ENABLE_MAP && $mapPoints) {
 <?php if (ENABLE_MAP): ?>
     <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>
 <?php endif; ?>
+    </div>
+    <span class="tools-more tools-more-l" aria-hidden="true"><?= ui_icon('chev-left') ?></span>
+    <span class="tools-more tools-more-r" aria-hidden="true"><?= ui_icon('chev-right') ?></span>
     </div>
     <button class="lightbox-copy lightbox-close-row" type="button" onclick="closeLightbox()" title="Close" aria-label="Close"><?= ui_icon('close') ?></button>
   </div>
@@ -11964,6 +11973,7 @@ if (ENABLE_MAP && $mapPoints) {
     current = index;
     updateImage();
     lightbox.classList.add('open');
+    toolsFade();
   }
   function closeLightbox() {
     if (lbEdit && lbEdit.isOpen()) lbEdit.close();
@@ -12737,19 +12747,12 @@ if (ENABLE_MAP && $mapPoints) {
   }
   // The strip of buttons on a phone: a soft fade shows there is more to swipe to at either end. A swipe on it must not turn the page.
   const tools = document.getElementById('lightbox-tools');
+  const toolsWrap = document.getElementById('lightbox-tools-wrap');
   function toolsFade() {
-    if (!tools) return;
-    // When the buttons don't all fit, the strip is cut a little way into a button (never exactly between two), so the next one shows
-    // half and it is plain that the strip goes on.
-    tools.style.maxWidth = '';
-    if (typeof getComputedStyle === 'function' && getComputedStyle(tools).display === 'flex' && tools.scrollWidth > tools.clientWidth + 2) {
-      const first = [].slice.call(tools.children).filter(function (e) { return !e.hidden && e.offsetWidth > 0; })[0];
-      if (first) { const bw = first.offsetWidth, n = Math.max(1, Math.floor(tools.clientWidth / bw - 0.3)); tools.style.maxWidth = Math.round((n + 0.55) * bw) + 'px'; }
-    }
-    const max = tools.scrollWidth - tools.clientWidth, more = max > 2, atStart = tools.scrollLeft <= 2, atEnd = tools.scrollLeft >= max - 2;
-    tools.classList.toggle('more', more && !atEnd && atStart);
-    tools.classList.toggle('start-gone', more && !atEnd && !atStart);
-    tools.classList.toggle('end', more && atEnd);
+    if (!tools || !toolsWrap) return;
+    const max = tools.scrollWidth - tools.clientWidth;
+    toolsWrap.classList.toggle('can-right', max > 2 && tools.scrollLeft < max - 2);
+    toolsWrap.classList.toggle('can-left', max > 2 && tools.scrollLeft > 2);
   }
   if (tools) {
     tools.addEventListener('scroll', toolsFade, { passive: true });
