@@ -11184,9 +11184,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     .lightbox-tools { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; pointer-events: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
     .lightbox-tools::-webkit-scrollbar { display: none; }
     .lightbox-tools > * { flex: none; }
-    .lightbox-tools.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent); }
-    .lightbox-tools.more.start-gone { -webkit-mask-image: linear-gradient(to right, transparent, #000 22px, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to right, transparent, #000 22px, #000 calc(100% - 22px), transparent); }
-    .lightbox-tools.end { -webkit-mask-image: linear-gradient(to right, transparent, #000 22px); mask-image: linear-gradient(to right, transparent, #000 22px); }
+    .lightbox-tools.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent); }
+    .lightbox-tools.more.start-gone { -webkit-mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent); mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent); }
+    .lightbox-tools.end { -webkit-mask-image: linear-gradient(to right, transparent, #000 12px); mask-image: linear-gradient(to right, transparent, #000 12px); }
     .lightbox .caption-row .lightbox-close-row { flex: none; }
     /* Every button of the row is the same box (44 points high) with the same drawn icon size, so the close button, which is
        the last of them, cannot differ from its neighbours in size or in where it sits. */
@@ -12739,6 +12739,13 @@ if (ENABLE_MAP && $mapPoints) {
   const tools = document.getElementById('lightbox-tools');
   function toolsFade() {
     if (!tools) return;
+    // When the buttons don't all fit, the strip is cut a little way into a button (never exactly between two), so the next one shows
+    // half and it is plain that the strip goes on.
+    tools.style.maxWidth = '';
+    if (typeof getComputedStyle === 'function' && getComputedStyle(tools).display === 'flex' && tools.scrollWidth > tools.clientWidth + 2) {
+      const first = [].slice.call(tools.children).filter(function (e) { return !e.hidden && e.offsetWidth > 0; })[0];
+      if (first) { const bw = first.offsetWidth, n = Math.max(1, Math.floor(tools.clientWidth / bw - 0.3)); tools.style.maxWidth = Math.round((n + 0.55) * bw) + 'px'; }
+    }
     const max = tools.scrollWidth - tools.clientWidth, more = max > 2, atStart = tools.scrollLeft <= 2, atEnd = tools.scrollLeft >= max - 2;
     tools.classList.toggle('more', more && !atEnd && atStart);
     tools.classList.toggle('start-gone', more && !atEnd && !atStart);
@@ -12748,6 +12755,14 @@ if (ENABLE_MAP && $mapPoints) {
     tools.addEventListener('scroll', toolsFade, { passive: true });
     ['touchstart', 'touchend'].forEach(function (name) { tools.addEventListener(name, function (e) { e.stopPropagation(); }, { passive: true }); });
     window.addEventListener('resize', toolsFade);
+    // Whenever a button appears or goes (the link and place buttons by photo, the zoom button while the editor is up), or the viewer's own
+    // state changes, look again: the fade must describe the strip as it is now.
+    if (window.MutationObserver) {
+      let queued = 0;
+      const again = function () { if (!queued) queued = requestAnimationFrame(function () { queued = 0; toolsFade(); }); };
+      new MutationObserver(again).observe(tools, { subtree: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+      new MutationObserver(again).observe(lightbox, { attributes: true, attributeFilter: ['class'] });
+    }
   }
   // ---- Zoom: 'fit' (the whole photo on the screen), 'width' (fills the width of the window, scroll up and down) and
   // 'actual' (real pixels, scroll both ways). Always the original file at its own proportions, never stretched.
