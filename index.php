@@ -6087,7 +6087,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
         $cell = function ($pair) use ($esc) {
             [$f, $own] = $pair;
             $where = dirname($f) === '.' ? '' : dirname($f);
-            $title = $own === 'private' ? 'Private on its own: press to make it public' : 'Public though its folder is private: press to let it follow the folder again';
+            $title = $own === 'private' ? 'Private on its own: press to make it public' : 'Public though its folder is private: press to make it private again';
             return '<span class="pv-th"><a class="pv-img" href="' . admin_item_href($f) . '" title="Open ' . $esc(basename($f)) . ' in the gallery"><img src="' . $esc(img_url($f, 'thumb')) . '" alt="" loading="lazy" decoding="async"></a>'
                 . '<button type="button" class="pv-lock ' . ($own === 'private' ? 'own' : 'pub') . '" data-file="' . $esc($f) . '" data-bare="' . $esc(basename($f)) . '" data-folder="' . $esc($where) . '" data-own="' . $own . '" title="' . $esc($title) . '" aria-label="' . $esc($title) . '">'
                 . ui_icon($own === 'private' ? 'lock' : 'unlock') . '</button></span>';
@@ -6111,11 +6111,12 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
             $n = count($r['own']);
             $sub = count_noun($n) . ' private';
         }
-        $ic = $private ? '<span class="pv-ic own">' . ui_icon('lock') . '</span>' : '<span class="pv-ic pub">' . ui_icon('unlock') . '</span>';
+        // A private folder's red lock is a button too: it asks whether to make the folder public (the same question as the link below).
+        $ic = $private ? '<button type="button" class="pv-ic own pv-makepub" data-folder="' . $esc($path) . '" data-label="' . $esc($r['label']) . '" title="Make this folder public&hellip;" aria-label="Make ' . $esc($r['label']) . ' public">' . ui_icon('lock') . '</button>' : '<span class="pv-ic pub">' . ui_icon('unlock') . '</span>';
         $html = '<details class="pv-row" data-key="' . $esc($path) . '"><summary>' . $ic . '<span class="pv-nm"><span class="pv-name">' . $esc($r['label']) . '</span><span class="pv-sub">' . $sub . '</span></span><span class="pv-chev">' . ui_icon('chev-down') . '</span></summary><div class="pv-xp">';
         if ($r['own'] || !empty($r['open'])) {
             $html .= $thumbs($r, $private);
-            $html .= '<p class="pv-hint">Press a lock to make a photo public.' . (!empty($r['open']) ? ' The ones with an open lock are public even though the folder is private; pressing that lock puts one back to following its folder.' : '') . ' Press the photo to open it in the gallery.</p>';
+            $html .= '<p class="pv-hint">Press a lock to switch a photo between private and public.' . (!empty($r['open']) ? ' An open lock is a photo that is public even though the folder is private.' : '') . ' Press the photo to open it in the gallery.</p>';
         }
         $html .= '<p class="pv-links"><a class="pv-lnk" href="' . $esc(folder_private_first_href($dir, $path)) . '">See them in the gallery &rsaquo;</a>';
         if ($private) $html .= '<span class="pv-sep">&middot;</span><a class="pv-lnk pv-makepub" href="' . $esc($settings) . '" data-folder="' . $esc($path) . '" data-label="' . $esc($r['label']) . '">Make public&hellip;</a>';
@@ -7038,7 +7039,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .pv-row summary:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
   .pv-ic { width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; }
   .pv-ic .ico { width:15px; height:15px; }
-  .pv-ic.own { background:rgba(237,66,69,0.92); color:#fff; }
+  .pv-ic.own { background:rgba(237,66,69,0.92); color:#fff; border:1px solid rgba(255,255,255,0.35); padding:0; cursor:pointer; position:relative; transition:transform .12s, box-shadow .12s, background .15s; -webkit-tap-highlight-color:transparent; }
+  .pv-ic.own::after { content:''; position:absolute; inset:-6px; }   /* a bigger target for a finger */
+  .pv-ic.own:active { transform:scale(0.92); }
+  .pv-ic.own:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+  @media (hover: hover) { .pv-ic.own:hover { background:#f4585b; transform:scale(1.1); box-shadow:0 0 0 2px #fff; } }
   .pv-ic.pub { background:#26262a; color:var(--muted); }
   .pv-nm { flex:1; min-width:0; display:block; }
   .pv-name { display:block; font-weight:600; font-size:0.95rem; overflow-wrap:anywhere; }
@@ -8120,9 +8125,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         e.preventDefault();
         var own = lock.getAttribute('data-own'), bare = lock.getAttribute('data-bare'), folder = lock.getAttribute('data-folder');
         lock.disabled = true;
-        // A private photo is made public (inside a private folder that is an explicit "public"); a public one in a private folder goes back to following its folder.
-        setPhoto(folder, bare, own === 'private' ? { on: '0' } : { state: 'inherit' }, function () {
-          say(own === 'private' ? 'Made public.' : 'Back to following its folder.', function () {
+        // The lock switches a photo between private and public: private becomes public (inside a private folder that is an explicit
+        // "public", so the photo stays in this list, with an open lock) and public becomes private again. It never drops to "follows the folder".
+        setPhoto(folder, bare, own === 'private' ? { on: '0' } : { state: 'private' }, function () {
+          say(own === 'private' ? 'Made public.' : 'Made private again.', function () {
             setPhoto(folder, bare, { state: own }, function () { say('Put back.'); }).catch(failed);
           });
         }).catch(function (err) { lock.disabled = false; if (err && err.message && err.message !== 'session' && err.message !== 'Failed to fetch') say(err.message, null, true); else failed(err); });
