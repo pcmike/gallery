@@ -418,7 +418,38 @@ define('ENABLE_PHOTO_LOCATION', gallery_setting('ENABLE_PHOTO_LOCATION', false))
 // actually remembered, so expect it to be shorter and more guessable
 // than ADMIN_PASSWORD — which is exactly why it gets the same
 // failed-attempt throttle, not an exemption from it.
+// (Share links, below, are the other way to let someone in: a secret address that can be limited, paused, revoked and
+// logged, whose page needs one press of a button before it counts as used, so a link-preview bot can't use one up.)
 define('PRIVATE_VIEW_PASSWORD', gallery_setting('PRIVATE_VIEW_PASSWORD', ''));
+
+// Share links: temporary addresses (https://example.com/gallery/k7QpR2mXv9LwTb4e) that sign a person in as a private viewer,
+// limited by number of opens and by time, and optionally to chosen folders or photos. Off by default. Made and managed in
+// the admin's Share links tab. A link is a secret in an address, so the page it opens asks for one press of a button
+// before it counts as used (a chat app that fetches a link to draw its preview never uses it up), and a link can be
+// paused, revoked or replaced at any time. See the README.
+define('ENABLE_SHARE_LINKS', gallery_setting('ENABLE_SHARE_LINKS', false));
+
+// Whether a person using a share link sees "The link being used to access this media expires on ..." at the top of the
+// gallery (a link with no end date never does). Each link can override this either way.
+define('SHARE_HEADS_UP', gallery_setting('SHARE_HEADS_UP', false));
+
+// Where a visitor's IP address comes from. 'direct': the connection itself. 'cloudflare': Cloudflare's CF-Connecting-IP
+// header, believed only when the connection really comes from one of Cloudflare's own addresses (or one listed in
+// TRUSTED_PROXY_RANGES, e.g. 127.0.0.1/32 for a tunnel running on this machine). 'proxy': the X-Forwarded-For header,
+// believed only when the connection comes from an address in TRUSTED_PROXY_RANGES. Behind a CDN the connection is always
+// the CDN's, so without this every visitor looks like the same few addresses (share-link logs, the sign-in throttle).
+define('TRUSTED_PROXY', gallery_setting('TRUSTED_PROXY', 'direct', ['direct', 'cloudflare', 'proxy']));
+define('TRUSTED_PROXY_RANGES', gallery_setting('TRUSTED_PROXY_RANGES', []));
+
+// Share links: the cookie that carries a link's sign-in (named for this copy's folder, like the other cookies), the one token the
+// admin asks for to test the tidy address, and a few fixed values. Plain constants here because they must exist before the
+// first request is routed.
+define('LINK_COOKIE_NAME', 'gallery_link_' . substr(hash('sha256', __DIR__), 0, 10));
+define('LINK_PROBE_TOKEN', '0000000000000000');   // the admin asks for this one to learn whether the tidy address reaches the script
+const LINK_TOKEN_LENGTH = 16;
+const LINK_REOPEN_GRACE_SECONDS = 900;   // the same address opening again this soon (an app's own browser, then Safari) is not a second use
+const LINK_ICON_GALLERY = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m5 17 5-5 3.5 3.5L16 13l3 3"/></svg>';
+const LINK_ICON_WARN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3.5 19h17zM12 10v4M12 16.8v.2"/></svg>';
 
 // Hands matching image/video requests to nginx's own static file serving
 // instead of reading them with PHP, via the X-Accel-Redirect header —
@@ -957,7 +988,7 @@ function slugify($text) {
 $requestedPhoto = null;
 if (isset($_GET['photo'])) {
     $candidate = $_GET['photo'];
-    if (in_array($candidate, $files, true) && (!file_is_hidden($dir, $candidate, $itemsData) || is_revealed())) {
+    if (in_array($candidate, $files, true) && viewer_may_see_item($dir, $candidate, $itemsData)) {
         $requestedPhoto = $candidate;
     }
 }
@@ -1022,6 +1053,12 @@ if (isset($_GET['manifest'])) {
 // that needs $groups or any of the scan below.
 if (isset($_GET['reveal'])) {
     run_reveal_route($dir);
+    exit;
+}
+
+// ?link=<token> — a share link (see the "Share links" section). Early, like ?reveal: it needs nothing from the scan below.
+if (isset($_GET['link'])) {
+    run_link_route($dir);
     exit;
 }
 
@@ -1481,7 +1518,7 @@ function stream_with_patches($fh, $size, $patches, $emit) {
  *  a photo whose location the gallery shows), a plan for a visitor who isn't signed in and a photo whose location is
  *  hidden, or null when that can't be done safely, in which case the file must not be given out. */
 function visitor_scrub_plan($srcPath, $filename, $itemsData) {
-    if (is_revealed() || photo_location_visible($itemsData[$filename] ?? [])) return [];
+    if (viewer_sees_all_locations() || photo_location_visible($itemsData[$filename] ?? [])) return [];
     return location_scrub_plan($srcPath);
 }
 
@@ -1683,8 +1720,8 @@ function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
  *  on; a visitor who isn't signed in gets a photo whose location the gallery hides with the location blanked out. */
 function serve_original_download($dir, $filename, $validFiles, $itemsData = []) {
     send_sensitive_page_headers();
-    if (!is_string($filename) || !in_array($filename, $validFiles, true) || (!is_revealed() && !ENABLE_PUBLIC_DOWNLOAD)
-        || (file_is_hidden($dir, $filename, $itemsData) && !is_revealed())) {
+    if (!is_string($filename) || !in_array($filename, $validFiles, true) || !viewer_may_see_item($dir, $filename, $itemsData)
+        || !viewer_may_download($dir, $filename, $itemsData)) {
         http_response_code(404);
         return;
     }
@@ -1884,7 +1921,7 @@ function video_strip_path($srcPath, $cacheDir, $filename) {
 /** ?strip=<video>: that sprite, for anyone who may see the video (same gates as the video itself); &warm only makes it. */
 function serve_video_strip($dir, $filename, $validFiles, $itemsData = []) {
     if (!is_string($filename) || !in_array($filename, $validFiles, true) || !is_video_file($filename)
-        || (file_is_hidden($dir, $filename, $itemsData) && !is_revealed())) {
+        || !viewer_may_see_item($dir, $filename, $itemsData)) {
         http_response_code(404);
         return;
     }
@@ -1914,7 +1951,7 @@ function video_previews_expected() {
  *  support (Safari plays nothing without it). Nothing is sent that wasn't made by ffmpeg from the video: no metadata. */
 function serve_video_preview($dir, $filename, $validFiles, $itemsData = []) {
     if (!is_string($filename) || !in_array($filename, $validFiles, true) || !is_video_file($filename)
-        || (file_is_hidden($dir, $filename, $itemsData) && !is_revealed())) {
+        || !viewer_may_see_item($dir, $filename, $itemsData)) {
         http_response_code(404);
         return;
     }
@@ -2489,7 +2526,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     // privacy if the file itself is still fetchable directly — this
     // refuses it to anyone without a valid reveal, the same allowlist-
     // plus-identity-check discipline as the line above.
-    if (file_is_hidden($dir, $filename, $itemsData) && !is_revealed()) {
+    if (!viewer_may_see_item($dir, $filename, $itemsData)) {
         http_response_code(404);
         return;
     }
@@ -2623,7 +2660,7 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
         http_response_code(404);
         return;
     }
-    if (file_is_hidden($dir, $filename, $itemsData) && !is_revealed()) {
+    if (!viewer_may_see_item($dir, $filename, $itemsData)) {
         http_response_code(404);
         return;
     }
@@ -3120,7 +3157,7 @@ foreach ($allFiles as $privateProbe) {
 if (!is_revealed()) {
     foreach ($groups as $key => $groupFiles) {
         $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData) {
-            return !file_is_hidden($dir, $f, $itemsData);
+            return viewer_may_see_item($dir, $f, $itemsData);
         }));
         if (empty($visibleMembers)) {
             unset($groups[$key], $folderGroupKeys[$key], $explicitGroupKeys[$key]);
@@ -3337,7 +3374,7 @@ function send_sensitive_page_headers() {
  *  anonymous request for the same URL. */
 function send_viewer_aware_cache_headers() {
     header('Vary: Cookie');
-    if (is_revealed()) {
+    if (is_revealed() || link_viewer() !== null) {
         header('Cache-Control: private, no-store');
     }
 }
@@ -3848,6 +3885,372 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
 }
 
 /* -----------------------------------------------------------------------
+ * Where a visitor's IP address comes from. REMOTE_ADDR is the other end of
+ * the connection, which behind a CDN (Cloudflare) is the CDN, so every
+ * visitor looks like one of a few addresses. The real address arrives in a
+ * header, but a header is whatever the sender says: it is only believed when
+ * the connection itself comes from a proxy the owner has said to trust (see
+ * TRUSTED_PROXY). Used by the share-link logs and the sign-in throttle; the
+ * "is this request local" test deliberately stays on the raw connection.
+ * ----------------------------------------------------------------------- */
+
+/** An address as raw bytes (4 for IPv4, 16 for IPv6; an IPv4 address written as ::ffff:a.b.c.d becomes 4), or null. */
+function ip_binary($ip) {
+    $bin = is_string($ip) ? @inet_pton($ip) : false;
+    if ($bin === false) return null;
+    if (strlen($bin) === 16 && strncmp($bin, str_repeat("\0", 10) . "\xff\xff", 12) === 0) return substr($bin, 12);
+    return $bin;
+}
+
+/** True if $ip lies in $cidr ("173.245.48.0/20", "2400:cb00::/32", or one bare address). */
+function ip_in_cidr($ip, $cidr) {
+    $ipBin = ip_binary($ip);
+    if ($ipBin === null || !is_string($cidr)) return false;
+    $parts = explode('/', $cidr, 2);
+    $netBin = ip_binary($parts[0]);
+    if ($netBin === null || strlen($netBin) !== strlen($ipBin)) return false;
+    $bits = isset($parts[1]) ? (ctype_digit($parts[1]) ? (int) $parts[1] : -1) : strlen($netBin) * 8;
+    if ($bits < 0 || $bits > strlen($netBin) * 8) return false;
+    $whole = intdiv($bits, 8);
+    if ($whole > 0 && strncmp($ipBin, $netBin, $whole) !== 0) return false;
+    $rest = $bits % 8;
+    if ($rest === 0) return true;
+    $mask = (0xFF << (8 - $rest)) & 0xFF;
+    return ((ord($ipBin[$whole]) ^ ord($netBin[$whole])) & $mask) === 0;
+}
+
+function ip_in_ranges($ip, $ranges) {
+    foreach ($ranges as $r) if (ip_in_cidr($ip, $r)) return true;
+    return false;
+}
+
+/** Cloudflare's published address ranges (https://www.cloudflare.com/ips/), as of October 2026. They change rarely; an
+ *  address that isn't listed here can be added with TRUSTED_PROXY_RANGES. */
+function cloudflare_ranges() {
+    return ['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+            '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+            '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+            '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32'];
+}
+
+/** The proxy addresses whose headers are believed under the current TRUSTED_PROXY setting. */
+function trusted_proxy_ranges() {
+    $own = array_values(array_filter((array) TRUSTED_PROXY_RANGES, 'is_string'));
+    return TRUSTED_PROXY === 'cloudflare' ? array_merge(cloudflare_ranges(), $own) : $own;
+}
+
+/** The visitor's address: the connection's, unless it comes from a trusted proxy, which says who is behind it. */
+function client_ip() {
+    static $ip = null;
+    if ($ip !== null) return $ip;
+    $peer = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    $ip = $peer;
+    if ($peer !== '' && TRUSTED_PROXY !== 'direct' && ip_in_ranges($peer, trusted_proxy_ranges())) {
+        if (TRUSTED_PROXY === 'cloudflare') {
+            $header = trim((string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''));
+            if (filter_var($header, FILTER_VALIDATE_IP)) $ip = $header;
+        } else {
+            // The proxies add the address they received from to the right-hand end: the client is the first one, reading
+            // from the right, that is not itself a trusted proxy.
+            $chain = array_map('trim', explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '')));
+            for ($i = count($chain) - 1; $i >= 0; $i--) {
+                if (!filter_var($chain[$i], FILTER_VALIDATE_IP)) break;
+                $ip = $chain[$i];
+                if (!ip_in_ranges($chain[$i], trusted_proxy_ranges())) break;
+            }
+        }
+    }
+    return $ip === '' ? 'unknown' : $ip;
+}
+
+/** The country Cloudflare reports for this visitor ("US"), or '' (only believed from a trusted proxy, like the address). */
+function client_country() {
+    if (TRUSTED_PROXY !== 'cloudflare' || !ip_in_ranges((string) ($_SERVER['REMOTE_ADDR'] ?? ''), trusted_proxy_ranges())) return '';
+    $c = strtoupper(trim((string) ($_SERVER['HTTP_CF_IPCOUNTRY'] ?? '')));
+    return preg_match('/^[A-Z]{2}$/', $c) && $c !== 'XX' && $c !== 'T1' ? $c : '';
+}
+
+/* -----------------------------------------------------------------------
+ * Share links. A link is a record in .gallery-links.php (a guarded data file
+ * beside this script, like the others): who it is for, what it may show, how
+ * many times it may be opened and until when. Opening the address
+ * (?link=<token>, or the tidy /<token> the server rule maps onto it) shows a page with one button; pressing it
+ * counts a use (unless this browser, or this address a moment ago, already
+ * did) and sets a cookie that is checked against the record on every request,
+ * so pausing, revoking or ending a link cuts off people already in. A person
+ * holding a link is never the owner, and never sees more than the link says.
+ * ----------------------------------------------------------------------- */
+
+
+function links_path() { return __DIR__ . '/.gallery-links.php'; }
+function links_default() { return ['links' => [], 'folderIndex' => [], 'seenAt' => 0]; }
+function links_read() { return json_file_read(links_path(), links_default()); }
+function links_update($modifier) { return json_file_update(links_path(), links_default(), $modifier); }
+
+/** A random 16-character token of letters and digits (about 95 bits), with no modulo bias. */
+function link_new_token() {
+    $alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+    $token = '';
+    while (strlen($token) < LINK_TOKEN_LENGTH) {
+        $v = ord(random_bytes(1));
+        if ($v < 248) $token .= $alphabet[$v % 62];   // 248 = 4 x 62
+    }
+    return $token;
+}
+function link_new_id() { return bin2hex(random_bytes(5)); }
+function link_token_format_ok($t) { return is_string($t) && preg_match('/^[A-Za-z0-9]{' . LINK_TOKEN_LENGTH . '}$/', $t) === 1; }
+
+/** A new link record with every field at its default. */
+function link_record_new($now) {
+    return [
+        'id' => link_new_id(), 'label' => '', 'token' => link_new_token(), 'status' => 'active', 'created' => $now,
+        'startsAt' => 0, 'endsAt' => 0, 'maxOpens' => 0, 'opens' => 0,
+        'note' => '', 'titleMode' => 'gallery', 'titleText' => '',
+        'scope' => ['type' => 'all', 'folders' => [], 'photos' => []], 'openIn' => '',
+        'downloads' => ['mode' => 'off', 'folders' => []], 'zip' => ['mode' => 'off', 'folders' => []],
+        'locations' => 'public', 'headsUp' => 'default',
+        'lastOpened' => 0, 'lastOpen' => ['ip' => '', 'at' => 0], 'revokedAt' => 0, 'pausedAt' => 0,
+    ];
+}
+
+/** The link with this token (compared in constant time against every link), or null. */
+function link_find_by_token($data, $token) {
+    $found = null;
+    foreach ((array) ($data['links'] ?? []) as $l) {
+        if (is_array($l) && isset($l['token']) && is_string($l['token']) && hash_equals($l['token'], (string) $token)) $found = $l;
+    }
+    return $found;
+}
+
+/** What a link is right now: active, paused, revoked, scheduled (not started), expired, used_up (no opens left). */
+function link_state($l, $now = null) {
+    $now = $now ?? time();
+    $status = $l['status'] ?? 'active';
+    if ($status === 'revoked') return 'revoked';
+    if ($status === 'paused') return 'paused';
+    if ((int) ($l['endsAt'] ?? 0) > 0 && $now >= (int) $l['endsAt']) return 'expired';
+    if ((int) ($l['startsAt'] ?? 0) > $now) return 'scheduled';
+    if ((int) ($l['maxOpens'] ?? 0) > 0 && (int) ($l['opens'] ?? 0) >= (int) $l['maxOpens']) return 'used_up';
+    return 'active';
+}
+/** Someone already signed in through the link keeps access while it is active or only out of opens. */
+function link_is_live($l, $now = null) { return in_array(link_state($l, $now), ['active', 'used_up'], true); }
+
+function link_cookie_value($l) {
+    return $l['id'] . '.' . hash_hmac('sha256', 'link|' . $l['id'] . '|' . $l['token'] . '|' . __DIR__, install_secret());
+}
+function link_set_cookie($l) {
+    install_secret(true);
+    $expires = time() + 31536000;
+    if ((int) ($l['endsAt'] ?? 0) > 0) $expires = min($expires, (int) $l['endsAt']);
+    setcookie(LINK_COOKIE_NAME, link_cookie_value($l), ['expires' => $expires, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+}
+function link_clear_cookie() {
+    setcookie(LINK_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+}
+
+/** The link record this request is signed in through, or null. Reads the links file only when the cookie is there, so an
+ *  ordinary visitor costs nothing. The owner's own browser is never a link holder. */
+function link_viewer() {
+    static $resolved = false, $link = null;
+    if ($resolved) return $link;
+    $resolved = true;
+    if (!ENABLE_SHARE_LINKS) return null;
+    $cookie = $_COOKIE[LINK_COOKIE_NAME] ?? '';
+    if (!is_string($cookie) || !preg_match('/^([0-9a-f]{10})\.[0-9a-f]{64}$/', $cookie, $m)) return null;
+    if (is_admin_browser()) return null;
+    $l = links_read()['links'][$m[1]] ?? null;
+    if (!is_array($l) || !isset($l['token']) || !hash_equals(link_cookie_value($l), $cookie) || !link_is_live($l)) return null;
+    return $link = $l;
+}
+/** A person using a share link, and not someone with the owner's or the private-view sign-in. */
+function viewer_is_link() { return !is_revealed() && link_viewer() !== null; }
+
+/** May the link $l show this item? (Scopes other than "everything" arrive with the folder and photo checks.) */
+function link_allows_item($l, $dir, $file) {
+    return ($l['scope']['type'] ?? '') === 'all';
+}
+
+/** May this visitor see the item (a public one, or a private one they were given)? */
+function viewer_may_see_item($dir, $file, $itemsData) {
+    if (!file_is_hidden($dir, $file, $itemsData)) return true;
+    if (is_revealed()) return true;
+    $l = link_viewer();
+    return $l !== null && link_allows_item($l, $dir, $file);
+}
+
+/** Does the link allow $cap ('downloads' or 'zip') for this item? */
+function link_capability_allows($l, $cap, $dir, $file) {
+    $mode = $l[$cap]['mode'] ?? 'off';
+    return $mode === 'all';
+}
+
+/** May this visitor download the original of an item they can see? The owner and the private-view password: always. Everyone
+ *  else: a public photo when the gallery lets visitors, a private one when their link says so. */
+function viewer_may_download($dir, $file, $itemsData) {
+    if (is_revealed()) return true;
+    if (!file_is_hidden($dir, $file, $itemsData)) return ENABLE_PUBLIC_DOWNLOAD;
+    $l = link_viewer();
+    return $l !== null && link_allows_item($l, $dir, $file) && link_capability_allows($l, 'downloads', $dir, $file);
+}
+
+/** Does this visitor see every saved location (the owner, the private-view password, or a link that says so)? */
+function viewer_sees_all_locations() {
+    if (is_revealed()) return true;
+    $l = link_viewer();
+    return $l !== null && ($l['locations'] ?? 'public') === 'all';
+}
+
+/** The gallery's own title, found without the page scan the pages themselves wait for. */
+function gallery_title_early($dir) {
+    $label = root_display_meta($dir)['label'];
+    if ($label !== '') return $label;
+    $scan = scan_gallery_md_files($dir);
+    if (!empty($scan['files'])) {
+        foreach (explode("\n", str_replace("\r\n", "\n", (string) $scan['contents'][$scan['files'][0]])) as $line) {
+            if (trim($line) === '') continue;
+            if (preg_match('/^#\s+(.+)$/', trim($line), $m)) return unprotect_inline_code(trim($m[1]));
+            break;
+        }
+    }
+    return basename($dir);
+}
+
+/** The title a link's opening page (and a chat app's preview of it) shows. */
+function link_page_title($l, $dir) {
+    $mode = $l['titleMode'] ?? 'gallery';
+    if ($mode === 'neutral') return 'A shared gallery';
+    if ($mode === 'custom' && trim((string) ($l['titleText'] ?? '')) !== '') return (string) $l['titleText'];
+    return gallery_title_early($dir);
+}
+
+/** Where pressing "Open the gallery" leads. */
+function link_open_in_href($l) {
+    return gallery_root_href();
+}
+
+/** A link's addresses: the tidy one (needs the server rule) and the one that always works. */
+function link_urls($l) {
+    $base = current_base_url();
+    return ['short' => $base . '/' . $l['token'], 'long' => $base . '/?link=' . $l['token']];
+}
+
+function link_standalone_head($title) {
+    header('Content-Type: text/html; charset=UTF-8');
+    header('Cache-Control: no-store');
+    header('X-Robots-Tag: noindex, nofollow');
+    header('Referrer-Policy: no-referrer');
+    header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    $t = htmlspecialchars($title, ENT_QUOTES, 'UTF-8');
+    return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="robots" content="noindex, nofollow"><meta name="referrer" content="no-referrer"><title>' . $t . '</title>'
+        . '<meta property="og:title" content="' . $t . '"><meta property="og:type" content="website">'
+        . '<style>:root{color-scheme:dark}html,body{height:100%}body{margin:0;background:#0f0f10;color:#eaeaea;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.5}'
+        . '.wrap{box-sizing:border-box;min-height:100%;max-width:420px;margin:0 auto;padding:12vh 24px 24px;text-align:center}'
+        . '.ico{width:64px;height:64px;border-radius:50%;background:#1a1a1c;display:inline-flex;align-items:center;justify-content:center;color:#aab2ff;margin-bottom:6px}.ico svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}'
+        . 'h1{font-size:1.5rem;margin:14px 0 10px}p{color:#b9b9c0;font-size:1rem;margin:0 0 20px}'
+        . '.note{margin:6px 0 22px;padding:12px 14px;border-left:3px solid #5865f2;background:#141416;border-radius:0 8px 8px 0;font-size:1rem;line-height:1.45;color:#e4e4e8;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}'
+        . '.big{display:block;width:100%;box-sizing:border-box;height:50px;border:0;border-radius:12px;background:#5865f2;color:#fff;font:inherit;font-size:1.05rem;font-weight:600;cursor:pointer}.big:focus-visible{outline:2px solid #fff;outline-offset:2px}'
+        . '.small{font-size:.8rem;color:#6f6f77;margin-top:14px}</style></head><body><div class="wrap">';
+}
+
+
+/** The page behind a link that doesn't work: the same for every reason (expired, used up, paused, revoked, mistyped,
+ *  switched off), with nothing to press and nothing about why. The person using it is meant to tell whoever sent it. */
+function render_link_invalid_page() {
+    http_response_code(404);
+    header('X-Gallery-Link: invalid');
+    echo link_standalone_head('This link isn\'t valid');
+    echo '<div class="ico" style="color:#8a8a8f">' . LINK_ICON_WARN . '</div><h1>This link isn\'t valid</h1><p>Please let the person who sent it to you know.</p></div></body></html>';
+}
+
+/** The page a working link opens: its title, an optional note, and the one button that counts as using it. */
+function render_link_open_page($l, $dir) {
+    header('X-Gallery-Link: open');
+    echo link_standalone_head(link_page_title($l, $dir));
+    echo '<div class="ico">' . LINK_ICON_GALLERY . '</div><h1>' . htmlspecialchars(link_page_title($l, $dir), ENT_QUOTES, 'UTF-8') . '</h1>';
+    if (trim((string) ($l['note'] ?? '')) !== '') echo '<div class="note">' . htmlspecialchars((string) $l['note'], ENT_QUOTES, 'UTF-8') . '</div>';
+    echo '<form method="post" action=""><input type="hidden" name="go" value="1"><button type="submit" class="big">Open the gallery</button></form>';
+    if ((int) ($l['endsAt'] ?? 0) > 0) {
+        $ts = (int) $l['endsAt'];
+        echo '<div class="small">This link works until <span id="until" data-ts="' . $ts . '">' . htmlspecialchars(gmdate('D, M j, Y g:i a', $ts) . ' UTC', ENT_QUOTES, 'UTF-8') . '</span>.</div>'
+           . '<script>(function(){var s=document.getElementById("until");var d=new Date(+s.getAttribute("data-ts")*1000);if(isNaN(d))return;'
+           . 's.textContent=d.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"})+" at "+d.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});})();</script>';
+    }
+    echo '</div></body></html>';
+}
+
+/** ?link=<token> (and the tidy address the server rule maps onto it). */
+function run_link_route($dir) {
+    $token = $_GET['link'] ?? '';
+    if (!ENABLE_SHARE_LINKS) { render_link_invalid_page(); return; }
+    if (!is_https_request() && !is_local_request()) { render_https_required_page(); return; }
+    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(); return; }   // the admin's check that the tidy address works: not a guess
+    $ip = client_ip();
+    $link = link_token_format_ok($token) ? link_find_by_token(links_read(), $token) : null;
+    // The owner, signed in, just goes where the link goes: nothing is counted or logged, no cookie is set, and the throttle
+    // (which is for guessing) doesn't apply.
+    if ($link !== null && is_admin_browser()) {
+        header('Cache-Control: no-store');
+        header('Location: ' . link_open_in_href($link), true, 303);
+        return;
+    }
+    if (!login_throttle_allows($dir, 'link', $ip)) {
+        http_response_code(429);
+        header('Content-Type: text/plain; charset=UTF-8');
+        header('Cache-Control: no-store');
+        echo 'Too many tries. Try again in a moment.';
+        return;
+    }
+    if ($link === null) {
+        login_throttle_record_failure($dir, 'link', $ip);
+        render_link_invalid_page();
+        return;
+    }
+    $cookie = $_COOKIE[LINK_COOKIE_NAME] ?? '';
+    install_secret(true);
+    $hasCookie = is_string($cookie) && hash_equals(link_cookie_value($link), $cookie) && link_is_live($link);
+    $posted = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['go']);
+    if (!$posted) {
+        if ($hasCookie) { header('Cache-Control: no-store'); header('Location: ' . link_open_in_href($link), true, 303); return; }
+        if (link_state($link) === 'active') { render_link_open_page($link, $dir); return; }
+        link_note_blocked($link, link_state($link));
+        render_link_invalid_page();
+        return;
+    }
+    // The button was pressed: count the use, atomically, so a link for one opening can't be opened twice at the same moment.
+    $outcome = 'blocked'; $stateNow = 'revoked'; $now = time();
+    links_update(function (&$d) use ($link, $ip, $hasCookie, $now, &$outcome, &$stateNow) {
+        $l = $d['links'][$link['id']] ?? null;
+        if (!is_array($l)) return;
+        $stateNow = link_state($l, $now);
+        if (!link_is_live($l, $now)) return;
+        if ($hasCookie) { $outcome = 'ok'; return; }
+        if (($l['lastOpen']['ip'] ?? '') === $ip && $now - (int) ($l['lastOpen']['at'] ?? 0) < LINK_REOPEN_GRACE_SECONDS) {
+            $d['links'][$link['id']]['lastOpen']['at'] = $now;
+            $outcome = 'ok';
+            return;
+        }
+        if ($stateNow !== 'active') return;   // no opens left
+        $d['links'][$link['id']]['opens'] = (int) ($l['opens'] ?? 0) + 1;
+        $d['links'][$link['id']]['lastOpened'] = $now;
+        $d['links'][$link['id']]['lastOpen'] = ['ip' => $ip, 'at' => $now];
+        $outcome = 'ok';
+    });
+    if ($outcome !== 'ok') {
+        link_note_blocked($link, $stateNow);
+        render_link_invalid_page();
+        return;
+    }
+    link_set_cookie($link);
+    header('Cache-Control: no-store');
+    header('Location: ' . link_open_in_href($link), true, 303);
+}
+
+/** Someone pressed a real link that no longer lets anyone in. (Recorded in the link's log once logs exist.) */
+function link_note_blocked($link, $state) {
+}
+
+/* -----------------------------------------------------------------------
  * Folder levels. $files (already hiding-filtered by the time a page is
  * built from it) is the allowlist for everything here: a folder path is
  * only ever "valid" because some file the script itself found sits under
@@ -3989,7 +4392,7 @@ function run_reveal_route($dir) {
         render_https_required_page();
         return;
     }
-    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $ip = client_ip();
     // One plain prompt, whichever password it turns out to be.
     $heading = 'Enter your access code';
     $prompt = '';
@@ -4412,7 +4815,7 @@ function photo_location_visible($itemEntry) {
     if (!ENABLE_PHOTO_LOCATION) return false;
     if (empty($itemEntry['location'])) return false;
     static $trusted = null;
-    if ($trusted === null) $trusted = is_revealed();
+    if ($trusted === null) $trusted = viewer_sees_all_locations();
     if ($trusted) return true;
     $visibility = $itemEntry['locationVisibility'] ?? 'inherit';
     if ($visibility === 'hide') return false;
@@ -5449,6 +5852,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'logout'];
     }
 
+    if (strncmp($action, 'link_', 5) === 0) {   // the Share links tab (answers JSON and ends the request)
+        links_admin_action($action);
+    }
+
     if ($action === 'save_site_settings') {
         $result = site_settings_save($isFetch);
         if ($isFetch) {
@@ -6481,6 +6888,17 @@ function gallery_setting_definitions() {
             ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any', 'requires' => 'ENABLE_MAP',
              'help' => 'Photos closer than this share one numbered pin. 1 suits a city trip, more a road trip, 0 turns grouping off. Folders can override it.'],
         ]],
+        ['title' => 'Share links', 'items' => [
+            ['name' => 'ENABLE_SHARE_LINKS', 'type' => 'bool', 'label' => 'Allow share links',
+             'help' => 'Temporary links that let someone see private photos, made in the Share links tab: each can be limited by number of opens, by time and to chosen folders or photos, and keeps a log of what was looked at.',
+             'risk' => 'Whoever opens a link sees what it allows. Keep each one as narrow and short-lived as you can.',
+             'offwarn' => 'Every share link stops working (it looks invalid to whoever opens it). Nothing is deleted, and turning this back on revives them.'],
+            ['name' => 'SHARE_HEADS_UP', 'type' => 'bool', 'label' => 'Heads-up for people using a link', 'requires' => 'ENABLE_SHARE_LINKS',
+             'help' => 'A thin line at the top of the gallery for someone using a link: "The link being used to access this media expires on ...". Each link can override this either way, and a link with no end date never shows it.'],
+            ['name' => 'TRUSTED_PROXY', 'type' => 'enum', 'label' => 'Where visitors\' IP addresses come from', 'status' => 'clientip',
+             'options' => ['direct' => 'The connection', 'cloudflare' => 'Cloudflare', 'proxy' => 'Another proxy'],
+             'help' => 'Behind Cloudflare (or another CDN) the connection is always the CDN\'s, so every visitor looks the same in share-link logs and in the sign-in throttle. Cloudflare: the visitor\'s address is read from its header, but only when the request really comes from Cloudflare. Another proxy: from X-Forwarded-For, only for proxies listed in TRUSTED_PROXY_RANGES in .gallery-config.php.'],
+        ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
              'help' => 'Show a place elsewhere on the server (an archive on another disk). Without a name its folders appear at the top; with one it shows as a single folder. Needs "Show subfolders".',
@@ -6670,6 +7088,309 @@ function site_settings_save($ajax = false) {
     return ['type' => 'redirect'];
 }
 
+/* -----------------------------------------------------------------------
+ * Share links: the admin side. The Share links tab lists every link, makes
+ * new ones and changes them; each change is a small POST that answers JSON
+ * (the page then fetches itself again, as the Private tab does, so what it
+ * shows is always what is stored). Nothing here is reachable without the
+ * admin's own session and CSRF token.
+ * ----------------------------------------------------------------------- */
+
+function link_clip($s, $max) {
+    $s = (string) $s;
+    return function_exists('mb_substr') ? mb_substr($s, 0, $max) : substr($s, 0, $max);
+}
+
+function link_state_label($state) {
+    return ['active' => 'Active', 'paused' => 'Paused', 'scheduled' => 'Starts later', 'expired' => 'Expired', 'used_up' => 'Used up', 'revoked' => 'Revoked'][$state] ?? $state;
+}
+
+/** The New link / Edit form's fields, checked. Returns [fields, errors]; $existing is the link being edited (its own end time may stay as it is). */
+function link_input_from_post($now, $existing = null) {
+    $errors = [];
+    $label = link_clip(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) ($_POST['label'] ?? ''))), 80);
+    if ($label === '') $errors[] = 'Give the link a name, so you can recognise it later.';
+    $note = (string) preg_replace('/[^\P{C}\n]+/u', '', str_replace("\r\n", "\n", (string) ($_POST['note'] ?? '')));
+    $note = link_clip(trim($note), 200);
+    $titleMode = (string) ($_POST['title_mode'] ?? 'gallery');
+    if (!in_array($titleMode, ['gallery', 'neutral', 'custom'], true)) $titleMode = 'gallery';
+    $titleText = link_clip(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) ($_POST['title_text'] ?? ''))), 80);
+    if ($titleMode === 'custom' && $titleText === '') $titleMode = 'gallery';
+    $maxOpens = max(0, min(100000, (int) ($_POST['max_opens'] ?? 0)));
+    $endsAt = max(0, (int) ($_POST['ends_at'] ?? 0));
+    $startsAt = max(0, (int) ($_POST['starts_at'] ?? 0));
+    if ($endsAt > $now + 3650 * 86400) $endsAt = $now + 3650 * 86400;
+    if ($endsAt > 0 && $endsAt <= $now && !($existing !== null && (int) ($existing['endsAt'] ?? 0) === $endsAt)) $errors[] = 'The end time has to be in the future.';
+    if ($startsAt > 0 && $startsAt <= $now) $startsAt = 0;
+    if ($startsAt > 0 && $endsAt > 0 && $startsAt >= $endsAt) $errors[] = 'The link has to start before it ends.';
+    $locations = (string) ($_POST['locations'] ?? 'public');
+    if (!in_array($locations, ['public', 'all'], true)) $locations = 'public';
+    $headsUp = (string) ($_POST['heads_up'] ?? 'default');
+    if (!in_array($headsUp, ['default', 'on', 'off'], true)) $headsUp = 'default';
+    $downloads = (string) ($_POST['downloads'] ?? 'off');
+    if (!in_array($downloads, ['off', 'all'], true)) $downloads = 'off';
+    return [[
+        'label' => $label, 'note' => $note, 'titleMode' => $titleMode, 'titleText' => $titleText, 'maxOpens' => $maxOpens,
+        'startsAt' => $startsAt, 'endsAt' => $endsAt, 'locations' => $locations, 'headsUp' => $headsUp, 'downloads' => $downloads,
+    ], $errors];
+}
+
+function link_apply_fields(&$rec, $f) {
+    foreach (['label', 'note', 'titleMode', 'titleText', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp'] as $k) $rec[$k] = $f[$k];
+    $rec['downloads']['mode'] = $f['downloads'];
+}
+
+/** The Share links tab's POST actions (link_create, link_save, link_pause, link_resume, link_revoke, link_extend, link_replace,
+ *  link_delete). Always answers JSON and ends the request. */
+function links_admin_action($action) {
+    $now = time();
+    $bad = function ($text) { admin_json_exit(['ok' => false, 'text' => $text]); };
+    if (!ENABLE_SHARE_LINKS) $bad('Share links are switched off in Site settings.');
+    $id = (string) ($_POST['id'] ?? '');
+    if ($action !== 'link_create' && !preg_match('/^[0-9a-f]{10}$/', $id)) $bad('Unknown link.');
+    $wrote = function () use ($bad) {
+        if (!empty($GLOBALS['__data_write_failed'])) $bad('Nothing was saved: the gallery\'s folder isn\'t writable by the web server.');
+    };
+    if ($action === 'link_create') {
+        [$f, $errors] = link_input_from_post($now);
+        if ($errors) $bad(implode(' ', $errors));
+        $rec = link_record_new($now);
+        link_apply_fields($rec, $f);
+        links_update(function (&$d) use ($rec) { $d['links'][$rec['id']] = $rec; });
+        $wrote();
+        admin_json_exit(['ok' => true, 'id' => $rec['id'], 'text' => 'Link made.']);
+    }
+    $problem = null; $text = 'Saved.';
+    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text) {
+        $l = $d['links'][$id] ?? null;
+        if (!is_array($l)) { $problem = 'That link no longer exists.'; return; }
+        $state = link_state($l, $now);
+        if ($action === 'link_delete') { unset($d['links'][$id]); $text = 'Link and its log deleted.'; return; }
+        if ($action === 'link_save') {
+            if ($state === 'revoked') { $problem = 'A revoked link can\'t be changed.'; return; }
+            [$f, $errors] = link_input_from_post($now, $l);
+            if ($errors) { $problem = implode(' ', $errors); return; }
+            link_apply_fields($d['links'][$id], $f);
+            return;
+        }
+        if ($action === 'link_pause') {
+            if (($l['status'] ?? '') !== 'active') { $problem = 'Only an active link can be paused.'; return; }
+            $d['links'][$id]['status'] = 'paused'; $d['links'][$id]['pausedAt'] = $now; $text = 'Paused. Anyone using it is locked out until you resume it.';
+            return;
+        }
+        if ($action === 'link_resume') {
+            if (($l['status'] ?? '') !== 'paused') { $problem = 'That link isn\'t paused.'; return; }
+            $d['links'][$id]['status'] = 'active'; $d['links'][$id]['pausedAt'] = 0; $text = 'Resumed.';
+            return;
+        }
+        if ($action === 'link_revoke') {
+            if (($l['status'] ?? '') === 'revoked') { $problem = 'Already revoked.'; return; }
+            $d['links'][$id]['status'] = 'revoked'; $d['links'][$id]['revokedAt'] = $now; $text = 'Revoked. It stays here with its log.';
+            return;
+        }
+        if ($action === 'link_replace') {
+            if ($state === 'revoked') { $problem = 'A revoked link can\'t be given a new address.'; return; }
+            $d['links'][$id]['token'] = link_new_token(); $text = 'New address ready. The old one no longer works.';
+            return;
+        }
+        if ($action === 'link_extend') {
+            if ($state === 'revoked') { $problem = 'A revoked link can\'t be extended.'; return; }
+            $endsAt = (int) ($_POST['ends_at'] ?? 0);
+            $addOpens = max(0, min(100000, (int) ($_POST['add_opens'] ?? 0)));
+            if ($endsAt > 0) {
+                if ($endsAt <= $now) { $problem = 'The new end time has to be in the future.'; return; }
+                $d['links'][$id]['endsAt'] = min($endsAt, $now + 3650 * 86400);
+            } elseif (($_POST['no_end'] ?? '') === '1') {
+                $d['links'][$id]['endsAt'] = 0;
+            }
+            if ($addOpens > 0 && (int) ($l['maxOpens'] ?? 0) > 0) $d['links'][$id]['maxOpens'] = (int) $l['maxOpens'] + $addOpens;
+            $text = 'Extended.';
+            return;
+        }
+        $problem = 'Unknown action.';
+    });
+    if ($problem !== null) $bad($problem);
+    $wrote();
+    if ($action === 'link_delete') link_delete_log($id);
+    admin_json_exit(['ok' => true, 'id' => $id, 'text' => $text]);
+}
+
+/** A link's log goes only when the link itself is deleted (revoking, pausing and expiring keep it). */
+function link_delete_log($id) {
+    foreach (glob(__DIR__ . '/.gallery-linklog-' . $id . '*') ?: [] as $f) @unlink($f);
+}
+
+/** The server rules that make https://example.com/<gallery>/<token> reach the script, written for this install's own address. */
+function render_link_rules_help() {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    $loc = $base === '' ? '/' : $base . '/';
+    $nginx = "location ~ ^" . $loc . "[A-Za-z0-9]{" . LINK_TOKEN_LENGTH . "}\$ {\n    rewrite ^" . $loc . "([A-Za-z0-9]{" . LINK_TOKEN_LENGTH . "})\$ " . $loc . "index.php?link=\$1 last;\n}\n";
+    $apache = "RewriteEngine On\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteCond %{REQUEST_FILENAME} !-d\nRewriteRule ^([A-Za-z0-9]{" . LINK_TOKEN_LENGTH . "})\$ index.php?link=\$1 [L,QSA]\n";
+    ob_start();
+?>
+    <div class="rules-help">
+      <details>
+        <summary><strong>nginx</strong> (needs shell access to the server)</summary>
+        <p>Add inside the site's <code>server { }</code> block, next to the other rules, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>. It matches only a path of exactly <?= (int) LINK_TOKEN_LENGTH ?> letters and digits, so no photo or folder address is touched.<?= $base === '' ? ' <strong>At the top of the site it would also catch any other address of that shape: narrow its path first.</strong>' : '' ?></p>
+        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
+      </details>
+      <details>
+        <summary><strong>Apache</strong> (works on FTP-only hosting)</summary>
+        <p>Add to <code>.htaccess</code> in the gallery's folder (needs <code>mod_rewrite</code> and <code>AllowOverride FileInfo</code>).</p>
+        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
+      </details>
+    </div>
+<?php
+    return ob_get_clean();
+}
+
+/** One date for the tab: the page's script turns it into the visitor's own time zone; without it, UTC. */
+function link_time_html($ts) {
+    $ts = (int) $ts;
+    return '<time class="sl-time" data-ts="' . $ts . '" datetime="' . gmdate('c', $ts) . '">' . htmlspecialchars(gmdate('D, M j, g:i a', $ts) . ' UTC', ENT_QUOTES, 'UTF-8') . '</time>';
+}
+
+/** The summary line under a link's name. */
+function link_summary_html($l, $state) {
+    $max = (int) ($l['maxOpens'] ?? 0); $opens = (int) ($l['opens'] ?? 0);
+    $parts = [$max > 0 ? '<b>' . $opens . ' of ' . $max . '</b> opens' : '<b>' . $opens . '</b> opens, no limit'];
+    $ends = (int) ($l['endsAt'] ?? 0);
+    if ($state === 'revoked') $parts[] = 'revoked ' . link_time_html($l['revokedAt'] ?? 0);
+    elseif ($state === 'paused') $parts[] = 'paused ' . link_time_html($l['pausedAt'] ?? 0);
+    elseif ($state === 'scheduled') $parts[] = 'starts ' . link_time_html($l['startsAt']);
+    elseif ($state === 'expired') $parts[] = 'ended ' . link_time_html($ends);
+    elseif ($ends > 0) $parts[] = 'ends ' . link_time_html($ends);
+    else $parts[] = 'no end date';
+    return implode(' <span class="sl-dot">&middot;</span> ', $parts);
+}
+
+function link_scope_text($l) {
+    return 'Everything private';
+}
+
+function render_admin_links_panel($csrfToken) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $data = links_read();
+    $now = time();
+    $current = []; $ended = [];
+    foreach ($data['links'] as $l) {
+        if (!is_array($l) || !isset($l['id'], $l['token'])) continue;
+        $s = link_state($l, $now);
+        if (in_array($s, ['active', 'paused', 'scheduled'], true)) $current[] = [$l, $s]; else $ended[] = [$l, $s];
+    }
+    usort($current, function ($a, $b) { return (int) $b[0]['created'] <=> (int) $a[0]['created']; });
+    usort($ended, function ($a, $b) { return max((int) $b[0]['revokedAt'], (int) $b[0]['endsAt'], (int) $b[0]['lastOpened']) <=> max((int) $a[0]['revokedAt'], (int) $a[0]['endsAt'], (int) $a[0]['lastOpened']); });
+    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    $loc = $base === '' ? '/' : $base . '/';
+    $row = function ($l, $state, $ended) use ($esc) {
+        $urls = link_urls($l);
+        $tail = substr($l['token'], 0, 4) . '…' . substr($l['token'], -4);
+        $dl = ($l['downloads']['mode'] ?? 'off') === 'off' ? 'Off' : 'Everywhere';
+        $title = ($l['titleMode'] ?? 'gallery') === 'neutral' ? 'A neutral title (“A shared gallery”)' : (($l['titleMode'] ?? '') === 'custom' ? '“' . $esc($l['titleText']) . '”' : 'The gallery\'s title');
+        $heads = ['default' => 'The site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'][$l['headsUp'] ?? 'default'];
+        $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'maxOpens' => (int) $l['maxOpens'],
+            'startsAt' => (int) $l['startsAt'], 'endsAt' => (int) $l['endsAt'], 'locations' => $l['locations'], 'headsUp' => $l['headsUp'], 'downloads' => $l['downloads']['mode'] ?? 'off', 'state' => $state], JSON_HEX_TAG | JSON_HEX_AMP));
+        ob_start(); ?>
+        <details class="sl-row" data-id="<?= $esc($l['id']) ?>" data-state="<?= $esc($state) ?>" data-link="<?= $json ?>">
+          <summary>
+            <span class="sl-pill <?= $esc($state) ?>"><?= $esc(link_state_label($state)) ?></span>
+            <span class="sl-nm"><span class="sl-name"><?= $esc($l['label']) ?></span> <span class="sl-tail"><?= $esc($tail) ?></span>
+              <span class="sl-sub"><?= link_summary_html($l, $state) ?></span></span>
+            <?php if ($state === 'paused'): ?><button type="button" class="secondary sl-quick" data-sl="resume">Resume</button>
+            <?php elseif ($state === 'expired'): ?><button type="button" class="secondary sl-quick" data-sl="extend">Extend…</button>
+            <?php elseif (!$ended): ?><button type="button" class="secondary sl-quick sl-copy" data-sl="copy">Copy link</button><?php endif; ?>
+            <span class="sl-chev"><?= ui_icon('chev-down') ?></span>
+          </summary>
+          <div class="sl-xp">
+            <?php if ($state !== 'revoked'): ?>
+            <div class="sl-linkline"><input type="text" class="sl-url" readonly value="<?= $esc($urls['long']) ?>" data-long="<?= $esc($urls['long']) ?>" data-short="<?= $esc($urls['short']) ?>" aria-label="The link" onfocus="this.select()"><button type="button" class="secondary sl-copy" data-sl="copy">Copy</button></div>
+            <?php endif; ?>
+            <dl class="sl-facts">
+              <dt>Who can see</dt><dd><?= $esc(link_scope_text($l)) ?></dd>
+              <dt>Original downloads</dt><dd><?= $esc($dl) ?></dd>
+              <dt>Photo locations</dt><dd><?= ($l['locations'] ?? 'public') === 'all' ? 'All saved locations' : 'As the public sees them' ?></dd>
+              <dt>Starts</dt><dd><?= (int) $l['startsAt'] > 0 ? link_time_html($l['startsAt']) : 'Immediately' ?></dd>
+              <dt>Ends</dt><dd><?= (int) $l['endsAt'] > 0 ? link_time_html($l['endsAt']) : 'Never' ?></dd>
+              <dt>Heads-up header</dt><dd><?= $esc($heads) ?></dd>
+              <dt>Opening page title</dt><dd><?= $title ?></dd>
+              <?php if (trim((string) $l['note']) !== ''): ?><dt>Note shown</dt><dd>“<?= $esc($l['note']) ?>”</dd><?php endif; ?>
+              <dt>Made</dt><dd><?= link_time_html($l['created']) ?></dd>
+            </dl>
+            <div class="sl-acts">
+              <?php if ($state !== 'revoked'): ?><button type="button" class="linklike" data-sl="edit">Edit…</button><?php endif; ?>
+              <?php if (in_array($state, ['active', 'scheduled'], true) && ($l['status'] ?? '') === 'active'): ?><button type="button" class="linklike" data-sl="pause">Pause</button><?php endif; ?>
+              <?php if ($state === 'paused'): ?><button type="button" class="linklike" data-sl="resume">Resume</button><?php endif; ?>
+              <?php if (in_array($state, ['expired', 'used_up'], true)): ?><button type="button" class="linklike" data-sl="extend">Extend…</button><?php endif; ?>
+              <?php if ($state !== 'revoked'): ?><button type="button" class="linklike" data-sl="replace">Replace address…</button><button type="button" class="linklike" data-sl="revoke">Revoke</button><?php endif; ?>
+              <button type="button" class="linklike sl-danger" data-sl="delete">Delete…</button>
+            </div>
+          </div>
+        </details>
+<?php
+        return ob_get_clean();
+    };
+?>
+    <section class="panel sl" id="sl-root" data-csrf="<?= $esc($csrfToken) ?>" data-probe="<?= $esc($loc . LINK_PROBE_TOKEN) ?>">
+      <h2 class="section-title">Share links</h2>
+      <?php if (!ENABLE_SHARE_LINKS): ?>
+        <div class="sl-off">Share links are switched off, so none of these work. Turn on <em>Allow share links</em> in <a href="#site" onclick="return adminGoTo('site');">Site settings</a>.</div>
+      <?php endif; ?>
+      <div class="sl-check" data-sl-check hidden></div>
+      <details class="sl-rules"><summary>The tidy address needs a server rule (nginx or Apache)</summary><?= render_link_rules_help() ?></details>
+      <div class="sl-head">
+        <div class="sl-count muted"><?= count($current) ?> not ended &middot; <?= count($ended) ?> ended</div>
+        <button type="button" class="sl-new-btn" data-sl="new">+ New link</button>
+      </div>
+      <form class="sl-form" id="sl-form" hidden>
+        <h3 class="sl-form-title">New share link</h3>
+        <input type="hidden" name="id" value="">
+        <label class="sl-f"><span class="sl-k">Name <span class="muted">(only you see it)</span></span><input type="text" name="label" maxlength="80" placeholder="Aunt Carol" autocomplete="off"></label>
+        <label class="sl-f"><span class="sl-k">Note on the opening page <span class="muted">(optional)</span></span><textarea name="note" rows="2" maxlength="200" placeholder="Hi Carol, here are the Rome photos."></textarea></label>
+        <div class="sl-f"><span class="sl-k">Title on the opening page and in message previews</span>
+          <?= ui_segmented('title_mode', ['gallery' => 'The gallery\'s title', 'neutral' => 'A neutral title', 'custom' => 'My own text…'], 'gallery', 'Title') ?>
+          <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" hidden>
+          <span class="sl-h">A neutral title shows “A shared gallery”. The icon is always the gallery's, and no photo or folder name is ever shown.</span></div>
+        <div class="sl-f"><span class="sl-k">What they can see</span><span class="sl-h" style="margin-top:0">Everything private: every private folder and photo in the gallery, including ones you add later.</span></div>
+        <div class="sl-f"><span class="sl-k">Download originals</span>
+          <?= ui_segmented('downloads', ['off' => 'Off', 'all' => 'Everywhere'], 'off', 'Download originals') ?>
+          <span class="sl-h">Public photos follow the gallery's own download setting.</span></div>
+        <div class="sl-f"><span class="sl-k">Photo locations</span>
+          <?= ui_segmented('locations', ['public' => 'As the public sees them', 'all' => 'All saved locations'], 'public', 'Photo locations') ?>
+          <span class="sl-h">The first shows only places this gallery already shows to visitors; the others stay hidden, and are removed from any download. The second shows every saved location.</span></div>
+        <div class="sl-f"><span class="sl-k">Starts</span>
+          <?= ui_segmented('starts_pick', ['now' => 'Immediately', 'pick' => 'Pick a date…'], 'now', 'Starts') ?>
+          <input type="datetime-local" name="starts_at_local" hidden></div>
+        <div class="sl-f"><span class="sl-k">How many times can it be opened?</span>
+          <?= ui_segmented('opens_pick', ['1' => 'Once', '5' => '5', '10' => '10', '0' => 'Unlimited', 'n' => 'Other…'], '10', 'Opens') ?>
+          <input type="number" name="opens_other" min="1" max="100000" value="3" hidden>
+          <span class="sl-h">Counted per browser, not per page. Once someone is in, they can keep looking until the link ends.</span></div>
+        <div class="sl-f"><span class="sl-k">When does it stop working?</span>
+          <?= ui_segmented('ends_pick', ['86400' => '1 day', '604800' => '1 week', '2592000' => '30 days', 'pick' => 'Pick a date…', '0' => 'Never'], '604800', 'Ends') ?>
+          <input type="datetime-local" name="ends_at_local" hidden>
+          <span class="sl-h">In your browser's time zone. People already inside are signed out at that moment.</span></div>
+        <div class="sl-f"><span class="sl-k">Heads-up at the top of the gallery</span>
+          <?= ui_segmented('heads_up', ['default' => 'Use the site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'], 'default', 'Heads-up') ?>
+          <span class="sl-h">“The link being used to access this media expires on …”, a thin line they can dismiss. Not shown when there is no end date.</span></div>
+        <div class="sl-form-acts"><button type="submit" class="sl-save">Create link</button><button type="button" class="secondary" data-sl="cancel">Cancel</button><span class="sl-err" role="alert"></span></div>
+      </form>
+      <?php if (!$current && !$ended): ?>
+        <p class="muted sl-none">No links yet. Press <strong>New link</strong> to make one.</p>
+      <?php endif; ?>
+      <?php if ($current): ?><div class="sl-grp">Current</div><?php foreach ($current as [$l, $s]) echo $row($l, $s, false); ?><?php endif; ?>
+      <?php if ($ended): ?><div class="sl-grp">Ended <span class="sl-grp-note">&middot; the log is kept until you delete the link</span></div><?php foreach ($ended as [$l, $s]) echo $row($l, $s, true); ?><?php endif; ?>
+      <div class="admin-modal" id="sl-modal" role="dialog" aria-modal="true" aria-labelledby="sl-modal-title" hidden>
+        <div class="admin-modal-card">
+          <h3 id="sl-modal-title"></h3>
+          <div class="sl-modal-body"></div>
+          <div class="pm-btns"><button type="button" class="secondary" data-sl-modal="cancel">Cancel</button><button type="button" data-sl-modal="ok">OK</button></div>
+        </div>
+      </div>
+      <div class="pv-toast" id="sl-toast" role="status" aria-live="polite" hidden></div>
+    </section>
+<?php
+}
+
 /** Remembers which version of this script last ran against this install (a small guarded data file beside index.php), so
  *  the health panel can say "upgraded from X on Y". Written only when the version changes; null if it can't be kept. */
 function health_version_record($dir) {
@@ -6854,6 +7575,9 @@ function render_admin_site_settings($csrfToken) {
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
                 <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Set "FFMPEG_PATH" in .gallery-config.php.' ?></div>
                 <?php endif; ?>
+                <?php if (($d['status'] ?? '') === 'clientip'): ?>
+                <div class="help">Your address as the gallery sees it: <strong><?= $esc(client_ip()) ?></strong><?= client_country() !== '' ? ' (' . $esc(client_country()) . ')' : '' ?><?= TRUSTED_PROXY === 'direct' && !is_local_request() && (!empty($_SERVER['HTTP_CF_CONNECTING_IP']) || !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) ? '. This request came through a proxy: choose the matching setting so the real address is used.' : '' ?></div>
+                <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
                 <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
                 <?php endif; ?>
@@ -7026,6 +7750,66 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .js-tabs .tab-panel { display:none; }
   .js-tabs .tab-panel.active { display:block; }
   .tab-panel > .panel + .panel, .tab-panel > .flash + .panel { margin-top:0; }
+  /* The Share links tab. */
+  .sl-off { background:rgba(224,160,40,0.12); border:1px solid rgba(224,160,40,0.5); border-radius:10px; padding:10px 14px; font-size:0.9rem; margin-bottom:12px; }
+  .sl-check { border-radius:10px; padding:10px 14px; font-size:0.9rem; margin-bottom:10px; }
+  .sl-check[hidden] { display:none; }
+  .sl-check.ok { background:rgba(59,165,92,0.12); border:1px solid rgba(59,165,92,0.45); }
+  .sl-check.no { background:rgba(224,160,40,0.12); border:1px solid rgba(224,160,40,0.5); }
+  .sl-rules { margin:0 0 12px; font-size:0.85rem; color:var(--muted); }
+  .sl-rules > summary { cursor:pointer; }
+  .sl-head { display:flex; align-items:center; gap:12px; margin:6px 0 6px; }
+  .sl-count { flex:1; font-size:0.85rem; }
+  .sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:20px 0 4px; }
+  .sl-grp-note { text-transform:none; letter-spacing:0; }
+  .sl-row { border-top:1px solid #26262a; }
+  .sl-grp + .sl-row { border-top:0; }
+  .sl-row > summary { display:flex; align-items:center; gap:12px; padding:12px 4px; cursor:pointer; list-style:none; border-radius:8px; transition:background .15s; }
+  .sl-row > summary::-webkit-details-marker { display:none; }
+  .sl-row > summary:hover { background:rgba(255,255,255,0.04); }
+  .sl-row > summary:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .sl-nm { flex:1; min-width:0; display:block; }
+  .sl-name { font-weight:600; font-size:0.95rem; overflow-wrap:anywhere; }
+  .sl-tail { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:0.78rem; color:var(--muted); margin-left:6px; }
+  .sl-sub { display:block; font-size:0.82rem; color:var(--muted); margin-top:3px; }
+  .sl-sub b { color:var(--text); font-weight:600; }
+  .sl-dot { color:#55555c; margin:0 3px; }
+  .sl-chev { color:var(--muted); display:flex; transition:transform .15s; }
+  .sl-chev .ico { width:18px; height:18px; }
+  .sl-row[open] .sl-chev { transform:rotate(180deg); }
+  .sl-quick { padding:5px 12px; font-size:0.82rem; white-space:nowrap; }
+  .sl-pill { display:inline-flex; align-items:center; height:22px; padding:0 9px; border-radius:999px; font-size:0.75rem; white-space:nowrap; border:1px solid #34343a; color:var(--muted); background:#26262a; }
+  .sl-pill.active { background:rgba(59,165,92,0.14); color:#6fcf8d; border-color:rgba(59,165,92,0.4); }
+  .sl-pill.paused { background:rgba(224,160,40,0.13); color:#e0a028; border-color:rgba(224,160,40,0.45); }
+  .sl-pill.scheduled { background:rgba(88,101,242,0.16); color:#aab2ff; border-color:rgba(88,101,242,0.5); }
+  .sl-pill.revoked { background:transparent; color:#ff9a9c; border-color:rgba(255,120,122,0.5); }
+  .sl-xp { padding:2px 4px 16px 4px; }
+  .sl-linkline { display:flex; gap:8px; margin:4px 0 12px; }
+  .sl-url { flex:1; min-width:0; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:0.82rem; }
+  .sl-facts { display:grid; grid-template-columns:160px 1fr; gap:5px 14px; font-size:0.88rem; margin:0 0 12px; }
+  .sl-facts dt { color:var(--muted); }
+  .sl-facts dd { margin:0; overflow-wrap:anywhere; }
+  .sl-acts { display:flex; flex-wrap:wrap; gap:6px 18px; }
+  .sl-acts .linklike { color:var(--accent); font-weight:600; font-size:0.88rem; padding:2px 3px; }
+  .sl-acts .sl-danger { color:#ff8a8c; }
+  .sl-form { background:#141416; border:1px solid #26262a; border-radius:12px; padding:16px 18px; margin:10px 0 6px; }
+  .sl-form[hidden] { display:none; }
+  .sl-form-title { margin:0 0 12px; font-size:1.05rem; }
+  .sl-f { display:block; margin:0 0 16px; }
+  .sl-k { display:block; font-size:0.88rem; font-weight:600; margin-bottom:6px; }
+  .sl-k .muted { font-weight:400; }
+  .sl-h { display:block; font-size:0.8rem; color:var(--muted); margin-top:6px; line-height:1.4; }
+  .sl-f input[type=text], .sl-f textarea, .sl-f input[type=datetime-local], .sl-f input[type=number] { width:100%; max-width:420px; box-sizing:border-box; }
+  .sl-f .seg + input { margin-top:8px; display:block; }
+  .sl-f textarea { height:64px; min-height:0; resize:vertical; }
+  .sl-f input[hidden], .sl-f textarea[hidden] { display:none; }
+  .sl-form-acts { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:6px; }
+  .sl-err { color:#ff8a8c; font-size:0.85rem; }
+  .sl-modal-body { font-size:0.92rem; line-height:1.5; margin-bottom:12px; }
+  .sl-modal-body p { margin:0 0 8px; }
+  .sl-modal-body .sl-f { margin-bottom:12px; }
+  @media (max-width:560px) { .sl-facts { grid-template-columns:1fr; gap:0; } .sl-facts dt { margin-top:6px; } .sl-row > summary { flex-wrap:wrap; } }
+  .sl-danger-btn { background:#d83c3e; border-color:#d83c3e; color:#fff; }
   /* The Private tab: what is private, one line per folder, each opening to its photos. */
   .pv-stats { display:flex; gap:28px; flex-wrap:wrap; margin:4px 0 2px; }
   .pv-stat b { display:block; font-size:1.5rem; line-height:1.2; }
@@ -7277,6 +8061,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .side-link { display:flex; align-items:center; margin:0 0 10px; padding:6px 10px 6px 11px; border-radius:6px; font-size:0.85rem; color:var(--text); text-decoration:none; background:#1a1a1e; border:1px solid #2c2c30; }
   .side-link:hover { background:#222228; border-color:#3a3a42; }
   .side-link.active { color:#fff; font-weight:600; background:var(--accent); border-color:var(--accent); }
+  .side-link .count { margin-left:auto; font-size:0.72rem; font-weight:600; background:rgba(255,255,255,0.09); color:var(--muted); padding:1px 7px; border-radius:10px; }
+  .side-link.active .count { background:rgba(255,255,255,0.28); color:#fff; }
   .site-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(190px,260px); gap:6px 22px; padding:12px 0; border-top:1px solid #26262a; align-items:start; }
   .site-settings h3.subhead + .site-row, .site-settings .muted + .site-row { border-top:0; }
   .rules-help details { border:1px solid #2c2c30; border-radius:8px; padding:8px 12px; margin:8px 0; background:#18181b; }
@@ -7411,6 +8197,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <?php if ($adminHidden): ?>
     <a href="#hidden" data-tab="hidden" class="side-hidden">Private <span class="count"><?= count($adminHidden['folders']) + count($adminHidden['items']) ?></span></a>
   <?php endif; ?>
+  <?php if (ENABLE_SHARE_LINKS): $slActive = 0; foreach (links_read()['links'] as $slL) if (is_array($slL) && in_array(link_state($slL), ['active', 'paused', 'scheduled'], true)) $slActive++; ?>
+    <a href="#links" data-tab="links" class="side-link">Share links <span class="count"><?= $slActive ?></span></a>
+  <?php endif; ?>
   <a href="#site" data-tab="site" class="side-link">Site settings</a>
   <details class="admin-folders" open>
     <summary>Folders <span class="here">&middot; <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span></summary>
@@ -7426,6 +8215,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <?php if ($adminHidden): ?>
   <div class="tab-panel" data-tab="hidden">
 <?php render_admin_hidden_panel($adminHidden, $csrfToken); ?>
+  </div>
+<?php endif; ?>
+<?php if (ENABLE_SHARE_LINKS): ?>
+  <div class="tab-panel" data-tab="links">
+<?php render_admin_links_panel($csrfToken); ?>
   </div>
 <?php endif; ?>
   <div class="tab-panel" data-tab="settings">
@@ -7904,10 +8698,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       });
       // On Site settings or Private nothing in the folder list is selected: the folder you came from stays marked, quietly.
       var lay = document.querySelector('.admin-layout');
-      if (lay) lay.classList.toggle('off-folder', name === 'site' || name === 'hidden');
+      if (lay) lay.classList.toggle('off-folder', name === 'site' || name === 'hidden' || name === 'links');
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
-      if (name !== 'hidden' && name !== 'site') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
+      if (name !== 'hidden' && name !== 'site' && name !== 'links') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
     function fromLocation() {
@@ -7924,7 +8718,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var target = t.getAttribute('data-tab');
         if (window.__siteDirty && target !== 'site') {
           // Something in Site settings changed what the gallery shows: reload so the sidebar, counts and photos are current.
-          if (target !== 'hidden') { try { sessionStorage.setItem(KEY, target); } catch (e) {} }
+          if (target !== 'hidden' && target !== 'links') { try { sessionStorage.setItem(KEY, target); } catch (e) {} }
           if (history.replaceState) history.replaceState(null, '', '#' + target);
           location.reload();
           return;
@@ -8167,6 +8961,190 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         }).then(function () { say('The folder is public now. The photos you marked private stay private.'); }).catch(failed);
       });
     }
+  })();
+  // The Share links tab: make, change, pause, revoke, replace and delete links. Every change is a small POST; the tab is then fetched
+  // again so what it shows is what is stored, and the rows that were open stay open. Plain events on the tab itself, so the
+  // fresh copy keeps working.
+  (function () {
+    var box = document.getElementById('sl-root'); if (!box) return;
+    var csrf = box.getAttribute('data-csrf') || '';
+    var toastTimer = null, pretty = null;
+    function modalEl() { return document.getElementById('sl-modal'); }   // (looked up each time: the tab's own markup is replaced when it refreshes)
+    function say(text, bad) {
+      var toast = document.getElementById('sl-toast');
+      clearTimeout(toastTimer); toast.className = 'pv-toast' + (bad ? ' err' : ''); toast.textContent = text; toast.hidden = false;
+      toastTimer = setTimeout(function () { toast.hidden = true; }, bad ? 6000 : 3500);
+    }
+    function post(fields) {
+      var body = new URLSearchParams(); body.set('csrf_token', csrf);
+      Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+      return fetch('?admin', { method: 'POST', credentials: 'same-origin', body: body.toString(),
+          headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
+    }
+    function failed(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', true); }
+    function times() {
+      [].forEach.call(box.querySelectorAll('time.sl-time[data-ts]'), function (t) {
+        var d = new Date(+t.getAttribute('data-ts') * 1000); if (isNaN(d)) return;
+        t.textContent = d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      });
+    }
+    function probe() {
+      var url = box.getAttribute('data-probe'), banner = box.querySelector('[data-sl-check]'); if (!url || !banner) return;
+      fetch(url, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { pretty = r.headers.get('X-Gallery-Link') === 'invalid'; }).catch(function () { pretty = false; }).then(function () {
+        banner = box.querySelector('[data-sl-check]');
+        [].forEach.call(box.querySelectorAll('.sl-url'), function (i) { i.value = pretty ? i.getAttribute('data-short') : i.getAttribute('data-long'); });
+        banner.className = 'sl-check ' + (pretty ? 'ok' : 'no'); banner.hidden = false;
+        if (pretty) banner.textContent = 'Tidy addresses work: a link looks like ' + location.origin + url.replace(/0+$/, '') + 'k7QpR2mXv9LwTb4e.';
+        else banner.textContent = 'Links use the long form (…/?link=…) until the server rule below is added; it works as it is, the rule only makes them shorter.';
+      });
+    }
+    function refresh() {
+      var openIds = [].map.call(box.querySelectorAll('details.sl-row[open]'), function (d) { return d.getAttribute('data-id'); });
+      var formOpen = !box.querySelector('#sl-form').hidden;
+      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html'), fresh = doc.getElementById('sl-root');
+        if (!fresh) { location.reload(); return; }
+        var keepForm = formOpen ? box.querySelector('#sl-form') : null;
+        box.innerHTML = fresh.innerHTML;
+        if (keepForm) box.querySelector('#sl-form').replaceWith(keepForm);
+        [].forEach.call(box.querySelectorAll('details.sl-row'), function (d) { if (openIds.indexOf(d.getAttribute('data-id')) >= 0) d.open = true; });
+        times(); pretty = null; probe();
+        var c = document.querySelector('.side-link[data-tab="links"] .count'), fc = doc.querySelector('.side-link[data-tab="links"] .count');
+        if (c && fc) c.textContent = fc.textContent;
+      });
+    }
+    function copy(text, done) {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); return; }
+      var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
+    }
+    // ---- the question box
+    var asking = null;
+    function ask(title, bodyHtml, okText, danger) {
+      return new Promise(function (resolve) {
+        var modal = modalEl();
+        document.getElementById('sl-modal-title').textContent = title;
+        modal.querySelector('.sl-modal-body').innerHTML = bodyHtml;
+        var ok = modal.querySelector('[data-sl-modal=ok]'); ok.textContent = okText; ok.className = danger ? 'sl-danger-btn' : '';
+        asking = function (yes) { asking = null; modal.hidden = true; resolve(yes); };
+        modal.hidden = false; modal.querySelector('[data-sl-modal=cancel]').focus();
+      });
+    }
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-sl-modal]') : null;
+      if (b && asking) asking(b.getAttribute('data-sl-modal') === 'ok'); else if (e.target === modalEl() && asking) asking(false);
+    });
+    box.addEventListener('keydown', function (e) { if (e.key === 'Escape' && asking) { e.preventDefault(); asking(false); } });
+    // ---- the form
+    var DEFAULTS = { label: '', note: '', titleMode: 'gallery', titleText: '', maxOpens: 10, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default', downloads: 'off' };
+    function localValue(ts) {
+      var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+    function epoch(value) { var t = new Date(value).getTime(); return isNaN(t) ? 0 : Math.floor(t / 1000); }
+    function radio(form, name, value) { var r = form.querySelector('input[name="' + name + '"][value="' + value + '"]'); if (r) r.checked = true; }
+    function radioValue(form, name) { var r = form.querySelector('input[name="' + name + '"]:checked'); return r ? r.value : ''; }
+    function syncForm(form) {
+      form.querySelector('[name=title_text]').hidden = radioValue(form, 'title_mode') !== 'custom';
+      form.querySelector('[name=starts_at_local]').hidden = radioValue(form, 'starts_pick') !== 'pick';
+      form.querySelector('[name=opens_other]').hidden = radioValue(form, 'opens_pick') !== 'n';
+      form.querySelector('[name=ends_at_local]').hidden = radioValue(form, 'ends_pick') !== 'pick';
+    }
+    function openForm(link) {
+      var form = box.querySelector('#sl-form'), v = Object.assign({}, DEFAULTS, link || {});
+      form.reset();
+      form.querySelector('[name=id]').value = link ? link.id : '';
+      form.querySelector('.sl-form-title').textContent = link ? 'Edit link' : 'New share link';
+      form.querySelector('.sl-save').textContent = link ? 'Save' : 'Create link';
+      form.querySelector('[name=label]').value = v.label; form.querySelector('[name=note]').value = v.note; form.querySelector('[name=title_text]').value = v.titleText;
+      radio(form, 'title_mode', v.titleMode); radio(form, 'downloads', v.downloads); radio(form, 'locations', v.locations); radio(form, 'heads_up', v.headsUp);
+      radio(form, 'starts_pick', v.startsAt > 0 ? 'pick' : 'now'); if (v.startsAt > 0) form.querySelector('[name=starts_at_local]').value = localValue(v.startsAt);
+      var presets = { 0: '0', 1: '1', 5: '5', 10: '10' };
+      if (presets[v.maxOpens] !== undefined) radio(form, 'opens_pick', presets[v.maxOpens]); else { radio(form, 'opens_pick', 'n'); form.querySelector('[name=opens_other]').value = v.maxOpens; }
+      if (v.endsAt > 0) { radio(form, 'ends_pick', 'pick'); form.querySelector('[name=ends_at_local]').value = localValue(v.endsAt); } else radio(form, 'ends_pick', link ? '0' : '604800');
+      form.querySelector('.sl-err').textContent = '';
+      syncForm(form); form.hidden = false; form.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); form.querySelector('[name=label]').focus();
+    }
+    function formFields(form) {
+      var now = Math.floor(Date.now() / 1000), ends = radioValue(form, 'ends_pick'), opens = radioValue(form, 'opens_pick');
+      return {
+        action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
+        label: form.querySelector('[name=label]').value, note: form.querySelector('[name=note]').value,
+        title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value,
+        downloads: radioValue(form, 'downloads'), locations: radioValue(form, 'locations'), heads_up: radioValue(form, 'heads_up'),
+        starts_at: radioValue(form, 'starts_pick') === 'pick' ? epoch(form.querySelector('[name=starts_at_local]').value) : 0,
+        max_opens: opens === 'n' ? (+form.querySelector('[name=opens_other]').value || 0) : +opens,
+        ends_at: ends === 'pick' ? epoch(form.querySelector('[name=ends_at_local]').value) : (ends === '0' ? 0 : now + (+ends))
+      };
+    }
+    box.addEventListener('change', function (e) { var form = e.target.closest ? e.target.closest('#sl-form') : null; if (form) syncForm(form); });
+    box.addEventListener('submit', function (e) {
+      var form = e.target.closest ? e.target.closest('#sl-form') : null; if (!form) return;
+      e.preventDefault();
+      var f = formFields(form), err = form.querySelector('.sl-err'), btn = form.querySelector('.sl-save'), editing = !!f.id;
+      if (radioValue(form, 'ends_pick') === 'pick' && !f.ends_at) { err.textContent = 'Pick the date and time it should stop working.'; return; }
+      btn.disabled = true; err.textContent = '';
+      post(f).then(function (j) {
+        btn.disabled = false;
+        if (!j.ok) { err.textContent = j.text || 'Not saved'; return; }
+        form.hidden = true;
+        return refresh().then(function () {
+          var row = box.querySelector('details.sl-row[data-id="' + j.id + '"]');
+          if (row) { row.open = true; row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+          say(editing ? 'Saved.' : 'Link made. Copy it from here.');
+        });
+      }).catch(function (x) { btn.disabled = false; failed(x); });
+    });
+    // ---- the buttons
+    function rowOf(el) { return el.closest ? el.closest('details.sl-row') : null; }
+    function act(action, row, extra) {
+      var f = { action: action, id: row.getAttribute('data-id') };
+      Object.keys(extra || {}).forEach(function (k) { f[k] = extra[k]; });
+      return post(f).then(function (j) { if (!j.ok) { say(j.text || 'Not saved', true); return; } return refresh().then(function () { say(j.text || 'Saved.'); }); }).catch(failed);
+    }
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-sl]') : null; if (!b) return;
+      var what = b.getAttribute('data-sl'), row = rowOf(b), link = null;
+      if (row) { try { link = JSON.parse(row.getAttribute('data-link')); } catch (x) {} }
+      if (b.closest('summary')) e.preventDefault();   // a button in a row's title line doesn't also fold the row
+      if (what === 'new') { openForm(null); return; }
+      if (what === 'cancel') { box.querySelector('#sl-form').hidden = true; return; }
+      if (!row) return;
+      if (what === 'copy') {
+        var input = row.querySelector('.sl-url'); if (!input) return;
+        copy(input.value, function () { var old = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = old; }, 1400); });
+        return;
+      }
+      if (what === 'edit') { openForm(link); return; }
+      var name = link ? link.label : 'this link';
+      if (what === 'pause') { act('link_pause', row); return; }
+      if (what === 'resume') { act('link_resume', row); return; }
+      if (what === 'revoke') {
+        ask('Revoke this link?', '<p>“' + esc(name) + '” stops working for good, and anyone signed in through it is signed out. It stays in the list, and its log is kept.</p><p class="hint">Not sure? Pause it instead: you can resume a paused link.</p>', 'Revoke', true).then(function (yes) { if (yes) act('link_revoke', row); });
+        return;
+      }
+      if (what === 'replace') {
+        ask('Give this link a new address?', '<p>The address you sent stops working right away, and anyone signed in through it is signed out.</p><p class="hint">Its name, settings and log stay as they are. You will need to send the new address to whoever should still have it.</p>', 'Replace address', false).then(function (yes) { if (yes) act('link_replace', row); });
+        return;
+      }
+      if (what === 'delete') {
+        ask('Delete this link?', '<p>“' + esc(name) + '” stops working for good and is removed from the list. <strong>Its log is deleted with it.</strong></p><p class="hint">To keep the log, don\'t delete: a revoked, paused or expired link keeps it.</p>', 'Delete link and log', true).then(function (yes) { if (yes) act('link_delete', row); });
+        return;
+      }
+      if (what === 'extend') {
+        var limited = link && link.maxOpens > 0;
+        ask('Extend this link', '<div class="sl-f"><span class="sl-k">Stops working</span><input type="datetime-local" id="sl-ext-end" value="' + localValue(Math.floor(Date.now() / 1000) + 7 * 86400) + '"> <label class="muted"><input type="checkbox" id="sl-ext-never"> Never</label></div>'
+          + (limited ? '<div class="sl-f"><span class="sl-k">Add opens</span><input type="number" id="sl-ext-opens" min="0" max="100000" value="' + (link.state === 'used_up' ? 1 : 0) + '"></div>' : ''), 'Extend', false).then(function (yes) {
+          if (!yes) return;
+          var extra = document.getElementById('sl-ext-never').checked ? { no_end: '1' } : { ends_at: epoch(document.getElementById('sl-ext-end').value) };
+          var add = document.getElementById('sl-ext-opens'); if (add && +add.value > 0) extra.add_opens = add.value;
+          act('link_extend', row, extra);
+        });
+      }
+    });
+    function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+    times(); probe();
   })();
   // Private folder: a switch like the others. Switching it on saves at once; switching it off first says what will happen (how many
   // photos stay private, how many become public) and waits for a yes.
@@ -8734,7 +9712,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         render_https_required_page();
         return;
     }
-    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $ip = client_ip();
     if (!login_throttle_allows($dir, 'admin', $ip)) {
         http_response_code(429);
         header('Content-Type: text/plain; charset=UTF-8');
@@ -12005,7 +12983,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 // admin password opens the admin). Open: this browser is signed in (with either); pressing it signs out and locks the
 // private items again.
 $lockHtml = ''; $lockForm = '';
-if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)) {
+if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)) && !viewer_is_link()) {
     $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
     // The open photo and the open map are part of "the page you are on" too: signing in or out brings you back to them.
     $lockPhoto = isset($_GET['photo']) && is_string($_GET['photo']) && $_GET['photo'] !== '' && strlen($_GET['photo']) < 1024 ? $_GET['photo'] : '';
@@ -12444,7 +13422,7 @@ if (ENABLE_MAP && $mapPoints) {
     <button class="lightbox-copy owner-priv" id="lightbox-private" type="button" data-owner="private" title="Make this private" aria-label="Make this private"><?= ui_icon('unlock') ?></button>
 <?php endif; ?>
     <button class="lightbox-copy lightbox-zoom" id="lightbox-zoom" type="button" title="Fill the width of the screen" aria-label="Fill the width of the screen"><?= ui_icon('zoom-in') ?></button>
-<?php if (is_revealed() || ENABLE_PUBLIC_DOWNLOAD): ?>
+<?php $linkViewer = link_viewer(); if (is_revealed() || ENABLE_PUBLIC_DOWNLOAD || ($linkViewer !== null && ($linkViewer['downloads']['mode'] ?? 'off') !== 'off')): ?>
     <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
 <?php endif; ?>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link"><?= ui_icon('link') ?></button>
@@ -12529,6 +13507,17 @@ if (ENABLE_MAP && $mapPoints) {
           foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; }
           echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
+  ?>;
+  // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain
+  // link to a private photo opens nothing for anyone without access, and a download is offered per what the person's link
+  // allows. null means "all of them".
+  const downloadOk = <?php
+      if ($linkViewer !== null && !is_revealed()) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
+      else echo 'null';
+  ?>;
+  const copyLinkOk = <?php
+      if (!is_admin_browser()) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return !file_is_hidden($dir, $f, $itemsData); }, $files));
+      else echo 'null';
   ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
@@ -13462,7 +14451,9 @@ if (ENABLE_MAP && $mapPoints) {
       lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
     }
     paintCaption();
-    if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file); downloadLink.classList.remove('ready'); }
+    if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file); downloadLink.classList.remove('ready'); downloadLink.hidden = !!(downloadOk && !downloadOk[current]); }
+    const copyBtn = document.getElementById('lightbox-copy-btn');
+    if (copyBtn) copyBtn.hidden = !!(copyLinkOk && !copyLinkOk[current]);
     applyZoom();
     updateLightboxExtras();
     toolsFade();

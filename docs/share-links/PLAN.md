@@ -34,14 +34,15 @@ Working rules for this branch (from the repo and the owner): single file, no dep
 
 Each ends with: `php -l`, the full `tests/run.php` on PHP 8.4 and 8.3, a commit on `v2.3.0-dev`, and this checklist updated.
 
-### M1 · Foundations, redeem, the tab's skeleton
-- [ ] `client_ip()` + `TRUSTED_PROXY` setting (directly / cloudflare / custom ranges) and use it in the login throttle.
-- [ ] `ENABLE_SHARE_LINKS` (off), `SHARE_HEADS_UP` (off) settings and Site-settings section.
-- [ ] Link store: read/update, token generation (`random_bytes`, 16 base-62), lookup (constant time), statuses and validity (`link_state()`), counters under lock.
-- [ ] Cookie, `link_viewer()`, cache headers (`private, no-store`) for link holders.
-- [ ] Redeem route: opening page, invalid page, POST go, throttling, blocked-try log stub; pretty-path rewrite rule generator + probe + `?link=` fallback.
-- [ ] Admin **Share links** tab: list (Current / Ended), New link (everything-private scope first), pause/resume, revoke, extend, replace address, delete.
-- [ ] Tests: server suite `[share links]` for the above.
+### M1 · Foundations, redeem, the tab's skeleton: DONE (commit "M1")
+- [x] `client_ip()` + `TRUSTED_PROXY` (direct / cloudflare / proxy, `TRUSTED_PROXY_RANGES`) and used by the login throttle.
+- [x] `ENABLE_SHARE_LINKS` (off), `SHARE_HEADS_UP` (off), `TRUSTED_PROXY` in Site settings (new "Share links" group, shows the address the gallery sees).
+- [x] Link store (`.gallery-links.php`), 16-character base-62 token, constant-time lookup, `link_state()` (active, paused, revoked, scheduled, expired, used_up), counters under the file lock.
+- [x] Cookie bound to the token, `link_viewer()`, `viewer_may_see_item` / `viewer_may_download` / `viewer_sees_all_locations`, link holders kept out of shared caches.
+- [x] Redeem route (opening page, the one invalid page, press-to-count with the 15-minute same-address allowance, throttle, owner's browser skips everything); rule generator (nginx + Apache, written per install) and the live probe; `?link=` fallback. *Blocked-try logging is a stub until M3.*
+- [x] Admin Share links tab: list (Current / Ended), New link and Edit (scope "everything private" only for now), Pause/Resume, Extend, Replace address, Revoke, Delete (modals), phone width, address check banner.
+- [x] The call sites (see the table): `?photo=`, the scrub plan, originals, strip/preview, `serve_image`, `serve_video`, the page filter, cache headers, location trust, the sign-in lock. In the viewer: download and copy-link buttons are per file for link holders. *Not yet:* ZIP for links (M2), private-folder cards' link icon (M2), heads-up header (M2).
+- [x] Tests: `[share links]` in `tests/run.php` (33 checks: opening page, counting, grace, statuses and cut-off, identical invalid page, replace/extend/edit/revoke/delete, throttle, owner, proxies and addresses, per-install rules and probe). Server suite 1,176 on PHP 8.4, 1,172 on 8.3.
 
 ### M2 · Scopes and capabilities (the risky part)
 - [ ] `folderId` stamping, ancestor-id walk, `viewer_may_see_item`, photo scope.

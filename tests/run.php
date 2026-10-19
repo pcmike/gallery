@@ -482,6 +482,17 @@ function write_patched_index($destPath, $indexContents, $patches) {
     file_put_contents($destPath, $content);
 }
 
+/** index.php's link_state(), for the test script (which never loads index.php): the same rules. */
+function link_state_for_tests($l, $now = null) {
+    $now = $now ?? time();
+    if (($l['status'] ?? '') === 'revoked') return 'revoked';
+    if (($l['status'] ?? '') === 'paused') return 'paused';
+    if ((int) ($l['endsAt'] ?? 0) > 0 && $now >= (int) $l['endsAt']) return 'expired';
+    if ((int) ($l['startsAt'] ?? 0) > $now) return 'scheduled';
+    if ((int) ($l['maxOpens'] ?? 0) > 0 && (int) ($l['opens'] ?? 0) >= (int) $l['maxOpens']) return 'used_up';
+    return 'active';
+}
+
 function new_fixture_dir($label) {
     global $cleanupDirs;
     $dir = sys_get_temp_dir() . '/gallery-tests-' . $label . '-' . bin2hex(random_bytes(4));
@@ -4755,6 +4766,190 @@ http_get("$baseVg/?admin", ['Cookie: ' . extract_cookie_header($vgHd)]);   // th
 $vgItems = json_decode(substr((string) file_get_contents("$fxVg/.gallery-items.php"), strpos((string) file_get_contents("$fxVg/.gallery-items.php"), "\n") + 1), true)['items'] ?? [];
 check('[video gps] the owner opening the folder stores the two locations (and marks every video as read), and a video without one gets none', ($vgItems['iphone.mov']['location']['lat'] ?? null) === 48.8584 && ($vgItems['android.mp4']['location']['lng'] ?? null) === 151.2093 && !isset($vgItems['plain.mp4']['location']) && !empty($vgItems['plain.mp4']['gpsChecked']));
 check('[video gps] the tiles of those two videos now show a location badge (before, none did)', $vgBefore === 0 && $vgBadges() === 2);
+
+/* ======================================================================= *
+ * SHARE LINKS (2.3.0): temporary addresses that sign a person in as a private viewer.
+ * ======================================================================= */
+
+echo "== share links: opening page, counting, statuses, what a link holder reaches ==\n";
+
+$fxSl = new_fixture_dir('sharelinks');
+mkdir("$fxSl/Rome"); mkdir("$fxSl/Pisa");
+make_jpeg("$fxSl/pub.jpg", 80, 60, 200, 60, 60); make_jpeg("$fxSl/sec.jpg", 80, 60, 50, 60, 60);
+make_jpeg("$fxSl/Rome/r1.jpg", 80, 60, 100, 60, 60); make_jpeg("$fxSl/Pisa/p1.jpg", 80, 60, 150, 60, 60);
+write_data_file("$fxSl/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => []]);
+write_data_file("$fxSl/Rome/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+file_put_contents("$fxSl/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'sl-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));   // share links are off to begin with
+copy($indexSrc, "$fxSl/index.php");
+$portSl = find_free_port(); start_server($fxSl, $portSl); $baseSl = "http://127.0.0.1:$portSl";
+$slLinks = fn () => read_data_file("$fxSl/.gallery-links.php");
+$slPage = fn ($path, $cookie = null) => http_get("$baseSl/$path", $cookie ? ["Cookie: $cookie"] : []);
+$slThrottleReset = function () use ($fxSl) { @unlink("$fxSl/.gallery-login-attempts.php"); };
+$slInvalid = fn ($body, $status) => $status === 404 && str_contains($body, 'This link isn\'t valid') && str_contains($body, 'Please let the person who sent it to you know.');
+
+[$slOffStatus, $slOffBody, $slOffHeaders] = http_get("$baseSl/?link=AAAAAAAAAAAAAAAA");
+check('[share links] with the setting off, a link address shows the plain "isn\'t valid" page (and a link can\'t be made)', $slInvalid($slOffBody, $slOffStatus) && in_array('X-Gallery-Link: invalid', $slOffHeaders, true));
+check('[share links] ...and the page has no button, no link back and no reason why', !str_contains($slOffBody, '<button') && !str_contains($slOffBody, '<a ') && !str_contains($slOffBody, 'expired') && !str_contains($slOffBody, 'used up') && !str_contains($slOffBody, 'public'));
+file_put_contents("$fxSl/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'sl-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+
+[, , $slLoginHeaders] = http_post("$baseSl/?admin", ['access_code' => 'sl-admin-pw-1'], [], false);
+$slAdminCookie = extract_cookie_header($slLoginHeaders);
+$slAdminPage = http_get("$baseSl/?admin", ["Cookie: $slAdminCookie"])[1];
+$slCsrf = extract_csrf_token($slAdminPage);
+$slAdmin = function (array $fields) use ($baseSl, $slAdminCookie, $slCsrf) {
+    [, $body] = http_post("$baseSl/?admin", $fields + ['csrf_token' => $slCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $slAdminCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$slForm = fn (array $o = []) => $o + ['action' => 'link_create', 'label' => 'Aunt Carol', 'note' => 'Hi Carol, here are the Rome photos.', 'title_mode' => 'gallery', 'max_opens' => 5, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'downloads' => 'off'];
+
+check('[share links] the admin has a Share links tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slAdminPage, 'location ~ ^/[A-Za-z0-9]{16}$') && str_contains($slAdminPage, 'index.php?link=$1 last;') && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9]{16})$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
+$slMade = $slAdmin($slForm());
+$slAll = $slLinks()['links'] ?? [];
+$slId = $slMade['id'] ?? '';
+$slLink = $slAll[$slId] ?? [];
+$slToken = $slLink['token'] ?? '';
+check('[share links] making a link stores it (a 16-letter-and-digit token, active, nothing opened yet, everything-private scope) and the data file answers 404 to a direct request', ($slMade['ok'] ?? false) === true && preg_match('/^[A-Za-z0-9]{16}$/', $slToken) === 1 && ($slLink['status'] ?? '') === 'active' && ($slLink['opens'] ?? -1) === 0 && ($slLink['scope']['type'] ?? '') === 'all' && ($slLink['label'] ?? '') === 'Aunt Carol' && http_get("$baseSl/.gallery-links.php")[0] === 404);
+check('[share links] a link needs a name, and an end time that is still to come', ($slAdmin($slForm(['label' => '  ']))['ok'] ?? true) === false && ($slAdmin($slForm(['ends_at' => time() - 60]))['ok'] ?? true) === false && count($slLinks()['links']) === 1);
+
+[$slGetStatus, $slGetBody, $slGetHeaders] = http_get("$baseSl/?link=$slToken");
+$slHeaderLines = implode("\n", $slGetHeaders);
+check('[share links] opening the address shows the page with one button, the note and the title, and counts nothing yet', $slGetStatus === 200 && str_contains($slGetBody, 'Open the gallery') && str_contains($slGetBody, 'Hi Carol, here are the Rome photos.') && str_contains($slGetBody, '<h1>' . basename($fxSl) . '</h1>') && ($slLinks()['links'][$slId]['opens'] ?? -1) === 0);
+check('[share links] ...the page is private to the visitor (no storing, not indexed, no referrer, nothing framed) and does not give away the link\'s name or any photo', stripos($slHeaderLines, 'Cache-Control: no-store') !== false && stripos($slHeaderLines, 'X-Robots-Tag: noindex') !== false && stripos($slHeaderLines, 'Referrer-Policy: no-referrer') !== false && stripos($slHeaderLines, 'frame-ancestors') !== false && !str_contains($slGetBody, 'Aunt Carol') && !str_contains($slGetBody, 'sec.jpg') && !str_contains($slGetBody, 'Rome/') && !str_contains($slGetBody, 'og:image'));
+check('[share links] before anyone presses the button the public sees nothing private', !str_contains($slPage('')[1], 'sec.jpg') && http_get("$baseSl/?img=sec.jpg&size=thumb")[0] === 404 && http_get("$baseSl/?img=Rome%2Fr1.jpg&size=thumb")[0] === 404);
+
+[$slGo1Status, , $slGo1Headers] = http_post("$baseSl/?link=$slToken", ['go' => '1'], [], false);
+$slCookie = extract_cookie_header($slGo1Headers);
+$slLocation = ''; foreach ($slGo1Headers as $h) if (stripos($h, 'Location:') === 0) $slLocation = trim(substr($h, 9));
+check('[share links] pressing the button counts one use, sets the link cookie (not readable by scripts) and goes to the gallery', $slGo1Status === 303 && $slLocation === './' && $slCookie !== null && str_starts_with((string) $slCookie, 'gallery_link_') && ($slLinks()['links'][$slId]['opens'] ?? -1) === 1 && (bool) array_filter($slGo1Headers, fn ($h) => stripos($h, 'Set-Cookie: gallery_link_') === 0 && stripos($h, 'HttpOnly') !== false && stripos($h, 'SameSite=Lax') !== false));
+[$slHome, $slHomeBody, $slHomeHeaders] = $slPage('', $slCookie);
+check('[share links] with the cookie the private photo and the private folder show, the page is kept out of shared caches, and the owner\'s tools (the sign-in lock) are absent', $slHome === 200 && str_contains($slHomeBody, 'sec.jpg') && str_contains($slHomeBody, 'Rome') && in_array('Cache-Control: private, no-store', $slHomeHeaders, true) && in_array('Vary: Cookie', $slHomeHeaders, true) && !str_contains($slHomeBody, 'class="map-combo-btn lock-link') && !str_contains($slHomeBody, 'id="lightbox-edit"'));
+check('[share links] ...and its pictures load, while without the cookie they still don\'t', http_get("$baseSl/?img=sec.jpg&size=thumb", ["Cookie: $slCookie"])[0] === 200 && http_get("$baseSl/?img=Rome%2Fr1.jpg&size=full", ["Cookie: $slCookie"])[0] === 200 && http_get("$baseSl/?img=sec.jpg&size=thumb")[0] === 404);
+check('[share links] downloads are off for this link: no download of an original and no ZIP, and the viewer has no download button', http_get("$baseSl/?original=sec.jpg", ["Cookie: $slCookie"])[0] === 404 && http_get("$baseSl/?archive", ["Cookie: $slCookie"])[0] === 404 && !str_contains($slHomeBody, 'id="lightbox-download"'));
+check('[share links] in the viewer, copy-link is off for private photos (a plain link to one opens nothing for others) and on for public ones', preg_match('/const copyLinkOk = \[([^\]]*)\]/', $slHomeBody, $slCopyOk) === 1 && str_contains($slCopyOk[1], 'false') && str_contains($slCopyOk[1], 'true'));
+$slAdminHome = http_get("$baseSl/", ["Cookie: $slAdminCookie"])[1];
+check('[share links] the owner still sees everything, with the owner\'s tools (a link holder is never the owner)', str_contains($slAdminHome, 'sec.jpg') && str_contains($slAdminHome, 'id="lightbox-edit"'));
+
+// A second browser, a moment later, from the same address: the in-app browser, then Safari. Not a second use.
+[, , $slGoAgainHeaders] = http_post("$baseSl/?link=$slToken", ['go' => '1'], [], false);
+check('[share links] the same address pressing again within a few minutes (another browser on the same phone) is let in without using another open', ($slLinks()['links'][$slId]['opens'] ?? -1) === 1 && extract_cookie_header($slGoAgainHeaders) !== null);
+// Pressing from the browser that already holds the cookie: never counted.
+http_post("$baseSl/?link=$slToken", ['go' => '1'], ["Cookie: $slCookie"], false);
+check('[share links] and a browser that already holds the cookie is never counted again', ($slLinks()['links'][$slId]['opens'] ?? -1) === 1);
+[$slRevisitStatus, , $slRevisitHeaders] = http_get("$baseSl/?link=$slToken", ["Cookie: $slCookie"], false);
+check('[share links] returning to the address with the cookie goes straight in, with no page to press', $slRevisitStatus === 303);
+
+// The same page for every way a link can stop working, and it never says why.
+$slThrottleReset();
+$slBodies = [];
+$slBad = function ($label, $token) use ($baseSl, &$slBodies) { [$s, $b, $h] = http_get("$baseSl/?link=$token"); $slBodies[$label] = [$s, $b]; };
+$slBad('unknown', 'ZZZZZZZZZZZZZZZZ'); $slBad('malformed', 'short'); $slBad('empty', '');
+$slFile = $slLinks();
+foreach (['paused' => ['status' => 'paused'], 'revoked' => ['status' => 'revoked'], 'expired' => ['endsAt' => time() - 5], 'later' => ['startsAt' => time() + 3600], 'used' => ['maxOpens' => 1, 'opens' => 1]] as $slWhy => $slPatch) {
+    $f = $slFile; $f['links'][$slId] = array_replace($f['links'][$slId], $slPatch); write_data_file("$fxSl/.gallery-links.php", $f);
+    $slBad($slWhy, $slToken);
+}
+write_data_file("$fxSl/.gallery-links.php", $slFile);
+$slSame = array_unique(array_map(fn ($v) => md5($v[1]), $slBodies));
+check('[share links] an unknown, mistyped, empty, paused, revoked, expired, not-yet-started and used-up link all show exactly the same page (status 404), so nothing says why', count($slBodies) === 8 && count($slSame) === 1 && count(array_unique(array_column($slBodies, 0))) === 1 && array_unique(array_column($slBodies, 0))[0] === 404);
+
+$slThrottleReset();
+// People already in are cut off the moment the link stops being live (and come back when it is live again).
+$slPatchLink = function (array $patch) use ($fxSl, $slId, $slFile) { $f = $slFile; $f['links'][$slId] = array_replace($f['links'][$slId], $patch); write_data_file("$fxSl/.gallery-links.php", $f); };
+$slSees = fn () => str_contains($slPage('', $slCookie)[1], 'sec.jpg');
+$slPatchLink(['status' => 'paused']); $slPausedSees = $slSees();
+$slPatchLink([]); $slResumedSees = $slSees();
+$slPatchLink(['endsAt' => time() - 5]); $slExpiredSees = $slSees();
+$slPatchLink(['status' => 'revoked']); $slRevokedSees = $slSees();
+$slPatchLink(['maxOpens' => 1, 'opens' => 1]); $slUsedUpSees = $slSees();   // out of opens only stops new people: those already in stay in
+$slPatchLink([]);
+check('[share links] pausing, expiring or revoking cuts off someone already in at once; resuming lets them back; a link out of opens only stops new people', !$slPausedSees && $slResumedSees && !$slExpiredSees && !$slRevokedSees && $slUsedUpSees);
+
+// A one-use link: the second person (a different address) is turned away, the first keeps looking.
+$slOnce = $slAdmin($slForm(['label' => 'Once', 'max_opens' => 1])); $slOnceId = $slOnce['id'] ?? ''; $slOnceToken = $slLinks()['links'][$slOnceId]['token'] ?? '';
+[, , $slOnceH1] = http_post("$baseSl/?link=$slOnceToken", ['go' => '1'], [], false); $slOnceCookie = extract_cookie_header($slOnceH1);
+$f = $slLinks(); $f['links'][$slOnceId]['lastOpen']['at'] = time() - 4000; write_data_file("$fxSl/.gallery-links.php", $f);   // long enough ago for the re-open allowance to be over
+[$slOnce2Status, $slOnce2Body] = http_post("$baseSl/?link=$slOnceToken", ['go' => '1'], [], false);
+check('[share links] a link for one opening lets the first person in and turns the next away (same page as any dead link), without disturbing the first', $slOnceCookie !== null && ($slLinks()['links'][$slOnceId]['opens'] ?? -1) === 1 && $slInvalid($slOnce2Body, $slOnce2Status) && str_contains($slPage('', $slOnceCookie)[1], 'sec.jpg') && $slInvalid(http_get("$baseSl/?link=$slOnceToken")[1], http_get("$baseSl/?link=$slOnceToken")[0]));
+
+// Pause / resume / extend / replace / revoke / delete from the tab.
+check('[share links] pausing a link in the tab, then resuming it', ($slAdmin(['action' => 'link_pause', 'id' => $slId])['ok'] ?? false) && ($slLinks()['links'][$slId]['status'] ?? '') === 'paused' && ($slAdmin(['action' => 'link_pause', 'id' => $slId])['ok'] ?? true) === false && ($slAdmin(['action' => 'link_resume', 'id' => $slId])['ok'] ?? false) && ($slLinks()['links'][$slId]['status'] ?? '') === 'active');
+$slThrottleReset();
+$slOld = $slToken;
+$slRep = $slAdmin(['action' => 'link_replace', 'id' => $slId]); $slNewToken = $slLinks()['links'][$slId]['token'] ?? '';
+check('[share links] giving a link a new address: the old address and the old cookie stop working, the new one works, name and settings stay, and opens already used stay counted', ($slRep['ok'] ?? false) && $slNewToken !== $slOld && preg_match('/^[A-Za-z0-9]{16}$/', $slNewToken) === 1 && $slInvalid(http_get("$baseSl/?link=$slOld")[1], http_get("$baseSl/?link=$slOld")[0]) && !str_contains($slPage('', $slCookie)[1], 'sec.jpg') && str_contains(http_get("$baseSl/?link=$slNewToken")[1], 'Open the gallery') && ($slLinks()['links'][$slId]['label'] ?? '') === 'Aunt Carol' && ($slLinks()['links'][$slId]['opens'] ?? -1) === 1);
+$slToken = $slNewToken;
+$slPatchLink = function (array $patch) use ($fxSl, $slId) { $f = read_data_file("$fxSl/.gallery-links.php"); $f['links'][$slId] = array_replace($f['links'][$slId], $patch); write_data_file("$fxSl/.gallery-links.php", $f); };
+$slPatchLink(['endsAt' => time() - 60]);
+$slExt = $slAdmin(['action' => 'link_extend', 'id' => $slId, 'ends_at' => time() + 7200]);
+check('[share links] extending an expired link makes it live again (and a past end time is refused)', ($slExt['ok'] ?? false) && link_state_for_tests($slLinks()['links'][$slId]) === 'active' && ($slAdmin(['action' => 'link_extend', 'id' => $slId, 'ends_at' => time() - 5])['ok'] ?? true) === false);
+$slEdit = $slAdmin($slForm(['action' => 'link_save', 'id' => $slId, 'label' => 'Aunt Carol (Rome)', 'title_mode' => 'neutral', 'max_opens' => 9, 'heads_up' => 'on', 'locations' => 'all', 'downloads' => 'all']));
+$slEdited = $slLinks()['links'][$slId] ?? [];
+check('[share links] editing a link saves its fields without touching its token or its opens', ($slEdit['ok'] ?? false) && ($slEdited['label'] ?? '') === 'Aunt Carol (Rome)' && ($slEdited['titleMode'] ?? '') === 'neutral' && ($slEdited['maxOpens'] ?? 0) === 9 && ($slEdited['headsUp'] ?? '') === 'on' && ($slEdited['locations'] ?? '') === 'all' && ($slEdited['downloads']['mode'] ?? '') === 'all' && ($slEdited['token'] ?? '') === $slToken && ($slEdited['opens'] ?? -1) === 1);
+$slThrottleReset();
+check('[share links] a neutral title shows "A shared gallery" on the opening page, with no photo or folder name', str_contains(http_get("$baseSl/?link=$slToken")[1], '<h1>A shared gallery</h1>') && !str_contains(http_get("$baseSl/?link=$slToken")[1], basename($fxSl)));
+$slThrottleReset();
+$slRev = $slAdmin(['action' => 'link_revoke', 'id' => $slId]);
+check('[share links] revoking keeps the link in the list as revoked (it can\'t be edited, replaced or extended), and it no longer opens', ($slRev['ok'] ?? false) && ($slLinks()['links'][$slId]['status'] ?? '') === 'revoked' && ($slAdmin(['action' => 'link_extend', 'id' => $slId, 'ends_at' => time() + 100])['ok'] ?? true) === false && ($slAdmin(['action' => 'link_replace', 'id' => $slId])['ok'] ?? true) === false && $slInvalid(http_get("$baseSl/?link=$slToken")[1], http_get("$baseSl/?link=$slToken")[0]));
+$slDel = $slAdmin(['action' => 'link_delete', 'id' => $slId]);
+check('[share links] deleting a link removes it', ($slDel['ok'] ?? false) && !isset($slLinks()['links'][$slId]) && isset($slLinks()['links'][$slOnceId]));
+check('[share links] every action needs the admin\'s session and token: with a wrong token or no session nothing happens', ($slAdmin(['action' => 'link_delete', 'id' => $slOnceId, 'csrf_token' => 'nope'])['ok'] ?? true) === false && json_decode(http_post("$baseSl/?admin", ['action' => 'link_delete', 'id' => $slOnceId, 'csrf_token' => $slCsrf], ['X-Requested-With: gallery-fetch'])[1], true) === null && isset($slLinks()['links'][$slOnceId]));
+
+// The owner opening a link is not counted and gets no cookie.
+$slBefore = $slLinks()['links'][$slOnceId]['opens'];
+[$slOwnerStatus, , $slOwnerHeaders] = http_get("$baseSl/?link=$slOnceToken", ["Cookie: $slAdminCookie"], false);
+check('[share links] the owner opening a link just goes to the gallery: nothing counted, no link cookie', $slOwnerStatus === 303 && ($slLinks()['links'][$slOnceId]['opens'] ?? -1) === $slBefore && !array_filter($slOwnerHeaders, fn ($h) => stripos($h, 'Set-Cookie: gallery_link_') === 0));
+
+// Wrong tokens are throttled like wrong passwords.
+for ($i = 0; $i < 5; $i++) http_get("$baseSl/?link=BADBADBADBADBAD" . $i);
+check('[share links] after five wrong addresses the sixth try (even a real one) is held back for a moment', http_get("$baseSl/?link=$slOnceToken")[0] === 429);
+$f = read_data_file("$fxSl/.gallery-login-attempts.php"); foreach ($f as $k => $v) $f[$k]['lockUntil'] = time() - 1; write_data_file("$fxSl/.gallery-login-attempts.php", $f);
+
+// Where the visitor's address comes from.
+$slIpOf = function () use ($fxSl, $slOnceId) { return read_data_file("$fxSl/.gallery-links.php")['links'][$slOnceId]['lastOpen']['ip'] ?? ''; };
+$slOpenFrom = function (array $headers) use ($baseSl, $fxSl, $slOnceId, $slOnceToken) {
+    $f = read_data_file("$fxSl/.gallery-links.php"); $f['links'][$slOnceId]['maxOpens'] = 0; $f['links'][$slOnceId]['lastOpen'] = ['ip' => '', 'at' => 0]; write_data_file("$fxSl/.gallery-links.php", $f);
+    http_post("$baseSl/?link=$slOnceToken", ['go' => '1'], $headers, false);
+    return read_data_file("$fxSl/.gallery-links.php")['links'][$slOnceId]['lastOpen']['ip'] ?? '';
+};
+// (The first sign-in replaced the plain password in the settings file with its hash: keep whatever is stored, or the owner's session would end.)
+$slCfg = function (array $extra) use ($fxSl) { $cur = cfg_read("$fxSl/.gallery-config.php"); file_put_contents("$fxSl/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => $cur['ADMIN_PASSWORD'] ?? 'sl-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true] + $extra)); };
+$slIpDirect = $slOpenFrom(['CF-Connecting-IP: 203.0.113.9']);
+$slCfg(['TRUSTED_PROXY' => 'cloudflare']);
+$slIpCfNotTrusted = $slOpenFrom(['CF-Connecting-IP: 203.0.113.9']);   // the connection is 127.0.0.1, which is not Cloudflare
+$slCfg(['TRUSTED_PROXY' => 'cloudflare', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32']]);
+$slIpCfTrusted = $slOpenFrom(['CF-Connecting-IP: 203.0.113.9']);
+$slIpCfJunk = $slOpenFrom(['CF-Connecting-IP: not-an-address']);
+$slIpCfV6 = $slOpenFrom(['CF-Connecting-IP: 2001:db8::1']);
+$slCfg(['TRUSTED_PROXY' => 'proxy', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32', '10.0.0.0/8']]);
+$slIpChain = $slOpenFrom(['X-Forwarded-For: 198.51.100.7, 10.1.2.3']);   // a trusted hop on the right: the client is the one before it
+$slIpForged = $slOpenFrom(['X-Forwarded-For: 6.6.6.6, 198.51.100.7, 10.1.2.3']);   // a forged value further left is never believed
+$slCfg(['TRUSTED_PROXY' => 'proxy']);
+$slIpProxyUnlisted = $slOpenFrom(['X-Forwarded-For: 198.51.100.7']);
+$slCfg([]);
+check('[share links] the visitor\'s address is the connection\'s, and a header is believed only from a proxy you named: not by default, not when the connection isn\'t Cloudflare, not when it isn\'t a listed proxy', $slIpDirect === '127.0.0.1' && $slIpCfNotTrusted === '127.0.0.1' && $slIpProxyUnlisted === '127.0.0.1');
+check('[share links] behind a trusted Cloudflare connection the header gives the real address (IPv4 or IPv6), a junk header is ignored, and with X-Forwarded-For the client is the first address from the right that is not itself a trusted proxy', $slIpCfTrusted === '203.0.113.9' && $slIpCfJunk === '127.0.0.1' && $slIpCfV6 === '2001:db8::1' && $slIpChain === '198.51.100.7' && $slIpForged === '198.51.100.7');
+
+// The sign-in throttle sees the real address too (it used to see only the proxy's).
+$slCfg(['TRUSTED_PROXY' => 'cloudflare', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32']]);
+http_get("$baseSl/?link=BADBADBADBADBAD9", ['CF-Connecting-IP: 198.51.100.55']);
+$slThrottleKeys = array_keys(read_data_file("$fxSl/.gallery-login-attempts.php"));
+check('[share links] the throttle counts failures per real visitor address, not per proxy', in_array('link|198.51.100.55', $slThrottleKeys, true));
+$slCfg([]);
+
+// Site settings: the new group.
+$slSettings = http_get("$baseSl/?admin", ["Cookie: $slAdminCookie"])[1];
+check('[share links] Site settings has a Share links group (allow, heads-up, where addresses come from) that shows the visitor address it sees', str_contains($slSettings, 'name="set_ENABLE_SHARE_LINKS"') && str_contains($slSettings, 'name="set_SHARE_HEADS_UP"') && str_contains($slSettings, 'name="set_TRUSTED_PROXY"') && str_contains($slSettings, 'Your address as the gallery sees it: <strong>127.0.0.1</strong>'));
+
+// Installed in a folder: the rule and the probe are written for that folder.
+$fxSlSub = new_fixture_dir('sharelinks-sub');
+mkdir("$fxSlSub/trip"); copy($indexSrc, "$fxSlSub/trip/index.php"); make_jpeg("$fxSlSub/trip/pub.jpg", 80, 60, 200, 60, 60);
+file_put_contents("$fxSlSub/trip/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'sl-sub-pw-1', 'ENABLE_SHARE_LINKS' => true]));
+$portSlSub = find_free_port(); @touch("$fxSlSub/trip/index.php", time() - 3600); start_server($fxSlSub, $portSlSub);
+[, , $slSubLogin] = http_post("http://127.0.0.1:$portSlSub/trip/index.php?admin", ['access_code' => 'sl-sub-pw-1'], [], false);
+$slSubPage = http_get("http://127.0.0.1:$portSlSub/trip/index.php?admin", ['Cookie: ' . extract_cookie_header($slSubLogin)])[1];
+check('[share links] in a gallery installed at /trip/ the nginx rule is for /trip/ (no top-of-site warning) and the probe asks for /trip/ plus the probe token', str_contains($slSubPage, 'location ~ ^/trip/[A-Za-z0-9]{16}$ {') && str_contains($slSubPage, 'rewrite ^/trip/([A-Za-z0-9]{16})$ /trip/index.php?link=$1 last;') && str_contains($slSubPage, 'data-probe="/trip/0000000000000000"') && !str_contains($slSubPage, 'At the top of the site'));
+[$slSubProbeStatus, , $slSubProbeHeaders] = http_get("http://127.0.0.1:$portSlSub/trip/index.php?link=0000000000000000");
+check('[share links] the probe token answers with the marker header but is not counted as a wrong guess', $slSubProbeStatus === 404 && in_array('X-Gallery-Link: invalid', $slSubProbeHeaders, true) && !preg_grep('/^link\|/', array_keys(read_data_file("$fxSlSub/trip/.gallery-login-attempts.php"))));
 
 /* --------------------------------------------------------------------- */
 
