@@ -3811,6 +3811,14 @@ function owner_folder_privacy($dir, $files, $folderPath, $withCount = true) {
     return ['state' => $state, 'stay' => $stay];
 }
 
+/** Where "See them" goes for a folder: the folder's page with the photos that are private on their own first, in the order the
+ *  folder already has (a ?sort= lasts for that visit only). $folderPath '' is the gallery's own page. */
+function folder_private_first_href($dir, $folderPath) {
+    $spec = media_sort_spec_for_folder($folderPath === '' ? $dir : resolve_real_path($dir, $folderPath));
+    $spec['private'] = true;
+    return ($folderPath === '' ? '?' : '?folder=' . rawurlencode($folderPath) . '&') . 'sort=' . media_sort_encode($spec);
+}
+
 /** Cache-Control for a photo/video response. Ordinary files are immutable
  *  and public (the URL changes when the file does not, and a CDN is welcome
  *  to hold them). A *hidden* item is only ever served to a trusted viewer,
@@ -6023,16 +6031,96 @@ function render_server_rules_help($withTidyLinks = false) {
 
 /** The Hidden tab: the plain-English warning, then every hidden thing with
  *  a link to where it can be changed. */
-function render_admin_hidden_panel($data) {
-    $listFolders = function ($paths) {
-        foreach ($paths as $f) {
-            echo '<li><a href="?admin&amp;folder=' . htmlspecialchars(rawurlencode($f), ENT_QUOTES, 'UTF-8') . '#settings">' . htmlspecialchars($f, ENT_QUOTES, 'UTF-8') . '</a> <span class="muted">&mdash; open its settings</span></li>';
+/** What is private, grouped by folder for the Private tab: each private folder (with what opening it would do and the photos
+ *  kept private inside it, or public inside it), then each public folder that holds photos kept private. Rows are sorted by path. */
+function admin_private_overview($dir, $files, $data) {
+    $privFolders = array_fill_keys($data['folders'], true);
+    $label = function ($path) use ($dir) {
+        if ($path === '') return 'Main page';
+        $parts = []; $acc = '';
+        foreach (explode('/', $path) as $seg) {
+            $acc = $acc === '' ? $seg : $acc . '/' . $seg;
+            $l = folder_display_meta($dir, $acc)['label'];
+            $parts[] = $l !== '' ? $l : $seg;
         }
+        return implode(' / ', $parts);
     };
-    $listItems = function ($paths) {
-        foreach ($paths as $f) {
-            echo '<li><a href="' . admin_item_href($f) . '">' . htmlspecialchars($f, ENT_QUOTES, 'UTF-8') . '</a> <span class="muted">&mdash; open it</span></li>';
+    $above = function ($file) use ($privFolders) {   // the private folders a file sits in, at any depth
+        $out = []; $acc = '';
+        $where = dirname($file);
+        if ($where === '.') return $out;
+        foreach (explode('/', $where) as $seg) {
+            $acc = $acc === '' ? $seg : $acc . '/' . $seg;
+            if (isset($privFolders[$acc])) $out[] = $acc;
         }
+        return $out;
+    };
+    $priv = []; $pub = [];
+    foreach ($data['folders'] as $f) $priv[$f] = ['path' => $f, 'label' => $label($f), 'own' => [], 'open' => [], 'counts' => folder_privacy_counts($dir, $files, $f)];
+    foreach ($data['items'] as $file) {
+        $anc = $above($file);
+        foreach ($anc as $a) $priv[$a]['own'][] = $file;
+        if (!$anc) {
+            $where = dirname($file) === '.' ? '' : dirname($file);
+            if (!isset($pub[$where])) $pub[$where] = ['path' => $where, 'label' => $label($where), 'own' => []];
+            $pub[$where]['own'][] = $file;
+        }
+    }
+    foreach ($data['shown'] as $file) foreach ($above($file) as $a) $priv[$a]['open'][] = $file;
+    $byPath = function ($x, $y) { return strnatcasecmp($x['path'], $y['path']); };
+    $priv = array_values($priv); $pub = array_values($pub);
+    usort($priv, $byPath); usort($pub, $byPath);
+    return ['private' => $priv, 'public' => $pub];
+}
+
+function render_admin_hidden_panel($data, $csrfToken = '') {
+    global $dir, $files;
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $ov = admin_private_overview($dir, $files, $data);
+    $noun = ENABLE_VIDEO ? 'item' : 'photo';
+    $plural = function ($n, $one, $many = null) { return number_format($n) . ' ' . ($n === 1 ? $one : ($many ?? $one . 's')); };
+    $thumbs = function ($row, $kind) use ($esc, $dir) {
+        $all = [];
+        foreach ($row['own'] as $f) $all[] = [$f, 'private'];
+        foreach ($row['open'] ?? [] as $f) $all[] = [$f, 'public'];
+        $shown = array_slice($all, 0, 300);
+        $cell = function ($pair) use ($esc) {
+            [$f, $own] = $pair;
+            $where = dirname($f) === '.' ? '' : dirname($f);
+            $title = $own === 'private' ? 'Private on its own: press to make it public' : 'Public though its folder is private: press to let it follow the folder again';
+            return '<span class="pv-th"><a class="pv-img" href="' . admin_item_href($f) . '" title="Open ' . $esc(basename($f)) . ' in the gallery"><img src="' . $esc(img_url($f, 'thumb')) . '" alt="" loading="lazy" decoding="async"></a>'
+                . '<button type="button" class="pv-lock ' . ($own === 'private' ? 'own' : 'pub') . '" data-file="' . $esc($f) . '" data-bare="' . $esc(basename($f)) . '" data-folder="' . $esc($where) . '" data-own="' . $own . '" title="' . $esc($title) . '" aria-label="' . $esc($title) . '">'
+                . ui_icon($own === 'private' ? 'lock' : 'unlock') . '</button></span>';
+        };
+        $out = '<div class="pv-grid">' . implode('', array_map($cell, array_slice($shown, 0, 12))) . '</div>';
+        if (count($shown) > 12) {
+            $out .= '<div class="pv-grid pv-rest" hidden>' . implode('', array_map($cell, array_slice($shown, 12))) . '</div>'
+                . '<button type="button" class="pv-showall linklike">Show all ' . number_format(count($all)) . '</button>';
+        }
+        if (count($all) > 300) $out .= '<p class="pv-hint">And ' . number_format(count($all) - 300) . ' more: see them in the gallery.</p>';
+        return $out;
+    };
+    $row = function ($r, $private) use ($esc, $dir, $thumbs, $noun) {
+        $path = $r['path'];
+        $settings = $path === '' ? '?admin#settings' : '?admin&folder=' . rawurlencode($path) . '#settings';
+        if ($private) {
+            $stay = (int) $r['counts']['stay']; $open = (int) $r['counts']['open'];
+            $sub = ($stay > 0 ? count_noun($stay) . ($stay === 1 ? ' stays' : ' stay') . ' private' : 'nothing private on its own')
+                . ' &middot; ' . count_noun($open) . ($open === 1 ? ' becomes' : ' become') . ' public when opened';
+        } else {
+            $n = count($r['own']);
+            $sub = count_noun($n) . ' private';
+        }
+        $ic = $private ? '<span class="pv-ic own">' . ui_icon('lock') . '</span>' : '<span class="pv-ic pub">' . ui_icon('unlock') . '</span>';
+        $html = '<details class="pv-row" data-key="' . $esc($path) . '"><summary>' . $ic . '<span class="pv-nm"><span class="pv-name">' . $esc($r['label']) . '</span><span class="pv-sub">' . $sub . '</span></span><span class="pv-chev">' . ui_icon('chev-down') . '</span></summary><div class="pv-xp">';
+        if ($r['own'] || !empty($r['open'])) {
+            $html .= $thumbs($r, $private);
+            $html .= '<p class="pv-hint">Press a lock to make a photo public.' . (!empty($r['open']) ? ' The ones with an open lock are public even though the folder is private; pressing that lock puts one back to following its folder.' : '') . ' Press the photo to open it in the gallery.</p>';
+        }
+        $html .= '<p class="pv-links"><a class="pv-lnk" href="' . $esc(folder_private_first_href($dir, $path)) . '">See them in the gallery &rsaquo;</a>';
+        if ($private) $html .= '<span class="pv-sep">&middot;</span><a class="pv-lnk pv-makepub" href="' . $esc($settings) . '" data-folder="' . $esc($path) . '" data-label="' . $esc($r['label']) . '">Make public&hellip;</a>';
+        $html .= '<span class="pv-sep">&middot;</span><a class="pv-lnk" href="' . $esc($settings) . '">' . ($path === '' ? 'Gallery settings' : 'Folder settings') . '</a></p></div></details>';
+        return $html;
     };
 ?>
     <div class="flash error hidden-warning" id="lock-banner">
@@ -6048,18 +6136,27 @@ function render_admin_hidden_panel($data) {
       <?= render_server_rules_help() ?>
       <p class="muted" data-tidy-rules>Optional tidy folder links and the nginx redirect setting are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Site settings → Server setup</a>.</p>
     </section>
-    <section class="panel">
-      <h2 class="section-title">Folders that are private (<?= count($data['folders']) ?>)</h2>
-      <?php if (empty($data['folders'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listFolders($data['folders']); ?></ul><?php endif; ?>
+    <section class="panel pv" id="pv-overview" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= $noun ?>">
+      <h2 class="section-title">What is private</h2>
+      <div class="pv-stats">
+        <?php if (count($data['folders'])): ?><div class="pv-stat"><b><?= number_format(count($data['folders'])) ?></b><span><?= count($data['folders']) === 1 ? 'private folder' : 'private folders' ?></span></div><?php endif; ?>
+        <?php if (count($data['items'])): ?><div class="pv-stat"><b><?= number_format(count($data['items'])) ?></b><span><?= count($data['items']) === 1 ? $noun : $noun . 's' ?> private on their own</span></div><?php endif; ?>
+        <?php if (count($data['shown'])): ?><div class="pv-stat"><b><?= number_format(count($data['shown'])) ?></b><span>public inside a private folder</span></div><?php endif; ?>
+      </div>
+      <?php if ($ov['private']): ?><div class="pv-grp">Private folders</div><?php foreach ($ov['private'] as $r) echo $row($r, true); ?><?php endif; ?>
+      <?php if ($ov['public']): ?><div class="pv-grp">Public folders with private <?= ENABLE_VIDEO ? 'items' : 'photos' ?></div><?php foreach ($ov['public'] as $r) echo $row($r, false); ?><?php endif; ?>
     </section>
-    <section class="panel">
-      <h2 class="section-title"><?= ucfirst(media_word()) ?> made private (<?= count($data['items']) ?>)</h2>
-      <?php if (empty($data['items'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listItems($data['items']); ?></ul><?php endif; ?>
-    </section>
-    <section class="panel">
-      <h2 class="section-title">Items public inside a private folder (<?= count($data['shown']) ?>)</h2>
-      <?php if (empty($data['shown'])): ?><p class="muted">None.</p><?php else: ?><ul class="hidden-list"><?php $listItems($data['shown']); ?></ul><?php endif; ?>
-    </section>
+    <div class="pv-toast" id="pv-toast" role="status" aria-live="polite" hidden></div>
+    <div class="admin-modal" id="pt-modal" role="dialog" aria-modal="true" aria-labelledby="pt-modal-title" hidden>
+      <div class="admin-modal-card">
+        <h3 id="pt-modal-title">Make this folder public?</h3>
+        <p class="hint" id="pt-folder" style="margin:0 0 8px"></p>
+        <div class="pm-row pm-stay"><?= ui_icon('lock') ?><span><strong id="pt-stay">0 photos</strong> <span id="pt-stay-v">stay</span> private</span></div>
+        <div class="pm-row pm-open"><?= ui_icon('unlock') ?><span><strong id="pt-open">0 photos</strong> <span id="pt-open-v">become</span> public</span></div>
+        <p class="hint">Anyone with the link will see those. Not right? Cancel, mark more photos private first, then come back.</p>
+        <div class="pm-btns"><button type="button" class="secondary" id="pt-cancel">Cancel</button><button type="button" id="pt-ok">Make public</button></div>
+      </div>
+    </div>
 <?php
 }
 
@@ -6928,6 +7025,55 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .js-tabs .tab-panel { display:none; }
   .js-tabs .tab-panel.active { display:block; }
   .tab-panel > .panel + .panel, .tab-panel > .flash + .panel { margin-top:0; }
+  /* The Private tab: what is private, one line per folder, each opening to its photos. */
+  .pv-stats { display:flex; gap:28px; flex-wrap:wrap; margin:4px 0 2px; }
+  .pv-stat b { display:block; font-size:1.5rem; line-height:1.2; }
+  .pv-stat span { font-size:0.8rem; color:var(--muted); }
+  .pv-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:20px 0 4px; }
+  .pv-row { border-top:1px solid #26262a; }
+  .pv-grp + .pv-row { border-top:0; }
+  .pv-row summary { display:flex; align-items:center; gap:12px; padding:12px 4px; cursor:pointer; list-style:none; border-radius:8px; transition:background .15s; }
+  .pv-row summary::-webkit-details-marker { display:none; }
+  .pv-row summary:hover { background:rgba(255,255,255,0.04); }
+  .pv-row summary:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .pv-ic { width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; }
+  .pv-ic .ico { width:15px; height:15px; }
+  .pv-ic.own { background:rgba(237,66,69,0.92); color:#fff; }
+  .pv-ic.pub { background:#26262a; color:var(--muted); }
+  .pv-nm { flex:1; min-width:0; display:block; }
+  .pv-name { display:block; font-weight:600; font-size:0.95rem; overflow-wrap:anywhere; }
+  .pv-sub { display:block; font-size:0.82rem; color:var(--muted); margin-top:2px; }
+  .pv-chev { color:var(--muted); display:flex; transition:transform .15s; }
+  .pv-chev .ico { width:18px; height:18px; }
+  .pv-row[open] .pv-chev { transform:rotate(180deg); }
+  .pv-xp { padding:2px 4px 16px 44px; }
+  .pv-grid { display:flex; flex-wrap:wrap; gap:10px; margin-top:2px; }
+  .pv-grid + .pv-grid { margin-top:10px; }
+  .pv-grid[hidden] { display:none; }
+  .pv-th { position:relative; width:84px; height:84px; border-radius:8px; overflow:hidden; background:#26262a; display:block; }
+  .pv-img { display:block; width:100%; height:100%; }
+  .pv-img img { width:100%; height:100%; object-fit:cover; display:block; }
+  .pv-lock { display:none; position:absolute; left:5px; bottom:5px; width:28px; height:28px; padding:0; border-radius:50%; align-items:center; justify-content:center; color:#fff; border:1px solid rgba(255,255,255,0.35); cursor:pointer; transition:transform .12s, box-shadow .12s, background .15s; }
+  .js-tabs .pv-lock { display:flex; }
+  .pv-lock .ico { width:15px; height:15px; }
+  .pv-lock.own { background:rgba(237,66,69,0.92); }
+  .pv-lock.pub { background:rgba(0,0,0,0.62); }
+  .pv-lock::after { content:''; position:absolute; inset:-6px; }   /* a bigger target for a finger */
+  @media (hover: hover) { .pv-lock:hover { transform:scale(1.14); box-shadow:0 0 0 2px #fff; background:var(--accent); border-color:#fff; } }
+  .pv-lock:active { transform:scale(0.92); }
+  .pv-lock:disabled { opacity:.4; pointer-events:none; }
+  .pv-lock:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+  .pv-hint { font-size:0.8rem; color:var(--muted); margin:10px 0 0; line-height:1.45; }
+  .pv-links { margin:12px 0 0; font-size:0.9rem; line-height:1.9; }
+  .pv-lnk { color:#aab2ff; text-decoration:none; border-radius:4px; transition:background .15s, box-shadow .15s; }
+  .pv-lnk:hover { background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); }
+  .pv-sep { color:#55555c; margin:0 8px; }
+  .pv-showall { margin-top:10px; color:#aab2ff; font-size:0.85rem; }
+  .pv-toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:150; background:#26262a; border:1px solid #34343a; border-radius:10px; padding:10px 16px; font-size:0.9rem; box-shadow:0 8px 28px rgba(0,0,0,0.5); max-width:calc(100vw - 32px); }
+  .pv-toast[hidden] { display:none; }
+  .pv-toast button { color:#aab2ff; font-weight:600; margin-left:10px; }
+  .pv-toast.err { border-color:rgba(237,66,69,0.6); color:#ff9a9c; }
+  @media (max-width:600px) { .pv-xp { padding-left:4px; } .pv-th { width:76px; height:76px; } .pv-stats { gap:18px; } }
   .hidden-list { margin:0; padding-left:20px; }
   .hidden-list li { margin-bottom:6px; font-size:0.9rem; }
   .hidden-list a { color:#aab2ff; }
@@ -7274,7 +7420,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <div id="server-probe" hidden data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>"></div>
 <?php if ($adminHidden): ?>
   <div class="tab-panel" data-tab="hidden">
-<?php render_admin_hidden_panel($adminHidden); ?>
+<?php render_admin_hidden_panel($adminHidden, $csrfToken); ?>
   </div>
 <?php endif; ?>
   <div class="tab-panel" data-tab="settings">
@@ -7928,6 +8074,94 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       det.addEventListener('sf-changed', soon);
     });
   });
+  // The Private tab: a lock on a photo's thumbnail changes it on the spot (with an Undo), "Show all" opens a long row, and
+  // "Make public…" asks first, with the counts, then opens the folder. The list is fetched again after every change so its numbers
+  // are the server's, not guessed here; the rows that were open stay open.
+  (function () {
+    var box = document.getElementById('pv-overview'); if (!box) return;
+    var csrf = box.getAttribute('data-csrf') || '', noun = box.getAttribute('data-noun') || 'photo';
+    var toast = document.getElementById('pv-toast'), modal = document.getElementById('pt-modal'), pending = null, toastTimer = null;
+    function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
+    function say(text, undo, bad) {
+      clearTimeout(toastTimer); toast.className = 'pv-toast' + (bad ? ' err' : ''); toast.textContent = text + ' ';
+      if (undo) {
+        var b = document.createElement('button'); b.type = 'button'; b.className = 'linklike'; b.textContent = 'Undo';
+        b.addEventListener('click', function () { toast.hidden = true; undo(); }); toast.appendChild(b);
+      }
+      toast.hidden = false; toastTimer = setTimeout(function () { toast.hidden = true; }, undo ? 8000 : 4000);
+    }
+    function post(folder, fields) {
+      var body = new URLSearchParams(); body.set('csrf_token', csrf);
+      Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+      return fetch('?admin' + (folder ? '&folder=' + encodeURIComponent(folder) : ''), { method: 'POST', credentials: 'same-origin', body: body.toString(),
+          headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
+    }
+    function failed(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', null, true); }
+    function refresh() {
+      var openKeys = [].map.call(box.querySelectorAll('details.pv-row[open]'), function (d) { return d.getAttribute('data-key'); });
+      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html'), fresh = doc.getElementById('pv-overview');
+        if (!fresh) { location.reload(); return; }   // nothing is private any more: the tab is gone
+        box.innerHTML = fresh.innerHTML;
+        [].forEach.call(box.querySelectorAll('details.pv-row'), function (d) { if (openKeys.indexOf(d.getAttribute('data-key')) >= 0) d.open = true; });
+        var c = document.querySelector('.side-hidden .count'), fc = doc.querySelector('.side-hidden .count');
+        if (c && fc) c.textContent = fc.textContent;
+      });
+    }
+    function setPhoto(folder, bare, fields, done) {
+      var f = { action: 'set_item_flag', file: bare, flag: 'private' };
+      Object.keys(fields).forEach(function (k) { f[k] = fields[k]; });
+      return post(folder, f).then(function (j) { if (!j.ok) throw new Error(j.text || 'Not saved'); return refresh(); }).then(done);
+    }
+    box.addEventListener('click', function (e) {
+      var lock = e.target.closest ? e.target.closest('.pv-lock') : null;
+      if (lock) {
+        e.preventDefault();
+        var own = lock.getAttribute('data-own'), bare = lock.getAttribute('data-bare'), folder = lock.getAttribute('data-folder');
+        lock.disabled = true;
+        // A private photo is made public (inside a private folder that is an explicit "public"); a public one in a private folder goes back to following its folder.
+        setPhoto(folder, bare, own === 'private' ? { on: '0' } : { state: 'inherit' }, function () {
+          say(own === 'private' ? 'Made public.' : 'Back to following its folder.', function () {
+            setPhoto(folder, bare, { state: own }, function () { say('Put back.'); }).catch(failed);
+          });
+        }).catch(function (err) { lock.disabled = false; if (err && err.message && err.message !== 'session' && err.message !== 'Failed to fetch') say(err.message, null, true); else failed(err); });
+        return;
+      }
+      var more = e.target.closest ? e.target.closest('.pv-showall') : null;
+      if (more) {
+        var rest = more.parentNode.querySelector('.pv-rest'); if (rest) rest.hidden = false;
+        more.hidden = true; return;
+      }
+      var mk = e.target.closest ? e.target.closest('.pv-makepub') : null;
+      if (mk && modal) {
+        e.preventDefault();
+        var folder2 = mk.getAttribute('data-folder');
+        fetch('?admin&folder=' + encodeURIComponent(folder2) + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
+          .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+          .then(function (j) {
+            var c = j.counts || { stay: 0, open: 0 };
+            document.getElementById('pt-folder').textContent = mk.getAttribute('data-label') || folder2;
+            document.getElementById('pt-stay').textContent = word(c.stay); document.getElementById('pt-open').textContent = word(c.open);
+            document.getElementById('pt-stay-v').textContent = c.stay === 1 ? 'stays' : 'stay'; document.getElementById('pt-open-v').textContent = c.open === 1 ? 'becomes' : 'become';
+            pending = { folder: folder2, from: mk }; modal.hidden = false; document.getElementById('pt-cancel').focus();
+          }).catch(failed);
+      }
+    });
+    function closeModal() { modal.hidden = true; if (pending && pending.from && document.body.contains(pending.from)) pending.from.focus(); }
+    if (modal) {
+      document.getElementById('pt-cancel').addEventListener('click', closeModal);
+      modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
+      modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeModal(); } });
+      document.getElementById('pt-ok').addEventListener('click', function () {
+        var target = pending; modal.hidden = true; if (!target) return;
+        post(target.folder, { action: 'toggle_folder_restriction' }).then(function (j) {
+          if (!j.ok) throw new Error(j.text || 'Not saved');
+          return refresh();
+        }).then(function () { say('The folder is public now. The photos you marked private stay private.'); }).catch(failed);
+      });
+    }
+  })();
   // Private folder: a switch like the others. Switching it on saves at once; switching it off first says what will happen (how many
   // photos stay private, how many become public) and waits for a yes.
   [].forEach.call(document.querySelectorAll('.priv-folder-form'), function (form) {
@@ -10367,8 +10601,9 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     // Only the owner sees this: solid red when the folder is private on its own, dashed when only a folder above it is.
-    if ($priv['state'] === 'own') $html .= '<span class="folder-priv own" title="Private folder: visitors can\'t see it">' . ui_icon('lock') . 'Private</span>';
-    elseif ($priv['state'] === 'inh') $html .= '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
+    $pill = '';
+    if ($priv['state'] === 'own') $pill = '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
+    elseif ($priv['state'] === 'inh') $pill = '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
     if ($coverFile !== null) {
         // The picture is a square cut from the original photo (see generate_cover_jpeg): a small one for ordinary cards, and
         // a larger one offered too so a big card, or a sharp screen, takes it. The browser picks by the card's width.
@@ -10384,9 +10619,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     }
     if ($priv['stay'] > 0) {
         // The count of what is private inside is a link of its own (so the card's link ends first): to the folder with those first.
-        $spec = media_sort_spec_for_folder(resolve_real_path($dir, $folderPath));
-        $spec['private'] = true;
-        $privHref = htmlspecialchars('?folder=' . rawurlencode($folderPath) . '&sort=' . media_sort_encode($spec), ENT_QUOTES, 'UTF-8');
+        $privHref = htmlspecialchars(folder_private_first_href($dir, $folderPath), ENT_QUOTES, 'UTF-8');
         $n = (int) $priv['stay'];
         $privText = number_format($n) . ($priv['state'] === 'own' ? ($n === 1 ? ' stays private' : ' stay private') : ' private');
         $html .= '</a><span class="folder-cover-count has-priv-count"><a class="fc-main" href="' . $folderUrl . '">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8')
@@ -10395,6 +10628,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
         $html .= '<span class="folder-cover-count">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</span>';
         $html .= '</a>';
     }
+    $html .= $pill;
     $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
     $html .= '</div>';
     return $html;
@@ -10621,7 +10855,7 @@ function render_about_page() {
   <ul>
     <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
     <li><strong>Edit right on the gallery:</strong> a pencil on every photo opens its caption, link, place, private and cover switches beside or under the photo, saved as you type; <em>Select</em> makes many photos private or public, or places them next to each other by drag and drop</li>
-    <li><strong>Go through a private folder before you open it:</strong> hide a folder, mark the photos that must stay private on their own, then make the folder public knowing what visitors will see; the main page marks private folders for you (a red pill, a lock in the folder buttons, and a count you can press to see those photos first); folder settings save as you change them</li>
+    <li><strong>Go through a private folder before you open it:</strong> hide a folder, mark the photos that must stay private on their own, then make the folder public knowing what visitors will see; the main page marks private folders for you (a red pill, a lock in the folder buttons, and a count you can press to see those photos first), and the Private tab lists what is private folder by folder; folder settings save as you change them</li>
     <li>An admin for folder names and dates, notes, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
     <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>
@@ -11174,15 +11408,19 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     font-size: 0.8rem;
   }
   /* The owner's mark on a folder card: the same two pills as a photo's lock. The count of what is private inside is its own link. */
-  .folder-priv { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 0.72rem; line-height: 1; color: #fff; pointer-events: none; }
+  .folder-priv { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 0.72rem; line-height: 1; color: #fff; font-family: inherit; }
   .folder-priv .ico { width: 1em; height: 1em; }
-  .folder-priv.own { background: rgba(237,66,69,0.92); border: 1px solid rgba(255,255,255,0.35); }
-  .folder-priv.inh { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; }
+  .folder-priv.own { background: rgba(237,66,69,0.92); border: 1px solid rgba(255,255,255,0.35); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; -webkit-tap-highlight-color: transparent; }
+  .folder-priv.own::after { content: ''; position: absolute; inset: -6px; }   /* a bigger target for a finger */
+  .folder-priv.own:active { transform: scale(0.94); }
+  .folder-priv.own:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  @media (hover: hover) { .folder-priv.own:hover { background: #f4585b; transform: scale(1.06); box-shadow: 0 0 0 2px #fff; } }
+  .folder-priv.inh { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; pointer-events: none; }
   .folder-cover.has-priv .sold-badge-corner, .folder-cover.has-priv .reserved-badge-corner { top: 40px; }
   .folder-cover-count.has-priv-count { position: relative; }
   .folder-cover-count .fc-main { color: inherit; text-decoration: none; }
   .folder-cover-count .fc-main::before { content: ''; position: absolute; inset: 0; }   /* the whole line still opens the folder */
-  .folder-cover-count .fc-priv { position: relative; z-index: 1; color: #ff8a8c; text-decoration: none; padding: 2px 4px; margin: 0 -1px 0 -1px; border-radius: 6px; transition: color .15s, background .15s; }   /* the padding is the chip's room, so its edge keeps clear of the words beside it */
+  .folder-cover-count .fc-priv { position: relative; z-index: 1; white-space: nowrap; color: #ff8a8c; text-decoration: none; padding: 2px 4px; margin: 0 -1px 0 -1px; border-radius: 6px; transition: color .15s, background .15s; }   /* the padding is the chip's room, so its edge keeps clear of the words beside it */
   .folder-cover-count .fc-priv .ico { width: 0.95em; height: 0.95em; margin: 0 -1px 0 0; vertical-align: -2.5px; stroke-width: 2.2; }   /* the arrow that says it is pressable, on a phone too */
   @media (hover: hover) { .folder-cover-count .fc-priv:hover { color: #fff; background: rgba(237,66,69,0.38); } }
   .folder-cover-count .fc-priv:active { background: rgba(237,66,69,0.55); }
@@ -12122,9 +12360,12 @@ if (ENABLE_MAP && $mapPoints) {
       <span class="fpb-counts" aria-live="polite"><?= count_noun($privCounts['stay']) ?> will stay private &middot; <?= count_noun($privCounts['open']) ?> <?= (int) $privCounts['open'] === 1 ? 'becomes' : 'become' ?> public when you open it</span>
       <em class="fpb-hint">Make it public&hellip;</em></div>
   </div>
-  <div class="fp-modal" id="fp-modal" role="dialog" aria-modal="true" aria-labelledby="fp-modal-title" hidden>
+<?php endif; ?>
+<?php if (is_admin_browser() && AUTO_GROUP_BY_FOLDER): ?>
+  <div class="fp-modal" id="fp-modal" role="dialog" aria-modal="true" aria-labelledby="fp-modal-title" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" hidden>
     <div class="fp-modal-card">
       <h3 id="fp-modal-title">Make this folder public?</h3>
+      <p class="fp-hint" id="fp-folder" style="margin:0 0 8px" hidden></p>
       <div class="fp-row fp-stay"><?= ui_icon('lock') ?><span><strong id="fp-stay">0 photos</strong> <span id="fp-stay-v">stay</span> private</span></div>
       <div class="fp-row fp-open"><?= ui_icon('unlock') ?><span><strong id="fp-open">0 photos</strong> <span id="fp-open-v">become</span> public</span></div>
       <p class="fp-hint">Anyone with the link will see those. Not right? Cancel, mark more private first, then come back.</p>
@@ -13087,28 +13328,36 @@ if (ENABLE_MAP && $mapPoints) {
     openLightbox(i);
     lbEdit.open();
   }, true);
-  // The banner on a private folder's page: pressing it asks (with the counts) whether to make the folder public; only a yes does.
+  // The banner on a private folder's page, and the red Private pill on a private folder's card: pressing either asks (with the counts)
+  // whether to make the folder public; only a yes does.
   (function () {
-    const banner = document.getElementById('folder-priv-banner'), modal = document.getElementById('fp-modal');
-    if (!banner || !modal) return;
-    const folder = banner.getAttribute('data-folder'), noun = banner.getAttribute('data-noun') || 'photo', $ = function (id) { return document.getElementById(id); };
+    const modal = document.getElementById('fp-modal');
+    if (!modal) return;
+    const $ = function (id) { return document.getElementById(id); }, noun = modal.getAttribute('data-noun') || 'photo';
+    const triggers = [].slice.call(document.querySelectorAll('#folder-priv-banner, button.folder-priv.own'));
+    if (!triggers.length) return;
     const many = function (k) { return k + ' ' + noun + (k === 1 ? '' : 's'); };
     const say = function (text) {
       const t = $('owner-toast'); if (!t) return;
       t.textContent = text; t.hidden = false; clearTimeout(say.timer); say.timer = setTimeout(function () { t.hidden = true; }, 3500);
     };
     const json = function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); };
-    const closeIt = function () { modal.hidden = true; banner.focus(); };
-    const ask = function () {
+    let folder = '', from = null;
+    const closeIt = function () { modal.hidden = true; if (from) from.focus(); };
+    const ask = function (el) {
+      from = el; folder = el.getAttribute('data-folder') || '';
       fetch('?admin&folder=' + encodeURIComponent(folder) + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then(function (j) {
         const c = j.counts || { stay: 0, open: 0 };
         $('fp-stay').textContent = many(c.stay); $('fp-open').textContent = many(c.open);
         $('fp-stay-v').textContent = c.stay === 1 ? 'stays' : 'stay'; $('fp-open-v').textContent = c.open === 1 ? 'becomes' : 'become';
+        const name = $('fp-folder'); if (name) { name.textContent = el.id === 'folder-priv-banner' ? '' : (el.closest('.folder-cover') && el.closest('.folder-cover').querySelector('.folder-cover-label') ? el.closest('.folder-cover').querySelector('.folder-cover-label').textContent : folder); name.hidden = !name.textContent; }
         modal.hidden = false; $('fp-cancel').focus();
       }).catch(function () { say('Your admin session ended: sign in again'); });
     };
-    banner.addEventListener('click', ask);
-    banner.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ask(); } });
+    triggers.forEach(function (el) {
+      el.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); ask(el); });
+      el.addEventListener('keydown', function (e) { if (el.tagName !== 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); ask(el); } });
+    });
     $('fp-cancel').addEventListener('click', closeIt);
     modal.addEventListener('click', function (e) { if (e.target === modal) closeIt(); });
     modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeIt(); } });
@@ -13120,7 +13369,7 @@ if (ENABLE_MAP && $mapPoints) {
       }).then(json).then(function (j) {
         if (!j.ok) throw new Error(j.text || 'not saved');
         say('This folder is public now'); setTimeout(function () { location.reload(); }, 500);
-      }).catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); banner.focus(); });
+      }).catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); if (from) from.focus(); });
     });
   })();
 <?php endif; ?>
