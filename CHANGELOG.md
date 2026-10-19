@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
-## [2.2.0] - 2026-10-18
+## [2.2.0] - 2026-10-19
 
 ### Added
 - **A private folder can be gone through before it is opened.** A photo in a private folder now has three states, and each is drawn differently: a dashed **Folder** lock (private only because its folder is), a solid red **Private** (kept private on its own, so it stays private when the folder opens) and an open lock (public, though its folder is private). The lock on a tile, the lock in the viewer and the editor's *Private* pill all go round Folder, Private, Public, Folder; and *Select* in a private folder offers three equal buttons, *Private*, *Public* and *Folder* (back to following the folder), instead of the two. Nothing new is stored: a photo that follows its folder still has no setting of its own.
