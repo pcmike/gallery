@@ -1721,6 +1721,64 @@ try:
     finally:
         srv18.terminate(); srv18.wait()
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
+    # ---------------- a private folder shows on the main page ----------------
+    print("== private folders on the main page: a pill on the card, a count that opens the folder, a lock in the folder buttons")
+    SITE19 = WORK + "/site19"
+    for sub in ("Eurotrip/Florence", "Eurotrip/Rome", "Eurotrip/Pisa"):
+        os.makedirs(SITE19 + "/" + sub)
+        for nm in ("p1.jpg", "p2.jpg", "p3.jpg", "p4.jpg"):
+            subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE19 + "/" + sub + "/" + nm], check=True)
+    shutil.copy(HERE + "/../../../index.php", SITE19 + "/index.php"); os.utime(SITE19 + "/index.php", (time.time() - 3600,) * 2)
+    def put19(sub, data): open(SITE19 + "/" + sub + "/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps(data))
+    put19("Eurotrip/Florence", {"items": {"p2.jpg": {"restriction": "private"}, "p3.jpg": {"restriction": "private"}}})
+    put19("Eurotrip/Rome", {"items": {"p4.jpg": {"restriction": "private"}}, "restriction": "private"})
+    put19("Eurotrip/Pisa", {"items": {}, "restriction": "private"})
+    open(SITE19 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "p19-admin-pw"], capture_output=True, text=True).stdout, "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    s19 = socket.socket(); s19.bind(("127.0.0.1", 0)); P19 = s19.getsockname()[1]; s19.close(); B19 = f"http://127.0.0.1:{P19}"
+    srv19 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P19}", "-t", SITE19], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1100, 900)
+        vis19 = urllib.request.urlopen(B19 + "/?folder=Eurotrip").read().decode("utf-8", "replace")
+        ok('class="folder-priv' not in vis19 and 'class="fc-priv"' not in vis19 and "(2 private)" not in vis19, "[privacy] a visitor sees no pill and no count on the folder cards")
+        b.goto(B19 + "/?admin&folder=Eurotrip", 1.2)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "p19-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.goto(B19 + "/?folder=Eurotrip", 1.5)
+        cards = b.js("""(() => Object.fromEntries([...document.querySelectorAll('.folder-cover')].map(c => [c.querySelector('.folder-cover-label').textContent, {pill: (c.querySelector('.folder-priv') || {}).textContent || '', dashed: !!c.querySelector('.folder-priv.inh'), count: c.querySelector('.folder-cover-count').textContent.trim()}])))()""")
+        ok(cards.get("Florence", {}).get("pill") == "" and cards.get("Rome", {}).get("pill") == "Private" and cards.get("Pisa", {}).get("pill") == "Private", "[privacy] the owner sees the red Private pill on the private folders' cards and none on the public one", str(cards))
+        ok(cards["Florence"]["count"] == "4 photos (2 private)" and cards["Rome"]["count"] == "4 photos (1 stays private)" and cards["Pisa"]["count"] == "4 photos", "[privacy] the count of what is private sits at the end of the card's own count line, and a folder with none keeps the plain line", str(cards))
+        geo = b.js("""(() => { const c = [...document.querySelectorAll('.folder-cover')].find(x => x.querySelector('.folder-cover-label').textContent === 'Rome'), r = c.getBoundingClientRect(), p = c.querySelector('.folder-priv').getBoundingClientRect(), l = c.querySelector('.folder-permalink-copy').getBoundingClientRect();
+            const cnt = c.querySelector('.folder-cover-count'), line = cnt.getBoundingClientRect(), pv = c.querySelector('.fc-priv');
+            return {inside: p.left >= r.left && p.top >= r.top && p.right <= r.right, apart: p.right <= l.left, oneLine: line.height < 30, red: getComputedStyle(pv).color}; })()""")
+        ok(geo["inside"] and geo["apart"] and geo["oneLine"], "[privacy] the pill sits in the card's corner clear of the link button, and the count stays on one line", str(geo))
+        gap19 = b.js("""(() => { const c = [...document.querySelectorAll('.folder-cover')].find(x => x.querySelector('.folder-cover-label').textContent === 'Florence'), m = c.querySelector('.fc-main').getBoundingClientRect(), p = c.querySelector('.fc-priv').getBoundingClientRect(); return {gap: Math.round((p.left - m.right) * 10) / 10, arrow: !!c.querySelector('.fc-priv svg.ico')}; })()""")
+        ok(gap19["gap"] >= 2 and gap19["arrow"], "[privacy] the count's chip keeps clear of the words before it, and ends with an arrow that says it can be pressed", str(gap19))
+        shot(b, "19-folder-cards")
+        b.js("document.querySelector('.fc-priv').click()"); b.drain(1.5)
+        order19 = b.js("[...document.querySelectorAll('.gallery .card[data-file]')].map(c => c.getAttribute('data-file').split('/').pop())")
+        ok("folder=Eurotrip%2FFlorence" in b.js("location.href") and order19[:2] == ["p2.jpg", "p3.jpg"] and order19[2:] == ["p1.jpg", "p4.jpg"], "[privacy] pressing the count opens the folder with the private photos first, the rest in their order", str(order19))
+        ok(b.js("document.querySelector('#sort-combo .sort-flag[data-flag=private]').getAttribute('aria-pressed')") == "true", "...and the sort button shows Private first as on, so the order is explained")
+        b.goto(B19 + "/?folder=Eurotrip", 1.2)
+        b.js("document.querySelector('.fc-main').click()"); b.drain(1.5)
+        ok(b.js("location.search") == "?folder=Eurotrip%2FFlorence" or b.js("location.search").startswith("?folder=Eurotrip%2F"), "[privacy] pressing the photo count itself still opens the folder, in its own order", b.js("location.search"))
+        b.goto(B19 + "/?folder=Eurotrip%2FRome", 1.5)
+        pills = b.js("""(() => [...document.querySelectorAll('.folder-pills a')].map(a => ({t: a.textContent.trim(), priv: a.classList.contains('priv'), cur: a.classList.contains('current'), icon: !!a.querySelector('svg.ico'), h: Math.round(a.getBoundingClientRect().height)})))()""")
+        byname = {x["t"]: x for x in pills}
+        ok(byname["Rome"]["priv"] and byname["Rome"]["cur"] and byname["Rome"]["icon"] and byname["Pisa"]["priv"] and byname["Pisa"]["icon"] and not byname["Florence"]["priv"] and not byname["Florence"]["icon"], "[privacy] the owner's folder buttons carry a lock in each private folder, the open one included, and none in a public one", str(pills))
+        ok(max(x["h"] for x in pills) - min(x["h"] for x in pills) <= 1, "...and the lock does not make its button taller than the others", str(pills))
+        shot(b, "19-folder-buttons")
+        # a phone
+        b.call("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True})
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
+        b.goto(B19 + "/?folder=Eurotrip&n=2", 1.5)
+        ok(b.js("document.documentElement.scrollWidth <= window.innerWidth + 1") and b.js("document.querySelector('.fc-priv').getBoundingClientRect().right <= window.innerWidth"), "[privacy] on a phone the cards, the pill and the count fit the width")
+        shot(b, "19-folder-cards-phone")
+        b.goto(B19 + "/?folder=Eurotrip%2FRome&n=3", 1.5)
+        ok(b.js("document.documentElement.scrollWidth <= window.innerWidth + 1"), "[privacy] ...and so does a folder page with the lock in its buttons")
+        ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
+    finally:
+        srv19.terminate(); srv19.wait()
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
     # ---------------- first-run setup (a gallery that was just uploaded) ----------------
     print("== first-run setup")
     SITE3 = WORK + "/site3"; os.makedirs(SITE3)

@@ -3800,6 +3800,17 @@ function folder_privacy_counts($dir, $files, $folderPath) {
     return ['stay' => $stay, 'open' => $open];
 }
 
+/** What the owner sees on a folder's card and button: whether it is private on its own ("own"), only because a folder above it is
+ *  ("inh") or neither (""), and, for the first and last, how many photos and videos under it are private (so stay hidden from a
+ *  visitor even if the folder is opened). Nothing for anyone but the owner. $withCount is false where only the state is drawn. */
+function owner_folder_privacy($dir, $files, $folderPath, $withCount = true) {
+    $none = ['state' => '', 'stay' => 0];
+    if (!AUTO_GROUP_BY_FOLDER || !is_admin_browser()) return $none;
+    $state = folder_restriction_cached($dir, $folderPath) === 'private' ? 'own' : (folder_above_is_private($dir, $folderPath) ? 'inh' : '');
+    $stay = $withCount && $state !== 'inh' ? folder_privacy_counts($dir, $files, $folderPath)['stay'] : 0;
+    return ['state' => $state, 'stay' => $stay];
+}
+
 /** Cache-Control for a photo/video response. Ordinary files are immutable
  *  and public (the URL changes when the file does not, and a CDN is welcome
  *  to hold them). A *hidden* item is only ever served to a trusted viewer,
@@ -4810,7 +4821,7 @@ function media_sort_apply($files, $dir) {
         $times = $spec['order'] === 'name' ? [] : media_taken_times($folderReal, array_map('basename', $list));
         foreach ($list as $f) {
             $info[$f] = [
-                'private' => $spec['private'] && file_is_hidden($dir, $f, $itemsData),
+                'private' => $spec['private'] && item_restriction($itemsData[$f] ?? null) === 'private',   // marked private on their own (all of a private folder is hidden, which sets nothing apart)
                 'video' => $spec['video'] && is_video_file($f),
                 'located' => $spec['located'] && photo_location_visible($itemsData[$f] ?? []),
                 't' => $spec['order'] === 'modified' ? (int) @filemtime(resolve_real_path($dir, $f)) : ($times[basename($f)] ?? 0),
@@ -9111,7 +9122,7 @@ if (isset($_GET['folder'])) {
         }
         foreach ($pillShown as $pillName) {
             $pillLabel = folder_display_meta($dir, $pillPrefix . $pillName)['label'];
-            $folderPills[] = ['?folder=' . rawurlencode($pillPrefix . $pillName), $pillLabel !== '' ? $pillLabel : $pillName, $pillName === $pillHere];
+            $folderPills[] = ['?folder=' . rawurlencode($pillPrefix . $pillName), $pillLabel !== '' ? $pillLabel : $pillName, $pillName === $pillHere, owner_folder_privacy($dir, $files, $pillPrefix . $pillName, false)['state']];
         }
     }
     $currentFolderMeta = folder_display_meta($dir, $currentFolderPath);
@@ -10342,17 +10353,22 @@ function media_count_label($files) {
 }
 
 function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualCover = null, $idKey = null, $meta = null, $status = '', $accentColor = null) {
+    global $dir;
+    $priv = owner_folder_privacy($dir, $recursiveFiles, $folderPath);   // the owner's lock and count; empty for everyone else
     $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
     $coverFile = pick_folder_cover($recursiveFiles, $manualCover);
     $count = count($recursiveFiles);
     $slug = slugify($idKey ?? $folderPath);
     // The paragraph that mentions a folder can mark it sold or reserved, or give it a colour, like any other group.
     $style = $accentColor ? ' style="box-shadow: 0 0 0 3px ' . htmlspecialchars($accentColor, ENT_QUOTES, 'UTF-8') . ';"' : '';
-    $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
+    $html = '<div class="folder-cover' . ($status ? ' ' . $status : '') . ($priv['state'] !== '' ? ' has-priv' : '') . '" id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '"' . $style . '>';
     $coverParts = $coverFile !== null ? video_tile_parts($coverFile) : ['attrs' => '', 'inner' => ''];
     $html .= '<a class="folder-cover-link' . ($coverParts['inner'] !== '' ? ' vtile' : '') . '" href="' . $folderUrl . '">';
     if ($status === 'sold') $html .= '<span class="sold-badge-corner">SOLD</span>';
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
+    // Only the owner sees this: solid red when the folder is private on its own, dashed when only a folder above it is.
+    if ($priv['state'] === 'own') $html .= '<span class="folder-priv own" title="Private folder: visitors can\'t see it">' . ui_icon('lock') . 'Private</span>';
+    elseif ($priv['state'] === 'inh') $html .= '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
     if ($coverFile !== null) {
         // The picture is a square cut from the original photo (see generate_cover_jpeg): a small one for ordinary cards, and
         // a larger one offered too so a big card, or a sharp screen, takes it. The browser picks by the card's width.
@@ -10366,8 +10382,19 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if (!empty($meta['dates'])) {
         $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
-    $html .= '<span class="folder-cover-count">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</span>';
-    $html .= '</a>';
+    if ($priv['stay'] > 0) {
+        // The count of what is private inside is a link of its own (so the card's link ends first): to the folder with those first.
+        $spec = media_sort_spec_for_folder(resolve_real_path($dir, $folderPath));
+        $spec['private'] = true;
+        $privHref = htmlspecialchars('?folder=' . rawurlencode($folderPath) . '&sort=' . media_sort_encode($spec), ENT_QUOTES, 'UTF-8');
+        $n = (int) $priv['stay'];
+        $privText = number_format($n) . ($priv['state'] === 'own' ? ($n === 1 ? ' stays private' : ' stay private') : ' private');
+        $html .= '</a><span class="folder-cover-count has-priv-count"><a class="fc-main" href="' . $folderUrl . '">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8')
+               . '</a> <a class="fc-priv" href="' . $privHref . '" title="Open the folder with those first">(' . $privText . ui_icon('chev-right') . ')</a></span>';
+    } else {
+        $html .= '<span class="folder-cover-count">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</span>';
+        $html .= '</a>';
+    }
     $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
     $html .= '</div>';
     return $html;
@@ -10594,7 +10621,7 @@ function render_about_page() {
   <ul>
     <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
     <li><strong>Edit right on the gallery:</strong> a pencil on every photo opens its caption, link, place, private and cover switches beside or under the photo, saved as you type; <em>Select</em> makes many photos private or public, or places them next to each other by drag and drop</li>
-    <li><strong>Go through a private folder before you open it:</strong> hide a folder, mark the photos that must stay private on their own, then make the folder public knowing what visitors will see; folder settings save as you change them</li>
+    <li><strong>Go through a private folder before you open it:</strong> hide a folder, mark the photos that must stay private on their own, then make the folder public knowing what visitors will see; the main page marks private folders for you (a red pill, a lock in the folder buttons, and a count you can press to see those photos first); folder settings save as you change them</li>
     <li>An admin for folder names and dates, notes, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
     <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>
@@ -10851,6 +10878,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   header nav.folder-pills a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
   header nav.folder-pills a.current { color: #fff; background: var(--accent); border-color: var(--accent); }
   header nav.folder-pills a.all { border-style: dashed; }
+  header nav.folder-pills a.priv { display: inline-flex; align-items: center; gap: 6px; }   /* the owner's lock in a private folder's button */
+  header nav.folder-pills a.priv .ico { width: 0.95em; height: 0.95em; color: #ff8a8c; }
+  header nav.folder-pills a.priv.current .ico { color: #fff; }
   header h1 {
     margin: 0 0 4px;
     font-size: 1.6rem;
@@ -11143,6 +11173,20 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     color: var(--muted);
     font-size: 0.8rem;
   }
+  /* The owner's mark on a folder card: the same two pills as a photo's lock. The count of what is private inside is its own link. */
+  .folder-priv { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 0.72rem; line-height: 1; color: #fff; pointer-events: none; }
+  .folder-priv .ico { width: 1em; height: 1em; }
+  .folder-priv.own { background: rgba(237,66,69,0.92); border: 1px solid rgba(255,255,255,0.35); }
+  .folder-priv.inh { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; }
+  .folder-cover.has-priv .sold-badge-corner, .folder-cover.has-priv .reserved-badge-corner { top: 40px; }
+  .folder-cover-count.has-priv-count { position: relative; }
+  .folder-cover-count .fc-main { color: inherit; text-decoration: none; }
+  .folder-cover-count .fc-main::before { content: ''; position: absolute; inset: 0; }   /* the whole line still opens the folder */
+  .folder-cover-count .fc-priv { position: relative; z-index: 1; color: #ff8a8c; text-decoration: none; padding: 2px 4px; margin: 0 -1px 0 -1px; border-radius: 6px; transition: color .15s, background .15s; }   /* the padding is the chip's room, so its edge keeps clear of the words beside it */
+  .folder-cover-count .fc-priv .ico { width: 0.95em; height: 0.95em; margin: 0 -1px 0 0; vertical-align: -2.5px; stroke-width: 2.2; }   /* the arrow that says it is pressable, on a phone too */
+  @media (hover: hover) { .folder-cover-count .fc-priv:hover { color: #fff; background: rgba(237,66,69,0.38); } }
+  .folder-cover-count .fc-priv:active { background: rgba(237,66,69,0.55); }
+  .folder-cover-count .fc-priv:focus-visible { outline: 2px solid #ff8a8c; outline-offset: 2px; }
   .folder-permalink-copy {
     position: absolute;
     top: 8px;
@@ -11740,7 +11784,7 @@ if (ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems))
     <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
     <?php if (count($folderPills) >= 2): ?>
     <nav class="folder-pills" aria-label="Other folders here">
-      <?php foreach ($folderPills as [$pillHref, $pillText, $pillCurrent]): ?><a href="<?= htmlspecialchars($pillHref, ENT_QUOTES, 'UTF-8') ?>"<?= $pillCurrent ? ' class="current" aria-current="page"' : '' ?>><?= htmlspecialchars($pillText, ENT_QUOTES, 'UTF-8') ?></a><?php endforeach; ?>
+      <?php foreach ($folderPills as [$pillHref, $pillText, $pillCurrent, $pillPriv]): ?><a href="<?= htmlspecialchars($pillHref, ENT_QUOTES, 'UTF-8') ?>" class="<?= trim(($pillCurrent ? 'current' : '') . ($pillPriv !== '' ? ' priv' : '')) ?>"<?= $pillCurrent ? ' aria-current="page"' : '' ?><?= $pillPriv !== '' ? ' title="' . ($pillPriv === 'own' ? 'Private folder' : 'Hidden because a folder above it is private') . '"' : '' ?>><?= $pillPriv !== '' ? ui_icon('lock') : '' ?><?= htmlspecialchars($pillText, ENT_QUOTES, 'UTF-8') ?></a><?php endforeach; ?>
       <?php if ($folderPillsAll !== null): ?><a class="all" href="<?= htmlspecialchars($folderPillsAll, ENT_QUOTES, 'UTF-8') ?>">All</a><?php endif; ?>
     </nav>
     <?php endif; ?>

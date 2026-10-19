@@ -282,6 +282,8 @@ A folder you have made private hides everything in it, and nothing is stored on 
 
 A photo that sits inside another private folder stays private too, and is counted with the ones that stay. The counts include everything beneath the folder.
 
+**The main page shows you which folders are private** (you only; a visitor sees none of it, nor the folders). A folder you made private has a red **Private** pill on its card, a folder hidden only because one above it is private has the dashed **Folder** pill, and in the row of folder buttons at the top of a folder's page each private folder has a small lock. Where a folder holds photos that are private on their own, its count line says so at the end: "253 photos · 7 videos (2 private ›)", or "36 photos · 6 videos (3 stay private ›)" on a private folder (the same number as its banner). **Press that bracket** and the folder opens with those photos first, in the order it already had; the sort button's *Private items first* shows as on, and the choice lasts for that visit only. In **Private items first**, "private" means photos marked private on their own (in a private folder everything is hidden, which would set none of them apart).
+
 ## Downloads
 
 **Original.** The viewer's caption bar has a download button that saves the file exactly as it sits on the server (a HEIC stays HEIC). On a phone it opens the share sheet, so **Save Image** / **Save Video** puts it straight into Photos (anywhere that isn't possible it is a normal download).
