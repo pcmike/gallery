@@ -1624,9 +1624,11 @@ function archive_stream($entries, $zip64) {
         $fh = @fopen($e['path'], 'rb');
         if (!$fh) return;   // the connection ends short of its length, so the download shows as failed, never as a good file
         $ctx = hash_init('crc32b');
-        for ($left = $size; $left > 0;) {
+        for ($left = $size, $at0 = 0; $left > 0;) {
             $chunk = fread($fh, min(1048576, $left));
             if ($chunk === false || $chunk === '') { fclose($fh); return; }
+            if (!empty($e['patches'])) $chunk = apply_patches_to_chunk($chunk, $at0, $e['patches']);   // same length: the size worked out in advance stays right
+            $at0 += strlen($chunk);
             hash_update($ctx, $chunk);
             $emit($chunk);
             $left -= strlen($chunk);
@@ -1664,15 +1666,35 @@ function archive_take_slot() {
     return null;
 }
 
+/** The files of $files this visitor may have in a ZIP: everything for the owner and the private-view password; for someone using a
+ *  share link, what their link's ZIP setting covers (a private item) and public items only where the gallery lets visitors
+ *  download; nothing for anyone else. */
+function archive_files_for_viewer($dir, $files) {
+    if (is_revealed()) return $files;
+    $l = link_viewer();
+    if ($l === null || ($l['zip']['mode'] ?? 'off') === 'off') return [];
+    global $itemsData;
+    return array_values(array_filter($files, function ($f) use ($dir, $l, $itemsData) {
+        if (!file_is_hidden($dir, $f, $itemsData)) return ENABLE_PUBLIC_DOWNLOAD;
+        return link_capability_allows($l, 'zip', $dir, $f);
+    }));
+}
+
 /** ?archive[&folder=...]: the originals of this gallery or folder as one ZIP. $files is every file the visitor may see;
- *  $folder is the folder asked for (null for the whole gallery). Signed-in visitors only, files exactly as they are. */
+ *  $folder is the folder asked for (null for the whole gallery). The owner and the private-view password get files exactly as
+ *  they are; someone using a share link gets what the link allows, with any location the gallery hides taken out. */
 function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
     send_sensitive_page_headers();
-    if (!is_revealed()) {
-        http_response_code(404);
-        return;
+    $files = archive_files_for_viewer($dir, $files);
+    $entries = $files ? archive_entries($dir, $files) : [];
+    if ($entries && !viewer_sees_all_locations()) {
+        global $itemsData;
+        foreach ($entries as $i => $e) {
+            $plan = visitor_scrub_plan($e['path'], $e['rel'], $itemsData);
+            if ($plan === null) unset($entries[$i]); else $entries[$i]['patches'] = $plan;   // a file whose location can't be taken out safely is left out
+        }
+        $entries = array_values($entries);
     }
-    $entries = archive_entries($dir, $files);
     if (!$entries) {
         http_response_code(404);
         return;
@@ -3154,6 +3176,7 @@ foreach ($allFiles as $privateProbe) {
 // every member of a group ends up hidden, the group itself disappears
 // here too, rather than rendering an empty "0 photos" box, which would
 // be its own tell that something's being withheld.
+if (!is_revealed() && ($linkHere = link_viewer()) !== null && ($linkHere['scope']['type'] ?? 'all') !== 'all') link_scan_ambiguity($dir, $allFiles);   // a folder copied with its id is shown to nobody
 if (!is_revealed()) {
     foreach ($groups as $key => $groupFiles) {
         $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData) {
@@ -3868,6 +3891,11 @@ function file_cache_control($dir, $file, $itemsData) {
         : 'public, max-age=31536000, immutable';
 }
 
+/** Whether a folder is private (on its own, or because a folder above it is). */
+function folder_is_private($dir, $folderPath) {
+    return folder_restriction_cached($dir, $folderPath) === 'private' || folder_above_is_private($dir, $folderPath);
+}
+
 /** One folder's own restriction, read once per request — file_is_hidden()
  *  asks about every ancestor of every file, so without this a deep tree
  *  would re-read the same small JSON files thousands of times.
@@ -4066,9 +4094,107 @@ function link_viewer() {
 /** A person using a share link, and not someone with the owner's or the private-view sign-in. */
 function viewer_is_link() { return !is_revealed() && link_viewer() !== null; }
 
-/** May the link $l show this item? (Scopes other than "everything" arrive with the folder and photo checks.) */
+/** Whether a link shows the "expires on" line at the top of the gallery: its own choice, else the site setting; never when it has no end date. */
+function link_headsup_on($l) {
+    $h = $l['headsUp'] ?? 'default';
+    return ($h === 'on' || ($h === 'default' && SHARE_HEADS_UP)) && (int) ($l['endsAt'] ?? 0) > 0;
+}
+
+/** The thin line itself. The page's script puts the time in the visitor's own zone, turns it amber in the last day and remembers a dismissal. */
+function render_link_headsup($l) {
+    $ends = (int) $l['endsAt'];
+    return '<div class="link-headsup" id="link-headsup" role="status" data-ends="' . $ends . '" data-key="' . htmlspecialchars($l['id'] . '.' . $ends, ENT_QUOTES, 'UTF-8') . '">'
+        . '<span class="lh-t">The link being used to access this media expires on <time datetime="' . gmdate('c', $ends) . '">' . htmlspecialchars(gmdate('D, M j, g:i a', $ends) . ' UTC', ENT_QUOTES, 'UTF-8') . '</time>.</span>'
+        . '<button type="button" class="lh-x" aria-label="Dismiss" title="Dismiss">&times;</button></div>';
+}
+
+/* A folder's hidden id. A share link limited to chosen folders remembers each by an id kept in the folder's own settings file
+ * (stamped the first time a link covers it), not by its name: renaming or moving the folder keeps the link working, a folder
+ * deleted or wiped is simply gone, and a new folder that happens to reuse the old name has no id and is not covered. */
+
+function folder_id_read($folderReal) {
+    $id = items_read($folderReal)['folderId'] ?? '';
+    return is_string($id) && preg_match('/^[0-9a-f]{12}$/', $id) ? $id : '';
+}
+
+/** The folder's id, giving it one first if it has none. '' when that can't be written (the folder isn't writable). */
+function folder_id_stamp($folderReal) {
+    $id = folder_id_read($folderReal);
+    if ($id !== '') return $id;
+    $new = bin2hex(random_bytes(6));
+    $failedBefore = !empty($GLOBALS['__data_write_failed']);
+    $GLOBALS['__data_write_failed'] = false;
+    items_update($folderReal, function (&$d) use ($new) {
+        if (!is_string($d['folderId'] ?? null) || $d['folderId'] === '') $d['folderId'] = $new;
+    });
+    $failed = !empty($GLOBALS['__data_write_failed']);
+    $GLOBALS['__data_write_failed'] = $failedBefore || $failed;
+    return $failed ? '' : folder_id_read($folderReal);
+}
+
+/** The id of the folder at this relative path ('' is the gallery's own folder), read once per request. */
+function folder_id_cached($dir, $rel) {
+    static $cache = [];
+    if (!isset($cache[$rel])) $cache[$rel] = folder_id_read($rel === '' ? $dir : resolve_real_path($dir, $rel));
+    return $cache[$rel];
+}
+
+/** Every id found among the folders that hold $files: id => the relative paths that carry it (more than one means a folder was copied). */
+function folder_id_map($dir, $files) {
+    $map = [];
+    foreach (all_folder_paths($files) as $rel) {
+        $id = folder_id_cached($dir, $rel);
+        if ($id !== '') $map[$id][] = $rel;
+    }
+    return $map;
+}
+
+/** The ids that more than one folder carries: they point at nothing until the owner sorts it out. Kept in the links file so the
+ *  routes that answer before the tree is scanned know too. */
+function link_ambiguous_set($set = null) {
+    static $cache = null;
+    if ($set !== null) { $cache = $set; return $cache; }
+    if ($cache === null) $cache = array_fill_keys(array_filter((array) (links_read()['ambiguous'] ?? []), 'is_string'), true);
+    return $cache;
+}
+function link_scan_ambiguity($dir, $allFiles) {
+    $dups = [];
+    foreach (folder_id_map($dir, $allFiles) as $id => $paths) if (count($paths) > 1) $dups[$id] = true;
+    $stored = array_keys(link_ambiguous_set());
+    $now = array_keys($dups); sort($stored); sort($now);
+    if ($stored !== $now) links_update(function (&$d) use ($now) { $d['ambiguous'] = $now; });
+    link_ambiguous_set($dups);
+}
+
+/** True if the item is inside one of the folders with these ids (the folder it is in, or any folder above it). */
+function link_item_under_folder_ids($dir, $file, $fids) {
+    $set = array_fill_keys(array_filter((array) $fids, 'is_string'), true);
+    if (!$set) return false;
+    $amb = link_ambiguous_set();
+    $parts = explode('/', $file); array_pop($parts);
+    $prefix = '';
+    foreach ($parts as $seg) {
+        $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
+        $id = folder_id_cached($dir, $prefix);
+        if ($id !== '' && isset($set[$id]) && !isset($amb[$id])) return true;
+    }
+    return false;
+}
+
+/** May the link $l show this item? */
 function link_allows_item($l, $dir, $file) {
-    return ($l['scope']['type'] ?? '') === 'all';
+    $type = $l['scope']['type'] ?? '';
+    if ($type === 'all') return true;
+    if ($type === 'folders') return link_item_under_folder_ids($dir, $file, $l['scope']['folders'] ?? []);
+    if ($type === 'photos') {
+        $set = [];
+        foreach ((array) ($l['scope']['photos'] ?? []) as $p) if (is_array($p) && is_string($p['fid'] ?? null) && is_string($p['name'] ?? null)) $set[$p['fid'] . "\0" . $p['name']] = true;
+        if (!$set) return false;
+        $slash = strrpos($file, '/');
+        $fid = folder_id_cached($dir, $slash === false ? '' : substr($file, 0, $slash));
+        return $fid !== '' && !isset(link_ambiguous_set()[$fid]) && isset($set[$fid . "\0" . basename($file)]);
+    }
+    return false;
 }
 
 /** May this visitor see the item (a public one, or a private one they were given)? */
@@ -4082,7 +4208,9 @@ function viewer_may_see_item($dir, $file, $itemsData) {
 /** Does the link allow $cap ('downloads' or 'zip') for this item? */
 function link_capability_allows($l, $cap, $dir, $file) {
     $mode = $l[$cap]['mode'] ?? 'off';
-    return $mode === 'all';
+    if ($mode === 'all') return true;
+    if ($mode === 'some') return link_item_under_folder_ids($dir, $file, $l[$cap]['folders'] ?? []);
+    return false;
 }
 
 /** May this visitor download the original of an item they can see? The owner and the private-view password: always. Everyone
@@ -4124,9 +4252,34 @@ function link_page_title($l, $dir) {
     return gallery_title_early($dir);
 }
 
-/** Where pressing "Open the gallery" leads. */
+/** A folder's last known path (from the links file), if the folder is still there carrying that id. */
+function link_folder_path_hint($fid) {
+    $rel = (string) (links_read()['folderIndex'][$fid] ?? '');
+    if ($rel === '') return null;
+    $real = resolve_real_path(__DIR__, $rel);
+    return is_dir($real) && folder_id_read($real) === $fid ? $rel : null;
+}
+
+/** Where pressing "Open the gallery" leads: the front page, the folder the link opens in, or (for a link to photos) the first photo. */
 function link_open_in_href($l) {
-    return gallery_root_href();
+    $root = gallery_root_href();
+    if (($l['scope']['type'] ?? '') === 'photos') {
+        $p = $l['scope']['photos'][0] ?? null;
+        if (is_array($p) && is_string($p['fid'] ?? null) && is_string($p['name'] ?? null)) {
+            $rel = $p['fid'] === folder_id_read(__DIR__) ? '' : link_folder_path_hint($p['fid']);
+            if ($rel !== null) {
+                $file = ($rel === '' ? '' : $rel . '/') . $p['name'];
+                if (is_file(resolve_real_path(__DIR__, $file))) return $root . '?' . ($rel !== '' ? 'folder=' . rawurlencode($rel) . '&' : '') . 'photo=' . rawurlencode($file);
+            }
+        }
+        return $root;
+    }
+    $in = (string) ($l['openIn'] ?? '');
+    if ($in !== '') {
+        $rel = link_folder_path_hint($in);
+        if ($rel !== null) return $root . '?folder=' . rawurlencode($rel);
+    }
+    return $root;
 }
 
 /** A link's addresses: the tidy one (needs the server rule) and the one that always works. */
@@ -4765,7 +4918,7 @@ function items_path($folderPath) {
  *  locationEnabled is this folder's own
  *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => []];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
 }
 
 function items_read($folderPath) {
@@ -5853,7 +6006,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     }
 
     if (strncmp($action, 'link_', 5) === 0) {   // the Share links tab (answers JSON and ends the request)
-        links_admin_action($action);
+        links_admin_action($action, $dir, $files);
     }
 
     if ($action === 'save_site_settings') {
@@ -7105,8 +7258,20 @@ function link_state_label($state) {
     return ['active' => 'Active', 'paused' => 'Paused', 'scheduled' => 'Starts later', 'expired' => 'Expired', 'used_up' => 'Used up', 'revoked' => 'Revoked'][$state] ?? $state;
 }
 
-/** The New link / Edit form's fields, checked. Returns [fields, errors]; $existing is the link being edited (its own end time may stay as it is). */
-function link_input_from_post($now, $existing = null) {
+/** The labels of the folders on the way to a folder, joined ("Eurotrip 2026 / Rome"). */
+function link_folder_label($dir, $rel) {
+    $out = []; $prefix = '';
+    foreach (explode('/', $rel) as $seg) {
+        $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
+        $label = folder_display_meta($dir, $prefix)['label'];
+        $out[] = $label !== '' ? $label : $seg;
+    }
+    return implode(' / ', $out);
+}
+
+/** The New link / Edit form's fields, checked. Returns [fields, errors]; $existing is the link being edited (its own end time may
+ *  stay as it is). Folders arrive as paths and leave as hidden ids (stamped into the folder on the way). */
+function link_input_from_post($now, $existing, $dir, $files) {
     $errors = [];
     $label = link_clip(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) ($_POST['label'] ?? ''))), 80);
     if ($label === '') $errors[] = 'Give the link a name, so you can recognise it later.';
@@ -7127,22 +7292,85 @@ function link_input_from_post($now, $existing = null) {
     if (!in_array($locations, ['public', 'all'], true)) $locations = 'public';
     $headsUp = (string) ($_POST['heads_up'] ?? 'default');
     if (!in_array($headsUp, ['default', 'on', 'off'], true)) $headsUp = 'default';
-    $downloads = (string) ($_POST['downloads'] ?? 'off');
-    if (!in_array($downloads, ['off', 'all'], true)) $downloads = 'off';
+
+    // What it covers, and where it opens. Folders come as paths; each is checked against the folders that really exist, and
+    // stamped with its hidden id (a folder that can't be written to can't be remembered, so it is refused).
+    $validFolders = array_fill_keys(all_folder_paths($files), true);
+    $validFiles = array_fill_keys($files, true);
+    $index = [];   // id => path, for the links file's list of where folders were last seen
+    $list = function ($key) { $v = json_decode((string) ($_POST[$key] ?? '[]'), true); return is_array($v) ? array_slice(array_values(array_unique(array_filter($v, 'is_string'))), 0, 60) : []; };
+    $stamp = function ($rel) use ($dir, $validFolders, &$errors, &$index) {
+        if (!isset($validFolders[$rel])) { $errors[] = 'One of the folders you chose isn\'t in the gallery any more.'; return null; }
+        $id = folder_id_stamp(resolve_real_path($dir, $rel));
+        if ($id === '') { $errors[] = 'A link can\'t be limited to "' . link_clip($rel, 60) . '": the web server can\'t write in that folder, and a link remembers a folder by a small id kept in it.'; return null; }
+        $index[$id] = $rel;
+        return $id;
+    };
+    $scopeType = (string) ($_POST['scope_type'] ?? 'all');
+    if (!in_array($scopeType, ['all', 'folders', 'photos'], true)) $scopeType = 'all';
+    $scopeFolderPaths = [];
+    $scope = ['type' => 'all', 'folders' => [], 'photos' => []];
+    if ($scopeType === 'folders') {
+        if (!AUTO_GROUP_BY_FOLDER) $errors[] = 'Turn on "Show subfolders" in Site settings to limit a link to folders.';
+        $scopeFolderPaths = $list('scope_folders');
+        if (!$scopeFolderPaths) $errors[] = 'Choose at least one folder, or choose "Everything private".';
+        $ids = [];
+        foreach ($scopeFolderPaths as $rel) { $id = $stamp($rel); if ($id !== null) $ids[] = $id; }
+        $scope = ['type' => 'folders', 'folders' => $ids, 'photos' => []];
+    } elseif ($scopeType === 'photos') {
+        $photos = [];
+        foreach ($list('scope_photos') as $rel) {
+            if (!isset($validFiles[$rel])) { $errors[] = 'One of the photos you chose isn\'t in the gallery any more.'; continue; }
+            $slash = strrpos($rel, '/');
+            $folderRel = $slash === false ? '' : substr($rel, 0, $slash);
+            $fid = $folderRel === '' ? folder_id_stamp($dir) : $stamp($folderRel);
+            if ($folderRel === '' && $fid === '') { $errors[] = 'The gallery\'s own folder can\'t be written to, so a link can\'t remember a photo in it.'; continue; }
+            if ($fid !== null) { $photos[] = ['fid' => $fid, 'name' => basename($rel)]; if ($folderRel === '') $index[$fid] = ''; }
+        }
+        if (!$photos) $errors[] = 'Choose at least one photo.';
+        $scope = ['type' => 'photos', 'folders' => [], 'photos' => $photos];
+    }
+    $underScope = function ($rel) use ($scopeType, $scopeFolderPaths) {
+        if ($scopeType !== 'folders') return true;
+        foreach ($scopeFolderPaths as $s) if ($rel === $s || str_starts_with($rel, $s . '/')) return true;
+        return false;
+    };
+    $openIn = '';
+    $inRel = trim((string) ($_POST['open_in'] ?? ''));
+    if ($inRel !== '' && $scopeType !== 'photos') {
+        if (!$underScope($inRel)) $errors[] = 'It can only open in a folder it covers.';
+        else { $id = $stamp($inRel); if ($id !== null) $openIn = $id; }
+    }
+    $cap = function ($modeKey, $listKey, $noun) use ($stamp, $list, $underScope, &$errors) {
+        $mode = (string) ($_POST[$modeKey] ?? 'off');
+        if (!in_array($mode, ['off', 'all', 'some'], true)) $mode = 'off';
+        $ids = [];
+        if ($mode === 'some') {
+            $paths = $list($listKey);
+            if (!$paths) $errors[] = 'Choose the folders ' . $noun . ' is allowed in, or pick another choice.';
+            foreach ($paths as $rel) {
+                if (!$underScope($rel)) { $errors[] = 'The ' . $noun . ' folders have to be among the folders the link covers.'; continue; }
+                $id = $stamp($rel); if ($id !== null) $ids[] = $id;
+            }
+        }
+        return ['mode' => $mode, 'folders' => $ids];
+    };
+    $downloads = $cap('downloads', 'downloads_folders', 'downloads');
+    $zip = $cap('zip', 'zip_folders', 'ZIP downloads');
     return [[
         'label' => $label, 'note' => $note, 'titleMode' => $titleMode, 'titleText' => $titleText, 'maxOpens' => $maxOpens,
-        'startsAt' => $startsAt, 'endsAt' => $endsAt, 'locations' => $locations, 'headsUp' => $headsUp, 'downloads' => $downloads,
+        'startsAt' => $startsAt, 'endsAt' => $endsAt, 'locations' => $locations, 'headsUp' => $headsUp,
+        'scope' => $scope, 'openIn' => $openIn, 'downloads' => $downloads, 'zip' => $zip, '_index' => $index,
     ], $errors];
 }
 
 function link_apply_fields(&$rec, $f) {
-    foreach (['label', 'note', 'titleMode', 'titleText', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp'] as $k) $rec[$k] = $f[$k];
-    $rec['downloads']['mode'] = $f['downloads'];
+    foreach (['label', 'note', 'titleMode', 'titleText', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'openIn', 'downloads', 'zip'] as $k) $rec[$k] = $f[$k];
 }
 
 /** The Share links tab's POST actions (link_create, link_save, link_pause, link_resume, link_revoke, link_extend, link_replace,
  *  link_delete). Always answers JSON and ends the request. */
-function links_admin_action($action) {
+function links_admin_action($action, $dir, $files) {
     $now = time();
     $bad = function ($text) { admin_json_exit(['ok' => false, 'text' => $text]); };
     if (!ENABLE_SHARE_LINKS) $bad('Share links are switched off in Site settings.');
@@ -7152,25 +7380,41 @@ function links_admin_action($action) {
         if (!empty($GLOBALS['__data_write_failed'])) $bad('Nothing was saved: the gallery\'s folder isn\'t writable by the web server.');
     };
     if ($action === 'link_create') {
-        [$f, $errors] = link_input_from_post($now);
-        if ($errors) $bad(implode(' ', $errors));
+        [$f, $errors] = link_input_from_post($now, null, $dir, $files);
+        if ($errors) $bad(implode(' ', array_unique($errors)));
         $rec = link_record_new($now);
         link_apply_fields($rec, $f);
-        links_update(function (&$d) use ($rec) { $d['links'][$rec['id']] = $rec; });
+        $GLOBALS['__data_write_failed'] = false;
+        links_update(function (&$d) use ($rec, $f) { $d['links'][$rec['id']] = $rec; foreach ($f['_index'] as $fid => $rel) $d['folderIndex'][$fid] = $rel; });
         $wrote();
         admin_json_exit(['ok' => true, 'id' => $rec['id'], 'text' => 'Link made.']);
     }
     $problem = null; $text = 'Saved.';
-    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text) {
+    $saveFields = null; $saveErrors = [];
+    if ($action === 'link_save') [$saveFields, $saveErrors] = link_input_from_post($now, ($links0 = links_read()['links'][$id] ?? null) === null ? null : $links0, $dir, $files);
+    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text, $saveFields, $saveErrors) {
         $l = $d['links'][$id] ?? null;
         if (!is_array($l)) { $problem = 'That link no longer exists.'; return; }
         $state = link_state($l, $now);
         if ($action === 'link_delete') { unset($d['links'][$id]); $text = 'Link and its log deleted.'; return; }
         if ($action === 'link_save') {
             if ($state === 'revoked') { $problem = 'A revoked link can\'t be changed.'; return; }
-            [$f, $errors] = link_input_from_post($now, $l);
-            if ($errors) { $problem = implode(' ', $errors); return; }
-            link_apply_fields($d['links'][$id], $f);
+            if ($saveErrors) { $problem = implode(' ', array_unique($saveErrors)); return; }
+            link_apply_fields($d['links'][$id], $saveFields);
+            foreach ($saveFields['_index'] as $fid => $rel) $d['folderIndex'][$fid] = $rel;
+            return;
+        }
+        if ($action === 'link_forget') {
+            // A folder that is gone: take it out of this link (and out of what it opens in, downloads and ZIPs).
+            $fid = (string) ($_POST['fid'] ?? '');
+            $had = in_array($fid, $d['links'][$id]['scope']['folders'] ?? [], true);
+            if ($had && count($d['links'][$id]['scope']['folders']) < 2) { $problem = 'A link has to keep at least one folder: pick another one with Edit, or delete the link.'; return; }
+            $keep = function ($ids) use ($fid) { return array_values(array_filter((array) $ids, function ($x) use ($fid) { return $x !== $fid; })); };
+            $d['links'][$id]['scope']['folders'] = $keep($d['links'][$id]['scope']['folders'] ?? []);
+            $d['links'][$id]['scope']['photos'] = array_values(array_filter((array) ($d['links'][$id]['scope']['photos'] ?? []), function ($p) use ($fid) { return ($p['fid'] ?? '') !== $fid; }));
+            foreach (['downloads', 'zip'] as $c) $d['links'][$id][$c]['folders'] = $keep($d['links'][$id][$c]['folders'] ?? []);
+            if (($d['links'][$id]['openIn'] ?? '') === $fid) $d['links'][$id]['openIn'] = '';
+            $text = 'Taken out of this link.';
             return;
         }
         if ($action === 'link_pause') {
@@ -7265,37 +7509,94 @@ function link_summary_html($l, $state) {
     return implode(' <span class="sl-dot">&middot;</span> ', $parts);
 }
 
-function link_scope_text($l) {
+/** Where a folder id is now: [state, path]: ok (found once), ambiguous (found in more than one folder), missing (nowhere;
+ *  the path is where it was last seen). */
+function link_fid_state($fid, $map, $index, $rootFid) {
+    if ($rootFid !== '' && $fid === $rootFid) return ['ok', ''];
+    if (isset($map[$fid])) return [count($map[$fid]) === 1 ? 'ok' : 'ambiguous', $map[$fid][0]];
+    return ['missing', (string) ($index[$fid] ?? '')];
+}
+
+/** What a link covers, for the tab: lists of [label, state] for its folders and photos, how many are not found, and the paths
+ *  the edit form starts from. */
+function link_scope_report($l, $map, $index, $dir, $rootFid) {
+    $out = ['folders' => [], 'photos' => [], 'problems' => 0, 'paths' => ['scope' => [], 'downloads' => [], 'zip' => [], 'photos' => [], 'openIn' => '']];
+    $one = function ($fid) use ($map, $index, $dir, $rootFid, &$out) {
+        [$state, $rel] = link_fid_state($fid, $map, $index, $rootFid);
+        if ($state !== 'ok') $out['problems']++;
+        return [$state, $rel, $rel === '' ? 'the gallery\'s own folder' : link_folder_label($dir, $rel)];
+    };
+    foreach ((array) ($l['scope']['folders'] ?? []) as $fid) { [$s, $rel, $label] = $one($fid); $out['folders'][] = ['fid' => $fid, 'state' => $s, 'label' => $s === 'missing' && $rel === '' ? 'a folder that is gone' : $label]; if ($s === 'ok') $out['paths']['scope'][] = $rel; }
+    foreach ((array) ($l['scope']['photos'] ?? []) as $p) {
+        if (!is_array($p)) continue;
+        [$s, $rel] = link_fid_state((string) ($p['fid'] ?? ''), $map, $index, $rootFid);
+        if ($s !== 'ok') $out['problems']++;
+        $out['photos'][] = ['fid' => $p['fid'] ?? '', 'state' => $s, 'label' => ($rel === '' ? '' : link_folder_label($dir, $rel) . ' / ') . (string) ($p['name'] ?? '')];
+        if ($s === 'ok') $out['paths']['photos'][] = ($rel === '' ? '' : $rel . '/') . $p['name'];
+    }
+    foreach (['downloads', 'zip'] as $c) foreach ((array) ($l[$c]['folders'] ?? []) as $fid) { [$s, $rel] = link_fid_state($fid, $map, $index, $rootFid); if ($s === 'ok') $out['paths'][$c][] = $rel; }
+    if (($l['openIn'] ?? '') !== '') { [$s, $rel] = link_fid_state($l['openIn'], $map, $index, $rootFid); if ($s === 'ok') $out['paths']['openIn'] = $rel; }
+    return $out;
+}
+
+function link_scope_text_html($l, $report) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $item = function ($x) use ($esc) {
+        return $x['state'] === 'ok' ? $esc($x['label']) : '<span class="sl-bad">' . $esc($x['label']) . ' <em>(' . ($x['state'] === 'ambiguous' ? 'found in more than one folder, so it is not shown' : 'can\'t be found: renamed away, moved or deleted?') . ')</em></span>';
+    };
+    $type = $l['scope']['type'] ?? 'all';
+    if ($type === 'folders') return 'Only ' . implode(', ', array_map($item, $report['folders']));
+    if ($type === 'photos') return count($report['photos']) . ' photo' . (count($report['photos']) === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 6))) . (count($report['photos']) > 6 ? ' and ' . (count($report['photos']) - 6) . ' more' : '');
     return 'Everything private';
 }
 
-function render_admin_links_panel($csrfToken) {
+function link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootFid) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $mode = $l[$cap]['mode'] ?? 'off';
+    if ($mode === 'off') return 'Off';
+    if ($mode === 'all') return ($l['scope']['type'] ?? 'all') === 'all' ? 'Everywhere' : 'In all the folders it covers';
+    $names = [];
+    foreach ((array) ($l[$cap]['folders'] ?? []) as $fid) { [$s, $rel] = link_fid_state($fid, $map, $index, $rootFid); $names[] = $s === 'ok' ? $esc(link_folder_label($dir, $rel)) : '<span class="sl-bad">a folder that can\'t be found</span>'; }
+    return 'Only in ' . implode(', ', $names);
+}
+
+function render_admin_links_panel($csrfToken, $dir, $files) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    if (AUTO_GROUP_BY_FOLDER) link_scan_ambiguity($dir, $files);   // keeps the list of ids found in two folders current
     $data = links_read();
     $now = time();
-    $current = []; $ended = [];
+    $map = folder_id_map($dir, $files);
+    $index = (array) ($data['folderIndex'] ?? []);
+    $rootFid = folder_id_read($dir);
+    $folderOpts = [];
+    foreach (all_folder_paths($files) as $p) $folderOpts[] = ['p' => $p, 'l' => link_folder_label($dir, $p), 'x' => folder_is_private($dir, $p)];
+    $current = []; $ended = []; $problemLinks = 0;
     foreach ($data['links'] as $l) {
         if (!is_array($l) || !isset($l['id'], $l['token'])) continue;
         $s = link_state($l, $now);
-        if (in_array($s, ['active', 'paused', 'scheduled'], true)) $current[] = [$l, $s]; else $ended[] = [$l, $s];
+        $report = link_scope_report($l, $map, $index, $dir, $rootFid);
+        if ($report['problems'] > 0 && $s !== 'revoked') $problemLinks++;
+        if (in_array($s, ['active', 'paused', 'scheduled'], true)) $current[] = [$l, $s, $report]; else $ended[] = [$l, $s, $report];
     }
     usort($current, function ($a, $b) { return (int) $b[0]['created'] <=> (int) $a[0]['created']; });
     usort($ended, function ($a, $b) { return max((int) $b[0]['revokedAt'], (int) $b[0]['endsAt'], (int) $b[0]['lastOpened']) <=> max((int) $a[0]['revokedAt'], (int) $a[0]['endsAt'], (int) $a[0]['lastOpened']); });
     $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
     $loc = $base === '' ? '/' : $base . '/';
-    $row = function ($l, $state, $ended) use ($esc) {
+    $row = function ($l, $state, $report, $ended) use ($esc, $map, $index, $dir, $rootFid) {
         $urls = link_urls($l);
         $tail = substr($l['token'], 0, 4) . '…' . substr($l['token'], -4);
-        $dl = ($l['downloads']['mode'] ?? 'off') === 'off' ? 'Off' : 'Everywhere';
         $title = ($l['titleMode'] ?? 'gallery') === 'neutral' ? 'A neutral title (“A shared gallery”)' : (($l['titleMode'] ?? '') === 'custom' ? '“' . $esc($l['titleText']) . '”' : 'The gallery\'s title');
         $heads = ['default' => 'The site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'][$l['headsUp'] ?? 'default'];
         $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'maxOpens' => (int) $l['maxOpens'],
-            'startsAt' => (int) $l['startsAt'], 'endsAt' => (int) $l['endsAt'], 'locations' => $l['locations'], 'headsUp' => $l['headsUp'], 'downloads' => $l['downloads']['mode'] ?? 'off', 'state' => $state], JSON_HEX_TAG | JSON_HEX_AMP));
+            'startsAt' => (int) $l['startsAt'], 'endsAt' => (int) $l['endsAt'], 'locations' => $l['locations'], 'headsUp' => $l['headsUp'], 'state' => $state,
+            'scopeType' => $l['scope']['type'] ?? 'all', 'scopeFolders' => $report['paths']['scope'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
+            'downloads' => $l['downloads']['mode'] ?? 'off', 'downloadsFolders' => $report['paths']['downloads'], 'zip' => $l['zip']['mode'] ?? 'off', 'zipFolders' => $report['paths']['zip']], JSON_HEX_TAG | JSON_HEX_AMP));
+        $missing = array_merge(array_filter($report['folders'], function ($x) { return $x['state'] !== 'ok'; }), array_filter($report['photos'], function ($x) { return $x['state'] !== 'ok'; }));
         ob_start(); ?>
         <details class="sl-row" data-id="<?= $esc($l['id']) ?>" data-state="<?= $esc($state) ?>" data-link="<?= $json ?>">
           <summary>
             <span class="sl-pill <?= $esc($state) ?>"><?= $esc(link_state_label($state)) ?></span>
-            <span class="sl-nm"><span class="sl-name"><?= $esc($l['label']) ?></span> <span class="sl-tail"><?= $esc($tail) ?></span>
+            <span class="sl-nm"><span class="sl-name"><?= $esc($l['label']) ?></span> <?php if ($report['problems'] > 0 && $state !== 'revoked'): ?><span class="sl-pill paused" title="Part of what this link covers can't be found">Folder missing</span> <?php endif; ?><span class="sl-tail"><?= $esc($tail) ?></span>
               <span class="sl-sub"><?= link_summary_html($l, $state) ?></span></span>
             <?php if ($state === 'paused'): ?><button type="button" class="secondary sl-quick" data-sl="resume">Resume</button>
             <?php elseif ($state === 'expired'): ?><button type="button" class="secondary sl-quick" data-sl="extend">Extend…</button>
@@ -7306,9 +7607,14 @@ function render_admin_links_panel($csrfToken) {
             <?php if ($state !== 'revoked'): ?>
             <div class="sl-linkline"><input type="text" class="sl-url" readonly value="<?= $esc($urls['long']) ?>" data-long="<?= $esc($urls['long']) ?>" data-short="<?= $esc($urls['short']) ?>" aria-label="The link" onfocus="this.select()"><button type="button" class="secondary sl-copy" data-sl="copy">Copy</button></div>
             <?php endif; ?>
+            <?php if ($missing && $state !== 'revoked'): ?>
+            <div class="sl-warn"><?= ui_icon('warn') ?><div><strong>Part of this link can't be found.</strong> Nothing from it is shown to anyone using the link; the rest still works. Use <em>Edit…</em> to pick it again<?php foreach ($missing as $m): if ($m['state'] === 'missing' && isset($m['fid']) && ($l['scope']['type'] ?? '') === 'folders'): ?> <button type="button" class="linklike sl-forget" data-sl="forget" data-fid="<?= $esc($m['fid']) ?>">Take “<?= $esc($m['label']) ?>” out of this link</button><?php endif; endforeach; ?>.</div></div>
+            <?php endif; ?>
             <dl class="sl-facts">
-              <dt>Who can see</dt><dd><?= $esc(link_scope_text($l)) ?></dd>
-              <dt>Original downloads</dt><dd><?= $esc($dl) ?></dd>
+              <dt>Who can see</dt><dd><?= link_scope_text_html($l, $report) ?></dd>
+              <?php if (($l['openIn'] ?? '') !== '' && ($l['scope']['type'] ?? '') !== 'photos'): ?><dt>Opens in</dt><dd><?= $report['paths']['openIn'] !== '' ? $esc(link_folder_label($dir, $report['paths']['openIn'])) : '<span class="sl-bad">a folder that can\'t be found (it opens the front page)</span>' ?></dd><?php endif; ?>
+              <dt>Original downloads</dt><dd><?= link_capability_text_html($l, 'downloads', $report, $map, $index, $dir, $rootFid) ?></dd>
+              <dt>ZIP of a folder</dt><dd><?= link_capability_text_html($l, 'zip', $report, $map, $index, $dir, $rootFid) ?></dd>
               <dt>Photo locations</dt><dd><?= ($l['locations'] ?? 'public') === 'all' ? 'All saved locations' : 'As the public sees them' ?></dd>
               <dt>Starts</dt><dd><?= (int) $l['startsAt'] > 0 ? link_time_html($l['startsAt']) : 'Immediately' ?></dd>
               <dt>Ends</dt><dd><?= (int) $l['endsAt'] > 0 ? link_time_html($l['endsAt']) : 'Never' ?></dd>
@@ -7331,10 +7637,13 @@ function render_admin_links_panel($csrfToken) {
         return ob_get_clean();
     };
 ?>
-    <section class="panel sl" id="sl-root" data-csrf="<?= $esc($csrfToken) ?>" data-probe="<?= $esc($loc . LINK_PROBE_TOKEN) ?>">
+    <section class="panel sl" id="sl-root" data-csrf="<?= $esc($csrfToken) ?>" data-probe="<?= $esc($loc . LINK_PROBE_TOKEN) ?>" data-nofolders="<?= AUTO_GROUP_BY_FOLDER ? '' : '1' ?>">
       <h2 class="section-title">Share links</h2>
       <?php if (!ENABLE_SHARE_LINKS): ?>
         <div class="sl-off">Share links are switched off, so none of these work. Turn on <em>Allow share links</em> in <a href="#site" onclick="return adminGoTo('site');">Site settings</a>.</div>
+      <?php endif; ?>
+      <?php if ($problemLinks > 0): ?>
+        <div class="sl-check no" style="display:flex; gap:10px; align-items:center;"><?= ui_icon('warn') ?><div><strong><?= $problemLinks ?> link<?= $problemLinks === 1 ? ' refers' : 's refer' ?> to something that can't be found.</strong> It fails safe: nothing from it is shown. Open the link to see which.</div></div>
       <?php endif; ?>
       <div class="sl-check" data-sl-check hidden></div>
       <details class="sl-rules"><summary>The tidy address needs a server rule (nginx or Apache)</summary><?= render_link_rules_help() ?></details>
@@ -7342,7 +7651,7 @@ function render_admin_links_panel($csrfToken) {
         <div class="sl-count muted"><?= count($current) ?> not ended &middot; <?= count($ended) ?> ended</div>
         <button type="button" class="sl-new-btn" data-sl="new">+ New link</button>
       </div>
-      <form class="sl-form" id="sl-form" hidden>
+      <form class="sl-form" id="sl-form" hidden data-folders="<?= $esc(json_encode($folderOpts, JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
         <h3 class="sl-form-title">New share link</h3>
         <input type="hidden" name="id" value="">
         <label class="sl-f"><span class="sl-k">Name <span class="muted">(only you see it)</span></span><input type="text" name="label" maxlength="80" placeholder="Aunt Carol" autocomplete="off"></label>
@@ -7351,13 +7660,25 @@ function render_admin_links_panel($csrfToken) {
           <?= ui_segmented('title_mode', ['gallery' => 'The gallery\'s title', 'neutral' => 'A neutral title', 'custom' => 'My own text…'], 'gallery', 'Title') ?>
           <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" hidden>
           <span class="sl-h">A neutral title shows “A shared gallery”. The icon is always the gallery's, and no photo or folder name is ever shown.</span></div>
-        <div class="sl-f"><span class="sl-k">What they can see</span><span class="sl-h" style="margin-top:0">Everything private: every private folder and photo in the gallery, including ones you add later.</span></div>
+        <div class="sl-f"><span class="sl-k">What they can see</span>
+          <div class="sl-radios" role="radiogroup" aria-label="What they can see">
+            <label class="sl-radio"><input type="radio" name="scope_type" value="all" checked><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
+            <label class="sl-radio"><input type="radio" name="scope_type" value="folders"<?= AUTO_GROUP_BY_FOLDER ? '' : ' disabled' ?>><span><strong>Only some folders</strong><small>Each folder includes everything inside it. They are never told other private folders exist.<?= AUTO_GROUP_BY_FOLDER ? '' : ' (Turn on “Show subfolders” in Site settings first.)' ?></small></span></label>
+            <label class="sl-radio" data-photos-only hidden><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note"></small></span></label>
+          </div>
+          <div class="sl-chips" data-chips="scope" hidden></div>
+        </div>
+        <div class="sl-f" data-openin><span class="sl-k">Opens in</span><select name="open_in" aria-label="Opens in"><option value="">The front page</option></select><span class="sl-h">The first page they see.</span></div>
         <div class="sl-f"><span class="sl-k">Download originals</span>
-          <?= ui_segmented('downloads', ['off' => 'Off', 'all' => 'Everywhere'], 'off', 'Download originals') ?>
+          <?= ui_segmented('downloads', ['off' => 'Off', 'all' => 'Everywhere', 'some' => 'Only in some folders'], 'off', 'Download originals') ?>
+          <div class="sl-chips" data-chips="downloads" hidden></div>
           <span class="sl-h">Public photos follow the gallery's own download setting.</span></div>
+        <div class="sl-f"><span class="sl-k">ZIP of a folder</span>
+          <?= ui_segmented('zip', ['off' => 'Off', 'all' => 'Everywhere', 'some' => 'Only in some folders'], 'off', 'ZIP of a folder') ?>
+          <div class="sl-chips" data-chips="zip" hidden></div></div>
         <div class="sl-f"><span class="sl-k">Photo locations</span>
           <?= ui_segmented('locations', ['public' => 'As the public sees them', 'all' => 'All saved locations'], 'public', 'Photo locations') ?>
-          <span class="sl-h">The first shows only places this gallery already shows to visitors; the others stay hidden, and are removed from any download. The second shows every saved location.</span></div>
+          <span class="sl-h">The first shows only places this gallery already shows to visitors; the others stay hidden, and are removed from any download or ZIP. The second shows every saved location.</span></div>
         <div class="sl-f"><span class="sl-k">Starts</span>
           <?= ui_segmented('starts_pick', ['now' => 'Immediately', 'pick' => 'Pick a date…'], 'now', 'Starts') ?>
           <input type="datetime-local" name="starts_at_local" hidden></div>
@@ -7377,8 +7698,8 @@ function render_admin_links_panel($csrfToken) {
       <?php if (!$current && !$ended): ?>
         <p class="muted sl-none">No links yet. Press <strong>New link</strong> to make one.</p>
       <?php endif; ?>
-      <?php if ($current): ?><div class="sl-grp">Current</div><?php foreach ($current as [$l, $s]) echo $row($l, $s, false); ?><?php endif; ?>
-      <?php if ($ended): ?><div class="sl-grp">Ended <span class="sl-grp-note">&middot; the log is kept until you delete the link</span></div><?php foreach ($ended as [$l, $s]) echo $row($l, $s, true); ?><?php endif; ?>
+      <?php if ($current): ?><div class="sl-grp">Current</div><?php foreach ($current as [$l, $s, $r]) echo $row($l, $s, $r, false); ?><?php endif; ?>
+      <?php if ($ended): ?><div class="sl-grp">Ended <span class="sl-grp-note">&middot; the log is kept until you delete the link</span></div><?php foreach ($ended as [$l, $s, $r]) echo $row($l, $s, $r, true); ?><?php endif; ?>
       <div class="admin-modal" id="sl-modal" role="dialog" aria-modal="true" aria-labelledby="sl-modal-title" hidden>
         <div class="admin-modal-card">
           <h3 id="sl-modal-title"></h3>
@@ -7809,6 +8130,24 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-modal-body p { margin:0 0 8px; }
   .sl-modal-body .sl-f { margin-bottom:12px; }
   @media (max-width:560px) { .sl-facts { grid-template-columns:1fr; gap:0; } .sl-facts dt { margin-top:6px; } .sl-row > summary { flex-wrap:wrap; } }
+  .sl-radios { display:flex; flex-direction:column; gap:8px; }
+  .sl-radio { display:flex; gap:10px; align-items:flex-start; cursor:pointer; font-size:0.9rem; }
+  .sl-radio input { margin-top:4px; flex:none; }
+  .sl-radio small { display:block; color:var(--muted); font-size:0.8rem; margin-top:2px; line-height:1.4; }
+  .sl-radio input:disabled + span { opacity:.55; }
+  .sl-chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:8px; }
+  .sl-chips[hidden] { display:none; }
+  .sl-chip { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 4px 0 11px; border-radius:999px; background:#26262a; border:1px solid #34343a; font-size:0.82rem; }
+  .sl-chip button { background:none; border:0; color:var(--muted); cursor:pointer; font-size:1rem; line-height:1; padding:0 6px; }
+  .sl-chip button:hover { color:#fff; }
+  .sl-chips .sl-add { color:var(--accent); font-size:0.85rem; font-weight:600; padding:2px 4px; }
+  .sl-f select { max-width:420px; width:100%; background:#0f0f10; color:var(--text); border:1px solid #34343a; border-radius:8px; padding:8px 10px; font:inherit; }
+  .sl-warn { display:flex; gap:10px; align-items:flex-start; background:rgba(224,160,40,0.12); border:1px solid rgba(224,160,40,0.5); border-radius:10px; padding:10px 12px; margin:0 0 12px; font-size:0.86rem; line-height:1.45; }
+  .sl-warn .ico { width:18px; height:18px; color:#e0a028; flex:none; margin-top:2px; }
+  .sl-bad { color:#e0a028; }
+  .sl-bad em { font-style:normal; font-size:0.85em; }
+  .sl-picklist { max-height:48vh; overflow:auto; border:1px solid #26262a; border-radius:8px; padding:6px 10px; margin-bottom:8px; }
+  .sl-pick { display:flex; gap:8px; align-items:center; padding:5px 0; cursor:pointer; font-size:0.9rem; }
   .sl-danger-btn { background:#d83c3e; border-color:#d83c3e; color:#fff; }
   /* The Private tab: what is private, one line per folder, each opening to its photos. */
   .pv-stats { display:flex; gap:28px; flex-wrap:wrap; margin:4px 0 2px; }
@@ -8219,7 +8558,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <?php endif; ?>
 <?php if (ENABLE_SHARE_LINKS): ?>
   <div class="tab-panel" data-tab="links">
-<?php render_admin_links_panel($csrfToken); ?>
+<?php render_admin_links_panel($csrfToken, $dir, $files); ?>
   </div>
 <?php endif; ?>
   <div class="tab-panel" data-tab="settings">
@@ -8969,6 +9308,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     var box = document.getElementById('sl-root'); if (!box) return;
     var csrf = box.getAttribute('data-csrf') || '';
     var toastTimer = null, pretty = null;
+    var st = { scope: [], downloads: [], zip: [], photos: [] };   // the folders and photos the form is holding, as paths
     function modalEl() { return document.getElementById('sl-modal'); }   // (looked up each time: the tab's own markup is replaced when it refreshes)
     function say(text, bad) {
       var toast = document.getElementById('sl-toast');
@@ -8983,6 +9323,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
     }
     function failed(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', true); }
+    function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
     function times() {
       [].forEach.call(box.querySelectorAll('time.sl-time[data-ts]'), function (t) {
         var d = new Date(+t.getAttribute('data-ts') * 1000); if (isNaN(d)) return;
@@ -9037,7 +9378,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     });
     box.addEventListener('keydown', function (e) { if (e.key === 'Escape' && asking) { e.preventDefault(); asking(false); } });
     // ---- the form
-    var DEFAULTS = { label: '', note: '', titleMode: 'gallery', titleText: '', maxOpens: 10, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default', downloads: 'off' };
+    var DEFAULTS = { label: '', note: '', titleMode: 'gallery', titleText: '', maxOpens: 10, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default',
+      scopeType: 'all', scopeFolders: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
     function localValue(ts) {
       var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
       return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
@@ -9045,40 +9387,96 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function epoch(value) { var t = new Date(value).getTime(); return isNaN(t) ? 0 : Math.floor(t / 1000); }
     function radio(form, name, value) { var r = form.querySelector('input[name="' + name + '"][value="' + value + '"]'); if (r) r.checked = true; }
     function radioValue(form, name) { var r = form.querySelector('input[name="' + name + '"]:checked'); return r ? r.value : ''; }
+    function folderList(form) { try { return JSON.parse(form.getAttribute('data-folders') || '[]'); } catch (x) { return []; } }
+    function labelOf(form, path) { var f = folderList(form).filter(function (o) { return o.p === path; })[0]; return f ? f.l : path; }
+    function under(path, roots) { return roots.some(function (r) { return path === r || path.indexOf(r + '/') === 0; }); }
+    function chipsHtml(form, kind) {
+      var list = st[kind] || [];
+      return list.map(function (p) { return '<span class="sl-chip">' + esc(labelOf(form, p)) + ' <button type="button" data-chip-x="' + kind + '" data-p="' + esc(p) + '" aria-label="Take it out">×</button></span>'; }).join('')
+        + '<button type="button" class="linklike sl-add" data-chip-add="' + kind + '">+ Add folder</button>';
+    }
     function syncForm(form) {
+      var scope = radioValue(form, 'scope_type'), dl = radioValue(form, 'downloads'), zp = radioValue(form, 'zip');
       form.querySelector('[name=title_text]').hidden = radioValue(form, 'title_mode') !== 'custom';
       form.querySelector('[name=starts_at_local]').hidden = radioValue(form, 'starts_pick') !== 'pick';
       form.querySelector('[name=opens_other]').hidden = radioValue(form, 'opens_pick') !== 'n';
       form.querySelector('[name=ends_at_local]').hidden = radioValue(form, 'ends_pick') !== 'pick';
+      var sc = form.querySelector('[data-chips=scope]');
+      if (scope === 'folders') { sc.hidden = false; sc.innerHTML = chipsHtml(form, 'scope'); }
+      else if (scope === 'photos') { sc.hidden = false; sc.innerHTML = '<span class="sl-chip">' + st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' chosen</span>'; }
+      else sc.hidden = true;
+      [['downloads', dl], ['zip', zp]].forEach(function (pair) {
+        var c = form.querySelector('[data-chips=' + pair[0] + ']'); c.hidden = pair[1] !== 'some'; if (pair[1] === 'some') c.innerHTML = chipsHtml(form, pair[0]);
+        var allLabel = form.querySelector('input[name=' + pair[0] + '][value=all] + span'); if (allLabel) allLabel.textContent = scope === 'all' ? 'Everywhere' : 'In all the folders it covers';
+        var someLabel = form.querySelector('input[name=' + pair[0] + '][value=some] + span'); if (someLabel) someLabel.textContent = scope === 'all' ? 'Only in some folders' : 'Only in some of them';
+      });
+      // where it opens: the front page, or a folder (among the folders it covers, when it is limited)
+      var sel = form.querySelector('[name=open_in]'), keep = sel.getAttribute('data-want') !== null ? sel.getAttribute('data-want') : sel.value;
+      sel.removeAttribute('data-want');
+      var opts = scope === 'folders' ? st.scope.map(function (p) { return { p: p, l: labelOf(form, p) }; }) : (scope === 'photos' ? [] : folderList(form));
+      sel.innerHTML = '<option value="">' + (scope === 'photos' ? 'The first photo' : 'The front page') + '</option>' + opts.map(function (o) { return '<option value="' + esc(o.p) + '">' + esc(o.l) + '</option>'; }).join('');
+      sel.value = opts.some(function (o) { return o.p === keep; }) ? keep : '';
+      sel.disabled = scope === 'photos';
+      var ph = form.querySelector('[data-photos-only]'); ph.hidden = !(st.photos.length || scope === 'photos');
+      ph.querySelector('.sl-photos-note').textContent = 'Only the photos you picked, wherever they are. They see nothing else of the folder.';
     }
     function openForm(link) {
       var form = box.querySelector('#sl-form'), v = Object.assign({}, DEFAULTS, link || {});
       form.reset();
+      st = { scope: (v.scopeFolders || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
       form.querySelector('[name=id]').value = link ? link.id : '';
       form.querySelector('.sl-form-title').textContent = link ? 'Edit link' : 'New share link';
       form.querySelector('.sl-save').textContent = link ? 'Save' : 'Create link';
       form.querySelector('[name=label]').value = v.label; form.querySelector('[name=note]').value = v.note; form.querySelector('[name=title_text]').value = v.titleText;
-      radio(form, 'title_mode', v.titleMode); radio(form, 'downloads', v.downloads); radio(form, 'locations', v.locations); radio(form, 'heads_up', v.headsUp);
+      radio(form, 'title_mode', v.titleMode); radio(form, 'downloads', v.downloads); radio(form, 'zip', v.zip); radio(form, 'locations', v.locations); radio(form, 'heads_up', v.headsUp);
+      radio(form, 'scope_type', v.scopeType);
       radio(form, 'starts_pick', v.startsAt > 0 ? 'pick' : 'now'); if (v.startsAt > 0) form.querySelector('[name=starts_at_local]').value = localValue(v.startsAt);
       var presets = { 0: '0', 1: '1', 5: '5', 10: '10' };
       if (presets[v.maxOpens] !== undefined) radio(form, 'opens_pick', presets[v.maxOpens]); else { radio(form, 'opens_pick', 'n'); form.querySelector('[name=opens_other]').value = v.maxOpens; }
       if (v.endsAt > 0) { radio(form, 'ends_pick', 'pick'); form.querySelector('[name=ends_at_local]').value = localValue(v.endsAt); } else radio(form, 'ends_pick', link ? '0' : '604800');
       form.querySelector('.sl-err').textContent = '';
+      form.querySelector('[name=open_in]').setAttribute('data-want', v.openIn || '');
       syncForm(form); form.hidden = false; form.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); form.querySelector('[name=label]').focus();
     }
     function formFields(form) {
-      var now = Math.floor(Date.now() / 1000), ends = radioValue(form, 'ends_pick'), opens = radioValue(form, 'opens_pick');
+      var now = Math.floor(Date.now() / 1000), ends = radioValue(form, 'ends_pick'), opens = radioValue(form, 'opens_pick'), scope = radioValue(form, 'scope_type');
       return {
         action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
         label: form.querySelector('[name=label]').value, note: form.querySelector('[name=note]').value,
         title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value,
-        downloads: radioValue(form, 'downloads'), locations: radioValue(form, 'locations'), heads_up: radioValue(form, 'heads_up'),
+        scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' ? st.scope : []), scope_photos: JSON.stringify(scope === 'photos' ? st.photos : []),
+        open_in: form.querySelector('[name=open_in]').value,
+        downloads: radioValue(form, 'downloads'), downloads_folders: JSON.stringify(st.downloads), zip: radioValue(form, 'zip'), zip_folders: JSON.stringify(st.zip),
+        locations: radioValue(form, 'locations'), heads_up: radioValue(form, 'heads_up'),
         starts_at: radioValue(form, 'starts_pick') === 'pick' ? epoch(form.querySelector('[name=starts_at_local]').value) : 0,
         max_opens: opens === 'n' ? (+form.querySelector('[name=opens_other]').value || 0) : +opens,
         ends_at: ends === 'pick' ? epoch(form.querySelector('[name=ends_at_local]').value) : (ends === '0' ? 0 : now + (+ends))
       };
     }
-    box.addEventListener('change', function (e) { var form = e.target.closest ? e.target.closest('#sl-form') : null; if (form) syncForm(form); });
+    box.addEventListener('change', function (e) {
+      var form = e.target.closest ? e.target.closest('#sl-form') : null; if (!form) return;
+      if (e.target.name === 'scope_type' && e.target.value === 'folders') {
+        // folders already chosen for downloads and ZIPs that the new scope doesn't cover are dropped
+        ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope) || !st.scope.length; }); });
+      }
+      syncForm(form);
+    });
+    // The folder picker: a list of check boxes.
+    function pickFolders(form, kind) {
+      var all = folderList(form), roots = st.scope, scope = radioValue(form, 'scope_type');
+      var list = (kind !== 'scope' && scope === 'folders') ? all.filter(function (o) { return under(o.p, roots); }) : all;
+      if (kind !== 'scope' && scope === 'folders' && !roots.length) { say('Choose the folders it covers first.', true); return Promise.resolve(false); }
+      var rows = list.map(function (o, i) {
+        return '<label class="sl-pick"><input type="checkbox" value="' + esc(o.p) + '"' + (st[kind].indexOf(o.p) >= 0 ? ' checked' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.l) + '</span></label>';
+      }).join('') || '<p class="muted">There are no folders to choose from.</p>';
+      return ask(kind === 'scope' ? 'Choose the folders it covers' : 'Choose the folders', '<div class="sl-picklist">' + rows + '</div><p class="hint">A folder includes everything inside it. A lock marks a private folder.</p>', 'Done', false).then(function (yes) {
+        if (!yes) return false;
+        st[kind] = [].map.call(modalEl().querySelectorAll('.sl-picklist input:checked'), function (c) { return c.value; });
+        if (kind === 'scope') ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope); }); });
+        syncForm(form);
+        return true;
+      });
+    }
     box.addEventListener('submit', function (e) {
       var form = e.target.closest ? e.target.closest('#sl-form') : null; if (!form) return;
       e.preventDefault();
@@ -9104,9 +9502,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       return post(f).then(function (j) { if (!j.ok) { say(j.text || 'Not saved', true); return; } return refresh().then(function () { say(j.text || 'Saved.'); }); }).catch(failed);
     }
     box.addEventListener('click', function (e) {
+      var x = e.target.closest ? e.target.closest('[data-chip-x]') : null;
+      if (x) { var k = x.getAttribute('data-chip-x'), p = x.getAttribute('data-p'); st[k] = st[k].filter(function (q) { return q !== p; }); if (k === 'scope') ['downloads', 'zip'].forEach(function (kk) { st[kk] = st[kk].filter(function (q) { return under(q, st.scope); }); }); syncForm(box.querySelector('#sl-form')); return; }
+      var add = e.target.closest ? e.target.closest('[data-chip-add]') : null;
+      if (add) { pickFolders(box.querySelector('#sl-form'), add.getAttribute('data-chip-add')); return; }
       var b = e.target.closest ? e.target.closest('[data-sl]') : null; if (!b) return;
       var what = b.getAttribute('data-sl'), row = rowOf(b), link = null;
-      if (row) { try { link = JSON.parse(row.getAttribute('data-link')); } catch (x) {} }
+      if (row) { try { link = JSON.parse(row.getAttribute('data-link')); } catch (x2) {} }
       if (b.closest('summary')) e.preventDefault();   // a button in a row's title line doesn't also fold the row
       if (what === 'new') { openForm(null); return; }
       if (what === 'cancel') { box.querySelector('#sl-form').hidden = true; return; }
@@ -9120,6 +9522,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var name = link ? link.label : 'this link';
       if (what === 'pause') { act('link_pause', row); return; }
       if (what === 'resume') { act('link_resume', row); return; }
+      if (what === 'forget') { act('link_forget', row, { fid: b.getAttribute('data-fid') }); return; }
       if (what === 'revoke') {
         ask('Revoke this link?', '<p>“' + esc(name) + '” stops working for good, and anyone signed in through it is signed out. It stays in the list, and its log is kept.</p><p class="hint">Not sure? Pause it instead: you can resume a paused link.</p>', 'Revoke', true).then(function (yes) { if (yes) act('link_revoke', row); });
         return;
@@ -9138,12 +9541,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           + (limited ? '<div class="sl-f"><span class="sl-k">Add opens</span><input type="number" id="sl-ext-opens" min="0" max="100000" value="' + (link.state === 'used_up' ? 1 : 0) + '"></div>' : ''), 'Extend', false).then(function (yes) {
           if (!yes) return;
           var extra = document.getElementById('sl-ext-never').checked ? { no_end: '1' } : { ends_at: epoch(document.getElementById('sl-ext-end').value) };
-          var add = document.getElementById('sl-ext-opens'); if (add && +add.value > 0) extra.add_opens = add.value;
+          var addOpens = document.getElementById('sl-ext-opens'); if (addOpens && +addOpens.value > 0) extra.add_opens = addOpens.value;
           act('link_extend', row, extra);
         });
       }
     });
-    function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
     times(); probe();
   })();
   // Private folder: a switch like the others. Switching it on saves at once; switching it off first says what will happen (how many
@@ -10177,7 +10579,7 @@ function is_non_viewing_request() {
  * last page; every counted page load slides it forward.
  */
 function visit_is_new() {
-    if (is_bot_request() || is_non_viewing_request() || is_admin_browser()) return false;
+    if (is_bot_request() || is_non_viewing_request() || is_admin_browser() || link_viewer() !== null) return false;   // (someone using a share link is an invited guest, not the audience)
     $now = time();
     $last = (int) ($_COOKIE['gallery_visit'] ?? 0);
     $isNew = $last <= 0 || $last > $now + 60 || ($now - $last) > VISIT_WINDOW_SECONDS;
@@ -10200,7 +10602,7 @@ function visit_is_new() {
 // immediately, with no reload — and never renders the gallery itself.
 if (isset($_GET['track'])) {
     $response = ['ok' => false];
-    if (TRACK_VIEWS && !is_bot_request() && !is_admin_browser() && !is_non_viewing_request()) {
+    if (TRACK_VIEWS && !is_bot_request() && !is_admin_browser() && link_viewer() === null && !is_non_viewing_request()) {
         $requested = $_GET['track'];
         if (in_array($requested, $files, true)) {
             // A group's members always live in the same folder (folder
@@ -10370,8 +10772,8 @@ if (isset($_GET['archive'])) {
 }
 // ...and the button for it, with what it would send, for a signed-in visitor.
 $archiveCount = 0; $archiveBytes = 0;
-if (is_revealed()) {
-    foreach (archive_entries($dir, $currentFolderPath === null ? $files : $currentFolderFiles) as $archiveEntry) { $archiveCount++; $archiveBytes += $archiveEntry['size']; }
+if (($archiveButtonFiles = archive_files_for_viewer($dir, $currentFolderPath === null ? $files : $currentFolderFiles))) {
+    foreach (archive_entries($dir, $archiveButtonFiles) as $archiveEntry) { $archiveCount++; $archiveBytes += $archiveEntry['size']; }
 }
 
 /**
@@ -11613,7 +12015,8 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
         $html .= '</a>';
     }
     $html .= $pill;
-    $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
+    // A plain link to a private folder opens nothing for anyone without access, so only the owner is offered one there.
+    if (is_admin_browser() || !folder_is_private($dir, $folderPath)) $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
     $html .= '</div>';
     return $html;
 }
@@ -12051,6 +12454,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     --reserved: #f5a623;
   }
   * { box-sizing: border-box; }
+  .link-headsup { display:flex; align-items:center; gap:10px; padding:8px 14px; background:#1f2233; border-bottom:1px solid #2f3350; font-size:0.85rem; line-height:1.35; color:#d9dcff; }
+  .link-headsup.soon { background:#33290f; border-color:#6b5316; color:#ffe2a3; }
+  .link-headsup[hidden] { display:none; }
+  .link-headsup .lh-x { margin-left:auto; background:none; border:0; color:inherit; opacity:.75; font-size:1.3rem; line-height:1; cursor:pointer; padding:0 4px; }
+  .link-headsup .lh-x:hover { opacity:1; }
   body {
     margin: 0;
     background: var(--bg);
@@ -12976,6 +13384,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 </head>
 <body>
 <?= ui_icon_sprite() ?>
+<?php if (($headsUpLink = link_viewer()) !== null && !is_revealed() && link_headsup_on($headsUpLink)) echo render_link_headsup($headsUpLink); ?>
 
 <?php
 // The lock in the icon strip, right beside the archive icon: the one way in. Shown when there is an admin password, or a private-view password and
@@ -14858,6 +15267,18 @@ if (ENABLE_MAP && $mapPoints) {
     const url = window.location.origin + window.location.pathname + '?photo=' + encodeURIComponent(files[current]);
     copyToClipboard(url).then(() => flashCopied(lightboxCopyBtn));
   });
+
+  // The "this link expires on ..." line for someone using a share link: the time in their own zone, amber in the last day, and a dismissal kept for as long as the end time and that state stay the same.
+  (function () {
+    var el = document.getElementById('link-headsup'); if (!el) return;
+    var ends = +el.getAttribute('data-ends'), t = el.querySelector('time'), d = new Date(ends * 1000);
+    if (!isNaN(d)) t.textContent = d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    var soon = ends * 1000 - Date.now() < 86400000;
+    el.classList.toggle('soon', soon);
+    var key = 'galleryHeadsUp:' + el.getAttribute('data-key') + (soon ? ':soon' : '');
+    try { if (localStorage.getItem(key)) el.hidden = true; } catch (e) {}
+    el.querySelector('.lh-x').addEventListener('click', function () { el.hidden = true; try { localStorage.setItem(key, '1'); } catch (e) {} });
+  })();
 
   // ?photo=<filename> deep link: open straight to that photo on load.
   if (initialPhoto) {

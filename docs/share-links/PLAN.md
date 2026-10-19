@@ -44,13 +44,16 @@ Each ends with: `php -l`, the full `tests/run.php` on PHP 8.4 and 8.3, a commit 
 - [x] The call sites (see the table): `?photo=`, the scrub plan, originals, strip/preview, `serve_image`, `serve_video`, the page filter, cache headers, location trust, the sign-in lock. In the viewer: download and copy-link buttons are per file for link holders. *Not yet:* ZIP for links (M2), private-folder cards' link icon (M2), heads-up header (M2).
 - [x] Tests: `[share links]` in `tests/run.php` (33 checks: opening page, counting, grace, statuses and cut-off, identical invalid page, replace/extend/edit/revoke/delete, throttle, owner, proxies and addresses, per-install rules and probe). Server suite 1,176 on PHP 8.4, 1,172 on 8.3.
 
-### M2 · Scopes and capabilities (the risky part)
-- [ ] `folderId` stamping, ancestor-id walk, `viewer_may_see_item`, photo scope.
-- [ ] Apply at the choke point and in every route (checklist below).
-- [ ] Capabilities: downloads, ZIP (with location scrubbing for link holders), locations.
-- [ ] "Folder/photo missing" detection and the fix-up actions.
-- [ ] Viewer UI for link holders (no owner tools; hide the link button on private media; heads-up header; opens-in).
-- [ ] **Leak test:** every route as a folder-limited and a photo-limited viewer, added to the server suite and to the fuzz tool.
+### M2 · Scopes and capabilities (the risky part): DONE (commit "M2")
+- [x] `folderId` stamped in the folder's own `.gallery-items.php` (refused when the folder can't be written), ancestor-id walk (`link_item_under_folder_ids`), photo scope (folder id + name), `viewer_may_see_item` for all three scopes.
+- [x] Ids carried by more than one folder (a copied folder) are ambiguous and match nothing; found by the first page a link holder loads or the admin tab, kept in the links file so the early routes agree.
+- [x] Applied at the page filter and in every route (`?img` all sizes, `?video`, `?strip`, `?preview`, `?original`, `?archive`, `?photo`, folder pages, counts, pills, covers).
+- [x] Capabilities: downloads and ZIP (off / everywhere / only some folders), ZIP streams with hidden locations scrubbed (same size) and leaves out a file that can't be scrubbed; locations (public / all) also for single originals.
+- [x] "Folder missing": tab shows a pill, a notice, and *Take it out of this link*; renamed folders keep working, a same-name newcomer is not covered, a copy makes the id ambiguous.
+- [x] Link holders: no sign-in lock, no owner tools, per-file download and copy-link buttons, the heads-up line (amber in the last day, dismissable), kept out of the view counts, the private folder card's link icon hidden for non-owners.
+- [x] Form: scope (everything / some folders, with a folder picker and chips), opens in, downloads and ZIP (+ folder lists), all worded for the scope. Photo scope works in the backend; its pickers arrive with M4.
+- [x] Leak matrix in `tests/run.php` (5 viewers x every file, every size, video, `?photo=`, folder pages, names on the page) + fuzz identities (link-folders / link-photos / link-all, 5,015 requests, 0 problems) + XSS canary (labels, notes, titles, odd folder and file names; 557 pages, 0 findings).
+- Server suite 1,211 on PHP 8.4, 1,207 on 8.3.
 
 ### M3 · The log
 - [ ] Per-link log store, visitor/IP records, caps (300 events, 200 visitors), blocked tries.

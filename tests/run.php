@@ -4951,6 +4951,199 @@ check('[share links] in a gallery installed at /trip/ the nginx rule is for /tri
 [$slSubProbeStatus, , $slSubProbeHeaders] = http_get("http://127.0.0.1:$portSlSub/trip/index.php?link=0000000000000000");
 check('[share links] the probe token answers with the marker header but is not counted as a wrong guess', $slSubProbeStatus === 404 && in_array('X-Gallery-Link: invalid', $slSubProbeHeaders, true) && !preg_grep('/^link\|/', array_keys(read_data_file("$fxSlSub/trip/.gallery-login-attempts.php"))));
 
+
+echo "== share links: folder and photo scopes, downloads, ZIPs and locations: what a link holder can reach and nothing more ==\n";
+
+$fxS2 = new_fixture_dir('slscope');
+foreach (['Florence', 'Rome/Sub', 'Pisa', 'Other'] as $d) mkdir("$fxS2/$d", 0775, true);
+foreach (['pub.jpg' => 1, 'secret.jpg' => 2, 'Florence/f1.jpg' => 3, 'Florence/f2.jpg' => 4, 'Rome/r1.jpg' => 5, 'Rome/r2.jpg' => 6, 'Rome/Sub/s1.jpg' => 7, 'Pisa/p1.jpg' => 8, 'Other/o1.jpg' => 9] as $f => $n) make_jpeg("$fxS2/$f", 60 + $n, 50, 20 * $n % 255, 90, 30 * $n % 255);
+make_minimal_mp4("$fxS2/Rome/clip.mp4", 5);
+make_gps_jpeg("$fxS2/Rome/geo.jpg", 'N', [[48, 1], [51, 1], [0, 1]], 'E', [[2, 1], [21, 1], [0, 1]]);
+write_data_file("$fxS2/.gallery-items.php", ['items' => ['secret.jpg' => ['restriction' => 'private']], 'groups' => []]);
+write_data_file("$fxS2/Florence/.gallery-items.php", ['items' => ['f2.jpg' => ['restriction' => 'private']], 'groups' => []]);
+foreach (['Rome', 'Pisa', 'Other'] as $d) write_data_file("$fxS2/$d/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+file_put_contents("$fxS2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'sl2-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+copy($indexSrc, "$fxS2/index.php");
+$portS2 = find_free_port(); start_server($fxS2, $portS2); $baseS2 = "http://127.0.0.1:$portS2";
+[, , $s2Login] = http_post("$baseS2/?admin", ['access_code' => 'sl2-admin-pw-1'], [], false);
+$s2AdminCookie = extract_cookie_header($s2Login);
+$s2Csrf = extract_csrf_token(http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1]);
+$s2Admin = function (array $fields) use ($baseS2, $s2AdminCookie, $s2Csrf) {
+    [, $body] = http_post("$baseS2/?admin", $fields + ['csrf_token' => $s2Csrf], ['X-Requested-With: gallery-fetch', "Cookie: $s2AdminCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$s2Links = fn () => read_data_file("$fxS2/.gallery-links.php");
+$s2Reset = function () use ($fxS2) { @unlink("$fxS2/.gallery-login-attempts.php"); };
+// Makes a link (the form's fields as the page sends them), presses its button, and returns [id, token, cookie, where the button led].
+$s2Make = function (string $label, array $f) use ($s2Admin, $s2Links, $baseS2, $s2Reset) {
+    $made = $s2Admin($f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+    if (!($made['ok'] ?? false)) return [null, null, null, $made['text'] ?? 'failed'];
+    $token = $s2Links()['links'][$made['id']]['token'];
+    $s2Reset();
+    [, , $h] = http_post("$baseS2/?link=$token", ['go' => '1'], [], false);
+    $loc = ''; foreach ($h as $x) if (stripos($x, 'Location:') === 0) $loc = trim(substr($x, 9));
+    return [$made['id'], $token, extract_cookie_header($h), $loc];
+};
+[$idA, $tokA, $ckA, $locA] = $s2Make('A Rome', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Rome']), 'open_in' => 'Rome', 'downloads' => 'all', 'zip' => 'all']);
+[$idB, $tokB, $ckB] = $s2Make('B Rome and Pisa', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Rome', 'Pisa']), 'downloads' => 'some', 'downloads_folders' => json_encode(['Pisa'])]);
+[$idC, $tokC, $ckC, $locC] = $s2Make('C two photos', ['scope_type' => 'photos', 'scope_photos' => json_encode(['Rome/r1.jpg', 'Florence/f2.jpg'])]);
+[$idD, $tokD, $ckD] = $s2Make('D everything', ['downloads' => 'all', 'locations' => 'all', 'zip' => 'all']);
+check('[share links] links for a folder, two folders, two photos and everything can all be made', $idA && $idB && $idC && $idD);
+
+$s2All = ['pub.jpg', 'secret.jpg', 'Florence/f1.jpg', 'Florence/f2.jpg', 'Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/geo.jpg', 'Rome/clip.mp4', 'Rome/Sub/s1.jpg', 'Pisa/p1.jpg', 'Other/o1.jpg'];
+$s2Public = ['pub.jpg', 'Florence/f1.jpg'];
+$s2Rome = ['Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/geo.jpg', 'Rome/clip.mp4', 'Rome/Sub/s1.jpg'];
+$s2Viewers = [   // name => [cookie, the files that viewer may reach]
+    'the public' => [null, $s2Public],
+    'a link to Rome' => [$ckA, array_merge($s2Public, $s2Rome)],
+    'a link to Rome and Pisa' => [$ckB, array_merge($s2Public, $s2Rome, ['Pisa/p1.jpg'])],
+    'a link to two photos' => [$ckC, array_merge($s2Public, ['Rome/r1.jpg', 'Florence/f2.jpg'])],
+    'a link to everything' => [$ckD, $s2All],
+];
+$s2Hdr = fn ($c) => $c ? ["Cookie: $c"] : [];
+$s2Visible = function ($body) { return preg_match('/const files = (\[[^\n]*\]);/', $body, $m) ? (json_decode($m[1], true) ?: []) : null; };
+$s2Same = function ($a, $b) { sort($a); sort($b); return $a === $b; };
+foreach ($s2Viewers as $name => [$ck, $expect]) {
+    $s2Reset();
+    $problems = [];
+    // the page and the lightbox's own list of files
+    $rootBody = http_get("$baseS2/", $s2Hdr($ck))[1];
+    $seen = $s2Visible($rootBody);
+    if ($seen === null || !$s2Same($seen, $expect)) $problems[] = 'the page lists ' . json_encode($seen);
+    // every picture, every size, and the video
+    foreach ($s2All as $f) {
+        $isVideo = str_ends_with($f, '.mp4'); $want = in_array($f, $expect, true);
+        foreach ($isVideo ? [null] : ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover'] as $size) {
+            $url = $isVideo ? "$baseS2/?video=" . rawurlencode($f) : "$baseS2/?img=" . rawurlencode($f) . "&size=$size";
+            $st = http_get($url, $s2Hdr($ck))[0];
+            if (($want && $st !== 200) || (!$want && $st !== 404)) $problems[] = "$f " . ($size ?? 'video') . " answered $st";
+        }
+        $photoBody = http_get("$baseS2/?photo=" . rawurlencode($f), $s2Hdr($ck))[1];
+        $initial = preg_match('/const initialPhoto = ([^\n]*);/', $photoBody, $pm) ? json_decode($pm[1], true) : 'none';
+        if (($want && $initial !== $f) || (!$want && $initial !== null)) $problems[] = "?photo=$f opened " . json_encode($initial);
+    }
+    // folder pages
+    foreach (['Florence', 'Rome', 'Rome/Sub', 'Pisa', 'Other'] as $folder) {
+        $has = (bool) array_filter($expect, fn ($x) => str_starts_with($x, $folder . '/'));
+        $st = http_get("$baseS2/?folder=" . rawurlencode($folder), $s2Hdr($ck))[0];
+        if (($has && $st !== 200) || (!$has && $st !== 404)) $problems[] = "?folder=$folder answered $st";
+    }
+    // names of what they may not see never appear anywhere on the page
+    foreach (['Pisa' => 'Pisa/p1.jpg', 'Other' => 'Other/o1.jpg'] as $word => $witness) if (!in_array($witness, $expect, true) && str_contains($rootBody, $word)) $problems[] = "the page names $word";
+    if (!in_array('secret.jpg', $expect, true) && str_contains($rootBody, 'secret')) $problems[] = 'the page names secret.jpg';
+    check("[share links] leak matrix, $name: the page, every picture at every size, the video, ?photo= and each folder page show exactly what that viewer may reach" . ($problems ? ' -- ' . implode('; ', array_slice($problems, 0, 4)) : ''), !$problems);
+}
+
+// Folder pages show only what the link covers: counts, folder buttons and the covers are made from what that visitor can see.
+$s2RomeBody = http_get("$baseS2/?folder=Rome", $s2Hdr($ckA))[1];
+check('[share links] a link to Rome shows 4 photos and 1 video in Rome, with no mention of the folders beside it (no Pisa, no Other) in its buttons or breadcrumbs', preg_match('/4 photos\s*(?:·|&middot;)\s*1 video/', $s2RomeBody) === 1 && !str_contains($s2RomeBody, 'Pisa') && !str_contains($s2RomeBody, '>Other<') && !str_contains($s2RomeBody, 'o1.jpg'));
+$s2RootA = http_get("$baseS2/", $s2Hdr($ckA))[1];
+check('[share links] ...and on the front page the folder card counts only what the link may see', preg_match('/folder-cover-count[^>]*>[^<]*4 photos\s*(?:·|&middot;)\s*1 video/', $s2RootA) === 1);
+
+// The viewer's buttons: a link to Rome has downloads (originals) but a plain link to a private photo is not offered.
+check('[share links] the viewer\'s download button exists for a link that allows downloads, and is per file (private files only)', str_contains($s2RootA, 'id="lightbox-download"') && preg_match('/const downloadOk = (\[[^\n]*\]);/', $s2RootA, $dm) === 1 && count(array_filter(json_decode($dm[1], true))) === 5);
+check('[share links] and for a link with downloads off there is no download button at all', !str_contains(http_get("$baseS2/", $s2Hdr($ckC))[1], 'id="lightbox-download"'));
+
+// Downloads of originals.
+$s2Dl = fn ($ck, $f) => http_get("$baseS2/?original=" . rawurlencode($f), $s2Hdr($ck))[0];
+check('[share links] a link that allows downloads everywhere hands out the originals of what it covers, and never a private file outside it or a public one the gallery doesn\'t offer', $s2Dl($ckA, 'Rome/r1.jpg') === 200 && $s2Dl($ckA, 'Pisa/p1.jpg') === 404 && $s2Dl($ckA, 'pub.jpg') === 404 && $s2Dl($ckA, 'secret.jpg') === 404);
+check('[share links] "only in some folders" means exactly those folders (here Pisa, not Rome), and a link with downloads off gives nothing', $s2Dl($ckB, 'Pisa/p1.jpg') === 200 && $s2Dl($ckB, 'Rome/r1.jpg') === 404 && $s2Dl($ckC, 'Rome/r1.jpg') === 404 && $s2Dl(null, 'Rome/r1.jpg') === 404);
+check('[share links] a link to everything with downloads on reaches every private original', $s2Dl($ckD, 'secret.jpg') === 200 && $s2Dl($ckD, 'Other/o1.jpg') === 200);
+
+// Locations: "as the public sees them" removes a hidden location from the copy (same size), "all saved locations" leaves the file as it is.
+$s2Orig = (string) file_get_contents("$fxS2/Rome/geo.jpg");
+$s2GetA = http_get("$baseS2/?original=" . rawurlencode('Rome/geo.jpg'), $s2Hdr($ckA)); $s2GetD = http_get("$baseS2/?original=" . rawurlencode('Rome/geo.jpg'), $s2Hdr($ckD));
+check('[share links] a hidden location is taken out of the copy a link gives (same size, different bytes) unless the link shows all locations', strlen($s2GetA[1]) === strlen($s2Orig) && $s2GetA[1] !== $s2Orig && $s2GetD[1] === $s2Orig);
+
+// ZIPs: only what the link's ZIP setting covers, with the same location clean-up.
+$s2Zip = function ($ck, $query) use ($baseS2, $s2Hdr, $haveUnzip, $zipNames, $zipEntry) {
+    [$st, $body] = http_get("$baseS2/?archive$query", $s2Hdr($ck));
+    if ($st !== 200) return [$st, []];
+    $f = tempnam(sys_get_temp_dir(), 'slz'); file_put_contents($f, $body);
+    $names = $haveUnzip ? $zipNames($f) : [];
+    return [$st, $names, $f];
+};
+if ($haveUnzip) {
+    [$zStA, $zNamesA, $zFileA] = $s2Zip($ckA, '');
+    $zBare = array_map(fn ($n) => preg_replace('#^[^/]+/#', '', $n), $zNamesA);
+    check('[share links] a link with ZIP on gets a ZIP of exactly the private files it covers (the public photos stay out: the gallery doesn\'t offer them as downloads)', $zStA === 200 && $s2Same($zBare, $s2Rome));
+    $zGeo = (string) $zipEntry($zFileA, $zNamesA[array_search('Rome/geo.jpg', $zBare)]);
+    check('[share links] ...with the hidden location taken out of the copy of geo.jpg in the ZIP (same size, different bytes)', strlen($zGeo) === strlen($s2Orig) && $zGeo !== $s2Orig);
+    [, $zNamesD, $zFileD] = $s2Zip($ckD, '&folder=Rome');
+    $zGeoD = (string) $zipEntry($zFileD, preg_grep('#geo\.jpg$#', $zNamesD) ? array_values(preg_grep('#geo\.jpg$#', $zNamesD))[0] : 'none');
+    check('[share links] a link to everything with all locations gets the files exactly as they are', $zGeoD === $s2Orig);
+    foreach ([$zFileA ?? null, $zFileD ?? null] as $zf) if ($zf) @unlink($zf);
+}
+check('[share links] a link with ZIP off (B), the public, and a link to photos get no ZIP', http_get("$baseS2/?archive", $s2Hdr($ckB))[0] === 404 && http_get("$baseS2/?archive", $s2Hdr($ckC))[0] === 404 && http_get("$baseS2/?archive")[0] === 404);
+
+// Where the button leads.
+check('[share links] pressing the button leads where the link opens: a chosen folder, the first photo of a link to photos, else the front page', $locA === './?folder=Rome' && $locC === './?folder=Rome&photo=Rome%2Fr1.jpg');
+
+// Folders are remembered by a hidden id, not by name.
+$s2Id = fn ($rel) => (read_data_file("$fxS2/$rel/.gallery-items.php")['folderId'] ?? '');
+check('[share links] the folders a link covers got a hidden id (12 letters/digits), and a folder it doesn\'t cover didn\'t', preg_match('/^[0-9a-f]{12}$/', $s2Id('Rome')) === 1 && preg_match('/^[0-9a-f]{12}$/', $s2Id('Pisa')) === 1 && $s2Id('Other') === '' && ($s2Links()['links'][$idA]['scope']['folders'][0] ?? '') === $s2Id('Rome'));
+rename("$fxS2/Rome", "$fxS2/Roma");
+$s2Reset();
+$s2AfterRename = $s2Visible(http_get("$baseS2/", $s2Hdr($ckA))[1]);
+check('[share links] renaming a folder keeps the link working (the id travels with it): the link now shows Roma, and the old name shows nothing', $s2AfterRename !== null && in_array('Roma/r1.jpg', $s2AfterRename, true) && !array_filter($s2AfterRename, fn ($x) => str_starts_with($x, 'Rome/')) && http_get("$baseS2/?img=" . rawurlencode('Roma/r1.jpg') . '&size=thumb', $s2Hdr($ckA))[0] === 200);
+$s2AdminTab = http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1];
+check('[share links] the tab shows no problem for a renamed folder, and lists it under its new name', !str_contains($s2AdminTab, 'Folder missing') && str_contains($s2AdminTab, 'Only Roma'));
+// A copy of the folder, with its settings file and so its id: the id now points at two folders, so it points at nothing.
+mkdir("$fxS2/Roma copy", 0775, true); copy("$fxS2/Roma/r1.jpg", "$fxS2/Roma copy/r1.jpg"); copy("$fxS2/Roma/.gallery-items.php", "$fxS2/Roma copy/.gallery-items.php");
+http_get("$baseS2/", $s2Hdr($ckA));   // the first page the link holder loads notices the duplicate
+$s2Dup = $s2Visible(http_get("$baseS2/", $s2Hdr($ckA))[1]);
+check('[share links] a folder copied together with its settings (so its id) leaves the id ambiguous: the link shows neither folder, and the routes that answer early agree', $s2Dup !== null && !array_filter($s2Dup, fn ($x) => str_starts_with($x, 'Roma')) && http_get("$baseS2/?img=" . rawurlencode('Roma/r1.jpg') . '&size=thumb', $s2Hdr($ckA))[0] === 404 && http_get("$baseS2/?img=" . rawurlencode('Roma copy/r1.jpg') . '&size=thumb', $s2Hdr($ckA))[0] === 404);
+$s2AdminTab = http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1];
+check('[share links] the tab says so: the link is marked "Folder missing" and the folder is listed as found in more than one place', str_contains($s2AdminTab, 'Folder missing') && str_contains($s2AdminTab, 'found in more than one folder'));
+rrmdir("$fxS2/Roma copy");
+$s2Reset();
+http_get("$baseS2/", $s2Hdr($ckA));
+check('[share links] taking the copy away makes the link work again', in_array('Roma/r1.jpg', $s2Visible(http_get("$baseS2/", $s2Hdr($ckA))[1]) ?? [], true));
+// A folder deleted and another made under the old name: the newcomer has no id, so the link doesn't cover it.
+rrmdir("$fxS2/Roma"); mkdir("$fxS2/Rome", 0775, true); make_jpeg("$fxS2/Rome/new.jpg", 70, 50, 1, 2, 3);
+write_data_file("$fxS2/Rome/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+$s2Reset();
+$s2New = $s2Visible(http_get("$baseS2/", $s2Hdr($ckA))[1]);
+check('[share links] a folder deleted and a new one made under the same name: the link does NOT cover the newcomer (nothing private shows)', $s2New !== null && !array_filter($s2New, fn ($x) => str_starts_with($x, 'Rome/') || str_starts_with($x, 'Roma')) && http_get("$baseS2/?img=" . rawurlencode('Rome/new.jpg') . '&size=thumb', $s2Hdr($ckA))[0] === 404);
+$s2AdminTab = http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1];
+check('[share links] and the tab shows the link as having a missing folder, with the way to take it out', str_contains($s2AdminTab, 'Folder missing') && str_contains($s2AdminTab, 'can\'t be found') && str_contains($s2AdminTab, 'data-sl="forget"'));
+check('[share links] taking out the only folder of a link is refused (a link keeps at least one)', ($s2Admin(['action' => 'link_forget', 'id' => $idA, 'fid' => $s2Links()['links'][$idA]['scope']['folders'][0]])['ok'] ?? true) === false);
+$s2B = $s2Links()['links'][$idB]['scope']['folders'];
+$s2BForget = $s2Admin(['action' => 'link_forget', 'id' => $idB, 'fid' => $s2B[0]]);
+check('[share links] taking one folder out of a link with two works (and clears it from the downloads list too)', ($s2BForget['ok'] ?? false) && count($s2Links()['links'][$idB]['scope']['folders']) === 1);
+
+// A folder the web server can't write in can't be remembered, so a link can't be limited to it.
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    chmod("$fxS2/Other", 0555); chmod("$fxS2/Other/.gallery-items.php", 0444);   // (a folder's settings file that already exists can be written even in a locked folder: lock both)
+    $s2Locked = $s2Admin(['action' => 'link_create', 'label' => 'x', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'folders', 'scope_folders' => json_encode(['Other']), 'downloads' => 'off', 'zip' => 'off']);
+    chmod("$fxS2/Other", 0775); chmod("$fxS2/Other/.gallery-items.php", 0664);
+    check('[share links] a link can\'t be limited to a folder the web server can\'t write in (it says why), and nothing is made', ($s2Locked['ok'] ?? true) === false && str_contains($s2Locked['text'] ?? '', 'can\'t write') && count($s2Links()['links']) === 4);
+}
+
+// Checking the form's choices.
+$s2Bad = fn (array $f) => ($s2Admin($f + ['action' => 'link_create', 'label' => 'bad', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off'])['ok'] ?? true) === false;
+check('[share links] a link to folders needs at least one, a folder that isn\'t there is refused, downloads "only in some folders" need folders among those the link covers, and it can only open in a folder it covers', $s2Bad(['scope_type' => 'folders', 'scope_folders' => '[]']) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Nope'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'downloads' => 'some', 'downloads_folders' => json_encode(['Other'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'open_in' => 'Other']) && $s2Bad(['scope_type' => 'photos', 'scope_photos' => json_encode(['nope.jpg'])]) && count($s2Links()['links']) === 4);
+
+// The heads-up line.
+$s2Ends = time() + 3 * 86400;
+$s2Hu = function (array $f, array $cfg = []) use ($s2Make, $fxS2, $baseS2, $s2Hdr) {
+    $cur = cfg_read("$fxS2/.gallery-config.php");
+    file_put_contents("$fxS2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => $cur['ADMIN_PASSWORD'], 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true] + $cfg));
+    [, , $ck] = $s2Make('hu', $f);
+    return http_get("$baseS2/", $s2Hdr($ck))[1];
+};
+$huOn = $s2Hu(['heads_up' => 'on', 'ends_at' => $s2Ends]);
+$huDefaultOff = $s2Hu(['heads_up' => 'default', 'ends_at' => $s2Ends]);
+$huDefaultSite = $s2Hu(['heads_up' => 'default', 'ends_at' => $s2Ends], ['SHARE_HEADS_UP' => true]);
+$huOffSite = $s2Hu(['heads_up' => 'off', 'ends_at' => $s2Ends], ['SHARE_HEADS_UP' => true]);
+$huNoEnd = $s2Hu(['heads_up' => 'on', 'ends_at' => 0]);
+check('[share links] the heads-up line says "The link being used to access this media expires on" with the end time, when the link asks for it, or when it follows a site setting that is on', str_contains($huOn, 'id="link-headsup"') && str_contains($huOn, 'The link being used to access this media expires on') && str_contains($huOn, 'data-ends="' . $s2Ends . '"') && !str_contains($huDefaultOff, 'id="link-headsup"') && str_contains($huDefaultSite, 'id="link-headsup"'));
+check('[share links] ...never when the link says off (even with the site setting on), and never for a link with no end date', !str_contains($huOffSite, 'id="link-headsup"') && !str_contains($huNoEnd, 'id="link-headsup"'));
+check('[share links] the public and the owner never see the heads-up line', !str_contains(http_get("$baseS2/")[1], 'id="link-headsup"') && !str_contains(http_get("$baseS2/", ["Cookie: $s2AdminCookie"])[1], 'id="link-headsup"'));
+
+// Someone using a link is not counted in the gallery's view counts, and the owner's pages show the private tab unchanged.
+check('[share links] the owner\'s own view of the gallery still shows everything, including folders the links no longer reach', str_contains(http_get("$baseS2/", ["Cookie: $s2AdminCookie"])[1], 'Other'));
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";

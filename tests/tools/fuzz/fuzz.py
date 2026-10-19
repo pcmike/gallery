@@ -57,10 +57,28 @@ def cookie_from(path,auth):
 revealC,_=cookie_from("/?reveal","viewer:viewer-pw")
 adminC,adminResp=cookie_from("/?admin","admin:adm-pw")
 adminAuth={"Authorization":"Basic "+base64.b64encode(b"admin:adm-pw").decode(),"Cookie":adminC}
-sess=[("anon",{}),("revealed",{"Cookie":revealC}),("admin",adminAuth)]
+# --- share links: a link to a folder, a link to photos and a link to everything, each as a signed-in link holder
+def _csrf():
+    s,b,_=req("/?admin",headers=adminAuth); m=re.search(rb'csrf_token"\s+value="([a-f0-9]+)"',b) or re.search(rb'csrf_token" value="([a-f0-9]+)"',b); return m.group(1).decode()
+import json
+def make_link(label,**fields):
+    base={"action":"link_create","label":label,"title_mode":"gallery","max_opens":"0","ends_at":str(int(time.time())+86400),"locations":"public","heads_up":"on","scope_type":"all","downloads":"off","zip":"off","csrf_token":_csrf()}
+    base.update(fields)
+    s,b,_=req("/?admin",method="POST",data=base,headers=dict(adminAuth,**{"X-Requested-With":"gallery-fetch"}),label="make link "+label)
+    d=json.loads(b.decode() or "{}")
+    if not d.get("ok"): problems.append(("make link "+label,"not made: "+str(d))); return None,""
+    raw=open(SITE+"/.gallery-links.php").read(); links=json.loads(raw[raw.index("\n")+1:])["links"]; tok=links[d["id"]]["token"]
+    r=urllib.request.Request(B+"/?link="+tok,data=b"go=1",method="POST")
+    try: resp=op.open(r,timeout=10)
+    except urllib.error.HTTPError as e: resp=e
+    return tok,"; ".join(h.split(';')[0] for h in resp.headers.get_all('Set-Cookie') or [])
+linkTokF,linkF=make_link("folder",scope_type="folders",scope_folders=json.dumps(["Europe/Germany","Europe/France"]),open_in="Europe/France",downloads="all",zip="all",locations="public")
+linkTokP,linkP=make_link("photos",scope_type="photos",scope_photos=json.dumps(["loose1.jpg","secret.jpg","Europe/France/Paris/eiffel.jpg"]),downloads="all")
+linkTokA,linkA=make_link("all",downloads="all",zip="all",locations="all")
+sess=[("anon",{}),("revealed",{"Cookie":revealC}),("admin",adminAuth),("link-folders",{"Cookie":linkF}),("link-photos",{"Cookie":linkP}),("link-all",{"Cookie":linkA})]
 # --- GET sweeps
 for name,h in sess:
-    for p in ['/','/?about','/?map','/?mapicon','/?download','/?hidden','/?reveal','/?admin','/?admin&hidden']: req(p,headers=h,label=f"[{name}] {p}")
+    for p in ['/','/?about','/?map','/?mapicon','/?download','/?hidden','/?reveal','/?admin','/?admin&hidden','/?archive','/?archive&folder=Europe','/?archive&folder=Europe%2FGermany','/?archive&folder=nope']: req(p,headers=h,label=f"[{name}] {p}")
     for f in folders+junk:
         req("/?folder="+q(f,safe=''),headers=h,label=f"[{name}] ?folder={f[:30]}")
         req("/?admin&folder="+q(f,safe=''),headers=h,label=f"[{name}] ?admin&folder={f[:30]}")
@@ -70,6 +88,9 @@ for name,h in sess:
         req("/?video="+q(f,safe=''),headers=h,label=f"[{name}] ?video={f[:30]}")
         req("/?track="+q(f,safe=''),headers=h,label=f"[{name}] ?track={f[:30]}")
         req("/?photo="+q(f,safe=''),headers=h,label=f"[{name}] ?photo={f[:30]}")
+        for what in ('original','strip','preview'): req(f"/?{what}="+q(f,safe=''),headers=h,label=f"[{name}] ?{what}={f[:30]}")
+        req("/?link="+q(f,safe=''),headers=h,label=f"[{name}] ?link={f[:30]}")
+        req("/?link="+q(f,safe=''),method="POST",data={"go":"1"},headers=h,label=f"[{name}] POST ?link={f[:30]}")
     for arr in ['folder[]=x','img[]=x','video[]=x','track[]=x','photo[]=x','folder[a]=b','img[]=a&img[]=b','size[]=x&img=loose1.jpg','map[]=1','admin[]=1','reveal[]=1','folder=Europe&photo[]=x','folder[]=Europe&map']:
         req("/?"+arr,headers=h,label=f"[{name}] ?{arr}")
     for combo in ['folder=Europe&photo=Europe/intro.jpg','map&folder=Asia','about&folder=Europe','folder=Asia&track=loose1.jpg','map&photo=loose1.jpg']:
@@ -83,10 +104,11 @@ for m in ['POST','PUT','DELETE','OPTIONS','HEAD','PATCH']:
 def csrf():
     s,b,_=req("/?admin",headers=adminAuth); m=re.search(rb'csrf_token" value="([a-f0-9]+)"',b); return m.group(1).decode()
 tok=csrf()
-weird=['', 'x', 'a'*3000, '<?php echo 1; ?>', "'; DROP TABLE x;--", '../../etc/passwd', '0','-1','1e999','NaN','99999999999999999999', '😀', "\x00", "line1\nline2\r\n", ' ', '{"a":1}']
+weird=['["Europe"]', '["Europe/France","Asia"]', '["nope"]', '[1,2,3]', '{"a":1}', 'folders', 'photos', 'some', 'all', 'on', 'public', '1700000000', '99999999999', '["loose1.jpg"]', '', 'x', 'a'*3000, '<?php echo 1; ?>', "'; DROP TABLE x;--", '../../etc/passwd', '0','-1','1e999','NaN','99999999999999999999', '😀', "\x00", "line1\nline2\r\n", ' ', '{"a":1}']
+raw=open(SITE+"/.gallery-links.php").read(); weird += list(json.loads(raw[raw.index("\n")+1:])["links"].keys())   # real link ids, so the link actions get past the first check
 arrs=[['a','b'],{'k':'v'}]
-actions=['save_item','save_group_label','save_folder_identity','toggle_location_enabled','toggle_folder_restriction','set_cover','save_notes','delete_notes','add_gallery_marker','export_items','export_tree','save_site_settings','save_site_settings','nonexistent','']
-fields=['file','caption','web','lat','lng','loc_label','loc_visibility','restriction','group_key','display_name','description','dates','sort_order','enabled','hidden','cover','md_file','new_name','content','confirm','loaded_hash','set_ENABLE_VIDEO','set_AUTO_GROUP_BY_FOLDER','set_TRACK_VIEWS','set_PHOTO_SORT_ORDER','set_FOLDER_DISPLAY_MODE','set_MAP_CLUSTER_RADIUS_MILES','pw_admin','pw_admin2','pw_private','pw_private2','pw_private_remove','config_hash']
+actions=['save_item','save_group_label','save_folder_identity','toggle_location_enabled','toggle_folder_restriction','set_cover','save_notes','delete_notes','add_gallery_marker','export_items','export_tree','save_site_settings','save_site_settings','link_create','link_create','link_save','link_pause','link_resume','link_revoke','link_extend','link_replace','link_forget','link_delete','nonexistent','']
+fields=['file','caption','web','lat','lng','loc_label','loc_visibility','restriction','group_key','display_name','description','dates','sort_order','enabled','hidden','cover','md_file','new_name','content','confirm','loaded_hash','set_ENABLE_VIDEO','set_AUTO_GROUP_BY_FOLDER','set_TRACK_VIEWS','set_PHOTO_SORT_ORDER','set_FOLDER_DISPLAY_MODE','set_MAP_CLUSTER_RADIUS_MILES','pw_admin','pw_admin2','pw_private','pw_private2','pw_private_remove','config_hash','id','label','note','title_mode','title_text','max_opens','ends_at','starts_at','locations','heads_up','scope_type','scope_folders','scope_photos','open_in','downloads','downloads_folders','zip','zip_folders','add_opens','no_end','fid']
 random.seed(7)
 import atexit; atexit.register(lambda: (srv.poll() is None) and srv.terminate())
 scopes=['','&folder=Europe','&folder=Asia','&folder='+q('Europe/France/Paris',safe=''),'&folder=nope']

@@ -85,7 +85,8 @@ def check(label, body, headers=None):
     if m: findings.append((label, "javascript: URL in an attribute: " + html_only[max(0, m.start() - 40):m.end() + 60].replace("\n", " ")))
     if headers is not None:
         for k, v in headers.items():
-            if re.search(r"XSSTOK", v) or "\n" in v or "\r" in v: findings.append((label, f"payload or CR/LF reflected in header {k}: {v[:100]}"))
+            # (a payload that comes back percent-encoded, as in a redirect's Location, can't break anything: only raw markup characters or a line break count)
+            if (re.search(r"XSSTOK", v) and re.search(r"[<>\"']", v)) or "\n" in v or "\r" in v: findings.append((label, f"payload or CR/LF reflected in header {k}: {v[:100]}"))
 
 # --- sign in (admin) and a revealed viewer
 def cookies_from(path, auth):
@@ -138,7 +139,39 @@ for f in forms(pg):
     if f.get("action") == "save_notes" and f.get("md_file", "").endswith(".md"): fetch("/?admin", "POST", dict(f, content=NOTES), AH)
 fetch("/?admin", "POST", {"csrf_token": re.search(r'csrf_token" value="([a-f0-9]+)"', pg).group(1), "action": "save_notes", "md_file": "poison.md", "content": NOTES, "new_name": "poison.md"}, AH)
 
-# --- crawl everything, as three kinds of visitor, with hostile query strings and headers
+# --- share links: hostile text in a link's name, note and title, and links to the oddly named folders and photos
+import json, time as _time
+def _admin_csrf():
+    s, pg, _ = fetch("/?admin", headers=AH); return re.search(r'csrf_token" value="([a-f0-9]+)"', pg).group(1)
+def _make_link(**fields):
+    base = {"action": "link_create", "label": "x", "title_mode": "gallery", "max_opens": "0", "ends_at": str(int(_time.time()) + 86400), "locations": "public", "heads_up": "on", "scope_type": "all", "downloads": "off", "zip": "off", "csrf_token": _admin_csrf()}
+    base.update(fields)
+    s, body, _ = fetch("/?admin", method="POST", data=base, headers=dict(AH, **{"X-Requested-With": "gallery-fetch"}))
+    check("POST link_create", body)
+    d = json.loads(body or "{}")
+    if not d.get("ok"): findings.append(("link_create", "not made, so nothing was proven for it: " + body[:160])); return None
+    raw = open(SITE + "/.gallery-links.php").read(); return json.loads(raw[raw.index("\n") + 1:])["links"][d["id"]]["token"]
+def _press(tok):
+    r = urllib.request.Request(B + "/?link=" + tok, data=b"go=1", method="POST")
+    try: resp = op.open(r, timeout=10)
+    except urllib.error.HTTPError as e: resp = e
+    return "; ".join(h.split(";")[0] for h in (resp.headers.get_all("Set-Cookie") or []))
+BADF = ['"><svg onload=alert(XSSTOK1)>', "'><img src=x onerror=alert(XSSTOK2)>"]
+link_toks = []
+for variant in range(3):
+    kw = dict(label=P["tag"] + P["script"] + P["attr"], note=P["img"] + P["attr"] + P["script"], title_mode="custom", title_text=P["tag"] + P["js"] + P["script"])
+    if variant == 0: kw.update(scope_type="folders", scope_folders=json.dumps(BADF), open_in=BADF[0], downloads="some", downloads_folders=json.dumps(BADF[:1]), zip="all")
+    if variant == 1: kw.update(scope_type="photos", scope_photos=json.dumps([BADF[0] + "/p.jpg", "<img src=x onerror=alert(XSSTOK2)>.jpg", '" onmouseover="alert(XSSTOK5).jpg']))
+    t = _make_link(**kw)
+    if t: link_toks.append(t)
+link_cookies = [_press(t) for t in link_toks]
+for t in link_toks:
+    s, body, hd = fetch("/?link=" + t); check("GET ?link=<token> (the opening page)", body, hd)
+    s, body, hd = fetch("/?link=" + t, method="POST", data={"go": "1"}); check("POST ?link=<token> go", body, hd)
+for k, v in P.items():
+    s, body, hd = fetch("/?link=" + urllib.parse.quote(v, safe="")); check("GET ?link=<payload>", body, hd)
+
+# --- crawl everything, as four kinds of visitor, with hostile query strings and headers
 roots = ["/", "/?map", "/?about", "/?admin", "/?admin&hidden"]
 s, pg, _ = fetch("/", headers={"Cookie": viewer_c}); links = set(re.findall(r'href="(\?folder=[^"]+)"', pg))
 for _ in range(2):
@@ -149,9 +182,9 @@ roots += ["/?admin&folder=" + urllib.parse.quote(urllib.parse.unquote(m), safe="
 for k, v in P.items():
     q = urllib.parse.quote(v, safe="")
     roots += [f"/?photo={q}", f"/?folder={q}", f"/?img={q}", f"/?track={q}", f"/?video={q}", f"/?map&x={q}", f"/?about&x={q}", f"/?size={q}&img=loose1.jpg", f"/?admin&folder={q}"]
-for who, h in (("anon", {}), ("revealed", {"Cookie": viewer_c}), ("admin", AH)):
+for who, h in [("anon", {}), ("revealed", {"Cookie": viewer_c}), ("admin", AH)] + [(f"link{i}", {"Cookie": c}) for i, c in enumerate(link_cookies)]:
     for p in sorted(set(roots)):
-        if p == "/?admin" and who != "admin": continue
+        if p.startswith("/?admin") and who != "admin": continue
         hh = dict(h); hh.update({"User-Agent": P["tag"] + P["script"], "Referer": "http://x.test/" + P["tag"], "X-Forwarded-Proto": "https", "X-Forwarded-For": P["tag"], "Accept-Language": P["img"]})
         s, body, hd = fetch(p, headers=hh); check(f"[{who}] GET {p[:70]}", body, hd)
     for host in (P["tag"], P["script"], P["attr"], "evil.test:80/" + P["tag"], "a b"):
