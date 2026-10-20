@@ -4809,7 +4809,10 @@ $slAdmin = function (array $fields) use ($baseSl, $slAdminCookie, $slCsrf) {
 };
 $slForm = fn (array $o = []) => $o + ['action' => 'link_create', 'label' => 'Aunt Carol', 'note' => 'Hi Carol, here are the Rome photos.', 'title_mode' => 'gallery', 'max_opens' => 5, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'downloads' => 'off'];
 
-check('[share links] the admin has a Share links tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slAdminPage, 'location ~ ^/[A-Za-z0-9]{16}$') && str_contains($slAdminPage, 'index.php?link=$1 last;') && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9]{16})$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
+// The nginx rule as the tab writes it (decoded), and whether nginx would accept it: nginx reads an unquoted { as the start of a block, so every { in a pattern must sit inside quotes
+$slNginxRule = function ($page) { return preg_match('/<pre><code>(location ~ [^<]*?index\.php\?link=[^<]*?)<\/code><\/pre>/s', $page, $m) ? html_entity_decode($m[1], ENT_QUOTES) : ''; };
+$slNginxOk = function ($rule) { $bare = preg_replace('/"[^"\n]*"/', '""', $rule); return $rule !== '' && !str_contains($bare, '{16}') && substr_count($bare, '{') === 1 && substr_count($bare, '}') === 1; };
+check('[share links] the admin has a Share links tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slNginxRule($slAdminPage), 'location ~ "^/[A-Za-z0-9]{16}$" {') && str_contains($slNginxRule($slAdminPage), 'index.php?link=$1 last;') && $slNginxOk($slNginxRule($slAdminPage)) && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9]{16})$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
 $slMade = $slAdmin($slForm());
 $slAll = $slLinks()['links'] ?? [];
 $slId = $slMade['id'] ?? '';
@@ -4954,7 +4957,7 @@ file_put_contents("$fxSlSub/trip/.gallery-config.php", cfg_text(['ADMIN_PASSWORD
 $portSlSub = find_free_port(); @touch("$fxSlSub/trip/index.php", time() - 3600); start_server($fxSlSub, $portSlSub);
 [, , $slSubLogin] = http_post("http://127.0.0.1:$portSlSub/trip/index.php?admin", ['access_code' => 'sl-sub-pw-1'], [], false);
 $slSubPage = http_get("http://127.0.0.1:$portSlSub/trip/index.php?admin", ['Cookie: ' . extract_cookie_header($slSubLogin)])[1];
-check('[share links] in a gallery installed at /trip/ the nginx rule is for /trip/ (no top-of-site warning) and the probe asks for /trip/ plus the probe token', str_contains($slSubPage, 'location ~ ^/trip/[A-Za-z0-9]{16}$ {') && str_contains($slSubPage, 'rewrite ^/trip/([A-Za-z0-9]{16})$ /trip/index.php?link=$1 last;') && str_contains($slSubPage, 'data-probe="/trip/0000000000000000"') && !str_contains($slSubPage, 'At the top of the site'));
+check('[share links] in a gallery installed at /trip/ the nginx rule is for /trip/ (no top-of-site warning) and the probe asks for /trip/ plus the probe token', str_contains($slNginxRule($slSubPage), 'location ~ "^/trip/[A-Za-z0-9]{16}$" {') && str_contains($slNginxRule($slSubPage), 'rewrite "^/trip/([A-Za-z0-9]{16})$" /trip/index.php?link=$1 last;') && $slNginxOk($slNginxRule($slSubPage)) && str_contains($slSubPage, 'data-probe="/trip/0000000000000000"') && !str_contains($slSubPage, 'At the top of the site'));
 [$slSubProbeStatus, , $slSubProbeHeaders] = http_get("http://127.0.0.1:$portSlSub/trip/index.php?link=0000000000000000");
 check('[share links] the probe token answers with the marker header but is not counted as a wrong guess', $slSubProbeStatus === 404 && in_array('X-Gallery-Link: invalid', $slSubProbeHeaders, true) && !preg_grep('/^link\|/', array_keys(read_data_file("$fxSlSub/trip/.gallery-login-attempts.php"))));
 
@@ -5360,6 +5363,91 @@ check('[preview] a revoked link can\'t be previewed, and its old preview shows n
 file_put_contents("$fxS/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slshare-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => false, 'TRACK_VIEWS' => true]));
 $shOffPage = http_get("$baseS/?folder=Rome", $shOwner)[1];
 check('[share kit] with share links switched off the owner gets none of the pieces (no kit, no Share buttons, no popup question)', !str_contains($shOffPage, '__shareCfg') && !str_contains($shOffPage, 'page-share" data-gs-folder') && !str_contains($shOffPage, 'data-select="share"') && !str_contains($shOffPage, 'This photo is private'));
+
+echo "== share links: photo locations as a link holder sees them ==\n";
+
+$fxO = new_fixture_dir('slloc');
+mkdir("$fxO/Rome", 0775); mkdir("$fxO/Florence", 0775);
+foreach (['Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/r3.jpg', 'Florence/f1.jpg', 'Florence/f2.jpg'] as $i => $f) make_jpeg("$fxO/$f", 70 + $i, 50, 100 + $i * 10, 60, 60);
+$loPlace = fn ($a, $b) => ['lat' => $a, 'lng' => $b, 'label' => ''];
+$loWrite = function ($romeOn) use ($fxO, $loPlace) {
+    write_data_file("$fxO/Rome/.gallery-items.php", ['items' => ['r1.jpg' => ['location' => $loPlace(41.90, 12.49), 'restriction' => 'private'], 'r2.jpg' => ['location' => $loPlace(41.91, 12.50)], 'r3.jpg' => ['location' => $loPlace(41.92, 12.51), 'locationVisibility' => 'hide']] + [], 'groups' => [], 'locationEnabled' => $romeOn]);
+};
+$loWrite(true);
+write_data_file("$fxO/Florence/.gallery-items.php", ['items' => ['f1.jpg' => ['location' => $loPlace(43.77, 11.25)], 'f2.jpg' => ['location' => $loPlace(43.78, 11.26)]], 'groups' => [], 'locationEnabled' => true]);
+file_put_contents("$fxO/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slloc-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_MAP' => true]));
+copy($indexSrc, "$fxO/index.php");
+$portO = find_free_port(); start_server($fxO, $portO); $baseO = "http://127.0.0.1:$portO";
+[, , $loLogin] = http_post("$baseO/?admin", ['access_code' => 'slloc-admin-1'], [], false);
+$loCookie = extract_cookie_header($loLogin); $loCsrf = extract_csrf_token(http_get("$baseO/?admin", ["Cookie: $loCookie"])[1]);
+$loAdmin = function (array $fields) use ($baseO, $loCookie, $loCsrf) { [, $body] = http_post("$baseO/?admin", $fields + ['csrf_token' => $loCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $loCookie"]); return json_decode($body, true) ?? []; };
+$loMake = function ($label, array $more) use ($loAdmin, $fxO) {
+    $r = $loAdmin($more + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off']);
+    $d = read_data_file("$fxO/.gallery-links.php"); return $d['links'][$r['id'] ?? ''] ?? null;
+};
+$loHolder = function ($link) use ($baseO) { [, , $h] = http_post("$baseO/?link=" . $link['token'], ['go' => '1'], [], false); return ['Cookie: ' . extract_cookie_header($h)]; };
+// which of a folder's photos the page hands out a location for, as the person asking
+$loSees = function (array $headers, $folder) use ($baseO) {
+    $page = http_get("$baseO/?folder=$folder", $headers)[1];
+    if (!preg_match('/const files = (\[.*?\]);/s', $page, $f) || !preg_match('/const locations = (\[.*?\]);\n/s', $page, $l)) return null;
+    $out = []; foreach (json_decode($f[1], true) as $i => $name) if ((json_decode($l[1], true)[$i] ?? null) !== null) $out[] = $name;
+    return $out;
+};
+$loPhoto = $loMake('one photo', ['scope_type' => 'photos', 'scope_photos' => '["Rome/r1.jpg"]', 'locations' => 'public']);
+$loHold = $loHolder($loPhoto);
+check('[share links locations] with Rome\'s public locations on, a link for one photo shows the locations the public sees in Rome (and the shared photo\'s), exactly as in any other folder', $loSees([], 'Rome') === ['Rome/r2.jpg'] && $loSees($loHold, 'Rome') === ['Rome/r1.jpg', 'Rome/r2.jpg'] && $loSees($loHold, 'Florence') === ['Florence/f1.jpg', 'Florence/f2.jpg'] && $loSees([], 'Florence') === ['Florence/f1.jpg', 'Florence/f2.jpg']);
+$loWrite(false);
+check('[share links locations] with Rome\'s public locations off, the public and a link set to "as the public sees them" get none in Rome, and other folders are unaffected', $loSees([], 'Rome') === [] && $loSees($loHold, 'Rome') === [] && $loSees($loHold, 'Florence') === ['Florence/f1.jpg', 'Florence/f2.jpg']);
+$loAdmin(['action' => 'link_save', 'id' => $loPhoto['id'], 'label' => 'one photo', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'all', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off', 'scope_type' => 'photos', 'scope_photos' => '["Rome/r1.jpg"]']);
+check('[share links locations] ...and editing the link to "all saved locations" shows every stored location in Rome (even a photo hidden on its own), while the public still gets none', $loSees($loHold, 'Rome') === ['Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/r3.jpg'] && $loSees([], 'Rome') === []);
+
+echo "== photo locations: when they are read from the files, and checking again ==\n";
+
+$fxG = new_fixture_dir('slgps');
+mkdir("$fxG/Rome", 0775);
+$gLat = [[41, 1], [54, 1], [0, 1]]; $gLng = [[12, 1], [29, 1], [0, 1]];
+foreach (['r1', 'r2', 'r3', 'hidden', 'fresh'] as $n) make_gps_jpeg("$fxG/Rome/$n.jpg", 'N', $gLat, 'E', $gLng);   // every one of these files has a location in it
+make_jpeg("$fxG/Rome/plain.jpg", 60, 50, 100, 60, 60);                                                            // this one has none
+$gHasImagick = class_exists('Imagick');
+if ($gHasImagick) file_put_contents("$fxG/Rome/broken.heic", random_bytes(300));                                  // a file the image library can't read
+// What the gallery remembers from an earlier read: r1-r3 and plain were looked at and nothing was stored (the situation of the owner's Rome folder), hidden is set to hide its location, fresh and broken were never looked at.
+write_data_file("$fxG/Rome/.gallery-items.php", ['items' => ['r1.jpg' => ['gpsChecked' => true], 'r2.jpg' => ['gpsChecked' => true], 'r3.jpg' => ['gpsChecked' => true], 'plain.jpg' => ['gpsChecked' => true], 'hidden.jpg' => ['gpsChecked' => true, 'locationVisibility' => 'hide']], 'groups' => [], 'locationEnabled' => false]);
+file_put_contents("$fxG/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slgps-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+copy($indexSrc, "$fxG/index.php");
+$portG = find_free_port(); start_server($fxG, $portG); $baseG = "http://127.0.0.1:$portG";
+[, , $gLogin] = http_post("$baseG/?admin", ['access_code' => 'slgps-admin-1'], [], false);
+$gCookie = extract_cookie_header($gLogin);
+$gPage = function () use ($baseG, $gCookie) { return http_get("$baseG/?admin&folder=Rome", ["Cookie: $gCookie"])[1]; };
+$gCsrf = extract_csrf_token($gPage());
+$gPost = function (array $f) use ($baseG, $gCookie, $gCsrf) { [, $b] = http_post("$baseG/?admin&folder=Rome", $f + ['csrf_token' => $gCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $gCookie"]); return json_decode($b, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($b, 0, 80)]; };
+$gItems = fn () => read_data_file("$fxG/Rome/.gallery-items.php")['items'] ?? [];
+$gHas = fn ($n) => !empty($gItems()[str_contains($n, '.') ? $n : "$n.jpg"]['location']);
+$gOffPage = $gPage();
+check('[locations] with the folder\'s location switch off the settings page has no "Check the photos again" button, and merely opening the folder reads nothing', !str_contains($gOffPage, 'class="secondary loc-recheck-btn"') && !$gHas('fresh') && empty($gItems()['fresh.jpg']['gpsChecked']));
+$gOn = $gPost(['action' => 'toggle_location_enabled', 'enabled' => '1']);
+check('[locations] switching the folder\'s locations on reads the photos that were never read (and stores what the file says), and remembers each as read', $gOn['ok'] === true && $gHas('fresh') && !empty($gItems()['fresh.jpg']['gpsChecked']) && abs(($gItems()['fresh.jpg']['location']['lat'] ?? 0) - 41.9) < 0.01);
+check('[locations] ...but not the ones read before: they were remembered as having none, so switching off and on leaves them without a location, and the reply says so and what to press', !$gHas('r1') && !$gHas('r2') && !$gHas('r3') && !$gHas('plain') && str_contains($gOn['text'], 'read before') && str_contains($gOn['text'], 'Check the photos for locations again'));
+$gOnPage = $gPage();
+check('[locations] ...and the settings page now has the "Check the photos again" button, with its explanation', str_contains($gOnPage, 'class="secondary loc-recheck-btn"') && str_contains($gOnPage, 'read from its file once and then remembered'));
+check('[locations] a file that couldn\'t be read is not remembered as "no location", so the next look tries again', !$gHasImagick || (empty($gItems()['broken.heic']['gpsChecked']) && !$gHas('broken')));
+$gRe = $gPost(['action' => 'recheck_folder_gps']);
+$gExpectLooked = $gHasImagick ? 5 : 4;
+check('[locations] "Check the photos again" reads every photo that has no location, remembered or not, and stores what the files say (r1-r3 now have it)', $gRe['ok'] === true && $gHas('r1') && $gHas('r2') && $gHas('r3') && str_contains($gRe['text'], "Read $gExpectLooked files") && str_contains($gRe['text'], '3 now have a location') && abs(($gItems()['r1.jpg']['location']['lng'] ?? 0) - 12.483333) < 0.01);
+check('[locations] ...a photo whose file has no location stays without one and is counted as such, and one set to hide its location is left alone', !$gHas('plain') && str_contains($gRe['text'], '1 has none in the file') && !$gHas('hidden') && ($gItems()['hidden.jpg']['locationVisibility'] ?? '') === 'hide');
+check('[locations] ...and a file that couldn\'t be read is named, counted and still not remembered', !$gHasImagick || (str_contains($gRe['text'], '1 couldn\'t be read at all (broken.heic') && empty($gItems()['broken.heic']['gpsChecked'])));
+$gBefore = json_encode(array_map(fn ($i) => $i['location'] ?? null, $gItems()));
+$gRe2 = $gPost(['action' => 'recheck_folder_gps']);
+check('[locations] checking again is harmless: nothing already stored changes', $gRe2['ok'] === true && json_encode(array_map(fn ($i) => $i['location'] ?? null, $gItems())) === $gBefore);
+$gPost(['action' => 'toggle_location_enabled', 'enabled' => '0']);
+$gOff = $gPost(['action' => 'recheck_folder_gps']);
+check('[locations] with the switch off, "check again" refuses and says what to switch on', ($gOff['ok'] ?? null) === false && str_contains($gOff['text'], 'Show photo locations publicly'));
+$gPost(['action' => 'toggle_location_enabled', 'enabled' => '1']);
+// when a photo added later is read: not on a visitor's request, but when the owner opens the folder in the admin
+make_gps_jpeg("$fxG/Rome/late.jpg", 'N', $gLat, 'E', $gLng);
+http_get("$baseG/?folder=Rome"); http_get("$baseG/");
+check('[locations] a photo added later is not read on a visitor\'s request (a page view reads no file)', empty($gItems()['late.jpg']));
+$gPage();
+check('[locations] ...it is read, and its location stored, when the owner opens the folder in the admin', $gHas('late') && !empty($gItems()['late.jpg']['gpsChecked']));
 
 /* --------------------------------------------------------------------- */
 

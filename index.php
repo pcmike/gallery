@@ -5564,14 +5564,16 @@ function import_folder_gps($dir, $folderReal, $looseFiles) {
         $bare = basename($file);
         $entry = $data['items'][$bare] ?? [];
         if (!empty($entry['location']) || !empty($entry['gpsChecked']) || !gps_readable_file($file)) continue;
-        $found[$bare] = extract_photo_gps(resolve_real_path($dir, $file));
+        $status = 'none';
+        $found[$bare] = [extract_photo_gps(resolve_real_path($dir, $file), $status), $status];
     }
     if (!$found) return 0;
     $imported = 0;
     items_update($folderReal, function (&$d) use ($found, &$imported) {
-        foreach ($found as $bare => $loc) {
+        foreach ($found as $bare => [$loc, $status]) {
             $entry = $d['items'][$bare] ?? [];
             if (!empty($entry['location']) || !empty($entry['gpsChecked'])) continue;
+            if ($loc === null && $status === 'unreadable') continue;   // a file that couldn't be read hasn't been looked at: try again next time, don't remember it as "no location"
             $entry['gpsChecked'] = true;
             if ($loc !== null) {
                 $entry['location'] = ['lat' => $loc['lat'], 'lng' => $loc['lng'], 'label' => ''];
@@ -5581,6 +5583,40 @@ function import_folder_gps($dir, $folderReal, $looseFiles) {
         }
     });
     return empty($GLOBALS['__data_write_failed']) ? $imported : 0;
+}
+
+/**
+ * "Check the photos for locations again": reads, from their files, every photo in this folder that has no stored location, whether or not
+ * it was read before. (import_folder_gps() reads each photo once and remembers the answer, so a photo that was read when it couldn't be, or
+ * before its file had a location, would otherwise never be looked at again.) A photo set to hide its location is left alone, and one that
+ * already has a location is never touched. Returns how many were found, how many have none in the file, and the files that couldn't be read.
+ */
+function recheck_folder_gps($dir, $folderReal, $looseFiles) {
+    $out = ['looked' => 0, 'found' => 0, 'none' => 0, 'unreadable' => [], 'hidden' => 0];
+    if (!ENABLE_PHOTO_LOCATION) return $out;
+    $data = items_read($folderReal);
+    $read = [];
+    foreach ($looseFiles as $file) {
+        $bare = basename($file);
+        $entry = $data['items'][$bare] ?? [];
+        if (!empty($entry['location']) || !gps_readable_file($file)) continue;
+        if (($entry['locationVisibility'] ?? 'inherit') === 'hide') { $out['hidden']++; continue; }
+        $status = 'none';
+        $read[$bare] = [extract_photo_gps(resolve_real_path($dir, $file), $status), $status];
+    }
+    $out['looked'] = count($read);
+    if (!$read) return $out;
+    items_update($folderReal, function (&$d) use ($read, &$out) {
+        foreach ($read as $bare => [$loc, $status]) {
+            $entry = $d['items'][$bare] ?? [];
+            if (!empty($entry['location'])) continue;
+            if ($loc !== null) { $entry['location'] = ['lat' => $loc['lat'], 'lng' => $loc['lng'], 'label' => '']; $entry['gpsChecked'] = true; $out['found']++; }
+            elseif ($status === 'unreadable') { $out['unreadable'][] = $bare; }   // not marked as checked: it hasn't really been looked at
+            else { $entry['gpsChecked'] = true; $out['none']++; }
+            $d['items'][$bare] = $entry;
+        }
+    });
+    return $out;
 }
 
 /** A numeric latitude/longitude pair, validated the same discipline
@@ -5615,23 +5651,25 @@ function exif_gps_to_decimal($component, $ref) {
  *  GPS block to read, so manual entry is the only route. Returns null on
  *  anything missing or unparseable — manual entry is always the
  *  fallback, never a hard failure. */
-function extract_photo_gps($realPath) {
+function extract_photo_gps($realPath, &$status = null) {
+    $status = 'none';   // 'ok' (a location was found), 'none' (the file has none) or 'unreadable' (the file couldn't be read at all)
     $ext = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
     if (in_array($ext, ['heic', 'heif'], true)) {
-        return extract_heic_gps($realPath);
+        return extract_heic_gps($realPath, $status);
     }
     if (in_array($ext, ['mov', 'mp4'], true)) {
-        return extract_video_gps($realPath);
+        return extract_video_gps($realPath, $status);
     }
-    return extract_jpeg_gps($realPath);
+    return extract_jpeg_gps($realPath, $status);
 }
 
 /** A video's location, from the tag phones write into it: QuickTime's "location.ISO6709" item (iPhone) or the
  *  \xA9xyz atom (Android and most others), both a string like "+48.8584+002.2945+035.000/". Null if it has none. */
-function extract_video_gps($realPath) {
+function extract_video_gps($realPath, &$status = null) {
+    $status = 'none';
     $size = @filesize($realPath);
     $fh = $size === false ? false : @fopen($realPath, 'rb');
-    if (!$fh) return null;
+    if (!$fh) { $status = 'unreadable'; return null; }
     $strings = [];
     try {
         $walk = function ($from, $to, $depth) use (&$walk, &$strings, $fh) {
@@ -5689,6 +5727,7 @@ function extract_video_gps($realPath) {
     }
     foreach ($strings as $str) {
         if (preg_match('/^\s*([+-]\d{1,2}(?:\.\d+)?)([+-]\d{1,3}(?:\.\d+)?)/', $str, $m) && is_valid_coordinate($m[1], $m[2])) {
+            $status = 'ok';
             return ['lat' => round((float) $m[1], 6), 'lng' => round((float) $m[2], 6)];
         }
     }
@@ -5700,14 +5739,16 @@ function extract_video_gps($realPath) {
  *  properties (each coordinate as "n/d,n/d,n/d"). pingImage() reads
  *  just the metadata, without decoding the pixels. Needs Imagick with
  *  HEIC support, the same condition HEIC display already has. */
-function extract_heic_gps($realPath) {
-    if (!class_exists('Imagick')) return null;
+function extract_heic_gps($realPath, &$status = null) {
+    $status = 'none';
+    if (!class_exists('Imagick')) { $status = 'unreadable'; return null; }
     try {
         $im = new Imagick();
         $im->pingImage($realPath);
         $props = $im->getImageProperties('exif:GPS*');
         $im->clear();
     } catch (Exception $e) {
+        $status = 'unreadable';
         return null;
     }
     $split = function ($value) {
@@ -5717,12 +5758,14 @@ function extract_heic_gps($realPath) {
     $lat = exif_gps_to_decimal($split($props['exif:GPSLatitude']), $props['exif:GPSLatitudeRef'] ?? 'N');
     $lng = exif_gps_to_decimal($split($props['exif:GPSLongitude']), $props['exif:GPSLongitudeRef'] ?? 'E');
     if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng)) return null;
+    $status = 'ok';
     return ['lat' => round($lat, 6), 'lng' => round($lng, 6)];
 }
 
 /** JPEG half of extract_photo_gps(). */
-function extract_jpeg_gps($realPath) {
-    if (!function_exists('exif_read_data')) return null;
+function extract_jpeg_gps($realPath, &$status = null) {
+    $status = 'none';
+    if (!function_exists('exif_read_data')) { $status = 'unreadable'; return null; }
     $ext = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
     if (!in_array($ext, ['jpg', 'jpeg'], true)) return null;
     $exif = @exif_read_data($realPath, 'GPS');
@@ -5730,6 +5773,7 @@ function extract_jpeg_gps($realPath) {
     $lat = exif_gps_to_decimal($exif['GPSLatitude'], $exif['GPSLatitudeRef'] ?? 'N');
     $lng = exif_gps_to_decimal($exif['GPSLongitude'], $exif['GPSLongitudeRef'] ?? 'E');
     if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng)) return null;
+    $status = 'ok';
     return ['lat' => round($lat, 6), 'lng' => round($lng, 6)];
 }
 
@@ -6456,7 +6500,8 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             return ['type' => 'ok', 'text' => 'Location sharing disabled for this folder. Saved coordinates are kept, just not shown.'];
         }
         $prefix = $adminFolderPath === null ? '' : $adminFolderPath . '/';
-        $imported = import_folder_gps($dir, $targetReal, split_folder_level($files, $prefix)['loose']);
+        $loose = split_folder_level($files, $prefix)['loose'];
+        $imported = import_folder_gps($dir, $targetReal, $loose);
         $text = 'Location sharing enabled for this folder.';
         if (!ENABLE_PHOTO_LOCATION) {
             $text .= ' Nothing shows yet, because ENABLE_PHOTO_LOCATION is off in index.php.';
@@ -6465,7 +6510,37 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         } else {
             $text .= ' None of its photos has GPS to show; add coordinates by hand on any photo.';
         }
+        if (ENABLE_PHOTO_LOCATION) {
+            // photos that were read before and had no location then are not read again by switching off and on: say so, and what to press
+            $seen = items_read($targetReal)['items'] ?? [];
+            $readBefore = 0;
+            foreach ($loose as $f) if (!empty($seen[basename($f)]['gpsChecked']) && empty($seen[basename($f)]['location']) && ($seen[basename($f)]['locationVisibility'] ?? 'inherit') !== 'hide' && gps_readable_file($f)) $readBefore++;
+            if ($readBefore > 0) $text .= ' (' . $readBefore . ' ' . ($readBefore === 1 ? 'was' : 'were') . ' read before and had none then: switching this off and on doesn\'t read them again. Press "Check the photos for locations again" to.)';
+        }
         return ['type' => 'ok', 'text' => $text];
+    }
+
+    if ($action === 'recheck_folder_gps') {
+        $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
+        $reply = function ($ok, $text) use ($isFetch) {
+            if ($isFetch) admin_json_exit(['ok' => $ok, 'text' => $text]);
+            return ['type' => $ok ? 'ok' : 'error', 'text' => $text];
+        };
+        $itemsNow = items_read($targetReal);
+        if (!ENABLE_PHOTO_LOCATION) return $reply(false, 'Photo locations are off for the whole gallery (Site settings).');
+        if (empty($itemsNow['locationEnabled'])) return $reply(false, 'Switch "Show photo locations publicly" on for this folder first.');
+        $prefix = $adminFolderPath === null ? '' : $adminFolderPath . '/';
+        $r = recheck_folder_gps($dir, $targetReal, split_folder_level($files, $prefix)['loose']);
+        if (!empty($GLOBALS['__data_write_failed'])) return $reply(false, 'Nothing was saved: this folder isn\'t writable by the web server.');
+        $n = function ($c, $w) { return $c . ' ' . $w . ($c === 1 ? '' : 's'); };
+        if ($r['looked'] === 0) {
+            $text = 'Every photo here that can have a location already has one' . ($r['hidden'] > 0 ? ' (or is set to hide it: ' . $r['hidden'] . ')' : '') . '. Nothing to read again.';
+        } else {
+            $text = 'Read ' . $n($r['looked'], 'file') . ': ' . $r['found'] . ' now ' . ($r['found'] === 1 ? 'has' : 'have') . ' a location from the file, ' . $r['none'] . ' ' . ($r['none'] === 1 ? 'has' : 'have') . ' none in the file';
+            if ($r['unreadable']) $text .= ', ' . count($r['unreadable']) . ' couldn\'t be read at all (' . implode(', ', array_slice($r['unreadable'], 0, 3)) . (count($r['unreadable']) > 3 ? ', …' : '') . ': the server\'s image library may not read this kind of file)';
+            $text .= '.';
+        }
+        return $reply(true, $text);
     }
 
     if ($action === 'add_gallery_marker') {
@@ -6897,6 +6972,12 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
     </div>
 <?php endif; ?>
     <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), $isRoot ? 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : '') : 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : ''), $locWarn); ?>
+    <?php if ($locOn): ?>
+    <div class="loc-recheck" data-csrf="<?= $csrfToken ?>">
+      <button type="button" class="secondary loc-recheck-btn">Check the photos for locations again</button><span class="rowstate loc-recheck-state" role="status" aria-live="polite"></span>
+      <p class="hint">Each photo's location is read from its file once and then remembered, so a photo that was read before its file had one (or when it couldn't be read) stays without. This reads those again. A photo whose location you cleared gets it back from the file; one set to hide its location stays hidden.</p>
+    </div>
+    <?php endif; ?>
     <div class="map-under<?= $locOn ? '' : ' no-loc' ?>" id="map-under"<?= ENABLE_PHOTO_LOCATION ? '' : ' data-global-off="1"' ?>>
       <p class="warn-note map-loc-note">Locations are off here, so the map has nothing to show. A photo you set to show its location on its own still appears.</p>
       <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot); ?>
@@ -7595,7 +7676,8 @@ function render_link_rules_help() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
     $loc = $base === '' ? '/' : $base . '/';
-    $nginx = "location ~ ^" . $loc . "[A-Za-z0-9]{" . LINK_TOKEN_LENGTH . "}\$ {\n    rewrite ^" . $loc . "([A-Za-z0-9]{" . LINK_TOKEN_LENGTH . "})\$ " . $loc . "index.php?link=\$1 last;\n}\n";
+    // (nginx reads a { in an unquoted pattern as the start of a block, so both patterns are quoted)
+    $nginx = "location ~ \"^" . $loc . "[A-Za-z0-9]{" . LINK_TOKEN_LENGTH . "}\$\" {\n    rewrite \"^" . $loc . "([A-Za-z0-9]{" . LINK_TOKEN_LENGTH . "})\$\" " . $loc . "index.php?link=\$1 last;\n}\n";
     $apache = "RewriteEngine On\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteCond %{REQUEST_FILENAME} !-d\nRewriteRule ^([A-Za-z0-9]{" . LINK_TOKEN_LENGTH . "})\$ index.php?link=\$1 [L,QSA]\n";
     ob_start();
 ?>
@@ -7909,10 +7991,24 @@ KIT_CSS;
     clearTimeout(toastTimer); t.className = 'gs-toast' + (bad ? ' err' : ''); t.textContent = text; t.hidden = false;
     toastTimer = setTimeout(function () { t.hidden = true; }, bad ? 6000 : 3000);
   }
+  // Copying an address. The older way goes first: it is synchronous, so it always happens inside the click, which every browser, Safari most of all,
+  // insists on (Safari refused the first press of the newer call). The newer clipboard call is the second choice, and an error is shown only if both are refused.
+  function legacyCopy(text) {
+    var prev = document.activeElement, ta = document.createElement('textarea'), ok = false;
+    ta.value = text; ta.setAttribute('readonly', ''); ta.setAttribute('aria-hidden', 'true');
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;font-size:16px';
+    document.body.appendChild(ta); ta.select();
+    try { ta.setSelectionRange(0, text.length); } catch (e) {}
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    if (prev && prev !== document.body && prev.focus) { try { prev.focus(); } catch (e) {} }
+    return ok;
+  }
   function copyText(text, done) {
-    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () { say('Couldn\'t copy: select it and copy by hand.', true); }); return; }
-    var ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); done(); } catch (e) { say('Couldn\'t copy: select it and copy by hand.', true); } document.body.removeChild(ta);
+    function fail() { say('Couldn\'t copy: select it and copy by hand.', true); }
+    if (legacyCopy(text)) { done(); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, fail); return; }
+    fail();
   }
   // The code, drawn on a canvas: white all round, the gallery's own icon in the middle (the error correction covers it with room to spare).
   function qrCanvas(text, px) {
@@ -7935,28 +8031,39 @@ KIT_CSS;
     c.lineTo(x0 + f + fw * 0.72, x0 + f + fw * 0.6); c.lineTo(x0 + f + fw * 0.94, x0 + f + fw * 0.82); c.stroke();
     return cv;
   }
-  function blobOf(text, px) { return new Promise(function (res) { var cv = qrCanvas(text, px); if (!cv) { res(null); return; } cv.toBlob(function (b) { res(b); }, 'image/png'); }); }
-  function copyImage(text) {
-    return blobOf(text, 1024).then(function (blob) {
-      if (!blob) { say('That address is too long for a QR code.', true); return; }
-      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
-        return navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(function () { say('Picture copied. Paste it into a message.'); }, function () { say('Your browser won\'t copy a picture here: use Save image.', true); });
-      }
-      say('Your browser can\'t copy a picture: use Save image.', true);
+  var blobs = {};   // address -> { p: a promise of the picture, blob: the picture once it is made }
+  function warm(text) {
+    if (blobs[text]) return blobs[text];
+    var e = blobs[text] = { blob: null };
+    e.p = new Promise(function (res, rej) {
+      var cv = qrCanvas(text, 1024); if (!cv) { rej(new Error('long')); return; }
+      cv.toBlob(function (b) { if (b) { e.blob = b; res(b); } else rej(new Error('blob')); }, 'image/png');
     });
+    e.p.catch(function () {});
+    return e;
+  }
+  function copyImage(text) {
+    if (!(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write)) { say('Your browser can\'t copy a picture: use Save image.', true); return; }
+    // The picture goes over as a promise, right now, inside the click: making it takes a moment, and Safari refuses a write that comes later.
+    try {
+      navigator.clipboard.write([new ClipboardItem({ 'image/png': warm(text).p })]).then(function () { say('Picture copied. Paste it into a message.'); }, function () { say('Your browser won\'t copy a picture here: use Save image.', true); });
+    } catch (e) { say('Your browser won\'t copy a picture here: use Save image.', true); }
   }
   function saveImage(text, name) {
-    return blobOf(text, 1024).then(function (blob) {
-      if (!blob) { say('That address is too long for a QR code.', true); return; }
-      var file = null; try { file = new File([blob], (name || 'share-link') + '-qr.png', { type: 'image/png' }); } catch (e) {}
+    var e = warm(text), fname = (name || 'share-link').replace(/[^\w.-]+/g, '-') + '-qr.png';
+    function go(blob) {
+      var file = null; try { file = new File([blob], fname, { type: 'image/png' }); } catch (x) {}
       if (file && navigator.canShare && navigator.canShare({ files: [file] })) { return navigator.share({ files: [file] }).catch(function () {}); }   // a phone: "Save Image" is in its share sheet
-      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (name || 'share-link').replace(/[^\w.-]+/g, '-') + '-qr.png';
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname;
       document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
-    });
+    }
+    if (e.blob) return go(e.blob);   // already made, so a phone's share sheet is asked inside the click
+    return e.p.then(go, function () { say('That address is too long for a QR code.', true); });
   }
   // The large, white version, to hold up to someone's camera across a table.
   function showLarge(url, name) {
     var cv = qrCanvas(url, 900); if (!cv) { say('That address is too long for a QR code.', true); return; }
+    warm(url);
     var o = document.createElement('div'); o.className = 'gs-large'; o.setAttribute('role', 'dialog'); o.setAttribute('aria-modal', 'true'); o.setAttribute('aria-label', 'QR code');
     var phone = window.matchMedia && matchMedia('(pointer: coarse)').matches;
     o.innerHTML = '<div class="gs-large-in"><div class="gs-large-code"></div><div class="gs-large-name">' + esc(name || '') + '</div><div class="gs-large-hint">' + (phone ? 'Hold this up to their camera.<br>Stays on screen until you press Done.' : 'Scan with the camera to open') + '</div><div class="gs-large-btns">' + (phone ? '' : '<button type="button" class="gs-btn gs-light" data-gs="copyimg">' + icon('copy') + ' Copy image</button>') + '<button type="button" class="gs-btn gs-dark" data-gs="done">Done</button></div></div>';
@@ -7976,7 +8083,7 @@ KIT_CSS;
       + '<p class="gs-note">Copy image puts the code on the clipboard as a picture, to paste into a message.' + (canShare ? ' Share… opens the phone\'s own share sheet.' : '') + '</p></div></div>';
     function draw() {
       var box = el.querySelector('.gs-qrbox'), url = opts.url(), cv = qrCanvas(url, 480);
-      box.innerHTML = ''; if (cv) { cv.setAttribute('aria-label', 'QR code for the link'); box.appendChild(cv); } else box.textContent = 'That address is too long for a QR code.';
+      box.innerHTML = ''; if (cv) { cv.setAttribute('aria-label', 'QR code for the link'); box.appendChild(cv); warm(url); } else box.textContent = 'That address is too long for a QR code.';
     }
     el.addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('[data-gs]') : null; if (!b || !el.contains(b)) return;
@@ -9245,6 +9352,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-newt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--accent); }
   .sl-amber { color:#e0a028; }
   .sl-viewswitch { margin-right:4px; }
+  .loc-recheck { margin:2px 0 14px 56px; }
+  .loc-recheck .loc-recheck-state { margin-left:10px; }
+  .loc-recheck .loc-recheck-state.ok { color:#3ba55c; }
+  .loc-recheck .loc-recheck-state.err { color:#ff8587; }
   @media (max-width: 640px) { .sl-head { flex-wrap:wrap; } .sl-count { flex:1 0 100%; } .sl-viewswitch { margin-right:auto; } }
   .sl-prevnote { display:flex; gap:10px; align-items:center; margin:0 0 12px; padding:10px 14px; background:#262046; border:1px solid #3d3470; border-radius:8px; color:#e9e6ff; font-size:0.88rem; line-height:1.4; }
   .sl-prevnote .ico { flex:none; color:#b9b2ff; }
@@ -10250,6 +10361,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     btn.addEventListener('click', function () {
       var text = btn.parentNode.querySelector('pre').textContent;
       function done() { var old = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = old; }, 1400); }
+      if (window.GalleryShare && window.GalleryShare.copyText) { window.GalleryShare.copyText(text, done); return; }
       if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); return; }
       var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
       try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
@@ -10577,6 +10689,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function markSeen() { if (box.querySelector('.sl-newt')) post({ action: 'link_seen' }).catch(function () {}); }
     window.__slSeen = markSeen;
     function copy(text, done) {
+      if (window.GalleryShare && window.GalleryShare.copyText) { window.GalleryShare.copyText(text, done); return; }   // (the share kit's copy: it never fails the first press)
       if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); return; }
       var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
       try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
@@ -10808,6 +10921,20 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (draft) { sessionStorage.removeItem('galleryShareDraft'); var dv = JSON.parse(draft); dv.id = ''; setTimeout(function () { openForm(dv); }, 300); }
     } catch (x) {}
   })();
+  // "Check the photos for locations again": one request, and the answer (how many were found, how many have none, which couldn't be read) beside the button.
+  [].forEach.call(document.querySelectorAll('.loc-recheck'), function (box) {
+    var btn = box.querySelector('.loc-recheck-btn'), state = box.querySelector('.loc-recheck-state');
+    btn.addEventListener('click', function () {
+      var body = new URLSearchParams(); body.set('csrf_token', box.getAttribute('data-csrf')); body.set('action', 'recheck_folder_gps');
+      btn.disabled = true; state.className = 'rowstate loc-recheck-state busy'; state.textContent = 'Reading the files…';
+      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+          headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+        .then(function (j) { state.className = 'rowstate loc-recheck-state ' + (j.ok ? 'ok' : 'err'); state.textContent = j.text || (j.ok ? 'Done.' : 'Not done.'); window.__siteDirty = true; })
+        .catch(function (e) { state.className = 'rowstate loc-recheck-state err'; state.textContent = e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t check: check your connection.'; })
+        .then(function () { btn.disabled = false; });
+    });
+  });
   // Private folder: a switch like the others. Switching it on saves at once; switching it off first says what will happen (how many
   // photos stay private, how many become public) and waits for a yes.
   [].forEach.call(document.querySelectorAll('.priv-folder-form'), function (form) {
@@ -13754,10 +13881,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .link-preview .lp-panel li.no .ico { color: #9a9aa2; }
   .link-preview .lp-note { margin: 12px 0 0; font-size: 0.8rem; color: #8e8e96; }
   @media (max-width: 640px) { .link-preview .lp-bar { flex-wrap: wrap; } .link-preview .lp-t { flex-basis: 100%; order: 1; } .link-preview .lp-bar .ico { display: none; } .link-preview .lp-more { order: 2; margin-right: auto; } .link-preview .lp-exit { order: 3; } }
-  .link-headsup { display:flex; align-items:center; gap:10px; padding:8px 14px; background:#1f2233; border-bottom:1px solid #2f3350; font-size:0.85rem; line-height:1.35; color:#d9dcff; }
+  .link-headsup { position:relative; display:flex; align-items:center; justify-content:center; text-align:center; gap:10px; padding:8px 44px; background:#1f2233; border-bottom:1px solid #2f3350; font-size:0.85rem; line-height:1.35; color:#d9dcff; }
   .link-headsup.soon { background:#33290f; border-color:#6b5316; color:#ffe2a3; }
   .link-headsup[hidden] { display:none; }
-  .link-headsup .lh-x { margin-left:auto; background:none; border:0; color:inherit; opacity:.75; font-size:1.3rem; line-height:1; cursor:pointer; padding:0 4px; }
+  .link-headsup .lh-x { position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:0; color:inherit; opacity:.75; font-size:1.3rem; line-height:1; cursor:pointer; padding:0 4px; }
   .link-headsup .lh-x:hover { opacity:1; }
   body {
     margin: 0;

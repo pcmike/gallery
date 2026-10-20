@@ -197,6 +197,8 @@ Each photo or video can have a **caption**, a **web link** and a **location**, e
 
 These gates decide what **visitors who aren't signed in** see. You, and anyone with the private-view password, see every saved location. A photo you saved yourself is never overwritten by GPS from its file, and a cleared location stays cleared. Photos added later are picked up the next time you open the folder in the admin, never on a visitor's request. There's no place-name lookup (it would need a third-party service): paste coordinates from any map tool.
 
+**When a photo's location is read from its file.** Only on your actions in the admin, never on a visitor's request and never when thumbnails are made: when you switch a folder's location switch on, and whenever you open that folder in the admin (which is how photos added later are picked up), for the photos directly in that folder that have no location yet. Each photo is read once and the answer is remembered, so a photo that was read and had no location then is not read again by switching the folder off and on. **Check the photos for locations again** (under the folder's location switch) reads those again and says what it found: how many now have a location, how many have none in the file, and which files couldn't be read at all. A photo whose location you cleared gets it back from its file; one set to hide its location stays hidden.
+
 > **The original files keep their GPS.** So the gallery blanks a location out of what it sends a visitor who isn't signed in, for any photo or video whose location it doesn't show ([Downloads](#downloads)). Your files on the server are never changed. Not covered: some cameras' maker notes, and GIF/BMP files. If that matters, strip metadata before uploading.
 
 ## Photo order
@@ -326,10 +328,12 @@ Once in, they see the gallery as the link allows: no owner tools, no lock for si
 A link looks like `https://example.com/trip/k7QpR2mXv9LwTb4e`: the gallery's own address and 16 letters and digits. For that tidy form the server must hand the path to the script; the Share links tab writes the rule for your gallery's address and checks it. Until it is in, the long form works as it is: `https://example.com/trip/?link=k7QpR2mXv9LwTb4e`. For a gallery at `/kb/`:
 
 ```nginx
-location ~ ^/kb/[A-Za-z0-9]{16}$ {
-    rewrite ^/kb/([A-Za-z0-9]{16})$ /kb/index.php?link=$1 last;
+location ~ "^/kb/[A-Za-z0-9]{16}$" {
+    rewrite "^/kb/([A-Za-z0-9]{16})$" /kb/index.php?link=$1 last;
 }
 ```
+
+(The quotes matter: nginx reads an unquoted `{` as the start of a block and refuses the file.)
 
 and in `.htaccess` for Apache (`mod_rewrite` and `AllowOverride FileInfo`):
 

@@ -800,6 +800,17 @@ try:
         ok(landed["lb"] and landed["editor"] and link[1].endswith(landed["name"]), "clicking a hidden photo opens it in the viewer with its editor up", str(landed) + " " + str(link))
     b.goto(B + "/?admin&folder=Asia", 1.0)
     ok(b.js(vis) != ["hidden"], "moving to another folder doesn't land you back on Hidden", str(b.js(vis)))
+    # ---------------- the folder settings' "Check the photos for locations again" ----------------
+    print("== check the photos for locations again")
+    b.goto(B + "/?admin", 1.2)
+    ok(b.js("!!document.querySelector('.loc-recheck-btn')"), "[locations] a folder with locations on has a 'Check the photos for locations again' button under the switch")
+    b.js("document.querySelector('.loc-recheck-btn').click()")
+    for _ in range(40):
+        b.drain(0.25)
+        t = b.js("document.querySelector('.loc-recheck-state').textContent")
+        if t and not t.startswith("Reading"): break
+    st = b.js("({text: document.querySelector('.loc-recheck-state').textContent, cls: document.querySelector('.loc-recheck-state').className, enabled: !document.querySelector('.loc-recheck-btn').disabled})")
+    ok(st["cls"].endswith(" ok") and (st["text"].startswith("Read ") or st["text"].startswith("Every photo here")) and st["enabled"], "[locations] pressing it answers beside the button (how many were read and what was found) and the button is ready again", str(st))
     # ---------------- the folder tree in the sidebar ----------------
     print("== folder tree")
     b.viewport(1280, 900); b.goto(B + "/?admin&folder=Europe%2FFrance%2FParis", 1.0)
@@ -1918,9 +1929,10 @@ try:
             lhttp(BL + "/?admin", {**base, **f}, {**lauth, "X-Requested-With": "gallery-fetch"}, ljar)
         lmake(label="Aunt Carol", scope_type="all", downloads="all")
         lmake(label="Mark & Jen", scope_type="folders", scope_folders='["Rome"]', downloads="off")
+        lmake(label="One photo", scope_type="photos", scope_photos='["Rome/r1.jpg"]', downloads="off")
         lraw = open(SITE_L + "/.gallery-links.php").read(); ldata = json.loads(lraw[lraw.index("\n") + 1:])
         tok = {l["label"]: l["token"] for l in ldata["links"].values()}
-        ok(set(tok) == {"Aunt Carol", "Mark & Jen"}, "[share links] the owner can make two links (everything private; only the Rome folder)", str(sorted(tok)))
+        ok(set(tok) == {"Aunt Carol", "Mark & Jen", "One photo"}, "[share links] the owner can make links (everything private; only the Rome folder; one photo)", str(sorted(tok)))
         ua_phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         ua_mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         for label, ua, events in (("Aunt Carol", ua_phone, [["f", ""], ["s", "pub.jpg"], ["s", "pub2.jpg"], ["o", "pub.jpg"], ["f", "Rome"], ["s", "Rome/r1.jpg"], ["o", "Rome/r1.jpg"], ["o", "Rome/r1.jpg"]]),
@@ -1944,14 +1956,24 @@ try:
         ok("Rome" in hp["text"] and "Pisa" not in hp["text"] and "pub.jpg" not in hp["text"], "[share links] a holder of the Rome link sees the Rome folder and not Pisa", hp["text"][:200])
         ok(hp["toggles"] == 0 and not hp["adminLink"] and not hp["lock"], "[share links] a link holder gets no owner tools: no lock or star on tiles, no admin link, no sign-in lock", str(hp))
         ok("expires on" in hp["headsUp"], "[share links] the heads-up line says when the link ends (this link asks for it)", hp["headsUp"])
+        hu = b.js("(() => { const t = document.querySelector('#link-headsup .lh-t').getBoundingClientRect(), x = document.querySelector('#link-headsup .lh-x').getBoundingClientRect(); return {mid: Math.round((t.left + t.right) / 2), vw: innerWidth, xRight: Math.round(innerWidth - x.right)}; })()")
+        ok(abs(hu["mid"] - hu["vw"] / 2) <= 3 and hu["xRight"] <= 16, "[share links] the heads-up line is centered across the top of the page, with its close button at the right edge", str(hu))
         ok(not b.problems(IGN), "[share links] ...and the holder's page has no console or CSP errors", "; ".join(b.problems(IGN))[:300])
+        # --- a link for one photo: it opens straight into the viewer on that photo, and the folder shows that photo and no other of its private ones
+        b.goto(BL + "/?link=" + tok["One photo"], 0.8); b.js("document.querySelector('form button.big').click()"); b.drain(2.0)
+        ph = b.js("({url: location.search, open: document.getElementById('lightbox').classList.contains('open'), img: document.getElementById('lightbox-img').src})")
+        ok("photo=" in ph["url"] and ph["open"] and "Rome%2Fr1.jpg" in ph["img"], "[share links] a link for one photo opens straight into the viewer on that photo", str(ph))
+        shot(b, "20b-link-one-photo")
+        b.goto(BL + "/?folder=Rome&x=1", 1.2)
+        alts = b.js("[...document.querySelectorAll('.gallery .card img')].map(i => i.getAttribute('alt'))")
+        ok(alts == ["Rome/r1.jpg"], "[share links] ...and closing it shows the folder with only that photo in it (Rome's other private photo is not there)", str(alts))
         # --- the owner's Share links tab ---
         b.goto(BL + "/?admin", 1.2)
         b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": LPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         b.js("location.hash = '#links'"); b.drain(2.0)   # (a change of the part after # is not a page load: goto would wait for one that never comes)
         body = b.js("document.body.innerText")
         ok("new since you last looked" in body and "Mark & Jen" in body, "[share links tab] each link is a row, named exactly as typed, saying how many happenings are new since the owner last looked")
-        ok(b.js("(document.querySelector('.side-link[data-tab=links] .count') || {}).textContent") == "2", "[share links tab] the sidebar counts the links with news", b.js("document.querySelector('.side-link[data-tab=links]').innerText"))
+        ok(b.js("(document.querySelector('.side-link[data-tab=links] .count') || {}).textContent") == "3", "[share links tab] the sidebar counts the links with news", b.js("document.querySelector('.side-link[data-tab=links]').innerText"))
         b.drain(2.0)   # the tab marks itself as looked at
         A = ".sl-row[open] .sl-act"   # (the hidden IP-addresses view has a .sl-act of its own, always first on the page: always say which one)
         b.js("[...document.querySelectorAll('details.sl-row')].find(d => d.querySelector('.sl-name').textContent.trim() === 'Aunt Carol').open = true")
@@ -1987,6 +2009,14 @@ try:
         b.viewport(1280, 900)
         # --- sharing: the QR code, the short form from a folder, a photo and a selection, the viewer's question, the photo picker, preview ---
         sys.path.insert(0, HERE + "/../qr"); import qr_reference as QR
+        b.call("Browser.grantPermissions", {"origin": BL, "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+        def real_click(sel):   # a trusted mouse press and release at the middle of the element, as a person's click is (Safari and Chrome only copy during one)
+            r = b.js(f"(() => {{ const e = document.querySelector('{sel}'); e.scrollIntoView({{block: 'center'}}); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }})()")
+            for t in ("mousePressed", "mouseReleased"): b.call("Input.dispatchMouseEvent", {"type": t, "x": r[0], "y": r[1], "button": "left", "clickCount": 1})
+            b.drain(0.5)
+        def clip_text(): return b.js("navigator.clipboard.readText()")
+        def clip_image(): return b.js("navigator.clipboard.read().then(items => Promise.all(items.map(i => Promise.all(i.types.map(t => i.getType(t).then(b => [t, b.size]))))))")
+        def error_toast(): return b.js("(() => { const t = document.getElementById('gs-toast'); return !!t && !t.hidden && t.classList.contains('err'); })()")
         def links_now():
             raw = open(SITE_L + "/.gallery-links.php").read(); return json.loads(raw[raw.index("\n") + 1:])["links"]
         def link_named(name): return next((l for l in links_now().values() if l["label"] == name), None)
@@ -2015,6 +2045,11 @@ try:
         b.js(f"document.querySelector('{R} [data-gs=qr]').click()")
         ok(lwait(f"!!document.querySelector('{R} .gs-qrbox canvas')") and b.js(f"(() => {{ const c = document.querySelector('{R} .gs-qrbox canvas'), x = c.getContext('2d'), n = GalleryShare.qr(document.querySelector('{R} .sl-url').value).length, scale = c.width / (n + 8), inner = Math.max(5, Math.floor(n * 0.19)) * scale, mid = c.width / 2; const px = (a, b) => x.getImageData(Math.round(a), Math.round(b), 1, 1).data[0]; return px(2, 2) > 240 && px(mid - inner / 2 + inner * 0.1, mid) < 60 && px(mid - inner / 2 - scale * 0.75, mid) > 240; }})()"), "[qr] pressing it draws the code: white all round, the gallery's own icon in dark in the middle with a white margin round it")
         shot(b, "26-link-qr")
+        real_click(f"{R} .sl-linkline .sl-copy")
+        ok(clip_text() == b.js(f"document.querySelector('{R} .sl-url').value") and b.js(f"document.querySelector('{R} .sl-linkline .sl-copy').textContent") == "Copied", "[share links tab] the first press of Copy next to a link's address puts it on the clipboard", clip_text())
+        real_click(f"{R} [data-gs=copyimg]")
+        ci = clip_image()
+        ok(any(t == "image/png" and n > 500 for grp in ci for t, n in grp) and not error_toast(), "[qr] the first press of Copy image puts the code on the clipboard as a picture, with no error", str(ci))
         b.js(f"document.querySelector('{R} [data-gs=large]').click()")
         big = b.js("(() => { const o = document.querySelector('.gs-large'); if (!o) return null; const r = o.getBoundingClientRect(), c = o.querySelector('canvas').getBoundingClientRect(); return {full: r.width === innerWidth && r.height === innerHeight, white: getComputedStyle(o).backgroundColor, size: Math.round(c.width), name: o.querySelector('.gs-large-name').textContent}; })()")
         ok(big is not None and big["full"] and big["white"] == "rgb(255, 255, 255)" and big["size"] >= 300 and big["name"] == "Aunt Carol", "[qr] Show large fills the screen in white with a big code and the link's name", str(big))
@@ -2034,6 +2069,22 @@ try:
         ok(made is not None and made["scope"]["type"] == "folders" and len(made["scope"]["folders"]) == 1 and made["maxOpens"] == 10 and made["openIn"] == made["scope"]["folders"][0] and made["downloads"]["mode"] == "off" and made["locations"] == "public", "[share this folder] ...and the link it made covers just that folder, opens in it, 10 opens, downloads off, locations as the public sees them", str(made))
         url = b.js("document.querySelector('.gs-url').value")
         ok(url == BL + "/?link=" + made["token"] and set(b.js("[...document.querySelectorAll('.gs-card .gs-btn')].map(x => x.textContent.trim())")) >= {"Copy", "QR code", "Done"}, "[share this folder] the address is the one that always works here, with Copy and a QR code beside it", url)
+        real_click(".gs-card [data-gs=copy]")
+        ok(clip_text() == url and b.js("document.querySelector('.gs-card [data-gs=copy]').textContent.trim()") == "Copied" and not error_toast(), "[share form] the first press of Copy puts the address on the clipboard and says Copied, with no error", clip_text())
+        real_click(".gs-card [data-gs=copy]"); real_click(".gs-card [data-gs=copy]")
+        ok(clip_text() == url and not error_toast(), "[share form] ...and pressing it again and again never raises an error")
+        # a browser that refuses one way of copying (Safari refused the newer call on a first press): the other way still copies, and an error shows only when both are refused
+        b.js("(() => { window.__wt = navigator.clipboard.writeText.bind(navigator.clipboard); window.__ec = document.execCommand.bind(document); })()")
+        refuse_new = "navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'))"
+        refuse_old = "document.execCommand = () => false"
+        b.js("window.__wt('cleared')"); b.js(refuse_new); real_click(".gs-card [data-gs=copy]")
+        ok(clip_text() == url and not error_toast(), "[share form] when the browser refuses the newer clipboard call, Copy still copies (the older way), with no error")
+        b.js("navigator.clipboard.writeText = window.__wt; window.__wt('cleared')"); b.js(refuse_old); real_click(".gs-card [data-gs=copy]")
+        ok(clip_text() == url and not error_toast(), "[share form] ...and when it refuses the older way, the newer call copies, with no error")
+        b.js("window.__wt('cleared')"); b.js(refuse_new); real_click(".gs-card [data-gs=copy]")
+        ok(error_toast() and "copy by hand" in b.js("document.getElementById('gs-toast').textContent"), "[share form] ...and only when both are refused does it say so, and what to do")
+        b.js("navigator.clipboard.writeText = window.__wt; document.execCommand = window.__ec; document.getElementById('gs-toast').hidden = true; window.__wt('cleared')")
+        real_click(".gs-card [data-gs=copy]"); ok(clip_text() == url, "[share form] ...and it copies again once the browser allows it")
         b.js("document.querySelector('.gs-card [data-gs=qr]').click()")
         ok(lwait("!!document.querySelector('.gs-card .gs-qrbox canvas')"), "[share this folder] the code can be shown right there")
         shot(b, "29-share-folder-result")
