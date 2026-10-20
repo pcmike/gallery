@@ -76,6 +76,26 @@ linkTokF,linkF=make_link("folder",scope_type="folders",scope_folders=json.dumps(
 linkTokP,linkP=make_link("photos",scope_type="photos",scope_photos=json.dumps(["loose1.jpg","secret.jpg","Europe/France/Paris/eiffel.jpg"]),downloads="all")
 linkTokA,linkA=make_link("all",downloads="all",zip="all",locations="all")
 sess=[("anon",{}),("revealed",{"Cookie":revealC}),("admin",adminAuth),("link-folders",{"Cookie":linkF}),("link-photos",{"Cookie":linkP}),("link-all",{"Cookie":linkA})]
+# --- Preview as this link: the owner's own browser (admin cookie and all) as a holder of each link, and the routes that start and end it
+def preview_for(lid):
+    r=urllib.request.Request(B+f"/?admin&linkpreview={lid}&csrf_token={_csrf()}",headers=adminAuth)
+    try: resp=op.open(r,timeout=10)
+    except urllib.error.HTTPError as e: resp=e
+    pairs=[h.split(';')[0] for h in resp.headers.get_all('Set-Cookie') or [] if h.startswith('gallery_preview_')]
+    if not pairs: problems.append(("preview start "+lid,"no preview cookie was set"))
+    return "; ".join([adminC]+pairs)
+_raw=open(SITE+"/.gallery-links.php").read(); _byLabel={l["label"]:i for i,l in json.loads(_raw[_raw.index("\n")+1:])["links"].items()}
+sess_preview=[("preview-folders",{"Cookie":preview_for(_byLabel["folder"])}),("preview-photos",{"Cookie":preview_for(_byLabel["photos"])}),("preview-all",{"Cookie":preview_for(_byLabel["all"])})]
+for lid in list(_byLabel.values())+['nope','','../','a'*40,'%00']:
+    for tk in (_csrf(),'','x','a'*500,'%00'):
+        req(f"/?admin&linkpreview={q(lid,safe='')}&csrf_token={q(tk,safe='')}",headers=adminAuth,label=f"linkpreview {lid[:12]} {tk[:6]}")
+    req(f"/?admin&linkpreview={q(lid,safe='')}",headers=adminAuth,label=f"linkpreview no token {lid[:12]}")
+for f in folders+junk: req("/?admin&linkphotos="+q(f,safe=''),headers=adminAuth,label=f"linkphotos {f[:30]}")
+req("/?admin&linkphotos=",headers=adminAuth,label="linkphotos root"); req("/?admin&linkphotos[]=x",headers=adminAuth,label="linkphotos array")
+for name,h in sess:
+    if name!='admin':
+        s_,b_,_=req("/?admin&linkphotos=Europe",headers=h,label=f"[{name}] linkphotos")
+        if b_ and b'sl-pickphoto' in b_: problems.append((f"[{name}] linkphotos","the photo picker was served to a non-owner"))
 # --- the log: reports from link holders, and the owner's views of it
 raw=open(SITE+"/.gallery-links.php").read(); LINK_IDS=list(json.loads(raw[raw.index("\n")+1:])["links"].keys())
 beacons=[{"e":[["s","loose1.jpg"],["o","loose1.jpg"],["p","clip.mp4"],["f","Europe"],["f",""]]},{"e":[["s","secret.jpg"],["o","Asia/geo2.jpg"],["d","loose1.jpg"]]},{"e":"x"},{"e":[["s"]]},{"e":[["s",["a"]]]},{"e":[[1,2]]},{"e":[["s","a"*5000]]},{"e":[["f","../.."],["f","Europe/../x"],["s","../index.php"]]},{"e":[["s","loose1.jpg"]]*200},{},[],"str",None,{"e":[["s","\u0000"]]}]
@@ -106,9 +126,10 @@ for name,h in sess:
         for p in ("/?admin&linkview="+LINK_IDS[0]+"&tab=visitors","/?admin&linkips=1","/?admin&linkexport=all&what=items"):
             s,b,_=req(p,headers=h,label=f"[{name}] {p[:40]}")
             if s==200 and b'data-ip=' in b: problems.append((f"[{name}] {p[:40]}","the owner's log was served to a non-owner"))
-# --- GET sweeps
+# --- GET sweeps (the previews too: their cookie is the owner's plus the preview's)
+sess=sess+sess_preview
 for name,h in sess:
-    for p in ['/','/?about','/?map','/?mapicon','/?download','/?hidden','/?reveal','/?admin','/?admin&hidden','/?archive','/?archive&folder=Europe','/?archive&folder=Europe%2FGermany','/?archive&folder=nope']: req(p,headers=h,label=f"[{name}] {p}")
+    for p in ['/?exitpreview','/','/?about','/?map','/?mapicon','/?download','/?hidden','/?reveal','/?admin','/?admin&hidden','/?archive','/?archive&folder=Europe','/?archive&folder=Europe%2FGermany','/?archive&folder=nope']: req(p,headers=h,label=f"[{name}] {p}")
     for f in folders+junk:
         req("/?folder="+q(f,safe=''),headers=h,label=f"[{name}] ?folder={f[:30]}")
         req("/?admin&folder="+q(f,safe=''),headers=h,label=f"[{name}] ?admin&folder={f[:30]}")

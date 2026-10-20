@@ -171,6 +171,14 @@ for variant in range(3):
     if t: link_toks.append(t)
 link_cookies = [_press(t) for t in link_toks]
 raw = open(SITE + "/.gallery-links.php").read(); link_ids = list(json.loads(raw[raw.index("\n") + 1:])["links"].keys())
+def _preview_cookie(lid):   # the owner's browser while previewing that link (the owner's cookie rides along)
+    r = urllib.request.Request(B + f"/?admin&linkpreview={lid}&csrf_token={_admin_csrf()}", headers=AH)
+    try: resp = op.open(r, timeout=10)
+    except urllib.error.HTTPError as e: resp = e
+    pairs = [h.split(";")[0] for h in (resp.headers.get_all("Set-Cookie") or []) if h.startswith("gallery_preview_")]
+    if not pairs: findings.append(("preview start", "no preview cookie was set, so nothing was proven for it"))
+    return "; ".join([AH.get("Cookie", "")] + pairs).strip("; ")
+preview_cookies = [_preview_cookie(i) for i in link_ids]
 bad_files = ['<img src=x onerror=alert(XSSTOK2)>.jpg', '" onmouseover="alert(XSSTOK5).jpg', "';alert(XSSTOK6);'.jpg", BADF[0] + "/p.jpg", BADF[1] + "/p.jpg"]
 for c in link_cookies:   # what these visitors did gets into the logs, under the oddly named files and folders
     body = json.dumps({"e": [[k, bf] for bf in bad_files for k in ("s", "o", "p")] + [["f", BADF[0]], ["f", BADF[1]], ["f", ""]]}).encode()
@@ -195,11 +203,12 @@ for lid in link_ids:
     for tab in ("visitors", "folders", "photos"): roots.append(f"/?admin&linkview={lid}&tab={tab}")
     roots += [f"/?admin&linkview={lid}&tab=photos&folder=" + urllib.parse.quote(BADF[0], safe=""), f"/?admin&linkexport={lid}&what=items"]
 for tab in ("folders", "media", "timeline"): roots.append(f"/?admin&linkip=127.0.0.1&tab={tab}")
+roots += ["/?admin&linkphotos=" + urllib.parse.quote(BADF[0], safe=""), "/?admin&linkphotos=", "/?exitpreview"]
 roots += ["/?admin&linkips=1", "/?admin&linkip=" + urllib.parse.quote(P["tag"], safe="")]
 for k, v in P.items():
     q = urllib.parse.quote(v, safe="")
     roots += [f"/?admin&linkview={q}", f"/?admin&linkip={q}", f"/?admin&linkexport={q}", f"/?photo={q}", f"/?folder={q}", f"/?img={q}", f"/?track={q}", f"/?video={q}", f"/?map&x={q}", f"/?about&x={q}", f"/?size={q}&img=loose1.jpg", f"/?admin&folder={q}"]
-for who, h in [("anon", {}), ("revealed", {"Cookie": viewer_c}), ("admin", AH)] + [(f"link{i}", {"Cookie": c}) for i, c in enumerate(link_cookies)]:
+for who, h in [("anon", {}), ("revealed", {"Cookie": viewer_c}), ("admin", AH)] + [(f"link{i}", {"Cookie": c}) for i, c in enumerate(link_cookies)] + [(f"preview{i}", {"Cookie": c}) for i, c in enumerate(preview_cookies)]:
     for p in sorted(set(roots)):
         if p.startswith("/?admin") and who != "admin": continue
         hh = dict(h); hh.update({"User-Agent": P["tag"] + P["script"], "Referer": "http://x.test/" + P["tag"], "X-Forwarded-Proto": "https", "X-Forwarded-For": P["tag"], "Accept-Language": P["img"]})

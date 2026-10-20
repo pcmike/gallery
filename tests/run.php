@@ -5280,6 +5280,86 @@ check('[share log] ...and the Visitors tab says how many earlier visitors are no
 $lgHolderPage = http_get("$baseL/", ["Cookie: $lgCk2"])[1];
 check('[share log] the page of a link holder carries the logging script, the public page and the owner\'s don\'t', str_contains($lgHolderPage, 'window.__linkLog = log') && !str_contains(http_get("$baseL/")[1], 'window.__linkLog = log') && !str_contains(http_get("$baseL/", ["Cookie: $lgAdminCookie"])[1], 'window.__linkLog = log'));
 
+echo "== share links: the sharing pieces (QR kit, the short form's entry points, the photo picker) and Preview as this link ==\n";
+
+$fxS = new_fixture_dir('slshare');
+mkdir("$fxS/Rome", 0775); mkdir("$fxS/Pisa", 0775); mkdir("$fxS/Open", 0775);
+make_jpeg("$fxS/pub.jpg", 60, 50, 200, 60, 60); make_jpeg("$fxS/own.jpg", 61, 50, 100, 60, 60); make_jpeg("$fxS/Rome/r1.jpg", 62, 50, 100, 60, 60); make_jpeg("$fxS/Rome/r2.jpg", 63, 50, 110, 60, 60);
+make_jpeg("$fxS/Pisa/p1.jpg", 64, 50, 150, 60, 60); make_jpeg("$fxS/Open/o1.jpg", 65, 50, 160, 60, 60);
+foreach (['Rome', 'Pisa'] as $d) write_data_file("$fxS/$d/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+write_data_file("$fxS/.gallery-items.php", ['items' => ['own.jpg' => ['restriction' => 'private']], 'groups' => []]);
+file_put_contents("$fxS/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slshare-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'TRACK_VIEWS' => true]));
+copy($indexSrc, "$fxS/index.php");
+$portS = find_free_port(); start_server($fxS, $portS); $baseS = "http://127.0.0.1:$portS";
+[, , $shLogin] = http_post("$baseS/?admin", ['access_code' => 'slshare-admin-1'], [], false);
+$shAdminCookie = extract_cookie_header($shLogin);
+$shOwner = ["Cookie: $shAdminCookie"];
+$shCsrf = extract_csrf_token(http_get("$baseS/?admin", $shOwner)[1]);
+$shAdmin = function (array $fields) use ($baseS, $shAdminCookie, $shCsrf) {
+    [, $body] = http_post("$baseS/?admin", $fields + ['csrf_token' => $shCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $shAdminCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$shLinks = fn () => read_data_file("$fxS/.gallery-links.php");
+$shNew = fn (array $more) => $shAdmin($more + ['action' => 'link_create', 'label' => 'Mark', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 5, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'folders', 'scope_folders' => '["Rome"]', 'open_in' => 'Rome', 'downloads' => 'off', 'zip' => 'off']);
+$shMade = $shNew([]);
+$shId = $shMade['id'] ?? ''; $shTok = $shLinks()['links'][$shId]['token'] ?? '';
+check('[share kit] making a link answers with both forms of its address (the long one that always works, and the tidy one)', ($shMade['ok'] ?? false) === true && ($shMade['urls']['long'] ?? '') === "$baseS/?link=$shTok" && ($shMade['urls']['short'] ?? '') === "$baseS/$shTok");
+
+// who gets the share pieces
+$shRoot = http_get("$baseS/", $shOwner)[1]; $shRome = http_get("$baseS/?folder=Rome", $shOwner)[1]; $shOpen = http_get("$baseS/?folder=Open", $shOwner)[1];
+[, , $shGo] = http_post("$baseS/?link=$shTok", ['go' => '1'], [], false); $shHolder = ['Cookie: ' . extract_cookie_header($shGo)];
+$shHolderPage = http_get("$baseS/", $shHolder)[1];
+check('[share kit] the owner\'s gallery pages and the admin page carry the share pieces (QR code, Copy / Share…, the short form); the public page and a link holder\'s page carry none of it', str_contains($shRoot, 'window.GalleryShare = {') && str_contains(http_get("$baseS/?admin", $shOwner)[1], 'window.GalleryShare = {') && !str_contains(http_get("$baseS/")[1], '__shareCfg') && !str_contains($shHolderPage, '__shareCfg') && !str_contains($shHolderPage, 'data-gs-folder'));
+check('[share this folder] a private folder\'s page has a Share button in the icon strip for the owner, and a public folder\'s page does not', str_contains($shRome, 'class="map-combo-btn page-share" data-gs-folder="Rome"') && !str_contains($shOpen, 'page-share" data-gs-folder'));
+check('[share this folder] on the front page, a private folder\'s card has its link icon ask what to share (owner), while a public folder\'s keeps the plain copy link', preg_match('/folder-permalink-copy"[^>]*data-gs-folder="Rome"/', $shRoot) === 1 && !str_contains($shRoot, 'data-gs-folder="Open"') && preg_match('/folder-permalink-copy" href="[^"]*Open[^"]*" title="Copy link"/', $shRoot) === 1);
+check('[share this folder] the Private tab offers Share… on each private folder (and none on the front page row)', str_contains(http_get("$baseS/?admin", $shOwner)[1], 'data-gs-folder="Rome" data-gs-label=') && str_contains(http_get("$baseS/?admin", $shOwner)[1], 'data-gs-folder="Pisa"') && !str_contains(http_get("$baseS/?admin", $shOwner)[1], 'data-gs-folder=""'));
+check('[share photos] the owner\'s Select bar has a Share… button, and the viewer\'s link button asks about a private photo; nobody else gets either', str_contains($shRoot, 'data-select="share"') && str_contains($shRoot, 'This photo is private') && !str_contains(http_get("$baseS/")[1], 'data-select="share"') && !str_contains(http_get("$baseS/")[1], 'This photo is private') && !str_contains($shHolderPage, 'This photo is private'));
+
+// the photo picker's list
+$shPick = http_get("$baseS/?admin&linkphotos=Rome", $shOwner)[1]; $shPickRoot = http_get("$baseS/?admin&linkphotos=", $shOwner)[1];
+check('[photo picker] the list of a folder\'s photos has a check box and thumbnail for each (and none from other folders)', str_contains($shPick, 'value="Rome/r1.jpg"') && str_contains($shPick, 'value="Rome/r2.jpg"') && !str_contains($shPick, 'Pisa/p1.jpg') && !str_contains($shPick, 'value="pub.jpg"') && str_contains($shPick, '?img=Rome%2Fr1.jpg&amp;size=thumb'));
+check('[photo picker] ...the front page lists only its own photos, an unknown folder says so, and only the owner can ask', str_contains($shPickRoot, 'value="pub.jpg"') && str_contains($shPickRoot, 'value="own.jpg"') && !str_contains($shPickRoot, 'Rome/r1.jpg') && str_contains(http_get("$baseS/?admin&linkphotos=" . rawurlencode('Nope/../x'), $shOwner)[1], 'isn\'t in the gallery') && !str_contains(http_get("$baseS/?admin&linkphotos=Rome")[1], 'Rome/r1.jpg'));
+
+// Preview as this link (a link nobody has opened, so that "nothing counted or logged" can be checked against zero)
+$pvMade = $shNew([]); $pvId = $pvMade['id'] ?? '';
+$shStart = function ($token, $cookies = null) use ($baseS, $pvId, $shOwner) { return http_get("$baseS/?admin&linkpreview=$pvId&csrf_token=" . rawurlencode($token), $cookies ?? $shOwner, false); };
+[$pc1] = $shStart('wrong'); [$pc0] = http_get("$baseS/?admin&linkpreview=$pvId&csrf_token=" . rawurlencode($shCsrf), [], false);
+[$pc2, , $pvH] = $shStart($shCsrf);
+$pvLoc = ''; $pvSet = '';
+foreach ($pvH as $h) { if (stripos($h, 'Location:') === 0) $pvLoc = trim(substr($h, 9)); if (stripos($h, 'Set-Cookie: gallery_preview_') === 0) $pvSet = $h; }
+check('[preview] starting a preview needs the owner and the owner\'s token; it then opens where the link opens, with a cookie of its own', $pc1 === 400 && $pc0 !== 303 && $pc2 === 303 && str_contains($pvLoc, 'folder=Rome') && str_contains($pvSet, 'HttpOnly') && str_contains($pvSet, 'SameSite=Lax'));
+$pvCookie = extract_cookie_header($pvH);
+$pvBoth = ["Cookie: $shAdminCookie; $pvCookie"];
+$stats = function () use ($fxS) { $o = ''; foreach (glob("$fxS/.gallery-stats*") ?: [] as $f) $o .= sha1_file($f); foreach (glob("$fxS/.gallery-linklog-*") ?: [] as $f) $o .= basename($f) . sha1_file($f); return sha1($o . sha1_file("$fxS/.gallery-links.php")); };
+$pvBefore = $stats();
+$pvPage = http_get("$baseS/", $pvBoth)[1]; $pvRome = http_get("$baseS/?folder=Rome", $pvBoth)[1];
+check('[preview] the page shows whose view it is, with the list of what the link includes and a way out', str_contains($pvPage, 'Previewing as Mark') && str_contains($pvPage, 'Nothing you do here is counted or logged') && str_contains($pvPage, 'What this link includes') && str_contains($pvPage, 'Rome and everything inside it') && str_contains($pvPage, 'not shown and not hinted at') && str_contains($pvPage, 'href="?exitpreview"'));
+check('[preview] it is the link\'s own view: no owner tools or share pieces, Rome yes, Pisa and the other private photo no (even though the owner\'s cookie is there too)', !str_contains($pvPage, '__shareCfg') && str_contains($pvPage, 'const ownerState = null;') && str_contains($shRoot, 'const ownerState = {') && str_contains($pvPage, 'Rome') && !str_contains($pvPage, 'Pisa') && !str_contains($pvPage, 'own.jpg') && str_contains($pvRome, 'r1.jpg') && !str_contains($pvRome, 'page-share" data-gs-folder'));
+check('[preview] ...in the pictures too: what the link covers loads, what it doesn\'t is refused', http_get("$baseS/?img=Rome%2Fr1.jpg&size=thumb", $pvBoth)[0] === 200 && http_get("$baseS/?img=Pisa%2Fp1.jpg&size=thumb", $pvBoth)[0] === 404 && http_get("$baseS/?img=own.jpg&size=thumb", $pvBoth)[0] === 404 && http_get("$baseS/?img=Pisa%2Fp1.jpg&size=thumb", $shOwner)[0] === 200);
+$adminPageDuring = http_get("$baseS/?admin", $pvBoth)[1];
+$thumbFromAdmin = http_get("$baseS/?img=own.jpg&size=thumb", array_merge($pvBoth, ["Referer: $baseS/?admin"]))[0];
+check('[preview] the admin pages stay the owner\'s, and a picture asked for by an admin page is the owner\'s too (so the tabs\' thumbnails still show), but not one asked for by the gallery or by another site', str_contains($adminPageDuring, 'Gallery Admin') && str_contains($adminPageDuring, 'data-gs-folder="Rome"') && $thumbFromAdmin === 200 && http_get("$baseS/?img=own.jpg&size=thumb", array_merge($pvBoth, ["Referer: $baseS/?folder=Rome"]))[0] === 404 && http_get("$baseS/?img=own.jpg&size=thumb", array_merge($pvBoth, ['Referer: http://evil.example/?admin']))[0] === 404);
+http_get("$baseS/?track=" . rawurlencode('Rome/r1.jpg'), $pvBoth);
+[$beaconCode] = (function () use ($baseS, $pvBoth) { $c = stream_context_create(['http' => ['method' => 'POST', 'header' => implode("\r\n", array_merge($pvBoth, ['Content-Type: application/json'])), 'content' => json_encode(['e' => [['s', 'Rome/r1.jpg'], ['o', 'Rome/r1.jpg'], ['f', 'Rome']]]), 'ignore_errors' => true, 'timeout' => 5]]); @file_get_contents("$baseS/?linklog", false, $c); $code = 0; foreach ($http_response_header ?? [] as $h) if (preg_match('#^HTTP/\S+\s+(\d+)#', $h, $m)) $code = (int) $m[1]; return [$code]; })();
+http_get("$baseS/?original=" . rawurlencode('Rome/r1.jpg'), $pvBoth);
+check('[preview] nothing is counted or logged: the link\'s opens, its log and queue files, and the gallery\'s visit counts are exactly as they were after pages, pictures, a view ping, a report from the page and a download', $beaconCode === 204 && $stats() === $pvBefore && !glob("$fxS/.gallery-linklog-$pvId*") && ($shLinks()['links'][$pvId]['opens'] ?? -1) === 0);
+$pvTampered = ['Cookie: ' . $shAdminCookie . '; ' . substr($pvCookie, 0, -1) . (substr($pvCookie, -1) === 'a' ? 'b' : 'a')];
+$pvNot = http_get("$baseS/", $pvTampered)[1];
+check('[preview] a changed cookie is no preview (the owner just sees the owner\'s gallery)', !str_contains($pvNot, 'Previewing as') && str_contains($pvNot, 'const ownerState = {'));
+[$exC, , $exH] = http_get("$baseS/?exitpreview", $pvBoth, false);
+$exLoc = ''; $exSet = '';
+foreach ($exH as $h) { if (stripos($h, 'Location:') === 0) $exLoc = trim(substr($h, 9)); if (stripos($h, 'Set-Cookie: gallery_preview_') === 0) $exSet = $h; }
+check('[preview] Exit preview clears the cookie and goes back to the Share links tab', $exC === 303 && str_contains($exLoc, '?admin#links') && (str_contains($exSet, 'Max-Age=0') || str_contains($exSet, '1970') || str_contains($exSet, '=deleted')));
+$shAdmin(['action' => 'link_pause', 'id' => $pvId]);
+[$pc3, , $pvH3] = $shStart($shCsrf); $pvPaused = http_get("$baseS/", ["Cookie: $shAdminCookie; " . extract_cookie_header($pvH3)])[1];
+check('[preview] a paused link can still be previewed, and the strip says that the people who have it see nothing for now', $pc3 === 303 && str_contains($pvPaused, 'Previewing as Mark') && str_contains($pvPaused, 'paused right now'));
+$shAdmin(['action' => 'link_revoke', 'id' => $pvId]);
+check('[preview] a revoked link can\'t be previewed, and its old preview shows nothing of it', $shStart($shCsrf)[0] === 400 && !str_contains(http_get("$baseS/", ["Cookie: $shAdminCookie; " . extract_cookie_header($pvH3)])[1], 'Previewing as'));
+// with share links switched off none of the pieces appear
+file_put_contents("$fxS/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slshare-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => false, 'TRACK_VIEWS' => true]));
+$shOffPage = http_get("$baseS/?folder=Rome", $shOwner)[1];
+check('[share kit] with share links switched off the owner gets none of the pieces (no kit, no Share buttons, no popup question)', !str_contains($shOffPage, '__shareCfg') && !str_contains($shOffPage, 'page-share" data-gs-folder') && !str_contains($shOffPage, 'data-select="share"') && !str_contains($shOffPage, 'This photo is private'));
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";

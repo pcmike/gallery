@@ -445,6 +445,8 @@ define('TRUSTED_PROXY_RANGES', gallery_setting('TRUSTED_PROXY_RANGES', []));
 // admin asks for to test the tidy address, and a few fixed values. Plain constants here because they must exist before the
 // first request is routed.
 define('LINK_COOKIE_NAME', 'gallery_link_' . substr(hash('sha256', __DIR__), 0, 10));
+define('PREVIEW_COOKIE_NAME', 'gallery_preview_' . substr(hash('sha256', __DIR__), 0, 10));   // the owner previewing a link in this browser
+const PREVIEW_SECONDS = 14400;   // a preview ends by itself after four hours
 define('LINK_PROBE_TOKEN', '0000000000000000');   // the admin asks for this one to learn whether the tidy address reaches the script
 const LINK_TOKEN_LENGTH = 16;
 const LINK_REOPEN_GRACE_SECONDS = 900;   // the same address opening again this soon (an app's own browser, then Safari) is not a second use
@@ -839,6 +841,14 @@ if (isset($_GET['original'])) {
 // ?linklog: what someone using a share link has had on screen, opened and played (a small POST from their page).
 if (isset($_GET['linklog'])) {
     run_linklog_route($dir, $mediaExtensions, $self);
+    exit;
+}
+
+// ?exitpreview: ends "Preview as this link" in this browser and goes back to the Share links tab.
+if (isset($_GET['exitpreview'])) {
+    preview_clear_cookie();
+    header('Cache-Control: no-store');
+    header('Location: ?admin#links', true, 303);
     exit;
 }
 
@@ -3780,6 +3790,7 @@ function set_admin_reveal_cookie($password = null) {
  *  cookie, so a hidden item simply stays hidden — the same closed-by-default
  *  posture as every other gate in this script. */
 function is_revealed() {
+    if (link_preview() !== null) return false;   // while previewing a link this browser is not the owner's (gallery and media pages only)
     $cookie = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
     if (!is_string($cookie) || $cookie === '') return false;
     if (PRIVATE_VIEW_PASSWORD !== '' && hash_equals(reveal_cookie_value(), $cookie)) return true;
@@ -4112,6 +4123,7 @@ function link_viewer() {
     if ($resolved) return $link;
     $resolved = true;
     if (!ENABLE_SHARE_LINKS) return null;
+    if (($previewed = link_preview()) !== null) return $link = $previewed;
     $cookie = $_COOKIE[LINK_COOKIE_NAME] ?? '';
     if (!is_string($cookie) || !preg_match('/^([0-9a-f]{10})\.[0-9a-f]{64}$/', $cookie, $m)) return null;
     if (is_admin_browser()) return null;
@@ -4121,6 +4133,75 @@ function link_viewer() {
 }
 /** A person using a share link, and not someone with the owner's or the private-view sign-in. */
 function viewer_is_link() { return !is_revealed() && link_viewer() !== null; }
+
+/* Preview as this link. The owner presses it on the Share links tab; a signed cookie then makes this browser see the gallery exactly as
+ * someone using that link does (the same checks, the same pages, no owner tools), and nothing is counted or logged. It never touches
+ * the admin pages (?admin keeps the owner's sign-in), a thumbnail asked for by an admin page is still the owner's, and it ends by
+ * itself after four hours or when "Exit preview" is pressed. */
+function preview_cookie_value($l, $ts) {
+    return $l['id'] . '.' . (int) $ts . '.' . hash_hmac('sha256', 'preview|' . $l['id'] . '|' . (int) $ts . '|' . $l['token'] . '|' . __DIR__, install_secret());
+}
+function preview_set_cookie($l) {
+    install_secret(true);
+    $now = time();
+    setcookie(PREVIEW_COOKIE_NAME, preview_cookie_value($l, $now), ['expires' => $now + PREVIEW_SECONDS, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+}
+function preview_clear_cookie() {
+    setcookie(PREVIEW_COOKIE_NAME, '', ['expires' => 1, 'path' => '/', 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+}
+/** True when the page that asked for this picture or video is one of the admin's own pages (so the owner gets the owner's version of it). */
+function preview_referer_is_admin() {
+    $ref = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+    if ($ref === '') return false;
+    $query = parse_url($ref, PHP_URL_QUERY); $host = parse_url($ref, PHP_URL_HOST); $mine = parse_url('//' . (string) ($_SERVER['HTTP_HOST'] ?? ''), PHP_URL_HOST);
+    if (!is_string($query) || !is_string($host) || strcasecmp($host, (string) $mine) !== 0) return false;
+    parse_str($query, $q);
+    return array_key_exists('admin', $q);
+}
+/** The link record the owner is previewing in this browser, or null. */
+function link_preview() {
+    static $resolved = false, $link = null;
+    if ($resolved) return $link;
+    $resolved = true;
+    if (!ENABLE_SHARE_LINKS) return null;
+    $cookie = $_COOKIE[PREVIEW_COOKIE_NAME] ?? '';
+    if (!is_string($cookie) || !preg_match('/^([0-9a-f]{10})\.(\d{1,12})\.[0-9a-f]{64}$/', $cookie, $m)) return null;
+    if (isset($_GET['admin'])) return null;
+    $ts = (int) $m[2];
+    if ($ts > time() + 60 || time() - $ts > PREVIEW_SECONDS) return null;
+    if ((isset($_GET['img']) || isset($_GET['video']) || isset($_GET['strip']) || isset($_GET['preview'])) && preview_referer_is_admin()) return null;
+    $l = links_read()['links'][$m[1]] ?? null;
+    if (!is_array($l) || !isset($l['token']) || !hash_equals(preview_cookie_value($l, $ts), $cookie) || link_state($l) === 'revoked') return null;
+    return $link = $l;
+}
+/** The strip across the top of a previewed gallery: who it is a preview of, a list of what the link includes, and the way out. */
+function render_link_preview_banner($l, $dir, $files) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $map = folder_id_map($dir, $files);
+    $index = (array) (links_read()['folderIndex'] ?? []);
+    $rootFid = folder_id_read($dir);
+    $report = link_scope_report($l, $map, $index, $dir, $rootFid);
+    $state = link_state($l);
+    $type = $l['scope']['type'] ?? 'all';
+    $yes = function ($html) { return '<li class="yes">' . ui_icon('check') . '<span>' . $html . '</span></li>'; };
+    $no = function ($html) { return '<li class="no">' . ui_icon('close') . '<span>' . $html . '</span></li>'; };
+    $items = [];
+    $items[] = $yes(($type === 'all' ? 'Every private folder and photo, including ones you add later' : ($type === 'folders' ? $esc(implode(', ', array_map(function ($x) { return $x['label']; }, $report['folders']))) . ' and everything inside ' . (count($report['folders']) === 1 ? 'it' : 'them') : link_scope_text_html($l, $report))));
+    $items[] = $yes('All public folders and photos, as any visitor sees them');
+    if ($type !== 'all') $items[] = $no('Your other private folders and photos are <strong>not shown and not hinted at</strong>');
+    foreach (['downloads' => ['Originals can be downloaded: ', 'Original downloads are off.'], 'zip' => ['ZIP of a folder: ', 'ZIP downloads are off.']] as $cap => [$onText, $offText]) {
+        if (($l[$cap]['mode'] ?? 'off') === 'off') $items[] = $no($offText);
+        else $items[] = $yes($onText . strtolower(link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootFid)));
+    }
+    $items[] = $yes(($l['locations'] ?? 'public') === 'all' ? 'Locations: every saved location is shown' : 'Locations: only the ones the public can see');
+    $quiet = $state === 'active' || $state === 'used_up' ? '' : ' This link is ' . $esc(strtolower(link_state_label($state))) . ' right now, so the people who have it see nothing until that changes.';
+    return '<div class="link-preview" id="link-preview" role="status"><div class="lp-bar">' . ui_icon('eye')
+        . '<span class="lp-t"><strong>Previewing as ' . $esc($l['label']) . '.</strong> You see exactly what this link shows. Nothing you do here is counted or logged.' . $quiet . '</span>'
+        . '<button type="button" class="lp-more" aria-expanded="false" aria-controls="lp-panel">What\'s included ' . ui_icon('chev-down') . '</button>'
+        . '<a class="lp-exit" href="?exitpreview">Exit preview</a></div>'
+        . '<div class="lp-panel" id="lp-panel" hidden><h3>What this link includes</h3><ul>' . implode('', $items) . '</ul><p class="lp-note">Pressing Exit preview ends the preview and takes you back to the Share links tab.</p></div></div>'
+        . '<script>(function(){var b=document.querySelector("#link-preview .lp-more"),p=document.getElementById("lp-panel");if(!b||!p)return;b.addEventListener("click",function(){var o=p.hidden;p.hidden=!o;b.setAttribute("aria-expanded",o?"true":"false");});})();</script>';
+}
 
 /** Whether a link shows the "expires on" line at the top of the gallery: its own choice, else the site setting; never when it has no end date. */
 function link_headsup_on($l) {
@@ -6709,7 +6790,9 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
         }
         $html .= '<p class="pv-links"><a class="pv-lnk" href="' . $esc(folder_private_first_href($dir, $path)) . '">See them in the gallery &rsaquo;</a>';
         if ($private) $html .= '<span class="pv-sep">&middot;</span><a class="pv-lnk pv-makepub" href="' . $esc($settings) . '" data-folder="' . $esc($path) . '" data-label="' . $esc($r['label']) . '">Make public&hellip;</a>';
-        $html .= '<span class="pv-sep">&middot;</span><a class="pv-lnk" href="' . $esc($settings) . '">' . ($path === '' ? 'Gallery settings' : 'Folder settings') . '</a></p></div></details>';
+        $html .= '<span class="pv-sep">&middot;</span><a class="pv-lnk" href="' . $esc($settings) . '">' . ($path === '' ? 'Gallery settings' : 'Folder settings') . '</a>';
+        if ($private && $path !== '' && ENABLE_SHARE_LINKS) $html .= '<span class="pv-sep">&middot;</span><a class="pv-lnk" href="#links" data-gs-folder="' . $esc($path) . '" data-gs-label="' . $esc($r['label']) . '">Share&hellip;</a>';
+        $html .= '</p></div></details>';
         return $html;
     };
 ?>
@@ -7420,7 +7503,7 @@ function links_admin_action($action, $dir, $files) {
         $GLOBALS['__data_write_failed'] = false;
         links_update(function (&$d) use ($rec, $f) { $d['links'][$rec['id']] = $rec; foreach ($f['_index'] as $fid => $rel) $d['folderIndex'][$fid] = $rel; });
         $wrote();
-        admin_json_exit(['ok' => true, 'id' => $rec['id'], 'text' => 'Link made.']);
+        admin_json_exit(['ok' => true, 'id' => $rec['id'], 'text' => 'Link made.', 'urls' => link_urls($rec)]);
     }
     $problem = null; $text = 'Saved.';
     $saveFields = null; $saveErrors = [];
@@ -7612,6 +7695,381 @@ function link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootF
     return 'Only in ' . implode(', ', $names);
 }
 
+// KIT-BEGIN
+/** The pieces the owner shares with: a QR code drawn in the browser (with the gallery's icon in the middle), Copy / Share… / QR code for a
+ *  link, the large white code, Copy image and Save image, and the short "Share this folder / photo" form. Written out on the owner's own
+ *  gallery pages and on the admin page, when share links are switched on; nobody else gets any of it. */
+function render_share_kit() {
+    if (!ENABLE_SHARE_LINKS) return '';
+    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    $cfg = ['probe' => ($base === '' ? '/' : $base . '/') . LINK_PROBE_TOKEN, 'admin' => '?admin'];
+    $css = <<<'KIT_CSS'
+  .gs-panel { margin-top: 10px; margin-bottom: 14px; }
+  .gs-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .gs-btn { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; min-height: 36px; padding: 7px 13px; background: #232327; border: 1px solid #3a3a42; border-radius: 9px; color: #eaeaea; font: inherit; font-size: 0.92rem; font-weight: 600; text-decoration: none; cursor: pointer; }
+  .gs-btn:hover:not(:disabled) { background: #2c2c31; border-color: #4a4a54; }
+  .gs-btn:disabled { opacity: 0.5; cursor: default; }
+  .gs-btn[aria-expanded=true] { border-color: #5865f2; background: #20233a; color: #cfd3ff; }
+  .gs-btn .ico { width: 16px; height: 16px; vertical-align: 0; }
+  .gs-primary { background: #5865f2; border-color: #5865f2; color: #fff; }
+  .gs-primary:hover:not(:disabled) { background: #6b77f0; border-color: #6b77f0; }
+  .gs-light { background: #ececf0; border-color: #ececf0; color: #111; }
+  .gs-light:hover:not(:disabled) { background: #fff; border-color: #fff; }
+  .gs-dark { background: #111; border-color: #111; color: #fff; }
+  .gs-dark:hover:not(:disabled) { background: #000; border-color: #000; }
+  .gs-qr { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; align-items: flex-start; }
+  .gs-qr[hidden] { display: none; }
+  .gs-qrbox { flex: none; width: 176px; max-width: 100%; box-sizing: border-box; padding: 0; background: #fff; border-radius: 8px; overflow: hidden; line-height: 0; }
+  .gs-qrbox canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+  .gs-qrside { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 190px; flex: 1 1 190px; max-width: 320px; }
+  .gs-qrh { font-weight: 700; margin-bottom: 2px; }
+  .gs-note { margin: 4px 0 0; font-size: 0.82rem; line-height: 1.45; color: #9a9aa2; }
+  .gs-toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 100002; max-width: calc(100vw - 32px); padding: 10px 16px; background: #26262b; border: 1px solid #3a3a42; border-radius: 10px; color: #eaeaea; font-size: 0.92rem; box-shadow: 0 6px 24px rgba(0,0,0,0.5); }
+  .gs-toast.err { border-color: #ed4245; color: #ffb4b6; }
+  .gs-toast[hidden] { display: none; }
+  .gs-modal { position: fixed; inset: 0; z-index: 100000; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(0,0,0,0.65); overflow: auto; }
+  .gs-card { box-sizing: border-box; width: 480px; max-width: 100%; max-height: calc(100vh - 24px); overflow: auto; padding: 20px; background: #1a1a1d; border: 1px solid #323238; border-radius: 14px; color: #eaeaea; box-shadow: 0 20px 60px rgba(0,0,0,0.6); text-align: left; font-size: 0.95rem; line-height: 1.45; }
+  .gs-title { margin: 0 0 12px; font-size: 1.15rem; font-weight: 700; }
+  .gs-f { display: block; margin: 0 0 14px; }
+  .gs-k { display: block; margin: 0 0 6px; font-size: 0.85rem; font-weight: 700; color: #cfcfd6; }
+  .gs-name, .gs-url { box-sizing: border-box; width: 100%; padding: 10px 12px; background: #101012; border: 1px solid #34343a; border-radius: 9px; color: #fff; font: inherit; }
+  .gs-name:focus, .gs-url:focus { outline: 2px solid #5865f2; outline-offset: 0; border-color: #5865f2; }
+  .gs-url { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88rem; }
+  .gs-seg { display: inline-flex; flex-wrap: wrap; border: 1px solid #34343a; border-radius: 999px; overflow: hidden; max-width: 100%; }
+  .gs-seg button { padding: 7px 14px; background: transparent; border: 0; border-right: 1px solid #34343a; color: #c8c8cf; font: inherit; font-size: 0.9rem; cursor: pointer; }
+  .gs-seg button:last-child { border-right: 0; }
+  .gs-seg button.on { background: #5865f2; color: #fff; }
+  .gs-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 4px; }
+  .gs-chip { display: inline-block; padding: 5px 11px; background: #232327; border: 1px solid #3a3a42; border-radius: 999px; font-size: 0.88rem; }
+  .gs-muted { color: #9a9aa2; font-size: 0.85rem; }
+  .gs-photo { display: flex; gap: 12px; align-items: center; margin: 0 0 14px; }
+  .gs-thumbs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .gs-thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; background: #26262b; }
+  .gs-fine { margin: 0 0 8px; font-size: 0.85rem; color: #9a9aa2; }
+  .gs-link { padding: 0; background: none; border: 0; color: #aab2ff; font: inherit; font-weight: 600; cursor: pointer; }
+  .gs-link:hover { text-decoration: underline; }
+  .gs-err { min-height: 1.2em; color: #ff8587; font-size: 0.88rem; }
+  .gs-acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+  .gs-large { position: fixed; inset: 0; z-index: 100001; display: flex; align-items: center; justify-content: center; background: #fff; color: #111; overflow: auto; }
+  .gs-large-in { box-sizing: border-box; display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 760px; padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px)); text-align: center; }
+  .gs-large-code { width: min(78vw, 62vh, 640px); line-height: 0; }
+  .gs-large-code canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+  .gs-large-name { margin-top: 18px; font-size: 1.35rem; font-weight: 700; }
+  .gs-large-hint { margin-top: 8px; color: #55555d; font-size: 1rem; line-height: 1.5; }
+  .gs-large-btns { display: flex; gap: 10px; margin-top: 22px; width: 100%; justify-content: center; }
+  .gs-large-btns .gs-btn { min-width: 120px; justify-content: center; min-height: 44px; }
+  @media (max-width: 560px), (pointer: coarse) { .gs-large-btns .gs-dark { flex: 1; max-width: 420px; } }
+KIT_CSS;
+    $js = <<<'KIT_JS'
+  // ---- a QR code: byte mode, error correction H (a third of the code can be lost, so the gallery's icon can sit in the middle),
+  // versions 1 to 20 (up to about 380 characters). Written to the QR standard; the browser checks compare it module for module
+  // with an independent encoder and read it back with an independent decoder.
+  var QR_ECC = [0, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28];
+  var QR_BLOCKS = [0, [[1, 9]], [[1, 16]], [[2, 13]], [[4, 9]], [[2, 11], [2, 12]], [[4, 15]], [[4, 13], [1, 14]], [[4, 14], [2, 15]], [[4, 12], [4, 13]], [[6, 15], [2, 16]],
+    [[3, 12], [8, 13]], [[7, 14], [4, 15]], [[12, 11], [4, 12]], [[11, 12], [5, 13]], [[11, 12], [7, 13]], [[3, 15], [13, 16]], [[2, 14], [17, 15]], [[2, 14], [19, 15]],
+    [[9, 13], [16, 14]], [[15, 15], [10, 16]]];
+  var QR_MASKS = [function (x, y) { return (x + y) % 2 === 0; }, function (x, y) { return y % 2 === 0; }, function (x, y) { return x % 3 === 0; },
+    function (x, y) { return (x + y) % 3 === 0; }, function (x, y) { return (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0; },
+    function (x, y) { return x * y % 2 + x * y % 3 === 0; }, function (x, y) { return (x * y % 2 + x * y % 3) % 2 === 0; },
+    function (x, y) { return ((x + y) % 2 + x * y % 3) % 2 === 0; }];
+  function qrDataCw(v) { var n = 0; QR_BLOCKS[v].forEach(function (g) { n += g[0] * g[1]; }); return n; }
+  function qrGfMul(x, y) { var z = 0; for (var i = 7; i >= 0; i--) { z = (z << 1) ^ ((z >> 7) * 0x11D); z ^= ((y >> i) & 1) * x; } return z; }
+  function qrRsGen(d) {
+    var r = [], i, j, root = 1; for (i = 0; i < d - 1; i++) r.push(0); r.push(1);
+    for (i = 0; i < d; i++) { for (j = 0; j < d; j++) { r[j] = qrGfMul(r[j], root); if (j + 1 < d) r[j] ^= r[j + 1]; } root = qrGfMul(root, 2); }
+    return r;
+  }
+  function qrRsRem(data, gen) {
+    var r = gen.map(function () { return 0; });
+    data.forEach(function (b) { var f = b ^ r.shift(); r.push(0); for (var i = 0; i < gen.length; i++) r[i] ^= qrGfMul(gen[i], f); });
+    return r;
+  }
+  function qrAlign(v) {
+    if (v === 1) return [];
+    var n = Math.floor(v / 7) + 2, step = Math.ceil((v * 4 + 4) / (n * 2 - 2)) * 2, out = [];
+    for (var p = v * 4 + 10; out.length < n - 1; p -= step) out.unshift(p);
+    out.unshift(6); return out;
+  }
+  function qrFormatBits(m) { var d = (2 << 3) | m, r = d; for (var i = 0; i < 10; i++) r = (r << 1) ^ ((r >> 9) * 0x537); return ((d << 10) | r) ^ 0x5412; }
+  function qrVersionBits(v) { var r = v; for (var i = 0; i < 12; i++) r = (r << 1) ^ ((r >> 11) * 0x1F25); return (v << 12) | r; }
+  function qrGrid(size, val) { var g = []; for (var y = 0; y < size; y++) { var row = []; for (var x = 0; x < size; x++) row.push(val); g.push(row); } return g; }
+  function qrFunctionMap(v) {
+    var size = v * 4 + 17, dark = qrGrid(size, false), fn = qrGrid(size, false), i, j, dx, dy;
+    function put(x, y, d) { dark[y][x] = d; fn[y][x] = true; }
+    for (i = 0; i < size; i++) { put(6, i, i % 2 === 0); put(i, 6, i % 2 === 0); }
+    [[3, 3], [size - 4, 3], [3, size - 4]].forEach(function (c) {
+      for (dy = -4; dy <= 4; dy++) for (dx = -4; dx <= 4; dx++) {
+        var x = c[0] + dx, y = c[1] + dy, d = Math.max(Math.abs(dx), Math.abs(dy));
+        if (x >= 0 && x < size && y >= 0 && y < size) put(x, y, d !== 2 && d !== 4);
+      }
+    });
+    var ap = qrAlign(v);
+    for (i = 0; i < ap.length; i++) for (j = 0; j < ap.length; j++) {
+      if ((i === 0 && j === 0) || (i === 0 && j === ap.length - 1) || (i === ap.length - 1 && j === 0)) continue;
+      for (dy = -2; dy <= 2; dy++) for (dx = -2; dx <= 2; dx++) put(ap[i] + dx, ap[j] + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+    }
+    for (i = 0; i < 9; i++) if (i !== 6) { fn[i][8] = true; fn[8][i] = true; }
+    for (i = 0; i < 8; i++) { fn[8][size - 1 - i] = true; fn[size - 1 - i][8] = true; }
+    put(8, size - 8, true);
+    if (v >= 7) {
+      var vb = qrVersionBits(v);
+      for (i = 0; i < 18; i++) { var a = size - 11 + i % 3, b = Math.floor(i / 3), bit = ((vb >> i) & 1) === 1; put(a, b, bit); put(b, a, bit); }
+    }
+    return { dark: dark, fn: fn };
+  }
+  function qrDrawFormat(g, m) {
+    var size = g.length, b = qrFormatBits(m), i;
+    function bit(k) { return ((b >> k) & 1) === 1; }
+    for (i = 0; i < 6; i++) g[i][8] = bit(i);
+    g[7][8] = bit(6); g[8][8] = bit(7); g[8][7] = bit(8);
+    for (i = 9; i < 15; i++) g[8][14 - i] = bit(i);
+    for (i = 0; i < 8; i++) g[8][size - 1 - i] = bit(i);
+    for (i = 8; i < 15; i++) g[size - 15 + i][8] = bit(i);
+    g[size - 8][8] = true;
+  }
+  function qrPenalty(g) {
+    var size = g.length, p = 0, lines = g.slice(), x, y, a, run, s;
+    for (x = 0; x < size; x++) { var col = []; for (y = 0; y < size; y++) col.push(g[y][x]); lines.push(col); }
+    lines.forEach(function (line) {
+      run = 1;
+      for (a = 1; a < size; a++) { if (line[a] === line[a - 1]) run++; else { if (run >= 5) p += 3 + run - 5; run = 1; } }
+      if (run >= 5) p += 3 + run - 5;
+      s = line.map(function (t) { return t ? '1' : '0'; }).join('');
+      p += 40 * ((s.split('00001011101').length - 1) + (s.split('10111010000').length - 1));
+    });
+    for (y = 0; y < size - 1; y++) for (x = 0; x < size - 1; x++) if (g[y][x] === g[y][x + 1] && g[y][x] === g[y + 1][x] && g[y][x] === g[y + 1][x + 1]) p += 3;
+    var dark = 0; g.forEach(function (row) { row.forEach(function (t) { if (t) dark++; }); });
+    var total = size * size;
+    return p + (Math.ceil(Math.abs(dark * 20 - total * 10) / total) - 1) * 10;
+  }
+  // text -> a square array of booleans (true = dark), or null when it won't fit.
+  function qrEncode(text) {
+    var s = unescape(encodeURIComponent(String(text))), data = [], i, v;
+    for (i = 0; i < s.length; i++) data.push(s.charCodeAt(i));
+    for (v = 1; v <= 20; v++) if (4 + (v < 10 ? 8 : 16) + 8 * data.length <= qrDataCw(v) * 8) break;
+    if (v > 20) return null;
+    var bits = [];
+    function put(val, n) { for (var k = n - 1; k >= 0; k--) bits.push((val >> k) & 1); }
+    put(4, 4); put(data.length, v < 10 ? 8 : 16);
+    data.forEach(function (b) { put(b, 8); });
+    var cap = qrDataCw(v); put(0, Math.min(4, cap * 8 - bits.length));
+    while (bits.length % 8) bits.push(0);
+    var cw = [];
+    for (i = 0; i < bits.length; i += 8) { var n = 0; for (var k = 0; k < 8; k++) n = (n << 1) | bits[i + k]; cw.push(n); }
+    for (var pad = 0; cw.length < cap; pad++) cw.push(pad % 2 === 0 ? 0xEC : 0x11);
+    var gen = qrRsGen(QR_ECC[v]), blocks = [], pos = 0;
+    QR_BLOCKS[v].forEach(function (g) { for (var c = 0; c < g[0]; c++) { var d = cw.slice(pos, pos + g[1]); pos += g[1]; blocks.push([d, qrRsRem(d, gen)]); } });
+    var out = [], longest = 0;
+    blocks.forEach(function (b) { longest = Math.max(longest, b[0].length); });
+    for (i = 0; i < longest; i++) blocks.forEach(function (b) { if (i < b[0].length) out.push(b[0][i]); });
+    for (i = 0; i < QR_ECC[v]; i++) blocks.forEach(function (b) { out.push(b[1][i]); });
+    var size = v * 4 + 17, map = qrFunctionMap(v), base = map.dark, fn = map.fn, allbits = [];
+    out.forEach(function (c) { for (var k = 7; k >= 0; k--) allbits.push((c >> k) & 1); });
+    var bi = 0, x = size - 1, up = true, y, dx;
+    while (x > 0) {
+      if (x === 6) x--;
+      for (var yy = 0; yy < size; yy++) {
+        y = up ? size - 1 - yy : yy;
+        for (dx = 0; dx < 2; dx++) { var xx = x - dx; if (!fn[y][xx]) { base[y][xx] = bi < allbits.length ? allbits[bi] === 1 : false; bi++; } }
+      }
+      up = !up; x -= 2;
+    }
+    var best = null;
+    for (var m = 0; m < 8; m++) {
+      var g = base.map(function (row) { return row.slice(); });
+      for (y = 0; y < size; y++) for (x = 0; x < size; x++) if (!fn[y][x] && QR_MASKS[m](x, y)) g[y][x] = !g[y][x];
+      qrDrawFormat(g, m);
+      var sc = qrPenalty(g);
+      if (best === null || sc < best[0]) best = [sc, g];
+    }
+    return best[1];
+  }
+  // ---- the pieces the owner shares with
+  var cfg = window.__shareCfg || {};
+  var pretty = null, prettyAsked = null, toastTimer = null;
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function icon(name) { return '<svg class="ico" aria-hidden="true"><use href="#i-' + name + '"></use></svg>'; }
+  // Does the tidy address (/trip/<code>) work on this server? Asked once; the long form always works.
+  function tidy() {
+    if (prettyAsked) return prettyAsked;
+    prettyAsked = cfg.probe ? fetch(cfg.probe, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { pretty = r.headers.get('X-Gallery-Link') === 'invalid'; return pretty; }).catch(function () { pretty = false; return false; }) : Promise.resolve(false);
+    return prettyAsked;
+  }
+  function say(text, bad) {
+    var t = document.getElementById('gs-toast');
+    if (!t) { t = document.createElement('div'); t.id = 'gs-toast'; t.className = 'gs-toast'; t.setAttribute('role', 'status'); t.setAttribute('aria-live', 'polite'); document.body.appendChild(t); }
+    clearTimeout(toastTimer); t.className = 'gs-toast' + (bad ? ' err' : ''); t.textContent = text; t.hidden = false;
+    toastTimer = setTimeout(function () { t.hidden = true; }, bad ? 6000 : 3000);
+  }
+  function copyText(text, done) {
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () { say('Couldn\'t copy: select it and copy by hand.', true); }); return; }
+    var ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { say('Couldn\'t copy: select it and copy by hand.', true); } document.body.removeChild(ta);
+  }
+  // The code, drawn on a canvas: white all round, the gallery's own icon in the middle (the error correction covers it with room to spare).
+  function qrCanvas(text, px) {
+    var g = qrEncode(text); if (!g) return null;
+    var n = g.length, quiet = 4, mods = n + quiet * 2, scale = Math.max(2, Math.floor((px || 480) / mods)), cv = document.createElement('canvas');
+    cv.width = cv.height = mods * scale;
+    var c = cv.getContext('2d'); c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height); c.fillStyle = '#000';
+    for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) if (g[y][x]) c.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+    var inner = Math.max(5, Math.floor(n * 0.19)) * scale, pad = scale * 1.5, mid = cv.width / 2, bx = mid - inner / 2 - pad, bw = inner + pad * 2;
+    c.fillStyle = '#fff'; c.fillRect(bx, bx, bw, bw);
+    var r = inner * 0.2, x0 = mid - inner / 2;
+    c.fillStyle = '#111'; c.beginPath();
+    if (c.roundRect) c.roundRect(x0, x0, inner, inner, r); else c.rect(x0, x0, inner, inner);
+    c.fill();
+    c.strokeStyle = '#fff'; c.lineWidth = inner * 0.07; c.lineJoin = 'round'; c.lineCap = 'round';
+    var f = inner * 0.2, fw = inner - f * 2;   // the picture-frame glyph, like the gallery icon
+    c.beginPath(); if (c.roundRect) c.roundRect(x0 + f, x0 + f, fw, fw, fw * 0.12); else c.rect(x0 + f, x0 + f, fw, fw); c.stroke();
+    c.beginPath(); c.arc(x0 + f + fw * 0.33, x0 + f + fw * 0.34, fw * 0.09, 0, Math.PI * 2); c.stroke();
+    c.beginPath(); c.moveTo(x0 + f + fw * 0.06, x0 + f + fw * 0.86); c.lineTo(x0 + f + fw * 0.4, x0 + f + fw * 0.55); c.lineTo(x0 + f + fw * 0.6, x0 + f + fw * 0.72);
+    c.lineTo(x0 + f + fw * 0.72, x0 + f + fw * 0.6); c.lineTo(x0 + f + fw * 0.94, x0 + f + fw * 0.82); c.stroke();
+    return cv;
+  }
+  function blobOf(text, px) { return new Promise(function (res) { var cv = qrCanvas(text, px); if (!cv) { res(null); return; } cv.toBlob(function (b) { res(b); }, 'image/png'); }); }
+  function copyImage(text) {
+    return blobOf(text, 1024).then(function (blob) {
+      if (!blob) { say('That address is too long for a QR code.', true); return; }
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        return navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(function () { say('Picture copied. Paste it into a message.'); }, function () { say('Your browser won\'t copy a picture here: use Save image.', true); });
+      }
+      say('Your browser can\'t copy a picture: use Save image.', true);
+    });
+  }
+  function saveImage(text, name) {
+    return blobOf(text, 1024).then(function (blob) {
+      if (!blob) { say('That address is too long for a QR code.', true); return; }
+      var file = null; try { file = new File([blob], (name || 'share-link') + '-qr.png', { type: 'image/png' }); } catch (e) {}
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) { return navigator.share({ files: [file] }).catch(function () {}); }   // a phone: "Save Image" is in its share sheet
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (name || 'share-link').replace(/[^\w.-]+/g, '-') + '-qr.png';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+    });
+  }
+  // The large, white version, to hold up to someone's camera across a table.
+  function showLarge(url, name) {
+    var cv = qrCanvas(url, 900); if (!cv) { say('That address is too long for a QR code.', true); return; }
+    var o = document.createElement('div'); o.className = 'gs-large'; o.setAttribute('role', 'dialog'); o.setAttribute('aria-modal', 'true'); o.setAttribute('aria-label', 'QR code');
+    var phone = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+    o.innerHTML = '<div class="gs-large-in"><div class="gs-large-code"></div><div class="gs-large-name">' + esc(name || '') + '</div><div class="gs-large-hint">' + (phone ? 'Hold this up to their camera.<br>Stays on screen until you press Done.' : 'Scan with the camera to open') + '</div><div class="gs-large-btns">' + (phone ? '' : '<button type="button" class="gs-btn gs-light" data-gs="copyimg">' + icon('copy') + ' Copy image</button>') + '<button type="button" class="gs-btn gs-dark" data-gs="done">Done</button></div></div>';
+    o.querySelector('.gs-large-code').appendChild(cv);
+    function close() { document.removeEventListener('keydown', key, true); if (o.parentNode) o.parentNode.removeChild(o); }
+    function key(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } }
+    o.addEventListener('click', function (e) { var b = e.target.closest ? e.target.closest('[data-gs]') : null; if (b && b.getAttribute('data-gs') === 'done') close(); else if (b && b.getAttribute('data-gs') === 'copyimg') copyImage(url); });
+    document.addEventListener('keydown', key, true); document.body.appendChild(o); o.querySelector('[data-gs=done]').focus();
+  }
+  // Copy / Share… / QR code, drawn into an element. opts.url() gives the address as it is right now; opts.copy false leaves out Copy.
+  function mount(el, opts) {
+    if (!el || el._gs) return; el._gs = true; el.classList.add('gs-panel');
+    var canShare = !!navigator.share, shown = false;
+    el.innerHTML = '<div class="gs-btns">' + (opts.copy === false ? '' : '<button type="button" class="gs-btn" data-gs="copy">' + icon('copy') + ' Copy</button>')
+      + (canShare ? '<button type="button" class="gs-btn" data-gs="share">' + icon('share') + ' Share…</button>' : '') + '<button type="button" class="gs-btn" data-gs="qr" aria-expanded="false">' + icon('qr') + ' QR code</button></div>'
+      + '<div class="gs-qr" hidden><div class="gs-qrbox"></div><div class="gs-qrside"><div class="gs-qrh">Scan to open</div><button type="button" class="gs-btn" data-gs="large">Show large</button><button type="button" class="gs-btn" data-gs="copyimg">' + icon('copy') + ' Copy image</button><button type="button" class="gs-btn" data-gs="saveimg">Save image</button>'
+      + '<p class="gs-note">Copy image puts the code on the clipboard as a picture, to paste into a message.' + (canShare ? ' Share… opens the phone\'s own share sheet.' : '') + '</p></div></div>';
+    function draw() {
+      var box = el.querySelector('.gs-qrbox'), url = opts.url(), cv = qrCanvas(url, 480);
+      box.innerHTML = ''; if (cv) { cv.setAttribute('aria-label', 'QR code for the link'); box.appendChild(cv); } else box.textContent = 'That address is too long for a QR code.';
+    }
+    el.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-gs]') : null; if (!b || !el.contains(b)) return;
+      var what = b.getAttribute('data-gs'), url = opts.url();
+      if (what === 'copy') copyText(url, function () { var old = b.innerHTML; b.textContent = 'Copied'; setTimeout(function () { b.innerHTML = old; }, 1400); });
+      else if (what === 'share') navigator.share({ title: opts.name || 'Gallery', url: url }).catch(function () {});
+      else if (what === 'qr') { shown = !shown; el.querySelector('.gs-qr').hidden = !shown; b.setAttribute('aria-expanded', shown ? 'true' : 'false'); if (shown) draw(); }
+      else if (what === 'large') showLarge(url, opts.name);
+      else if (what === 'copyimg') copyImage(url);
+      else if (what === 'saveimg') saveImage(url, opts.name);
+    });
+    el._gsRedraw = function () { if (shown) draw(); };
+  }
+  // ---- the short form: Share this folder / photo / these photos
+  var modal = null, draftKey = 'galleryShareDraft';
+  function seg(name, list, cur) { return '<div class="gs-seg" data-seg="' + name + '" role="radiogroup">' + list.map(function (o) { return '<button type="button" role="radio" aria-checked="' + (String(o[0]) === String(cur)) + '" data-v="' + o[0] + '" class="' + (String(o[0]) === String(cur) ? 'on' : '') + '">' + o[1] + '</button>'; }).join('') + '</div>'; }
+  function segValue(root, name) { var b = root.querySelector('[data-seg=' + name + '] .on'); return b ? b.getAttribute('data-v') : ''; }
+  function csrf() { return fetch((cfg.admin || '?admin') + '&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); }).then(function (j) { return j.token; }); }
+  function closeModal() { if (modal && modal.parentNode) modal.parentNode.removeChild(modal); modal = null; document.removeEventListener('keydown', onKey, true); }
+  function onKey(e) { if (e.key === 'Escape' && modal) { e.preventDefault(); e.stopPropagation(); closeModal(); } }
+  function when(sec) { return sec > 0 ? new Date((Math.floor(Date.now() / 1000) + sec) * 1000).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''; }
+  // opts: { kind: 'folder' | 'photos', path, label (folder), files [paths] (photos), name (a suggestion) }
+  function quick(opts) {
+    closeModal(); tidy();
+    var photos = opts.kind === 'photos', files = opts.files || [], one = photos && files.length === 1;
+    var title = photos ? (one ? 'Share just this photo' : 'Share these ' + files.length + ' photos') : 'Share ' + (opts.label || opts.path || 'the gallery');
+    var subject = '';
+    if (photos) {
+      var shown = files.slice(0, 6).map(function (f) { return '<img src="?img=' + encodeURIComponent(f) + '&size=thumb" alt="" loading="lazy">'; }).join('');
+      subject = one ? '<div class="gs-photo"><div class="gs-thumbs">' + shown + '</div><div><strong>' + esc(files[0].split('/').pop()) + '</strong><div class="gs-muted">' + esc(files[0].indexOf('/') > 0 ? files[0].replace(/\/[^\/]*$/, '') + ' · private' : 'The front page · private') + '</div></div></div>'
+        : '<div class="gs-photo"><div class="gs-thumbs">' + shown + '</div><div class="gs-muted">' + (files.length > 6 ? '+' + (files.length - 6) + ' more' : '') + '</div></div>';
+    } else subject = '<div class="gs-f"><span class="gs-k">Folder</span><div class="gs-chips"><span class="gs-chip">' + esc(opts.label || opts.path) + '</span></div><div class="gs-muted">Everything inside it too.</div></div>';
+    var o = document.createElement('div'); o.className = 'gs-modal'; o.setAttribute('role', 'dialog'); o.setAttribute('aria-modal', 'true'); o.setAttribute('aria-label', title);
+    var whoField = '<label class="gs-f"><span class="gs-k">Who is it for?</span><input type="text" class="gs-name" maxlength="80" placeholder="Aunt Carol" autocomplete="off" value="' + esc(opts.name || '') + '"></label>';
+    o.innerHTML = '<div class="gs-card"><h3 class="gs-title">' + esc(title) + '</h3><div class="gs-body">' + (photos ? subject + whoField : whoField + subject)
+      + '<div class="gs-f"><span class="gs-k">Opens</span>' + seg('opens', [[1, 'Once'], [5, '5'], [10, '10'], [0, 'Unlimited']], photos ? 1 : 10) + '</div>'
+      + '<div class="gs-f"><span class="gs-k">Stops working</span>' + seg('ends', [[86400, '1 day'], [604800, '1 week'], [2592000, '30 days'], [0, 'Never']], photos ? 604800 : 2592000) + '</div>'
+      + '<p class="gs-fine">' + (photos ? 'They can look at ' + (one ? 'this photo' : 'these photos') + ' only. ' : 'They see this folder and what is inside it. ') + 'Downloads off, locations as the public sees them, no note. <button type="button" class="gs-link" data-gs="more">More options…</button></p>'
+      + '<div class="gs-err" role="alert"></div></div>'
+      + '<div class="gs-acts"><button type="button" class="gs-btn" data-gs="cancel">Cancel</button><button type="button" class="gs-btn gs-primary" data-gs="create">Create link</button></div></div>';
+    modal = o; document.body.appendChild(o); document.addEventListener('keydown', onKey, true);
+    var card = o.querySelector('.gs-card'), nameIn = o.querySelector('.gs-name');
+    setTimeout(function () { nameIn.focus(); }, 30);
+    o.addEventListener('click', function (e) {
+      if (e.target === o) { closeModal(); return; }
+      var sb = e.target.closest ? e.target.closest('.gs-seg button') : null;
+      if (sb) { [].forEach.call(sb.parentNode.children, function (x) { x.classList.toggle('on', x === sb); x.setAttribute('aria-checked', x === sb ? 'true' : 'false'); }); return; }
+      var b = e.target.closest ? e.target.closest('[data-gs]') : null; if (!b) return;
+      var what = b.getAttribute('data-gs');
+      if (what === 'cancel') { closeModal(); return; }
+      var draftOf = function () {
+        var sec = +segValue(card, 'ends');
+        return { label: nameIn.value.trim(), scopeType: photos ? 'photos' : 'folders', scopeFolders: photos ? [] : [opts.path], scopePhotos: photos ? files : [], openIn: photos ? '' : opts.path, maxOpens: +segValue(card, 'opens'), endsAt: sec > 0 ? Math.floor(Date.now() / 1000) + sec : 0 };
+      };
+      if (what === 'more') {
+        var d = draftOf(); closeModal();
+        if (window.__slOpenForm) { if (window.adminGoTo) window.adminGoTo('links'); window.__slOpenForm(d); }
+        else { try { sessionStorage.setItem(draftKey, JSON.stringify(d)); } catch (x) {} location.href = (cfg.admin || '?admin') + '#links'; }
+        return;
+      }
+      if (what !== 'create') return;
+      var err = card.querySelector('.gs-err'); err.textContent = '';
+      if (!nameIn.value.trim()) { err.textContent = 'Give it a name, so you can recognise it later.'; nameIn.focus(); return; }
+      b.disabled = true;
+      var d2 = draftOf();
+      csrf().then(function (token) {
+        var body = new URLSearchParams();
+        body.set('csrf_token', token); body.set('action', 'link_create'); body.set('label', d2.label); body.set('note', ''); body.set('title_mode', 'gallery');
+        body.set('scope_type', d2.scopeType); body.set('scope_folders', JSON.stringify(d2.scopeFolders)); body.set('scope_photos', JSON.stringify(d2.scopePhotos)); body.set('open_in', d2.openIn);
+        body.set('downloads', 'off'); body.set('zip', 'off'); body.set('locations', 'public'); body.set('heads_up', 'default'); body.set('starts_at', '0');
+        body.set('max_opens', d2.maxOpens); body.set('ends_at', d2.endsAt);
+        return fetch((cfg.admin || '?admin'), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+          .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
+      }).then(function (j) {
+        if (!j.ok) { b.disabled = false; err.textContent = j.text || 'Not saved.'; return; }
+        return tidy().then(function () { result(card, j, d2); if (window.__slRefresh) window.__slRefresh(); });
+      }).catch(function (x) { b.disabled = false; err.textContent = x && x.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.'; });
+    });
+  }
+  function result(card, j, d) {
+    var urls = j.urls || {}, url = pretty && urls.short ? urls.short : (urls.long || '');
+    var opensText = d.maxOpens > 0 ? 'up to ' + d.maxOpens + ' open' + (d.maxOpens === 1 ? '' : 's') : 'as many opens as they like';
+    card.innerHTML = '<h3 class="gs-title">Link made for ' + esc(d.label) + '</h3><div class="gs-body"><input type="text" class="gs-url" readonly value="' + esc(url) + '" aria-label="The link" onfocus="this.select()"><div class="gs-mount"></div>'
+      + '<p class="gs-fine">' + (d.endsAt > 0 ? 'Ends ' + esc(when(d.endsAt - Math.floor(Date.now() / 1000))) + ' · ' : 'No end date · ') + opensText + '. You can copy it again any time from the Share links tab.</p></div>'
+      + '<div class="gs-acts"><a class="gs-btn" href="' + esc((cfg.admin || '?admin') + '#links') + '">Open Share links</a><button type="button" class="gs-btn gs-primary" data-gs="done">Done</button></div>';
+    mount(card.querySelector('.gs-mount'), { url: function () { return card.querySelector('.gs-url').value; }, name: d.label, copy: true });
+    card.querySelector('.gs-url').select();
+    card.addEventListener('click', function (e) { var b = e.target.closest ? e.target.closest('[data-gs=done]') : null; if (b) closeModal(); });
+  }
+  // Anything marked data-gs-folder (a button on a private folder's page, a link on the Private tab) opens the short form for that folder.
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('[data-gs-folder]') : null; if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    quick({ kind: 'folder', path: b.getAttribute('data-gs-folder'), label: b.getAttribute('data-gs-label') || b.getAttribute('data-gs-folder') });
+  }, true);
+  window.GalleryShare = { qr: qrEncode, canvas: qrCanvas, mount: mount, large: showLarge, quick: quick, say: say, copyText: copyText, tidy: tidy, draftKey: draftKey };
+KIT_JS;
+    return '<style>' . $css . '</style><script>window.__shareCfg = ' . json_encode($cfg, JSON_HEX_TAG | JSON_HEX_AMP) . ';(function () {' . "\n" . $js . "\n" . '})();</script>';
+}
+// KIT-END
+
 function render_admin_links_panel($csrfToken, $dir, $files) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     if (AUTO_GROUP_BY_FOLDER) link_scan_ambiguity($dir, $files);   // keeps the list of ids found in two folders current
@@ -7662,6 +8120,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
           <div class="sl-xp">
             <?php if ($state !== 'revoked'): ?>
             <div class="sl-linkline"><input type="text" class="sl-url" readonly value="<?= $esc($urls['long']) ?>" data-long="<?= $esc($urls['long']) ?>" data-short="<?= $esc($urls['short']) ?>" aria-label="The link" onfocus="this.select()"><button type="button" class="secondary sl-copy" data-sl="copy">Copy</button></div>
+            <div class="gs-mount" data-name="<?= $esc($l['label']) ?>"></div>
             <?php endif; ?>
             <?php if ($missing && $state !== 'revoked'): ?>
             <div class="sl-warn"><?= ui_icon('warn') ?><div><strong>Part of this link can't be found.</strong> Nothing from it is shown to anyone using the link; the rest still works. Use <em>Edit…</em> to pick it again<?php foreach ($missing as $m): if ($m['state'] === 'missing' && isset($m['fid']) && ($l['scope']['type'] ?? '') === 'folders'): ?> <button type="button" class="linklike sl-forget" data-sl="forget" data-fid="<?= $esc($m['fid']) ?>">Take “<?= $esc($m['label']) ?>” out of this link</button><?php endif; endforeach; ?>.</div></div>
@@ -7686,7 +8145,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
                 <a href="?admin&amp;linkexport=<?= $esc($l['id']) ?>&amp;what=items">What they looked at<small>One line per item: seen, opened, played, saved</small></a>
                 <a href="?admin&amp;linkexport=<?= $esc($l['id']) ?>&amp;what=events">Everything, in order<small>The timeline, one line per happening</small></a>
                 <span class="sl-menu-note">Includes IP addresses. Opens in your downloads.</span></div></details>
-              <?php if ($state !== 'revoked'): ?><button type="button" class="linklike" data-sl="edit">Edit…</button><?php endif; ?>
+              <?php if ($state !== 'revoked'): ?><button type="button" class="linklike" data-sl="edit">Edit…</button><button type="button" class="linklike" data-sl="preview" title="Opens a new tab that shows the gallery exactly as this link does">Preview as this link</button><?php endif; ?>
               <?php if (in_array($state, ['active', 'scheduled'], true) && ($l['status'] ?? '') === 'active'): ?><button type="button" class="linklike" data-sl="pause">Pause</button><?php endif; ?>
               <?php if ($state === 'paused'): ?><button type="button" class="linklike" data-sl="resume">Resume</button><?php endif; ?>
               <?php if (in_array($state, ['expired', 'used_up'], true)): ?><button type="button" class="linklike" data-sl="extend">Extend…</button><?php endif; ?>
@@ -7729,7 +8188,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
           <div class="sl-radios" role="radiogroup" aria-label="What they can see">
             <label class="sl-radio"><input type="radio" name="scope_type" value="all" checked><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
             <label class="sl-radio"><input type="radio" name="scope_type" value="folders"<?= AUTO_GROUP_BY_FOLDER ? '' : ' disabled' ?>><span><strong>Only some folders</strong><small>Each folder includes everything inside it. They are never told other private folders exist.<?= AUTO_GROUP_BY_FOLDER ? '' : ' (Turn on “Show subfolders” in Site settings first.)' ?></small></span></label>
-            <label class="sl-radio" data-photos-only hidden><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note"></small></span></label>
+            <label class="sl-radio" data-photos-only><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note">Only the photos you pick, wherever they are. They see nothing else of the folder.</small></span></label>
           </div>
           <div class="sl-chips" data-chips="scope" hidden></div>
         </div>
@@ -7776,6 +8235,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       </div>
       <div class="pv-toast" id="sl-toast" role="status" aria-live="polite" hidden></div>
     </section>
+<?= render_share_kit() ?>
 <?php
 }
 
@@ -7800,8 +8260,8 @@ function link_log_default() { return ['v' => 1, 'visitors' => [], 'blocked' => [
 function link_items_default() { return ['t' => [], 'f' => []]; }   // t: "visitor|item" => tally; f: "visitor|folder" => [times, first, last]
 function link_log_read($id) { return json_file_read(link_log_path($id), link_log_default()); }
 function link_items_read($id) { return json_file_read(link_log_path($id, '-items'), link_items_default()); }
-function link_log_update($id, $fn) { return json_file_update(link_log_path($id), link_log_default(), $fn); }
-function link_items_update($id, $fn) { return json_file_update(link_log_path($id, '-items'), link_items_default(), $fn); }
+function link_log_update($id, $fn) { if (link_preview() !== null) return link_log_default(); return json_file_update(link_log_path($id), link_log_default(), $fn); }
+function link_items_update($id, $fn) { if (link_preview() !== null) return link_items_default(); return json_file_update(link_log_path($id, '-items'), link_items_default(), $fn); }
 
 /** "Safari on iPhone": the browser and where it runs, as far as the User-Agent says. An app's own browser is named as such. */
 function ua_label($ua) {
@@ -7931,6 +8391,7 @@ function link_log_apply($link, $vid, $ip, $label, $country, $batch, $now = null)
 
 /** The server noting that it sent a private picture to someone using a link (or an original, which is a save): a cheap append. */
 function link_queue_delivery($link, $kind, $item) {
+    if (link_preview() !== null) return;
     [$vid, $ip, $label, $country] = link_visitor_identity();
     $path = link_log_path($link['id'], '-q');
     $new = !is_file($path);
@@ -7946,7 +8407,7 @@ function link_queue_delivery($link, $kind, $item) {
 
 /** The same for many items at once (a ZIP's files): one open, one lock. */
 function link_queue_deliveries($link, array $pairs) {
-    if (!$pairs) return;
+    if (!$pairs || link_preview() !== null) return;
     [$vid, $ip, $label, $country] = link_visitor_identity();
     $path = link_log_path($link['id'], '-q');
     $new = !is_file($path);
@@ -8266,6 +8727,7 @@ function run_links_view_route($dir, $files) {
     if (isset($_GET['linkexport'])) { link_export($str('linkexport'), $str('what'), $str('ip'), $data, $dir); return; }
     header('Content-Type: text/html; charset=UTF-8');
     if (isset($_GET['linkips'])) { echo render_link_ips_list(); return; }
+    if (isset($_GET['linkphotos'])) { echo render_link_photo_picker($str('linkphotos'), $files); return; }
     if (isset($_GET['linkip'])) {
         $tab = in_array($str('tab'), ['folders', 'media', 'timeline'], true) ? $str('tab') : 'folders';
         echo render_link_ip_page($str('linkip'), $tab, preg_match('/^[0-9a-f]{10}$/', $str('link')) ? $str('link') : '', $dir, $files);
@@ -8276,6 +8738,25 @@ function run_links_view_route($dir, $files) {
     if (!is_array($l)) { http_response_code(404); echo '<p class="muted">That link no longer exists.</p>'; return; }
     $tab = in_array($str('tab'), ['visitors', 'folders', 'photos'], true) ? $str('tab') : 'visitors';
     echo render_link_activity($l, $tab, preg_match('/^[0-9a-f]{10}$/', $str('vid')) ? $str('vid') : '', $str('folder'), $str('sort') === 'recent' ? 'recent' : 'viewed', $str('all') === '1', $dir, $files);
+}
+
+/** The photos of one folder (not the ones inside its subfolders), as check boxes with thumbnails: the "Add photos" picker of the link form. */
+function render_link_photo_picker($folder, $files) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $folder = trim(str_replace('\\', '/', $folder), '/');
+    if ($folder !== '' && !in_array($folder, all_folder_paths($files), true)) return '<p class="muted">That folder isn\'t in the gallery.</p>';
+    $list = [];
+    foreach ($files as $f) {
+        $slash = strrpos($f, '/');
+        if (($slash === false ? '' : substr($f, 0, $slash)) === $folder) $list[] = $f;
+    }
+    natcasesort($list);
+    if (!$list) return '<p class="muted">There are no photos directly in this folder.</p>';
+    $out = '';
+    foreach (array_slice(array_values($list), 0, 400) as $f) {
+        $out .= '<label class="sl-pickphoto"><input type="checkbox" value="' . $esc($f) . '"><img src="?img=' . rawurlencode($f) . '&amp;size=thumb" alt="" loading="lazy"><span>' . $esc(basename($f)) . '</span></label>';
+    }
+    return $out . (count($list) > 400 ? '<p class="muted">Showing the first 400 of ' . count($list) . '.</p>' : '');
 }
 
 /** CSV of a link's (or every link's) log: what=visitors | items | events; ip limits it to one address. */
@@ -8734,6 +9215,19 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-warn .ico { width:18px; height:18px; color:#e0a028; flex:none; margin-top:2px; }
   .sl-bad { color:#e0a028; }
   .sl-bad em { font-style:normal; font-size:0.85em; }
+  .sl-pths { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
+  .sl-pth { position:relative; width:78px; height:78px; border-radius:9px; background:#26262a; }
+  .sl-pth img { display:block; width:100%; height:100%; object-fit:cover; border-radius:9px; }
+  .sl-pth button { position:absolute; top:-7px; right:-7px; width:22px; height:22px; padding:0; border-radius:50%; background:#3a3a42; border:1px solid #55555e; color:#fff; font-size:0.9rem; line-height:1; cursor:pointer; }
+  .sl-pth button:hover { background:#ed4245; border-color:#ed4245; }
+  .sl-padd { width:78px; height:78px; padding:4px; background:none; border:1px dashed #4a4a54; border-radius:9px; color:#aab2ff; font:inherit; font-size:0.82rem; font-weight:600; cursor:pointer; }
+  .sl-padd:hover { background:#1c1c22; }
+  .sl-pickgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(88px, 1fr)); gap:8px; max-height:46vh; overflow:auto; margin-bottom:8px; }
+  .sl-pickphoto { position:relative; display:block; cursor:pointer; }
+  .sl-pickphoto img { display:block; width:100%; aspect-ratio:1; object-fit:cover; border-radius:8px; background:#26262a; border:2px solid transparent; box-sizing:border-box; }
+  .sl-pickphoto input { position:absolute; top:6px; left:6px; width:18px; height:18px; margin:0; accent-color:#5865f2; }
+  .sl-pickphoto input:checked + img { border-color:#5865f2; }
+  .sl-pickphoto span { display:block; margin-top:3px; font-size:0.72rem; color:#9a9aa2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .sl-picklist { max-height:48vh; overflow:auto; border:1px solid #26262a; border-radius:8px; padding:6px 10px; margin-bottom:8px; }
   .sl-pick { display:flex; gap:8px; align-items:center; padding:5px 0; cursor:pointer; font-size:0.9rem; }
   .sl-newt { display:inline-flex; align-items:center; gap:6px; font-size:0.78rem; color:#aab2ff; margin:0 4px; white-space:nowrap; }
@@ -9986,6 +10480,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       fetch(url, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { pretty = r.headers.get('X-Gallery-Link') === 'invalid'; }).catch(function () { pretty = false; }).then(function () {
         banner = box.querySelector('[data-sl-check]');
         [].forEach.call(box.querySelectorAll('.sl-url'), function (i) { i.value = pretty ? i.getAttribute('data-short') : i.getAttribute('data-long'); });
+        [].forEach.call(box.querySelectorAll('.gs-mount'), function (m) { if (m._gsRedraw) m._gsRedraw(); });
         banner.className = 'sl-check ' + (pretty ? 'ok' : 'no'); banner.hidden = false;
         if (pretty) banner.textContent = 'Tidy addresses work: a link looks like ' + location.origin + url.replace(/0+$/, '') + 'k7QpR2mXv9LwTb4e.';
         else banner.textContent = 'Links use the long form (…/?link=…) until the server rule below is added; it works as it is, the rule only makes them shorter.';
@@ -10005,6 +10500,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var sideNow = document.querySelector('.side-link[data-tab="links"]'), sideNew = doc.querySelector('.side-link[data-tab="links"]');
         if (sideNow && sideNew) sideNow.innerHTML = sideNew.innerHTML;
         [].forEach.call(box.querySelectorAll('details.sl-row[open] .sl-act'), function (a) { actLoad(a); });
+        mountPanels();
+      });
+    }
+    // ---- Copy / Share… / QR code under a row's address, drawn when the row opens (the pieces come from the share kit)
+    function mountPanels() {
+      if (!window.GalleryShare) return;
+      [].forEach.call(box.querySelectorAll('details.sl-row[open] .gs-mount'), function (m) {
+        var row = rowOf(m);
+        window.GalleryShare.mount(m, { copy: false, name: m.getAttribute('data-name') || '', url: function () { var u = row.querySelector('.sl-url'); return u ? u.value : ''; } });
       });
     }
     // ---- the log: Visitors / Folders / Photos on a link, the page of one address, the list of every address
@@ -10028,7 +10532,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     box.addEventListener('toggle', function (e) {
       var d = e.target;
-      if (d && d.classList && d.classList.contains('sl-row') && d.open) { var a = d.querySelector('.sl-act'); if (a && !a._st) actLoad(a); }
+      if (d && d.classList && d.classList.contains('sl-row') && d.open) { var a = d.querySelector('.sl-act'); if (a && !a._st) actLoad(a); mountPanels(); }
     }, true);
     box.addEventListener('click', function (e) {
       var act = e.target.closest ? e.target.closest('.sl-act') : null;
@@ -10105,7 +10609,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       form.querySelector('[name=ends_at_local]').hidden = radioValue(form, 'ends_pick') !== 'pick';
       var sc = form.querySelector('[data-chips=scope]');
       if (scope === 'folders') { sc.hidden = false; sc.innerHTML = chipsHtml(form, 'scope'); }
-      else if (scope === 'photos') { sc.hidden = false; sc.innerHTML = '<span class="sl-chip">' + st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' chosen</span>'; }
+      else if (scope === 'photos') {
+        sc.hidden = false;
+        sc.innerHTML = '<div class="sl-pths">' + st.photos.map(function (p) {
+          return '<span class="sl-pth" title="' + esc(p) + '"><img src="?img=' + encodeURIComponent(p) + '&size=thumb" alt=""><button type="button" data-chip-x="photos" data-p="' + esc(p) + '" aria-label="Take ' + esc(p.split('/').pop()) + ' out">×</button></span>';
+        }).join('') + '<button type="button" class="sl-padd" data-chip-add="photos">+ Add photos</button></div>';
+      }
       else sc.hidden = true;
       [['downloads', dl], ['zip', zp]].forEach(function (pair) {
         var c = form.querySelector('[data-chips=' + pair[0] + ']'); c.hidden = pair[1] !== 'some'; if (pair[1] === 'some') c.innerHTML = chipsHtml(form, pair[0]);
@@ -10119,23 +10628,23 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       sel.innerHTML = '<option value="">' + (scope === 'photos' ? 'The first photo' : 'The front page') + '</option>' + opts.map(function (o) { return '<option value="' + esc(o.p) + '">' + esc(o.l) + '</option>'; }).join('');
       sel.value = opts.some(function (o) { return o.p === keep; }) ? keep : '';
       sel.disabled = scope === 'photos';
-      var ph = form.querySelector('[data-photos-only]'); ph.hidden = !(st.photos.length || scope === 'photos');
-      ph.querySelector('.sl-photos-note').textContent = 'Only the photos you picked, wherever they are. They see nothing else of the folder.';
+      form.querySelector('[data-openin] .sl-h').textContent = scope === 'photos' ? 'Straight into the viewer, on the first photo.' : 'The first page they see.';
     }
     function openForm(link) {
       var form = box.querySelector('#sl-form'), v = Object.assign({}, DEFAULTS, link || {});
       form.reset();
       st = { scope: (v.scopeFolders || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
-      form.querySelector('[name=id]').value = link ? link.id : '';
-      form.querySelector('.sl-form-title').textContent = link ? 'Edit link' : 'New share link';
-      form.querySelector('.sl-save').textContent = link ? 'Save' : 'Create link';
+      var editing = !!(link && link.id);
+      form.querySelector('[name=id]').value = editing ? link.id : '';
+      form.querySelector('.sl-form-title').textContent = editing ? 'Edit link' : 'New share link';
+      form.querySelector('.sl-save').textContent = editing ? 'Save' : 'Create link';
       form.querySelector('[name=label]').value = v.label; form.querySelector('[name=note]').value = v.note; form.querySelector('[name=title_text]').value = v.titleText;
       radio(form, 'title_mode', v.titleMode); radio(form, 'downloads', v.downloads); radio(form, 'zip', v.zip); radio(form, 'locations', v.locations); radio(form, 'heads_up', v.headsUp);
       radio(form, 'scope_type', v.scopeType);
       radio(form, 'starts_pick', v.startsAt > 0 ? 'pick' : 'now'); if (v.startsAt > 0) form.querySelector('[name=starts_at_local]').value = localValue(v.startsAt);
       var presets = { 0: '0', 1: '1', 5: '5', 10: '10' };
       if (presets[v.maxOpens] !== undefined) radio(form, 'opens_pick', presets[v.maxOpens]); else { radio(form, 'opens_pick', 'n'); form.querySelector('[name=opens_other]').value = v.maxOpens; }
-      if (v.endsAt > 0) { radio(form, 'ends_pick', 'pick'); form.querySelector('[name=ends_at_local]').value = localValue(v.endsAt); } else radio(form, 'ends_pick', link ? '0' : '604800');
+      if (v.endsAt > 0) { radio(form, 'ends_pick', 'pick'); form.querySelector('[name=ends_at_local]').value = localValue(v.endsAt); } else radio(form, 'ends_pick', editing ? '0' : (link ? '0' : '604800'));
       form.querySelector('.sl-err').textContent = '';
       form.querySelector('[name=open_in]').setAttribute('data-want', v.openIn || '');
       syncForm(form); form.hidden = false; form.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); form.querySelector('[name=label]').focus();
@@ -10179,6 +10688,31 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         return true;
       });
     }
+    // The photo picker: choose a folder, tick its photos; what is ticked stays ticked while another folder is looked at.
+    function pickPhotos(form) {
+      var chosen = st.photos.slice(), all = folderList(form), first = chosen.length ? chosen[0] : '';
+      var startIn = first.indexOf('/') > 0 ? first.replace(/\/[^\/]*$/, '') : '';
+      var opts = '<option value="">The front page</option>' + all.map(function (o) { return '<option value="' + esc(o.p) + '"' + (o.p === startIn ? ' selected' : '') + '>' + (o.x ? '🔒 ' : '') + esc(o.l) + '</option>'; }).join('');
+      var done = ask('Add photos', '<div class="sl-f"><select id="sl-pp-folder" aria-label="Folder">' + opts + '</select></div><div id="sl-pp-grid" class="sl-pickgrid"><p class="muted">Loading…</p></div><p class="hint" id="sl-pp-count"></p>', 'Done', false);
+      var m = modalEl(), grid = m.querySelector('#sl-pp-grid'), sel = m.querySelector('#sl-pp-folder'), count = m.querySelector('#sl-pp-count');
+      function tally() { count.textContent = chosen.length ? chosen.length + ' photo' + (chosen.length === 1 ? '' : 's') + ' chosen' : 'Tick the photos to share.'; }
+      function load() {
+        grid.innerHTML = '<p class="muted">Loading…</p>';
+        fetch('?admin&linkphotos=' + encodeURIComponent(sel.value), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+          grid.innerHTML = html;
+          [].forEach.call(grid.querySelectorAll('input[type=checkbox]'), function (i) { i.checked = chosen.indexOf(i.value) >= 0; });
+          tally();
+        }).catch(function () { grid.innerHTML = '<p class="muted">Couldn\'t load: check your connection.</p>'; });
+      }
+      grid.addEventListener('change', function (e) {
+        var i = e.target; if (!i || i.type !== 'checkbox') return;
+        var k = chosen.indexOf(i.value);
+        if (i.checked && k < 0) chosen.push(i.value); else if (!i.checked && k >= 0) chosen.splice(k, 1);
+        tally();
+      });
+      sel.addEventListener('change', load); load();
+      return done.then(function (yes) { if (!yes) return false; st.photos = chosen; syncForm(form); return true; });
+    }
     box.addEventListener('submit', function (e) {
       var form = e.target.closest ? e.target.closest('#sl-form') : null; if (!form) return;
       e.preventDefault();
@@ -10206,7 +10740,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var x = e.target.closest ? e.target.closest('[data-chip-x]') : null;
       if (x) { var k = x.getAttribute('data-chip-x'), p = x.getAttribute('data-p'); st[k] = st[k].filter(function (q) { return q !== p; }); if (k === 'scope') ['downloads', 'zip'].forEach(function (kk) { st[kk] = st[kk].filter(function (q) { return under(q, st.scope); }); }); syncForm(box.querySelector('#sl-form')); return; }
       var add = e.target.closest ? e.target.closest('[data-chip-add]') : null;
-      if (add) { pickFolders(box.querySelector('#sl-form'), add.getAttribute('data-chip-add')); return; }
+      if (add) { var addKind = add.getAttribute('data-chip-add'); if (addKind === 'photos') pickPhotos(box.querySelector('#sl-form')); else pickFolders(box.querySelector('#sl-form'), addKind); return; }
       var b = e.target.closest ? e.target.closest('[data-sl]') : null; if (!b) return;
       var what = b.getAttribute('data-sl'), row = rowOf(b), link = null;
       if (row) { try { link = JSON.parse(row.getAttribute('data-link')); } catch (x2) {} }
@@ -10220,6 +10754,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         return;
       }
       if (what === 'edit') { openForm(link); return; }
+      if (what === 'preview') { window.open('?admin&linkpreview=' + encodeURIComponent(link.id) + '&csrf_token=' + encodeURIComponent(csrf), '_blank'); return; }
       var name = link ? link.label : 'this link';
       if (what === 'pause') { act('link_pause', row); return; }
       if (what === 'resume') { act('link_resume', row); return; }
@@ -10250,6 +10785,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     times(); probe();
     if (box.closest('.tab-panel.active')) setTimeout(markSeen, 1500);
     [].forEach.call(box.querySelectorAll('details.sl-row[open]'), function (d) { var a = d.querySelector('.sl-act'); if (a) actLoad(a); });
+    mountPanels();
+    // the short "Share this folder / photo" form hands over to the full form ("More options…"), here or from another page
+    window.__slOpenForm = openForm; window.__slRefresh = refresh;
+    try {
+      var draft = sessionStorage.getItem('galleryShareDraft');
+      if (draft) { sessionStorage.removeItem('galleryShareDraft'); var dv = JSON.parse(draft); dv.id = ''; setTimeout(function () { openForm(dv); }, 300); }
+    } catch (x) {}
   })();
   // Private folder: a switch like the others. Switching it on saves at once; switching it off first says what will happen (how many
   // photos stay private, how many become public) and waits for a yes.
@@ -10887,7 +11429,15 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
 
-    if (isset($_GET['linkview']) || isset($_GET['linkip']) || isset($_GET['linkips']) || isset($_GET['linkexport'])) {   // the Share links tab's fragments and CSV downloads
+    if (isset($_GET['linkpreview'])) {   // "Preview as this link": opens the link's own view of the gallery, in a new tab
+        $pl = ENABLE_SHARE_LINKS && admin_csrf_valid($_GET['csrf_token'] ?? '') && preg_match('/^[0-9a-f]{10}$/', (string) $_GET['linkpreview']) ? (links_read()['links'][$_GET['linkpreview']] ?? null) : null;
+        if (!is_array($pl) || link_state($pl) === 'revoked') { http_response_code(400); echo 'That link can\'t be previewed.'; return; }
+        preview_set_cookie($pl);
+        header('Cache-Control: no-store');
+        header('Location: ' . link_open_in_href($pl), true, 303);
+        return;
+    }
+    if (isset($_GET['linkview']) || isset($_GET['linkip']) || isset($_GET['linkips']) || isset($_GET['linkexport']) || isset($_GET['linkphotos'])) {   // the Share links tab's fragments and CSV downloads
         run_links_view_route($dir, $files);
         return;
     }
@@ -11261,6 +11811,7 @@ define('VISIT_WINDOW_SECONDS', 1800);
 /** True if this browser is the admin's own (it carries the admin's reveal token,
  *  set at login). The owner looking at their own gallery is not an audience. */
 function is_admin_browser() {
+    if (link_preview() !== null) return false;
     $token = admin_reveal_cookie_value();
     $cookie = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
     return $token !== '' && is_string($cookie) && $cookie !== '' && hash_equals($token, $cookie);
@@ -12607,6 +13158,9 @@ function ui_icon_paths() {
         'edit'    => '<path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M14.5 6.5l3 3"/>',
         'select'  => '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/>',
         'chev-down' => '<path d="M5.5 8.75 12 15.25l6.5-6.5"/>',
+        'share'   => '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 13v5.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V13"/>',
+        'qr'      => '<rect x="4" y="4" width="6.5" height="6.5" rx="1"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1"/><path d="M14 14h2.5v2.5H14zM19.5 14v.01M14 19.5v.01M17 19.5h3.5M19.5 17v3.5"/>',
+        'copy'    => '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
     ];
 }
 function ui_icon($name) {
@@ -12724,7 +13278,10 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     }
     $html .= $pill;
     // A plain link to a private folder opens nothing for anyone without access, so only the owner is offered one there.
-    if (is_admin_browser() || !folder_is_private($dir, $folderPath)) $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
+    if (ENABLE_SHARE_LINKS && is_admin_browser() && folder_is_private($dir, $folderPath)) {
+        // for the owner, on a private folder, the link icon asks what to share: a plain link opens nothing for anyone else
+        $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Share this folder…" aria-label="Share this folder…" data-gs-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" data-gs-label="' . htmlspecialchars(link_folder_label($dir, $folderPath), ENT_QUOTES, 'UTF-8') . '">' . ui_icon('link') . '</a>';
+    } elseif (is_admin_browser() || !folder_is_private($dir, $folderPath)) $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
     $html .= '</div>';
     return $html;
 }
@@ -13162,6 +13719,24 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     --reserved: #f5a623;
   }
   * { box-sizing: border-box; }
+  .link-preview { position: sticky; top: 0; z-index: 95; background: #262046; border-bottom: 1px solid #3d3470; color: #e9e6ff; font-size: 0.88rem; }
+  .link-preview .lp-bar { display: flex; align-items: center; gap: 12px; padding: 9px 14px; }
+  .link-preview .lp-bar .ico { flex: none; color: #b9b2ff; }
+  .link-preview .lp-t { flex: 1 1 auto; line-height: 1.4; }
+  .link-preview .lp-more { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 6px 4px; background: none; border: 0; color: #cfc9ff; font: inherit; cursor: pointer; }
+  .link-preview .lp-more:hover { text-decoration: underline; }
+  .link-preview .lp-exit { flex: none; padding: 7px 14px; background: #14141a; border: 1px solid #4a4380; border-radius: 9px; color: #fff; font-weight: 700; text-decoration: none; white-space: nowrap; }
+  .link-preview .lp-exit:hover { background: #000; }
+  .link-preview .lp-panel { position: absolute; right: 14px; top: calc(100% + 8px); box-sizing: border-box; width: min(420px, calc(100vw - 28px)); padding: 16px 18px; background: #1a1a1d; border: 1px solid #38383f; border-radius: 12px; color: #eaeaea; box-shadow: 0 14px 44px rgba(0,0,0,0.6); }
+  .link-preview .lp-panel[hidden] { display: none; }
+  .link-preview .lp-panel h3 { margin: 0 0 10px; font-size: 1.05rem; }
+  .link-preview .lp-panel ul { list-style: none; margin: 0; padding: 0; }
+  .link-preview .lp-panel li { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 9px; line-height: 1.4; }
+  .link-preview .lp-panel li .ico { flex: none; width: 16px; height: 16px; margin-top: 3px; }
+  .link-preview .lp-panel li.yes .ico { color: #57c47a; }
+  .link-preview .lp-panel li.no .ico { color: #9a9aa2; }
+  .link-preview .lp-note { margin: 12px 0 0; font-size: 0.8rem; color: #8e8e96; }
+  @media (max-width: 640px) { .link-preview .lp-bar { flex-wrap: wrap; } .link-preview .lp-t { flex-basis: 100%; order: 1; } .link-preview .lp-bar .ico { display: none; } .link-preview .lp-more { order: 2; margin-right: auto; } .link-preview .lp-exit { order: 3; } }
   .link-headsup { display:flex; align-items:center; gap:10px; padding:8px 14px; background:#1f2233; border-bottom:1px solid #2f3350; font-size:0.85rem; line-height:1.35; color:#d9dcff; }
   .link-headsup.soon { background:#33290f; border-color:#6b5316; color:#ffe2a3; }
   .link-headsup[hidden] { display:none; }
@@ -13737,6 +14312,18 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     .cover-toggle.is-cover:hover { background: #ffd86b; }
     .priv-toggle:hover:active, .cover-toggle:hover:active, .edit-toggle:hover:active { transform: scale(1.02); }
   }
+  .lb-sharepop { position: fixed; z-index: 150; top: 66px; right: 12px; box-sizing: border-box; width: min(460px, calc(100vw - 24px)); padding: 14px 16px; background: #1b1b1e; border: 1px solid #38383f; border-radius: 12px; color: #eaeaea; box-shadow: 0 14px 44px rgba(0,0,0,0.6); font-size: 0.92rem; line-height: 1.45; }
+  .lb-sharepop p { margin: 6px 0 12px; color: #c2c2c9; }
+  .lb-sharepop .lsp-h { display: flex; align-items: center; gap: 8px; font-size: 1.02rem; font-weight: 700; color: #fff; }
+  .lb-sharepop .lsp-h .ico { color: #ed4245; }
+  .lb-sharepop .lsp-btns { display: flex; gap: 8px; }
+  .lb-sharepop .lsp-btns button { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 8px 12px; background: #26262b; border: 1px solid #3a3a42; border-radius: 9px; color: #eaeaea; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .lb-sharepop .lsp-btns .lsp-share { flex: 1.6 1 0; background: #5865f2; border-color: #5865f2; color: #fff; }
+  .lb-sharepop .lsp-btns .lsp-share:hover { background: #6b77f0; }
+  .lb-sharepop .lsp-btns .lsp-copy:hover { background: #303036; }
+  .lb-sharepop .lsp-btns .ico { width: 16px; height: 16px; vertical-align: 0; }
+  .lb-sharepop .lsp-fine { margin: 10px 0 0; font-size: 0.82rem; color: #8e8e96; }
+  .select-bar .sb-share { display: inline-flex; align-items: center; gap: 5px; }
   .lightbox .caption-row .lightbox-copy.owner-cover.on { color: #f5c542; opacity: 1; }
   .lightbox .caption-row .lightbox-copy.owner-cover.on .ico { fill: currentColor; }
   .lightbox .caption-row .lightbox-copy.owner-priv.on { color: #ed4245; opacity: 1; }
@@ -14092,6 +14679,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 </head>
 <body>
 <?= ui_icon_sprite() ?>
+<?php if (($previewLink = link_preview()) !== null) echo render_link_preview_banner($previewLink, $dir, $allFiles); ?>
 <?php if (($headsUpLink = link_viewer()) !== null && !is_revealed() && link_headsup_on($headsUpLink)) echo render_link_headsup($headsUpLink); ?>
 
 <?php
@@ -14440,6 +15028,9 @@ if (ENABLE_MAP && $mapPoints) {
         <?php if ($archiveCount > 0 || $lockHtml !== ''): $archiveTitle = 'Download all ' . number_format($archiveCount) . ' original' . ($archiveCount === 1 ? '' : 's') . ' (' . human_bytes($archiveBytes) . ') as one ZIP'; ?>
         <span class="map-combo"><?php if ($archiveCount > 0): ?><a class="map-combo-btn page-archive" href="?archive<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>" data-bytes="<?= (int) $archiveBytes ?>" data-ask="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" title="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>" aria-label="<?= htmlspecialchars($archiveTitle, ENT_QUOTES, 'UTF-8') ?>"><?= ui_icon('archive') ?></a><?php endif; ?><?= $lockHtml ?></span>
         <?php endif; ?>
+        <?php if (ENABLE_SHARE_LINKS && is_admin_browser() && $currentFolderPath !== null && folder_is_private($dir, $currentFolderPath)): ?>
+        <span class="map-combo"><button type="button" class="map-combo-btn page-share" data-gs-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-gs-label="<?= htmlspecialchars(link_folder_label($dir, $currentFolderPath), ENT_QUOTES, 'UTF-8') ?>" title="Share this folder…" aria-label="Share this folder…"><?= ui_icon('share') ?></button></span>
+        <?php endif; ?>
         <span class="map-combo"><a class="map-combo-btn page-about" href="?about" title="About this gallery software" aria-label="About this gallery software"><?= ui_icon('gallery') ?></a></span>
       </span>
     </div>
@@ -14507,6 +15098,9 @@ if (ENABLE_MAP && $mapPoints) {
     <button type="button" data-select="private" class="sb-private"><?= ui_icon('lock') ?> <span class="sb-n">Make private</span><span class="sb-p">Private</span></button>
     <button type="button" data-select="public" class="sb-public"><?= ui_icon('unlock') ?> <span class="sb-n">Make public</span><span class="sb-p">Public</span></button>
     <button type="button" data-select="inherit" class="sb-folder" title="Back to whatever the folder is: they follow it again" hidden><?= ui_icon('lock') ?> Folder</button>
+<?php if (ENABLE_SHARE_LINKS): ?>
+    <button type="button" data-select="share" class="sb-share" title="Make a share link for just these photos"><?= ui_icon('share') ?> Share&hellip;</button>
+<?php endif; ?>
   </div>
 <?php if (!empty($arrangeShown)): ?>
   <div class="select-arr">
@@ -14592,6 +15186,7 @@ if (ENABLE_MAP && $mapPoints) {
   </div>
 <?php endif; ?>
 </div>
+<?php if (is_admin_browser()) echo render_share_kit(); ?>
 
 <script>
   const files = <?= json_encode($files) ?>;
@@ -14936,6 +15531,7 @@ if (ENABLE_MAP && $mapPoints) {
       bar.querySelector('[data-select=private]').disabled = !n || busy;
       bar.querySelector('[data-select=public]').disabled = !n || busy;
       bar.querySelector('[data-select=inherit]').disabled = !n || busy;
+      const shareBtn = bar.querySelector('[data-select=share]'); if (shareBtn) shareBtn.disabled = !n || busy;
       // In a private folder (the photos picked, or else the ones on the page) the bar offers the three states of the lock.
       const first = cards()[0], ctx = picked.length ? picked[0] : (first ? fileOf(first) : null), inPriv = !!(ctx && ownerState.inh[ctx]);
       bar.classList.toggle('in-private', inPriv);
@@ -15007,6 +15603,7 @@ if (ENABLE_MAP && $mapPoints) {
       else if (what === 'private') bulk('private');
       else if (what === 'public') bulk('public');
       else if (what === 'inherit') bulk('inherit');
+      else if (what === 'share') { if (picked.length && window.GalleryShare) window.GalleryShare.quick({ kind: 'photos', files: picked.slice() }); }
       else if (what === 'release') {
         const sel = picked.filter(function (f) { return stackOf[f] !== undefined; });
         send(folderOf(sel[0]), { mode: 'release', files: JSON.stringify(sel.map(bare)) }, picked.slice());
@@ -15972,10 +16569,37 @@ if (ENABLE_MAP && $mapPoints) {
 
   // Copies a "?photo=" deep link to the photo currently open in the lightbox.
   const lightboxCopyBtn = document.getElementById('lightbox-copy-btn');
-  lightboxCopyBtn.addEventListener('click', () => {
+  const copyPhotoLink = () => {
     const url = window.location.origin + window.location.pathname + '?photo=' + encodeURIComponent(files[current]);
     copyToClipboard(url).then(() => flashCopied(lightboxCopyBtn));
+  };
+  lightboxCopyBtn.addEventListener('click', () => {
+    // A plain link to a private photo only opens for people who already have access, so the owner is asked what they mean.
+    if (ownerState && ownerState.priv[files[current]] && window.GalleryShare) { openPrivateLinkPopup(); return; }
+    copyPhotoLink();
   });
+<?php if (is_admin_browser() && ENABLE_SHARE_LINKS): ?>
+  let linkPop = null;
+  function closeLinkPopup() { if (linkPop) { linkPop.remove(); linkPop = null; document.removeEventListener('keydown', linkPopKey, true); document.removeEventListener('pointerdown', linkPopAway, true); } }
+  function linkPopKey(e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLinkPopup(); } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') closeLinkPopup(); }
+  function linkPopAway(e) { if (linkPop && !linkPop.contains(e.target) && e.target !== lightboxCopyBtn && !lightboxCopyBtn.contains(e.target)) closeLinkPopup(); }
+  function openPrivateLinkPopup() {
+    if (linkPop) { closeLinkPopup(); return; }
+    const file = files[current];
+    linkPop = document.createElement('div'); linkPop.className = 'lb-sharepop'; linkPop.setAttribute('role', 'dialog'); linkPop.setAttribute('aria-label', 'This photo is private');
+    linkPop.innerHTML = '<div class="lsp-h"><?= ui_icon('lock') ?> This photo is private</div><p>A plain link only opens for people who already have access. To let someone see just this photo, make a share link for it.</p>'
+      + '<div class="lsp-btns"><button type="button" class="lsp-share"><?= ui_icon('share') ?> Share just this photo&hellip;</button><button type="button" class="lsp-copy"><?= ui_icon('copy') ?> Copy link</button></div>'
+      + '<p class="lsp-fine">Share links are managed in the Share links tab.</p>';
+    document.body.appendChild(linkPop);
+    linkPop.querySelector('.lsp-share').addEventListener('click', () => { closeLinkPopup(); window.GalleryShare.quick({ kind: 'photos', files: [file] }); });
+    linkPop.querySelector('.lsp-copy').addEventListener('click', () => { closeLinkPopup(); copyPhotoLink(); });
+    document.addEventListener('keydown', linkPopKey, true); document.addEventListener('pointerdown', linkPopAway, true);
+  }
+  // (moving to another photo, or closing the viewer, closes the question)
+  document.addEventListener('click', (e) => { if (linkPop && e.target.closest && e.target.closest('.lightbox .close, .lightbox .nav, .lightbox-close-row')) closeLinkPopup(); }, true);
+<?php else: ?>
+  function openPrivateLinkPopup() { copyPhotoLink(); }
+<?php endif; ?>
 
   // The "this link expires on ..." line for someone using a share link: the time in their own zone, amber in the last day, and a dismissal kept for as long as the end time and that state stay the same.
   (function () {

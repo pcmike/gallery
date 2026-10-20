@@ -61,7 +61,8 @@ try:
     run(["galleryrun.js", f"{WORK}/gallery.html", f"{WORK}/js/gallery-{gi}.js"], "gallery script (lightbox, captions, tracking, popover, copy-link)")
     ni = max(range(len(scripts["nested"])), key=lambda i: len(scripts["nested"][i]))
     run(["galleryrun.js", f"{WORK}/nested.html", f"{WORK}/js/nested-{ni}.js"], "gallery script on a nested folder page")
-    run(["adminrun.js", f"{WORK}/js/admin-0.js"], "admin script (collapse on phone, insert at cursor, Save As confirm)")
+    ai = next(i for i, js in enumerate(scripts["admin"]) if "admConfirmSaveAs" in js)   # (not the first one: the share kit's script can come before it)
+    run(["adminrun.js", f"{WORK}/js/admin-{ai}.js"], "admin script (collapse on phone, insert at cursor, Save As confirm)")
 finally:
     srv.terminate(); srv.wait(); shutil.rmtree(WORK, ignore_errors=True)
 print("\nALL JS CHECKS PASSED" if not failures else f"\n{failures} JS CHECK GROUP(S) FAILED")
