@@ -3,7 +3,7 @@
 Things the owner found while using 2.3.0-dev, and things found while fixing them. **Rule: collect, then fix in one pass** (the owner's request), with a test for each (a test that fails without the fix), then run every suite. Newest first. Add a line here when something turns up; tick it when it is fixed and tested; "verify" means the owner confirms it on their own device.
 
 ## Queued
-(nothing: everything found so far is fixed below; add new finds here)
+- [ ] **A 404 line in Safari's console whenever the Share links tab opens (owner):** `Failed to load resource: the server responded with a status of 404 () (0000000000000000, line 0)`. It is the admin's own check of the tidy address (a request for `/trip/0000000000000000`, which answers the "This link isn't valid" page with the header `X-Gallery-Link: invalid`); harmless, but the browser logs any 404. Plan: answer that one fixed probe token with 200 (same page, same header; only the header is read), every real wrong token still 404. Test: the probe answers 200 with the header, a wrong 16-character token still answers 404 without it, and the tab's tidy-address check still turns green. Owner agreed to add it to the list (2026-10-20), not yet to build it.
 
 ## Open: the owner's to verify
 - [x] **Rome (owner, verified on the iPhone):** the button answered "Read 42 files: 42 now have a location from the file, 0 have none in the file." So the files were fine and readable, and the photos had been remembered as read-with-nothing. (Why that first read stored nothing is still unknown; Prepare media removes the whole class of problem.) **Still to look at:** Rome's public page now shows pins and the map button, and a one-photo link shows Rome's locations.
