@@ -2016,7 +2016,7 @@ check('a valid admin login also sets the reveal cookie, unlocking the public pag
 // The admin tool itself always sees everything, regardless of hiding.
 [, $adminGridBody] = http_get("$basePrivate/?admin", [$adminAuth, "Cookie: $sessCookie"]);
 check('the admin tool\'s own grid always shows a hidden item, hide flag and all', str_contains($adminGridBody, 'loose1.jpg'));
-check('the admin shows a red Hidden entry in the sidebar, above the folder list, with the not-a-lock explanation, while hidden items exist', str_contains($adminGridBody, 'class="side-hidden"') && strpos($adminGridBody, 'class="side-hidden"') < strpos($adminGridBody, 'class="admin-folder-nav"') && str_contains($adminGridBody, 'data-tab="hidden"') && str_contains($adminGridBody, "Private isn't locked") && str_contains($adminGridBody, 'by their direct address'));
+check('the admin shows an Edited entry in the sidebar, above the folder list, with the not-a-lock explanation, while hidden items exist', str_contains($adminGridBody, 'class="side-hidden edited"') && strpos($adminGridBody, 'class="side-hidden edited"') < strpos($adminGridBody, 'class="admin-folder-nav"') && str_contains($adminGridBody, 'data-tab="hidden"') && str_contains($adminGridBody, "Private isn't locked") && str_contains($adminGridBody, 'by their direct address'));
 check('...and the top tabs stay the same four sections (Hidden is not one of them)', (bool) preg_match('#<nav class="admin-tabs".*?</nav>#s', $adminGridBody, $tabNav) && !str_contains($tabNav[0], 'hidden'));
 check('...with the tabs in the same bar as the title and Log out (one header row), in that order', (function ($b) { $p1 = strpos($b, '<h1>Gallery Admin</h1>'); $p2 = strpos($b, '<nav class="admin-tabs"'); $p3 = strpos($b, 'class="logout-form"'); return $p1 !== false && $p1 < $p2 && $p2 < $p3 && substr_count(substr($b, 0, $p3), '<header') === 1 && strpos($b, '</header>') > $p3; })($adminGridBody));
 
@@ -2280,7 +2280,7 @@ check('the admin nav lists nested folders at every depth', str_contains($depthAd
 $parisAdminQuery = '&folder=' . rawurlencode('Europe/France/Paris');
 [$parisAdminStatus, $parisAdminBody] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
 check('?admin&folder= works three levels deep', $parisAdminStatus === 200 && str_contains($parisAdminBody, 'eiffel.jpg'));
-check('the admin grid shows only what is loose in that folder (not Lyon\'s photo)', !str_contains($parisAdminBody, 'lyon.jpg'));
+check('the admin grid shows only what is loose in that folder (not Lyon\'s photo)', !str_contains(preg_replace('#<section class="panel media-panel".*?</section>#s', '', $parisAdminBody), 'lyon.jpg'));   // (Prepare media, on the Site tab, lists files from the whole gallery)
 [$badAdminStatus] = http_get("$baseDepth/?admin&folder=" . rawurlencode('Europe/Nope'), [$depthAuth, "Cookie: $depthCookie"]);
 check('?admin&folder= with a bogus nested path returns 404', $badAdminStatus === 404);
 
@@ -3708,7 +3708,7 @@ check('[instant] the folder location switch works in place too: off answers JSON
 $jLocOn = $locAjax('&folder=Lisbon', true);
 check('[instant] ...and on answers JSON and turns it back on', ($jLocOn['ok'] ?? null) === true && !empty(read_data_file("$fxMapF/Lisbon/.gallery-items.php")['locationEnabled']));
 [, $mapAdminAgain] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
-check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 3);   // (the page's own confirms: Prepare media's "read everything again" and "tidy up", and one more elsewhere)
+check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 4);   // (the page's own confirms: Prepare media's "read everything again", "tidy up" and "delete the backups", and one more elsewhere)
 
 // The whole map feature off: nothing anywhere.
 file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
@@ -4988,6 +4988,18 @@ $slCfg([]);
 
 // Site settings: the new group.
 $slSettings = http_get("$baseSl/?admin", ["Cookie: $slAdminCookie"])[1];
+// The "came through a proxy" line under "Where visitors' IP addresses come from": said only when the connection itself is a proxy's.
+{
+    $ipSrc = (string) file_get_contents(__DIR__ . '/../index.php');
+    foreach (['ip_binary', 'ip_in_cidr', 'ip_in_ranges', 'cloudflare_ranges', 'is_local_request', 'client_ip_proxy_hint'] as $ipFn) {
+        $at = strpos($ipSrc, "function $ipFn("); eval(substr($ipSrc, $at, strpos($ipSrc, "\n}\n", $at) + 3 - $at));
+    }
+    define('TRUSTED_PROXY', 'direct');
+    $ipHint = function (array $server) { $keep = $_SERVER; $_SERVER = $server; $out = client_ip_proxy_hint(); $_SERVER = $keep; return $out; };
+    check('[share links] the proxy line stays quiet when the connection is an ordinary address, even with a Cloudflare header (the web server already passes the real address on)', $ipHint(['REMOTE_ADDR' => '92.184.124.36', 'HTTP_CF_CONNECTING_IP' => '92.184.124.36']) === '' && $ipHint(['REMOTE_ADDR' => '92.184.124.36', 'HTTP_X_FORWARDED_FOR' => '203.0.113.9']) === '');
+    check('[share links] the proxy line says Cloudflare when the connection is inside Cloudflare\'s ranges and the header is there', str_contains($ipHint(['REMOTE_ADDR' => '172.70.1.2', 'HTTP_CF_CONNECTING_IP' => '203.0.113.9']), 'came through Cloudflare') && $ipHint(['REMOTE_ADDR' => '172.70.1.2']) === '');
+    check('[share links] the proxy line says "a proxy" for a private-network connection with a forwarding header, and nothing for this very machine', str_contains($ipHint(['REMOTE_ADDR' => '10.0.0.5', 'HTTP_X_FORWARDED_FOR' => '203.0.113.9']), 'came through a proxy') && $ipHint(['REMOTE_ADDR' => '127.0.0.1', 'HTTP_X_FORWARDED_FOR' => '203.0.113.9']) === '' && $ipHint(['REMOTE_ADDR' => '10.0.0.5']) === '');
+}
 check('[share links] Site settings has a Share links group (allow, heads-up, where addresses come from) that shows the visitor address it sees', str_contains($slSettings, 'name="set_ENABLE_SHARE_LINKS"') && str_contains($slSettings, 'name="set_SHARE_HEADS_UP"') && str_contains($slSettings, 'name="set_TRUSTED_PROXY"') && str_contains($slSettings, 'Your address as the gallery sees it: <strong>127.0.0.1</strong>'));
 
 // Installed in a folder: the rule and the probe are written for that folder.
@@ -4999,7 +5011,9 @@ $portSlSub = find_free_port(); @touch("$fxSlSub/trip/index.php", time() - 3600);
 $slSubPage = http_get("http://127.0.0.1:$portSlSub/trip/index.php?admin", ['Cookie: ' . extract_cookie_header($slSubLogin)])[1];
 check('[share links] in a gallery installed at /trip/ the nginx rule is for /trip/ (no top-of-site warning) and the probe asks for /trip/ plus the probe token', str_contains($slNginxRule($slSubPage), 'location ~ "^/trip/[A-Za-z0-9]{16}$" {') && str_contains($slNginxRule($slSubPage), 'rewrite "^/trip/([A-Za-z0-9]{16})$" /trip/index.php?link=$1 last;') && $slNginxOk($slNginxRule($slSubPage)) && str_contains($slSubPage, 'data-probe="/trip/0000000000000000"') && !str_contains($slSubPage, 'At the top of the site'));
 [$slSubProbeStatus, , $slSubProbeHeaders] = http_get("http://127.0.0.1:$portSlSub/trip/index.php?link=0000000000000000");
-check('[share links] the probe token answers with the marker header but is not counted as a wrong guess', $slSubProbeStatus === 404 && in_array('X-Gallery-Link: invalid', $slSubProbeHeaders, true) && !preg_grep('/^link\|/', array_keys(read_data_file("$fxSlSub/trip/.gallery-login-attempts.php"))));
+check('[share links] the probe token answers 200 (a browser logs no 404 in its console) with the marker header, and is not counted as a wrong guess', $slSubProbeStatus === 200 && in_array('X-Gallery-Link: invalid', $slSubProbeHeaders, true) && !preg_grep('/^link\|/', array_keys(read_data_file("$fxSlSub/trip/.gallery-login-attempts.php"))));
+[$slSubWrongStatus, , $slSubWrongHeaders] = http_get("http://127.0.0.1:$portSlSub/trip/index.php?link=Zz9Zz9Zz9Zz9Zz9Z");
+check('[share links] a real wrong 16-character token still answers 404 (with the marker header)', $slSubWrongStatus === 404 && in_array('X-Gallery-Link: invalid', $slSubWrongHeaders, true));
 
 
 echo "== share links: folder and photo scopes, downloads, ZIPs and locations: what a link holder can reach and nothing more ==\n";
@@ -5039,6 +5053,11 @@ $s2Make = function (string $label, array $f) use ($s2Admin, $s2Links, $baseS2, $
 [$idC, $tokC, $ckC, $locC] = $s2Make('C two photos', ['scope_type' => 'photos', 'scope_photos' => json_encode(['Rome/r1.jpg', 'Florence/f2.jpg'])]);
 [$idD, $tokD, $ckD] = $s2Make('D everything', ['downloads' => 'all', 'locations' => 'all', 'zip' => 'all']);
 check('[share links] links for a folder, two folders, two photos and everything can all be made', $idA && $idB && $idC && $idD);
+// "Show only these": the pages the person sees list nothing but what the link covers, the public rest of the gallery too.
+[$idE, $tokE, $ckE] = $s2Make('E two photos, only those', ['scope_type' => 'photos', 'scope_photos' => json_encode(['Rome/r1.jpg', 'Florence/f2.jpg']), 'only' => '1']);
+[$idG, $tokG, $ckG] = $s2Make('G Rome, only that', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Rome']), 'open_in' => 'Rome', 'only' => '1']);
+[$idH, , ] = $s2Make('H everything, only?', ['only' => '1']);
+check('[share links] a link made with "only" keeps it for photos and folders, and ignores it for a link to everything (nothing to leave out)', !empty($s2Links()['links'][$idE]['only']) && !empty($s2Links()['links'][$idG]['only']) && empty($s2Links()['links'][$idH]['only']) && empty($s2Links()['links'][$idA]['only']) && empty($s2Links()['links'][$idC]['only']));
 
 $s2All = ['pub.jpg', 'secret.jpg', 'Florence/f1.jpg', 'Florence/f2.jpg', 'Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/geo.jpg', 'Rome/clip.mp4', 'Rome/Sub/s1.jpg', 'Pisa/p1.jpg', 'Other/o1.jpg'];
 $s2Public = ['pub.jpg', 'Florence/f1.jpg'];
@@ -5049,6 +5068,8 @@ $s2Viewers = [   // name => [cookie, the files that viewer may reach]
     'a link to Rome and Pisa' => [$ckB, array_merge($s2Public, $s2Rome, ['Pisa/p1.jpg'])],
     'a link to two photos' => [$ckC, array_merge($s2Public, ['Rome/r1.jpg', 'Florence/f2.jpg'])],
     'a link to everything' => [$ckD, $s2All],
+    'a link to two photos, only those' => [$ckE, ['Rome/r1.jpg', 'Florence/f2.jpg']],
+    'a link to Rome, only that' => [$ckG, $s2Rome],
 ];
 $s2Hdr = fn ($c) => $c ? ["Cookie: $c"] : [];
 $s2Visible = function ($body) { return preg_match('/const files = (\[[^\n]*\]);/', $body, $m) ? (json_decode($m[1], true) ?: []) : null; };
@@ -5083,6 +5104,17 @@ foreach ($s2Viewers as $name => [$ck, $expect]) {
     if (!in_array('secret.jpg', $expect, true) && str_contains($rootBody, 'secret')) $problems[] = 'the page names secret.jpg';
     check("[share links] leak matrix, $name: the page, every picture at every size, the video, ?photo= and each folder page show exactly what that viewer may reach" . ($problems ? ' -- ' . implode('; ', array_slice($problems, 0, 4)) : ''), !$problems);
 }
+
+// The form and the row: the checkbox, what the row says, and that it can be changed later.
+$s2Tab = http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1];
+check('[share links] the full form has the "Show only what they can see here" box (with the tidy-view-not-a-lock line), the row for a link says what the rest of the public gallery does, and the form gets the setting for editing', str_contains($s2Tab, 'name="only"') && str_contains($s2Tab, 'A tidy view, not a lock') && str_contains($s2Tab, '<dt>The rest of the gallery</dt><dd>Not listed: they see only what the link covers.') && str_contains($s2Tab, '<dt>The rest of the gallery</dt><dd>Listed too: they also see everything that is already public.') && str_contains($s2Tab, '&quot;only&quot;:true'));
+$s2Edit = $s2Admin(['action' => 'link_save', 'id' => $idE, 'label' => 'E two photos, only those', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'photos', 'scope_photos' => json_encode(['Rome/r1.jpg', 'Florence/f2.jpg']), 'downloads' => 'off', 'zip' => 'off', 'only' => '0']);
+check('[share links] changing it later (Edit, unticked) lists the public photos again for that same link, with no new sign-in', ($s2Edit['ok'] ?? false) && empty($s2Links()['links'][$idE]['only']) && $s2Same($s2Visible(http_get("$baseS2/", $s2Hdr($ckE))[1]) ?? [], array_merge($s2Public, ['Rome/r1.jpg', 'Florence/f2.jpg'])), json_encode($s2Edit));
+$s2Edit2 = $s2Admin(['action' => 'link_save', 'id' => $idE, 'label' => 'E two photos, only those', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'photos', 'scope_photos' => json_encode(['Rome/r1.jpg', 'Florence/f2.jpg']), 'downloads' => 'off', 'zip' => 'off', 'only' => '1']);
+check('[share links] ...and ticking it again takes them out again', ($s2Edit2['ok'] ?? false) && $s2Same($s2Visible(http_get("$baseS2/", $s2Hdr($ckE))[1]) ?? [], ['Rome/r1.jpg', 'Florence/f2.jpg']));
+$s2OnlyFolder = http_get("$baseS2/?folder=Florence", $s2Hdr($ckE))[1];
+check('[share links] in a public folder, a link to one private photo with "only" shows that photo and not the folder\'s public photos (the folder page counts just 1)', preg_match('/1 photo\b/', $s2OnlyFolder) === 1 && !str_contains($s2OnlyFolder, 'f1.jpg'));
+check('[share links] ...while the same link without "only" (the plain two-photo link) still shows the public photos of that folder', str_contains(http_get("$baseS2/?folder=Florence", $s2Hdr($ckC))[1], 'f1.jpg'));
 
 // Folder pages show only what the link covers: counts, folder buttons and the covers are made from what that visitor can see.
 $s2RomeBody = http_get("$baseS2/?folder=Rome", $s2Hdr($ckA))[1];
@@ -5167,12 +5199,12 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     chmod("$fxS2/Other", 0555); chmod("$fxS2/Other/.gallery-items.php", 0444);   // (a folder's settings file that already exists can be written even in a locked folder: lock both)
     $s2Locked = $s2Admin(['action' => 'link_create', 'label' => 'x', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'folders', 'scope_folders' => json_encode(['Other']), 'downloads' => 'off', 'zip' => 'off']);
     chmod("$fxS2/Other", 0775); chmod("$fxS2/Other/.gallery-items.php", 0664);
-    check('[share links] a link can\'t be limited to a folder the web server can\'t write in (it says why), and nothing is made', ($s2Locked['ok'] ?? true) === false && str_contains($s2Locked['text'] ?? '', 'can\'t write') && count($s2Links()['links']) === 4);
+    check('[share links] a link can\'t be limited to a folder the web server can\'t write in (it says why), and nothing is made', ($s2Locked['ok'] ?? true) === false && str_contains($s2Locked['text'] ?? '', 'can\'t write') && count($s2Links()['links']) === 7);
 }
 
 // Checking the form's choices.
 $s2Bad = fn (array $f) => ($s2Admin($f + ['action' => 'link_create', 'label' => 'bad', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off'])['ok'] ?? true) === false;
-check('[share links] a link to folders needs at least one, a folder that isn\'t there is refused, downloads "only in some folders" need folders among those the link covers, and it can only open in a folder it covers', $s2Bad(['scope_type' => 'folders', 'scope_folders' => '[]']) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Nope'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'downloads' => 'some', 'downloads_folders' => json_encode(['Other'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'open_in' => 'Other']) && $s2Bad(['scope_type' => 'photos', 'scope_photos' => json_encode(['nope.jpg'])]) && count($s2Links()['links']) === 4);
+check('[share links] a link to folders needs at least one, a folder that isn\'t there is refused, downloads "only in some folders" need folders among those the link covers, and it can only open in a folder it covers', $s2Bad(['scope_type' => 'folders', 'scope_folders' => '[]']) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Nope'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'downloads' => 'some', 'downloads_folders' => json_encode(['Other'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'open_in' => 'Other']) && $s2Bad(['scope_type' => 'photos', 'scope_photos' => json_encode(['nope.jpg'])]) && count($s2Links()['links']) === 7);
 
 // The heads-up line.
 $s2Ends = time() + 3 * 86400;
@@ -5302,24 +5334,57 @@ $lgTok2 = $lgLinks()['links'][$lgMade2['id']]['token'] ?? '';
 [, , $lgGo2] = http_post("$baseL/?link=$lgTok2", ['go' => '1'], [], false); $lgCk2 = extract_cookie_header($lgGo2);
 http_get("$baseL/?track=" . rawurlencode('Rome/r1.jpg'), ["Cookie: $lgCk2"]); http_get("$baseL/", ["Cookie: $lgCk2"]);
 check('[share log] a link holder\'s views stay out of the gallery\'s view counts: the same ?track ping that counts for a visitor is refused (ok:false) for someone using a link', str_contains(http_get("$baseL/?track=" . rawurlencode('pub.jpg'))[1], '"ok":true') && str_contains(http_get("$baseL/?track=" . rawurlencode('pub.jpg'), ["Cookie: $lgCk2"])[1], '"ok":false'));
-// The log is bounded: the latest 300 timeline lines and the latest 200 visitors are kept; the visitor who makes the 201st is
+// The log is bounded: the latest 5,000 timeline lines and the latest 2,000 visitors are kept; the visitor who makes the 2,001st is
 // let in by folding the least recently seen one into a count ("+ 1 earlier visitor").
 $lgCapId = $lgMade2['id'] ?? '';
 $lgCapFile = "$fxL/.gallery-linklog-$lgCapId.php";
 $seed = read_data_file($lgCapFile); $seed['visitors'] = []; $seed['events'] = []; $seed['folded'] = 0;
-for ($i = 0; $i < 200; $i++) {
+for ($i = 0; $i < 2000; $i++) {
     $vid = sprintf('seed%06d', $i);
     $seed['visitors'][$vid] = ['ip' => '10.1.' . intdiv($i, 250) . '.' . ($i % 250 + 1), 'ua' => 'Safari on iPhone', 'country' => '', 'first' => 1000 + $i, 'last' => 1000 + $i, 'opens' => 1, 'views' => 1];
 }
-for ($i = 0; $i < 300; $i++) $seed['events'][] = ['t' => 1000 + $i, 'v' => sprintf('seed%06d', $i % 200), 'k' => 'link'];
+for ($i = 0; $i < 5000; $i++) $seed['events'][] = ['t' => 1000 + $i, 'v' => sprintf('seed%06d', $i % 2000), 'k' => 'link'];
 write_data_file($lgCapFile, $seed);
 $lgFirefox = 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0';
 $f = $lgLinks(); unset($f['links'][$lgCapId]['lastOpen']); write_data_file("$fxL/.gallery-links.php", $f);   // (the same address pressing again within 15 minutes isn't a new opening)
 http_post("$baseL/?link=$lgTok2", ['go' => '1'], [$lgFirefox], false);
 $capLog = read_data_file($lgCapFile);
 $capNew = array_filter($capLog['visitors'], fn ($v) => $v['ip'] === '127.0.0.1' && $v['ua'] === 'Firefox on Linux');
-check('[share log] the log is bounded: a 201st visitor folds the least recently seen one into a count, and the timeline keeps its latest 300 lines', count($capLog['visitors']) === 200 && count($capNew) === 1 && !isset($capLog['visitors']['seed000000']) && isset($capLog['visitors']['seed000001']) && (int) $capLog['folded'] === 1 && count($capLog['events']) === 300 && $capLog['events'][0]['t'] === 1001 && ($capLog['events'][299]['k'] ?? '') === 'link' && ($capLog['events'][299]['v'] ?? '') === array_key_first($capNew));
+check('[share log] the log is bounded: a 2,001st visitor folds the least recently seen one into a count, and the timeline keeps its latest 5,000 lines', count($capLog['visitors']) === 2000 && count($capNew) === 1 && !isset($capLog['visitors']['seed000000']) && isset($capLog['visitors']['seed000001']) && (int) $capLog['folded'] === 1 && count($capLog['events']) === 5000 && $capLog['events'][0]['t'] === 1001 && ($capLog['events'][4999]['k'] ?? '') === 'link' && ($capLog['events'][4999]['v'] ?? '') === array_key_first($capNew));
 check('[share log] ...and the Visitors tab says how many earlier visitors are no longer listed', str_contains($lgFrag("linkview=$lgCapId&tab=visitors")[1], '+ 1 earlier visitor'));
+// Trim the log: what is older than a number of days (or a date) goes from one link's log or from all of them; the preview counts what the real thing then removes.
+$lgNow = time(); $lgDay = 86400;
+$lgSeedLog = function ($id, $offset = 0) use ($fxL, $lgNow, $lgDay) {
+    write_data_file("$fxL/.gallery-linklog-$id.php", ['v' => 1, 'folded' => 0, 'last' => $lgNow - $lgDay,
+        'visitors' => ['aaaa000001' => ['ip' => '10.9.0.1', 'ua' => 'Safari on iPhone', 'country' => '', 'first' => $lgNow - 41 * $lgDay, 'last' => $lgNow - 40 * $lgDay, 'opens' => 1, 'views' => 3],
+                       'bbbb000002' => ['ip' => '10.9.0.2', 'ua' => 'Chrome on Windows', 'country' => '', 'first' => $lgNow - 3 * $lgDay, 'last' => $lgNow - 2 * $lgDay, 'opens' => 2, 'views' => 5],
+                       'cccc000003' => ['ip' => '10.9.0.3', 'ua' => 'Firefox on Linux', 'country' => '', 'first' => $lgNow - 101 * $lgDay, 'last' => $lgNow - 100 * $lgDay, 'opens' => 1, 'views' => 1]],
+        'blocked' => ['dddd000004' => ['ip' => '10.9.0.4', 'ua' => 'A script', 'country' => '', 'first' => $lgNow - 50 * $lgDay, 'last' => $lgNow - 50 * $lgDay, 'tries' => 2, 'why' => ['expired' => 2]],
+                      'eeee000005' => ['ip' => '10.9.0.5', 'ua' => 'A script', 'country' => '', 'first' => $lgNow - $lgDay, 'last' => $lgNow - $lgDay, 'tries' => 1, 'why' => ['revoked' => 1]]],
+        'events' => [['t' => $lgNow - 100 * $lgDay, 'v' => 'cccc000003', 'k' => 'link'], ['t' => $lgNow - 40 * $lgDay, 'v' => 'aaaa000001', 'k' => 'link'], ['t' => $lgNow - 2 * $lgDay, 'v' => 'bbbb000002', 'k' => 'link']]]);
+    write_data_file("$fxL/.gallery-linklog-$id-items.php", ['t' => ['aaaa000001|Rome/r1.jpg' => ['sf' => $lgNow - 40 * $lgDay, 'sl' => $lgNow - 40 * $lgDay],
+        'bbbb000002|Rome/r2.jpg' => ['sf' => $lgNow - 2 * $lgDay, 'sl' => $lgNow - 2 * $lgDay, 'on' => 1, 'of' => $lgNow - 2 * $lgDay, 'ol' => $lgNow - 2 * $lgDay],
+        'cccc000003|pub.jpg' => ['sf' => $lgNow - 100 * $lgDay, 'sl' => $lgNow - 100 * $lgDay]],
+        'f' => ['aaaa000001|Rome' => [1, $lgNow - 40 * $lgDay, $lgNow - 40 * $lgDay], 'bbbb000002|Rome' => [2, $lgNow - 2 * $lgDay, $lgNow - 2 * $lgDay]]]);
+};
+$lgMade3 = $lgAdmin(['action' => 'link_create', 'label' => 'third', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 7, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+$lgTrimId = $lgMade3['id'] ?? '';
+$lgSeedLog($lgTrimId); $lgSeedLog($lgCapId);   // (two links with the same old and new lines in their logs)
+$lgOpensBefore = $lgLinks()['links'][$lgTrimId]['opens'] ?? 0;
+$lgPrev = $lgAdmin(['action' => 'link_trim', 'id' => $lgTrimId, 'days' => 30, 'apply' => 0]);
+$lgPrevFiles = [file_get_contents("$fxL/.gallery-linklog-$lgTrimId.php"), file_get_contents("$fxL/.gallery-linklog-$lgTrimId-items.php")];
+check('[share log] Trim the log: the preview says what is older than 30 days (2 timeline lines, 2 visitors, 1 turned-away try, 3 records of what was looked at) and changes nothing', ($lgPrev['ok'] ?? false) && ($lgPrev['applied'] ?? true) === false && ($lgPrev['counts'] ?? []) === ['events' => 2, 'visitors' => 2, 'blocked' => 1, 'items' => 2, 'folders' => 1] && str_contains($lgPrev['text'] ?? '', 'This would remove') && str_contains($lgPrev['text'] ?? '', 'stay'), json_encode($lgPrev));
+$lgReal = $lgAdmin(['action' => 'link_trim', 'id' => $lgTrimId, 'days' => 30, 'apply' => 1]);
+$lgAfter = read_data_file("$fxL/.gallery-linklog-$lgTrimId.php"); $lgAfterItems = read_data_file("$fxL/.gallery-linklog-$lgTrimId-items.php");
+check('[share log] ...and the real trim removes exactly what the preview counted, for that link only', ($lgReal['counts'] ?? null) === ($lgPrev['counts'] ?? 0) && ($lgReal['applied'] ?? false) === true && array_keys($lgAfter['visitors']) === ['bbbb000002'] && count($lgAfter['events']) === 1 && array_keys($lgAfter['blocked']) === ['eeee000005'] && array_keys($lgAfterItems['t']) === ['bbbb000002|Rome/r2.jpg'] && array_keys($lgAfterItems['f']) === ['bbbb000002|Rome'] && count(read_data_file("$fxL/.gallery-linklog-$lgCapId.php")['visitors']) === 3, json_encode($lgReal));
+check('[share log] ...the trimmed visitors are added to the "earlier visitors" count, and the link\'s own opens counter and the visitor\'s totals stay', (int) $lgAfter['folded'] === 2 && ($lgLinks()['links'][$lgTrimId]['opens'] ?? -1) === $lgOpensBefore && ($lgAfter['visitors']['bbbb000002']['opens'] ?? 0) === 2 && ($lgAfter['visitors']['bbbb000002']['views'] ?? 0) === 5);
+$lgNothing = $lgAdmin(['action' => 'link_trim', 'id' => $lgTrimId, 'days' => 30, 'apply' => 0]);
+check('[share log] trimming again says there is nothing that old', ($lgNothing['ok'] ?? false) && ($lgNothing['nothing'] ?? false) === true && str_contains($lgNothing['text'] ?? '', 'nothing to trim'), json_encode($lgNothing));
+$lgAll = $lgAdmin(['action' => 'link_trim', 'id' => 'all', 'before' => $lgNow - 10 * $lgDay, 'apply' => 1]);
+check('[share log] "All links" with a date trims every link\'s log (here the second link, with the same old lines)', ($lgAll['ok'] ?? false) && ($lgAll['links'] ?? 0) === 1 && ($lgAll['counts']['visitors'] ?? 0) === 2 && count(read_data_file("$fxL/.gallery-linklog-$lgCapId.php")['visitors']) === 1, json_encode($lgAll));
+check('[share log] trimming asks for how old (a number of days or a date in the past), and knows its links', !($lgAdmin(['action' => 'link_trim', 'id' => $lgTrimId, 'apply' => 0])['ok'] ?? true) && !($lgAdmin(['action' => 'link_trim', 'id' => $lgTrimId, 'before' => $lgNow + 3600, 'apply' => 0])['ok'] ?? true) && !($lgAdmin(['action' => 'link_trim', 'id' => 'ffffffffff', 'days' => 5, 'apply' => 0])['ok'] ?? true) && !($lgAdmin(['action' => 'link_trim', 'id' => 'nope', 'days' => 5, 'apply' => 0])['ok'] ?? true));
+$lgTabHtml = http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1];
+check('[share log] the Share links tab has a "Trim the log…" button (when there are links), and the old and new limits are not mixed up in the notes', str_contains($lgTabHtml, 'data-sl="trim"') && !str_contains($lgFrag("linkview=$lgCapId&tab=visitors")[1], 'latest 200'));
 $lgHolderPage = http_get("$baseL/", ["Cookie: $lgCk2"])[1];
 check('[share log] the page of a link holder carries the logging script, the public page and the owner\'s don\'t', str_contains($lgHolderPage, 'window.__linkLog = log') && !str_contains(http_get("$baseL/")[1], 'window.__linkLog = log') && !str_contains(http_get("$baseL/", ["Cookie: $lgAdminCookie"])[1], 'window.__linkLog = log'));
 
@@ -5583,6 +5648,116 @@ write_data_file("$fxT3/.gallery-items.php", ['items' => ['a.jpg' => ['location' 
 file_put_contents("$fxT3/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'tidy-pw-3', 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_THUMBNAIL_CACHE' => false])); copy($indexSrc, "$fxT3/index.php");
 [$baseT3, $hdrT3] = $tidyStart($fxT3, 'tidy-pw-3'); $tN = $tidyCall($baseT3, $hdrT3, ['mode' => 'refresh', 'apply' => '1']);
 check('[tidy] with the thumbnail cache off it refuses and changes nothing', ($tN['ok'] ?? null) === false && !empty(read_data_file("$fxT3/.gallery-items.php")['items']['a.jpg']['location']) && !glob("$fxT3/.gallery-items.before-tidy-*"));
+
+echo "== prepare media: videos, what needs attention, Tidy up only when needed, and its backups ==\n";
+
+// Videos: Prepare media makes the poster frame, the hover clip and the scrub strip (with a pretend ffmpeg), one video per request, and says so.
+$vmBuild = function ($name, $ffmpeg, $extra = []) use ($indexSrc) {
+    $fx = new_fixture_dir($name);
+    make_minimal_mp4("$fx/a.mp4", 3); make_minimal_mp4("$fx/b.mp4", 3);
+    file_put_contents("$fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'vm-pw-1', 'ENABLE_VIDEO' => true, 'FFMPEG_PATH' => $ffmpeg] + $extra));
+    copy($indexSrc, "$fx/index.php");
+    return $fx;
+};
+$vmCache = fn ($fx, $glob) => count(glob("$fx/.gallery-cache/$glob") ?: []);
+$fxV1 = $vmBuild('vm-ok', $vtOk); [$baseV1, $hdrV1] = $tidyStart($fxV1, 'vm-pw-1'); $cookieV1 = [$hdrV1[0]];
+$vmPage0 = http_get("$baseV1/?admin", $cookieV1)[1];
+check('[prepare media videos] with ffmpeg the panel counts videos: "Videos ready: 0 of 2", and what each has (posters, clips, strips)', str_contains($vmPage0, 'Videos ready: 0 of 2.') && str_contains($vmPage0, '0 of 2 have their poster frame, 0 their hover clip and 0 their scrub strip') && str_contains($vmPage0, 'data-left="2"'));
+$vmFirst = json_decode(http_post("$baseV1/?admin", ['csrf_token' => admin_token($baseV1, $hdrV1), 'action' => 'prepare_media', 'from' => '0'], $hdrV1)[1], true);
+check('[prepare media videos] one request makes one video\'s three pictures (a poster, a clip, a strip) and hands back, not both videos', ($vmFirst['ok'] ?? false) && ($vmFirst['done'] ?? true) === false && ($vmFirst['made'] ?? 0) === 3 && $vmCache($fxV1, '*.mp4') === 1 && $vmCache($fxV1, '*.jpg') === 2, json_encode($vmFirst));
+$vmRun = prepare_media_run($baseV1, $hdrV1);
+check('[prepare media videos] a whole run makes every video\'s pictures: 2 posters, 2 clips, 2 strips, none failed', $vmRun['ok'] && $vmRun['failed'] === 0 && $vmCache($fxV1, '*.mp4') === 2 && $vmCache($fxV1, '*.jpg') === 4, json_encode($vmRun));
+$vmPage1 = http_get("$baseV1/?admin", $cookieV1)[1];
+check('[prepare media videos] afterwards everything is prepared (nothing left, the videos line says 2 of 2), and asking again makes nothing more', str_contains($vmPage1, 'data-left="0"') && str_contains($vmPage1, 'Everything is prepared: 2 files.') && str_contains($vmPage1, '2 of 2 have their poster frame, 2 their hover clip and 2 their scrub strip') && (prepare_media_run($baseV1, $hdrV1)['made'] ?? -1) === 0);
+$vmRep = json_decode(http_post("$baseV1/?admin", ['csrf_token' => admin_token($baseV1, $hdrV1), 'action' => 'media_report'], $hdrV1)[1], true);
+check('[prepare media videos] the folder list reports the videos (posters, clips, strips) and the report says nothing needs attention', ($vmRep['rows'][0]['videos'] ?? 0) === 2 && ($vmRep['rows'][0]['posters'] ?? 0) === 2 && ($vmRep['rows'][0]['clips'] ?? 0) === 2 && ($vmRep['rows'][0]['strips'] ?? 0) === 2 && str_contains($vmRep['attentionHtml'] ?? '', 'Nothing needs attention') && !str_contains($vmRep['attentionHtml'] ?? '', 'media-attn-act') && ($vmRep['attention'] ?? -1) === 0, json_encode($vmRep['rows'][0] ?? null));
+// ffmpeg that fails: counted, listed, not tried again at once.
+$fxV2 = $vmBuild('vm-fail', $vtFail); [$baseV2, $hdrV2] = $tidyStart($fxV2, 'vm-pw-1');
+$vmRun2 = prepare_media_run($baseV2, $hdrV2);
+$vmRep2 = json_decode(http_post("$baseV2/?admin", ['csrf_token' => admin_token($baseV2, $hdrV2), 'action' => 'media_report'], $hdrV2)[1], true);
+check('[prepare media videos] when ffmpeg cannot make them they are counted as failed, listed under "needs attention" with a link to each, and the panel says so', $vmRun2['ok'] && $vmRun2['failed'] > 0 && ($vmRep2['rows'][0]['videoFailed'] ?? 0) === 2 && str_contains($vmRep2['attentionHtml'] ?? '', 'Videos ffmpeg could not make pictures for') && str_contains($vmRep2['attentionHtml'] ?? '', 'href="?photo=a.mp4&amp;edit=1"') && ($vmRep2['attention'] ?? 0) === 2 && str_contains(http_get("$baseV2/?admin", [$hdrV2[0]])[1], 'could not be made lately'), json_encode($vmRun2));
+$vmFailedLog = (int) trim((string) shell_exec('grep -c -v -e "-version" ' . escapeshellarg($vtLog) . ' 2>/dev/null'));
+prepare_media_run($baseV2, $hdrV2);
+check('[prepare media videos] ...and a second run does not try them again (not for six hours)', (int) trim((string) shell_exec('grep -c -v -e "-version" ' . escapeshellarg($vtLog) . ' 2>/dev/null')) === $vmFailedLog);
+// No ffmpeg: nothing to prepare for videos, and the panel says why; the settings off: it says that.
+$fxV3 = $vmBuild('vm-none', "$fxV1/does-not-exist"); [$baseV3, $hdrV3] = $tidyStart($fxV3, 'vm-pw-1');
+$vmPage3 = http_get("$baseV3/?admin", [$hdrV3[0]])[1];
+check('[prepare media videos] without ffmpeg the videos are not counted as left (the files still are, for their dates), and the panel says ffmpeg was not found', str_contains($vmPage3, 'ffmpeg was not found on this server') && !str_contains($vmPage3, 'Videos ready:') && str_contains($vmPage3, 'data-left="2"') && (prepare_media_run($baseV3, $hdrV3)['made'] ?? -1) === 0 && $vmCache($fxV3, '*.mp4') === 0 && str_contains(http_get("$baseV3/?admin", [$hdrV3[0]])[1], 'Everything is prepared: 2 files.'));
+$fxV4 = $vmBuild('vm-off', $vtOk, ['ENABLE_VIDEO_THUMBNAILS' => false, 'ENABLE_VIDEO_PREVIEWS' => false]); [$baseV4, $hdrV4] = $tidyStart($fxV4, 'vm-pw-1');
+check('[prepare media videos] with video pictures switched off the panel says the gallery makes none', str_contains(http_get("$baseV4/?admin", [$hdrV4[0]])[1], 'makes no pictures from videos'));
+
+// The Media row of the Health check, and "needs attention" for photos.
+$vmHealthRow = fn ($page) => preg_match('/<h3 class="subhead">Media<\/h3>.*?<div class="health-label">(.*?)<\/div>/s', $page, $m) ? $m[1] : null;
+check('[health] there is a Media line: "All prepared" when it is, linking to Prepare media', $vmHealthRow($vmPage1) === 'All prepared' && str_contains($vmPage1, '<a href="#media-panel">Open Prepare media</a>'), (string) $vmHealthRow($vmPage1));
+check('[health] ...and "N things need attention" when videos could not be made', str_contains((string) $vmHealthRow(http_get("$baseV2/?admin", [$hdrV2[0]])[1]), '2 things need attention'), (string) $vmHealthRow(http_get("$baseV2/?admin", [$hdrV2[0]])[1]));
+
+check('[health] files that are only not read yet are "not prepared yet" (quiet), never "need attention", and the Prepare media list still names them', str_contains((string) $vmHealthRow($vmPage3), '2 files not prepared yet') && str_contains($vmPage3, 'Files not read yet') && str_contains($vmPage3, 'media-attn-unread'), (string) $vmHealthRow($vmPage3));
+// Tidy up shows only when there is something to tidy; its backups can be deleted.
+$fxT4 = $tidyBuild('tidy-gate', 'tidy-pw-4'); [$baseT4, $hdrT4] = $tidyStart($fxT4, 'tidy-pw-4'); $cookieT4 = [$hdrT4[0]];
+$tgUnread = http_get("$baseT4/?admin", $cookieT4)[1];
+check('[tidy] before the files are read the Tidy up box is there too (saved locations that can not be compared yet)', str_contains($tgUnread, '<details class="media-tidy-box">'));
+first_look($baseT4, ['Rome/imp.jpg', 'Rome/dif.jpg', 'Rome/lab.jpg', 'Rome/hid.jpg', 'Rome/chk.jpg', 'Rome/clr.jpg', 'Rome/solo.jpg', 'Rome/shot.jpg', 'Rome/plain.jpg', 'Rome/manual.jpg', 'Rome/late.jpg', 'Paris/p1.jpg'], $hdrT4);
+$tgPage0 = http_get("$baseT4/?admin", $cookieT4)[1];
+check('[tidy] the Tidy up box is there when saved copies and old marks exist', str_contains($tgPage0, '<details class="media-tidy-box">') && !str_contains($tgPage0, '<details class="media-tidy-box" hidden>') && !str_contains($tgPage0, 'class="hint media-backups-line"'), json_encode(array_map(fn ($x) => substr($x, 0, 60), array_slice(explode('media-tidy-box', $tgPage0), 1, 2))));
+check('[health] ...and the old marks make the Media line ask for attention, and the list names them with a link to each photo', str_contains((string) $vmHealthRow($tgPage0), 'need') && str_contains($tgPage0, 'Old &quot;nothing found&quot; marks') && str_contains($tgPage0, 'href="?photo=Rome%2Fchk.jpg&amp;edit=1"'), (string) $vmHealthRow($tgPage0));
+check('[prepare media] "Saved locations that differ from their file" is listed for information (not counted as needing attention), with a link to the photo', str_contains($tgPage0, 'Saved locations that differ from their file') && str_contains($tgPage0, 'For your information') && str_contains($tgPage0, 'href="?photo=Rome%2Fdif.jpg&amp;edit=1"'));
+$tgApply = $tidyCall($baseT4, $hdrT4, ['mode' => 'refresh', 'apply' => '1']);
+$tgPage1 = http_get("$baseT4/?admin", $cookieT4)[1];
+check('[tidy] after a tidy the box goes (nothing left to tidy) and a line says how many backups it made, and when', ($tgApply['ok'] ?? false) && str_contains($tgPage1, '<details class="media-tidy-box" hidden>') && preg_match('/<strong>(\d+) backups? from Tidy up<\/strong>/', $tgPage1, $tgM) && (int) $tgM[1] === ($tgApply['backups'] ?? -1) && ($tgApply['backups'] ?? 0) >= 1, json_encode($tgApply['totals'] ?? null));
+file_put_contents("$fxT4/Rome/.gallery-items.before-tidy-notes.php", 'mine'); file_put_contents("$fxT4/Rome/.gallery-items.php.bak", 'mine too');
+$tgDel = json_decode(http_post("$baseT4/?admin", ['csrf_token' => admin_token($baseT4, $hdrT4), 'action' => 'media_backups_delete'], $hdrT4)[1], true);
+check('[tidy] "Delete the backups" removes them (only files named exactly like the backups, never anything else), and the line goes', ($tgDel['ok'] ?? false) && ($tgDel['deleted'] ?? 0) === ($tgApply['backups'] ?? -1) && !glob("$fxT4/*/.gallery-items.before-tidy-2*.php") && is_file("$fxT4/Rome/.gallery-items.before-tidy-notes.php") && is_file("$fxT4/Rome/.gallery-items.php.bak") && !str_contains(http_get("$baseT4/?admin", $cookieT4)[1], 'class="hint media-backups-line"') && !empty(read_data_file("$fxT4/Rome/.gallery-items.php")['items']['imp.jpg']['caption']), json_encode([$tgDel, $tgApply['backups'] ?? null, glob("$fxT4/*/.gallery-items.before-tidy-2*.php"), is_file("$fxT4/Rome/.gallery-items.before-tidy-notes.php"), is_file("$fxT4/Rome/.gallery-items.php.bak"), str_contains(http_get("$baseT4/?admin", $cookieT4)[1], 'class="hint media-backups-line"')]));
+// A gallery with nothing to tidy: the box is hidden from the start.
+$fxT5 = new_fixture_dir('tidy-none'); make_jpeg("$fxT5/x.jpg", 60, 50, 90, 60, 60);
+file_put_contents("$fxT5/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'tidy-pw-5'])); copy($indexSrc, "$fxT5/index.php");
+[$baseT5, $hdrT5] = $tidyStart($fxT5, 'tidy-pw-5');
+$t5Page = http_get("$baseT5/?admin", [$hdrT5[0]])[1];
+check('[tidy] a gallery with no saved copies and no old marks has no Tidy up box and no backups line', str_contains($t5Page, '<details class="media-tidy-box" hidden>') && !str_contains($t5Page, 'class="hint media-backups-line"'), json_encode([strlen($t5Page), substr($t5Page, 0, 200), substr_count($t5Page, 'media-tidy-box')]));
+
+echo "== the Edited tab: only what was set by hand, grouped by folder ==\n";
+
+$fxE = new_fixture_dir('edited');
+foreach (['Rome', 'Opts', 'Plain'] as $d) mkdir("$fxE/$d");
+foreach (['one', 'two', 'three', 'four', 'five'] as $i => $n) make_jpeg("$fxE/$n.jpg", 60 + $i, 50, 40 * $i + 20, 90, 30);
+make_gps_jpeg("$fxE/fromfile.jpg", 'N', [[41, 1], [54, 1], [0, 1]], 'E', [[12, 1], [29, 1], [0, 1]]);
+foreach (['r1', 'r2', 'r3', 'r4'] as $i => $n) make_jpeg("$fxE/Rome/$n.jpg", 70 + $i, 50, 40 * $i + 10, 60, 60);
+make_jpeg("$fxE/Opts/o1.jpg", 80, 50, 100, 100, 100); make_jpeg("$fxE/Plain/p1.jpg", 81, 50, 100, 100, 100);
+write_data_file("$fxE/.gallery-items.php", ['items' => [
+    'one.jpg' => ['caption' => 'Ponte <b>Vecchio</b> at dusk', 'web' => 'https://uffizi.example/en/tickets'],
+    'two.jpg' => ['restriction' => 'private'],
+    'three.jpg' => ['location' => ['lat' => 43.77, 'lng' => 11.25, 'label' => 'Piazzale Michelangelo']],
+    'four.jpg' => ['locationCleared' => true, 'locationVisibility' => 'hide', 'web' => 'javascript:alert(1)'],
+    'five.jpg' => ['gpsChecked' => true],
+], 'groups' => [], 'locationEnabled' => false] + items_default_for_tests());
+write_data_file("$fxE/Rome/.gallery-items.php", ['restriction' => 'private', 'items' => ['r1.jpg' => ['restriction' => 'public'], 'r2.jpg' => ['restriction' => 'private'], 'r3.jpg' => ['gpsChecked' => true], 'r4.jpg' => ['caption' => 'Colosseum']], 'groups' => []] + items_default_for_tests());
+write_data_file("$fxE/Opts/.gallery-items.php", ['items' => [], 'groups' => [], 'displayName' => 'Options trip', 'dates' => '3-9 May 2024', 'cover' => 'o1.jpg', 'locationEnabled' => true] + items_default_for_tests());
+write_data_file("$fxE/Plain/.gallery-items.php", ['items' => ['p1.jpg' => []], 'groups' => []] + items_default_for_tests());
+file_put_contents("$fxE/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'edited-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true])); copy($indexSrc, "$fxE/index.php");
+[$baseE, $hdrE] = $tidyStart($fxE, 'edited-pw-1');
+$edPage = http_get("$baseE/?admin", [$hdrE[0]])[1];
+$edStart = strpos($edPage, 'id="ed-panel"'); $edEnd = strpos($edPage, '<details class="ed-priv"', $edStart); $edHtml = substr($edPage, $edStart, ($edEnd === false ? 60000 : $edEnd - $edStart));
+$edFolder = function ($path) use ($edHtml) { $s = strpos($edHtml, '<section class="ed-folder" data-path="' . $path . '">'); if ($s === false) return ''; $e = strpos($edHtml, '<section class="ed-folder"', $s + 10); return substr($edHtml, $s, $e === false ? null : $e - $s); };
+check('[edited] the sidebar says Edited with the number of edits (7 photos and 2 folders have something set by hand), and the old Private entry is gone', str_contains($edPage, 'class="side-hidden edited">Edited <span class="count">9</span>') && !str_contains($edPage, '>Private <span class="count">'), (string) (preg_match('/class="side-hidden edited">.*?<\/a>/s', $edPage, $m0) ? $m0[0] : 'no link'));
+check('[edited] the tab opens with the summary and the six chips with their counts: all 9, private 3, captions 2, links 2, locations 2, folder settings 2', str_contains($edHtml, '<b>9</b> edits in <b>3</b> folders') && str_contains($edHtml, 'data-k="all" aria-pressed="true">All <em>9</em>') && str_contains($edHtml, 'data-k="private" aria-pressed="false">Private <em>3</em>') && str_contains($edHtml, 'data-k="caption" aria-pressed="false">Captions <em>2</em>') && str_contains($edHtml, 'data-k="link" aria-pressed="false">Links <em>2</em>') && str_contains($edHtml, 'data-k="location" aria-pressed="false">Locations <em>2</em>') && str_contains($edHtml, 'data-k="folder" aria-pressed="false">Folder settings <em>2</em>'), substr($edHtml, 0, 700));
+check('[edited] folders with nothing set (Plain) are not listed, and every card starts closed', !str_contains($edHtml, 'data-path="Plain"') && substr_count($edHtml, 'aria-expanded="false"') === 3 && !str_contains($edHtml, 'aria-expanded="true"'));
+$edRoot = $edFolder('');
+check('[edited] the main page lists the caption, the link, the typed place, the removed place with its own switch, the private flag, and not the untouched photo, nor the photo whose location is only in its file, nor the one with an old mark', str_contains($edRoot, 'one.jpg') && str_contains($edRoot, '&ldquo;Ponte &lt;b&gt;Vecchio&lt;/b&gt; at dusk&rdquo;') && str_contains($edRoot, '>uffizi.example</a>') && str_contains($edRoot, 'three.jpg') && str_contains($edRoot, 'Place you set: Piazzale Michelangelo') && str_contains($edRoot, 'four.jpg') && str_contains($edRoot, 'Location removed on purpose') && str_contains($edRoot, 'hidden from visitors (its own switch)') && str_contains($edRoot, 'two.jpg') && !str_contains($edRoot, 'five.jpg') && !str_contains($edRoot, 'fromfile.jpg'), strlen($edRoot) . ' ' . substr($edRoot, 0, 300));
+check('[edited] text is escaped (no markup from a caption), and a link that is not http(s) is shown as text, not made clickable', !str_contains($edHtml, '<b>Vecchio</b>') && str_contains($edRoot, 'javascript:alert(1)') && !str_contains($edRoot, 'href="javascript:'));
+check('[edited] a photo whose only edit is "private" is a small lock thumbnail in the strip, not a row, and links to its editor', preg_match('/<a class="ed-it ed-sm" data-kinds="private" href="\?photo=two\.jpg&amp;edit=1"/', $edRoot) === 1 && !preg_match('/class="ed-it ed-row"[^>]*>(?:(?!<\/div>).)*two\.jpg/s', $edRoot));
+check('[edited] each row has an Edit button to that photo\'s editor, and a thumbnail that links there too', substr_count($edRoot, 'href="?photo=one.jpg&amp;edit=1"') === 2);
+$edRome = $edFolder('Rome');
+check('[edited] the private folder shows a "hidden folder" tag, its photo that is public on its own, the one private on its own, its caption, and not the one with only an old mark', str_contains($edRome, 'hidden folder') && str_contains($edRome, 'Public though its folder is private') && str_contains($edRome, 'r1.jpg') && str_contains($edRome, 'r2.jpg') && str_contains($edRome, 'Colosseum') && !str_contains($edRome, 'r3.jpg'));
+$edOpts = $edFolder('Opts');
+check('[edited] a folder with only its own settings shows them (name, dates, cover, locations on) and no photos', str_contains($edOpts, 'Own name: Options trip') && str_contains($edOpts, 'Dates: 3-9 May 2024') && str_contains($edOpts, 'Cover: o1.jpg') && str_contains($edOpts, 'Locations on') && !str_contains($edOpts, 'class="ed-it'));
+check('[edited] the private folders and the rules are still there, closed, under "Private folders" on the same tab, and the not-a-lock banner stays at the top', str_contains($edPage, '<details class="ed-priv" id="ed-priv"><summary>Private folders') && str_contains($edPage, 'id="pv-overview"') && str_contains($edPage, 'What is private') && str_contains($edPage, 'id="lock-banner"') && strpos($edPage, 'id="lock-banner"') < strpos($edPage, 'id="ed-panel"') && strpos($edPage, 'id="ed-panel"') < strpos($edPage, 'id="ed-priv"'));
+// With nothing private and nothing set: no tab. With a caption only: the tab, with no private banner and no private list.
+$fxE2 = new_fixture_dir('edited-none'); make_jpeg("$fxE2/a.jpg", 60, 50, 90, 60, 60); file_put_contents("$fxE2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'edited-pw-2'])); copy($indexSrc, "$fxE2/index.php");
+[$baseE2, $hdrE2] = $tidyStart($fxE2, 'edited-pw-2');
+check('[edited] a gallery with nothing private and nothing set by hand has no Edited tab', !str_contains(http_get("$baseE2/?admin", [$hdrE2[0]])[1], 'data-tab="hidden"'));
+write_data_file("$fxE2/.gallery-items.php", ['items' => ['a.jpg' => ['caption' => 'Only a caption']], 'groups' => []] + items_default_for_tests());
+$edPage2 = http_get("$baseE2/?admin", [$hdrE2[0]])[1];
+check('[edited] ...and with only a caption there is the tab (1 edit), the caption listed, no private banner and no private list', str_contains($edPage2, 'class="side-hidden edited">Edited <span class="count">1</span>') && str_contains($edPage2, 'Only a caption') && !str_contains($edPage2, 'id="lock-banner"') && !str_contains($edPage2, 'id="ed-priv"'));
+check('[edited] the old #hidden address and the ?hidden link still lead to the tab', str_contains($edPage2, 'href="#hidden" data-tab="hidden"') && in_array('Location: ?admin#hidden', http_get("$baseE2/?admin&hidden=1", [$hdrE2[0]])[2], true));
 
 /* --------------------------------------------------------------------- */
 

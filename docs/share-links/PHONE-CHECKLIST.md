@@ -18,7 +18,7 @@ Everything below was built and tested in a desktop browser (a real headless Chro
 - [ ] Open it from Messages: the page is one button, **Open the gallery**. Press it: you land in the gallery (or the folder it opens in).
 - [ ] The link doesn't count an open until the button is pressed: open the link in Messages' preview and check the tab still says *0 of N opens*.
 - [ ] Open a link from an app's own browser (Instagram, Facebook, Messages' in-app view), press the button, then choose *Open in Safari*: it still works and used only one open.
-- [ ] As the person: no pencils, no locks, no sign-in lock, no Private tab; private photos have no link button; only what the link covers is there (a folder-limited link shows no other private folder).
+- [ ] As the person: no pencils, no locks, no sign-in lock, no Private tab; private photos have no link button; only what the link covers is there, plus what is public (a folder-limited link shows no other private folder; a link made with *Show only these photos* shows nothing else, public photos included).
 - [ ] The heads-up line (if on) shows the end time in your own time zone and can be dismissed.
 - [ ] A link that is **paused**, **revoked**, expired or mistyped shows the same "This link isn't valid" page.
 

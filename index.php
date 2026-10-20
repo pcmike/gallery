@@ -454,10 +454,11 @@ define('LINK_PROBE_TOKEN', '0000000000000000');   // the admin asks for this one
 const LINK_TOKEN_LENGTH = 16;
 const LINK_REOPEN_GRACE_SECONDS = 900;   // the same address opening again this soon (an app's own browser, then Safari) is not a second use
 // The log of a share link keeps this much: the latest happenings on its timeline, visitors (an older one is folded into a count), per-item records, and tries turned away.
-const LINK_LOG_EVENTS = 300;      // the timeline keeps this many happenings
-const LINK_LOG_VISITORS = 200;    // and this many visitors; an older one is folded into a count
-const LINK_LOG_ITEMS = 20000;     // per-item records (past this, new ones are not added)
-const LINK_LOG_BLOCKED = 100;
+// (Each report rewrites the link's log file, so there is a ceiling; a few megabytes at most, and the owner trims by age when they choose.)
+const LINK_LOG_EVENTS = 5000;     // the timeline keeps this many happenings
+const LINK_LOG_VISITORS = 2000;   // and this many visitors; an older one is folded into a count
+const LINK_LOG_ITEMS = 50000;     // per-item records (past this, new ones are not added)
+const LINK_LOG_BLOCKED = 500;
 const LINK_ICON_GALLERY = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m5 17 5-5 3.5 3.5L16 13l3 3"/></svg>';
 const LINK_ICON_WARN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3.5 19h17zM12 10v4M12 16.8v.2"/></svg>';
 
@@ -2509,15 +2510,45 @@ function generate_tile_jpegs($srcPath, $targets) {
     return false;
 }
 
+/** Which of a video's three made files the settings ask for: its poster frame, its hover clip and its scrub strip. */
+function video_made_wanted() {
+    $cache = ENABLE_THUMBNAIL_CACHE;
+    return ['poster' => $cache && ENABLE_VIDEO_THUMBNAILS, 'clip' => $cache && ENABLE_VIDEO_PREVIEWS, 'strip' => $cache && ENABLE_VIDEO_PREVIEWS];
+}
+
+/** Where each of a video's made files is (or would be) kept: 'poster', 'clip', 'strip' => a path. Nothing is created. */
+function video_made_paths($dir, $file) {
+    $src = resolve_real_path($dir, $file);
+    $cacheDir = containing_folder_real_path($dir, $file) . '/.gallery-cache';
+    $mt = @filemtime($src);
+    return ['poster' => $cacheDir . '/' . md5($file . '|poster|' . $mt) . '.jpg', 'clip' => $cacheDir . '/' . md5($file . '|preview2|' . $mt) . '.mp4', 'strip' => $cacheDir . '/' . md5($file . '|strip2|' . $mt) . '.jpg'];
+}
+
+/** The state of each of a video's made files: 'ready', 'missing' (to be made), 'failed' (ffmpeg could not, lately: not tried again for six
+ *  hours), 'unavailable' (no scrub strip can be made: the length can't be read) or 'off' (the settings don't ask for it). */
+function video_made_state($dir, $file) {
+    $want = video_made_wanted(); $paths = video_made_paths($dir, $file); $out = [];
+    foreach ($paths as $k => $path) {
+        if (!$want[$k]) { $out[$k] = 'off'; continue; }
+        if (is_file($path) && filesize($path) > 0) $out[$k] = 'ready';
+        elseif (is_file($path . '.failed') && time() - (int) @filemtime($path . '.failed') < 21600) $out[$k] = 'failed';
+        else $out[$k] = 'missing';
+    }
+    if ($out['strip'] === 'missing') { $d = video_duration_seconds(resolve_real_path($dir, $file)); if ($d === null || $d < 1) $out['strip'] = 'unavailable'; }
+    return $out;
+}
+
 /** What Prepare media still has to do: how many files there are, how many photos lack some tile size, how many files have no usable
- *  record of what they say about themselves (when taken, where), and how many files need either (that is what the progress counts). */
+ *  record of what they say about themselves (when taken, where), how many videos lack their poster, clip or strip (when ffmpeg is there to
+ *  make them), and how many files need any of it (that is what the progress counts). */
 function media_readiness($dir, $files) {
-    $r = ['total' => 0, 'photos' => 0, 'tilesReady' => 0, 'metaLeft' => 0, 'left' => 0];
+    $ff = ffmpeg_binary() !== '';
+    $r = ['total' => 0, 'photos' => 0, 'tilesReady' => 0, 'metaLeft' => 0, 'left' => 0, 'videos' => 0, 'videosReady' => 0, 'posters' => 0, 'clips' => 0, 'strips' => 0, 'videoFailed' => 0, 'videoLeft' => 0, 'ffmpeg' => $ff, 'videoWanted' => array_values(array_filter(array_keys(video_made_wanted()), function ($k) { return video_made_wanted()[$k]; }))];
     foreach ($files as $file) {
         $src = resolve_real_path($dir, $file);
         if (!$src) continue;
         $r['total']++;
-        $needTiles = false;
+        $needTiles = false; $needVideo = false;
         if (!is_video_file($file)) {
             $r['photos']++;
             $cacheDir = containing_folder_real_path($dir, $file) . '/.gallery-cache';
@@ -2527,10 +2558,17 @@ function media_readiness($dir, $files) {
                 if (!is_file($path)) { $all = false; break; }
             }
             if ($all) $r['tilesReady']++; else $needTiles = true;
+        } else {
+            $r['videos']++;
+            $vs = video_made_state($dir, $file);
+            foreach (['poster' => 'posters', 'clip' => 'clips', 'strip' => 'strips'] as $k => $count) if ($vs[$k] === 'ready') $r[$count]++;
+            if (!in_array('missing', $vs, true) && !in_array('failed', $vs, true)) $r['videosReady']++;
+            if (in_array('failed', $vs, true)) $r['videoFailed']++;
+            if ($ff && in_array('missing', $vs, true)) { $needVideo = true; $r['videoLeft']++; }
         }
         $needMeta = !media_meta_fresh(media_meta_load(containing_folder_real_path($dir, $file))[basename($file)] ?? null, $src);   // (one that couldn't be read is tried again by a run, but isn't counted as left)
         if ($needMeta) $r['metaLeft']++;
-        if ($needTiles || $needMeta) $r['left']++;
+        if ($needTiles || $needMeta || $needVideo) $r['left']++;
     }
     return $r;
 }
@@ -2567,6 +2605,19 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
                 if (generate_tile_jpegs($src, $missing)) $made += count($missing); else $failed += count($missing);
             }
         }
+        $videoMade = false;
+        if (is_video_file($file) && ffmpeg_binary() !== '') {   // a video's poster frame, hover clip and scrub strip: seconds each, so one video per call
+            $vs = video_made_state($dir, $file); $paths = video_made_paths($dir, $file); $cacheDir = $folderReal . '/.gallery-cache';
+            $need = array_keys(array_filter($vs, function ($st) use ($remake) { return $st === 'missing' || ($remake && ($st === 'ready' || $st === 'failed')); }));
+            if ($need && (is_dir($cacheDir) || @mkdir($cacheDir, 0775, true)) && is_writable($cacheDir)) {
+                $did = true; $videoMade = true;
+                foreach ($need as $k) {
+                    if ($remake) { @unlink($paths[$k]); @unlink($paths[$k] . '.failed'); }
+                    $res = $k === 'poster' ? video_poster_path($src, $cacheDir, $file) : ($k === 'clip' ? video_preview_path($src, $cacheDir, $file) : video_strip_path($src, $cacheDir, $file));
+                    if ($res !== null) $made++; else $failed++;
+                }
+            }
+        }
         $bare = basename($file);
         if (media_meta_enabled() && ($again || !media_meta_ready(media_meta_load($folderReal)[$bare] ?? null, $src))) {
             $did = true;
@@ -2577,6 +2628,7 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
             if ($again) $unmark[$folderReal][] = $bare;
         }
         if ($did) $worked++;
+        if ($videoMade) { $i += $step; break; }   // (one video per call: the page asks again at once)
     }
     foreach ($records as $folderReal => $recs) {
         media_meta_store($folderReal, $recs);
@@ -2590,6 +2642,113 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
         }
     }
     return ['next' => $i, 'total' => $total, 'made' => $made, 'failed' => $failed, 'worked' => $worked, 'read' => $read, 'unreadable' => $unreadable, 'done' => $i >= $total];
+}
+
+/** The backups Tidy up made: every .gallery-items.before-tidy-<date>.php in the folders that hold files, newest last. [['folder', 'file', 'at', 'bytes'], ...] */
+function media_tidy_backups($dir, $files) {
+    $reals = [];
+    foreach ($files as $file) $reals[containing_folder_real_path($dir, $file)] = ($slash = strrpos($file, '/')) === false ? '' : substr($file, 0, $slash);
+    $out = [];
+    foreach ($reals as $real => $folder) {
+        foreach (glob($real . '/.gallery-items.before-tidy-*.php') ?: [] as $f) {
+            if (!preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}\.php$/', basename($f)) || !is_file($f) || is_link($f)) continue;
+            $out[] = ['folder' => $folder, 'file' => $f, 'at' => (int) @filemtime($f), 'bytes' => (int) @filesize($f)];
+        }
+    }
+    usort($out, function ($a, $b) { return $a['at'] <=> $b['at'] ?: strcmp($a['file'], $b['file']); });
+    return $out;
+}
+
+/** Removes the Tidy up backups (only files named exactly like them, in the folders that hold files); how many went. */
+function media_tidy_backups_delete($dir, $files) {
+    $n = 0;
+    foreach (media_tidy_backups($dir, $files) as $b) if (@unlink($b['file'])) $n++;
+    return $n;
+}
+
+/** What a person might want to look at in the media, in groups: [['key', 'title', 'hint', 'actionable', 'count', 'items' => [file, ...]], ...]
+ *  (empty groups left out). 'actionable' ones are things to deal with; the others are for information. 'attention' counts the files in
+ *  the first kind. */
+function media_attention($dir, $files) {
+    static $memo = [];
+    $key = count($files) . '|' . (string) ($files[0] ?? '') . '|' . (string) ($files[count($files) - 1] ?? '');
+    if (isset($memo[$key])) return $memo[$key];
+    $g = ['unreadable' => [], 'unread' => [], 'legacy' => [], 'videoFailed' => [], 'videoMissing' => [], 'undated' => [], 'differs' => []];
+    $ff = ffmpeg_binary() !== '';
+    $byFolder = [];
+    foreach ($files as $file) $byFolder[containing_folder_real_path($dir, $file)][] = $file;
+    foreach ($byFolder as $folderReal => $list) {
+        $items = items_read($folderReal)['items'] ?? [];
+        $recs = media_meta_enabled() ? media_meta_load($folderReal) : [];
+        foreach ($list as $file) {
+            $bare = basename($file); $entry = $items[$bare] ?? [];
+            if (media_meta_enabled()) {
+                $rec = $recs[$bare] ?? null;
+                if (!media_meta_fresh($rec, $folderReal . '/' . $bare)) $g['unread'][] = $file;
+                else {
+                    if (($rec['gs'] ?? '') === 'unreadable') $g['unreadable'][] = $file;
+                    if (($rec['t'] ?? null) === null) $g['undated'][] = $file;
+                }
+                if (!empty($entry['gpsChecked']) && empty($entry['location']) && empty($entry['locationCleared'])) $g['legacy'][] = $file;
+            }
+            if (is_video_file($file) && $ff) {
+                $vs = video_made_state($dir, $file);
+                if (in_array('failed', $vs, true)) $g['videoFailed'][] = $file;
+                elseif ($vs['poster'] === 'missing') $g['videoMissing'][] = $file;
+            }
+        }
+    }
+    if (media_meta_enabled() && ENABLE_THUMBNAIL_CACHE) {
+        foreach (media_tidy_run($dir, $files, false, false)['rows'] as $row) foreach ($row['lists']['edited'] ?? [] as $x) $g['differs'][] = ($row['folder'] === '' ? '' : $row['folder'] . '/') . $x['name'];
+    }
+    // [title, hint, to deal with (else for information), counted as "needs attention"]: files not read yet and videos not made yet are
+    // to be done by the Prepare button, which is routine (every new photo is that until it is first shown), so they are listed but not counted.
+    $meta = [
+        'unreadable' => ['Files that could not be read', 'The gallery could not get a capture date or location from these (a damaged file, or a kind it cannot read). They still show.', true, true],
+        'unread' => ['Files not read yet', 'Prepare the rest reads them.', true, false],
+        'legacy' => ['Old "nothing found" marks', 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.', true, true],
+        'videoFailed' => ['Videos ffmpeg could not make pictures for', 'Not tried again for six hours.', true, true],
+        'videoMissing' => ['Videos without a poster frame yet', 'Prepare the rest makes them.', true, false],
+        'undated' => ['Files with no capture date', 'They are ordered by when the file was changed. Nothing to fix: screenshots, downloads and some videos carry no date.', false, false],
+        'differs' => ['Saved locations that differ from their file', 'Yours, kept as they are. Tidy up would not touch them in its careful mode.', false, false],
+    ];
+    $groups = []; $attention = 0;
+    foreach ($meta as $k => [$title, $hint, $actionable, $counted]) {
+        if (!$g[$k]) continue;
+        $groups[] = ['key' => $k, 'title' => $title, 'hint' => $hint, 'actionable' => $actionable, 'count' => count($g[$k]), 'items' => array_slice($g[$k], 0, 40)];
+        if ($counted) $attention += count($g[$k]);
+    }
+    return $memo[$key] = ['groups' => $groups, 'attention' => $attention];
+}
+
+/** The "Needs attention" part of the Prepare media panel, as HTML (also sent to the page after a run). */
+function render_media_attention_html($att) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $one = function ($grp) use ($esc) {
+        $out = '<details class="media-attn media-attn-' . $esc($grp['key']) . ($grp['actionable'] ? ' media-attn-act' : '') . '"><summary><strong>' . $esc($grp['title']) . '</strong> <span class="muted">' . number_format($grp['count']) . '</span></summary><p class="hint">' . $esc($grp['hint']) . '</p><ul class="media-attn-list">';
+        foreach ($grp['items'] as $file) $out .= '<li><a href="' . admin_item_href($file) . '">' . $esc($file) . '</a></li>';
+        if ($grp['count'] > count($grp['items'])) $out .= '<li class="muted">and ' . number_format($grp['count'] - count($grp['items'])) . ' more</li>';
+        return $out . '</ul></details>';
+    };
+    $act = array_filter($att['groups'], function ($g) { return $g['actionable']; });
+    $info = array_filter($att['groups'], function ($g) { return !$g['actionable']; });
+    $out = '';
+    if (!$act) $out .= '<p class="muted media-nothing">Nothing needs attention.</p>';
+    foreach ($act as $grp) $out .= $one($grp);
+    if ($info) {
+        $out .= '<p class="muted media-info-title">For your information</p>';
+        foreach ($info as $grp) $out .= $one($grp);
+    }
+    return $out;
+}
+
+/** The "Backups from Tidy up" line of the Prepare media panel, as HTML; empty when there are none. */
+function render_media_backups_html($backups) {
+    if (!$backups) return '';
+    $folders = []; foreach ($backups as $b) $folders[$b['folder']] = true;
+    $first = $backups[0]['at']; $last = $backups[count($backups) - 1]['at'];
+    $fmt = function ($t) { return gmdate('j M Y', $t); };
+    return '<p class="hint media-backups-line"><strong>' . count($backups) . ' backup' . (count($backups) === 1 ? '' : 's') . ' from Tidy up</strong> (the folders\' data as it was before, in ' . count($folders) . ' folder' . (count($folders) === 1 ? '' : 's') . ', ' . ($fmt($first) === $fmt($last) ? $fmt($first) : $fmt($first) . ' to ' . $fmt($last)) . '). Keep them until you have looked through the gallery. <button type="button" class="secondary media-backups-delete">Delete the backups&hellip;</button> <span class="media-backups-out" aria-live="polite"></span></p>';
 }
 
 /** Everything Prepare media's list says, one row per folder that has files: the folder, its files, how many photos have their tile pictures, and
@@ -2616,7 +2775,16 @@ function media_report($dir, $files) {
             }
             if ($ok) $tiles++;
         }
-        $rows[] = ['folder' => $path, 'photos' => $photos, 'tiles' => $tiles] + $sum;
+        $vids = 0; $posters = 0; $clips = 0; $strips = 0; $vfail = 0;
+        foreach ($list as $file) {
+            if (!is_video_file($file)) continue;
+            $vids++; $vs = video_made_state($dir, $file);
+            if ($vs['poster'] === 'ready') $posters++;
+            if ($vs['clip'] === 'ready') $clips++;
+            if ($vs['strip'] === 'ready') $strips++;
+            if (in_array('failed', $vs, true)) $vfail++;
+        }
+        $rows[] = ['folder' => $path, 'photos' => $photos, 'tiles' => $tiles, 'videos' => $vids, 'posters' => $posters, 'clips' => $clips, 'strips' => $strips, 'videoFailed' => $vfail] + $sum;
     }
     return $rows;
 }
@@ -4092,6 +4260,21 @@ function client_ip() {
     return $ip === '' ? 'unknown' : $ip;
 }
 
+/** What to tell the owner when "The connection" is chosen but the request looks like it came through a proxy: only when the
+ *  connection itself is a proxy's (inside Cloudflare's ranges, or a private or loopback address with a forwarding header), since a
+ *  web server that already passes the real address on (nginx's real-ip rule) leaves a Cloudflare header behind and is right as it is. */
+function client_ip_proxy_hint() {
+    if (TRUSTED_PROXY !== 'direct') return '';
+    $peer = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    if (!filter_var($peer, FILTER_VALIDATE_IP)) return '';
+    $cf = trim((string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? '')) !== '';
+    $fwd = $cf || trim((string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '')) !== '';
+    if ($cf && ip_in_ranges($peer, cloudflare_ranges())) return 'This request came through Cloudflare: choose Cloudflare so the real address is used.';
+    $private = !filter_var($peer, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+    if ($fwd && $private && !is_local_request()) return 'This request came through a proxy: choose the matching setting so the real address is used.';
+    return '';
+}
+
 /** The country Cloudflare reports for this visitor ("US"), or '' (only believed from a trusted proxy, like the address). */
 function client_country() {
     if (TRUSTED_PROXY !== 'cloudflare' || !ip_in_ranges((string) ($_SERVER['REMOTE_ADDR'] ?? ''), trusted_proxy_ranges())) return '';
@@ -4387,10 +4570,16 @@ function link_allows_item($l, $dir, $file) {
 
 /** May this visitor see the item (a public one, or a private one they were given)? */
 function viewer_may_see_item($dir, $file, $itemsData) {
-    if (!file_is_hidden($dir, $file, $itemsData)) return true;
     if (is_revealed()) return true;
     $l = link_viewer();
+    if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file)) return false;   // a link that shows only its own things: not the public rest of the gallery either
+    if (!file_is_hidden($dir, $file, $itemsData)) return true;
     return $l !== null && link_allows_item($l, $dir, $file);
+}
+
+/** Is this link set to show only what it covers (its photos or folders), the public rest of the gallery left out of the pages it shows? */
+function link_shows_only_its_own($l) {
+    return !empty($l['only']) && ($l['scope']['type'] ?? 'all') !== 'all';
 }
 
 /** Does the link allow $cap ('downloads' or 'zip') for this item? */
@@ -4497,8 +4686,8 @@ function link_standalone_head($title) {
 
 /** The page behind a link that doesn't work: the same for every reason (expired, used up, paused, revoked, mistyped,
  *  switched off), with nothing to press and nothing about why. The person using it is meant to tell whoever sent it. */
-function render_link_invalid_page() {
-    http_response_code(404);
+function render_link_invalid_page($status = 404) {
+    http_response_code($status);
     header('X-Gallery-Link: invalid');
     echo link_standalone_head('This link isn\'t valid');
     echo '<div class="ico" style="color:#8a8a8f">' . LINK_ICON_WARN . '</div><h1>This link isn\'t valid</h1><p>Please let the person who sent it to you know.</p></div></body></html>';
@@ -4525,7 +4714,7 @@ function run_link_route($dir) {
     $token = $_GET['link'] ?? '';
     if (!ENABLE_SHARE_LINKS) { render_link_invalid_page(); return; }
     if (!is_https_request() && !is_local_request()) { render_https_required_page(); return; }
-    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(); return; }   // the admin's check that the tidy address works: not a guess
+    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(200); return; }   // the admin's check that the tidy address works: not a guess, and not a 404, which a browser would log in its console on every look at the Share links tab
     $ip = client_ip();
     $link = link_token_format_ok($token) ? link_find_by_token(links_read(), $token) : null;
     // The owner, signed in, just goes where the link goes: nothing is counted or logged, no cookie is set, and the throttle
@@ -6450,7 +6639,12 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         session_write_close();
         $out = [];
         foreach (media_report($dir, $files) as $row) $out[] = $row;
-        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out]);
+        $att = media_attention($dir, $files);
+        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out, 'attentionHtml' => render_media_attention_html($att), 'attention' => $att['attention'], 'backupsHtml' => render_media_backups_html(media_tidy_backups($dir, $files))]);
+    }
+    if ($action === 'media_backups_delete') {
+        $n = media_tidy_backups_delete($dir, $files);
+        admin_json_exit(['ok' => true, 'deleted' => $n, 'text' => $n ? 'Deleted ' . $n . ' backup' . ($n === 1 ? '' : 's') . '.' : 'There were no backups.']);
     }
 
     if ($action === 'save_item') {
@@ -7021,6 +7215,124 @@ function render_server_rules_help($withTidyLinks = false) {
     return ob_get_clean();
 }
 
+/** Everything the owner has set by hand, for the Edited tab: per folder (those with anything), its own settings (hidden, name, description,
+ *  dates, position, cover, location and map switches, photo order, stacks, groups) and, for each photo or video, what was set on it
+ *  (private or public on its own, a caption, an information link, a location typed in, labelled or removed on purpose, its own location
+ *  switch). What the gallery read from the files is never listed: it was not set by hand. $hidden is admin_hidden_data()'s result (or null). */
+function admin_edited_overview($dir, $files, $hidden) {
+    $privFolders = array_fill_keys($hidden['folders'] ?? [], true);
+    $privItems = array_fill_keys($hidden['items'] ?? [], true);
+    $shownItems = array_fill_keys($hidden['shown'] ?? [], true);
+    $label = function ($path) use ($dir) {
+        if ($path === '') return 'Main page';
+        $parts = []; $acc = '';
+        foreach (explode('/', $path) as $seg) {
+            $acc = $acc === '' ? $seg : $acc . '/' . $seg;
+            $l = folder_display_meta($dir, $acc)['label'];
+            $parts[] = $l !== '' ? $l : $seg;
+        }
+        return implode(' / ', $parts);
+    };
+    $byFolder = [];
+    foreach ($files as $file) { $slash = strrpos($file, '/'); $byFolder[$slash === false ? '' : substr($file, 0, $slash)][] = $file; }
+    $paths = array_merge([''], all_folder_paths($files));
+    $folders = []; $c = ['all' => 0, 'private' => 0, 'caption' => 0, 'link' => 0, 'location' => 0, 'folder' => 0, 'photos' => 0];
+    foreach ($paths as $path) {
+        $real = $path === '' ? $dir : resolve_real_path($dir, $path);
+        if (!$real || !is_dir($real)) continue;
+        $d = items_read($real);
+        $set = [];
+        if (isset($privFolders[$path])) $set[] = ['hid', 'Hidden folder'];
+        if (is_string($d['displayName'] ?? null) && $d['displayName'] !== '') $set[] = ['', 'Own name: ' . $d['displayName']];
+        if (is_string($d['description'] ?? null) && $d['description'] !== '') $set[] = ['', 'Description'];
+        if (is_string($d['dates'] ?? null) && $d['dates'] !== '') $set[] = ['', 'Dates: ' . $d['dates']];
+        if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
+        if (is_string($d['cover'] ?? null) && $d['cover'] !== '') $set[] = ['cap', 'Cover: ' . $d['cover']];
+        if (!empty($d['locationEnabled'])) $set[] = ['loc', 'Locations on'];
+        if (array_key_exists('mapEnabled', $d) && $d['mapEnabled'] !== null) $set[] = ['', 'Map ' . ($d['mapEnabled'] ? 'on' : 'off') . ' here'];
+        if (array_key_exists('mapRadius', $d) && $d['mapRadius'] !== null) $set[] = ['', 'Map grouping set'];
+        if (is_string($d['photoSort'] ?? null) && $d['photoSort'] !== '') $set[] = ['', 'Photo order set'];
+        if (!empty($d['stacks'])) $set[] = ['', count((array) $d['stacks']) . ' stack' . (count((array) $d['stacks']) === 1 ? '' : 's')];
+        if (!empty($d['groups'])) $set[] = ['', count((array) $d['groups']) . ' group' . (count((array) $d['groups']) === 1 ? '' : 's')];
+        $items = [];
+        foreach ($byFolder[$path] ?? [] as $file) {
+            $e = $d['items'][basename($file)] ?? null;
+            $kinds = []; $tags = []; $text = [];
+            if (isset($privItems[$file])) { $kinds[] = 'private'; $tags[] = ['priv', 'private']; }
+            elseif (isset($shownItems[$file])) { $kinds[] = 'private'; $tags[] = ['pub', 'public']; $text[] = 'Public though its folder is private.'; }
+            if (is_array($e)) {
+                $cap = is_string($e['caption'] ?? null) ? trim($e['caption']) : '';
+                if ($cap !== '') { $kinds[] = 'caption'; $tags[] = ['cap', 'caption']; $text[] = ['caption', $cap]; }
+                $web = is_string($e['web'] ?? null) ? trim($e['web']) : '';
+                if ($web !== '') { $kinds[] = 'link'; $tags[] = ['cap', 'link']; $text[] = ['link', $web]; }
+                $loc = [];
+                if (!empty($e['location']) && is_array($e['location'])) {
+                    $lab = is_string($e['location']['label'] ?? null) ? trim($e['location']['label']) : '';
+                    $loc[] = $lab !== '' ? 'Place you set: ' . $lab : 'A place you set';
+                } elseif (!empty($e['locationCleared'])) $loc[] = 'Location removed on purpose';
+                $vis = (string) ($e['locationVisibility'] ?? 'inherit');
+                if ($vis === 'show') $loc[] = 'Its location is shown to visitors (its own switch)';
+                elseif ($vis === 'hide') $loc[] = 'Its location is hidden from visitors (its own switch)';
+                if ($loc) { $kinds[] = 'location'; $tags[] = ['loc', 'location']; $text[] = ['loc', implode('. ', $loc)]; }
+            }
+            if (!$kinds) continue;
+            $items[] = ['file' => $file, 'kinds' => $kinds, 'tags' => $tags, 'text' => $text];
+        }
+        if (!$set && !$items) continue;
+        foreach ($items as $it) { $c['photos']++; foreach (array_unique($it['kinds']) as $k) $c[$k]++; }
+        if ($set) $c['folder']++;
+        $folders[] = ['path' => $path, 'label' => $label($path), 'hidden' => isset($privFolders[$path]), 'set' => $set, 'items' => $items];
+    }
+    $c['all'] = $c['photos'] + $c['folder'];
+    return ['folders' => $folders, 'counts' => $c, 'total' => $c['all']];
+}
+
+/** The Edited tab's list, as HTML: a summary, filter chips and one collapsed card per folder (see the script, "ed-root"). */
+function render_admin_edited_html($ov, $csrfToken) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $c = $ov['counts']; $noun = ENABLE_VIDEO ? 'item' : 'photo';
+    $n = function ($x, $one, $many = null) { return number_format($x) . ' ' . ($x === 1 ? $one : ($many ?? $one . 's')); };
+    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Links'], ['location', 'Locations'], ['folder', 'Folder settings']];
+    $out = '<div class="ed" id="ed-root">';
+    if ($ov['total'] === 0) return $out . '<p class="muted ed-empty">Nothing is set by hand yet. When you add a caption, a link or a private flag to a ' . $noun . ', or change a folder\'s own settings, it is listed here.</p></div>';
+    $out .= '<p class="ed-sum"><span><b>' . number_format($c['all']) . '</b> edit' . ($c['all'] === 1 ? '' : 's') . ' in <b>' . number_format(count($ov['folders'])) . '</b> folder' . (count($ov['folders']) === 1 ? '' : 's') . '</span><span><b>' . number_format($c['private']) . '</b> private</span><span><b>' . number_format($c['caption']) . '</b> caption' . ($c['caption'] === 1 ? '' : 's') . '</span><span><b>' . number_format($c['link']) . '</b> link' . ($c['link'] === 1 ? '' : 's') . '</span></p>';
+    $out .= '<div class="ed-chips" role="group" aria-label="Show only">';
+    foreach ($chips as [$k, $name]) $out .= '<button type="button" class="ed-chip" data-k="' . $k . '" aria-pressed="' . ($k === 'all' ? 'true' : 'false') . '">' . $name . ' <em>' . number_format($c[$k]) . '</em></button>';
+    $out .= '</div><div class="ed-tools"><button type="button" class="linklike" data-ed-expand="all">Expand all</button> &middot; <button type="button" class="linklike" data-ed-expand="none">Collapse all</button></div>';
+    foreach ($ov['folders'] as $f) {
+        $path = $f['path']; $settings = $path === '' ? '?admin#settings' : '?admin&folder=' . rawurlencode($path) . '#settings';
+        $open = $path === '' ? '?' : '?folder=' . rawurlencode($path);
+        $out .= '<section class="ed-folder" data-path="' . $esc($path) . '"><button type="button" class="ed-head" aria-expanded="false"><span class="ed-name">' . $esc($f['label']) . '<small>' . $esc($path === '' ? 'the main page' : $path) . '</small></span>' . ($f['hidden'] ? '<span class="tag ed-hid">hidden folder</span>' : '') . '<span class="ed-chev" aria-hidden="true">&rsaquo;</span><span class="ed-fsum"></span></button><div class="ed-body" hidden>';
+        $out .= '<div class="ed-fset-links"><a class="ed-btn" href="' . $esc($open) . '">Open folder</a> <a class="ed-btn" href="' . $esc($settings) . '">Folder settings</a></div>';
+        if ($f['set']) {
+            $out .= '<div class="ed-fset" data-kinds="folder" data-n="' . count($f['set']) . '"><span class="muted">Folder settings:</span>';
+            foreach ($f['set'] as [$cls, $text]) $out .= '<span class="tag' . ($cls !== '' ? ' ed-' . $cls : '') . '">' . $esc($text) . '</span>';
+            $out .= '</div>';
+        }
+        $rows = []; $strip = [];
+        foreach ($f['items'] as $it) { if (count($it['kinds']) === 1 && $it['kinds'][0] === 'private' && ($it['tags'][0][1] ?? '') === 'private') $strip[] = $it; else $rows[] = $it; }   // (a photo whose only edit is "private": a small lock; "public in a private folder" has a row, it is not a lock)
+        foreach (array_slice($rows, 0, 150) as $it) {
+            $tags = ''; foreach ($it['tags'] as [$cls, $name]) $tags .= '<span class="tag ed-' . $cls . '">' . $esc($name) . '</span>';
+            $txt = '';
+            foreach ($it['text'] as $t) {
+                if (is_string($t)) { $txt .= '<div class="ed-t">' . $esc($t) . '</div>'; continue; }
+                if ($t[0] === 'caption') $txt .= '<div class="ed-t">&ldquo;' . $esc($t[1]) . '&rdquo;</div>';
+                elseif ($t[0] === 'link') { $host = (string) parse_url($t[1], PHP_URL_HOST); $txt .= '<div class="ed-t">' . (preg_match('#^https?://#i', $t[1]) ? '<a href="' . $esc($t[1]) . '" target="_blank" rel="noopener noreferrer">' . $esc($host !== '' ? $host : $t[1]) . '</a>' : $esc($t[1])) . '</div>'; }
+                else $txt .= '<div class="ed-t">' . $esc($t[1]) . '</div>';
+            }
+            $out .= '<div class="ed-it ed-row" data-kinds="' . $esc(implode(' ', array_unique($it['kinds']))) . '"><a class="ed-th" href="' . admin_item_href($it['file']) . '" title="Open ' . $esc(basename($it['file'])) . ' in the gallery"><img src="' . $esc(img_url($it['file'], 'thumb')) . '" alt="" loading="lazy" decoding="async"></a><div class="ed-rb"><div class="ed-rn">' . $esc(basename($it['file'])) . '</div><div class="ed-tags">' . $tags . '</div>' . $txt . '</div><a class="ed-btn" href="' . admin_item_href($it['file']) . '">Edit</a></div>';
+        }
+        if (count($rows) > 150) $out .= '<p class="muted ed-more-note">And ' . number_format(count($rows) - 150) . ' more with a caption, link or place: open the folder to see them.</p>';
+        if ($strip) {
+            $out .= '<div class="ed-strip"><p class="ed-strip-h">Private, nothing else set <span class="tag ed-priv-n">' . number_format(count($strip)) . '</span></p><div class="ed-sth">';
+            foreach (array_slice($strip, 0, 300) as $it) $out .= '<a class="ed-it ed-sm" data-kinds="private" href="' . admin_item_href($it['file']) . '" title="' . $esc(basename($it['file'])) . ' (private): open it in the gallery"><img src="' . $esc(img_url($it['file'], 'thumb')) . '" alt="" loading="lazy" decoding="async"><i>' . ui_icon('lock') . '</i></a>';
+            $out .= '<button type="button" class="ed-more" hidden></button></div>' . (count($strip) > 300 ? '<p class="muted ed-more-note">And ' . number_format(count($strip) - 300) . ' more: see them in the gallery.</p>' : '') . '</div>';
+        }
+        $out .= '</div></section>';
+    }
+    return $out . '</div>';
+}
+
 /** The Hidden tab: the plain-English warning, then every hidden thing with
  *  a link to where it can be changed. */
 /** What is private, grouped by folder for the Private tab: each private folder (with what opening it would do and the photos
@@ -7068,7 +7380,8 @@ function admin_private_overview($dir, $files, $data) {
 function render_admin_hidden_panel($data, $csrfToken = '') {
     global $dir, $files;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $ov = admin_private_overview($dir, $files, $data);
+    $ed = admin_edited_overview($dir, $files, $data);
+    $ov = $data ? admin_private_overview($dir, $files, $data) : ['private' => [], 'public' => []];
     $noun = ENABLE_VIDEO ? 'item' : 'photo';
     $plural = function ($n, $one, $many = null) { return number_format($n) . ' ' . ($n === 1 ? $one : ($many ?? $one . 's')); };
     $thumbs = function ($row, $kind) use ($esc, $dir) {
@@ -7118,6 +7431,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
         return $html;
     };
 ?>
+<?php if ($data): ?>
     <div class="flash error hidden-warning" id="lock-banner">
       <div class="lock-open-text"><strong>Private isn't locked.</strong> Making something private hides it from the gallery's pages, but the photo files can still be opened by their direct address. Add the rules below to stop that.</div>
       <div class="lock-locked-text" hidden><strong>Private is locked.</strong> Direct requests for photos are refused (checked just now from this browser). <button type="button" class="linklike show-rules-btn">Show the rules</button></div>
@@ -7131,6 +7445,14 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
       <?= render_server_rules_help() ?>
       <p class="muted" data-tidy-rules>Optional tidy folder links and the nginx redirect setting are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Site settings → Server setup</a>.</p>
     </section>
+<?php endif; ?>
+    <section class="panel ed-panel" id="ed-panel">
+      <h2 class="section-title">Edited</h2>
+      <p class="muted" style="margin-top:0;">Everything you set by hand, in one place: private flags, captions, information links, places you typed or removed, and each folder's own settings. What the gallery read from the files, such as locations and capture dates, is not listed here, since you did not change it. Press a folder to open it.</p>
+      <?= render_admin_edited_html($ed, $csrfToken) ?>
+    </section>
+<?php if ($data): ?>
+    <details class="ed-priv" id="ed-priv"><summary>Private folders <span class="muted"><?= number_format(count($data['folders'])) ?> private folder<?= count($data['folders']) === 1 ? '' : 's' ?>, <?= number_format(count($data['items'])) ?> <?= count($data['items']) === 1 ? $noun : $noun . 's' ?> private on their own</span></summary>
     <section class="panel pv" id="pv-overview" data-csrf="<?= $esc($csrfToken) ?>" data-noun="<?= $noun ?>">
       <h2 class="section-title">What is private</h2>
       <div class="pv-stats">
@@ -7141,6 +7463,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
       <?php if ($ov['private']): ?><div class="pv-grp">Private folders</div><?php foreach ($ov['private'] as $r) echo $row($r, true); ?><?php endif; ?>
       <?php if ($ov['public']): ?><div class="pv-grp">Public folders with private <?= ENABLE_VIDEO ? 'items' : 'photos' ?></div><?php foreach ($ov['public'] as $r) echo $row($r, false); ?><?php endif; ?>
     </section>
+    </details>
     <div class="pv-toast" id="pv-toast" role="status" aria-live="polite" hidden></div>
     <div class="admin-modal" id="pt-modal" role="dialog" aria-modal="true" aria-labelledby="pt-modal-title" hidden>
       <div class="admin-modal-card">
@@ -7152,6 +7475,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
         <div class="pm-btns"><button type="button" class="secondary" id="pt-cancel">Cancel</button><button type="button" id="pt-ok">Make public</button></div>
       </div>
     </div>
+<?php endif; ?>
 <?php
 }
 
@@ -7482,14 +7806,14 @@ function gallery_setting_definitions() {
              'help' => 'A thin line at the top of the gallery for someone using a link: "The link being used to access this media expires on ...". Each link can override this either way, and a link with no end date never shows it.'],
             ['name' => 'TRUSTED_PROXY', 'type' => 'enum', 'label' => 'Where visitors\' IP addresses come from', 'status' => 'clientip',
              'options' => ['direct' => 'The connection', 'cloudflare' => 'Cloudflare', 'proxy' => 'Another proxy'],
-             'help' => 'Behind Cloudflare (or another CDN) the connection is always the CDN\'s, so every visitor looks the same in share-link logs and in the sign-in throttle. Cloudflare: the visitor\'s address is read from its header, but only when the request really comes from Cloudflare. Another proxy: from X-Forwarded-For, only for proxies listed in TRUSTED_PROXY_RANGES in .gallery-config.php.'],
+             'help' => 'Behind Cloudflare (or another CDN) the connection is always the CDN\'s, so every visitor looks the same in share-link logs and in the sign-in throttle. Cloudflare: the visitor\'s address is read from its header, but only when the request really comes from Cloudflare. Another proxy: from X-Forwarded-For, only for proxies listed in TRUSTED_PROXY_RANGES in .gallery-config.php. If your web server already passes the real address on, leave it on The connection (the address is right; the Visitors tab then shows no country, which comes from Cloudflare).'],
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'EXTRA_FOLDERS', 'type' => 'folders', 'label' => 'Folders from elsewhere on the server',
              'help' => 'Show a place elsewhere on the server (an archive on another disk). Without a name its folders appear at the top; with one it shows as a single folder. Needs "Show subfolders".',
              'risk' => 'Every photo and video there becomes visible.'],
             ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect', 'status' => 'accel',
-             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (see the Private tab) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
+             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (see the Edited tab) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
              'risk' => 'Without the matching nginx location, photos and videos stop loading.'],
         ]],
     ];
@@ -7789,15 +8113,16 @@ function link_input_from_post($now, $existing, $dir, $files) {
     };
     $downloads = $cap('downloads', 'downloads_folders', 'downloads');
     $zip = $cap('zip', 'zip_folders', 'ZIP downloads');
+    $only = $scopeType !== 'all' && ($_POST['only'] ?? '') === '1';   // "show only these": the person's pages list nothing but what the link covers, the rest of the public gallery too
     return [[
         'label' => $label, 'note' => $note, 'titleMode' => $titleMode, 'titleText' => $titleText, 'maxOpens' => $maxOpens,
         'startsAt' => $startsAt, 'endsAt' => $endsAt, 'locations' => $locations, 'headsUp' => $headsUp,
-        'scope' => $scope, 'openIn' => $openIn, 'downloads' => $downloads, 'zip' => $zip, '_index' => $index,
+        'scope' => $scope, 'only' => $only, 'openIn' => $openIn, 'downloads' => $downloads, 'zip' => $zip, '_index' => $index,
     ], $errors];
 }
 
 function link_apply_fields(&$rec, $f) {
-    foreach (['label', 'note', 'titleMode', 'titleText', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'openIn', 'downloads', 'zip'] as $k) $rec[$k] = $f[$k];
+    foreach (['label', 'note', 'titleMode', 'titleText', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'only', 'openIn', 'downloads', 'zip'] as $k) $rec[$k] = $f[$k];
 }
 
 /** The Share links tab's POST actions (link_create, link_save, link_pause, link_resume, link_revoke, link_extend, link_replace,
@@ -7807,10 +8132,31 @@ function links_admin_action($action, $dir, $files) {
     $bad = function ($text) { admin_json_exit(['ok' => false, 'text' => $text]); };
     if (!ENABLE_SHARE_LINKS) $bad('Share links are switched off in Site settings.');
     $id = (string) ($_POST['id'] ?? '');
-    if ($action !== 'link_create' && $action !== 'link_seen' && !preg_match('/^[0-9a-f]{10}$/', $id)) $bad('Unknown link.');
+    if ($action !== 'link_create' && $action !== 'link_seen' && !($action === 'link_trim' && $id === 'all') && !preg_match('/^[0-9a-f]{10}$/', $id)) $bad('Unknown link.');
     $wrote = function () use ($bad) {
         if (!empty($GLOBALS['__data_write_failed'])) $bad('Nothing was saved: the gallery\'s folder isn\'t writable by the web server.');
     };
+    if ($action === 'link_trim') {   // Trim the log: what is older than a number of days or a date goes from one link's log or from all of them; apply=1 does it, otherwise it only counts
+        $before = (int) ($_POST['before'] ?? 0); $days = (int) ($_POST['days'] ?? 0);
+        $cutoff = $before > 0 ? $before : $now - $days * 86400;
+        if (($before <= 0 && $days <= 0) || $cutoff > $now) $bad('Pick how old a line has to be to go: a number of days, or a date in the past.');
+        $ids = $id === 'all' ? array_keys((array) links_read()['links']) : [$id];
+        if ($id !== 'all' && !isset(links_read()['links'][$id])) $bad('That link no longer exists.');
+        $apply = ($_POST['apply'] ?? '') === '1';
+        $tot = ['events' => 0, 'visitors' => 0, 'blocked' => 0, 'items' => 0, 'folders' => 0]; $linksHit = 0;
+        foreach ($ids as $lid) {
+            if (!preg_match('/^[0-9a-f]{10}$/', (string) $lid)) continue;
+            $c = link_log_trim($lid, $cutoff, $apply);
+            if (array_sum($c) > 0) $linksHit++;
+            foreach ($c as $k => $v) $tot[$k] += $v;
+        }
+        if ($apply) $wrote();
+        $lines = $tot['events'] + $tot['items'] + $tot['folders'] + $tot['blocked'];
+        $what = number_format($tot['events']) . ' line' . ($tot['events'] === 1 ? '' : 's') . ' of the timeline, ' . number_format($tot['visitors']) . ' visitor' . ($tot['visitors'] === 1 ? '' : 's') . ' and ' . number_format($tot['items'] + $tot['folders']) . ' record' . ($tot['items'] + $tot['folders'] === 1 ? '' : 's') . ' of what was looked at' . ($tot['blocked'] ? ', and ' . number_format($tot['blocked']) . ' turned-away ' . ($tot['blocked'] === 1 ? 'try' : 'tries') : '');
+        $none = $lines + $tot['visitors'] === 0;
+        admin_json_exit(['ok' => true, 'applied' => $apply, 'counts' => $tot, 'links' => $linksHit, 'nothing' => $none,
+            'text' => $none ? 'Nothing is that old: there is nothing to trim.' : ($apply ? 'Trimmed: ' : 'This would remove ') . $what . ', from ' . $linksHit . ' link' . ($linksHit === 1 ? '' : 's') . '.' . ($apply ? '' : ' Opens, views and the total number of visitors stay.')]);
+    }
     if ($action === 'link_seen') {   // the owner has looked at the tab: what happened before now is no longer "new"
         links_update(function (&$d) use ($now) { $d['seenAt'] = $now; });
         admin_json_exit(['ok' => true, 'text' => '']);
@@ -8067,6 +8413,8 @@ function render_share_kit() {
   .gs-thumbs { display: flex; gap: 4px; flex-wrap: wrap; }
   .gs-thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; background: #26262b; }
   .gs-fine { margin: 0 0 8px; font-size: 0.85rem; color: #9a9aa2; }
+  .gs-only { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
+  .gs-only input { width: 18px; height: 18px; flex: none; accent-color: #5865f2; }
   .gs-link { padding: 0; background: none; border: 0; color: #aab2ff; font: inherit; font-weight: 600; cursor: pointer; }
   .gs-link:hover { text-decoration: underline; }
   .gs-err { min-height: 1.2em; color: #ff8587; font-size: 0.88rem; }
@@ -8336,6 +8684,12 @@ KIT_CSS;
   function closeModal() { if (modal && modal.parentNode) modal.parentNode.removeChild(modal); modal = null; document.removeEventListener('keydown', onKey, true); }
   function onKey(e) { if (e.key === 'Escape' && modal) { e.preventDefault(); e.stopPropagation(); closeModal(); } }
   function when(sec) { return sec > 0 ? new Date((Math.floor(Date.now() / 1000) + sec) * 1000).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''; }
+  // What the person will see, said plainly: what the link covers, and the public rest of the gallery (listed too, or not).
+  function fineText(photos, one, only) {
+    if (!photos) return 'They can see this folder and what is inside it, and everything that is already public. ';
+    var what = one ? 'this photo' : 'these photos';
+    return only ? 'They can see only ' + what + '. A tidy view, not a lock: a public photo can still be opened by anyone who knows its address. ' : 'They can see ' + what + ', and everything that is already public. ';
+  }
   // opts: { kind: 'folder' | 'photos', path, label (folder), files [paths] (photos), name (a suggestion) }
   function quick(opts) {
     closeModal(); tidy();
@@ -8350,14 +8704,18 @@ KIT_CSS;
     var o = document.createElement('div'); o.className = 'gs-modal'; o.setAttribute('role', 'dialog'); o.setAttribute('aria-modal', 'true'); o.setAttribute('aria-label', title);
     var whoField = '<label class="gs-f"><span class="gs-k">Who is it for?</span><input type="text" class="gs-name" maxlength="80" placeholder="Aunt Carol" autocomplete="off" value="' + esc(opts.name || '') + '"></label>';
     o.innerHTML = '<div class="gs-card"><h3 class="gs-title">' + esc(title) + '</h3><div class="gs-body">' + (photos ? subject + whoField : whoField + subject)
-      + '<div class="gs-f"><span class="gs-k">Opens</span>' + seg('opens', [[1, 'Once'], [5, '5'], [10, '10'], [0, 'Unlimited']], photos ? 1 : 10) + '</div>'
-      + '<div class="gs-f"><span class="gs-k">Stops working</span>' + seg('ends', [[86400, '1 day'], [604800, '1 week'], [2592000, '30 days'], [0, 'Never']], photos ? 604800 : 2592000) + '</div>'
-      + '<p class="gs-fine">' + (photos ? 'They can look at ' + (one ? 'this photo' : 'these photos') + ' only. ' : 'They see this folder and what is inside it. ') + 'Downloads off, locations as the public sees them, no note. <button type="button" class="gs-link" data-gs="more">More options…</button></p>'
+      + '<div class="gs-f"><span class="gs-k">Opens</span>' + seg('opens', [[1, 'Once'], [5, '5'], [10, '10'], [0, 'Unlimited']], 10) + '</div>'
+      + '<div class="gs-f"><span class="gs-k">Stops working</span>' + seg('ends', [[86400, '1 day'], [604800, '1 week'], [2592000, '30 days'], [0, 'Never']], 604800) + '</div>'
+      + (photos ? '<label class="gs-only"><input type="checkbox" id="gs-only" checked> <span>Show only ' + (one ? 'this photo' : 'these photos') + '</span></label>' : '')
+      + '<p class="gs-fine"><span class="gs-fine-t">' + fineText(photos, one, true) + '</span>Downloads off, locations as the public sees them, no note. <button type="button" class="gs-link" data-gs="more">More options…</button></p>'
       + '<div class="gs-err" role="alert"></div></div>'
       + '<div class="gs-acts"><button type="button" class="gs-btn" data-gs="cancel">Cancel</button><button type="button" class="gs-btn gs-primary" data-gs="create">Create link</button></div></div>';
     modal = o; document.body.appendChild(o); document.addEventListener('keydown', onKey, true);
     var card = o.querySelector('.gs-card'), nameIn = o.querySelector('.gs-name');
     setTimeout(function () { nameIn.focus(); }, 30);
+    o.addEventListener('change', function (e) {
+      if (e.target && e.target.id === 'gs-only') card.querySelector('.gs-fine-t').textContent = fineText(photos, one, e.target.checked);
+    });
     o.addEventListener('click', function (e) {
       if (e.target === o) { closeModal(); return; }
       var sb = e.target.closest ? e.target.closest('.gs-seg button') : null;
@@ -8367,7 +8725,7 @@ KIT_CSS;
       if (what === 'cancel') { closeModal(); return; }
       var draftOf = function () {
         var sec = +segValue(card, 'ends');
-        return { label: nameIn.value.trim(), scopeType: photos ? 'photos' : 'folders', scopeFolders: photos ? [] : [opts.path], scopePhotos: photos ? files : [], openIn: photos ? '' : opts.path, maxOpens: +segValue(card, 'opens'), endsAt: sec > 0 ? Math.floor(Date.now() / 1000) + sec : 0 };
+        return { label: nameIn.value.trim(), scopeType: photos ? 'photos' : 'folders', only: photos && !!card.querySelector('#gs-only').checked, scopeFolders: photos ? [] : [opts.path], scopePhotos: photos ? files : [], openIn: photos ? '' : opts.path, maxOpens: +segValue(card, 'opens'), endsAt: sec > 0 ? Math.floor(Date.now() / 1000) + sec : 0 };
       };
       if (what === 'more') {
         var d = draftOf(); closeModal();
@@ -8383,7 +8741,7 @@ KIT_CSS;
       csrf().then(function (token) {
         var body = new URLSearchParams();
         body.set('csrf_token', token); body.set('action', 'link_create'); body.set('label', d2.label); body.set('note', ''); body.set('title_mode', 'gallery');
-        body.set('scope_type', d2.scopeType); body.set('scope_folders', JSON.stringify(d2.scopeFolders)); body.set('scope_photos', JSON.stringify(d2.scopePhotos)); body.set('open_in', d2.openIn);
+        body.set('scope_type', d2.scopeType); body.set('only', d2.only ? '1' : '0'); body.set('scope_folders', JSON.stringify(d2.scopeFolders)); body.set('scope_photos', JSON.stringify(d2.scopePhotos)); body.set('open_in', d2.openIn);
         body.set('downloads', 'off'); body.set('zip', 'off'); body.set('locations', 'public'); body.set('heads_up', 'default'); body.set('starts_at', '0');
         body.set('max_opens', d2.maxOpens); body.set('ends_at', d2.endsAt);
         return fetch((cfg.admin || '?admin'), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
@@ -8449,7 +8807,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         $heads = ['default' => 'The site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'][$l['headsUp'] ?? 'default'];
         $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'maxOpens' => (int) $l['maxOpens'],
             'startsAt' => (int) $l['startsAt'], 'endsAt' => (int) $l['endsAt'], 'locations' => $l['locations'], 'headsUp' => $l['headsUp'], 'state' => $state,
-            'scopeType' => $l['scope']['type'] ?? 'all', 'scopeFolders' => $report['paths']['scope'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
+            'scopeType' => $l['scope']['type'] ?? 'all', 'only' => !empty($l['only']), 'scopeFolders' => $report['paths']['scope'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
             'downloads' => $l['downloads']['mode'] ?? 'off', 'downloadsFolders' => $report['paths']['downloads'], 'zip' => $l['zip']['mode'] ?? 'off', 'zipFolders' => $report['paths']['zip']], JSON_HEX_TAG | JSON_HEX_AMP));
         $missing = array_merge(array_filter($report['folders'], function ($x) { return $x['state'] !== 'ok'; }), array_filter($report['photos'], function ($x) { return $x['state'] !== 'ok'; }));
         ob_start(); ?>
@@ -8474,6 +8832,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
             <dl class="sl-facts">
               <dt>Who can see</dt><dd><?= link_scope_text_html($l, $report) ?></dd>
               <?php if (($l['openIn'] ?? '') !== '' && ($l['scope']['type'] ?? '') !== 'photos'): ?><dt>Opens in</dt><dd><?= $report['paths']['openIn'] !== '' ? $esc(link_folder_label($dir, $report['paths']['openIn'])) : '<span class="sl-bad">a folder that can\'t be found (it opens the front page)</span>' ?></dd><?php endif; ?>
+              <?php if (($l['scope']['type'] ?? 'all') !== 'all'): ?><dt>The rest of the gallery</dt><dd><?= link_shows_only_its_own($l) ? 'Not listed: they see only what the link covers. A tidy view, not a lock: a public photo can still be opened by anyone who knows its address.' : 'Listed too: they also see everything that is already public.' ?></dd><?php endif; ?>
               <dt>Original downloads</dt><dd><?= link_capability_text_html($l, 'downloads', $report, $map, $index, $dir, $rootFid) ?></dd>
               <dt>ZIP of a folder</dt><dd><?= link_capability_text_html($l, 'zip', $report, $map, $index, $dir, $rootFid) ?></dd>
               <dt>Photo locations</dt><dd><?= ($l['locations'] ?? 'public') === 'all' ? 'All saved locations' : 'As the public sees them' ?></dd>
@@ -8537,9 +8896,10 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
           <div class="sl-radios" role="radiogroup" aria-label="What they can see">
             <label class="sl-radio"><input type="radio" name="scope_type" value="all" checked><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
             <label class="sl-radio"><input type="radio" name="scope_type" value="folders"<?= AUTO_GROUP_BY_FOLDER ? '' : ' disabled' ?>><span><strong>Only some folders</strong><small>Each folder includes everything inside it. They are never told other private folders exist.<?= AUTO_GROUP_BY_FOLDER ? '' : ' (Turn on “Show subfolders” in Site settings first.)' ?></small></span></label>
-            <label class="sl-radio" data-photos-only><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note">Only the photos you pick, wherever they are. They see nothing else of the folder.</small></span></label>
+            <label class="sl-radio" data-photos-only><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note">Only the photos you pick, wherever they are. Anything already public stays visible too, unless you tick the box below.</small></span></label>
           </div>
           <div class="sl-chips" data-chips="scope" hidden></div>
+          <label class="sl-only" data-only-row hidden><input type="checkbox" name="only"> <span><strong>Show only what they can see here</strong> <small>The pages they see list nothing but what this link covers, not the rest of the public gallery. A tidy view, not a lock: a public photo can still be opened by anyone who knows its address.</small></span></label>
         </div>
         <div class="sl-f" data-openin><span class="sl-k">Opens in</span><select name="open_in" aria-label="Opens in"><option value="">The front page</option></select><span class="sl-h">The first page they see.</span></div>
         <div class="sl-f"><span class="sl-k">Download originals</span>
@@ -8574,6 +8934,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       <?php endif; ?>
       <?php if ($current): ?><div class="sl-grp">Current</div><?php foreach ($current as [$l, $s, $r]) echo $row($l, $s, $r, false); ?><?php endif; ?>
       <?php if ($ended): ?><div class="sl-grp">Ended <span class="sl-grp-note">&middot; the log is kept until you delete the link</span></div><?php foreach ($ended as [$l, $s, $r]) echo $row($l, $s, $r, true); ?><?php endif; ?>
+      <?php if ($current || $ended): ?><p class="note sl-trimnote"><button type="button" class="linklike" data-sl="trim">Trim the log&hellip;</button> Takes old activity out of one link's log, or all of them. Download it first if you want to keep it.</p><?php endif; ?>
       </div>
       <div class="admin-modal" id="sl-modal" role="dialog" aria-modal="true" aria-labelledby="sl-modal-title" hidden>
         <div class="admin-modal-card">
@@ -8611,6 +8972,40 @@ function link_log_read($id) { return json_file_read(link_log_path($id), link_log
 function link_items_read($id) { return json_file_read(link_log_path($id, '-items'), link_items_default()); }
 function link_log_update($id, $fn) { if (link_preview() !== null) return link_log_default(); return json_file_update(link_log_path($id), link_log_default(), $fn); }
 function link_items_update($id, $fn) { if (link_preview() !== null) return link_items_default(); return json_file_update(link_log_path($id, '-items'), link_items_default(), $fn); }
+
+/** Trim the log: takes what is older than $cutoff (a timestamp) out of a link's log and returns what went. Totals (opens, the "earlier
+ *  visitors" count) stay: a trimmed visitor is added to that count. Works on a copy when only counting. */
+function link_log_trim_data(&$log, $cutoff) {
+    $n = ['events' => 0, 'visitors' => 0, 'blocked' => 0];
+    $keep = [];
+    foreach ((array) ($log['events'] ?? []) as $e) { if ((int) ($e['t1'] ?? $e['t'] ?? 0) < $cutoff) $n['events']++; else $keep[] = $e; }
+    $log['events'] = $keep;
+    foreach ((array) ($log['visitors'] ?? []) as $k => $v) { if ((int) ($v['last'] ?? 0) < $cutoff) { unset($log['visitors'][$k]); $n['visitors']++; $log['folded'] = (int) ($log['folded'] ?? 0) + 1; } }
+    foreach ((array) ($log['blocked'] ?? []) as $k => $b) { if ((int) ($b['last'] ?? 0) < $cutoff) { unset($log['blocked'][$k]); $n['blocked']++; } }
+    return $n;
+}
+function link_items_trim_data(&$it, $cutoff) {
+    $n = ['items' => 0, 'folders' => 0];
+    foreach ((array) ($it['t'] ?? []) as $k => $t) {
+        $last = max(array_map('intval', array_intersect_key((array) $t, array_flip(['sf', 'sl', 'of', 'ol', 'pl', 'dl']))) ?: [0]);
+        if ($last < $cutoff) { unset($it['t'][$k]); $n['items']++; }
+    }
+    foreach ((array) ($it['f'] ?? []) as $k => $f) { if ((int) ($f[2] ?? 0) < $cutoff) { unset($it['f'][$k]); $n['folders']++; } }
+    return $n;
+}
+/** What would go (or, with $apply, what went) from one link's log: ['events', 'visitors', 'blocked', 'items', 'folders']. */
+function link_log_trim($id, $cutoff, $apply) {
+    link_queue_merge($id);
+    $n = ['events' => 0, 'visitors' => 0, 'blocked' => 0, 'items' => 0, 'folders' => 0];
+    if (!$apply) {
+        $log = link_log_read($id); $it = link_items_read($id);
+        return array_merge($n, link_log_trim_data($log, $cutoff), link_items_trim_data($it, $cutoff));
+    }
+    $a = $n; $b = [];
+    link_log_update($id, function (&$log) use ($cutoff, &$a) { $a = link_log_trim_data($log, $cutoff); });
+    link_items_update($id, function (&$it) use ($cutoff, &$b) { $b = link_items_trim_data($it, $cutoff); });
+    return array_merge($n, $a, $b);
+}
 
 /** "Safari on iPhone": the browser and where it runs, as far as the User-Agent says. An app's own browser is named as such. */
 function ua_label($ua) {
@@ -8903,7 +9298,7 @@ function render_link_activity($l, $tab, $vidFilter, $folderFilter, $sort, $showA
             $out .= '<tr><td><button type="button" class="linklike sl-ipt" data-ip="' . $esc($v['ip']) . '">' . $esc($v['ip']) . '</button></td><td>' . link_place_html($v['country'] ?? '') . '</td><td>' . $esc($v['ua']) . '</td><td>' . link_time_html($v['first']) . '</td><td>' . link_time_html($v['last']) . '</td><td>' . (int) $v['opens'] . '</td><td><button type="button" class="linklike sl-viewed" data-vid="' . $esc($vid) . '">' . (int) $v['views'] . ' views &rsaquo;</button></td></tr>';
         }
         $out .= '</tbody></table></div>';
-        if ((int) $log['folded'] > 0) $out .= '<p class="muted">+ ' . (int) $log['folded'] . ' earlier visitor' . ((int) $log['folded'] === 1 ? '' : 's') . ' (the latest ' . LINK_LOG_VISITORS . ' are kept; the folder and photo tallies stay exact).</p>';
+        if ((int) $log['folded'] > 0) $out .= '<p class="muted">+ ' . (int) $log['folded'] . ' earlier visitor' . ((int) $log['folded'] === 1 ? '' : 's') . ' (the log keeps the latest ' . number_format(LINK_LOG_VISITORS) . ' visitors; download the log to keep the rest, and trim it whenever you like).</p>';
         if ($log['blocked']) {
             uasort($log['blocked'], function ($a, $b) { return (int) $b['last'] <=> (int) $a['last']; });
             $out .= '<div class="sl-sub2 warn">Blocked tries &middot; ' . count($log['blocked']) . ' address' . (count($log['blocked']) === 1 ? '' : 'es') . '</div><div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
@@ -8989,10 +9384,11 @@ function render_link_ip_page($ip, $tab, $linkFilter, $dir, $files) {
     if (!$perLink) return '<div class="sl-ippage"><p class="muted">No link has seen this address.</p></div>';
     $linksUsed = ''; $n = 0;
     foreach ($perLink as $lid => $vs) { $opens = array_sum(array_column($vs, 'opens')); $linksUsed .= '<span class="sl-lchip">' . $esc($data['links'][$lid]['label']) . ' &middot; ' . $opens . ' open' . ($opens === 1 ? '' : 's') . '</span>'; }
-    $seen = []; $opened = []; $saved = []; $folders = []; $itemsAgg = []; $events = [];
+    $seen = []; $opened = []; $saved = []; $folders = []; $itemsAgg = []; $events = []; $anyFull = false;
     foreach ($perLink as $lid => $vs) {
         if ($linkFilter !== '' && $lid !== $linkFilter) continue;
         [$log, $items] = link_activity($lid);
+        if (count($log['events']) >= LINK_LOG_EVENTS) $anyFull = true;
         foreach (link_item_rows($items) as [$vid, $rel, $t]) {
             if (!isset($vs[$vid])) continue;
             $a = &$itemsAgg[$rel]; $a = $a ?? ['link' => $data['links'][$lid]['label'], 'sf' => 0, 'on' => 0, 'pn' => 0, 'dn' => 0, 'last' => 0];
@@ -9044,7 +9440,7 @@ function render_link_ip_page($ip, $tab, $linkFilter, $dir, $files) {
         else continue;
         $out .= '<div class="sl-ev"><span class="sl-evt">' . $when . '</span><div>' . $text . ($thumbs !== '' ? '<div class="sl-strip">' . $thumbs . '</div>' : '') . '<div class="muted sl-evl">via ' . $esc($e['_link']) . '</div></div></div>';
     }
-    return $out . '</div><p class="note">Scrolling is one line per stretch. Opened, played and saved items get their own line. The latest ' . LINK_LOG_EVENTS . ' lines are kept per link; older ones are folded into the counts in the Folders and Media tabs.</p></div></div>';
+    return $out . '</div><p class="note">Scrolling is one line per stretch. Opened, played and saved items get their own line. ' . ($anyFull ? 'The timeline is full: it keeps the latest ' . number_format(LINK_LOG_EVENTS) . ' lines, so older ones were folded away. Download the log to keep them. ' : '') . 'The Folders and Photos tabs keep their own, exact tallies.</p></div></div>';
 }
 
 /** Every address that has opened or tried any link, with the links each used. */
@@ -9145,7 +9541,7 @@ function health_version_record($dir) {
  *  changed by looking. Folders are sampled (the first 300 that hold media) so a huge gallery stays quick. */
 function health_checks($dir, $files) {
     $rows = [];
-    $add = function ($group, $status, $label, $detail = '') use (&$rows) { $rows[] = [$group, $status, $label, $detail]; };
+    $add = function ($group, $status, $label, $detail = '', $link = null) use (&$rows) { $rows[] = [$group, $status, $label, $detail, $link]; };
 
     // --- this install
     $rec = health_version_record($dir);
@@ -9215,6 +9611,14 @@ function health_checks($dir, $files) {
         $ff = ffmpeg_binary();
         $add('Videos', $ff !== '' ? 'ok' : 'warn', 'ffmpeg ' . ($ff !== '' ? 'found' : 'not found'), $ff !== '' ? $ff . ' — real thumbnails, hover clips and scrubbing are available.' : 'Videos show the browser\'s own first frame; no hover clips or scrubbing.');
     }
+    // --- media: one line for what Prepare media lists
+    if (ENABLE_THUMBNAIL_CACHE && $files) {
+        $mr = media_readiness($dir, $files); $ma = media_attention($dir, $files);
+        $go = ['#media-panel', 'Open Prepare media'];
+        if ($ma['attention'] > 0) $add('Media', 'warn', $ma['attention'] . ' thing' . ($ma['attention'] === 1 ? '' : 's') . ' need' . ($ma['attention'] === 1 ? 's' : '') . ' attention', 'Files that could not be read, old "nothing found" marks or videos ffmpeg could not make pictures for: Prepare media lists them.', $go);
+        elseif ($mr['left'] > 0) $add('Media', 'info', number_format($mr['left']) . ' file' . ($mr['left'] === 1 ? '' : 's') . ' not prepared yet', 'Thumbnails and what the files say about themselves are made the first time a photo is shown; Prepare media does the rest in one go.', $go);
+        else $add('Media', 'ok', 'All prepared', number_format($mr['total']) . ' file' . ($mr['total'] === 1 ? '' : 's') . ': thumbnails made and read from the files.', $go);
+    }
     return $rows;
 }
 
@@ -9237,10 +9641,10 @@ function render_admin_health_panel() {
       <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn') $allQuiet = false; ?>
         <div class="health-group<?= $allQuiet ? ' all-quiet' : '' ?>">
           <h3 class="subhead"><?= $esc($g) ?></h3>
-          <?php foreach ($items as [, $status, $label, $detail]): $isLoud = $status === 'bad' || $status === 'warn'; ?>
+          <?php foreach ($items as [, $status, $label, $detail, $rowLink]): $isLoud = $status === 'bad' || $status === 'warn'; ?>
             <div class="health-row health-<?= $esc($status) ?> <?= $isLoud ? 'loud' : 'quiet' ?>">
               <span class="health-mark <?= $status === 'ok' ? 'ok-text' : ($status === 'bad' ? 'warn-text' : ($status === 'warn' ? 'note-text' : 'muted')) ?>"><?= isset($mark[$status]) ? ui_icon($mark[$status]) : '&bull;' ?></span>
-              <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?></div><?php endif; ?></div>
+              <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?><?php if ($rowLink): ?> <a href="<?= $esc($rowLink[0]) ?>"><?= $esc($rowLink[1]) ?></a><?php endif; ?></div><?php endif; ?></div>
             </div>
           <?php endforeach; ?>
         </div>
@@ -9272,19 +9676,30 @@ function render_admin_thumbnails_panel($csrfToken) {
     }
     $r = media_readiness($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
     $left = $r['left'];
+    $attn = media_attention($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
+    $tidyTot = media_meta_enabled() ? media_tidy_run($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? [], true, false)['totals'] : null;
+    $tidyAny = $tidyTot !== null && ($tidyTot['copies'] + $tidyTot['refreshed'] + $tidyTot['marks'] + $tidyTot['unread']) > 0;   // (the "refresh" reading is the wider one; saved locations of files not read yet can't be compared, so Prepare media comes first and the box stays)
+    $backups = media_tidy_backups($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
 ?>
     <section class="panel media-panel" id="media-panel" data-csrf="<?= $csrfToken ?>" data-left="<?= (int) $left ?>" data-total="<?= (int) $r['total'] ?>">
       <h2 class="section-title">Prepare media</h2>
       <p class="muted" style="margin-top:0;">For every photo and video, the gallery makes its thumbnails and reads what the file says about itself, when it was taken and where, <strong>once</strong>, and keeps the answers in the thumbnail cache. That happens by itself the first time a photo is shown, so this is for doing a whole gallery ahead of time, and for catching up on anything added since. It works through the files as fast as the server allows, with a live percentage; stop whenever you like, what is done stays done. Whether locations are <em>shown</em> is decided by the location switches, never by this.</p>
-      <p class="media-line"><strong class="media-count <?= $left === 0 ? 'ok-text' : '' ?>"><?= $left === 0 ? 'Everything is prepared: ' . number_format($r['total']) . ' file' . ($r['total'] === 1 ? '' : 's') . '.' : 'Thumbnails ready: ' . number_format($r['tilesReady']) . ' of ' . number_format($r['photos']) . ' photos. Read from the files: ' . number_format($r['total'] - $r['metaLeft']) . ' of ' . number_format($r['total']) . ' files.' ?></strong>
+      <p class="media-line"><strong class="media-count <?= $left === 0 ? 'ok-text' : '' ?>"><?= $left === 0 ? 'Everything is prepared: ' . number_format($r['total']) . ' file' . ($r['total'] === 1 ? '' : 's') . '.' : 'Thumbnails ready: ' . number_format($r['tilesReady']) . ' of ' . number_format($r['photos']) . ' photos. ' . ($r['videos'] > 0 && $r['videoWanted'] && $r['ffmpeg'] ? 'Videos ready: ' . number_format($r['videosReady']) . ' of ' . number_format($r['videos']) . '. ' : '') . 'Read from the files: ' . number_format($r['total'] - $r['metaLeft']) . ' of ' . number_format($r['total']) . ' files.' ?></strong>
         <button type="button" class="secondary media-go"<?= $left === 0 ? ' hidden' : '' ?>>Prepare the rest</button>
         <button type="button" class="secondary media-stop" hidden>Stop</button></p>
       <div class="media-bar" hidden><span></span></div>
+      <?php if ($r['videos'] > 0): ?>
+        <p class="hint media-videos"<?= $r['videoWanted'] && $r['ffmpeg'] ? ' data-live="1"' : '' ?>>Videos: <?php
+          if (!$r['videoWanted']) echo 'the gallery makes no pictures from videos (<em>Video thumbnails</em> and <em>Video previews</em> are off in Site settings).';
+          elseif (!$r['ffmpeg']) echo 'ffmpeg was not found on this server, so videos show the browser\'s own first frame and have no hover clip or scrub strip. Nothing to prepare for them.';
+          else echo number_format($r['posters']) . ' of ' . number_format($r['videos']) . ' have their poster frame, ' . number_format($r['clips']) . ' their hover clip and ' . number_format($r['strips']) . ' their scrub strip' . ($r['videoFailed'] > 0 ? '; <strong class="warn-text">' . number_format($r['videoFailed']) . ' could not be made lately</strong> (tried again after six hours, or press <em>Read everything again</em> with the thumbnails box ticked)' : '') . '. Prepare media makes the missing ones, one video at a time.'; ?></p>
+      <?php endif; ?>
+      <div class="media-attn-wrap"><p class="media-attn-title"><strong>Needs attention</strong></p><div class="media-attention" aria-live="polite"><?= render_media_attention_html($attn) ?></div></div>
       <details class="media-more">
         <summary>What the gallery knows about each folder</summary>
         <div class="media-report" aria-live="polite"><p class="muted">Loading&hellip;</p></div>
       </details>
-      <details class="media-tidy-box">
+      <details class="media-tidy-box"<?= $tidyAny ? '' : ' hidden' ?>>
         <summary>Tidy up saved locations</summary>
         <p class="hint">Older versions copied each photo's location from its file into the folder's saved data. Now the files are read once into the cache, and that is the only place those locations belong, so the copies can go (otherwise they go stale when a photo is replaced). This changes nothing else: <strong>captions, links, private flags, covers and each photo's Location switch are never touched</strong>. Every folder that changes is copied first to <code>.gallery-items.before-tidy-&hellip;.php</code>. Run <em>Prepare the rest</em> first: a file that hasn't been read can't be compared, so its location is left as it is. Pressing the first button only shows what would change.</p>
         <div class="media-tidy-modes">
@@ -9294,6 +9709,7 @@ function render_admin_thumbnails_panel($csrfToken) {
         <p><button type="button" class="secondary media-tidy-preview">Show what would change</button></p>
         <div class="media-tidy-out" aria-live="polite"></div>
       </details>
+      <div class="media-backups"><?= render_media_backups_html($backups) ?></div>
       <details class="media-again-box">
         <summary>Read everything again</summary>
         <p class="hint">Reads every file again, even the ones read before (in case files were edited or replaced without changing, or you want to be sure). It also reads photos that an earlier version of the gallery marked as "checked, nothing found": those marks can't be told from a location you removed on purpose, so they are normally left alone, and reading them again can make a location from the file show where there was none. A location you typed in or removed yourself is never changed.</p>
@@ -9344,7 +9760,7 @@ function render_admin_site_settings($csrfToken) {
                 <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Set "FFMPEG_PATH" in .gallery-config.php.' ?></div>
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'clientip'): ?>
-                <div class="help">Your address as the gallery sees it: <strong><?= $esc(client_ip()) ?></strong><?= client_country() !== '' ? ' (' . $esc(client_country()) . ')' : '' ?><?= TRUSTED_PROXY === 'direct' && !is_local_request() && (!empty($_SERVER['HTTP_CF_CONNECTING_IP']) || !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) ? '. This request came through a proxy: choose the matching setting so the real address is used.' : '' ?></div>
+                <div class="help">Your address as the gallery sees it: <strong><?= $esc(client_ip()) ?></strong><?= client_country() !== '' ? ' (' . $esc(client_country()) . ')' : '' ?><?= client_ip_proxy_hint() !== '' ? '. ' . client_ip_proxy_hint() : '' ?></div>
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
                 <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
@@ -9451,6 +9867,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $csrfToken = htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8');
     $folderLabel = $adminFolderPath ?? 'Root';
     $adminHidden = admin_any_hidden($dir, $files, $folderGroupKeys) ? admin_hidden_data($dir, $files) : null;
+    $adminEdited = admin_edited_overview($dir, $files, $adminHidden);   // (what was set by hand: the Edited tab)
     $GLOBALS['__lock_probe'] = lock_probe_targets($dir, $files);
     $GLOBALS['__admin_files'] = $files;
     $itemsHere = items_read($adminFolderReal);
@@ -9527,6 +9944,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-count { flex:1; font-size:0.85rem; }
   .sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:20px 0 4px; }
   .sl-grp-note { text-transform:none; letter-spacing:0; }
+  .sl-trimnote { margin-top:16px; }
+  #sl-trim-date { background:#0f0f10; color:var(--text); border:1px solid #34343a; border-radius:8px; padding:7px 10px; font:inherit; color-scheme:dark; }
   .sl-row { border-top:1px solid #26262a; }
   .sl-grp + .sl-row { border-top:0; }
   .sl-row > summary { display:flex; align-items:center; gap:12px; padding:12px 4px; cursor:pointer; list-style:none; border-radius:8px; transition:background .15s; }
@@ -9579,6 +9998,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-radio { display:flex; gap:10px; align-items:flex-start; cursor:pointer; font-size:0.9rem; }
   .sl-radio input { margin-top:4px; flex:none; }
   .sl-radio small { display:block; color:var(--muted); font-size:0.8rem; margin-top:2px; line-height:1.4; }
+  .sl-only { display:flex; gap:9px; align-items:flex-start; margin-top:10px; cursor:pointer; }
+  .sl-only[hidden] { display:none; }
+  .sl-only input { margin-top:3px; flex:none; }
+  .sl-only small { display:block; color:var(--muted); font-size:0.8rem; margin-top:2px; line-height:1.4; }
   .sl-radio input:disabled + span { opacity:.55; }
   .sl-chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:8px; }
   .sl-chips[hidden] { display:none; }
@@ -9674,6 +10097,63 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   @media (max-width:560px) { .sl-ev { grid-template-columns:1fr; gap:2px; } .sl-menu { width:260px; } }
   .sl-act .note, .sl-ippage .note, .sl-ipsview .note { font-size:0.8rem; color:var(--muted); line-height:1.45; margin:10px 0 4px; }
   .sl-danger-btn { background:#d83c3e; border-color:#d83c3e; color:#fff; }
+  /* The Edited tab: what was set by hand, one card per folder, each closed until pressed. */
+  .ed-sum { display:flex; flex-wrap:wrap; gap:6px 18px; margin:0 0 12px; font-size:0.92rem; }
+  .ed-sum b { font-variant-numeric:tabular-nums; }
+  .ed-chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 10px; }
+  .ed-chip { font:inherit; font-size:0.88rem; font-weight:600; min-height:34px; padding:5px 13px; border-radius:999px; background:#232327; border:1px solid #3a3a42; color:var(--text); cursor:pointer; display:inline-flex; gap:7px; align-items:center; }
+  .ed-chip em { font-style:normal; color:var(--muted); font-weight:500; font-variant-numeric:tabular-nums; }
+  .ed-chip[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .ed-chip[aria-pressed=true] em { color:#dfe2ff; }
+  .ed-tools { text-align:right; margin:0 0 8px; font-size:0.85rem; color:var(--muted); }
+  .ed-folder { background:var(--card); border:1px solid #2c2c31; border-radius:12px; margin:0 0 10px; overflow:hidden; }
+  .ed-folder[hidden], .ed-it[hidden], .ed-fset[hidden], .ed-strip[hidden], .ed-more[hidden], .ed-body[hidden] { display:none; }
+  .ed-head { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; width:100%; padding:12px 14px; background:none; border:0; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+  .ed-head:hover { background:rgba(255,255,255,0.04); }
+  .ed-head:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .ed-name { font-weight:700; flex:1 1 200px; min-width:0; overflow-wrap:anywhere; }
+  .ed-name small { display:block; font-weight:400; color:var(--muted); font-size:0.8rem; }
+  .ed-chev { margin-left:auto; color:var(--muted); font-size:1.3rem; line-height:1; transition:transform .15s; }
+  .ed-folder.open .ed-chev { transform:rotate(90deg); }
+  .ed-folder.open .ed-head { border-bottom:1px solid #2c2c31; }
+  .ed-fsum { display:flex; flex-wrap:wrap; gap:5px; flex:1 1 100%; order:3; }
+  .ed-fsum:empty { display:none; }
+  .ed .tag { display:inline-flex; align-items:center; padding:2px 9px; border-radius:999px; font-size:0.78rem; font-weight:700; background:#232327; border:1px solid #3a3a42; color:#cfcfd6; white-space:nowrap; }
+  .ed .tag.ed-priv, .ed .tag.ed-hid { background:rgba(237,66,69,0.14); border-color:rgba(237,66,69,0.4); color:#ff8587; }
+  .ed .tag.ed-pub { background:rgba(59,165,92,0.14); border-color:rgba(59,165,92,0.4); color:#5fcf8b; }
+  .ed .tag.ed-cap { background:rgba(88,101,242,0.16); border-color:rgba(88,101,242,0.45); color:#aab2ff; }
+  .ed .tag.ed-loc { background:rgba(240,178,50,0.13); border-color:rgba(240,178,50,0.4); color:#f0b232; }
+  .ed-fset-links { padding:9px 14px 0; }
+  .ed-fset { padding:9px 14px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:0.85rem; border-bottom:1px solid #2c2c31; }
+  .ed-btn { display:inline-flex; align-items:center; min-height:30px; padding:3px 11px; border-radius:8px; background:#232327; border:1px solid #3a3a42; color:var(--text); font-size:0.85rem; font-weight:600; text-decoration:none; }
+  .ed-btn:hover { background:#2c2c31; }
+  .ed-row { display:flex; gap:12px; padding:11px 14px; border-top:1px solid #26262a; align-items:flex-start; }
+  .ed-fset + .ed-row, .ed-fset-links + .ed-row { border-top:0; }
+  .ed-th { flex:none; width:64px; height:64px; border-radius:8px; overflow:hidden; background:#26262b; display:block; }
+  .ed-th img { width:100%; height:100%; object-fit:cover; display:block; }
+  .ed-rb { flex:1; min-width:0; }
+  .ed-rn { font-weight:700; font-size:0.92rem; overflow-wrap:anywhere; }
+  .ed-tags { display:flex; flex-wrap:wrap; gap:5px; margin:4px 0 2px; }
+  .ed-t { color:#cfcfd6; font-size:0.88rem; overflow-wrap:anywhere; }
+  .ed-strip { padding:11px 14px; border-top:1px solid #26262a; }
+  .ed-strip-h { margin:0 0 8px; font-size:0.85rem; color:var(--muted); font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .ed-sth { display:flex; flex-wrap:wrap; gap:5px; }
+  .ed-sm { position:relative; width:46px; height:46px; border-radius:6px; overflow:hidden; display:block; background:#26262b; }
+  .ed-sm img { width:100%; height:100%; object-fit:cover; display:block; }
+  .ed-sm i { position:absolute; right:2px; bottom:2px; width:16px; height:16px; border-radius:50%; background:rgba(0,0,0,0.65); display:grid; place-items:center; color:#fff; }
+  .ed-sm i .ico { width:10px; height:10px; }
+  .ed-more { width:46px; height:46px; border-radius:6px; background:#232327; border:1px dashed #3a3a42; color:#aab2ff; font:inherit; font-weight:700; font-size:0.78rem; cursor:pointer; }
+  .ed-more-note { margin:6px 14px 10px; font-size:0.82rem; }
+  .ed-priv { margin-top:18px; }
+  .ed-priv > summary { cursor:pointer; padding:12px 14px; background:var(--card); border:1px solid #2c2c31; border-radius:12px; font-weight:700; }
+  .ed-priv[open] > summary { border-bottom-left-radius:0; border-bottom-right-radius:0; }
+  .ed-priv > summary .muted { font-weight:400; margin-left:6px; }
+  .side-hidden.edited { color:var(--text); background:rgba(255,255,255,0.04); border-color:#2c2c31; }
+  .side-hidden.edited .count { background:rgba(255,255,255,0.09); color:var(--muted); }
+  .side-hidden.edited:hover { background:rgba(255,255,255,0.08); }
+  .side-hidden.edited.active { color:#fff; background:rgba(88,101,242,0.3); border-color:var(--accent); }
+  .side-hidden.edited.active .count { background:rgba(88,101,242,0.7); color:#fff; }
+  @media (max-width: 520px) { .ed-row { flex-wrap:wrap; } .ed-row > .ed-btn { margin-left:76px; } .ed-th { width:58px; height:58px; } }
   /* The Private tab: what is private, one line per folder, each opening to its photos. */
   .pv-stats { display:flex; gap:28px; flex-wrap:wrap; margin:4px 0 2px; }
   .pv-stat b { display:block; font-size:1.5rem; line-height:1.2; }
@@ -9851,6 +10331,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .media-tidy-folder { margin:8px 0; padding:6px 10px; border:1px solid #2c2c31; border-radius:8px; }
   .media-tidy-folder > summary { cursor:pointer; }
   .media-tidy-folder ul { margin:4px 0 8px 18px; padding:0; font-size:0.85rem; }
+  .media-attn-wrap { margin:10px 0; }
+  .media-attn-title { margin:0 0 4px; }
+  .media-attn { margin:6px 0; padding:6px 10px; border:1px solid #2c2c31; border-radius:8px; }
+  .media-attn-act { border-color:#6a5522; }
+  .media-attn > summary { cursor:pointer; }
+  .media-attn-list { margin:4px 0 8px 18px; padding:0; font-size:0.85rem; overflow-wrap:anywhere; }
+  .media-backups-line { margin:10px 0; }
   @media (max-width:640px) {
     .media-table, .media-table tbody, .media-table tr, .media-table td { display:block; width:auto; min-width:0; }
     .media-table thead { display:none; }
@@ -10080,8 +10567,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </header>
 <div class="admin-layout">
 <aside class="admin-side">
-  <?php if ($adminHidden): ?>
-    <a href="#hidden" data-tab="hidden" class="side-hidden">Private <span class="count"><?= count($adminHidden['folders']) + count($adminHidden['items']) ?></span></a>
+  <?php if ($adminHidden || $adminEdited['total'] > 0): ?>
+    <a href="#hidden" data-tab="hidden" class="side-hidden edited">Edited <span class="count"><?= number_format($adminEdited['total']) ?></span></a>
   <?php endif; ?>
   <?php if (ENABLE_SHARE_LINKS): $slNews = 0; $slSeenAt = (int) (links_read()['seenAt'] ?? 0); foreach (links_read()['links'] as $slL) if (is_array($slL) && isset($slL['id']) && link_news_count(link_activity($slL['id'])[0], $slSeenAt) > 0) $slNews++; ?>
     <a href="#links" data-tab="links" class="side-link">Share links<?= $slNews > 0 ? ' <span class="count">' . $slNews . '</span>' : '' ?></a>
@@ -10098,7 +10585,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <?php endif; ?>
 
   <div id="server-probe" hidden data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>"></div>
-<?php if ($adminHidden): ?>
+<?php if ($adminHidden || $adminEdited['total'] > 0): ?>
   <div class="tab-panel" data-tab="hidden">
 <?php render_admin_hidden_panel($adminHidden, $csrfToken); ?>
   </div>
@@ -10336,6 +10823,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (!panel || !panel.dataset.csrf) return;
       const go = panel.querySelector('.media-go'), stop = panel.querySelector('.media-stop'), count = panel.querySelector('.media-count'), bar = panel.querySelector('.media-bar'), fill = bar.firstElementChild;
       const again = panel.querySelector('.media-again'), remake = panel.querySelector('.media-remake'), more = panel.querySelector('.media-more'), reportBox = panel.querySelector('.media-report');
+      const attnBox = panel.querySelector('.media-attention'), backupsBox = panel.querySelector('.media-backups');
       // Three requests work side by side, each on every third file, and each asks again the moment it is answered; a request
       // lasts about a second and a half, so the percentage moves several times a second. The percentage is of the files that
       // needed something when the page opened (or when the button was pressed): every file for "Read everything again".
@@ -10362,10 +10850,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
           .then(function (r) { return r.json(); })
           .then(function (j) {
+            if (j.ok && attnBox && typeof j.attentionHtml === 'string') attnBox.innerHTML = j.attentionHtml;
+            if (j.ok && backupsBox && typeof j.backupsHtml === 'string') backupsBox.innerHTML = j.backupsHtml;
             reportBox.textContent = '';
             if (!j.ok || !j.rows.length) { reportBox.appendChild(text('p', 'muted', j.ok ? 'There are no photos or videos yet.' : (j.text || 'The list could not be loaded.'))); return; }
             const wrap = text('div', 'media-table-wrap', ''), table = document.createElement('table'), thead = document.createElement('thead'), head = document.createElement('tr'), tbody = document.createElement('tbody');
-            const heads = ['Folder', 'Files', 'Thumbnails', 'Locations in the files', 'Capture dates', "Saved in the folder's data"];
+            const heads = ['Folder', 'Files', 'Thumbnails', 'Videos', 'Locations in the files', 'Capture dates', "Saved in the folder's data"];
             table.className = 'media-table';
             heads.forEach(function (h) { head.appendChild(text('th', '', h)); });
             thead.appendChild(head); table.appendChild(thead); table.appendChild(tbody);
@@ -10383,6 +10873,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
               tr.appendChild(text('td', 'media-folder', r.folder === '' ? '(top level)' : r.folder));
               tr.appendChild(text('td', '', fmt(r.files)));
               tr.appendChild(text('td', r.photos && r.tiles < r.photos ? 'note-text' : '', r.photos ? r.tiles + ' of ' + many(r.photos, 'photo') : '—'));
+              tr.appendChild(text('td', r.videoFailed ? 'warn-text' : (r.videos && (r.posters < r.videos || r.clips < r.videos || r.strips < r.videos) ? 'note-text' : ''), r.videos ? many(r.videos, 'video') + ': ' + r.posters + ' posters, ' + r.clips + ' clips, ' + r.strips + ' strips' + (r.videoFailed ? ' (' + r.videoFailed + ' failed lately)' : '') : '—'));
               const lc = text('td', r.unreadable ? 'warn-text' : '', loc.join(', ') || (r.unread === 0 ? '—' : ''));
               if (r.unreadable) { lc.appendChild(document.createTextNode((loc.length ? ', ' : '') + r.unreadable + " couldn't be read: " + r.bad.slice(0, 8).join(', ') + (r.bad.length > 8 ? ' and ' + (r.bad.length - 8) + ' more' : ''))); }
               tr.appendChild(lc);
@@ -10391,6 +10882,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
               [].forEach.call(tr.children, function (td, i) { td.setAttribute('data-label', heads[i]); });
               tbody.appendChild(tr);
             });
+            const vl = panel.querySelector('.media-videos[data-live]');
+            if (vl) {
+              const sum = j.rows.reduce(function (t, r) { t.v += r.videos; t.p += r.posters; t.c += r.clips; t.s += r.strips; t.f += r.videoFailed; return t; }, { v: 0, p: 0, c: 0, s: 0, f: 0 });
+              vl.textContent = 'Videos: ' + sum.p + ' of ' + sum.v + ' have their poster frame, ' + sum.c + ' their hover clip and ' + sum.s + ' their scrub strip' + (sum.f ? '; ' + sum.f + ' could not be made lately (tried again after six hours, or press Read everything again with the thumbnails box ticked)' : '') + '. Prepare media makes the missing ones, one video at a time.';
+            }
             wrap.appendChild(table); reportBox.appendChild(wrap);
             reportBox.appendChild(text('p', 'hint', 'Saved in the folder\'s data are locations kept next to the captions: copies an older version made from the files, or ones you set. "Tidy up saved locations" (below) compares them with the files.'));
             if (legacy) reportBox.appendChild(text('p', 'hint', 'An old mark means an earlier version of the gallery looked at that photo and found no location. They are left alone; "Tidy up" and "Read everything again" deal with them.'));
@@ -10449,7 +10945,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           go2.addEventListener('click', function () {
             if (!confirm('Tidy up ' + many(t.folders, 'folder') + '?\n\nEach folder is copied first (.gallery-items.before-tidy-….php). Captions, links, private flags and every other setting stay exactly as they are.')) return;
             go2.disabled = true; tidyBtn.disabled = true;
-            tidyAsk(true).then(function (r) { tidyBtn.disabled = false; tidyShow(r); if (more.open) loadReport(); }).catch(function () { tidyBtn.disabled = false; go2.disabled = false; tidyOut.appendChild(text('p', 'warn-text', 'The server did not answer.')); });
+            tidyAsk(true).then(function (r) { tidyBtn.disabled = false; tidyShow(r); loadReport(); }).catch(function () { tidyBtn.disabled = false; go2.disabled = false; tidyOut.appendChild(text('p', 'warn-text', 'The server did not answer.')); });
           });
           tidyOut.appendChild(go2);
         }
@@ -10457,6 +10953,19 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       tidyBtn.addEventListener('click', function () {
         tidyBtn.disabled = true; tidyOut.textContent = ''; tidyOut.appendChild(text('p', 'muted', 'Comparing…'));
         tidyAsk(false).then(function (j) { tidyBtn.disabled = false; tidyShow(j); }).catch(function () { tidyBtn.disabled = false; tidyOut.textContent = ''; tidyOut.appendChild(text('p', 'warn-text', 'The server did not answer.')); });
+      });
+      // The Tidy up backups: delete them all, after a yes.
+      panel.addEventListener('click', function (e) {
+        const del = e.target.closest ? e.target.closest('.media-backups-delete') : null;
+        if (!del) return;
+        if (!confirm('Delete the backups Tidy up made?\n\nThey are copies of the folders\' data (captions, links, private flags) from before the tidy. Do it once you have looked through the gallery and everything is as it should be.')) return;
+        del.disabled = true;
+        const body = new URLSearchParams();
+        body.set('csrf_token', panel.dataset.csrf); body.set('action', 'media_backups_delete');
+        fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); })
+          .then(function (j) { backupsBox.textContent = ''; backupsBox.appendChild(text('p', 'hint ' + (j.ok ? 'ok-text' : 'warn-text'), j.text || 'Done.')); })
+          .catch(function () { del.disabled = false; const o = backupsBox.querySelector('.media-backups-out'); if (o) o.textContent = 'The server did not answer.'; });
       });
       const finish = function () {
         if (active > 0) return;
@@ -10475,7 +10984,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         count.textContent = notes.length ? 'Finished. ' + notes.join('; ') + '.' : (all ? 'Everything was read again: ' : 'Everything is prepared: ') + many(total, 'file') + '.';
         count.className = 'media-count ' + (notes.length ? 'note-text' : 'ok-text');
         go.hidden = true;
-        if (more.open) loadReport();
+        loadReport();
       };
       const work = function (k, mine) {
         active++;
@@ -10540,7 +11049,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', locked);
       if (outside) mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
       else mirror('lock', locked ? 'ok-text' : state === 'open' ? 'warn-text' : '', locked ? 'Yes: a photo and a cached thumbnail asked for by their plain addresses were refused, so private items can only be reached through the gallery.'
-        : state === 'open' ? 'No: ' + detail + ' was handed out to a plain request, so a private photo can be fetched by its address. Use the rules on the Private tab.' : 'Couldn\'t tell (the request failed or was redirected).');
+        : state === 'open' ? 'No: ' + detail + ' was handed out to a plain request, so a private photo can be fetched by its address. Use the rules on the Edited tab.' : 'Couldn\'t tell (the request failed or was redirected).');
       document.querySelectorAll('[data-lock-detail]').forEach(function (el) {
         el.className = 'lock-result warn-text';
         el.textContent = locked ? '' : state === 'open' ? 'The server handed out ' + detail + ' to a plain request.' : 'Couldn\'t check from this browser just now.';
@@ -10596,7 +11105,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           if (works === null) return mirror('accel', '', 'Couldn\'t tell (the request failed).');
           mirror('accel', current ? (works ? 'ok-text' : 'warn-text') : (works ? 'note-text' : ''), current
             ? (works ? 'Set to ' + current + ' and working: nginx sends the photos and videos itself.' : 'Set to ' + current + ' but nginx did not serve a test photo through it; photos may fail to load.')
-            : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (see the Private tab).'));
+            : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (see the Edited tab).'));
           accel.textContent = '';
           const say = function (cls, text) { accel.className = 'help accel-status ' + cls; accel.appendChild(document.createTextNode(text)); };
           if (current) {
@@ -10872,6 +11381,54 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       det.addEventListener('sf-changed', soon);
     });
   });
+  // The Edited tab: filter chips, one card per folder that opens and closes, and a header that says what is inside (as filtered).
+  (function () {
+    var root = document.getElementById('ed-root'); if (!root) return;
+    var chips = [].slice.call(root.querySelectorAll('.ed-chip')), cards = [].slice.call(root.querySelectorAll('.ed-folder')), state = 'all', expanded = {};
+    var LIMIT = 12;
+    function match(el) { var k = (el.getAttribute('data-kinds') || '').split(' '); return state === 'all' || k.indexOf(state) >= 0; }
+    function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+    function tag(cls, text) { var s = document.createElement('span'); s.className = 'tag ' + cls; s.textContent = text; return s; }
+    function apply() {
+      cards.forEach(function (card) {
+        var counts = { private: 0, caption: 0, link: 0, location: 0 }, shown = 0, thumbs = [];
+        [].forEach.call(card.querySelectorAll('.ed-it'), function (el) {
+          var ok = match(el);
+          if (el.classList.contains('ed-sm')) { if (ok) thumbs.push(el); else el.hidden = true; }
+          else el.hidden = !ok;
+          if (ok) { shown++; (el.getAttribute('data-kinds') || '').split(' ').forEach(function (k) { if (counts[k] !== undefined) counts[k]++; }); }
+        });
+        thumbs.forEach(function (el, i) { el.hidden = !(expanded[card.getAttribute('data-path')] || i < LIMIT); });
+        var more = card.querySelector('.ed-more'), rest = Math.max(0, thumbs.length - LIMIT);
+        if (more) { more.hidden = expanded[card.getAttribute('data-path')] || rest === 0; more.textContent = '+' + rest; }
+        var strip = card.querySelector('.ed-strip'); if (strip) strip.hidden = thumbs.length === 0;
+        var fs = card.querySelector('.ed-fset'), fsOk = !!fs && (state === 'all' || state === 'folder');
+        if (fs) { fs.hidden = !fsOk; var fl = card.querySelector('.ed-fset-links'); }
+        var sum = card.querySelector('.ed-fsum'); sum.textContent = '';
+        if (counts.private) sum.appendChild(tag('ed-priv', counts.private + ' private'));
+        if (counts.caption) sum.appendChild(tag('ed-cap', plural(counts.caption, 'caption', 'captions')));
+        if (counts.link) sum.appendChild(tag('ed-cap', plural(counts.link, 'link', 'links')));
+        if (counts.location) sum.appendChild(tag('ed-loc', plural(counts.location, 'location', 'locations')));
+        if (fsOk) sum.appendChild(tag('', plural(+fs.getAttribute('data-n'), 'folder setting', 'folder settings')));
+        card.hidden = shown === 0 && !fsOk;
+      });
+    }
+    function setOpen(card, open) {
+      var head = card.querySelector('.ed-head'), body = card.querySelector('.ed-body');
+      card.classList.toggle('open', open); head.setAttribute('aria-expanded', open ? 'true' : 'false'); body.hidden = !open;
+    }
+    root.addEventListener('click', function (e) {
+      var chip = e.target.closest ? e.target.closest('.ed-chip') : null;
+      if (chip) { state = chip.getAttribute('data-k'); chips.forEach(function (c) { c.setAttribute('aria-pressed', c === chip ? 'true' : 'false'); }); apply(); return; }
+      var head = e.target.closest ? e.target.closest('.ed-head') : null;
+      if (head) { var card = head.parentNode; setOpen(card, !card.classList.contains('open')); return; }
+      var all = e.target.closest ? e.target.closest('[data-ed-expand]') : null;
+      if (all) { var want = all.getAttribute('data-ed-expand') === 'all'; cards.forEach(function (c) { setOpen(c, want); }); return; }
+      var more = e.target.closest ? e.target.closest('.ed-more') : null;
+      if (more) { expanded[more.closest('.ed-folder').getAttribute('data-path')] = true; apply(); }
+    });
+    apply();
+  })();
   // The Private tab: a lock on a photo's thumbnail changes it on the spot (with an Undo), "Show all" opens a long row, and
   // "Make public…" asks first, with the counts, then opens the folder. The list is fetched again after every change so its numbers
   // are the server's, not guessed here; the rows that were open stay open.
@@ -10984,6 +11541,36 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function failed(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', true); }
     function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+    // ---- Trim the log: pick a link (or all) and how old; it says what would go, then does it on a yes
+    function openTrim() {
+      var opts = '<option value="all">All links</option>';
+      [].forEach.call(box.querySelectorAll('details.sl-row'), function (d) { var l = {}; try { l = JSON.parse(d.getAttribute('data-link')); } catch (x) {} opts += '<option value="' + esc(d.getAttribute('data-id')) + '">' + esc(l.label || d.getAttribute('data-id')) + '</option>'; });
+      var asked = ask('Trim the log', '<div class="sl-f"><span class="sl-k">Which link</span><select id="sl-trim-link">' + opts + '</select></div>'
+        + '<div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="sl-trim-age"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="sl-trim-date" hidden></div>'
+        + '<p class="hint" id="sl-trim-out" role="status">Counting&hellip;</p>'
+        + '<p class="hint">Opens, views and the number of visitors stay. To keep the lines themselves, download them first: <a id="sl-trim-dl-events" href="#">the timeline</a> &middot; <a id="sl-trim-dl-items" href="#">what they looked at</a> &middot; <a id="sl-trim-dl-visitors" href="#">visitors</a> (CSV, with IP addresses).</p>', 'Trim', true);
+      var m = modalEl(), sel = m.querySelector('#sl-trim-link'), age = m.querySelector('#sl-trim-age'), date = m.querySelector('#sl-trim-date'), out = m.querySelector('#sl-trim-out'), okBtn = m.querySelector('[data-sl-modal=ok]'), stamp = 0;
+      function params(apply) {
+        var f = { action: 'link_trim', id: sel.value, apply: apply ? '1' : '0' };
+        if (age.value === 'pick') f.before = date.value ? epoch(date.value + 'T00:00') : 0; else f.days = age.value;
+        return f;
+      }
+      function check() {
+        var mine = ++stamp, parts = ['events', 'items', 'visitors'];
+        parts.forEach(function (k) { m.querySelector('#sl-trim-dl-' + k).href = '?admin&linkexport=' + encodeURIComponent(sel.value) + '&what=' + k; });
+        date.hidden = age.value !== 'pick'; okBtn.disabled = true;
+        if (age.value === 'pick' && !date.value) { out.textContent = 'Pick a date: what is older than it goes.'; return; }
+        out.textContent = 'Counting…';
+        post(params(false)).then(function (j) { if (mine !== stamp) return; out.textContent = j.text || ''; okBtn.disabled = !j.ok || !!j.nothing; }).catch(function (e) { if (mine === stamp) out.textContent = e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t count: check your connection.'; });
+      }
+      sel.addEventListener('change', check); age.addEventListener('change', check); date.addEventListener('change', check);
+      check();
+      asked.then(function (yes) {
+        stamp++;
+        if (!yes) return;
+        post(params(true)).then(function (j) { if (!j.ok) { say(j.text || 'Not trimmed', true); return; } return refresh().then(function () { say(j.text || 'Trimmed.'); }); }).catch(failed);
+      });
+    }
     function times() {
       [].forEach.call(box.querySelectorAll('time.sl-time[data-ts]'), function (t) {
         var d = new Date(+t.getAttribute('data-ts') * 1000); if (isNaN(d)) return;
@@ -11089,7 +11676,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var modal = modalEl();
         document.getElementById('sl-modal-title').textContent = title;
         modal.querySelector('.sl-modal-body').innerHTML = bodyHtml;
-        var ok = modal.querySelector('[data-sl-modal=ok]'); ok.textContent = okText; ok.className = danger ? 'sl-danger-btn' : '';
+        var ok = modal.querySelector('[data-sl-modal=ok]'); ok.textContent = okText; ok.className = danger ? 'sl-danger-btn' : ''; ok.disabled = false;
         asking = function (yes) { asking = null; modal.hidden = true; resolve(yes); };
         modal.hidden = false; modal.querySelector('[data-sl-modal=cancel]').focus();
       });
@@ -11101,7 +11688,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     box.addEventListener('keydown', function (e) { if (e.key === 'Escape' && asking) { e.preventDefault(); asking(false); } });
     // ---- the form
     var DEFAULTS = { label: '', note: '', titleMode: 'gallery', titleText: '', maxOpens: 10, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default',
-      scopeType: 'all', scopeFolders: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
+      scopeType: 'all', only: false, scopeFolders: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
     function localValue(ts) {
       var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
       return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
@@ -11132,6 +11719,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         }).join('') + '<button type="button" class="sl-padd" data-chip-add="photos">+ Add photos</button></div>';
       }
       else sc.hidden = true;
+      form.querySelector('[data-only-row]').hidden = scope === 'all';
       [['downloads', dl], ['zip', zp]].forEach(function (pair) {
         var c = form.querySelector('[data-chips=' + pair[0] + ']'); c.hidden = pair[1] !== 'some'; if (pair[1] === 'some') c.innerHTML = chipsHtml(form, pair[0]);
         var allLabel = form.querySelector('input[name=' + pair[0] + '][value=all] + span'); if (allLabel) allLabel.textContent = scope === 'all' ? 'Everywhere' : 'In all the folders it covers';
@@ -11156,7 +11744,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       form.querySelector('.sl-save').textContent = editing ? 'Save' : 'Create link';
       form.querySelector('[name=label]').value = v.label; form.querySelector('[name=note]').value = v.note; form.querySelector('[name=title_text]').value = v.titleText;
       radio(form, 'title_mode', v.titleMode); radio(form, 'downloads', v.downloads); radio(form, 'zip', v.zip); radio(form, 'locations', v.locations); radio(form, 'heads_up', v.headsUp);
-      radio(form, 'scope_type', v.scopeType);
+      radio(form, 'scope_type', v.scopeType); form.querySelector('[name=only]').checked = !!v.only;
       radio(form, 'starts_pick', v.startsAt > 0 ? 'pick' : 'now'); if (v.startsAt > 0) form.querySelector('[name=starts_at_local]').value = localValue(v.startsAt);
       var presets = { 0: '0', 1: '1', 5: '5', 10: '10' };
       if (presets[v.maxOpens] !== undefined) radio(form, 'opens_pick', presets[v.maxOpens]); else { radio(form, 'opens_pick', 'n'); form.querySelector('[name=opens_other]').value = v.maxOpens; }
@@ -11172,6 +11760,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         label: form.querySelector('[name=label]').value, note: form.querySelector('[name=note]').value,
         title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value,
         scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' ? st.scope : []), scope_photos: JSON.stringify(scope === 'photos' ? st.photos : []),
+        only: scope !== 'all' && form.querySelector('[name=only]').checked ? '1' : '0',
         open_in: form.querySelector('[name=open_in]').value,
         downloads: radioValue(form, 'downloads'), downloads_folders: JSON.stringify(st.downloads), zip: radioValue(form, 'zip'), zip_folders: JSON.stringify(st.zip),
         locations: radioValue(form, 'locations'), heads_up: radioValue(form, 'heads_up'),
@@ -11182,6 +11771,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     box.addEventListener('change', function (e) {
       var form = e.target.closest ? e.target.closest('#sl-form') : null; if (!form) return;
+      if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'photos';   // (photos: on to start with; folders: off)
       if (e.target.name === 'scope_type' && e.target.value === 'folders') {
         // folders already chosen for downloads and ZIPs that the new scope doesn't cover are dropped
         ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope) || !st.scope.length; }); });
@@ -11262,6 +11852,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (row) { try { link = JSON.parse(row.getAttribute('data-link')); } catch (x2) {} }
       if (b.closest('summary')) e.preventDefault();   // a button in a row's title line doesn't also fold the row
       if (what === 'new') { openForm(null); return; }
+      if (what === 'trim') { openTrim(); return; }
       if (what === 'cancel') { box.querySelector('#sl-form').hidden = true; return; }
       if (!row) return;
       if (what === 'copy') {
@@ -14023,7 +14614,7 @@ function render_about_page() {
   <ul>
     <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
     <li><strong>Edit right on the gallery:</strong> a pencil on every photo opens its caption, link, place, private and cover switches beside or under the photo, saved as you type; <em>Select</em> makes many photos private or public, or places them next to each other by drag and drop</li>
-    <li><strong>Go through a private folder before you open it:</strong> hide a folder, mark the photos that must stay private on their own, then make the folder public knowing what visitors will see; the main page marks private folders for you (a red pill, a lock in the folder buttons, and a count you can press to see those photos first), and the Private tab lists what is private folder by folder; folder settings save as you change them</li>
+    <li><strong>Go through a private folder before you open it:</strong> hide a folder, mark the photos that must stay private on their own, then make the folder public knowing what visitors will see; the main page marks private folders for you (a red pill, a lock in the folder buttons, and a count you can press to see those photos first), and the Edited tab lists everything you set by hand (private flags, captions, links, places, folder settings) with the private folders folder by folder underneath; folder settings save as you change them</li>
     <li>An admin for folder names and dates, notes, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
     <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>

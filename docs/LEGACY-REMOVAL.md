@@ -22,6 +22,9 @@ Older versions copied each photo's location from its file into the folder data a
 ## Old view-count stores
 - [ ] `stats_import_legacy()`: folds the plain-JSON store (`.gallery-stats.json`) and the old SQLite table `photo_views` (readable filenames) into the current `photo_views_h`, then deletes the old ones. Also its call in the stats connection code and its tests.
 
+## Old addresses
+- [ ] `?admin&hidden=1` (redirects to `?admin#hidden`) and the tab key `hidden`, the name the Edited tab keeps from when it was the Hidden and then the Private tab. Links and bookmarks to `#hidden` still work; renaming the key to `edited` would break them.
+
 ## Not legacy (keep)
 - The Health panel's "Upgraded from X on Y" record: a feature, not a compatibility shim.
 - Orphan cleanup for deleted or renamed photos: ongoing housekeeping.
