@@ -493,6 +493,13 @@ function link_state_for_tests($l, $now = null) {
     return 'active';
 }
 
+/** The visitors in a link's log file, for the test script. */
+function link_log_visitors_for_tests($file) {
+    $raw = (string) @file_get_contents($file);
+    $d = json_decode(strncmp($raw, '<?php', 5) === 0 ? substr($raw, strpos($raw, "\n") + 1) : $raw, true);
+    return is_array($d) ? ($d['visitors'] ?? []) : [];
+}
+
 function new_fixture_dir($label) {
     global $cleanupDirs;
     $dir = sys_get_temp_dir() . '/gallery-tests-' . $label . '-' . bin2hex(random_bytes(4));
@@ -5143,6 +5150,135 @@ check('[share links] the public and the owner never see the heads-up line', !str
 
 // Someone using a link is not counted in the gallery's view counts, and the owner's pages show the private tab unchanged.
 check('[share links] the owner\'s own view of the gallery still shows everything, including folders the links no longer reach', str_contains(http_get("$baseS2/", ["Cookie: $s2AdminCookie"])[1], 'Other'));
+
+
+echo "== share links: the log (opens, what was seen, opened, played and saved, blocked tries), kept until the link is deleted ==\n";
+
+$fxL = new_fixture_dir('sllog');
+mkdir("$fxL/Rome", 0775); mkdir("$fxL/Pisa", 0775);
+make_jpeg("$fxL/pub.jpg", 60, 50, 200, 60, 60); make_jpeg("$fxL/Rome/r1.jpg", 61, 50, 100, 60, 60); make_jpeg("$fxL/Rome/r2.jpg", 62, 50, 110, 60, 60); make_jpeg("$fxL/Pisa/p1.jpg", 63, 50, 150, 60, 60);
+make_minimal_mp4("$fxL/Rome/clip.mp4", 5);
+foreach (['Rome', 'Pisa'] as $d) write_data_file("$fxL/$d/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+file_put_contents("$fxL/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'sllog-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true]));
+copy($indexSrc, "$fxL/index.php");
+$portL = find_free_port(); start_server($fxL, $portL); $baseL = "http://127.0.0.1:$portL";
+[, , $lgLogin] = http_post("$baseL/?admin", ['access_code' => 'sllog-admin-1'], [], false);
+$lgAdminCookie = extract_cookie_header($lgLogin);
+$lgCsrf = extract_csrf_token(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1]);
+$lgAdmin = function (array $fields) use ($baseL, $lgAdminCookie, $lgCsrf) {
+    [, $body] = http_post("$baseL/?admin", $fields + ['csrf_token' => $lgCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $lgAdminCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$lgLinks = fn () => read_data_file("$fxL/.gallery-links.php");
+$lgUa = 'User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+$lgMade = $lgAdmin(['action' => 'link_create', 'label' => '=cmd|calc', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'all', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'all', 'zip' => 'all']);
+$lgId = $lgMade['id'] ?? ''; $lgTok = $lgLinks()['links'][$lgId]['token'] ?? '';
+[, , $lgGoH] = http_post("$baseL/?link=$lgTok", ['go' => '1'], [$lgUa], false); $lgCk = extract_cookie_header($lgGoH);
+$lgH = ["Cookie: $lgCk", $lgUa];
+$lgLog = fn () => read_data_file("$fxL/.gallery-linklog-$lgId.php");
+$lgItems = fn () => read_data_file("$fxL/.gallery-linklog-$lgId-items.php");
+$lgV = array_values($lgLog()['visitors'] ?? [])[0] ?? [];
+check('[share log] pressing the button starts the link\'s log: one visitor (address and browser, named plainly), one open, in a data file that answers 404 to a direct request', count($lgLog()['visitors'] ?? []) === 1 && ($lgV['ip'] ?? '') === '127.0.0.1' && ($lgV['ua'] ?? '') === 'Safari on iPhone' && ($lgV['opens'] ?? 0) === 1 && http_get("$baseL/.gallery-linklog-$lgId.php")[0] === 404 && ($lgLog()['events'][0]['k'] ?? '') === 'link');
+
+$lgBeacon = function (array $events, $headers = null) use ($baseL, $lgH) {
+    $opts = ['http' => ['method' => 'POST', 'header' => implode("\r\n", array_merge(['Content-Type: application/json'], $headers ?? $lgH)), 'content' => json_encode(['e' => $events]), 'ignore_errors' => true, 'timeout' => 5]];
+    $body = @file_get_contents("$baseL/?linklog", false, stream_context_create($opts)); $st = 0;
+    foreach ($http_response_header ?? [] as $h) if (preg_match('#^HTTP/\S+\s+(\d+)#', $h, $m)) $st = (int) $m[1];
+    return [$st, $body];
+};
+[$lgBs] = $lgBeacon([['s', 'Rome/r1.jpg'], ['s', 'Rome/r2.jpg'], ['s', 'pub.jpg'], ['f', 'Rome'], ['o', 'Rome/r1.jpg'], ['o', 'Rome/r1.jpg'], ['p', 'Rome/clip.mp4'], ['s', 'Pisa/nope.jpg'], ['s', '../etc/passwd'], ['x', 'pub.jpg'], ['f', 'Nope']]);
+$lgT = $lgItems()['t'] ?? [];
+$lgVid = array_key_first($lgLog()['visitors']);
+$lgTally = fn ($rel) => $lgT["$lgVid|$rel"] ?? null;
+check('[share log] the page\'s report is taken: seen (first time kept), opened twice, played once, and the folder page; answers 204', $lgBs === 204 && (($lgTally('Rome/r1.jpg')['sf'] ?? null) !== null) && ($lgTally('Rome/r1.jpg')['on'] ?? 0) === 2 && (($lgTally('Rome/r2.jpg')['sf'] ?? null) !== null) && (($lgTally('pub.jpg')['sf'] ?? null) !== null) && ($lgTally('Rome/clip.mp4')['pn'] ?? 0) === 1 && (($lgItems()['f']["$lgVid|Rome"][0] ?? 0) === 1));
+check('[share log] ...and what doesn\'t exist, what a link can\'t reach (Pisa isn\'t covered... here everything is, so a missing file), a path trying to climb out, an unknown kind and a missing folder are all ignored', ($lgTally('Pisa/nope.jpg') === null) && ($lgTally('../etc/passwd') === null) && !isset($lgItems()['f']["$lgVid|Nope"]) && count($lgT) === 4);
+$lgEvents = $lgLog()['events'];
+check('[share log] the timeline has the opening, one line for the scroll (3 pictures first seen), the folder, two openings, and the play', count(array_filter($lgEvents, fn ($e) => $e['k'] === 'scroll')) >= 1 && count(array_filter($lgEvents, fn ($e) => $e['k'] === 'opened')) === 2 && count(array_filter($lgEvents, fn ($e) => $e['k'] === 'played')) === 1 && count(array_filter($lgEvents, fn ($e) => $e['k'] === 'folder')) === 1);
+check('[share log] the visitor\'s views are counted (two openings and one folder page)', (array_values($lgLog()['visitors'])[0]['views'] ?? 0) === 3);
+check('[share log] a report from someone who is not using a link (the public, the owner) is dropped, and nothing is written', $lgBeacon([['s', 'pub.jpg']], [])[0] === 204 && $lgBeacon([['s', 'pub.jpg']], ["Cookie: $lgAdminCookie"])[0] === 204 && count($lgItems()['t']) === 4 && ($lgTally('pub.jpg')['sl'] ?? 0) === ($lgItems()['t']["$lgVid|pub.jpg"]['sl'] ?? -1));
+
+// What the server notes itself: a private picture it sends, an original, a ZIP.
+http_get("$baseL/?img=" . rawurlencode('Pisa/p1.jpg') . '&size=thumb', $lgH);   // (not covered... this link covers everything, so it is sent)
+http_get("$baseL/?img=" . rawurlencode('Rome/r2.jpg') . '&size=tile', $lgH);
+http_get("$baseL/?img=" . rawurlencode('pub.jpg') . '&size=tile', $lgH);        // public: not noted by the server (the browser reports it)
+http_get("$baseL/?original=" . rawurlencode('Rome/r2.jpg'), $lgH);
+$lgQueue = (string) @file_get_contents("$fxL/.gallery-linklog-$lgId-q.php");
+check('[share log] the server appends a note for each private picture it sends a link holder and for each original it hands out, in a guarded queue file (a cheap write); a public picture is left to the browser', substr_count($lgQueue, '"s"') === 2 && substr_count($lgQueue, '"d"') === 1 && !str_contains($lgQueue, 'pub.jpg') && str_starts_with($lgQueue, '<?php') && http_get("$baseL/.gallery-linklog-$lgId-q.php")[0] === 404);
+[$lgZipSt, $lgZipBody] = http_get("$baseL/?archive&folder=Rome", $lgH);
+$lgFrag = fn ($qs) => http_get("$baseL/?admin&$qs", ["Cookie: $lgAdminCookie"]);
+$lgVisitorsHtml = $lgFrag("linkview=$lgId&tab=visitors")[1];
+check('[share log] the Visitors tab folds the queue in and lists the address (a button), where from, the browser, opens and views', $lgZipSt === 200 && str_contains($lgVisitorsHtml, 'data-ip="127.0.0.1"') && str_contains($lgVisitorsHtml, 'Safari on iPhone') && str_contains($lgVisitorsHtml, 'data-vid="' . $lgVid . '"') && !str_contains((string) @file_get_contents("$fxL/.gallery-linklog-$lgId-q.php"), '"s"'));
+$lgT = $lgItems()['t']; $lgTally = fn ($rel) => $lgT["$lgVid|$rel"] ?? null;
+check('[share log] the queued notes became "seen" (Pisa/p1.jpg, Rome/r2.jpg) and "saved" (the original and each file of the ZIP), and the ZIP is one line of the timeline', (($lgTally('Pisa/p1.jpg')['sf'] ?? null) !== null) && ($lgTally('Rome/r2.jpg')['dn'] ?? 0) === 2 && ($lgTally('Rome/r1.jpg')['dn'] ?? 0) === 1 && count(array_filter($lgLog()['events'], fn ($e) => $e['k'] === 'zip')) === 1);
+$lgFolders = $lgFrag("linkview=$lgId&tab=folders")[1];
+check('[share log] the Folders tab says, per folder, how many items were seen of how many there are, opened and saved, with a lock on private folders', str_contains($lgFolders, 'Rome') && preg_match('/<td>\s*3 of 3\s*<\/td>|<td>3 of 3<\/td>/', $lgFolders) === 1 && str_contains($lgFolders, 'sl-lock') && str_contains($lgFolders, 'Front page'));
+$lgPhotos = $lgFrag("linkview=$lgId&tab=photos")[1];
+$lgPhotosOne = $lgFrag("linkview=$lgId&tab=photos&vid=$lgVid&folder=Rome")[1];
+check('[share log] filtering to one address and one folder shows only that folder\'s items', substr_count($lgPhotosOne, 'class="sl-th"') === 3 && !str_contains($lgPhotosOne, rawurlencode('pub.jpg')) && str_contains($lgPhotosOne, 'sl-fchip'));
+$lgIp = $lgFrag('linkip=127.0.0.1&tab=folders')[1];
+check('[share log] one address\'s page: its links, totals, a key for seen / opened / saved, and the Folders, Media and Timeline tabs', str_contains($lgIp, 'sl-ipbig') && str_contains($lgIp, '127.0.0.1') && str_contains($lgIp, 'Safari on iPhone') && str_contains($lgIp, 'sl-lchip') && str_contains($lgIp, 'was on their screen') && str_contains($lgIp, 'data-tab="media"') && str_contains($lgIp, 'data-tab="timeline"'));
+$lgIpMedia = $lgFrag('linkip=127.0.0.1&tab=media')[1]; $lgIpTime = $lgFrag('linkip=127.0.0.1&tab=timeline')[1];
+check('[share log] its Media tab names each file with first seen, opened and saved, and its Timeline lists the happenings in order (newest first), scrolling as one line', str_contains($lgIpMedia, 'r1.jpg') && str_contains($lgIpMedia, 'Opened ×2') && str_contains($lgIpMedia, '✓ saved') && str_contains($lgIpTime, 'Scrolled through') && str_contains($lgIpTime, 'Saved a ZIP of') && str_contains($lgIpTime, 'Played'));
+check('[share log] the list of every address names the links each used and what it viewed', str_contains($lgFrag('linkips=1')[1], 'data-ip="127.0.0.1"') && str_contains($lgFrag('linkips=1')[1], 'sl-lchip'));
+[$lgCsvSt, $lgCsv, $lgCsvH] = $lgFrag("linkexport=$lgId&what=items");
+check('[share log] the CSV export is a download with a header row and one line per item, and a name starting with = can\'t run as a spreadsheet formula', $lgCsvSt === 200 && (bool) array_filter($lgCsvH, fn ($h) => stripos($h, 'Content-Disposition: attachment') === 0 && str_contains($h, '.csv')) && str_contains($lgCsv, '"link","ip","browser","folder","file"') && str_contains($lgCsv, '"\'=cmd|calc"') && substr_count($lgCsv, "\r\n") >= 6);
+check('[share log] the other exports work too (visitors, everything in order) and one address can be exported alone', str_contains($lgFrag("linkexport=$lgId&what=visitors")[1], '"link","ip","where"') && str_contains($lgFrag("linkexport=$lgId&what=events")[1], '"time","link","ip","what"') && !str_contains($lgFrag("linkexport=$lgId&what=items&ip=9.9.9.9")[1], 'r1.jpg') && $lgFrag('linkexport=nope&what=items')[0] === 404);
+check('[share log] these fragments and downloads are for the owner only', http_get("$baseL/?admin&linkview=$lgId&tab=visitors", [])[0] !== 200 || !str_contains(http_get("$baseL/?admin&linkview=$lgId&tab=visitors", [$lgUa])[1], 'data-ip='));
+
+// The list's summary line and the "new" markers.
+$lgTab = http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1];
+check('[share log] the link\'s summary line in the tab carries the log: its addresses and views', preg_match('/<b>1<\/b> IP\s*<span class="sl-dot">&middot;<\/span>\s*\d+ views/', $lgTab) === 1);
+check('[share log] until the owner has looked, the row says how many are new since, and the sidebar counts the links with news', str_contains($lgTab, 'new since you last looked') && preg_match('/data-tab="links" class="side-link">Share links <span class="count">1<\/span>/', $lgTab) === 1);
+check('[share log] telling the server the tab was looked at clears them (a later page load shows none)', ($lgAdmin(['action' => 'link_seen'])['ok'] ?? false) && !str_contains(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1], 'new since you last looked'));
+
+// Blocked tries and a replaced address.
+$lgAdmin(['action' => 'link_pause', 'id' => $lgId]);
+http_post("$baseL/?link=$lgTok", ['go' => '1'], [$lgUa], false); http_get("$baseL/?link=$lgTok", [$lgUa]);
+$lgAdmin(['action' => 'link_resume', 'id' => $lgId]);
+$lgOldTok = $lgTok; $lgAdmin(['action' => 'link_replace', 'id' => $lgId]); $lgTok = $lgLinks()['links'][$lgId]['token'];
+@unlink("$fxL/.gallery-login-attempts.php");
+$lgOldBody = http_get("$baseL/?link=$lgOldTok", [$lgUa]);
+$lgBlocked = array_values($lgLog()['blocked'] ?? [])[0] ?? [];
+check('[share log] tries turned away are logged with the address and why (paused; the old address after a replace), the invalid page is the same as ever, and an old address isn\'t counted as a guess', ($lgBlocked['tries'] ?? 0) === 3 && ($lgBlocked['why']['paused'] ?? 0) === 2 && ($lgBlocked['why']['replaced'] ?? 0) === 1 && $lgOldBody[0] === 404 && str_contains($lgOldBody[1], 'This link isn\'t valid') && !str_contains(json_encode(is_file("$fxL/.gallery-login-attempts.php") ? read_data_file("$fxL/.gallery-login-attempts.php") : []), 'link|'));
+check('[share log] the Visitors tab lists them as blocked tries (with the reason), and the summary line says so', str_contains($lgFrag("linkview=$lgId&tab=visitors")[1], 'Blocked tries') && str_contains($lgFrag("linkview=$lgId&tab=visitors")[1], 'old address') && str_contains(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1], '3 blocked tries'));
+
+// The log is kept when a link ends, whatever way, and goes only when the link is deleted.
+$lgAdmin(['action' => 'link_revoke', 'id' => $lgId]);
+$lgFile = function ($p) use ($fxL, $lgId) { clearstatcache(); return is_file("$fxL/.gallery-linklog-$lgId$p.php"); };   // (the server removes files: don't trust PHP's cached answer)
+$lgKeptRevoked = $lgFile('') && $lgFile('-items') && count(link_log_visitors_for_tests("$fxL/.gallery-linklog-$lgId.php")) === 1;
+$f = $lgLinks(); $f['links'][$lgId]['endsAt'] = time() - 5; $f['links'][$lgId]['status'] = 'active'; write_data_file("$fxL/.gallery-links.php", $f);   // (an expired link)
+$lgKeptExpired = $lgFile('') && $lgFile('-items');
+$lgEndedView = $lgFrag("linkview=$lgId&tab=visitors")[1];
+check('[share log] revoking or letting a link expire keeps its log (still readable in the tab); nothing but deleting removes it', $lgKeptRevoked && $lgKeptExpired && str_contains($lgEndedView, 'data-ip="127.0.0.1"'));
+$lgDelRes = $lgAdmin(['action' => 'link_delete', 'id' => $lgId]);
+check('[share log] deleting the link deletes its log files (the log, the per-item record and the queue)', !$lgFile('') && !$lgFile('-items') && !$lgFile('-q') && !isset($lgLinks()['links'][$lgId]));
+
+// Someone using a link is not counted in the gallery's own view counts.
+$lgMade2 = $lgAdmin(['action' => 'link_create', 'label' => 'second', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+$lgTok2 = $lgLinks()['links'][$lgMade2['id']]['token'] ?? '';
+[, , $lgGo2] = http_post("$baseL/?link=$lgTok2", ['go' => '1'], [], false); $lgCk2 = extract_cookie_header($lgGo2);
+http_get("$baseL/?track=" . rawurlencode('Rome/r1.jpg'), ["Cookie: $lgCk2"]); http_get("$baseL/", ["Cookie: $lgCk2"]);
+check('[share log] a link holder\'s views stay out of the gallery\'s view counts: the same ?track ping that counts for a visitor is refused (ok:false) for someone using a link', str_contains(http_get("$baseL/?track=" . rawurlencode('pub.jpg'))[1], '"ok":true') && str_contains(http_get("$baseL/?track=" . rawurlencode('pub.jpg'), ["Cookie: $lgCk2"])[1], '"ok":false'));
+// The log is bounded: the latest 300 timeline lines and the latest 200 visitors are kept; the visitor who makes the 201st is
+// let in by folding the least recently seen one into a count ("+ 1 earlier visitor").
+$lgCapId = $lgMade2['id'] ?? '';
+$lgCapFile = "$fxL/.gallery-linklog-$lgCapId.php";
+$seed = read_data_file($lgCapFile); $seed['visitors'] = []; $seed['events'] = []; $seed['folded'] = 0;
+for ($i = 0; $i < 200; $i++) {
+    $vid = sprintf('seed%06d', $i);
+    $seed['visitors'][$vid] = ['ip' => '10.1.' . intdiv($i, 250) . '.' . ($i % 250 + 1), 'ua' => 'Safari on iPhone', 'country' => '', 'first' => 1000 + $i, 'last' => 1000 + $i, 'opens' => 1, 'views' => 1];
+}
+for ($i = 0; $i < 300; $i++) $seed['events'][] = ['t' => 1000 + $i, 'v' => sprintf('seed%06d', $i % 200), 'k' => 'link'];
+write_data_file($lgCapFile, $seed);
+$lgFirefox = 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0';
+$f = $lgLinks(); unset($f['links'][$lgCapId]['lastOpen']); write_data_file("$fxL/.gallery-links.php", $f);   // (the same address pressing again within 15 minutes isn't a new opening)
+http_post("$baseL/?link=$lgTok2", ['go' => '1'], [$lgFirefox], false);
+$capLog = read_data_file($lgCapFile);
+$capNew = array_filter($capLog['visitors'], fn ($v) => $v['ip'] === '127.0.0.1' && $v['ua'] === 'Firefox on Linux');
+check('[share log] the log is bounded: a 201st visitor folds the least recently seen one into a count, and the timeline keeps its latest 300 lines', count($capLog['visitors']) === 200 && count($capNew) === 1 && !isset($capLog['visitors']['seed000000']) && isset($capLog['visitors']['seed000001']) && (int) $capLog['folded'] === 1 && count($capLog['events']) === 300 && $capLog['events'][0]['t'] === 1001 && ($capLog['events'][299]['k'] ?? '') === 'link' && ($capLog['events'][299]['v'] ?? '') === array_key_first($capNew));
+check('[share log] ...and the Visitors tab says how many earlier visitors are no longer listed', str_contains($lgFrag("linkview=$lgCapId&tab=visitors")[1], '+ 1 earlier visitor'));
+$lgHolderPage = http_get("$baseL/", ["Cookie: $lgCk2"])[1];
+check('[share log] the page of a link holder carries the logging script, the public page and the owner\'s don\'t', str_contains($lgHolderPage, 'window.__linkLog = log') && !str_contains(http_get("$baseL/")[1], 'window.__linkLog = log') && !str_contains(http_get("$baseL/", ["Cookie: $lgAdminCookie"])[1], 'window.__linkLog = log'));
 
 /* --------------------------------------------------------------------- */
 

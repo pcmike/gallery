@@ -65,6 +65,11 @@ def check(label, body, headers=None):
     </script> (or an unescaped JS-string quote) could break out; everywhere else
     any of the raw payload forms is dangerous."""
     global pages; pages += 1
+    if headers is not None and (headers.get("Content-Type", "") or "").lower().startswith("text/csv") and "attachment" in (headers.get("Content-Disposition", "") or ""):
+        # a CSV download is not a page: its cells hold the exact text (a spreadsheet gets it as data, and a leading = + - @ is already defused); only its headers are checked
+        for k, v in headers.items():
+            if re.search(r"[<>\"']", v) and "XSSTOK" in v or "\n" in v or "\r" in v: findings.append((label, f"payload reflected in header {k}"))
+        return
     if "&lt;/script&gt;&lt;script&gt;alert(XSSTOK3)" in body: reached["script-payload (caption/description/notes)"] += 1
     if "&quot; onmouseover=&quot;alert(XSSTOK5)" in body: reached["attr-payload (display name/dates/notes)"] += 1
     if "&lt;svg onload=alert(XSSTOK1)&gt;" in body: reached["tag-payload"] += 1
@@ -165,6 +170,13 @@ for variant in range(3):
     t = _make_link(**kw)
     if t: link_toks.append(t)
 link_cookies = [_press(t) for t in link_toks]
+raw = open(SITE + "/.gallery-links.php").read(); link_ids = list(json.loads(raw[raw.index("\n") + 1:])["links"].keys())
+bad_files = ['<img src=x onerror=alert(XSSTOK2)>.jpg', '" onmouseover="alert(XSSTOK5).jpg', "';alert(XSSTOK6);'.jpg", BADF[0] + "/p.jpg", BADF[1] + "/p.jpg"]
+for c in link_cookies:   # what these visitors did gets into the logs, under the oddly named files and folders
+    body = json.dumps({"e": [[k, bf] for bf in bad_files for k in ("s", "o", "p")] + [["f", BADF[0]], ["f", BADF[1]], ["f", ""]]}).encode()
+    r = urllib.request.Request(B + "/?linklog", data=body, method="POST", headers={"Cookie": c, "Content-Type": "application/json", "User-Agent": P["tag"] + P["script"] + " Instagram"})
+    try: op.open(r, timeout=10)
+    except urllib.error.HTTPError: pass
 for t in link_toks:
     s, body, hd = fetch("/?link=" + t); check("GET ?link=<token> (the opening page)", body, hd)
     s, body, hd = fetch("/?link=" + t, method="POST", data={"go": "1"}); check("POST ?link=<token> go", body, hd)
@@ -179,9 +191,14 @@ for _ in range(2):
         s, sub, _ = fetch("/" + html.unescape(l), headers={"Cookie": viewer_c}); links |= set(re.findall(r'href="(\?folder=[^"]+)"', sub))
 roots += ["/" + html.unescape(l) for l in links]
 roots += ["/?admin&folder=" + urllib.parse.quote(urllib.parse.unquote(m), safe="") for m in re.findall(r'folder=([^"&]+)', fetch("/?admin", headers=AH)[1])]
+for lid in link_ids:
+    for tab in ("visitors", "folders", "photos"): roots.append(f"/?admin&linkview={lid}&tab={tab}")
+    roots += [f"/?admin&linkview={lid}&tab=photos&folder=" + urllib.parse.quote(BADF[0], safe=""), f"/?admin&linkexport={lid}&what=items"]
+for tab in ("folders", "media", "timeline"): roots.append(f"/?admin&linkip=127.0.0.1&tab={tab}")
+roots += ["/?admin&linkips=1", "/?admin&linkip=" + urllib.parse.quote(P["tag"], safe="")]
 for k, v in P.items():
     q = urllib.parse.quote(v, safe="")
-    roots += [f"/?photo={q}", f"/?folder={q}", f"/?img={q}", f"/?track={q}", f"/?video={q}", f"/?map&x={q}", f"/?about&x={q}", f"/?size={q}&img=loose1.jpg", f"/?admin&folder={q}"]
+    roots += [f"/?admin&linkview={q}", f"/?admin&linkip={q}", f"/?admin&linkexport={q}", f"/?photo={q}", f"/?folder={q}", f"/?img={q}", f"/?track={q}", f"/?video={q}", f"/?map&x={q}", f"/?about&x={q}", f"/?size={q}&img=loose1.jpg", f"/?admin&folder={q}"]
 for who, h in [("anon", {}), ("revealed", {"Cookie": viewer_c}), ("admin", AH)] + [(f"link{i}", {"Cookie": c}) for i, c in enumerate(link_cookies)]:
     for p in sorted(set(roots)):
         if p.startswith("/?admin") and who != "admin": continue

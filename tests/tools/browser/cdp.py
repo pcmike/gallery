@@ -1,6 +1,6 @@
 """A tiny Chrome DevTools Protocol client using only the standard library
 (a hand-rolled WebSocket), so the browser checks need nothing but Chromium."""
-import socket, base64, os, struct, json, time, subprocess, tempfile, shutil, urllib.request, urllib.parse
+import socket, base64, os, struct, json, time, subprocess, tempfile, shutil, urllib.request, urllib.parse, atexit, signal, glob
 
 class WS:
     def __init__(self, url):
@@ -37,14 +37,49 @@ class WS:
             msg += payload
             if fin: return msg.decode("utf-8", "replace")
 
+PROFILE_PREFIX = "gallery-chromium-"
+_live = []   # browsers started by this process and not yet closed
+
+def _cleanup_all():
+    for b in list(_live):
+        b.close()
+
+def _on_signal(signum, frame):
+    # `timeout` (SIGTERM) and a closed terminal (SIGHUP) end Python without running `finally` blocks, which used to leave
+    # Chromium running and its ~90 MB profile behind (in /tmp, which is RAM on some machines). Raising SystemExit instead
+    # lets every `finally` and the atexit hook below run. Ctrl-C already raises KeyboardInterrupt, so it is left alone.
+    raise SystemExit(128 + signum)
+
+def _sweep_stale_profiles(min_age=600):
+    """Remove profile folders left by runs that were killed hard (SIGKILL, the OOM killer): old enough, and no process still has them open."""
+    in_use = ""
+    for f in glob.glob("/proc/[0-9]*/cmdline"):
+        try: in_use += open(f, "rb").read().replace(b"\0", b" ").decode("utf-8", "replace") + "\n"
+        except OSError: pass
+    for d in glob.glob(os.path.join(tempfile.gettempdir(), PROFILE_PREFIX + "*")):
+        try:
+            if time.time() - os.path.getmtime(d) > min_age and d not in in_use: shutil.rmtree(d, ignore_errors=True)
+        except OSError: pass
+
+atexit.register(_cleanup_all)
+for _sig in (signal.SIGTERM, signal.SIGHUP):
+    try: signal.signal(_sig, _on_signal)
+    except (ValueError, OSError): pass   # not the main thread
+
 class Browser:
+    proc = None; udd = None
     def __init__(self, chromium=None):
         self.chromium = chromium or os.environ.get("CHROMIUM") or shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
         if not self.chromium: raise SystemExit("Chromium not found. Install it (e.g. `sudo apt install chromium`) or set CHROMIUM=/path/to/chromium.")
-        self.udd = tempfile.mkdtemp(prefix="gallery-chromium-")
+        _sweep_stale_profiles()
+        self.udd = tempfile.mkdtemp(prefix=PROFILE_PREFIX)
+        _live.append(self)
+        try: self._start()
+        except BaseException: self.close(); raise
+    def _start(self):
         s = socket.socket(); s.bind(("127.0.0.1", 0)); self.port = s.getsockname()[1]; s.close()
         self.proc = subprocess.Popen([self.chromium, "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run",
-            "--hide-scrollbars", f"--user-data-dir={self.udd}", f"--remote-debugging-port={self.port}", "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            "--hide-scrollbars", f"--user-data-dir={self.udd}", f"--remote-debugging-port={self.port}", "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)   # its own process group, so close() reaches every helper process
         for _ in range(100):
             try:
                 tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json", timeout=2))
@@ -102,6 +137,22 @@ class Browser:
             elif m == "Log.entryAdded" and p["entry"].get("level") == "error": out.append(f"browser error ({p['entry'].get('source')}): {p['entry'].get('text', '')[:160]} {p['entry'].get('url', '')[:80]}")
         return [x for x in out if not any(i in x for i in ignore)]
     def close(self):
-        try: self.proc.terminate(); self.proc.wait(timeout=5)
-        except Exception: self.proc.kill()
-        shutil.rmtree(self.udd, ignore_errors=True)
+        if self in _live: _live.remove(self)
+        if self.proc is not None:
+            pg = self.proc.pid
+            for sig, patience in ((signal.SIGTERM, 4.0), (signal.SIGKILL, 4.0)):
+                try: os.killpg(pg, sig)
+                except ProcessLookupError: break
+                try: self.proc.wait(timeout=patience)
+                except Exception: pass
+                end = time.time() + patience   # the helper processes (zygote, network service...) can outlive the main one for a moment and re-create files in the profile
+                while time.time() < end:
+                    try: os.killpg(pg, 0)
+                    except ProcessLookupError: break
+                    time.sleep(0.05)
+                else: continue
+                break
+            self.proc = None
+        if self.udd: shutil.rmtree(self.udd, ignore_errors=True); self.udd = None
+    def __enter__(self): return self
+    def __exit__(self, *a): self.close()

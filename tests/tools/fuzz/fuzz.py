@@ -76,6 +76,36 @@ linkTokF,linkF=make_link("folder",scope_type="folders",scope_folders=json.dumps(
 linkTokP,linkP=make_link("photos",scope_type="photos",scope_photos=json.dumps(["loose1.jpg","secret.jpg","Europe/France/Paris/eiffel.jpg"]),downloads="all")
 linkTokA,linkA=make_link("all",downloads="all",zip="all",locations="all")
 sess=[("anon",{}),("revealed",{"Cookie":revealC}),("admin",adminAuth),("link-folders",{"Cookie":linkF}),("link-photos",{"Cookie":linkP}),("link-all",{"Cookie":linkA})]
+# --- the log: reports from link holders, and the owner's views of it
+raw=open(SITE+"/.gallery-links.php").read(); LINK_IDS=list(json.loads(raw[raw.index("\n")+1:])["links"].keys())
+beacons=[{"e":[["s","loose1.jpg"],["o","loose1.jpg"],["p","clip.mp4"],["f","Europe"],["f",""]]},{"e":[["s","secret.jpg"],["o","Asia/geo2.jpg"],["d","loose1.jpg"]]},{"e":"x"},{"e":[["s"]]},{"e":[["s",["a"]]]},{"e":[[1,2]]},{"e":[["s","a"*5000]]},{"e":[["f","../.."],["f","Europe/../x"],["s","../index.php"]]},{"e":[["s","loose1.jpg"]]*200},{},[],"str",None,{"e":[["s","\u0000"]]}]
+for name,h in [(nm,hh) for nm,hh in sess if nm.startswith("link") or nm in ("anon","admin","revealed")]:
+    for b in beacons:
+        r=urllib.request.Request(B+"/?linklog",data=json.dumps(b).encode(),method="POST",headers=dict(h,**{"Content-Type":"application/json"}))
+        n+=1
+        try: resp=op.open(r,timeout=10); st=resp.status; body=resp.read()
+        except urllib.error.HTTPError as e: st=e.code; body=e.read()
+        if st>=500 or BAD.search(body): problems.append((f"[{name}] linklog {str(b)[:40]}",f"HTTP {st} {body[:80]!r}"))
+    for raw_body in (b"", b"{", b"\xff\xfe", b"[[[[[", b"{\"e\":" + b"["*500):
+        r=urllib.request.Request(B+"/?linklog",data=raw_body,method="POST",headers=dict(h))
+        n+=1
+        try: resp=op.open(r,timeout=10); st=resp.status; body=resp.read()
+        except urllib.error.HTTPError as e: st=e.code; body=e.read()
+        if st>=500 or BAD.search(body): problems.append((f"[{name}] linklog raw {raw_body[:10]!r}",f"HTTP {st}"))
+    req("/?linklog",headers=h,label=f"[{name}] linklog GET")
+for lid in LINK_IDS+['nope','','../','a'*40,'%00']:
+    for tab in ('visitors','folders','photos','bogus',''):
+        req(f"/?admin&linkview={q(lid,safe='')}&tab={tab}",headers=adminAuth,label=f"linkview {lid[:12]} {tab}")
+    req(f"/?admin&linkview={q(lid,safe='')}&tab=photos&vid={q(lid,safe='')}&folder={q('Europe',safe='')}&sort=recent&all=1",headers=adminAuth,label=f"linkview filters {lid[:12]}")
+    for what in ('visitors','items','events','bogus',''): req(f"/?admin&linkexport={q(lid,safe='')}&what={what}",headers=adminAuth,label=f"linkexport {lid[:12]} {what}")
+req("/?admin&linkexport=all&what=items",headers=adminAuth,label="linkexport all"); req("/?admin&linkips=1",headers=adminAuth,label="linkips")
+for ip in ('127.0.0.1','nope','','::1','a'*300,'<script>','%00'):
+    for tab in ('folders','media','timeline','bogus'): req(f"/?admin&linkip={q(ip,safe='')}&tab={tab}",headers=adminAuth,label=f"linkip {ip[:12]} {tab}")
+for name,h in sess:
+    if name!='admin':
+        for p in ("/?admin&linkview="+LINK_IDS[0]+"&tab=visitors","/?admin&linkips=1","/?admin&linkexport=all&what=items"):
+            s,b,_=req(p,headers=h,label=f"[{name}] {p[:40]}")
+            if s==200 and b'data-ip=' in b: problems.append((f"[{name}] {p[:40]}","the owner's log was served to a non-owner"))
 # --- GET sweeps
 for name,h in sess:
     for p in ['/','/?about','/?map','/?mapicon','/?download','/?hidden','/?reveal','/?admin','/?admin&hidden','/?archive','/?archive&folder=Europe','/?archive&folder=Europe%2FGermany','/?archive&folder=nope']: req(p,headers=h,label=f"[{name}] {p}")

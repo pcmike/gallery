@@ -55,11 +55,15 @@ Each ends with: `php -l`, the full `tests/run.php` on PHP 8.4 and 8.3, a commit 
 - [x] Leak matrix in `tests/run.php` (5 viewers x every file, every size, video, `?photo=`, folder pages, names on the page) + fuzz identities (link-folders / link-photos / link-all, 5,015 requests, 0 problems) + XSS canary (labels, notes, titles, odd folder and file names; 557 pages, 0 findings).
 - Server suite 1,211 on PHP 8.4, 1,207 on 8.3.
 
-### M3 · The log
-- [ ] Per-link log store, visitor/IP records, caps (300 events, 200 visitors), blocked tries.
-- [ ] `?linklog` beacon + the page script (seen/opened/played/saved) + server notes for private deliveries.
-- [ ] Activity views: Visitors / Folders / Photos on a link; the IP page (Folders / Media / Timeline); the all-IPs list; the new-activity badge.
-- [ ] CSV export.
+### M3 · The log: DONE (commit "M3")
+- [x] Per-link log store (`.gallery-linklog-<id>.php`, plus `-items` for exact per-item tallies and `-q` for the server's cheap delivery notes), visitor/IP records (an address together with a browser), caps (latest 300 timeline lines, latest 200 visitors folded into a "+ N earlier" count), blocked tries with the reason (paused, replaced, ...).
+- [x] `?linklog` beacon + the page script (seen via IntersectionObserver / opened / played / saved) + server notes for private pictures and originals delivered; reports from the public or the owner are dropped.
+- [x] Activity views: Visitors / Folders / Photos on a link; the address page (Folders / Media / Timeline, filterable by link and folder); the all-IP-addresses list; the new-activity badge (row text and sidebar count, cleared by `link_seen`).
+- [x] CSV export (visitors / what they looked at / everything in order; one address alone; a cell starting `=`, `+`, `-` or `@` can't run as a formula), owner only.
+- [x] Logs are kept when a link is revoked or expires; only deleting the link deletes them. Link holders stay out of the gallery's view counts.
+- [x] Tests: 28 `[share log]` checks in `tests/run.php` (including the caps); a `share links` section in `tests/tools/browser/browser_checks.py` (opening page and mistyped link on a phone, a Rome-only holder's page and the absence of owner tools, the heads-up line, the whole tab flow: rows, Visitors / Folders / Photos, address page and timeline, back, IP addresses view, "nothing new" after looking, phone width: 20 checks). Server suite 1,239 on PHP 8.4, 1,235 on 8.3; fuzz 5,268 requests, 0 problems; XSS 592 pages, 0 findings.
+- Test-harness notes: the hidden IP-addresses view owns the first `.sl-act` on the page, so browser checks must scope to `.sl-row[open] .sl-act`. A press from an address that opened the link in the last 15 minutes is not a new opening (clear `lastOpen` in a test to get one). Don't run the browser tools under `ulimit -v`: Chromium won't start.
+- Cosmetic, for M4/M5: on a phone the "2 not ended · 0 ended" line wraps into four short lines beside the Links / IP addresses switch.
 
 ### M4 · Sharing UI
 - [ ] Copy / Share… / QR (client-side encoder, icon in the centre, large view, copy image, save image).
@@ -68,7 +72,7 @@ Each ends with: `php -l`, the full `tests/run.php` on PHP 8.4 and 8.3, a commit 
 
 ### M5 · Finish
 - [ ] README (Share links section, backup list, nginx/Apache snippet, Private items now leads with links), `?about`, CHANGELOG, `GALLERY_VERSION` 2.3.0, `gallery-config.example.php`.
-- [ ] Browser tests (opening page, viewer for a scoped link, tab, QR), XSS and fuzz runs, JS checks.
+- [ ] Browser tests: the opening page, scoped holder and tab are done (M3); still to add: the share/QR UI, preview as a link, Share this folder, the photo popup. XSS and fuzz runs, JS checks.
 - [ ] Full chain on 8.4 and 8.3; a real-phone checklist for the owner.
 
 ## Call-site checklist (every place visibility is decided)

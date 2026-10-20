@@ -1882,6 +1882,109 @@ try:
     ok(b.js("document.querySelector('input[name=access_code]') !== null") and b.js("document.querySelector('input[name=setup_password]') === null"), "once logged out, ?admin is the login form and setup never comes back, though the file is still brand new")
     srv3.terminate(); srv3.wait()
     b.viewport(1280, 900)
+    # ---------------- share links: the opening page, a link holder's page, and the Share links tab with its log ----------------
+    print("== share links: the opening page, a link holder's page, the tab and its log")
+    import http.cookiejar
+    SITE_L = WORK + "/sitelinks"; os.makedirs(SITE_L + "/Rome"); os.makedirs(SITE_L + "/Pisa")
+    shutil.copy(HERE + "/../../../index.php", SITE_L + "/index.php"); os.utime(SITE_L + "/index.php", (time.time() - 3600,) * 2)
+    for i, rel in enumerate(("pub.jpg", "pub2.jpg", "Rome/r1.jpg", "Rome/r2.jpg", "Pisa/p1.jpg")):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(120,90); imagefill($i,0,0,imagecolorallocate($i,40+$argv[2]*40,90,200-$argv[2]*30)); imagejpeg($i,$argv[1]);", SITE_L + "/" + rel, str(i)], check=True)
+    LGUARD = "<?php http_response_code(404); exit; ?>\n"
+    for d in ("Rome", "Pisa"):
+        open(f"{SITE_L}/{d}/.gallery-items.php", "w").write(LGUARD + json.dumps({"restriction": "private", "items": [], "groups": []}) + "\n")
+    LPW = "links-admin-pw"
+    lhash = subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", LPW], capture_output=True, text=True).stdout
+    open(SITE_L + "/.gallery-config.php", "w").write(LGUARD + json.dumps({"ADMIN_PASSWORD": lhash, "AUTO_GROUP_BY_FOLDER": True, "ENABLE_SHARE_LINKS": True, "TRACK_VIEWS": True}) + "\n")
+    sl_ = socket.socket(); sl_.bind(("127.0.0.1", 0)); PL = sl_.getsockname()[1]; sl_.close(); BL = f"http://127.0.0.1:{PL}"
+    srvL = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PL}", "-t", SITE_L], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    def lhttp(url, data=None, headers=None, jar=None):
+        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar if jar is not None else http.cookiejar.CookieJar()))
+        req = urllib.request.Request(url, data=urllib.parse.urlencode(data).encode() if isinstance(data, dict) else data, headers=headers or {})
+        try: r = op.open(req, timeout=20); return r.status, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e: return e.code, e.read().decode("utf-8", "replace")
+    def lwait(expr, limit=8.0):
+        end = time.time() + limit
+        while time.time() < end:
+            if b.js(expr): return True
+            b.drain(0.1)
+        return False
+    try:
+        # the owner makes two links (over HTTP, as the tab's own form would), and two people use them
+        lauth = {"Authorization": "Basic " + base64.b64encode(("u:" + LPW).encode()).decode()}; ljar = http.cookiejar.CookieJar()
+        csrf = re.search(r'csrf_token" value="([a-f0-9]+)"', lhttp(BL + "/?admin", headers=lauth, jar=ljar)[1]).group(1)
+        def lmake(**f):
+            base = {"action": "link_create", "max_opens": "5", "ends_at": str(int(time.time()) + 4 * 86400), "locations": "public", "heads_up": "on", "title_mode": "gallery", "note": "", "zip": "off", "csrf_token": csrf}
+            lhttp(BL + "/?admin", {**base, **f}, {**lauth, "X-Requested-With": "gallery-fetch"}, ljar)
+        lmake(label="Aunt Carol", scope_type="all", downloads="all")
+        lmake(label="Mark & Jen", scope_type="folders", scope_folders='["Rome"]', downloads="off")
+        lraw = open(SITE_L + "/.gallery-links.php").read(); ldata = json.loads(lraw[lraw.index("\n") + 1:])
+        tok = {l["label"]: l["token"] for l in ldata["links"].values()}
+        ok(set(tok) == {"Aunt Carol", "Mark & Jen"}, "[share links] the owner can make two links (everything private; only the Rome folder)", str(sorted(tok)))
+        ua_phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        ua_mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        for label, ua, events in (("Aunt Carol", ua_phone, [["f", ""], ["s", "pub.jpg"], ["s", "pub2.jpg"], ["o", "pub.jpg"], ["f", "Rome"], ["s", "Rome/r1.jpg"], ["o", "Rome/r1.jpg"], ["o", "Rome/r1.jpg"]]),
+                                  ("Mark & Jen", ua_mac, [["f", "Rome"], ["s", "Rome/r1.jpg"], ["s", "Rome/r2.jpg"], ["o", "Rome/r2.jpg"]])):
+            hj = http.cookiejar.CookieJar()
+            lhttp(BL + "/?link=" + tok[label], {"go": "1"}, {"User-Agent": ua}, hj)
+            lhttp(BL + "/?linklog", json.dumps({"e": events}).encode(), {"User-Agent": ua, "Content-Type": "application/json"}, hj)
+            lhttp(BL + "/?img=Rome%2Fr1.jpg&size=thumb", headers={"User-Agent": ua}, jar=hj)
+        # --- the opening page, on a phone ---
+        b.viewport(390, 844, mobile=True)
+        b.goto(BL + "/?link=" + tok["Mark & Jen"], 1.0); shot(b, "20-link-opening-phone")
+        op = b.js("({button: (document.querySelector('form button.big') || {}).textContent, fits: " + overflow + ", text: document.body.innerText, nofollow: (document.querySelector('meta[name=robots]') || {}).content})")
+        ok(op["button"] == "Open the gallery" and op["fits"] and "Rome" not in op["text"] and "Pisa" not in op["text"] and "noindex" in (op["nofollow"] or ""), "[share links] the opening page on a phone is one button that fits the screen, names no folder, and asks search engines to stay away", str(op))
+        b.goto(BL + "/?link=AAAAAAAAAAAAAAAA", 0.8)
+        ok("isn't valid" in b.js("document.body.innerText") and b.js("document.querySelector('button, form, a')") is None, "[share links] a mistyped link is the one invalid page, with nothing to press", b.js("document.body.innerText")[:80])
+        # --- a link holder's page (this browser has no owner cookie yet) ---
+        b.goto(BL + "/?link=" + tok["Mark & Jen"], 0.8)
+        b.js("document.querySelector('form button.big').click()"); b.drain(2.0)
+        b.viewport(1280, 900); b.goto(BL + "/", 1.5); shot(b, "21-link-holder-page")
+        hp = b.js("({text: document.body.innerText, toggles: document.querySelectorAll('.priv-toggle, .cover-toggle').length, adminLink: !!document.querySelector('a[href*=\"?admin\"]'), headsUp: (document.getElementById('link-headsup') || {}).textContent || '', lock: !!document.querySelector('.lock-link')})")
+        ok("Rome" in hp["text"] and "Pisa" not in hp["text"] and "pub.jpg" not in hp["text"], "[share links] a holder of the Rome link sees the Rome folder and not Pisa", hp["text"][:200])
+        ok(hp["toggles"] == 0 and not hp["adminLink"] and not hp["lock"], "[share links] a link holder gets no owner tools: no lock or star on tiles, no admin link, no sign-in lock", str(hp))
+        ok("expires on" in hp["headsUp"], "[share links] the heads-up line says when the link ends (this link asks for it)", hp["headsUp"])
+        ok(not b.problems(IGN), "[share links] ...and the holder's page has no console or CSP errors", "; ".join(b.problems(IGN))[:300])
+        # --- the owner's Share links tab ---
+        b.goto(BL + "/?admin", 1.2)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": LPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.js("location.hash = '#links'"); b.drain(2.0)   # (a change of the part after # is not a page load: goto would wait for one that never comes)
+        body = b.js("document.body.innerText")
+        ok("new since you last looked" in body and "Mark & Jen" in body, "[share links tab] each link is a row, named exactly as typed, saying how many happenings are new since the owner last looked")
+        ok(b.js("(document.querySelector('.side-link[data-tab=links] .count') || {}).textContent") == "2", "[share links tab] the sidebar counts the links with news", b.js("document.querySelector('.side-link[data-tab=links]').innerText"))
+        b.drain(2.0)   # the tab marks itself as looked at
+        A = ".sl-row[open] .sl-act"   # (the hidden IP-addresses view has a .sl-act of its own, always first on the page: always say which one)
+        b.js("[...document.querySelectorAll('details.sl-row')].find(d => d.querySelector('.sl-name').textContent.trim() === 'Aunt Carol').open = true")
+        ok(lwait(f"document.querySelectorAll('{A} table tbody tr').length >= 1"), "[share links tab] opening a row loads its Visitors tab (one line per address and browser)", b.js(f"(document.querySelector('{A}') || {{innerText: ''}}).innerText")[:200])
+        shot(b, "22-link-visitors")
+        b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=folders]').click()")
+        ok(lwait(f"(() => {{ const a = document.querySelector('{A}'); const t = a.querySelector('table'); return !!t && /Front page/.test(t.innerText) && / of /.test(t.innerText); }})()"), "[share links tab] its Folders tab says, for each folder, how many items were seen of how many there are")
+        shot(b, "23-link-folders")
+        b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=photos]').click()")
+        ok(lwait(f"document.querySelectorAll('{A} .sl-th').length >= 2"), "[share links tab] its Photos tab shows thumbnails of what was looked at", b.js(f"document.querySelector('{A}').innerText")[:200])
+        b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=visitors]').click()"); lwait(f"!!document.querySelector('{A} [data-ip]')")
+        b.js(f"document.querySelector('{A} [data-ip]').click()")
+        ok(lwait(f"(() => {{ const a = document.querySelector('{A}'); return a.innerHTML.includes('sl-ipbig') && !!a.querySelector('.sl-back'); }})()"), "[share links tab] pressing an address opens that address's own page, with a way back")
+        b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=timeline]').click()")
+        ok(lwait(f"document.querySelector('{A}').innerText.includes('Opened')"), "[share links tab] the address's Timeline lists what happened, in order")
+        shot(b, "24-link-address")
+        b.js(f"document.querySelector('{A} [data-back]').click()")
+        ok(lwait(f"document.querySelectorAll('{A} table tbody tr').length >= 1"), "[share links tab] Back returns to the link's Visitors tab")
+        b.js("document.querySelector('[data-view=ips]').click()")
+        ok(lwait("!document.getElementById('sl-ips-view').hidden && document.getElementById('sl-links-view').hidden && document.querySelectorAll('#sl-ips-view table tbody tr').length >= 1"), "[share links tab] the IP addresses view lists every address that used any link")
+        b.js("document.querySelector('#sl-ips-view [data-ip]').click()")
+        ok(lwait("document.querySelector('#sl-ips-view .sl-back') !== null"), "[share links tab] from there an address's page also has a way back")
+        ok(not b.problems(IGN), "[share links tab] no console or CSP errors while moving about the tab", "; ".join(b.problems(IGN))[:300])
+        b.goto(BL + "/?admin&again=1", 1.5); b.js("location.hash = '#links'"); b.drain(1.5)
+        ok("new since you last looked" not in b.js("document.body.innerText"), "[share links tab] after the owner has looked, nothing is new any more")
+        # --- the tab on a phone ---
+        b.viewport(390, 844, mobile=True); b.drain(0.5)
+        b.js("[...document.querySelectorAll('details.sl-row')].forEach(d => d.open = true)"); b.drain(1.5); shot(b, "25-link-tab-phone")
+        ok(b.js(overflow), "[share links tab] on a phone, with the rows open, nothing runs off the side of the screen", str(b.js("[document.documentElement.scrollWidth, innerWidth]")))
+        b.viewport(1280, 900)
+    finally:
+        srvL.terminate(); srvL.wait()
+        b.viewport(1280, 900)
 except Exception as e:
     fails += 1; print("  FAIL  the browser run crashed:", type(e).__name__, e)
 finally:
