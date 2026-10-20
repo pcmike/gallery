@@ -531,7 +531,7 @@ try:
         ok(pm["l"] >= 0 and pm["r"] <= pm["w"] and not pm["over"], "[sort] on a phone the menu fits the screen and the page does not scroll sideways", str(pm))
         shot(b, "41-sort-menu-phone")
         row = b.js("""(() => { const bs = [...document.querySelectorAll('.map-preview-heading .map-combo-btn')].map(e => { const r = e.getBoundingClientRect(); return {top: Math.round(r.top), left: Math.round(r.left), right: Math.round(r.right)}; }); return {n: bs.length, tops: [...new Set(bs.map(x => x.top))], rightMost: Math.max(...bs.map(x => x.right)), vw: innerWidth}; })()""")
-        ok(row["n"] >= 3 and len(row["tops"]) == 1 and row["rightMost"] <= row["vw"] - 8 and row["rightMost"] >= row["vw"] - 30, "[buttons] on a phone the buttons stay on a single line and keep their places: the sort and map buttons at the left, the about button at the right edge", str(row))
+        ok(row["n"] >= (3 if has_clip else 2) and len(row["tops"]) == 1 and row["rightMost"] <= row["vw"] - 8 and row["rightMost"] >= row["vw"] - 30, "[buttons] on a phone the buttons stay on a single line and keep their places: the sort and map buttons at the left, the about button at the right edge", str(row))
     finally:
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False})
         srv13.terminate(); srv13.wait()
@@ -1981,6 +1981,9 @@ try:
         b.viewport(390, 844, mobile=True); b.drain(0.5)
         b.js("[...document.querySelectorAll('details.sl-row')].forEach(d => d.open = true)"); b.drain(1.5); shot(b, "25-link-tab-phone")
         ok(b.js(overflow), "[share links tab] on a phone, with the rows open, nothing runs off the side of the screen", str(b.js("[document.documentElement.scrollWidth, innerWidth]")))
+        hd = b.js("(() => { const c = document.querySelector('.sl-head .sl-count').getBoundingClientRect(), v = document.querySelector('.sl-viewswitch').getBoundingClientRect(), n = document.querySelector('.sl-new-btn').getBoundingClientRect(); return {countH: Math.round(c.height), countAbove: c.bottom <= v.top + 1, sameRow: Math.abs(v.top - n.top) < 8, switchH: Math.round(v.height)}; })()")
+        ok(hd["countH"] < 28 and hd["countAbove"] and hd["sameRow"], "[share links tab] on a phone the count ('2 not ended · 0 ended') is one line of its own, with the Links / IP addresses switch and New link on the line below", str(hd))
+        shot(b, "25b-link-head-phone")
         b.viewport(1280, 900)
         # --- sharing: the QR code, the short form from a folder, a photo and a selection, the viewer's question, the photo picker, preview ---
         sys.path.insert(0, HERE + "/../qr"); import qr_reference as QR
@@ -2115,10 +2118,17 @@ try:
         ok(b.js(overflow) and b.js("document.getElementById('lp-panel').getBoundingClientRect().right <= innerWidth"), "[preview] on a phone the strip and its list fit the screen")
         shot(b, "36-preview-phone")
         b.viewport(1280, 900)
+        b.goto(BL + "/?admin&pvnote=1", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)
+        note = b.js("(() => { const n = document.querySelector('.sl-prevnote'); return n ? {text: n.innerText, link: !!n.querySelector('a[href=\"?exitpreview\"]')} : null; })()")
+        ok(note is not None and "Mark & Jen" in note["text"] and "is open in this browser" in note["text"] and note["link"], "[preview] back on the Share links tab, a note says a preview is open in this browser, with a way to end it", str(note))
+        shot(b, "36b-preview-note-in-tab")
+        b.goto(BL + "/?folder=Rome&back=1", 1.2)
         b.js("document.querySelector('.lp-exit').click()"); b.drain(1.8)
         ok(b.js("location.hash") == "#links" and "admin" in b.js("location.search"), "[preview] Exit preview goes back to the Share links tab")
         b.goto(BL + "/?folder=Rome&after=1", 1.2)
         ok(b.js("document.getElementById('link-preview')") is None and b.js("document.querySelectorAll('.priv-toggle').length") > 0, "[preview] ...and the gallery is the owner's again")
+        b.goto(BL + "/?admin&pvnote=2", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)
+        ok(b.js("document.querySelector('.sl-prevnote')") is None, "[preview] ...and the note is gone from the tab")
         # the share forms on a phone
         b.viewport(390, 844, mobile=True); b.goto(BL + "/?folder=Rome&ph=1", 1.5)
         b.js("document.querySelector('.page-share').click()"); b.drain(0.5); type_in(".gs-name", "On a phone")

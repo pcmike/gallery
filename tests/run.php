@@ -5350,6 +5350,7 @@ check('[preview] a changed cookie is no preview (the owner just sees the owner\'
 $exLoc = ''; $exSet = '';
 foreach ($exH as $h) { if (stripos($h, 'Location:') === 0) $exLoc = trim(substr($h, 9)); if (stripos($h, 'Set-Cookie: gallery_preview_') === 0) $exSet = $h; }
 check('[preview] Exit preview clears the cookie and goes back to the Share links tab', $exC === 303 && str_contains($exLoc, '?admin#links') && (str_contains($exSet, 'Max-Age=0') || str_contains($exSet, '1970') || str_contains($exSet, '=deleted')));
+check('[preview] the Share links tab says a preview is open in this browser (with a way to end it), and says nothing when there is none', str_contains($adminPageDuring, 'A preview of &ldquo;Mark&rdquo; is open in this browser') && str_contains($adminPageDuring, 'href="?exitpreview"') && !str_contains(http_get("$baseS/?admin", $shOwner)[1], 'is open in this browser') && !str_contains($pvTampered ? http_get("$baseS/?admin", $pvTampered)[1] : '', 'is open in this browser'));
 $shAdmin(['action' => 'link_pause', 'id' => $pvId]);
 [$pc3, , $pvH3] = $shStart($shCsrf); $pvPaused = http_get("$baseS/", ["Cookie: $shAdminCookie; " . extract_cookie_header($pvH3)])[1];
 check('[preview] a paused link can still be previewed, and the strip says that the people who have it see nothing for now', $pc3 === 303 && str_contains($pvPaused, 'Previewing as Mark') && str_contains($pvPaused, 'paused right now'));

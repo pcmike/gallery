@@ -4158,21 +4158,29 @@ function preview_referer_is_admin() {
     parse_str($query, $q);
     return array_key_exists('admin', $q);
 }
-/** The link record the owner is previewing in this browser, or null. */
-function link_preview() {
+/** The link a preview cookie in this browser belongs to, if the cookie is genuine, fresh and the link isn't revoked, whatever page is being asked for. */
+function preview_cookie_link() {
     static $resolved = false, $link = null;
     if ($resolved) return $link;
     $resolved = true;
     if (!ENABLE_SHARE_LINKS) return null;
     $cookie = $_COOKIE[PREVIEW_COOKIE_NAME] ?? '';
     if (!is_string($cookie) || !preg_match('/^([0-9a-f]{10})\.(\d{1,12})\.[0-9a-f]{64}$/', $cookie, $m)) return null;
-    if (isset($_GET['admin'])) return null;
     $ts = (int) $m[2];
     if ($ts > time() + 60 || time() - $ts > PREVIEW_SECONDS) return null;
-    if ((isset($_GET['img']) || isset($_GET['video']) || isset($_GET['strip']) || isset($_GET['preview'])) && preview_referer_is_admin()) return null;
     $l = links_read()['links'][$m[1]] ?? null;
     if (!is_array($l) || !isset($l['token']) || !hash_equals(preview_cookie_value($l, $ts), $cookie) || link_state($l) === 'revoked') return null;
     return $link = $l;
+}
+/** The link the owner is previewing, as far as THIS request is concerned: gallery and media pages only. The admin's own pages are always the
+ *  owner's, and so is a picture or video that an admin page asked for. */
+function link_preview() {
+    static $resolved = false, $link = null;
+    if ($resolved) return $link;
+    $resolved = true;
+    if (isset($_GET['admin'])) return null;
+    if ((isset($_GET['img']) || isset($_GET['video']) || isset($_GET['strip']) || isset($_GET['preview'])) && preview_referer_is_admin()) return null;
+    return $link = preview_cookie_link();
 }
 /** The strip across the top of a previewed gallery: who it is a preview of, a list of what the link includes, and the way out. */
 function render_link_preview_banner($l, $dir, $files) {
@@ -8163,6 +8171,9 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       <?php if (!ENABLE_SHARE_LINKS): ?>
         <div class="sl-off">Share links are switched off, so none of these work. Turn on <em>Allow share links</em> in <a href="#site" onclick="return adminGoTo('site');">Site settings</a>.</div>
       <?php endif; ?>
+      <?php if (($previewOpen = preview_cookie_link()) !== null): ?>
+        <div class="sl-prevnote"><?= ui_icon('eye') ?><div><strong>A preview of &ldquo;<?= $esc($previewOpen['label']) ?>&rdquo; is open in this browser.</strong> The gallery's own pages here show that link's view until you end it (the admin pages stay yours). <a href="?exitpreview">End preview</a></div></div>
+      <?php endif; ?>
       <?php if ($problemLinks > 0): ?>
         <div class="sl-check no" style="display:flex; gap:10px; align-items:center;"><?= ui_icon('warn') ?><div><strong><?= $problemLinks ?> link<?= $problemLinks === 1 ? ' refers' : 's refer' ?> to something that can't be found.</strong> It fails safe: nothing from it is shown. Open the link to see which.</div></div>
       <?php endif; ?>
@@ -9234,6 +9245,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-newt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--accent); }
   .sl-amber { color:#e0a028; }
   .sl-viewswitch { margin-right:4px; }
+  @media (max-width: 640px) { .sl-head { flex-wrap:wrap; } .sl-count { flex:1 0 100%; } .sl-viewswitch { margin-right:auto; } }
+  .sl-prevnote { display:flex; gap:10px; align-items:center; margin:0 0 12px; padding:10px 14px; background:#262046; border:1px solid #3d3470; border-radius:8px; color:#e9e6ff; font-size:0.88rem; line-height:1.4; }
+  .sl-prevnote .ico { flex:none; color:#b9b2ff; }
+  .sl-prevnote a { color:#fff; font-weight:700; white-space:nowrap; }
   .sl-segbar { display:inline-flex; border:1px solid #34343a; border-radius:999px; overflow:hidden; flex-wrap:wrap; }
   .sl-segbtn { background:transparent; border:0; color:var(--muted); padding:6px 14px; font-size:0.82rem; cursor:pointer; border-radius:0; }
   .sl-segbtn + .sl-segbtn { border-left:1px solid #34343a; }
