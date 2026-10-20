@@ -808,6 +808,16 @@ try:
     ok(st is not None and re.search(r"What the gallery has read from the files here: \d+ with a location, \d+ without", st["text"]) and "Prepare media" in st["text"] and st["link"], "[locations] a folder with locations on says, under the switch, what the gallery has read from its files, and points to Prepare media", str(st))
     b.js("document.querySelector('.loc-status a').click()"); b.drain(0.5)
     ok(b.js("location.hash") == "#site" and b.js("(() => { const e = document.getElementById('media-panel'); return !!e && e.offsetParent !== null; })()"), "[locations] ...and the link takes you to Prepare media on the Site tab", str(b.js("location.hash")))
+    # Prepare media, then a tidy-up preview over a gallery whose data holds a copy of a file's location (geo1.jpg) and a labelled one (Asia/geo2.jpg)
+    if b.js("!document.querySelector('#media-panel .media-go').hidden"):
+        b.js("document.querySelector('#media-panel .media-go').click()")
+        for _ in range(60):
+            b.drain(0.5)
+            if b.js("/^Everything is prepared/.test(document.querySelector('#media-panel .media-count').textContent)"): break
+    b.js("document.querySelector('#media-panel .media-tidy-box').open = true")
+    b.js("document.querySelector('#media-panel .media-tidy-preview').click()"); b.drain(2)
+    tp = b.js("(() => { const o = document.querySelector('#media-panel .media-tidy-out'); return {text: o.textContent, go: !!o.querySelector('button'), folders: o.querySelectorAll('details.media-tidy-folder').length}; })()")
+    ok(tp["text"].startswith("Would remove") and "Has a label" in tp["text"] and tp["go"], "[prepare media] 'Tidy up saved locations' previews what would change (copies of the files' locations), lists what it keeps, and offers 'Tidy up now'", str(tp)[:300])
     # ---------------- the folder tree in the sidebar ----------------
     print("== folder tree")
     b.viewport(1280, 900); b.goto(B + "/?admin&folder=Europe%2FFrance%2FParis", 1.0)
@@ -1146,7 +1156,7 @@ try:
         b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "phone-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         ok(b.js("document.querySelector('h1') && document.querySelector('h1').textContent") == "Gallery Admin", "[owner] signed in to the admin")
         b.goto(B15 + "/?admin#site", 1.2)
-        ok(b.js("(() => { const t = document.querySelector('#media-panel .media-count'); return !!t && /0 of 2 files are prepared/.test(t.textContent) && !document.querySelector('#media-panel .media-go').hidden; })()"), "[prepare media] the Site tab says how many files are prepared and offers to do the rest", b.js("document.querySelector('#media-panel') && document.querySelector('#media-panel').innerText"))
+        ok(b.js("(() => { const t = document.querySelector('#media-panel .media-count'); return !!t && /Thumbnails ready: 0 of 2 photos\\. Read from the files: \\d of 2 files\\./.test(t.textContent) && !document.querySelector('#media-panel .media-go').hidden; })()"), "[prepare media] the Site tab says how many files are prepared and offers to do the rest", b.js("document.querySelector('#media-panel') && document.querySelector('#media-panel').innerText"))
         b.js("document.querySelector('#media-panel .media-go').click()")
         for _ in range(40):
             b.drain(0.5)
@@ -1156,6 +1166,15 @@ try:
         b.js("document.querySelector('#media-panel .media-more').open = true"); b.drain(1.2)
         rep = b.js("(() => { const rows = [...document.querySelectorAll('#media-panel .media-table tr')].map(r => r.innerText.replace(/\\s+/g, ' ')); return rows; })()")
         ok(len(rep) == 2 and rep[0].startswith("Folder Files Thumbnails") and "(top level)" in rep[1] and "2 of 2 photos" in rep[1], "[prepare media] opening 'What the gallery knows about each folder' lists the folder with its files, thumbnails and what was read", str(rep))
+        # the report on a phone: each folder is a block with labelled lines, nothing runs off the side
+        b.viewport(390, 844, mobile=True); b.drain(0.6)
+        pr = b.js("(() => { const t = document.querySelector('#media-panel .media-table'); const td = t.querySelector('tbody td:nth-child(3)'); return {headHidden: getComputedStyle(t.querySelector('thead')).display === 'none', label: getComputedStyle(td, '::before').content, fits: t.getBoundingClientRect().right <= innerWidth + 1, page: document.documentElement.scrollWidth <= innerWidth + 1}; })()")
+        ok(pr["headHidden"] and "Thumbnails" in pr["label"] and pr["fits"] and pr["page"], "[prepare media] on a phone the list of folders is stacked blocks with labelled lines, and nothing runs off the side of the screen", str(pr))
+        b.viewport(1280, 900); b.drain(0.4)
+        # tidy up: a preview that says there is nothing to tidy when no saved location is a copy of a file's
+        b.js("document.querySelector('#media-panel .media-tidy-box').open = true")
+        b.js("document.querySelector('#media-panel .media-tidy-preview').click()"); b.drain(1.5)
+        ok(b.js("document.querySelector('#media-panel .media-tidy-out').textContent").startswith("Nothing to tidy") and b.js("!document.querySelector('#media-panel .media-tidy-out button')"), "[prepare media] 'Tidy up saved locations' previews, here saying there is nothing to tidy (and offering no button to do it)", str(b.js("document.querySelector('#media-panel .media-tidy-out').textContent")))
         b.js("window.confirm = function (t) { window.__asked = t; return true; }")
         b.js("document.querySelector('#media-panel .media-again').click()")
         for _ in range(40):

@@ -212,8 +212,8 @@ function item_get($root, array $hdrs, $file) {
 
 /** A first look at some files, as a visitor's page would make: their thumbnails are asked for, which is when the gallery reads what a file says
  *  about itself (the answer is read from the cache's record afterwards). $names are relative paths. */
-function first_look($root, array $names) {
-    foreach ($names as $n) http_get(rtrim($root, '/') . '/?img=' . rawurlencode($n) . '&size=thumb');
+function first_look($root, array $names, array $hdrs = []) {
+    foreach ($names as $n) http_get(rtrim($root, '/') . '/?img=' . rawurlencode($n) . '&size=thumb', $hdrs);
 }
 
 /** Prepare media run to the end, as the admin page's button does (the answers are added up). $extra: e.g. ['again' => '1', 'remake' => '1']. */
@@ -1424,7 +1424,7 @@ $thTok = (json_decode(http_get("$baseTh/?admin&csrf=1", $thAuthH)[1], true)['tok
 foreach (glob("$fxTh/.gallery-cache/*.jpg") as $f) @unlink($f);
 @unlink("$fxTh/.gallery-cache/meta1.php");
 [, $thAdminBody] = http_get("$baseTh/?admin", $thAuthH);
-check('[prepare media] the Site tab says how many files are prepared, and offers to do the rest', preg_match('#id="media-panel"#', $thAdminBody) === 1 && str_contains($thAdminBody, '0 of 5 files are prepared') && str_contains($thAdminBody, 'media-go') && str_contains($thAdminBody, 'Read everything again'), substr(strip_tags(substr($thAdminBody, strpos($thAdminBody, 'id="media-panel"'), 900)), 0, 200));
+check('[prepare media] the Site tab says how many thumbnails are ready and how many files are read, and offers to do the rest', preg_match('#id="media-panel"#', $thAdminBody) === 1 && str_contains($thAdminBody, 'Thumbnails ready: 0 of 4 photos. Read from the files: 0 of 5 files.') && str_contains($thAdminBody, 'media-go') && str_contains($thAdminBody, 'Read everything again'), substr(strip_tags(substr($thAdminBody, strpos($thAdminBody, 'id="media-panel"'), 900)), 0, 200));
 // (a request lasts about a second at most and says where to carry on, so ask again until it says it is done)
 $warm = ['ok' => true, 'done' => false, 'total' => 0, 'made' => 0, 'failed' => 0, 'read' => 0]; $warmFrom = 0;
 for ($warmTry = 0; $warmTry < 20 && empty($warm['done']); $warmTry++) {
@@ -3708,7 +3708,7 @@ check('[instant] the folder location switch works in place too: off answers JSON
 $jLocOn = $locAjax('&folder=Lisbon', true);
 check('[instant] ...and on answers JSON and turns it back on', ($jLocOn['ok'] ?? null) === true && !empty(read_data_file("$fxMapF/Lisbon/.gallery-items.php")['locationEnabled']));
 [, $mapAdminAgain] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
-check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 2);
+check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 3);   // (the page's own confirms: Prepare media's "read everything again" and "tidy up", and one more elsewhere)
 
 // The whole map feature off: nothing anywhere.
 file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
@@ -5512,6 +5512,77 @@ first_look($baseGc, ['p.jpg']);
 $gcRun = json_decode(http_post("$baseGc/?admin", ['csrf_token' => admin_token($baseGc, $gcHdrs), 'action' => 'prepare_media', 'from' => '0'], $gcHdrs)[1], true) ?: [];
 check('[prepare media] with the thumbnail cache switched off nothing is recorded anywhere, Prepare media says why, and the panel explains', !is_dir("$fxGc/.gallery-cache") && ($gcRun['ok'] ?? null) === false && str_contains($gcRun['text'] ?? '', 'thumbnail cache is switched off') && str_contains(http_get("$baseGc/?admin", $gcHdrs)[1], 'there is nowhere to keep what is made or read'));
 check('[prepare media] ...a photo\'s file location is then not shown to visitors (it would have to be read on every page), but the editor still offers it to the owner', substr_count(http_get("$baseGc/")[1], 'location-badge') === 0 && abs((float) (item_get($baseGc, $gcHdrs, 'p.jpg')['auto']['lat'] ?? 0) - 41.9) < 0.01);
+
+echo "== tidy up: the files' own locations leave the folder data, the owner's things stay ==\n";
+
+$tidyBuild = function ($name, $pw) use ($indexSrc) {
+    $fx = new_fixture_dir($name);
+    mkdir("$fx/Rome"); mkdir("$fx/Paris");
+    $xy = [[41, 1], [54, 1], [0, 1]]; $xx = [[12, 1], [29, 1], [0, 1]];
+    foreach (['imp', 'dif', 'lab', 'hid', 'chk', 'clr', 'solo', 'late', 'manual'] as $n) make_gps_jpeg("$fx/Rome/$n.jpg", 'N', $xy, 'E', $xx);   // the files all say 41.9, 12.4833
+    make_jpeg("$fx/Rome/shot.jpg", 60, 50, 90, 60, 60); make_jpeg("$fx/Rome/plain.jpg", 60, 50, 60, 60, 90);    // these two say nothing
+    make_gps_jpeg("$fx/Paris/p1.jpg", 'N', [[48, 1], [51, 1], [0, 1]], 'E', [[2, 1], [21, 1], [0, 1]]);
+    $loc = fn ($lat, $lng, $label = '') => ['lat' => $lat, 'lng' => $lng, 'label' => $label];
+    write_data_file("$fx/Rome/.gallery-items.php", ['items' => [
+        'imp.jpg' => ['caption' => 'Colosseum at dawn', 'web' => 'https://example.com/c', 'restriction' => 'private', 'location' => $loc(41.9, 12.4833), 'gpsChecked' => true],   // an old import, with the owner's things on it
+        'dif.jpg' => ['caption' => 'Moved', 'location' => $loc(10.5, 20.5), 'gpsChecked' => true],                                                                           // a location that differs from its file
+        'lab.jpg' => ['location' => $loc(41.9, 12.4833, 'Hotel Roma'), 'gpsChecked' => true],                                                                              // one with the owner's words on it
+        'hid.jpg' => ['caption' => 'Hidden pin', 'location' => $loc(41.9, 12.4833), 'locationVisibility' => 'hide', 'gpsChecked' => true],
+        'chk.jpg' => ['gpsChecked' => true],                                                                                                                                 // marked, no location: removed on purpose, or a failed read?
+        'clr.jpg' => ['locationCleared' => true, 'gpsChecked' => true, 'caption' => 'Private spot'],
+        'solo.jpg' => ['location' => $loc(41.9, 12.4833), 'gpsChecked' => true],                                                                                              // only a copy: nothing else on the entry
+        'shot.jpg' => ['location' => $loc(1.5, 2.5, ''), 'gpsChecked' => true],                                                                                             // a place for a photo whose file says nothing
+        'plain.jpg' => ['gpsChecked' => true, 'caption' => 'No GPS here'],
+        'late.jpg' => ['location' => $loc(41.9, 12.4833)],                                                                                                                   // (not read yet when the tidy runs)
+        'manual.jpg' => ['caption' => 'Left alone'],
+    ], 'groups' => [], 'displayName' => 'Rome trip', 'locationEnabled' => true, 'cover' => 'imp.jpg'] + items_default_for_tests());
+    write_data_file("$fx/Paris/.gallery-items.php", ['items' => ['p1.jpg' => ['location' => $loc(48.85, 2.35), 'gpsChecked' => true, 'caption' => 'Louvre']], 'groups' => [], 'locationEnabled' => true] + items_default_for_tests());
+    file_put_contents("$fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => $pw, 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+    copy($indexSrc, "$fx/index.php");
+    return $fx;
+};
+function items_default_for_tests() { return ['dates' => null, 'sortOrder' => null, 'description' => null]; }
+$tidyStart = function ($fx, $pw) {
+    $port = find_free_port(); start_server($fx, $port); $base = "http://127.0.0.1:$port";
+    [, , $login] = http_post("$base/?admin", ['access_code' => $pw], [], false);
+    return [$base, ['Cookie: ' . extract_cookie_header($login), 'X-Requested-With: gallery-fetch']];
+};
+$tidyCall = function ($base, $hdrs, array $f) { return json_decode(http_post("$base/?admin", $f + ['csrf_token' => admin_token($base, $hdrs), 'action' => 'media_tidy'], $hdrs)[1], true) ?: ['ok' => false]; };
+$tidyItems = fn ($fx, $folder) => read_data_file("$fx/$folder/.gallery-items.php");
+$fxT = $tidyBuild('tidy-careful', 'tidy-pw-1'); [$baseT, $hdrT] = $tidyStart($fxT, 'tidy-pw-1');
+first_look($baseT, ['Rome/imp.jpg', 'Rome/dif.jpg', 'Rome/lab.jpg', 'Rome/hid.jpg', 'Rome/chk.jpg', 'Rome/clr.jpg', 'Rome/solo.jpg', 'Rome/shot.jpg', 'Rome/plain.jpg', 'Rome/manual.jpg', 'Paris/p1.jpg'], $hdrT);   // (late.jpg is left unread; the owner's own browsing makes the pictures, private ones included)
+$tOrig = file_get_contents("$fxT/Rome/.gallery-items.php");
+$tPrev = $tidyCall($baseT, $hdrT, ['mode' => 'careful']);
+check('[tidy] a preview says what would change and writes nothing: the folder\'s data is byte for byte as it was, and no backup is made', ($tPrev['ok'] ?? false) && ($tPrev['applied'] ?? true) === false && file_get_contents("$fxT/Rome/.gallery-items.php") === $tOrig && !glob("$fxT/*/.gallery-items.before-tidy-*") && ($tPrev['backups'] ?? -1) === 0);
+$tT = $tPrev['totals'] ?? [];
+check('[tidy] careful: the saved locations that are copies of what their files say are found (imp, hid, solo and Paris\'s p1)', ($tT['copies'] ?? 0) === 4, json_encode($tT));
+check('[tidy] ...and what is kept is listed: the one that differs, the one with a label, the one for a file that says nothing, the unread one, and the old mark that may be a removal', ($tT['edited'] ?? 0) === 1 && ($tT['labelled'] ?? 0) === 1 && ($tT['noFile'] ?? 0) === 2 && ($tT['ambiguous'] ?? 0) === 1 && ($tT['unread'] ?? 0) === 1, json_encode($tT));
+$tApply = $tidyCall($baseT, $hdrT, ['mode' => 'careful', 'apply' => '1']);
+$tR = $tidyItems($fxT, 'Rome'); $tRi = $tR['items'] ?? [];
+check('[tidy] applying removes the copies, and with them the redundant marks', ($tApply['ok'] ?? false) && !isset($tRi['imp.jpg']['location']) && !isset($tRi['hid.jpg']['location']) && !isset($tRi['solo.jpg']) && empty($tRi['imp.jpg']['gpsChecked']) && empty($tRi['hid.jpg']['gpsChecked']) && empty($tRi['plain.jpg']['gpsChecked']) && empty($tRi['clr.jpg']['gpsChecked']) && empty($tRi['dif.jpg']['gpsChecked']));
+check('[tidy] ...and an entry that held only the copy is gone altogether', !array_key_exists('solo.jpg', $tRi));
+check('[tidy] captions, links, private flags, the location switch, the removed-on-purpose flag and everything else on those photos are exactly as they were', ($tRi['imp.jpg']['caption'] ?? '') === 'Colosseum at dawn' && ($tRi['imp.jpg']['web'] ?? '') === 'https://example.com/c' && ($tRi['imp.jpg']['restriction'] ?? '') === 'private' && ($tRi['hid.jpg']['locationVisibility'] ?? '') === 'hide' && ($tRi['hid.jpg']['caption'] ?? '') === 'Hidden pin' && !empty($tRi['clr.jpg']['locationCleared']) && ($tRi['clr.jpg']['caption'] ?? '') === 'Private spot' && ($tRi['plain.jpg']['caption'] ?? '') === 'No GPS here' && ($tRi['manual.jpg']['caption'] ?? '') === 'Left alone');
+check('[tidy] ...and the folder\'s own settings are untouched (name, cover, location switch)', ($tR['displayName'] ?? '') === 'Rome trip' && ($tR['cover'] ?? '') === 'imp.jpg' && ($tR['locationEnabled'] ?? false) === true);
+check('[tidy] careful keeps what it can\'t vouch for: the location that differs, the labelled one, the place for a file that says nothing and the unread file\'s; the old mark that might mean a removal stays', ($tRi['dif.jpg']['location']['lat'] ?? 0) === 10.5 && ($tRi['lab.jpg']['location']['label'] ?? '') === 'Hotel Roma' && ($tRi['shot.jpg']['location']['lat'] ?? 0) === 1.5 && ($tRi['late.jpg']['location']['lat'] ?? 0) === 41.9 && !empty($tRi['chk.jpg']['gpsChecked']));
+check('[tidy] each changed folder was copied first, to a guarded file that holds exactly what was there before; a folder with nothing to change got no backup', count(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")) === 1 && str_starts_with((string) file_get_contents(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")[0]), '<?php') && file_get_contents(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")[0]) === $tOrig && ($tApply['backups'] ?? 0) === 2 && count(glob("$fxT/Paris/.gallery-items.before-tidy-*.php")) === 1);
+check('[tidy] the removed copies are not lost: the photos still show the same locations, now from the files', abs((float) (item_get($baseT, $hdrT, 'Rome/imp.jpg')['auto']['lat'] ?? 0) - 41.9) < 0.01 && abs((float) (item_get($baseT, $hdrT, 'Paris/p1.jpg')['auto']['lat'] ?? 0) - 48.85) < 0.01 && substr_count(http_get("$baseT/?folder=Rome")[1], 'location-badge') >= 3);
+$tAgain = $tidyCall($baseT, $hdrT, ['mode' => 'careful']);
+check('[tidy] doing it again finds nothing more to remove', ($tAgain['totals']['copies'] ?? -1) === 0 && ($tAgain['totals']['marks'] ?? -1) === 0 && ($tAgain['totals']['changed'] ?? -1) === 0);
+check('[tidy] the backup is not picked up as a gallery file and answers 404 when asked for directly', http_get("$baseT/Rome/" . basename(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")[0]))[0] === 404 && !str_contains(http_get("$baseT/?folder=Rome")[1], 'before-tidy'));
+check('[tidy] a visitor cannot run it, and without the admin\'s token nothing happens', !isset(json_decode(http_post("$baseT/?admin", ['action' => 'media_tidy', 'mode' => 'refresh', 'apply' => '1', 'csrf_token' => 'x'], ['X-Requested-With: gallery-fetch'])[1] ?? '', true)['totals']) && (json_decode(http_post("$baseT/?admin", ['action' => 'media_tidy', 'apply' => '1'], $hdrT)[1], true)['ok'] ?? true) === false);
+// refresh: the owner never typed a location
+$fxT2 = $tidyBuild('tidy-refresh', 'tidy-pw-2'); [$baseT2, $hdrT2] = $tidyStart($fxT2, 'tidy-pw-2');
+first_look($baseT2, ['Rome/imp.jpg', 'Rome/dif.jpg', 'Rome/lab.jpg', 'Rome/hid.jpg', 'Rome/chk.jpg', 'Rome/clr.jpg', 'Rome/solo.jpg', 'Rome/shot.jpg', 'Rome/plain.jpg', 'Rome/manual.jpg', 'Paris/p1.jpg'], $hdrT2);
+$tFApply = $tidyCall($baseT2, $hdrT2, ['mode' => 'refresh', 'apply' => '1']); $tFi = $tidyItems($fxT2, 'Rome')['items'] ?? [];
+check('[tidy] refresh: the saved location that differs from its file goes too, so the file\'s is used (and Paris\'s copy goes as usual)', ($tFApply['ok'] ?? false) && ($tFApply['totals']['refreshed'] ?? 0) === 1 && !isset($tFi['dif.jpg']['location']) && abs((float) (item_get($baseT2, $hdrT2, 'Rome/dif.jpg')['auto']['lat'] ?? 0) - 41.9) < 0.01 && !isset($tidyItems($fxT2, 'Paris')['items']['p1.jpg']['location']));
+check('[tidy] ...the old mark on a photo whose file has a location is cleared, so the file\'s location shows (the removal flag still wins)', empty($tFi['chk.jpg']['gpsChecked']) && abs((float) (item_get($baseT2, $hdrT2, 'Rome/chk.jpg')['auto']['lat'] ?? 0) - 41.9) < 0.01 && !empty($tFi['clr.jpg']['locationCleared']) && item_get($baseT2, $hdrT2, 'Rome/clr.jpg')['auto'] === null);
+check('[tidy] ...but a labelled location, one for a file that says nothing and an unread file\'s stay, and everything else of the owner\'s is as it was', ($tFi['lab.jpg']['location']['label'] ?? '') === 'Hotel Roma' && ($tFi['shot.jpg']['location']['lat'] ?? 0) === 1.5 && ($tFi['late.jpg']['location']['lat'] ?? 0) === 41.9 && ($tFi['imp.jpg']['caption'] ?? '') === 'Colosseum at dawn' && ($tFi['imp.jpg']['restriction'] ?? '') === 'private' && ($tFi['dif.jpg']['caption'] ?? '') === 'Moved' && ($tFi['hid.jpg']['locationVisibility'] ?? '') === 'hide');
+// the cache off: nothing was read, so nothing to compare with
+$fxT3 = new_fixture_dir('tidy-nocache'); make_gps_jpeg("$fxT3/a.jpg", 'N', [[41, 1], [54, 1], [0, 1]], 'E', [[12, 1], [29, 1], [0, 1]]);
+write_data_file("$fxT3/.gallery-items.php", ['items' => ['a.jpg' => ['location' => ['lat' => 41.9, 'lng' => 12.4833, 'label' => ''], 'gpsChecked' => true]], 'groups' => [], 'locationEnabled' => true] + items_default_for_tests());
+file_put_contents("$fxT3/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'tidy-pw-3', 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_THUMBNAIL_CACHE' => false])); copy($indexSrc, "$fxT3/index.php");
+[$baseT3, $hdrT3] = $tidyStart($fxT3, 'tidy-pw-3'); $tN = $tidyCall($baseT3, $hdrT3, ['mode' => 'refresh', 'apply' => '1']);
+check('[tidy] with the thumbnail cache off it refuses and changes nothing', ($tN['ok'] ?? null) === false && !empty(read_data_file("$fxT3/.gallery-items.php")['items']['a.jpg']['location']) && !glob("$fxT3/.gallery-items.before-tidy-*"));
 
 /* --------------------------------------------------------------------- */
 

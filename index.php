@@ -5764,6 +5764,100 @@ function media_file_location($entry, $rec) {
     return ['lat' => (float) $rec['g'][0], 'lng' => (float) $rec['g'][1], 'label' => ''];
 }
 
+/** Tidy up: what a folder's saved data holds that the files already say. Older versions copied each photo's location from its file into the
+ *  folder's data (and marked the photo "checked"); the files, read once into the cache, are now the only place that belongs. This goes through
+ *  $names (bare file names of one folder) in $items (the folder's saved item data, changed in place) and takes out the copies and the redundant
+ *  marks, and nothing else: captions, links, private flags and every other field are never touched.
+ *   - a saved location equal to the file's (to about 10 m) with no label is a copy: removed;
+ *   - one that differs from the file's with no label: kept and listed, or with $refresh (the owner typed none) removed so the file's shows;
+ *   - one with a label (the owner's words): always kept, and listed;
+ *   - one the file can't confirm (it has none, couldn't be read, or hasn't been read yet): kept, and listed;
+ *   - "checked" marks: removed where redundant (a location is saved, the file has none, a location was cleared on purpose) and, with $refresh,
+ *     where the file has a location; otherwise left, and listed, because they may mean the owner removed the location.
+ *  Returns counts (n) and capped lists of what was kept. */
+function media_tidy_items(array &$items, array $recs, $folderReal, array $names, $refresh) {
+    $n = ['copies' => 0, 'refreshed' => 0, 'marks' => 0, 'edited' => 0, 'labelled' => 0, 'noFile' => 0, 'ambiguous' => 0, 'unread' => 0, 'changed' => 0];
+    $lists = ['edited' => [], 'labelled' => [], 'noFile' => [], 'ambiguous' => []];
+    $note = function ($kind, $name, $saved, $file) use (&$lists) { if (count($lists[$kind]) < 60) $lists[$kind][] = ['name' => $name, 'saved' => $saved, 'file' => $file]; };
+    foreach ($names as $bare) {
+        if (!isset($items[$bare]) || !is_array($items[$bare])) continue;
+        $e = $items[$bare]; $new = $e;
+        $rec = $recs[$bare] ?? null;
+        $fresh = media_meta_fresh($rec, $folderReal . '/' . $bare);
+        $fileLoc = ($fresh && ($rec['gs'] ?? '') === 'ok' && is_array($rec['g'] ?? null)) ? [(float) $rec['g'][0], (float) $rec['g'][1]] : null;
+        $fileNone = $fresh && in_array($rec['gs'] ?? '', ['none', 'na'], true);
+        if (!empty($e['location']) && is_array($e['location'])) {
+            $saved = [(float) ($e['location']['lat'] ?? 0), (float) ($e['location']['lng'] ?? 0)];
+            $label = trim((string) ($e['location']['label'] ?? ''));
+            if ($fileLoc === null) {
+                if (!$fresh) $n['unread']++;
+                $n['noFile']++; $note('noFile', $bare, $saved, null);
+            } elseif ($label !== '') {
+                $n['labelled']++; $note('labelled', $bare, $saved, $fileLoc);
+            } elseif (abs($saved[0] - $fileLoc[0]) < 0.0001 && abs($saved[1] - $fileLoc[1]) < 0.0001) {
+                $n['copies']++; unset($new['location']);
+            } elseif ($refresh) {
+                $n['refreshed']++; unset($new['location']);
+            } else {
+                $n['edited']++; $note('edited', $bare, $saved, $fileLoc);
+            }
+            unset($new['gpsChecked']);   // (a photo with a location of its own needs no mark)
+        } elseif (!empty($e['gpsChecked'])) {
+            if (!empty($e['locationCleared']) || $fileNone || ($fileLoc !== null && $refresh)) unset($new['gpsChecked']);
+            elseif ($fileLoc !== null) { $n['ambiguous']++; $note('ambiguous', $bare, null, $fileLoc); }
+            elseif (!$fresh) $n['unread']++;
+        }
+        if (array_key_exists('gpsChecked', $e) && !array_key_exists('gpsChecked', $new)) $n['marks']++;
+        if ($new !== $e) {
+            $n['changed']++;
+            if ($new === []) unset($items[$bare]); else $items[$bare] = $new;
+        }
+    }
+    return ['n' => $n, 'lists' => $lists];
+}
+
+/** Tidy up across the whole gallery: a preview ($apply false: nothing is written) or the real thing. Each folder that will change is copied
+ *  first to .gallery-items.before-tidy-<date>.php (guarded like the original); a folder whose backup can't be made is left alone and reported. */
+function media_tidy_run($dir, $files, $refresh, $apply) {
+    $byFolder = [];
+    foreach ($files as $file) {
+        $real = containing_folder_real_path($dir, $file);
+        $byFolder[$real]['names'][] = basename($file);
+        $byFolder[$real]['folder'] = ($slash = strrpos($file, '/')) === false ? '' : substr($file, 0, $slash);
+    }
+    $rows = []; $errors = []; $backups = 0; $stamp = date('Ymd-His');
+    foreach ($byFolder as $folderReal => $info) {
+        $recs = media_meta_load($folderReal);
+        $items = items_read($folderReal)['items'] ?? [];
+        if (!is_array($items)) continue;
+        $res = media_tidy_items($items, $recs, $folderReal, $info['names'], $refresh);
+        $row = ['folder' => $info['folder']] + $res;
+        if ($apply && $res['n']['changed'] > 0) {
+            $src = items_path($folderReal);
+            $backup = $folderReal . '/.gallery-items.before-tidy-' . $stamp . '.php';
+            if (!@copy($src, $backup)) {
+                $errors[] = ($info['folder'] === '' ? '(top level)' : $info['folder']) . ': a backup could not be made (is the folder writable by the web server?), so it was left as it is.';
+                $row['skipped'] = true;
+                $rows[] = $row; continue;
+            }
+            $backups++;
+            $failedBefore = !empty($GLOBALS['__data_write_failed']); $GLOBALS['__data_write_failed'] = false;
+            $names = $info['names'];
+            items_update($folderReal, function (&$d) use ($recs, $folderReal, $names, $refresh) {
+                $its = is_array($d['items'] ?? null) ? $d['items'] : [];
+                media_tidy_items($its, $recs, $folderReal, $names, $refresh);
+                $d['items'] = $its;
+            });
+            if (!empty($GLOBALS['__data_write_failed'])) { $errors[] = ($info['folder'] === '' ? '(top level)' : $info['folder']) . ': the changes could not be saved.'; $row['skipped'] = true; }
+            $GLOBALS['__data_write_failed'] = $failedBefore;
+        }
+        $rows[] = $row;
+    }
+    $tot = ['copies' => 0, 'refreshed' => 0, 'marks' => 0, 'edited' => 0, 'labelled' => 0, 'noFile' => 0, 'ambiguous' => 0, 'unread' => 0, 'changed' => 0, 'folders' => 0];
+    foreach ($rows as $r) { foreach ($r['n'] as $k => $v) $tot[$k] += $v; if ($r['n']['changed'] > 0) $tot['folders']++; }
+    return ['rows' => $rows, 'totals' => $tot, 'errors' => $errors, 'backups' => $backups];
+}
+
 /** A numeric latitude/longitude pair, validated the same discipline
  *  is_safe_color() already applies to {color:} before it's ever trusted
  *  into a generated map-link URL. */
@@ -6340,6 +6434,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $r = media_prepare_batch($dir, $files, (int) ($_POST['from'] ?? 0), 1.0, min(8, max(1, (int) ($_POST['step'] ?? 1))), $again, $again && !empty($_POST['remake']));
         $r['ok'] = true; $r['text'] = '';
         admin_json_exit($r);
+    }
+
+    // Tidy up saved locations: what the folders' data holds that the files already say (a preview, or the real thing with a backup first).
+    if ($action === 'media_tidy') {
+        if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'The thumbnail cache is switched off in the site settings, so the files can\'t have been read and there is nothing to compare with.']);
+        @set_time_limit(120);
+        $apply = !empty($_POST['apply']);
+        $res = media_tidy_run($dir, $files, ($_POST['mode'] ?? '') === 'refresh', $apply);
+        admin_json_exit(['ok' => true, 'text' => ''] + $res + ['applied' => $apply]);
     }
 
     // What the gallery knows and doesn't know about each folder's files (Prepare media's list).
@@ -9173,13 +9276,23 @@ function render_admin_thumbnails_panel($csrfToken) {
     <section class="panel media-panel" id="media-panel" data-csrf="<?= $csrfToken ?>" data-left="<?= (int) $left ?>" data-total="<?= (int) $r['total'] ?>">
       <h2 class="section-title">Prepare media</h2>
       <p class="muted" style="margin-top:0;">For every photo and video, the gallery makes its thumbnails and reads what the file says about itself, when it was taken and where, <strong>once</strong>, and keeps the answers in the thumbnail cache. That happens by itself the first time a photo is shown, so this is for doing a whole gallery ahead of time, and for catching up on anything added since. It works through the files as fast as the server allows, with a live percentage; stop whenever you like, what is done stays done. Whether locations are <em>shown</em> is decided by the location switches, never by this.</p>
-      <p class="media-line"><strong class="media-count <?= $left === 0 ? 'ok-text' : '' ?>"><?= $left === 0 ? 'Everything is prepared: ' . number_format($r['total']) . ' file' . ($r['total'] === 1 ? '' : 's') . '.' : number_format($r['total'] - $left) . ' of ' . number_format($r['total']) . ' files are prepared.' ?></strong>
+      <p class="media-line"><strong class="media-count <?= $left === 0 ? 'ok-text' : '' ?>"><?= $left === 0 ? 'Everything is prepared: ' . number_format($r['total']) . ' file' . ($r['total'] === 1 ? '' : 's') . '.' : 'Thumbnails ready: ' . number_format($r['tilesReady']) . ' of ' . number_format($r['photos']) . ' photos. Read from the files: ' . number_format($r['total'] - $r['metaLeft']) . ' of ' . number_format($r['total']) . ' files.' ?></strong>
         <button type="button" class="secondary media-go"<?= $left === 0 ? ' hidden' : '' ?>>Prepare the rest</button>
         <button type="button" class="secondary media-stop" hidden>Stop</button></p>
       <div class="media-bar" hidden><span></span></div>
       <details class="media-more">
         <summary>What the gallery knows about each folder</summary>
         <div class="media-report" aria-live="polite"><p class="muted">Loading&hellip;</p></div>
+      </details>
+      <details class="media-tidy-box">
+        <summary>Tidy up saved locations</summary>
+        <p class="hint">Older versions copied each photo's location from its file into the folder's saved data. Now the files are read once into the cache, and that is the only place those locations belong, so the copies can go (otherwise they go stale when a photo is replaced). This changes nothing else: <strong>captions, links, private flags, covers and each photo's Location switch are never touched</strong>. Every folder that changes is copied first to <code>.gallery-items.before-tidy-&hellip;.php</code>. Run <em>Prepare the rest</em> first: a file that hasn't been read can't be compared, so its location is left as it is. Pressing the first button only shows what would change.</p>
+        <div class="media-tidy-modes">
+          <label class="check"><input type="radio" name="media-tidy-mode" value="careful" checked> <strong>Careful.</strong> Remove only saved locations that match the file and have no label. One that differs from the file, or has a label, is kept and listed.</label>
+          <label class="check"><input type="radio" name="media-tidy-mode" value="refresh"> <strong>Refresh from the files.</strong> I never typed a location: use the file's wherever it has one, even where the saved one differs. A saved location with a label is still kept, and so is one the file can't confirm. Old &ldquo;checked&rdquo; marks are cleared too.</label>
+        </div>
+        <p><button type="button" class="secondary media-tidy-preview">Show what would change</button></p>
+        <div class="media-tidy-out" aria-live="polite"></div>
       </details>
       <details class="media-again-box">
         <summary>Read everything again</summary>
@@ -9732,6 +9845,21 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .media-table th, .media-table td { text-align:left; vertical-align:top; padding:6px 10px; border-bottom:1px solid #2c2c31; }
   .media-table th { color:#9a9aa2; font-weight:600; white-space:nowrap; }
   .media-table .media-folder { word-break:break-word; }
+  .media-tidy-box { margin-top:12px; }
+  .media-tidy-box > summary { cursor:pointer; font-weight:600; }
+  .media-tidy-modes label { display:block; margin:8px 0; }
+  .media-tidy-folder { margin:8px 0; padding:6px 10px; border:1px solid #2c2c31; border-radius:8px; }
+  .media-tidy-folder > summary { cursor:pointer; }
+  .media-tidy-folder ul { margin:4px 0 8px 18px; padding:0; font-size:0.85rem; }
+  @media (max-width:640px) {
+    .media-table, .media-table tbody, .media-table tr, .media-table td { display:block; width:auto; min-width:0; }
+    .media-table thead { display:none; }
+    .media-table tr { padding:8px 0; border-bottom:1px solid #2c2c31; }
+    .media-table td { border:0; padding:2px 0; }
+    .media-table td::before { content:attr(data-label) ': '; color:#9a9aa2; font-weight:600; }
+    .media-table td.media-folder { font-weight:700; }
+    .media-table td.media-folder::before { content:''; }
+  }
   .health-mark .ico { width:1.1em; height:1.1em; }
   .health-summary .secondary { padding:3px 12px; font-size:0.8rem; }
   .accel-status:empty { display:none; }
@@ -10236,10 +10364,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           .then(function (j) {
             reportBox.textContent = '';
             if (!j.ok || !j.rows.length) { reportBox.appendChild(text('p', 'muted', j.ok ? 'There are no photos or videos yet.' : (j.text || 'The list could not be loaded.'))); return; }
-            const wrap = text('div', 'media-table-wrap', ''), table = document.createElement('table'), head = document.createElement('tr');
+            const wrap = text('div', 'media-table-wrap', ''), table = document.createElement('table'), thead = document.createElement('thead'), head = document.createElement('tr'), tbody = document.createElement('tbody');
+            const heads = ['Folder', 'Files', 'Thumbnails', 'Locations in the files', 'Capture dates', "Saved in the folder's data"];
             table.className = 'media-table';
-            ['Folder', 'Files', 'Thumbnails', 'Locations in the files', 'Capture dates', 'Set by you'].forEach(function (h) { head.appendChild(text('th', '', h)); });
-            table.appendChild(head);
+            heads.forEach(function (h) { head.appendChild(text('th', '', h)); });
+            thead.appendChild(head); table.appendChild(thead); table.appendChild(tbody);
             let legacy = 0;
             j.rows.forEach(function (r) {
               const tr = document.createElement('tr'), loc = [];
@@ -10247,7 +10376,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
               if (r.none + r.na) loc.push((r.none + r.na) + ' without');
               if (r.unread) loc.push(r.unread + ' not read yet');
               const own = [];
-              if (r.own) own.push(r.own + ' location' + (r.own === 1 ? '' : 's') + ' typed in');
+              if (r.own) own.push(r.own + ' location' + (r.own === 1 ? '' : 's'));
               if (r.cleared) own.push(r.cleared + ' removed on purpose');
               if (r.legacy) own.push(r.legacy + ' old "nothing found" mark' + (r.legacy === 1 ? '' : 's'));
               legacy += r.legacy;
@@ -10259,14 +10388,76 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
               tr.appendChild(lc);
               tr.appendChild(text('td', '', r.dated + (r.undated ? ' of ' + (r.dated + r.undated) : '') + ' dated'));
               tr.appendChild(text('td', '', own.join(', ') || '—'));
-              table.appendChild(tr);
+              [].forEach.call(tr.children, function (td, i) { td.setAttribute('data-label', heads[i]); });
+              tbody.appendChild(tr);
             });
             wrap.appendChild(table); reportBox.appendChild(wrap);
-            if (legacy) reportBox.appendChild(text('p', 'hint', 'An old mark means an earlier version of the gallery looked at that photo and found no location. They are left alone; "Read everything again" reads them too.'));
+            reportBox.appendChild(text('p', 'hint', 'Saved in the folder\'s data are locations kept next to the captions: copies an older version made from the files, or ones you set. "Tidy up saved locations" (below) compares them with the files.'));
+            if (legacy) reportBox.appendChild(text('p', 'hint', 'An old mark means an earlier version of the gallery looked at that photo and found no location. They are left alone; "Tidy up" and "Read everything again" deal with them.'));
           })
           .catch(function () { reportBox.textContent = ''; reportBox.appendChild(text('p', 'warn-text', 'The list could not be loaded.')); });
       };
       more.addEventListener('toggle', function () { if (more.open) loadReport(); });
+      // Tidy up saved locations: a preview first, then the real thing (every folder that changes is backed up first).
+      const tidyOut = panel.querySelector('.media-tidy-out'), tidyBtn = panel.querySelector('.media-tidy-preview');
+      const tidyMode = function () { const c = panel.querySelector('input[name=media-tidy-mode]:checked'); return c ? c.value : 'careful'; };
+      const tidyAsk = function (apply) {
+        const body = new URLSearchParams();
+        body.set('csrf_token', panel.dataset.csrf); body.set('action', 'media_tidy'); body.set('mode', tidyMode()); if (apply) body.set('apply', '1');
+        return fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); });
+      };
+      const coords = function (c) { return c ? c[0].toFixed(5) + ', ' + c[1].toFixed(5) : 'none'; };
+      const tidyShow = function (j) {
+        tidyOut.textContent = '';
+        if (!j.ok) { tidyOut.appendChild(text('p', 'warn-text', j.text || 'That did not work.')); return; }
+        const t = j.totals, gone = t.copies + t.refreshed;
+        if (j.applied) {
+          tidyOut.appendChild(text('p', gone || t.marks ? 'ok-text' : 'muted', gone || t.marks ? 'Done. Removed ' + many(gone, 'saved location') + ' that the files already say and ' + many(t.marks, 'old mark') + ', in ' + many(t.folders, 'folder') + '. ' + many(j.backups, 'backup') + ' made (.gallery-items.before-tidy-….php in each folder).' : 'Nothing needed tidying.'));
+          j.errors.forEach(function (e) { tidyOut.appendChild(text('p', 'warn-text', e)); });
+        } else if (!gone && !t.marks) {
+          tidyOut.appendChild(text('p', 'ok-text', 'Nothing to tidy: no saved location is a copy of what a file says.'));
+        } else {
+          tidyOut.appendChild(text('p', '', 'Would remove ' + many(t.copies, 'saved location') + ' that match their file' + (t.refreshed ? ' and ' + many(t.refreshed, 'one') + ' that differ (the file\'s location is used instead)' : '') + ', and clear ' + many(t.marks, 'old mark') + ', in ' + many(t.folders, 'folder') + '. Nothing else changes.'));
+        }
+        const kept = [];
+        if (t.edited) kept.push(many(t.edited, 'location') + ' differ from the file and are kept');
+        if (t.labelled) kept.push(many(t.labelled, 'location') + ' with a label are kept');
+        if (t.noFile) kept.push(many(t.noFile, 'location') + " can't be confirmed by the file and are kept");
+        if (t.ambiguous) kept.push(many(t.ambiguous, 'old mark') + ' left (the file has a location but the mark may mean you removed it)');
+        if (t.unread) kept.push(many(t.unread, 'photo') + " haven't been read yet (Prepare the rest first)");
+        if (kept.length) tidyOut.appendChild(text('p', 'hint', (j.applied ? 'Left as they were: ' : 'Kept: ') + kept.join('; ') + '.'));
+        const names = { edited: 'Differs from the file', labelled: 'Has a label', noFile: 'The file can\'t confirm', ambiguous: 'Old mark, the file has a location' };
+        j.rows.forEach(function (r) {
+          const parts = [], keptKinds = Object.keys(names).filter(function (k) { return r.lists[k].length; });
+          if (r.n.copies + r.n.refreshed) parts.push((j.applied ? 'removed ' : 'would remove ') + many(r.n.copies + r.n.refreshed, 'location'));
+          if (r.n.marks) parts.push(many(r.n.marks, 'mark') + (j.applied ? ' cleared' : ' to clear'));
+          if (!parts.length && !keptKinds.length) return;
+          const box = document.createElement('details'); box.className = 'media-tidy-folder';
+          const sum = document.createElement('summary'); sum.textContent = (r.folder === '' ? '(top level)' : r.folder) + ': ' + (parts.join(', ') || 'nothing to change') + (keptKinds.length ? ' (' + keptKinds.length + ' list' + (keptKinds.length === 1 ? '' : 's') + ' of what is kept)' : '');
+          box.appendChild(sum);
+          Object.keys(names).forEach(function (k) {
+            if (!r.lists[k].length) return;
+            box.appendChild(text('p', 'hint', names[k] + ' (' + r.n[k] + '):'));
+            const ul = document.createElement('ul');
+            r.lists[k].forEach(function (x) { ul.appendChild(text('li', '', x.name + (x.saved ? ' (saved ' + coords(x.saved) + ')' : '') + (k === 'edited' || k === 'labelled' || k === 'ambiguous' ? ' (file ' + coords(x.file) + ')' : ''))); });
+            box.appendChild(ul);
+          });
+          tidyOut.appendChild(box);
+        });
+        if (!j.applied && (gone || t.marks)) {
+          const go2 = document.createElement('button'); go2.type = 'button'; go2.className = 'secondary'; go2.textContent = 'Tidy up now';
+          go2.addEventListener('click', function () {
+            if (!confirm('Tidy up ' + many(t.folders, 'folder') + '?\n\nEach folder is copied first (.gallery-items.before-tidy-….php). Captions, links, private flags and every other setting stay exactly as they are.')) return;
+            go2.disabled = true; tidyBtn.disabled = true;
+            tidyAsk(true).then(function (r) { tidyBtn.disabled = false; tidyShow(r); if (more.open) loadReport(); }).catch(function () { tidyBtn.disabled = false; go2.disabled = false; tidyOut.appendChild(text('p', 'warn-text', 'The server did not answer.')); });
+          });
+          tidyOut.appendChild(go2);
+        }
+      };
+      tidyBtn.addEventListener('click', function () {
+        tidyBtn.disabled = true; tidyOut.textContent = ''; tidyOut.appendChild(text('p', 'muted', 'Comparing…'));
+        tidyAsk(false).then(function (j) { tidyBtn.disabled = false; tidyShow(j); }).catch(function () { tidyBtn.disabled = false; tidyOut.textContent = ''; tidyOut.appendChild(text('p', 'warn-text', 'The server did not answer.')); });
+      });
       const finish = function () {
         if (active > 0) return;
         running = false; stop.hidden = true; stop.disabled = false; again.disabled = false;
