@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.2.0');
+define('GALLERY_VERSION', '2.3.0');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -13513,6 +13513,7 @@ function render_about_page() {
     <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>
     <li><strong>Prepare thumbnails</strong> makes every photo's pictures ahead of time with a progress bar, so the first visit to a big folder isn't slow</li>
     <li>Markdown notes with <code>{photos}</code>, <code>{group}</code>, <code>{sold}</code> and <code>{reserved}</code>, for trips or for-sale listings</li>
+    <li><strong>Temporary share links for private things:</strong> make one from a private folder, a photo or a selection, limit it by opens, by time and to chosen folders or photos, send it as an address or a QR code, preview exactly what it shows, and read a log of who looked at what; revoke it and it stops at once</li>
     <li>Private photos and folders behind a separate viewer password, and visit counts</li>
     <li>On an iPhone, add the gallery to your Home Screen while signed in and it opens as an app with no browser bars</li>
     <li>Export everything you typed as JSON, the only backup you need of captions and places</li>
@@ -13523,6 +13524,7 @@ function render_about_page() {
     <li>Writes only its own small files (thumbnails, settings, captions) and never touches your photos</li>
     <li>Locations, maps, video, subfolders and passwords stay off until you turn them on, and the admin says what each one publishes</li>
     <li>Private items are removed outright for anyone without the password, and the sign-in box is built so browsers don't offer to save it</li>
+    <li>A share link shows only what it was made for, never tells whoever uses it that anything else is private, and is checked again on every request, so pausing or revoking it cuts people off at once</li>
   </ul>
 
   <h2>Documentation</h2>

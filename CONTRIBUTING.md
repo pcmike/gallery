@@ -45,11 +45,12 @@ The minimum is **PHP 8.3**, and it's a tested claim: the whole suite and every t
 
 ## Optional tools: fuzzing and JavaScript checks
 
-Four extra checks live in [`tests/tools/`](tests/tools/README.md), outside the main suite because they need a bit more (python3, plus Chromium for the browser one and QuickJS for the JavaScript one): a **fuzzer** that sends a few thousand hostile requests at every endpoint with PHP reporting every error, a **cross-site-scripting canary** (`xss.py`) that plants payloads in every input and fails if any comes back unescaped in a dangerous context, a **real-browser run** (headless Chromium: clicks, key presses, layout, the map, a real admin form under its CSP, screenshots), and a **JavaScript runner** that executes the page scripts against a fake DOM and a fake Leaflet. Both are worth running after touching request handling, the admin, or any inline script — the fuzzer is what found the `?size[]=` fatal error and the admin NUL-byte crash that the main suite hadn't thought to try.
+Five extra checks live in [`tests/tools/`](tests/tools/README.md), outside the main suite because they need a bit more (python3, plus Chromium for the browser one and QuickJS for the JavaScript one): a **fuzzer** that sends thousands of hostile requests at every endpoint with PHP reporting every error, a **cross-site-scripting canary** (`xss.py`) that plants payloads in every input and fails if any comes back unescaped in a dangerous context, a **real-browser run** (headless Chromium: clicks, key presses, layout, the map, a real admin form under its CSP, screenshots), a **JavaScript runner** that executes the page scripts against a fake DOM and a fake Leaflet, and a small **reference QR encoder and decoder** that the browser run uses to check the gallery's own QR code. Both are worth running after touching request handling, the admin, or any inline script — the fuzzer is what found the `?size[]=` fatal error and the admin NUL-byte crash that the main suite hadn't thought to try.
 
 ```
 python3 tests/tools/fuzz/fuzz.py
 python3 tests/tools/fuzz/xss.py
+python3 tests/tools/qr/qr_reference.py
 python3 tests/tools/browser/browser_checks.py --shots /tmp/gallery-shots
 QJS=/path/to/qjs python3 tests/tools/js/run_js_checks.py
 ```

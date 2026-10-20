@@ -1,6 +1,6 @@
 # Share links: build plan
 
-Branch `v2.3.0-dev` (from `main` at 2.2.0, `9b23f49`). **Not released and not pushed until the owner says so.** Reasons for every choice: [DECISIONS.md](DECISIONS.md). Pictures of every screen: [mockups/png/](mockups/png/) (and the generators in [mockups/](mockups/)).
+Branch `v2.3.0-dev` (from `main` at 2.2.0, `9b23f49`). **Built (M1 to M5); not released and not pushed until the owner says so.** Reasons for every choice: [DECISIONS.md](DECISIONS.md). Pictures of every screen: [mockups/png/](mockups/png/) (and the generators in [mockups/](mockups/)).
 
 Working rules for this branch (from the repo and the owner): single file, no dependencies, graceful degradation; every user-facing change bumps `GALLERY_VERSION` + CHANGELOG + README + `?about` together; `php -l` and the whole suite before each commit; a test per behaviour; commit per milestone; PHP ≥ 8.3 (tested on 8.3 and 8.4). Don't start the long browser suite casually (about 17 min for the whole chain).
 
@@ -76,10 +76,12 @@ Each ends with: `php -l`, the full `tests/run.php` on PHP 8.4 and 8.3, a commit 
 - Not done here (needs a real phone): the iPhone share sheet, copying the QR as a picture, the full-screen QR held up to a camera, Save Image from the share sheet.
 - Cosmetic, still open: on a phone the Share links tab's "2 not ended · 0 ended" line wraps into four short lines beside the Links / IP addresses switch.
 
-### M5 · Finish
-- [ ] README (Share links section, backup list, nginx/Apache snippet, Private items now leads with links), `?about`, CHANGELOG, `GALLERY_VERSION` 2.3.0, `gallery-config.example.php`.
-- [ ] Browser tests: the opening page, scoped holder and tab are done (M3); still to add: the share/QR UI, preview as a link, Share this folder, the photo popup. XSS and fuzz runs, JS checks.
-- [ ] Full chain on 8.4 and 8.3; a real-phone checklist for the owner.
+### M5 · Finish: DONE except the owner's real-phone check (commit "M5")
+- [x] README (a **Share links** section; the Private photos recipe and the Private items intro lead with links; the settings table, the admin list, the data files, Downloads, Security notes, Upgrading and the `.gitignore` block), `?about`, CHANGELOG `[2.3.0] - 2026-10-20` (re-date it at release), `GALLERY_VERSION` 2.3.0, `gallery-config.example.php`, `.gitignore`, the tools README and CONTRIBUTING.
+- [x] Browser tests (the opening page, a scoped holder, the tab and its log, the QR code against the reference, every share form, the viewer's question, the photo picker, preview, phone widths), XSS and fuzz runs, JS checks.
+- [x] Full chain on 8.4 and 8.3 (see the commit message for the numbers).
+- [ ] [PHONE-CHECKLIST.md](PHONE-CHECKLIST.md): the owner's real-phone check (Share sheet, copy and save the QR, the large QR held to a camera, Messages' preview, an app's own browser, the tidy address behind Cloudflare). Not testable from here.
+- Release only on the owner's say-so (`CMPR`): docs sweep, re-date the CHANGELOG, all suites, merge to `main`, tag `v2.3.0`, push, release assets.
 
 ## Call-site checklist (every place visibility is decided)
 

@@ -2,11 +2,11 @@
 
 A single-file, drop-in PHP photo gallery. No dependencies, no build step, no database to set up: put `index.php` in a folder of photos and it shows a gallery for that folder.
 
-Made for sharing "for sale" listings (Reddit, Discord…) as much as for plain galleries, with grouping by filename or by hand, a small Markdown notes box with sold/reserved markers, opt-in view stats and links that preview properly when shared. Version 2 also does **trips**: nested folders, video, captions and locations, an owner-only admin, private items, maps and sorting, sharp thumbnails and a full-screen viewer built for phones as much as desktops.
+Made for sharing "for sale" listings (Reddit, Discord…) as much as for plain galleries, with grouping by filename or by hand, a small Markdown notes box with sold/reserved markers, opt-in view stats and links that preview properly when shared. Version 2 also does **trips**: nested folders, video, captions and locations, an owner-only admin, private items you can share with temporary, logged links, maps and sorting, sharp thumbnails and a full-screen viewer built for phones as much as desktops.
 
 **Everything beyond the basic gallery is opt-in.** With nothing changed it writes only small thumbnails to a `.gallery-cache` folder, contacts no third party, and shows no subfolder, video or photo location. (It peeks into subfolders, read-only and capped at 40, only to warn you if photos there are being skipped.)
 
-**Contents:** [Quick start](#quick-start) · [Recipes](#recipes) · [Settings](#settings) · [Notes and directives](#notes-and-directives) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [Photo order](#photo-order) · [The viewer](#the-viewer) · [Thumbnails and phones](#thumbnails-and-phones) · [The admin](#the-admin) · [Private items](#private-items) · [Downloads](#downloads) · [Locking down the files](#locking-down-the-files) · [Maps](#maps) · [Sharing](#sharing-and-previews) · [Troubleshooting](#troubleshooting) · [Security](#security-notes) · [Upgrading](#upgrading-and-backups)
+**Contents:** [Quick start](#quick-start) · [Recipes](#recipes) · [Settings](#settings) · [Notes and directives](#notes-and-directives) · [Folders](#folders) · [Video](#video) · [Captions and locations](#captions-and-locations) · [Photo order](#photo-order) · [The viewer](#the-viewer) · [Thumbnails and phones](#thumbnails-and-phones) · [The admin](#the-admin) · [Private items](#private-items) · [Share links](#share-links) · [Downloads](#downloads) · [Locking down the files](#locking-down-the-files) · [Maps](#maps) · [Sharing](#sharing-and-previews) · [Troubleshooting](#troubleshooting) · [Security](#security-notes) · [Upgrading](#upgrading-and-backups)
 
 ## Quick start
 
@@ -61,9 +61,9 @@ Settings: `AUTO_GROUP_BY_FOLDER`, `ENABLE_PHOTO_LOCATION`, `ENABLE_MAP` (the one
 Videos show a play mark and length and play in the viewer. **Back up your captions** with *Export as JSON* in the admin.
 
 ### Private photos
-Settings: an admin password and `PRIVATE_VIEW_PASSWORD`.
+Settings: an admin password; `ENABLE_SHARE_LINKS` for [share links](#share-links), or `PRIVATE_VIEW_PASSWORD` for a password.
 1. Make a photo private with its **Private** switch (several at once with **Select**), or a whole folder with its **Private folder** switch (in the folder's settings). A photo can be switched back to public inside a private folder. To go through a folder before anyone sees it, see [Going through a private folder first](#going-through-a-private-folder-first).
-2. Give the viewer password to your people. They press the **lock** in the icon strip and type it once; the browser remembers for a year and the link you share never changes.
+2. Let people in. **A share link** is a temporary address (or QR code) for a person: limited by opens and time, optionally to one folder or a few photos, with a log of what they looked at, and you can pause or revoke it. Press **Share** on a private folder, or **Share…** on a photo or a selection. Or, for standing access, give your people the viewer password: they press the **lock** in the icon strip and type it once, and the browser remembers for a year.
 
 Visitors without the password see no trace of what's private. **Then lock the files themselves**: private only controls what the gallery serves ([Locking down the files](#locking-down-the-files)). The admin warns you on its Private tab until that's done.
 
@@ -101,6 +101,9 @@ Changed in **Site settings** (no Save button: each change saves as you make it) 
 | `EXTRA_ROOTS` / `EXTRA_FOLDERS` | none | Places elsewhere on the server (see [Archive elsewhere](#archive-elsewhere)) |
 | `ADMIN_PASSWORD` | none | Turns the admin on |
 | `PRIVATE_VIEW_PASSWORD` | none | Turns private view on |
+| `ENABLE_SHARE_LINKS` | off | Turns on [share links](#share-links) |
+| `SHARE_HEADS_UP` | off | A thin line at the top for people using a link: when it ends (each link can say otherwise) |
+| `TRUSTED_PROXY` / `TRUSTED_PROXY_RANGES` | `direct` / none | Where visitors' addresses come from, for share-link logs and the sign-in throttle: `direct` (the connection), `cloudflare`, or `proxy` (the `X-Forwarded-For` header, believed only from the ranges you list) |
 | `NGINX_ACCEL_REDIRECT_PREFIX` | none | The gallery's URL path (e.g. `/kb`), once nginx has the matching rules |
 
 ### The settings file
@@ -248,6 +251,7 @@ The sign-in box is deliberately **not a password field**, so browsers and passwo
 - **Settings** (*Folder settings* in a folder): the title or display name, dates, position, description, the order of the photos (including its own *Put first* list) and a *Privacy* section with three switches that look alike: *Private folder*, *Show photo locations publicly* and, indented under it (the map shows only photos whose location is public, so it is dimmed, with a note, while locations are off), the map. The gallery's top has the same form (without the folder switch), so a notes file isn't needed just to name it. **Nothing here has a Save button:** a text field saves when you leave it or a second after you stop typing, the order choices and every switch as soon as you change them, and each says *Saving…* or *Saved* beside its own label. A value that isn't valid (a position that isn't a whole number) is marked and not saved. Each save is checked against the record's fingerprint, so a change made in another tab is never overwritten, and a save sends only the field you changed, so nothing else is touched. (A browser without JavaScript still gets a Save button.)
 - **Notes**: every `.md` in the folder, edited as raw text and saved byte-for-byte; *Save*, *Save As* and *Delete* are separate (the latter two ask first) and locked to `.md` names. A file missing `{gallery}` is shown as not active with a one-click fix.
 - **Export**: the folder or whole tree as JSON, the only backup of what you typed.
+- **Share links** (while [share links](#share-links) are on): your links, what each has been used for and a log of who looked at what, with the buttons to pause, extend, replace the address, revoke or delete, **Preview as this link**, and **Copy**, **Share…** and a **QR code** for each. A **Share** button also sits in the icon strip of a private folder's page, **Share…** on the Private tab's folder rows and in Select mode, and the viewer's link button on a private photo asks whether you mean a share link.
 - **Private** (red, only while something is private; its lock warning and the rules come first, then **What is private**: a short summary, and one line per folder, private folders first, then public folders that hold private photos, each with its counts in words, such as "3 photos stay private · 39 photos become public when opened"). Press a line to open it: the private photos as thumbnails, each with a lock that works (press it to make that photo public, with an *Undo* for a few seconds; an open lock, a photo public inside a private folder, is made private again by the next press, so it stays in the list), *Show all* when there are more than twelve, and three links: *See them in the gallery* (the folder with those photos first), *Make public…* (a private folder: asks first with the counts, then opens it; the photos marked private stay private) and the folder's settings. Press a thumbnail to open that photo in the gallery's editor. **Site settings**, and a folder tree in the sidebar (a collapsed bar on a phone). While Site settings or Private is showing, the folder you came from is only softly tinted, so the one lit item is the one you are looking at.
 - Two tabs can't clobber each other: a save whose record changed elsewhere is refused with an explanation. The admin works at phone width.
 
@@ -258,14 +262,14 @@ The sign-in box is deliberately **not a password field**, so browsers and passwo
 Both passwords are stored in `.gallery-config.php` as **bcrypt hashes**, so a copy of that file doesn't give them away (a hash typed into the sign-in does nothing). New passwords are hashed on saving; a plain-text one (older file, or edited by hand) works and is replaced by its hash at the next sign-in, which signs everyone out once. Sign-in cookies are keyed with a per-install secret in `.gallery-secret.php` (deleting it signs everyone out). Pick long passwords: a short one can still be guessed from its hash. A forgotten password can't be read back: delete the `ADMIN_PASSWORD` line, create `.gallery-setup`, and open `?admin`. To write a hash yourself: `php -r 'echo password_hash("the password", PASSWORD_DEFAULT), "\n";'`.
 
 ### What a folder keeps
-Each folder holds its own data: `.gallery-items.php` (captions, saved locations, cover, name, dates and the **private flags** of the folder and its photos), `.gallery-stats.*` (view counts) and `.gallery-cache`. Settings, passwords, extra-folder paths, the sign-in key and notes live beside `index.php`. So **wiping a folder and putting a new one in its place keeps every setting working, but the new folder starts blank, and a folder that was private is public again until you mark it**. Keep its `.gallery-items.php` (or the Export download) before replacing a folder. If the new folder is owned by another user the gallery can still show it, but nothing can be saved there and thumbnails aren't cached; the Health check lists such folders.
+Each folder holds its own data: `.gallery-items.php` (captions, saved locations, cover, name, dates, the **private flags** of the folder and its photos and, once a share link has covered it, the folder's hidden id), `.gallery-stats.*` (view counts) and `.gallery-cache`. Settings, passwords, extra-folder paths, the sign-in key and notes live beside `index.php`. So **wiping a folder and putting a new one in its place keeps every setting working, but the new folder starts blank, and a folder that was private is public again until you mark it**. Keep its `.gallery-items.php` (or the Export download) before replacing a folder. If the new folder is owned by another user the gallery can still show it, but nothing can be saved there and thumbnails aren't cached; the Health check lists such folders.
 
 ### Data files are guarded
-Generated files (`.gallery-items.php`, `.gallery-stats.php`, `.gallery-login-attempts.php`, `.gallery-secret.php`, `.gallery-health.php`) hold captions, GPS and the exact names of hidden items. They are stored as PHP files starting with a guard line, so a direct request runs it, answers **404** and stops, with no server setting needed. The gallery reads them as plain text and skips the guard line; text is written with `<` and `>` escaped. The one exception is the optional `.gallery-stats.sqlite`, which holds only counts keyed by a hash of each photo's path; the [server rules](#locking-down-the-files) cover it.
+Generated files (`.gallery-items.php`, `.gallery-stats.php`, `.gallery-login-attempts.php`, `.gallery-secret.php`, `.gallery-health.php`, `.gallery-links.php` and each share link's `.gallery-linklog-*.php`) hold captions, GPS and the exact names of hidden items. They are stored as PHP files starting with a guard line, so a direct request runs it, answers **404** and stops, with no server setting needed. The gallery reads them as plain text and skips the guard line; text is written with `<` and `>` escaped. The one exception is the optional `.gallery-stats.sqlite`, which holds only counts keyed by a hash of each photo's path; the [server rules](#locking-down-the-files) cover it.
 
 ## Private items
 
-For photos, videos or folders that shouldn't be on the public link but that trusted people may see in the same gallery.
+For photos, videos or folders that shouldn't be on the public link but that trusted people may see in the same gallery. There are two ways in: a **[share link](#share-links)**, a temporary address for a person that you can limit, watch and switch off, and a **viewer password** for people who should always have access. Both are described below; share links come first in practice.
 
 1. Make an **item** private, or a whole **folder** (covering everything beneath it, with its **Private folder** switch). An item can be switched back to *public* inside a private folder, or *private* inside a public one, or set to simply follow its folder.
 2. Set `PRIVATE_VIEW_PASSWORD`. The **lock** in the icon strip, beside the archive icon (shown whenever there is an admin password, or a private-view password and something private) leads to `?reveal`, a one-field form accepting either password; the private-view one sets a cookie for a year and returns you to the plain link. Pressing the open lock locks private items again in that browser. It is a **password, not a secret link**: links pasted into chats get crawled and can't be revoked.
@@ -284,6 +288,77 @@ A photo that sits inside another private folder stays private too, and is counte
 
 **The main page shows you which folders are private** (you only; a visitor sees none of it, nor the folders). A folder you made private has a red **Private** pill on its card (press it to be asked whether to make the folder public, with the counts), a folder hidden only because one above it is private has the dashed **Folder** pill, and in the row of folder buttons at the top of a folder's page each private folder has a small lock. Where a folder holds photos that are private on their own, its count line says so at the end: "253 photos · 7 videos (2 private ›)", or "36 photos · 6 videos (3 stay private ›)" on a private folder (the same number as its banner). **Press that bracket** and the folder opens with those photos first, in the order it already had; the sort button's *Private items first* shows as on, and the choice lasts for that visit only. In **Private items first**, "private" means photos marked private on their own (in a private folder everything is hidden, which would set none of them apart).
 
+## Share links
+
+A share link lets someone see private things for a while, without a password and without being able to see anything else. It is an address (or a QR code) for one person or group: it can open a limited number of times, start and stop on dates you choose, and cover everything private, only some folders or only some photos. Every link keeps a log of who looked at what. Turn on **Allow share links** in Site settings (`ENABLE_SHARE_LINKS`, off by default); a link you made is then listed in the **Share links** tab.
+
+### Making a link
+Wherever you are looking at something private, you can share it:
+- **A private folder:** the **Share** button in the icon strip of its page, the link icon on its card on the main page, or **Share…** on its row of the Private tab.
+- **A photo:** the viewer's link button on a private photo asks *Share just this photo…* or *Copy link* (a plain link only opens for people who already have access).
+- **Several photos:** **Select**, pick them, **Share…**.
+- **Anything, with every option:** **+ New link** in the Share links tab.
+
+The first four open a short form: **Who is it for?** (a name only you see), **Opens** (once, 5, 10 or unlimited) and **Stops working** (1 day, 1 week, 30 days or never), already set to what you were looking at. It then shows the address with **Copy**, **Share…** (the phone's own share sheet) and **QR code**. *More options…* carries what you typed into the full form.
+
+### What a link can see
+- **Everything private**, including what you add later.
+- **Only some folders**, each with everything inside it.
+- **Only some photos**, wherever they are (**+ Add photos** in the full form, or from Select). They see nothing else of the folder.
+
+Public things are always visible, as to anyone. A person using a link is told nothing about other private folders: no counts, no locks, no hints.
+
+A link remembers a folder by a **hidden id** kept in the folder's own `.gallery-items.php`, not by its name. Renaming or moving the folder keeps the link working; a new folder with the same name is not covered; a copied folder (the same id twice) is ambiguous and shows nothing; and a folder the web server can't write to can't be used for a link (the form says so). If a folder is deleted the link shows **Folder missing**, with *Take it out of this link*. Anything that can't be matched shows nothing: it fails closed.
+
+### Options
+- **Original downloads** and **ZIP of a folder**: off, everywhere the link covers, or only in some folders. Public photos follow the gallery's own download setting.
+- **Photo locations:** *as the public sees them* (the default: only the locations visitors already see) or *all saved locations*. A location that is hidden is removed from every download and ZIP the link hands out ([how](#downloads)).
+- **Starts**, **Opens** and **Stops working**, in your browser's time zone. Opens are counted per browser, not per page: once someone is in they can keep looking until the link stops.
+- **Heads-up:** a thin line at the top of the gallery, "The link being used to access this media expires on …", amber in the last day and dismissable. `SHARE_HEADS_UP` sets the default; each link can turn it on or off; a link with no end date never shows it.
+- **Opening page title and note:** the gallery's title, "A shared gallery", or your own text; an optional note. Never a photo or folder name.
+
+### What the person sees
+The address opens a page with one button, **Open the gallery**. **Pressing the button is what uses the link**, so a message app's link preview can't use it up. The same address opening again within 15 minutes (an app's own browser, then Safari) is not a second use. Every link that doesn't work (expired, used up, paused, revoked, mistyped, switched off) shows the same page, *This link isn't valid*, with nothing to press and no reason given. The page is not indexed, not stored and sends no referrer.
+
+Once in, they see the gallery as the link allows: no owner tools, no lock for signing in, no view counts for what they look at, and no link button on private things (a plain link would be useless to them).
+
+### The address, and the server rule
+A link looks like `https://example.com/trip/k7QpR2mXv9LwTb4e`: the gallery's own address and 16 letters and digits. For that tidy form the server must hand the path to the script; the Share links tab writes the rule for your gallery's address and checks it. Until it is in, the long form works as it is: `https://example.com/trip/?link=k7QpR2mXv9LwTb4e`. For a gallery at `/kb/`:
+
+```nginx
+location ~ ^/kb/[A-Za-z0-9]{16}$ {
+    rewrite ^/kb/([A-Za-z0-9]{16})$ /kb/index.php?link=$1 last;
+}
+```
+
+and in `.htaccess` for Apache (`mod_rewrite` and `AllowOverride FileInfo`):
+
+```apache
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^([A-Za-z0-9]{16})$ index.php?link=$1 [L,QSA]
+```
+
+### Sending a link
+**Copy** puts the address on the clipboard. **Share…** opens the phone's share sheet. **QR code** draws a code (with the gallery's icon in the middle) to scan: **Show large** fills the screen in white to hold up to a camera, **Copy image** puts it on the clipboard as a picture to paste into a message, and **Save image** saves it.
+
+### Statuses and changes
+Each link is **Active**, **Paused**, **Used up**, **Expired** or **Revoked**. *Pause* and *Resume*, *Extend…* (a new end, more opens), *Replace address…* (a new address; the old one stops at once and anyone who is in is signed out; name, settings and log stay), *Revoke* (final: it stays listed with its log) and *Delete…* (which also deletes its log). The sign-in a link gives is checked against the link on every request, so pausing, revoking, replacing or letting it expire cuts off people who are already in.
+
+### Preview as this link
+**Preview as this link** opens a new tab showing the gallery exactly as the link does, so you can check a folder-limited link before you send it. A strip at the top says whose view it is, lists what the link includes and what it doesn't (**What's included**) and has **Exit preview**. **Nothing you do in a preview is counted or logged.** The admin pages stay yours, and a preview ends by itself after four hours.
+
+### The log
+Every link keeps a log, and **it is kept until you delete the link**: revoking, pausing or letting it expire never loses it. It records each visitor (an address with a browser, named plainly: "Safari on iPhone"), and for each what they **saw** (on their screen, even as a thumbnail), **opened** (large, in the viewer), **played** and **saved** (an original or a ZIP), and which folders they looked at. Tries that were turned away are logged with the reason (paused, replaced…).
+
+In the tab, a link shows **Visitors**, **Folders** (how much of each folder was seen) and **Photos** (thumbnails of what was looked at). Press an address for its own page (Folders, Media, Timeline), or open **IP addresses** for every address across all links. **New activity** since you last looked shows on the link and as a count in the sidebar. **Export log** gives CSV: visitors, what they looked at, everything in order, or one address. The timeline keeps the latest 300 lines and 200 visitors for each link (older visitors are folded into a count; the tallies stay exact).
+
+The address is the connection's. **Behind Cloudflare** or another proxy every visitor would look the same, so set `TRUSTED_PROXY` (Site settings → Share links): `cloudflare` reads Cloudflare's own header, but only when the request really comes from Cloudflare's ranges (built in), and `proxy` reads `X-Forwarded-For` only from the ranges you list in `TRUSTED_PROXY_RANGES`. This also corrects the sign-in throttle.
+
+### What a link is, and isn't
+A link is a secret address: **anyone who has it can use it**, up to its limits, so keep each as narrow and short-lived as you can and revoke one that went further than you meant. An address is not a person: two people on one network, or one person on two phones, can look alike in the log. Wrong addresses are throttled like wrong passwords.
+
 ## Downloads
 
 **Original.** The viewer's caption bar has a download button that saves the file exactly as it sits on the server (a HEIC stays HEIC). On a phone it opens the share sheet, so **Save Image** / **Save Video** puts it straight into Photos (anywhere that isn't possible it is a normal download).
@@ -292,6 +367,7 @@ A photo that sits inside another private folder stays private too, and is counte
 |---|---|---|
 | The owner | always | as it is on the server |
 | Private-view password | always | as it is on the server |
+| Someone using a [share link](#share-links) | as that link allows (off, everywhere it covers, or some folders) | location blanked unless the link shows all saved locations |
 | Anyone else | only with `ENABLE_PUBLIC_DOWNLOAD` (off) | location blanked if the gallery hides it |
 
 The same rule covers the full-size picture in the viewer and a video as it plays (including ranged requests): a visitor who isn't signed in never receives the coordinates of a photo or video whose location is hidden. Private items stay a 404.
@@ -388,12 +464,14 @@ Keep the `B` flag: it escapes spaces, `&`, `+` and `#`.
 - Everything it writes is private (guarded data files, [above](#data-files-are-guarded)). Output is HTML-escaped everywhere, and a request can only *select* among files the script found itself, never name a path (`..`, symlinks, wrong-case spellings and NUL bytes are refused).
 - **Logins:** a form with a constant-time compare and a fresh session id; HTTPS-only admin and private view (except `localhost`); a throttle; CSRF tokens on every write; a stale-edit check; an `HttpOnly`, `SameSite=Strict`, uniquely named session cookie.
 - Admin and private-view pages are `no-store`, not frameable, and can't post forms elsewhere; every response carries `nosniff`.
+- **Share links** are 16 random letters and digits, compared in constant time; the sign-in they give is bound to the link and checked against its record on every request; wrong addresses are throttled; every link that doesn't work looks the same; and a person using one can't see, or be told about, what it doesn't cover. Hidden locations are removed from what a link hands out.
 - Private items stay out of shared caches (`private, no-store`); ordinary photos stay cacheable, and a replaced photo gets a new `&v=` tag so browsers fetch it.
 - The Host header is used in absolute URLs only if it looks like a real host name.
 
 **Limits**
 - A web server hands out any file it can see: private needs the [server rules](#locking-down-the-files).
-- Original photos keep their GPS except in copies sent to signed-out visitors where you hide the location.
+- Original photos keep their GPS except in copies sent to signed-out visitors (and people using a share link) where you hide the location.
+- **A share link is a bearer secret:** whoever has the address can use it until it ends. Behind Cloudflare or another proxy, set `TRUSTED_PROXY` so a link's log and the throttle see the real visitor.
 - A short password can be guessed from its hash.
 - **Behind a reverse proxy the script believes what the server tells PHP** (`REMOTE_ADDR`, `HTTPS`, port 443, `X-Forwarded-Proto`). With php-fpm that is right. With `proxy_pass` to PHP on the same machine every visitor looks like `127.0.0.1`, so the HTTPS requirement protects nothing and the throttle is shared: pass the real address and protocol, or keep PHP behind FastCGI.
 - Images and Markdown are processed from folders **you** control; it isn't built to accept uploads from strangers.
@@ -403,6 +481,8 @@ Found a security problem? Open a GitHub issue, or contact the author privately i
 ## Upgrading and backups
 
 **Updating** means replacing `index.php`. Settings (`.gallery-config.php`), captions and everything else live beside it and are untouched; the Health check then shows what it was upgraded from.
+
+**Upgrading to 2.3.0 or later** adds [share links](#share-links), off until you switch on *Allow share links*. Nothing stored changes. Once links are used the gallery writes `.gallery-links.php` (the links) and a `.gallery-linklog-*.php` for each (its log) beside `index.php`, and stamps a hidden id into the `.gallery-items.php` of a folder a link covers; add the two new names to `.gitignore` and your backups (below). On a private photo or a private folder's card, the link button now asks you what you mean, and is gone for everyone else.
 
 **Upgrading to 2.0.8 or later** changes one default: a gallery that has never had its photo order set now runs by date taken, oldest first, so videos sit among the photos they were shot with (before, by file name). A gallery that groups photos by filename keeps name order, and an order you chose yourself is never touched; to keep the old order, pick **Name** in Site settings (or `"PHOTO_SORT_ORDER": "filename"`).
 
@@ -426,9 +506,11 @@ Found a security problem? Open a GitHub issue, or contact the author privately i
 .gallery-login-attempts.php
 .gallery-secret.php
 .gallery-health.php
+.gallery-links.php
+.gallery-linklog-*.php
 ```
 
-`.gallery-items.php`, `.gallery-config.php` and your `.md` files can't be regenerated: use the admin's JSON export for captions and your host's backups for the rest.
+`.gallery-items.php`, `.gallery-config.php`, `.gallery-links.php`, the `.gallery-linklog-*.php` logs and your `.md` files can't be regenerated: use the admin's JSON export for captions and your host's backups for the rest.
 
 ## Project status
 

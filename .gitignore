@@ -10,6 +10,8 @@
 .gallery-login-attempts.php
 .gallery-secret.php
 .gallery-health.php
+.gallery-links.php
+.gallery-linklog-*.php
 .gallery-stats.json
 .gallery-stats.sqlite
 .gallery-stats.sqlite-wal
