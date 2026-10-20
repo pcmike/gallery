@@ -3,7 +3,7 @@
 Things the owner found while using 2.3.0-dev, and things found while fixing them. **Rule: collect, then fix in one pass** (the owner's request), with a test for each (a test that fails without the fix), then run every suite. Newest first. Add a line here when something turns up; tick it when it is fixed and tested; "verify" means the owner confirms it on their own device.
 
 ## Queued
-(nothing yet: add what turns up)
+- [ ] **On a phone the text of an Edited row is squeezed (owner, 2026-10-20, an iPhone screenshot):** a photo with a link shows "sanminia / toalmont / e.it" and "IMG_95 / 97.heic": the row is thumbnail + text column (`.ed-rb`, `flex:1; min-width:0`) + the *Edit* button, and with no minimum width the text takes only what the thumbnail and the button leave (about 120 px) and `overflow-wrap:anywhere` breaks it mid-word. Give the text column a wide basis (nearly the whole remaining width) so that on a narrow screen the *Edit* button wraps under it (indented to the text), and the name and link use the whole line; no change on a desktop. Tests (browser, 390 px): a row's name and link text are not broken (their height is one line, or only at spaces), the Edit button is under the text, and nothing overflows the width.
 
 ## Open: the owner's to verify
 - [x] **Rome (owner, verified on the iPhone):** the button answered "Read 42 files: 42 now have a location from the file, 0 have none in the file." So the files were fine and readable, and the photos had been remembered as read-with-nothing. (Why that first read stored nothing is still unknown; Prepare media removes the whole class of problem.) **Still to look at:** Rome's public page now shows pins and the map button, and a one-photo link shows Rome's locations.
