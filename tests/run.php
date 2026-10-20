@@ -79,7 +79,7 @@ set_error_handler(function ($errno, $message, $file, $line) {
     return true;
 });
 
-function check($description, $condition) {
+function check($description, $condition, $detail = null) {
     global $failCount, $passCount;
     if ($condition) {
         $passCount++;
@@ -87,6 +87,7 @@ function check($description, $condition) {
     } else {
         $failCount++;
         echo "  FAIL  $description\n";
+        if ($detail !== null) echo '        ' . substr(str_replace("\n", ' ', (string) $detail), 0, 600) . "\n";
     }
 }
 
@@ -207,6 +208,26 @@ function flag_post($url, $page, array $hdrs, $flag, $on, array $names) {
 function item_get($root, array $hdrs, $file) {
     $j = json_decode(http_get(rtrim($root, '/') . '/?admin&item=' . rawurlencode($file), $hdrs)[1] ?? '', true);
     return is_array($j) ? $j : [];
+}
+
+/** A first look at some files, as a visitor's page would make: their thumbnails are asked for, which is when the gallery reads what a file says
+ *  about itself (the answer is read from the cache's record afterwards). $names are relative paths. */
+function first_look($root, array $names) {
+    foreach ($names as $n) http_get(rtrim($root, '/') . '/?img=' . rawurlencode($n) . '&size=thumb');
+}
+
+/** Prepare media run to the end, as the admin page's button does (the answers are added up). $extra: e.g. ['again' => '1', 'remake' => '1']. */
+function prepare_media_run($root, array $hdrs, array $extra = []) {
+    $tok = admin_token($root, $hdrs); $sum = ['worked' => 0, 'read' => 0, 'made' => 0, 'failed' => 0, 'unreadable' => 0, 'total' => 0, 'done' => false, 'ok' => true];
+    $from = 0;
+    for ($try = 0; $try < 60 && !$sum['done']; $try++) {
+        $raw = http_post(rtrim($root, '/') . '/?admin', ['csrf_token' => $tok, 'action' => 'prepare_media', 'from' => (string) $from] + $extra, $hdrs)[1] ?? '';
+        $j = json_decode($raw, true) ?: ['ok' => false];
+        if (empty($j['ok'])) { $sum['ok'] = false; $sum['raw'] = substr((string) $raw, 0, 200); break; }
+        foreach (['worked', 'read', 'made', 'failed', 'unreadable'] as $k) $sum[$k] += (int) ($j[$k] ?? 0);
+        $sum['total'] = $j['total']; $sum['done'] = !empty($j['done']); $from = $j['next'];
+    }
+    return $sum;
 }
 
 /** The token the page asks the admin for before it saves anything. */
@@ -832,7 +853,7 @@ check('?track path traversal is rejected (ok:false)', is_array($json2) && $json2
 check('GET /?about returns 200', $status === 200);
 check('?about links to the GitHub repo', str_contains($body, 'github.com/pcmike/gallery'));
 check('?about shows the current version', str_contains($body, 'v' . $currentVersion));
-check('?about covers what the gallery now does: sharp tiles, the viewer built for phones and its zoom controls, putting things first in an order you set, the lock on tiles, prepare thumbnails and the Home Screen app', str_contains($body, 'Sharp thumbnails') && str_contains($body, 'Built for phones') && str_contains($body, 'soft dark pill') && str_contains($body, 'Put first is one list you order') && str_contains($body, 'A lock and a star on every tile') && str_contains($body, 'Prepare thumbnails') && str_contains($body, 'Home Screen'));
+check('?about covers what the gallery now does: sharp tiles, the viewer built for phones and its zoom controls, putting things first in an order you set, the lock on tiles, prepare media and the Home Screen app', str_contains($body, 'Sharp thumbnails') && str_contains($body, 'Built for phones') && str_contains($body, 'soft dark pill') && str_contains($body, 'Put first is one list you order') && str_contains($body, 'A lock and a star on every tile') && str_contains($body, 'Prepare media') && str_contains($body, 'Home Screen'));
 
 [$status, $body, $dlHeaders] = http_get("$base1/?download", [], false);
 check('?download redirects (302), does not serve the file', $status === 302);
@@ -1395,45 +1416,59 @@ $thCacheBefore = count(glob("$fxTh/.gallery-cache/*.jpg"));
 http_get("$baseTh/"); http_get("$baseTh/?folder=nothing");
 check('[tile] the cache clean-up keeps the tile pictures (it knows they belong to a photo)', count(glob("$fxTh/.gallery-cache/*.jpg")) === $thCacheBefore && $thCacheBefore >= 5);
 check('[tile] with thumbnails switched off a tile has no srcset (there is only the original)', !str_contains(http_get("http://127.0.0.1:$portNoCache/")[1], 'srcset='));
-// prepare thumbnails
-[, $thAdminBody, $thAdminHd] = http_get("$baseTh/?admin", ['Authorization: Basic ' . base64_encode('admin:th-admin-pw')]);
+// prepare media (thumbnails, and what each file says about itself)
+[, , $thAdminHd] = http_get("$baseTh/?admin", ['Authorization: Basic ' . base64_encode('admin:th-admin-pw')]);
 $thCookie = extract_cookie_header($thAdminHd);
 $thAuthH = ['Authorization: Basic ' . base64_encode('admin:th-admin-pw'), "Cookie: $thCookie", 'X-Requested-With: gallery-fetch'];
 $thTok = (json_decode(http_get("$baseTh/?admin&csrf=1", $thAuthH)[1], true)['token'] ?? '');
-check('[prepare thumbnails] the Site tab says how many photos are ready, and offers to make the rest', preg_match('#id="warm-panel"#', $thAdminBody) === 1 && str_contains($thAdminBody, 'of 4 photos are ready') && str_contains($thAdminBody, 'warm-go'), substr(strip_tags(substr($thAdminBody, strpos($thAdminBody, 'id="warm-panel"'), 900)), 0, 200));
 foreach (glob("$fxTh/.gallery-cache/*.jpg") as $f) @unlink($f);
+@unlink("$fxTh/.gallery-cache/meta1.php");
+[, $thAdminBody] = http_get("$baseTh/?admin", $thAuthH);
+check('[prepare media] the Site tab says how many files are prepared, and offers to do the rest', preg_match('#id="media-panel"#', $thAdminBody) === 1 && str_contains($thAdminBody, '0 of 5 files are prepared') && str_contains($thAdminBody, 'media-go') && str_contains($thAdminBody, 'Read everything again'), substr(strip_tags(substr($thAdminBody, strpos($thAdminBody, 'id="media-panel"'), 900)), 0, 200));
 // (a request lasts about a second at most and says where to carry on, so ask again until it says it is done)
-$warm = ['ok' => true, 'done' => false, 'total' => 0, 'made' => 0, 'failed' => 0]; $warmFrom = 0;
+$warm = ['ok' => true, 'done' => false, 'total' => 0, 'made' => 0, 'failed' => 0, 'read' => 0]; $warmFrom = 0;
 for ($warmTry = 0; $warmTry < 20 && empty($warm['done']); $warmTry++) {
-    [, $warmBody] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => (string) $warmFrom], $thAuthH);
+    [, $warmBody] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'prepare_media', 'from' => (string) $warmFrom], $thAuthH);
     $one = json_decode($warmBody, true) ?: ['ok' => false];
-    $warm = ['ok' => $one['ok'] ?? false, 'done' => $one['done'] ?? false, 'total' => $one['total'] ?? 0, 'made' => $warm['made'] + ($one['made'] ?? 0), 'failed' => $warm['failed'] + ($one['failed'] ?? 0)];
+    $warm = ['ok' => $one['ok'] ?? false, 'done' => $one['done'] ?? false, 'total' => $one['total'] ?? 0, 'made' => $warm['made'] + ($one['made'] ?? 0), 'failed' => $warm['failed'] + ($one['failed'] ?? 0), 'read' => $warm['read'] + ($one['read'] ?? 0)];
     $warmFrom = $one['next'] ?? 0;
 }
-check('[prepare thumbnails] asking until it says it is done makes both tile sizes of every photo (the video is left alone)', ($warm['ok'] ?? false) === true && ($warm['done'] ?? false) === true && $warm['total'] === 4 && $warm['made'] === 8 && $warm['failed'] === 0 && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8, $warmBody);
-[, $warm2Body] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
-check('[prepare thumbnails] a second run finds nothing left to make', (json_decode($warm2Body, true)['made'] ?? -1) === 0);
-[, $warm3Body] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '2'], $thAuthH);
-check('[prepare thumbnails] it can carry on from where it stopped', (json_decode($warm3Body, true)['next'] ?? 0) === 4);
-[, $warmNoTok] = http_post("$baseTh/?admin", ['action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
-// Shared work: three requests, each taking every third photo, make everything between them with nothing done twice.
+check('[prepare media] asking until it says it is done makes both tile sizes of every photo, and reads every file, the video too (its picture is left to when it is first shown)', ($warm['ok'] ?? false) === true && ($warm['done'] ?? false) === true && $warm['total'] === 5 && $warm['made'] === 8 && $warm['failed'] === 0 && $warm['read'] === 5 && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8 && count((read_data_file("$fxTh/.gallery-cache/meta1.php") ?: [])['f'] ?? []) === 5, $warmBody);
+[, $warm2Body] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'prepare_media', 'from' => '0'], $thAuthH);
+check('[prepare media] a second run finds nothing left to do', (json_decode($warm2Body, true)['made'] ?? -1) === 0 && (json_decode($warm2Body, true)['read'] ?? -1) === 0 && (json_decode($warm2Body, true)['worked'] ?? -1) === 0);
+[, $warm3Body] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'prepare_media', 'from' => '2'], $thAuthH);
+check('[prepare media] it can carry on from where it stopped', (json_decode($warm3Body, true)['next'] ?? 0) === 5);
+[, $warmOld] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], $thAuthH);
+check('[prepare media] the older name of the action still works', (json_decode($warmOld, true)['ok'] ?? false) === true);
+[, $warmNoTok] = http_post("$baseTh/?admin", ['action' => 'prepare_media', 'from' => '0'], $thAuthH);
+// Shared work: three requests, each taking every third file, make everything between them with nothing done twice.
 foreach (glob("$fxTh/.gallery-cache/*.jpg") as $f) @unlink($f);
+@unlink("$fxTh/.gallery-cache/meta1.php");
 $warmShares = [];
 foreach ([0, 1, 2] as $k) {
     $share = ['worked' => 0, 'made' => 0, 'failed' => 0, 'done' => false]; $shareFrom = $k;
     for ($shareTry = 0; $shareTry < 20 && !$share['done']; $shareTry++) {
-        [, $wb] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => (string) $shareFrom, 'step' => '3'], $thAuthH);
+        [, $wb] = http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'prepare_media', 'from' => (string) $shareFrom, 'step' => '3'], $thAuthH);
         $one = json_decode($wb, true) ?: [];
         $share = ['worked' => $share['worked'] + ($one['worked'] ?? 0), 'made' => $share['made'] + ($one['made'] ?? 0), 'failed' => $share['failed'] + ($one['failed'] ?? 0), 'done' => $one['done'] ?? false];
         $shareFrom = $one['next'] ?? 0;
     }
     $warmShares[$k] = $share;
 }
-check('[prepare thumbnails] several requests can share the work, each taking every n-th photo: between them every photo is made once, and each says how many photos it made', ($warmShares[0]['worked'] ?? -1) === 2 && ($warmShares[1]['worked'] ?? -1) === 1 && ($warmShares[2]['worked'] ?? -1) === 1 && array_sum(array_column($warmShares, 'made')) === 8 && !array_filter($warmShares, function ($r) { return empty($r['done']) || ($r['failed'] ?? 1) !== 0; }) && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8, json_encode($warmShares));
-check('[prepare thumbnails] without the admin\'s token nothing happens', (json_decode($warmNoTok, true)['ok'] ?? true) === false);
-check('[prepare thumbnails] a visitor cannot run it', !isset(json_decode(http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'warm_thumbnails', 'from' => '0'], ['X-Requested-With: gallery-fetch'])[1] ?? '', true)['made']));
+check('[prepare media] several requests can share the work, each taking every n-th file: between them every file is done once, and each says how many files it worked on', ($warmShares[0]['worked'] ?? -1) === 2 && ($warmShares[1]['worked'] ?? -1) === 2 && ($warmShares[2]['worked'] ?? -1) === 1 && array_sum(array_column($warmShares, 'made')) === 8 && !array_filter($warmShares, function ($r) { return empty($r['done']) || ($r['failed'] ?? 1) !== 0; }) && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8 && count((read_data_file("$fxTh/.gallery-cache/meta1.php") ?: [])['f'] ?? []) === 5, json_encode($warmShares));
+check('[prepare media] without the admin\'s token nothing happens', (json_decode($warmNoTok, true)['ok'] ?? true) === false);
+check('[prepare media] a visitor cannot run it', !isset(json_decode(http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'prepare_media', 'from' => '0'], ['X-Requested-With: gallery-fetch'])[1] ?? '', true)['made']));
 [, $thAdminBody2] = http_get("$baseTh/?admin", $thAuthH);
-check('[prepare thumbnails] once everything is made the panel says all photos are ready', str_contains($thAdminBody2, 'All 4 photos are ready.'));
+check('[prepare media] once everything is done the panel says so', str_contains($thAdminBody2, 'Everything is prepared: 5 files.'));
+$thRep = json_decode(http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'media_report'], $thAuthH)[1], true) ?: [];
+check('[prepare media] the list of what the gallery knows has this folder: 5 files, 4 photos with their pictures, every file read, none without a capture date unknown', ($thRep['ok'] ?? false) === true && count($thRep['rows'] ?? []) === 1 && ($thRep['rows'][0]['files'] ?? 0) === 5 && ($thRep['rows'][0]['photos'] ?? 0) === 4 && ($thRep['rows'][0]['tiles'] ?? 0) === 4 && ($thRep['rows'][0]['unread'] ?? -1) === 0, json_encode($thRep));
+check('[prepare media] ...and a visitor cannot ask for it', !isset(json_decode(http_post("$baseTh/?admin", ['csrf_token' => $thTok, 'action' => 'media_report'], ['X-Requested-With: gallery-fetch'])[1] ?? '', true)['rows']));
+$thAgain = prepare_media_run($baseTh, $thAuthH, ['again' => '1']);
+check('[prepare media] "Read everything again" reads every file again but leaves the thumbnails that are fine', $thAgain['ok'] && $thAgain['read'] === 5 && $thAgain['worked'] === 5 && $thAgain['made'] === 0);
+$thRemake = prepare_media_run($baseTh, $thAuthH, ['again' => '1', 'remake' => '1']);
+check('[prepare media] ...and with "also make the thumbnails again" it makes every photo\'s pictures anew', $thRemake['ok'] && $thRemake['read'] === 5 && $thRemake['made'] === 8 && count(glob("$fxTh/.gallery-cache/*.jpg")) === 8);
+check('[prepare media] the remake box on its own does nothing (it only goes with "read everything again")', prepare_media_run($baseTh, $thAuthH, ['remake' => '1'])['made'] === 0);
+check('[prepare media] what is read is kept in a guarded file (a direct request answers 404) that the export leaves out', http_get("$baseTh/.gallery-cache/meta1.php")[0] === 404 && is_array($thExport = json_decode(http_post("$baseTh/?admin", ['action' => 'export_items', 'csrf_token' => $thTok], $thAuthH)[1], true)) && !str_contains(json_encode($thExport), '"gs"'));
 // the viewer and the download
 check('[viewer] on a touch screen the counter and buttons are a row across the top and the photo takes the rest of the visible area (dvh), nothing is laid over the photo or near the bottom edge', str_contains($thPage, '@media (pointer: coarse)') && str_contains($thPage, '100dvh') && str_contains($thPage, 'position: fixed; top: 0; left: 0; right: 0; bottom: auto') && !str_contains($thPage, 'lvh') && !str_contains($thPage, 'bars-away'));
 [, $thOwnerPage] = http_get("$baseTh/", $thAuthH);
@@ -2789,6 +2824,7 @@ write_patched_index("$fxGps/index.php", $indexContents, [
 $portGps = find_free_port();
 start_server($fxGps, $portGps);
 [, $gpsAdmin] = http_get("http://127.0.0.1:$portGps/?admin", ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')]);
+first_look("http://127.0.0.1:$portGps", array_merge(['north-east.jpg', 'south-west.jpg', 'no-gps.jpg', 'iphone.jpg'], $heicOk ? ['phone.heic'] : []));   // (the gallery reads a photo's location when its thumbnails are first made)
 $gpsCard = function ($body, $name) use ($portGps) {   // (the photo's record, as the editor in the viewer asks for it: a place read from its GPS is `auto` until it is kept)
     return json_encode(item_get("http://127.0.0.1:$portGps", ['Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')], $name));
 };
@@ -2825,7 +2861,7 @@ check('[editor] choosing to keep the place (no keep_loc) stores it with its labe
  * a cover, and check what a visitor — and a pasted link — then sees.
  * ======================================================================= */
 
-echo "== locations: turning a folder on publishes what it can; opting out stays out ==\n";
+echo "== locations: read from the files once, shown only where the switches allow; opting out stays out ==\n";
 
 $fxGps = new_fixture_dir('gps-import');
 mkdir("$fxGps/Rome");
@@ -2836,39 +2872,40 @@ write_patched_index("$fxGps/index.php", $indexContents, [
     'AUTO_GROUP_BY_FOLDER' => 'true', 'ENABLE_PHOTO_LOCATION' => 'true', 'ENABLE_MAP' => 'true', 'ADMIN_PASSWORD' => "'gps-admin-pw'",
 ]);
 $portGps = find_free_port(); start_server($fxGps, $portGps); $baseGps = "http://127.0.0.1:$portGps";
+first_look($baseGps, ['Rome/colosseum.jpg', 'Rome/hotel.jpg', 'Rome/cleared.jpg', 'Rome/plain.jpg']);   // the first time anyone's page asks for their pictures, the files are read
 $gpsAuth = 'Authorization: Basic ' . base64_encode('admin:gps-admin-pw');
 [, $gAdmin, $gAdminHd] = http_get("$baseGps/?admin&folder=Rome", [$gpsAuth]);
 $gpsHdrs = [$gpsAuth, 'Cookie: ' . extract_cookie_header($gAdminHd)];
 $romeUrl = "$baseGps/?admin&folder=Rome";
 $gpsRomeFile = fn ($page, $file) => json_encode(item_get($baseGps, $gpsHdrs, 'Rome/' . $file));
-check('[gps import] before the switch: three photos have GPS, the admin warns and nothing is public', str_contains($gAdmin, '3 photos here have GPS in the file') && !str_contains(http_get("$baseGps/")[1], 'trip-map-preview'));
+$gpsItems = fn () => read_data_file("$fxGps/Rome/.gallery-items.php")['items'] ?? [];
+check('[locations] before the switch: three photos have a location in the file, the admin warns and nothing is public', str_contains($gAdmin, '3 photos here have a location in the file') && !str_contains(http_get("$baseGps/")[1], 'trip-map-preview'));
+check('[locations] ...and the folder\'s settings say what the gallery has read from its files (3 with a location, 1 without)', (bool) preg_match('#class="hint loc-status">[^<]*<strong>3</strong> with a location, 1 without#', $gAdmin));
 // The owner opts one photo out (hotel) and clears another (cleared) *before* turning the folder on.
 $r = flag_post($romeUrl, $gAdmin, $gpsHdrs, 'location', false, ['hotel.jpg']);
-check('[gps import] switching "Show its location" off for a photo saves, even while the folder is off (coordinates are kept, just never shown, whatever the folder later does)', ($r['ok'] ?? null) === true && (read_data_file("$fxGps/Rome/.gallery-items.php")['items']['hotel.jpg']['locationVisibility'] ?? null) === 'hide');
+check('[locations] switching "Show its location" off for a photo saves, even while the folder is off (the location is kept, just never shown, whatever the folder later does)', ($r['ok'] ?? null) === true && ($gpsItems()['hotel.jpg']['locationVisibility'] ?? null) === 'hide');
 [, $gAdmin] = http_get($romeUrl, $gpsHdrs);
 [, $r] = item_save($romeUrl, $gpsHdrs, 'cleared.jpg', ['lat' => '', 'lng' => '', 'loc_label' => '']);
-check('[gps import] clearing a photo\'s coordinates saves', str_contains($r, 'class="flash ok"'));
+check('[locations] clearing a photo\'s coordinates saves, and is remembered as cleared on purpose', str_contains($r, 'class="flash ok"') && !empty($gpsItems()['cleared.jpg']['locationCleared']) && !isset($gpsItems()['cleared.jpg']['location']));
 [, $gAdmin] = http_get($romeUrl, $gpsHdrs);
 [, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $gpsHdrs);
-check('[gps import] turning the switch on reports how many photos now show a location', str_contains($r, 'class="flash ok"') && str_contains($r, '1 photo has GPS in the file and now shows a location'));
-$items = read_data_file("$fxGps/Rome/.gallery-items.php")['items'] ?? [];
-check('[gps import] the unhidden photo got its GPS stored (41.883, 12.483)', abs(($items['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001 && abs(($items['colosseum.jpg']['location']['lng'] ?? 0) - 12.4833) < 0.001);
-check('[gps import] a photo with no GPS is marked checked and given no location', !isset($items['plain.jpg']['location']) && !empty($items['plain.jpg']['gpsChecked']));
+check('[locations] turning the switch on reports how many photos now show a location (not the one opted out, not the cleared one)', str_contains($r, 'class="flash ok"') && str_contains($r, '1 photo has a location and now shows it'));
+check('[locations] ...nothing was copied into the folder\'s data: the location still comes from the file, the photos carry no "checked" marks', !isset($gpsItems()['colosseum.jpg']['location']) && empty($gpsItems()['plain.jpg']['gpsChecked']) && empty($gpsItems()['colosseum.jpg']['gpsChecked']));
 $romePub = http_get("$baseGps/?folder=Rome")[1];
-check('[gps import] visitors see the imported photo\'s location badge and the map', str_contains(http_get("$baseGps/")[1], 'trip-map-preview') && substr_count($romePub, 'location-badge') === 1);
+check('[locations] visitors see the photo\'s location badge and the map', str_contains(http_get("$baseGps/")[1], 'trip-map-preview') && substr_count($romePub, 'location-badge') === 1);
 $mapPins = (function ($h) { preg_match('/var clusters = (\[.*?\]);/s', $h, $m); return json_decode($m[1] ?? '[]', true); })(http_get("$baseGps/")[1]);
-check('[gps import] ...only that photo is on the map: the hidden one and the cleared one stay out', count($mapPins) === 1 && str_contains(json_encode($mapPins), 'colosseum.jpg') && !str_contains(json_encode($mapPins), 'hotel.jpg') && !str_contains(json_encode($mapPins), 'cleared.jpg'));
-// Opening the folder again (which also picks up later uploads) must not resurrect the cleared location.
+check('[locations] ...only that photo is on the map: the hidden one and the cleared one stay out', count($mapPins) === 1 && str_contains(json_encode($mapPins), 'colosseum.jpg') && !str_contains(json_encode($mapPins), 'hotel.jpg') && !str_contains(json_encode($mapPins), 'cleared.jpg'));
 [, $gAdmin] = http_get($romeUrl, $gpsHdrs);
-check('[gps import] re-opening the folder does not bring a deliberately cleared location back', str_contains($gpsRomeFile($gAdmin, 'cleared.jpg'), '"lat":""') && str_contains($gpsRomeFile($gAdmin, 'cleared.jpg'), '"auto":null'));
-// A photo uploaded after the switch is on is picked up the next time the owner opens the folder.
+check('[locations] re-opening the folder does not bring a deliberately cleared location back', str_contains($gpsRomeFile($gAdmin, 'cleared.jpg'), '"lat":""') && str_contains($gpsRomeFile($gAdmin, 'cleared.jpg'), '"auto":null'));
+// A photo added after the switch is on: nothing reads it until its pictures are first made, and then it shows with nobody opening the admin.
 make_gps_jpeg("$fxGps/Rome/late.jpg", 'N', [[41, 1], [56, 1], [0, 1]], 'E', [[12, 1], [32, 1], [0, 1]]);
-check('[gps import] a photo uploaded later is not public until the owner next opens the folder...', substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 1);
+http_get("$baseGps/?folder=Rome"); http_get($romeUrl, $gpsHdrs);
+check('[locations] a photo added later is not read by a page view or by opening the admin...', substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 1 && is_file("$fxGps/Rome/.gallery-cache/meta1.php") && !isset((read_data_file("$fxGps/Rome/.gallery-cache/meta1.php")['f'] ?? [])['late.jpg']));
+first_look($baseGps, ['Rome/late.jpg']);
+check('[locations] ...it is read when its pictures are first made, and then it shows', substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 2);
 [, $gAdmin] = http_get($romeUrl, $gpsHdrs);
-check('[gps import] ...and then it is', substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 2);
-// The switch asks first, and turning it off keeps the data.
 [, $r] = user_submit($romeUrl, $gAdmin, 'value="toggle_location_enabled"', ['enabled' => '0'], $gpsHdrs);
-check('[gps import] turning it off hides every location again but keeps the stored coordinates', str_contains($r, 'Saved coordinates are kept') && substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 0 && abs((read_data_file("$fxGps/Rome/.gallery-items.php")['items']['colosseum.jpg']['location']['lat'] ?? 0) - 41.8833) < 0.001);
+check('[locations] turning it off hides every location again, and the files\' answers stay on record', str_contains($r, 'Saved coordinates are kept') && substr_count(http_get("$baseGps/?folder=Rome")[1], 'location-badge') === 0 && (read_data_file("$fxGps/Rome/.gallery-cache/meta1.php")['f']['colosseum.jpg']['gs'] ?? '') === 'ok');
 
 echo "== the admin always sees their own hidden items, with no private-view password needed ==\n";
 
@@ -3861,6 +3898,7 @@ write_patched_index("$fxTrip/index.php", $indexContents, [
     'ENABLE_VIDEO' => 'true', 'ENABLE_THUMBNAIL_CACHE' => 'true', 'ADMIN_PASSWORD' => "'trip-admin-pw'",
 ]);
 $portTrip = find_free_port(); start_server($fxTrip, $portTrip); $baseTrip = "http://127.0.0.1:$portTrip";
+first_look($baseTrip, ['Paris/eiffel.jpg', 'Paris/louvre.jpg', 'Lisbon/tram.jpg', 'Lisbon/castle.jpg', 'hello.jpg']);   // (the pictures are asked for as soon as anyone opens a page: that is when each file's location is read)
 $tripAuth = 'Authorization: Basic ' . base64_encode('admin:trip-admin-pw');
 
 // 1. A visitor's first look: one cover card per folder, natural order, and no map yet
@@ -3890,9 +3928,9 @@ check('[trip] ...and Position 1 moved Paris ahead of Lisbon', strpos($tripHome2,
 check('[trip] ticking "Show photo locations publicly for this folder" saves', str_contains($r, 'class="flash ok"'));
 [, $pAdmin] = http_get($parisUrl, $tripHdrs);
 $eiffelFields = item_get($baseTrip, $tripHdrs, 'Paris/eiffel.jpg');
-check('[trip] the editor has the photo\'s location from its EXIF GPS (48.8584, 2.2945) before anything is typed', abs((float) ($eiffelFields['lat'] ?? 0) - 48.8584) < 0.0001 && abs((float) ($eiffelFields['lng'] ?? 0) - 2.2945) < 0.0001);
-check('[trip] turning the folder\'s switch on says how many photos now show a location, and how to keep one private', str_contains($r, '1 photo has GPS in the file and now shows a location') && str_contains($r, 'switch off Location'));
-check('[trip] ...the GPS was stored for that photo right then (nothing to Save first), so there is no "not saved yet" nagging', array_key_exists('auto', $eiffelFields) && $eiffelFields['auto'] === null && !str_contains($pAdmin, 'loc-unsaved-summary'));
+check('[trip] the editor has the photo\'s location from its EXIF GPS (48.8584, 2.2945) before anything is typed', abs((float) ($eiffelFields['auto']['lat'] ?? 0) - 48.8584) < 0.0001 && abs((float) ($eiffelFields['auto']['lng'] ?? 0) - 2.2945) < 0.0001 && ($eiffelFields['lat'] ?? 'x') === '');
+check('[trip] turning the folder\'s switch on says how many photos now show a location, and how to keep one private', str_contains($r, '1 photo has a location and now shows it to visitors') && str_contains($r, 'switch off Location'));
+check('[trip] ...nothing was written to the folder\'s data for it (the location comes from the file), and with the switch on there is no "not saved yet" nagging', !isset((read_data_file("$fxTrip/Paris/.gallery-items.php")['items'] ?? [])['eiffel.jpg']['location']) && !str_contains($pAdmin, 'loc-unsaved-summary'));
 check('[trip] ...and visitors see the map and the location badge straight away', str_contains(http_get("$baseTrip/")[1], 'trip-map-preview') && str_contains(http_get("$baseTrip/?folder=Paris")[1], 'location-badge'));
 [, $r] = item_save($parisUrl, $tripHdrs, 'eiffel.jpg', ['caption' => 'The iron lady', 'web' => 'https://en.wikipedia.org/wiki/Eiffel_Tower', 'loc_label' => 'Champ de Mars']);
 check('[trip] saving the photo (caption + link, untouched pre-filled GPS) succeeds', str_contains($r, 'class="flash ok"'));
@@ -4194,7 +4232,7 @@ $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
 check('[plain] a copy of index.php with no settings changed shows the root photos, and not the ones in the subfolder', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && !str_contains($plain, 'three.jpg') && !str_contains($plain, 'Subfolder'));
 $newEntries = array_values(array_diff($after, $before));
 $plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
-check('[plain] ...writes only thumbnails and the dates found in the photos (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && $f !== 'taken3.json'));
+check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken3.json', 'meta1.php'], true)));
 check('[plain] ...makes no request to any third party (no external host in any src/href except github)', !preg_match('#(src|href)="https?://(?!github\.com|127\.0\.0\.1)#', $plain));
 check('[plain] ...?admin, ?reveal, ?map, ?folder= are all inert (404 / the normal page)', http_get("$basePlain/?admin")[0] === 404 && http_get("$basePlain/?reveal")[0] === 404 && http_get("$basePlain/?folder=Subfolder")[0] === 404 && !str_contains(http_get("$basePlain/?map")[1], 'cdnjs.cloudflare.com'));
 check('[plain] ...and says (in the collapsed notices banner) that a photo in a subfolder is being skipped', str_contains($plain, '1 photo/video was found in subfolders but isn&#039;t shown'));
@@ -4769,9 +4807,11 @@ $portVg = find_free_port(); start_server($fxVg, $portVg); $baseVg = "http://127.
 $vgBadges = fn () => substr_count(http_get("$baseVg/")[1], 'class="item-badge location-badge"');
 $vgBefore = $vgBadges();
 [, , $vgHd] = http_post("$baseVg/?admin", ['access_code' => 'videogps-admin-1'], [], false);
-http_get("$baseVg/?admin", ['Cookie: ' . extract_cookie_header($vgHd)]);   // the owner opens the folder: its photos' and videos' locations are read once
-$vgItems = json_decode(substr((string) file_get_contents("$fxVg/.gallery-items.php"), strpos((string) file_get_contents("$fxVg/.gallery-items.php"), "\n") + 1), true)['items'] ?? [];
-check('[video gps] the owner opening the folder stores the two locations (and marks every video as read), and a video without one gets none', ($vgItems['iphone.mov']['location']['lat'] ?? null) === 48.8584 && ($vgItems['android.mp4']['location']['lng'] ?? null) === 151.2093 && !isset($vgItems['plain.mp4']['location']) && !empty($vgItems['plain.mp4']['gpsChecked']));
+$vgOwner = ['Cookie: ' . extract_cookie_header($vgHd), 'X-Requested-With: gallery-fetch'];
+$vgRun = prepare_media_run($baseVg, $vgOwner);   // Prepare media reads every photo's and video's location once
+$vgRec = read_data_file("$fxVg/.gallery-cache/meta1.php")['f'] ?? [];
+$vgItems = read_data_file("$fxVg/.gallery-items.php")['items'] ?? [];
+check('[video gps] Prepare media records the two locations (and that the others have none), and writes nothing into the folder\'s data', ($vgRun['ok'] ?? false) && ($vgRec['iphone.mov']['g'] ?? null) === [48.8584, 2.2945] && ($vgRec['android.mp4']['g'][1] ?? null) === 151.2093 && ($vgRec['plain.mp4']['gs'] ?? '') === 'none' && array_key_exists('g', $vgRec['plain.mp4'] ?? []) && $vgRec['plain.mp4']['g'] === null && !isset($vgItems['iphone.mov']) && !isset($vgItems['plain.mp4']['gpsChecked']), json_encode([$vgRun, $vgRec, $vgItems]));
 check('[video gps] the tiles of those two videos now show a location badge (before, none did)', $vgBefore === 0 && $vgBadges() === 2);
 
 /* ======================================================================= *
@@ -5401,53 +5441,77 @@ check('[share links locations] with Rome\'s public locations off, the public and
 $loAdmin(['action' => 'link_save', 'id' => $loPhoto['id'], 'label' => 'one photo', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'all', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off', 'scope_type' => 'photos', 'scope_photos' => '["Rome/r1.jpg"]']);
 check('[share links locations] ...and editing the link to "all saved locations" shows every stored location in Rome (even a photo hidden on its own), while the public still gets none', $loSees($loHold, 'Rome') === ['Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/r3.jpg'] && $loSees([], 'Rome') === []);
 
-echo "== photo locations: when they are read from the files, and checking again ==\n";
+echo "== prepare media: what the files say is read once, kept in the cache, and never overrides the owner ==\n";
 
 $fxG = new_fixture_dir('slgps');
 mkdir("$fxG/Rome", 0775);
 $gLat = [[41, 1], [54, 1], [0, 1]]; $gLng = [[12, 1], [29, 1], [0, 1]];
-foreach (['r1', 'r2', 'r3', 'hidden', 'fresh'] as $n) make_gps_jpeg("$fxG/Rome/$n.jpg", 'N', $gLat, 'E', $gLng);   // every one of these files has a location in it
-make_jpeg("$fxG/Rome/plain.jpg", 60, 50, 100, 60, 60);                                                            // this one has none
+foreach (['r1', 'r2', 'r3', 'hidden', 'fresh', 'own', 'gone'] as $n) make_gps_jpeg("$fxG/Rome/$n.jpg", 'N', $gLat, 'E', $gLng);   // every one of these files has a location in it
+make_jpeg("$fxG/Rome/plain.jpg", 60, 50, 100, 60, 60);                                                                              // this one has none
 $gHasImagick = class_exists('Imagick');
-if ($gHasImagick) file_put_contents("$fxG/Rome/broken.heic", random_bytes(300));                                  // a file the image library can't read
-// What the gallery remembers from an earlier read: r1-r3 and plain were looked at and nothing was stored (the situation of the owner's Rome folder), hidden is set to hide its location, fresh and broken were never looked at.
-write_data_file("$fxG/Rome/.gallery-items.php", ['items' => ['r1.jpg' => ['gpsChecked' => true], 'r2.jpg' => ['gpsChecked' => true], 'r3.jpg' => ['gpsChecked' => true], 'plain.jpg' => ['gpsChecked' => true], 'hidden.jpg' => ['gpsChecked' => true, 'locationVisibility' => 'hide']], 'groups' => [], 'locationEnabled' => false]);
+if ($gHasImagick) file_put_contents("$fxG/Rome/broken.heic", random_bytes(300));                                                     // a file the image library can't read
+// What an older version left: r1-r3 and plain were looked at and nothing was stored (the situation of the owner's Rome folder); hidden is set to hide its
+// location; own has a location typed in that differs from its file; gone had its location removed on purpose; fresh and broken were never looked at.
+write_data_file("$fxG/Rome/.gallery-items.php", ['items' => ['r1.jpg' => ['gpsChecked' => true], 'r2.jpg' => ['gpsChecked' => true], 'r3.jpg' => ['gpsChecked' => true], 'plain.jpg' => ['gpsChecked' => true], 'hidden.jpg' => ['gpsChecked' => true, 'locationVisibility' => 'hide'], 'own.jpg' => ['location' => ['lat' => 10.5, 'lng' => 20.5, 'label' => 'Mine']], 'gone.jpg' => ['locationCleared' => true]], 'groups' => [], 'locationEnabled' => true]);
 file_put_contents("$fxG/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slgps-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
 copy($indexSrc, "$fxG/index.php");
 $portG = find_free_port(); start_server($fxG, $portG); $baseG = "http://127.0.0.1:$portG";
 [, , $gLogin] = http_post("$baseG/?admin", ['access_code' => 'slgps-admin-1'], [], false);
-$gCookie = extract_cookie_header($gLogin);
-$gPage = function () use ($baseG, $gCookie) { return http_get("$baseG/?admin&folder=Rome", ["Cookie: $gCookie"])[1]; };
-$gCsrf = extract_csrf_token($gPage());
-$gPost = function (array $f) use ($baseG, $gCookie, $gCsrf) { [, $b] = http_post("$baseG/?admin&folder=Rome", $f + ['csrf_token' => $gCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $gCookie"]); return json_decode($b, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($b, 0, 80)]; };
+$gHdrs = ['Cookie: ' . extract_cookie_header($gLogin), 'X-Requested-With: gallery-fetch'];
+$gPage = function () use ($baseG, $gHdrs) { return http_get("$baseG/?admin&folder=Rome", $gHdrs)[1]; };
 $gItems = fn () => read_data_file("$fxG/Rome/.gallery-items.php")['items'] ?? [];
-$gHas = fn ($n) => !empty($gItems()[str_contains($n, '.') ? $n : "$n.jpg"]['location']);
-$gOffPage = $gPage();
-check('[locations] with the folder\'s location switch off the settings page has no "Check the photos again" button, and merely opening the folder reads nothing', !str_contains($gOffPage, 'class="secondary loc-recheck-btn"') && !$gHas('fresh') && empty($gItems()['fresh.jpg']['gpsChecked']));
-$gOn = $gPost(['action' => 'toggle_location_enabled', 'enabled' => '1']);
-check('[locations] switching the folder\'s locations on reads the photos that were never read (and stores what the file says), and remembers each as read', $gOn['ok'] === true && $gHas('fresh') && !empty($gItems()['fresh.jpg']['gpsChecked']) && abs(($gItems()['fresh.jpg']['location']['lat'] ?? 0) - 41.9) < 0.01);
-check('[locations] ...but not the ones read before: they were remembered as having none, so switching off and on leaves them without a location, and the reply says so and what to press', !$gHas('r1') && !$gHas('r2') && !$gHas('r3') && !$gHas('plain') && str_contains($gOn['text'], 'read before') && str_contains($gOn['text'], 'Check the photos for locations again'));
-$gOnPage = $gPage();
-check('[locations] ...and the settings page now has the "Check the photos again" button, with its explanation', str_contains($gOnPage, 'class="secondary loc-recheck-btn"') && str_contains($gOnPage, 'read from its file once and then remembered'));
-check('[locations] a file that couldn\'t be read is not remembered as "no location", so the next look tries again', !$gHasImagick || (empty($gItems()['broken.heic']['gpsChecked']) && !$gHas('broken')));
-$gRe = $gPost(['action' => 'recheck_folder_gps']);
-$gExpectLooked = $gHasImagick ? 5 : 4;
-check('[locations] "Check the photos again" reads every photo that has no location, remembered or not, and stores what the files say (r1-r3 now have it)', $gRe['ok'] === true && $gHas('r1') && $gHas('r2') && $gHas('r3') && str_contains($gRe['text'], "Read $gExpectLooked files") && str_contains($gRe['text'], '3 now have a location') && abs(($gItems()['r1.jpg']['location']['lng'] ?? 0) - 12.483333) < 0.01);
-check('[locations] ...a photo whose file has no location stays without one and is counted as such, and one set to hide its location is left alone', !$gHas('plain') && str_contains($gRe['text'], '1 has none in the file') && !$gHas('hidden') && ($gItems()['hidden.jpg']['locationVisibility'] ?? '') === 'hide');
-check('[locations] ...and a file that couldn\'t be read is named, counted and still not remembered', !$gHasImagick || (str_contains($gRe['text'], '1 couldn\'t be read at all (broken.heic') && empty($gItems()['broken.heic']['gpsChecked'])));
-$gBefore = json_encode(array_map(fn ($i) => $i['location'] ?? null, $gItems()));
-$gRe2 = $gPost(['action' => 'recheck_folder_gps']);
-check('[locations] checking again is harmless: nothing already stored changes', $gRe2['ok'] === true && json_encode(array_map(fn ($i) => $i['location'] ?? null, $gItems())) === $gBefore);
-$gPost(['action' => 'toggle_location_enabled', 'enabled' => '0']);
-$gOff = $gPost(['action' => 'recheck_folder_gps']);
-check('[locations] with the switch off, "check again" refuses and says what to switch on', ($gOff['ok'] ?? null) === false && str_contains($gOff['text'], 'Show photo locations publicly'));
-$gPost(['action' => 'toggle_location_enabled', 'enabled' => '1']);
-// when a photo added later is read: not on a visitor's request, but when the owner opens the folder in the admin
-make_gps_jpeg("$fxG/Rome/late.jpg", 'N', $gLat, 'E', $gLng);
-http_get("$baseG/?folder=Rome"); http_get("$baseG/");
-check('[locations] a photo added later is not read on a visitor\'s request (a page view reads no file)', empty($gItems()['late.jpg']));
-$gPage();
-check('[locations] ...it is read, and its location stored, when the owner opens the folder in the admin', $gHas('late') && !empty($gItems()['late.jpg']['gpsChecked']));
+$gRecs = fn () => is_file("$fxG/Rome/.gallery-cache/meta1.php") ? (read_data_file("$fxG/Rome/.gallery-cache/meta1.php")['f'] ?? []) : [];
+$gAuto = fn ($n) => item_get($baseG, $gHdrs, "Rome/$n.jpg")['auto'] ?? null;   // the location the editor offers: the one from the file, when the owner has no say
+$gBadges = fn () => substr_count(http_get("$baseG/?folder=Rome")[1], 'location-badge');
+$gReport = function () use ($baseG, $gHdrs) { $rows = json_decode(http_post("$baseG/?admin", ['csrf_token' => admin_token($baseG, $gHdrs), 'action' => 'media_report'], $gHdrs)[1], true)['rows'] ?? []; foreach ($rows as $r) if ($r['folder'] === 'Rome') return $r; return []; };
+$gPage(); $gPage();
+check('[prepare media] opening the folder in the admin, and viewing its pages, reads no file: nothing is recorded yet', !is_file("$fxG/Rome/.gallery-cache/meta1.php") && $gBadges() === 1 && str_contains($gPage(), 'not read yet'));
+$gOwn = $gReport();
+check('[prepare media] the list says so: every file not read yet, the owner\'s own, removed and old-marked locations counted', ($gOwn['files'] ?? 0) === ($gHasImagick ? 9 : 8) && ($gOwn['unread'] ?? 0) === ($gHasImagick ? 9 : 8) && ($gOwn['own'] ?? 0) === 1 && ($gOwn['cleared'] ?? 0) === 1 && ($gOwn['legacy'] ?? 0) === 5, json_encode($gOwn));
+$gRun = prepare_media_run($baseG, $gHdrs);
+$gNFiles = $gHasImagick ? 9 : 8;
+check('[prepare media] running it reads every file (and tries the thumbnails of all the photos) without touching what the owner set', $gRun['ok'] && $gRun['read'] === $gNFiles && count($gRecs()) === $gNFiles && ($gItems()['own.jpg']['location']['lat'] ?? 0) === 10.5 && !empty($gItems()['gone.jpg']['locationCleared']));
+check('[prepare media] a photo that was never looked at now offers the location from its file; nothing was written to the folder\'s data for it', abs((float) ($gAuto('fresh')['lat'] ?? 0) - 41.9) < 0.01 && !isset($gItems()['fresh.jpg']));
+check('[prepare media] the owner\'s own location wins over the file\'s, and a removed one stays removed', $gAuto('own') === null && (item_get($baseG, $gHdrs, 'Rome/own.jpg')['lat'] ?? '') === '10.5' && $gAuto('gone') === null);
+check('[prepare media] photos with an old "checked, nothing found" mark are left alone (they can\'t be told from a removed location): nothing is offered for them', $gAuto('r1') === null && $gAuto('r2') === null && $gAuto('r3') === null && $gAuto('plain') === null && $gAuto('hidden') === null);
+check('[prepare media] ...and the list counts them, with the file\'s own answer beside the mark', ($gReport()['legacy'] ?? 0) === 5 && ($gReport()['found'] ?? 0) >= 6 && ($gReport()['unread'] ?? -1) === 0);
+$gBad = $gHasImagick ? ($gRecs()['broken.heic'] ?? []) : ['gs' => 'unreadable'];
+check('[prepare media] a file that cannot be read is recorded as such (never as "has no location"), and the list names it', ($gBad['gs'] ?? '') === 'unreadable' && (!$gHasImagick || (($gReport()['unreadable'] ?? 0) === 1 && ($gReport()['bad'] ?? []) === ['broken.heic'])));
+$gRun2 = prepare_media_run($baseG, $gHdrs);
+check('[prepare media] running it again leaves everything read alone, and only tries the unreadable file once more', $gRun2['ok'] && $gRun2['read'] === ($gHasImagick ? 1 : 0) && $gRun2['made'] === 0);
+// a file that is replaced is read again by itself
+make_gps_jpeg("$fxG/Rome/fresh.jpg", 'S', [[10, 1], [0, 1], [0, 1]], 'W', [[20, 1], [0, 1], [0, 1]]); touch("$fxG/Rome/fresh.jpg", time() + 60);
+$gRun3 = prepare_media_run($baseG, $gHdrs);
+check('[prepare media] a photo whose file was replaced is read again, and only that one', $gRun3['read'] === 1 + ($gHasImagick ? 1 : 0) && abs((float) ($gRecs()['fresh.jpg']['g'][0] ?? 0) + 10) < 0.01 && abs((float) ($gAuto('fresh')['lng'] ?? 0) + 20) < 0.01);
+// shown only where the switches say
+check('[prepare media] with the folder\'s switch on, visitors see the owner\'s own location and the one from the never-looked-at photo\'s file, but not those of the old-marked, the hidden and the removed ones', $gBadges() === 2, (string) $gBadges());
+// Read everything again
+$gAgain = prepare_media_run($baseG, $gHdrs, ['again' => '1']);
+check('[prepare media] "Read everything again" reads every file, and lets the file\'s location show for the photos with an old mark', $gAgain['ok'] && $gAgain['read'] === $gNFiles && abs((float) ($gAuto('r1')['lat'] ?? 0) - 41.9) < 0.01 && abs((float) ($gAuto('r3')['lat'] ?? 0) - 41.9) < 0.01 && empty($gItems()['r1.jpg']['gpsChecked']));
+check('[prepare media] ...a photo with no location in its file still has none, and one set to hide its location still hides it', $gAuto('plain') === null && ($gItems()['hidden.jpg']['locationVisibility'] ?? '') === 'hide' && empty($gItems()['hidden.jpg']['gpsChecked']) && ($gReport()['legacy'] ?? -1) === 0);
+check('[prepare media] ...and what the owner set is exactly as it was: the typed location, and the removed one', ($gItems()['own.jpg']['location']['lat'] ?? 0) === 10.5 && !empty($gItems()['gone.jpg']['locationCleared']) && !isset($gItems()['gone.jpg']['location']));
+check('[prepare media] ...so visitors now see r1-r3, fresh and the owner\'s own: five, not the hidden one nor the removed one', $gBadges() === 5, (string) $gBadges());
+// the site-wide switch, and the cache
+file_put_contents("$fxG/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slgps-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => false]));
+check('[prepare media] with locations off for the whole gallery nothing shows, but the records are kept', $gBadges() === 0 && count($gRecs()) === $gNFiles);
+[, , $gLogin] = http_post("$baseG/?admin", ['access_code' => 'slgps-admin-1'], [], false);   // (changing the settings file signed the owner out)
+$gHdrs = ['Cookie: ' . extract_cookie_header($gLogin), 'X-Requested-With: gallery-fetch'];
+$gRun4 = prepare_media_run($baseG, $gHdrs, ['again' => '1']);
+check('[prepare media] ...and Prepare media still reads: the switches decide what is shown, never what is read', $gRun4['ok'] && $gRun4['read'] === $gNFiles, json_encode($gRun4));
+file_put_contents("$fxG/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slgps-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+// the cache off: nowhere to keep anything
+$fxGc = new_fixture_dir('slgps-nocache');
+make_gps_jpeg("$fxGc/p.jpg", 'N', $gLat, 'E', $gLng);
+write_data_file("$fxGc/.gallery-items.php", ['items' => [], 'groups' => [], 'locationEnabled' => true]);
+file_put_contents("$fxGc/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slgps-admin-2', 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_THUMBNAIL_CACHE' => false]));
+copy($indexSrc, "$fxGc/index.php");
+$portGc = find_free_port(); start_server($fxGc, $portGc); $baseGc = "http://127.0.0.1:$portGc";
+[, , $gcLogin] = http_post("$baseGc/?admin", ['access_code' => 'slgps-admin-2'], [], false);
+$gcHdrs = ['Cookie: ' . extract_cookie_header($gcLogin), 'X-Requested-With: gallery-fetch'];
+first_look($baseGc, ['p.jpg']);
+$gcRun = json_decode(http_post("$baseGc/?admin", ['csrf_token' => admin_token($baseGc, $gcHdrs), 'action' => 'prepare_media', 'from' => '0'], $gcHdrs)[1], true) ?: [];
+check('[prepare media] with the thumbnail cache switched off nothing is recorded anywhere, Prepare media says why, and the panel explains', !is_dir("$fxGc/.gallery-cache") && ($gcRun['ok'] ?? null) === false && str_contains($gcRun['text'] ?? '', 'thumbnail cache is switched off') && str_contains(http_get("$baseGc/?admin", $gcHdrs)[1], 'there is nowhere to keep what is made or read'));
+check('[prepare media] ...a photo\'s file location is then not shown to visitors (it would have to be read on every page), but the editor still offers it to the owner', substr_count(http_get("$baseGc/")[1], 'location-badge') === 0 && abs((float) (item_get($baseGc, $gcHdrs, 'p.jpg')['auto']['lat'] ?? 0) - 41.9) < 0.01);
 
 /* --------------------------------------------------------------------- */
 

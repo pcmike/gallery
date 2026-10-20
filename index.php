@@ -271,6 +271,9 @@ define('ENABLE_THUMBNAIL_CACHE', gallery_setting('ENABLE_THUMBNAIL_CACHE', true)
 // The two pictures a tile can show (size=tile and size=tilehd), both square cuts from the middle of the photo, which is all
 // a tile ever shows of it: [side in pixels, JPEG quality]. A tile is 180 to 250 points wide (a phone in portrait with one
 // column: about 350), so 560 is right for an ordinary screen and 1080 for a 3x phone.
+/** The thumbnail cache's file of what the gallery has read from each file (when taken, where): see media_meta_read_file(). */
+const MEDIA_META_FILE = 'meta1.php';
+
 const TILE_SIZES = ['tile' => [560, 82], 'tilehd' => [1080, 80]];
 
 // Auto-group photos by filename (stripping a trailing "_01"/"-02" style
@@ -2284,6 +2287,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
             if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
             $mtime = @filemtime(resolve_real_path($dir, $file));
             $valid['taken3.json'] = true;   // the capture dates found for sorting (see media_taken_times)
+            $valid[MEDIA_META_FILE] = true;   // what was read from the files: when taken, where (see media_meta_ensure)
             if (is_video_file($file)) $valid[md5($file . '|preview2|' . $mtime) . '.mp4'] = true;   // and its short clip (see video_preview_path)
             foreach ($variants as $variant) {
                 $valid[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = true;
@@ -2505,53 +2509,116 @@ function generate_tile_jpegs($srcPath, $targets) {
     return false;
 }
 
-/** How many photos have every tile size ready in the cache, and how many photos there are (videos are left to the
- *  moment they are first shown: cutting a frame out of one is heavy). */
-function thumbnail_readiness($dir, $files) {
-    $ready = 0; $total = 0;
+/** What Prepare media still has to do: how many files there are, how many photos lack some tile size, how many files have no usable
+ *  record of what they say about themselves (when taken, where), and how many files need either (that is what the progress counts). */
+function media_readiness($dir, $files) {
+    $r = ['total' => 0, 'photos' => 0, 'tilesReady' => 0, 'metaLeft' => 0, 'left' => 0];
     foreach ($files as $file) {
-        if (is_video_file($file)) continue;
-        $total++;
         $src = resolve_real_path($dir, $file);
-        $cacheDir = containing_folder_real_path($dir, $file) . '/.gallery-cache';
-        $all = true;
-        foreach (array_keys(TILE_SIZES) as $variant) {
-            $mtime = @filemtime($src);
-            $path = $cacheDir . '/' . md5($file . '|' . $variant . '|' . $mtime) . '.jpg';
-            if (!is_file($path)) { $all = false; break; }
+        if (!$src) continue;
+        $r['total']++;
+        $needTiles = false;
+        if (!is_video_file($file)) {
+            $r['photos']++;
+            $cacheDir = containing_folder_real_path($dir, $file) . '/.gallery-cache';
+            $all = true;
+            foreach (array_keys(TILE_SIZES) as $variant) {
+                $path = $cacheDir . '/' . md5($file . '|' . $variant . '|' . @filemtime($src)) . '.jpg';
+                if (!is_file($path)) { $all = false; break; }
+            }
+            if ($all) $r['tilesReady']++; else $needTiles = true;
         }
-        if ($all) $ready++;
+        $needMeta = !media_meta_fresh(media_meta_load(containing_folder_real_path($dir, $file))[basename($file)] ?? null, $src);   // (one that couldn't be read is tried again by a run, but isn't counted as left)
+        if ($needMeta) $r['metaLeft']++;
+        if ($needTiles || $needMeta) $r['left']++;
     }
-    return [$ready, $total];
+    return $r;
 }
 
-/** Makes the tile pictures of the photos from number $from onward, taking every $step-th one (several requests can share the
- *  work, each with its own start and the same step), for about $budget seconds, then says where to carry on. A photo that
- *  can't be made, such as a damaged file, is counted and passed over rather than tried forever. 'worked' is how many photos
- *  needed making (made or not) in this call. */
-function warm_thumbnail_batch($dir, $files, $from, $budget, $step = 1) {
-    $photos = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
-    $total = count($photos);
+/** Prepare media, one slice: from file number $from onward, every $step-th one (several requests share the work, each with its own
+ *  start and the same step), for about $budget seconds, then says where to carry on. For each file: a photo's missing tile pictures are
+ *  made (all of them again when $remake), and what the file says about itself is read and recorded when it has no usable record (every
+ *  file again when $again, which also lets a location in the file show for photos carrying an old "read, nothing found" mark, see
+ *  media_file_location). A file that can't be handled, such as a damaged one, is counted and passed over rather than tried forever.
+ *  'worked' is how many files needed something in this call. */
+function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = false, $remake = false) {
+    $total = count($files);
     $start = microtime(true);
-    $made = 0; $failed = 0; $worked = 0; $i = max(0, (int) $from); $step = max(1, (int) $step);
+    $made = 0; $failed = 0; $worked = 0; $read = 0; $unreadable = 0; $i = max(0, (int) $from); $step = max(1, (int) $step);
+    $records = []; $unmark = [];   // folderReal => [bare name => record], folderReal => [bare names whose old "read, nothing found" mark goes]
     for (; $i < $total; $i += $step) {
-        if ($made + $failed > 0 && microtime(true) - $start > $budget) break;
-        $file = $photos[$i];
+        if ($worked > 0 && microtime(true) - $start > $budget) break;
+        $file = $files[$i];
         $src = resolve_real_path($dir, $file);
-        $cacheDir = containing_folder_real_path($dir, $file) . '/.gallery-cache';
-        $missing = [];
-        foreach (array_keys(TILE_SIZES) as $variant) {
-            $cachePath = image_cache_path($cacheDir, $file, $variant, $src);
-            if ($cachePath === null) { $failed++; continue; }
-            if (is_file($cachePath) && filemtime($cachePath) >= @filemtime($src)) continue;
-            $missing[$variant] = $cachePath;
+        if (!$src || !is_file($src)) continue;
+        $folderReal = containing_folder_real_path($dir, $file);
+        $did = false;
+        if (!is_video_file($file)) {
+            $cacheDir = $folderReal . '/.gallery-cache';
+            $missing = [];
+            foreach (array_keys(TILE_SIZES) as $variant) {
+                $cachePath = image_cache_path($cacheDir, $file, $variant, $src);
+                if ($cachePath === null) { $failed++; continue; }
+                if (!$remake && is_file($cachePath) && filemtime($cachePath) >= @filemtime($src)) continue;
+                $missing[$variant] = $cachePath;
+            }
+            if ($missing) {   // one reading of the photo makes every size that is missing
+                $did = true;
+                if (generate_tile_jpegs($src, $missing)) $made += count($missing); else $failed += count($missing);
+            }
         }
-        if ($missing) {   // one reading of the photo makes every size that is missing
-            $worked++;
-            if (generate_tile_jpegs($src, $missing)) $made += count($missing); else $failed += count($missing);
+        $bare = basename($file);
+        if (media_meta_enabled() && ($again || !media_meta_ready(media_meta_load($folderReal)[$bare] ?? null, $src))) {
+            $did = true;
+            $rec = media_meta_read_file($src);
+            $records[$folderReal][$bare] = $rec;
+            $read++;
+            if ($rec['gs'] === 'unreadable') $unreadable++;
+            if ($again) $unmark[$folderReal][] = $bare;
+        }
+        if ($did) $worked++;
+    }
+    foreach ($records as $folderReal => $recs) {
+        media_meta_store($folderReal, $recs);
+        if (!empty($unmark[$folderReal])) {
+            $names = $unmark[$folderReal];
+            items_update($folderReal, function (&$d) use ($names) {
+                foreach ($names as $n) {
+                    if (isset($d['items'][$n]) && empty($d['items'][$n]['location']) && empty($d['items'][$n]['locationCleared'])) unset($d['items'][$n]['gpsChecked']);
+                }
+            });
         }
     }
-    return ['next' => $i, 'total' => $total, 'made' => $made, 'failed' => $failed, 'worked' => $worked, 'done' => $i >= $total];
+    return ['next' => $i, 'total' => $total, 'made' => $made, 'failed' => $failed, 'worked' => $worked, 'read' => $read, 'unreadable' => $unreadable, 'done' => $i >= $total];
+}
+
+/** Everything Prepare media's list says, one row per folder that has files: the folder, its files, how many photos have their tile pictures, and
+ *  media_folder_summary()'s counts. */
+function media_report($dir, $files) {
+    $byFolder = [];
+    foreach ($files as $file) {
+        $slash = strrpos($file, '/');
+        $byFolder[$slash === false ? '' : substr($file, 0, $slash)][] = $file;
+    }
+    ksort($byFolder, SORT_NATURAL | SORT_FLAG_CASE);
+    $rows = [];
+    foreach ($byFolder as $path => $list) {
+        $folderReal = containing_folder_real_path($dir, $list[0]);
+        $sum = media_folder_summary($dir, $folderReal, $list);
+        $tiles = 0; $photos = 0;
+        foreach ($list as $file) {
+            if (is_video_file($file)) continue;
+            $photos++;
+            $src = resolve_real_path($dir, $file);
+            $ok = true;
+            foreach (array_keys(TILE_SIZES) as $variant) {
+                if (!is_file($folderReal . '/.gallery-cache/' . md5($file . '|' . $variant . '|' . @filemtime($src)) . '.jpg')) { $ok = false; break; }
+            }
+            if ($ok) $tiles++;
+        }
+        $rows[] = ['folder' => $path, 'photos' => $photos, 'tiles' => $tiles] + $sum;
+    }
+    return $rows;
 }
 
 /** Serves ?img=<filename-or-relative-path>&size=thumb|share|full,
@@ -2629,6 +2696,10 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
         header('Content-Type: image/jpeg');
         header('Cache-Control: ' . $cacheControl);
         readfile($cachePath);
+        // The first time the gallery meets this file: now that its picture is made, read what the file says about itself
+        // (when it was taken, where) and keep it, after the visitor has been answered where the server allows.
+        if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request();
+        media_meta_ensure($dir, $filename);
         return;
     }
     if ($pictureSrc !== $srcPath) {
@@ -5057,11 +5128,18 @@ function items_get_all_for_files($dir, $files) {
         $byFolder[containing_folder_real_path($dir, $file)][] = $file;
     }
     $result = [];
+    $withFileLocations = ENABLE_PHOTO_LOCATION && media_meta_enabled();   // (nothing to merge when locations are off for the whole gallery)
     foreach ($byFolder as $folderPath => $folderFiles) {
         $data = items_read($folderPath);
+        $records = $withFileLocations ? media_meta_load($folderPath) : [];
         foreach ($folderFiles as $file) {
             $bare = basename($file);
             $entry = $data['items'][$bare] ?? [];
+            // A location the gallery has read from the file stands in for one the owner hasn't set (the owner's always wins).
+            if ($records && isset($records[$bare]) && media_meta_fresh($records[$bare], $folderPath . '/' . $bare)) {
+                $fromFile = media_file_location($entry, $records[$bare]);
+                if ($fromFile !== null) $entry['location'] = $fromFile;
+            }
             // Not real item data — a folder-level setting stashed onto
             // each of its own files' entries so callers (the location
             // badge/pin, specifically) don't need a second lookup
@@ -5542,81 +5620,148 @@ function gps_readable_file($file) {
     return false;
 }
 
-/**
- * Once a folder's locations are switched on, every photo in it that has
- * GPS in the file gets that location stored, so turning the switch on
- * actually puts the places on the gallery and map — hiding one photo is
- * then the opt-out (its "Always hide" setting, or clearing its
- * coordinates), not showing each one. A photo is read once and marked
- * (gpsChecked), so a location the owner later clears stays cleared, and a
- * photo with no GPS isn't re-read on every visit. A photo that already
- * has a saved location is never touched. Returns how many photos were
- * given a location. Runs when the switch is turned on and whenever the
- * owner opens that folder in the admin (which is how photos uploaded
- * later get picked up); never on a visitor's request.
- */
-function import_folder_gps($dir, $folderReal, $looseFiles) {
-    if (!ENABLE_PHOTO_LOCATION) return 0;
-    $data = items_read($folderReal);
-    if (empty($data['locationEnabled'])) return 0;
-    $found = [];
-    foreach ($looseFiles as $file) {
-        $bare = basename($file);
-        $entry = $data['items'][$bare] ?? [];
-        if (!empty($entry['location']) || !empty($entry['gpsChecked']) || !gps_readable_file($file)) continue;
-        $status = 'none';
-        $found[$bare] = [extract_photo_gps(resolve_real_path($dir, $file), $status), $status];
-    }
-    if (!$found) return 0;
-    $imported = 0;
-    items_update($folderReal, function (&$d) use ($found, &$imported) {
-        foreach ($found as $bare => [$loc, $status]) {
-            $entry = $d['items'][$bare] ?? [];
-            if (!empty($entry['location']) || !empty($entry['gpsChecked'])) continue;
-            if ($loc === null && $status === 'unreadable') continue;   // a file that couldn't be read hasn't been looked at: try again next time, don't remember it as "no location"
-            $entry['gpsChecked'] = true;
-            if ($loc !== null) {
-                $entry['location'] = ['lat' => $loc['lat'], 'lng' => $loc['lng'], 'label' => ''];
-                if (($entry['locationVisibility'] ?? 'inherit') !== 'hide') $imported++;   // one switched off is stored, not shown
+/* -----------------------------------------------------------------------
+ * What the gallery has read from the media files themselves ("media records").
+ *
+ * Whenever the gallery first meets a photo or video that has no record, it
+ * reads from the file when it was taken and where (its GPS), and keeps the
+ * answer in the folder's cache, next to the thumbnails: one record per file,
+ * keyed by the file's modified time and size, so a replaced file is simply a
+ * file with no record and is read again, and a file that couldn't be read is
+ * retried. Nothing is "checked off" for good. The owner's own entries live in
+ * the folder's data file and always win over what a file says (a location
+ * typed in, or cleared on purpose, stands). The folder's and the site's
+ * location switches decide what is SHOWN, never what is read: a location the
+ * gallery has read is only a location it knows.
+ *
+ * The coordinates are private data like the data files, so the records are
+ * kept in a guarded .php file (a direct request answers 404), not in a plain
+ * file next to the pictures. They are never part of the Export. The cache can
+ * be deleted at any time; the records are read again.
+ *
+ * Files are read when their thumbnails are first made (a visitor's first look
+ * at a new photo, or Prepare media), and by Prepare media for everything else.
+ * ----------------------------------------------------------------------- */
+
+/** The records live in the thumbnail cache's folder, so with the cache switched off there is nowhere to keep them. */
+function media_meta_enabled() { return ENABLE_THUMBNAIL_CACHE; }
+
+function media_meta_path($folderReal) { return $folderReal . '/.gallery-cache/' . MEDIA_META_FILE; }
+
+/** A folder's records, name => record, read once per request ($reset forgets what was read, after a write). */
+function media_meta_load($folderReal, $reset = false) {
+    static $memo = [];
+    if ($reset) { unset($memo[$folderReal]); return []; }
+    if (!isset($memo[$folderReal])) {
+        $memo[$folderReal] = [];
+        if (media_meta_enabled()) {
+            $path = media_meta_path($folderReal);
+            if (is_file($path)) {
+                $d = json_file_read($path, ['v' => 1, 'f' => []]);
+                if (is_array($d['f'] ?? null)) $memo[$folderReal] = $d['f'];
             }
-            $d['items'][$bare] = $entry;
         }
-    });
-    return empty($GLOBALS['__data_write_failed']) ? $imported : 0;
+    }
+    return $memo[$folderReal];
 }
 
-/**
- * "Check the photos for locations again": reads, from their files, every photo in this folder that has no stored location, whether or not
- * it was read before. (import_folder_gps() reads each photo once and remembers the answer, so a photo that was read when it couldn't be, or
- * before its file had a location, would otherwise never be looked at again.) A photo set to hide its location is left alone, and one that
- * already has a location is never touched. Returns how many were found, how many have none in the file, and the files that couldn't be read.
- */
-function recheck_folder_gps($dir, $folderReal, $looseFiles) {
-    $out = ['looked' => 0, 'found' => 0, 'none' => 0, 'unreadable' => [], 'hidden' => 0];
-    if (!ENABLE_PHOTO_LOCATION) return $out;
-    $data = items_read($folderReal);
-    $read = [];
-    foreach ($looseFiles as $file) {
-        $bare = basename($file);
-        $entry = $data['items'][$bare] ?? [];
-        if (!empty($entry['location']) || !gps_readable_file($file)) continue;
-        if (($entry['locationVisibility'] ?? 'inherit') === 'hide') { $out['hidden']++; continue; }
-        $status = 'none';
-        $read[$bare] = [extract_photo_gps(resolve_real_path($dir, $file), $status), $status];
-    }
-    $out['looked'] = count($read);
-    if (!$read) return $out;
-    items_update($folderReal, function (&$d) use ($read, &$out) {
-        foreach ($read as $bare => [$loc, $status]) {
-            $entry = $d['items'][$bare] ?? [];
-            if (!empty($entry['location'])) continue;
-            if ($loc !== null) { $entry['location'] = ['lat' => $loc['lat'], 'lng' => $loc['lng'], 'label' => '']; $entry['gpsChecked'] = true; $out['found']++; }
-            elseif ($status === 'unreadable') { $out['unreadable'][] = $bare; }   // not marked as checked: it hasn't really been looked at
-            else { $entry['gpsChecked'] = true; $out['none']++; }
-            $d['items'][$bare] = $entry;
+/** Whether a record still describes the file as it is now (the same modified time and size). */
+function media_meta_fresh($rec, $realPath) {
+    return is_array($rec) && ($rec['m'] ?? null) === (int) @filemtime($realPath) && ($rec['s'] ?? null) === (int) @filesize($realPath);
+}
+
+/** A fresh record whose file could be read: nothing is left to do for this file. (A file that couldn't be read is tried again.) */
+function media_meta_ready($rec, $realPath) {
+    return media_meta_fresh($rec, $realPath) && ($rec['gs'] ?? '') !== 'unreadable';
+}
+
+/** What one file says about itself: [m, s] its modified time and size, t when it was taken (or null), g its [lat, lng] (or null),
+ *  gs how the location read went ('ok', 'none' = the file has none, 'unreadable' = the file couldn't be read, 'na' = this kind of
+ *  file doesn't carry one), r when it was read. Never throws. */
+function media_meta_read_file($realPath) {
+    $rec = ['m' => (int) @filemtime($realPath), 's' => (int) @filesize($realPath), 't' => null, 'g' => null, 'gs' => 'na', 'r' => time()];
+    if (!is_readable($realPath)) { $rec['gs'] = 'unreadable'; return $rec; }
+    try { $t = media_capture_time($realPath); } catch (Throwable $e) { $t = null; }
+    $rec['t'] = is_int($t) ? $t : null;
+    $ext = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
+    if (in_array($ext, ['jpg', 'jpeg', 'heic', 'heif', 'mov', 'mp4'], true)) {
+        if (!gps_readable_file($realPath)) {
+            $rec['gs'] = 'unreadable';   // this PHP lacks what it takes to read this kind of file (the exif extension, or Imagick)
+        } else {
+            $status = 'none';
+            try { $loc = extract_photo_gps($realPath, $status); } catch (Throwable $e) { $loc = null; $status = 'unreadable'; }
+            $rec['gs'] = $status;
+            if ($loc !== null) $rec['g'] = [$loc['lat'], $loc['lng']];
         }
+    }
+    return $rec;
+}
+
+/** Saves records ([name => record]) into a folder's cache file, merging with what is there. False when it can't be written (no
+ *  cache folder to keep them in, or it isn't writable): nothing is lost then, the files are simply read again next time. */
+function media_meta_store($folderReal, array $records) {
+    if (!$records || !media_meta_enabled()) return false;
+    $cacheDir = $folderReal . '/.gallery-cache';
+    if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0755)) return false;
+    $failedBefore = !empty($GLOBALS['__data_write_failed']);
+    $GLOBALS['__data_write_failed'] = false;
+    json_file_update(media_meta_path($folderReal), ['v' => 1, 'f' => []], function (&$d) use ($records) {
+        if (!is_array($d['f'] ?? null)) $d['f'] = [];
+        foreach ($records as $name => $rec) $d['f'][$name] = $rec;
     });
+    $ok = empty($GLOBALS['__data_write_failed']);
+    $GLOBALS['__data_write_failed'] = $failedBefore;   // (a cache that can't be written to is not a failed save of the owner's data)
+    media_meta_load($folderReal, true);
+    return $ok;
+}
+
+/** Makes sure one file has a record: the first time the gallery meets it (when its thumbnail is made), or when it has changed or couldn't be read before. */
+function media_meta_ensure($dir, $file) {
+    if (!media_meta_enabled()) return;
+    $real = resolve_real_path($dir, $file);
+    if (!$real || !is_file($real)) return;
+    $folderReal = containing_folder_real_path($dir, $file);
+    if (media_meta_ready(media_meta_load($folderReal)[basename($file)] ?? null, $real)) return;
+    media_meta_store($folderReal, [basename($file) => media_meta_read_file($real)]);
+}
+
+/** What the gallery knows from the files of one folder level ($looseFiles: the files directly in it, as relative paths): how many files,
+ *  how many have a location in the file / none / couldn't be read / haven't been read yet / are of a kind that has none, how many
+ *  carry a capture date, how many locations are the owner's own or were cleared on purpose, how many carry an old "read, nothing
+ *  found" mark, how many have a location from the file that is the one shown (`fromFile`), and the names of the unreadable ones. */
+function media_folder_summary($dir, $folderReal, $looseFiles) {
+    $items = items_read($folderReal)['items'] ?? [];
+    $recs = media_meta_load($folderReal);
+    $out = ['files' => 0, 'found' => 0, 'none' => 0, 'unreadable' => 0, 'unread' => 0, 'na' => 0, 'dated' => 0, 'undated' => 0, 'own' => 0, 'cleared' => 0, 'legacy' => 0, 'fromFile' => 0, 'bad' => []];
+    foreach ($looseFiles as $f) {
+        $bare = basename($f);
+        $real = $folderReal . '/' . $bare;
+        $entry = $items[$bare] ?? [];
+        $out['files']++;
+        if (!empty($entry['location'])) $out['own']++;
+        elseif (!empty($entry['locationCleared'])) $out['cleared']++;
+        elseif (!empty($entry['gpsChecked'])) $out['legacy']++;
+        $rec = $recs[$bare] ?? null;
+        if (!media_meta_fresh($rec, $real)) { $out['unread']++; continue; }
+        $gs = (string) ($rec['gs'] ?? 'na');
+        if ($gs === 'ok') $out['found']++;
+        elseif ($gs === 'none') $out['none']++;
+        elseif ($gs === 'unreadable') { $out['unreadable']++; $out['bad'][] = $bare; }
+        else $out['na']++;
+        if (($rec['t'] ?? null) !== null) $out['dated']++; else $out['undated']++;
+        if (media_file_location($entry, $rec) !== null) $out['fromFile']++;
+    }
     return $out;
+}
+
+/** The saved-location shape for a photo that has no location of its own but whose file has one: what the gallery shows (when the
+ *  gates are open) instead. Null when the owner has a say: a location typed in (it stands), one cleared on purpose, or, for
+ *  entries made before the records existed, a photo marked as read with no location (which can't be told from one the owner
+ *  cleared, so it is left alone; Prepare media's "Read everything again" reads those too). */
+function media_file_location($entry, $rec) {
+    if (!empty($entry['location']) || !empty($entry['locationCleared']) || !empty($entry['gpsChecked'])) return null;
+    if (!is_array($rec) || !is_array($rec['g'] ?? null) || ($rec['gs'] ?? '') !== 'ok') return null;
+    return ['lat' => (float) $rec['g'][0], 'lng' => (float) $rec['g'][1], 'label' => ''];
 }
 
 /** A numeric latitude/longitude pair, validated the same discipline
@@ -6123,8 +6268,14 @@ function admin_item_json($dir, $files) {
     $vis = $entry['locationVisibility'] ?? 'inherit';
     $loc = $entry['location'] ?? null;
     $auto = null;
-    if ($loc === null && empty($entry['gpsChecked']) && ENABLE_PHOTO_LOCATION && !is_video_file($file)) {
-        $auto = extract_photo_gps(resolve_real_path($dir, $file));
+    if ($loc === null && empty($entry['gpsChecked']) && empty($entry['locationCleared']) && ENABLE_PHOTO_LOCATION) {
+        if (media_meta_enabled()) {
+            $rec = media_meta_load($real)[$bare] ?? null;
+            $fromFile = media_meta_fresh($rec, $real . '/' . $bare) ? media_file_location($entry, $rec) : null;
+            if ($fromFile !== null) $auto = ['lat' => $fromFile['lat'], 'lng' => $fromFile['lng']];
+        } else {
+            $auto = extract_photo_gps(resolve_real_path($dir, $file));   // (no cache to keep a record in: read it now)
+        }
     }
     $cover = $data['cover'] ?? null;
     admin_json_exit([
@@ -6179,14 +6330,24 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return $result;
     }
 
-    // Makes the tile pictures ahead of time, a few seconds' worth per request; the page asks again until it is done.
-    if ($action === 'warm_thumbnails') {
-        if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'Thumbnails are switched off in the site settings.']);
+    // Prepare media: makes the tile pictures and records what the files say about themselves (when taken, where), a few seconds' worth
+    // per request; the page asks again until it is done. ('warm_thumbnails' is the older name of the same action.)
+    if ($action === 'prepare_media' || $action === 'warm_thumbnails') {
+        if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'The thumbnail cache is switched off in the site settings, so there is nowhere to keep anything it prepares.']);
         @set_time_limit(60);
         session_write_close();   // the page runs a few of these side by side: none may wait for another's hold on the session
-        $r = warm_thumbnail_batch($dir, $files, (int) ($_POST['from'] ?? 0), 1.0, min(8, max(1, (int) ($_POST['step'] ?? 1))));
+        $again = !empty($_POST['again']);
+        $r = media_prepare_batch($dir, $files, (int) ($_POST['from'] ?? 0), 1.0, min(8, max(1, (int) ($_POST['step'] ?? 1))), $again, $again && !empty($_POST['remake']));
         $r['ok'] = true; $r['text'] = '';
         admin_json_exit($r);
+    }
+
+    // What the gallery knows and doesn't know about each folder's files (Prepare media's list).
+    if ($action === 'media_report') {
+        session_write_close();
+        $out = [];
+        foreach (media_report($dir, $files) as $row) $out[] = $row;
+        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out]);
     }
 
     if ($action === 'save_item') {
@@ -6228,12 +6389,12 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             if (!$keepLoc) {
                 if ($lat !== '' && $lng !== '') {
                     $entry['location'] = ['lat' => (float) $lat, 'lng' => (float) $lng, 'label' => $locLabel];
+                    unset($entry['locationCleared']);
                 } else {
+                    // Cleared by the owner: what the file says is not shown in its place.
                     unset($entry['location']);
+                    $entry['locationCleared'] = true;
                 }
-                // Saved by the owner, so whatever location it has (or deliberately
-                // doesn't) stands: never auto-import GPS over it later.
-                $entry['gpsChecked'] = true;
             }
             if ($visibility !== null) $entry['locationVisibility'] = $visibility;
             if ($restriction === 'inherit') { unset($entry['restriction']); } elseif ($restriction !== null) { $entry['restriction'] = $restriction; }
@@ -6501,46 +6662,21 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         }
         $prefix = $adminFolderPath === null ? '' : $adminFolderPath . '/';
         $loose = split_folder_level($files, $prefix)['loose'];
-        $imported = import_folder_gps($dir, $targetReal, $loose);
         $text = 'Location sharing enabled for this folder.';
         if (!ENABLE_PHOTO_LOCATION) {
             $text .= ' Nothing shows yet, because ENABLE_PHOTO_LOCATION is off in index.php.';
-        } elseif ($imported > 0) {
-            $text .= ' ' . $imported . ' photo' . ($imported === 1 ? ' has' : 's have') . ' GPS in the file and now show' . ($imported === 1 ? 's' : '') . ' a location to visitors and on the map. To keep one private, press its pencil and switch off Location (or clear its coordinates).';
         } else {
-            $text .= ' None of its photos has GPS to show; add coordinates by hand on any photo.';
-        }
-        if (ENABLE_PHOTO_LOCATION) {
-            // photos that were read before and had no location then are not read again by switching off and on: say so, and what to press
-            $seen = items_read($targetReal)['items'] ?? [];
-            $readBefore = 0;
-            foreach ($loose as $f) if (!empty($seen[basename($f)]['gpsChecked']) && empty($seen[basename($f)]['location']) && ($seen[basename($f)]['locationVisibility'] ?? 'inherit') !== 'hide' && gps_readable_file($f)) $readBefore++;
-            if ($readBefore > 0) $text .= ' (' . $readBefore . ' ' . ($readBefore === 1 ? 'was' : 'were') . ' read before and had none then: switching this off and on doesn\'t read them again. Press "Check the photos for locations again" to.)';
+            // Nothing is read now: the gallery has already read what its files say (when their pictures were made, or by Prepare media).
+            $shown = 0;
+            foreach (items_get_all_for_files($dir, $loose) as $e) if (!empty($e['location']) && ($e['locationVisibility'] ?? 'inherit') !== 'hide') $shown++;
+            $sum = media_folder_summary($dir, $targetReal, $loose);
+            if ($shown > 0) $text .= ' ' . $shown . ' photo' . ($shown === 1 ? ' has' : 's have') . ' a location and now show' . ($shown === 1 ? 's' : '') . ' it to visitors and on the map. To keep one private, press its pencil and switch off Location (or clear its coordinates).';
+            else $text .= ' None of its photos has a location to show; add coordinates by hand on any photo.';
+            if ($sum['unread'] > 0) $text .= ' ' . $sum['unread'] . ' file' . ($sum['unread'] === 1 ? ' hasn\'t' : 's haven\'t') . ' been read yet: Prepare media (in Site settings) reads them.';
+            if ($sum['legacy'] > 0) $text .= ' ' . $sum['legacy'] . ' ' . ($sum['legacy'] === 1 ? 'was' : 'were') . ' read under older rules and found nothing, and are left alone: "Read everything again" in Prepare media reads them again.';
+            if ($sum['unreadable'] > 0) $text .= ' ' . $sum['unreadable'] . ' couldn\'t be read at all (' . implode(', ', array_slice($sum['bad'], 0, 3)) . ($sum['unreadable'] > 3 ? ', …' : '') . ').';
         }
         return ['type' => 'ok', 'text' => $text];
-    }
-
-    if ($action === 'recheck_folder_gps') {
-        $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
-        $reply = function ($ok, $text) use ($isFetch) {
-            if ($isFetch) admin_json_exit(['ok' => $ok, 'text' => $text]);
-            return ['type' => $ok ? 'ok' : 'error', 'text' => $text];
-        };
-        $itemsNow = items_read($targetReal);
-        if (!ENABLE_PHOTO_LOCATION) return $reply(false, 'Photo locations are off for the whole gallery (Site settings).');
-        if (empty($itemsNow['locationEnabled'])) return $reply(false, 'Switch "Show photo locations publicly" on for this folder first.');
-        $prefix = $adminFolderPath === null ? '' : $adminFolderPath . '/';
-        $r = recheck_folder_gps($dir, $targetReal, split_folder_level($files, $prefix)['loose']);
-        if (!empty($GLOBALS['__data_write_failed'])) return $reply(false, 'Nothing was saved: this folder isn\'t writable by the web server.');
-        $n = function ($c, $w) { return $c . ' ' . $w . ($c === 1 ? '' : 's'); };
-        if ($r['looked'] === 0) {
-            $text = 'Every photo here that can have a location already has one' . ($r['hidden'] > 0 ? ' (or is set to hide it: ' . $r['hidden'] . ')' : '') . '. Nothing to read again.';
-        } else {
-            $text = 'Read ' . $n($r['looked'], 'file') . ': ' . $r['found'] . ' now ' . ($r['found'] === 1 ? 'has' : 'have') . ' a location from the file, ' . $r['none'] . ' ' . ($r['none'] === 1 ? 'has' : 'have') . ' none in the file';
-            if ($r['unreadable']) $text .= ', ' . count($r['unreadable']) . ' couldn\'t be read at all (' . implode(', ', array_slice($r['unreadable'], 0, 3)) . (count($r['unreadable']) > 3 ? ', …' : '') . ': the server\'s image library may not read this kind of file)';
-            $text .= '.';
-        }
-        return $reply(true, $text);
     }
 
     if ($action === 'add_gallery_marker') {
@@ -6940,7 +7076,7 @@ function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $
 /** The "Privacy" section of a folder's (or the gallery's) settings: three rows with the same switch, each saved the moment it is
  *  pressed: the folder itself private (not at the top of the gallery), whether photo locations are public, and, under that because it
  *  only shows photos whose location is public, the map. */
-function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, $counts, $locWarn = '') {
+function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, $counts, $locWarn = '', $locStatus = '') {
     $isRoot = $adminFolderPath === null;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $locOn = !empty($itemsHere['locationEnabled']) && ENABLE_PHOTO_LOCATION;
@@ -6972,11 +7108,8 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
     </div>
 <?php endif; ?>
     <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), $isRoot ? 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : '') : 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : ''), $locWarn); ?>
-    <?php if ($locOn): ?>
-    <div class="loc-recheck" data-csrf="<?= $csrfToken ?>">
-      <button type="button" class="secondary loc-recheck-btn">Check the photos for locations again</button><span class="rowstate loc-recheck-state" role="status" aria-live="polite"></span>
-      <p class="hint">Each photo's location is read from its file once and then remembered, so a photo that was read before its file had one (or when it couldn't be read) stays without. This reads those again. A photo whose location you cleared gets it back from the file; one set to hide its location stays hidden.</p>
-    </div>
+    <?php if ($locStatus !== ''): ?>
+    <p class="hint loc-status"><?= $locStatus ?></p>
     <?php endif; ?>
     <div class="map-under<?= $locOn ? '' : ' no-loc' ?>" id="map-under"<?= ENABLE_PHOTO_LOCATION ? '' : ' data-global-off="1"' ?>>
       <p class="warn-note map-loc-note">Locations are off here, so the map has nothing to show. A photo you set to show its location on its own still appears.</p>
@@ -7045,7 +7178,7 @@ function format_date_range($min, $max) {
 
 /**
  * What dates do a folder's photos span? Offered to the admin as a suggestion for the folder's Dates field and never
- * published unless they save it. Uses each JPEG's own capture date when it has one, else the file's modified date.
+ * published unless they save it. Uses each photo's own capture date (JPEG or HEIC) when it has one, else the file's modified date.
  * Looks at no more than $cap photos, so a huge folder can't slow the admin down. Returns null with nothing to go on.
  */
 function suggest_folder_dates($dir, $fileList, $cap = 300) {
@@ -7057,15 +7190,10 @@ function suggest_folder_dates($dir, $fileList, $cap = 300) {
         if (++$looked > $cap) break;
         $real = resolve_real_path($dir, $f);
         if (!$real || !is_file($real)) continue;
-        $t = null;
-        if (function_exists('exif_read_data') && preg_match('/\.jpe?g$/i', $f)) {
-            $ex = @exif_read_data($real, 'EXIF', false);
-            $raw = is_array($ex) ? ($ex['DateTimeOriginal'] ?? $ex['DateTimeDigitized'] ?? null) : null;
-            if (is_string($raw) && preg_match('/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)/', $raw, $m) && (int) $m[1] > 1971 && checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
-                $t = gmmktime((int) $m[4], (int) $m[5], (int) $m[6], (int) $m[2], (int) $m[3], (int) $m[1]);
-                $fromExif++;
-            }
-        }
+        // The capture date the gallery already recorded for this file, else read from the file now (a JPEG's or a HEIC's EXIF).
+        $rec = media_meta_load(containing_folder_real_path($dir, $f))[basename($f)] ?? null;
+        $t = media_meta_fresh($rec, $real) ? ($rec['t'] ?? null) : media_capture_time($real);
+        if (is_int($t)) $fromExif++; else $t = null;
         if ($t === null) $t = @filemtime($real) ?: null;
         if ($t !== null) $times[] = $t;
     }
@@ -7223,8 +7351,8 @@ function gallery_setting_definitions() {
         ]],
         ['title' => 'Thumbnails and counting', 'items' => [
             ['name' => 'ENABLE_THUMBNAIL_CACHE', 'type' => 'bool', 'label' => 'Thumbnails',
-             'help' => 'Small copies kept in .gallery-cache so pages load fast and iPhone photos show. If it can\'t write, originals are sent.',
-             'offwarn' => 'Photos are sent at full size and iPhone (HEIC) photos can\'t show. Nothing is deleted.'],
+             'help' => 'Small copies kept in .gallery-cache so pages load fast and iPhone photos show, and what each file says about itself (when it was taken, where), read once. If it can\'t write, originals are sent.',
+             'offwarn' => 'Photos are sent at full size, iPhone (HEIC) photos can\'t show, and nothing can be read from the files ahead of time, so photo locations read from the files stop showing. Nothing is deleted.'],
             ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
              'help' => 'Visits (one per visitor per half hour) and each photo\'s views. You always see them here.'],
             ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
@@ -7232,7 +7360,7 @@ function gallery_setting_definitions() {
         ]],
         ['title' => 'Locations and the map', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
-             'help' => 'Required before any location shows. Each folder and photo still has its own switch.',
+             'help' => 'Required before any location shows. Each folder and photo still has its own switch. These switches only decide what is shown: the gallery reads every file\'s location whenever it makes the thumbnails (needs "Thumbnails" on), or when you press Prepare media below.',
              'risk' => 'GPS can reveal where you live or have been. Nothing shows until a folder opts in.',
              'offwarn' => 'Locations and maps disappear. Nothing is deleted.'],
             ['name' => 'ENABLE_MAP', 'type' => 'bool', 'label' => 'Map',
@@ -9027,19 +9155,38 @@ function render_admin_health_panel() {
 <?php
 }
 
-/** The thumbnails panel: how many photos have their tile pictures ready, and a button that makes the rest now. */
+/** The Prepare media panel: makes every photo's tile pictures and records what each file says about itself (when taken, where), for the
+ *  whole gallery, with a list of what the gallery knows and doesn't know about each folder. */
 function render_admin_thumbnails_panel($csrfToken) {
-    if (!ENABLE_THUMBNAIL_CACHE) return;
-    [$ready, $total] = thumbnail_readiness($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
-    $left = $total - $ready;
+    if (!ENABLE_THUMBNAIL_CACHE) {
 ?>
-    <section class="panel warm-panel" id="warm-panel" data-csrf="<?= $csrfToken ?>" data-left="<?= (int) $left ?>">
-      <h2 class="section-title">Thumbnails</h2>
-      <p class="muted" style="margin-top:0;">A photo's tile pictures are made the first time it is shown, so the first visit to a big folder is slower. Prepare them all now and every visit is quick. It works through the photos as fast as the server allows, with a live percentage, and you can stop whenever you like; what is done stays done.</p>
-      <p class="warm-line"><strong class="warm-count <?= $left === 0 ? 'ok-text' : '' ?>"><?= $left === 0 ? 'All ' . number_format($total) . ' photos are ready.' : number_format($ready) . ' of ' . number_format($total) . ' photos are ready.' ?></strong>
-        <button type="button" class="secondary warm-go"<?= $left === 0 ? ' hidden' : '' ?>>Prepare the rest</button>
-        <button type="button" class="secondary warm-stop" hidden>Stop</button></p>
-      <div class="warm-bar" hidden><span></span></div>
+    <section class="panel media-panel" id="media-panel">
+      <h2 class="section-title">Prepare media</h2>
+      <p class="muted" style="margin-top:0;">The thumbnail cache is switched off (<em>Thumbnails</em>, under Site settings), so there is nowhere to keep what is made or read, and nothing can be prepared ahead of time. Switch it on to make every thumbnail once and to have the gallery read each file's capture date and location once.</p>
+    </section>
+<?php
+        return;
+    }
+    $r = media_readiness($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
+    $left = $r['left'];
+?>
+    <section class="panel media-panel" id="media-panel" data-csrf="<?= $csrfToken ?>" data-left="<?= (int) $left ?>" data-total="<?= (int) $r['total'] ?>">
+      <h2 class="section-title">Prepare media</h2>
+      <p class="muted" style="margin-top:0;">For every photo and video, the gallery makes its thumbnails and reads what the file says about itself, when it was taken and where, <strong>once</strong>, and keeps the answers in the thumbnail cache. That happens by itself the first time a photo is shown, so this is for doing a whole gallery ahead of time, and for catching up on anything added since. It works through the files as fast as the server allows, with a live percentage; stop whenever you like, what is done stays done. Whether locations are <em>shown</em> is decided by the location switches, never by this.</p>
+      <p class="media-line"><strong class="media-count <?= $left === 0 ? 'ok-text' : '' ?>"><?= $left === 0 ? 'Everything is prepared: ' . number_format($r['total']) . ' file' . ($r['total'] === 1 ? '' : 's') . '.' : number_format($r['total'] - $left) . ' of ' . number_format($r['total']) . ' files are prepared.' ?></strong>
+        <button type="button" class="secondary media-go"<?= $left === 0 ? ' hidden' : '' ?>>Prepare the rest</button>
+        <button type="button" class="secondary media-stop" hidden>Stop</button></p>
+      <div class="media-bar" hidden><span></span></div>
+      <details class="media-more">
+        <summary>What the gallery knows about each folder</summary>
+        <div class="media-report" aria-live="polite"><p class="muted">Loading&hellip;</p></div>
+      </details>
+      <details class="media-again-box">
+        <summary>Read everything again</summary>
+        <p class="hint">Reads every file again, even the ones read before (in case files were edited or replaced without changing, or you want to be sure). It also reads photos that an earlier version of the gallery marked as "checked, nothing found": those marks can't be told from a location you removed on purpose, so they are normally left alone, and reading them again can make a location from the file show where there was none. A location you typed in or removed yourself is never changed.</p>
+        <p><label class="check"><input type="checkbox" class="media-remake"> Also make the thumbnails again</label></p>
+        <p><button type="button" class="secondary media-again">Read everything again</button></p>
+      </details>
     </section>
 <?php
 }
@@ -9190,29 +9337,26 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $version = htmlspecialchars(GALLERY_VERSION, ENT_QUOTES, 'UTF-8');
     $csrfToken = htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8');
     $folderLabel = $adminFolderPath ?? 'Root';
-    import_folder_gps($dir, $adminFolderReal, $adminFiles);
     $adminHidden = admin_any_hidden($dir, $files, $folderGroupKeys) ? admin_hidden_data($dir, $files) : null;
     $GLOBALS['__lock_probe'] = lock_probe_targets($dir, $files);
     $GLOBALS['__admin_files'] = $files;
     $itemsHere = items_read($adminFolderReal);
-    // Photos whose GPS the gallery can read from the file but that have no
-    // *saved* location yet (and haven't been read before). With the
-    // folder's switch on they were just imported above, so these are only
-    // left when the switch is off — the editor pre-fills them for review,
-    // and each is flagged below and counted in the folder panel.
-    $adminAutoLoc = [];
-    foreach ($adminFiles as $adminFile) {
-        $adminEntry = $itemsHere['items'][basename($adminFile)] ?? [];
-        if (($adminEntry['location'] ?? null) !== null || !empty($adminEntry['gpsChecked'])) continue;
-        $autoLoc = extract_photo_gps(resolve_real_path($dir, $adminFile));
-        if ($autoLoc !== null) $adminAutoLoc[$adminFile] = $autoLoc;
-    }
-    // The warning shown beside the location switch (turning it on publishes places, so say how many and how to keep one back).
-    $gpsCount = count($adminAutoLoc);
+    // What the gallery already knows from this folder's files (nothing is read here: see the media records), for the warning beside the
+    // location switch and the line under it.
+    $adminSummary = media_folder_summary($dir, $adminFolderReal, $adminFiles);
+    $gpsCount = $adminSummary['fromFile'];
     $locWarn = 'Turning this on shows the location of ' . ($gpsCount > 0
         ? $gpsCount . ' photo' . ($gpsCount === 1 ? '' : 's') . ' here'
         : 'any photo here that has one')
         . ' to visitors, on the gallery and the map. A photo can opt out with its own Location switch (press its pencil). You and private-view visitors always see every location.';
+    $s_ = $adminSummary;
+    $locStatus = '';
+    if (media_meta_enabled() && ENABLE_PHOTO_LOCATION) {
+        $locStatus = 'What the gallery has read from the files here: <strong>' . $s_['found'] . '</strong> with a location, ' . $s_['none'] . ' without'
+            . ($s_['unreadable'] > 0 ? ', <strong class="warn-text">' . $s_['unreadable'] . ' couldn\'t be read</strong>' : '')
+            . ($s_['unread'] > 0 ? ', <strong>' . $s_['unread'] . ' not read yet</strong>' : '')
+            . '. <a href="#site" onclick="return adminGoTo(\'site\');">Prepare media</a> (Site settings) reads the rest and lists each folder.';
+    }
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
 ?>
@@ -9316,7 +9460,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-modal-body { font-size:0.92rem; line-height:1.5; margin-bottom:12px; }
   .sl-modal-body p { margin:0 0 8px; }
   .sl-modal-body .sl-f { margin-bottom:12px; }
-  @media (max-width:560px) { .sl-facts { grid-template-columns:1fr; gap:0; } .sl-facts dt { margin-top:6px; } .sl-row > summary { flex-wrap:wrap; } }
+  @media (max-width:560px) { .sl-facts { grid-template-columns:1fr; gap:0; } .sl-facts dt { margin-top:6px; } .sl-row > summary { flex-wrap:wrap; }
+    .sl-row > summary > .sl-pill { order:1; } .sl-row > summary > .sl-quick { order:2; margin-left:auto; } .sl-row > summary > .sl-chev { order:3; } .sl-row > summary > .sl-nm { order:4; flex:1 0 100%; } }
   .sl-radios { display:flex; flex-direction:column; gap:8px; }
   .sl-radio { display:flex; gap:10px; align-items:flex-start; cursor:pointer; font-size:0.9rem; }
   .sl-radio input { margin-top:4px; flex:none; }
@@ -9352,10 +9497,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-newt::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--accent); }
   .sl-amber { color:#e0a028; }
   .sl-viewswitch { margin-right:4px; }
-  .loc-recheck { margin:2px 0 14px 56px; }
-  .loc-recheck .loc-recheck-state { margin-left:10px; }
-  .loc-recheck .loc-recheck-state.ok { color:#3ba55c; }
-  .loc-recheck .loc-recheck-state.err { color:#ff8587; }
+  .loc-status { margin:2px 0 14px 56px; }
   @media (max-width: 640px) { .sl-head { flex-wrap:wrap; } .sl-count { flex:1 0 100%; } .sl-viewswitch { margin-right:auto; } }
   .sl-prevnote { display:flex; gap:10px; align-items:center; margin:0 0 12px; padding:10px 14px; background:#262046; border:1px solid #3d3470; border-radius:8px; color:#e9e6ff; font-size:0.88rem; line-height:1.4; }
   .sl-prevnote .ico { flex:none; color:#b9b2ff; }
@@ -9579,10 +9721,17 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-panel:not(.show-all) .health-row.quiet, .health-panel:not(.show-all) .health-group.all-quiet, .health-panel:not(.show-all) .health-intro { display:none; }
   .health-panel.is-checking .health-toggle { display:none; }
   .health-toggle { padding:3px 12px; font-size:0.8rem; }
-  .warm-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 8px; }
-  .warm-bar { height:8px; border-radius:4px; background:#26262a; overflow:hidden; }
-  .warm-bar span { display:block; height:100%; width:0; background:#5865f2; transition:width .4s ease-out; }
-  .warm-count { font-variant-numeric:tabular-nums; }
+  .media-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 8px; }
+  .media-bar { height:8px; border-radius:4px; background:#26262a; overflow:hidden; }
+  .media-bar span { display:block; height:100%; width:0; background:#5865f2; transition:width .4s ease-out; }
+  .media-count { font-variant-numeric:tabular-nums; }
+  .media-more, .media-again-box { margin-top:12px; }
+  .media-more > summary, .media-again-box > summary { cursor:pointer; font-weight:600; }
+  .media-table-wrap { overflow-x:auto; margin-top:8px; }
+  .media-table { border-collapse:collapse; font-size:0.88rem; min-width:100%; }
+  .media-table th, .media-table td { text-align:left; vertical-align:top; padding:6px 10px; border-bottom:1px solid #2c2c31; }
+  .media-table th { color:#9a9aa2; font-weight:600; white-space:nowrap; }
+  .media-table .media-folder { word-break:break-word; }
   .health-mark .ico { width:1.1em; height:1.1em; }
   .health-summary .secondary { padding:3px 12px; font-size:0.8rem; }
   .accel-status:empty { display:none; }
@@ -9832,28 +9981,23 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   </div>
 <?php endif; ?>
   <div class="tab-panel" data-tab="settings">
-  <?php if (ENABLE_PHOTO_LOCATION && $adminAutoLoc): $unsavedCount = count($adminAutoLoc); ?>
+  <?php if (ENABLE_PHOTO_LOCATION && empty($itemsHere['locationEnabled']) && $adminSummary['fromFile'] > 0): $unsavedCount = $adminSummary['fromFile']; ?>
     <div class="panel loc-unsaved-summary">
-      <?php if (!empty($itemsHere['locationEnabled'])): ?>
-        <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS that isn't saved yet.</strong>
-        <span class="muted">It couldn't be stored automatically (is this folder writable by the web server?). Open the photo in the gallery, press its pencil, and choose <em>Keep the location from the photo</em>.</span>
-      <?php else: ?>
-        <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> GPS in the file.</strong>
+        <strong><?= ui_icon('warn') ?> <?= $unsavedCount ?> photo<?= $unsavedCount === 1 ? '' : 's' ?> here <?= $unsavedCount === 1 ? 'has' : 'have' ?> a location in the file.</strong>
         <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos whose <em>Location</em> switch (in the pencil's editor) you turn off.</span>
-      <?php endif; ?>
     </div>
   <?php endif; ?>
   <?php if ($adminFolderPath !== null): ?>
   <section class="panel" id="settings">
     <h2 class="section-title">This folder's own settings</h2>
     <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, suggest_folder_dates($dir, folder_files_under($files, $adminFolderPath))); ?>
-    <?php render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, folder_privacy_counts($dir, $files, $adminFolderPath), $locWarn); ?>
+    <?php render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, folder_privacy_counts($dir, $files, $adminFolderPath), $locWarn, $locStatus); ?>
   </section>
   <?php else: ?>
   <section class="panel" id="settings">
     <h2 class="section-title">Gallery settings</h2>
     <?php render_admin_identity_form($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files)); ?>
-    <?php render_admin_privacy_section($itemsHere, $csrfToken, null, ['stay' => 0, 'open' => 0], $locWarn); ?>
+    <?php render_admin_privacy_section($itemsHere, $csrfToken, null, ['stay' => 0, 'open' => 0], $locWarn, $locStatus); ?>
   </section>
   <?php endif; ?>
 
@@ -10060,32 +10204,73 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       text.className = 'health-summary-text ' + (loud ? (red ? 'warn-text' : 'note-text') : pending ? 'muted' : 'ok-text');
     };
     (function () {
-      const panel = document.getElementById('warm-panel');
-      if (!panel) return;
-      const go = panel.querySelector('.warm-go'), stop = panel.querySelector('.warm-stop'), count = panel.querySelector('.warm-count'), bar = panel.querySelector('.warm-bar'), fill = bar.firstElementChild;
-      // Three requests work side by side, each on every third photo, and each asks again the moment it is answered; a request
-      // lasts about a second and a half, so the percentage moves several times a second. The percentage is of the photos that
-      // were missing when the page opened (or when the button was pressed again).
+      const panel = document.getElementById('media-panel');
+      if (!panel || !panel.dataset.csrf) return;
+      const go = panel.querySelector('.media-go'), stop = panel.querySelector('.media-stop'), count = panel.querySelector('.media-count'), bar = panel.querySelector('.media-bar'), fill = bar.firstElementChild;
+      const again = panel.querySelector('.media-again'), remake = panel.querySelector('.media-remake'), more = panel.querySelector('.media-more'), reportBox = panel.querySelector('.media-report');
+      // Three requests work side by side, each on every third file, and each asks again the moment it is answered; a request
+      // lasts about a second and a half, so the percentage moves several times a second. The percentage is of the files that
+      // needed something when the page opened (or when the button was pressed): every file for "Read everything again".
       const WORKERS = 3, fmt = function (n) { return n.toLocaleString(); };
-      let running = false, stopping = false, gen = 0, active = 0, pending = Number(panel.dataset.left) || 0, worked = 0, failed = 0, total = 0, started = 0, problem = '';
+      let running = false, stopping = false, gen = 0, active = 0, pending = Number(panel.dataset.left) || 0, worked = 0, failed = 0, unreadable = 0, total = Number(panel.dataset.total) || 0, started = 0, problem = '', all = false;
+      const many = function (n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); };
       const pct = function () { return pending > 0 ? Math.min(99, Math.floor(100 * worked / pending)) : 99; };
       const paint = function () {
         const p = pct(), secs = (Date.now() - started) / 1000;
         let eta = '';
         if (secs >= 3 && worked >= 3 && pending > worked) {
           const left = Math.round((pending - worked) * secs / worked);
-          const many = function (n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); };
           if (left < 60) eta = ', about ' + many(Math.max(5, Math.round(left / 5) * 5), 'second') + ' left';
           else if (left < 3600) eta = ', about ' + many(Math.round(left / 60), 'minute') + ' left';
           else { let h = Math.floor(left / 3600), m = Math.round((left % 3600) / 60); if (m === 60) { h++; m = 0; } eta = ', about ' + many(h, 'hour') + (m ? ' ' + many(m, 'minute') : '') + ' left'; }
         }
         fill.style.width = p + '%';
-        count.textContent = (stopping ? 'Stopping… ' : 'Preparing… ') + p + '% (' + fmt(worked) + ' of ' + fmt(pending) + ' photos made' + eta + ')';
+        count.textContent = (stopping ? 'Stopping… ' : 'Preparing… ') + p + '% (' + fmt(worked) + ' of ' + fmt(pending) + ' files done' + eta + ')';
       };
+      const text = function (tag, cls, t) { const e = document.createElement(tag); if (cls) e.className = cls; e.textContent = t; return e; };
+      const loadReport = function () {
+        const body = new URLSearchParams();
+        body.set('csrf_token', panel.dataset.csrf); body.set('action', 'media_report');
+        fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            reportBox.textContent = '';
+            if (!j.ok || !j.rows.length) { reportBox.appendChild(text('p', 'muted', j.ok ? 'There are no photos or videos yet.' : (j.text || 'The list could not be loaded.'))); return; }
+            const wrap = text('div', 'media-table-wrap', ''), table = document.createElement('table'), head = document.createElement('tr');
+            table.className = 'media-table';
+            ['Folder', 'Files', 'Thumbnails', 'Locations in the files', 'Capture dates', 'Set by you'].forEach(function (h) { head.appendChild(text('th', '', h)); });
+            table.appendChild(head);
+            let legacy = 0;
+            j.rows.forEach(function (r) {
+              const tr = document.createElement('tr'), loc = [];
+              if (r.found) loc.push(r.found + ' found');
+              if (r.none + r.na) loc.push((r.none + r.na) + ' without');
+              if (r.unread) loc.push(r.unread + ' not read yet');
+              const own = [];
+              if (r.own) own.push(r.own + ' location' + (r.own === 1 ? '' : 's') + ' typed in');
+              if (r.cleared) own.push(r.cleared + ' removed on purpose');
+              if (r.legacy) own.push(r.legacy + ' old "nothing found" mark' + (r.legacy === 1 ? '' : 's'));
+              legacy += r.legacy;
+              tr.appendChild(text('td', 'media-folder', r.folder === '' ? '(top level)' : r.folder));
+              tr.appendChild(text('td', '', fmt(r.files)));
+              tr.appendChild(text('td', r.photos && r.tiles < r.photos ? 'note-text' : '', r.photos ? r.tiles + ' of ' + many(r.photos, 'photo') : '—'));
+              const lc = text('td', r.unreadable ? 'warn-text' : '', loc.join(', ') || (r.unread === 0 ? '—' : ''));
+              if (r.unreadable) { lc.appendChild(document.createTextNode((loc.length ? ', ' : '') + r.unreadable + " couldn't be read: " + r.bad.slice(0, 8).join(', ') + (r.bad.length > 8 ? ' and ' + (r.bad.length - 8) + ' more' : ''))); }
+              tr.appendChild(lc);
+              tr.appendChild(text('td', '', r.dated + (r.undated ? ' of ' + (r.dated + r.undated) : '') + ' dated'));
+              tr.appendChild(text('td', '', own.join(', ') || '—'));
+              table.appendChild(tr);
+            });
+            wrap.appendChild(table); reportBox.appendChild(wrap);
+            if (legacy) reportBox.appendChild(text('p', 'hint', 'An old mark means an earlier version of the gallery looked at that photo and found no location. They are left alone; "Read everything again" reads them too.'));
+          })
+          .catch(function () { reportBox.textContent = ''; reportBox.appendChild(text('p', 'warn-text', 'The list could not be loaded.')); });
+      };
+      more.addEventListener('toggle', function () { if (more.open) loadReport(); });
       const finish = function () {
         if (active > 0) return;
-        running = false; stop.hidden = true; stop.disabled = false;
-        if (problem) { go.hidden = false; go.textContent = 'Try again'; count.textContent = 'Stopped: ' + problem + '.'; count.className = 'warm-count warn-text'; return; }
+        running = false; stop.hidden = true; stop.disabled = false; again.disabled = false;
+        if (problem) { go.hidden = false; go.textContent = 'Try again'; count.textContent = 'Stopped: ' + problem + '.'; count.className = 'media-count warn-text'; return; }
         if (stopping) {
           stopping = false; pending = Math.max(1, pending - worked); worked = 0;
           go.hidden = false; go.textContent = 'Carry on';
@@ -10093,20 +10278,26 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           return;
         }
         bar.hidden = true; fill.style.width = '100%';
-        count.textContent = failed ? 'Finished. ' + failed + ' picture' + (failed === 1 ? '' : 's') + ' could not be made (a damaged file, or a folder the web server cannot write to).' : 'All ' + fmt(total) + ' photos are ready.';
-        count.className = 'warm-count ' + (failed ? 'note-text' : 'ok-text');
+        const notes = [];
+        if (failed) notes.push(many(failed, 'picture') + ' could not be made (a damaged file, or a folder the web server cannot write to)');
+        if (unreadable) notes.push(many(unreadable, 'file') + " couldn't be read for a capture date or location (the list below names them)");
+        count.textContent = notes.length ? 'Finished. ' + notes.join('; ') + '.' : (all ? 'Everything was read again: ' : 'Everything is prepared: ') + many(total, 'file') + '.';
+        count.className = 'media-count ' + (notes.length ? 'note-text' : 'ok-text');
+        go.hidden = true;
+        if (more.open) loadReport();
       };
       const work = function (k, mine) {
         active++;
         const next = function (from) {
           if (!running || stopping || mine !== gen) { active--; finish(); return; }
           const body = new URLSearchParams();
-          body.set('csrf_token', panel.dataset.csrf); body.set('action', 'warm_thumbnails'); body.set('from', String(from)); body.set('step', String(WORKERS));
+          body.set('csrf_token', panel.dataset.csrf); body.set('action', 'prepare_media'); body.set('from', String(from)); body.set('step', String(WORKERS));
+          if (all) { body.set('again', '1'); if (remake.checked) body.set('remake', '1'); }
           fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
             .then(function (r) { return r.json(); })
             .then(function (j) {
               if (!j.ok) throw new Error(j.text || 'failed');
-              failed += j.failed; worked += j.worked || 0; total = j.total;
+              failed += j.failed; unreadable += j.unreadable || 0; worked += j.worked || 0; total = j.total;
               paint();
               if (j.done) { active--; finish(); } else next(j.next);
             })
@@ -10114,11 +10305,17 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         };
         next(k);
       };
-      go.addEventListener('click', function () {
-        running = true; stopping = false; problem = ''; failed = 0; worked = 0; total = 0; gen++; started = Date.now();
-        go.hidden = true; stop.hidden = false; bar.hidden = false; fill.style.width = '0'; count.className = 'warm-count';
+      const start = function (everything) {
+        running = true; stopping = false; problem = ''; failed = 0; unreadable = 0; worked = 0; all = everything; gen++; started = Date.now();
+        if (everything) pending = Math.max(1, total);
+        go.hidden = true; stop.hidden = false; again.disabled = true; bar.hidden = false; fill.style.width = '0'; count.className = 'media-count';
         count.textContent = 'Starting…';
         for (let k = 0; k < WORKERS; k++) work(k, gen);
+      };
+      go.addEventListener('click', function () { start(false); });
+      again.addEventListener('click', function () {
+        if (running) return;
+        if (confirm('Read every file again' + (remake.checked ? ' and make every thumbnail again' : '') + '?\n\nThis also checks photos that an earlier version marked as "nothing found", so a location in the file may start to show where there was none. Anything you typed in or removed yourself is kept. It can take a while on a big gallery; you can stop it and carry on later.')) start(true);
       });
       stop.addEventListener('click', function () { if (!running || stopping) return; stopping = true; stop.disabled = true; paint(); });
     })();
@@ -10921,20 +11118,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (draft) { sessionStorage.removeItem('galleryShareDraft'); var dv = JSON.parse(draft); dv.id = ''; setTimeout(function () { openForm(dv); }, 300); }
     } catch (x) {}
   })();
-  // "Check the photos for locations again": one request, and the answer (how many were found, how many have none, which couldn't be read) beside the button.
-  [].forEach.call(document.querySelectorAll('.loc-recheck'), function (box) {
-    var btn = box.querySelector('.loc-recheck-btn'), state = box.querySelector('.loc-recheck-state');
-    btn.addEventListener('click', function () {
-      var body = new URLSearchParams(); body.set('csrf_token', box.getAttribute('data-csrf')); body.set('action', 'recheck_folder_gps');
-      btn.disabled = true; state.className = 'rowstate loc-recheck-state busy'; state.textContent = 'Reading the files…';
-      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
-          headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
-        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
-        .then(function (j) { state.className = 'rowstate loc-recheck-state ' + (j.ok ? 'ok' : 'err'); state.textContent = j.text || (j.ok ? 'Done.' : 'Not done.'); window.__siteDirty = true; })
-        .catch(function (e) { state.className = 'rowstate loc-recheck-state err'; state.textContent = e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t check: check your connection.'; })
-        .then(function () { btn.disabled = false; });
-    });
-  });
   // Private folder: a switch like the others. Switching it on saves at once; switching it off first says what will happen (how many
   // photos stay private, how many become public) and waits for a yes.
   [].forEach.call(document.querySelectorAll('.priv-folder-form'), function (form) {
@@ -13653,7 +13836,7 @@ function render_about_page() {
     <li>An admin for folder names and dates, notes, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
     <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>
-    <li><strong>Prepare thumbnails</strong> makes every photo's pictures ahead of time with a progress bar, so the first visit to a big folder isn't slow</li>
+    <li><strong>Prepare media</strong> makes every photo's pictures, and reads what each file says about itself (when it was taken, where), ahead of time with a progress bar, so the first visit to a big folder isn't slow and nothing is read twice</li>
     <li>Markdown notes with <code>{photos}</code>, <code>{group}</code>, <code>{sold}</code> and <code>{reserved}</code>, for trips or for-sale listings</li>
     <li><strong>Temporary share links for private things:</strong> make one from a private folder, a photo or a selection, limit it by opens, by time and to chosen folders or photos, send it as an address or a QR code, preview exactly what it shows, and read a log of who looked at what; revoke it and it stops at once</li>
     <li>Private photos and folders behind a separate viewer password, and visit counts</li>

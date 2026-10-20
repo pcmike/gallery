@@ -800,17 +800,14 @@ try:
         ok(landed["lb"] and landed["editor"] and link[1].endswith(landed["name"]), "clicking a hidden photo opens it in the viewer with its editor up", str(landed) + " " + str(link))
     b.goto(B + "/?admin&folder=Asia", 1.0)
     ok(b.js(vis) != ["hidden"], "moving to another folder doesn't land you back on Hidden", str(b.js(vis)))
-    # ---------------- the folder settings' "Check the photos for locations again" ----------------
-    print("== check the photos for locations again")
+    # ---------------- the folder settings' line about what the gallery has read from the files ----------------
+    print("== what the gallery has read from a folder's files")
     b.goto(B + "/?admin", 1.2)
-    ok(b.js("!!document.querySelector('.loc-recheck-btn')"), "[locations] a folder with locations on has a 'Check the photos for locations again' button under the switch")
-    b.js("document.querySelector('.loc-recheck-btn').click()")
-    for _ in range(40):
-        b.drain(0.25)
-        t = b.js("document.querySelector('.loc-recheck-state').textContent")
-        if t and not t.startswith("Reading"): break
-    st = b.js("({text: document.querySelector('.loc-recheck-state').textContent, cls: document.querySelector('.loc-recheck-state').className, enabled: !document.querySelector('.loc-recheck-btn').disabled})")
-    ok(st["cls"].endswith(" ok") and (st["text"].startswith("Read ") or st["text"].startswith("Every photo here")) and st["enabled"], "[locations] pressing it answers beside the button (how many were read and what was found) and the button is ready again", str(st))
+    ok(not b.js("!!document.querySelector('.loc-recheck-btn')"), "[locations] there is no per-folder 'check again' button any more: reading is Prepare media's job")
+    st = b.js("(() => { const p = document.querySelector('.loc-status'); return p ? {text: p.textContent, link: !!p.querySelector('a')} : null; })()")
+    ok(st is not None and re.search(r"What the gallery has read from the files here: \d+ with a location, \d+ without", st["text"]) and "Prepare media" in st["text"] and st["link"], "[locations] a folder with locations on says, under the switch, what the gallery has read from its files, and points to Prepare media", str(st))
+    b.js("document.querySelector('.loc-status a').click()"); b.drain(0.5)
+    ok(b.js("location.hash") == "#site" and b.js("(() => { const e = document.getElementById('media-panel'); return !!e && e.offsetParent !== null; })()"), "[locations] ...and the link takes you to Prepare media on the Site tab", str(b.js("location.hash")))
     # ---------------- the folder tree in the sidebar ----------------
     print("== folder tree")
     b.viewport(1280, 900); b.goto(B + "/?admin&folder=Europe%2FFrance%2FParis", 1.0)
@@ -1149,13 +1146,22 @@ try:
         b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "phone-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         ok(b.js("document.querySelector('h1') && document.querySelector('h1').textContent") == "Gallery Admin", "[owner] signed in to the admin")
         b.goto(B15 + "/?admin#site", 1.2)
-        ok(b.js("(() => { const t = document.querySelector('#warm-panel .warm-count'); return !!t && /of 2 photos are ready/.test(t.textContent) && !document.querySelector('#warm-panel .warm-go').hidden; })()"), "[prepare thumbnails] the Site tab says how many photos are ready and offers to make the rest", b.js("document.querySelector('#warm-panel') && document.querySelector('#warm-panel').innerText"))
-        b.js("document.querySelector('#warm-panel .warm-go').click()")
+        ok(b.js("(() => { const t = document.querySelector('#media-panel .media-count'); return !!t && /0 of 2 files are prepared/.test(t.textContent) && !document.querySelector('#media-panel .media-go').hidden; })()"), "[prepare media] the Site tab says how many files are prepared and offers to do the rest", b.js("document.querySelector('#media-panel') && document.querySelector('#media-panel').innerText"))
+        b.js("document.querySelector('#media-panel .media-go').click()")
         for _ in range(40):
             b.drain(0.5)
-            if b.js("/^All 2 photos are ready/.test(document.querySelector('#warm-panel .warm-count').textContent)"): break
-        ok(b.js("/^All 2 photos are ready/.test(document.querySelector('#warm-panel .warm-count').textContent)") and b.js("document.querySelector('#warm-panel .warm-go').hidden"), "[prepare thumbnails] pressing the button makes them all, shows it is done, and the button goes away", b.js("document.querySelector('#warm-panel').innerText"))
-        ok(len([f for f in os.listdir(SITE15 + "/.gallery-cache") if f.endswith(".jpg")]) >= 4, "[prepare thumbnails] both sizes of both photos are now in the folder's cache")
+            if b.js("/^Everything is prepared/.test(document.querySelector('#media-panel .media-count').textContent)"): break
+        ok(b.js("document.querySelector('#media-panel .media-count').textContent") == "Everything is prepared: 2 files." and b.js("document.querySelector('#media-panel .media-go').hidden"), "[prepare media] pressing the button does them all, shows it is done, and the button goes away", b.js("document.querySelector('#media-panel').innerText"))
+        ok(len([f for f in os.listdir(SITE15 + "/.gallery-cache") if f.endswith(".jpg")]) >= 4 and len(json.loads(open(SITE15 + "/.gallery-cache/meta1.php").read().split("\n", 1)[1])["f"]) == 2, "[prepare media] both sizes of both photos are now in the folder's cache, and what each file says about itself is recorded")
+        b.js("document.querySelector('#media-panel .media-more').open = true"); b.drain(1.2)
+        rep = b.js("(() => { const rows = [...document.querySelectorAll('#media-panel .media-table tr')].map(r => r.innerText.replace(/\\s+/g, ' ')); return rows; })()")
+        ok(len(rep) == 2 and rep[0].startswith("Folder Files Thumbnails") and "(top level)" in rep[1] and "2 of 2 photos" in rep[1], "[prepare media] opening 'What the gallery knows about each folder' lists the folder with its files, thumbnails and what was read", str(rep))
+        b.js("window.confirm = function (t) { window.__asked = t; return true; }")
+        b.js("document.querySelector('#media-panel .media-again').click()")
+        for _ in range(40):
+            b.drain(0.5)
+            if b.js("/^Everything was read again/.test(document.querySelector('#media-panel .media-count').textContent)"): break
+        ok("Read every file again" in (b.js("window.__asked") or "") and b.js("document.querySelector('#media-panel .media-count').textContent") == "Everything was read again: 2 files.", "[prepare media] 'Read everything again' asks first, then reads every file again and says so", str(b.js("window.__asked")) + " | " + str(b.js("document.querySelector('#media-panel .media-count').textContent")))
         # the owner's lock on a tile, pressed
         b.goto(B15 + "/", 1.5)
         ok(b.js("document.querySelectorAll('.priv-toggle').length") == 2 and b.js("document.querySelector('link[rel=manifest]') !== null && document.querySelector('meta[name=apple-mobile-web-app-capable]') !== null"), "[owner lock] the owner's page has a lock on each tile, and the tags that let it be added to the Home Screen as an app")
@@ -2006,6 +2012,8 @@ try:
         hd = b.js("(() => { const c = document.querySelector('.sl-head .sl-count').getBoundingClientRect(), v = document.querySelector('.sl-viewswitch').getBoundingClientRect(), n = document.querySelector('.sl-new-btn').getBoundingClientRect(); return {countH: Math.round(c.height), countAbove: c.bottom <= v.top + 1, sameRow: Math.abs(v.top - n.top) < 8, switchH: Math.round(v.height)}; })()")
         ok(hd["countH"] < 28 and hd["countAbove"] and hd["sameRow"], "[share links tab] on a phone the count ('2 not ended · 0 ended') is one line of its own, with the Links / IP addresses switch and New link on the line below", str(hd))
         shot(b, "25b-link-head-phone")
+        rowg = b.js("(() => { const r = document.querySelector('details.sl-row > summary'), nm = r.querySelector('.sl-nm'), sub = r.querySelector('.sl-sub'), pill = r.querySelector(':scope > .sl-pill'), q = r.querySelector('.sl-quick'); const R = r.getBoundingClientRect(), N = nm.getBoundingClientRect(); return {width: Math.round(N.width / R.width * 100), subLines: Math.round(sub.getBoundingClientRect().height / parseFloat(getComputedStyle(sub).lineHeight || 18)), below: N.top >= pill.getBoundingClientRect().bottom - 1, quickRight: q ? q.getBoundingClientRect().right > R.right - 70 : true}; })()")
+        ok(rowg["width"] >= 90 and rowg["below"] and rowg["quickRight"] and rowg["subLines"] <= 3, "[share links tab] on a phone a link's name and summary run the full width of the row, under the status and the Copy link button (not squeezed into a narrow column between them)", str(rowg))
         b.viewport(1280, 900)
         # --- sharing: the QR code, the short form from a folder, a photo and a selection, the viewer's question, the photo picker, preview ---
         sys.path.insert(0, HERE + "/../qr"); import qr_reference as QR
