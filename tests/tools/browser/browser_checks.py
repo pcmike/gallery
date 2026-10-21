@@ -562,6 +562,26 @@ try:
         ok(b.js("(() => { const a = document.querySelector('.folder-pills a:not(.current)'); a.click(); return true; })()"), "[folder pills] (clicked a sibling)")
         b.drain(1.2)
         ok("Few" in b.js("location.search") and "Two" not in b.js("location.search"), "[folder pills] pressing one opens that folder", b.js("location.search"))
+        # the way back and the pills stay at the top like the icon strip, with arrows to the bottom and the top once the page has scrolled
+        os.makedirs(SITE14 + "/Tall", exist_ok=True)
+        for n in range(40):
+            subprocess.run(["php", "-r", "$i=imagecreatetruecolor(600,450); imagejpeg($i,$argv[1]);", SITE14 + "/Tall/t%02d.jpg" % n], check=True)
+        stackq = """(() => { const c = document.getElementById('crumb-bar'), m = document.getElementById('map-bar'), j = c.querySelector('.jump-btns'), cr = c.getBoundingClientRect(), mr = m.getBoundingClientRect(); return {y: Math.round(scrollY), crumbTop: Math.round(cr.top), crumbH: Math.round(cr.height), mapTop: Math.round(mr.top), jumpsHidden: j.hidden, order: [...j.querySelectorAll('button')].map(x => x.dataset.jump), jumpsRight: !j.hidden && Math.round(j.getBoundingClientRect().right) <= Math.round(cr.right), mapStuck: m.classList.contains('stuck'), crumbStuck: c.classList.contains('stuck'), bottom: Math.round(document.documentElement.scrollHeight - innerHeight)}; })()"""
+        for label, vw, vh, mob in (("desktop", 1280, 900, False), ("phone", 390, 844, True)):
+            b.viewport(vw, vh, mobile=mob); b.goto(B14 + "/?folder=Tall", 1.5)
+            top0 = b.js(stackq)
+            ok(top0["jumpsHidden"] and top0["crumbTop"] == 0, f"[sticky crumbs] ({label}) at the top of the page the arrows are not shown yet", str(top0))
+            b.js("window.scrollTo(0, 900)"); b.drain(0.6)
+            mid = b.js(stackq)
+            ok(mid["crumbTop"] == 0 and abs(mid["mapTop"] - mid["crumbH"]) <= 1 and mid["mapStuck"] and mid["y"] >= 500, f"[sticky crumbs] ({label}) scrolled down, the way back and the pills stay at the top and the icon strip sticks right under them", str(mid))
+            ok(not mid["jumpsHidden"] and mid["order"] == ["bottom", "top"] and mid["jumpsRight"], f"[sticky crumbs] ({label}) the down arrow and then the up arrow appear at the right of the row", str(mid))
+            shot(b, "43-sticky-crumbs-" + label)
+            b.js("document.querySelector('.jump-btn[data-jump=top]').click()"); b.drain(1.5)
+            ok(b.js("Math.round(scrollY)") == 0, f"[sticky crumbs] ({label}) the up arrow goes to the top")
+            b.js("document.querySelector('.jump-btns').hidden = false; document.querySelector('.jump-btn[data-jump=bottom]').click()"); b.drain(2.0)
+            ok(abs(b.js("Math.round(scrollY)") - mid["bottom"]) <= 3, f"[sticky crumbs] ({label}) the down arrow goes to the bottom", b.js("Math.round(scrollY)"))
+        b.viewport(1280, 900); b.goto(B14 + "/", 1.2)
+        ok(b.js("document.getElementById('crumb-bar') === null && document.querySelector('.jump-btn') === null"), "[sticky crumbs] the main page has neither the bar nor the arrows")
     finally:
         srv14.terminate(); srv14.wait()
         b.viewport(1280, 900)
@@ -880,7 +900,7 @@ try:
 
     # public breadcrumb pills
     b.goto(B + "/?folder=Asia", 1.0)
-    bc = b.js("(() => { const a = document.querySelector('header p.breadcrumb a'); if (!a) return null; const c = getComputedStyle(a); return {radius: c.borderTopLeftRadius, deco: c.textDecorationLine, bg: c.backgroundColor}; })()")
+    bc = b.js("(() => { const a = document.querySelector('p.breadcrumb a'); if (!a) return null; const c = getComputedStyle(a); return {radius: c.borderTopLeftRadius, deco: c.textDecorationLine, bg: c.backgroundColor}; })()")
     ok(bc is not None and bc["deco"] == "none" and bc["radius"] not in ("0px", ""), "the public folder page's way back is a styled pill, not a default blue link", str(bc))
     shot(b, "11-folder-breadcrumb")
     b.viewport(1280, 900); b.goto(B + "/?admin", 1.5); shot(b, "08-admin-desktop")
@@ -2103,6 +2123,11 @@ try:
         b.drain(2.0)   # the tab marks itself as looked at
         ok(b.js("document.querySelector('.side-link[data-tab=links]').innerText").strip().startswith("Share") and "Share links" not in b.js("document.querySelector('.side-link[data-tab=links]').innerText") and b.js("document.querySelector('.side-link[data-tab=site]').innerText").strip() == "Settings" and b.js("document.querySelector('.admin-tabs a[data-tab=settings]').innerText").strip() == "Folder settings", "[tab names] the sidebar says Share and Settings, and the folder tab says Folder settings (the Root's too)")
         b.js(LIFT_HOVER)
+        ok(b.js("!document.querySelector('.sl-rules') && !document.querySelector('[data-sl-check]')"), "[tidy share address] the Share tab no longer has the server-rule dropdown or the banner")
+        b.js("location.hash = '#site'"); b.drain(2.5)
+        hr = b.js("(() => { const r = document.querySelector('[data-health-row=sharetidy]'); const st = document.querySelector('[data-sharetidy-status]'); return r ? {pending: r.classList.contains('pending'), text: r.innerText, st: st ? st.textContent : null, rules: !!document.querySelector('[data-sharetidy-rules]'), link: !!r.querySelector('a.health-more')} : null; })()")
+        ok(hr is not None and not hr["pending"] and ("Not set up" in hr["text"] or "A link looks like" in hr["text"]) and hr["st"] and hr["rules"] and hr["link"], "[tidy share address] the Health check and Settings → Server setup each say whether the tidy share address works, with a link to the rules", str(hr))
+        b.js("location.hash = '#links'"); b.drain(1.5)
         qp = b.js("(() => { const e = document.querySelector('.sl-quick'); e.scrollIntoView({block: 'center'}); const r = e.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2, bg: getComputedStyle(e).backgroundColor}; })()")
         b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": qp["x"], "y": qp["y"]}); b.drain(0.4)
         qh = b.js("getComputedStyle(document.querySelector('.sl-quick')).backgroundColor")

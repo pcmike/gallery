@@ -163,6 +163,8 @@ The blank line makes two paragraphs, so the directive has no text of its own. Re
 
 ## Folders
 
+**On a folder's page the way back and the pills for the folders beside it stay at the top of the screen** (the icon strip sticks just under them), with a down arrow and an up arrow at the right, once you have scrolled, that jump to the bottom and the top of the page. The main page has neither.
+
 With `AUTO_GROUP_BY_FOLDER`, subfolders work to any depth, and each becomes a group labelled with the folder's name (rename it with a `{group:}` directive or the admin's *Display name*; names are never prettified automatically).
 
 - **`overview` mode** shows one cover card per subfolder (a highlight photo, name and a recursive count) plus photos loose at that level; a card opens `?folder=Europe/France`, with a breadcrumb back. **`inline` mode** shows a folder's photos in a box on the current page. A page with only one to four folders shows larger cards on a wide screen.
@@ -329,7 +331,7 @@ The address opens a page with one button, **Open the gallery**. **Pressing the b
 Once in, they see the gallery as the link allows: no owner tools, no lock for signing in, no view counts for what they look at, and no link button on private things (a plain link would be useless to them).
 
 ### The address, and the server rule
-A link looks like `https://example.com/trip/k7QpR2mXv9LwTb4e`: the gallery's own address and 16 letters and digits. For that tidy form the server must hand the path to the script; the Share tab writes the rule for your gallery's address and checks it. Until it is in, the long form works as it is: `https://example.com/trip/?link=k7QpR2mXv9LwTb4e`. For a gallery at `/kb/`:
+A link looks like `https://example.com/trip/k7QpR2mXv9LwTb4e`: the gallery's own address and 16 letters and digits. For that tidy form the server must hand the path to the script; **Settings → Server setup** writes the rule for your gallery's address and checks it (the Health check says when it is missing; it is optional). Until it is in, the long form works as it is: `https://example.com/trip/?link=k7QpR2mXv9LwTb4e`. For a gallery at `/kb/`:
 
 ```nginx
 location ~ "^/kb/[A-Za-z0-9]{16}$" {

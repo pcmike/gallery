@@ -8816,8 +8816,6 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       <?php if ($problemLinks > 0): ?>
         <div class="sl-check no" style="display:flex; gap:10px; align-items:center;"><?= ui_icon('warn') ?><div><strong><?= $problemLinks ?> link<?= $problemLinks === 1 ? ' refers' : 's refer' ?> to something that can't be found.</strong> It fails safe: nothing from it is shown. Open the link to see which.</div></div>
       <?php endif; ?>
-      <div class="sl-check" data-sl-check hidden></div>
-      <details class="sl-rules"><summary>The tidy address needs a server rule (nginx or Apache)</summary><?= render_link_rules_help() ?></details>
       <div class="sl-head">
         <div class="sl-count muted"><?= count($current) ?> not ended &middot; <?= count($ended) ?> ended</div>
         <div class="sl-segbar sl-viewswitch" role="tablist"><button type="button" class="sl-segbtn on" data-view="links">Links</button><button type="button" class="sl-segbtn" data-view="ips">IP addresses</button></div>
@@ -9607,10 +9605,10 @@ function render_admin_health_panel() {
       <?php endforeach; ?>
       <div class="health-group all-quiet" data-health-group="web">
         <h3 class="subhead">Web server (tested by your browser, just now)</h3>
-        <?php foreach ([['lock', 'Direct photo requests refused'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']] as [$key, $label]): ?>
+        <?php foreach (array_merge([['lock', 'Direct photo requests refused'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>">
             <span class="health-mark muted">&bull;</span>
-            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div></div>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">Open Settings &rarr; Server setup</a><?php endif; ?></div>
           </div>
         <?php endforeach; ?>
       </div>
@@ -9759,6 +9757,9 @@ function render_admin_site_settings($csrfToken) {
           <?php endforeach; ?>
           <?php if ($group['title'] === 'Server setup (advanced)'): ?>
             <div class="site-rules"><div class="name">Keep private photos from being fetched by address</div><div class="lock-result" data-lock-status></div><div class="help lock-help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help(true) ?></div>
+            <?php if (ENABLE_SHARE_LINKS): ?>
+            <div class="site-rules"><div class="name">Tidy share addresses</div><div class="lock-result" data-sharetidy-status></div><div data-sharetidy-rules><div class="help">Optional. A share link always works as <code>.../?link=&hellip;</code>; with this rule it is the short <code>.../k7QpR2mXv9LwTb4e</code>. Rules to copy:</div><?= render_link_rules_help() ?></div></div>
+            <?php endif; ?>
           <?php endif; ?>
           </details>
         <?php endforeach; ?>
@@ -9886,8 +9887,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-check[hidden] { display:none; }
   .sl-check.ok { background:rgba(59,165,92,0.12); border:1px solid rgba(59,165,92,0.45); }
   .sl-check.no { background:rgba(224,160,40,0.12); border:1px solid rgba(224,160,40,0.5); }
-  .sl-rules { margin:0 0 12px; font-size:0.85rem; color:var(--muted); }
-  .sl-rules > summary { cursor:pointer; }
   .sl-head { display:flex; align-items:center; gap:12px; margin:6px 0 6px; }
   .sl-count { flex:1; font-size:0.85rem; }
   .sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:20px 0 4px; }
@@ -10239,6 +10238,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-mark { flex:none; width:1.3em; text-align:center; line-height:1.5; }
   .health-label { font-weight:600; }
   .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
+  .health-more { display:inline-block; margin-top:2px; font-size:0.8rem; color:#aab2ff; }
   .health-summary { margin:0 0 6px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .site-group { scroll-margin-top:70px; margin:0 0 10px; border:1px solid #26262a; border-radius:9px; padding:0 12px; }
   .site-group[open] { padding-bottom:6px; }
@@ -10551,7 +10551,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div id="server-probe" hidden data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>"></div>
+  <div id="server-probe" hidden data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>" data-share-probe="<?= htmlspecialchars(ENABLE_SHARE_LINKS ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . LINK_PROBE_TOKEN : '', ENT_QUOTES, 'UTF-8') ?>"></div>
 <?php if ($adminHidden || $adminEdited['total'] > 0): ?>
   <div class="tab-panel" data-tab="hidden">
 <?php render_admin_hidden_panel($adminHidden, $csrfToken); ?>
@@ -11029,6 +11029,26 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         lockShow('unknown');
       });
     };
+    // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
+    const runShareTidy = function () {
+      const url = probe.getAttribute('data-share-probe');
+      if (!url) return;
+      fetch(url, { cache: 'no-store', credentials: 'omit' })
+        .then(function (r) { return r.headers.get('X-Gallery-Link') === 'invalid' ? 'works' : 'no'; })
+        .catch(function () { return 'unknown'; })
+        .then(function (state) {
+          const shown = location.origin + url.replace(/0+$/, '') + 'k7QpR2mXv9LwTb4e';
+          mirror('sharetidy', state === 'works' ? 'ok-text' : state === 'no' ? 'note-text' : '', state === 'works' ? 'A link looks like ' + shown + '.'
+            : state === 'no' ? 'Not set up (optional): links use the long form (…/?link=…). It works as it is; the rule only makes them shorter.' : 'Couldn\'t tell (the request failed).');
+          if (state === 'works') {
+            hideAll('[data-sharetidy-rules]', true);
+            report('[data-sharetidy-status]', true, 'Tidy share addresses work: a link looks like ' + shown + ' (checked just now from this browser).', '[data-sharetidy-rules]');
+          } else {
+            hideAll('[data-sharetidy-rules]', false);
+            report('[data-sharetidy-status]', false, state === 'no' ? 'Tidy share addresses are not set up (optional): links use the long form (…/?link=…), which works as it is. Rules to add are below.' : 'Couldn\'t check tidy share addresses from this browser just now.', '[data-sharetidy-rules]');
+          }
+        });
+    };
     const runTidy = function () {
       if (!folderUrl) return;
       fetch(folderUrl, { cache: 'no-store', credentials: 'omit', redirect: 'manual' })
@@ -11093,6 +11113,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     mirrorLater();
     runLock();
     runTidy();
+    runShareTidy();
     runAccel();
   })();
   // The directive reference starts expanded on a desktop and collapsed
@@ -11562,14 +11583,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       });
     }
     function probe() {
-      var url = box.getAttribute('data-probe'), banner = box.querySelector('[data-sl-check]'); if (!url || !banner) return;
+      var url = box.getAttribute('data-probe'); if (!url) return;
       fetch(url, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { pretty = r.headers.get('X-Gallery-Link') === 'invalid'; }).catch(function () { pretty = false; }).then(function () {
-        banner = box.querySelector('[data-sl-check]');
         [].forEach.call(box.querySelectorAll('.sl-url'), function (i) { i.value = pretty ? i.getAttribute('data-short') : i.getAttribute('data-long'); });
         [].forEach.call(box.querySelectorAll('.gs-mount'), function (m) { if (m._gsRedraw) m._gsRedraw(); });
-        banner.className = 'sl-check ' + (pretty ? 'ok' : 'no'); banner.hidden = false;
-        if (pretty) banner.textContent = 'Tidy addresses work: a link looks like ' + location.origin + url.replace(/0+$/, '') + 'k7QpR2mXv9LwTb4e.';
-        else banner.textContent = 'Links use the long form (…/?link=…) until the server rule below is added; it works as it is, the rule only makes them shorter.';
       });
     }
     function refresh() {
@@ -14249,6 +14266,8 @@ function ui_icon_paths() {
         'edit'    => '<path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M14.5 6.5l3 3"/>',
         'select'  => '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/>',
         'chev-down' => '<path d="M5.5 8.75 12 15.25l6.5-6.5"/>',
+        'jump-down' => '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
+        'jump-up' => '<path d="M12 20V9M7.5 13.5 12 9l4.5 4.5M5 4.5h14"/>',
         'share'   => '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 13v5.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V13"/>',
         'qr'      => '<rect x="4" y="4" width="6.5" height="6.5" rx="1"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1"/><path d="M14 14h2.5v2.5H14zM19.5 14v.01M14 19.5v.01M17 19.5h3.5M19.5 17v3.5"/>',
         'copy'    => '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
@@ -14854,37 +14873,49 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-combo-btn.lock-link.open { color: #3ba55c; }
   /* Breadcrumb: a row of pills (the separators in the markup are hidden)
      with a chevron before each level after the first. */
-  header p.breadcrumb {
+  p.breadcrumb {
     display: flex; flex-wrap: wrap; justify-content: center; gap: 6px;
     font-size: 0; margin: 0 0 14px;
   }
-  header p.breadcrumb a {
+  p.breadcrumb a {
     font-size: 0.82rem; line-height: 1;
     color: var(--muted); text-decoration: none;
     background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07);
     padding: 7px 13px; border-radius: 999px;
     transition: color .15s, border-color .15s, background .15s;
   }
-  header p.breadcrumb a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
-  header p.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  header p.breadcrumb a + a::before { content: "\203A"; margin-right: 9px; opacity: 0.55; }
+  p.breadcrumb a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  p.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  p.breadcrumb a + a::before { content: "\203A"; margin-right: 9px; opacity: 0.55; }
+  /* The way back and the pills stay at the top of the screen, like the icon strip (which sticks just under them). Two arrows at the right,
+     once the page has scrolled, jump to the bottom and the top. */
+  .crumb-bar { position: sticky; top: var(--stick-top, 0px); z-index: 41; display: flex; align-items: center; gap: 8px; padding: 10px 24px 6px; background: var(--bg); transition: box-shadow .15s; }
+  .crumb-bar.stuck { box-shadow: 0 1px 0 #26262a; }
+  .crumb-bar + header { padding-top: 10px; }
+  .jump-btns { flex: none; display: flex; gap: 6px; }
+  .jump-btns[hidden] { display: none; }
+  .jump-btn { width: 34px; height: 34px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.12); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; }
+  .jump-btn .ico { width: 18px; height: 18px; }
+  .jump-btn:active { transform: scale(0.9); }
+  @media (hover: hover) { .jump-btn:hover { transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; } .jump-btn:hover:active { transform: scale(1.02); } }
+  @media (max-width: 600px) { .crumb-bar { padding: 8px 16px 4px; } }
   /* The way back and the folders beside this one share ONE line: the way back stays put at the left while the sibling pills
      swipe; the current folder is lit. When it all fits it is centred. */
-  header .crumb-row { position: relative; display: flex; align-items: center; gap: 10px; overflow-x: auto; margin: 0 0 14px; padding: 2px 2px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-  header .crumb-row::-webkit-scrollbar { display: none; }
-  header .crumb-row p.breadcrumb { flex: none; flex-wrap: nowrap; margin: 0 0 0 auto; }
-  header .crumb-row p.breadcrumb:only-child { margin-right: auto; }
-  header .crumb-row nav.folder-pills { margin-right: auto; }
-  header .crumb-row p.breadcrumb:not(:only-child) { position: sticky; left: 0; z-index: 2; background: var(--bg); box-shadow: 8px 0 8px -4px var(--bg); }
-  header .crumb-row p.breadcrumb:not(:only-child)::after { content: "\2022"; font-size: 1rem; line-height: 1; color: var(--muted); opacity: 0.7; align-self: center; margin-left: 4px; margin-right: 0; }
-  header nav.folder-pills { flex: none; display: flex; gap: 6px; }
-  header nav.folder-pills a { flex: none; font-size: 0.82rem; line-height: 1; color: var(--muted); text-decoration: none; background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07); padding: 7px 13px; border-radius: 999px; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }   /* the same pill as the breadcrumb's */
-  header nav.folder-pills a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
-  header nav.folder-pills a.current { color: #fff; background: var(--accent); border-color: var(--accent); }
-  header nav.folder-pills a.all { border-style: dashed; }
-  header nav.folder-pills a.priv { display: inline-flex; align-items: center; gap: 6px; }   /* the owner's lock in a private folder's button */
-  header nav.folder-pills a.priv .ico { width: 0.95em; height: 0.95em; color: #ff8a8c; }
-  header nav.folder-pills a.priv.current .ico { color: #fff; }
+  .crumb-row { position: relative; display: flex; align-items: center; gap: 10px; overflow-x: auto; flex: 1 1 auto; min-width: 0; margin: 0; padding: 2px 2px 2px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .crumb-row::-webkit-scrollbar { display: none; }
+  .crumb-row p.breadcrumb { flex: none; flex-wrap: nowrap; margin: 0 0 0 auto; }
+  .crumb-row p.breadcrumb:only-child { margin-right: auto; }
+  .crumb-row nav.folder-pills { margin-right: auto; }
+  .crumb-row p.breadcrumb:not(:only-child) { position: sticky; left: 0; z-index: 2; background: var(--bg); box-shadow: 8px 0 8px -4px var(--bg); }
+  .crumb-row p.breadcrumb:not(:only-child)::after { content: "\2022"; font-size: 1rem; line-height: 1; color: var(--muted); opacity: 0.7; align-self: center; margin-left: 4px; margin-right: 0; }
+  nav.folder-pills { flex: none; display: flex; gap: 6px; }
+  nav.folder-pills a { flex: none; font-size: 0.82rem; line-height: 1; color: var(--muted); text-decoration: none; background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07); padding: 7px 13px; border-radius: 999px; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }   /* the same pill as the breadcrumb's */
+  nav.folder-pills a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  nav.folder-pills a.current { color: #fff; background: var(--accent); border-color: var(--accent); }
+  nav.folder-pills a.all { border-style: dashed; }
+  nav.folder-pills a.priv { display: inline-flex; align-items: center; gap: 6px; }   /* the owner's lock in a private folder's button */
+  nav.folder-pills a.priv .ico { width: 0.95em; height: 0.95em; color: #ff8a8c; }
+  nav.folder-pills a.priv.current .ico { color: #fff; }
   header h1 {
     margin: 0 0 4px;
     font-size: 1.6rem;
@@ -15467,9 +15498,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
      running to the edges of the window. */
   .map-preview { max-width: 1400px; margin: 8px auto 0; padding: 0 24px; }
   /* The strip of buttons stays at the top of the screen while the photos scroll under it. */
-  .map-bar { position: sticky; top: 0; z-index: 40; margin-top: 0; padding-top: 8px; padding-bottom: 10px; background: var(--bg); transition: box-shadow .15s; }
+  .map-bar { position: sticky; top: calc(var(--stick-top, 0px) + var(--crumb-h, 0px)); z-index: 40; margin-top: 0; padding-top: 8px; padding-bottom: 10px; background: var(--bg); transition: box-shadow .15s; }
   .map-bar.stuck { box-shadow: 0 1px 0 #26262a, 0 10px 16px -10px rgba(0,0,0,0.9); }
-  html { scroll-padding-top: 64px; }   /* a link that scrolls to a photo or group stops below the strip, not under it */
+  html { scroll-padding-top: calc(64px + var(--stick-top, 0px) + var(--crumb-h, 0px)); }   /* a link that scrolls to a photo or group stops below the strip, not under it */
   .map-preview-heading {
     font-size: 1rem; margin: 0; font-weight: 400;
     display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px;
@@ -15830,8 +15861,8 @@ if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)
     }
 }
 ?>
-<header>
-  <?php if ($currentFolderPath !== null): ?>
+<?php if ($currentFolderPath !== null): ?>
+<div class="crumb-bar" id="crumb-bar">
     <div class="crumb-row">
     <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
     <?php if (count($folderPills) >= 2): ?>
@@ -15841,7 +15872,13 @@ if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)
     </nav>
     <?php endif; ?>
     </div>
-  <?php endif; ?>
+  <div class="jump-btns" hidden>
+    <button type="button" class="jump-btn" data-jump="bottom" title="Jump to the bottom" aria-label="Jump to the bottom of the page"><?= ui_icon('jump-down') ?></button>
+    <button type="button" class="jump-btn" data-jump="top" title="Jump to the top" aria-label="Jump to the top of the page"><?= ui_icon('jump-up') ?></button>
+  </div>
+</div>
+<?php endif; ?>
+<header>
   <?php if (ADMIN_PASSWORD !== '' && is_admin_browser()): ?>
     <?php // Signed in as the owner: the title leads back to the admin page for wherever you are (a folder's own admin on its page). ?>
     <h1><a class="title-admin" rel="nofollow" href="?admin<?= $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($pageTitle) ?></a></h1>
@@ -17218,8 +17255,32 @@ if (ENABLE_MAP && $mapPoints) {
   // The strip of buttons sticks to the top; once the page has scrolled under it, it gets a soft edge.
   (function () {
     const bar = document.getElementById('map-bar'); if (!bar) return;
-    const edge = function () { bar.classList.toggle('stuck', window.scrollY > 0 && bar.getBoundingClientRect().top <= 0.5); };
-    window.addEventListener('scroll', edge, { passive: true }); edge();
+    const crumbs = document.getElementById('crumb-bar'), root = document.documentElement;
+    let topAt = 0;   // where the strip sticks: under the folder row (and under a preview banner, if one is showing)
+    const edge = function () { bar.classList.toggle('stuck', window.scrollY > 0 && bar.getBoundingClientRect().top <= topAt + 0.5); };
+    // The folder row sticks above the strip: the strip's top is the row's height (and below a preview banner, if one is showing).
+    const sizes = function () {
+      const pv = document.querySelector('.link-preview');
+      const pvH = pv ? pv.offsetHeight || 0 : 0, crH = crumbs ? crumbs.offsetHeight || 0 : 0;
+      root.style.setProperty('--stick-top', pvH + 'px');
+      root.style.setProperty('--crumb-h', crH + 'px');
+      topAt = pvH + crH;
+      edge();
+    };
+    window.addEventListener('scroll', edge, { passive: true }); window.addEventListener('resize', sizes);
+    if (crumbs && typeof ResizeObserver !== 'undefined') new ResizeObserver(sizes).observe(crumbs);
+    sizes();
+    const jumps = crumbs && crumbs.querySelector('.jump-btns');
+    if (jumps) {
+      // Down and up arrows (in that order) at the right of the row, once the page has scrolled: to the bottom, to the top.
+      const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const show = function () { const on = window.scrollY > 120; if (jumps.hidden === on) jumps.hidden = !on; crumbs.classList.toggle('stuck', window.scrollY > 0); };
+      window.addEventListener('scroll', show, { passive: true }); show();
+      crumbs.addEventListener('click', function (e) {
+        const b = e.target.closest('.jump-btn'); if (!b) return;
+        window.scrollTo({ top: b.getAttribute('data-jump') === 'top' ? 0 : document.documentElement.scrollHeight, behavior: calm ? 'auto' : 'smooth' });
+      });
+    }
   })();
   // The row of sibling folders starts with the current one in view.
   (function () {

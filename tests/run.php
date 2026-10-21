@@ -1100,6 +1100,7 @@ check('?folder=Paris shows its own photo count (2), not the whole gallery\'s', (
 check('every page shows a "Last updated" date derived from file mtimes', (bool) preg_match('/Last updated [A-Z][a-z]+ \d{1,2}, \d{4}/', $nestedBody));
 check('?folder=Paris also shows the same "Last updated" line', (bool) preg_match('/Last updated [A-Z][a-z]+ \d{1,2}, \d{4}/', $folderBody));
 check('?folder=Paris shows a breadcrumb back-link to the root', (bool) preg_match('/<p class="breadcrumb"><a href="\.\/">.*?' . preg_quote($rootTitle, '/') . '.*?<\/a><\/p>/', $folderBody));
+check('[sticky crumbs] a folder page has the way back and the folder pills in a bar of their own above the header (so they can stay at the top), with a down arrow then an up arrow, hidden until the page has scrolled', (bool) preg_match('#<div class="crumb-bar" id="crumb-bar">\s*<div class="crumb-row">.*?</div>\s*<div class="jump-btns" hidden>\s*<button[^>]*data-jump="bottom"[^>]*>.*?</button>\s*<button[^>]*data-jump="top"[^>]*>.*?</button>\s*</div>\s*</div>\s*<header>#s', $folderBody) && !preg_match('#<header>\s*<div class="crumb-row">#', $folderBody) && str_contains($folderBody, '.crumb-bar { position: sticky; top: var(--stick-top, 0px);') && str_contains($folderBody, '.map-bar { position: sticky; top: calc(var(--stick-top, 0px) + var(--crumb-h, 0px));'));
 check('?folder=Paris does not render its own nested folder-cover cards', !str_contains($folderBody, '<div class="folder-cover"'));
 check('?folder=Paris reflects the folder in its Open Graph title', str_contains($folderBody, 'property="og:title" content="Paris — ' . $rootTitle . '"'));
 
@@ -1572,7 +1573,7 @@ $plM = $plPills('Many%2FF08');
 check('[folder pills] with more than ten siblings it shows a window of nine around the current one, plus "All" back to the parent', $plM !== null && count($plM) === 10 && $plM[9][2] === true && in_array(['F08', true, false], $plM, true) && array_column($plM, 0)[0] === 'F04' && array_column(array_slice($plM, 0, 9), 0)[8] === 'F12', json_encode($plM));
 $plEnd = $plPills('Many%2FF14');
 check('[folder pills] ...and at the end of a long row the window stays full', $plEnd !== null && array_column(array_slice($plEnd, 0, 9), 0)[0] === 'F06' && in_array(['F14', true, false], $plEnd, true));
-check('[folder pills] the gallery front page has none', !str_contains(http_get("http://127.0.0.1:$portPl/")[1], 'class="folder-pills"'));
+check('[folder pills] the gallery front page has none, and no crumb bar or jump arrows (they would be of little use there)', (function ($b) { return !str_contains($b, 'class="folder-pills"') && !str_contains($b, 'id="crumb-bar"') && !str_contains($b, 'data-jump='); })(http_get("http://127.0.0.1:$portPl/")[1]));
 check('[folder pills] a folder with no siblings has none', !str_contains(http_get("http://127.0.0.1:$portPl/?folder=Solo%2FOnly")[1], 'class="folder-pills"'));
 $plOg = []; for ($i = 0; $i < 3; $i++) $plOg[] = $ogOf($portPl);
 check('[preview] among several folders it is one of their covers, never a private folder\'s, and the same on every request that day', count(array_unique($plOg)) === 1 && preg_match('#^(Alpha|Bravo|Charlie|Many|Solo)/(.+/)?x\.jpg$#', (string) $plOg[0]) === 1 && !str_starts_with((string) $plOg[0], 'Secret/'), json_encode($plOg));
@@ -3246,7 +3247,7 @@ $portCv = find_free_port(); start_server($fxCv, $portCv); $baseCv = "http://127.
 [, $cvRoot] = http_get("$baseCv/");
 check('[cover jump] a folder whose owner chose a cover photo opens at the top like any other: its link carries no #fragment that scrolls the page to that photo', str_contains($cvRoot, 'class="folder-cover-link" href="?folder=Trip"') && !str_contains($cvRoot, '#folder-cover'));
 [, $stkPage] = http_get("$baseCv/");
-check('[sticky strip] the strip of buttons above the photos is a bar that sticks to the top of the screen while the photos scroll under it, and a link that scrolls to a photo stops below it', str_contains($stkPage, 'id="map-bar"') && str_contains($stkPage, '.map-bar { position: sticky; top: 0;') && str_contains($stkPage, 'scroll-padding-top'));
+check('[sticky strip] the strip of buttons above the photos is a bar that sticks to the top of the screen while the photos scroll under it, and a link that scrolls to a photo stops below it', str_contains($stkPage, 'id="map-bar"') && str_contains($stkPage, '.map-bar { position: sticky; top: calc(var(--stick-top, 0px) + var(--crumb-h, 0px));') && str_contains($stkPage, 'scroll-padding-top'));
 check('[cover jump] a folder with no chosen cover opens at the top, as before', str_contains($cvRoot, 'class="folder-cover-link" href="?folder=Rome"') && !str_contains($cvRoot, 'href="?folder=Rome#'));
 [, $cvTrip] = http_get("$baseCv/?folder=Trip");
 check('[cover jump] the folder page no longer marks a photo to land on', !str_contains($cvTrip, 'id="folder-cover"') && !str_contains($cvTrip, 'cover-anchor'));
@@ -4869,6 +4870,7 @@ $slForm = fn (array $o = []) => $o + ['action' => 'link_create', 'label' => 'Aun
 $slNginxRule = function ($page) { return preg_match('/<pre><code>(location ~ [^<]*?index\.php\?link=[^<]*?)<\/code><\/pre>/s', $page, $m) ? html_entity_decode($m[1], ENT_QUOTES) : ''; };
 $slNginxOk = function ($rule) { $bare = preg_replace('/"[^"\n]*"/', '""', $rule); return $rule !== '' && !str_contains($bare, '{16}') && substr_count($bare, '{') === 1 && substr_count($bare, '}') === 1; };
 check('[share links] the admin has a Share tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slNginxRule($slAdminPage), 'location ~ "^/[A-Za-z0-9]{16}$" {') && str_contains($slNginxRule($slAdminPage), 'index.php?link=$1 last;') && $slNginxOk($slNginxRule($slAdminPage)) && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9]{16})$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
+check('[tidy share address] it lives with the other server setup: a row in Settings → Server setup with its rules and a status line, and a Health check row with a link there; the Share tab has neither the dropdown nor the banner', str_contains($slAdminPage, 'data-sharetidy-status') && str_contains($slAdminPage, 'data-sharetidy-rules') && str_contains($slAdminPage, 'data-health-row="sharetidy"') && str_contains($slAdminPage, 'Open Settings &rarr; Server setup') && str_contains($slAdminPage, 'data-share-probe="') && !str_contains($slAdminPage, 'data-sl-check') && !str_contains($slAdminPage, 'class="sl-rules"') && !str_contains($slAdminPage, 'The tidy address needs a server rule'));
 $slMade = $slAdmin($slForm());
 $slAll = $slLinks()['links'] ?? [];
 $slId = $slMade['id'] ?? '';
