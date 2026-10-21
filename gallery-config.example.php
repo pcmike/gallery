@@ -9,7 +9,7 @@
 //
 // Anything you leave out keeps its default from index.php. This file survives
 // replacing index.php with a newer version, so your settings do too. The
-// gallery's admin ("Site settings") can also edit it; when it saves, it keeps
+// gallery's admin ("Settings") can also edit it; when it saves, it keeps
 // only the settings that differ from the defaults and drops these comments.
 //
 // Only the names below are settings. A name that isn't (a typo), a value of
@@ -51,7 +51,7 @@
     // "PRIVATE_VIEW_PASSWORD": "something-to-share",   // empty = no private view
 
     // --- Share links (README: Share links) ---------------------------------
-    // "ENABLE_SHARE_LINKS": true,          // default false: temporary links that let someone see private photos (made in the admin's Share links tab)
+    // "ENABLE_SHARE_LINKS": true,          // default false: temporary links that let someone see private photos (made in the admin's Share tab)
     // "SHARE_HEADS_UP": true,              // default false: a thin line at the top for people using a link, saying when it ends (each link can override)
     // "TRUSTED_PROXY": "cloudflare",       // where visitors' addresses come from, for link logs and the sign-in throttle: "direct" (the default), "cloudflare" or "proxy"
     // "TRUSTED_PROXY_RANGES": ["203.0.113.0/24"],   // with "proxy" (or to add to Cloudflare's): the addresses whose X-Forwarded-For header is believed

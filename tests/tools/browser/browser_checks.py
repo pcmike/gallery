@@ -601,15 +601,15 @@ try:
                 ok(st is not None and st["locked"] and not st["open"] and "ok" in st["cls"].split() and "are refused" in st["status"] and st["again"], "[lock check] with the server refusing direct requests for photos and cache files, the warning is replaced by the \"Private is locked\" state", str(st))
                 b.js("document.querySelector('.side-hidden').click()"); b.drain(0.5)
                 ok(b.js("document.getElementById('lock-banner').hidden") and b.js("(() => { const t = document.querySelector('.tab-panel[data-tab=hidden]'); return !!t && [...t.querySelectorAll('.flash')].every(e => e.offsetParent === null); })()"), "[lock check] ...and the Edited tab shows no banner at all when private is locked (the Health check says it)")
-                ok(st["lockRulesHidden"] and st["panelHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => h.hidden)"), "[lock check] ...and the nginx/Apache rules and the warning text in Site settings go away, as does the Hidden tab's rules panel", str(st))
-                ok("note-text" in st["accelCls"] and "Not using it yet" in st["accel"] and "/trip" in st["accel"], "[nginx redirect check] with the nginx location in place but the setting empty, Site settings points that out and offers to set it", str([st["accelCls"], st["accel"]]))
+                ok(st["lockRulesHidden"] and st["panelHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => h.hidden)"), "[lock check] ...and the nginx/Apache rules and the warning text in Settings go away, as does the Hidden tab's rules panel", str(st))
+                ok("note-text" in st["accelCls"] and "Not using it yet" in st["accel"] and "/trip" in st["accel"], "[nginx redirect check] with the nginx location in place but the setting empty, Settings points that out and offers to set it", str([st["accelCls"], st["accel"]]))
                 b.js("[...document.querySelectorAll('[data-accel-status] button')][0].click()"); b.drain(2.0)
                 saved = open(SITE11 + "/.gallery-config.php").read()
                 ok("NGINX_ACCEL_REDIRECT_PREFIX" in saved and "trip" in saved.split("NGINX_ACCEL_REDIRECT_PREFIX")[1][:20], "[nginx redirect check] its button fills in and saves the setting", saved[:300])
-                ok(st["tidyRulesHidden"] and any(t.startswith("lock-result ok-text|Tidy folder links work") for t in st["tidyStatus"]), "[tidy check] with /Folder/ sent to the gallery, Site settings says in green that tidy folder links work and hides their rules", str(st["tidyStatus"]))
+                ok(st["tidyRulesHidden"] and any(t.startswith("lock-result ok-text|Tidy folder links work") for t in st["tidyStatus"]), "[tidy check] with /Folder/ sent to the gallery, Settings says in green that tidy folder links work and hides their rules", str(st["tidyStatus"]))
             else:
                 ok(st is not None and st["open"] and not st["locked"] and "error" in st["cls"].split() and "handed out" in st["status"], "[lock check] with nothing in place (the photo is served as a plain file) the warning stays, and says which address was handed out", str(st))
-                ok(not st["lockRulesHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => !h.hidden)"), "[lock check] ...and the rules and the Site settings text stay too", str(st))
+                ok(not st["lockRulesHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => !h.hidden)"), "[lock check] ...and the rules and the Settings text stay too", str(st))
                 b.js("document.querySelector('.side-hidden').click()"); b.drain(0.5)
                 bn = b.js("""(() => { const x = document.getElementById('lock-banner'); if (!x) return null; const t = x.querySelector('.lock-open-text').getBoundingClientRect(), k = x.querySelector('.lock-recheck').getBoundingClientRect(), r = x.getBoundingClientRect(); return {shown: !x.hidden && r.height > 0, oneLine: Math.abs((k.top + k.bottom) / 2 - (t.top + t.bottom) / 2) < t.height / 2 + 4, inside: k.right <= r.right + 1 && t.left >= r.left - 1}; })()""")
                 ok(bn is not None and bn["shown"] and bn["oneLine"] and bn["inside"], "[lock check] when private is not locked the Edited tab shows the warning as one tidy line, with Check again level with its text and inside the box", str(bn))
@@ -628,17 +628,17 @@ try:
                 ok(nm["appearance"] == "textfield" and float(nm["width"].replace("px", "")) <= 120, "[inputs] a typed number has no up/down arrows and a small box", str(nm))
                 ok(nm["pill"] >= 20, "[inputs] choices are drawn as pills", str(nm))
                 ok(b.js("(() => { const a = document.createElement('a'); a.href = 'https://example.com/'; a.textContent = 'x'; document.body.appendChild(a); const c = getComputedStyle(a).color; a.remove(); return c; })()") == "rgb(170, 178, 255)", "[links] a plain link in the admin is the same periwinkle")
-                ok(not st["tidyRulesHidden"] and any(t.startswith("lock-result warn-text|Tidy folder links are not set up") for t in st["tidyStatus"]), "[tidy check] with nothing in place, Site settings says in red that tidy folder links aren't set up (and keeps the rules)", str(st["tidyStatus"]))
+                ok(not st["tidyRulesHidden"] and any(t.startswith("lock-result warn-text|Tidy folder links are not set up") for t in st["tidyStatus"]), "[tidy check] with nothing in place, Settings says in red that tidy folder links aren't set up (and keeps the rules)", str(st["tidyStatus"]))
                 ff = b.js("(() => { const e = document.querySelector('.ffstatus'); return e ? {cls: e.className, text: e.textContent.slice(0, 40), color: getComputedStyle(e).color} : null; })()")
-                ok(ff is not None and "warn-text" in ff["cls"] and "not found" in ff["text"] and ff["color"] == "rgb(237, 66, 69)", "Site settings says in red that ffmpeg was not found", str(ff))
+                ok(ff is not None and "warn-text" in ff["cls"] and "not found" in ff["text"] and ff["color"] == "rgb(237, 66, 69)", "Settings says in red that ffmpeg was not found", str(ff))
                 hp = b.js("""(() => { const p = document.getElementById('health-panel'); const vis = [...p.querySelectorAll('.health-row')].filter(r => getComputedStyle(r).display !== 'none');
                     return {summary: p.querySelector('.health-summary-text').textContent, cls: p.querySelector('.health-summary-text').className, visible: vis.map(r => r.className.replace(/\\s+/g, ' ')), loud: p.querySelectorAll('.health-row.loud').length}; })()""")
                 ok("thing" in hp["summary"] and hp["loud"] >= 2 and len(hp["visible"]) == hp["loud"] and all("loud" in v for v in hp["visible"]) and "warn-text" in hp["cls"], "[health] with problems, the Health check shows exactly the rows that need attention (red when something is wrong) and folds the rest away", str(hp))
-                # the link on the Hidden tab goes straight to the Server setup part of Site settings
+                # the link on the Hidden tab goes straight to the Server setup part of Settings
                 b.js("document.querySelector('[data-tab=hidden].side-hidden, .admin-tabs a[data-tab=hidden]').click()"); b.drain(0.5)
                 b.js("document.querySelector('p[data-tidy-rules] a').click()"); b.drain(1.5)
                 jump = b.js("(() => { const e = document.getElementById('server-setup'), r = e && e.getBoundingClientRect(); return {site: document.querySelector('.tab-panel[data-tab=site]').classList.contains('active'), top: r ? r.top : null, h: innerHeight}; })()")
-                ok(jump["site"] and jump["top"] is not None and -2 <= jump["top"] < jump["h"] * 0.5, "the link on the Hidden tab opens Site settings and scrolls straight to Server setup", str(jump))
+                ok(jump["site"] and jump["top"] is not None and -2 <= jump["top"] < jump["h"] * 0.5, "the link on the Hidden tab opens Settings and scrolls straight to Server setup", str(jump))
                 col = b.js("(() => { const a = document.querySelector('p[data-tidy-rules] a'); return a ? getComputedStyle(a).color : null; })()")
                 ok(col is not None and col != "rgb(0, 0, 238)" and col != "rgb(138, 180, 255)", "links in the admin's running text use the admin's own colour, not the browser's default blue", str(col))
             if expect:
@@ -843,7 +843,7 @@ try:
     b.js("window.scrollTo(0, 0)"); b.drain(0.3)
     b.js("document.querySelector('#health-panel a[onclick*=\"media-panel\"]').click()"); b.drain(1.2)
     jmp = b.js("""(() => { const p = document.getElementById('media-panel'), r = p.getBoundingClientRect(); return {tab: document.querySelector('.tab-panel[data-tab=site]').classList.contains('active'), top: Math.round(r.top), h: innerHeight, ring: p.classList.contains('flash-target') || true, hash: location.hash}; })()""")
-    ok(jmp["tab"] and -2 <= jmp["top"] < jmp["h"] * 0.6, "[health] \"Open Prepare media\" ends on the Site settings tab with the Prepare media panel in view (it used to fall back to the folder's Settings tab)", str(jmp))
+    ok(jmp["tab"] and -2 <= jmp["top"] < jmp["h"] * 0.6, "[health] \"Open Prepare media\" ends on the Settings tab with the Prepare media panel in view (it used to fall back to the folder's Settings tab)", str(jmp))
     shot(b, "10b-prepare-media-attention")
     b.js("window.confirm = () => true")
     b.js("[...document.querySelectorAll('#media-panel .media-tidy-out button')].find(x => x.textContent === 'Tidy up now').click()"); b.drain(3)
@@ -874,9 +874,9 @@ try:
     b.js("[...document.querySelectorAll('.admin-folder-nav li.has-children')].find(l => l.querySelector(':scope > a .fname').textContent == 'Europe').querySelector(':scope > .ftoggle').click()"); b.drain(0.2)
     ok(b.js("getComputedStyle([...document.querySelectorAll('.admin-folder-nav li.has-children')].find(l => l.querySelector(':scope > a .fname').textContent == 'Europe').querySelector(':scope > ul')).display") != "none", "...and its chevron opens it")
     texts = b.js("(() => { const t = el => { const r = el.getBoundingClientRect(), c = getComputedStyle(el); return Math.round(r.left + parseFloat(c.borderLeftWidth) + parseFloat(c.paddingLeft)); }; const q = s => document.querySelector(s); return [t(q('.side-hidden')), t(q('.side-link')), t(q('.admin-folders > summary')), t(q('.admin-folder-nav a'))]; })()")
-    ok(max(texts) - min(texts) <= 1, "the Hidden entry, Site settings, the FOLDERS label and the folder names all start in the same column", str(texts))
+    ok(max(texts) - min(texts) <= 1, "the Hidden entry, Settings, the FOLDERS label and the folder names all start in the same column", str(texts))
     sc = b.js("getComputedStyle(document.querySelector('.side-link')).color")
-    ok(sc == "rgb(234, 234, 234)" and not sc.startswith("rgb(94, 234, 212)"), "Site settings is a neutral entry (the page's own text colour, no teal); it turns the admin's accent colour only while open", sc)
+    ok(sc == "rgb(234, 234, 234)" and not sc.startswith("rgb(94, 234, 212)"), "Settings is a neutral entry (the page's own text colour, no teal); it turns the admin's accent colour only while open", sc)
 
     # public breadcrumb pills
     b.goto(B + "/?folder=Asia", 1.0)
@@ -924,7 +924,7 @@ try:
     refused = any("X-Frame-Options" in (e.get("params", {}).get("entry", {}).get("text", "") + str(e.get("params", {}))) for e in b.events)
     ok(framed is True or refused, "[admin] the browser refuses to display it inside a frame (X-Frame-Options: DENY)", str(framed))
     b.call("Network.setExtraHTTPHeaders", {"headers": {}})
-    # ---------------- Site settings (a real person, real clicks) ----------------
+    # ---------------- Settings (a real person, real clicks) ----------------
     print("== site settings")
     SITE2 = WORK + "/site2"; os.makedirs(SITE2 + "/Sub")
     shutil.copy(HERE + "/../../../index.php", SITE2 + "/index.php")
@@ -945,7 +945,7 @@ try:
     b.js("document.querySelector('.side-link').click()"); b.drain(0.4); shot(b, "14-site-settings")
     vis2 = "[...document.querySelectorAll('.tab-panel')].filter(p => getComputedStyle(p).display !== 'none').map(p => p.dataset.tab)"
     cfg = lambda: open(cfgfile).read()
-    ok(b.js(vis2) == ["site"] and b.js("document.querySelector('.side-link').classList.contains('active')"), "clicking Site settings in the sidebar shows the settings (and nothing else)", str(b.js(vis2)))
+    ok(b.js(vis2) == ["site"] and b.js("document.querySelector('.side-link').classList.contains('active')"), "clicking Settings in the sidebar shows the settings (and nothing else)", str(b.js(vis2)))
     ok(b.js("document.querySelectorAll('.site-row .switch input').length") >= 7 and not b.problems(IGN), "...as a list of switches, with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
     ok(b.js("(() => { const n = document.querySelector('.site-settings-form .nojs-only'); return !n || getComputedStyle(n).display === 'none'; })()"), "there is no Save button to scroll to: it only exists for browsers without JavaScript")
     before_items = open(SITE2 + "/.gallery-items.php").read()
@@ -1019,14 +1019,14 @@ try:
     b.js("(() => { const i = document.querySelector('input[name=set_NGINX_ACCEL_REDIRECT_PREFIX]'); i.value = ''; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(1.0)
     ok('NGINX_ACCEL_REDIRECT_PREFIX' not in cfg(), "clearing it needs no question and takes it out of the file")
     b.js("document.querySelector('.admin-tabs a[data-tab=settings]').click()"); b.drain(1.8)
-    ok(b.js("window.__stay") is None and b.js("document.querySelector('.admin-folder-nav a[href*=Sub]') !== null") and b.js(vis2) == ["settings"], "leaving Site settings after a change reloads, landing on the tab clicked, and the sidebar now lists the new folder", str(b.js(vis2)))
+    ok(b.js("window.__stay") is None and b.js("document.querySelector('.admin-folder-nav a[href*=Sub]') !== null") and b.js(vis2) == ["settings"], "leaving Settings after a change reloads, landing on the tab clicked, and the sidebar now lists the new folder", str(b.js(vis2)))
     # removing the private password: orange text on the row, no dialog
     b.js("document.querySelector('.admin-tabs a[data-tab=site]') ? document.querySelector('.admin-tabs a[data-tab=site]').click() : document.querySelector('.side-link').click()"); b.drain(0.5)
     b.js("window.__confirms = []; window.confirm = m => { window.__confirms.push(m); return true; };")
     ok(b.js("(() => { const w = document.querySelector('.pw-btn[data-pw=private-remove]').closest('.site-row').querySelector('.warn-note'); return !!w && getComputedStyle(w).color.startsWith('rgb(245, 166, 35)') && w.textContent.includes('Nothing is deleted'); })()"), "the private-view row carries an orange note about what removing the password does")
     b.js("document.querySelector('.pw-btn[data-pw=private-remove]').click()"); b.drain(1.0)
     ok(b.js("window.__confirms.length") == 0 and 'PRIVATE_VIEW_PASSWORD' not in cfg(), "removing the private-view password saves at once with no question")
-    # pin grouping sits under the map in Site settings, and only shows while the map is on
+    # pin grouping sits under the map in Settings, and only shows while the map is on
     b.goto(B2 + "/?admin#site", 1.2)
     sub = lambda: b.js("(() => { const r = document.querySelector('.site-row.sub-row[data-requires=set_ENABLE_MAP]'); if (!r) return null; const m = document.querySelector('input[name=set_ENABLE_MAP][type=checkbox]').closest('.site-row').getBoundingClientRect(), x = r.getBoundingClientRect(); return {hidden: getComputedStyle(r).display === 'none', indent: Math.round(x.left - m.left), below: x.top >= m.bottom - 1}; })()")
     s0 = sub()
@@ -1036,7 +1036,7 @@ try:
     ok(s2 is not None and s2["hidden"], "[pin grouping] and goes again when the map is switched off", str(s2))
     # the web-server rules, collapsed, with a working copy button
     b.js("Object.defineProperty(navigator, 'clipboard', {value: {writeText: t => { window.__rules = t; return Promise.resolve(); }}, configurable: true})")
-    ok(b.js("[...document.querySelectorAll('.site-rules details')].every(d => !d.open)") and b.js("document.querySelectorAll('.site-rules details').length") == 4, "[rules] the nginx and Apache rules (and the two optional tidy-link ones) are collapsed drop-downs in Site settings")
+    ok(b.js("[...document.querySelectorAll('.site-rules details')].every(d => !d.open)") and b.js("document.querySelectorAll('.site-rules details').length") == 4, "[rules] the nginx and Apache rules (and the two optional tidy-link ones) are collapsed drop-downs in Settings")
     b.js("document.querySelector('.site-rules details summary').click()"); b.drain(0.3)
     b.js("document.querySelector('.site-rules details .copy-rules').click()"); b.drain(0.4)
     ok(b.js("document.querySelector('.site-rules details').open") and "internal;" in (b.js("window.__rules") or "") and b.js("document.querySelector('.site-rules details .copy-rules').textContent") == "Copied", "[rules] opening one shows the rules for this gallery's address and Copy puts them on the clipboard", str(b.js("window.__rules"))[:80])
@@ -1135,6 +1135,22 @@ try:
     time.sleep(1.0)
     cardw = "Math.round(document.querySelector('.folder-cover').getBoundingClientRect().width)"
     b.viewport(1280, 900)
+    # (a headless browser has no mouse, so it ignores @media (hover: hover); to try those rules, lift them out of the media query)
+    LIFT_HOVER = "(() => { let css = ''; for (const sh of document.styleSheets) { for (const r of sh.cssRules) { if (r.type === 4 && /hover:\\s*hover/.test(r.conditionText)) css += [...r.cssRules].map(x => x.cssText).join('\\n'); } } const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st); })()"
+    # five folders: the cards share the whole width (no empty columns on the right), at any desktop width
+    for vw in (1700, 1280, 1000):
+        b.viewport(vw, 900); b.goto(B4 + "/", 1.2)
+        edge = b.js("(() => { const g = document.querySelector('.gallery'), cs = [...document.querySelectorAll('.folder-cover')], r = g.getBoundingClientRect(), cst = getComputedStyle(g); return {last: Math.round(cs[cs.length - 1].getBoundingClientRect().right), right: Math.round(r.right - parseFloat(cst.paddingRight)), n: cs.length, rows: new Set(cs.map(c => Math.round(c.getBoundingClientRect().top))).size}; })()")
+        ok(edge["n"] == 5 and abs(edge["last"] - edge["right"]) <= 2 and edge["rows"] == 1, f"[few folders] five folders fill the row to the right edge at {vw}px wide (no empty columns)", str(edge))
+    b.viewport(1280, 900); b.goto(B4 + "/", 1.2)
+    # the link icon on a cover answers like a tile's badge: larger, a white ring, the accent colour; and sinks when pressed
+    b.js(LIFT_HOVER)
+    pos = b.js("(() => { const r = document.querySelector('.folder-permalink-copy').getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()")
+    base = b.js("(() => { const e = document.querySelector('.folder-permalink-copy'); return {w: e.getBoundingClientRect().width, bg: getComputedStyle(e).backgroundColor}; })()")
+    b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": pos["x"], "y": pos["y"]}); b.drain(0.5)
+    hov = b.js("(() => { const e = document.querySelector('.folder-permalink-copy'), c = getComputedStyle(e); return {w: e.getBoundingClientRect().width, bg: c.backgroundColor, ring: c.boxShadow}; })()")
+    ok(hov["w"] > base["w"] * 1.1 and hov["bg"] != base["bg"] and "255, 255, 255" in hov["ring"], "[hover] the link icon on a folder cover grows, takes the accent colour and a white ring on hover, like a tile's badges", f"{base} -> {hov}")
+    b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 5, "y": 5}); b.drain(0.2)
     shutil.rmtree(SITE4 + "/Rome"); shutil.rmtree(SITE4 + "/Oslo"); shutil.rmtree(SITE4 + "/Bern")
     b.goto(B4 + "/", 1.5); shot(b, "18-two-folders-desktop")
     w2 = b.js(cardw)
@@ -1552,7 +1568,7 @@ try:
     finally:
         srv17.terminate(); srv17.wait()
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
-    # ---------------- "Put first": the list you drag, on Site settings and on a folder's settings ----------------
+    # ---------------- "Put first": the list you drag, on Settings and on a folder's settings ----------------
     print("== put first: the draggable list")
     SITE16 = WORK + "/site16"; os.makedirs(SITE16 + "/sub")
     shutil.copy(HERE + "/../../../index.php", SITE16 + "/index.php"); os.utime(SITE16 + "/index.php", (time.time() - 3600,) * 2)
@@ -1593,7 +1609,7 @@ try:
             b.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []}); b.drain(1.8)
         SL = ".sortfirst:not(.sf-form)"
         go16("/?admin#site")
-        ok(rows16(SL) == "private,video,located" and b.js("document.querySelector('.sf-summary').textContent") == "Nothing is put first: photos follow the order above.", "[put first] Site settings: one list of three rows, nothing on, and a sentence that says so", rows16(SL))
+        ok(rows16(SL) == "private,video,located" and b.js("document.querySelector('.sf-summary').textContent") == "Nothing is put first: photos follow the order above.", "[put first] Settings: one list of three rows, nothing on, and a sentence that says so", rows16(SL))
         for k in ("located", "video", "private"):
             b.js("document.querySelector('%s li[data-kind=%s] .switch').click()" % (SL, k)); b.drain(1.4)
         ok(rows16(SL) == "located*,video*,private*" and b.js("document.querySelector('%s .sf-summary').textContent" % SL) == "Photos with a location, then videos, then private items, then the rest.", "[put first] switching a row on moves it up under the ones already on, and the sentence follows", rows16(SL))
@@ -1629,10 +1645,10 @@ try:
         b.js("document.querySelector('.sort-details').open = false"); b.drain(0.1)
         go16("/?admin&folder=sub#settings")
         ok(b.js("document.querySelector('.sort-details').hasAttribute('open')"), "[put first] a folder with its own order always opens that section by itself")
-        # Site settings: the folder you came from is not lit like the selection
+        # Settings: the folder you came from is not lit like the selection
         b.js("document.querySelector('.side-link[data-tab=site]').click()"); b.drain(0.5)
         cur16 = b.js("(() => { const a = document.querySelector('.admin-folder-nav a.current'); const c = getComputedStyle(a); return {bg: c.backgroundColor, off: document.querySelector('.admin-layout').classList.contains('off-folder'), shadow: c.boxShadow}; })()")
-        ok(cur16["off"] and cur16["bg"] != "rgb(88, 101, 242)" and cur16["shadow"] == "none", "[admin] on Site settings the folder you came from is only softly tinted (not the selection colour) and has no edge line", str(cur16))
+        ok(cur16["off"] and cur16["bg"] != "rgb(88, 101, 242)" and cur16["shadow"] == "none", "[admin] on Settings the folder you came from is only softly tinted (not the selection colour) and has no edge line", str(cur16))
         b.js("document.querySelector('.admin-tabs a[data-tab=settings]').click()"); b.drain(0.4)
         ok(b.js("getComputedStyle(document.querySelector('.admin-folder-nav a.current')).backgroundColor") == "rgb(88, 101, 242)", "[admin] ...and lit again once you are back on the folder's own tabs")
         # on a phone: a finger drags a row past two others
@@ -1992,7 +2008,7 @@ try:
     b.js("document.querySelector('#setup_password2').focus()"); b.call("Input.insertText", {"text": "my first admin pw 1"})
     b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
     ok(b.js("document.querySelector('h1') && document.querySelector('h1').textContent") == "Gallery Admin" and "admin password is set" in b.js("document.body.innerText"), "choosing a password lands in the admin, already signed in, with a message saying so", b.js("location.href"))
-    ok(b.js("[...document.querySelectorAll('.tab-panel')].filter(p => getComputedStyle(p).display !== 'none').map(p => p.dataset.tab)") == ["site"], "...on Site settings, where the rest of the gallery-wide settings are")
+    ok(b.js("[...document.querySelectorAll('.tab-panel')].filter(p => getComputedStyle(p).display !== 'none').map(p => p.dataset.tab)") == ["site"], "...on Settings, where the rest of the gallery-wide settings are")
     guard = "<?php http_response_code(404); exit; ?>\n"
     cfg3 = open(SITE3 + "/.gallery-config.php").read()
     ok(cfg3.startswith(guard) and stored_password_is(cfg3, "ADMIN_PASSWORD", "my first admin pw 1") and "my first admin pw 1" not in cfg3, "the password is in the settings file (the 404 guard plus JSON)", cfg3.replace("\n", " ")[:200])
@@ -2003,7 +2019,7 @@ try:
     ok(b.js("document.querySelector('input[name=access_code]') !== null") and b.js("document.querySelector('input[name=setup_password]') === null"), "once logged out, ?admin is the login form and setup never comes back, though the file is still brand new")
     srv3.terminate(); srv3.wait()
     b.viewport(1280, 900)
-    # ---------------- share links: the opening page, a link holder's page, and the Share links tab with its log ----------------
+    # ---------------- share links: the opening page, a link holder's page, and the Share tab with its log ----------------
     print("== share links: the opening page, a link holder's page, the tab and its log")
     import http.cookiejar
     SITE_L = WORK + "/sitelinks"; os.makedirs(SITE_L + "/Rome"); os.makedirs(SITE_L + "/Pisa")
@@ -2077,7 +2093,7 @@ try:
         b.goto(BL + "/?folder=Rome&x=1", 1.2)
         alts = b.js("[...document.querySelectorAll('.gallery .card img')].map(i => i.getAttribute('alt'))")
         ok(alts == ["Rome/r1.jpg"], "[share links] ...and closing it shows the folder with only that photo in it (Rome's other private photo is not there)", str(alts))
-        # --- the owner's Share links tab ---
+        # --- the owner's Share tab ---
         b.goto(BL + "/?admin", 1.2)
         b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": LPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         b.js("location.hash = '#links'"); b.drain(2.0)   # (a change of the part after # is not a page load: goto would wait for one that never comes)
@@ -2085,6 +2101,13 @@ try:
         ok("new since you last looked" in body and "Mark & Jen" in body, "[share links tab] each link is a row, named exactly as typed, saying how many happenings are new since the owner last looked")
         ok(b.js("(document.querySelector('.side-link[data-tab=links] .count') || {}).textContent") == "3", "[share links tab] the sidebar counts the links with news", b.js("document.querySelector('.side-link[data-tab=links]').innerText"))
         b.drain(2.0)   # the tab marks itself as looked at
+        ok(b.js("document.querySelector('.side-link[data-tab=links]').innerText").strip().startswith("Share") and "Share links" not in b.js("document.querySelector('.side-link[data-tab=links]').innerText") and b.js("document.querySelector('.side-link[data-tab=site]').innerText").strip() == "Settings" and b.js("document.querySelector('.admin-tabs a[data-tab=settings]').innerText").strip() == "Folder settings", "[tab names] the sidebar says Share and Settings, and the folder tab says Folder settings (the Root's too)")
+        b.js(LIFT_HOVER)
+        qp = b.js("(() => { const e = document.querySelector('.sl-quick'); e.scrollIntoView({block: 'center'}); const r = e.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2, bg: getComputedStyle(e).backgroundColor}; })()")
+        b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": qp["x"], "y": qp["y"]}); b.drain(0.4)
+        qh = b.js("getComputedStyle(document.querySelector('.sl-quick')).backgroundColor")
+        ok(qh != qp["bg"], "[hover] a grey button on the Share tab (Copy link, Resume) visibly changes on hover", f"{qp['bg']} -> {qh}")
+        b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 5, "y": 5}); b.drain(0.2)
         A = ".sl-row[open] .sl-act"   # (the hidden IP-addresses view has a .sl-act of its own, always first on the page: always say which one)
         b.js("[...document.querySelectorAll('details.sl-row')].find(d => d.querySelector('.sl-name').textContent.trim() === 'Aunt Carol').open = true")
         ok(lwait(f"document.querySelectorAll('{A} table tbody tr').length >= 1"), "[share links tab] opening a row loads its Visitors tab (one line per address and browser)", b.js(f"(document.querySelector('{A}') || {{innerText: ''}}).innerText")[:200])
@@ -2213,7 +2236,7 @@ try:
         # More options… hands over to the full form, filled in
         b.js("document.querySelector('.page-share').click()"); b.drain(0.4); type_in(".gs-name", "Handed over")
         b.js("document.querySelector('.gs-seg[data-seg=opens] button[data-v=\"1\"]').click()"); b.js("document.querySelector('[data-gs=more]').click()"); b.drain(2.5)
-        ok(lwait("!document.getElementById('sl-form').hidden") and b.js("document.querySelector('#sl-form [name=label]').value") == "Handed over" and b.js("document.querySelector('#sl-form input[name=scope_type]:checked').value") == "folders" and b.js("document.querySelector('#sl-form input[name=opens_pick]:checked').value") == "1", "[share form] More options… opens the full form on the Share links tab with the name, the folder and the opens carried over")
+        ok(lwait("!document.getElementById('sl-form').hidden") and b.js("document.querySelector('#sl-form [name=label]').value") == "Handed over" and b.js("document.querySelector('#sl-form input[name=scope_type]:checked').value") == "folders" and b.js("document.querySelector('#sl-form input[name=opens_pick]:checked').value") == "1", "[share form] More options… opens the full form on the Share tab with the name, the folder and the opens carried over")
         # the viewer's link button: a private photo asks, a public one copies
         b.goto(BL + "/?folder=Rome&v=1", 1.5); b.js("openLightbox(0)"); b.drain(0.8)
         b.js("document.getElementById('lightbox-copy-btn').click()"); b.drain(0.4)
@@ -2283,7 +2306,7 @@ try:
         ok(box["all"]["hidden"] and not box["ph"]["hidden"] and box["ph"]["checked"] and not box["fo"]["hidden"] and not box["fo"]["checked"] and box["again"] and "not a lock" in box["text"], "[share form] the full form's \"Show only what they can see here\" box: hidden for everything private, ticked for photos, unticked for folders, and it says it is a tidy view and not a lock", str(box))
         b.js("document.querySelector('#sl-form [data-sl=cancel]').click()")
         # Trim the log: the dialog says what would go before it does anything
-        ok(b.js("!!document.querySelector('[data-sl=trim]')"), "[trim] the Share links tab has a Trim the log… button")
+        ok(b.js("!!document.querySelector('[data-sl=trim]')"), "[trim] the Share tab has a Trim the log… button")
         b.js("document.querySelector('[data-sl=trim]').click()"); b.drain(1.2)
         tr = b.js("""(() => { const m = document.getElementById('sl-modal'); return {shown: !m.hidden, title: document.getElementById('sl-modal-title').textContent, opts: [...document.querySelectorAll('#sl-trim-link option')].map(o => o.textContent), out: document.getElementById('sl-trim-out').textContent, okOff: document.querySelector('[data-sl-modal=ok]').disabled, dl: document.getElementById('sl-trim-dl-events').getAttribute('href'), age: document.getElementById('sl-trim-age').value}; })()""")
         ok(tr["shown"] and tr["title"] == "Trim the log" and tr["opts"][0] == "All links" and len(tr["opts"]) > 2 and tr["age"] == "30" and "nothing to trim" in tr["out"] and tr["okOff"] and tr["dl"] == "?admin&linkexport=all&what=events", "[trim] Trim the log opens a question: which link (All links first), how old (30 days to start with), what would go (here nothing is that old), the download links, and Trim stays off while there is nothing to trim", str(tr))
@@ -2335,11 +2358,11 @@ try:
         b.viewport(1280, 900)
         b.goto(BL + "/?admin&pvnote=1", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)
         note = b.js("(() => { const n = document.querySelector('.sl-prevnote'); return n ? {text: n.innerText, link: !!n.querySelector('a[href=\"?exitpreview\"]')} : null; })()")
-        ok(note is not None and "Mark & Jen" in note["text"] and "is open in this browser" in note["text"] and note["link"], "[preview] back on the Share links tab, a note says a preview is open in this browser, with a way to end it", str(note))
+        ok(note is not None and "Mark & Jen" in note["text"] and "is open in this browser" in note["text"] and note["link"], "[preview] back on the Share tab, a note says a preview is open in this browser, with a way to end it", str(note))
         shot(b, "36b-preview-note-in-tab")
         b.goto(BL + "/?folder=Rome&back=1", 1.2)
         b.js("document.querySelector('.lp-exit').click()"); b.drain(1.8)
-        ok(b.js("location.hash") == "#links" and "admin" in b.js("location.search"), "[preview] Exit preview goes back to the Share links tab")
+        ok(b.js("location.hash") == "#links" and "admin" in b.js("location.search"), "[preview] Exit preview goes back to the Share tab")
         b.goto(BL + "/?folder=Rome&after=1", 1.2)
         ok(b.js("document.getElementById('link-preview')") is None and b.js("document.querySelectorAll('.priv-toggle').length") > 0, "[preview] ...and the gallery is the owner's again")
         b.goto(BL + "/?admin&pvnote=2", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)

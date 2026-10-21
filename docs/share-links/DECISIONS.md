@@ -10,8 +10,8 @@ The owner currently gives people a *private-view password*. They want to stop ha
 
 ## Where it lives
 
-- **A new "Share links" tab in the admin**, next to Private, not a Site-settings section. *Why:* Site settings holds on/off options saved to `.gallery-config.php`; links are records that change constantly (use counts, pause, revoke, logs).
-- **Site settings gets only**: *Allow share links* (off by default, like every opt-in), the short-address check, the heads-up default (off), where visitors' IP addresses come from, and a Cloudflare-caching note.
+- **A new "Share links" tab in the admin**, next to Private, not a Site-settings section. *Why:* Settings holds on/off options saved to `.gallery-config.php`; links are records that change constantly (use counts, pause, revoke, logs).
+- **Settings gets only**: *Allow share links* (off by default, like every opt-in), the short-address check, the heads-up default (off), where visitors' IP addresses come from, and a Cloudflare-caching note.
 - Storage: `.gallery-links.php` beside `index.php` (the same guarded-PHP-JSON pattern as `.gallery-items.php`), plus one log file per link. They are matched by the existing `/\.gallery-` web-server rule and need adding to the README's backup list.
 
 ## The link and the opening page
@@ -37,8 +37,8 @@ The owner currently gives people a *private-view password*. They want to stop ha
 - **Opens**: Once / 5 / 10 / Unlimited / other. **Ends**: 1 day / 1 week / 30 days / a picked date / never. Times are entered and shown in the owner's browser time zone.
 - **Heads-up header** (the visitor sees a thin line at the top): *can be turned on/off, including per link* because the owner isn't sure they like it. Site default off; per link: use the site setting / On / Off. **Wording (owner's):** "The link being used to access this media expires on <date>." Amber in the last day; dismissable; not shown when the link has no end date.
 - **Replace address**: new token, same name, settings and log; the old address stops working at once and, if pressed, is logged as a blocked try.
-- **Preview as this link** (opens in a new tab): shows exactly what the link shows; counts nothing and logs nothing. Needed to check a folder-limited link before sending it. **How it really works (changed while building it):** the first plan said the new tab would have "its own sign-in" so the owner stayed signed in as themselves in the first tab, but cookies are shared by every tab of a browser, so that can't be done. A signed preview cookie (4 hours, or until *Exit preview*) therefore makes the whole browser see the link's view on gallery and media pages (never on `?admin`, and a picture an admin page asks for is still the owner's, so the admin's thumbnails keep working). Every gallery page in that browser shows the purple strip with *Exit preview*, and the Share links tab shows a note with *End preview*, so it can't be mistaken for the owner's view. Rejected: asking the owner to use a private window instead (more steps, and no strip or list of what's included).
-- **A new-activity badge** on the Share links tab/row (no email; the gallery has no mail).
+- **Preview as this link** (opens in a new tab): shows exactly what the link shows; counts nothing and logs nothing. Needed to check a folder-limited link before sending it. **How it really works (changed while building it):** the first plan said the new tab would have "its own sign-in" so the owner stayed signed in as themselves in the first tab, but cookies are shared by every tab of a browser, so that can't be done. A signed preview cookie (4 hours, or until *Exit preview*) therefore makes the whole browser see the link's view on gallery and media pages (never on `?admin`, and a picture an admin page asks for is still the owner's, so the admin's thumbnails keep working). Every gallery page in that browser shows the purple strip with *Exit preview*, and the Share tab shows a note with *End preview*, so it can't be mistaken for the owner's view. Rejected: asking the owner to use a private window instead (more steps, and no strip or list of what's included).
+- **A new-activity badge** on the Share tab/row (no email; the gallery has no mail).
 - **Not included:** emailing the owner on first open.
 
 ## What a link can see

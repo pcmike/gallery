@@ -184,7 +184,7 @@ function gallery_setting($name, $default, $allowed = null) {
         return null;
     }
     $asked[$name] = true;
-    $GLOBALS['__gallery_defaults'][$name] = $default;   // what the admin's Site settings shows as "default"
+    $GLOBALS['__gallery_defaults'][$name] = $default;   // what the admin's Settings shows as "default"
     if (!array_key_exists($name, $cfg)) return $default;
     $v = $cfg[$name];
     $ok = is_bool($default) ? is_bool($v)
@@ -427,7 +427,7 @@ define('PRIVATE_VIEW_PASSWORD', gallery_setting('PRIVATE_VIEW_PASSWORD', ''));
 
 // Share links: temporary addresses (https://example.com/gallery/k7QpR2mXv9LwTb4e) that sign a person in as a private viewer,
 // limited by number of opens and by time, and optionally to chosen folders or photos. Off by default. Made and managed in
-// the admin's Share links tab. A link is a secret in an address, so the page it opens asks for one press of a button
+// the admin's Share tab. A link is a secret in an address, so the page it opens asks for one press of a button
 // before it counts as used (a chat app that fetches a link to draw its preview never uses it up), and a link can be
 // paused, revoked or replaced at any time. See the README.
 define('ENABLE_SHARE_LINKS', gallery_setting('ENABLE_SHARE_LINKS', false));
@@ -848,7 +848,7 @@ if (isset($_GET['linklog'])) {
     exit;
 }
 
-// ?exitpreview: ends "Preview as this link" in this browser and goes back to the Share links tab.
+// ?exitpreview: ends "Preview as this link" in this browser and goes back to the Share tab.
 if (isset($_GET['exitpreview'])) {
     preview_clear_cookie();
     header('Cache-Control: no-store');
@@ -3069,7 +3069,7 @@ foreach (array_merge(array_values((array) EXTRA_ROOTS), array_values((array) EXT
 }
 if (AUTO_GROUP_BY_FOLDER && $unreadableExtra > 0) {
     $galleryNotices[] = ($unreadableExtra === 1 ? 'A folder from elsewhere on the server is missing or can\'t be read' : $unreadableExtra . ' folders from elsewhere on the server are missing or can\'t be read')
-        . ', so nothing from ' . ($unreadableExtra === 1 ? 'it is' : 'them is') . ' shown. The Health check in Site settings names ' . ($unreadableExtra === 1 ? 'it' : 'them') . '.';
+        . ', so nothing from ' . ($unreadableExtra === 1 ? 'it is' : 'them is') . ' shown. The Health check in Settings names ' . ($unreadableExtra === 1 ? 'it' : 'them') . '.';
 }
 
 // Only a .md file whose first non-blank line is exactly "{gallery}" is
@@ -4376,7 +4376,7 @@ function link_viewer() {
 /** A person using a share link, and not someone with the owner's or the private-view sign-in. */
 function viewer_is_link() { return !is_revealed() && link_viewer() !== null; }
 
-/* Preview as this link. The owner presses it on the Share links tab; a signed cookie then makes this browser see the gallery exactly as
+/* Preview as this link. The owner presses it on the Share tab; a signed cookie then makes this browser see the gallery exactly as
  * someone using that link does (the same checks, the same pages, no owner tools), and nothing is counted or logged. It never touches
  * the admin pages (?admin keeps the owner's sign-in), a thumbnail asked for by an admin page is still the owner's, and it ends by
  * itself after four hours or when "Exit preview" is pressed. */
@@ -4449,7 +4449,7 @@ function render_link_preview_banner($l, $dir, $files) {
         . '<span class="lp-t"><strong>Previewing as ' . $esc($l['label']) . '.</strong> You see exactly what this link shows. Nothing you do here is counted or logged.' . $quiet . '</span>'
         . '<button type="button" class="lp-more" aria-expanded="false" aria-controls="lp-panel">What\'s included ' . ui_icon('chev-down') . '</button>'
         . '<a class="lp-exit" href="?exitpreview">Exit preview</a></div>'
-        . '<div class="lp-panel" id="lp-panel" hidden><h3>What this link includes</h3><ul>' . implode('', $items) . '</ul><p class="lp-note">Pressing Exit preview ends the preview and takes you back to the Share links tab.</p></div></div>'
+        . '<div class="lp-panel" id="lp-panel" hidden><h3>What this link includes</h3><ul>' . implode('', $items) . '</ul><p class="lp-note">Pressing Exit preview ends the preview and takes you back to the Share tab.</p></div></div>'
         . '<script>(function(){var b=document.querySelector("#link-preview .lp-more"),p=document.getElementById("lp-panel");if(!b||!p)return;b.addEventListener("click",function(){var o=p.hidden;p.hidden=!o;b.setAttribute("aria-expanded",o?"true":"false");});})();</script>';
 }
 
@@ -4702,7 +4702,7 @@ function run_link_route($dir) {
     $token = $_GET['link'] ?? '';
     if (!ENABLE_SHARE_LINKS) { render_link_invalid_page(); return; }
     if (!is_https_request() && !is_local_request()) { render_https_required_page(); return; }
-    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(200); return; }   // the admin's check that the tidy address works: not a guess, and not a 404, which a browser would log in its console on every look at the Share links tab
+    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(200); return; }   // the admin's check that the tidy address works: not a guess, and not a 404, which a browser would log in its console on every look at the Share tab
     $ip = client_ip();
     $link = link_token_format_ok($token) ? link_find_by_token(links_read(), $token) : null;
     // The owner, signed in, just goes where the link goes: nothing is counted or logged, no cookie is set, and the throttle
@@ -6589,7 +6589,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'logout'];
     }
 
-    if (strncmp($action, 'link_', 5) === 0) {   // the Share links tab (answers JSON and ends the request)
+    if (strncmp($action, 'link_', 5) === 0) {   // the Share tab (answers JSON and ends the request)
         links_admin_action($action, $dir, $files);
     }
 
@@ -6604,7 +6604,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     // Prepare media: makes the tile pictures and records what the files say about themselves (when taken, where), a few seconds' worth
     // per request; the page asks again until it is done. ('warm_thumbnails' is the older name of the same action.)
     if ($action === 'prepare_media' || $action === 'warm_thumbnails') {
-        if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'The thumbnail cache is switched off in the site settings, so there is nowhere to keep anything it prepares.']);
+        if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'The thumbnail cache is switched off in Settings, so there is nowhere to keep anything it prepares.']);
         @set_time_limit(60);
         session_write_close();   // the page runs a few of these side by side: none may wait for another's hold on the session
         $again = !empty($_POST['again']);
@@ -6615,7 +6615,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
 
     // Tidy up saved locations: what the folders' data holds that the files already say (a preview, or the real thing with a backup first).
     if ($action === 'media_tidy') {
-        if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'The thumbnail cache is switched off in the site settings, so the files can\'t have been read and there is nothing to compare with.']);
+        if (!ENABLE_THUMBNAIL_CACHE) admin_json_exit(['ok' => false, 'text' => 'The thumbnail cache is switched off in Settings, so the files can\'t have been read and there is nothing to compare with.']);
         @set_time_limit(120);
         $apply = !empty($_POST['apply']);
         $res = media_tidy_run($dir, $files, ($_POST['mode'] ?? '') === 'refresh', $apply);
@@ -6922,8 +6922,8 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (array_key_exists('mapEnabled', $updates)) {
             if ($updates['mapEnabled']) {
                 $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.';
-                if (!ENABLE_MAP) $part .= ' It stays hidden until the map is switched on in Site settings.';
-                elseif (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until photo locations are allowed in Site settings.';
+                if (!ENABLE_MAP) $part .= ' It stays hidden until the map is switched on in Settings.';
+                elseif (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until photo locations are allowed in Settings.';
             } else {
                 $part = 'The map no longer shows on ' . $where . '. Nothing is deleted.';
             }
@@ -6957,7 +6957,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $sum = media_folder_summary($dir, $targetReal, $loose);
             if ($shown > 0) $text .= ' ' . $shown . ' photo' . ($shown === 1 ? ' has' : 's have') . ' a location and now show' . ($shown === 1 ? 's' : '') . ' it to visitors and on the map. To keep one private, press its pencil and switch off Location (or clear its coordinates).';
             else $text .= ' None of its photos has a location to show; add coordinates by hand on any photo.';
-            if ($sum['unread'] > 0) $text .= ' ' . $sum['unread'] . ' file' . ($sum['unread'] === 1 ? ' hasn\'t' : 's haven\'t') . ' been read yet: Prepare media (in Site settings) reads them.';
+            if ($sum['unread'] > 0) $text .= ' ' . $sum['unread'] . ' file' . ($sum['unread'] === 1 ? ' hasn\'t' : 's haven\'t') . ' been read yet: Prepare media (in Settings) reads them.';
             if ($sum['legacy'] > 0) $text .= ' ' . $sum['legacy'] . ' ' . ($sum['legacy'] === 1 ? 'was' : 'were') . ' read under older rules and found nothing, and are left alone: "Read everything again" in Prepare media reads them again.';
             if ($sum['unreadable'] > 0) $text .= ' ' . $sum['unreadable'] . ' couldn\'t be read at all (' . implode(', ', array_slice($sum['bad'], 0, 3)) . ($sum['unreadable'] > 3 ? ', …' : '') . ').';
         }
@@ -7160,7 +7160,7 @@ function lock_probe_targets($dir, $files) {
 
 /** Ready-to-use web server rules that keep the photo files themselves from being fetched by address (private items are
  *  only private through this script otherwise), written out for this gallery's own address, in two collapsed blocks:
- *  nginx and Apache. Shown on the Private page and in Site settings so nobody has to leave the admin to set it up. */
+ *  nginx and Apache. Shown on the Private page and in Settings so nobody has to leave the admin to set it up. */
 function render_server_rules_help($withTidyLinks = false) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
@@ -7185,7 +7185,7 @@ function render_server_rules_help($withTidyLinks = false) {
         <summary><strong>nginx</strong> (strongest; needs shell access to the server)</summary>
         <p>Add inside the site's <code>server { }</code> block, first location above the second, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>.<?= $base === '' ? ' <strong>At the top of the site the second rule would block every image on it: narrow its path first.</strong>' : '' ?></p>
         <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
-        <p>Then set <em>nginx internal redirect</em> (Site settings → Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>. Test: <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code> should answer 404. Behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol on.</p>
+        <p>Then set <em>nginx internal redirect</em> (Settings → Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>. Test: <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code> should answer 404. Behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol on.</p>
       </details>
       <details>
         <summary><strong>Apache</strong> (blunter, but works on FTP-only hosting)</summary>
@@ -7224,7 +7224,7 @@ function admin_edited_overview($dir, $files, $hidden) {
     $privItems = array_fill_keys($hidden['items'] ?? [], true);
     $shownItems = array_fill_keys($hidden['shown'] ?? [], true);
     $label = function ($path) use ($dir) {
-        if ($path === '') return 'Main page';
+        if ($path === '') return 'Root';
         $parts = []; $acc = '';
         foreach (explode('/', $path) as $seg) {
             $acc = $acc === '' ? $seg : $acc . '/' . $seg;
@@ -7391,7 +7391,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
       <h2 class="section-title">Lock the files themselves</h2>
       <p class="muted" style="margin-top:0;">Copy the rules for your server. They stop photo files being fetched by their direct address.</p>
       <?= render_server_rules_help() ?>
-      <p class="muted" data-tidy-rules>Optional tidy folder links and the nginx redirect setting are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Site settings → Server setup</a>.</p>
+      <p class="muted" data-tidy-rules>Optional tidy folder links and the nginx redirect setting are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Settings → Server setup</a>.</p>
     </section>
 <?php endif; ?>
     <section class="panel ed-panel" id="ed-panel">
@@ -7470,7 +7470,7 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
       </div>
     </div>
 <?php endif; ?>
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), $isRoot ? 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : '') : 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Site settings)' : ''), $locWarn); ?>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), $isRoot ? 'Show photo locations publicly at the root' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Settings)' : '') : 'Show photo locations publicly for this folder' . (!ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in Settings)' : ''), $locWarn); ?>
     <?php if ($locStatus !== ''): ?>
     <p class="hint loc-status"><?= $locStatus ?></p>
     <?php endif; ?>
@@ -7490,7 +7490,7 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
     $radius = $itemsHere['mapRadius'] ?? null;
 ?>
     <?php if (!ENABLE_MAP): ?>
-      <p class="muted" style="margin-top:0;">The map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="return adminGoTo('site');">Site settings</a> first; then each folder can show its own map.</p>
+      <p class="muted" style="margin-top:0;">The map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="return adminGoTo('site');">Settings</a> first; then each folder can show its own map.</p>
     <?php else: ?>
       <form method="post" class="instant-form map-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
@@ -7645,7 +7645,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
             </div>
             </div>
           </div>
-          <p class="hint">"Put first" is the same list as in Site settings. Until you change it here, this folder follows the site's. Visitors can change the order with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
+          <p class="hint">"Put first" is the same list as in Settings. Until you change it here, this folder follows the site's. Visitors can change the order with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
         </details>
         <div class="field wide">
           <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
@@ -7660,7 +7660,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
 }
 
 /**
- * The settings the admin's "Site settings" screen can change: one table that
+ * The settings the admin's "Settings" screen can change: one table that
  * drives both the form and the validation, so nothing outside it can ever be
  * written. Passwords are handled separately (never shown, confirmed), and
  * EXTRA_FOLDERS / NGINX_ACCEL_REDIRECT_PREFIX are deliberately file-only:
@@ -7735,7 +7735,7 @@ function gallery_setting_definitions() {
         ]],
         ['title' => 'Share links', 'items' => [
             ['name' => 'ENABLE_SHARE_LINKS', 'type' => 'bool', 'label' => 'Allow share links',
-             'help' => 'Temporary links that let someone see private photos, made in the Share links tab: each can be limited by number of opens, by time and to chosen folders or photos, and keeps a log of what was looked at.',
+             'help' => 'Temporary links that let someone see private photos, made in the Share tab: each can be limited by number of opens, by time and to chosen folders or photos, and keeps a log of what was looked at.',
              'risk' => 'Whoever opens a link sees what it allows. Keep each one as narrow and short-lived as you can.',
              'offwarn' => 'Every share link stops working (it looks invalid to whoever opens it). Nothing is deleted, and turning this back on revives them.'],
             ['name' => 'SHARE_HEADS_UP', 'type' => 'bool', 'label' => 'Heads-up for people using a link', 'requires' => 'ENABLE_SHARE_LINKS',
@@ -7755,7 +7755,7 @@ function gallery_setting_definitions() {
     ];
 }
 
-/** Checks the places from elsewhere that the Site settings screen posts (JSON: {"named": {name: path}, "roots": [path]})
+/** Checks the places from elsewhere that the Settings screen posts (JSON: {"named": {name: path}, "roots": [path]})
  *  before anything is stored. A path must be a real, readable folder, written as the real path (no symlink anywhere in
  *  it, since the scan refuses to follow them), outside this gallery's own folder and not one that contains it. Returns
  *  ['named' => ..., 'roots' => ...] clean, or null with reasons in $errors. */
@@ -7830,7 +7830,7 @@ function gallery_config_render($cfg) {
     return $json === false ? null : data_file_guard_line() . $json . "\n";
 }
 
-/** Validates the Site settings form and rewrites .gallery-config.php, and
+/** Validates the Settings form and rewrites .gallery-config.php, and
  *  nothing else: captions, locations, hide flags, stats and notes are never
  *  read or written here. Returns an admin result array. */
 function site_settings_save($ajax = false) {
@@ -7934,7 +7934,7 @@ function site_settings_save($ajax = false) {
 }
 
 /* -----------------------------------------------------------------------
- * Share links: the admin side. The Share links tab lists every link, makes
+ * Share links: the admin side. The Share tab lists every link, makes
  * new ones and changes them; each change is a small POST that answers JSON
  * (the page then fetches itself again, as the Private tab does, so what it
  * shows is always what is stored). Nothing here is reachable without the
@@ -8003,7 +8003,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
     $scopeFolderPaths = [];
     $scope = ['type' => 'all', 'folders' => [], 'photos' => []];
     if ($scopeType === 'folders') {
-        if (!AUTO_GROUP_BY_FOLDER) $errors[] = 'Turn on "Show subfolders" in Site settings to limit a link to folders.';
+        if (!AUTO_GROUP_BY_FOLDER) $errors[] = 'Turn on "Show subfolders" in Settings to limit a link to folders.';
         $scopeFolderPaths = $list('scope_folders');
         if (!$scopeFolderPaths) $errors[] = 'Choose at least one folder, or choose "Everything private".';
         $ids = [];
@@ -8061,12 +8061,12 @@ function link_apply_fields(&$rec, $f) {
     foreach (['label', 'note', 'titleMode', 'titleText', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'only', 'openIn', 'downloads', 'zip'] as $k) $rec[$k] = $f[$k];
 }
 
-/** The Share links tab's POST actions (link_create, link_save, link_pause, link_resume, link_revoke, link_extend, link_replace,
+/** The Share tab's POST actions (link_create, link_save, link_pause, link_resume, link_revoke, link_extend, link_replace,
  *  link_delete). Always answers JSON and ends the request. */
 function links_admin_action($action, $dir, $files) {
     $now = time();
     $bad = function ($text) { admin_json_exit(['ok' => false, 'text' => $text]); };
-    if (!ENABLE_SHARE_LINKS) $bad('Share links are switched off in Site settings.');
+    if (!ENABLE_SHARE_LINKS) $bad('Share links are switched off in Settings.');
     $id = (string) ($_POST['id'] ?? '');
     if ($action !== 'link_create' && $action !== 'link_seen' && !($action === 'link_trim' && $id === 'all') && !preg_match('/^[0-9a-f]{10}$/', $id)) $bad('Unknown link.');
     $wrote = function () use ($bad) {
@@ -8698,8 +8698,8 @@ KIT_CSS;
     var urls = j.urls || {}, url = pretty && urls.short ? urls.short : (urls.long || '');
     var opensText = d.maxOpens > 0 ? 'up to ' + d.maxOpens + ' open' + (d.maxOpens === 1 ? '' : 's') : 'as many opens as they like';
     card.innerHTML = '<h3 class="gs-title">Link made for ' + esc(d.label) + '</h3><div class="gs-body"><input type="text" class="gs-url" readonly value="' + esc(url) + '" aria-label="The link" onfocus="this.select()"><div class="gs-mount"></div>'
-      + '<p class="gs-fine">' + (d.endsAt > 0 ? 'Ends ' + esc(when(d.endsAt - Math.floor(Date.now() / 1000))) + ' · ' : 'No end date · ') + opensText + '. You can copy it again any time from the Share links tab.</p></div>'
-      + '<div class="gs-acts"><a class="gs-btn" href="' + esc((cfg.admin || '?admin') + '#links') + '">Open Share links</a><button type="button" class="gs-btn gs-primary" data-gs="done">Done</button></div>';
+      + '<p class="gs-fine">' + (d.endsAt > 0 ? 'Ends ' + esc(when(d.endsAt - Math.floor(Date.now() / 1000))) + ' · ' : 'No end date · ') + opensText + '. You can copy it again any time from the Share tab.</p></div>'
+      + '<div class="gs-acts"><a class="gs-btn" href="' + esc((cfg.admin || '?admin') + '#links') + '">Open Share</a><button type="button" class="gs-btn gs-primary" data-gs="done">Done</button></div>';
     mount(card.querySelector('.gs-mount'), { url: function () { return card.querySelector('.gs-url').value; }, name: d.label, copy: true });
     card.querySelector('.gs-url').select();
     card.addEventListener('click', function (e) { var b = e.target.closest ? e.target.closest('[data-gs=done]') : null; if (b) closeModal(); });
@@ -8806,9 +8806,9 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
     };
 ?>
     <section class="panel sl" id="sl-root" data-csrf="<?= $esc($csrfToken) ?>" data-probe="<?= $esc($loc . LINK_PROBE_TOKEN) ?>" data-nofolders="<?= AUTO_GROUP_BY_FOLDER ? '' : '1' ?>">
-      <h2 class="section-title">Share links</h2>
+      <h2 class="section-title">Share</h2>
       <?php if (!ENABLE_SHARE_LINKS): ?>
-        <div class="sl-off">Share links are switched off, so none of these work. Turn on <em>Allow share links</em> in <a href="#site" onclick="return adminGoTo('site');">Site settings</a>.</div>
+        <div class="sl-off">Share links are switched off, so none of these work. Turn on <em>Allow share links</em> in <a href="#site" onclick="return adminGoTo('site');">Settings</a>.</div>
       <?php endif; ?>
       <?php if (($previewOpen = preview_cookie_link()) !== null): ?>
         <div class="sl-prevnote"><?= ui_icon('eye') ?><div><strong>A preview of &ldquo;<?= $esc($previewOpen['label']) ?>&rdquo; is open in this browser.</strong> The gallery's own pages here show that link's view until you end it (the admin pages stay yours). <a href="?exitpreview">End preview</a></div></div>
@@ -8837,7 +8837,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         <div class="sl-f"><span class="sl-k">What they can see</span>
           <div class="sl-radios" role="radiogroup" aria-label="What they can see">
             <label class="sl-radio"><input type="radio" name="scope_type" value="all" checked><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
-            <label class="sl-radio"><input type="radio" name="scope_type" value="folders"<?= AUTO_GROUP_BY_FOLDER ? '' : ' disabled' ?>><span><strong>Only some folders</strong><small>Each folder includes everything inside it. They are never told other private folders exist.<?= AUTO_GROUP_BY_FOLDER ? '' : ' (Turn on “Show subfolders” in Site settings first.)' ?></small></span></label>
+            <label class="sl-radio"><input type="radio" name="scope_type" value="folders"<?= AUTO_GROUP_BY_FOLDER ? '' : ' disabled' ?>><span><strong>Only some folders</strong><small>Each folder includes everything inside it. They are never told other private folders exist.<?= AUTO_GROUP_BY_FOLDER ? '' : ' (Turn on “Show subfolders” in Settings first.)' ?></small></span></label>
             <label class="sl-radio" data-photos-only><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note">Only the photos you pick, wherever they are. Anything already public stays visible too, unless you tick the box below.</small></span></label>
           </div>
           <div class="sl-chips" data-chips="scope" hidden></div>
@@ -9177,7 +9177,7 @@ function link_folder_reachable($l, $dir, $folderRel) {
 
 /* -----------------------------------------------------------------------
  * What the log shows the owner (all server-rendered fragments, fetched into
- * the Share links tab): a link's visitors, its folders and its photos; one
+ * the Share tab): a link's visitors, its folders and its photos; one
  * address across every link (folders, media, timeline); the list of every
  * address; and the CSV exports.
  * ----------------------------------------------------------------------- */
@@ -9405,7 +9405,7 @@ function render_link_ips_list() {
     return $out . '</tbody></table></div><p class="note">Every address that has opened or tried any link. An address on two links is worth a look. Press one to see everything it opened.</p>';
 }
 
-/** The fragments and downloads the Share links tab asks for: ?admin&linkview=ID, &linkip=ADDRESS, &linkips=1, &linkexport=ID|all. */
+/** The fragments and downloads the Share tab asks for: ?admin&linkview=ID, &linkip=ADDRESS, &linkips=1, &linkexport=ID|all. */
 function run_links_view_route($dir, $files) {
     header('Cache-Control: no-store');
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
@@ -9502,7 +9502,7 @@ function health_checks($dir, $files) {
     $state = gallery_config_load();
     $cfgPath = gallery_config_path();
     if ($state['status'] === 'absent') $add('Settings and passwords', 'info', 'No settings file yet', 'Everything runs on the defaults; .gallery-config.php appears when you change something here.');
-    elseif ($state['status'] === 'ok') $add('Settings and passwords', is_writable($cfgPath) ? 'ok' : 'warn', 'Settings file readable' . (is_writable($cfgPath) ? ' and writable' : ' but not writable'), is_writable($cfgPath) ? '' : 'Changes in Site settings can\'t be saved until the web server may write .gallery-config.php.');
+    elseif ($state['status'] === 'ok') $add('Settings and passwords', is_writable($cfgPath) ? 'ok' : 'warn', 'Settings file readable' . (is_writable($cfgPath) ? ' and writable' : ' but not writable'), is_writable($cfgPath) ? '' : 'Changes in Settings can\'t be saved until the web server may write .gallery-config.php.');
     else $add('Settings and passwords', 'bad', 'Settings file can\'t be read as settings', 'Fix or delete .gallery-config.php; until then the settings in index.php apply.');
     foreach (($GLOBALS['__gallery_config_problems'] ?? []) as $problem) $add('Settings and passwords', 'warn', 'Settings problem', $problem);
     $pwRow = function ($label, $value, $emptyStatus, $emptyDetail) use ($add) {
@@ -9573,12 +9573,12 @@ function health_checks($dir, $files) {
         }
         if ($mr['left'] > 0) $add('Media', 'info', $n($mr['left'], 'file') . ' not prepared yet', 'Thumbnails, what the files say about themselves and video pictures are made the first time a photo is shown; Prepare media does the rest in one go.', $go);
         elseif (!$ma['attention']) $add('Media', 'ok', 'All prepared', number_format($mr['total']) . ' file' . ($mr['total'] === 1 ? '' : 's') . ': thumbnails made, video pictures made and read from the files.', $go);
-        if ($mr['videos'] > 0 && !$mr['videoWanted']) $add('Videos', 'info', 'Video pictures are switched off', 'Video thumbnails and video previews are off in Site settings, so videos show the browser\'s own first frame.');
+        if ($mr['videos'] > 0 && !$mr['videoWanted']) $add('Videos', 'info', 'Video pictures are switched off', 'Video thumbnails and video previews are off in Settings, so videos show the browser\'s own first frame.');
     }
     return $rows;
 }
 
-/** The health panel at the top of Site settings: the server-side rows from health_checks(), then three the browser fills in
+/** The health panel at the top of Settings: the server-side rows from health_checks(), then three the browser fills in
  *  (see the script: the web server rules can only be tested by asking for addresses the way a visitor would). */
 function render_admin_health_panel() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
@@ -9625,7 +9625,7 @@ function render_admin_thumbnails_panel($csrfToken) {
 ?>
     <section class="panel media-panel" id="media-panel">
       <h2 class="section-title">Prepare media</h2>
-      <p class="muted" style="margin-top:0;">The thumbnail cache is switched off (<em>Thumbnails</em>, under Site settings), so there is nowhere to keep what is made or read, and nothing can be prepared ahead of time. Switch it on to make every thumbnail once and to have the gallery read each file's capture date and location once.</p>
+      <p class="muted" style="margin-top:0;">The thumbnail cache is switched off (<em>Thumbnails</em>, under Settings), so there is nowhere to keep what is made or read, and nothing can be prepared ahead of time. Switch it on to make every thumbnail once and to have the gallery read each file's capture date and location once.</p>
     </section>
 <?php
         return;
@@ -9668,7 +9668,7 @@ function render_admin_thumbnails_panel($csrfToken) {
 <?php
 }
 
-/** The Site settings panel. */
+/** The Settings panel. */
 function render_admin_site_settings($csrfToken) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $state = gallery_config_load();
@@ -9680,7 +9680,7 @@ function render_admin_site_settings($csrfToken) {
     $broken = !in_array($state['status'], ['absent', 'ok'], true);
 ?>
     <section class="panel site-settings">
-      <h2 class="section-title">Site settings</h2>
+      <h2 class="section-title">Settings</h2>
       <p class="muted" style="margin-top:0;">Whole-gallery settings. <strong>Each change saves as you make it</strong>, in <code>.gallery-config.php</code> (it survives replacing <code>index.php</code>). Your photos, captions and stats are never touched.</p>
       <?php if ($broken): ?>
         <div class="flash error">The settings file exists but can't be read as settings, so this screen won't change it (that could overwrite what's in it). Fix or delete <code>.gallery-config.php</code>, then reload.</div>
@@ -9795,7 +9795,7 @@ function render_admin_site_settings($csrfToken) {
         </details>
 
         <div class="item-actions nojs-only" style="margin-top:14px;">
-          <button type="submit"<?= $broken ? ' disabled' : '' ?>>Save site settings</button>
+          <button type="submit"<?= $broken ? ' disabled' : '' ?>>Save settings</button>
         </div>
         <p class="muted nojs-only" style="margin-top:14px;">Only settings that differ from the defaults are stored.</p>
       </form>
@@ -9833,7 +9833,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         $locStatus = 'What the gallery has read from the files here: <strong>' . $s_['found'] . '</strong> with a location, ' . $s_['none'] . ' without'
             . ($s_['unreadable'] > 0 ? ', <strong class="warn-text">' . $s_['unreadable'] . ' couldn\'t be read</strong>' : '')
             . ($s_['unread'] > 0 ? ', <strong>' . $s_['unread'] . ' not read yet</strong>' : '')
-            . '. <a href="#site" onclick="return adminGoTo(\'site\');">Prepare media</a> (Site settings) reads the rest and lists each folder.';
+            . '. <a href="#site" onclick="return adminGoTo(\'site\');">Prepare media</a> (Settings) reads the rest and lists each folder.';
     }
     $mdScan = scan_gallery_md_files($adminFolderReal);
     $activeMd = array_fill_keys($mdScan['files'], true);
@@ -9880,7 +9880,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .js-tabs .tab-panel { display:none; }
   .js-tabs .tab-panel.active { display:block; }
   .tab-panel > .panel + .panel, .tab-panel > .flash + .panel { margin-top:0; }
-  /* The Share links tab. */
+  /* The Share tab. */
   .sl-off { background:rgba(224,160,40,0.12); border:1px solid rgba(224,160,40,0.5); border-radius:10px; padding:10px 14px; font-size:0.9rem; margin-bottom:12px; }
   .sl-check { border-radius:10px; padding:10px 14px; font-size:0.9rem; margin-bottom:10px; }
   .sl-check[hidden] { display:none; }
@@ -10009,6 +10009,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-filterline { margin:6px 0; }
   .sl-fchip, .sl-lchip { display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 4px 0 10px; border-radius:999px; font-size:0.78rem; background:rgba(88,101,242,0.18); border:1px solid rgba(88,101,242,0.6); color:#c9ceff; }
   .sl-lchip { background:#26262a; border-color:#34343a; color:var(--text); padding:0 10px; margin:0 6px 4px 0; }
+  .sl-fx:hover { color:#fff; } .sl-pickphoto:hover img { border-color:#4a4a52; } .sl-pickphoto input:checked + img:hover { border-color:#6b77f0; }
   .sl-fx { background:none; border:0; color:#aab2ff; font-size:1.1rem; cursor:pointer; padding:0 6px; line-height:1; }
   .sl-grid { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
   .sl-th { position:relative; width:92px; height:92px; border-radius:8px; overflow:hidden; background:#26262a; display:block; }
@@ -10049,6 +10050,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .ed-sum b { font-variant-numeric:tabular-nums; }
   .ed-chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 10px; }
   .ed-chip { font:inherit; font-size:0.88rem; font-weight:600; min-height:34px; padding:5px 13px; border-radius:999px; background:#232327; border:1px solid #3a3a42; color:var(--text); cursor:pointer; display:inline-flex; gap:7px; align-items:center; }
+  .ed-chip { transition:border-color .15s, background .15s, transform .12s; }
+  .ed-chip:active { transform:scale(0.97); }
+  @media (hover: hover) { .ed-chip:not([aria-pressed=true]):hover { border-color:#6b77f0; background:#2c2c31; } .ed-chip[aria-pressed=true]:hover { filter:brightness(1.12); } }
   .ed-chip em { font-style:normal; color:var(--muted); font-weight:500; font-variant-numeric:tabular-nums; }
   .ed-chip[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:#fff; }
   .ed-chip[aria-pressed=true] em { color:#dfe2ff; }
@@ -10086,6 +10090,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .ed-sth { display:flex; flex-wrap:wrap; gap:5px; }
   .ed-sth { gap:10px; }
   .ed-more { width:84px; height:84px; border-radius:8px; background:#232327; border:1px dashed #3a3a42; color:#aab2ff; font:inherit; font-weight:700; font-size:0.95rem; cursor:pointer; }
+  .ed-more { transition:border-color .15s, background .15s, transform .12s; }
+  .ed-more:active { transform:scale(0.96); }
+  @media (hover: hover) { .ed-more:hover { border-color:#6b77f0; background:#2c2c31; } }
   .ed-top { display:flex; gap:14px; align-items:flex-start; padding:12px 14px 0; }
   .ed-top-r { flex:1; min-width:0; }
   .ed-top .ed-fset-links { padding:0; display:flex; flex-wrap:wrap; gap:8px; }
@@ -10187,7 +10194,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-folder-nav a:hover .fcount { color:var(--muted); }
   .admin-folder-nav a.current { color:#fff; background:var(--accent); font-weight:600; }
   .admin-folder-nav a.current .fcount { color:rgba(255,255,255,0.8); font-weight:500; }
-  /* While Site settings (or Private) is the section on show, the folder you came from is only marked, not lit like the selection. */
+  /* While Settings (or Private) is the section on show, the folder you came from is only marked, not lit like the selection. */
   .admin-layout.off-folder .admin-folder-nav a.current { color:var(--text); background:rgba(255,255,255,0.05); font-weight:500; }
   .admin-layout.off-folder .admin-folder-nav a.current .fcount { color:#6f6f78; }
   /* The fold chevron sits in the gutter left of the name, so names stay in one column. */
@@ -10345,6 +10352,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   button, .btn { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px; font-size:0.85rem; cursor:pointer; }
   button.secondary { background:#2a2a2e; color:var(--text); }
   button.danger { background:var(--err); }
+  /* Every plain button answers a mouse (a little lighter) and a press (it sinks). :where() keeps this at zero strength, so a button with a hover of its own keeps it. */
+  @media (hover: hover) { :where(button:not(.linklike):not(:disabled):hover, .btn:hover) { filter:brightness(1.14); } }
+  /* A grey button is too dark for a brighter shade to show, so it gets a lighter grey of its own (Copy link, Resume, Pause, Edit… and the rest). */
+  @media (hover: hover) { button.secondary:hover:not(:disabled) { background:#3a3a42; color:#fff; } }
+  :where(button:not(.linklike):not(:disabled):active, .btn:active) { transform:scale(0.97); }
   .md-file { border-top:1px solid #26262a; padding:14px 0; }
   .md-file:first-child { border-top:none; }
   .md-file-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -10385,7 +10397,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .notes-reference button.linklike { background:none; color:var(--accent); padding:0 2px; font-size:inherit; text-decoration:none; }
   @media (max-width: 1100px) { .notes-layout { grid-template-columns:1fr; } .notes-reference { position:static; max-height:none; } }
   /* The left column's text all starts at the same place: 12px in, counting a pill's 1px border, so the pills,
-     the FOLDERS label and every folder name line up. Site settings is teal (blue is "selected", red is Hidden). */
+     the FOLDERS label and every folder name line up. Settings is teal (blue is "selected", red is Hidden). */
   .side-link { display:flex; align-items:center; margin:0 0 10px; padding:6px 10px 6px 11px; border-radius:6px; font-size:0.85rem; color:var(--text); text-decoration:none; background:#1a1a1e; border:1px solid #2c2c30; }
   .side-link:hover { background:#222228; border-color:#3a3a42; }
   .side-link.active { color:#fff; font-weight:600; background:var(--accent); border-color:var(--accent); }
@@ -10509,7 +10521,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <h1>Gallery Admin</h1>
     <span class="crumb">Editing: <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span>
     <nav class="admin-tabs" role="tablist" aria-label="Sections">
-      <a href="#settings" role="tab" data-tab="settings"><?= $adminFolderPath !== null ? 'Folder settings' : 'Settings' ?></a>
+      <a href="#settings" role="tab" data-tab="settings">Folder settings</a>
       <a href="#notes" role="tab" data-tab="notes">Notes <span class="count"><?= count($mdCandidates) ?></span></a>
       <a href="#export" role="tab" data-tab="export">Export</a>
     </nav>
@@ -10526,9 +10538,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <a href="#hidden" data-tab="hidden" class="side-hidden edited">Edited <span class="count"><?= number_format($adminEdited['total']) ?></span></a>
   <?php endif; ?>
   <?php if (ENABLE_SHARE_LINKS): $slNews = 0; $slSeenAt = (int) (links_read()['seenAt'] ?? 0); foreach (links_read()['links'] as $slL) if (is_array($slL) && isset($slL['id']) && link_news_count(link_activity($slL['id'])[0], $slSeenAt) > 0) $slNews++; ?>
-    <a href="#links" data-tab="links" class="side-link">Share links<?= $slNews > 0 ? ' <span class="count">' . $slNews . '</span>' : '' ?></a>
+    <a href="#links" data-tab="links" class="side-link">Share<?= $slNews > 0 ? ' <span class="count">' . $slNews . '</span>' : '' ?></a>
   <?php endif; ?>
-  <a href="#site" data-tab="site" class="side-link">Site settings</a>
+  <a href="#site" data-tab="site" class="side-link">Settings</a>
   <details class="admin-folders" open>
     <summary>Folders <span class="here">&middot; <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span></summary>
     <?= render_admin_folder_nav($files, $adminFolderPath) ?: '<p class="muted">No subfolders.</p>' ?>
@@ -10717,7 +10729,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }, 60);
     return false;
   }
-  // Are the web server rules in place (the ones on the Hidden tab and in Site settings)? This browser asks, without any
+  // Are the web server rules in place (the ones on the Hidden tab and in Settings)? This browser asks, without any
   // sign-in: for a photo and a cached thumbnail by their plain addresses (a refusal means locked, a picture coming back
   // means not; HEAD, so nothing is downloaded), and for a folder by its tidy address (the gallery's own page for that folder
   // means the tidy links work). A warning only goes away on a clear answer; any doubt leaves it, and the rules, standing.
@@ -11152,7 +11164,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         t.classList.toggle('active', on);
         t.setAttribute('aria-selected', on ? 'true' : 'false');
       });
-      // On Site settings or Private nothing in the folder list is selected: the folder you came from stays marked, quietly.
+      // On Settings or Private nothing in the folder list is selected: the folder you came from stays marked, quietly.
       var lay = document.querySelector('.admin-layout');
       if (lay) lay.classList.toggle('off-folder', name === 'site' || name === 'hidden' || name === 'links');
       // "Hidden" is a look at the whole tree, not a section of a folder:
@@ -11174,7 +11186,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         ev.preventDefault();
         var target = t.getAttribute('data-tab');
         if (window.__siteDirty && target !== 'site') {
-          // Something in Site settings changed what the gallery shows: reload so the sidebar, counts and photos are current.
+          // Something in Settings changed what the gallery shows: reload so the sidebar, counts and photos are current.
           if (target !== 'hidden' && target !== 'links') { try { sessionStorage.setItem(KEY, target); } catch (e) {} }
           if (history.replaceState) history.replaceState(null, '', '#' + target);
           location.reload();
@@ -11189,7 +11201,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     fromLocation();
   })();
   // Folder tree: branches not on the way to the folder being edited start folded; the chevron toggles one.
-  // A function so it can be run again when Site settings changes which folders exist.
+  // A function so it can be run again when Settings changes which folders exist.
   function initFolderTree() {
     var nav = document.querySelector('.admin-folder-nav');
     if (!nav) return;
@@ -11473,7 +11485,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     window.addEventListener('resize', function () { apply(); });
     apply();
   })();
-  // The Share links tab: make, change, pause, revoke, replace and delete links. Every change is a small POST; the tab is then fetched
+  // The Share tab: make, change, pause, revoke, replace and delete links. Every change is a small POST; the tab is then fetched
   // again so what it shows is what is stored, and the rows that were open stay open. Plain events on the tab itself, so the
   // fresh copy keeps working.
   (function () {
@@ -11939,12 +11951,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     var box = document.querySelector('.instant-form input[type=checkbox][name=enabled]'), form = box && box.closest('form');
     if (form) form.addEventListener('instant-saved', function () { under.classList.toggle('no-loc', !box.checked); });
   })();
-  // Site settings: every change saves the moment it is made (one request at a time, so the file's
+  // Settings: every change saves the moment it is made (one request at a time, so the file's
   // fingerprint never races), and anything that publishes content, contacts a third party, or removes
   // something visitors see asks first. The other screens refresh when you leave this one.
   // "Put first": the three kinds are rows you drag (by the handle, with a finger or a mouse, or with the arrow keys on it) into the
   // order they stack in; each row's switch says whether it is used at all. What is switched on always stands above what is off. The
-  // list is the same on the Site settings page (every change saved as it is made) and in a folder's own settings (written into the
+  // list is the same on the Settings page (every change saved as it is made) and in a folder's own settings (written into the
   // form, saved with it); persist(order, ok, fail) is how each one keeps a change.
   function initSortFirst(box, persist) {
     var list = box.querySelector('.sf-list'), summary = box.querySelector('.sf-summary');
@@ -12160,7 +12172,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         post(f, stateOf(cb), function () { cb.checked = !on; follow(!on); }, function () { if (note) note.hidden = on || !off; });
       });
     });
-    // On the Site settings page: the switches are saved by the checkbox code above; the order is saved here.
+    // On the Settings page: the switches are saved by the checkbox code above; the order is saved here.
     [].forEach.call(form.querySelectorAll('.sortfirst'), function (box) {
       var status = stateOf(box);
       initSortFirst(box, function (now, ok, fail) { var f = {}; f[box.getAttribute('data-name')] = now.join(','); post(f, status, fail, ok); });
@@ -12351,7 +12363,7 @@ function render_setup_page($error = '', $manual = '') {
 <body>
 <div class="wrap">
   <h1>Set up your gallery</h1>
-  <p>Choose the password that will unlock this gallery's admin: captions, folder settings, notes and the site settings. You'll be signed in straight away.</p>
+  <p>Choose the password that will unlock this gallery's admin: captions, folder settings, notes and the settings. You'll be signed in straight away.</p>
   <div class="warn">Whoever opens this page first sets the password, so do it now. This page switches itself off <?= $minutes ?> minutes after <code>index.php</code> was uploaded, and for good once a password exists.</div>
   <?php if ($error !== ''): ?><div class="err" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
   <?php if ($manual !== ''): ?><textarea readonly rows="8" onfocus="this.select()"><?= htmlspecialchars($manual, ENT_QUOTES, 'UTF-8') ?></textarea><?php endif; ?>
@@ -12388,7 +12400,7 @@ function run_admin_setup() {
                 session_regenerate_id(true);
                 $_SESSION['admin_auth'] = admin_session_marker($result['stored']);
                 set_admin_reveal_cookie($result['stored']);
-                $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Your admin password is set and you\'re signed in. Site settings (left) is where the gallery-wide settings live; the password is kept in .gallery-config.php, which survives updating index.php.'];
+                $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Your admin password is set and you\'re signed in. Settings (left) is where the gallery-wide settings live; the password is kept in .gallery-config.php, which survives updating index.php.'];
                 @unlink(__DIR__ . '/.gallery-setup');
                 header('Location: ?admin#site', true, 303);
                 return;
@@ -12516,7 +12528,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         header('Location: ' . link_open_in_href($pl), true, 303);
         return;
     }
-    if (isset($_GET['linkview']) || isset($_GET['linkip']) || isset($_GET['linkips']) || isset($_GET['linkexport']) || isset($_GET['linkphotos'])) {   // the Share links tab's fragments and CSV downloads
+    if (isset($_GET['linkview']) || isset($_GET['linkip']) || isset($_GET['linkips']) || isset($_GET['linkexport']) || isset($_GET['linkphotos'])) {   // the Share tab's fragments and CSV downloads
         run_links_view_route($dir, $files);
         return;
     }
@@ -14587,7 +14599,7 @@ function render_about_page() {
     <li>Set up in the browser: upload, open <code>?admin</code>, choose a password</li>
     <li><strong>Edit right on the gallery:</strong> a pencil on every photo opens its caption, link, place, private and cover switches beside or under the photo, saved as you type; <em>Select</em> makes many photos private or public, or places them next to each other by drag and drop</li>
     <li><strong>Go through a private folder before you open it:</strong> hide a folder, mark the photos that must stay private on their own, then make the folder public knowing what visitors will see; the main page marks private folders for you (a red pill, a lock in the folder buttons, and a count you can press to see those photos first), and the Edited tab lists everything you set by hand (private flags, captions, links, places, folder settings) with the private folders folder by folder underneath; folder settings save as you change them</li>
-    <li>An admin for folder names and dates, notes, and Site settings that save as you flip them, with a health check that looks over the server for you</li>
+    <li>An admin for folder names and dates, notes, and Settings that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Put first is one list you order:</strong> switch on private items, videos and located photos and drag them into the order they stack in; a sentence says the result, and a folder can follow the site's list or have its own</li>
     <li>A lock and a star on every tile, for you alone (and the same two in the viewer): one press makes a photo private or public, or its folder's cover</li>
     <li><strong>Prepare media</strong> makes every photo's pictures, and reads what each file says about itself (when it was taken, where), ahead of time with a progress bar, so the first visit to a big folder isn't slow and nothing is read twice</li>
@@ -14822,7 +14834,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .link-headsup.soon { background:#33290f; border-color:#6b5316; color:#ffe2a3; }
   .link-headsup[hidden] { display:none; }
   .link-headsup .lh-x { position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:0; color:inherit; opacity:.75; font-size:1.3rem; line-height:1; cursor:pointer; padding:0 4px; }
-  .link-headsup .lh-x:hover { opacity:1; }
+  .link-headsup .lh-x { border-radius:4px; transition:opacity .15s, background .15s, box-shadow .15s, transform .12s; }
+  .link-headsup .lh-x:hover { opacity:1; background:rgba(255,255,255,0.14); box-shadow:0 0 0 3px rgba(255,255,255,0.14); }
+  .link-headsup .lh-x:active { transform:translateY(-50%) scale(0.9); }
   body {
     margin: 0;
     background: var(--bg);
@@ -15001,6 +15015,11 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     opacity: 0.75;
   }
   .permalink-copy:hover { opacity: 1; }
+  /* An inline link icon (beside a heading or a paragraph) answers like the text links around it: the soft halo. A folder card's round one has its own, below. */
+  .permalink-copy { transition: color .15s, background .15s, box-shadow .15s, transform .12s; }
+  .permalink-copy:not(.folder-permalink-copy) { border-radius: 4px; }
+  .permalink-copy:active { transform: scale(0.9); }
+  @media (hover: hover) { .permalink-copy:not(.folder-permalink-copy):hover { color: #e1e4ff; background: rgba(170,178,255,0.16); box-shadow: 0 0 0 3px rgba(170,178,255,0.16); } }
   .permalink-copy.copied { color: #3ba55c; opacity: 1; }
   .note-box p, .note-box .sold-item, .note-box .reserved-item { scroll-margin-top: 20px; }
   .note-box p:target,
@@ -15067,6 +15086,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .gallery.covers-2, .map-preview.covers-2 { max-width: 1106px; }
   .gallery.covers-3, .map-preview.covers-3 { max-width: 1280px; }
   .gallery.covers-4, .map-preview.covers-4 { max-width: 1290px; }
+  /* Five or six folders: the normal grid would make room for more columns than there are cards and leave the right side
+     empty. auto-fit drops the empty columns, so the cards share the full width (the box is as wide as the normal grid). */
+  .gallery.covers-5, .gallery.covers-6 { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
   @media (min-width: 640px) {
     .gallery.covers-1 { grid-template-columns: minmax(0, 1fr); }
     .gallery.covers-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
@@ -15185,14 +15207,24 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     position: absolute;
     top: 8px;
     right: 8px;
-    background: rgba(0,0,0,0.55);
+    background: rgba(0,0,0,0.65);
+    color: #eaeaea;
+    opacity: 1;
     border-radius: 50%;
     width: 28px;
     height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: background .15s, transform .12s, box-shadow .12s;
   }
+  /* The same answer as the caption, place and link badges on a tile: over it a ring, the accent colour, a little larger; pressed, it sinks. */
+  .folder-permalink-copy:active { transform: scale(0.9); }
+  @media (hover: hover) {
+    .folder-permalink-copy:hover { transform: scale(1.2); box-shadow: 0 0 0 2px #fff; background: var(--accent); color: #fff; }
+    .folder-permalink-copy:hover:active { transform: scale(1.04); }
+  }
+  .folder-permalink-copy.copied, .folder-permalink-copy.copied:hover { background: #3ba55c; color: #fff; opacity: 1; }
   .group-label {
     margin: 0 0 12px;
     font-size: 0.95rem;
@@ -15446,6 +15478,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-modal[hidden] { display: none; }
   .map-modal-card { position: relative; width: min(100%, 1100px); background: var(--card); border-radius: 12px; padding: 12px; box-shadow: 0 12px 48px rgba(0,0,0,0.6); max-height: 100%; overflow: auto; }
   .map-modal-close { position: absolute; top: 10px; right: 10px; z-index: 5; width: 34px; height: 34px; padding: 0; border-radius: 50%; border: none; background: rgba(0,0,0,0.7); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; }
+  /* A round button over a map answers like a badge on a tile: a ring, the accent colour, a little larger; pressed, it sinks. */
+  .map-modal-close, .lbmap-close { transition: background .15s, transform .12s, box-shadow .12s; }
+  .map-modal-close:active, .lbmap-close:active { transform: scale(0.92); }
+  @media (hover: hover) { .map-modal-close:hover, .lbmap-close:hover { transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); } .map-modal-close:hover:active, .lbmap-close:hover:active { transform: scale(1.02); } }
   .map-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.8rem; color: var(--muted); }
   .map-legend-item { display: flex; align-items: center; gap: 6px; }
   .map-legend-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
@@ -15610,6 +15646,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-combo-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 34px; padding: 0; background: none; border: 0; color: var(--text); font-size: 1.05rem; cursor: pointer; text-decoration: none; }
   .map-combo-btn + .map-combo-btn { border-left: 1px solid #2c2c30; }
   .map-combo-btn:hover { background: #26262a; }
+  .map-combo-btn:active { background: #303036; }
   .map-combo-btn[aria-expanded="true"], .map-combo-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
   .map-preview-heading { position: relative; }
   .sort-pop { position: absolute; top: 40px; left: 0; z-index: 30; min-width: 230px; max-width: calc(100vw - 32px); padding: 10px; background: var(--card); border: 1px solid #2c2c30; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-size: 0.85rem; }
@@ -15672,6 +15709,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     }
     .lightbox .caption-row .lightbox-copy:not(.on):not(.nudge):not(.copied):not(.ready):hover, .lightbox .close:hover, .lightbox .nav:hover { color: #fff; }
   }
+  .lightbox .close:active { transform: scale(0.92); }
+  .lightbox .prev:active, .lightbox .next:active { transform: translateY(-50%) scale(0.92); }   /* the arrows sit centred by a translate, so keep it */
+  .lightbox .close, .lightbox .nav { transition: background .12s, opacity .12s, color .12s, transform .12s; }
   /* The owner's editor in the viewer: a sheet under the photo on a phone, a panel beside it on a wide screen. */
   .lightbox .caption-row .lightbox-copy.owner-edit.on { color: #aab2ff; opacity: 1; }
   .lb-editor { position: fixed; z-index: 9; box-sizing: border-box; display: flex; flex-direction: column; background: #1a1a1c; color: var(--text); touch-action: pan-y; font-size: 0.95rem; }
@@ -15690,6 +15730,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .lbe-status.err { color: #ed4245; flex-basis: 100%; }
   .lbe-hidekb { display: none; align-items: center; gap: 5px; height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid #34343a; background: #26262a; color: var(--text); font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
   .lb-editor.kb .lbe-hidekb { display: inline-flex; }
+  .lbe-hidekb:active { transform: scale(0.97); }
+  @media (hover: hover) { .lbe-hidekb:hover { background: #303036; } }
   .lbe-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 16px 10px; display: flex; flex-direction: column; gap: 12px; }
   .lbe-field { display: block; }
   .lbe-field > span { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 5px; }
@@ -16039,7 +16081,7 @@ if ($currentFolderPath !== null) {
 // in a big empty page). The map buttons above them use the same width, so they line up with the first card's corner.
 // Anything else, and every phone, keeps the usual grid.
 $coverCount = FOLDER_DISPLAY_MODE === 'overview' ? count($folderGroupKeys) : 0;
-$fewCovers = ($coverCount >= 1 && $coverCount <= 4 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
+$fewCovers = ($coverCount >= 1 && $coverCount <= 6 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
 $GLOBALS['__big_covers'] = $fewCovers !== '';
 ?>
 <?php
@@ -16858,7 +16900,7 @@ if (ENABLE_MAP && $mapPoints) {
       if (k === 'inh') note = 'Private because its folder is. Tap to keep it private on its own.';
       else if (k === 'own' && ownerState.inh[st.file]) note = 'Kept private on its own. Tap to make it public.';
       else if (k === 'pub') note = 'Public, though its folder is private. Tap to follow the folder again.';
-      else if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Site settings), so none show yet.';
+      else if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Settings), so none show yet.';
       noteEl.textContent = note; noteEl.hidden = note === '';
     };
     const paintLoc = function () {
@@ -17680,7 +17722,7 @@ if (ENABLE_MAP && $mapPoints) {
     linkPop = document.createElement('div'); linkPop.className = 'lb-sharepop'; linkPop.setAttribute('role', 'dialog'); linkPop.setAttribute('aria-label', 'This photo is private');
     linkPop.innerHTML = '<div class="lsp-h"><?= ui_icon('lock') ?> This photo is private</div><p>A plain link only opens for people who already have access. To let someone see just this photo, make a share link for it.</p>'
       + '<div class="lsp-btns"><button type="button" class="lsp-share"><?= ui_icon('share') ?> Share just this photo&hellip;</button><button type="button" class="lsp-copy"><?= ui_icon('copy') ?> Copy link</button></div>'
-      + '<p class="lsp-fine">Share links are managed in the Share links tab.</p>';
+      + '<p class="lsp-fine">Share links are managed in the Share tab.</p>';
     document.body.appendChild(linkPop);
     linkPop.querySelector('.lsp-share').addEventListener('click', () => { closeLinkPopup(); window.GalleryShare.quick({ kind: 'photos', files: [file] }); });
     linkPop.querySelector('.lsp-copy').addEventListener('click', () => { closeLinkPopup(); copyPhotoLink(); });

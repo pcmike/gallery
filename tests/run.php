@@ -1320,7 +1320,7 @@ $pfAuth = 'Authorization: Basic ' . base64_encode('admin:pf-admin-pw');
 [, $pfAdmin, $pfHd] = http_get("$basePf/?admin", [$pfAuth]);
 $pfHdrs = [$pfAuth, 'Cookie: ' . extract_cookie_header($pfHd)];
 $pfSite = fn ($page) => (function ($pg) { foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; })($page);
-check('[put first] Site settings has ONE list for the three kinds: a row each, in the stacking order, with a handle and a switch (no separate toggles)', str_contains($pfAdmin, 'class="sortfirst"') && $pfSiteList($pfAdmin) === ['private', 'video', 'located'] && substr_count($pfAdmin, 'class="sf-grip"') >= 3 && !preg_match('#<div class="name">(Videos first|Photos with a location first|Private items first)#', $pfAdmin));
+check('[put first] Settings has ONE list for the three kinds: a row each, in the stacking order, with a handle and a switch (no separate toggles)', str_contains($pfAdmin, 'class="sortfirst"') && $pfSiteList($pfAdmin) === ['private', 'video', 'located'] && substr_count($pfAdmin, 'class="sf-grip"') >= 3 && !preg_match('#<div class="name">(Videos first|Photos with a location first|Private items first)#', $pfAdmin));
 check('[put first] ...with a sentence under it, and the same list is on the folder\'s settings page under the Site\'s / This folder\'s own pills', str_contains($pfAdmin, 'Nothing is put first: photos follow the order above.') && str_contains($pfAdmin, 'class="sortfirst sf-form"') && str_contains($pfAdmin, 'name="photo_sort_first"') && str_contains($pfAdmin, 'name="photo_sort_priority"'));
 check('[put first] by default the three stack private, videos, located: with videos and located both on, the video comes first', true);
 [, $r] = user_submit("$basePf/?admin", $pfAdmin, 'value="save_site_settings"', ['set_SORT_VIDEOS_FIRST' => '1', 'set_SORT_LOCATED_FIRST' => '1'], $pfHdrs);
@@ -1355,7 +1355,7 @@ check('[put first] choosing the Site\'s pill stores nothing for the folder', $pf
 check('[put first] a priority list that is not a permutation of the three kinds is ignored (the kinds are still stored, the order is the site\'s)', (function () use ($pfFolderPost, $pfStored) { $pfFolderPost(['photo_sort_first' => 'own', 'photo_sort_priority' => 'video,video,private', 'photo_sort_video' => 'on', 'photo_sort_located' => 'off', 'photo_sort_private' => 'off']); return $pfStored() == ['video' => true, 'located' => false, 'private' => false]; })(), json_encode($pfStored()));
 $pfFolderPost(['photo_sort_first' => '']);
 // the owner's page chrome that goes with it
-check('[admin] while Site settings or Private is on show, the folder you came from is only softly tinted, not lit like the selection (the page marks the layout as off-folder)', str_contains($pfAdmin4, "classList.toggle('off-folder'") && str_contains($pfAdmin4, '.admin-layout.off-folder .admin-folder-nav a.current'));
+check('[admin] while Settings or Private is on show, the folder you came from is only softly tinted, not lit like the selection (the page marks the layout as off-folder)', str_contains($pfAdmin4, "classList.toggle('off-folder'") && str_contains($pfAdmin4, '.admin-layout.off-folder .admin-folder-nav a.current'));
 [, $pfPage] = http_get("$basePf/");
 check('[viewer] the close button and the arrows are drawn icons (a chevron each way, a circled cross) in identical round boxes, and the close button is also the last button of the touch screen\'s top row', str_contains($pfPage, '<symbol id="i-chev-left"') && str_contains($pfPage, '<symbol id="i-chev-right"') && str_contains($pfPage, '<symbol id="i-close"') && preg_match('#class="nav prev"[^>]*aria-label="Previous"><svg#', $pfPage) && preg_match('#class="nav next"[^>]*aria-label="Next"><svg#', $pfPage) && str_contains($pfPage, 'class="lightbox-copy lightbox-close-row"') && str_contains($pfPage, '.lightbox .close, .lightbox .nav { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px;'));
 check('[viewer] zoomed in on a desktop, the counter and buttons are one soft dark pill (not a strip), the close button and arrows get the same backing, and each control lights its own box on hover; a button in a state (map on, copied) keeps its colour', str_contains($pfPage, 'border-radius: 999px; background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(2px)') && str_contains($pfPage, '.lightbox.zoom-width .close, .lightbox.zoom-actual .close, .lightbox.zoom-width .nav, .lightbox.zoom-actual .nav {') && str_contains($pfPage, '@media (hover: hover) {') && str_contains($pfPage, ':not(.on):not(.nudge):not(.copied):not(.ready)'));
@@ -1600,7 +1600,7 @@ $portVm = find_free_port(); start_server($fxVm, $portVm); $baseVm = "http://127.
 check('[video mark] the admin page has no thumbnail grid or per-photo forms any more; a video on the owner\'s gallery page is a video tile (play mark, length) with its pencil beside the length', !str_contains($vmAdmin, 'class="thumb-grid"') && !str_contains($vmAdmin, 'class="item-editor"') && preg_match('#class="card owner-card vtile"[^>]*data-file="clip\.mp4"|class="card owner-card vtile"[^>]*data-strip#', $vmOwnerPage) === 1 && str_contains($vmOwnerPage, 'class="edit-toggle" data-file="clip.mp4"') && str_contains($vmOwnerPage, '.owner-card .video-duration { left: 38px; }'));
 $vmAuth = ['Authorization: Basic ' . base64_encode('admin:vm-admin-pw')];
 check('[wording] with videos switched on the strip\'s button and bar say "media" (Select media, Tap media to select); without them "photos"', str_contains($vmOwnerPage, 'title="Select media"') && str_contains($vmOwnerPage, 'Tap media to select') && !str_contains($vmAdmin, 'data-tab="photos"') && str_contains($vmAdmin, 'data-tab="settings"'));
-check('[health] Site settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . (preg_match("/define\('GALLERY_VERSION', '([^']+)'\)/", $indexContents, $verM) ? $verM[1] : '?')) && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php") && !str_contains($vmAdmin, 'health-row health-bad'));
+check('[health] Settings opens with a Health check: the running version is recorded, the checks read fine on a healthy install', str_contains($vmAdmin, 'Health check') && str_contains($vmAdmin, 'Running ' . (preg_match("/define\('GALLERY_VERSION', '([^']+)'\)/", $indexContents, $verM) ? $verM[1] : '?')) && str_contains($vmAdmin, 'Folder data files all read fine') && str_contains($vmAdmin, 'All 2 folders are writable') && str_contains($vmAdmin, 'data-health="lock"') && is_file("$fxVm/.gallery-health.php") && !str_contains($vmAdmin, 'health-row health-bad'));
 $vmHealthGuard = (string) @file_get_contents("$fxVm/.gallery-health.php");
 check('[health] the version file is a guarded data file (a direct request for it answers 404 with nothing else)', str_starts_with($vmHealthGuard, "<?php http_response_code(404); exit; ?>\n") && http_get("$baseVm/.gallery-health.php")[0] === 404);
 file_put_contents("$fxVm/.gallery-health.php", data_file_guard_line_for_tests() . json_encode(['version' => '2.0.1', 'from' => '', 'at' => '2026-01-02', 'first' => '2026-01-02']));
@@ -2017,6 +2017,8 @@ check('a valid admin login also sets the reveal cookie, unlocking the public pag
 [, $adminGridBody] = http_get("$basePrivate/?admin", [$adminAuth, "Cookie: $sessCookie"]);
 check('the admin tool\'s own grid always shows a hidden item, hide flag and all', str_contains($adminGridBody, 'loose1.jpg'));
 check('the admin shows an Edited entry in the sidebar, above the folder list, with the not-a-lock explanation, while hidden items exist', str_contains($adminGridBody, 'class="side-hidden edited"') && strpos($adminGridBody, 'class="side-hidden edited"') < strpos($adminGridBody, 'class="admin-folder-nav"') && str_contains($adminGridBody, 'data-tab="hidden"') && str_contains($adminGridBody, "Private isn't locked") && str_contains($adminGridBody, 'by their direct address'));
+check('[hover] the admin\'s plain buttons answer a mouse and a press (zero strength, so a button\'s own hover wins), and the filter chips and +N answer too', str_contains($adminGridBody, ':where(button:not(.linklike):not(:disabled):hover, .btn:hover) { filter:brightness(1.14); }') && str_contains($adminGridBody, ':where(button:not(.linklike):not(:disabled):active, .btn:active) { transform:scale(0.97); }') && str_contains($adminGridBody, 'button.secondary:hover:not(:disabled) { background:#3a3a42; color:#fff; }') && str_contains($adminGridBody, '.ed-chip:not([aria-pressed=true]):hover') && str_contains($adminGridBody, '.ed-more:hover'));
+check('[tab names] the sidebar says Settings (not Site settings), the folder-level tab is Folder settings, and the Root\'s card on the Edited tab is called Root', str_contains($adminGridBody, 'data-tab="site" class="side-link">Settings</a>') && str_contains($adminGridBody, 'data-tab="settings">Folder settings</a>') && !str_contains($adminGridBody, '>Site settings<') && !str_contains($adminGridBody, 'Main page'));
 check('...and the top tabs stay the same four sections (Hidden is not one of them)', (bool) preg_match('#<nav class="admin-tabs".*?</nav>#s', $adminGridBody, $tabNav) && !str_contains($tabNav[0], 'hidden'));
 check('...with the tabs in the same bar as the title and Log out (one header row), in that order', (function ($b) { $p1 = strpos($b, '<h1>Gallery Admin</h1>'); $p2 = strpos($b, '<nav class="admin-tabs"'); $p3 = strpos($b, 'class="logout-form"'); return $p1 !== false && $p1 < $p2 && $p2 < $p3 && substr_count(substr($b, 0, $p3), '<header') === 1 && strpos($b, '</header>') > $p3; })($adminGridBody));
 
@@ -2989,7 +2991,7 @@ $claimPw = "my 'first' admin password 1 // with, odd } chars";
 [$cst, , $chd] = http_post("$baseSetup/?admin", ['setup_password' => $claimPw, 'setup_password2' => $claimPw], [], false);
 $claimLoc = ''; foreach ($chd as $h) if (stripos($h, 'Location:') === 0) $claimLoc = trim(substr($h, 9));
 $claimCookie = extract_cookie_header($chd);
-check('[setup] choosing a password redirects into the admin\'s Site settings, already signed in (a session cookie)', $cst === 303 && $claimLoc === '?admin#site' && str_contains($claimCookie, 'gallery_admin_'));
+check('[setup] choosing a password redirects into the admin\'s Settings, already signed in (a session cookie)', $cst === 303 && $claimLoc === '?admin#site' && str_contains($claimCookie, 'gallery_admin_'));
 $claimCfg = cfg_read($setupCfg); ksort($claimCfg);
 check('[setup] the password is stored in the settings file next to the settings that were already there, and nowhere else', pw_stored_ok($claimCfg['ADMIN_PASSWORD'] ?? null, $claimPw) && !str_contains((string) file_get_contents($setupCfg), 'first') && array_diff_key($claimCfg, ['ADMIN_PASSWORD' => 1]) === ['ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true] && (fileperms($setupCfg) & 0o077) === 0 && str_starts_with((string) file_get_contents($setupCfg), $cfgGuard));
 [, $claimedPage] = http_get("$baseSetup/?admin", ["Cookie: $claimCookie"]);
@@ -3075,7 +3077,7 @@ check('[settings file] a password containing "//", a comma and a brace is read b
 // The admin says what comes from the file, by name only.
 file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123']));
 [, $cfgAdmin] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
-check('[settings file] the root Settings tab no longer carries a "settings file" paragraph (Site settings is where that lives), and never shows a password', !str_contains($cfgAdmin, 'is in use and keeps its settings') && !str_contains($cfgAdmin, 'cfg-pw-123'));
+check('[settings file] the root Settings tab no longer carries a "settings file" paragraph (Settings is where that lives), and never shows a password', !str_contains($cfgAdmin, 'is in use and keeps its settings') && !str_contains($cfgAdmin, 'cfg-pw-123'));
 unlink("$fxCfg/.gallery-config.php");
 [, $cfgAdmin2] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
 touch("$fxCfg/index.php", time() - 3600);
@@ -3100,6 +3102,20 @@ check('[page bar] the bar above the photos holds the map buttons on the left and
 check('[pin colours] ?map is the gallery page itself with the map overlay set to open, previewing as the map (title, description and the map icon), and exactly one document', str_contains($pinPage, 'class="gallery') && str_contains($pinPage, 'if (true) show();') && str_contains($pinPage, '<meta property="og:title" content="') && str_contains($pinPage, ' — Map">') && str_contains($pinPage, 'og:image" content="http://127.0.0.1:' . $portPin . '/?mapicon"') && str_contains($pinPage, '2 locations plotted') && substr_count($pinPage, '<!DOCTYPE html>') === 1 && str_contains($pinHome, 'if (false) show();'));
 check('[cover size] a page of nothing but two folders gets the larger-card layout (covers-2)', str_contains($pinHome, '<div class="gallery covers-2">') && str_contains($pinHome, '.gallery.covers-2, .map-preview.covers-2 { max-width: 1106px; }') && str_contains($pinHome, '<section class="map-preview covers-2"') && str_contains($pinHome, '1200w'));
 check('[cover size] a page that also has a loose photo keeps the normal grid', str_contains($fnRoot, '<div class="gallery">') && !str_contains($fnRoot, 'class="gallery covers-'));
+$fxFive = new_fixture_dir('fivecovers');
+foreach (['Paris', 'Tropez', 'Positano', 'Florence', 'Rome', 'Pisa'] as $fiN => $fiName) { mkdir("$fxFive/$fiName"); make_jpeg("$fxFive/$fiName/a.jpg", 60, 60, 10 + $fiN, 10, 10); }
+write_patched_index("$fxFive/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true']);
+$portFive = find_free_port(); start_server($fxFive, $portFive);
+[, $fiSix] = http_get("http://127.0.0.1:$portFive/");
+check('[cover size] six folders and nothing else share the full width: covers-6 with auto-fit columns (no empty columns on the right)', str_contains($fiSix, '<div class="gallery covers-6">') && str_contains($fiSix, '.gallery.covers-5, .gallery.covers-6 { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));'));
+rrmdir("$fxFive/Pisa");
+[, $fiFive] = http_get("http://127.0.0.1:$portFive/");
+check('[cover size] five folders get covers-5', str_contains($fiFive, '<div class="gallery covers-5">'));
+check('[cover size] the link icon on a folder card answers like the badges on a tile: a ring, the accent colour, a little larger over it, sinks when pressed, green when copied', str_contains($fiFive, '.folder-permalink-copy:hover { transform: scale(1.2); box-shadow: 0 0 0 2px #fff; background: var(--accent); color: #fff; }') && str_contains($fiFive, '.folder-permalink-copy:active { transform: scale(0.9); }') && str_contains($fiFive, '.folder-permalink-copy.copied') && str_contains($fiFive, '.item-badge:hover { transform: scale(1.2); box-shadow: 0 0 0 2px #fff; background: var(--accent); color: #fff; }'));
+rrmdir("$fxFive/Rome");
+[, $fiFour] = http_get("http://127.0.0.1:$portFive/");
+check('[cover size] four folders still get covers-4', str_contains($fiFour, '<div class="gallery covers-4">'));
+check('[hover] on the gallery page the round close buttons over a map answer like a tile\'s badges, an inline link icon gets the soft halo of the text links, and the viewer\'s arrows keep their centring when pressed', str_contains($pinHome, '.map-modal-close:hover, .lbmap-close:hover { transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); }') && str_contains($pinHome, '.permalink-copy:not(.folder-permalink-copy):hover { color: #e1e4ff;') && str_contains($pinHome, '.lightbox .prev:active, .lightbox .next:active { transform: translateY(-50%) scale(0.92); }') && str_contains($pinHome, '.lbe-hidekb:hover'));
 file_put_contents("$fxPin/n.md", "{gallery}\n\nNothing coloured here.\n");
 usleep(300000);
 [, $pinPlain] = http_get("http://127.0.0.1:$portPin/?map");
@@ -3155,10 +3171,10 @@ check('[cover mark] the folder\'s settings carry no cover paragraph (the cover i
 [, $flRootAdmin] = http_get("$baseFl/?admin", $flHdrs);
 check('[cover mark] nor does the gallery\'s own settings page', !str_contains($flRootAdmin, 'Shared links use the first photo as their picture') && !str_contains($flRootAdmin, 'Cover photo (the picture in shared-link previews)'));
 check('[rules] the Private page offers ready-made nginx and Apache rules, collapsed, written for this gallery\'s address, with copy buttons', str_contains($flCoverPage, '<h2 class="section-title">Lock the files themselves</h2>') && substr_count($flCoverPage, 'class="secondary copy-rules"') >= 2);
-check('[rules] Site settings carries the same rules in its Server setup section', str_contains($flRootAdmin, 'class="site-rules"') && str_contains($flRootAdmin, '<summary><strong>nginx</strong>') && str_contains($flRootAdmin, '<summary><strong>Apache</strong>') && str_contains($flRootAdmin, 'location ~* ^/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$') && str_contains($flRootAdmin, 'FilesMatch') && str_contains($flRootAdmin, 'class="secondary copy-rules"'));
-check('[rules] Site settings also has the optional tidy-folder-link rules for nginx and Apache, exactly as the README gives them', str_contains($flRootAdmin, 'rewrite ^/(.+)/$ /index.php?folder=$1 last;') && str_contains($flRootAdmin, 'RewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]') && substr_count($flRootAdmin, '<summary><strong>') >= 4);
-check('[rules] the Private page keeps to the privacy rules (two drop-downs) and points to Site settings for the optional ones and the nginx redirect setting', (preg_match('#Lock the files themselves.*?</section>#s', $flCoverPage, $lockSec) === 1 && substr_count($lockSec[0], '<summary><strong>') === 2) && str_contains($lockSec[0] ?? '', 'tidy folder links and the nginx redirect') && !str_contains($lockSec[0] ?? '', 'RewriteRule ^(.+)/$') && !str_contains($lockSec[0] ?? '', 'rewrite ^'));
-check('[pin grouping] in Site settings the pin-grouping row is set in under the map and hidden while the map is off', (bool) preg_match('#<div class="site-row sub-row" data-requires="set_ENABLE_MAP" hidden>#', $flRootAdmin));
+check('[rules] Settings carries the same rules in its Server setup section', str_contains($flRootAdmin, 'class="site-rules"') && str_contains($flRootAdmin, '<summary><strong>nginx</strong>') && str_contains($flRootAdmin, '<summary><strong>Apache</strong>') && str_contains($flRootAdmin, 'location ~* ^/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$') && str_contains($flRootAdmin, 'FilesMatch') && str_contains($flRootAdmin, 'class="secondary copy-rules"'));
+check('[rules] Settings also has the optional tidy-folder-link rules for nginx and Apache, exactly as the README gives them', str_contains($flRootAdmin, 'rewrite ^/(.+)/$ /index.php?folder=$1 last;') && str_contains($flRootAdmin, 'RewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]') && substr_count($flRootAdmin, '<summary><strong>') >= 4);
+check('[rules] the Private page keeps to the privacy rules (two drop-downs) and points to Settings for the optional ones and the nginx redirect setting', (preg_match('#Lock the files themselves.*?</section>#s', $flCoverPage, $lockSec) === 1 && substr_count($lockSec[0], '<summary><strong>') === 2) && str_contains($lockSec[0] ?? '', 'tidy folder links and the nginx redirect') && !str_contains($lockSec[0] ?? '', 'RewriteRule ^(.+)/$') && !str_contains($lockSec[0] ?? '', 'rewrite ^'));
+check('[pin grouping] in Settings the pin-grouping row is set in under the map and hidden while the map is off', (bool) preg_match('#<div class="site-row sub-row" data-requires="set_ENABLE_MAP" hidden>#', $flRootAdmin));
 // Passwords.
 $flFields = fn ($pw) => user_submit("$baseFl/?admin", http_get("$baseFl/?admin#site", $flHdrs)[1], 'value="save_site_settings"', ['pw_admin' => $pw, 'pw_admin2' => $pw], $flHdrs)[1];
 foreach (['abcdefghijkl' => 'letters only', '1234567890' => 'numbers only', 'abc123' => 'under 8', '          ' => 'spaces'] as $pw => $why) {
@@ -3345,7 +3361,7 @@ http_get("$baseSite/?track=photo.jpg"); http_get("$baseSite/?track=photo.jpg"); 
 $siteHdrs = [$siteAuth, 'Cookie: ' . extract_cookie_header($sAdminHd)];
 $siteForm = function ($page) { foreach (html_post_forms($page) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; };
 $sForm = $siteForm($sAdmin);
-check('[site settings] the admin has a "Site settings" entry in the sidebar and a form with every managed setting', str_contains($sAdmin, 'data-tab="site" class="side-link"') && $sForm !== '' && str_contains($sForm, 'name="set_ENABLE_VIDEO"') && str_contains($sForm, 'name="set_AUTO_GROUP_BY_FOLDER"') && str_contains($sForm, 'name="set_PHOTO_SORT_ORDER"') && str_contains($sForm, 'name="set_MAP_CLUSTER_RADIUS_MILES"') && str_contains($sForm, 'name="pw_admin"'));
+check('[site settings] the admin has a "Settings" entry in the sidebar and a form with every managed setting', str_contains($sAdmin, 'data-tab="site" class="side-link"') && $sForm !== '' && str_contains($sForm, 'name="set_ENABLE_VIDEO"') && str_contains($sForm, 'name="set_AUTO_GROUP_BY_FOLDER"') && str_contains($sForm, 'name="set_PHOTO_SORT_ORDER"') && str_contains($sForm, 'name="set_MAP_CLUSTER_RADIUS_MILES"') && str_contains($sForm, 'name="pw_admin"'));
 check('[site settings] ...it shows what comes from the settings file, never the password itself, and offers the server settings (extra folders, nginx prefix) as editable controls', str_contains($sAdmin, 'your setting') && !str_contains($sAdmin, 'first-admin-pw-123') && str_contains($sForm, 'data-name="set_EXTRA_FOLDERS"') && str_contains($sForm, 'name="set_NGINX_ACCEL_REDIRECT_PREFIX"') && str_contains($sForm, 'class="extra-add-btn'));
 check('[site settings] each setting says what the default is', str_contains($sForm, 'default: off') && str_contains($sForm, 'default: on'));
 // Snapshot everything that is NOT the settings file.
@@ -3475,7 +3491,7 @@ check('[autosave] a value that isn\'t an allowed choice is refused as JSON with 
 check('[autosave] saving a value the file already has says there is nothing to change, and gives the same fingerprint', (json_decode($jb6, true)['ok'] ?? null) === true && !empty(json_decode($jb6, true)['unchanged']) && (json_decode($jb6, true)['hash'] ?? '') === $j3['hash']);
 [$jst7, , $jhd7] = http_post("$baseSite/?admin", ['csrf_token' => $fa['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $j3['hash'], 'set_ENABLE_VIDEO' => '0'], $siteHdrs2, false);
 $loc7 = ''; foreach ($jhd7 as $h) if (stripos($h, 'Location:') === 0) $loc7 = trim(substr($h, 9));
-check('[autosave] the ordinary form post (what a browser without JavaScript sends) still saves and redirects back to Site settings, as before', $jst7 === 303 && str_ends_with($loc7, '#site') && !isset(cfg_read($siteCfg)['ENABLE_VIDEO']));
+check('[autosave] the ordinary form post (what a browser without JavaScript sends) still saves and redirects back to Settings, as before', $jst7 === 303 && str_ends_with($loc7, '#site') && !isset(cfg_read($siteCfg)['ENABLE_VIDEO']));
 check('[autosave] a visitor who is not signed in gets nothing from the endpoint: no JSON, no change', !str_contains(http_post("$baseSite/?admin", ['action' => 'save_site_settings', 'set_ENABLE_MAP' => '1'], ['X-Requested-With: gallery-fetch'])[1], '"ok"') && !isset(cfg_read($siteCfg)['ENABLE_MAP']));
 
 // Server setup in the admin: folders from elsewhere on the server, and the nginx prefix.
@@ -3540,7 +3556,7 @@ check('[extra roots] ...with thumbnails that load, and their own pages', http_ge
 check('[extra roots] a real folder of the same name wins over one from the added place (Sub keeps its own photos, not shadowed.jpg)', !str_contains(http_get("$baseSite/?folder=Sub")[1], 'shadowed.jpg') && http_get("$baseSite/?img=Sub%2Fshadowed.jpg&size=thumb")[0] === 404);
 check('[extra roots] photos lying directly in the added place are not shown, and a setup notice says how many (a count, never a name)', !str_contains($homeRoots, 'loose.jpg') && str_contains($homeRoots, '1 photo or video lies directly in a place added from elsewhere'));
 check('[extra roots] the admin sidebar lists the folders too', str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], 'folder=StTropez'));
-check('[extra roots] the Site settings row lists the place and says its folders are at the top', str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], 'its folders are at the top of the gallery') && str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], htmlspecialchars($rootsSrcReal)));
+check('[extra roots] the Settings row lists the place and says its folders are at the top', str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], 'its folders are at the top of the gallery') && str_contains(http_get("$baseSite/?admin", $siteHdrs2)[1], htmlspecialchars($rootsSrcReal)));
 $both = $siteAjax(['set_EXTRA_FOLDERS' => $exJson(['OldTrip' => $extraSrcReal], [$rootsSrcReal])]);
 $homeBoth = http_get("$baseSite/", $siteHdrs2)[1];
 check('[extra roots] a named place and an unnamed one live together: one wrapper folder, plus the other place\'s folders at the top', ($both['ok'] ?? null) === true && str_contains($homeBoth, 'id="group-oldtrip"') && str_contains($homeBoth, 'id="group-paris"') && (cfg_read($siteCfg)['EXTRA_FOLDERS'] ?? null) === ['OldTrip' => $extraSrcReal] && (cfg_read($siteCfg)['EXTRA_ROOTS'] ?? null) === [$rootsSrcReal]);
@@ -3762,7 +3778,7 @@ $pingCarol = json_decode($vGet('/?track=top.jpg', $carol)[1], true);
 $pingCarol2 = json_decode($vGet('/?track=top.jpg', $carol)[1], true);
 check('[visits] a visitor\'s photo views still count, once per photo per half hour as before', ($pingCarol['ok'] ?? null) === true && ($pingCarol['photoViews'] ?? 0) === 1 && ($pingCarol2['photoViews'] ?? 0) === 1);
 $adminVisits = http_get("$baseVis/?admin", array_merge(['Authorization: Basic ' . base64_encode('x:visit-admin-pw-123')]))[1];
-check('[visits] the admin still says what is counted (visits: one per visitor per half hour), now in Site settings, and carries no photo list', str_contains($adminVisits, 'one per visitor per half hour') && !str_contains($adminVisits, 'class="thumb-grid"'));
+check('[visits] the admin still says what is counted (visits: one per visitor per half hour), now in Settings, and carries no photo list', str_contains($adminVisits, 'one per visitor per half hour') && !str_contains($adminVisits, 'class="thumb-grid"'));
 $dave = []; $vGet('/', $dave);
 check('[visits] in the end the total is exactly the number of real visits: Alice, Bob, one returning after a long gap, and Dave, which is four, with everything else (bots, prefetches, the admin, reloads) left out', $vCount($vGet('/', $dave)[1]) === 4);
 
@@ -4364,14 +4380,14 @@ chmod($fxHp, 0555);
 $hpRo = http_post("$baseHp/?admin", ['login_password' => 'plain-admin-pw-1'], [], false)[0];
 chmod($fxHp, 0775);
 check('[pw hash] when the folder can\'t be written, signing in still works and the file is left as it was (the plain text stays until it can be replaced)', $hpRo === 303 && (string) file_get_contents($hpCfg) === $hpBytes);
-// Changing a password from Site settings stores a hash, keeps the owner signed in, and signs the viewers out.
+// Changing a password from Settings stores a hash, keeps the owner signed in, and signs the viewers out.
 [$hpS4, , $hpHd4] = http_post("$baseHp/?admin", ['login_password' => 'plain-admin-pw-1'], [], false);
 $hpAdminCookie = extract_cookie_header($hpHd4);
 [, $hpAdminPg] = http_get("$baseHp/?admin", ["Cookie: $hpAdminCookie"]);
 check('[pw hash] (setup) the owner is signed in, and the plain password that was left in the file is a hash by now', $hpS4 === 303 && pw_stored_ok(cfg_read($hpCfg)['ADMIN_PASSWORD'] ?? null, 'plain-admin-pw-1'));
 user_submit("$baseHp/?admin", $hpAdminPg, 'value="save_site_settings"', ['pw_admin' => 'changed-admin-pw-2', 'pw_admin2' => 'changed-admin-pw-2', 'pw_private' => 'new view pw', 'pw_private2' => 'new view pw'], ["Cookie: $hpAdminCookie"]);
 $hpNow = cfg_read($hpCfg);
-check('[pw hash] changing both passwords in Site settings stores two new hashes, and nothing readable', pw_stored_ok($hpNow['ADMIN_PASSWORD'] ?? null, 'changed-admin-pw-2') && pw_stored_ok($hpNow['PRIVATE_VIEW_PASSWORD'] ?? null, 'new view pw') && !str_contains((string) file_get_contents($hpCfg), 'changed-admin-pw-2'));
+check('[pw hash] changing both passwords in Settings stores two new hashes, and nothing readable', pw_stored_ok($hpNow['ADMIN_PASSWORD'] ?? null, 'changed-admin-pw-2') && pw_stored_ok($hpNow['PRIVATE_VIEW_PASSWORD'] ?? null, 'new view pw') && !str_contains((string) file_get_contents($hpCfg), 'changed-admin-pw-2'));
 check('[pw hash] ...the new ones work and the old admin password does not', http_post("$baseHp/?admin", ['login_password' => 'changed-admin-pw-2'], [], false)[0] === 303 && http_post("$baseHp/?admin", ['login_password' => 'plain-admin-pw-1'], [], false)[0] === 200 && http_post("$baseHp/?reveal", ['login_password' => 'new view pw'], [], false)[0] === 302);
 check('[pw hash] ...a viewer who had the old private-view cookie is shut out again', http_get($hpPrivThumb, ["Cookie: $hpViewerCookie"])[0] === 404);
 
@@ -4528,9 +4544,9 @@ $atomAt = strpos($dlMov, '48.8584');
 [$rSt, $rBody] = http_get("$baseDl/?video=clip.mov", ['Range: bytes=' . ($atomAt - 10) . '-' . ($atomAt + 30)]);
 check('[viewer video] ...and so is a part of it fetched with a Range request (what a player does when seeking): the same bytes as that part of the whole, blanked', $rSt === 206 && $rBody === substr($vBody, $atomAt - 10, 41) && !str_contains($rBody, '48.8584'));
 check('[download] the files on the server were not changed by any of it', (string) file_get_contents("$fxDl/hidden.jpg") === $dlOrig && (string) file_get_contents("$fxDl/clip.mov") === $dlMov);
-// Site settings offers the switch, off, with its warning.
+// Settings offers the switch, off, with its warning.
 [, $dlSettings] = http_get("$baseDl/?admin", $dlAdmin);
-check('[download] Site settings has the "Let visitors download originals" switch, with its orange warning', str_contains($dlSettings, 'name="set_ENABLE_PUBLIC_DOWNLOAD"') && str_contains($dlSettings, 'Anyone can save every photo at full resolution'));
+check('[download] Settings has the "Let visitors download originals" switch, with its orange warning', str_contains($dlSettings, 'name="set_ENABLE_PUBLIC_DOWNLOAD"') && str_contains($dlSettings, 'Anyone can save every photo at full resolution'));
 
 /* --------------------------------------------------------------------- */
 
@@ -4718,13 +4734,13 @@ check('[video previews] switched off, there is no clip, no address on the tile, 
 [, $vnBase] = $vtSite('none', ['FFMPEG_PATH' => '/nonexistent/ffmpeg'], ['clip.mp4' => 3]);
 $vNone = $vtCenter(http_get("$vnBase/?img=clip.mp4&size=thumb")[1]);
 check('[video pictures] with no ffmpeg there it is the placeholder, the video file is never sent as a picture, and the tile gets the browser\'s first frame', $vNone !== null && $vNone[0] < 80 && str_contains(http_get("$vnBase/")[1], 'class="tile-video"'));
-// Site settings.
+// Settings.
 [$vsDir, $vsBase] = $vtSite('settings', ['FFMPEG_PATH' => $vtOk, 'ADMIN_PASSWORD' => 'vp-admin-pw-1'], ['clip.mp4' => 3]);
 [, , $vsHd] = http_post("$vsBase/?admin", ['login_password' => 'vp-admin-pw-1'], [], false);
 $vsPage = http_get("$vsBase/?admin", ['Cookie: ' . extract_cookie_header($vsHd)])[1];
-check('[video previews] Site settings says whether ffmpeg was found (and where), so a missing one is easy to spot', str_contains($vsPage, 'ffmpeg on this server: found') && str_contains($vsPage, '(' . htmlspecialchars($vtOk, ENT_QUOTES, 'UTF-8') . ')') && str_contains($vsPage, 'ffstatus ok-text'));
-check('[video previews] Site settings has a "Video previews" switch next to it, on, with its warning', str_contains($vsPage, 'name="set_ENABLE_VIDEO_PREVIEWS"') && str_contains($vsPage, 'Hovering or scrubbing a video plays a short silent clip'));
-check('[video pictures] Site settings has a "Video thumbnails" switch, on, with its warning, shown only while videos are on', str_contains($vsPage, 'name="set_ENABLE_VIDEO_THUMBNAILS"') && str_contains($vsPage, 'Runs ffmpeg on your server') && (bool) preg_match('#data-requires="set_ENABLE_VIDEO"[^>]*>(?:(?!</div>).)*set_ENABLE_VIDEO_THUMBNAILS#s', $vsPage) || str_contains($vsPage, 'Video thumbnails'));
+check('[video previews] Settings says whether ffmpeg was found (and where), so a missing one is easy to spot', str_contains($vsPage, 'ffmpeg on this server: found') && str_contains($vsPage, '(' . htmlspecialchars($vtOk, ENT_QUOTES, 'UTF-8') . ')') && str_contains($vsPage, 'ffstatus ok-text'));
+check('[video previews] Settings has a "Video previews" switch next to it, on, with its warning', str_contains($vsPage, 'name="set_ENABLE_VIDEO_PREVIEWS"') && str_contains($vsPage, 'Hovering or scrubbing a video plays a short silent clip'));
+check('[video pictures] Settings has a "Video thumbnails" switch, on, with its warning, shown only while videos are on', str_contains($vsPage, 'name="set_ENABLE_VIDEO_THUMBNAILS"') && str_contains($vsPage, 'Runs ffmpeg on your server') && (bool) preg_match('#data-requires="set_ENABLE_VIDEO"[^>]*>(?:(?!</div>).)*set_ENABLE_VIDEO_THUMBNAILS#s', $vsPage) || str_contains($vsPage, 'Video thumbnails'));
 // The real thing, when this machine has ffmpeg.
 $realFf = getenv('FFMPEG_TEST_BIN') ?: trim((string) shell_exec('command -v ffmpeg'));
 if ($realFf !== '' && is_executable($realFf)) {
@@ -4852,7 +4868,7 @@ $slForm = fn (array $o = []) => $o + ['action' => 'link_create', 'label' => 'Aun
 // The nginx rule as the tab writes it (decoded), and whether nginx would accept it: nginx reads an unquoted { as the start of a block, so every { in a pattern must sit inside quotes
 $slNginxRule = function ($page) { return preg_match('/<pre><code>(location ~ [^<]*?index\.php\?link=[^<]*?)<\/code><\/pre>/s', $page, $m) ? html_entity_decode($m[1], ENT_QUOTES) : ''; };
 $slNginxOk = function ($rule) { $bare = preg_replace('/"[^"\n]*"/', '""', $rule); return $rule !== '' && !str_contains($bare, '{16}') && substr_count($bare, '{') === 1 && substr_count($bare, '}') === 1; };
-check('[share links] the admin has a Share links tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slNginxRule($slAdminPage), 'location ~ "^/[A-Za-z0-9]{16}$" {') && str_contains($slNginxRule($slAdminPage), 'index.php?link=$1 last;') && $slNginxOk($slNginxRule($slAdminPage)) && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9]{16})$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
+check('[share links] the admin has a Share tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slNginxRule($slAdminPage), 'location ~ "^/[A-Za-z0-9]{16}$" {') && str_contains($slNginxRule($slAdminPage), 'index.php?link=$1 last;') && $slNginxOk($slNginxRule($slAdminPage)) && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9]{16})$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
 $slMade = $slAdmin($slForm());
 $slAll = $slLinks()['links'] ?? [];
 $slId = $slMade['id'] ?? '';
@@ -4986,7 +5002,7 @@ $slThrottleKeys = array_keys(read_data_file("$fxSl/.gallery-login-attempts.php")
 check('[share links] the throttle counts failures per real visitor address, not per proxy', in_array('link|198.51.100.55', $slThrottleKeys, true));
 $slCfg([]);
 
-// Site settings: the new group.
+// Settings: the new group.
 $slSettings = http_get("$baseSl/?admin", ["Cookie: $slAdminCookie"])[1];
 // The "came through a proxy" line under "Where visitors' IP addresses come from": said only when the connection itself is a proxy's.
 {
@@ -5000,7 +5016,7 @@ $slSettings = http_get("$baseSl/?admin", ["Cookie: $slAdminCookie"])[1];
     check('[share links] the proxy line says Cloudflare when the connection is inside Cloudflare\'s ranges and the header is there', str_contains($ipHint(['REMOTE_ADDR' => '172.70.1.2', 'HTTP_CF_CONNECTING_IP' => '203.0.113.9']), 'came through Cloudflare') && $ipHint(['REMOTE_ADDR' => '172.70.1.2']) === '');
     check('[share links] the proxy line says "a proxy" for a private-network connection with a forwarding header, and nothing for this very machine', str_contains($ipHint(['REMOTE_ADDR' => '10.0.0.5', 'HTTP_X_FORWARDED_FOR' => '203.0.113.9']), 'came through a proxy') && $ipHint(['REMOTE_ADDR' => '127.0.0.1', 'HTTP_X_FORWARDED_FOR' => '203.0.113.9']) === '' && $ipHint(['REMOTE_ADDR' => '10.0.0.5']) === '');
 }
-check('[share links] Site settings has a Share links group (allow, heads-up, where addresses come from) that shows the visitor address it sees', str_contains($slSettings, 'name="set_ENABLE_SHARE_LINKS"') && str_contains($slSettings, 'name="set_SHARE_HEADS_UP"') && str_contains($slSettings, 'name="set_TRUSTED_PROXY"') && str_contains($slSettings, 'Your address as the gallery sees it: <strong>127.0.0.1</strong>'));
+check('[share links] Settings has a Share links group (allow, heads-up, where addresses come from) that shows the visitor address it sees', str_contains($slSettings, 'name="set_ENABLE_SHARE_LINKS"') && str_contains($slSettings, 'name="set_SHARE_HEADS_UP"') && str_contains($slSettings, 'name="set_TRUSTED_PROXY"') && str_contains($slSettings, 'Your address as the gallery sees it: <strong>127.0.0.1</strong>'));
 
 // Installed in a folder: the rule and the probe are written for that folder.
 $fxSlSub = new_fixture_dir('sharelinks-sub');
@@ -5304,7 +5320,7 @@ check('[share log] these fragments and downloads are for the owner only', http_g
 // The list's summary line and the "new" markers.
 $lgTab = http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1];
 check('[share log] the link\'s summary line in the tab carries the log: its addresses and views', preg_match('/<b>1<\/b> IP\s*<span class="sl-dot">&middot;<\/span>\s*\d+ views/', $lgTab) === 1);
-check('[share log] until the owner has looked, the row says how many are new since, and the sidebar counts the links with news', str_contains($lgTab, 'new since you last looked') && preg_match('/data-tab="links" class="side-link">Share links <span class="count">1<\/span>/', $lgTab) === 1);
+check('[share log] until the owner has looked, the row says how many are new since, and the sidebar counts the links with news', str_contains($lgTab, 'new since you last looked') && preg_match('/data-tab="links" class="side-link">Share <span class="count">1<\/span>/', $lgTab) === 1);
 check('[share log] telling the server the tab was looked at clears them (a later page load shows none)', ($lgAdmin(['action' => 'link_seen'])['ok'] ?? false) && !str_contains(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1], 'new since you last looked'));
 
 // Blocked tries and a replaced address.
@@ -5458,8 +5474,8 @@ check('[preview] a changed cookie is no preview (the owner just sees the owner\'
 [$exC, , $exH] = http_get("$baseS/?exitpreview", $pvBoth, false);
 $exLoc = ''; $exSet = '';
 foreach ($exH as $h) { if (stripos($h, 'Location:') === 0) $exLoc = trim(substr($h, 9)); if (stripos($h, 'Set-Cookie: gallery_preview_') === 0) $exSet = $h; }
-check('[preview] Exit preview clears the cookie and goes back to the Share links tab', $exC === 303 && str_contains($exLoc, '?admin#links') && (str_contains($exSet, 'Max-Age=0') || str_contains($exSet, '1970') || str_contains($exSet, '=deleted')));
-check('[preview] the Share links tab says a preview is open in this browser (with a way to end it), and says nothing when there is none', str_contains($adminPageDuring, 'A preview of &ldquo;Mark&rdquo; is open in this browser') && str_contains($adminPageDuring, 'href="?exitpreview"') && !str_contains(http_get("$baseS/?admin", $shOwner)[1], 'is open in this browser') && !str_contains($pvTampered ? http_get("$baseS/?admin", $pvTampered)[1] : '', 'is open in this browser'));
+check('[preview] Exit preview clears the cookie and goes back to the Share tab', $exC === 303 && str_contains($exLoc, '?admin#links') && (str_contains($exSet, 'Max-Age=0') || str_contains($exSet, '1970') || str_contains($exSet, '=deleted')));
+check('[preview] the Share tab says a preview is open in this browser (with a way to end it), and says nothing when there is none', str_contains($adminPageDuring, 'A preview of &ldquo;Mark&rdquo; is open in this browser') && str_contains($adminPageDuring, 'href="?exitpreview"') && !str_contains(http_get("$baseS/?admin", $shOwner)[1], 'is open in this browser') && !str_contains($pvTampered ? http_get("$baseS/?admin", $pvTampered)[1] : '', 'is open in this browser'));
 $shAdmin(['action' => 'link_pause', 'id' => $pvId]);
 [$pc3, , $pvH3] = $shStart($shCsrf); $pvPaused = http_get("$baseS/", ["Cookie: $shAdminCookie; " . extract_cookie_header($pvH3)])[1];
 check('[preview] a paused link can still be previewed, and the strip says that the people who have it see nothing for now', $pc3 === 303 && str_contains($pvPaused, 'Previewing as Mark') && str_contains($pvPaused, 'paused right now'));
@@ -5690,7 +5706,7 @@ check('[prepare media videos] with video pictures switched off the Health check 
 
 // The Media row of the Health check, and "needs attention" for photos.
 $vmHealthRow = fn ($page) => preg_match('/<h3 class="subhead">Media<\/h3>.*?<div class="health-label">(.*?)<\/div>/s', $page, $m) ? $m[1] : null;
-check('[health] there is a Media row: "All prepared" when it is, linking to Prepare media the way the other jumps go (it switches to Site settings and scrolls to the panel)', str_contains($vmPage1, '<div class="health-label">All prepared</div>') && str_contains($vmPage1, "<a href=\"#site\" onclick=\"return adminGoTo('site', 'media-panel');\">Open Prepare media</a>") && !str_contains($vmPage1, 'href="#media-panel"'), (string) $vmHealthRow($vmPage1));
+check('[health] there is a Media row: "All prepared" when it is, linking to Prepare media the way the other jumps go (it switches to Settings and scrolls to the panel)', str_contains($vmPage1, '<div class="health-label">All prepared</div>') && str_contains($vmPage1, "<a href=\"#site\" onclick=\"return adminGoTo('site', 'media-panel');\">Open Prepare media</a>") && !str_contains($vmPage1, 'href="#media-panel"'), (string) $vmHealthRow($vmPage1));
 check('[health] ...and a row for what needs attention instead (here the videos ffmpeg could not make pictures for), amber', str_contains(html_entity_decode((string) $vmHealthRow($vmPageF), ENT_QUOTES), "2 videos ffmpeg couldn't make pictures for") && (bool) preg_match('/<div class="health-row health-warn loud">.{0,400}videos ffmpeg/s', html_entity_decode($vmPageF, ENT_QUOTES)), (string) $vmHealthRow($vmPageF));
 
 check('[health] files that are only not read yet are a quiet row ("2 files not read yet", listed with links), never amber, and there is no Needs attention heading anywhere', str_contains((string) $vmHealthRow($vmPage3), '2 files not read yet') && str_contains($vmPage3, 'media-attn-unread') && (bool) preg_match('/<div class="health-row health-info quiet">.{0,300}2 files not read yet/s', $vmPage3) && !str_contains($vmPage3, 'Needs attention') && !str_contains($vmPage3, 'Nothing needs attention'), (string) $vmHealthRow($vmPage3));

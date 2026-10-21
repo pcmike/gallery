@@ -20,7 +20,7 @@ Shipping available anywhere, buyer covers insurance.
 
 Two ways to put several photos under one item — pick whichever fits your files.
 
-**Filename-based (what this example uses):** turn on **Group photos by filename** (Site settings in the admin, or `AUTO_GROUP_BY_FILENAME` in the settings file), then name your photos so each item's filename prefix is a word that appears in that item's paragraph:
+**Filename-based (what this example uses):** turn on **Group photos by filename** (Settings in the admin, or `AUTO_GROUP_BY_FILENAME` in the settings file), then name your photos so each item's filename prefix is a word that appears in that item's paragraph:
 
 ```
 alpha_01.jpg, alpha_02.jpg    -> attach to (1), because "Alpha" is in its text

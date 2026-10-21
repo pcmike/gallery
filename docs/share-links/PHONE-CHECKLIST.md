@@ -1,9 +1,9 @@
 # Share links: what to check on a real phone
 
-Everything below was built and tested in a desktop browser (a real headless Chromium) and against a server, but it behaves differently on a real iPhone, in Messages and in an app's own browser. Copy `index.php` to your trip gallery (and, for the tidy address, add the rule the Share links tab shows), then go through this. Tick what works; anything that doesn't, tell me what you saw.
+Everything below was built and tested in a desktop browser (a real headless Chromium) and against a server, but it behaves differently on a real iPhone, in Messages and in an app's own browser. Copy `index.php` to your trip gallery (and, for the tidy address, add the rule the Share tab shows), then go through this. Tick what works; anything that doesn't, tell me what you saw.
 
 ## Making and sending a link
-- [ ] **Site settings → Share links → Allow share links** is on, and the tab appears.
+- [ ] **Settings → Share links → Allow share links** is on, and the tab appears.
 - [ ] On a private folder's page the **Share** button is in the icon strip, on the same row as the others. Press it: the form fits the screen and the keyboard doesn't hide **Create link**.
 - [ ] After **Create link**, **Copy** puts the address on the clipboard (paste it into Notes).
 - [ ] **Share…** opens the phone's own share sheet with the address (Messages, Mail, AirDrop).
@@ -23,7 +23,7 @@ Everything below was built and tested in a desktop browser (a real headless Chro
 - [ ] A link that is **paused**, **revoked**, expired or mistyped shows the same "This link isn't valid" page.
 
 ## Preview and the log
-- [ ] **Preview as this link** opens a new tab with the purple strip; **What's included** lists the right things; **Exit preview** returns you to the Share links tab. Opening the gallery normally afterwards shows your owner tools again.
+- [ ] **Preview as this link** opens a new tab with the purple strip; **What's included** lists the right things; **Exit preview** returns you to the Share tab. Opening the gallery normally afterwards shows your owner tools again.
 - [ ] After someone has used a link (use your own phone, signed out, or a private tab): the link row shows **new** activity, and its **Visitors**, **Folders** and **Photos** tabs say what they looked at; tapping an address opens its page.
 - [ ] The tab is usable at phone width (rows open, the log scrolls sideways inside its table, nothing runs off the screen).
 
