@@ -796,13 +796,25 @@ try:
     b.js("document.querySelector('.side-hidden').click()"); b.drain(0.3); shot(b, "10-admin-hidden-tab")
     ok(b.js(vis) == ["hidden"] and b.js("document.querySelector('.hidden-warning') !== null"), "clicking Hidden shows the explanation")
     ok(b.js("document.querySelector('.side-hidden').classList.contains('active') && !document.querySelector('.admin-tabs a.active')"), "...with Hidden highlighted and no folder tab selected (it is not a folder section)")
-    link = b.js("(() => { const a = [...document.querySelectorAll('.pv-img[href*=edit]')].find(x => x.closest('.pv-th, .ed-th').querySelector('.pv-lock')); return a ? [a.getAttribute('href'), a.closest('.pv-th, .ed-th').querySelector('.pv-lock').getAttribute('data-file')] : null; })()")
-    ok(link is not None and link[0].startswith("?photo="), "...and lists hidden photos as thumbnails that link to the gallery's viewer with the editor open", str(link))
+    PV = "[...document.querySelectorAll('.pv-img')].find(x => x.closest('.pv-th, .ed-th').querySelector('.pv-lock'))"
+    link = b.js("(() => { const a = " + PV + "; return a ? [a.getAttribute('href'), a.closest('.pv-th, .ed-th').querySelector('.pv-lock').getAttribute('data-file')] : null; })()")
+    ok(link is not None and "find=" in link[0] and "photo=" not in link[0], "...and lists hidden photos as thumbnails that show the photo in its folder (not the one-photo viewer)", str(link))
     if link:
         b.js("document.querySelector('[data-ed-expand=all]').click()"); b.drain(0.3)
-        b.js("[...document.querySelectorAll('.pv-img[href*=edit]')].find(x => x.closest('.pv-th, .ed-th').querySelector('.pv-lock')).click()"); b.drain(2.5)
-        landed = b.js("(() => ({lb: document.getElementById('lightbox').classList.contains('open'), editor: !document.getElementById('lb-editor').hidden, name: document.getElementById('lbe-name').textContent}))()")
-        ok(landed["lb"] and landed["editor"] and link[1].endswith(landed["name"]), "clicking a hidden photo opens it in the viewer with its editor up", str(landed) + " " + str(link))
+        b.js(PV + ".click()"); b.drain(2.2)
+        landed = b.js("""(() => { const t = document.querySelector('.card.find-ring'); if (!t) return null; const r = t.getBoundingClientRect(); return {file: t.dataset.file, search: location.search, ring: getComputedStyle(t).outlineColor, lb: document.getElementById('lightbox').classList.contains('open'), inView: r.top >= 0 && r.bottom <= innerHeight}; })()""")
+        ok(landed is not None and landed["file"] == link[1] and not landed["lb"] and landed["inView"] and landed["ring"] == "rgb(170, 178, 255)", "clicking a hidden photo's thumbnail lands in its folder on that photo, ringed in periwinkle (the viewer is not opened)", str(landed) + " " + str(link))
+        # the Edit button opens the editor in the photo's own folder, so closing the viewer leaves you on that folder's grid
+        b.goto(B + "/?admin", 1.0); b.js("document.querySelector('.side-hidden').click()"); b.drain(0.3); b.js("document.querySelector('[data-ed-expand=all]').click()"); b.drain(0.3)
+        EB = "[...document.querySelectorAll('.ed-row .ed-btn')].filter(a => a.getAttribute('href').indexOf('folder=') >= 0)"
+        eb = b.js("(() => { const a = " + EB + "[0]; return a ? a.getAttribute('href') : null; })()")
+        if eb:
+            b.js(EB + "[0].click()"); b.drain(2.5)
+            before = b.js("location.search"); opened = b.js("document.getElementById('lightbox').classList.contains('open') && !document.getElementById('lb-editor').hidden")
+            b.js("closeLightbox()"); b.drain(0.8)
+            after = b.js("""(() => ({search: location.search, open: document.getElementById('lightbox').classList.contains('open'), cards: document.querySelectorAll('.card').length, crumb: document.body.innerText.length > 0}))()""")
+            ok(opened and "folder=" in before and "photo=" in before, "the Edit button opens the viewer with the editor, in the photo's own folder (the folder is in the address)", before)
+            ok(not after["open"] and "folder=" in after["search"] and after["cards"] > 0, "...and closing the viewer leaves you on that folder's grid (the page is the folder, not the main page)", str(after))
     b.goto(B + "/?admin&folder=Asia", 1.0)
     ok(b.js(vis) != ["hidden"], "moving to another folder doesn't land you back on Hidden", str(b.js(vis)))
     # ---------------- the folder settings' line about what the gallery has read from the files ----------------
@@ -1863,10 +1875,10 @@ try:
         ok(ed["chips"] == ["All 21", "Private 17", "Captions 1", "Links 1", "Locations 0", "Folder settings 3"] and "21 edits in 4 folders" in ed["sum"], "...with the summary and the chips counting what is set (17 private, 1 caption, 1 link, 2 hidden folders and a cover)", str(ed["chips"]) + " " + ed["sum"])
         b.js("document.querySelector('.ed-folder[data-path=\"Eurotrip/Florence\"] .ed-head').click()"); b.drain(0.3)
         row = b.js("""(() => { const c = document.querySelector('.ed-folder[data-path="Eurotrip/Florence"]'); const r = c.querySelector('.ed-row'); return {open: c.classList.contains('open'), expanded: c.querySelector('.ed-head').getAttribute('aria-expanded'), body: c.querySelector('.ed-body').offsetParent !== null, row: r ? r.innerText.replace(/\\s+/g, ' ') : '', edit: r ? r.querySelector('.ed-btn').getAttribute('href') : '', strip: c.querySelectorAll('.ed-sm').length, head: c.querySelector('.ed-fsum').innerText.replace(/\\s+/g, ' ')}; })()""")
-        ok(row["open"] and row["expanded"] == "true" and row["body"] and "p1.jpg" in row["row"] and "Duomo at noon" in row["row"] and "example.com" in row["row"] and row["edit"].startswith("?photo=") and row["strip"] == 2 and "2 private" in row["head"], "[edited tab] pressing a folder opens it: the photo with a caption and a link is a row with an Edit button, the two private photos are small lock thumbnails, and the header counts what is inside", str(row))
+        ok(row["open"] and row["expanded"] == "true" and row["body"] and "p1.jpg" in row["row"] and "Duomo at noon" in row["row"] and "example.com" in row["row"] and row["edit"] == "?folder=Eurotrip%2FFlorence&photo=Eurotrip%2FFlorence%2Fp1.jpg&edit=1" and row["strip"] == 2 and "2 private" in row["head"], "[edited tab] pressing a folder opens it: the photo with a caption and a link is a row with an Edit button, the two private photos are small lock thumbnails, and the header counts what is inside", str(row))
         cv = b.js("""(() => { const c = document.querySelector('.ed-folder[data-path="Eurotrip/Florence"]'), a = c.querySelector('.ed-cover'), tags = [...c.querySelectorAll('.ed-fsum .tag')].map(t => Math.round(t.getBoundingClientRect().height) + '@' + Math.round(t.getBoundingClientRect().top)), r = a ? a.getBoundingClientRect() : null;
             return {href: a ? a.getAttribute('href') : null, w: r ? Math.round(r.width) : 0, star: !!(a && a.querySelector('i svg')), img: a ? a.querySelector('img').complete : false, noPill: !/Cover:/.test(c.querySelector('.ed-body').innerText), noLabel: !/Folder settings:/.test(c.querySelector('.ed-body').innerText), sameSize: new Set(tags.map(x => x.split('@')[0])).size === 1 && new Set(tags.map(x => x.split('@')[1])).size === 1, n: tags.length}; })()""")
-        ok(cv["href"] == "?folder=Eurotrip%2FFlorence&find=Eurotrip%2FFlorence%2Fp3.jpg" and cv["w"] == 84 and cv["star"] and cv["noPill"] and cv["noLabel"], "[edited tab] a folder's cover is a picture with the cover star (84 px) that links to the folder with ?find=, and there is no cover pill and no \"Folder settings:\" label", str(cv))
+        ok(cv["href"] == "?folder=Eurotrip%2FFlorence&find=Eurotrip%2FFlorence%2Fp3.jpg&as=cover" and cv["w"] == 84 and cv["star"] and cv["noPill"] and cv["noLabel"], "[edited tab] a folder's cover is a picture with the cover star (84 px) that links to the folder with ?find=, and there is no cover pill and no \"Folder settings:\" label", str(cv))
         ok(cv["n"] >= 3 and cv["sameSize"], "[edited tab] the pills in a card's header are all the same size and on one line (private, links, folder settings)", str(cv))
         b.js("document.querySelector('.ed-chip[data-k=caption]').click()"); b.drain(0.3)
         cap = b.js("""(() => ({cards: [...document.querySelectorAll('.ed-folder')].filter(c => !c.hidden).map(c => c.dataset.path), head: document.querySelector('.ed-folder[data-path="Eurotrip/Florence"] .ed-fsum').innerText.replace(/\\s+/g, ' '), strip: document.querySelector('.ed-folder[data-path="Eurotrip/Florence"] .ed-strip').hidden, pressed: document.querySelector('.ed-chip[aria-pressed=true]').dataset.k}))()""")
@@ -1936,11 +1948,19 @@ try:
         b.js("document.querySelector('.ed-folder[data-path=\"Eurotrip/Many\"] .ed-more').click()"); b.drain(0.3)
         ok(b.js("[...document.querySelectorAll('.ed-folder[data-path=\"Eurotrip/Many\"] .ed-sm')].filter(t => !t.hidden).length") == 14 and b.js("document.documentElement.scrollWidth <= window.innerWidth + 1"), "...and +N shows them all, still inside the width")
         shot(b, "19-edited-tab-phone-many")
+        rw = b.js("""(() => { const r = document.querySelector('.ed-folder[data-path="Eurotrip/Florence"] .ed-row'), rb = r.querySelector('.ed-rb'), a = r.querySelector('.ed-t a'), n = r.querySelector('.ed-rn'), e = r.querySelector('.ed-btn').getBoundingClientRect(), th = r.querySelector('.ed-th').getBoundingClientRect(), rbr = rb.getBoundingClientRect(), lh = parseFloat(getComputedStyle(a).lineHeight) || 22;
+            return {rb: Math.round(rbr.width), linkH: Math.round(a.getBoundingClientRect().height), nameH: Math.round(n.getBoundingClientRect().height), lh: Math.round(lh), under: e.top >= rbr.bottom - 2, aligned: Math.abs(e.left - rbr.left) < 4, fits: document.documentElement.scrollWidth <= innerWidth + 1}; })()""")
+        ok(rw["rb"] >= 200 and rw["linkH"] <= rw["lh"] * 1.6 and rw["nameH"] <= rw["lh"] * 1.8 and rw["under"] and rw["aligned"] and rw["fits"], "[edited tab] on a phone a row's text gets the whole line (the name and the link are not broken into pieces) and the Edit button sits under it, lined up with the text", str(rw))
         # the cover's link: the folder's grid scrolled to that photo, ringed for a moment; a plain folder link still opens at the top
         b.goto(B19 + "/?folder=Eurotrip%2FMany&n=11", 1.2)
         ok(b.js("scrollY") == 0 and not b.js("!!document.querySelector('.find-ring')"), "[cover jump] a folder opened the plain way still opens at the top, with nothing ringed")
         b.goto(B19 + "/?folder=Eurotrip%2FMany&find=Eurotrip%2FMany%2Fm13.jpg&n=12", 1.5)
         fr = b.js("""(() => { const t = document.querySelector('.card[data-file="Eurotrip/Many/m13.jpg"]'); if (!t) return null; const r = t.getBoundingClientRect(); return {ring: t.classList.contains('find-ring'), y: Math.round(scrollY), inView: r.top >= 0 && r.bottom <= innerHeight, mid: Math.abs((r.top + r.bottom) / 2 - innerHeight / 2) < innerHeight * 0.3}; })()""")
+        fc = b.js("""(() => { const t = document.querySelector('.card[data-file="Eurotrip/Many/m13.jpg"]'); return t ? getComputedStyle(t).outlineColor : null; })()""")
+        ok(fc == "rgb(170, 178, 255)", "[cover jump] a plain ?find= rings the photo in periwinkle", str(fc))
+        b.goto(B19 + "/?folder=Eurotrip%2FMany&find=Eurotrip%2FMany%2Fm13.jpg&as=cover&n=13", 1.5)
+        fc2 = b.js("""(() => { const t = document.querySelector('.card[data-file="Eurotrip/Many/m13.jpg"]'); return t ? getComputedStyle(t).outlineColor : null; })()""")
+        ok(fc2 == "rgb(245, 197, 66)", "[cover jump] ...and with as=cover (the cover picture's link) in gold, like the star", str(fc2))
         ok(fr is not None and fr["ring"] and fr["y"] > 0 and fr["inView"] and fr["mid"], "[cover jump] with ?find= the folder opens scrolled to that photo (near the middle of the screen) with a ring around it, so the grid can be looked through for another cover", str(fr))
         shot(b, "19-cover-jump")
         b.drain(3.6)

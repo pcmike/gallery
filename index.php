@@ -2725,7 +2725,7 @@ function media_attention($dir, $files) {
 function render_media_group_html($grp) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $out = '<details class="media-attn media-attn-' . $esc($grp['key']) . '"><summary>Show the file' . ($grp['count'] === 1 ? '' : 's') . '</summary><ul class="media-attn-list">';
-    foreach ($grp['items'] as $file) $out .= '<li><a href="' . admin_item_href($file) . '">' . $esc($file) . '</a></li>';
+    foreach ($grp['items'] as $file) $out .= '<li><a href="' . admin_find_href($file) . '" title="Show it in its folder">' . $esc($file) . '</a></li>';
     if ($grp['count'] > count($grp['items'])) $out .= '<li class="muted">and ' . number_format($grp['count'] - count($grp['items'])) . ' more</li>';
     return $out . '</ul></details>';
 }
@@ -7118,9 +7118,21 @@ function admin_hidden_data($dir, $files) {
     return ['folders' => $hiddenFolders, 'items' => $hiddenItems, 'shown' => $shownDespiteHiddenFolder];
 }
 
-/** Where an item is edited: the gallery's viewer open on that photo, with the editor up (the pencil's own address). */
+/** The folder a file is in ('' at the top level). */
+function admin_file_folder($file) { $d = dirname((string) $file); return $d === '.' ? '' : $d; }
+
+/** Where an item is edited: the gallery's viewer open on that photo, with the editor up (the pencil's own address), in that photo's
+ *  own folder, so that closing the viewer leaves you on the folder's grid and not on the main page. (HTML-escaped, for an attribute.) */
 function admin_item_href($file) {
-    return '?photo=' . htmlspecialchars(rawurlencode($file), ENT_QUOTES, 'UTF-8') . '&amp;edit=1';
+    $folder = admin_file_folder($file);
+    return '?' . ($folder !== '' ? 'folder=' . htmlspecialchars(rawurlencode($folder), ENT_QUOTES, 'UTF-8') . '&amp;' : '') . 'photo=' . htmlspecialchars(rawurlencode($file), ENT_QUOTES, 'UTF-8') . '&amp;edit=1';
+}
+
+/** Where a photo is shown in its folder: the folder's grid scrolled to that photo, which is ringed for a moment (periwinkle; the folder's
+ *  cover is $as 'cover', gold). The place to land from a thumbnail or a file name; from there the pencil is a press away. (HTML-escaped.) */
+function admin_find_href($file, $as = '') {
+    $folder = admin_file_folder($file);
+    return '?' . ($folder !== '' ? 'folder=' . htmlspecialchars(rawurlencode($folder), ENT_QUOTES, 'UTF-8') . '&amp;' : '') . 'find=' . htmlspecialchars(rawurlencode($file), ENT_QUOTES, 'UTF-8') . ($as === 'cover' ? '&amp;as=cover' : '');
 }
 
 /** Addresses for the owner's browser to try, to see whether the web server rules in render_server_rules_help are in place:
@@ -7304,7 +7316,7 @@ function render_admin_edited_html($ov, $csrfToken) {
         // The top of the card: the cover as a picture on the left, the buttons and the settings beside it.
         $out .= '<div class="ed-top">';
         if ($f['cover'] !== null && $f['cover']['file'] !== null) {
-            $out .= '<a class="ed-cover" href="' . $esc(($path === '' ? '?' : '?folder=' . rawurlencode($path) . '&') . 'find=' . rawurlencode($f['cover']['file'])) . '" title="This folder\'s cover photo: show it in the folder"><img src="' . $esc(img_url($f['cover']['file'], 'thumb')) . '" alt="Cover photo: ' . $esc($f['cover']['name']) . '" loading="lazy" decoding="async"><i>' . ui_icon('star') . '</i></a>';
+            $out .= '<a class="ed-cover" href="' . admin_find_href($f['cover']['file'], 'cover') . '" title="This folder\'s cover photo: show it in the folder"><img src="' . $esc(img_url($f['cover']['file'], 'thumb')) . '" alt="Cover photo: ' . $esc($f['cover']['name']) . '" loading="lazy" decoding="async"><i>' . ui_icon('star') . '</i></a>';
         }
         $out .= '<div class="ed-top-r"><div class="ed-fset-links"><a class="ed-btn" href="' . $esc($open) . '">Open folder</a> <a class="ed-btn" href="' . $esc($settings) . '">Folder settings</a>';
         if ($f['hidden'] && $path !== '') {
@@ -7342,7 +7354,7 @@ function render_admin_edited_html($ov, $csrfToken) {
                 $ltitle = $it['own'] === 'private' ? 'Private on its own: press to make it public' : 'Public though its folder is private: press to make it private again';
                 $lock = '<button type="button" class="pv-lock ' . ($it['own'] === 'private' ? 'own' : 'pub') . '" data-file="' . $esc($it['file']) . '" data-bare="' . $esc(basename($it['file'])) . '" data-folder="' . $esc($where) . '" data-own="' . $it['own'] . '" title="' . $esc($ltitle) . '" aria-label="' . $esc($ltitle) . '">' . ui_icon($it['own'] === 'private' ? 'lock' : 'unlock') . '</button>';
             }
-            $out .= '<div class="ed-it ed-row" data-kinds="' . $esc(implode(' ', array_unique($it['kinds']))) . '"><span class="ed-th"><a class="pv-img" href="' . admin_item_href($it['file']) . '" title="Open ' . $esc(basename($it['file'])) . ' in the gallery"><img src="' . $esc(img_url($it['file'], 'thumb')) . '" alt="" loading="lazy" decoding="async"></a>' . $lock . '</span><div class="ed-rb"><div class="ed-rn">' . $esc(basename($it['file'])) . '</div><div class="ed-tags">' . $tags . '</div>' . $txt . '</div><a class="ed-btn" href="' . admin_item_href($it['file']) . '">Edit</a></div>';
+            $out .= '<div class="ed-it ed-row" data-kinds="' . $esc(implode(' ', array_unique($it['kinds']))) . '"><span class="ed-th"><a class="pv-img" href="' . admin_find_href($it['file']) . '" title="Show ' . $esc(basename($it['file'])) . ' in its folder"><img src="' . $esc(img_url($it['file'], 'thumb')) . '" alt="" loading="lazy" decoding="async"></a>' . $lock . '</span><div class="ed-rb"><div class="ed-rn">' . $esc(basename($it['file'])) . '</div><div class="ed-tags">' . $tags . '</div>' . $txt . '</div><a class="ed-btn" href="' . admin_item_href($it['file']) . '">Edit</a></div>';
         }
         if (count($rows) > 150) $out .= '<p class="muted ed-more-note">And ' . number_format(count($rows) - 150) . ' more with a caption, link or place: open the folder to see them.</p>';
         if ($strip) {
@@ -7350,10 +7362,10 @@ function render_admin_edited_html($ov, $csrfToken) {
             foreach (array_slice($strip, 0, 300) as $it) {
                 $where = dirname($it['file']) === '.' ? '' : dirname($it['file']);
                 $title = $it['own'] === 'private' ? 'Private on its own: press to make it public' : 'Public though its folder is private: press to make it private again';
-                $out .= '<span class="pv-th ed-it ed-sm" data-kinds="private"><a class="pv-img" href="' . admin_item_href($it['file']) . '" title="Open ' . $esc(basename($it['file'])) . ' in the gallery"><img src="' . $esc(img_url($it['file'], 'thumb')) . '" alt="" loading="lazy" decoding="async"></a>'
+                $out .= '<span class="pv-th ed-it ed-sm" data-kinds="private"><a class="pv-img" href="' . admin_find_href($it['file']) . '" title="Show ' . $esc(basename($it['file'])) . ' in its folder"><img src="' . $esc(img_url($it['file'], 'thumb')) . '" alt="" loading="lazy" decoding="async"></a>'
                     . '<button type="button" class="pv-lock ' . ($it['own'] === 'private' ? 'own' : 'pub') . '" data-file="' . $esc($it['file']) . '" data-bare="' . $esc(basename($it['file'])) . '" data-folder="' . $esc($where) . '" data-own="' . $it['own'] . '" title="' . $esc($title) . '" aria-label="' . $esc($title) . '">' . ui_icon($it['own'] === 'private' ? 'lock' : 'unlock') . '</button></span>';
             }
-            $out .= '<button type="button" class="ed-more" hidden></button></div>' . (count($strip) > 300 ? '<p class="muted ed-more-note">And ' . number_format(count($strip) - 300) . ' more: see them in the gallery.</p>' : '') . '<p class="pv-hint">Press a lock to switch a photo between private and public' . (array_filter($strip, function ($x) { return $x['own'] === 'public'; }) ? '; an open lock is a photo that is public though its folder is private' : '') . '. Press a photo to open it in the gallery.</p></div>';
+            $out .= '<button type="button" class="ed-more" hidden></button></div>' . (count($strip) > 300 ? '<p class="muted ed-more-note">And ' . number_format(count($strip) - 300) . ' more: see them in the gallery.</p>' : '') . '<p class="pv-hint">Press a lock to switch a photo between private and public' . (array_filter($strip, function ($x) { return $x['own'] === 'public'; }) ? '; an open lock is a photo that is public though its folder is private' : '') . '. Press a photo to see it in its folder.</p></div>';
         }
         $out .= '</div></section>';
     }
@@ -9289,7 +9301,7 @@ function render_link_activity($l, $tab, $vidFilter, $folderFilter, $sort, $showA
     foreach ($shown as $rel => $a) {
         $priv = file_is_hidden($dir, $rel, items_get_all_for_files($dir, [$rel]));
         $badge = ($a['pn'] > 0 ? 'played ×' . $a['pn'] : ($a['on'] > 0 ? '×' . $a['on'] : 'seen')) . ($a['dn'] > 0 ? ' · saved' : '');
-        $out .= '<a class="sl-th" href="' . $esc(admin_item_href($rel)) . '" title="' . $esc($rel) . '"><img src="' . $esc(img_url($rel, 'thumb')) . '" alt="" loading="lazy" decoding="async"><span class="sl-badge">' . $esc($badge) . '</span>' . ($priv ? '<span class="sl-lk">' . ui_icon('lock') . '</span>' : '') . '</a>';
+        $out .= '<a class="sl-th" href="' . admin_find_href($rel) . '" title="' . $esc($rel) . '"><img src="' . $esc(img_url($rel, 'thumb')) . '" alt="" loading="lazy" decoding="async"><span class="sl-badge">' . $esc($badge) . '</span>' . ($priv ? '<span class="sl-lk">' . ui_icon('lock') . '</span>' : '') . '</a>';
     }
     $out .= '</div>';
     if (!$showAll && count($agg) > 60) $out .= '<button type="button" class="secondary sl-more" data-more>Show all ' . count($agg) . '</button>';
@@ -9347,7 +9359,7 @@ function render_link_ip_page($ip, $tab, $linkFilter, $dir, $files) {
         foreach (array_slice($itemsAgg, 0, 200, true) as $rel => $a) {
             $f = link_item_folder($rel); $priv = file_is_hidden($dir, $rel, items_get_all_for_files($dir, [$rel]));
             $opened2 = $a['pn'] > 0 ? 'Played ×' . $a['pn'] : ($a['on'] > 0 ? 'Opened ×' . $a['on'] : '—');
-            $out .= '<tr><td><a href="' . $esc(admin_item_href($rel)) . '"><img class="sl-mini" src="' . $esc(img_url($rel, 'thumb')) . '" alt="" loading="lazy"></a></td><td class="sl-file">' . $esc(basename($rel)) . '</td><td>' . ($priv ? '<span class="sl-lock">' . ui_icon('lock') . '</span> ' : '') . $esc($f === '' ? 'Front page' : link_folder_label($dir, $f)) . '</td><td>' . ($a['sf'] ? link_time_html($a['sf']) : '—') . '</td><td>' . $esc($opened2) . '</td><td>' . ($a['dn'] ? '✓ saved' : '—') . '</td><td>' . link_time_html($a['last']) . '</td></tr>';
+            $out .= '<tr><td><a href="' . admin_find_href($rel) . '"><img class="sl-mini" src="' . $esc(img_url($rel, 'thumb')) . '" alt="" loading="lazy"></a></td><td class="sl-file">' . $esc(basename($rel)) . '</td><td>' . ($priv ? '<span class="sl-lock">' . ui_icon('lock') . '</span> ' : '') . $esc($f === '' ? 'Front page' : link_folder_label($dir, $f)) . '</td><td>' . ($a['sf'] ? link_time_html($a['sf']) : '—') . '</td><td>' . $esc($opened2) . '</td><td>' . ($a['dn'] ? '✓ saved' : '—') . '</td><td>' . link_time_html($a['last']) . '</td></tr>';
         }
         $out .= '</tbody></table></div>';
         return $out . '<p class="note">' . min(200, count($itemsAgg)) . ' of ' . count($itemsAgg) . ' shown, latest first. Filenames are shown because only you see this page. Press a picture to open it in the gallery.</p></div>';
@@ -10095,7 +10107,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .side-hidden.edited:hover { background:rgba(255,255,255,0.08); }
   .side-hidden.edited.active { color:#fff; background:rgba(88,101,242,0.3); border-color:var(--accent); }
   .side-hidden.edited.active .count { background:rgba(88,101,242,0.7); color:#fff; }
-  @media (max-width: 520px) { .ed-row { flex-wrap:wrap; } .ed-row > .ed-btn { margin-left:96px; } .ed-th { width:76px; height:76px; } }
+  @media (max-width: 520px) { .ed-row { flex-wrap:wrap; } .ed-rb { flex:1 1 calc(100% - 100px); } .ed-row > .ed-btn { margin-left:88px; } .ed-th { width:76px; height:76px; } }
   /* The Private tab: what is private, one line per folder, each opening to its photos. */
   .pv-stats { display:flex; gap:28px; flex-wrap:wrap; margin:4px 0 2px; }
   .pv-stat b { display:block; font-size:1.5rem; line-height:1.2; }
@@ -15212,7 +15224,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     position: relative;
     scroll-margin-top: 16px;
   }
-  .card.find-ring { outline: 3px solid #f5c542; outline-offset: 3px; box-shadow: 0 0 0 8px rgba(245,197,66,0.25); transition: outline-color .6s, box-shadow .6s; }
+  .card.find-ring { outline: 3px solid #aab2ff; outline-offset: 3px; box-shadow: 0 0 0 8px rgba(170,178,255,0.28); transition: outline-color .6s, box-shadow .6s; }
+  .card.find-ring.as-cover { outline-color: #f5c542; box-shadow: 0 0 0 8px rgba(245,197,66,0.25); }
   /* Select (the owner's way to act on several photos): tiles are picked with a tap; where the photos sit one by one a picked tile
      can also be held and dragged next to another (Arrange). */
   .select-bar { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; background: rgba(30,30,34,0.97); border: 1px solid #3a3a42; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 90; display: flex; flex-direction: column; gap: 8px; }
@@ -16327,7 +16340,7 @@ if (ENABLE_MAP && $mapPoints) {
     let file; try { file = decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch (e) { return; }
     const tile = document.querySelector('.card[data-file="' + cssEscape(file) + '"]'); if (!tile) return;
     const go = function () { tile.scrollIntoView({ block: 'center' }); };
-    go(); tile.classList.add('find-ring');
+    go(); tile.classList.add('find-ring'); if (/[?&]as=cover(&|#|$)/.test(location.search)) tile.classList.add('as-cover');
     window.addEventListener('load', go);   // (pictures finishing can move it)
     setTimeout(function () { tile.classList.remove('find-ring'); }, 3500);
   })();
