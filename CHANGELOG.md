@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.3.1] - unreleased
+
+### Added
+- **A cover photo in a share link's message preview and on its opening page.** Pasting a link into a chat used to show only the title and icon; now it can show a picture too. A new **Show a cover photo** box in the link form (next to the title) is on by default when the title is the gallery's own, and off with a neutral title or your own text, since a photo says which gallery it is; either can be changed on any link. The picture is your gallery's chosen cover when it is public, else the cover of one of the **public** folders (a public photo from the front page when there are no folders), the same one every time for a given link. It is worked out as a signed-out visitor would see the gallery, whoever asks, so a private photo can never be picked, and with nothing public to show the link has no picture and keeps the gallery's icon. The opening page shows the same picture above the title (its policy now allows pictures from the gallery and nothing else), and a link that doesn't work still shows none. Links made before this show no picture until you switch it on in **Edit**. Each link's details list its setting. The quick *Share this folder…* form makes links with the picture on.
+
 ## [2.3.0] - 2026-10-21
 
 ### Added

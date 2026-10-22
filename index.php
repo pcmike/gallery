@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.3.0');
+define('GALLERY_VERSION', '2.3.1');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -4305,7 +4305,7 @@ function link_record_new($now) {
     return [
         'id' => link_new_id(), 'label' => '', 'token' => link_new_token(), 'status' => 'active', 'created' => $now,
         'startsAt' => 0, 'endsAt' => 0, 'maxOpens' => 0, 'opens' => 0,
-        'note' => '', 'titleMode' => 'gallery', 'titleText' => '',
+        'note' => '', 'titleMode' => 'gallery', 'titleText' => '', 'picture' => false,
         'scope' => ['type' => 'all', 'folders' => [], 'photos' => []], 'openIn' => '',
         'downloads' => ['mode' => 'off', 'folders' => []], 'zip' => ['mode' => 'off', 'folders' => []],
         'locations' => 'public', 'headsUp' => 'default',
@@ -4617,6 +4617,40 @@ function link_page_title($l, $dir) {
     return gallery_title_early($dir);
 }
 
+/** The picture a link's message preview and opening page show, when the link has its picture switched on: the gallery's own cover if
+ *  it has one, else a cover from one of the PUBLIC folders (a public photo from the front page when there are no folders). It is
+ *  worked out as a signed-out visitor would see the gallery, whoever is asking, so a private photo can never be chosen; the same one
+ *  every time for a given link. A relative file path, or null (switched off, or nothing public to show). */
+function link_preview_picture($l, $dir) {
+    global $mediaExtensions, $self;
+    if (empty($l['picture'])) return null;
+    if (AUTO_GROUP_BY_FOLDER) {
+        $all = flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self));
+    } else {
+        $all = [];
+        foreach ((array) @scandir($dir) as $f) {
+            if ($f === $self || $f === '.' || $f === '..' || !is_file("$dir/$f")) continue;
+            if (in_array(strtolower(pathinfo($f, PATHINFO_EXTENSION)), $mediaExtensions, true)) $all[] = $f;
+        }
+        usort($all, 'strnatcasecmp');
+    }
+    $all = array_values(media_sort_apply($all, $dir));
+    $itemsData = items_get_all_for_files($dir, $all);
+    $public = array_values(array_filter($all, function ($f) use ($dir, $itemsData) { return !file_is_hidden($dir, $f, $itemsData); }));
+    $photo = function ($f) { return !is_video_file($f); };
+    $rootCover = root_display_meta($dir)['cover'];
+    if ($rootCover !== null && in_array($rootCover, $public, true) && $photo($rootCover)) return $rootCover;
+    $level = split_folder_level($public, '');
+    $pool = [];
+    foreach ($level['folders'] as $top => $members) {
+        $cover = pick_folder_cover($members, folder_display_meta($dir, $top)['cover']);
+        if ($cover !== null && $photo($cover)) $pool[] = $cover;
+    }
+    if (!$pool) $pool = array_values(array_filter($public, $photo));
+    if (!$pool) return null;
+    return $pool[hexdec(substr(hash('sha256', (string) ($l['token'] ?? '')), 0, 8)) % count($pool)];
+}
+
 /** A folder's last known path (from the links file), if the folder is still there carrying that id. */
 function link_folder_path_hint($fid) {
     $rel = (string) (links_read()['folderIndex'][$fid] ?? '');
@@ -4653,22 +4687,24 @@ function link_urls($l) {
     return ['short' => $base . '/' . $l['token'], 'long' => $base . '/?link=' . $l['token']];
 }
 
-function link_standalone_head($title) {
+function link_standalone_head($title, $picture = '') {
     header('Content-Type: text/html; charset=UTF-8');
     header('Cache-Control: no-store');
     header('X-Robots-Tag: noindex, nofollow');
     header('Referrer-Policy: no-referrer');
-    header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    header("Content-Security-Policy: default-src 'none'; " . ($picture !== '' ? "img-src 'self'; " : '') . "style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     $t = htmlspecialchars($title, ENT_QUOTES, 'UTF-8');
+    $og = $picture === '' ? '' : '<meta property="og:image" content="' . htmlspecialchars(current_base_url() . '/' . img_url($picture, 'share'), ENT_QUOTES, 'UTF-8') . '"><meta name="twitter:card" content="summary_large_image">';
     return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="robots" content="noindex, nofollow"><meta name="referrer" content="no-referrer"><title>' . $t . '</title>'
-        . '<meta property="og:title" content="' . $t . '"><meta property="og:type" content="website">'
+        . '<meta property="og:title" content="' . $t . '"><meta property="og:type" content="website">' . $og
         . '<style>:root{color-scheme:dark}html,body{height:100%}body{margin:0;background:#0f0f10;color:#eaeaea;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.5}'
         . '.wrap{box-sizing:border-box;min-height:100%;max-width:420px;margin:0 auto;padding:12vh 24px 24px;text-align:center}'
         . '.ico{width:64px;height:64px;border-radius:50%;background:#1a1a1c;display:inline-flex;align-items:center;justify-content:center;color:#aab2ff;margin-bottom:6px}.ico svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}'
         . 'h1{font-size:1.5rem;margin:14px 0 10px}p{color:#b9b9c0;font-size:1rem;margin:0 0 20px}'
         . '.note{margin:6px 0 22px;padding:12px 14px;border-left:3px solid #5865f2;background:#141416;border-radius:0 8px 8px 0;font-size:1rem;line-height:1.45;color:#e4e4e8;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}'
         . '.big{display:block;width:100%;box-sizing:border-box;height:50px;border:0;border-radius:12px;background:#5865f2;color:#fff;font:inherit;font-size:1.05rem;font-weight:600;cursor:pointer}.big:focus-visible{outline:2px solid #fff;outline-offset:2px}'
-        . '.small{font-size:.8rem;color:#6f6f77;margin-top:14px}</style></head><body><div class="wrap">';
+        . '.pic{display:block;width:100%;aspect-ratio:1200/630;object-fit:cover;border-radius:14px;background:#1a1a1c;margin:0 0 18px}.wrap.has-pic{padding-top:6vh}'
+        . '.small{font-size:.8rem;color:#6f6f77;margin-top:14px}</style></head><body><div class="wrap' . ($picture !== '' ? ' has-pic' : '') . '">';
 }
 
 
@@ -4684,8 +4720,9 @@ function render_link_invalid_page($status = 404) {
 /** The page a working link opens: its title, an optional note, and the one button that counts as using it. */
 function render_link_open_page($l, $dir) {
     header('X-Gallery-Link: open');
-    echo link_standalone_head(link_page_title($l, $dir));
-    echo '<div class="ico">' . LINK_ICON_GALLERY . '</div><h1>' . htmlspecialchars(link_page_title($l, $dir), ENT_QUOTES, 'UTF-8') . '</h1>';
+    $picture = link_preview_picture($l, $dir);
+    echo link_standalone_head(link_page_title($l, $dir), (string) $picture);
+    echo ($picture !== null ? '<img class="pic" src="' . htmlspecialchars(gallery_root_href() . img_url($picture, 'share'), ENT_QUOTES, 'UTF-8') . '" alt="">' : '<div class="ico">' . LINK_ICON_GALLERY . '</div>') . '<h1>' . htmlspecialchars(link_page_title($l, $dir), ENT_QUOTES, 'UTF-8') . '</h1>';
     if (trim((string) ($l['note'] ?? '')) !== '') echo '<div class="note">' . htmlspecialchars((string) $l['note'], ENT_QUOTES, 'UTF-8') . '</div>';
     echo '<form method="post" action=""><input type="hidden" name="go" value="1"><button type="submit" class="big">Open the gallery</button></form>';
     if ((int) ($l['endsAt'] ?? 0) > 0) {
@@ -7973,6 +8010,9 @@ function link_input_from_post($now, $existing, $dir, $files) {
     if (!in_array($titleMode, ['gallery', 'neutral', 'custom'], true)) $titleMode = 'gallery';
     $titleText = link_clip(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) ($_POST['title_text'] ?? ''))), 80);
     if ($titleMode === 'custom' && $titleText === '') $titleMode = 'gallery';
+    // A cover photo in the message preview and on the opening page: on when the title is the gallery's own, unless the form says otherwise;
+    // a request that doesn't say (an older page, a script) leaves an existing link as it was.
+    $picture = isset($_POST['picture']) ? $_POST['picture'] === '1' : ($existing !== null ? !empty($existing['picture']) : $titleMode === 'gallery');
     $maxOpens = max(0, min(100000, (int) ($_POST['max_opens'] ?? 0)));
     $endsAt = max(0, (int) ($_POST['ends_at'] ?? 0));
     $startsAt = max(0, (int) ($_POST['starts_at'] ?? 0));
@@ -8051,14 +8091,14 @@ function link_input_from_post($now, $existing, $dir, $files) {
     $zip = $cap('zip', 'zip_folders', 'ZIP downloads');
     $only = $scopeType !== 'all' && ($_POST['only'] ?? '') === '1';   // "show only these": the person's pages list nothing but what the link covers, the rest of the public gallery too
     return [[
-        'label' => $label, 'note' => $note, 'titleMode' => $titleMode, 'titleText' => $titleText, 'maxOpens' => $maxOpens,
+        'label' => $label, 'note' => $note, 'titleMode' => $titleMode, 'titleText' => $titleText, 'picture' => $picture, 'maxOpens' => $maxOpens,
         'startsAt' => $startsAt, 'endsAt' => $endsAt, 'locations' => $locations, 'headsUp' => $headsUp,
         'scope' => $scope, 'only' => $only, 'openIn' => $openIn, 'downloads' => $downloads, 'zip' => $zip, '_index' => $index,
     ], $errors];
 }
 
 function link_apply_fields(&$rec, $f) {
-    foreach (['label', 'note', 'titleMode', 'titleText', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'only', 'openIn', 'downloads', 'zip'] as $k) $rec[$k] = $f[$k];
+    foreach (['label', 'note', 'titleMode', 'titleText', 'picture', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'only', 'openIn', 'downloads', 'zip'] as $k) $rec[$k] = $f[$k];
 }
 
 /** The Share tab's POST actions (link_create, link_save, link_pause, link_resume, link_revoke, link_extend, link_replace,
@@ -8682,7 +8722,7 @@ KIT_CSS;
       var d2 = draftOf();
       csrf().then(function (token) {
         var body = new URLSearchParams();
-        body.set('csrf_token', token); body.set('action', 'link_create'); body.set('label', d2.label); body.set('note', ''); body.set('title_mode', 'gallery');
+        body.set('csrf_token', token); body.set('action', 'link_create'); body.set('label', d2.label); body.set('note', ''); body.set('title_mode', 'gallery'); body.set('picture', '1');
         body.set('scope_type', d2.scopeType); body.set('only', d2.only ? '1' : '0'); body.set('scope_folders', JSON.stringify(d2.scopeFolders)); body.set('scope_photos', JSON.stringify(d2.scopePhotos)); body.set('open_in', d2.openIn);
         body.set('downloads', 'off'); body.set('zip', 'off'); body.set('locations', 'public'); body.set('heads_up', 'default'); body.set('starts_at', '0');
         body.set('max_opens', d2.maxOpens); body.set('ends_at', d2.endsAt);
@@ -8747,7 +8787,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         $tail = substr($l['token'], 0, 4) . '…' . substr($l['token'], -4);
         $title = ($l['titleMode'] ?? 'gallery') === 'neutral' ? 'A neutral title (“A shared gallery”)' : (($l['titleMode'] ?? '') === 'custom' ? '“' . $esc($l['titleText']) . '”' : 'The gallery\'s title');
         $heads = ['default' => 'The site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'][$l['headsUp'] ?? 'default'];
-        $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'maxOpens' => (int) $l['maxOpens'],
+        $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'picture' => !empty($l['picture']), 'maxOpens' => (int) $l['maxOpens'],
             'startsAt' => (int) $l['startsAt'], 'endsAt' => (int) $l['endsAt'], 'locations' => $l['locations'], 'headsUp' => $l['headsUp'], 'state' => $state,
             'scopeType' => $l['scope']['type'] ?? 'all', 'only' => !empty($l['only']), 'scopeFolders' => $report['paths']['scope'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
             'downloads' => $l['downloads']['mode'] ?? 'off', 'downloadsFolders' => $report['paths']['downloads'], 'zip' => $l['zip']['mode'] ?? 'off', 'zipFolders' => $report['paths']['zip']], JSON_HEX_TAG | JSON_HEX_AMP));
@@ -8782,6 +8822,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
               <dt>Ends</dt><dd><?= (int) $l['endsAt'] > 0 ? link_time_html($l['endsAt']) : 'Never' ?></dd>
               <dt>Heads-up header</dt><dd><?= $esc($heads) ?></dd>
               <dt>Opening page title</dt><dd><?= $title ?></dd>
+              <dt>Cover photo</dt><dd><?= !empty($l['picture']) ? 'A cover from the public folders' : 'None' ?></dd>
               <?php if (trim((string) $l['note']) !== ''): ?><dt>Note shown</dt><dd>“<?= $esc($l['note']) ?>”</dd><?php endif; ?>
               <dt>Made</dt><dd><?= link_time_html($l['created']) ?></dd>
             </dl>
@@ -8831,7 +8872,8 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         <div class="sl-f"><span class="sl-k">Title on the opening page and in message previews</span>
           <?= ui_segmented('title_mode', ['gallery' => 'The gallery\'s title', 'neutral' => 'A neutral title', 'custom' => 'My own text…'], 'gallery', 'Title') ?>
           <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" hidden>
-          <span class="sl-h">A neutral title shows “A shared gallery”. The icon is always the gallery's, and no photo or folder name is ever shown.</span></div>
+          <span class="sl-h">A neutral title shows “A shared gallery”.</span>
+          <label class="sl-only sl-pic"><input type="checkbox" name="picture" checked> <span><strong>Show a cover photo</strong> <small>In message previews and on the opening page: your gallery's cover, or a cover from one of the public folders, the same one every time for this link. Never a private photo and never a folder name. It starts on with the gallery's title and off with the other two, since a photo says which gallery it is. Without a photo the icon is the gallery's.</small></span></label></div>
         <div class="sl-f"><span class="sl-k">What they can see</span>
           <div class="sl-radios" role="radiogroup" aria-label="What they can see">
             <label class="sl-radio"><input type="radio" name="scope_type" value="all" checked><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
@@ -11688,7 +11730,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     });
     box.addEventListener('keydown', function (e) { if (e.key === 'Escape' && asking) { e.preventDefault(); asking(false); } });
     // ---- the form
-    var DEFAULTS = { label: '', note: '', titleMode: 'gallery', titleText: '', maxOpens: 10, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default',
+    var DEFAULTS = { label: '', note: '', titleMode: 'gallery', titleText: '', picture: true, maxOpens: 10, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default',
       scopeType: 'all', only: false, scopeFolders: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
     function localValue(ts) {
       var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
@@ -11744,6 +11786,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       form.querySelector('.sl-form-title').textContent = editing ? 'Edit link' : 'New share link';
       form.querySelector('.sl-save').textContent = editing ? 'Save' : 'Create link';
       form.querySelector('[name=label]').value = v.label; form.querySelector('[name=note]').value = v.note; form.querySelector('[name=title_text]').value = v.titleText;
+      form.querySelector('[name=picture]').checked = !!v.picture;
       radio(form, 'title_mode', v.titleMode); radio(form, 'downloads', v.downloads); radio(form, 'zip', v.zip); radio(form, 'locations', v.locations); radio(form, 'heads_up', v.headsUp);
       radio(form, 'scope_type', v.scopeType); form.querySelector('[name=only]').checked = !!v.only;
       radio(form, 'starts_pick', v.startsAt > 0 ? 'pick' : 'now'); if (v.startsAt > 0) form.querySelector('[name=starts_at_local]').value = localValue(v.startsAt);
@@ -11759,7 +11802,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       return {
         action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
         label: form.querySelector('[name=label]').value, note: form.querySelector('[name=note]').value,
-        title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value,
+        title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value, picture: form.querySelector('[name=picture]').checked ? '1' : '0',
         scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' ? st.scope : []), scope_photos: JSON.stringify(scope === 'photos' ? st.photos : []),
         only: scope !== 'all' && form.querySelector('[name=only]').checked ? '1' : '0',
         open_in: form.querySelector('[name=open_in]').value,
@@ -11772,6 +11815,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     box.addEventListener('change', function (e) {
       var form = e.target.closest ? e.target.closest('#sl-form') : null; if (!form) return;
+      if (e.target.name === 'title_mode' && !form.querySelector('[name=id]').value) form.querySelector('[name=picture]').checked = e.target.value === 'gallery';   // (a new link: the photo follows the title until you decide)
       if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'photos';   // (photos: on to start with; folders: off)
       if (e.target.name === 'scope_type' && e.target.value === 'folders') {
         // folders already chosen for downloads and ZIPs that the new scope doesn't cover are dropped

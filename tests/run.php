@@ -4882,7 +4882,7 @@ check('[share links] a link needs a name, and an end time that is still to come'
 [$slGetStatus, $slGetBody, $slGetHeaders] = http_get("$baseSl/?link=$slToken");
 $slHeaderLines = implode("\n", $slGetHeaders);
 check('[share links] opening the address shows the page with one button, the note and the title, and counts nothing yet', $slGetStatus === 200 && str_contains($slGetBody, 'Open the gallery') && str_contains($slGetBody, 'Hi Carol, here are the Rome photos.') && str_contains($slGetBody, '<h1>' . basename($fxSl) . '</h1>') && ($slLinks()['links'][$slId]['opens'] ?? -1) === 0);
-check('[share links] ...the page is private to the visitor (no storing, not indexed, no referrer, nothing framed) and does not give away the link\'s name or any photo', stripos($slHeaderLines, 'Cache-Control: no-store') !== false && stripos($slHeaderLines, 'X-Robots-Tag: noindex') !== false && stripos($slHeaderLines, 'Referrer-Policy: no-referrer') !== false && stripos($slHeaderLines, 'frame-ancestors') !== false && !str_contains($slGetBody, 'Aunt Carol') && !str_contains($slGetBody, 'sec.jpg') && !str_contains($slGetBody, 'Rome/') && !str_contains($slGetBody, 'og:image'));
+check('[share links] ...the page is private to the visitor (no storing, not indexed, no referrer, nothing framed) and does not give away the link\'s name or any photo', stripos($slHeaderLines, 'Cache-Control: no-store') !== false && stripos($slHeaderLines, 'X-Robots-Tag: noindex') !== false && stripos($slHeaderLines, 'Referrer-Policy: no-referrer') !== false && stripos($slHeaderLines, 'frame-ancestors') !== false && !str_contains($slGetBody, 'Aunt Carol') && !str_contains($slGetBody, 'sec.jpg') && !str_contains($slGetBody, 'Rome/') && !preg_match('/og:image[^>]*(sec\.jpg|Rome)/', $slGetBody));
 check('[share links] before anyone presses the button the public sees nothing private', !str_contains($slPage('')[1], 'sec.jpg') && http_get("$baseSl/?img=sec.jpg&size=thumb")[0] === 404 && http_get("$baseSl/?img=Rome%2Fr1.jpg&size=thumb")[0] === 404);
 
 [$slGo1Status, , $slGo1Headers] = http_post("$baseSl/?link=$slToken", ['go' => '1'], [], false);
@@ -5524,6 +5524,104 @@ $loWrite(false);
 check('[share links locations] with Rome\'s public locations off, the public and a link set to "as the public sees them" get none in Rome, and other folders are unaffected', $loSees([], 'Rome') === [] && $loSees($loHold, 'Rome') === [] && $loSees($loHold, 'Florence') === ['Florence/f1.jpg', 'Florence/f2.jpg']);
 $loAdmin(['action' => 'link_save', 'id' => $loPhoto['id'], 'label' => 'one photo', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'all', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off', 'scope_type' => 'photos', 'scope_photos' => '["Rome/r1.jpg"]']);
 check('[share links locations] ...and editing the link to "all saved locations" shows every stored location in Rome (even a photo hidden on its own), while the public still gets none', $loSees($loHold, 'Rome') === ['Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/r3.jpg'] && $loSees([], 'Rome') === []);
+
+echo "== share links: a cover photo in the message preview and on the opening page ==\n";
+
+$fxP = new_fixture_dir('slpicture');
+foreach (['Pisa', 'Lucca', 'Rome'] as $pxD) mkdir("$fxP/$pxD");
+make_jpeg("$fxP/pub.jpg", 80, 60, 200, 60, 60); make_jpeg("$fxP/sec.jpg", 80, 60, 50, 60, 60);
+make_jpeg("$fxP/Pisa/p1.jpg", 80, 60, 150, 60, 60); make_jpeg("$fxP/Lucca/l1.jpg", 80, 60, 60, 150, 60); make_jpeg("$fxP/Rome/r1.jpg", 80, 60, 60, 60, 150);
+write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => []]);
+write_data_file("$fxP/Rome/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+$pxConfig = fn (array $o = []) => file_put_contents("$fxP/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => 'pic-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'pic-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+$pxConfig();
+copy($indexSrc, "$fxP/index.php");
+$portP = find_free_port(); start_server($fxP, $portP); $baseP = "http://127.0.0.1:$portP";
+[, , $pxLoginH] = http_post("$baseP/?admin", ['access_code' => 'pic-admin-pw-1'], [], false);
+$pxCookie = extract_cookie_header($pxLoginH);
+$pxPage = http_get("$baseP/?admin", ["Cookie: $pxCookie"])[1];
+$pxCsrf = extract_csrf_token($pxPage);
+$pxAdmin = function (array $fields) use ($baseP, $pxCookie, $pxCsrf) {
+    [, $body] = http_post("$baseP/?admin", $fields + ['csrf_token' => $pxCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $pxCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$pxLinks = fn () => read_data_file("$fxP/.gallery-links.php")['links'] ?? [];
+$pxMake = function (array $o = []) use ($pxAdmin, $pxLinks) {
+    $r = $pxAdmin($o + ['action' => 'link_create', 'label' => 'Carol', 'title_mode' => 'gallery', 'max_opens' => 50, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'downloads' => 'off']);
+    return $pxLinks()[$r['id'] ?? ''] ?? [];
+};
+$pxOpen = function ($token, array $headers = []) use ($baseP) { return http_get("$baseP/?link=$token", $headers); };
+$pxOg = fn ($body) => preg_match('/<meta property="og:image" content="([^"]*)"/', $body, $m) ? html_entity_decode($m[1], ENT_QUOTES) : '';
+$pxFile = fn ($url) => preg_match('/[?&]img=([^&]*)/', $url, $m) ? rawurldecode($m[1]) : '';
+$pxCsp = function ($headers) { foreach ($headers as $h) if (stripos($h, 'Content-Security-Policy:') === 0) return $h; return ''; };
+
+$pxGallery = $pxMake(); $pxNeutral = $pxMake(['title_mode' => 'neutral']); $pxCustom = $pxMake(['title_mode' => 'custom', 'title_text' => 'For Carol']);
+$pxOffGallery = $pxMake(['picture' => '0']); $pxOnNeutral = $pxMake(['title_mode' => 'neutral', 'picture' => '1']);
+check('[share picture] a new link starts with the cover photo on when its title is the gallery\'s own, and off with a neutral or your own title; the form can say otherwise either way',
+    ($pxGallery['picture'] ?? null) === true && ($pxNeutral['picture'] ?? null) === false && ($pxCustom['picture'] ?? null) === false && ($pxOffGallery['picture'] ?? null) === false && ($pxOnNeutral['picture'] ?? null) === true);
+
+[, $pxBody, $pxHeaders] = $pxOpen($pxGallery['token']);
+$pxUrl = $pxOg($pxBody); $pxChosen = $pxFile($pxUrl);
+check('[share picture] the message preview gets an og:image: a full address to the 1200-wide share picture of a public folder\'s cover, and a large-image card', str_starts_with($pxUrl, "$baseP/?img=") && str_contains($pxUrl, '&size=share') && in_array($pxChosen, ['Pisa/p1.jpg', 'Lucca/l1.jpg'], true) && str_contains($pxBody, '<meta name="twitter:card" content="summary_large_image">'));
+check('[share picture] the opening page shows that picture instead of the icon, and its policy lets the page load pictures from the gallery and nothing else', preg_match('/<img class="pic" src="[^"]*img=' . preg_quote(rawurlencode($pxChosen), '/') . '[^"]*size=share/', $pxBody) === 1 && !str_contains($pxBody, '<div class="ico">') && str_contains($pxCsp($pxHeaders), "img-src 'self';") && !str_contains($pxCsp($pxHeaders), 'img-src *'));
+[$pxImgStatus, , $pxImgHeaders] = http_get($pxUrl);
+check('[share picture] that picture can be fetched by anyone with no sign-in (what a chat app does)', $pxImgStatus === 200 && count(preg_grep('/^Content-Type: image\//i', $pxImgHeaders)) === 1);
+
+$pxSeen = []; $pxLeak = 0; $pxStable = true; $pxViewerSame = true; $pxMany = [];
+$pxRevealCookie = extract_cookie_header(http_get("$baseP/?reveal", ['Authorization: Basic ' . base64_encode('x:pic-view-pw-1')], false)[2]);
+for ($i = 0; $i < 20; $i++) $pxMany[] = $pxMake();
+foreach ($pxMany as $pxL) {
+    $f1 = $pxFile($pxOg($pxOpen($pxL['token'])[1]));
+    $f2 = $pxFile($pxOg($pxOpen($pxL['token'])[1]));
+    $f3 = $pxRevealCookie ? $pxFile($pxOg($pxOpen($pxL['token'], ["Cookie: $pxRevealCookie"])[1])) : '?';
+    $pxSeen[$f1] = true;
+    if (!in_array($f1, ['Pisa/p1.jpg', 'Lucca/l1.jpg'], true)) $pxLeak++;
+    if ($f1 !== $f2) $pxStable = false;
+    if ($f1 !== $f3) $pxViewerSame = false;
+}
+check('[share picture] across 20 links the picture is only ever a public folder\'s cover (never the private Rome folder, the private photo, or the front-page photo), and both public folders get used', $pxLeak === 0 && count($pxSeen) === 2 && $pxRevealCookie !== null);
+check('[share picture] a link always shows the same picture, and someone holding the private-view password sees the preview a signed-out visitor would (so a private photo can\'t be picked)', $pxStable && $pxViewerSame);
+
+[, $pxOffBody, $pxOffHeaders] = $pxOpen($pxNeutral['token']);
+check('[share picture] with the picture off there is no og:image, the opening page keeps the gallery\'s icon, and its policy allows no pictures', $pxOg($pxOffBody) === '' && !str_contains($pxOffBody, 'twitter:card') && str_contains($pxOffBody, '<div class="ico">') && !str_contains($pxOffBody, '<img') && !str_contains($pxCsp($pxOffHeaders), 'img-src'));
+[, $pxOnNeutralBody] = $pxOpen($pxOnNeutral['token']);
+check('[share picture] a neutral title with the picture switched on shows the picture with the title "A shared gallery"', $pxOg($pxOnNeutralBody) !== '' && str_contains($pxOnNeutralBody, '<h1>A shared gallery</h1>'));
+check('[share picture] a link that doesn\'t work shows no picture, whatever its setting', $pxOg(http_get("$baseP/?link=ZZZZZZZZZZZZZZZZ")[1]) === '' && !str_contains(http_get("$baseP/?link=ZZZZZZZZZZZZZZZZ")[1], '<img'));
+
+// The gallery's own cover, when it has one and it is public, represents it; a private one is ignored.
+write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => [], 'cover' => 'pub.jpg']);
+$pxAllCover = array_unique(array_map(fn ($l) => $pxFile($pxOg($pxOpen($l['token'])[1])), array_slice($pxMany, 0, 6)));
+write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => [], 'cover' => 'sec.jpg']);
+$pxPrivCover = array_unique(array_map(fn ($l) => $pxFile($pxOg($pxOpen($l['token'])[1])), array_slice($pxMany, 0, 6)));
+write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => []]);
+check('[share picture] the gallery\'s chosen cover is used when it is public (the same one on every link), and ignored when it is private', $pxAllCover === ['pub.jpg'] && !in_array('sec.jpg', $pxPrivCover, true) && count($pxPrivCover) >= 1 && $pxPrivCover[0] !== '');
+
+// Nothing public to show: no picture, and the page is the usual one.
+write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private'], 'pub.jpg' => ['restriction' => 'private']], 'groups' => []]);
+foreach (['Pisa', 'Lucca'] as $pxD) write_data_file("$fxP/$pxD/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+[, $pxNoneBody] = $pxOpen($pxGallery['token']);
+check('[share picture] when nothing in the gallery is public there is no picture, and the opening page is the usual one with the icon', $pxOg($pxNoneBody) === '' && str_contains($pxNoneBody, '<div class="ico">') && str_contains($pxNoneBody, 'Open the gallery'));
+@unlink("$fxP/Pisa/.gallery-items.php"); @unlink("$fxP/Lucca/.gallery-items.php");
+write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => []]);
+
+// Editing: a request that doesn't mention the picture leaves it as it was; the form can switch it.
+$pxEditId = $pxGallery['id'];
+$pxAdmin(['action' => 'link_save', 'id' => $pxEditId, 'label' => 'Carol 2', 'title_mode' => 'neutral', 'max_opens' => 50, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'downloads' => 'off']);
+$pxKept = $pxLinks()[$pxEditId]['picture'] ?? null;
+$pxAdmin(['action' => 'link_save', 'id' => $pxEditId, 'label' => 'Carol 2', 'title_mode' => 'neutral', 'picture' => '0', 'max_opens' => 50, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'downloads' => 'off']);
+check('[share picture] editing without mentioning the picture leaves it as it was, and the form\'s choice is saved', $pxKept === true && ($pxLinks()[$pxEditId]['picture'] ?? null) === false);
+$pxOld = $pxLinks(); $pxOldId = $pxNeutral['id']; unset($pxOld[$pxOldId]['picture']); $pxFileAll = read_data_file("$fxP/.gallery-links.php"); $pxFileAll['links'] = $pxOld; write_data_file("$fxP/.gallery-links.php", $pxFileAll);
+check('[share picture] a link made before this setting existed shows no picture, as before', $pxOg($pxOpen($pxNeutral['token'])[1]) === '' && $pxOg($pxOpen($pxOffGallery['token'])[1]) === '');
+
+// The tab.
+$pxTab = http_get("$baseP/?admin", ["Cookie: $pxCookie"])[1];
+check('[share picture] the New link form has the "Show a cover photo" box, it is saved with the form, follows the title choice on a new link, and the tab lists each link\'s setting', str_contains($pxTab, 'name="picture"') && str_contains($pxTab, 'Show a cover photo') && str_contains($pxTab, "picture: form.querySelector('[name=picture]').checked ? '1' : '0'") && str_contains($pxTab, "e.target.name === 'title_mode'") && str_contains($pxTab, '<dt>Cover photo</dt>') && str_contains($pxTab, '&quot;picture&quot;:'));
+check('[share picture] the quick "Share this folder…" form makes its link with the picture on, and the old wording "no photo is ever shown" is gone', str_contains($pxTab, "body.set('picture', '1')") && !str_contains($pxTab, 'no photo or folder name is ever shown'));
+
+// Without folders (Show subfolders off): a public photo from the front page.
+$pxConfig(['AUTO_GROUP_BY_FOLDER' => false]);
+check('[share picture] with subfolders off the picture is a public photo from the front page', $pxFile($pxOg($pxOpen($pxMany[0]['token'])[1])) === 'pub.jpg');
+$pxConfig();
 
 echo "== prepare media: what the files say is read once, kept in the cache, and never overrides the owner ==\n";
 

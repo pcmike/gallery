@@ -14,7 +14,8 @@ Everything below was built and tested in a desktop browser (a real headless Chro
 - [ ] **Select** a few photos, **Share…**: the form says "Share these N photos".
 
 ## What the person sees
-- [ ] Paste the link into Messages: the preview shows the gallery's title and icon, never a photo or a folder name. (If you chose "A neutral title", it says "A shared gallery".)
+- [ ] Paste a link with the gallery's title into Messages: the preview shows the title and a cover photo from a public folder (never a private one, never a folder name), the same photo each time you paste it. (If you chose "A neutral title", it says "A shared gallery" and shows no photo unless you ticked *Show a cover photo*.)
+- [ ] The opening page of that link shows the same photo above the title; a link with the box unticked shows the gallery's icon instead.
 - [ ] Open it from Messages: the page is one button, **Open the gallery**. Press it: you land in the gallery (or the folder it opens in).
 - [ ] The link doesn't count an open until the button is pressed: open the link in Messages' preview and check the tab still says *0 of N opens*.
 - [ ] Open a link from an app's own browser (Instagram, Facebook, Messages' in-app view), press the button, then choose *Open in Safari*: it still works and used only one open.

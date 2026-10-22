@@ -323,7 +323,8 @@ A link remembers a folder by a **hidden id** kept in the folder's own `.gallery-
 - **Photo locations:** *as the public sees them* (the default: only the locations visitors already see) or *all saved locations*. A location that is hidden is removed from every download and ZIP the link hands out ([how](#downloads)).
 - **Starts**, **Opens** and **Stops working**, in your browser's time zone. Opens are counted per browser, not per page: once someone is in they can keep looking until the link stops.
 - **Heads-up:** a thin line at the top of the gallery, "The link being used to access this media expires on …", amber in the last day and dismissable. `SHARE_HEADS_UP` sets the default; each link can turn it on or off; a link with no end date never shows it.
-- **Opening page title and note:** the gallery's title, "A shared gallery", or your own text; an optional note. Never a photo or folder name.
+- **Opening page title and note:** the gallery's title, "A shared gallery", or your own text; an optional note. Never a folder name.
+- **Cover photo:** the **Show a cover photo** box puts a picture in the link's message preview (what Messages, Discord or Reddit show when the address is pasted) and above the title on the opening page. It is on to begin with when the title is the gallery's own and off with a neutral title or your own text, and you can change it on any link. The picture is the gallery's chosen cover if that is public, else the cover of one of the **public** folders (a public photo from the front page if there are no folders), and the same one every time for a given link. It is chosen as a signed-out visitor would see the gallery, so a private photo is never used; if nothing is public there is no picture and the icon stays. Anyone who sees the pasted message sees the picture, so leave it off for a link whose gallery shouldn't be recognisable.
 
 ### What the person sees
 The address opens a page with one button, **Open the gallery**. **Pressing the button is what uses the link**, so a message app's link preview can't use it up. The same address opening again within 15 minutes (an app's own browser, then Safari) is not a second use. Every link that doesn't work (expired, used up, paused, revoked, mistyped, switched off) shows the same page, *This link isn't valid*, with nothing to press and no reason given. The page is not indexed, not stored and sends no referrer.
@@ -491,6 +492,8 @@ Found a security problem? Open a GitHub issue, or contact the author privately i
 ## Upgrading and backups
 
 **Updating** means replacing `index.php`. Settings (`.gallery-config.php`), captions and everything else live beside it and are untouched; the Health check then shows what it was upgraded from.
+
+**Upgrading to 2.3.1** adds the **Show a cover photo** choice to [share links](#share-links). Links made before it have no picture until you switch it on in *Edit*; nothing else changes.
 
 **Upgrading to 2.3.0 or later** adds [share links](#share-links), off until you switch on *Allow share links*. Nothing stored changes. Once links are used the gallery writes `.gallery-links.php` (the links) and a `.gallery-linklog-*.php` for each (its log) beside `index.php`, and stamps a hidden id into the `.gallery-items.php` of a folder a link covers; add the two new names to `.gitignore` and your backups (below). On a private photo or a private folder's card, the link button now asks you what you mean, and is gone for everyone else.
 
