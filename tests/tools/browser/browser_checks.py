@@ -672,6 +672,21 @@ try:
                 ok(b.js("[...document.querySelectorAll('#health-panel .health-row')].every(r => getComputedStyle(r).display !== 'none')"), "[health] \"Show all checks\" unfolds every row")
         finally:
             srv11.terminate(); srv11.wait()
+    # a CLOSED gallery turns away the check's cookie-less request for /Folder/ with the invalid-link page, which only the gallery sends: that still means the address reaches it
+    raw11 = open(SITE11 + "/.gallery-config.php").read(); head11, _, body11 = raw11.partition("\n"); cfg11 = json.loads(body11)
+    cfg11.update({"ENABLE_SHARE_LINKS": True, "CLOSE_PUBLIC_GALLERY": True})
+    open(SITE11 + "/.gallery-config.php", "w").write(head11 + "\n" + json.dumps(cfg11) + "\n")
+    s11c = socket.socket(); s11c.bind(("127.0.0.1", 0)); P11C = s11c.getsockname()[1]; s11c.close()
+    srv11c = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P11C}", "-t", WORK + "/site11root", WORK + "/lockrouter.php"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.call("Network.setExtraHTTPHeaders", {"headers": lockauth})
+        b.viewport(1280, 900); b.goto(f"http://127.0.0.1:{P11C}/trip/?admin", 2.5); b.drain(2.5)
+        tc = b.js("""(() => ({status: [...document.querySelectorAll('[data-tidy-status]')].map(e => e.className + '|' + e.textContent), rulesHidden: [...document.querySelectorAll('[data-tidy-rules]')].every(e => e.hidden),
+            row: [...document.querySelectorAll('[data-health-row]')].map(r => r.textContent.replace(/\\s+/g, ' ').trim().slice(0, 200))}))()""")
+        ok(any(t.startswith("lock-result ok-text|Tidy folder links work") and "gallery is closed" in t for t in tc["status"]) and tc["rulesHidden"] and any("reaches the gallery" in r for r in tc["row"]), "[tidy check, closed] with the gallery closed, the check (no sign-in) is shown the invalid-link page, and Settings and the Health check still say tidy folder links work, and why", str(tc))
+    finally:
+        srv11c.terminate(); srv11c.wait()
     # a gallery whose photos all live in folders from elsewhere on the server: nothing there can be fetched by an address
     SITE12 = WORK + "/site12"; os.makedirs(SITE12); SITE12X = WORK + "/site12extra"; os.makedirs(SITE12X + "/Paris")
     shutil.copy(HERE + "/../../../index.php", SITE12 + "/index.php"); os.utime(SITE12 + "/index.php", (time.time() - 3600,) * 2)
@@ -716,10 +731,15 @@ try:
     ok(b.js("Math.round(window.scrollY)") == 0 and b.js("location.hash") == "", "[cover jump] a folder without a chosen cover opens at the top, as before")
     srv7.terminate(); srv7.wait()
     b.viewport(1280, 900)
-    print("== phone width (390x844)"); b.viewport(390, 844, mobile=True)
+    print("== phone width (390x844)"); b.viewport(390, 844, mobile=True); phone_grids = []
     for name, path in (("gallery", "/"), ("folder", "/?folder=Europe"), ("nested", "/?folder=Europe%2FFrance%2FParis"), ("about", "/?about")):
         b.goto(B + path, 1.5); shot(b, f"06-mobile-{name}")
         ok(b.js(overflow), f"[{name}] no horizontal scrolling on a phone", f"scrollWidth={b.js('document.documentElement.scrollWidth')}")
+        gr = b.js("(() => { const g = document.querySelector('.gallery'); if (!g) return null; const kids = [...g.children].filter(c => c.getBoundingClientRect().height > 0 && getComputedStyle(c).position !== 'absolute'), rows = {}; kids.forEach(c => { const t = Math.round(c.getBoundingClientRect().top / 4); rows[t] = (rows[t] || 0) + 1; }); const cols = Math.max(0, ...Object.values(rows)); return {one: g.classList.contains('one-up'), cols, tiles: kids.length}; })()")   # (columns = the most tiles that sit side by side in any row: the first child can be a full-width note, and the photo grid is not always a CSS grid)
+        if gr:
+            ok(not gr["one"] or gr["cols"] == 1, f"[one per row] [{name}] on a phone a page with the one-up class (fewer than ten things) is one column", str(gr))
+            phone_grids.append(gr)
+    ok(any(g["one"] for g in phone_grids), "[one per row] at least one of the phone pages has fewer than ten things and is one per row", str(phone_grids))
     # ---------------- swipe gestures (real touch events) ----------------
     print("== swipe gestures on a phone (real touch events)")
     b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
@@ -1192,6 +1212,12 @@ try:
     w5 = b.js(cardw)
     ok(abs(left('.map-combo') - left('.folder-cover')) <= 1, "[few folders] with the normal grid the map buttons still sit above the first card", f"{left('.map-combo')} vs {left('.folder-cover')}")
     ok(w5 < 260, "[few folders] five folders are back to the normal grid", str(w5))
+    for vw in (390, 393, 402, 430):   # (iPhone widths: five folder cards used to sit two across, and now sit one per row: fewer than ten things)
+        b.viewport(vw, 852, mobile=True); b.goto(B4 + "/", 1.0)
+        wc = b.js(cardw + " / document.documentElement.clientWidth")
+        ok(wc >= 0.8 and b.js(overflow) and b.js("document.querySelector('.gallery').classList.contains('one-up')"), f"[one per row] at {vw} px wide five folder cards are one per row (a card is about the width of the screen), with no sideways scrolling", str(wc))
+    b.viewport(1280, 900); b.goto(B4 + "/", 1.0)
+    ok(b.js(cardw) < 260, "[one per row] ...and on a wide screen they are unchanged (back to the normal grid)", str(b.js(cardw)))
     srv4.terminate(); srv4.wait()
     b.viewport(1280, 900)
     # ---------------- the phone viewer, the sharper tiles, "prepare thumbnails" and the owner's lock ----------------
@@ -2094,9 +2120,20 @@ try:
         ok(op["button"] == "Open the gallery" and op["fits"] and "Rome" not in op["text"] and "Pisa" not in op["text"] and "noindex" in (op["nofollow"] or ""), "[share links] the opening page on a phone is one button that fits the screen, names no folder, and asks search engines to stay away", str(op))
         pc = b.js("(() => { const i = document.querySelector('img.pic'), r = i ? i.getBoundingClientRect() : null; return {loaded: !!i && i.complete && i.naturalWidth > 0, src: i ? i.getAttribute('src') : '', w: r ? Math.round(r.width) : 0, h: r ? Math.round(r.height) : 0, button: !!document.querySelector('form button.big'), og: (document.querySelector('meta[property=\"og:image\"]') || {}).content || ''}; })()")
         shot(b, "20b-link-opening-picture")
-        ok(pc["loaded"] and "size=share" in pc["src"] and 300 <= pc["w"] <= 390 and 140 <= pc["h"] <= 220 and pc["button"] and "size=share" in pc["og"] and "Rome" not in pc["src"], "[share picture] the opening page shows the cover photo above the title: the picture loads, fits a phone's width in the preview's proportions, never comes from the private Rome folder, and the button is still there", str(pc))
+        pr = b.js("(() => { const i = document.querySelector('img.pic'); return {ratio: i.naturalWidth / i.naturalHeight, shown: i.getBoundingClientRect().width / i.getBoundingClientRect().height, cap: Math.round(innerHeight * 0.6)}; })()")
+        ok(pc["loaded"] and "size=share" in pc["src"] and pc["w"] <= 390 and pc["h"] <= pr["cap"] + 1 and abs(pr["ratio"] - pr["shown"]) / pr["ratio"] < 0.02 and pc["button"] and "size=share" in pc["og"] and "Rome" not in pc["src"], "[opening picture] the opening page shows the whole photo at its own proportions (not cropped to a banner) within a phone's width and no taller than 60% of the screen, never from the private Rome folder, and the button is still there", str(pc) + str(pr))
+        # a portrait and a landscape photo, drawn with the page's own CSS (pictures of known shape in a page of their own): neither is cropped, a tall one is held to 60% of the screen
+        css = b.js("[...document.styleSheets].flatMap(s => [...s.cssRules]).map(r => r.cssText).filter(t => /\\.pic|\\.wrap/.test(t)).join(' ')")
+        svg = lambda w, h: "data:image/svg+xml," + urllib.parse.quote(f"<svg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}'><rect width='{w}' height='{h}' fill='#c85a3c'/></svg>")
+        for vw, vh in ((390, 844), (1280, 900)):
+            b.viewport(vw, vh, mobile=(vw < 700))
+            page = f"<!doctype html><meta name=viewport content='width=device-width, initial-scale=1'><style>body{{margin:0;background:#0f0f10}}{css}</style><div class='wrap has-pic'><img class='pic' id='tall' src=\"{svg(600, 1200)}\"><img class='pic' id='wide' src=\"{svg(1600, 900)}\"></div>"
+            b.goto("data:text/html;charset=utf-8," + urllib.parse.quote(page), 0.8)
+            sy = b.js("(() => { const g = id => { const i = document.getElementById(id), r = i.getBoundingClientRect(); return {w: r.width, h: r.height, nat: i.naturalWidth / i.naturalHeight, ok: i.complete && i.naturalWidth > 0}; }; return {tall: g('tall'), wide: g('wide'), cap: innerHeight * 0.6, col: document.querySelector('.wrap').getBoundingClientRect().width}; })()")
+            ok(sy["tall"]["ok"] and sy["wide"]["ok"] and sy["tall"]["h"] <= sy["cap"] + 1 and abs(sy["tall"]["w"] / sy["tall"]["h"] - sy["tall"]["nat"]) < 0.02 and sy["wide"]["w"] <= sy["col"] + 1 and abs(sy["wide"]["w"] / sy["wide"]["h"] - sy["wide"]["nat"]) < 0.02, f"[opening picture] at {vw} px wide a tall photo is held to 60% of the screen and a wide one fills the page, each in its own proportions (nothing cropped)", str(sy))
+        b.viewport(390, 844, mobile=True)
         b.goto(BL + "/?link=AAAAAAAAAAAAAAAA", 0.8)
-        ok("isn't valid" in b.js("document.body.innerText") and b.js("document.querySelector('button, form, a')") is None, "[share links] a mistyped link is the one invalid page, with nothing to press", b.js("document.body.innerText")[:80])
+        ok("is not valid" in b.js("document.body.innerText") and b.js("document.querySelector('button, form, a')") is None, "[share links] a mistyped link is the one invalid page, with nothing to press", b.js("document.body.innerText")[:80])
         # --- a link holder's page (this browser has no owner cookie yet) ---
         b.goto(BL + "/?link=" + tok["Mark & Jen"], 0.8)
         b.js("document.querySelector('form button.big').click()"); b.drain(2.0)
@@ -2140,14 +2177,86 @@ try:
         b.js("[...document.querySelectorAll('details.sl-row')].find(d => d.querySelector('.sl-name').textContent.trim() === 'Aunt Carol').open = true")
         ok(lwait(f"document.querySelectorAll('{A} table tbody tr').length >= 1"), "[share links tab] opening a row loads its Visitors tab (one line per address and browser)", b.js(f"(document.querySelector('{A}') || {{innerText: ''}}).innerText")[:200])
         shot(b, "22-link-visitors")
+        # the opened link: address, Copy, Share and QR stay in view; the settings lines are folded (closed) with Edit… inside
+        sf = b.js("""(() => { const r = document.querySelector('.sl-row[open]'), d = r.querySelector('details.sl-settings'), vis = el => !!el && el.checkVisibility();   // (a closed <details> hides its content without taking away its boxes, so look at what the browser says is visible)
+            const line = r.querySelector('.sl-linkline').getBoundingClientRect(), bar = r.querySelector('.sl-act .sl-segbar').getBoundingClientRect();
+            return {closed: !d.open, factsHidden: !vis(d.querySelector('.sl-facts')), editHidden: !vis(d.querySelector('[data-sl=edit]')), editInside: !!d.querySelector('[data-sl=edit]'), editNotInActs: !r.querySelector('.sl-acts [data-sl=edit]'), urlShown: vis(r.querySelector('.sl-url')), shareShown: vis(r.querySelector('.gs-mount')),
+                    gap: Math.round(bar.top - line.bottom), summary: d.querySelector('summary').innerText.trim(), previewStays: !!r.querySelector('.sl-acts [data-sl=preview]')}; })()""")
+        shot(b, "22b-link-settings-folded")
+        ok(sf["closed"] and sf["factsHidden"] and sf["editHidden"] and sf["editInside"] and sf["editNotInActs"] and sf["urlShown"] and sf["shareShown"] and sf["summary"] == "Settings" and sf["previewStays"] and sf["gap"] < 220, "[settings fold] an opened link shows its address, Copy, Share… and QR code and goes straight on to the activity tabs; the settings lines are folded under a closed \"Settings\" line that holds Edit…", str(sf))
+        fs = b.js("(() => { const sm = document.querySelector('.sl-row[open] details.sl-settings > summary'), cs = getComputedStyle(sm), bc = getComputedStyle(sm, '::before'); return {size: parseFloat(cs.fontSize), weight: parseInt(cs.fontWeight), colour: cs.color, body: getComputedStyle(document.body).color, chevron: bc.borderRightWidth, notText: bc.content === 'none' || bc.content === '\"\"' || bc.content === 'normal'}; })()")
+        ok(fs["size"] >= 15 and fs["weight"] >= 600 and fs["colour"] == fs["body"] and fs["chevron"] == "2px" and fs["notText"], "[settings fold] the Settings line is as easy to see as the Settings tab's own folds: 15 px or more, bold, the normal text colour, with a drawn chevron (not a tiny character)", str(fs))
+        b.js("document.querySelector('.sl-row[open] details.sl-settings > summary').click()"); b.drain(0.3)
+        ok(b.js("(() => { const d = document.querySelector('.sl-row[open] details.sl-settings'); return d.open && /What they can see/.test(d.querySelector('.sl-facts').innerText) && d.querySelector('[data-sl=edit]').getClientRects().length > 0; })()"), "[settings fold] pressing Settings shows the lines (What they can see … Made) and the Edit… button")
+        b.js("document.querySelector('.sl-row[open] details.sl-settings [data-sl=edit]').click()"); b.drain(0.5)
+        lc = b.js("(() => { const col = el => getComputedStyle(el).color, body = col(document.body), edit = document.querySelector('.sl-row[open] details.sl-settings [data-sl=edit]'), prev = document.querySelector('.sl-row[open] .sl-acts [data-sl=preview]'); const bad = [...document.querySelectorAll('#sl-root .linklike')].filter(e => e.getClientRects().length && !e.classList.contains('sl-danger') && col(e) === body).map(e => e.className + ':' + e.textContent.trim().slice(0, 20)); return {edit: col(edit), prev: col(prev), body, bad}; })()")
+        ok(lc["edit"] == lc["prev"] and lc["edit"] != lc["body"] and not lc["bad"], "[link colour] Edit… is the same periwinkle as the other links and no link-styled button in the Share tab is plain white text", str(lc))
+        ok(b.js("!document.getElementById('sl-form').hidden"), "[settings fold] Edit… from inside Settings opens the form")
+        b.js("document.querySelector('#sl-form [data-sl=cancel]').click()"); b.drain(0.2)
+        b.js("document.querySelector('.sl-row[open] details.sl-settings > summary').click()"); b.drain(0.2)
         b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=folders]').click()")
         ok(lwait(f"(() => {{ const a = document.querySelector('{A}'); const t = a.querySelector('table'); return !!t && /Front page/.test(t.innerText) && / of /.test(t.innerText); }})()"), "[share links tab] its Folders tab says, for each folder, how many items were seen of how many there are")
+        hdr = b.js(f"[...document.querySelectorAll('{A} table th')].map(th => th.textContent.trim())")
+        ok(hdr == ["Folder", "Opens", "Media seen", "Opened", "Downloaded", "First seen", "Last activity"], "[tabs] the Folders table's columns are Folder, Opens, Media seen, Opened, Downloaded, First seen, Last activity", str(hdr))
         shot(b, "23-link-folders")
-        b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=photos]').click()")
-        ok(lwait(f"document.querySelectorAll('{A} .sl-th').length >= 2"), "[share links tab] its Photos tab shows thumbnails of what was looked at", b.js(f"document.querySelector('{A}').innerText")[:200])
+        # a number in the table leads to the Media tab, for that folder and that kind
+        fol = b.js(f"(() => {{ const n = document.querySelector('{A} button[data-media=viewed]'); return n ? {{folder: n.getAttribute('data-folder'), text: n.textContent.trim()}} : null; }})()")
+        b.js(f"document.querySelector('{A} button[data-media=viewed]').click()")
+        ok(lwait(f"document.querySelectorAll('{A} .sl-th').length >= 1 && document.querySelector('{A} .sl-segbtn.on').dataset.tab === 'media'"), "[tabs] pressing a Media seen number on the Folders tab opens the Media tab with that folder's pictures", str(fol))
+        fb = b.js(f"(() => {{ const p = document.querySelector('{A} [data-pop=folders]'); const th = [...document.querySelectorAll('{A} .sl-th')].map(a => a.getAttribute('href')); return {{label: p.querySelector('.sl-poplab').textContent, on: p.querySelector('.sl-popbtn').classList.contains('on'), checked: [...p.querySelectorAll('input:checked')].map(i => i.value), allInFolder: th.length > 0, tabs: [...document.querySelectorAll('{A} .sl-segbtn[data-tab]')].map(x => x.textContent.trim())}}; }})()")
+        ok(fb["on"] and fb["checked"] == [fol["folder"]] and fb["allInFolder"] and fb["tabs"] == ["Visitors", "Folders", "Media", "Timeline"], "[tabs] ...the Folders menu names that folder, and a link has the tabs Visitors, Folders, Media and Timeline", str(fb))
+        # the three menus: one line, open under their button, several ticks apply when the menu closes, one choice applies at once, Escape closes
+        b.js(f"document.querySelector('{A} [data-pop=what] .sl-popbtn').click()"); b.drain(0.2)
+        wm = b.js(f"(() => {{ const p = document.querySelector('{A} [data-pop=what]'), m = p.querySelector('.sl-popmenu'); return {{open: !m.hidden, expanded: p.querySelector('.sl-popbtn').getAttribute('aria-expanded'), opts: [...m.querySelectorAll('.sl-popopt')].map(o => o.textContent.trim()), radios: m.querySelectorAll('input[type=radio]').length, oneLine: new Set([...document.querySelectorAll('{A} .sl-filterbar > .sl-pop')].map(x => Math.round(x.getBoundingClientRect().top))).size === 1}}; }})()")
+        ok(wm["open"] and wm["expanded"] == "true" and wm["opts"] == ["Most viewed", "Most recent", "Photos", "Videos", "Private", "Opened", "Downloaded"] and wm["radios"] == 7 and wm["oneLine"], "[menus] the third menu opens under its button with the choices Most viewed, Most recent, Photos, Videos, Private, Opened, Downloaded, and the three menus sit on one line", str(wm))
+        shot(b, "23b-media-menu")
+        b.js(f"document.querySelector('{A} [data-pop=what] input[value=opened]').click()")
+        ok(lwait(f"document.querySelector('{A} [data-pop=what] .sl-poplab').textContent === 'Opened' && document.querySelector('{A} [data-pop=what] .sl-popmenu').hidden"), "[menus] choosing one thing in the third menu applies at once, closes the menu and names the choice on the button")
+        b.js(f"document.querySelector('{A} [data-pop=what] .sl-popbtn').click()"); b.drain(0.2)
+        b.js(f"document.querySelector('{A} [data-pop=what] .sl-popbtn').dispatchEvent(new KeyboardEvent('keydown', {{key: 'Escape', bubbles: true}}))"); b.drain(0.2)
+        ok(b.js(f"document.querySelector('{A} [data-pop=what] .sl-popmenu').hidden"), "[menus] Escape closes an open menu without changing anything")
+        b.js(f"document.querySelector('{A} [data-pop=what] .sl-popbtn').click()"); b.drain(0.2)
+        b.js(f"document.querySelector('{A} [data-pop=what] input[value=viewed]').click()"); lwait(f"document.querySelector('{A} [data-pop=what] .sl-poplab').textContent === 'Most viewed'")
+        b.js(f"document.querySelector('{A} [data-pop=folders] .sl-popbtn').click()"); b.drain(0.2)
+        nf = b.js(f"(() => {{ const boxes = [...document.querySelectorAll('{A} [data-pop=folders] input[type=checkbox]:not([data-all])')]; boxes.forEach(i => {{ if (!i.checked) i.click(); }}); return {{n: boxes.length, names: boxes.map(i => i.parentElement.textContent.trim())}}; }})()")
+        b.js(f"document.querySelector('{A} .sl-segbar').click()")   # (pressing anywhere else closes the menu and applies the ticks)
+        want = nf["names"][0] if nf["n"] == 1 else f"{nf['n']} folders"
+        ok(lwait(f"document.querySelector('{A} [data-pop=folders] .sl-poplab').textContent === {json.dumps(want)}"), "[menus] several folders can be ticked and the button says how many", str(nf))
+        b.js(f"document.querySelector('{A} [data-pop=folders] .sl-popbtn').click()"); b.drain(0.2)
+        b.js(f"document.querySelector('{A} [data-pop=folders] input[data-all]').click()")
+        ok(lwait(f"document.querySelector('{A} [data-pop=folders] .sl-poplab').textContent === 'All folders' && !document.querySelector('{A} [data-pop=folders] .sl-popbtn').classList.contains('on')"), "[menus] \"All folders\" at the top of the menu clears the ticks")
+        # the menus answer as each tick is made and stay open; "All" is an ordinary first row
+        b.js(f"(() => {{ const p = document.querySelector('{A} [data-pop=folders]'); if (p.querySelector('.sl-popmenu').hidden) p.querySelector('.sl-popbtn').click(); }})()"); b.drain(0.2)   # (the menu stays open after the last step: open it only if it is shut)
+        row = b.js(f"(() => {{ const m = document.querySelector('{A} [data-pop=folders] .sl-popmenu'), rows = [...m.querySelectorAll('.sl-popopt')], all = rows[0], other = rows[1]; return {{first: all.classList.contains('sl-popall') && !!all.querySelector('input[data-all]') && all.querySelector('input[data-all]').checked, sameColour: !!other && getComputedStyle(all.querySelector('span')).color === getComputedStyle(other.querySelector('span')).color, tag: all.tagName, nRows: rows.length}}; }})()")
+        ok(row["first"] and row["sameColour"] and row["tag"] == "LABEL", "[menus] \"All folders\" is the first row of the list, a tick box ticked while nothing else is, in the same colour as the other rows (not bare white text)", str(row))
+        names = b.js(f"[...document.querySelectorAll('{A} [data-pop=folders] .sl-popopt:not(.sl-popall)')].map(o => o.textContent.trim())")
+        b.js(f"document.querySelector('{A} [data-pop=folders] input[type=checkbox]:not([data-all])').click()")
+        ok(lwait(f"document.querySelector('{A} [data-pop=folders] .sl-poplab').textContent === {json.dumps(names[0])} && !document.querySelector('{A} [data-pop=folders] .sl-popmenu').hidden && !document.querySelector('{A} [data-pop=folders] input[data-all]').checked"), "[menus] ticking a folder updates the grid and the button at once, with the menu still open and \"All folders\" unticked (no need to click away)", str(names))
+        if len(names) >= 2:
+            b.js(f"document.querySelectorAll('{A} [data-pop=folders] input[type=checkbox]:not([data-all])')[1].click()")
+            ok(lwait(f"document.querySelector('{A} [data-pop=folders] .sl-poplab').textContent === '2 folders' && !document.querySelector('{A} [data-pop=folders] .sl-popmenu').hidden"), "[menus] a second tick adds to it, again with the menu open")
+        b.js(f"document.querySelector('{A} [data-pop=folders] input[data-all]').click()")
+        ok(lwait(f"document.querySelector('{A} [data-pop=folders] .sl-poplab').textContent === 'All folders' && document.querySelector('{A} [data-pop=folders] input[data-all]').checked && document.querySelectorAll('{A} [data-pop=folders] input:checked').length === 1 && !document.querySelector('{A} [data-pop=folders] .sl-popmenu').hidden"), "[menus] ticking \"All folders\" unticks the others and shows everything again")
+        b.js(f"document.querySelector('{A} .sl-segbar').click()"); b.drain(0.3)
+        b.js(f"document.querySelector('{A} [data-pop=ips] .sl-popbtn').click()"); b.drain(0.2)
+        b.js(f"document.querySelector('{A} [data-pop=ips] input[type=checkbox]:not([data-all])').click()")
+        b.js(f"document.querySelector('{A} .sl-segbar').click()")
+        ok(lwait(f"/^[0-9a-fA-F.:]+$/.test(document.querySelector('{A} [data-pop=ips] .sl-poplab').textContent) && document.querySelector('{A} [data-pop=ips] .sl-popbtn').classList.contains('on')"), "[menus] one address ticked in the first menu is named on its button and kept when the tab changes", b.js(f"document.querySelector('{A} [data-pop=ips] .sl-poplab').textContent"))
+        b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=timeline]').click()")
+        ok(lwait(f"document.querySelectorAll('{A} .sl-ev').length >= 1 && !!document.querySelector('{A} [data-pop=ips]') && !document.querySelector('{A} [data-pop=what]')"), "[tabs] a link has a Timeline tab (what everyone on it did) with an addresses menu")
+        tl = b.js(f"(() => {{ const t = [...document.querySelectorAll('{A} .sl-tth')]; return {{n: t.length, w: t.length ? Math.round(t[0].querySelector('img').getBoundingClientRect().width) : 0, links: t.every(a => /^\\?(folder=[^&]+&)?find=/.test(a.getAttribute('href'))), who: !!document.querySelector('{A} .sl-ev .sl-ipt')}}; }})()")
+        ok(tl["n"] == 0 or (tl["w"] >= 44 and tl["links"]), "[timeline] its pictures are 44 px or more and each is a link to the folder at that photo", str(tl))
+        shot(b, "23c-link-timeline")
+        b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=media]').click()")
+        ok(lwait(f"document.querySelectorAll('{A} .sl-th').length >= 2"), "[share links tab] its Media tab shows thumbnails of what was looked at", b.js(f"document.querySelector('{A}').innerText")[:200])
         b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=visitors]').click()"); lwait(f"!!document.querySelector('{A} [data-ip]')")
+        b.js(f"document.querySelector('{A} .sl-viewed').click()")
+        ok(lwait(f"(() => {{ const a = document.querySelector('{A}'); return a.innerHTML.includes('sl-ipbig') && !!a.querySelector('.sl-back') && a.querySelector('.sl-segbtn.on').dataset.tab === 'media' && a.querySelectorAll('.sl-th').length >= 1; }})()"), "[tabs] the views button in the Visitors list opens that address's own page on its Media tab, with a way back")
+        b.js(f"document.querySelector('{A} [data-back]').click()"); lwait(f"!!document.querySelector('{A} [data-ip]')")
         b.js(f"document.querySelector('{A} [data-ip]').click()")
         ok(lwait(f"(() => {{ const a = document.querySelector('{A}'); return a.innerHTML.includes('sl-ipbig') && !!a.querySelector('.sl-back'); }})()"), "[share links tab] pressing an address opens that address's own page, with a way back")
+        ok(b.js(f"(() => {{ const bk = document.querySelector('{A} .sl-back'); return getComputedStyle(bk).color !== getComputedStyle(document.body).color; }})()"), "[link colour] the back link on an address's page is periwinkle, not plain white")
+        ok(b.js(f"[...document.querySelectorAll('{A} .sl-segbtn[data-tab]')].map(x => x.textContent.trim()).join()") == "Folders,Media,Timeline" and b.js(f"!!document.querySelector('{A} .sl-popfixed') && !document.querySelector('{A} [data-pop=ips]')"), "[tabs] an address has the tabs Folders, Media and Timeline, with the address named (not a menu) in the filter line")
         b.js(f"document.querySelector('{A} .sl-segbtn[data-tab=timeline]').click()")
         ok(lwait(f"document.querySelector('{A}').innerText.includes('Opened')"), "[share links tab] the address's Timeline lists what happened, in order")
         shot(b, "24-link-address")
@@ -2169,7 +2278,39 @@ try:
         shot(b, "25b-link-head-phone")
         rowg = b.js("(() => { const r = document.querySelector('details.sl-row > summary'), nm = r.querySelector('.sl-nm'), sub = r.querySelector('.sl-sub'), pill = r.querySelector(':scope > .sl-pill'), q = r.querySelector('.sl-quick'); const R = r.getBoundingClientRect(), N = nm.getBoundingClientRect(); return {width: Math.round(N.width / R.width * 100), subLines: Math.round(sub.getBoundingClientRect().height / parseFloat(getComputedStyle(sub).lineHeight || 18)), below: N.top >= pill.getBoundingClientRect().bottom - 1, quickRight: q ? q.getBoundingClientRect().right > R.right - 70 : true}; })()")
         ok(rowg["width"] >= 90 and rowg["below"] and rowg["quickRight"] and rowg["subLines"] <= 3, "[share links tab] on a phone a link's name and summary run the full width of the row, under the status and the Copy link button (not squeezed into a narrow column between them)", str(rowg))
+        # the filter line and its menus on a phone: they wrap, nothing runs off the side, and a menu stays inside the screen
+        b.js("document.querySelector('.sl-row[open] .sl-act .sl-segbtn[data-tab=media]').click()")
+        ok(lwait("!!document.querySelector('.sl-row[open] .sl-act [data-pop=what]')"), "[menus phone] the Media tab opens on a phone")
+        b.js("document.querySelector('.sl-row[open] .sl-act [data-pop=folders] .sl-popbtn').click()"); b.drain(0.3)
+        pm = b.js("""(() => { const a = document.querySelector('.sl-row[open] .sl-act'), bar = a.querySelector('.sl-filterbar'), m = a.querySelector('[data-pop=folders] .sl-popmenu'), r = m.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+            return {open: !m.hidden && r.height > 0, inside: r.left >= 0 && r.right <= vw + 1, noSideScroll: document.documentElement.scrollWidth <= innerWidth + 1, btnsInside: [...bar.querySelectorAll('.sl-popbtn')].every(x => x.getBoundingClientRect().right <= vw + 1), rows: new Set([...bar.querySelectorAll(':scope > .sl-pop')].map(x => Math.round(x.getBoundingClientRect().top))).size}; })()""")
+        shot(b, "25d-media-menu-phone")
+        ok(pm["open"] and pm["inside"] and pm["noSideScroll"] and pm["btnsInside"] and pm["rows"] <= 2, "[menus phone] on a phone the three menus wrap to two lines at most, an open menu stays inside the screen, and nothing runs off the side", str(pm))
+        b.js("document.querySelector('.sl-row[open] .sl-act .sl-segbar').click()"); b.drain(0.3)
+        # a message in a photo grid dialog runs the full width, and on a touch screen every field is 16 px (a phone zooms into smaller ones and stays zoomed)
+        mw = b.js("(() => { const root = document.getElementById('sl-root'), g = document.createElement('div'); g.className = 'sl-pickgrid'; g.innerHTML = '<p>There are no public photos directly in this folder.</p>'; root.appendChild(g); const r = g.querySelector('p').getBoundingClientRect(), gr = g.getBoundingClientRect(); g.remove(); return {p: Math.round(r.width), grid: Math.round(gr.width)}; })()")
+        ok(mw["grid"] > 200 and mw["p"] >= mw["grid"] * 0.95, "[preview photo dialog] a message in the photo grid is as wide as the grid on a phone (not one narrow cell that wraps in short lines)", str(mw))
+        b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5}); b.drain(0.3)
+        b.js("document.querySelector('[data-sl=new]').click()"); b.drain(0.5)
+        fz = b.js("""(() => { const vis = el => el.checkVisibility() && el.type !== 'hidden' && el.type !== 'checkbox' && el.type !== 'radio'; const f = document.querySelector('#sl-form'); f.querySelector('input[name=title_mode][value=custom]').click();
+            const els = [...f.querySelectorAll('input, textarea, select')].filter(vis); const small = els.filter(e => parseFloat(getComputedStyle(e).fontSize) < 16).map(e => (e.name || e.id || e.type) + ':' + getComputedStyle(e).fontSize);
+            return {coarse: matchMedia('(pointer: coarse)').matches, n: els.length, small}; })()""")
+        ok(fz["coarse"] and fz["n"] >= 3 and not fz["small"], "[touch fields] on a touch screen every field of the link form is 16 px or more (so the phone does not zoom in when one is touched)", str(fz))
+        b.js("document.querySelector('#sl-form [data-sl=cancel]').click()"); b.drain(0.3)
+        # the IP addresses view on a phone: each address is a card (labelled lines), with the IP address first and in view, nothing to scroll sideways
+        b.js("document.querySelector('[data-view=ips]').click()")
+        ok(lwait("!document.getElementById('sl-ips-view').hidden && document.querySelectorAll('#sl-ips-view table tbody tr').length >= 1"), "[ip list phone] the IP addresses view opens on a phone")
+        ipc = b.js("""(() => { const vw = document.documentElement.clientWidth, t = document.querySelector('#sl-ips-view table'), sc = t.closest('.sl-scroll'), tr = t.querySelector('tbody tr'), ip = tr.querySelector('.sl-ipt').getBoundingClientRect();
+            return {stacked: getComputedStyle(t.querySelector('thead')).display === 'none', noSideScroll: sc.scrollWidth <= sc.clientWidth + 1 && sc.scrollLeft === 0, ipInView: ip.left >= 0 && ip.right <= vw && ip.width > 0,
+                    cellsInView: [...tr.children].every(td => { const r = td.getBoundingClientRect(); return r.width > 0 && r.left >= 0 && r.right <= vw + 1; }),
+                    labels: [...tr.children].map(td => getComputedStyle(td, '::before').content.replace(/"/g, ''))}; })()""")
+        shot(b, "25c-ip-list-phone")
+        ok(ipc["stacked"] and ipc["noSideScroll"] and ipc["ipInView"] and ipc["cellsInView"] and ipc["labels"][:3] == ["IP address", "Where", "Browser"], "[ip list phone] on a phone each address is a card with labelled lines (IP address, Where, Browser, ...), the IP address is in view, and nothing needs scrolling sideways", str(ipc))
+        b.js("document.querySelector('[data-view=links]').click()")
         b.viewport(1280, 900)
+        b.js("document.querySelector('[data-view=ips]').click()")
+        ok(lwait("!document.getElementById('sl-ips-view').hidden") and b.js("getComputedStyle(document.querySelector('#sl-ips-view thead')).display !== 'none' && getComputedStyle(document.querySelector('#sl-ips-view td'), '::before').content === 'none'"), "[ip list phone] on a wide screen it is still the table, with its header row and no card labels")
+        b.js("document.querySelector('[data-view=links]').click()")
         # --- sharing: the QR code, the short form from a folder, a photo and a selection, the viewer's question, the photo picker, preview ---
         sys.path.insert(0, HERE + "/../qr"); import qr_reference as QR
         b.call("Browser.grantPermissions", {"origin": BL, "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
@@ -2307,13 +2448,13 @@ try:
         b.js("location.hash = '#links'"); b.drain(1.0)
         b.js("document.querySelector('[data-sl=new]').click()"); b.drain(0.4); type_in("#sl-form [name=label]", "Picked")
         b.js("document.querySelector('#sl-form input[name=scope_type][value=photos]').click()"); b.drain(0.3)
-        ok(b.js("!!document.querySelector('#sl-form .sl-padd')") and b.js("document.querySelector('#sl-form [name=open_in]').disabled"), "[photo picker] choosing Only some photos shows + Add photos (and it opens on the first photo)")
+        ok(b.js("!!document.querySelector('#sl-form .sl-padd')") and b.js("document.querySelector('#sl-form [data-openin-menu] .sl-popbtn').disabled"), "[photo picker] choosing Only some photos shows + Add photos (and it opens on the first photo)")
         b.js("document.querySelector('#sl-form .sl-padd').click()")
         ok(lwait("document.querySelectorAll('#sl-pp-grid .sl-pickphoto').length >= 2"), "[photo picker] the picker lists a folder's photos with thumbnails")
-        b.js("(() => { const s = document.getElementById('sl-pp-folder'); s.value = 'Rome'; s.dispatchEvent(new Event('change', {bubbles: true})); })()")
+        b.js("[...document.querySelectorAll('input[name=pop-ppfolder]')].find(i => i.value === 'Rome').click()")
         ok(lwait("document.querySelectorAll('#sl-pp-grid .sl-pickphoto').length === 2 && [...document.querySelectorAll('#sl-pp-grid img')].every(i => i.complete && i.naturalWidth > 0)", 10), "[photo picker] choosing a folder lists its photos, and the thumbnails load")
         b.js("(() => { const i = document.querySelector('#sl-pp-grid input'); i.checked = true; i.dispatchEvent(new Event('change', {bubbles: true})); })()")
-        b.js("(() => { const s = document.getElementById('sl-pp-folder'); s.value = ''; s.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(0.8)
+        b.js("[...document.querySelectorAll('input[name=pop-ppfolder]')].find(i => i.value === '').click()"); b.drain(0.8)
         b.js("(() => { const i = document.querySelector('#sl-pp-grid input'); i.checked = true; i.dispatchEvent(new Event('change', {bubbles: true})); })()"); b.drain(0.2)
         ok(b.js("document.getElementById('sl-pp-count').textContent") == "2 photos chosen", "[photo picker] a photo ticked in one folder stays ticked while another folder is looked at", b.js("document.getElementById('sl-pp-count').textContent"))
         shot(b, "32-photo-picker")
@@ -2327,14 +2468,72 @@ try:
         ok(not b.problems(IGN), "[sharing] no console or CSP errors anywhere in the share forms", "; ".join(b.problems(IGN))[:300])
         # the full form's "show only" box follows the scope: hidden for everything, ticked for photos, unticked for folders
         b.goto(BL + "/?admin&onlybox=1", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)
-        ok(b.js("document.querySelector('#sl-root').getAttribute('data-probe')").endswith("0000000000000000") and not [x for x in b.problems(()) if "0000000000000000" in x], "[share links] the tab's check of the tidy address leaves no 404 line in the browser's console")
+        ok(b.js("document.querySelector('#sl-root').getAttribute('data-probe')").endswith("0000-probe-0000") and not [x for x in b.problems(()) if "0000-probe-0000" in x], "[share links] the tab's check of the tidy address leaves no 404 line in the browser's console")
         b.js("document.querySelector('[data-sl=new]').click()"); b.drain(0.5)
         box = b.js("""(() => { const f = document.getElementById('sl-form'), row = f.querySelector('[data-only-row]'), cb = f.querySelector('[name=only]'), pick = v => { const r = f.querySelector('input[name=scope_type][value="' + v + '"]'); r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); };
             const all = {hidden: row.hidden}; pick('photos'); const ph = {hidden: row.hidden, checked: cb.checked}; pick('folders'); const fo = {hidden: row.hidden, checked: cb.checked}; pick('all'); return {all, ph, fo, again: row.hidden, text: row.innerText.replace(/\\s+/g, ' ')}; })()""")
         ok(box["all"]["hidden"] and not box["ph"]["hidden"] and box["ph"]["checked"] and not box["fo"]["hidden"] and not box["fo"]["checked"] and box["again"] and "not a lock" in box["text"], "[share form] the full form's \"Show only what they can see here\" box: hidden for everything private, ticked for photos, unticked for folders, and it says it is a tidy view and not a lock", str(box))
         pic = b.js("""(() => { const f = document.getElementById('sl-form'), cb = f.querySelector('[name=picture]'), pick = v => { const r = f.querySelector('input[name=title_mode][value="' + v + '"]'); r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); };
             const start = cb.checked; pick('neutral'); const n = cb.checked; pick('custom'); const c = cb.checked; pick('gallery'); const g = cb.checked; cb.checked = false; pick('custom'); pick('gallery'); return {start, n, c, g, label: cb.closest('label').innerText.replace(/\\s+/g, ' ').slice(0, 40)}; })()""")
-        ok(pic["start"] and not pic["n"] and not pic["c"] and pic["g"] and pic["label"].startswith("Show a cover photo"), "[share form] the \"Show a cover photo\" box starts ticked for the gallery's title, unticks itself for a neutral or your own title and ticks again for the gallery's", str(pic))
+        ok(pic["start"] and not pic["n"] and not pic["c"] and pic["g"] and pic["label"].startswith("Show a preview photo"), "[share form] the \"Show a preview photo\" box starts ticked for the gallery's title, unticks itself for a neutral or your own title and ticks again for the gallery's", str(pic))
+        pub = b.js("""(() => { const f = document.getElementById('sl-form'), pick = (n, v) => { const r = f.querySelector('input[name=' + n + '][value="' + v + '"]'); r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); };
+            const vis = el => !!(el && el.getClientRects().length); const dl = [...f.querySelectorAll('[data-nopublic]')], only = f.querySelector('[data-only-row]');
+            pick('scope_type', 'all'); const optsAll = [...f.querySelectorAll('[data-openin-menu] .sl-popopt')].map(o => o.textContent.trim().replace('🔒 ', ''));
+            pick('scope_type', 'folders'); const before = {dl: dl.every(vis)};
+            pick('scope_type', 'public'); const opens = f.querySelector('input[name=opens_pick]:checked').value, ends = f.querySelector('input[name=ends_pick]:checked').value, heads = f.querySelector('input[name=heads_up]:checked').value;
+            const opts = [...f.querySelectorAll('[data-openin-menu] .sl-popopt')].map(o => o.textContent.trim().replace('🔒 ', ''));
+            const res = {before, dl: dl.some(vis), only: vis(only), opens, ends, heads, opts, optsAll, chips: vis(f.querySelector('[data-chips=scope]'))}; pick('scope_type', 'all'); res.back = dl.every(vis); return res; })()""")
+        ok(pub["before"]["dl"] and not pub["dl"] and not pub["only"] and not pub["chips"] and pub["opens"] == "0" and pub["ends"] == "0" and pub["heads"] == "off" and "Rome" in pub["optsAll"] and "Rome" not in pub["opts"] and "The front page" in pub["opts"] and set(pub["opts"]) < set(pub["optsAll"]) and pub["back"], "[public scope] choosing Just the public gallery in the form hides the download choices and the show-only box, starts a new link unlimited with no end and no heads-up, lists only public folders to open in, and the choices come back for the other scopes", str(pub))
+        # the cover photo: the picture it will use shows at once; it can be chosen (public photos only) and sent back to Automatic
+        b.js("(() => { const f = document.getElementById('sl-form'), r = f.querySelector('input[name=title_mode][value=gallery]'); r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); })()")
+        cv = lwait("(() => { const r = document.querySelector('#sl-form [data-coverrow]'); return !r.hidden && /Picked automatically|Nothing public/.test(r.querySelector('[data-cover-how]').textContent); })()")
+        cvs = b.js("(() => { const r = document.querySelector('#sl-form [data-coverrow]'), i = r.querySelector('img'); return {how: r.querySelector('[data-cover-how]').textContent, img: !i.hidden && /^\\?img=/.test(i.getAttribute('src')) && i.getBoundingClientRect().width >= 60, seed: /^[0-9a-f]{8}$/.test(document.querySelector('#sl-form [name=picture_seed]').value), file: document.querySelector('#sl-form [name=picture_file]').value, autoHidden: r.querySelector('[data-cover-auto]').hidden}; })()")
+        ok(cv and cvs["seed"] and cvs["file"] == "" and cvs["autoHidden"] and (cvs["img"] or "Nothing public" in cvs["how"]), "[preview photo] ticking Show a preview photo shows the picture the link will use right away (a new link has its own seed and no chosen photo; \"Automatic\" is not offered yet)", str(cvs))
+        b.js("document.querySelector('#sl-form [data-cover-choose]').click()")
+        ok(lwait("!!document.getElementById('sl-cp-grid') && !document.getElementById('sl-modal').hidden"), "[preview photo] Choose… opens a dialog with a folder menu and a grid")
+        lwait("document.querySelectorAll('#sl-cp-grid .sl-pickphoto, #sl-cp-grid p').length >= 1")
+        cp = b.js("(() => { const g = document.getElementById('sl-cp-grid'), pop = document.querySelector('#sl-modal [data-pop=coverfolder]'); return {radios: g.querySelectorAll('input[type=radio]').length, boxes: g.querySelectorAll('input[type=checkbox]').length, folders: [...pop.querySelectorAll('.sl-popopt')].map(o => o.textContent.trim()), hint: /Only public photos/.test(document.getElementById('sl-modal').innerText)}; })()")
+        ok(cp["boxes"] == 0 and cp["hint"] and not any("🔒" in f for f in cp["folders"]) and (cp["radios"] > 0 or b.js("/No folder has a public photo/.test(document.getElementById('sl-modal').innerText)")), "[preview photo] the cover dialog lists no private folder, offers its photos as one-choice buttons and says only public photos can be a cover", str(cp))
+        if cp["radios"] > 0:
+            b.js("document.querySelector('#sl-cp-grid input[type=radio]').click()"); b.drain(0.2)
+            b.js("document.querySelector('#sl-modal [data-sl-modal=ok]').click()")
+            ok(lwait("document.querySelector('#sl-form [data-cover-how]').textContent === 'Your choice' && !!document.querySelector('#sl-form [name=picture_file]').value && !document.querySelector('#sl-form [data-cover-auto]').hidden"), "[preview photo] choosing a photo shows it as \"Your choice\" and offers Automatic")
+            b.js("document.querySelector('#sl-form [data-cover-auto]').click()")
+            ok(lwait("document.querySelector('#sl-form [data-cover-how]').textContent === 'Picked automatically' && document.querySelector('#sl-form [name=picture_file]').value === '' && document.querySelector('#sl-form [data-cover-auto]').hidden"), "[preview photo] Automatic goes back to the automatic pick")
+        else:
+            b.js("document.querySelector('#sl-modal [data-sl-modal=cancel]').click()")
+        b.drain(0.3)
+        # Opens in is a menu like the others: the same look, a hidden field behind it, the folders as a tree
+        oi = b.js("(() => { const f = document.getElementById('sl-form'), h = f.querySelector('[data-openin-menu]'); return {sel: !!f.querySelector('select[name=open_in]'), hidden: f.querySelector('input[type=hidden][name=open_in]') !== null, label: h.querySelector('.sl-poplab').textContent, first: h.querySelector('.sl-popopt span').textContent, wide: Math.round(h.querySelector('.sl-popbtn').getBoundingClientRect().width)}; })()")
+        ok(not oi["sel"] and oi["hidden"] and oi["label"] == "The front page" and oi["first"] == "The front page" and oi["wide"] >= 200, "[opens in] it is a menu (not a plain dropdown) saying \"The front page\", with a hidden field behind it", str(oi))
+        b.js("document.querySelector('#sl-form [data-openin-menu] .sl-popbtn').click()"); b.drain(0.2)
+        opn = b.js("(() => { const m = document.querySelector('#sl-form [data-openin-menu] .sl-popmenu'), r = m.getBoundingClientRect(), rows = [...m.querySelectorAll('.sl-popopt')]; return {open: !m.hidden && r.height > 0, inScreen: r.left >= 0 && r.right <= document.documentElement.clientWidth, n: rows.length, value: rows.length > 1 ? rows[1].querySelector('input').value : null, text: rows.length > 1 ? rows[1].textContent.trim() : null}; })()")
+        shot(b, "26-opens-in-menu")
+        ok(opn["open"] and opn["inScreen"] and opn["n"] >= 2, "[opens in] pressing it lists the front page and the folders under it, inside the screen", str(opn))
+        b.js("document.querySelectorAll('#sl-form [data-openin-menu] input[type=radio]')[1].click()"); b.drain(0.3)
+        ok(b.js("document.querySelector('#sl-form [name=open_in]').value") == opn["value"] and b.js("document.querySelector('#sl-form [data-openin-menu] .sl-popmenu').hidden") and b.js("document.querySelector('#sl-form [data-openin-menu] .sl-poplab').textContent") != "The front page", "[opens in] choosing a folder closes the menu, names it on the button and sets the hidden field the form sends", str(opn))
+        # the address: a field with a one-press "Use the name" that turns the name into an address, and what to know about the one typed
+        ad = b.js("""(() => { const f = document.getElementById('sl-form'), i = f.querySelector('[name=address]'), btn = f.querySelector('[data-sl=addrname]'), r = i.getBoundingClientRect();
+            return {has: !!i && !!btn, empty: i.value === '', btn: btn && btn.textContent.trim(), hint: f.querySelector('[data-addrhint]').textContent, w: r.width, font: parseFloat(getComputedStyle(i).fontSize), base: f.querySelector('.sl-addrbase').textContent}; })()""")
+        ok(ad["has"] and ad["empty"] and ad["btn"] == "Use the name" and "random code" in ad["hint"] and ad["w"] >= 120 and ad["base"].startswith("…"), "[address field] the form has an Address field (empty: a random address is made) with a Use the name button and a hint", str(ad))
+        def addr(label, typed=None, press=False):
+            return b.js("""((label, typed, press) => { const f = document.getElementById('sl-form'), i = f.querySelector('[name=address]'), l = f.querySelector('[name=label]');
+                l.value = label; if (typed !== null) { i.value = typed; i.dispatchEvent(new Event('input', {bubbles: true})); }
+                if (press) f.querySelector('[data-sl=addrname]').click();
+                return {v: i.value, hint: f.querySelector('[data-addrhint]').textContent}; })(%s, %s, %s)""" % (json.dumps(label), json.dumps(typed), "true" if press else "false"))
+        a1 = addr("Dyllen and Brenden", None, True)
+        ok(a1["v"] == "dyllen-and-brenden" and "learns or guesses" in a1["hint"], "[address field] Use the name turns \"Dyllen and Brenden\" into dyllen-and-brenden", str(a1))
+        a2 = addr("Zoë & Chloé's trip!", "", True)
+        ok(a2["v"] == "zoe-chloe-s-trip", "[address field] accents go, anything else becomes one hyphen, none at either end", str(a2))
+        a3 = addr("Al", "", True)
+        ok(a3["v"] == "" and "at least 4" in a3["hint"], "[address field] a name too short to make an address says so and fills nothing", str(a3))
+        a4 = addr("Anything", "My Name_Here", False)
+        ok(a4["v"] == "my-name-here" and "short name can be guessed" not in a4["hint"], "[address field] typing is turned into lower case with hyphens as it goes", str(a4))
+        a5 = addr("Anything", "abc", False)
+        ok("At least 4" in a5["hint"], "[address field] under four characters says so", str(a5))
+        a6 = addr("Anything", "carol-rome", False)
+        ok("short name can be guessed" in a6["hint"], "[address field] a short name warns that it can be guessed", str(a6))
+        addr("", "", False)
         b.js("document.querySelector('#sl-form [data-sl=cancel]').click()")
         # Trim the log: the dialog says what would go before it does anything
         ok(b.js("!!document.querySelector('[data-sl=trim]')"), "[trim] the Share tab has a Trim the log… button")
@@ -2349,6 +2548,36 @@ try:
         b.js("document.querySelector('[data-sl-modal=cancel]').click()"); b.drain(0.3)
         ok(b.js("document.getElementById('sl-modal').hidden"), "[trim] Cancel closes it and changes nothing")
         ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
+        # Replace address…: its dialog says what happens to a custom name, offers Custom… (opens Edit on the Address), and its three short buttons share a line, even on a phone
+        b.js("""void fetch('?admin', {method: 'POST', credentials: 'same-origin', headers: {'X-Requested-With': 'gallery-fetch'}, body: new URLSearchParams({csrf_token: document.getElementById('sl-root').getAttribute('data-csrf'), action: 'link_create', label: 'Replace test', address: 'replace-dialog-test', title_mode: 'neutral', max_opens: '0', ends_at: '0', scope_type: 'all', locations: 'public', heads_up: 'off', downloads: 'off', zip: 'off'})})""")
+        b.drain(2.0)
+        b.goto(BL + "/?admin&rd=1", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)
+        rowjs = "[...document.querySelectorAll('details.sl-row')].find(d => %s)"
+        named = rowjs % "d.querySelector('.sl-name') && d.querySelector('.sl-name').textContent === 'Replace test'"
+        plain = rowjs % "!d.classList.contains('sl-public') && JSON.parse(d.getAttribute('data-link')).address === '' && d.querySelector('[data-sl=replace]')"
+        dlg = """(() => { const m = document.getElementById('sl-modal'), bs = [...m.querySelectorAll('.pm-btns button')].filter(x => !x.hidden), r = bs.map(x => x.getBoundingClientRect());
+            return {shown: !m.hidden, title: document.getElementById('sl-modal-title').textContent, body: m.querySelector('.sl-modal-body').textContent, btns: bs.map(x => x.textContent.trim()),
+              oneLine: r.length === 3 && r.every(q => Math.abs(q.top - r[0].top) < 2 && q.height > 20), inScreen: r.every(q => q.left >= 0 && q.right <= innerWidth), w: innerWidth}; })()"""
+        vw0, vh0 = b.js("innerWidth"), b.js("innerHeight")
+        for width in (390, 360):
+            b.viewport(width, 844)
+            b.js("(() => { const d = %s; d.open = true; d.querySelector('[data-sl=replace]').click(); })()" % named); b.drain(0.6)
+            rd = b.js(dlg)
+            ok(rd["shown"] and rd["title"] == "Give this link a new address?" and rd["btns"] == ["Cancel", "Random", "Custom…"] and rd["oneLine"] and rd["inScreen"], f"[replace dialog] at {width} px wide the dialog has Cancel, Random and Custom… on one line, inside the screen", str(rd))
+            if width == 390:
+                ok("replace-dialog-test" in rd["body"] and "random code instead" in rd["body"] and "the name is gone" in rd["body"] and "Custom…" in rd["body"], "[replace dialog] for a link with a custom address the text names it and says Random drops it, and points to Custom…", rd["body"][:300])
+            b.js("document.querySelector('[data-sl-modal=cancel]').click()"); b.drain(0.3)
+        ok(b.js("document.getElementById('sl-modal').hidden") and b.js("JSON.parse((" + named + ").getAttribute('data-link')).address") == "replace-dialog-test", "[replace dialog] Cancel closes it and the link keeps its address")
+        b.js("(() => { const d = %s; d.open = true; d.querySelector('[data-sl=replace]').click(); })()" % named); b.drain(0.5)
+        b.js("document.querySelector('[data-sl-modal=extra]').click()"); b.drain(0.8)
+        cu = b.js("(() => { const f = document.getElementById('sl-form'), a = f.querySelector('[name=address]'); return {open: !f.hidden, title: f.querySelector('.sl-form-title').textContent, focused: document.activeElement === a, value: a.value, modal: document.getElementById('sl-modal').hidden}; })()")
+        ok(cu["open"] and cu["title"] == "Edit link" and cu["focused"] and cu["value"] == "replace-dialog-test" and cu["modal"], "[replace dialog] Custom… closes the dialog and opens that link's Edit form with the cursor in the Address field (nothing is replaced)", str(cu))
+        b.js("document.querySelector('#sl-form [data-sl=cancel]').click()"); b.drain(0.3)
+        b.js("(() => { const d = %s; d.open = true; d.querySelector('[data-sl=replace]').click(); })()" % plain); b.drain(0.6)
+        rp = b.js(dlg)
+        ok(rp["shown"] and rp["btns"] == ["Cancel", "Random", "Custom…"] and "stops working right away" in rp["body"] and "use a name of your own" in rp["body"] and "Custom…" in rp["body"] and "the name is gone" not in rp["body"], "[replace dialog] for a link with a random address the old text stays, with a pointer to Custom…", rp["body"][:300])
+        b.js("document.querySelector('[data-sl-modal=cancel]').click()"); b.drain(0.3)
+        b.viewport(vw0, vh0)
         # the Export log menu closes: outside press, Escape, choosing an item, opening another
         b.goto(BL + "/?admin&menu=1", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)
         b.js("document.querySelectorAll('details.sl-row').forEach(d => d.open = true)"); b.drain(0.8)

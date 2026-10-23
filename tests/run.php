@@ -113,7 +113,7 @@ function make_jpeg($path, $w, $h, $r, $g, $b) {
     $im = imagecreatetruecolor($w, $h);
     imagefill($im, 0, 0, imagecolorallocate($im, $r, $g, $b));
     imagejpeg($im, $path, 85);
-    imagedestroy($im);
+    unset($im);
 }
 
 // A minimal but well-formed enough MP4 container to exercise
@@ -286,7 +286,7 @@ function write_data_file($path, $data) {
 /** A JPEG whose EXIF says it was taken at $dateText ("2022:01:01 12:00:00"). */
 function make_dated_jpeg($path, $dateText) {
     $im = imagecreatetruecolor(60, 60); imagefill($im, 0, 0, imagecolorallocate($im, 90, 90, 200));
-    ob_start(); imagejpeg($im); $jpeg = ob_get_clean(); imagedestroy($im);
+    ob_start(); imagejpeg($im); $jpeg = ob_get_clean(); unset($im);
     $data = $dateText . "\0";
     $exifIfd = 8 + 2 + 12 + 4;
     $dataStart = $exifIfd + 2 + 12 + 4;
@@ -304,7 +304,7 @@ function make_gps_jpeg($path, $latRef, $latDMS, $lngRef, $lngDMS) {
     ob_start();
     imagejpeg($im);
     $jpeg = ob_get_clean();
-    imagedestroy($im);
+    unset($im);
     $rationals = function ($dms) {
         $out = '';
         foreach ($dms as [$n, $d]) $out .= pack('VV', $n, $d);
@@ -333,7 +333,7 @@ function make_gps_jpeg($path, $latRef, $latDMS, $lngRef, $lngDMS) {
  *  real phones add (VersionID, altitude, timestamp). Latitude/longitude are
  *  [deg, min, sec*100] integer triples. */
 function make_iphone_gps_jpeg($path, $latRef, $lat, $lngRef, $lng) {
-    $im = imagecreatetruecolor(40, 40); ob_start(); imagejpeg($im); $j = ob_get_clean(); imagedestroy($im);
+    $im = imagecreatetruecolor(40, 40); ob_start(); imagejpeg($im); $j = ob_get_clean(); unset($im);
     $rat = fn($n, $d) => pack('NN', $n, $d);
     $ent = fn($tag, $type, $count, $val) => pack('nnN', $tag, $type, $count) . $val;
     $make = "Apple\0"; $base = 8; $ifd0Len = 2 + 12 * 3 + 4; $gpsEntries = 8; $gpsLen = 2 + 12 * $gpsEntries + 4;
@@ -3101,21 +3101,21 @@ check('[pin colours] a note\'s {color:} on a folder colours that folder\'s pins 
 check('[pin colours] ...and the full map (the page with ?map, overlay open) agrees, with the legend using the same colours', in_array('#ff0000', $pinCols($pinPage), true) && in_array('#e5484d', $pinCols($pinPage), true) && str_contains($pinPage, 'map-legend-swatch" style="background:#ff0000;"') && str_contains($pinPage, 'id="trip-map-modal"'));
 check('[page bar] the bar above the photos holds the map buttons on the left and, on the right, the gallery icon that leads to ?about; there is no footer', (bool) preg_match('#<div class="map-preview-heading">\\s*<span class="map-combo">.*?</span>\\s*<span class="page-tools">.*?<span class="map-combo"><a class="map-combo-btn page-about" href="\\?about" title="About this gallery software"[^>]*>' . preg_quote(ico('gallery'), '#') . '</a>#s', $pinHome) && !str_contains($pinHome, '<footer'));
 check('[pin colours] ?map is the gallery page itself with the map overlay set to open, previewing as the map (title, description and the map icon), and exactly one document', str_contains($pinPage, 'class="gallery') && str_contains($pinPage, 'if (true) show();') && str_contains($pinPage, '<meta property="og:title" content="') && str_contains($pinPage, ' — Map">') && str_contains($pinPage, 'og:image" content="http://127.0.0.1:' . $portPin . '/?mapicon"') && str_contains($pinPage, '2 locations plotted') && substr_count($pinPage, '<!DOCTYPE html>') === 1 && str_contains($pinHome, 'if (false) show();'));
-check('[cover size] a page of nothing but two folders gets the larger-card layout (covers-2)', str_contains($pinHome, '<div class="gallery covers-2">') && str_contains($pinHome, '.gallery.covers-2, .map-preview.covers-2 { max-width: 1106px; }') && str_contains($pinHome, '<section class="map-preview covers-2"') && str_contains($pinHome, '1200w'));
-check('[cover size] a page that also has a loose photo keeps the normal grid', str_contains($fnRoot, '<div class="gallery">') && !str_contains($fnRoot, 'class="gallery covers-'));
+check('[cover size] a page of nothing but two folders gets the larger-card layout (covers-2)', str_contains($pinHome, '<div class="gallery covers-2 one-up">') && str_contains($pinHome, '.gallery.covers-2, .map-preview.covers-2 { max-width: 1106px; }') && str_contains($pinHome, '<section class="map-preview covers-2"') && str_contains($pinHome, '1200w'));
+check('[cover size] a page that also has a loose photo keeps the normal grid', (str_contains($fnRoot, '<div class="gallery">') || str_contains($fnRoot, '<div class="gallery one-up">')) && !str_contains($fnRoot, 'class="gallery covers-'));
 $fxFive = new_fixture_dir('fivecovers');
 foreach (['Paris', 'Tropez', 'Positano', 'Florence', 'Rome', 'Pisa'] as $fiN => $fiName) { mkdir("$fxFive/$fiName"); make_jpeg("$fxFive/$fiName/a.jpg", 60, 60, 10 + $fiN, 10, 10); }
 write_patched_index("$fxFive/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true']);
 $portFive = find_free_port(); start_server($fxFive, $portFive);
 [, $fiSix] = http_get("http://127.0.0.1:$portFive/");
-check('[cover size] six folders and nothing else share the full width: covers-6 with auto-fit columns (no empty columns on the right)', str_contains($fiSix, '<div class="gallery covers-6">') && str_contains($fiSix, '.gallery.covers-5, .gallery.covers-6 { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));'));
+check('[cover size] six folders and nothing else share the full width: covers-6 with auto-fit columns (no empty columns on the right)', str_contains($fiSix, '<div class="gallery covers-6 one-up">') && str_contains($fiSix, '.gallery.covers-5, .gallery.covers-6 { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));'));
 rrmdir("$fxFive/Pisa");
 [, $fiFive] = http_get("http://127.0.0.1:$portFive/");
-check('[cover size] five folders get covers-5', str_contains($fiFive, '<div class="gallery covers-5">'));
+check('[cover size] five folders get covers-5', str_contains($fiFive, '<div class="gallery covers-5 one-up">'));
 check('[cover size] the link icon on a folder card answers like the badges on a tile: a ring, the accent colour, a little larger over it, sinks when pressed, green when copied', str_contains($fiFive, '.folder-permalink-copy:hover { transform: scale(1.2); box-shadow: 0 0 0 2px #fff; background: var(--accent); color: #fff; }') && str_contains($fiFive, '.folder-permalink-copy:active { transform: scale(0.9); }') && str_contains($fiFive, '.folder-permalink-copy.copied') && str_contains($fiFive, '.item-badge:hover { transform: scale(1.2); box-shadow: 0 0 0 2px #fff; background: var(--accent); color: #fff; }'));
 rrmdir("$fxFive/Rome");
 [, $fiFour] = http_get("http://127.0.0.1:$portFive/");
-check('[cover size] four folders still get covers-4', str_contains($fiFour, '<div class="gallery covers-4">'));
+check('[cover size] four folders still get covers-4', str_contains($fiFour, '<div class="gallery covers-4 one-up">'));
 check('[hover] on the gallery page the round close buttons over a map answer like a tile\'s badges, an inline link icon gets the soft halo of the text links, and the viewer\'s arrows keep their centring when pressed', str_contains($pinHome, '.map-modal-close:hover, .lbmap-close:hover { transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); }') && str_contains($pinHome, '.permalink-copy:not(.folder-permalink-copy):hover { color: #e1e4ff;') && str_contains($pinHome, '.lightbox .prev:active, .lightbox .next:active { transform: translateY(-50%) scale(0.92); }') && str_contains($pinHome, '.lbe-hidekb:hover'));
 file_put_contents("$fxPin/n.md", "{gallery}\n\nNothing coloured here.\n");
 usleep(300000);
@@ -3619,7 +3619,7 @@ check('[root identity] a folder\'s way back uses the gallery title', str_contain
 // A cover for shared links.
 [, $rAdmin2] = http_get("$baseRoot/?admin", $rootHdrs);
 [$cs, $cb] = item_cover("$baseRoot/?admin", $rootHdrs, 'two.jpg');
-check('[root identity] "Set as cover" works at the root too', $cs === 200 && str_contains($cb, 'set as the gallery') && str_contains($cb, 'class="flash ok"'));
+check('[root identity] "Set as cover" works at the root too, and says what it is: the front page\'s cover photo (not "the gallery\'s cover")', $cs === 200 && str_contains($cb, 'set as the front page') && !str_contains($cb, 'set as the gallery') && str_contains($cb, 'class="flash ok"'));
 check('[root identity] ...and the shared-link picture is then that photo, not simply the first', (bool) preg_match('#property="og:image" content="[^"]*img=two\.jpg#', http_get("$baseRoot/")[1]));
 // Hostile text is escaped like every other field.
 [, $rAdmin3] = http_get("$baseRoot/?admin", $rootHdrs);
@@ -4443,7 +4443,7 @@ check('[scrub] a JPEG whose metadata runs past the end of the file is refused (n
 file_put_contents("$fxSc/notajpeg.jpg", 'this is not a picture');
 check('[scrub] ...and so is a file that is not a JPEG at all', location_scrub_plan("$fxSc/notajpeg.jpg") === null);
 // PNG (eXIf chunk with a checksum) and WebP.
-$im = imagecreatetruecolor(8, 8); ob_start(); imagepng($im); $png = ob_get_clean(); imagedestroy($im);
+$im = imagecreatetruecolor(8, 8); ob_start(); imagepng($im); $png = ob_get_clean(); unset($im);
 $tiff = $tiffOf($gpsJpeg);
 $pngChunk = fn ($type, $data) => pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));
 $pngWith = substr($png, 0, 33) . $pngChunk('eXIf', $tiff) . substr($png, 33);
@@ -4849,7 +4849,7 @@ $portSl = find_free_port(); start_server($fxSl, $portSl); $baseSl = "http://127.
 $slLinks = fn () => read_data_file("$fxSl/.gallery-links.php");
 $slPage = fn ($path, $cookie = null) => http_get("$baseSl/$path", $cookie ? ["Cookie: $cookie"] : []);
 $slThrottleReset = function () use ($fxSl) { @unlink("$fxSl/.gallery-login-attempts.php"); };
-$slInvalid = fn ($body, $status) => $status === 404 && str_contains($body, 'This link isn\'t valid') && str_contains($body, 'Please let the person who sent it to you know.');
+$slInvalid = fn ($body, $status) => $status === 404 && str_contains($body, 'This link is not valid') && str_contains($body, 'Please contact the person who gave it to you.');
 
 [$slOffStatus, $slOffBody, $slOffHeaders] = http_get("$baseSl/?link=AAAAAAAAAAAAAAAA");
 check('[share links] with the setting off, a link address shows the plain "isn\'t valid" page (and a link can\'t be made)', $slInvalid($slOffBody, $slOffStatus) && in_array('X-Gallery-Link: invalid', $slOffHeaders, true));
@@ -4869,7 +4869,7 @@ $slForm = fn (array $o = []) => $o + ['action' => 'link_create', 'label' => 'Aun
 // The nginx rule as the tab writes it (decoded), and whether nginx would accept it: nginx reads an unquoted { as the start of a block, so every { in a pattern must sit inside quotes
 $slNginxRule = function ($page) { return preg_match('/<pre><code>(location ~ [^<]*?index\.php\?link=[^<]*?)<\/code><\/pre>/s', $page, $m) ? html_entity_decode($m[1], ENT_QUOTES) : ''; };
 $slNginxOk = function ($rule) { $bare = preg_replace('/"[^"\n]*"/', '""', $rule); return $rule !== '' && !str_contains($bare, '{16}') && substr_count($bare, '{') === 1 && substr_count($bare, '}') === 1; };
-check('[share links] the admin has a Share tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slNginxRule($slAdminPage), 'location ~ "^/[A-Za-z0-9]{16}$" {') && str_contains($slNginxRule($slAdminPage), 'index.php?link=$1 last;') && $slNginxOk($slNginxRule($slAdminPage)) && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9]{16})$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
+check('[share links] the admin has a Share tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slNginxRule($slAdminPage), 'location ~ "^/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$" {') && str_contains($slNginxRule($slAdminPage), 'index.php?link=$1 last;') && $slNginxOk($slNginxRule($slAdminPage)) && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9])$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
 check('[tidy share address] it lives with the other server setup: a row in Settings → Server setup with its rules and a status line, and a Health check row with a link there; the Share tab has neither the dropdown nor the banner', str_contains($slAdminPage, 'data-sharetidy-status') && str_contains($slAdminPage, 'data-sharetidy-rules') && str_contains($slAdminPage, 'data-health-row="sharetidy"') && str_contains($slAdminPage, 'Open Settings &rarr; Server setup') && str_contains($slAdminPage, 'data-share-probe="') && !str_contains($slAdminPage, 'data-sl-check') && !str_contains($slAdminPage, 'class="sl-rules"') && !str_contains($slAdminPage, 'The tidy address needs a server rule'));
 $slMade = $slAdmin($slForm());
 $slAll = $slLinks()['links'] ?? [];
@@ -5027,8 +5027,8 @@ file_put_contents("$fxSlSub/trip/.gallery-config.php", cfg_text(['ADMIN_PASSWORD
 $portSlSub = find_free_port(); @touch("$fxSlSub/trip/index.php", time() - 3600); start_server($fxSlSub, $portSlSub);
 [, , $slSubLogin] = http_post("http://127.0.0.1:$portSlSub/trip/index.php?admin", ['access_code' => 'sl-sub-pw-1'], [], false);
 $slSubPage = http_get("http://127.0.0.1:$portSlSub/trip/index.php?admin", ['Cookie: ' . extract_cookie_header($slSubLogin)])[1];
-check('[share links] in a gallery installed at /trip/ the nginx rule is for /trip/ (no top-of-site warning) and the probe asks for /trip/ plus the probe token', str_contains($slNginxRule($slSubPage), 'location ~ "^/trip/[A-Za-z0-9]{16}$" {') && str_contains($slNginxRule($slSubPage), 'rewrite "^/trip/([A-Za-z0-9]{16})$" /trip/index.php?link=$1 last;') && $slNginxOk($slNginxRule($slSubPage)) && str_contains($slSubPage, 'data-probe="/trip/0000000000000000"') && !str_contains($slSubPage, 'At the top of the site'));
-[$slSubProbeStatus, , $slSubProbeHeaders] = http_get("http://127.0.0.1:$portSlSub/trip/index.php?link=0000000000000000");
+check('[share links] in a gallery installed at /trip/ the nginx rule is for /trip/ (no top-of-site warning) and the probe asks for /trip/ plus the probe token', str_contains($slNginxRule($slSubPage), 'location ~ "^/trip/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$" {') && str_contains($slNginxRule($slSubPage), 'rewrite "^/trip/([A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9])$" /trip/index.php?link=$1 last;') && $slNginxOk($slNginxRule($slSubPage)) && str_contains($slSubPage, 'data-probe="/trip/0000-probe-0000"') && !str_contains($slSubPage, 'At the top of the site'));
+[$slSubProbeStatus, , $slSubProbeHeaders] = http_get("http://127.0.0.1:$portSlSub/trip/index.php?link=0000-probe-0000");
 check('[share links] the probe token answers 200 (a browser logs no 404 in its console) with the marker header, and is not counted as a wrong guess', $slSubProbeStatus === 200 && in_array('X-Gallery-Link: invalid', $slSubProbeHeaders, true) && !preg_grep('/^link\|/', array_keys(read_data_file("$fxSlSub/trip/.gallery-login-attempts.php"))));
 [$slSubWrongStatus, , $slSubWrongHeaders] = http_get("http://127.0.0.1:$portSlSub/trip/index.php?link=Zz9Zz9Zz9Zz9Zz9Z");
 check('[share links] a real wrong 16-character token still answers 404 (with the marker header)', $slSubWrongStatus === 404 && in_array('X-Gallery-Link: invalid', $slSubWrongHeaders, true));
@@ -5300,22 +5300,41 @@ check('[share log] the server appends a note for each private picture it sends a
 [$lgZipSt, $lgZipBody] = http_get("$baseL/?archive&folder=Rome", $lgH);
 $lgFrag = fn ($qs) => http_get("$baseL/?admin&$qs", ["Cookie: $lgAdminCookie"]);
 $lgVisitorsHtml = $lgFrag("linkview=$lgId&tab=visitors")[1];
-check('[share log] the Visitors tab folds the queue in and lists the address (a button), where from, the browser, opens and views', $lgZipSt === 200 && str_contains($lgVisitorsHtml, 'data-ip="127.0.0.1"') && str_contains($lgVisitorsHtml, 'Safari on iPhone') && str_contains($lgVisitorsHtml, 'data-vid="' . $lgVid . '"') && !str_contains((string) @file_get_contents("$fxL/.gallery-linklog-$lgId-q.php"), '"s"'));
+check('[share log] the Visitors tab folds the queue in and lists the address (a button), where from, the browser, opens and views (whose button opens that address\'s Media tab)', $lgZipSt === 200 && str_contains($lgVisitorsHtml, 'data-ip="127.0.0.1"') && str_contains($lgVisitorsHtml, 'Safari on iPhone') && str_contains($lgVisitorsHtml, 'data-ip="127.0.0.1" data-go="media"') && !str_contains($lgVisitorsHtml, 'data-vid=') && !str_contains((string) @file_get_contents("$fxL/.gallery-linklog-$lgId-q.php"), '"s"'));
 $lgT = $lgItems()['t']; $lgTally = fn ($rel) => $lgT["$lgVid|$rel"] ?? null;
 check('[share log] the queued notes became "seen" (Pisa/p1.jpg, Rome/r2.jpg) and "saved" (the original and each file of the ZIP), and the ZIP is one line of the timeline', (($lgTally('Pisa/p1.jpg')['sf'] ?? null) !== null) && ($lgTally('Rome/r2.jpg')['dn'] ?? 0) === 2 && ($lgTally('Rome/r1.jpg')['dn'] ?? 0) === 1 && count(array_filter($lgLog()['events'], fn ($e) => $e['k'] === 'zip')) === 1);
 $lgFolders = $lgFrag("linkview=$lgId&tab=folders")[1];
-check('[share log] the Folders tab says, per folder, how many items were seen of how many there are, opened and saved, with a lock on private folders', str_contains($lgFolders, 'Rome') && preg_match('/<td>\s*3 of 3\s*<\/td>|<td>3 of 3<\/td>/', $lgFolders) === 1 && str_contains($lgFolders, 'sl-lock') && str_contains($lgFolders, 'Front page'));
-$lgPhotos = $lgFrag("linkview=$lgId&tab=photos")[1];
-$lgPhotosOne = $lgFrag("linkview=$lgId&tab=photos&vid=$lgVid&folder=Rome")[1];
-check('[share log] the Photos tab\'s thumbnails show the photo in its folder (?folder=…&find=…, not the one-photo viewer, and not escaped twice)', (bool) preg_match('#class="sl-th" href="\?(folder=[^"&]+&amp;)?find=[^"&]+"#', $lgPhotos) && !str_contains($lgPhotos, '&amp;amp;'));
-check('[share log] filtering to one address and one folder shows only that folder\'s items', substr_count($lgPhotosOne, 'class="sl-th"') === 3 && !str_contains($lgPhotosOne, rawurlencode('pub.jpg')) && str_contains($lgPhotosOne, 'sl-fchip'));
+check('[share log] the Folders tab has the columns Folder, Opens, Media seen, Opened, Downloaded, First seen, Last activity (no IPs or Views column), with a lock on private folders and the front page named', str_contains($lgFolders, '<th>Folder</th><th>Opens</th><th>Media seen</th><th>Opened</th><th>Downloaded</th><th>First seen</th><th>Last activity</th>') && !str_contains($lgFolders, '<th>IPs</th>') && !str_contains($lgFolders, '<th>Views</th>') && str_contains($lgFolders, 'sl-lock') && str_contains($lgFolders, 'Front page'));
+preg_match('~<tr><td>(?:<span class="sl-lock".*?</span> )?Rome</td>(.*?)</tr>~s', $lgFolders, $lgRomeRow);
+check('[share log] ...Rome\'s row says its page was opened once, 3 of 3 seen, 2 opened (one opened twice, one played: each file counts once), 3 downloaded (the three files of the ZIP, one of them also as an original), and each of those numbers is a button that leads to the Media tab for that folder and that kind', ($lgRomeRow[1] ?? '') !== '' && str_starts_with($lgRomeRow[1], '<td>1</td>') && str_contains($lgRomeRow[1], 'data-media="viewed" data-folder="Rome">3 of 3<') && str_contains($lgRomeRow[1], 'data-media="opened" data-folder="Rome">2<') && str_contains($lgRomeRow[1], 'data-media="downloaded" data-folder="Rome">3<'), $lgRomeRow[1] ?? '(no Rome row)');
+check('[share log] ...the front page\'s row has no Opens number and no downloaded files (a dash, not a button) and a folder nobody opened says so with a dash too', preg_match('~<tr><td>Front page</td><td>—</td><td><button[^>]*data-media="viewed" data-folder="/">~', $lgFolders) === 1);
+$lgPhotos = $lgFrag("linkview=$lgId&tab=media")[1];
+$lgPhotosOne = $lgFrag("linkview=$lgId&tab=media&ips%5B%5D=127.0.0.1&folders%5B%5D=Rome")[1];
+check('[share log] the Media tab\'s thumbnails show the photo in its folder (?folder=…&find=…, not the one-photo viewer, and not escaped twice)', (bool) preg_match('#class="sl-th" href="\?(folder=[^"&]+&amp;)?find=[^"&]+"#', $lgPhotos) && !str_contains($lgPhotos, '&amp;amp;'));
+check('[share log] the old Photos address (tab=photos) still works and shows the Media tab, and the tab is called Media, not Photos', str_contains($lgFrag("linkview=$lgId&tab=photos")[1], 'class="sl-th"') && str_contains($lgPhotos, 'data-tab="media">Media</button>') && !str_contains($lgPhotos, 'data-tab="photos"') && str_contains($lgPhotos, 'data-tab="timeline">Timeline</button>'));
+check('[share log] filtering to one address and one folder shows only that folder\'s items, and the menus say what is chosen (the address, the folder)', substr_count($lgPhotosOne, 'class="sl-th"') === 3 && !str_contains($lgPhotosOne, rawurlencode('pub.jpg')) && preg_match('~data-pop="ips".*?sl-popbtn on".*?sl-poplab">127\.0\.0\.1<~s', $lgPhotosOne) === 1 && preg_match('~data-pop="folders".*?sl-popbtn on".*?sl-poplab">Rome<~s', $lgPhotosOne) === 1);
 $lgIp = $lgFrag('linkip=127.0.0.1&tab=folders')[1];
 check('[share log] one address\'s page: its links, totals, a key for seen / opened / saved, and the Folders, Media and Timeline tabs', str_contains($lgIp, 'sl-ipbig') && str_contains($lgIp, '127.0.0.1') && str_contains($lgIp, 'Safari on iPhone') && str_contains($lgIp, 'sl-lchip') && str_contains($lgIp, 'was on their screen') && str_contains($lgIp, 'data-tab="media"') && str_contains($lgIp, 'data-tab="timeline"'));
 $lgIpMedia = $lgFrag('linkip=127.0.0.1&tab=media')[1]; $lgIpTime = $lgFrag('linkip=127.0.0.1&tab=timeline')[1];
-check('[share log] its Media tab names each file with first seen, opened and saved, and its Timeline lists the happenings in order (newest first), scrolling as one line', str_contains($lgIpMedia, 'r1.jpg') && str_contains($lgIpMedia, 'Opened ×2') && str_contains($lgIpMedia, '✓ saved') && str_contains($lgIpTime, 'Scrolled through') && str_contains($lgIpTime, 'Saved a ZIP of') && str_contains($lgIpTime, 'Played'));
+check('[share log] its Media tab is the same grid (the photo in its folder, ×2 for the one opened twice, "downloaded" on the one whose original was), and its Timeline lists the happenings in order (newest first), scrolling as one line', str_contains($lgIpMedia, 'title="Rome/r1.jpg"') && str_contains($lgIpMedia, '×2') && str_contains($lgIpMedia, ' · downloaded') && !str_contains($lgIpMedia, '✓ saved') && str_contains($lgIpTime, 'Scrolled through') && str_contains($lgIpTime, 'Downloaded a ZIP of') && !str_contains($lgIpTime, 'Saved a ZIP') && str_contains($lgIpTime, 'Played'));
+$lgLinkTime = $lgFrag("linkview=$lgId&tab=timeline")[1];
+check('[share log] a link has a Timeline tab of its own: the same lines as its address\'s, each naming the address that did it (not the link)', str_contains($lgLinkTime, 'Scrolled through') && str_contains($lgLinkTime, 'Played') && str_contains($lgLinkTime, '<span class="sl-ipt">127.0.0.1</span>') && !str_contains($lgLinkTime, 'via ') && str_contains($lgLinkTime, 'data-tab="timeline"') && str_contains($lgIpTime, 'via '));
+check('[share log] in the Timeline the opened, played and downloaded lines carry a small picture that opens the folder at that photo (as the Media tab\'s do), and the scroll line\'s pictures do too', preg_match('~class="sl-tth" href="\?folder=Rome&amp;find=Rome%2Fr1\.jpg"~', $lgIpTime) === 1 && preg_match('~class="sl-evpic"><a class="sl-tth"[^>]*>.*?Opened <b>r1\.jpg</b>~s', $lgIpTime) === 1 && preg_match('~Played <b>clip\.mp4</b>~', $lgIpTime) === 1 && preg_match('~class="sl-strip"><a class="sl-tth"~', $lgIpTime) === 1 && !str_contains($lgIpTime, 'sl-mini2'));
+// a long stretch of scrolling keeps only its first six pictures: the line says how many more there were
+$lgLogKeep = read_data_file("$fxL/.gallery-linklog-$lgId.php"); $lgLogMore = $lgLogKeep; $lgNow = time();
+$lgLogMore['events'][] = ['t' => $lgNow, 't1' => $lgNow + 1, 'v' => $lgVid, 'k' => 'scroll', 'd' => 'Rome', 'n' => 117, 's' => ['Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/r1.jpg', 'Rome/r2.jpg']];
+write_data_file("$fxL/.gallery-linklog-$lgId.php", $lgLogMore);
+check('[share log] a scroll line with more pictures than were kept says "+111 more" after the six', str_contains($lgFrag('linkip=127.0.0.1&tab=timeline')[1], 'saw 117 photos') && str_contains($lgFrag('linkip=127.0.0.1&tab=timeline')[1], '<span class="sl-more-n">+111 more</span>'));
+write_data_file("$fxL/.gallery-linklog-$lgId.php", $lgLogKeep);
+check('[address scope] an address that used only one link has no links menu', !str_contains($lgFrag('linkip=127.0.0.1&tab=media')[1], 'data-pop="link"') && str_contains($lgFrag('linkip=127.0.0.1&tab=media')[1], 'data-pop="what"') && str_contains($lgFrag('linkip=127.0.0.1&tab=folders')[1], 'sl-popfixed'), substr(strip_tags($lgFrag('linkip=127.0.0.1&tab=media')[1]), 0, 400));
+check('[address scope] the address page\'s Folders tab has the same columns as the link\'s, and its numbers are buttons to the Media tab', str_contains($lgFrag('linkip=127.0.0.1&tab=folders')[1], '<th>Folder</th><th>Opens</th><th>Media seen</th><th>Opened</th><th>Downloaded</th><th>First seen</th><th>Last activity</th>') && str_contains($lgFrag('linkip=127.0.0.1&tab=folders')[1], 'data-media="opened" data-folder="Rome"') && str_contains($lgFrag('linkip=127.0.0.1&tab=folders')[1], '<span>downloaded</span>') && !str_contains($lgFrag('linkip=127.0.0.1&tab=folders')[1], '<span>saved</span>'), substr($lgFrag('linkip=127.0.0.1&tab=folders')[1], 0, 1500));
 check('[share log] the list of every address names the links each used and what it viewed', str_contains($lgFrag('linkips=1')[1], 'data-ip="127.0.0.1"') && str_contains($lgFrag('linkips=1')[1], 'sl-lchip'));
+$lgIpsHtml = $lgFrag('linkips=1')[1]; preg_match('~<tr><td([^>]*)>.*?</tr>~s', $lgIpsHtml, $lgIpsRow);
+check('[ip list phone] the list of every address can stack into cards on a phone: the table carries sl-cards and every cell of a row is labelled (IP address, Where, Browser, Links used, Views, Last seen)', str_contains($lgIpsHtml, '<table class="sl-table sl-cards">') && preg_match_all('~<td data-label="([^"]+)"~', $lgIpsRow[0] ?? '', $lgIpsLabels) && $lgIpsLabels[1] === ['IP address', 'Where', 'Browser', 'Links used', 'Views', 'Last seen']);
 [$lgCsvSt, $lgCsv, $lgCsvH] = $lgFrag("linkexport=$lgId&what=items");
 check('[share log] the CSV export is a download with a header row and one line per item, and a name starting with = can\'t run as a spreadsheet formula', $lgCsvSt === 200 && (bool) array_filter($lgCsvH, fn ($h) => stripos($h, 'Content-Disposition: attachment') === 0 && str_contains($h, '.csv')) && str_contains($lgCsv, '"link","ip","browser","folder","file"') && str_contains($lgCsv, '"\'=cmd|calc"') && substr_count($lgCsv, "\r\n") >= 6);
+[, $lgCsvEv] = $lgFrag("linkexport=$lgId&what=events");
+check('[share log] the CSV exports say "downloaded", not "saved": the items file has a downloaded column and the events file names the ZIP and the originals as downloaded', str_contains($lgCsv, '"opened","played","downloaded","last_activity"') && !str_contains($lgCsv, '"saved"') && preg_match('~,"downloaded",~', $lgCsvEv) === 1 && !str_contains($lgCsvEv, ',"saved",'));
 check('[share log] the other exports work too (visitors, everything in order) and one address can be exported alone', str_contains($lgFrag("linkexport=$lgId&what=visitors")[1], '"link","ip","where"') && str_contains($lgFrag("linkexport=$lgId&what=events")[1], '"time","link","ip","what"') && !str_contains($lgFrag("linkexport=$lgId&what=items&ip=9.9.9.9")[1], 'r1.jpg') && $lgFrag('linkexport=nope&what=items')[0] === 404);
 check('[share log] these fragments and downloads are for the owner only', http_get("$baseL/?admin&linkview=$lgId&tab=visitors", [])[0] !== 200 || !str_contains(http_get("$baseL/?admin&linkview=$lgId&tab=visitors", [$lgUa])[1], 'data-ip='));
 
@@ -5333,7 +5352,7 @@ $lgOldTok = $lgTok; $lgAdmin(['action' => 'link_replace', 'id' => $lgId]); $lgTo
 @unlink("$fxL/.gallery-login-attempts.php");
 $lgOldBody = http_get("$baseL/?link=$lgOldTok", [$lgUa]);
 $lgBlocked = array_values($lgLog()['blocked'] ?? [])[0] ?? [];
-check('[share log] tries turned away are logged with the address and why (paused; the old address after a replace), the invalid page is the same as ever, and an old address isn\'t counted as a guess', ($lgBlocked['tries'] ?? 0) === 3 && ($lgBlocked['why']['paused'] ?? 0) === 2 && ($lgBlocked['why']['replaced'] ?? 0) === 1 && $lgOldBody[0] === 404 && str_contains($lgOldBody[1], 'This link isn\'t valid') && !str_contains(json_encode(is_file("$fxL/.gallery-login-attempts.php") ? read_data_file("$fxL/.gallery-login-attempts.php") : []), 'link|'));
+check('[share log] tries turned away are logged with the address and why (paused; the old address after a replace), the invalid page is the same as ever, and an old address isn\'t counted as a guess', ($lgBlocked['tries'] ?? 0) === 3 && ($lgBlocked['why']['paused'] ?? 0) === 2 && ($lgBlocked['why']['replaced'] ?? 0) === 1 && $lgOldBody[0] === 404 && str_contains($lgOldBody[1], 'This link is not valid') && !str_contains(json_encode(is_file("$fxL/.gallery-login-attempts.php") ? read_data_file("$fxL/.gallery-login-attempts.php") : []), 'link|'));
 check('[share log] the Visitors tab lists them as blocked tries (with the reason), and the summary line says so', str_contains($lgFrag("linkview=$lgId&tab=visitors")[1], 'Blocked tries') && str_contains($lgFrag("linkview=$lgId&tab=visitors")[1], 'old address') && str_contains(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1], '3 blocked tries'));
 
 // The log is kept when a link ends, whatever way, and goes only when the link is deleted.
@@ -5563,6 +5582,7 @@ check('[share picture] a new link starts with the cover photo on when its title 
 [, $pxBody, $pxHeaders] = $pxOpen($pxGallery['token']);
 $pxUrl = $pxOg($pxBody); $pxChosen = $pxFile($pxUrl);
 check('[share picture] the message preview gets an og:image: a full address to the 1200-wide share picture of a public folder\'s cover, and a large-image card', str_starts_with($pxUrl, "$baseP/?img=") && str_contains($pxUrl, '&size=share') && in_array($pxChosen, ['Pisa/p1.jpg', 'Lucca/l1.jpg'], true) && str_contains($pxBody, '<meta name="twitter:card" content="summary_large_image">'));
+check('[opening picture] the opening page shows the whole photo at its own proportions: no fixed banner shape and no cropping (it used to be forced into 1200 x 630 and cut), as wide as the page allows, no taller than 60% of the screen, centred', str_contains($pxBody, '.pic{display:block;width:auto;height:auto;max-width:100%;max-height:60vh;margin:0 auto 18px;') && !str_contains($pxBody, 'aspect-ratio:1200/630') && !str_contains($pxBody, 'object-fit:cover'));
 check('[share picture] the opening page shows that picture instead of the icon, and its policy lets the page load pictures from the gallery and nothing else', preg_match('/<img class="pic" src="[^"]*img=' . preg_quote(rawurlencode($pxChosen), '/') . '[^"]*size=share/', $pxBody) === 1 && !str_contains($pxBody, '<div class="ico">') && str_contains($pxCsp($pxHeaders), "img-src 'self';") && !str_contains($pxCsp($pxHeaders), 'img-src *'));
 [$pxImgStatus, , $pxImgHeaders] = http_get($pxUrl);
 check('[share picture] that picture can be fetched by anyone with no sign-in (what a chat app does)', $pxImgStatus === 200 && count(preg_grep('/^Content-Type: image\//i', $pxImgHeaders)) === 1);
@@ -5615,13 +5635,434 @@ check('[share picture] a link made before this setting existed shows no picture,
 
 // The tab.
 $pxTab = http_get("$baseP/?admin", ["Cookie: $pxCookie"])[1];
-check('[share picture] the New link form has the "Show a cover photo" box, it is saved with the form, follows the title choice on a new link, and the tab lists each link\'s setting', str_contains($pxTab, 'name="picture"') && str_contains($pxTab, 'Show a cover photo') && str_contains($pxTab, "picture: form.querySelector('[name=picture]').checked ? '1' : '0'") && str_contains($pxTab, "e.target.name === 'title_mode'") && str_contains($pxTab, '<dt>Cover photo</dt>') && str_contains($pxTab, '&quot;picture&quot;:'));
+check('[share picture] the New link form has the "Show a preview photo" box, it is saved with the form, follows the title choice on a new link, and the tab lists each link\'s setting', str_contains($pxTab, 'name="picture"') && str_contains($pxTab, 'Show a preview photo') && !str_contains($pxTab, 'Show a cover photo') && str_contains($pxTab, "picture: form.querySelector('[name=picture]').checked ? '1' : '0'") && str_contains($pxTab, "e.target.name === 'title_mode'") && str_contains($pxTab, '<dt>Preview photo</dt>') && !str_contains($pxTab, '<dt>Cover photo</dt>') && str_contains($pxTab, '&quot;picture&quot;:'));
 check('[share picture] the quick "Share this folder…" form makes its link with the picture on, and the old wording "no photo is ever shown" is gone', str_contains($pxTab, "body.set('picture', '1')") && !str_contains($pxTab, 'no photo or folder name is ever shown'));
 
 // Without folders (Show subfolders off): a public photo from the front page.
 $pxConfig(['AUTO_GROUP_BY_FOLDER' => false]);
 check('[share picture] with subfolders off the picture is a public photo from the front page', $pxFile($pxOg($pxOpen($pxMany[0]['token'])[1])) === 'pub.jpg');
 $pxConfig();
+
+// Choosing the cover photo: the picture is shown right away, it can be chosen from the PUBLIC photos only, and it is looked at again every time it is used.
+// (the settings were rewritten just above, which ends the admin's session: sign in again)
+[, , $pxLoginH2] = http_post("$baseP/?admin", ['access_code' => 'pic-admin-pw-1'], [], false);
+$pxCookie = extract_cookie_header($pxLoginH2); $pxCsrf = extract_csrf_token(http_get("$baseP/?admin", ["Cookie: $pxCookie"])[1]);
+$pxAdmin = function (array $fields) use ($baseP, $pxCookie, $pxCsrf) {
+    [, $body] = http_post("$baseP/?admin", $fields + ['csrf_token' => $pxCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $pxCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$pxMake = function (array $o = []) use ($pxAdmin, $pxLinks) {
+    $r = $pxAdmin($o + ['action' => 'link_create', 'label' => 'Carol', 'title_mode' => 'gallery', 'max_opens' => 50, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'downloads' => 'off']);
+    return $pxLinks()[$r['id'] ?? ''] ?? [];
+};
+$pxCover = fn ($qs, $cookie = null) => json_decode(http_get("$baseP/?admin&linkcover=1&$qs", $cookie === null ? ["Cookie: $pxCookie"] : $cookie)[1], true);
+$pxCoverLink = $pxMake(['title_mode' => 'gallery', 'picture' => '1']); $pxCoverId = $pxCoverLink['id'] ?? '';
+check('[cover choice] a new link gets a small random number of its own (the seed that makes its automatic pick, kept for its life) and no chosen photo; two links get different numbers', preg_match('/^[0-9a-f]{8}$/', $pxCoverLink['pictureSeed'] ?? '') === 1 && ($pxCoverLink['pictureFile'] ?? 'x') === '' && ($pxMake()['pictureSeed'] ?? '') !== ($pxCoverLink['pictureSeed'] ?? ''), json_encode($pxCoverLink));
+$pxPick = fn ($seed) => $pxCover("id=&seed=$seed&file=");
+$pxSeen = []; foreach (['00000001', '00000002', '00000003', '00000004', '00000005', '00000006', '00000007', '00000008', '0000000f', 'aaaaaaaa', 'deadbeef', '12345678'] as $pxSd) $pxSeen[($pxPick($pxSd)['file'] ?? 'none')] = true;
+$pxP1 = $pxPick('12345678');
+check('[cover choice] the form\'s preview comes from the server: a seed gives a public folder\'s cover and a picture address, the same seed always the same one, different seeds reach both public folders, and never the private ones', ($pxP1['how'] ?? '') === 'auto' && str_starts_with($pxP1['img'] ?? '', '?img=') && $pxPick('12345678')['file'] === $pxP1['file'] && count($pxSeen) === 2 && !array_diff(array_keys($pxSeen), ['Pisa/p1.jpg', 'Lucca/l1.jpg']), json_encode(array_keys($pxSeen)));
+check('[cover choice] a public photo can be asked for and is then used (a front-page one too); a private photo, one in a private folder, one that does not exist, and a path trying to climb out all give the automatic pick instead', ($pxCover('id=&seed=12345678&file=Lucca%2Fl1.jpg')['how'] ?? '') === 'chosen' && ($pxCover('id=&seed=12345678&file=pub.jpg')['file'] ?? '') === 'pub.jpg'
+    && array_reduce(['sec.jpg', 'Rome%2Fr1.jpg', 'nope.jpg', '..%2Findex.php', 'Pisa'], function ($ok, $f) use ($pxCover, $pxP1) { $r = $pxCover("id=&seed=12345678&file=$f"); return $ok && ($r['how'] ?? '') === 'auto' && ($r['file'] ?? '') === $pxP1['file']; }, true));
+check('[cover choice] the preview is for the owner only: without the admin sign-in there is no answer', ($c = http_get("$baseP/?admin&linkcover=1&id=&seed=12345678&file=")[1]) !== '' && !str_contains($c, '"file"'));
+$pxSave = fn (array $o) => $pxAdmin($o + ['action' => 'link_save', 'id' => $pxCoverId, 'label' => 'Carol', 'title_mode' => 'gallery', 'max_opens' => 50, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'downloads' => 'off']);
+$pxBadSec = $pxSave(['picture_file' => 'sec.jpg']); $pxBadRome = $pxSave(['picture_file' => 'Rome/r1.jpg']); $pxBadGone = $pxSave(['picture_file' => 'gone.jpg']); $pxBadMov = $pxSave(['picture_file' => '../index.php']);
+check('[cover choice] saving a link refuses a cover that is private, in a private folder, missing or outside the gallery (it cannot be chosen by editing the request by hand), and nothing is stored', !($pxBadSec['ok'] ?? true) && str_contains($pxBadSec['text'] ?? '', 'public photo') && !($pxBadRome['ok'] ?? true) && !($pxBadGone['ok'] ?? true) && !($pxBadMov['ok'] ?? true) && ($pxLinks()[$pxCoverId]['pictureFile'] ?? 'x') === '');
+$pxGood = $pxSave(['picture_file' => 'Lucca/l1.jpg']);
+$pxTok = $pxLinks()[$pxCoverId]['token'] ?? '';
+check('[cover choice] a public photo is saved on the link, and the opening page and the message preview use it (the seed is left as it was)', ($pxGood['ok'] ?? false) && ($pxLinks()[$pxCoverId]['pictureFile'] ?? '') === 'Lucca/l1.jpg' && $pxFile($pxOg($pxOpen($pxTok)[1])) === 'Lucca/l1.jpg' && ($pxLinks()[$pxCoverId]['pictureSeed'] ?? '') === ($pxCoverLink['pictureSeed'] ?? 'x') && ($pxCover("id=$pxCoverId")['how'] ?? '') === 'chosen');
+check('[cover choice] saving again with the same photo works even if that is the only thing sent, and a request that does not mention the cover leaves it alone', ($pxSave(['picture_file' => 'Lucca/l1.jpg'])['ok'] ?? false) && ($pxSave([])['ok'] ?? false) && ($pxLinks()[$pxCoverId]['pictureFile'] ?? '') === 'Lucca/l1.jpg');
+// The rule that must never break: it is looked at again whenever it is used.
+write_data_file("$fxP/Lucca/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+$pxAfterPriv = $pxFile($pxOg($pxOpen($pxTok)[1])); $pxAfterPrivApi = $pxCover("id=$pxCoverId");
+check('[cover choice] if the chosen photo\'s folder is made private later, the opening page and the preview stop using it at once (the automatic pick instead, never a private photo), and the link still says what it holds', $pxAfterPriv === 'Pisa/p1.jpg' && ($pxAfterPrivApi['how'] ?? '') === 'auto' && ($pxLinks()[$pxCoverId]['pictureFile'] ?? '') === 'Lucca/l1.jpg');
+unlink("$fxP/Lucca/.gallery-items.php");
+check('[cover choice] ...and when it is public again it is used again', $pxFile($pxOg($pxOpen($pxTok)[1])) === 'Lucca/l1.jpg');
+$pxAll = read_data_file("$fxP/.gallery-links.php"); $pxAll['links'][$pxCoverId]['pictureFile'] = 'gone.jpg'; write_data_file("$fxP/.gallery-links.php", $pxAll);
+check('[cover choice] a chosen photo that has been deleted falls back to the automatic pick', in_array($pxFile($pxOg($pxOpen($pxTok)[1])), ['Pisa/p1.jpg', 'Lucca/l1.jpg'], true) && ($pxCover("id=$pxCoverId")['how'] ?? '') === 'auto');
+$pxSave(['picture_file' => 'Pisa/p1.jpg']); $pxSave(['picture_file' => '']);
+check('[cover choice] "Automatic" (an empty choice) clears it', ($pxLinks()[$pxCoverId]['pictureFile'] ?? 'x') === '' && ($pxCover("id=$pxCoverId")['how'] ?? '') === 'auto');
+// A link made before the seed existed keeps the pick its address gave it.
+$pxAll = read_data_file("$fxP/.gallery-links.php"); unset($pxAll['links'][$pxCoverId]['pictureSeed'], $pxAll['links'][$pxCoverId]['pictureFile']); write_data_file("$fxP/.gallery-links.php", $pxAll);
+$pxExpectPool = ['Lucca/l1.jpg', 'Pisa/p1.jpg']; $pxExpect = $pxExpectPool[hexdec(substr(hash('sha256', $pxTok), 0, 8)) % 2];
+check('[cover choice] a link made before there were seeds keeps exactly the picture its address always gave it', $pxFile($pxOg($pxOpen($pxTok)[1])) === $pxExpect && ($pxCover("id=$pxCoverId")['file'] ?? '') === $pxExpect);
+// The picker lists public photos only, one to choose; the "add photos" picker is as it was.
+$pxPickR = fn ($f, $c) => http_get("$baseP/?admin&linkphotos=" . rawurlencode($f) . ($c ? '&cover=1' : ''), ["Cookie: $pxCookie"])[1];
+check('[cover choice] the cover picker offers the public photos of a folder as round buttons (the front page: pub.jpg, not the private sec.jpg), nothing for a private folder, and the "Add photos" picker still lists everything as tick boxes', str_contains($pxPickR('', true), 'type="radio"') && str_contains($pxPickR('', true), 'value="pub.jpg"') && !str_contains($pxPickR('', true), 'sec.jpg') && str_contains($pxPickR('Pisa', true), 'value="Pisa/p1.jpg"') && str_contains($pxPickR('Rome', true), 'no public photos') && !str_contains($pxPickR('Rome', true), 'r1.jpg') && str_contains($pxPickR('', false), 'value="sec.jpg"') && str_contains($pxPickR('', false), 'type="checkbox"'));
+$pxFolders = json_decode(http_get("$baseP/?admin&linkcover=folders", ["Cookie: $pxCookie"])[1], true)['folders'] ?? null;
+check('[preview photo] the dialog\'s folder list has only the folders that have public photos in them, the front page first (it has pub.jpg) and then the public folders in order; the private Rome and its private photos are not there, and each says how many public photos it holds', is_array($pxFolders) && array_column($pxFolders, 'p') === ['', 'Lucca', 'Pisa'] && array_column($pxFolders, 'c') === [1, 1, 1] && $pxFolders[0]['n'] === 'The front page', json_encode($pxFolders));
+write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private'], 'pub.jpg' => ['restriction' => 'private']], 'groups' => []]);
+$pxFolders2 = json_decode(http_get("$baseP/?admin&linkcover=folders", ["Cookie: $pxCookie"])[1], true)['folders'] ?? null;
+check('[preview photo] when the front page has no public photo it is not listed, so the dialog opens on the first folder that has one (a gallery whose photos are all in folders never opens on an empty page)', is_array($pxFolders2) && array_column($pxFolders2, 'p') === ['Lucca', 'Pisa'], json_encode($pxFolders2));
+write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => []]);
+check('[preview photo] the folder list is for the owner only', !str_contains(http_get("$baseP/?admin&linkcover=folders")[1], '"folders"'));
+$pxTab2 = http_get("$baseP/?admin", ["Cookie: $pxCookie"])[1];
+check('[cover choice] the form has the preview row with Choose… and Automatic and the two hidden fields; Opens in is a menu behind a hidden field (no dropdown), as is the photo picker\'s folder; a link\'s settings line is filled in when it opens (Off for a link with the picture off)', str_contains($pxTab2, 'data-coverrow') && str_contains($pxTab2, 'data-cover-choose') && str_contains($pxTab2, 'data-cover-auto') && str_contains($pxTab2, 'name="picture_seed"') && str_contains($pxTab2, 'name="picture_file"') && str_contains($pxTab2, '<div data-openin-menu></div>') && !str_contains($pxTab2, '<select name="open_in"') && !str_contains($pxTab2, 'id="sl-pp-folder"') && str_contains($pxTab2, "popHtml('ppfolder'") && str_contains($pxTab2, 'class="sl-cover" data-cover-id="' . $pxCoverId . '"') && str_contains($pxTab2, '<dt>Preview photo</dt><dd>Off</dd>'));
+check('[cover choice] the words "the gallery\'s cover" are gone from the form: it says the front page\'s own cover photo, else a public folder\'s cover, or a photo you choose', str_contains($pxTab2, 'the front page\'s own cover photo if it has one') && !str_contains($pxTab2, 'your gallery\'s cover'));
+
+echo "== share links: a link to just the public gallery, and the log of the public address ==\n";
+
+$fxQ = new_fixture_dir('slpubliclog');
+mkdir("$fxQ/Pisa"); mkdir("$fxQ/Rome");
+make_jpeg("$fxQ/pub.jpg", 80, 60, 200, 60, 60); make_jpeg("$fxQ/sec.jpg", 80, 60, 50, 60, 60);
+make_jpeg("$fxQ/Pisa/p1.jpg", 80, 60, 150, 60, 60); make_jpeg("$fxQ/Rome/r1.jpg", 80, 60, 60, 60, 150);
+write_data_file("$fxQ/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => []]);
+write_data_file("$fxQ/Rome/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+$qConfig = fn (array $o = []) => file_put_contents("$fxQ/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => 'pub-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'pub-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'LOG_PUBLIC_VISITS' => true, 'LOG_PUBLIC_DAYS' => 1]));
+$qConfig();
+copy($indexSrc, "$fxQ/index.php");
+$portQ = find_free_port(); start_server($fxQ, $portQ); $baseQ = "http://127.0.0.1:$portQ";
+$qLogin = function () use ($baseQ) {
+    [, , $h] = http_post("$baseQ/?admin", ['access_code' => 'pub-admin-pw-1'], [], false);
+    $cookie = extract_cookie_header($h);
+    return [$cookie, extract_csrf_token(http_get("$baseQ/?admin", ["Cookie: $cookie"])[1])];
+};
+[$qCookie, $qCsrf] = $qLogin();
+$qAdmin = function (array $fields) use ($baseQ, &$qCookie, &$qCsrf) {
+    [, $body] = http_post("$baseQ/?admin", $fields + ['csrf_token' => $qCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $qCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$qLinks = fn () => read_data_file("$fxQ/.gallery-links.php")['links'] ?? [];
+$qPub = 'ffffffffff';
+$qLog = fn () => read_data_file("$fxQ/.gallery-linklog-$qPub.php");
+$qItems = fn () => read_data_file("$fxQ/.gallery-linklog-$qPub-items.php");
+$qPhone = 'User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+$qMac = 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+$qFox = 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0';
+$qBot = 'User-Agent: Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)';
+$qBeacon = function (array $events, array $headers) use ($baseQ) {
+    $opts = ['http' => ['method' => 'POST', 'header' => implode("\r\n", array_merge(['Content-Type: application/json'], $headers)), 'content' => json_encode(['e' => $events]), 'ignore_errors' => true, 'timeout' => 5]];
+    @file_get_contents("$baseQ/?linklog", false, stream_context_create($opts)); $st = 0;
+    foreach ($http_response_header ?? [] as $h) if (preg_match('#^HTTP/\S+\s+(\d+)#', $h, $m)) $st = (int) $m[1];
+    return $st;
+};
+$qForm = fn (array $o = []) => $o + ['action' => 'link_create', 'label' => 'Reddit post', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off'];
+
+// --- a share link whose scope is just the public gallery
+$qBad = $qAdmin($qForm(['scope_type' => 'public', 'open_in' => 'Rome']));
+$qMade = $qAdmin($qForm(['scope_type' => 'public', 'only' => '1', 'downloads' => 'all', 'zip' => 'all', 'open_in' => 'Pisa']));
+$qRec = $qLinks()[$qMade['id'] ?? ''] ?? [];
+$qToken = $qRec['token'] ?? '';
+check('[public scope] a link can be made for "just the public gallery": it grants nothing, so "show only" and downloads are forced off even if asked for, and it can open in a public folder but not a private one',
+    !($qBad['ok'] ?? true) && str_contains($qBad['text'] ?? '', 'private folder') && ($qMade['ok'] ?? false) && ($qRec['scope']['type'] ?? '') === 'public' && ($qRec['only'] ?? null) === false && ($qRec['downloads']['mode'] ?? '') === 'off' && ($qRec['zip']['mode'] ?? '') === 'off' && ($qRec['openIn'] ?? '') !== '');
+[, , $qGoH] = http_post("$baseQ/?link=$qToken", ['go' => '1'], [$qPhone], false);
+$qLinkCookie = extract_cookie_header($qGoH);
+[, $qHolderPage] = http_get("$baseQ/", ["Cookie: $qLinkCookie", $qPhone]);
+check('[public scope] the person sees the whole public gallery and nothing private (not the private photo, not the private folder), with the logging script on their page',
+    $qLinkCookie !== null && str_contains($qHolderPage, 'pub.jpg') && str_contains($qHolderPage, 'Pisa') && !str_contains($qHolderPage, 'sec.jpg') && !str_contains($qHolderPage, 'Rome') && str_contains($qHolderPage, 'window.__linkLog = log'));
+check('[public scope] ...and a private picture is refused to them while a public one is served', http_get("$baseQ/?img=sec.jpg&size=thumb", ["Cookie: $qLinkCookie"])[0] === 404 && http_get("$baseQ/?img=Rome%2Fr1.jpg&size=thumb", ["Cookie: $qLinkCookie"])[0] === 404 && http_get("$baseQ/?img=pub.jpg&size=thumb", ["Cookie: $qLinkCookie"])[0] === 200);
+$qLid = $qMade['id'] ?? '';
+$qSt = $qBeacon([['f', ''], ['s', 'pub.jpg'], ['s', 'sec.jpg'], ['o', 'Pisa/p1.jpg'], ['f', 'Rome']], ["Cookie: $qLinkCookie", $qPhone]);
+$qHolderItems = read_data_file("$fxQ/.gallery-linklog-$qLid-items.php")['t'] ?? [];
+$qHolderVid = array_key_first(read_data_file("$fxQ/.gallery-linklog-$qLid.php")['visitors'] ?? []);
+check('[public scope] the link\'s log records what they looked at in the public gallery (a public photo seen, a public photo opened) and drops a private photo and a private folder', $qSt === 204 && isset($qHolderItems["$qHolderVid|pub.jpg"]['sf']) && ($qHolderItems["$qHolderVid|Pisa/p1.jpg"]['on'] ?? 0) === 1 && !isset($qHolderItems["$qHolderVid|sec.jpg"]) && !isset(read_data_file("$fxQ/.gallery-linklog-$qLid-items.php")['f']["$qHolderVid|Rome"]));
+$qTab0 = http_get("$baseQ/?admin", ["Cookie: $qCookie"])[1];
+check('[public scope] the New link form offers "Just the public gallery" (and hides the download choices for it), and the list says "Nothing private: just the public gallery"', str_contains($qTab0, 'name="scope_type" value="public"') && str_contains($qTab0, 'Just the public gallery') && substr_count($qTab0, '<div class="sl-f" data-nopublic>') === 2 && str_contains($qTab0, 'Nothing private: just the public gallery'));
+
+// --- the public address's own log
+check('[public log] nothing is logged before anyone is: no record, no log file', !isset($qLinks()[$qPub]) && !is_file("$fxQ/.gallery-linklog-$qPub.php"));
+[, $qPlain] = http_get("$baseQ/", [$qPhone]);
+[, $qBotPage] = http_get("$baseQ/", [$qBot]);
+[, $qOwnerPage] = http_get("$baseQ/", ["Cookie: $qCookie", $qMac]);
+$qRevealCookie = extract_cookie_header(http_get("$baseQ/?reveal", ['Authorization: Basic ' . base64_encode('x:pub-view-pw-1')], false)[2]);
+[, $qRevealPage] = http_get("$baseQ/", ["Cookie: $qRevealCookie", $qFox]);
+check('[public log] an ordinary visitor\'s page carries the logging script; a link-preview bot\'s, the owner\'s and a private-view visitor\'s do not', str_contains($qPlain, 'window.__linkLog = log') && !str_contains($qBotPage, 'window.__linkLog = log') && !str_contains($qOwnerPage, 'window.__linkLog = log') && $qRevealCookie !== null && !str_contains($qRevealPage, 'window.__linkLog = log'), json_encode([str_contains($qPlain, 'window.__linkLog = log'), str_contains($qBotPage, 'window.__linkLog = log'), str_contains($qOwnerPage, 'window.__linkLog = log'), $qRevealCookie, str_contains($qRevealPage, 'window.__linkLog = log')]));
+$qS1 = $qBeacon([['f', ''], ['s', 'pub.jpg'], ['s', 'sec.jpg'], ['o', 'Pisa/p1.jpg'], ['f', 'Rome']], [$qPhone]);
+$qRecPub = $qLinks()[$qPub] ?? [];
+$qV = array_values($qLog()['visitors'] ?? [])[0] ?? [];
+$qT = $qItems()['t'] ?? []; $qVid = array_key_first($qLog()['visitors'] ?? []);
+check('[public log] an ordinary visitor\'s report makes the log: a record that is not a link (no address, kind public), one visitor with address and browser, one visit, and the public things looked at, in a data file that answers 404', $qS1 === 204 && ($qRecPub['kind'] ?? '') === 'public' && ($qRecPub['token'] ?? 'x') === '' && ($qRecPub['scope']['type'] ?? '') === 'public' && count($qLog()['visitors']) === 1 && ($qV['ip'] ?? '') === '127.0.0.1' && ($qV['ua'] ?? '') === 'Safari on iPhone' && ($qV['opens'] ?? 0) === 1 && isset($qT["$qVid|pub.jpg"]['sf']) && ($qT["$qVid|Pisa/p1.jpg"]['on'] ?? 0) === 1 && http_get("$baseQ/.gallery-linklog-$qPub.php")[0] === 404);
+check('[public log] a private photo and a private folder in the report are dropped', !isset($qT["$qVid|sec.jpg"]) && !isset($qItems()['f']["$qVid|Rome"]) && count($qT) === 2);
+$qBeacon([['s', 'pub.jpg'], ['o', 'pub.jpg']], [$qPhone]);
+check('[public log] the same visitor back within half an hour is the same visit (one visit, more views); a visitor back after half an hour is a new one', (array_values($qLog()['visitors'])[0]['opens'] ?? 0) === 1 && (array_values($qLog()['visitors'])[0]['views'] ?? 0) >= 3);
+$qLogRaw = read_data_file("$fxQ/.gallery-linklog-$qPub.php"); $qLogRaw['visitors'][$qVid]['last'] = time() - 4000; write_data_file("$fxQ/.gallery-linklog-$qPub.php", $qLogRaw);
+$qBeacon([['s', 'pub.jpg']], [$qPhone]);
+check('[public log] ...after half an hour away it counts a second visit, with a line in the timeline for each', (array_values($qLog()['visitors'])[0]['opens'] ?? 0) === 2 && count(array_filter($qLog()['events'], fn ($e) => $e['k'] === 'link')) === 2);
+$qBeforeN = count($qLog()['visitors']);
+$qBeacon([['s', 'pub.jpg']], [$qBot]);
+$qBeacon([['s', 'pub.jpg']], ["Cookie: $qCookie", $qMac]);
+$qBeacon([['s', 'pub.jpg']], ["Cookie: $qRevealCookie", $qFox]);
+$qBeacon([['s', 'pub.jpg']], ["Cookie: $qLinkCookie", $qMac]);
+check('[public log] a link-preview bot, the owner, a private-view visitor and someone using a share link are not added to it', count($qLog()['visitors']) === $qBeforeN);
+$qTab1 = http_get("$baseQ/?admin", ["Cookie: $qCookie"])[1];
+$qFrag = http_get("$baseQ/?admin&linkview=$qPub", ["Cookie: $qCookie"])[1];
+$qIps = http_get("$baseQ/?admin&linkips=1", ["Cookie: $qCookie"])[1];
+$qCsv = http_get("$baseQ/?admin&linkexport=$qPub&what=visitors", ["Cookie: $qCookie"])[1];
+check('[public log] the Share tab shows "The public address" above the links (logging, visits, addresses, views), its Visitors list names the address and says Visits, and it is not counted among the links',
+    str_contains($qTab1, 'The public address') && str_contains($qTab1, 'sl-public') && preg_match('/class="sl-pill active">Logging</', $qTab1) === 1 && str_contains($qTab1, '<b>2</b> visit') && str_contains($qFrag, 'data-ip="127.0.0.1"') && str_contains($qFrag, '<th>Visits</th>') && str_contains($qTab1, '1 not ended'));
+check('[public log] the list of every IP address shows the public address as a chip of its own beside the links the address used, and the CSV export has the address', str_contains($qIps, 'sl-lchip pub">Public address') && str_contains($qIps, 'sl-lchip">Reddit post') && str_contains($qCsv, '127.0.0.1'));
+preg_match_all('~<details class="sl-settings">(.*?)</details>~s', $qTab1, $qSet);
+$qLinkSet = array_values(array_filter($qSet[1], fn ($h) => str_contains($h, 'What they can see')))[0] ?? ''; $qPubSet = array_values(array_filter($qSet[1], fn ($h) => str_contains($h, 'Who is logged')))[0] ?? '';
+preg_match('~<details class="sl-row" data-id="[0-9a-f]{10}".*?<div class="sl-acts">(.*?)</div>\s*</div>\s*</details>~s', $qTab1, $qActs);
+check('[settings fold] an opened link keeps its address, Copy, Share… and QR code in view and puts its settings lines in a section called Settings that starts closed, with Edit… inside it (not with Export log, Preview, Pause…)', $qLinkSet !== '' && str_contains($qLinkSet, 'Original downloads') && str_contains($qLinkSet, 'Made') && str_contains($qLinkSet, 'data-sl="edit"') && !str_contains($qActs[1] ?? '', 'data-sl="edit"') && str_contains($qActs[1] ?? '', 'data-sl="preview"') && str_contains($qTab1, '<details class="sl-settings"><summary>Settings</summary>') && !str_contains($qTab1, '<details class="sl-settings" open') && strpos($qTab1, 'What they can see') < strpos($qTab1, 'data-act="link"', strpos($qTab1, 'What they can see')) && str_contains($qTab1, 'class="gs-mount"'));
+check('[settings fold] the public address\'s card folds its three lines the same way', $qPubSet !== '' && str_contains($qPubSet, 'Kept for') && !str_contains($qPubSet, 'data-sl="edit"'));
+// The Media tab's three menus (addresses, folders, and one choice from a list), which narrow the same set of photos and videos together (works for any link's log; here the public address's).
+$qItemsKeep = read_data_file("$fxQ/.gallery-linklog-$qPub-items.php"); $qItemsMore = $qItemsKeep; $qNow = time(); $qVid2 = array_key_first($qLog()['visitors']);
+$qItemsMore['t']["$qVid2|seenonly.jpg"] = ['sf' => $qNow, 'sl' => $qNow + 100]; $qItemsMore['t']["$qVid2|played.mp4"] = ['sf' => $qNow, 'sl' => $qNow, 'pn' => 2, 'pl' => $qNow]; $qItemsMore['t']["$qVid2|saved.jpg"] = ['sf' => $qNow, 'sl' => $qNow, 'dn' => 1, 'dl' => $qNow]; $qItemsMore['t']["$qVid2|sec.jpg"] = ['sf' => $qNow, 'sl' => $qNow];
+write_data_file("$fxQ/.gallery-linklog-$qPub-items.php", $qItemsMore);
+$qMedia = fn ($qs = '') => http_get("$baseQ/?admin&linkview=$qPub&tab=media$qs", ["Cookie: $qCookie"])[1];
+$qHas = fn ($html, $name) => str_contains($html, 'title="' . $name . '"');
+$qOrder = fn ($html) => array_map('rawurldecode', array_map(fn ($u) => preg_replace('~^.*find=~', '', $u), (function ($h) { preg_match_all('~class="sl-th" href="([^"]+)"~', $h, $m); return $m[1]; })($html)));
+$qAllHtml = $qMedia(); $qRecent = $qMedia('&what=recent'); $qPhotos = $qMedia('&what=photos'); $qVideos = $qMedia('&what=videos'); $qPrivate = $qMedia('&what=private'); $qOpenedHtml = $qMedia('&what=opened'); $qDown = $qMedia('&what=downloaded');
+check('[media filter] the Media tab has one line of three menus in this order: the addresses (several can be ticked), the folders (several), and one choice: Most viewed, Most recent, Photos, Videos, Private, Opened, Downloaded; no old dropdowns', preg_match('~data-pop="ips" data-multi="1".*?data-pop="folders" data-multi="1".*?data-pop="what" data-multi="0"~s', $qAllHtml) === 1 && preg_match('~data-pop="what".*?<span>Most viewed</span>.*?<span>Most recent</span>.*?<span>Photos</span>.*?<span>Videos</span>.*?<span>Private</span>.*?<span>Opened</span>.*?<span>Downloaded</span>~s', $qAllHtml) === 1 && !str_contains($qAllHtml, '<select') && !str_contains($qAllHtml, 'Seen only') && !str_contains($qAllHtml, '>Played<') && !str_contains($qAllHtml, 'data-filter='));
+check('[media filter] Most viewed (the default) lists everything seen with what was opened most first (the video played twice leads), Most recent lists the same photos newest first (the one touched last leads)', $qHas($qAllHtml, 'seenonly.jpg') && $qHas($qAllHtml, 'played.mp4') && $qHas($qAllHtml, 'pub.jpg') && $qHas($qAllHtml, 'saved.jpg') && $qOrder($qAllHtml)[0] === 'played.mp4' && $qOrder($qRecent)[0] === 'seenonly.jpg' && count($qOrder($qRecent)) === count($qOrder($qAllHtml)));
+check('[media filter] Photos has the photos and not the video, Videos only the video, Private only what is private (the one in the private folder), Opened what was opened or played (not what was only seen), Downloaded only what had its original downloaded', $qHas($qPhotos, 'pub.jpg') && !$qHas($qPhotos, 'played.mp4') && $qOrder($qVideos) === ['played.mp4'] && $qOrder($qPrivate) === ['sec.jpg'] && $qHas($qOpenedHtml, 'pub.jpg') && $qHas($qOpenedHtml, 'Pisa/p1.jpg') && $qHas($qOpenedHtml, 'played.mp4') && !$qHas($qOpenedHtml, 'seenonly.jpg') && !$qHas($qOpenedHtml, 'saved.jpg') && $qOrder($qDown) === ['saved.jpg']);
+check('[media filter] the chosen choice names the menu and is ticked, an unknown choice means Most viewed, and the three menus narrow together: a folder and a kind with nothing in common says so', preg_match('~data-pop="what".*?sl-popbtn on".*?sl-poplab">Opened<.*?<input type="radio" name="pop-what" value="opened" checked>~s', $qOpenedHtml) === 1 && !str_contains($qAllHtml, 'sl-popbtn on"') && $qOrder($qMedia('&what=nonsense')) === $qOrder($qAllHtml) && $qOrder($qMedia('&folders%5B%5D=Pisa')) === ['Pisa/p1.jpg'] && str_contains($qMedia('&what=videos&folders%5B%5D=Pisa'), 'No photo or video matches that.') && $qOrder($qMedia('&what=opened&folders%5B%5D=%2F')) === ['played.mp4', 'pub.jpg'] && $qOrder($qMedia('&what=photos&ips%5B%5D=10.9.9.9')) === [], json_encode([preg_match('~data-pop="what".*?sl-popbtn on".*?sl-poplab">Opened<.*?<input type="radio" name="pop-what" value="opened" checked>~s', $qOpenedHtml), !str_contains($qAllHtml, 'sl-popbtn on"'), $qOrder($qMedia('&what=nonsense')) === $qOrder($qAllHtml), $qOrder($qMedia('&folders%5B%5D=Pisa')), $qOrder($qMedia('&what=opened&folders%5B%5D=%2F')), $qOrder($qMedia('&what=photos&ips%5B%5D=10.9.9.9'))]));
+check('[media filter] the Share tab\'s script sends the three choices with each request, applies a menu of several ticks as each is made (a moment later, so quick ticks make one request) and keeps it open, and the "All" row clears the others', str_contains($qTab1, "(st.what ? '&what=' + st.what : '')") && str_contains($qTab1, "list('ips', st.ips)") && str_contains($qTab1, "list('folders', st.folders)") && str_contains($qTab1, "pop._t = setTimeout(function () { pop._t = null; popApply(pop); }, 220)") && str_contains($qTab1, "if (menu.hidden || pop.getAttribute('data-multi') !== '1') return;") && str_contains($qTab1, "inp.hasAttribute('data-all')") && !str_contains($qTab1, "st.did"));
+$qEvil = http_get("$baseQ/?admin&linkview=$qPub&tab=media&ips%5B%5D=%3Cscript%3Ealert(1)%3C%2Fscript%3E&folders%5B%5D=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E&what=%22%3E%3Cscript%3Ealert(2)", ["Cookie: $qCookie"])[1];
+$qEvil2 = http_get("$baseQ/?admin&linkview=$qPub&tab=media&folders%5B%5D=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E", ["Cookie: $qCookie"])[1];
+check('[media filter] addresses, folders and a choice that are not real are ignored and never come back as markup', !str_contains($qEvil, '<script>alert') && !str_contains($qEvil, '<img src=x') && !str_contains($qEvil2, '<img src=x') && !str_contains($qEvil2, 'onerror=alert') && str_contains($qEvil2, 'No photo or video matches that.') && str_contains($qEvil2, 'data-pop="what"'));
+// An address that used two records (a link and the public address) gets a menu of them; one that used a single link doesn't.
+$qIpTwo = http_get("$baseQ/?admin&linkip=127.0.0.1&tab=media", ["Cookie: $qCookie"])[1];
+$qIpOne = http_get("$baseQ/?admin&linkip=127.0.0.1&tab=media&linkid=$qPub", ["Cookie: $qCookie"])[1];
+check('[address scope] the "which link" choice travels as linkid, not link (a "link" parameter is a share link\'s own address and answers "This link is not valid")', str_contains($qTab1, "'&linkid=' + st.link") && !str_contains($qTab1, "'&link=' + st.link") && !str_contains($qIpOne, 'This link isn'));
+check('[address scope] an address that used two links has a fourth menu "All links (2)" (one choice) and its link tags; choosing one link narrows its pages to it; the address itself is named in the line and cannot be changed (no addresses menu)', str_contains($qIpTwo, 'data-pop="link" data-multi="0"') && str_contains($qIpTwo, 'All links (2)') && str_contains($qIpTwo, 'sl-popfixed') && !str_contains($qIpTwo, 'data-pop="ips"') && str_contains($qIpOne, '<input type="radio" name="pop-link" value="' . $qPub . '" checked>') && substr_count($qIpOne, 'class="sl-th"') <= substr_count($qIpTwo, 'class="sl-th"'), json_encode([str_contains($qIpTwo, 'data-pop="link" data-multi="0"'), str_contains($qIpTwo, 'All links (2)'), str_contains($qIpTwo, 'sl-popfixed'), !str_contains($qIpTwo, 'data-pop="ips"'), str_contains($qIpOne, '<input type="radio" name="pop-link" value="' . $qPub . '" checked>'), substr_count($qIpOne, 'class="sl-th"'), substr_count($qIpTwo, 'class="sl-th"'), substr(strip_tags($qIpOne), 0, 300)]));
+write_data_file("$fxQ/.gallery-linklog-$qPub-items.php", $qItemsKeep);
+$qPause = $qAdmin(['action' => 'link_pause', 'id' => $qPub]); $qSave = $qAdmin($qForm(['action' => 'link_save', 'id' => $qPub, 'scope_type' => 'all']));
+check('[public log] it is not a link: it can\'t be paused, edited, extended, replaced or revoked, nothing finds it by address, and it can\'t be previewed through', !($qPause['ok'] ?? true) && str_contains($qPause['text'] ?? '', 'public address') && !($qSave['ok'] ?? true) && ($qLinks()[$qPub]['scope']['type'] ?? '') === 'public' && !($qAdmin(['action' => 'link_replace', 'id' => $qPub])['ok'] ?? true) && !str_contains(http_get("$baseQ/?link=" . str_repeat('a', 16))[1], 'Open the gallery') && !str_contains(http_get("$baseQ/?admin&linkpreview=$qPub&csrf_token=$qCsrf", ["Cookie: $qCookie"], false)[1], 'link-preview'));
+$qTrim = $qAdmin(['action' => 'link_trim', 'id' => $qPub, 'days' => 30, 'apply' => 0]);
+check('[public log] it can be trimmed like any log (here nothing is that old)', ($qTrim['ok'] ?? false) && ($qTrim['nothing'] ?? false));
+
+// Kept for the chosen number of days (1 here): once a day a visitor's arrival removes what is older.
+$qOld = time() - 3 * 86400;
+$qLogRaw = read_data_file("$fxQ/.gallery-linklog-$qPub.php"); $qLogRaw['visitors']['0ldvisitor'] = ['ip' => '203.0.113.9', 'ua' => 'Chrome on Windows', 'country' => '', 'first' => $qOld, 'last' => $qOld, 'opens' => 1, 'views' => 1]; $qLogRaw['events'][] = ['t' => $qOld, 'v' => '0ldvisitor', 'k' => 'link']; unset($qLogRaw['trimmedAt']); write_data_file("$fxQ/.gallery-linklog-$qPub.php", $qLogRaw);
+$qItemsRaw = read_data_file("$fxQ/.gallery-linklog-$qPub-items.php"); $qItemsRaw['t']['0ldvisitor|pub.jpg'] = ['sf' => $qOld, 'sl' => $qOld]; write_data_file("$fxQ/.gallery-linklog-$qPub-items.php", $qItemsRaw);
+$qBeacon([['s', 'pub.jpg']], [$qFox]);
+$qAfter = $qLog();
+check('[public log] with "keep for 1 day", the next visitor\'s arrival removes the old visitor, its timeline line and its item lines, and counts the visitor as an earlier one; the new visitor is there', !isset($qAfter['visitors']['0ldvisitor']) && ($qAfter['folded'] ?? 0) >= 1 && !array_filter($qAfter['events'], fn ($e) => ($e['v'] ?? '') === '0ldvisitor') && !isset($qItems()['t']['0ldvisitor|pub.jpg']) && count($qAfter['visitors']) === 2 && ($qAfter['trimmedAt'] ?? 0) > time() - 60, json_encode([array_keys($qAfter['visitors']), $qAfter['folded'] ?? null, $qAfter['trimmedAt'] ?? null, array_keys($qItems()['t'])]));
+$qLogRaw = $qLog(); $qLogRaw['visitors']['0ldvisitor'] = ['ip' => '203.0.113.9', 'ua' => 'Chrome on Windows', 'country' => '', 'first' => $qOld, 'last' => $qOld, 'opens' => 1, 'views' => 1]; write_data_file("$fxQ/.gallery-linklog-$qPub.php", $qLogRaw);
+$qBeacon([['s', 'pub.jpg']], [$qFox]);
+check('[public log] ...and it does that once a day, not on every request', isset($qLog()['visitors']['0ldvisitor']));
+
+// Deleting the log: gone, and it starts again from nothing.
+$qDel = $qAdmin(['action' => 'link_delete', 'id' => $qPub]);
+clearstatcache();
+check('[public log] "Delete the log" removes the record and its files; the next visitor starts it again', ($qDel['ok'] ?? false) && !isset($qLinks()[$qPub]) && !is_file("$fxQ/.gallery-linklog-$qPub.php") && !is_file("$fxQ/.gallery-linklog-$qPub-items.php"));
+$qBeacon([['s', 'pub.jpg']], [$qPhone]);
+check('[public log] ...it is made again for the next visitor, with that one in it', isset($qLinks()[$qPub]) && count($qLog()['visitors']) === 1);
+$qTab2 = http_get("$baseQ/?admin", ["Cookie: $qCookie"])[1];
+check('[public log] Settings has the switch and the number of days, in the Share links group, with the risk said plainly', str_contains($qTab2, 'name="set_LOG_PUBLIC_VISITS"') && str_contains($qTab2, 'name="set_LOG_PUBLIC_DAYS"') && str_contains($qTab2, 'stores every visitor&#039;s IP address'));
+
+// Switched off: nothing new is logged and the page has no script; what was logged stays in the tab.
+$qConfig(['LOG_PUBLIC_VISITS' => false]);
+[$qCookie, $qCsrf] = $qLogin();
+[, $qOffPage] = http_get("$baseQ/", [$qFox]);
+$qOffBefore = count($qLog()['visitors']);
+$qBeacon([['s', 'pub.jpg']], [$qMac]);
+$qOffTab = http_get("$baseQ/?admin", ["Cookie: $qCookie"])[1];
+check('[public log] with the switch off nothing more is logged and the page has no script, while the log so far is still listed (marked "Logging is off") for you to read, export or delete', !str_contains($qOffPage, 'window.__linkLog = log') && count($qLog()['visitors']) === $qOffBefore && str_contains($qOffTab, 'Logging is off') && str_contains($qOffTab, 'sl-public'), json_encode([str_contains($qOffPage, 'window.__linkLog = log'), count($qLog()['visitors']), $qOffBefore, str_contains($qOffTab, 'Logging is off'), str_contains($qOffTab, 'sl-public')]));
+
+echo "== share links: the Media tab's folder menu as a tree ==\n";
+
+$fxT = new_fixture_dir('sltree');
+foreach (['Europe/France/Paris', 'Europe/Italy', 'Asia/Japan', 'Zoo'] as $trD) mkdir("$fxT/$trD", 0777, true);
+$trFiles = ['top.jpg', 'Europe/e1.jpg', 'Europe/France/f1.jpg', 'Europe/France/Paris/p1.jpg', 'Europe/Italy/i1.jpg', 'Asia/Japan/j1.jpg', 'Zoo/z1.jpg'];
+foreach ($trFiles as $trI => $trF) make_jpeg("$fxT/$trF", 60, 40, 40 + $trI * 25, 90, 120);
+write_data_file("$fxT/Zoo/.gallery-items.php", ['sortOrder' => 1, 'items' => [], 'groups' => []]);   // (a position the owner set: first among the folders)
+file_put_contents("$fxT/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'tree-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'tree-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxT/index.php");
+$portT = find_free_port(); start_server($fxT, $portT); $baseT = "http://127.0.0.1:$portT";
+[, , $trLoginH] = http_post("$baseT/?admin", ['access_code' => 'tree-admin-pw-1'], [], false);
+$trCookie = extract_cookie_header($trLoginH); $trCsrf = extract_csrf_token(http_get("$baseT/?admin", ["Cookie: $trCookie"])[1]);
+[, $trBody] = http_post("$baseT/?admin", ['csrf_token' => $trCsrf, 'action' => 'link_create', 'label' => 'Tree', 'title_mode' => 'neutral', 'max_opens' => 0, 'ends_at' => 0, 'scope_type' => 'all', 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off'], ['X-Requested-With: gallery-fetch', "Cookie: $trCookie"]);
+$trId = json_decode($trBody, true)['id'] ?? ''; $trToken = read_data_file("$fxT/.gallery-links.php")['links'][$trId]['token'] ?? '';
+[, , $trGoH] = http_post("$baseT/?link=$trToken", ['go' => '1'], [$qPhone], false); $trHold = extract_cookie_header($trGoH);
+$trEvents = []; foreach ($trFiles as $trF) $trEvents[] = ['s', $trF]; $trEvents[] = ['o', 'Europe/France/Paris/p1.jpg']; $trEvents[] = ['f', 'Europe'];
+$trOpts = ['http' => ['method' => 'POST', 'header' => implode("\r\n", ['Content-Type: application/json', "Cookie: $trHold", $qPhone]), 'content' => json_encode(['e' => $trEvents]), 'ignore_errors' => true, 'timeout' => 5]];
+@file_get_contents("$baseT/?linklog", false, stream_context_create($trOpts));
+$trMedia = fn ($qs = '', $tab = 'media') => http_get("$baseT/?admin&linkview=$trId&tab=$tab$qs", ["Cookie: $trCookie"])[1];
+$trHtml = $trMedia();
+preg_match_all('~<label class="sl-popopt(?: sl-d(\d))?"><input type="checkbox" name="pop-folders" value="([^"]*)"~', $trHtml, $trM);
+$trVals = $trM[2]; $trDepth = array_map(fn ($d) => (int) $d, $trM[1]);
+check('[folder tree] the Folders menu lists the front page first, then the folders in the gallery\'s own order (the one with a position set comes first, the rest by name), each folder followed by the folders inside it', $trVals === ['/', 'Zoo', 'Asia', 'Asia/Japan', 'Europe', 'Europe/France', 'Europe/France/Paris', 'Europe/Italy'], json_encode($trVals));
+check('[folder tree] ...a folder inside another is indented one step per level (Japan, France and Italy one, Paris two), and a folder that holds no photo itself (Asia) is shown so the tree reads', $trDepth === [0, 0, 0, 1, 0, 1, 2, 1] && str_contains($trHtml, 'value="Asia"'), json_encode($trDepth));
+check('[folder tree] the menu says a folder includes the folders inside it, and its first row is "All folders", ticked while nothing else is', str_contains($trHtml, 'A folder includes the folders inside it.') && preg_match('~data-pop="folders".*?<div class="sl-popmenu" hidden><label class="sl-popopt sl-popall"><input type="checkbox" data-all value="" checked><span>All folders</span>~s', $trHtml) === 1 && preg_match('~data-pop="ips".*?<label class="sl-popopt sl-popall"><input type="checkbox" data-all value="" checked><span>All IPs</span>~s', $trHtml) === 1);
+$trList = fn ($html) => array_map('rawurldecode', array_map(fn ($u) => preg_replace('~^.*find=~', '', $u), (function ($h) { preg_match_all('~class="sl-th" href="([^"]+)"~', $h, $m); return $m[1]; })($html)));
+$trSorted = function ($html) use ($trList) { $l = $trList($html); sort($l); return $l; };
+check('[folder tree] ticking a folder shows what is in it and in the folders inside it (Europe: four photos; France: its own and Paris\'s), the front page only its own photo, and "this folder only" keeps to the folder\'s own files', $trSorted($trMedia('&folders%5B%5D=Europe')) === ['Europe/France/Paris/p1.jpg', 'Europe/France/f1.jpg', 'Europe/Italy/i1.jpg', 'Europe/e1.jpg'] && $trSorted($trMedia('&folders%5B%5D=Europe%2FFrance')) === ['Europe/France/Paris/p1.jpg', 'Europe/France/f1.jpg'] && $trSorted($trMedia('&folders%5B%5D=%2F')) === ['top.jpg'] && $trSorted($trMedia('&folders%5B%5D=Europe&exact=1')) === ['Europe/e1.jpg'] && $trSorted($trMedia('&folders%5B%5D=Asia')) === ['Asia/Japan/j1.jpg']);
+$trTwo = $trMedia('&folders%5B%5D=Asia&folders%5B%5D=Zoo');
+check('[folder tree] several folders add together, and the menu names what is chosen: one folder by name ("this folder only" when it came from a number on the Folders tab), several by count; "All folders" is no longer ticked', $trSorted($trTwo) === ['Asia/Japan/j1.jpg', 'Zoo/z1.jpg'] && str_contains($trTwo, 'sl-poplab">2 folders<') && !str_contains($trTwo, 'data-all value="" checked><span>All folders') && str_contains($trMedia('&folders%5B%5D=Europe&exact=1'), 'sl-poplab">Europe only<') && str_contains($trMedia('&folders%5B%5D=Europe'), 'sl-poplab">Europe<'));
+check('[folder tree] the Folders tab\'s numbers still count each folder\'s own files, so they lead to "this folder only" (the script sends exact with them, and clears it when the menu is used)', str_contains($qTab1, "exact: true, what: numBtn.getAttribute('data-media')") && str_contains($qTab1, "if (k === 'folders') patch.exact = false;") && str_contains($qTab1, "(st.exact ? '&exact=1' : '')"));
+
+echo "== the phone's one-per-row grid for pages with fewer than ten things, and 16 px fields on touch screens ==\n";
+
+$fxG = new_fixture_dir('slgrid');
+foreach (['Nine', 'Ten', 'Mixed/m1', 'Mixed/m2', 'Mixed/m3', 'A', 'B'] as $gD) mkdir("$fxG/$gD", 0777, true);
+for ($gi = 1; $gi <= 9; $gi++) make_jpeg("$fxG/Nine/n$gi.jpg", 30, 20, 20 * $gi, 90, 120);
+for ($gi = 1; $gi <= 10; $gi++) make_jpeg("$fxG/Ten/t$gi.jpg", 30, 20, 20 * $gi, 90, 120);
+for ($gi = 1; $gi <= 4; $gi++) make_jpeg("$fxG/Mixed/x$gi.jpg", 30, 20, 20 * $gi, 90, 120);
+foreach (['Mixed/m1', 'Mixed/m2', 'Mixed/m3', 'A', 'B'] as $gD) make_jpeg("$fxG/$gD/only-" . str_replace('/', '-', $gD) . '.jpg', 30, 20, 100, 90, 120);   // (names that are not the same in every folder: equal names across folders are grouped together on the front page)
+file_put_contents("$fxG/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'grid-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxG/index.php");
+$portG = find_free_port(); start_server($fxG, $portG); $baseG = "http://127.0.0.1:$portG";
+$gClass = fn ($qs) => preg_match('~<div class="(gallery[^"]*)">~', http_get("$baseG/$qs")[1], $m) ? $m[1] : '(none)';
+check('[one per row] a page of five folder cards (the front page here) gets "one-up" with its wide-screen layout class', $gClass('') === 'gallery covers-5 one-up', $gClass(''));
+check('[one per row] a folder of nine photos is one per row on a phone, one of ten is not (fewer than ten things: folders, photos and videos together)', $gClass('?folder=Nine') === 'gallery one-up' && $gClass('?folder=Ten') === 'gallery', $gClass('?folder=Nine') . ' / ' . $gClass('?folder=Ten'));
+check('[one per row] a page that mixes folder cards and photos counts them together (three folders and four photos: seven things), and it does not get the all-cards layout class', $gClass('?folder=Mixed') === 'gallery one-up', $gClass('?folder=Mixed'));
+$gHome = http_get("$baseG/")[1];
+check('[one per row] the rule is for screens under 640 px wide only (wider ones keep their layouts), as one column, and comes after the all-cards layouts so it wins on a phone', preg_match('~@media \(max-width: 639px\) \{\s*\.gallery\.one-up \{ grid-template-columns: minmax\(0, 1fr\); gap: 14px; \}\s*\}~', $gHome) === 1 && strpos($gHome, '.gallery.one-up {') > strpos($gHome, '.gallery.covers-5, .gallery.covers-6 {'));
+[, $gAdminH] = [0, http_post("$baseG/?admin", ['access_code' => 'grid-admin-pw-1'], [], false)[2]];
+$gAdminPage = http_get("$baseG/?admin", ['Cookie: ' . extract_cookie_header($gAdminH)])[1];
+check('[touch fields] the admin makes every text box, text area, dropdown and date field 16 px on touch screens (a phone zooms into anything smaller and stays zoomed), and leaves the desktop sizes alone', preg_match('~@media \(pointer: coarse\) \{\s*html body input\[type=text\][^}]*input\[type=datetime-local\][^}]*textarea, html body select \{ font-size:16px; \}\s*\}~', $gAdminPage) === 1 && str_contains($gAdminPage, 'padding:7px 9px; font-size:0.9rem;'));
+check('[preview photo dialog] a message in the photo grids runs the full width (the grid\'s one narrow cell made it wrap in four short lines)', str_contains($gAdminPage, '.sl-pickgrid > p { grid-column:1 / -1; margin:0; }'));
+
+echo "== a closed gallery, custom share addresses, and the /admin address ==\n";
+
+// One fixture for both: Rome and Paris are public folders, "notes" is a file with no extension, and the gallery starts closed.
+$fxC = new_fixture_dir('slclosed');
+foreach (['Rome', 'Paris'] as $cD) mkdir("$fxC/$cD", 0777, true);
+make_jpeg("$fxC/Rome/rome-a.jpg", 60, 40, 200, 90, 90); make_jpeg("$fxC/Rome/rome-b.jpg", 61, 40, 90, 200, 90); make_jpeg("$fxC/Paris/paris-a.jpg", 62, 40, 90, 90, 200);
+file_put_contents("$fxC/notes", 'plain file');
+$cCfg = ['ADMIN_PASSWORD' => 'closed-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'closed-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'LOG_PUBLIC_VISITS' => true];
+file_put_contents("$fxC/.gallery-config.php", cfg_text($cCfg + ['CLOSE_PUBLIC_GALLERY' => true]));
+copy($indexSrc, "$fxC/index.php");
+$portC = find_free_port(); start_server($fxC, $portC); $baseC = "http://127.0.0.1:$portC";
+[, , $cLoginH] = http_post("$baseC/?admin", ['access_code' => 'closed-admin-pw-1'], [], false);
+$cCookie = extract_cookie_header($cLoginH); $cOwn = ["Cookie: $cCookie"];
+$cCsrf = extract_csrf_token(http_get("$baseC/?admin", $cOwn)[1]);
+$cMake = function (array $over = []) use ($baseC, $cOwn, $cCsrf) {
+    [, $b] = http_post("$baseC/?admin", array_merge(['csrf_token' => $cCsrf, 'action' => 'link_create', 'label' => 'Aunt Carol', 'title_mode' => 'gallery', 'picture' => '1', 'max_opens' => 0, 'ends_at' => 0, 'scope_type' => 'all', 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off'], $over), $cOwn);
+    return json_decode($b, true) ?: [];
+};
+$cLinkFile = fn () => read_data_file("$fxC/.gallery-links.php");
+$cLink = $cMake(['label' => 'Closed one']);
+$cId = $cLink['id'] ?? ''; $cTok = $cLinkFile()['links'][$cId]['token'] ?? '';
+$cBad = http_get("$baseC/?link=zzzzzzzzzzzzzzzz", [], false);
+foreach (['', '?folder=Rome', '?folder=Rome&photo=Rome%2Frome-a.jpg', '?img=Rome%2Frome-a.jpg&size=thumb', '?about', '?map', '?original=Rome%2Frome-a.jpg', '?download', '?track=1'] as $cQs) {
+    [$cSt, $cBody, $cHd] = http_get("$baseC/$cQs", [], false);
+    $cSame = $cSt === 404 && str_contains($cBody, 'This link is not valid') && str_contains($cBody, 'Please contact the person who gave it to you.') && !str_contains($cBody, 'Rome') && !str_contains($cBody, 'Paris') && in_array('X-Gallery-Link: invalid', $cHd, true) && stripos(implode("\n", $cHd), 'X-Robots-Tag: noindex') !== false;
+    check('[closed] a stranger asking for ' . ($cQs === '' ? 'the front page' : $cQs) . ' gets the page of a link that is not valid (404, noindex, no folder names, no photo)', $cSame, "$cSt " . substr($cBody, 0, 80));
+}
+$cStranger = http_get("$baseC/", [], false);
+check('[closed] ...and it is exactly the page of a mistyped link (same status, same body), so nothing says there is a gallery here', $cStranger[0] === $cBad[0] && $cStranger[1] === $cBad[1]);
+check('[closed] the owner signed in gets the gallery, its photos and the admin as before', ($o = http_get("$baseC/", $cOwn))[0] === 200 && str_contains($o[1], 'Rome') && http_get("$baseC/?img=Rome%2Frome-a.jpg&size=thumb", $cOwn)[0] === 200 && http_get("$baseC/?admin", $cOwn)[0] === 200);
+[, , $cViewH] = http_post("$baseC/?reveal", ['access_code' => 'closed-view-pw-1'], [], false);
+$cView = ['Cookie: ' . extract_cookie_header($cViewH)];
+check('[closed] the sign-in page itself is open to a stranger, and someone with the private-view password gets in and sees the gallery', http_get("$baseC/?reveal", [], false)[0] === 200 && str_contains(http_get("$baseC/", $cView)[1], 'Rome') && http_get("$baseC/", $cView)[0] === 200);
+$cOpenPage = http_get("$baseC/?link=$cTok", [], false);
+check('[closed] a share link\'s own address still shows its opening page to a stranger', $cOpenPage[0] === 200 && str_contains($cOpenPage[1], 'Open the gallery'));
+[, , $cGoH] = http_post("$baseC/?link=$cTok", ['go' => '1'], [$qPhone], false); $cHold = ['Cookie: ' . extract_cookie_header($cGoH)];
+check('[closed] ...and once opened, the person using the link sees the gallery and its photos', ($h = http_get("$baseC/", $cHold))[0] === 200 && str_contains($h[1], 'Rome') && http_get("$baseC/?img=Rome%2Frome-a.jpg&size=thumb", $cHold)[0] === 200);
+preg_match('~class="pic" src="([^"]+)"~', $cOpenPage[1], $cPm); $cPicSrc = html_entity_decode($cPm[1] ?? '');
+$cPicFile = rawurldecode(preg_replace('~^.*\?img=([^&]*).*$~', '$1', $cPicSrc));
+check('[closed] the opening page\'s preview photo can be fetched by a stranger (a chat app and the page itself ask without a cookie)', $cPicSrc !== '' && http_get("$baseC/$cPicSrc", [], false)[0] === 200, $cPicSrc);
+$cOtherFile = $cPicFile === 'Rome/rome-b.jpg' ? 'Rome/rome-a.jpg' : 'Rome/rome-b.jpg';
+check('[closed] ...but only that photo at that size: the same photo as a thumbnail, and any other photo as a preview picture, are turned away', http_get("$baseC/?img=" . rawurlencode($cPicFile) . '&size=thumb', [], false)[0] === 404 && http_get("$baseC/?img=" . rawurlencode($cOtherFile) . '&size=share', [], false)[0] === 404);
+foreach (['?img=Rome%2Frome-a.jpg&size=thumb&link=x', '?img=Rome%2Frome-a.jpg&size=thumb&admin=1', '?img=Rome%2Frome-a.jpg&size=thumb&reveal=1', '?img=Rome%2Frome-a.jpg&size=full&link=' . $cTok, '?about&admin=1', '?about&link=x', '?original=Rome%2Frome-a.jpg&admin=1', '?strip=Rome%2Frome-a.jpg&reveal=1', '?download&link=x', '?manifest&admin=1', '?appicon&reveal=1', '?linklog&admin=1', '?img=Rome%2Frome-b.jpg&size=share&admin=1&original=x'] as $cQs) {
+    [$cSt, $cBody] = http_get("$baseC/$cQs", [], false);
+    check('[closed] a stranger can\'t slip past the gate by adding a sign-in or link parameter to another request (' . $cQs . '): that request is answered by its own route first', $cSt === 404 && str_contains($cBody, 'This link is not valid') && !str_contains($cBody, 'JFIF'), "$cSt " . substr($cBody, 0, 40));
+}
+check('[closed] nobody who was turned away is written to the public address\'s log', !isset(($cLinkFile()['links'] ?? [])['ffffffffff']) && !glob("$fxC/.gallery-linklog-" . 'ffffffffff' . '*'));
+$cRevoke = http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_revoke', 'id' => $cId], $cOwn);
+check('[closed] when the link is revoked its holder is turned away too (the cookie alone no longer opens the gallery)', http_get("$baseC/", $cHold, false)[0] === 404 && str_contains(http_get("$baseC/", $cHold, false)[1], 'This link is not valid'));
+$cShare = http_get("$baseC/?admin", $cOwn)[1];
+check('[closed] the Share tab says the public address is closed (nothing is logged), and Settings tells how to sign in', str_contains($cShare, '<strong>Closed.</strong>') && str_contains($cShare, 'name="set_CLOSE_PUBLIC_GALLERY"') && str_contains($cShare, 'Close the public gallery'));
+
+echo "-- /admin and a folder typed without its slash --\n";
+$cAdm = http_get("$baseC/?link=admin", [], false); $cAdm2 = http_get("$baseC/?link=Admin", [], false); $cAdm3 = http_get("$baseC/?folder=admin%2F", [], false); $cAdm4 = http_get("$baseC/?folder=admin", [], false);
+$cLoc = fn ($r) => implode("\n", array_filter($r[2], fn ($h) => stripos($h, 'Location:') === 0));
+check('[admin address] "admin" (any case), and "admin/" as a folder address, go to the one sign-in, even while the gallery is closed', $cAdm[0] === 302 && str_contains($cLoc($cAdm), '?reveal') && $cAdm2[0] === 302 && str_contains($cLoc($cAdm2), '?reveal') && $cAdm3[0] === 302 && str_contains($cLoc($cAdm3), '?reveal') && $cAdm4[0] === 302);
+check('[closed] a stranger is not told which folders exist: a folder typed without its slash is the same page as any bad address', ($r = http_get("$baseC/?link=Rome", [], false))[0] === 404 && $r[1] === $cBad[1] && !str_contains($cLoc($r), 'Rome'));
+$cRome = http_get("$baseC/?link=Rome", $cOwn, false);
+check('[closed] ...while the owner is sent on to the folder as the server itself would have', $cRome[0] === 302 && str_contains($cLoc($cRome), 'Rome/'), $cLoc($cRome));
+
+echo "-- the setting is refused when nobody could get in --\n";
+$cSet = function (array $post, $cfgHash = null) use ($baseC, $cOwn, $fxC) {
+    $pg = http_get("$baseC/?admin", $cOwn)[1]; $f = [];
+    foreach (html_post_forms($pg) as $x) if (str_contains($x['html'], 'value="save_site_settings"')) $f = form_default_fields($x['html']);
+    [, $b] = http_post("$baseC/?admin", array_merge(['csrf_token' => $f['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $f['config_hash']], $post), array_merge($cOwn, ['X-Requested-With: gallery-fetch']));
+    return json_decode($b, true) ?: [];
+};
+$cOff = $cSet(['set_ENABLE_SHARE_LINKS' => '0', 'set_CLOSE_PUBLIC_GALLERY' => '1']);
+check('[closed] share links can\'t be switched off while the gallery is closed: nothing is saved and it says why', ($cOff['ok'] ?? true) === false && str_contains($cOff['text'] ?? '', 'needs share links') && (cfg_read("$fxC/.gallery-config.php")['ENABLE_SHARE_LINKS'] ?? null) === true);
+$cOn = $cSet(['set_CLOSE_PUBLIC_GALLERY' => '0']);
+check('[closed] the gallery can be opened again from Settings, at once (a stranger sees the gallery)', ($cOn['ok'] ?? false) === true && http_get("$baseC/", [], false)[0] === 200);
+$cAgain = $cSet(['set_CLOSE_PUBLIC_GALLERY' => '1']);
+check('[closed] ...and closed again (a stranger is turned away once more)', ($cAgain['ok'] ?? false) === true && http_get("$baseC/", [], false)[0] === 404);
+
+$fxC2 = new_fixture_dir('slclosed-none'); make_jpeg("$fxC2/a.jpg", 60, 40, 90, 90, 90);
+file_put_contents("$fxC2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'closed2-admin-pw1', 'CLOSE_PUBLIC_GALLERY' => true])); copy($indexSrc, "$fxC2/index.php");
+$portC2 = find_free_port(); start_server($fxC2, $portC2); $baseC2 = "http://127.0.0.1:$portC2";
+$c2Home = http_get("$baseC2/", [], false);
+check('[closed] switched on by hand but with share links off, it does nothing: the gallery stays open', $c2Home[0] === 200 && str_contains($c2Home[1], 'a.jpg'));
+[, , $c2L] = http_post("$baseC2/?admin", ['access_code' => 'closed2-admin-pw1'], [], false); $c2Own = ['Cookie: ' . extract_cookie_header($c2L)];
+check('[closed] ...and the setup notice says what it needs (share links on and an admin password)', str_contains(http_get("$baseC2/?admin", $c2Own)[1], 'needs share links on and an admin password'));
+
+echo "-- custom share addresses --\n";
+$cNew = $cMake(['label' => 'Dyllen and Brenden', 'address' => 'dyllen-and-brenden']);
+$cNewId = $cNew['id'] ?? ''; $cRec = $cLinkFile()['links'][$cNewId] ?? [];
+check('[custom address] a link can have an address of its own: it is stored as the link\'s address and marked as custom, and the answer gives its short and long forms', ($cNew['ok'] ?? false) && ($cRec['token'] ?? '') === 'dyllen-and-brenden' && ($cRec['custom'] ?? false) === true && str_ends_with($cNew['urls']['short'] ?? '', '/dyllen-and-brenden') && str_ends_with($cNew['urls']['long'] ?? '', '?link=dyllen-and-brenden'));
+$cNoAddr = $cMake(['label' => 'No address given']); $cNoRec = $cLinkFile()['links'][$cNoAddr['id'] ?? ''] ?? [];
+check('[custom address] left empty, the address is the random one it always was (16 letters and digits, not custom)', preg_match('/^[A-Za-z0-9]{16}$/', $cNoRec['token'] ?? '') === 1 && ($cNoRec['custom'] ?? true) === false);
+// (the gallery is closed here; a stranger can still use a link's address)
+$cOpenCustom = http_get("$baseC/?link=dyllen-and-brenden", [], false); $cOpenUpper = http_get("$baseC/?link=Dyllen-And-BRENDEN", [], false);
+check('[custom address] the custom address opens the link\'s page, in any letter case', $cOpenCustom[0] === 200 && str_contains($cOpenCustom[1], 'Open the gallery') && $cOpenUpper[0] === 200 && str_contains($cOpenUpper[1], 'Open the gallery'));
+$cRefuse = function ($addr, $label = 'Refused') use ($cMake, $cLinkFile) { $n = count($cLinkFile()['links'] ?? []); $r = $cMake(['label' => $label, 'address' => $addr]); return [($r['ok'] ?? true) === false, (string) ($r['text'] ?? ''), count($cLinkFile()['links'] ?? []) === $n]; };
+foreach ([
+    ['rome', 'folder', 'A folder or file called "Rome"'], ['PARIS', 'folder, any case', 'A folder or file called "Paris"'], ['notes', 'file with no extension', 'A folder or file called "notes"'],
+    ['admin', 'the sign-in', 'an address the gallery uses itself'], ['index', 'reserved', 'an address the gallery uses itself'], ['abc', 'too short', 'needs 4 to 40'], [str_repeat('a', 41), 'too long', 'needs 4 to 40'],
+    ['-start-hyphen', 'hyphen at the start', 'needs 4 to 40'], ['end-hyphen-', 'hyphen at the end', 'needs 4 to 40'], ['has space', 'a space', 'needs 4 to 40'], ['dot.name', 'a dot', 'needs 4 to 40'], ['slash/name', 'a slash', 'needs 4 to 40'],
+    ['dyllen-and-brenden', 'already used by another link', 'Another link has'],
+] as [$cAddr, $cWhy, $cMsg]) {
+    [$cRefused, $cText, $cNone] = $cRefuse($cAddr);
+    check("[custom address] \"$cAddr\" is refused ($cWhy), says why, and no link is made", $cRefused && str_contains($cText, $cMsg) && $cNone, $cText);
+}
+check('[custom address] 4 and 40 characters are the edges that work, with hyphens inside', ($cMake(['label' => 'Edge four', 'address' => 'abcd'])['ok'] ?? false) && ($cMake(['label' => 'Edge forty', 'address' => 'a' . str_repeat('b-', 19) . 'c'])['ok'] ?? false));
+
+// Editing: a new address makes the old one a "replaced" address; empty goes back to a random one.
+$cEdit = function ($id, $addr, $label = 'Dyllen and Brenden') use ($baseC, $cOwn, $cCsrf) {
+    [, $b] = http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_save', 'id' => $id, 'label' => $label, 'address' => $addr, 'title_mode' => 'gallery', 'picture' => '1', 'max_opens' => 0, 'ends_at' => 0, 'scope_type' => 'all', 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off'], $cOwn);
+    return json_decode($b, true) ?: [];
+};
+[, , $cHoldH] = http_post("$baseC/?link=dyllen-and-brenden", ['go' => '1'], [$qPhone], false); $cHoldDy = ['Cookie: ' . extract_cookie_header($cHoldH)];
+check('[custom address] before the change, the person signed in through it sees the gallery', http_get("$baseC/", $cHoldDy, false)[0] === 200);
+$cEd1 = $cEdit($cNewId, 'brenden-and-dyllen'); $cRec2 = $cLinkFile()['links'][$cNewId] ?? [];
+check('[custom address] changing the address keeps the old one in the list of replaced addresses and uses the new one', ($cEd1['ok'] ?? false) && ($cRec2['token'] ?? '') === 'brenden-and-dyllen' && in_array('dyllen-and-brenden', (array) ($cRec2['oldTokens'] ?? []), true) && ($cRec2['custom'] ?? false) === true);
+$cOldTry = http_get("$baseC/?link=dyllen-and-brenden", [], false);
+check('[custom address] the old address shows the invalid page and is noted as "replaced" in the log; the new one opens', $cOldTry[0] === 404 && str_contains($cOldTry[1], 'This link is not valid') && http_get("$baseC/?link=brenden-and-dyllen", [], false)[0] === 200);
+check('[custom address] anyone signed in through the old address is signed out (the cookie belongs to the address)', http_get("$baseC/", $cHoldDy, false)[0] === 404);
+check('[custom address] saving a link without touching the address leaves it exactly as it is (no replaced address added)', ($cEdit($cNewId, 'brenden-and-dyllen')['ok'] ?? false) && ($cLinkFile()['links'][$cNewId]['oldTokens'] ?? []) === ['dyllen-and-brenden']);
+check('[custom address] a name that another link used to have is refused as well', ($r = $cRefuse('dyllen-and-brenden', 'Takes an old one'))[0] && str_contains($r[1], 'Another link has'));
+check('[custom address] ...while its own link can take its old name back', ($cEdit($cNewId, 'dyllen-and-brenden')['ok'] ?? false) && ($cLinkFile()['links'][$cNewId]['token'] ?? '') === 'dyllen-and-brenden');
+$cEd3 = $cEdit($cNewId, ''); $cRec3 = $cLinkFile()['links'][$cNewId] ?? [];
+check('[custom address] emptying the field gives the link a new random address and takes the custom flag off (the name goes to the replaced list)', ($cEd3['ok'] ?? false) && preg_match('/^[A-Za-z0-9]{16}$/', $cRec3['token'] ?? '') === 1 && ($cRec3['custom'] ?? true) === false && in_array('dyllen-and-brenden', (array) ($cRec3['oldTokens'] ?? []), true));
+$cRep = http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_replace', 'id' => $cNewId], $cOwn);
+$cTwo = $cMake(['label' => 'Replace me', 'address' => 'replace-me-please']); $cTwoId = $cTwo['id'] ?? '';
+http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_replace', 'id' => $cTwoId], $cOwn); $cRecR = $cLinkFile()['links'][$cTwoId] ?? [];
+check('[custom address] "Replace address" on a custom link gives a random one as well: the custom flag is gone and the custom name is a replaced address', preg_match('/^[A-Za-z0-9]{16}$/', $cRecR['token'] ?? '') === 1 && ($cRecR['custom'] ?? true) === false && in_array('replace-me-please', (array) ($cRecR['oldTokens'] ?? []), true));
+
+echo "-- the rule that sends names to the gallery --\n";
+$cRules = http_get("$baseC/?admin", $cOwn)[1];
+check('[custom address] the nginx rule matches one word of 4 to 40 letters, digits and hyphens (quoted), the Apache rule has no folder check, and both say they replace the older one', str_contains($cRules, '[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]') && str_contains($cRules, 'location ~ &quot;^/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$&quot;') && !str_contains($cRules, 'RewriteCond %{REQUEST_FILENAME} !-d') && str_contains($cRules, 'RewriteCond %{REQUEST_FILENAME} !-f') && str_contains($cRules, 'It replaces the older rule'));
+check('[custom address] the probe is a hyphenated name, so "tidy addresses work" is only said once the new rule is in place', str_contains($cRules, 'data-probe="/0000-probe-0000"') && http_get("$baseC/?link=0000-probe-0000", [], false)[0] === 200);
+check('[custom address] the form has the address field and the button that turns the name into one', str_contains($cRules, 'name="address"') && str_contains($cRules, 'data-sl="addrname"') && str_contains($cRules, 'function slugName(') && str_contains($cRules, 'Use the name'));
+
+check('[replace dialog] the Share tab\'s dialog has a hidden third button for Custom…, the Replace dialog is Cancel, Random and Custom… (the row\'s action is still called Replace address…), and Custom… opens Edit on the Address field', str_contains($cRules, 'data-sl-modal="extra" hidden') && str_contains($cRules, "'Random', false, 'Custom…'") && str_contains($cRules, 'Replace address…') && str_contains($cRules, "openForm(link, 'address')") && str_contains($cRules, "focusField === 'address' ? '[name=address]'"));
+check('[replace dialog] for a custom address the text says Random drops the name; for a random one it keeps the old text and points to Custom…', str_contains($cRules, 'the name is gone, the address you sent stops working right away') && str_contains($cRules, 'To pick a different name of your own, press <em>Custom…</em>.') && str_contains($cRules, 'To use a name of your own instead, press <em>Custom…</em>.'));
+[$cHSt, $cHBody, $cHHd] = http_get("$baseC/?folder=Rome", [], false);
+check('[health, closed] a closed gallery answers the Health check\'s cookie-less folder request with the invalid page AND the gallery\'s marker header (a server without the tidy rule would send its own 404 with no marker), and the page\'s script reads that as "works"', $cHSt === 404 && in_array('X-Gallery-Link: invalid', $cHHd, true) && str_contains($cRules, "r.headers.get('X-Gallery-Link') === 'invalid'") && str_contains($cRules, 'reaches the gallery'));
+
+echo "-- a name that is also a folder (added after the link) --\n";
+$cShadow = $cMake(['label' => 'Shadowed', 'address' => 'later-folder']); $cShadowId = $cShadow['id'] ?? '';
+mkdir("$fxC/later-folder", 0777, true); make_jpeg("$fxC/later-folder/lf.jpg", 60, 40, 120, 120, 120);
+check('[custom address] a folder added later with the link\'s name does not take the address: the link still opens', ($r = http_get("$baseC/?link=later-folder", [], false))[0] === 200 && str_contains($r[1], 'Open the gallery'));
+check('[custom address] ...the row says a folder has that name (and how to send the long form), and the folder keeps its own address with the closing slash', str_contains(http_get("$baseC/?admin", $cOwn)[1], 'A folder called “later-folder” is in the gallery') && ($f = http_get("$baseC/?folder=later-folder", $cOwn))[0] === 200 && str_contains($f[1], 'lf.jpg'));
+
+echo "-- an open gallery: folders, names and the throttle --\n";
+file_put_contents("$fxC/.gallery-config.php", cfg_text($cCfg)); [, , $cLoginH2] = http_post("$baseC/?admin", ['access_code' => 'closed-admin-pw-1'], [], false); $cOwn = ['Cookie: ' . extract_cookie_header($cLoginH2)];
+$cF1 = http_get("$baseC/?link=Paris", [], false); $cF2 = http_get("$baseC/?link=Rome", [], false); $cF3 = http_get("$baseC/?link=later-folder", [], false);
+check('[folder redirect] a real folder typed without its slash is sent on to the folder\'s own address (what the server would have done), and a link of that name wins over it', $cF1[0] === 302 && str_contains($cLoc($cF1), 'Paris/') && $cF2[0] === 302 && str_contains($cLoc($cF2), 'Rome/') && $cF3[0] === 200 && str_contains($cF3[1], 'Open the gallery'));
+check('[folder redirect] it is not cached (so a link made later still wins)', stripos(implode("\n", $cF1[2]), 'Cache-Control: no-store') !== false);
+check('[folder redirect] a one-word address that is neither a link nor a folder is the invalid page (404) and "admin" still goes to the sign-in', http_get("$baseC/?link=no-such-place", [], false)[0] === 404 && http_get("$baseC/?link=admin", [], false)[0] === 302);
+$fxC3 = new_fixture_dir('slclosed-off'); mkdir("$fxC3/Rome"); make_jpeg("$fxC3/Rome/r.jpg", 60, 40, 90, 90, 90);
+file_put_contents("$fxC3/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'off-admin-pw-12', 'AUTO_GROUP_BY_FOLDER' => true])); copy($indexSrc, "$fxC3/index.php");
+$portC3 = find_free_port(); start_server($fxC3, $portC3); $baseC3 = "http://127.0.0.1:$portC3";
+$cOffR = http_get("$baseC3/?link=Rome", [], false);
+check('[folder redirect] with share links off the folder redirect and the sign-in address still work (the rule is in place whatever the setting), and any other name is the invalid page', $cOffR[0] === 302 && str_contains($cLoc($cOffR), 'Rome/') && http_get("$baseC3/?link=admin", [], false)[0] === 302 && http_get("$baseC3/?link=no-such-place", [], false)[0] === 404);
+$cMiss = []; for ($cI = 0; $cI < 5; $cI++) $cMiss[] = http_get("$baseC/?link=guess-number-$cI", [], false)[0];
+check('[custom address] guessing names is held back like guessing tokens: a run of wrong names ends in a short lockout (429) that holds even for a name that exists', $cMiss[0] === 404 && end($cMiss) === 429 && http_get("$baseC/?link=later-folder", [], false)[0] === 429, json_encode($cMiss));
+
+check('[php 8.5] the gallery calls no function PHP 8.5 deprecates (imagedestroy() does nothing since PHP 8.0 and warns on 8.5, which would put a notice into a thumbnail when errors are shown): images are freed by letting go of them', !str_contains($indexContents, 'imagedestroy('));
 
 echo "== prepare media: what the files say is read once, kept in the cache, and never overrides the owner ==\n";
 

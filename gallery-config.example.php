@@ -53,6 +53,9 @@
     // --- Share links (README: Share links) ---------------------------------
     // "ENABLE_SHARE_LINKS": true,          // default false: temporary links that let someone see private photos (made in the admin's Share tab)
     // "SHARE_HEADS_UP": true,              // default false: a thin line at the top for people using a link, saying when it ends (each link can override)
+    // "LOG_PUBLIC_VISITS": true,           // default false: also log who opens the public address (their IP address, browser and what they looked at), in the Share tab; needs ENABLE_SHARE_LINKS
+    // "LOG_PUBLIC_DAYS": 30,               // how many days that log is kept (0: until you trim it)
+    // "CLOSE_PUBLIC_GALLERY": true,        // default false: only you, private-view sign-ins and people using a share link see anything; everyone else gets the page of a link that is not valid (needs ENABLE_SHARE_LINKS and ADMIN_PASSWORD; sign in at .../admin)
     // "TRUSTED_PROXY": "cloudflare",       // where visitors' addresses come from, for link logs and the sign-in throttle: "direct" (the default), "cloudflare" or "proxy"
     // "TRUSTED_PROXY_RANGES": ["203.0.113.0/24"],   // with "proxy" (or to add to Cloudflare's): the addresses whose X-Forwarded-For header is believed
 
