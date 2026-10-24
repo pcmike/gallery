@@ -63,3 +63,15 @@ Everything below was built and tested in a desktop browser (a real headless Chro
 - [ ] **Replace address…** on a link: the dialog has **Cancel, Random, Custom…** on one line on your phone. On a link with a custom address its text names the address and says Random drops it; **Custom…** takes you to that link's Edit with the cursor in Address (no zoom), and nothing is replaced until you save a new name or press Random.
 - [ ] **Health check** (Settings): with the gallery closed, *Tidy folder links* is green and says the gallery is closed, not "not set up".
 
+## Keeping an old address working (2.3.2)
+- [ ] Edit a link that has a random address, type a name in **Address**: **Keep the old address working too** appears already ticked (and goes away if you put the old address back). Save.
+- [ ] Open the **old** address in a private window: you land on the new one and the address bar shows the new one.
+- [ ] Under the link's **Settings** there is **Also works at** with the old address, how many visits it sent and from how many IPs, and **Pause** and **Kill**. **Pause** moves it to **Paused addresses** at once (the old address shows "not valid"); **Resume** brings it back with its totals.
+- [ ] **Replace address…** on a link with a kept address says the kept one stops too.
+- [ ] A link's **Settings** now start with **Address** (the name whole, or "a random code, ending …xxxx").
+- [ ] **Paused addresses** appears under Settings for a link whose address you changed before; **Resume** on the random one you sent out makes it open and send people on to the custom name again. Open it while paused: the line says how many times it was tried.
+- [ ] **Kill** asks first (a name of your own gets the warning about the name being free), then leaves a line under **Killed addresses**; **Clear** removes the line.
+- [ ] Open that old address in a private window, then look at the link's **Visitors** tab: a line under the IP says `via: k7Q2…Tb4e` (a wide screen has a "Came in on" column). Someone who came before shows a dash.
+- [ ] **IP addresses** view on your phone: the link names under "Links used" are whole pills (nothing broken up), and pressing one opens that link in the Links view, Settings folded.
+- [ ] In the **Public address** row's Settings, **Settings → Share links → Log visitors to the public address** is one link: pressing it opens the Settings tab at that setting (the group open, the row outlined for a moment).
+- [ ] **New share link**: *What they can see* starts on **Just the public gallery**.

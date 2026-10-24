@@ -3175,7 +3175,7 @@ check('[rules] the Private page offers ready-made nginx and Apache rules, collap
 check('[rules] Settings carries the same rules in its Server setup section', str_contains($flRootAdmin, 'class="site-rules"') && str_contains($flRootAdmin, '<summary><strong>nginx</strong>') && str_contains($flRootAdmin, '<summary><strong>Apache</strong>') && str_contains($flRootAdmin, 'location ~* ^/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$') && str_contains($flRootAdmin, 'FilesMatch') && str_contains($flRootAdmin, 'class="secondary copy-rules"'));
 check('[rules] Settings also has the optional tidy-folder-link rules for nginx and Apache, exactly as the README gives them', str_contains($flRootAdmin, 'rewrite ^/(.+)/$ /index.php?folder=$1 last;') && str_contains($flRootAdmin, 'RewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]') && substr_count($flRootAdmin, '<summary><strong>') >= 4);
 check('[rules] the Private page keeps to the privacy rules (two drop-downs) and points to Settings for the optional ones and the nginx redirect setting', (preg_match('#Lock the files themselves.*?</section>#s', $flCoverPage, $lockSec) === 1 && substr_count($lockSec[0], '<summary><strong>') === 2) && str_contains($lockSec[0] ?? '', 'tidy folder links and the nginx redirect') && !str_contains($lockSec[0] ?? '', 'RewriteRule ^(.+)/$') && !str_contains($lockSec[0] ?? '', 'rewrite ^'));
-check('[pin grouping] in Settings the pin-grouping row is set in under the map and hidden while the map is off', (bool) preg_match('#<div class="site-row sub-row" data-requires="set_ENABLE_MAP" hidden>#', $flRootAdmin));
+check('[pin grouping] in Settings the pin-grouping row is set in under the map and hidden while the map is off', (bool) preg_match('#<div class="site-row sub-row" id="setting-MAP_CLUSTER_RADIUS_MILES" data-requires="set_ENABLE_MAP" hidden>#', $flRootAdmin));
 // Passwords.
 $flFields = fn ($pw) => user_submit("$baseFl/?admin", http_get("$baseFl/?admin#site", $flHdrs)[1], 'value="save_site_settings"', ['pw_admin' => $pw, 'pw_admin2' => $pw], $flHdrs)[1];
 foreach (['abcdefghijkl' => 'letters only', '1234567890' => 'numbers only', 'abc123' => 'under 8', '          ' => 'spaces'] as $pw => $why) {
@@ -5790,10 +5790,14 @@ $qIps = http_get("$baseQ/?admin&linkips=1", ["Cookie: $qCookie"])[1];
 $qCsv = http_get("$baseQ/?admin&linkexport=$qPub&what=visitors", ["Cookie: $qCookie"])[1];
 check('[public log] the Share tab shows "The public address" above the links (logging, visits, addresses, views), its Visitors list names the address and says Visits, and it is not counted among the links',
     str_contains($qTab1, 'The public address') && str_contains($qTab1, 'sl-public') && preg_match('/class="sl-pill active">Logging</', $qTab1) === 1 && str_contains($qTab1, '<b>2</b> visit') && str_contains($qFrag, 'data-ip="127.0.0.1"') && str_contains($qFrag, '<th>Visits</th>') && str_contains($qTab1, '1 not ended'));
-check('[public log] the list of every IP address shows the public address as a chip of its own beside the links the address used, and the CSV export has the address', str_contains($qIps, 'sl-lchip pub">Public address') && str_contains($qIps, 'sl-lchip">Reddit post') && str_contains($qCsv, '127.0.0.1'));
+check('[public log] the list of every IP address shows the public address as a chip of its own beside the links the address used, and the CSV export has the address', str_contains($qIps, 'sl-lchip sl-golink pub" data-golink="' . $qPub . '">Public address</button>') && str_contains($qIps, '>Reddit post</button>') && str_contains($qCsv, '127.0.0.1'));
 preg_match_all('~<details class="sl-settings">(.*?)</details>~s', $qTab1, $qSet);
 $qLinkSet = array_values(array_filter($qSet[1], fn ($h) => str_contains($h, 'What they can see')))[0] ?? ''; $qPubSet = array_values(array_filter($qSet[1], fn ($h) => str_contains($h, 'Who is logged')))[0] ?? '';
 preg_match('~<details class="sl-row" data-id="[0-9a-f]{10}".*?<div class="sl-acts">(.*?)</div>\s*</div>\s*</details>~s', $qTab1, $qActs);
+$abSrc = (string) file_get_contents(__DIR__ . '/../index.php');
+preg_match_all('/^\s*\.(sl-[a-z-]+)\s*\{[^}]*\bwidth\s*:\s*\d+px/m', $abSrc, $abW);
+check('[old address buttons] the Pause, Resume, Kill and Clear buttons use a class of their own: no other rule sets a fixed width on it (the Timeline pictures\' class once cut "Pause" short), and none of them uses the picture class', !in_array('sl-abtn', $abW[1], true) && substr_count($abSrc, 'secondary sl-abtn') >= 4 && !str_contains($abSrc, 'secondary sl-mini') && substr_count($abSrc, "\n  .sl-abtn {") === 1);
+check('[link hover] a plain link in a Settings facts line (a dd), a table cell or a hint gets the same hover highlight as a link in a paragraph (the "Log visitors to the public address" link had none)', preg_match('/\.admin-main p a:hover[^{]*\.admin-main dd a:hover[^{]*\.admin-main td a:hover[^{]*\.admin-main \.hint a:hover[^{]*\{[^}]*background:rgba\(170,178,255/', $abSrc) === 1);
 check('[settings fold] an opened link keeps its address, Copy, Share… and QR code in view and puts its settings lines in a section called Settings that starts closed, with Edit… inside it (not with Export log, Preview, Pause…)', $qLinkSet !== '' && str_contains($qLinkSet, 'Original downloads') && str_contains($qLinkSet, 'Made') && str_contains($qLinkSet, 'data-sl="edit"') && !str_contains($qActs[1] ?? '', 'data-sl="edit"') && str_contains($qActs[1] ?? '', 'data-sl="preview"') && str_contains($qTab1, '<details class="sl-settings"><summary>Settings</summary>') && !str_contains($qTab1, '<details class="sl-settings" open') && strpos($qTab1, 'What they can see') < strpos($qTab1, 'data-act="link"', strpos($qTab1, 'What they can see')) && str_contains($qTab1, 'class="gs-mount"'));
 check('[settings fold] the public address\'s card folds its three lines the same way', $qPubSet !== '' && str_contains($qPubSet, 'Kept for') && !str_contains($qPubSet, 'data-sl="edit"'));
 // The Media tab's three menus (addresses, folders, and one choice from a list), which narrow the same set of photos and videos together (works for any link's log; here the public address's).
@@ -6031,12 +6035,200 @@ $cTwo = $cMake(['label' => 'Replace me', 'address' => 'replace-me-please']); $cT
 http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_replace', 'id' => $cTwoId], $cOwn); $cRecR = $cLinkFile()['links'][$cTwoId] ?? [];
 check('[custom address] "Replace address" on a custom link gives a random one as well: the custom flag is gone and the custom name is a replaced address', preg_match('/^[A-Za-z0-9]{16}$/', $cRecR['token'] ?? '') === 1 && ($cRecR['custom'] ?? true) === false && in_array('replace-me-please', (array) ($cRecR['oldTokens'] ?? []), true));
 
+echo "-- an old address kept working --\n";
+$kEdit = function ($id, $addr, $keep) use ($baseC, $cOwn, $cCsrf) {
+    [, $b] = http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_save', 'id' => $id, 'label' => 'Keeper', 'address' => $addr, 'keep_old' => $keep ? '1' : '0', 'title_mode' => 'gallery', 'picture' => '1', 'max_opens' => 0, 'ends_at' => 0, 'scope_type' => 'all', 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off'], $cOwn);
+    return json_decode($b, true) ?: [];
+};
+$kAct = function ($action, $id, $extra = []) use ($baseC, $cOwn, $cCsrf) { [, $b] = http_post("$baseC/?admin", array_merge(['csrf_token' => $cCsrf, 'action' => $action, 'id' => $id], $extra), $cOwn); return json_decode($b, true) ?: []; };
+$kLoc = function ($hd) { foreach ($hd as $h) if (stripos($h, 'Location:') === 0) return trim(substr($h, 9)); return ''; };
+$kMade = $cMake(['label' => 'Keeper']); $kId = $kMade['id'] ?? ''; $kTok0 = $cLinkFile()['links'][$kId]['token'] ?? '';
+$kE1 = $kEdit($kId, 'keep-me-now', true); $kRec = $cLinkFile()['links'][$kId] ?? [];
+check('[kept address] changing a random address to a custom one with "keep the old one" makes the old one a kept address (not a replaced one) and the name the address', ($kE1['ok'] ?? false) && ($kRec['token'] ?? '') === 'keep-me-now' && ($kRec['custom'] ?? false) === true && count($kRec['aliases'] ?? []) === 1 && ($kRec['aliases'][0]['name'] ?? '') === $kTok0 && ($kRec['aliases'][0]['custom'] ?? true) === false && !in_array($kTok0, (array) ($kRec['oldTokens'] ?? []), true));
+[$kSt, $kBody, $kHd] = http_get("$baseC/?link=$kTok0", [], false); $kRec = $cLinkFile()['links'][$kId] ?? [];
+check('[kept address] the kept address answers with a temporary redirect to the link\'s present address (so the address bar shows the new one), never cached', $kSt === 302 && str_ends_with($kLoc($kHd), '/?link=keep-me-now') && in_array('Cache-Control: no-store', $kHd, true) && !str_contains($kBody, 'Open the gallery'));
+check('[kept address] the use is counted on the kept address (once, with the time)', ($kRec['aliases'][0]['hits'] ?? 0) === 1 && ($kRec['aliases'][0]['last'] ?? 0) > 0);
+$kNew = http_get("$baseC/?link=keep-me-now", [], false);
+check('[kept address] where the redirect leads, the opening page', $kNew[0] === 200 && str_contains($kNew[1], 'Open the gallery'));
+$kHold = http_post("$baseC/?link=keep-me-now", ['go' => '1'], [$qPhone], false); $kCookie = ['Cookie: ' . extract_cookie_header($kHold[2])];
+check('[kept address] the opened link works through the new address (the kept one changes nothing about the link itself)', http_get("$baseC/", $kCookie, false)[0] === 200);
+$kOwnTry = http_get("$baseC/?link=$kTok0", $cOwn, false);
+check('[kept address] the signed-in owner is taken where the link goes, as with any address (nothing counted)', $kOwnTry[0] === 303 && (($cLinkFile()['links'][$kId]['aliases'][0]['hits'] ?? 0) === 1));
+[$kSt2, , $kHd2] = http_get("$baseC/?link=" . strtoupper($kTok0), [], false);
+check('[kept address] a random address is exact: the wrong letter case is not an address', $kSt2 === 404 && $kLoc($kHd2) === '');
+$kRefuse = $cMake(['label' => 'Takes the kept one', 'address' => strtolower($kTok0)]);
+check('[kept address] no other link can take a kept address as its own', ($kRefuse['ok'] ?? true) === false && str_contains((string) ($kRefuse['text'] ?? ''), 'Another link has'));
+$kE2 = $kEdit($kId, 'keep-me-too', false); $kRec = $cLinkFile()['links'][$kId] ?? [];
+check('[kept address] a later change without the box ticked replaces the address as before (the name goes to the replaced list) and the kept one stays kept', ($kE2['ok'] ?? false) && in_array('keep-me-now', (array) ($kRec['oldTokens'] ?? []), true) && count($kRec['aliases'] ?? []) === 1 && ($kRec['aliases'][0]['name'] ?? '') === $kTok0);
+[$kSt3, , $kHd3] = http_get("$baseC/?link=$kTok0", [], false); $kOldName = http_get("$baseC/?link=keep-me-now", [], false);
+check('[kept address] the kept address now leads to the newest address; the replaced one shows the invalid page', $kSt3 === 302 && str_ends_with($kLoc($kHd3), '/?link=keep-me-too') && $kOldName[0] === 404 && str_contains($kOldName[1], 'This link is not valid'));
+$kE3 = $kEdit($kId, 'keep-me-three', true); $kRec = $cLinkFile()['links'][$kId] ?? [];
+[$kSt4, , $kHd4] = http_get("$baseC/?link=KEEP-ME-TOO", [], false);
+check('[kept address] a kept custom name answers in any letter case, and leads to the present address', ($kE3['ok'] ?? false) && count($kRec['aliases'] ?? []) === 2 && ($kRec['aliases'][1]['custom'] ?? false) === true && $kSt4 === 302 && str_ends_with($kLoc($kHd4), '/?link=keep-me-three'));
+check('[kept address] "keep" with the address unchanged does nothing (no kept address is added)', ($kEdit($kId, 'keep-me-three', true)['ok'] ?? false) && count($cLinkFile()['links'][$kId]['aliases'] ?? []) === 2);
+$kE4 = $kEdit($kId, 'keep-me-too', true); $kRec = $cLinkFile()['links'][$kId] ?? [];
+check('[kept address] moving back to a name the link keeps makes it the address again and takes it off the kept list (no duplicate)', ($kE4['ok'] ?? false) && ($kRec['token'] ?? '') === 'keep-me-too' && count($kRec['aliases'] ?? []) === 2 && !in_array('keep-me-too', array_map('strtolower', array_column($kRec['aliases'], 'name')), true) && in_array('keep-me-three', array_column($kRec['aliases'], 'name'), true));
+// a limit of nine kept (ten ways in, with the present address)
+foreach (['keep-n01', 'keep-n02', 'keep-n03', 'keep-n04', 'keep-n05', 'keep-n06', 'keep-n07'] as $kN) $kEdit($kId, $kN, true);
+$kRec = $cLinkFile()['links'][$kId] ?? [];
+$kSeven = $kEdit($kId, 'keep-n08', true); $kAfter = $cLinkFile()['links'][$kId] ?? [];
+check('[kept address] a link keeps at most nine old addresses (ten ways in with its own): the tenth is refused with a message that says what to do, and nothing changes', count($kRec['aliases'] ?? []) === 9 && ($kSeven['ok'] ?? true) === false && str_contains((string) ($kSeven['text'] ?? ''), 'already has 9') && ($kAfter['token'] ?? '') === 'keep-n07');
+$kRm = $kAct('link_alias_pause', $kId, ['alias' => $kTok0]); $kRec = $cLinkFile()['links'][$kId] ?? [];
+$kGone = http_get("$baseC/?link=$kTok0", [], false);
+check('[kept address] removing a kept address stops it for good (the invalid page, no redirect) and keeps it reserved as a replaced address', ($kRm['ok'] ?? false) && count($kRec['aliases'] ?? []) === 8 && in_array($kTok0, (array) ($kRec['oldTokens'] ?? []), true) && $kGone[0] === 404 && str_contains($kGone[1], 'This link is not valid') && $kLoc($kGone[2]) === '');
+check('[kept address] removing one that is not kept says so', ($kAct('link_alias_pause', $kId, ['alias' => $kTok0])['ok'] ?? true) === false);
+$kAdmin = http_get("$baseC/?admin", $cOwn)[1];
+check('[kept address] the Share tab lists the kept addresses under Settings, each with a Remove button, how many visits it sent and when the last was', str_contains($kAdmin, 'Also works at') && str_contains($kAdmin, 'data-sl="aliaspause" data-alias="keep-me-three"') && str_contains($kAdmin, 'sent 0 visits here'));
+check('[kept address] the Edit form has the "Keep the old address working too" box (hidden until an address is being changed), and sends it', str_contains($kAdmin, 'name="keep_old"') && str_contains($kAdmin, 'data-keeprow hidden') && str_contains($kAdmin, 'Keep the old address working too') && str_contains($kAdmin, 'keep_old: form.querySelector'));
+$kAct('link_pause', $kId);
+[$kSt5, $kB5, $kHd5] = http_get("$baseC/?link=keep-me-three", [], false);
+check('[kept address] while the link is paused a kept address shows the invalid page and does not give away the present address', $kSt5 === 404 && str_contains($kB5, 'This link is not valid') && $kLoc($kHd5) === '' && !str_contains($kB5, 'keep-n07'));
+$kAct('link_resume', $kId);
+$kRep = $kAct('link_replace', $kId); $kRec = $cLinkFile()['links'][$kId] ?? [];
+check('[kept address] "Replace address" is the "it leaked" button: the kept addresses stop too and are held as replaced ones', ($kRep['ok'] ?? false) && ($kRec['aliases'] ?? null) === [] && in_array('keep-me-three', (array) ($kRec['oldTokens'] ?? []), true) && http_get("$baseC/?link=keep-me-three", [], false)[0] === 404 && str_contains((string) ($kRep['text'] ?? ''), 'you kept working'));
+$kPlain = $cMake(['label' => 'No old one']); $kPlainId = $kPlain['id'] ?? '';
+$kP1 = $kEdit($kPlainId, '', true); $kP2 = $cMake(['label' => 'Created with keep', 'address' => 'created-keep-one']); $kP2Rec = $cLinkFile()['links'][$kP2['id'] ?? ''] ?? [];
+check('[kept address] a new link has nothing to keep, and a link with its address unchanged keeps nothing, whatever the box says', ($kP1['ok'] ?? false) && ($cLinkFile()['links'][$kPlainId]['aliases'] ?? []) === [] && ($kP2Rec['aliases'] ?? null) === []);
+
+echo "-- the address line, replaced addresses, and which address a visitor came in on --\n";
+@unlink("$fxC/.gallery-login-attempts.php");   // (the failed tries above would hold the next ones back)
+$vUaLinux = 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+$vUaMac = 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+$vLabel = function ($n) { return preg_match('/^[A-Za-z0-9]{16}$/', $n) === 1 && preg_match('/[A-Z]/', $n) === 1 ? substr($n, 0, 4) . '…' . substr($n, -4) : $n; };
+$vFrag = function ($q) use ($baseC, $cOwn) { return http_get("$baseC/?admin&$q", $cOwn)[1]; };
+$vMade = $cMake(['label' => 'Via test']); $vId = $vMade['id'] ?? ''; $vTok0 = $cLinkFile()['links'][$vId]['token'] ?? '';
+$vAdmin0 = http_get("$baseC/?admin", $cOwn)[1];
+check('[address line] a link with a random address says so and shows only the tail of the code', str_contains($vAdmin0, '<dt>Address</dt><dd>a random code, ending <code>…' . substr($vTok0, -4) . '</code></dd>') && !str_contains($vAdmin0, '…' . substr($vTok0, 0, 12)));
+http_post("$baseC/?link=$vTok0", ['go' => '1'], [$vUaLinux], false);   // opens before it has a second address
+sleep(1); $vE = $kEdit($vId, 'via-test-name', true); sleep(1);   // (a visitor counts as coming after the change when they are first seen after the second it was made)
+$vAdmin1 = http_get("$baseC/?admin", $cOwn)[1];
+check('[address line] a custom name is shown whole, with "a name of your own"', str_contains($vAdmin1, '<dt>Address</dt><dd><code>…/via-test-name</code> <span class="muted">a name of your own</span></dd>'));
+http_get("$baseC/?link=$vTok0", [$qPhone], false); http_get("$baseC/?link=$vTok0", [$vUaMac], false); http_get("$baseC/?link=$vTok0", [$qPhone], false);
+$vFresh = function () use ($vId, $cLinkFile, $fxC) { $f = $cLinkFile(); $f['links'][$vId]['lastOpen'] = ['ip' => '', 'at' => 0]; write_data_file("$fxC/.gallery-links.php", $f); };   // (the same address pressing again within 15 minutes isn't a new opening)
+$vFresh(); http_post("$baseC/?link=via-test-name", ['go' => '1'], [$qPhone], false);
+$vFresh(); http_post("$baseC/?link=via-test-name", ['go' => '1'], [$vUaMac], false);
+$vFresh(); http_post("$baseC/?link=via-test-name", ['go' => '1'], ['User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0'], false);   // (this one never used the old address)
+$vNow = $cLinkFile()['links'][$vId] ?? [];
+$vVis = $vFrag("linkview=$vId&tab=visitors");
+check('[came in on] the Visitors tab of a link with a second address has a "Came in on" column, and says on each visitor\'s IP cell (the phone\'s line) which address they used', ($vE['ok'] ?? false) && str_contains($vVis, '<th class="sl-viacol">Came in on</th>') && substr_count($vVis, 'class="sl-via"') >= 2);
+check('[came in on] someone who used the old random address shows its first and last four characters (via: k7Q2…Tb4e)', str_contains($vVis, 'via: ' . $vLabel($vTok0)) && str_contains($vVis, '<td class="sl-viacol">' . $vLabel($vTok0) . '</td>'));
+check('[came in on] someone who opened only the new address after the change shows the present one (via: via-test-name)', str_contains($vVis, '<td class="sl-viacol">via-test-name</td>') && str_contains($vVis, 'via: via-test-name'));
+check('[came in on] a visitor from before the link had a second address has nothing noted, so a dash, and no "via" line', preg_match('/Chrome on Linux<\/td><td class="sl-viacol">—<\/td>/', $vVis) === 1);
+$vLog = read_data_file("$fxC/.gallery-linklog-$vId.php");
+$vIpCount = 0; $vVisitsNoted = 0; foreach ((array) ($vLog['via'] ?? []) as $ve) { $vIpCount += isset($ve['n'][$vTok0]) ? 1 : 0; $vVisitsNoted += (int) ($ve['n'][$vTok0] ?? 0); }
+check('[came in on] the log has one note per visitor (phone, Mac) with how many times each used the old address (3 in all)', $vIpCount === 2 && $vVisitsNoted === 3, json_encode($vLog['via'] ?? null));
+$vAdmin2 = http_get("$baseC/?admin", $cOwn)[1];
+check('[kept address] "Also works at" counts the IPs as well as the visits: three visits from one IP, however many browsers', str_contains($vAdmin2, 'sent 3 visits here from 1 IP'));
+$vCsv = $vFrag("linkexport=$vId&what=visitors");
+check('[came in on] the Visitors CSV has a came_in_on column, with the address for each visitor and nothing for the one with no note', str_contains($vCsv, '"came_in_on"') && str_contains($vCsv, $vLabel($vTok0)) && str_contains($vCsv, 'via-test-name'));
+$vPlain = $cMake(['label' => 'One address only']); $vPlainId = $vPlain['id'] ?? ''; $vPlainTok = $cLinkFile()['links'][$vPlainId]['token'] ?? '';
+http_post("$baseC/?link=$vPlainTok", ['go' => '1'], [$qPhone], false);
+$vPlainVis = $vFrag("linkview=$vPlainId&tab=visitors");
+check('[came in on] a link with one address shows no such column and no "via" line', !str_contains($vPlainVis, 'Came in on') && !str_contains($vPlainVis, 'class="sl-via"') && str_contains($vPlainVis, 'data-ip="127.0.0.1"') && str_contains($vFrag("linkexport=$vPlainId&what=visitors"), '"came_in_on"'));
+check('[came in on] the column is hidden on a phone and the line under the IP shown there (and the other way round on a wide screen)', str_contains($vAdmin2, '.sl-viacol { display:none; } .sl-via { display:block; }') && str_contains($vAdmin2, '.sl-via { display:none;'));
+// trimming the log also trims the notes
+$vTrim = http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_trim', 'id' => $vId, 'before' => time() + 3600], $cOwn);
+
+// Replaced addresses and Bring back
+$rMade = $cMake(['label' => 'Bring back']); $rId = $rMade['id'] ?? ''; $rTok0 = $cLinkFile()['links'][$rId]['token'] ?? '';
+$kEdit($rId, 'bring-back-one', false);
+$rGone = http_get("$baseC/?link=$rTok0", [], false); $rAdmin = http_get("$baseC/?admin", $cOwn)[1];
+check('[replaced] an address that was replaced is listed in the link\'s Settings by its first and last four characters, with a Bring back button, and it shows the "not valid" page', $rGone[0] === 404 && str_contains($rAdmin, '<dt>Paused addresses</dt>') && str_contains($rAdmin, 'data-sl="aliasresume" data-alias="' . $rTok0 . '"') && str_contains($rAdmin, '…/' . $vLabel($rTok0) . '</code>') && !str_contains($rAdmin, '…/' . $rTok0 . '</code>'));
+$rBack = $kAct('link_alias_resume', $rId, ['alias' => $rTok0]); $rRec = $cLinkFile()['links'][$rId] ?? [];
+[$rSt, , $rHd] = http_get("$baseC/?link=$rTok0", [], false);
+check('[replaced] Bring back moves it from the replaced list to the kept addresses, and it redirects to the present address again', ($rBack['ok'] ?? false) && !in_array($rTok0, (array) ($rRec['oldTokens'] ?? []), true) && ($rRec['aliases'][0]['name'] ?? '') === $rTok0 && ($rRec['aliases'][0]['custom'] ?? true) === false && $rSt === 302 && str_ends_with($kLoc($rHd), '/?link=bring-back-one'));
+check('[replaced] it is not offered again once it is kept, and bringing it back twice is refused', !str_contains(http_get("$baseC/?admin", $cOwn)[1], 'data-sl="aliasresume" data-alias="' . $rTok0 . '"') && ($kAct('link_alias_resume', $rId, ['alias' => $rTok0])['ok'] ?? true) === false);
+check('[replaced] a name that was never on the list can\'t be brought back (nothing is invented)', ($kAct('link_alias_resume', $rId, ['alias' => 'never-was-here'])['ok'] ?? true) === false && ($kAct('link_alias_resume', $rId, ['alias' => 'bring-back-one'])['ok'] ?? true) === false);
+// a custom name that was replaced, then brought back: it is case-blind like any custom name
+$cuMade = $cMake(['label' => 'Custom old', 'address' => 'cust-aaaa']); $cuId = $cuMade['id'] ?? '';
+$kEdit($cuId, 'cust-bbbb', false); $cuBack = $kAct('link_alias_resume', $cuId, ['alias' => 'cust-aaaa']); $cuRec = $cLinkFile()['links'][$cuId] ?? [];
+[$cuSt, , $cuHd] = http_get("$baseC/?link=CUST-AAAA", [], false);
+check('[replaced] a custom name brought back is a custom kept address: any letter case redirects to the present address', ($cuBack['ok'] ?? false) && ($cuRec['aliases'][0]['custom'] ?? false) === true && $cuSt === 302 && str_ends_with($kLoc($cuHd), '/?link=cust-bbbb'));
+// a folder that has taken the name in the meantime
+$fMade = $cMake(['label' => 'Folder took it', 'address' => 'cust-eeee']); $fId = $fMade['id'] ?? '';
+$kEdit($fId, 'cust-ffff', false); mkdir("$fxC/cust-eeee", 0777, true);
+$fBack = $kAct('link_alias_resume', $fId, ['alias' => 'cust-eeee']);
+check('[replaced] an old name a folder has taken since is not brought back (the message says why), and stays on the replaced list', ($fBack['ok'] ?? true) === false && str_contains((string) ($fBack['text'] ?? ''), 'A folder or file called') && in_array('cust-eeee', (array) ($cLinkFile()['links'][$fId]['oldTokens'] ?? []), true));
+rmdir("$fxC/cust-eeee");
+// the limit of nine kept addresses applies to bringing back
+$lMade = $cMake(['label' => 'Full house']); $lId = $lMade['id'] ?? ''; $lTok0 = $cLinkFile()['links'][$lId]['token'] ?? '';
+$kEdit($lId, 'full-house-1', false);
+foreach (range(2, 10) as $lN) $kEdit($lId, 'full-house-' . $lN, true);
+$lFull = $kAct('link_alias_resume', $lId, ['alias' => $lTok0]);
+check('[replaced] with nine kept addresses already, bringing one back is refused and says what to do', ($lFull['ok'] ?? true) === false && str_contains((string) ($lFull['text'] ?? ''), 'already has 9') && in_array($lTok0, (array) ($cLinkFile()['links'][$lId]['oldTokens'] ?? []), true));
+$kAct('link_alias_pause', $lId, ['alias' => 'full-house-1']); $lOk = $kAct('link_alias_resume', $lId, ['alias' => $lTok0]);
+check('[replaced] ...and works once one is removed', ($lOk['ok'] ?? false) && count($cLinkFile()['links'][$lId]['aliases'] ?? []) === 9);
+$kAct('link_pause', $lId); $lPaused = $kAct('link_alias_resume', $lId, ['alias' => 'full-house-1']); $kAct('link_resume', $lId);
+$kAct('link_revoke', $lId); $lRevoked = $kAct('link_alias_resume', $lId, ['alias' => 'full-house-1']);
+check('[replaced] a revoked link can\'t change its addresses', ($lRevoked['ok'] ?? true) === false);
+
+// the replaced list is never trimmed
+$uMade = $cMake(['label' => 'Many renames']); $uId = $uMade['id'] ?? '';
+foreach (range(1, 13) as $uN) $kEdit($uId, 'many-renames-' . $uN, false);
+$uRec = $cLinkFile()['links'][$uId] ?? []; $uAdmin = http_get("$baseC/?admin", $cOwn)[1];
+check('[replaced] every replaced address is remembered, however many: thirteen renames leave thirteen on the list (the random code and twelve names) and Settings lists them all', count($uRec['oldTokens'] ?? []) === 13 && count(array_unique($uRec['oldTokens'] ?? [])) === 13 && substr_count($uAdmin, 'data-sl="aliasresume" data-alias="many-renames-') === 12);
+
+// Pause keeps the totals, tries on a paused address are counted, Kill frees the name and leaves a summary
+@unlink("$fxC/.gallery-login-attempts.php");
+$tMade = $cMake(['label' => 'Totals']); $tId = $tMade['id'] ?? ''; $tTok0 = $cLinkFile()['links'][$tId]['token'] ?? '';
+$kEdit($tId, 'totals-name-one', true);
+http_get("$baseC/?link=$tTok0", [$qPhone], false); http_get("$baseC/?link=$tTok0", [$vUaMac], false); http_get("$baseC/?link=$tTok0", [$qPhone], false);
+$tBefore = $cLinkFile()['links'][$tId]['aliases'][0] ?? [];
+$tPause = $kAct('link_alias_pause', $tId, ['alias' => $tTok0]); $tRec = $cLinkFile()['links'][$tId] ?? [];
+check('[pause] pausing a kept address moves it to the paused list and keeps its totals (visits and last used) on the link', ($tPause['ok'] ?? false) && ($tBefore['hits'] ?? 0) === 3 && ($tRec['aliases'] ?? null) === [] && in_array($tTok0, (array) ($tRec['oldTokens'] ?? []), true) && ($tRec['aliasStats'][$tTok0]['hits'] ?? 0) === 3 && ($tRec['aliasStats'][$tTok0]['last'] ?? 0) === ($tBefore['last'] ?? -1));
+$tDead1 = http_get("$baseC/?link=$tTok0", [$qPhone], false); $tDead2 = http_get("$baseC/?link=$tTok0", [$vUaMac], false); $tDead3 = http_get("$baseC/?link=$tTok0", [$qPhone], false);
+$tAdmin = http_get("$baseC/?admin", $cOwn)[1];
+check('[tries] a paused address shows the "not valid" page and each try is counted against that address (not held against the visitor): the Settings line says how many, from how many IPs', $tDead1[0] === 404 && $tDead3[0] === 404 && str_contains($tAdmin, 'tried 3 times from 1 IP, last') && str_contains($tAdmin, 'data-sl="aliasresume" data-alias="' . $tTok0 . '"') && str_contains($tAdmin, 'data-sl="aliaskill" data-alias="' . $tTok0 . '"'));
+$tLog = read_data_file("$fxC/.gallery-linklog-$tId.php"); $tTried = 0; foreach ((array) ($tLog['tried'] ?? []) as $te) $tTried += (int) ($te['n'][$tTok0] ?? 0);
+check('[tries] the log holds the tries by visitor (two: phone and Mac) and by address (three in all), next to the "came in on" notes', count($tLog['tried'] ?? []) === 2 && $tTried === 3 && count($tLog['via'] ?? []) === 2);
+$tResume = $kAct('link_alias_resume', $tId, ['alias' => $tTok0]); $tRec = $cLinkFile()['links'][$tId] ?? [];
+$tAdmin2 = http_get("$baseC/?admin", $cOwn)[1]; [$tSt, , $tHd] = http_get("$baseC/?link=$tTok0", [], false);
+check('[pause] resuming gives it back its totals (3 visits and the last-used time), redirects again, and drops the stored totals', ($tResume['ok'] ?? false) && ($tRec['aliases'][0]['hits'] ?? 0) === 3 && ($tRec['aliases'][0]['last'] ?? 0) === ($tBefore['last'] ?? -1) && !isset($tRec['aliasStats'][$tTok0]) && $tSt === 302 && str_ends_with($kLoc($tHd), '/?link=totals-name-one'));
+check('[tries] after Resume the working line still says how many tries it had while paused, and the visits and IPs carry on from the totals (3 visits from 1 IP)', str_contains($tAdmin2, 'sent 3 visits here from 1 IP') && str_contains($tAdmin2, 'tried 3 times while paused'));
+$tRep = $kAct('link_replace', $tId); $tRec = $cLinkFile()['links'][$tId] ?? [];
+check('[pause] Replace address pauses the kept ones too and keeps their totals (4 visits: three, then the one that checked the redirect)', ($tRep['ok'] ?? false) && ($tRec['aliases'] ?? null) === [] && in_array($tTok0, (array) ($tRec['oldTokens'] ?? []), true) && ($tRec['aliasStats'][$tTok0]['hits'] ?? 0) === 4);
+$tBack = $kAct('link_alias_resume', $tId, ['alias' => $tTok0]);
+check('[pause] ...and Resume after that gives the totals back as well', ($tBack['ok'] ?? false) && ($cLinkFile()['links'][$tId]['aliases'][0]['hits'] ?? 0) === 4);
+// Kill
+$tAdmin3 = http_get("$baseC/?admin", $cOwn)[1];
+check('[kill] the Kill dialog says it is for good and that the summary stays; for a name of your own it warns the name is free and what that means, for a random code it says the code is never used again; and it offers Pause instead', str_contains($tAdmin3, 'Kill this old address?') && str_contains($tAdmin3, 'The name is then free.') && str_contains($tAdmin3, 'anyone still holding this address would land on whatever uses the name next') && str_contains($tAdmin3, 'A random code is never used again.') && str_contains($tAdmin3, 'Pause it instead'));
+$tKill = $kAct('link_alias_kill', $tId, ['alias' => $tTok0]); $tRec = $cLinkFile()['links'][$tId] ?? []; $tK = $tRec['killed'][0] ?? [];
+check('[kill] killing a working address removes it from the link altogether and leaves one summary line: the short label, when, visits, IPs and tries, never the address itself', ($tKill['ok'] ?? false) && ($tRec['aliases'] ?? null) === [] && !in_array($tTok0, (array) ($tRec['oldTokens'] ?? []), true) && !isset($tRec['aliasStats'][$tTok0]) && ($tK['label'] ?? '') === $vLabel($tTok0) && ($tK['hits'] ?? 0) === 4 && ($tK['ips'] ?? 0) === 1 && ($tK['tries'] ?? 0) === 3 && ($tK['killedAt'] ?? 0) > 0 && !str_contains(json_encode($tRec), $tTok0));
+$tAdmin4 = http_get("$baseC/?admin", $cOwn)[1];
+check('[kill] Settings list it under Killed addresses with the numbers, and the page has nothing that could bring it back (the full address is nowhere on it)', str_contains($tAdmin4, '<dt>Killed addresses</dt>') && str_contains($tAdmin4, '…/' . $vLabel($tTok0) . '</code> <span class="muted">killed') && str_contains($tAdmin4, 'sent 4 visits from 1 IP, tried 3 times while paused') && !str_contains($tAdmin4, $tTok0) && str_contains($tAdmin4, 'data-sl="killedclear"'));
+$tGone = http_get("$baseC/?link=$tTok0", [], false);
+check('[kill] the killed address is an unknown address now: the same "not valid" page, no redirect', $tGone[0] === 404 && str_contains($tGone[1], 'This link is not valid') && $kLoc($tGone[2]) === '');
+check('[kill] killing something that is not one of the link\'s old addresses is refused', ($kAct('link_alias_kill', $tId, ['alias' => 'not-an-address'])['ok'] ?? true) === false);
+// a name of your own, killed from the paused list, is free for another link
+$kcMade = $cMake(['label' => 'Free the name', 'address' => 'free-this-name']); $kcId = $kcMade['id'] ?? '';
+$kEdit($kcId, 'free-this-name-2', false);
+$kcTaken = $cMake(['label' => 'Tries the name', 'address' => 'free-this-name']);
+check('[kill] before it is killed a paused name is still reserved to its link: another link cannot take it', ($kcTaken['ok'] ?? true) === false && str_contains((string) ($kcTaken['text'] ?? ''), 'Another link has'));
+$kcKill = $kAct('link_alias_kill', $kcId, ['alias' => 'free-this-name']); $kcRec = $cLinkFile()['links'][$kcId] ?? [];
+check('[kill] killing a paused address leaves its summary line (a name of your own is shown whole)', ($kcKill['ok'] ?? false) && !in_array('free-this-name', (array) ($kcRec['oldTokens'] ?? []), true) && ($kcRec['killed'][0]['label'] ?? '') === 'free-this-name' && ($kcRec['killed'][0]['custom'] ?? false) === true && str_contains((string) ($kcKill['text'] ?? ''), 'name is free'));
+$kcFree = $cMake(['label' => 'Takes the name', 'address' => 'free-this-name']);
+check('[kill] ...and the name is free: another link can now use it, and it opens that link', ($kcFree['ok'] ?? false) && ($r = http_get("$baseC/?link=free-this-name", [], false))[0] === 200 && str_contains($r[1], 'Open the gallery'));
+$kcClear = $kAct('link_killed_clear', $kcId);
+check('[kill] Clear removes the summary lines and nothing else', ($kcClear['ok'] ?? false) && ($cLinkFile()['links'][$kcId]['killed'] ?? null) === [] && ($cLinkFile()['links'][$kcId]['token'] ?? '') === 'free-this-name-2');
+
+// The link names in the all-addresses list go to the link
+$tw1 = $cMake(['label' => 'Twin']); $tw2 = $cMake(['label' => 'Twin']);
+foreach ([$tw1, $tw2] as $tw) { $twTok = $cLinkFile()['links'][$tw['id'] ?? '']['token'] ?? ''; http_post("$baseC/?link=$twTok", ['go' => '1'], [$qPhone], false); }
+$ipsList = $vFrag('linkips=1');
+check('[link pills] the all-addresses list puts the links an address used in one wrapping container, as buttons that go to the link (keyed by the link\'s id, so two links named alike stay two)', str_contains($ipsList, '<span class="sl-lchips">') && str_contains($ipsList, 'class="sl-lchip sl-golink" data-golink="' . ($tw1['id'] ?? '') . '"') && str_contains($ipsList, 'data-golink="' . ($tw2['id'] ?? '') . '"') && substr_count($ipsList, '>Twin</button>') >= 2 && !str_contains($ipsList, '<span class="sl-lchip ') && !str_contains($ipsList, '<span class="sl-lchip"'));
+$ipPage = $vFrag('linkip=127.0.0.1&tab=folders');
+check('[link pills] the page of one address has the same buttons, and the Public address\'s pill (when it is among them) too', str_contains($ipPage, 'class="sl-lchip sl-golink" data-golink="' . ($tw1['id'] ?? '') . '"') && !str_contains($ipPage, '<span class="sl-lchip ') && !str_contains($ipPage, '<span class="sl-lchip"'));
+check('[link pills] the page has the script that opens that link\'s row (and leaves its Settings alone) and the styles that keep a pill whole', str_contains($ipsList . $vAdmin2, 'closest(\'[data-golink]\')') && str_contains($vAdmin2, '.sl-lchips { display:flex; flex-wrap:wrap;') && str_contains($vAdmin2, 'details.sl-row[data-id="') && str_contains($vAdmin2, "actLoad(tAct, null, { mode: 'link', id: target.getAttribute('data-id'), tab: null })"));
+
 echo "-- the rule that sends names to the gallery --\n";
 $cRules = http_get("$baseC/?admin", $cOwn)[1];
 check('[custom address] the nginx rule matches one word of 4 to 40 letters, digits and hyphens (quoted), the Apache rule has no folder check, and both say they replace the older one', str_contains($cRules, '[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]') && str_contains($cRules, 'location ~ &quot;^/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$&quot;') && !str_contains($cRules, 'RewriteCond %{REQUEST_FILENAME} !-d') && str_contains($cRules, 'RewriteCond %{REQUEST_FILENAME} !-f') && str_contains($cRules, 'It replaces the older rule'));
 check('[custom address] the probe is a hyphenated name, so "tidy addresses work" is only said once the new rule is in place', str_contains($cRules, 'data-probe="/0000-probe-0000"') && http_get("$baseC/?link=0000-probe-0000", [], false)[0] === 200);
 check('[custom address] the form has the address field and the button that turns the name into one', str_contains($cRules, 'name="address"') && str_contains($cRules, 'data-sl="addrname"') && str_contains($cRules, 'function slugName(') && str_contains($cRules, 'Use the name'));
 
+check('[setting links] every setting row has an address (setting-NAME) the admin can jump to, and the jump opens the fold the row is in (or its group, when the row is hidden), scrolls to it and marks it', str_contains($cRules, 'id="setting-LOG_PUBLIC_VISITS"') && str_contains($cRules, 'id="setting-ENABLE_SHARE_LINKS"') && str_contains($cRules, 'id="setting-ENABLE_MAP"') && str_contains($cRules, "up.tagName === 'DETAILS'") && str_contains($cRules, "e.closest('details')") && str_contains($cRules, '.site-row.flash-target'));
+check('[setting links] the public address\'s "Turn it on or off" line is one link that goes to the Log visitors setting; the prompts to turn on Allow share links and the Map go to their settings too', str_contains($qTab1, "adminGoTo('site', 'setting-LOG_PUBLIC_VISITS');\">Settings &rarr; Share links &rarr; Log visitors to the public address</a>") && str_contains($indexContents, "adminGoTo('site', 'setting-ENABLE_SHARE_LINKS')") && str_contains($indexContents, "adminGoTo('site', 'setting-ENABLE_MAP')"));
+check('[new link default] the new link form starts on "Just the public gallery" (nothing private), not on "Everything private"; the form script\'s defaults say the same', str_contains($cRules, 'name="scope_type" value="public" checked') && !str_contains($cRules, 'name="scope_type" value="all" checked') && str_contains($cRules, "scopeType: 'public', only: false"));
 check('[replace dialog] the Share tab\'s dialog has a hidden third button for Custom…, the Replace dialog is Cancel, Random and Custom… (the row\'s action is still called Replace address…), and Custom… opens Edit on the Address field', str_contains($cRules, 'data-sl-modal="extra" hidden') && str_contains($cRules, "'Random', false, 'Custom…'") && str_contains($cRules, 'Replace address…') && str_contains($cRules, "openForm(link, 'address')") && str_contains($cRules, "focusField === 'address' ? '[name=address]'"));
 check('[replace dialog] for a custom address the text says Random drops the name; for a random one it keeps the old text and points to Custom…', str_contains($cRules, 'the name is gone, the address you sent stops working right away') && str_contains($cRules, 'To pick a different name of your own, press <em>Custom…</em>.') && str_contains($cRules, 'To use a name of your own instead, press <em>Custom…</em>.'));
 [$cHSt, $cHBody, $cHHd] = http_get("$baseC/?folder=Rome", [], false);

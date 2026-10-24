@@ -15,6 +15,7 @@ install needed). Exit status 0 only if every check passes; 2 if ffmpeg or Chromi
 """
 import subprocess, tempfile, os, socket, time, sys, shutil, struct
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
+os.environ["GALLERY_BROWSER_STRICT"] = "1"   # video playback takes real time: every wait runs in full
 from cdp import Browser
 FF = os.environ.get("FFMPEG") or shutil.which("ffmpeg")
 if not FF or not os.path.exists(FF):

@@ -62,7 +62,7 @@ if (PHP_VERSION_ID < 80300) {
 header('X-Content-Type-Options: nosniff');
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.3.1');
+define('GALLERY_VERSION', '2.3.2');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -466,6 +466,8 @@ define('PREVIEW_COOKIE_NAME', 'gallery_preview_' . substr(hash('sha256', __DIR__
 const PREVIEW_SECONDS = 14400;   // a preview ends by itself after four hours
 define('LINK_PROBE_TOKEN', '0000-probe-0000');   // the admin asks for this one to learn whether the tidy address reaches the script (it has hyphens, so only the rule that allows custom names lets it through)
 const LINK_TOKEN_LENGTH = 16;
+const LINK_ALIASES_MAX = 9;   // old addresses a link may keep working at the same time (with its own, ten ways in)
+const LINK_ADDRESS_TAKEN = 'Another link has (or had) that address: pick another.';
 // Names a link may not take: addresses the gallery uses itself.
 const LINK_RESERVED_NAMES = ['admin', 'administrator', 'login', 'logout', 'signin', 'reveal', 'index', 'about', 'link', 'links', 'share', 'gallery', 'robots', 'sitemap', 'favicon', 'assets', 'static', 'public', 'private', 'photos', 'media', 'download', 'downloads', 'cache', 'config', 'null', 'none', 'test'];
 const LINK_REOPEN_GRACE_SECONDS = 900;   // the same address opening again this soon (an app's own browser, then Safari) is not a second use
@@ -4391,8 +4393,8 @@ function link_custom_name_problem($name, $dir, $exceptId = '') {
     }
     foreach ((array) (links_read()['links'] ?? []) as $l) {
         if (!is_array($l) || ($l['id'] ?? '') === $exceptId) continue;
-        foreach (array_merge([(string) ($l['token'] ?? '')], array_map('strval', (array) ($l['oldTokens'] ?? []))) as $t) {
-            if ($t !== '' && strtolower($t) === $n) return 'Another link has (or had) that address: pick another.';
+        foreach (link_all_addresses($l) as $t) {
+            if (strtolower($t) === $n) return 'Another link has (or had) that address: pick another.';
         }
     }
     return '';
@@ -4420,6 +4422,96 @@ function link_find_by_token($data, $token) {
         if (!empty($l['custom']) ? hash_equals(strtolower($l['token']), strtolower((string) $token)) : hash_equals($l['token'], (string) $token)) $found = $l;
     }
     return $found;
+}
+
+/** Every address a link answers to or holds: its own, the replaced ones and the ones kept working. */
+function link_all_addresses($l) {
+    $out = [(string) ($l['token'] ?? '')];
+    foreach ((array) ($l['oldTokens'] ?? []) as $t) $out[] = (string) $t;
+    foreach ((array) ($l['aliases'] ?? []) as $a) if (is_array($a)) $out[] = (string) ($a['name'] ?? '');
+    return array_values(array_filter($out, function ($t) { return $t !== ''; }));
+}
+
+/** [the link, the kept address it was reached by] for an old address that was kept working, or null. */
+function link_find_by_alias($data, $token) {
+    $found = null;
+    foreach ((array) ($data['links'] ?? []) as $l) {
+        if (!is_array($l) || link_is_public_log($l)) continue;
+        foreach ((array) ($l['aliases'] ?? []) as $a) {
+            if (!is_array($a) || !is_string($a['name'] ?? null)) continue;
+            if (!empty($a['custom']) ? hash_equals(strtolower($a['name']), strtolower((string) $token)) : hash_equals($a['name'], (string) $token)) $found = [$l, $a['name']];
+        }
+    }
+    return $found;
+}
+
+/** True for an address that looks like a name of the owner's own; a random code is 16 letters and digits with a capital among them. */
+function link_address_is_custom($name) {
+    $name = (string) $name;
+    return !(preg_match('/^[A-Za-z0-9]{16}$/', $name) === 1 && preg_match('/[A-Z]/', $name) === 1);
+}
+
+/** An address as it is shown in the log: a name of your own whole, a random code as its first four and last four characters. */
+function link_address_label($name, $custom) {
+    $name = (string) $name;
+    return $custom || strlen($name) < 9 ? $name : substr($name, 0, 4) . '…' . substr($name, -4);
+}
+
+/** Does the Visitors list need to say which address each visitor came in on? Yes once a link has had a second one working. */
+function link_has_many_addresses($l, $log) {
+    return !link_is_public_log($l) && (!empty($l['aliases']) || !empty($log['via']));
+}
+
+/** How a visitor came in: the kept addresses they used; else, if they came after the link got a second address, the present one; else '' (before that, nobody noted it). */
+function link_visitor_via($l, $log, $vid, $v) {
+    $e = $log['via'][$vid] ?? null;
+    if (is_array($e) && !empty($e['n'])) {
+        $parts = [];
+        foreach (array_keys($e['n']) as $n) $parts[] = link_address_label($n, link_address_is_custom($n));
+        return implode(', ', $parts);
+    }
+    $since = (int) ($l['aliasSince'] ?? 0);
+    if ($since > 0 && (int) ($v['first'] ?? 0) > $since) return link_address_label($l['token'], !empty($l['custom']));
+    return '';
+}
+
+/** Counts one use of a kept address (how many times, and when last), so the owner can tell whether it can go. */
+function link_alias_used($id, $name) {
+    links_update(function (&$d) use ($id, $name) {
+        foreach ((array) ($d['links'][$id]['aliases'] ?? []) as $i => $a) {
+            if (is_array($a) && ($a['name'] ?? '') === $name) { $d['links'][$id]['aliases'][$i]['hits'] = (int) ($a['hits'] ?? 0) + 1; $d['links'][$id]['aliases'][$i]['last'] = time(); }
+        }
+    });
+}
+
+/** Notes in the link's log that this visitor used one of the link's old addresses: 'via' for a kept one (the visitor is sent on and opens the
+ *  link on the present address, so this is the only place it shows), 'tried' for a paused one (they saw the "not valid" page). */
+function link_note_address($link, $kind, $name) {
+    [$vid, $ip] = link_visitor_identity();
+    $now = time();
+    link_log_update($link['id'], function (&$log) use ($kind, $vid, $ip, $name, $now) {
+        $all = (array) ($log[$kind] ?? []);
+        if (!isset($all[$vid]) && count($all) >= LINK_LOG_VISITORS) { uasort($all, function ($a, $b) { return (int) ($a['last'] ?? 0) <=> (int) ($b['last'] ?? 0); }); array_shift($all); }
+        $e = $all[$vid] ?? ['ip' => $ip, 'n' => [], 'last' => $now];
+        $e['n'][$name] = (int) ($e['n'][$name] ?? 0) + 1; $e['last'] = $now;
+        $all[$vid] = $e; $log[$kind] = $all;
+    });
+}
+
+/** What the log says about one old address: [uses, distinct IPs, last time] from its 'via' notes (a kept address) or 'tried' notes (a paused one). */
+function link_address_log_stats($log, $kind, $name) {
+    $uses = 0; $ips = []; $last = 0;
+    foreach ((array) ($log[$kind] ?? []) as $e) {
+        if (!isset($e['n'][$name])) continue;
+        $uses += (int) $e['n'][$name]; $ips[(string) ($e['ip'] ?? '')] = true; $last = max($last, (int) ($e['last'] ?? 0));
+    }
+    return [$uses, count($ips), $last];
+}
+
+/** The stored spelling of the replaced address that matches this one (a custom name answers in any case), or ''. */
+function link_old_name($link, $token) {
+    foreach ((array) ($link['oldTokens'] ?? []) as $old) if (is_string($old) && hash_equals(strtolower($old), strtolower((string) $token))) return $old;
+    return '';
 }
 
 /** The link that used to have this address (before "Replace address"), or null. */
@@ -4887,7 +4979,8 @@ function run_link_route($dir) {
     // sign-in ("admin") and a real folder typed without its closing slash (sent on to the folder, as the server itself would have).
     // A link of that name wins over both.
     if (is_string($token) && preg_match('/^[A-Za-z0-9][A-Za-z0-9-]*$/', $token) === 1 && $token !== LINK_PROBE_TOKEN) {
-        $isLink = ENABLE_SHARE_LINKS && link_token_format_ok($token) && link_find_by_token(links_read(), $token) !== null;
+        $isLink = false;
+        if (ENABLE_SHARE_LINKS && link_token_format_ok($token)) { $all = links_read(); $isLink = link_find_by_token($all, $token) !== null || link_find_by_alias($all, $token) !== null; }
         if (!$isLink && strtolower($token) === 'admin' && !is_dir($dir . '/' . $token)) sign_in_redirect();
         $mayLook = !gallery_is_closed() || is_revealed() || is_admin_browser() || link_viewer() !== null;   // (a closed gallery doesn't tell a stranger which folders exist)
         if (!$isLink && $mayLook && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]))) {
@@ -4900,7 +4993,10 @@ function run_link_route($dir) {
     if (!is_https_request() && !is_local_request()) { render_https_required_page(); return; }
     if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(200); return; }   // the admin's check that the tidy address works: not a guess, and not a 404, which a browser would log in its console on every look at the Share tab
     $ip = client_ip();
-    $link = link_token_format_ok($token) ? link_find_by_token(links_read(), $token) : null;
+    $allLinks = links_read();
+    $link = link_token_format_ok($token) ? link_find_by_token($allLinks, $token) : null;
+    $viaAlias = null;   // (an old address the owner kept working: it sends people on to the link's present one)
+    if ($link === null && link_token_format_ok($token) && ($hit = link_find_by_alias($allLinks, $token)) !== null) [$link, $viaAlias] = $hit;
     // The owner, signed in, just goes where the link goes: nothing is counted or logged, no cookie is set, and the throttle
     // (which is for guessing) doesn't apply.
     if ($link !== null && is_admin_browser()) {
@@ -4915,10 +5011,18 @@ function run_link_route($dir) {
         echo 'Too many tries. Try again in a moment.';
         return;
     }
+    if ($link !== null && $viaAlias !== null && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET' && link_state($link) === 'active') {
+        // (a temporary redirect, never a permanent one: it must stop the moment the owner removes the old address; and the same form the person used, short or long)
+        link_alias_used($link['id'], $viaAlias);
+        link_note_address($link, 'via', $viaAlias);
+        header('Cache-Control: no-store');
+        header('Location: ' . link_urls($link)[preg_match('/[?&]link=/', $_SERVER['REQUEST_URI'] ?? '') === 1 ? 'long' : 'short'], true, 302);
+        return;
+    }
     if ($link === null) {
         // An address from before a link was given a new one: not a guess, so not held against the visitor, but noted in that link's log.
         $oldOwner = link_token_format_ok($token) ? link_find_by_old_token(links_read(), $token) : null;
-        if ($oldOwner !== null) { link_note_blocked($oldOwner, 'replaced'); render_link_invalid_page(); return; }
+        if ($oldOwner !== null) { link_note_blocked($oldOwner, 'replaced'); link_note_address($oldOwner, 'tried', link_old_name($oldOwner, $token)); render_link_invalid_page(); return; }
         login_throttle_record_failure($dir, 'link', $ip);
         render_link_invalid_page();
         return;
@@ -7708,7 +7812,7 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
     $radius = $itemsHere['mapRadius'] ?? null;
 ?>
     <?php if (!ENABLE_MAP): ?>
-      <p class="muted" style="margin-top:0;">The map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="return adminGoTo('site');">Settings</a> first; then each folder can show its own map.</p>
+      <p class="muted" style="margin-top:0;">The map is switched off for the whole gallery. Turn it on in <a href="#site" onclick="return adminGoTo('site', 'setting-ENABLE_MAP');">Settings</a> first; then each folder can show its own map.</p>
     <?php else: ?>
       <form method="post" class="instant-form map-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
@@ -8320,27 +8424,38 @@ function link_input_from_post($now, $existing, $dir, $files) {
     return [[
         'label' => $label, 'note' => $note, 'titleMode' => $titleMode, 'titleText' => $titleText, 'picture' => $picture, 'pictureSeed' => $pictureSeed, 'pictureFile' => $pictureFile, 'maxOpens' => $maxOpens,
         'startsAt' => $startsAt, 'endsAt' => $endsAt, 'locations' => $locations, 'headsUp' => $headsUp,
-        'scope' => $scope, 'only' => $only, 'openIn' => $openIn, 'downloads' => $downloads, 'zip' => $zip, '_index' => $index, '_address' => $address,
+        'scope' => $scope, 'only' => $only, 'openIn' => $openIn, 'downloads' => $downloads, 'zip' => $zip, '_index' => $index, '_address' => $address, '_keep' => ($_POST['keep_old'] ?? '') === '1',
     ], $errors];
 }
 
-/** Gives a link record its address: a custom name, or ('' ) a fresh random token. The address it had goes to the list of replaced
- *  ones (so it is noted in the log as such and stops working); $d is the links file's data, to refuse a name another link took in the meantime. */
-function link_apply_address(&$rec, $address, $d = null) {
-    if ($address === null) return true;
+/** Gives a link record its address: a custom name, or ('') a fresh random token. The address it had goes to the list of replaced
+ *  ones (so it is noted in the log as such and stops working), or, with $keep, to the ones kept working (they send people on to the
+ *  new address); $d is the links file's data, to refuse a name another link took in the meantime. Returns '' or the reason it
+ *  couldn't be done. */
+function link_apply_address(&$rec, $address, $d = null, $keep = false) {
+    if ($address === null) return '';
     if ($address !== '' && $d !== null) {
         foreach ((array) ($d['links'] ?? []) as $other) {
             if (!is_array($other) || ($other['id'] ?? '') === ($rec['id'] ?? '')) continue;
-            foreach (array_merge([(string) ($other['token'] ?? '')], array_map('strval', (array) ($other['oldTokens'] ?? []))) as $t) if ($t !== '' && strtolower($t) === $address) return false;
+            foreach (link_all_addresses($other) as $t) if (strtolower($t) === $address) return LINK_ADDRESS_TAKEN;
         }
     }
-    if (($rec['token'] ?? '') !== '' && empty($rec['_new'])) {
+    $aliases = array_values(array_filter((array) ($rec['aliases'] ?? []), 'is_array'));
+    // (a name this link already keeps working becomes its address: it stops being a kept one)
+    if ($address !== '') $aliases = array_values(array_filter($aliases, function ($a) use ($address) { return strtolower((string) ($a['name'] ?? '')) !== $address; }));
+    $hadOne = ($rec['token'] ?? '') !== '' && empty($rec['_new']);
+    if ($hadOne && $keep) {
+        if (count($aliases) >= LINK_ALIASES_MAX) return 'This link already has ' . LINK_ALIASES_MAX . ' old addresses working. Pause or kill one first (Settings, "Also works at").';
+        $aliases[] = ['name' => $rec['token'], 'custom' => !empty($rec['custom']), 'added' => time(), 'hits' => 0, 'last' => 0];
+        if (empty($rec['aliasSince'])) $rec['aliasSince'] = time();
+    } elseif ($hadOne) {
         $old = (array) ($rec['oldTokens'] ?? []); $old[] = $rec['token'];
-        $rec['oldTokens'] = array_slice($old, -5);
+        $rec['oldTokens'] = array_values(array_unique($old));   // (replaced addresses are all kept: that is what stops another link taking the name)
     }
+    $rec['aliases'] = $aliases;
     $rec['token'] = $address === '' ? link_new_token() : $address;
     $rec['custom'] = $address !== '';
-    return true;
+    return '';
 }
 
 function link_apply_fields(&$rec, $f) {
@@ -8393,18 +8508,28 @@ function links_admin_action($action, $dir, $files) {
         $taken = false;
         $GLOBALS['__data_write_failed'] = false;
         links_update(function (&$d) use (&$rec, $f, &$taken) {
-            if (!link_apply_address($rec, $f['_address'], $d)) { $taken = true; return; }
+            if (($why = link_apply_address($rec, $f['_address'], $d)) !== '') { $taken = $why; return; }
             unset($rec['_new']);
             $d['links'][$rec['id']] = $rec; foreach ($f['_index'] as $fid => $rel) $d['folderIndex'][$fid] = $rel;
         });
-        if ($taken) $bad('Another link has (or had) that address: pick another.');
+        if ($taken !== false) $bad($taken);
         $wrote();
         admin_json_exit(['ok' => true, 'id' => $rec['id'], 'text' => 'Link made.', 'urls' => link_urls($rec)]);
     }
     $problem = null; $text = 'Saved.';
     $saveFields = null; $saveErrors = [];
     if ($action === 'link_save') [$saveFields, $saveErrors] = link_input_from_post($now, ($links0 = links_read()['links'][$id] ?? null) === null ? null : $links0, $dir, $files);
-    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text, $saveFields, $saveErrors) {
+    $restoreName = ''; $restoreWhy = ''; $killName = ''; $killUse = [0, 0, 0]; $killTried = [0, 0, 0];
+    if ($action === 'link_alias_resume') {
+        $restoreName = (string) ($_POST['alias'] ?? '');
+        if (link_address_is_custom($restoreName)) $restoreWhy = link_custom_name_problem(strtolower($restoreName), $dir, $id);   // (a folder may have taken the name since)
+    }
+    if ($action === 'link_alias_kill') {   // (what the log says about it now, for the line that is left behind)
+        $killName = (string) ($_POST['alias'] ?? '');
+        $killLog = link_log_read($id);
+        $killUse = link_address_log_stats($killLog, 'via', $killName); $killTried = link_address_log_stats($killLog, 'tried', $killName);
+    }
+    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text, $saveFields, $saveErrors, $restoreName, $restoreWhy, $killName, $killUse, $killTried) {
         $l = $d['links'][$id] ?? null;
         if (!is_array($l)) { $problem = 'That link no longer exists.'; return; }
         $state = link_state($l, $now);
@@ -8412,7 +8537,7 @@ function links_admin_action($action, $dir, $files) {
         if ($action === 'link_save') {
             if ($state === 'revoked') { $problem = 'A revoked link can\'t be changed.'; return; }
             if ($saveErrors) { $problem = implode(' ', array_unique($saveErrors)); return; }
-            if (!link_apply_address($d['links'][$id], $saveFields['_address'], $d)) { $problem = 'Another link has (or had) that address: pick another.'; return; }
+            if (($why = link_apply_address($d['links'][$id], $saveFields['_address'], $d, !empty($saveFields['_keep']))) !== '') { $problem = $why; return; }
             link_apply_fields($d['links'][$id], $saveFields);
             foreach ($saveFields['_index'] as $fid => $rel) $d['folderIndex'][$fid] = $rel;
             return;
@@ -8447,9 +8572,75 @@ function links_admin_action($action, $dir, $files) {
         }
         if ($action === 'link_replace') {
             if ($state === 'revoked') { $problem = 'A revoked link can\'t be given a new address.'; return; }
+            // (this is the "it leaked" button: addresses kept working go the same way as the current one)
             $old = (array) ($d['links'][$id]['oldTokens'] ?? []); $old[] = $l['token'];
-            $d['links'][$id]['oldTokens'] = array_slice($old, -5);
-            $d['links'][$id]['token'] = link_new_token(); $d['links'][$id]['custom'] = false; $text = 'New address ready. The old one no longer works.';
+            $kept = 0;
+            $stats = (array) ($l['aliasStats'] ?? []);
+            foreach ((array) ($l['aliases'] ?? []) as $a) if (is_array($a) && ($a['name'] ?? '') !== '') { $old[] = $a['name']; $kept++; $stats[$a['name']] = ['hits' => (int) ($a['hits'] ?? 0), 'last' => (int) ($a['last'] ?? 0)]; }
+            $d['links'][$id]['oldTokens'] = array_values(array_unique($old));
+            $d['links'][$id]['aliasStats'] = $stats;
+            $d['links'][$id]['aliases'] = [];
+            $d['links'][$id]['token'] = link_new_token(); $d['links'][$id]['custom'] = false;
+            $text = $kept > 0 ? 'New address ready. The old one, and the ' . ($kept === 1 ? 'one' : $kept) . ' you kept working, are paused.' : 'New address ready. The old one no longer works.';
+            return;
+        }
+        if ($action === 'link_alias_resume') {
+            if ($state === 'revoked') { $problem = 'A revoked link can\'t be changed.'; return; }
+            if ($restoreWhy !== '') { $problem = $restoreWhy; return; }
+            $old = array_values(array_map('strval', (array) ($l['oldTokens'] ?? [])));
+            if (!in_array($restoreName, $old, true)) { $problem = 'That address isn\'t paused.'; return; }
+            if (strtolower($restoreName) === strtolower((string) ($l['token'] ?? ''))) { $problem = 'That is the link\'s own address.'; return; }
+            foreach ((array) ($d['links'] ?? []) as $other) {
+                if (!is_array($other) || ($other['id'] ?? '') === $id) continue;
+                foreach (link_all_addresses($other) as $t) if (strtolower($t) === strtolower($restoreName)) { $problem = LINK_ADDRESS_TAKEN; return; }
+            }
+            $aliases = array_values(array_filter((array) ($l['aliases'] ?? []), 'is_array'));
+            if (count($aliases) >= LINK_ALIASES_MAX) { $problem = 'This link already has ' . LINK_ALIASES_MAX . ' old addresses working. Pause or kill one first (Settings, "Also works at").'; return; }
+            $stats = (array) ($l['aliasStats'] ?? []); $was = (array) ($stats[$restoreName] ?? []);
+            $aliases[] = ['name' => $restoreName, 'custom' => link_address_is_custom($restoreName), 'added' => $now, 'hits' => (int) ($was['hits'] ?? 0), 'last' => (int) ($was['last'] ?? 0)];
+            unset($stats[$restoreName]);
+            $d['links'][$id]['aliases'] = $aliases;
+            $d['links'][$id]['aliasStats'] = $stats;
+            $d['links'][$id]['oldTokens'] = array_values(array_filter($old, function ($t) use ($restoreName) { return $t !== $restoreName; }));
+            if (empty($l['aliasSince'])) $d['links'][$id]['aliasSince'] = $now;
+            $text = 'Resumed. It sends people on to the link\'s present address again.';
+            return;
+        }
+        if ($action === 'link_alias_pause') {
+            $name = (string) ($_POST['alias'] ?? ''); $left = []; $gone = null;
+            foreach ((array) ($l['aliases'] ?? []) as $a) {
+                if (is_array($a) && ($a['name'] ?? '') === $name) { $gone = $a; continue; }
+                if (is_array($a)) $left[] = $a;
+            }
+            if ($gone === null) { $problem = 'That address isn\'t working any more.'; return; }
+            $old = (array) ($l['oldTokens'] ?? []); $old[] = $name;
+            $stats = (array) ($l['aliasStats'] ?? []); $stats[$name] = ['hits' => (int) ($gone['hits'] ?? 0), 'last' => (int) ($gone['last'] ?? 0)];   // (kept, so Resume gives them back)
+            $d['links'][$id]['oldTokens'] = array_values(array_unique($old));
+            $d['links'][$id]['aliasStats'] = $stats;
+            $d['links'][$id]['aliases'] = $left;
+            $text = 'Paused. It shows the “not valid” page until you resume it.';
+            return;
+        }
+        if ($action === 'link_alias_kill') {
+            $name = $killName; $custom = link_address_is_custom($name); $hits = 0; $last = 0; $found = false; $left = [];
+            foreach ((array) ($l['aliases'] ?? []) as $a) {
+                if (is_array($a) && ($a['name'] ?? '') === $name) { $found = true; $hits = (int) ($a['hits'] ?? 0); $last = (int) ($a['last'] ?? 0); continue; }
+                if (is_array($a)) $left[] = $a;
+            }
+            $old = array_values(array_filter(array_map('strval', (array) ($l['oldTokens'] ?? [])), function ($t) use ($name, &$found) { if ($t === $name) { $found = true; return false; } return true; }));
+            $stats = (array) ($l['aliasStats'] ?? []);
+            if (isset($stats[$name])) { $hits = (int) ($stats[$name]['hits'] ?? 0); $last = (int) ($stats[$name]['last'] ?? 0); unset($stats[$name]); }
+            if (!$found) { $problem = 'That address isn\'t one of this link\'s old addresses.'; return; }
+            // (only the short label is kept, never the address itself: a killed address can't be brought back, and its name is free)
+            $killed = (array) ($l['killed'] ?? []);
+            $killed[] = ['label' => link_address_label($name, $custom), 'custom' => $custom, 'killedAt' => $now, 'hits' => $hits, 'ips' => (int) $killUse[1], 'tries' => (int) $killTried[0], 'last' => max($last, (int) $killUse[2])];
+            $d['links'][$id]['aliases'] = $left; $d['links'][$id]['oldTokens'] = $old; $d['links'][$id]['aliasStats'] = $stats; $d['links'][$id]['killed'] = $killed;
+            $text = $custom ? 'Killed. The name is free to use again.' : 'Killed.';
+            return;
+        }
+        if ($action === 'link_killed_clear') {
+            $d['links'][$id]['killed'] = [];
+            $text = 'Cleared.';
             return;
         }
         if ($action === 'link_extend') {
@@ -9045,7 +9236,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         $tail = !empty($l['custom']) ? $l['token'] : substr($l['token'], 0, 4) . '…' . substr($l['token'], -4);
         $title = ($l['titleMode'] ?? 'gallery') === 'neutral' ? 'A neutral title (“A shared gallery”)' : (($l['titleMode'] ?? '') === 'custom' ? '“' . $esc($l['titleText']) . '”' : 'The gallery\'s title');
         $heads = ['default' => 'The site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'][$l['headsUp'] ?? 'default'];
-        $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'address' => !empty($l['custom']) ? $l['token'] : '', 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'picture' => !empty($l['picture']), 'pictureSeed' => (string) ($l['pictureSeed'] ?? ''), 'pictureFile' => (string) ($l['pictureFile'] ?? ''), 'maxOpens' => (int) $l['maxOpens'],
+        $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'address' => !empty($l['custom']) ? $l['token'] : '', 'aliases' => count((array) ($l['aliases'] ?? [])), 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'picture' => !empty($l['picture']), 'pictureSeed' => (string) ($l['pictureSeed'] ?? ''), 'pictureFile' => (string) ($l['pictureFile'] ?? ''), 'maxOpens' => (int) $l['maxOpens'],
             'startsAt' => (int) $l['startsAt'], 'endsAt' => (int) $l['endsAt'], 'locations' => $l['locations'], 'headsUp' => $l['headsUp'], 'state' => $state,
             'scopeType' => $l['scope']['type'] ?? 'all', 'only' => !empty($l['only']), 'scopeFolders' => $report['paths']['scope'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
             'downloads' => $l['downloads']['mode'] ?? 'off', 'downloadsFolders' => $report['paths']['downloads'], 'zip' => $l['zip']['mode'] ?? 'off', 'zipFolders' => $report['paths']['zip']], JSON_HEX_TAG | JSON_HEX_AMP));
@@ -9074,12 +9265,25 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
             <?php endif; ?>
             <details class="sl-settings"><summary>Settings</summary>
             <dl class="sl-facts">
+              <dt>Address</dt><dd><?php if (!empty($l['custom'])): ?><code>…/<?= $esc($l['token']) ?></code> <span class="muted">a name of your own</span><?php else: ?>a random code, ending <code>…<?= $esc(substr((string) $l['token'], -4)) ?></code><?php endif; ?></dd>
               <dt>What they can see</dt><dd><?= link_scope_text_html($l, $report) ?></dd>
               <?php if (($l['openIn'] ?? '') !== '' && ($l['scope']['type'] ?? '') !== 'photos'): ?><dt>Opens in</dt><dd><?= $report['paths']['openIn'] !== '' ? $esc(link_folder_label($dir, $report['paths']['openIn'])) : '<span class="sl-bad">a folder that can\'t be found (it opens the front page)</span>' ?></dd><?php endif; ?>
               <?php if (in_array($l['scope']['type'] ?? 'all', ['folders', 'photos'], true)): ?><dt>The rest of the gallery</dt><dd><?= link_shows_only_its_own($l) ? 'Not listed: they see only what the link covers. A tidy view, not a lock: a public photo can still be opened by anyone who knows its address.' : 'Listed too: they also see everything that is already public.' ?></dd><?php endif; ?>
               <dt>Original downloads</dt><dd><?= link_capability_text_html($l, 'downloads', $report, $map, $index, $dir, $rootFid) ?></dd>
               <dt>ZIP of a folder</dt><dd><?= link_capability_text_html($l, 'zip', $report, $map, $index, $dir, $rootFid) ?></dd>
               <dt>Photo locations</dt><dd><?= ($l['locations'] ?? 'public') === 'all' ? 'All saved locations' : 'As the public sees them' ?></dd>
+              <?php $kind = function ($name) { return link_address_is_custom($name) ? '1' : '0'; };
+              if (!empty($l['aliases'])): ?><dt>Also works at</dt><dd>
+                <?php foreach ((array) $l['aliases'] as $a): if (!is_array($a)) continue; $nIps = link_address_log_stats($report['log'], 'via', $a['name'])[1]; $tr = link_address_log_stats($report['log'], 'tried', $a['name']); ?><div class="sl-alias"><div class="sl-aliasinfo"><code>…/<?= $esc(link_address_label($a['name'], !empty($a['custom']))) ?></code> <span class="muted">sent <?= (int) ($a['hits'] ?? 0) ?> visit<?= (int) ($a['hits'] ?? 0) === 1 ? '' : 's' ?> here from <?= $nIps ?> IP<?= $nIps === 1 ? '' : 's' ?><?= (int) ($a['last'] ?? 0) > 0 ? ', last ' . link_time_html($a['last']) : '' ?><?= $tr[0] > 0 ? ' &middot; tried ' . $tr[0] . ' time' . ($tr[0] === 1 ? '' : 's') . ' while paused' : '' ?></span></div><div class="sl-aliasacts"><?php if ($state !== 'revoked'): ?><button type="button" class="secondary sl-abtn" data-sl="aliaspause" data-alias="<?= $esc($a['name']) ?>">Pause</button><?php endif; ?><button type="button" class="secondary sl-abtn sl-kill" data-sl="aliaskill" data-alias="<?= $esc($a['name']) ?>" data-custom="<?= $kind($a['name']) ?>">Kill</button></div></div><?php endforeach; ?>
+                <span class="muted">Each one sends people on to the link's present address.</span></dd><?php endif; ?>
+              <?php $aliasNames = array_map(function ($a) { return is_array($a) ? (string) ($a['name'] ?? '') : ''; }, (array) ($l['aliases'] ?? []));
+              $paused = array_values(array_filter(array_unique(array_map('strval', (array) ($l['oldTokens'] ?? []))), function ($t) use ($l, $aliasNames) { return $t !== '' && strtolower($t) !== strtolower((string) $l['token']) && !in_array($t, $aliasNames, true); }));
+              if ($paused): ?><dt>Paused addresses</dt><dd>
+                <?php foreach ($paused as $rt): $tr = link_address_log_stats($report['log'], 'tried', $rt); ?><div class="sl-alias"><div class="sl-aliasinfo"><code>…/<?= $esc(link_address_label($rt, link_address_is_custom($rt))) ?></code><?php if ($tr[0] > 0): ?> <span class="muted">tried <?= $tr[0] ?> time<?= $tr[0] === 1 ? '' : 's' ?> from <?= $tr[1] ?> IP<?= $tr[1] === 1 ? '' : 's' ?>, last <?= link_time_html($tr[2]) ?></span><?php endif; ?></div><div class="sl-aliasacts"><?php if ($state !== 'revoked'): ?><button type="button" class="secondary sl-abtn" data-sl="aliasresume" data-alias="<?= $esc($rt) ?>">Resume</button><?php endif; ?><button type="button" class="secondary sl-abtn sl-kill" data-sl="aliaskill" data-alias="<?= $esc($rt) ?>" data-custom="<?= $kind($rt) ?>">Kill</button></div></div><?php endforeach; ?>
+                <span class="muted">These show the “not valid” page and stay reserved to this link. <em>Resume</em> sends people on to its present address again; <em>Kill</em> ends one for good and frees the name.</span></dd><?php endif; ?>
+              <?php if (!empty($l['killed'])): ?><dt>Killed addresses</dt><dd>
+                <?php foreach ((array) $l['killed'] as $k): if (!is_array($k)) continue; ?><div class="sl-alias"><div class="sl-aliasinfo"><code>…/<?= $esc((string) ($k['label'] ?? '')) ?></code> <span class="muted">killed <?= link_time_html((int) ($k['killedAt'] ?? 0)) ?>: sent <?= (int) ($k['hits'] ?? 0) ?> visit<?= (int) ($k['hits'] ?? 0) === 1 ? '' : 's' ?> from <?= (int) ($k['ips'] ?? 0) ?> IP<?= (int) ($k['ips'] ?? 0) === 1 ? '' : 's' ?>, tried <?= (int) ($k['tries'] ?? 0) ?> time<?= (int) ($k['tries'] ?? 0) === 1 ? '' : 's' ?> while paused</span></div></div><?php endforeach; ?>
+                <div class="sl-aliasacts"><button type="button" class="secondary sl-abtn" data-sl="killedclear">Clear</button></div></dd><?php endif; ?>
               <dt>Starts</dt><dd><?= (int) $l['startsAt'] > 0 ? link_time_html($l['startsAt']) : 'Immediately' ?></dd>
               <dt>Ends</dt><dd><?= (int) $l['endsAt'] > 0 ? link_time_html($l['endsAt']) : 'Never' ?></dd>
               <dt>Heads-up header</dt><dd><?= $esc($heads) ?></dd>
@@ -9113,7 +9317,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
     <section class="panel sl" id="sl-root" data-csrf="<?= $esc($csrfToken) ?>" data-probe="<?= $esc($loc . LINK_PROBE_TOKEN) ?>" data-nofolders="<?= AUTO_GROUP_BY_FOLDER ? '' : '1' ?>">
       <h2 class="section-title">Share</h2>
       <?php if (!ENABLE_SHARE_LINKS): ?>
-        <div class="sl-off">Share links are switched off, so none of these work. Turn on <em>Allow share links</em> in <a href="#site" onclick="return adminGoTo('site');">Settings</a>.</div>
+        <div class="sl-off">Share links are switched off, so none of these work. Turn on <a href="#site" onclick="return adminGoTo('site', 'setting-ENABLE_SHARE_LINKS');"><em>Allow share links</em> in Settings</a>.</div>
       <?php endif; ?>
       <?php if (($previewOpen = preview_cookie_link()) !== null): ?>
         <div class="sl-prevnote"><?= ui_icon('eye') ?><div><strong>A preview of &ldquo;<?= $esc($previewOpen['label']) ?>&rdquo; is open in this browser.</strong> The gallery's own pages here show that link's view until you end it (the admin pages stay yours). <a href="?exitpreview">End preview</a></div></div>
@@ -9135,6 +9339,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         <div class="sl-f" data-addr><span class="sl-k">Address <span class="muted">(optional)</span></span>
           <div class="sl-addr"><span class="sl-addrbase" title="<?= $esc($loc) ?>">…<?= $esc($loc) ?></span><input type="text" name="address" maxlength="40" placeholder="a random one is made" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Address"><button type="button" class="secondary" data-sl="addrname">Use the name</button></div>
           <span class="sl-h" data-addrhint>Left empty, the address is a random code that can't be guessed. “Use the name” turns the name above into one.</span>
+          <label class="sl-keep" data-keeprow hidden><input type="checkbox" name="keep_old" value="1"> Keep the old address working too <span class="sl-h">(it sends people on to the new one)</span></label>
         </div>
         <label class="sl-f"><span class="sl-k">Note on the opening page <span class="muted">(optional)</span></span><textarea name="note" rows="2" maxlength="200" placeholder="Hi Carol, here are the Rome photos."></textarea></label>
         <div class="sl-f"><span class="sl-k">Title on the opening page and in message previews</span>
@@ -9150,9 +9355,9 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
           </div></div>
         <div class="sl-f"><span class="sl-k">What they can see</span>
           <div class="sl-radios" role="radiogroup" aria-label="What they can see">
-            <label class="sl-radio"><input type="radio" name="scope_type" value="all" checked><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
+            <label class="sl-radio"><input type="radio" name="scope_type" value="all"><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
             <label class="sl-radio"><input type="radio" name="scope_type" value="folders"<?= AUTO_GROUP_BY_FOLDER ? '' : ' disabled' ?>><span><strong>Only some folders</strong><small>Each folder includes everything inside it. They are never told other private folders exist.<?= AUTO_GROUP_BY_FOLDER ? '' : ' (Turn on “Show subfolders” in Settings first.)' ?></small></span></label>
-            <label class="sl-radio"><input type="radio" name="scope_type" value="public"><span><strong>Just the public gallery</strong><small>Nothing private. They see what any visitor sees, and the log shows who looked at what. Useful for finding out who opens a link you post or send.</small></span></label>
+            <label class="sl-radio"><input type="radio" name="scope_type" value="public" checked><span><strong>Just the public gallery</strong><small>Nothing private. They see what any visitor sees, and the log shows who looked at what. Useful for finding out who opens a link you post or send.</small></span></label>
             <label class="sl-radio" data-photos-only><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note">Only the photos you pick, wherever they are. Anything already public stays visible too, unless you tick the box below.</small></span></label>
           </div>
           <div class="sl-chips" data-chips="scope" hidden></div>
@@ -9207,7 +9412,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
               <?php if (gallery_is_closed()): ?><dt>Right now</dt><dd><strong>The gallery is closed:</strong> nobody opens it without a link or a sign-in, so nothing new is logged. The log so far stays.</dd><?php endif; ?>
               <dt>Who is logged</dt><dd>Everyone who opens the gallery's plain address in a browser. Not you, not people signed in with the private-view password, not people using a share link (their link has its own log), and not link-preview bots.</dd>
               <dt>Kept for</dt><dd><?= LOG_PUBLIC_DAYS > 0 ? (int) LOG_PUBLIC_DAYS . ' days, then removed by itself' : 'Until you trim it' ?></dd>
-              <dt>Turn it on or off</dt><dd><a href="#site" onclick="return adminGoTo('site');">Settings</a> &rarr; Share links &rarr; Log visitors to the public address</dd>
+              <dt>Turn it on or off</dt><dd><a href="#site" onclick="return adminGoTo('site', 'setting-LOG_PUBLIC_VISITS');">Settings &rarr; Share links &rarr; Log visitors to the public address</a></dd>
             </dl>
             </details>
             <div class="sl-act" data-act="link"><p class="muted sl-none">Loading…</p></div>
@@ -9272,6 +9477,7 @@ function link_log_trim_data(&$log, $cutoff) {
     $log['events'] = $keep;
     foreach ((array) ($log['visitors'] ?? []) as $k => $v) { if ((int) ($v['last'] ?? 0) < $cutoff) { unset($log['visitors'][$k]); $n['visitors']++; $log['folded'] = (int) ($log['folded'] ?? 0) + 1; } }
     foreach ((array) ($log['blocked'] ?? []) as $k => $b) { if ((int) ($b['last'] ?? 0) < $cutoff) { unset($log['blocked'][$k]); $n['blocked']++; } }
+    foreach (['via', 'tried'] as $kind) foreach ((array) ($log[$kind] ?? []) as $k => $e) { if ((int) ($e['last'] ?? 0) < $cutoff) unset($log[$kind][$k]); }
     return $n;
 }
 function link_items_trim_data(&$it, $cutoff) {
@@ -9752,7 +9958,7 @@ function render_link_scope($mode, $l, $ip, $tab, $flt, $dir, $files) {
                 $opens += (int) $v['opens']; $uas[$v['ua']] = true; if (($v['country'] ?? '') !== '') $country = $v['country'];
                 $first = $first ? min($first, (int) $v['first']) : (int) $v['first']; $last = max($last, (int) $v['last']);
             }
-            $linksUsed .= '<span class="sl-lchip' . (link_is_public_log($x) ? ' pub' : '') . '">' . $esc($x['label']) . ' &middot; ' . $opens . ' open' . ($opens === 1 ? '' : 's') . '</span>';
+            $linksUsed .= '<button type="button" class="sl-lchip sl-golink' . (link_is_public_log($x) ? ' pub' : '') . '" data-golink="' . $esc($x['id']) . '">' . $esc($x['label']) . ' &middot; ' . $opens . ' open' . ($opens === 1 ? '' : 's') . '</button>';
         }
         $seen = $opened = $down = 0; foreach ($m as $a) { if ($a['sf']) $seen++; if ($a['on'] || $a['pn']) $opened++; if ($a['dn']) $down++; }
         $out .= '<div class="sl-ip-head"><span class="sl-ipbig">' . $esc($ip) . '</span> <span class="muted">' . $esc(($country !== '' ? $country . ' · ' : '') . implode(', ', array_keys($uas))) . '</span></div>'
@@ -9767,9 +9973,11 @@ function render_link_scope($mode, $l, $ip, $tab, $flt, $dir, $files) {
         $log = link_log_read($l['id']); $vis = $log['visitors'];
         uasort($vis, function ($a, $b) { return (int) $b['last'] <=> (int) $a['last']; });
         if (!$vis) return $out . '<p class="muted sl-none">' . (link_is_public_log($l) ? 'Nobody has been logged yet.' : 'No one has opened this link yet.') . '</p></div>';
-        $out .= '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>First seen</th><th>Last seen</th><th>' . (link_is_public_log($l) ? 'Visits' : 'Opens') . '</th><th>Viewed</th></tr></thead><tbody>';
+        $manyAddr = link_has_many_addresses($l, $log);
+        $out .= '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th>' . ($manyAddr ? '<th class="sl-viacol">Came in on</th>' : '') . '<th>First seen</th><th>Last seen</th><th>' . (link_is_public_log($l) ? 'Visits' : 'Opens') . '</th><th>Viewed</th></tr></thead><tbody>';
         foreach ($vis as $vid => $v) {
-            $out .= '<tr><td><button type="button" class="linklike sl-ipt" data-ip="' . $esc($v['ip']) . '">' . $esc($v['ip']) . '</button></td><td>' . link_place_html($v['country'] ?? '') . '</td><td>' . $esc($v['ua']) . '</td><td>' . link_time_html($v['first']) . '</td><td>' . link_time_html($v['last']) . '</td><td>' . (int) $v['opens'] . '</td><td><button type="button" class="linklike sl-viewed" data-ip="' . $esc($v['ip']) . '" data-go="media">' . (int) $v['views'] . ' views &rsaquo;</button></td></tr>';
+            $via = $manyAddr ? link_visitor_via($l, $log, $vid, $v) : '';
+            $out .= '<tr><td><button type="button" class="linklike sl-ipt" data-ip="' . $esc($v['ip']) . '">' . $esc($v['ip']) . '</button>' . ($via !== '' ? '<span class="sl-via">via: ' . $esc($via) . '</span>' : '') . '</td><td>' . link_place_html($v['country'] ?? '') . '</td><td>' . $esc($v['ua']) . '</td>' . ($manyAddr ? '<td class="sl-viacol">' . ($via !== '' ? $esc($via) : '—') . '</td>' : '') . '<td>' . link_time_html($v['first']) . '</td><td>' . link_time_html($v['last']) . '</td><td>' . (int) $v['opens'] . '</td><td><button type="button" class="linklike sl-viewed" data-ip="' . $esc($v['ip']) . '" data-go="media">' . (int) $v['views'] . ' views &rsaquo;</button></td></tr>';
         }
         $out .= '</tbody></table></div>';
         if ((int) $log['folded'] > 0) $out .= '<p class="muted">+ ' . (int) $log['folded'] . ' earlier visitor' . ((int) $log['folded'] === 1 ? '' : 's') . ' (the log keeps the latest ' . number_format(LINK_LOG_VISITORS) . ' visitors; download the log to keep the rest, and trim it whenever you like).</p>';
@@ -9858,15 +10066,15 @@ function render_link_ips_list() {
         if (!is_array($l) || !isset($l['id'])) continue;
         [$log, $items] = link_activity($l['id']);
         $viewsBy = [];
-        foreach ($log['visitors'] as $vid => $v) { $a = &$ips[$v['ip']]; $a = $a ?? ['country' => '', 'ua' => [], 'links' => [], 'views' => 0, 'last' => 0, 'blocked' => 0]; $a['country'] = $v['country'] ?? $a['country']; $a['ua'][$v['ua']] = true; $a['links'][$l['label']] = link_is_public_log($l); $a['views'] += (int) $v['views']; $a['last'] = max($a['last'], (int) $v['last']); unset($a); }
-        foreach ($log['blocked'] as $b) { $a = &$ips[$b['ip']]; $a = $a ?? ['country' => '', 'ua' => [], 'links' => [], 'views' => 0, 'last' => 0, 'blocked' => 0]; $a['ua'][$b['ua']] = true; $a['links'][$l['label']] = link_is_public_log($l); $a['blocked'] += (int) $b['tries']; $a['last'] = max($a['last'], (int) $b['last']); unset($a); }
+        foreach ($log['visitors'] as $vid => $v) { $a = &$ips[$v['ip']]; $a = $a ?? ['country' => '', 'ua' => [], 'links' => [], 'views' => 0, 'last' => 0, 'blocked' => 0]; $a['country'] = $v['country'] ?? $a['country']; $a['ua'][$v['ua']] = true; $a['links'][$l['id']] = [$l['label'], link_is_public_log($l)]; $a['views'] += (int) $v['views']; $a['last'] = max($a['last'], (int) $v['last']); unset($a); }
+        foreach ($log['blocked'] as $b) { $a = &$ips[$b['ip']]; $a = $a ?? ['country' => '', 'ua' => [], 'links' => [], 'views' => 0, 'last' => 0, 'blocked' => 0]; $a['ua'][$b['ua']] = true; $a['links'][$l['id']] = [$l['label'], link_is_public_log($l)]; $a['blocked'] += (int) $b['tries']; $a['last'] = max($a['last'], (int) $b['last']); unset($a); }
     }
     if (!$ips) return '<p class="muted sl-none">No address has opened a link' . (LOG_PUBLIC_VISITS ? ' or been logged' : '') . ' yet.</p>';
     uasort($ips, function ($a, $b) { return $b['last'] <=> $a['last']; });
     $out = '<div class="sl-scroll"><table class="sl-table sl-cards"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Links used</th><th>Views</th><th>Last seen</th></tr></thead><tbody>';
     foreach ($ips as $ip => $a) {
-        $chips = ''; foreach ($a['links'] as $name => $isPub) $chips .= '<span class="sl-lchip' . ($isPub ? ' pub' : '') . '">' . $esc($name) . '</span>';
-        $out .= '<tr><td data-label="IP address"><button type="button" class="linklike sl-ipt" data-ip="' . $esc($ip) . '">' . $esc($ip) . '</button></td><td data-label="Where">' . link_place_html($a['country']) . '</td><td data-label="Browser">' . $esc(implode(', ', array_keys($a['ua']))) . '</td><td data-label="Links used">' . $chips . ($a['blocked'] > 0 ? ' <span class="sl-why">blocked ×' . (int) $a['blocked'] . '</span>' : '') . '</td><td data-label="Views">' . (int) $a['views'] . '</td><td data-label="Last seen">' . link_time_html($a['last']) . '</td></tr>';
+        $chips = ''; foreach ($a['links'] as $lid => [$name, $isPub]) $chips .= '<button type="button" class="sl-lchip sl-golink' . ($isPub ? ' pub' : '') . '" data-golink="' . $esc($lid) . '">' . $esc($name) . '</button>';
+        $out .= '<tr><td data-label="IP address"><button type="button" class="linklike sl-ipt" data-ip="' . $esc($ip) . '">' . $esc($ip) . '</button></td><td data-label="Where">' . link_place_html($a['country']) . '</td><td data-label="Browser">' . $esc(implode(', ', array_keys($a['ua']))) . '</td><td data-label="Links used"><span class="sl-lchips">' . $chips . ($a['blocked'] > 0 ? '<span class="sl-why">blocked ×' . (int) $a['blocked'] . '</span>' : '') . '</span></td><td data-label="Views">' . (int) $a['views'] . '</td><td data-label="Last seen">' . link_time_html($a['last']) . '</td></tr>';
     }
     return $out . '</tbody></table></div><p class="note">Every address that has opened or tried any link' . (LOG_PUBLIC_VISITS ? ', or been logged on the public address' : '') . '. An address on two links is worth a look. Press one to see everything it opened.</p>';
 }
@@ -9942,11 +10150,11 @@ function link_export($which, $what, $ip, $data, $dir) {
     if (!$links) { http_response_code(404); header('Content-Type: text/plain; charset=UTF-8'); echo 'No such link.'; return; }
     if (!in_array($what, ['visitors', 'items', 'events'], true)) $what = 'items';
     $rows = [];
-    $head = ['visitors' => ['link', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views'], 'items' => ['link', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'link', 'ip', 'what', 'folder', 'file', 'count']][$what];
+    $head = ['visitors' => ['link', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on'], 'items' => ['link', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'link', 'ip', 'what', 'folder', 'file', 'count']][$what];
     $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
     foreach ($links as $l) {
         [$log, $items] = link_activity($l['id']);
-        if ($what === 'visitors') foreach ($log['visitors'] as $v) { if ($ip !== '' && $v['ip'] !== $ip) continue; $rows[] = [$l['label'], $v['ip'], $v['country'] ?? '', $v['ua'], $iso($v['first']), $iso($v['last']), $v['opens'], $v['views']]; }
+        if ($what === 'visitors') foreach ($log['visitors'] as $vid => $v) { if ($ip !== '' && $v['ip'] !== $ip) continue; $rows[] = [$l['label'], $v['ip'], $v['country'] ?? '', $v['ua'], $iso($v['first']), $iso($v['last']), $v['opens'], $v['views'], link_has_many_addresses($l, $log) ? link_visitor_via($l, $log, $vid, $v) : '']; }
         elseif ($what === 'items') foreach (link_item_rows($items) as [$vid, $rel, $t]) { $v = $log['visitors'][$vid] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $rows[] = [$l['label'], $v['ip'], $v['ua'], link_item_folder($rel), basename($rel), $iso($t['sf'] ?? 0), (int) ($t['on'] ?? 0), (int) ($t['pn'] ?? 0), (int) ($t['dn'] ?? 0), $iso(max((int) ($t['sl'] ?? 0), (int) ($t['ol'] ?? 0), (int) ($t['pl'] ?? 0), (int) ($t['dl'] ?? 0)))]; }
         else foreach ($log['events'] as $e) { $v = $log['visitors'][$e['v'] ?? ''] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $k = $e['k'] ?? ''; $f = $e['f'] ?? ($e['d'] ?? ''); $rows[] = [$iso($e['t']), $l['label'], $v['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : $k), ($k === 'scroll' || $k === 'folder' || $k === 'zip') ? $f : link_item_folder((string) $f), ($k === 'scroll' || $k === 'folder' || $k === 'zip') ? '' : basename((string) $f), $e['n'] ?? 1]; }
     }
@@ -10189,7 +10397,7 @@ function render_admin_site_settings($csrfToken) {
           <summary><span class="site-group-title"><?= $esc($group['title']) ?></span> <span class="muted"><?php $nShown = count(array_filter($group['items'], function ($i) { return empty($i['in']); })); echo $nShown; ?> setting<?= $nShown === 1 ? '' : 's' ?></span></summary>
           <?php foreach ($group['items'] as $d): if (!empty($d['in'])) continue; $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null; ?>
             <?php $reqOn = empty($d['requires']) || (defined($d['requires']) && constant($d['requires'])); ?>
-            <div class="site-row<?= !empty($d['requires']) ? ' sub-row' : '' ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn ? '' : ' hidden') : '' ?>>
+            <div class="site-row<?= !empty($d['requires']) ? ' sub-row' : '' ?>" id="setting-<?= $esc($name) ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn ? '' : ' hidden') : '' ?>>
               <div>
                 <div class="name"><?= $esc($d['label']) ?>
                   <?php if (isset($fromFile[$name])): ?><span class="src" title="This value comes from .gallery-config.php">your setting</span><?php endif; ?></div>
@@ -10477,6 +10685,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-chip button { background:none; border:0; color:var(--muted); cursor:pointer; font-size:1rem; line-height:1; padding:0 6px; }
   .sl-chip button:hover { color:#fff; }
   .sl-chips .sl-add { color:var(--accent); font-size:0.85rem; font-weight:600; padding:2px 4px; }
+  .sl-keep { display:block; margin-top:8px; font-size:0.9rem; }
+  .sl-keep input { margin-right:6px; }
+  .sl-alias { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin:0 0 8px; }
+  .sl-aliasinfo { flex:1 1 280px; min-width:0; overflow-wrap:anywhere; }
+  .sl-aliasacts { display:flex; flex-wrap:wrap; gap:8px; flex:none; }
+  .sl-abtn { height:36px; padding:0 14px; font-size:0.85rem; border:1px solid #3a3a42; white-space:nowrap; }
+  .sl-abtn.sl-kill { border-color:rgba(237,66,69,0.6); color:#ff8a8c; }
+  @media (max-width:640px) { .sl-alias { display:block; } .sl-aliasacts { margin-top:6px; } }
   .sl-addr { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .sl-addrbase { color:var(--muted); font-size:0.85rem; white-space:nowrap; }
   .sl-f .sl-addr input[type=text] { flex:1 1 150px; width:auto; min-width:0; max-width:260px; }
@@ -10558,6 +10774,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-lchip.pub { background:rgba(59,165,92,0.16); border-color:rgba(59,165,92,0.6); color:#b8e6c6; }
   .sl-fchip, .sl-lchip { display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 4px 0 10px; border-radius:999px; font-size:0.78rem; background:rgba(88,101,242,0.18); border:1px solid rgba(88,101,242,0.6); color:#c9ceff; }
   .sl-lchip { background:#26262a; border-color:#34343a; color:var(--text); padding:0 10px; margin:0 6px 4px 0; }
+  .sl-lchips { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; min-width:0; }
+  .sl-lchips .sl-lchip { margin:0; flex:0 1 auto; max-width:100%; height:auto; min-height:26px; padding-top:2px; padding-bottom:2px; text-align:left; overflow-wrap:anywhere; }
+  .sl-cards td > .sl-lchips { flex:1 1 0; }
+  button.sl-golink { font:inherit; font-size:0.78rem; cursor:pointer; }
+  button.sl-golink:hover { border-color:var(--accent); color:#fff; }
+  button.sl-golink:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .sl-via { display:none; font-size:0.74rem; color:var(--muted); margin-top:2px; overflow-wrap:anywhere; }
+  @media (max-width:640px) { .sl-viacol { display:none; } .sl-via { display:block; } }
   .sl-fx:hover { color:#fff; } .sl-pickphoto:hover img { border-color:#4a4a52; } .sl-pickphoto input:checked + img:hover { border-color:#6b77f0; }
   .sl-fx { background:none; border:0; color:#aab2ff; font-size:1.1rem; cursor:pointer; padding:0 6px; line-height:1; }
   .sl-grid { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
@@ -10780,11 +11004,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .lock-result:empty { display:none; }
   /* Links in the admin's running text: the teal of the sidebar link, not the browser's default blue. */
   .admin-main p a, .admin-main li a, .admin-main .help a, .admin-main .muted a { color:#aab2ff; border-radius:3px; transition:color .15s, background .15s, box-shadow .15s; }
-  .admin-main p a:hover, .admin-main li a:hover, .admin-main .help a:hover, .admin-main .muted a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
+  .admin-main p a:hover, .admin-main li a:hover, .admin-main dd a:hover, .admin-main td a:hover, .admin-main .hint a:hover, .admin-main .help a:hover, .admin-main .muted a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
   .admin-main .flash a, .admin-main .flash a:hover { color:inherit; }
   .admin-main .flash a:hover { background:rgba(255,255,255,0.14); box-shadow:0 0 0 3px rgba(255,255,255,0.14); }
   .subhead { scroll-margin-top:70px; }
   .site-group.flash-target { outline:2px solid var(--accent); outline-offset:3px; }
+  .site-row.flash-target { outline:2px solid var(--accent); outline-offset:3px; border-radius:6px; }
   .subhead.flash-target { outline:2px solid var(--accent); outline-offset:4px; border-radius:4px; }
   .media-panel.flash-target { outline:2px solid var(--accent); outline-offset:3px; }
   .note-text, .help.note-text, .site-row .help.note-text { color:#f5a623; }
@@ -11277,7 +11502,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     if (id) setTimeout(function () {
       var e = document.getElementById(id);
       if (!e) return;
+      if (e.hidden && e.closest) e = e.closest('details') || e;   // (a row hidden because the setting it needs is off: go to its group)
       if (e.tagName === 'DETAILS') e.open = true;
+      for (var up = e.parentElement; up; up = up.parentElement) if (up.tagName === 'DETAILS') up.open = true;   // (a setting inside a folded group opens the group)
       e.scrollIntoView({ behavior: 'smooth', block: 'start' });
       e.classList.add('flash-target');
       setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
@@ -12214,6 +12441,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (d && d.classList && d.classList.contains('sl-row') && d.open) { var a = d.querySelector('.sl-act'); if (a && !a._st) actLoad(a); mountPanels(); }
     }, true);
     box.addEventListener('click', function (e) {
+      var go = e.target.closest ? e.target.closest('[data-golink]') : null;
+      if (go) {   // a link's name in the log: the Links view, with that link opened (its Settings stay folded) and in sight
+        var linksTab = box.querySelector('.sl-viewswitch .sl-segbtn[data-view=links]'); if (linksTab && !linksTab.classList.contains('on')) linksTab.click();
+        var target = box.querySelector('details.sl-row[data-id="' + go.getAttribute('data-golink') + '"]');
+        if (target) {
+          target.open = true;
+          var tAct = target.querySelector('.sl-act');   // (a row that is showing one address's page goes back to the link's own log: what pressing the link's name means)
+          if (tAct && tAct._st && tAct._st.mode === 'ip') actLoad(tAct, null, { mode: 'link', id: target.getAttribute('data-id'), tab: null });
+          target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
+        return;
+      }
       var act = e.target.closest ? e.target.closest('.sl-act') : null;
       var vs = e.target.closest ? e.target.closest('[data-view]') : null;
       if (vs) {
@@ -12308,7 +12547,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     box.addEventListener('keydown', function (e) { if (e.key === 'Escape' && asking) { e.preventDefault(); asking(false); } });
     // ---- the form
     var DEFAULTS = { label: '', address: '', note: '', titleMode: 'gallery', titleText: '', picture: true, pictureSeed: '', pictureFile: '', maxOpens: 10, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default',
-      scopeType: 'all', only: false, scopeFolders: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
+      scopeType: 'public', only: false, scopeFolders: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
     function localValue(ts) {
       var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
       return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
@@ -12388,10 +12627,16 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function addrHint(form) {
       var inp = form.querySelector('[name=address]'), h = form.querySelector('[data-addrhint]'), v = inp.value, was = inp.getAttribute('data-was') || '', msg;
-      if (v === '') msg = was ? 'Saving with this empty gives the link a new random address; the old one stops working.' : 'Left empty, the address is a random code that can\'t be guessed. “Use the name” turns the name above into one.';
+      // (the choice to keep the old address working is offered only when an address that exists is being changed)
+      var row = form.querySelector('[data-keeprow]'), keepBox = form.querySelector('[name=keep_old]');
+      var wasHidden = row.hidden;
+      row.hidden = !(inp.getAttribute('data-editing') === '1' && v !== was);
+      if (row.hidden) keepBox.checked = false; else if (wasHidden) keepBox.checked = true;   // (ticked whenever it appears: the address that was sent out is meant to keep working)
+      var kept = keepBox.checked, ending = kept ? ' The old address keeps working and sends people on to the new one; anyone signed in through it is signed out.' : ' The old address is paused: it shows the “not valid” page (you can resume it from Settings), and anyone signed in through it is signed out.';
+      if (v === '') msg = was ? 'Saving with this empty gives the link a new random address.' + ending : 'Left empty, the address is a random code that can\'t be guessed. “Use the name” turns the name above into one.';
       else if (v.length < 4) msg = 'At least 4 letters, digits or hyphens.';
       else {
-        msg = (v.length < 12 ? 'A short name can be guessed by someone who tries. A random address can\'t be.' : 'Anyone who learns or guesses this name can open the link.') + (was !== v && was !== '' ? ' The old address stops working and anyone signed in through it is signed out.' : '');
+        msg = (v.length < 12 ? 'A short name can be guessed by someone who tries. A random address can\'t be.' : 'Anyone who learns or guesses this name can open the link.') + (was !== v && was !== '' ? ending : '');
       }
       h.textContent = msg;
     }
@@ -12404,7 +12649,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       form.querySelector('.sl-form-title').textContent = editing ? 'Edit link' : 'New share link';
       form.querySelector('.sl-save').textContent = editing ? 'Save' : 'Create link';
       form.querySelector('[name=label]').value = v.label; form.querySelector('[name=note]').value = v.note; form.querySelector('[name=title_text]').value = v.titleText;
-      var addrIn = form.querySelector('[name=address]'); addrIn.value = v.address || ''; addrIn.setAttribute('data-was', v.address || ''); addrHint(form);
+      var addrIn = form.querySelector('[name=address]'); addrIn.value = v.address || ''; addrIn.setAttribute('data-was', v.address || ''); addrIn.setAttribute('data-editing', editing ? '1' : ''); form.querySelector('[name=keep_old]').checked = false; addrHint(form);
       form.querySelector('[name=picture]').checked = !!v.picture;
       form.querySelector('[name=picture_seed]').value = v.pictureSeed || (editing ? '' : Math.random().toString(16).slice(2, 10).padEnd(8, '0')); form.querySelector('[name=picture_file]').value = v.pictureFile || '';
       form.querySelector('[data-coverrow]')._loaded = false;
@@ -12422,7 +12667,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var now = Math.floor(Date.now() / 1000), ends = radioValue(form, 'ends_pick'), opens = radioValue(form, 'opens_pick'), scope = radioValue(form, 'scope_type');
       return {
         action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
-        label: form.querySelector('[name=label]').value, address: form.querySelector('[name=address]').value, note: form.querySelector('[name=note]').value,
+        label: form.querySelector('[name=label]').value, address: form.querySelector('[name=address]').value, keep_old: form.querySelector('[name=keep_old]').checked && !form.querySelector('[data-keeprow]').hidden ? '1' : '0', note: form.querySelector('[name=note]').value,
         title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value, picture: form.querySelector('[name=picture]').checked ? '1' : '0', picture_seed: form.querySelector('[name=picture_seed]').value, picture_file: form.querySelector('[name=picture_file]').value,
         scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' ? st.scope : []), scope_photos: JSON.stringify(scope === 'photos' ? st.photos : []),
         only: (scope === 'folders' || scope === 'photos') && form.querySelector('[name=only]').checked ? '1' : '0',
@@ -12442,6 +12687,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     });
     box.addEventListener('change', function (e) {
       var form = e.target.closest ? e.target.closest('#sl-form') : null; if (!form) return;
+      if (e.target.name === 'keep_old') { addrHint(form); return; }
       if (e.target.name === 'title_mode' && !form.querySelector('[name=id]').value) form.querySelector('[name=picture]').checked = e.target.value === 'gallery';
       if (e.target.name === 'picture' || e.target.name === 'title_mode') { form.querySelector('[data-coverrow]')._loaded = false; }   // (a new link: the photo follows the title until you decide)
       if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'photos';   // (photos: on to start with; folders: off)
@@ -12561,6 +12807,16 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         return;
       }
       if (what === 'edit') { openForm(link); return; }
+      if (what === 'aliasresume') { act('link_alias_resume', row, { alias: b.getAttribute('data-alias') }); return; }
+      if (what === 'aliaspause') { act('link_alias_pause', row, { alias: b.getAttribute('data-alias') }); return; }
+      if (what === 'killedclear') { act('link_killed_clear', row); return; }
+      if (what === 'aliaskill') {
+        var gone = b.getAttribute('data-alias'), named = b.getAttribute('data-custom') === '1', shown = named ? gone : gone.slice(0, 4) + '…' + gone.slice(-4);
+        ask('Kill this old address?', '<p><strong>' + esc(shown) + '</strong> stops working for good and is forgotten: it cannot be brought back, and its visit totals are dropped (a one-line summary stays in Settings).</p>'
+          + (named ? '<p class="hint"><strong>The name is then free.</strong> Any of your links (or a folder) can use it, and anyone still holding this address would land on whatever uses the name next.</p>' : '<p class="hint">A random code is never used again.</p>')
+          + '<p class="hint">Not sure? Pause it instead: you can resume a paused address.</p>', 'Kill', true).then(function (yes) { if (yes) act('link_alias_kill', row, { alias: gone }); });
+        return;
+      }
       if (what === 'preview') { window.open('?admin&linkpreview=' + encodeURIComponent(link.id) + '&csrf_token=' + encodeURIComponent(csrf), '_blank'); return; }
       var name = link ? link.label : 'this link';
       if (what === 'pause') { act('link_pause', row); return; }
@@ -12571,10 +12827,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         return;
       }
       if (what === 'replace') {
-        var custom = link && link.address ? link.address : '';
-        ask('Give this link a new address?', custom
+        var custom = link && link.address ? link.address : '', keptNote = link && link.aliases ? '<p class="hint">The ' + (link.aliases === 1 ? 'old address' : link.aliases + ' old addresses') + ' you kept working ' + (link.aliases === 1 ? 'is' : 'are') + ' paused too.</p>' : '';
+        ask('Give this link a new address?', (custom
           ? '<p>This link\'s address is <strong>' + esc(custom) + '</strong>. <em>Random</em> gives it a random code instead: the name is gone, the address you sent stops working right away, and anyone signed in through it is signed out.</p><p class="hint">Its name, settings and log stay as they are. To pick a different name of your own, press <em>Custom…</em>.</p>'
-          : '<p>The address you sent stops working right away, and anyone signed in through it is signed out.</p><p class="hint">Its name, settings and log stay as they are. You will need to send the new address to whoever should still have it. To use a name of your own instead, press <em>Custom…</em>.</p>', 'Random', false, 'Custom…').then(function (yes) {
+          : '<p>The address you sent stops working right away, and anyone signed in through it is signed out.</p><p class="hint">Its name, settings and log stay as they are. You will need to send the new address to whoever should still have it. To use a name of your own instead, press <em>Custom…</em>.</p>') + keptNote, 'Random', false, 'Custom…').then(function (yes) {
           if (yes === 'extra') openForm(link, 'address'); else if (yes) act('link_replace', row);
         });
         return;

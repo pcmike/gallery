@@ -234,6 +234,11 @@ TypesConfig "%(w)s/apache/mime.types"
     a = make('Dyllen and Brenden', 'dyllen-and-brenden'); b = make('Random one'); c = make('Later', 'later-folder')
     check('links are made: a custom name, a random one, and a name a folder will share', a.get('ok') and b.get('ok') and c.get('ok'), (a, b, c))
     tok = re.search(r'/([A-Za-z0-9]{16})$', b['urls']['short']).group(1)
+    # a link whose random address was kept working when it got a name of its own
+    d = make('Kept one'); tok2 = re.search(r'/([A-Za-z0-9]{16})$', d['urls']['short']).group(1)
+    import json
+    st, body, _, _ = site.post('/trip/index.php?admin', {'csrf_token': csrf, 'action': 'link_save', 'id': d['id'], 'label': 'Kept one', 'address': 'kept-one-now', 'keep_old': '1', 'title_mode': 'gallery', 'picture': '1', 'max_opens': '0', 'ends_at': '0', 'scope_type': 'all', 'locations': 'public', 'heads_up': 'off', 'downloads': 'off', 'zip': 'off'})
+    check('a link is given a name of its own and keeps its random address working', json.loads(body).get('ok'), body[:200])
     # the folder arrives afterwards (an FTP upload), with the same name as the last link
     os.makedirs(os.path.join(trip, 'later-folder')); shutil.copy(os.path.join(trip, 'Rome', 'photo-Rome.jpg'), os.path.join(trip, 'later-folder', 'photo-later-folder.jpg'))
 
@@ -246,6 +251,9 @@ TypesConfig "%(w)s/apache/mime.types"
         def opening(path): st, body, loc, r = srv.get(path); return st == 200 and 'Open the gallery' in body
         check('[%s] a custom name opens its link, in any case' % n, opening('/trip/dyllen-and-brenden') and opening('/trip/Dyllen-And-BRENDEN'))
         check('[%s] a random address still opens its link' % n, opening('/trip/' + tok))
+        st, body, loc, r = srv.get('/trip/' + tok2)
+        check('[%s] a kept old address sends people on to the present one, in the same short form (the address bar shows the new one)' % n, st == 302 and loc.endswith('/trip/kept-one-now'), (st, loc))
+        check('[%s] ...and the present address opens the link' % n, opening('/trip/kept-one-now'))
         check('[%s] the probe address answers (the admin\'s check that tidy addresses work)' % n, (lambda r: r[0] == 200 and r[3].getheader('X-Gallery-Link') == 'invalid')(srv.get('/trip/0000-probe-0000')))
         st, body, loc, r = srv.get('/trip/Rome')
         if n == 'nginx':

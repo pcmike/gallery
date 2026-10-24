@@ -2306,6 +2306,61 @@ try:
                     labels: [...tr.children].map(td => getComputedStyle(td, '::before').content.replace(/"/g, ''))}; })()""")
         shot(b, "25c-ip-list-phone")
         ok(ipc["stacked"] and ipc["noSideScroll"] and ipc["ipInView"] and ipc["cellsInView"] and ipc["labels"][:3] == ["IP address", "Where", "Browser"], "[ip list phone] on a phone each address is a card with labelled lines (IP address, Where, Browser, ...), the IP address is in view, and nothing needs scrolling sideways", str(ipc))
+        # the Visitors tab's "Came in on": a column on a wide screen, a line under the IP on a phone (shown here with a stand-in table, the rule being the page's own)
+        viachk = """(() => { let t = document.getElementById('via-probe'); if (!t) { t = document.createElement('table'); t.id = 'via-probe'; t.className = 'sl-table'; t.innerHTML = '<thead><tr><th>IP address</th><th class="sl-viacol">Came in on</th></tr></thead><tbody><tr><td>1.2.3.4<span class="sl-via">via: k7Q2…Tb4e</span></td><td class="sl-viacol">k7Q2…Tb4e</td></tr></tbody>'; document.getElementById('sl-root').appendChild(t); }
+            const d = s => getComputedStyle(document.querySelector(s)).display; return {col: d('#via-probe td.sl-viacol'), line: d('#via-probe .sl-via'), head: d('#via-probe th.sl-viacol')}; })()"""
+        b.viewport(390, 800); b.drain(0.3); vp = b.js(viachk)
+        ok(vp["col"] == "none" and vp["head"] == "none" and vp["line"] == "block", "[came in on] on a phone the column is hidden and the line under the IP is shown", str(vp))
+        b.viewport(1280, 900); b.drain(0.3); vw_ = b.js(viachk)
+        ok(vw_["col"] != "none" and vw_["head"] != "none" and vw_["line"] == "none", "[came in on] on a wide screen the column is shown and the line under the IP is hidden", str(vw_))
+        b.js("document.getElementById('via-probe').remove()"); b.viewport(390, 800); b.drain(0.3)
+        # the link names in that list: whole pills (never broken up letter by letter) in one wrapping container, and each one goes to its link
+        pillchk = """(() => { const vw = document.documentElement.clientWidth, box = document.querySelector('#sl-ips-view .sl-lchips'), chips = [...document.querySelectorAll('#sl-ips-view .sl-lchips .sl-lchip')];
+            const broken = chips.filter(c => { const r = c.getBoundingClientRect(), range = document.createRange(); range.selectNodeContents(c); const t = range.getBoundingClientRect(); return r.height > 40 || t.width > r.width + 1 || r.right > vw + 1 || r.width < 30; }).map(c => c.textContent + ':' + Math.round(c.getBoundingClientRect().width) + 'x' + Math.round(c.getBoundingClientRect().height));
+            return {n: chips.length, flex: !!box && getComputedStyle(box).display === 'flex' && getComputedStyle(box).flexWrap === 'wrap', buttons: chips.every(c => c.tagName === 'BUTTON' && c.getAttribute('data-golink')), broken, w: vw}; })()"""
+        for pw in (390, 360):
+            b.viewport(pw, 800); b.drain(0.4)
+            pc = b.js(pillchk)
+            ok(pc["n"] >= 1 and pc["flex"] and pc["buttons"] and not pc["broken"], f"[link pills] at {pw} px the link names are whole pills in one wrapping container (none broken up, none taller than a line or outside the screen), all buttons", str(pc))
+        b.viewport(390, 800); b.drain(0.3)
+        shot(b, "25d-link-pills-phone")
+        b.js("document.querySelectorAll('details.sl-row[open]').forEach(d => d.open = false)")
+        gl = b.js("""(() => { const c = [...document.querySelectorAll('#sl-ips-view .sl-lchip[data-golink]')].find(x => !x.classList.contains('pub')); return c ? c.getAttribute('data-golink') : ''; })()""")
+        b.js("document.querySelector('#sl-ips-view .sl-lchip[data-golink=\"%s\"]').click()" % gl); b.drain(0.8)
+        gg = b.js("""(id => { const r = document.querySelector('details.sl-row[data-id="' + id + '"]'); return {linksView: !document.getElementById('sl-links-view').hidden && document.getElementById('sl-ips-view').hidden, open: !!r && r.open, settingsClosed: !!r && !r.querySelector('details.sl-settings').open, others: [...document.querySelectorAll('details.sl-row')].filter(x => x !== r && x.open).length, top: r ? Math.round(r.getBoundingClientRect().top) : null}; })(%s)""" % json.dumps(gl))
+        ok(gg["linksView"] and gg["open"] and gg["settingsClosed"] and gg["others"] == 0 and gg["top"] is not None and gg["top"] < 400, "[link pills] pressing a link's pill goes to the Links view with that link opened (its Settings still folded, no other link opened) and in sight", str(gg))
+        b.js("document.querySelectorAll('details.sl-row[open]').forEach(d => d.open = false)")
+        b.js("document.querySelector('[data-view=ips]').click()"); b.drain(0.6)
+        # a link to one setting: opens the Settings tab, opens the fold the setting is in, scrolls to it and marks it (also when the row is hidden: then its group)
+        jump = """(() => { const e = document.getElementById('setting-LOG_PUBLIC_VISITS'), g = e.closest('details.site-group'); g.open = false; e.hidden = %s; adminGoTo('site', 'setting-LOG_PUBLIC_VISITS'); return true; })()"""
+        for hid in ("false", "true"):
+            b.js(jump % hid); b.drain(0.9)
+            sj = b.js("""(() => { const e = document.getElementById('setting-LOG_PUBLIC_VISITS'), g = e.closest('details.site-group'), r = (e.hidden ? g : e).getBoundingClientRect(), panel = document.querySelector('.site-settings').closest('.tab-panel');
+                return {tab: !panel || panel.classList.contains('active'), open: g.open, group: g.querySelector('.site-group-title').textContent, inView: r.height > 0 && r.top < innerHeight && r.bottom > 0, flash: (e.hidden ? g : e).classList.contains('flash-target')}; })()""")
+            ok(sj["tab"] and sj["open"] and sj["group"] == "Share links" and sj["inView"] and sj["flash"], f"[setting links] the jump to a setting ({'its row hidden: its group' if hid == 'true' else 'its row'}) opens the Settings tab and the Share links group, scrolls there and marks it", str(sj))
+            b.js("document.getElementById('setting-LOG_PUBLIC_VISITS').hidden = false")
+        b.js("adminGoTo('links')"); b.drain(0.8)
+        # a link in a Settings facts line (a dd) gets the same hover as every other link (the public address's row only exists once someone has opened the public gallery, so this uses a stand-in facts list in the same place)
+        hp = b.js("""(() => { const host = document.querySelector('.admin-main .sl') || document.querySelector('.admin-main'); const dl = document.createElement('dl'); dl.className = 'sl-facts'; dl.id = 'hover-standin'; dl.innerHTML = '<dt>Turn it on or off</dt><dd><a href="#site">Settings &rarr; Share links &rarr; Log visitors to the public address</a></dd>'; host.prepend(dl); const a = dl.querySelector('a'); a.scrollIntoView({block: 'center'}); const r = a.getClientRects()[0], cs = getComputedStyle(a); return {x: r.left + Math.min(20, r.width / 2), y: r.top + r.height / 2, bg: cs.backgroundColor, sh: cs.boxShadow}; })()"""); b.drain(0.4)
+        b.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": hp["x"], "y": hp["y"]}); b.drain(0.4)
+        hq = b.js("""(() => { const cs = getComputedStyle(document.querySelector('#hover-standin a')); return {bg: cs.backgroundColor, sh: cs.boxShadow}; })()""")
+        b.js("document.getElementById('hover-standin').remove()")
+        ok(hq["bg"] != hp["bg"] and hq["sh"] != hp["sh"] and hq["bg"] != "rgba(0, 0, 0, 0)", "[hover] a link in a Settings facts line (like Log visitors to the public address) shows the same highlight on hover as other links", f"{hp} -> {hq}")
+        # a row that is showing one address's page: pressing that link's own pill takes the row back to the link's log
+        b.js("document.querySelector('[data-view=links]').click()"); b.drain(0.4)
+        sel = b.js("""(() => { for (const d of document.querySelectorAll('details.sl-row:not(.sl-public)')) { d.open = true; } return true; })()"""); b.drain(1.5)
+        rid = b.js("""(() => { const d = [...document.querySelectorAll('details.sl-row:not(.sl-public)')].find(x => x.querySelector('.sl-act .sl-ipt[data-ip]')); return d ? d.getAttribute('data-id') : ''; })()""")
+        ok(rid != "", "[link pills] a link with visitors is there to press an address on (so a row can show that address's page)", str(rid))
+        if rid:
+            b.js("document.querySelectorAll('details.sl-row[open]').forEach(d => { if (d.getAttribute('data-id') !== '%s') d.open = false; })" % rid)
+            b.js("document.querySelector('details.sl-row[data-id=\"%s\"] .sl-act .sl-ipt[data-ip]').click()" % rid); b.drain(1.2)
+            inip = b.js("(id => { const a = document.querySelector('details.sl-row[data-id=\"' + id + '\"] .sl-act'); return {ipPage: !!a.querySelector('.sl-ippage'), pill: !!a.querySelector('.sl-lchip[data-golink=\"' + id + '\"]')}; })(%s)" % json.dumps(rid))
+            ok(inip["ipPage"] and inip["pill"], "[link pills] pressing an address in a link's Visitors shows that address's page inside the row, with the link's own name among its pills", str(inip))
+            b.js("document.querySelector('details.sl-row[data-id=\"%s\"] .sl-act .sl-lchip[data-golink=\"%s\"]').click()" % (rid, rid)); b.drain(1.5)
+            back = b.js("(id => { const r = document.querySelector('details.sl-row[data-id=\"' + id + '\"]'), a = r.querySelector('.sl-act'); return {open: r.open, settingsClosed: !r.querySelector('details.sl-settings').open, log: !!a.querySelector('.sl-activity'), ipPage: !!a.querySelector('.sl-ippage'), backLink: !!a.querySelector('[data-back]')}; })(%s)" % json.dumps(rid))
+            ok(back["open"] and back["settingsClosed"] and back["log"] and not back["ipPage"] and not back["backLink"], "[link pills] pressing the link's own pill on that page takes the row back to the link's log (its tabs), Settings still folded", str(back))
+        b.js("document.querySelectorAll('details.sl-row[open]').forEach(d => d.open = false)")
+        b.js("document.querySelector('[data-view=ips]').click()"); b.drain(0.6)
         b.js("document.querySelector('[data-view=links]').click()")
         b.viewport(1280, 900)
         b.js("document.querySelector('[data-view=ips]').click()")
@@ -2515,6 +2570,9 @@ try:
         # the address: a field with a one-press "Use the name" that turns the name into an address, and what to know about the one typed
         ad = b.js("""(() => { const f = document.getElementById('sl-form'), i = f.querySelector('[name=address]'), btn = f.querySelector('[data-sl=addrname]'), r = i.getBoundingClientRect();
             return {has: !!i && !!btn, empty: i.value === '', btn: btn && btn.textContent.trim(), hint: f.querySelector('[data-addrhint]').textContent, w: r.width, font: parseFloat(getComputedStyle(i).fontSize), base: f.querySelector('.sl-addrbase').textContent}; })()""")
+        b.js("document.querySelector('#sl-form [data-sl=cancel]').click(); document.querySelector('[data-sl=new]').click()"); b.drain(0.5)   # (a fresh form: earlier checks have been choosing things in this one)
+        sc0 = b.js("""(() => { const f = document.getElementById('sl-form'), c = f.querySelector('input[name=scope_type]:checked'); return {v: c && c.value, label: c && c.parentElement.querySelector('strong').textContent, title: f.querySelector('.sl-form-title').textContent}; })()""")
+        ok(sc0["title"] == "New share link" and sc0["v"] == "public" and sc0["label"] == "Just the public gallery", "[new link default] a new share link's form starts on \"Just the public gallery\"", str(sc0))
         ok(ad["has"] and ad["empty"] and ad["btn"] == "Use the name" and "random code" in ad["hint"] and ad["w"] >= 120 and ad["base"].startswith("…"), "[address field] the form has an Address field (empty: a random address is made) with a Use the name button and a hint", str(ad))
         def addr(label, typed=None, press=False):
             return b.js("""((label, typed, press) => { const f = document.getElementById('sl-form'), i = f.querySelector('[name=address]'), l = f.querySelector('[name=label]');
@@ -2572,6 +2630,62 @@ try:
         b.js("document.querySelector('[data-sl-modal=extra]').click()"); b.drain(0.8)
         cu = b.js("(() => { const f = document.getElementById('sl-form'), a = f.querySelector('[name=address]'); return {open: !f.hidden, title: f.querySelector('.sl-form-title').textContent, focused: document.activeElement === a, value: a.value, modal: document.getElementById('sl-modal').hidden}; })()")
         ok(cu["open"] and cu["title"] == "Edit link" and cu["focused"] and cu["value"] == "replace-dialog-test" and cu["modal"], "[replace dialog] Custom… closes the dialog and opens that link's Edit form with the cursor in the Address field (nothing is replaced)", str(cu))
+        # keeping the old address working: offered only while an existing address is being changed
+        kp = """(() => { const f = document.getElementById('sl-form'), r = f.querySelector('[data-keeprow]'), c = f.querySelector('[name=keep_old]'); return {hidden: r.hidden, checked: c.checked, hint: f.querySelector('[data-addrhint]').textContent, text: r.textContent.trim()}; })()"""
+        setaddr = lambda v: b.js("(() => { const i = document.querySelector('#sl-form [name=address]'); i.value = %s; i.dispatchEvent(new Event('input', {bubbles: true})); })()" % json.dumps(v))
+        k0 = b.js(kp)
+        ok(k0["hidden"] and not k0["checked"], "[kept address] editing a link without touching its address does not offer to keep an old one", str(k0))
+        setaddr("replace-dialog-two"); k1 = b.js(kp)
+        ok(not k1["hidden"] and k1["checked"] and "Keep the old address working too" in k1["text"] and "keeps working and sends people on" in k1["hint"], "[kept address] changing the address offers the box, TICKED to start with, and the hint says the old address keeps working and sends people on", str(k1))
+        b.js("document.querySelector('#sl-form [name=keep_old]').click()"); k2 = b.js(kp)
+        ok(not k2["checked"] and "is paused" in k2["hint"] and "resume it" in k2["hint"], "[kept address] unticking it changes the hint to say the old address is paused and can be resumed", str(k2))
+        setaddr("replace-dialog-test"); k3 = b.js(kp)
+        ok(k3["hidden"] and not k3["checked"], "[kept address] putting the address back hides the box and unticks it", str(k3))
+        setaddr("replace-dialog-two"); k4 = b.js(kp)
+        ok(not k4["hidden"] and k4["checked"], "[kept address] the box is ticked again each time it appears", str(k4))
+        b.js("document.querySelector('#sl-form .sl-save').click()"); b.drain(2.0)
+        kr = b.js("(() => { const d = %s; return d ? {text: d.querySelector('.sl-facts').textContent, pause: !!d.querySelector('[data-sl=aliaspause][data-alias=replace-dialog-test]'), kill: !!d.querySelector('[data-sl=aliaskill][data-alias=replace-dialog-test]'), addr: JSON.parse(d.getAttribute('data-link')).address, n: JSON.parse(d.getAttribute('data-link')).aliases} : null; })()" % named)
+        ok(kr and "Also works at" in kr["text"] and "…/replace-dialog-test" in kr["text"] and kr["pause"] and kr["kill"] and kr["addr"] == "replace-dialog-two" and kr["n"] == 1, "[kept address] saving with the box left ticked shows \"Also works at\" under the link's Settings, with Pause and Kill buttons", str(kr))
+        # the old addresses' buttons: separate, outlined buttons with a gap, on a row of their own under the text on a phone and at the end of the row on a wide screen
+        lay = """(row => { const out = []; for (const a of row.querySelectorAll('.sl-alias')) { const info = a.querySelector('.sl-aliasinfo'), bs = [...a.querySelectorAll('.sl-abtn')]; if (!bs.length) continue; const ir = info.getBoundingClientRect(), r = bs.map(x => x.getBoundingClientRect());
+            out.push({n: bs.length, sameLine: r.every(q => Math.abs(q.top - r[0].top) < 2), gap: r.length > 1 ? Math.round(r[1].left - r[0].right) : 99, tall: r.every(q => q.height >= 34), inScreen: r.every(q => q.left >= 0 && q.right <= innerWidth + 1), under: r[0].top >= ir.bottom - 1, right: r[0].left >= ir.right - 1 && Math.abs(r[0].top + r[0].height / 2 - (ir.top + ir.height / 2)) < ir.height, outlined: getComputedStyle(bs[0]).borderTopWidth !== '0px', fits: bs.every(x => x.scrollWidth <= x.clientWidth + 1 && x.getBoundingClientRect().width >= 44), widths: bs.map(x => Math.round(x.getBoundingClientRect().width) + '/' + x.scrollWidth),  killRed: bs.filter(x => x.classList.contains('sl-kill')).every(x => getComputedStyle(x).color.startsWith('rgb(255, 138'))}); } return out; })(%s)"""
+        def layout(what):
+            for w, h, mode in ((390, 800, "phone"), (360, 800, "phone"), (1280, 900, "wide")):
+                b.viewport(w, h); b.drain(0.4)
+                rows = b.js(lay % named)
+                good = rows and all(x["n"] >= 1 and x["sameLine"] and x["gap"] >= 8 and x["tall"] and x["fits"] and x["inScreen"] and x["outlined"] and x["killRed"] and (x["under"] if mode == "phone" else x["right"]) for x in rows)
+                ok(good, f"[old address buttons] {what} at {w} px: separate outlined buttons (a gap of 8 px or more, tall enough to tap, the whole word showing, Kill in red), on one line, " + ("under the text" if mode == "phone" else "at the end of the row"), str(rows))
+            b.viewport(390, 800); b.drain(0.3)
+        layout("working addresses")
+        b.js("(() => { const d = %s; d.open = true; d.querySelector('[data-sl=replace]').click(); })()" % named); b.drain(0.6)
+        kd = b.js(dlg)
+        ok(kd["shown"] and "you kept working is paused too" in kd["body"], "[kept address] the Replace dialog says the kept address is paused too", str(kd))
+        b.js("document.querySelector('[data-sl-modal=cancel]').click()"); b.drain(0.3)
+        # Kill asks first (and says what a name being free means); Cancel changes nothing
+        b.js("(() => { const d = %s; d.querySelector('[data-sl=aliaskill]').click(); })()" % named); b.drain(0.6)
+        ko = b.js("({shown: !document.getElementById('sl-modal').hidden, title: document.getElementById('sl-modal-title').textContent, body: document.querySelector('.sl-modal-body').textContent, btns: [...document.querySelectorAll('#sl-modal .pm-btns button')].filter(x => !x.hidden).map(x => x.textContent.trim())})")
+        ok(ko["shown"] and ko["title"] == "Kill this old address?" and "replace-dialog-test" in ko["body"] and "The name is then free." in ko["body"] and "Pause it instead" in ko["body"] and ko["btns"] == ["Cancel", "Kill"], "[kill] Kill asks first, names the address, says the name is then free, and points to Pause", str(ko))
+        b.js("document.querySelector('[data-sl-modal=cancel]').click()"); b.drain(0.3)
+        ok(b.js("JSON.parse((%s).getAttribute('data-link')).aliases" % named) == 1, "[kill] Cancel keeps the address as it was")
+        # Pause is at once (it can be undone) and moves the address to Paused addresses with Resume and Kill
+        b.js("(() => { const d = %s; d.querySelector('[data-sl=aliaspause]').click(); })()" % named); b.drain(1.6)
+        kg = b.js("(() => { const d = %s, dts = [...d.querySelectorAll('.sl-facts dt')].map(x => x.textContent); return {facts: d.querySelector('.sl-facts').textContent, n: JSON.parse(d.getAttribute('data-link')).aliases, modal: document.getElementById('sl-modal').hidden, first: dts[0], addr: d.querySelector('.sl-facts dd').textContent, has: dts.includes('Paused addresses'), resume: !!d.querySelector('[data-sl=aliasresume][data-alias=replace-dialog-test]'), kill: !!d.querySelector('[data-sl=aliaskill][data-alias=replace-dialog-test]'), list: ((d.querySelector('[data-sl=aliasresume]') || {closest: () => null}).closest('.sl-alias') || {textContent: ''}).textContent}; })()" % named)
+        ok("Also works at" not in kg["facts"] and kg["n"] == 0 and kg["modal"], "[pause] Pause takes effect at once (no question) and the Also works at list is gone", str(kg))
+        ok(kg["first"] == "Address" and "replace-dialog-two" in kg["addr"] and "a name of your own" in kg["addr"], "[address line] a link's Settings start with its Address (a custom name whole, with \"a name of your own\")", str(kg))
+        ok(kg["has"] and kg["resume"] and kg["kill"] and "replace-dialog-test" in kg["list"], "[pause] the paused address is listed under Paused addresses with Resume and Kill buttons", str(kg))
+        layout("paused addresses")
+        b.js("(() => { const d = %s; d.querySelector('[data-sl=aliasresume]').click(); })()" % named); b.drain(1.6)
+        br = b.js("(() => { const d = %s, f = d.querySelector('.sl-facts').textContent; return {also: f.includes('Also works at') && f.includes('replace-dialog-test'), n: JSON.parse(d.getAttribute('data-link')).aliases, paused: f.includes('Paused addresses')}; })()" % named)
+        ok(br["also"] and br["n"] == 1 and not br["paused"], "[pause] Resume puts it back under Also works at and off the paused list", str(br))
+        # Kill it for good: a summary line stays, with Clear
+        b.js("(() => { const d = %s; d.querySelector('[data-sl=aliaskill]').click(); })()" % named); b.drain(0.5)
+        b.js("document.querySelector('[data-sl-modal=ok]').click()"); b.drain(1.6)
+        kk = b.js("(() => { const d = %s, f = d.querySelector('.sl-facts').textContent; return {killed: f.includes('Killed addresses') && f.includes('replace-dialog-test') && f.includes('killed'), n: JSON.parse(d.getAttribute('data-link')).aliases, gone: !f.includes('Also works at') && !f.includes('Paused addresses'), clear: !!d.querySelector('[data-sl=killedclear]')}; })()" % named)
+        ok(kk["killed"] and kk["n"] == 0 and kk["gone"] and kk["clear"], "[kill] Kill removes the address and leaves a Killed addresses line with a Clear button", str(kk))
+        cl = b.js("(() => { const d = %s, c = d.querySelector('[data-sl=killedclear]'), r = c.getBoundingClientRect(), t = d.querySelector('.sl-alias .sl-aliasinfo').getBoundingClientRect(); return {tall: r.height >= 34, inScreen: r.left >= 0 && r.right <= innerWidth, below: r.top >= t.bottom - 1, button: c.classList.contains('secondary') && getComputedStyle(c).borderTopWidth !== '0px'}; })()" % named)
+        ok(cl["tall"] and cl["inScreen"] and cl["below"] and cl["button"], "[old address buttons] the Clear button under the killed lines is an outlined button, tall enough to tap, inside the screen and below the lines", str(cl))
+        b.js("(() => { const d = %s; d.querySelector('[data-sl=killedclear]').click(); })()" % named); b.drain(1.6)
+        ok(b.js("!(%s).querySelector('.sl-facts').textContent.includes('Killed addresses')" % named), "[kill] Clear removes the summary lines")
         b.js("document.querySelector('#sl-form [data-sl=cancel]').click()"); b.drain(0.3)
         b.js("(() => { const d = %s; d.open = true; d.querySelector('[data-sl=replace]').click(); })()" % plain); b.drain(0.6)
         rp = b.js(dlg)

@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.3.2] - 2026-10-24
+
+### Added
+- **Keep an old share address working.** When you change a link's address, the form offers **Keep the old address working too**: the old address is not replaced but sends people on, with a temporary redirect, to the link's present address (so the address bar shows the new one). Up to nine per link (ten ways in with the present address); each is listed under the link's Settings as **Also works at**, with how many visits it sent and when the last was, and a **Remove** button. *Replace address…* stops them too, since it is the button for a leaked link. A kept address cannot be taken by another link. The tidy-address server rule needs no change. The box is **ticked to start with** (untick it to pause the old address instead).
+- **Old addresses can be working, paused or killed.** *Also works at* lists the working ones with **Pause** and **Kill**; **Paused addresses** (what used to be the replaced list, never shown before) lists the paused ones with **Resume** and **Kill**. Pause keeps an address reserved to its link and keeps its visit totals, which come back on Resume; tries on a paused address are counted (how many, from how many IPs). **Kill** (it asks first) forgets the address and frees the name for any other link or folder, and leaves a one-line summary under **Killed addresses** with a **Clear** button. *Replace address…* pauses the kept addresses too.
+- **Paused addresses can be resumed.** A link's Settings list its paused addresses (by their first and last four characters) with a **Resume** button that makes one work again, so an address you had already sent out works again. A link remembers every paused address (it used to keep the last five).
+- **An Address line in a link's Settings** (a name of your own whole, a random code by its last four characters).
+- **Which address a visitor came in on.** A link with more than one address shows, on its Visitors tab, `via: <address>` for each visitor (a column on a wide screen, a line under the IP on a phone), and the Visitors CSV has a `came_in_on` column. Each kept address also says how many different IP addresses used it.
+- **The link names in the list of every IP address are buttons.** Pressing one goes to the Share tab with that link opened (its Settings stay folded); on the page of one address, pressing the link's own name takes that row back to the link's log.
+
+### Changed
+- **A new share link starts on "Just the public gallery"** (nothing private) in *What they can see*; the other choices are one press away.
+- **A link to one setting jumps to it.** Every setting row has an address; the public address's "Settings → Share links → Log visitors to the public address" line (and the prompts to turn on *Allow share links* and the Map) open the Settings tab, open the group the setting is in, scroll to it and outline it for a moment.
+
+### Tests
+- **The browser checks run in about 7 minutes instead of 15 to 18**, with the same checks passing: a wait ends early once the page has gone quiet (`GALLERY_BROWSER_STRICT=1` runs every wait in full), and a link that only changes the `#fragment` no longer waits 30 seconds for a load that never comes. Described in `tests/tools/README.md`.
+
+### Fixed
+- **The Pause, Resume, Kill and Clear buttons were cut off** ("Paus" running into Kill): a rule meant for the Timeline's small pictures forced them to 42 px wide. They have their own style now.
+- **A link in a Settings line had no hover.** The "Log visitors to the public address" link now lights up on hover like the other links, as do links in other admin lines and table cells.
+- **The link pills in the list of every IP address broke up letter by letter on a phone** ("M o m"). They are now whole pills in one wrapping container; the list also tells two links of the same name apart.
+
 ## [2.3.1] - 2026-10-23
 
 ### Added

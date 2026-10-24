@@ -20,6 +20,8 @@ FFMPEG=/path/to/ffmpeg python3 tests/tools/browser/video_checks.py
 QJS=/path/to/qjs python3 tests/tools/js/run_js_checks.py     # QJS defaults to `qjs` on PATH
 ```
 
+**How long the browser checks wait.** After an action the checks wait (`drain`) for the page to settle. A wait of 0.25 to 2.9 s ends early once the page has gone quiet (nothing in flight on the network, no short timer or animation frame pending, no running animation or transition, no DOM change, scroll or resize for 150 ms, seen twice in a row); a page that never goes quiet uses the whole wait, and waits of 3 s or more are real-time waits and always run in full. `GALLERY_BROWSER_STRICT=1` makes every wait run in full (the slow, literal mode; `video_checks.py` always does). `GALLERY_BROWSER_STATS=1` prints where the waiting went (by call site, and each page load by address) when the run ends. A `goto` to the same page with only a different `#fragment` is an in-page jump (no load event ever comes): it is finished when the browser says so; any other load that does not finish in 30 s prints a `note` line. Measured 2026-10-23: 726 checks, about 7 minutes (was 15 to 18), the same checks passing.
+
 All of them exit 0 only when nothing is found. The gallery itself runs under `PHP_SERVER` (default `php`), so you can check another PHP version, e.g. `PHP_SERVER=/path/to/php8.3 python3 tests/tools/fuzz/fuzz.py` (the fixture is still built with the `php` on your PATH, which needs gd + imagick; a static CLI build from <https://dl.static-php.dev/> makes a handy second version). `php tests/run.php` already uses whatever PHP you run it with.
 
 **Getting QuickJS without root** (Debian/Ubuntu): `apt-get download quickjs && dpkg -x quickjs_*.deb ~/quickjs`, then `QJS=~/quickjs/usr/bin/qjs`.
