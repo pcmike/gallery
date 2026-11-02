@@ -22,8 +22,23 @@ Older versions copied each photo's location from its file into the folder data a
 ## Old view-count stores
 - [ ] `stats_import_legacy()`: folds the plain-JSON store (`.gallery-stats.json`) and the old SQLite table `photo_views` (readable filenames) into the current `photo_views_h`, then deletes the old ones. Also its call in the stats connection code and its tests.
 
+## Old visitor-download switch
+- [ ] `ENABLE_PUBLIC_DOWNLOAD` (the on/off switch before `PUBLIC_DOWNLOAD_MODE`, 2.4.0): still read, and counted as `all` when `PUBLIC_DOWNLOAD_MODE` is absent (search `PUBLIC_DOWNLOAD_MODE` where it is defined); the Settings page drops the old line when the new setting is saved. Remove the fallback and the constant once nobody has the old line.
+
 ## Old addresses
 - [ ] `?admin&hidden=1` (redirects to `?admin#hidden`) and the tab key `hidden`, the name the Edited tab keeps from when it was the Hidden and then the Private tab. Links and bookmarks to `#hidden` still work; renaming the key to `edited` would break them.
+
+## The gallery-wide Map switch (2.4.0)
+- `ENABLE_MAP`: `gallery_setting('ENABLE_MAP', false);` is kept only so an older settings file's line raises no "isn't a setting" notice; its value is ignored (`ENABLE_MAP` is `ENABLE_PHOTO_LOCATION`), and `site_settings_save()` drops the line (`unset($cfg['ENABLE_MAP'])`). Remove both lines (and the `ENABLE_MAP` constant, replacing its uses with `ENABLE_PHOTO_LOCATION`) once no gallery is likely to have the key.
+
+## Unkeyed cache file names (2.4.0)
+- [ ] `gc_image_cache()` renames a made file found under its 2.3.2 name (`md5(path|variant|date)`) to its keyed name (`cache_name()`) instead of deleting it (search `LEGACY (see docs/LEGACY-REMOVAL.md)`). Once every gallery has run 2.4.0 for a while, delete the `$renamed` map and that branch. `cache_name()` itself keeps the plain-md5 fallback for an install with no secret yet (nobody has signed in; or a script folder the server cannot write to); keep it.
+
+## Cookies on the whole domain (2.4.0)
+- [ ] `gallery_cookie_expire()` ends every cookie on `/` as well as on the gallery's own path, for browsers that still hold a 2.3.2 cookie made with `path=/`. Once those have expired (the longest lives a year), make it end only `gallery_cookie_path()`.
+
+## The 2.3.2 stay-signed-in token (2.4.0)
+- [ ] `legacy_stay_path()`, `legacy_stay_take()`, `legacy_stay_forget()` and the `ADMIN_STAY_COOKIE_NAME` constant (search `LEGACY (see docs/LEGACY-REMOVAL.md): the "stay signed in"`): a browser that still holds the old cookie (`gallery_stay_…`, file `.gallery-stay.php`) is signed in by it once and given a token of the new kind. The longest such token lives 30 days, so a release or two after 2.4.0 the whole group can go; also the `.gallery-stay.php` entry in `owned_top_names()` and `.gitignore`, and the `[browsers]` test of it.
 
 ## Not legacy (keep)
 - The Health panel's "Upgraded from X on Y" record: a feature, not a compatibility shim.

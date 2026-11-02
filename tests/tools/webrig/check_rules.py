@@ -231,7 +231,7 @@ TypesConfig "%(w)s/apache/mime.types"
         import json
         st, body, _, _ = site.post('/trip/index.php?admin', f)
         return json.loads(body)
-    a = make('Dyllen and Brenden', 'dyllen-and-brenden'); b = make('Random one'); c = make('Later', 'later-folder')
+    a = make('Carol and Sam', 'carol-and-sam'); b = make('Random one'); c = make('Later', 'later-folder')
     check('links are made: a custom name, a random one, and a name a folder will share', a.get('ok') and b.get('ok') and c.get('ok'), (a, b, c))
     tok = re.search(r'/([A-Za-z0-9]{16})$', b['urls']['short']).group(1)
     # a link whose random address was kept working when it got a name of its own
@@ -249,7 +249,7 @@ TypesConfig "%(w)s/apache/mime.types"
         reset_throttle()
         print('-- ' + n + ' --')
         def opening(path): st, body, loc, r = srv.get(path); return st == 200 and 'Open the gallery' in body
-        check('[%s] a custom name opens its link, in any case' % n, opening('/trip/dyllen-and-brenden') and opening('/trip/Dyllen-And-BRENDEN'))
+        check('[%s] a custom name opens its link, in any case' % n, opening('/trip/carol-and-sam') and opening('/trip/Carol-And-SAM'))
         check('[%s] a random address still opens its link' % n, opening('/trip/' + tok))
         st, body, loc, r = srv.get('/trip/' + tok2)
         check('[%s] a kept old address sends people on to the present one, in the same short form (the address bar shows the new one)' % n, st == 302 and loc.endswith('/trip/kept-one-now'), (st, loc))
@@ -289,7 +289,7 @@ TypesConfig "%(w)s/apache/mime.types"
         check('[%s, closed] ...and the front page' % n, st == 404 and 'This link is not valid' in body)
         st, body, loc, r = srv.get('/trip/admin')
         check('[%s, closed] /trip/admin still goes to the sign-in' % n, st == 302 and '?reveal' in loc, (st, loc))
-        check('[%s, closed] a link\'s own name still opens its page' % n, srv.get('/trip/dyllen-and-brenden')[0] == 200)
+        check('[%s, closed] a link\'s own name still opens its page' % n, srv.get('/trip/carol-and-sam')[0] == 200)
     # the owner signed in sees the gallery, through nginx
     own = Site('nginx', nport); own.post('/trip/index.php?reveal', {'access_code': 'rig-admin-pw-1'})
     st, body, loc, r = own.get('/trip/')

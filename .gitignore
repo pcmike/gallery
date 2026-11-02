@@ -8,6 +8,14 @@
 .gallery-items.php
 .gallery-stats.php
 .gallery-login-attempts.php
+.gallery-stay.php
+.gallery-browsers.php
+.gallery-browsers-log.php
+.gallery-signin-*.php
+.gallery-geo.php
+.gallery-geo-state.php
+.gallery-geo.*.php
+gallery-setup-code.php
 .gallery-secret.php
 .gallery-health.php
 .gallery-links.php
@@ -30,3 +38,6 @@ Thumbs.db
 # Python bytecode from the tools in tests/tools
 __pycache__/
 *.pyc
+
+# skeletons of a real gallery hold password hashes, link addresses and visitor IPs: never commit one
+gallery-skeleton-*.tar.gz

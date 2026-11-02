@@ -1,0 +1,42 @@
+  :root {
+    --bg: #0f0f10; --card: #1a1a1c; --text: #eaeaea; --muted: #8a8a8f; --accent: #5865f2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 32px 24px 64px; }
+  .top-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 28px;
+  }
+  .back-link {
+    font-size: 0.82rem; line-height: 1; color: var(--muted); text-decoration: none;
+    background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07);
+    padding: 7px 13px; border-radius: 999px;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .back-link:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  .back-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .version-tag { color: var(--muted); font-size: 0.8rem; }
+  h1 { font-size: 1.5rem; margin: 0 0 6px; }
+  .subtitle { color: var(--muted); margin: 0 0 24px; }
+  .download-btn {
+    display: inline-block; background: var(--accent); color: #fff;
+    text-decoration: none; font-weight: 600; padding: 12px 20px;
+    border-radius: 8px;
+  }
+  .download-btn:hover { opacity: 0.9; }
+  h2 { font-size: 1.15rem; margin: 32px 0 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 24px; }
+  p, li { color: #d5d5d8; font-size: 0.95rem; }
+  p a { border-radius: 3px; transition: color .15s, background .15s, box-shadow .15s; }
+  p a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
+  ul { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  code {
+    background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 4px;
+    font-size: 0.88em; color: #eaeaea;
+  }
+  a { color:#aab2ff; text-decoration:none; }

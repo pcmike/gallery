@@ -172,7 +172,7 @@ for variant in range(3):
 link_cookies = [_press(t) for t in link_toks]
 raw = open(SITE + "/.gallery-links.php").read(); link_ids = list(json.loads(raw[raw.index("\n") + 1:])["links"].keys())
 def _preview_cookie(lid):   # the owner's browser while previewing that link (the owner's cookie rides along)
-    r = urllib.request.Request(B + f"/?admin&linkpreview={lid}&csrf_token={_admin_csrf()}", headers=AH)
+    r = urllib.request.Request(B + "/?admin", data=urllib.parse.urlencode({"linkpreview": lid, "csrf_token": _admin_csrf()}).encode(), headers=AH, method="POST")
     try: resp = op.open(r, timeout=10)
     except urllib.error.HTTPError as e: resp = e
     pairs = [h.split(";")[0] for h in (resp.headers.get_all("Set-Cookie") or []) if h.startswith("gallery_preview_")]

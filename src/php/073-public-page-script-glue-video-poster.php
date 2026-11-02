@@ -1,0 +1,1 @@
+      lightboxVideo.poster = <?= video_pictures_expected() ? 'true' : 'false' ?> ? '?img=' + encodeURIComponent(file) + '&size=share' + (fileVersions[current] ? '&v=' + fileVersions[current] : '') : '';

@@ -17,7 +17,7 @@ some-dir/usr/bin/qjs.)
 
 Exit status 0 only if every check passes.
 """
-import subprocess, time, urllib.request, urllib.error, base64, re, os, sys, tempfile, shutil, socket
+import subprocess, time, urllib.request, urllib.error, base64, re, os, sys, tempfile, shutil, socket, glob
 HERE = os.path.dirname(os.path.abspath(__file__))
 QJS = os.environ.get("QJS") or shutil.which("qjs")
 if not QJS or not os.path.exists(QJS):
@@ -53,6 +53,14 @@ try:
             r = subprocess.run([QJS, "--std", HERE + "/syn.js", f"{WORK}/js/{name}-{i}.js"], capture_output=True, text=True)
             if not (r.stdout + r.stderr).strip().startswith("OK"): bad += 1; print(f"SYNTAX ERROR in {name} script #{i}: {(r.stdout + r.stderr).strip()[:300]}")
     print(f"=== syntax: {total} inline scripts checked, {bad} with errors"); failures += bad
+    # 1b. the .js parts of src/ (the same text the build pastes back between <script> tags) are plain JavaScript on their own
+    # (the gallery page's, the map's and the Files panel's scripts are cut into pieces at every PHP tag inside them; a piece is not a
+    # program on its own, and the whole of each is checked above as the page renders it)
+    parts = [f for f in sorted(glob.glob(HERE + "/../../../src/js/*.js")) if not re.search(r"-script-|map-script", os.path.basename(f))]; badparts = 0
+    for f in parts:
+        r = subprocess.run([QJS, "--std", HERE + "/syn.js", f], capture_output=True, text=True)
+        if not (r.stdout + r.stderr).strip().startswith("OK"): badparts += 1; print(f"SYNTAX ERROR in {os.path.basename(f)}: {(r.stdout + r.stderr).strip()[:300]}")
+    print(f"=== syntax: {len(parts)} script parts in src/js checked, {badparts} with errors"); failures += badparts
     # 2. behaviour
     mapi = next(i for i, js in enumerate(scripts["map"]) if "var clusters =" in js)
     run(["maprun.js", f"{WORK}/map.html", f"{WORK}/js/map-{mapi}.js"], "map script, real data")

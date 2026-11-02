@@ -1,0 +1,120 @@
+/** A link's settings in plain words, one clause for each thing (what they see; how often; how long; downloads and ZIP; locations; the opening
+ *  page; when it was made). A clause that is the default (public gallery, unlimited, never ends, starts now, downloads and ZIP off, locations
+ *  shown only, the gallery's title, an automatic preview photo, no note) is plain grey, one that is not is darker and bolder. */
+function link_paragraph_html($l, $state, $report, $map, $index, $dir, $rootFid) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $cl = function ($html, $changed) { return '<span class="' . ($changed ? 'sl-cl-ch' : 'sl-cl') . '">' . $html . '</span>'; };
+    if ($state === 'revoked') return $cl('Revoked ' . link_time_html($l['revokedAt'] ?? 0) . '. It stays in the list and its log is kept; nobody can open it.', false) . ' ' . $cl('Made ' . link_time_html($l['created']) . '.', false);
+    $item = function ($x) use ($esc) {
+        return $x['state'] === 'ok' ? $esc($x['label']) : '<span class="sl-bad">' . $esc($x['label']) . ' <em>(' . ($x['state'] === 'ambiguous' ? 'found in more than one folder, so it is not shown' : 'can\'t be found: renamed away, moved or deleted?') . ')</em></span>';
+    };
+    $type = $l['scope']['type'] ?? 'all';
+    $only = link_shows_only_its_own($l);
+    $rest = $only ? (gallery_is_closed() ? ' and nothing else.' : ' and nothing else on their pages (a tidy view: the rest of the gallery stays public to everyone).') : ' and the public gallery.';
+    if ($type === 'public') $c1 = $cl('They see the public gallery and nothing private.', false);
+    elseif ($type === 'all') $c1 = $cl('They see every private folder and photo, including ones you add later, and the public gallery.', true);
+    elseif ($type === 'folders') $c1 = $cl('They see ' . implode(', ', array_map($item, $report['folders'])) . ' (with everything inside)' . $rest, true);
+    elseif ($type === 'mixed') { $n = count($report['photos']); $c1 = $cl('They see ' . ($report['folders'] ? implode(', ', array_map($item, $report['folders'])) . ' (with everything inside)' : '') . ($report['folders'] && $n ? ' and ' : '') . ($n ? $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') : '') . $rest, true); }
+    else { $n = count($report['photos']); $c1 = $cl('They see ' . ($only ? 'only ' : '') . $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') . $rest, true); }
+    if (($l['openIn'] ?? '') !== '' && $type !== 'photos') $c1 .= ' ' . $cl('It opens in ' . ($report['paths']['openIn'] !== '' ? $esc(link_folder_label($dir, $report['paths']['openIn'])) : '<span class="sl-bad">a folder that can\'t be found (it opens the front page)</span>') . '.', true);
+    $max = (int) ($l['maxOpens'] ?? 0); $ends = (int) ($l['endsAt'] ?? 0); $starts = (int) ($l['startsAt'] ?? 0);
+    $c2 = $max > 0 ? $cl('It can be opened in ' . ($max === 1 ? 'just one browser' : 'up to ' . $max . ' browsers') . ',', $max !== (int) DEFAULT_LINK_USES) : $cl('It can be opened in as many browsers as they like,', (int) DEFAULT_LINK_USES !== 0);
+    $c3 = $ends > 0 ? $cl('and ' . ($state === 'expired' ? 'stopped' : 'stops') . ' working on ' . link_time_html($ends) . '.', true) : $cl('and never stops working.', false);
+    if ($starts > 0) $c3 .= ' ' . $cl('It ' . ($state === 'scheduled' ? 'starts' : 'started') . ' on ' . link_time_html($starts) . '.', true);
+    $dl = $l['downloads']['mode'] ?? 'off'; $zp = $l['zip']['mode'] ?? 'off';
+    $low = function ($t) { return preg_match('/^(Off|Everything)/', $t) ? lcfirst($t) : lcfirst($t); };
+    $c4 = $dl === 'off' && $zp === 'off' ? $cl('Downloads and ZIP are off.', false)
+        : $cl('Downloads: ' . $low(link_capability_text_html($l, 'downloads', $report, $map, $index, $dir, $rootFid)) . '; ZIP: ' . $low(link_capability_text_html($l, 'zip', $report, $map, $index, $dir, $rootFid)) . '.', true);
+    $c5 = ($l['locations'] ?? 'public') === 'all' ? $cl('All saved locations are shown.', true) : $cl('Photo locations are shown only where you set them to show.', false);
+    $titleMode = $l['titleMode'] ?? 'gallery'; $pic = !empty($l['picture']); $picFile = (string) ($l['pictureFile'] ?? ''); $note = trim((string) ($l['note'] ?? '')); $heads = (string) ($l['headsUp'] ?? 'default');
+    $titleSay = ['gallery' => 'the gallery\'s title', 'neutral' => 'a neutral title', 'custom' => $esc('a title of your own')][$titleMode] ?? 'the gallery\'s title';
+    if ($titleMode === 'custom' && trim((string) ($l['titleText'] ?? '')) !== '') $titleSay = 'the title “' . $esc($l['titleText']) . '”';
+    $picSay = !$pic ? 'no preview photo' : ($picFile !== '' ? 'a preview photo you chose' : 'an automatic preview photo');
+    $c6 = $cl('The opening page uses ' . $titleSay . ' and ' . $picSay . ', ' . ($note !== '' ? 'with the note “' . $esc($note) . '”.' : 'with no note.') . ($heads === 'default' ? '' : ' The heads-up line is ' . $esc($heads) . '.'), $titleMode !== 'gallery' || !$pic || $picFile !== '' || $note !== '' || $heads !== 'default');
+    return $c1 . ' ' . $c2 . ' ' . $c3 . ' ' . $c4 . ' ' . $c5 . ' ' . $c6 . ' ' . $cl('Made ' . link_time_html($l['created']) . '.', false);
+}
+
+/** The summary line under a link's name: opens, addresses, views, tries turned away, and when it ends. */
+function link_summary_html($l, $state, $log = null) {
+    $max = (int) ($l['maxOpens'] ?? 0); $opens = (int) ($l['opens'] ?? 0);
+    $parts = [$max > 0 ? '<b>' . $opens . ' of ' . $max . '</b> browsers' : ($opens === 0 ? 'Not opened yet' : '<b>' . $opens . '</b> ' . ($opens === 1 ? 'browser' : 'browsers'))];
+    if ($log !== null) {
+        $ips = count(array_unique(array_column($log['visitors'], 'ip'))); $views = array_sum(array_column($log['visitors'], 'views'));
+        if ($ips > 0) $parts[] = '<b>' . $ips . '</b> IP' . ($ips === 1 ? '' : 's');
+        if ($views > 0) $parts[] = $views . ' view' . ($views === 1 ? '' : 's');
+        $tries = array_sum(array_column($log['blocked'], 'tries'));
+        if ($tries > 0) $parts[] = '<b class="sl-amber">' . $tries . ' blocked ' . ($tries === 1 ? 'try' : 'tries') . '</b>';
+    }
+    $ends = (int) ($l['endsAt'] ?? 0);
+    if ($state === 'revoked') $parts[] = 'revoked ' . link_time_html($l['revokedAt'] ?? 0);
+    elseif ($state === 'paused') $parts[] = 'paused ' . link_time_html($l['pausedAt'] ?? 0);
+    elseif ($state === 'scheduled') $parts[] = 'starts ' . link_time_html($l['startsAt']);
+    elseif ($state === 'expired') $parts[] = 'ended ' . link_time_html($ends);
+    elseif ($state === 'used_up') $parts[] = $ends > 0 ? 'ends ' . link_time_html($ends) : 'used up';
+    elseif ($ends > 0) $parts[] = 'ends ' . link_time_html($ends);
+    return implode(' <span class="sl-dot">&middot;</span> ', $parts);
+}
+
+/** How many visitors have been active, and tries turned away, since the owner last looked at the tab. */
+function link_news_count($log, $seenAt) {
+    if ($seenAt <= 0) $seenAt = 0;
+    $n = 0;
+    foreach ($log['visitors'] as $v) if ((int) $v['last'] > $seenAt) $n++;
+    foreach ($log['blocked'] as $b) if ((int) $b['last'] > $seenAt) $n++;
+    return $n;
+}
+
+/** Where a folder id is now: [state, path]: ok (found once), ambiguous (found in more than one folder), missing (nowhere;
+ *  the path is where it was last seen). */
+function link_fid_state($fid, $map, $index, $rootFid) {
+    if ($rootFid !== '' && $fid === $rootFid) return ['ok', ''];
+    if (isset($map[$fid])) return [count($map[$fid]) === 1 ? 'ok' : 'ambiguous', $map[$fid][0]];
+    return ['missing', (string) ($index[$fid] ?? '')];
+}
+
+/** What a link covers, for the tab: lists of [label, state] for its folders and photos, how many are not found, and the paths
+ *  the edit form starts from. */
+function link_scope_report($l, $map, $index, $dir, $rootFid) {
+    $out = ['folders' => [], 'photos' => [], 'problems' => 0, 'paths' => ['scope' => [], 'downloads' => [], 'zip' => [], 'photos' => [], 'openIn' => '']];
+    $one = function ($fid) use ($map, $index, $dir, $rootFid, &$out) {
+        [$state, $rel] = link_fid_state($fid, $map, $index, $rootFid);
+        if ($state !== 'ok') $out['problems']++;
+        return [$state, $rel, $rel === '' ? 'the gallery\'s own folder' : link_folder_label($dir, $rel)];
+    };
+    foreach ((array) ($l['scope']['folders'] ?? []) as $fid) { [$s, $rel, $label] = $one($fid); $out['folders'][] = ['fid' => $fid, 'state' => $s, 'label' => $s === 'missing' && $rel === '' ? 'a folder that is gone' : $label]; if ($s === 'ok') $out['paths']['scope'][] = $rel; }
+    foreach ((array) ($l['scope']['photos'] ?? []) as $p) {
+        if (!is_array($p)) continue;
+        [$s, $rel] = link_fid_state((string) ($p['fid'] ?? ''), $map, $index, $rootFid);
+        if ($s !== 'ok') $out['problems']++;
+        $out['photos'][] = ['fid' => $p['fid'] ?? '', 'state' => $s, 'label' => ($rel === '' ? '' : link_folder_label($dir, $rel) . ' / ') . (string) ($p['name'] ?? '')];
+        if ($s === 'ok') $out['paths']['photos'][] = ($rel === '' ? '' : $rel . '/') . $p['name'];
+    }
+    foreach (['downloads', 'zip'] as $c) foreach ((array) ($l[$c]['folders'] ?? []) as $fid) { [$s, $rel] = link_fid_state($fid, $map, $index, $rootFid); if ($s === 'ok') $out['paths'][$c][] = $rel; }
+    if (($l['openIn'] ?? '') !== '') { [$s, $rel] = link_fid_state($l['openIn'], $map, $index, $rootFid); if ($s === 'ok') $out['paths']['openIn'] = $rel; }
+    return $out;
+}
+
+function link_scope_text_html($l, $report) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $item = function ($x) use ($esc) {
+        return $x['state'] === 'ok' ? $esc($x['label']) : '<span class="sl-bad">' . $esc($x['label']) . ' <em>(' . ($x['state'] === 'ambiguous' ? 'found in more than one folder, so it is not shown' : 'can\'t be found: renamed away, moved or deleted?') . ')</em></span>';
+    };
+    $type = $l['scope']['type'] ?? 'all';
+    if ($type === 'folders') return 'Only ' . implode(', ', array_map($item, $report['folders']));
+    if ($type === 'mixed') { $n = count($report['photos']); return 'Only ' . implode(', ', array_map($item, $report['folders'])) . ' (with everything inside)' . ($n ? ' and ' . $n . ' photo' . ($n === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 4))) . ($n > 4 ? ' and ' . ($n - 4) . ' more' : '') : ''); }
+    if ($type === 'photos') return count($report['photos']) . ' photo' . (count($report['photos']) === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 6))) . (count($report['photos']) > 6 ? ' and ' . (count($report['photos']) - 6) . ' more' : '');
+    if ($type === 'public') return 'Nothing private: just the public gallery';
+    return 'Everything private';
+}
+
+function link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootFid) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $mode = $l[$cap]['mode'] ?? 'off';
+    if ($mode === 'off') return 'Off';
+    if ($mode === 'all') return 'Everything';
+    if ($mode === 'public') return 'Everything but private';
+    $names = [];
+    foreach ((array) ($l[$cap]['folders'] ?? []) as $fid) { [$s, $rel] = link_fid_state($fid, $map, $index, $rootFid); $names[] = $s === 'ok' ? $esc(link_folder_label($dir, $rel)) : '<span class="sl-bad">a folder that can\'t be found</span>'; }
+    return 'Only some folders: ' . implode(', ', $names);
+}
+

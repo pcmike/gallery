@@ -35,6 +35,7 @@
 
 error_reporting(E_ALL);
 ini_set('display_errors', '1');
+ini_set('memory_limit', '-1');   // (a static CLI build ships with PHP's 128M default, which the archive unit test below outgrows)
 
 if (!extension_loaded('gd')) {
     fwrite(STDERR, "This test suite needs the GD extension to generate fixture images.\n");
@@ -49,6 +50,14 @@ if (!preg_match("/define\('GALLERY_VERSION', '([^']+)'\)/", $indexContents, $vm)
     exit(1);
 }
 $currentVersion = $vm[1];
+
+// index.php is built from src/ (php build.php). A stale one would test one thing and ship another: stop here.
+if (is_file($repoRoot . '/src/manifest.txt')) {
+    $builtCheck = shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($repoRoot . '/build.php') . ' --check 2>&1');
+    $buildOk = str_contains((string) $builtCheck, 'up to date');
+    echo ($buildOk ? '  ok    ' : '  FAIL  ') . "index.php is exactly what src/ builds (php build.php --check)\n";
+    if (!$buildOk) { echo '        ' . trim((string) $builtCheck) . "\n"; exit(1); }
+}
 
 $failCount = 0;
 $passCount = 0;
@@ -276,6 +285,50 @@ function pw_stored_ok($stored, $plain) { return is_string($stored) && str_starts
 function cfg_plain($cfg, $known) { foreach ($known as $name => $plain) if (pw_stored_ok($cfg[$name] ?? null, $plain)) $cfg[$name] = $plain; return $cfg; }
 function cfg_read($path) { $raw = (string) file_get_contents($path); $raw = substr($raw, (int) strpos($raw, "\n") + 1); return json_decode($raw, true); }
 
+/** The name the gallery keeps a made file under (see cache_name in index.php): a keyed hash, with the install's secret read from its folder. */
+function cache_name_for_tests($root, $file, $variant, $mtime) {
+    $secret = preg_match('/^[0-9a-f]{64}$/m', (string) @file_get_contents("$root/.gallery-secret.php"), $m) ? $m[0] : '';
+    $text = $file . '|' . $variant . '|' . $mtime;
+    return $secret === '' ? md5($text) : substr(hash_hmac('sha256', $text, $secret), 0, 32);
+}
+
+/** The code in gallery-setup-code.php (what the owner reads in a file manager), or '' when there is no such file. */
+function setup_code_for_tests($root) {
+    return preg_match('/^Setup code: ([A-Z0-9-]+)$/m', (string) @file_get_contents("$root/gallery-setup-code.php"), $m) ? $m[1] : '';
+}
+
+/** A tiny country file in the MaxMind DB format, for the tests: $ranges is ['203.0.113.0/24' => 'US', '2001:db8::/32' => 'DE', ...]; $ver 4 or 6 is the
+ *  tree's IP version (an IPv6 tree keeps IPv4 under ::/96), $rec 24, 28 or 32 the bits of each tree record. */
+function make_test_mmdb(array $ranges, $ver = 6, $rec = 24) {
+    $root = ['c' => [null, null], 'cc' => null]; $ids = [];
+    foreach ($ranges as $cidr => $cc) {
+        [$addr, $len] = explode('/', $cidr); $bin = inet_pton($addr);
+        if (strlen($bin) === 4 && $ver === 6) { $bin = str_repeat("\0", 12) . $bin; $len += 96; }
+        $bits = ''; for ($i = 0; $i < $len; $i++) $bits .= (ord($bin[$i >> 3]) >> (7 - ($i & 7))) & 1;
+        $n = &$root;
+        for ($i = 0; $i < strlen($bits); $i++) { $b = (int) $bits[$i]; if ($n['c'][$b] === null) $n['c'][$b] = ['c' => [null, null], 'cc' => null]; $m = &$n['c'][$b]; unset($n); $n = &$m; unset($m); }
+        $n['cc'] = $cc; unset($n);
+    }
+    $nodes = []; $walk = function (&$n) use (&$walk, &$nodes) { $n['id'] = count($nodes); $nodes[] = &$n; foreach ([0, 1] as $b) if ($n['c'][$b] !== null) $walk($n['c'][$b]); };
+    $walk($root);
+    $str = fn ($t) => chr(0x40 | strlen($t)) . $t;
+    $data = ''; $off = [];
+    foreach (array_unique(array_values($ranges)) as $cc) { $off[$cc] = strlen($data); $data .= "\xE1" . $str('country') . "\xE1" . $str('iso_code') . $str($cc); }
+    $count = count($nodes);
+    $val = function ($c) use ($count, $off) { if ($c === null) return $count; if ($c['c'][0] !== null || $c['c'][1] !== null) return $c['id']; return $c['cc'] === null ? $count : $count + 16 + $off[$c['cc']]; };
+    $tree = '';
+    foreach ($nodes as $n) {
+        $l = $n['c'][0] === null ? ($n['cc'] !== null ? $count + 16 + $off[$n['cc']] : $count) : $n['c'][0]['id'];
+        $r = $n['c'][1] === null ? ($n['cc'] !== null ? $count + 16 + $off[$n['cc']] : $count) : $n['c'][1]['id'];
+        if ($rec === 24) $tree .= substr(pack('N', $l), 1) . substr(pack('N', $r), 1);
+        elseif ($rec === 28) $tree .= substr(pack('N', $l), 1) . chr((($l >> 24) & 0x0F) << 4 | (($r >> 24) & 0x0F)) . substr(pack('N', $r), 1);
+        else $tree .= pack('N', $l) . pack('N', $r);
+    }
+    $u = fn ($type, $v) => ($v === 0 ? chr(($type << 5)) : chr(($type << 5) | strlen(ltrim(pack('N', $v), "\0"))) . ltrim(pack('N', $v), "\0"));
+    $meta = "\xE6" . $str('node_count') . $u(6, $count) . $str('record_size') . $u(5, $rec) . $str('ip_version') . $u(5, $ver) . $str('binary_format_major_version') . $u(5, 2) . $str('binary_format_minor_version') . $u(5, 0) . $str('database_type') . $str('Test');
+    return $tree . str_repeat("\0", 16) . $data . "\xAB\xCD\xEFMaxMind.com" . $meta;
+}
+
 function write_data_file($path, $data) {
     file_put_contents($path, "<?php http_response_code(404); exit; ?>\n" . json_encode($data, JSON_HEX_TAG));
 }
@@ -490,6 +543,7 @@ function extract_csrf_token($body) {
 function write_patched_index($destPath, $indexContents, $patches) {
     $content = $indexContents;
     foreach ($patches as $const => $value) {
+        if ($const === 'ENABLE_MAP') continue;   // (the gallery-wide Map switch is gone: the map follows ENABLE_PHOTO_LOCATION, which the same fixtures patch)
         // A setting is define('NAME', gallery_setting('NAME', default[, allowed])): replace the whole define.
         $pattern = "/define\('" . preg_quote($const, '/') . "',\s*gallery_setting\([^)]*\)\)/";
         $replacement = "define('$const', " . $value . ')';
@@ -941,11 +995,11 @@ check('?img serves image/jpeg', (bool) array_filter($headers, fn($h) => stripos(
 check('?img=<valid file> creates a cache entry when caching is on', is_dir("$fx2/.gallery-cache") && count(glob("$fx2/.gallery-cache/*.jpg")) > 0);
 
 $orphanMtime = filemtime("$fx2/gc-orphan.jpg");
-$orphanThumbHash = md5('gc-orphan.jpg|thumb|' . $orphanMtime) . '.jpg';
 http_get("$base2/?img=gc-orphan.jpg&size=thumb");
+$orphanThumbHash = cache_name_for_tests($fx2, 'gc-orphan.jpg', 'thumb', $orphanMtime) . '.jpg';
 check('gc-orphan.jpg thumbnail was cached', file_exists("$fx2/.gallery-cache/$orphanThumbHash"));
 $dp104Mtime = filemtime("$fx2/dp104_01.jpg");
-$dp104ThumbHash = md5('dp104_01.jpg|thumb|' . $dp104Mtime) . '.jpg';
+$dp104ThumbHash = cache_name_for_tests($fx2, 'dp104_01.jpg', 'thumb', $dp104Mtime) . '.jpg';
 check('dp104_01.jpg thumbnail was cached (sanity check before GC)', file_exists("$fx2/.gallery-cache/$dp104ThumbHash"));
 unlink("$fx2/gc-orphan.jpg");
 http_get("$base2/"); // normal page load triggers gc_image_cache()
@@ -1100,7 +1154,7 @@ check('?folder=Paris shows its own photo count (2), not the whole gallery\'s', (
 check('every page shows a "Last updated" date derived from file mtimes', (bool) preg_match('/Last updated [A-Z][a-z]+ \d{1,2}, \d{4}/', $nestedBody));
 check('?folder=Paris also shows the same "Last updated" line', (bool) preg_match('/Last updated [A-Z][a-z]+ \d{1,2}, \d{4}/', $folderBody));
 check('?folder=Paris shows a breadcrumb back-link to the root', (bool) preg_match('/<p class="breadcrumb"><a href="\.\/">.*?' . preg_quote($rootTitle, '/') . '.*?<\/a><\/p>/', $folderBody));
-check('[sticky crumbs] a folder page has the way back and the folder pills in a bar of their own above the header (so they can stay at the top), with a down arrow then an up arrow, hidden until the page has scrolled', (bool) preg_match('#<div class="crumb-bar" id="crumb-bar">\s*<div class="crumb-row">.*?</div>\s*<div class="jump-btns" hidden>\s*<button[^>]*data-jump="bottom"[^>]*>.*?</button>\s*<button[^>]*data-jump="top"[^>]*>.*?</button>\s*</div>\s*</div>\s*<header>#s', $folderBody) && !preg_match('#<header>\s*<div class="crumb-row">#', $folderBody) && str_contains($folderBody, '.crumb-bar { position: sticky; top: var(--stick-top, 0px);') && str_contains($folderBody, '.map-bar { position: sticky; top: calc(var(--stick-top, 0px) + var(--crumb-h, 0px));'));
+check('[sticky crumbs] a folder page has the way back and the folder pills in a bar of their own above the header (so they can stay at the top), with a down arrow then an up arrow, hidden until the page has scrolled', (bool) preg_match('#<div class="crumb-bar" id="crumb-bar"[^>]*>\s*<div class="crumb-row">.*?</div>\s*<div class="jump-btns" hidden>\s*<button[^>]*data-jump="bottom"[^>]*>.*?</button>\s*<button[^>]*data-jump="top"[^>]*>.*?</button>\s*</div>\s*</div>\s*<header>#s', $folderBody) && !preg_match('#<header>\s*<div class="crumb-row">#', $folderBody) && str_contains($folderBody, '.crumb-bar { position: sticky; top: var(--stick-top, 0px);') && str_contains($folderBody, '.map-bar { position: sticky; top: calc(var(--stick-top, 0px) + var(--crumb-h, 0px));'));
 check('?folder=Paris does not render its own nested folder-cover cards', !str_contains($folderBody, '<div class="folder-cover"'));
 check('?folder=Paris reflects the folder in its Open Graph title', str_contains($folderBody, 'property="og:title" content="Paris — ' . $rootTitle . '"'));
 
@@ -1175,14 +1229,14 @@ $acHdr = function ($hd, $name) { foreach ($hd as $h) if (stripos($h, "$name:") =
 check('[nginx redirect] a video in the gallery\'s own folder is handed to nginx (an X-Accel-Redirect under the prefix, no body from PHP)', $acV1St === 200 && $acHdr($acV1Hd, 'X-Accel-Redirect') === '/trip/loose.mp4' && $acV1Body === '');
 check('[nginx redirect] a video brought in from elsewhere on the server is sent by the gallery itself, whole, with no X-Accel-Redirect (nginx has no file at that address)', $acV2St === 200 && $acHdr($acV2Hd, 'X-Accel-Redirect') === null && strlen($acV2Body) === filesize("$fxAcExtra/Paris/far.mp4"));
 [, $acAdmin] = http_get("http://127.0.0.1:$portAc/?admin", ['Authorization: Basic ' . base64_encode('admin:ac-admin-pw')]);
-check('[server checks] the browser is only ever sent addresses that really exist under the gallery: a photo from elsewhere on the server, and a folder that is only a mount, are not used as test targets (they would read as "refused" and "tidy links not working" for the wrong reason)', str_contains($acAdmin, 'id="server-probe" hidden data-photo="/loose.mp4"') && str_contains($acAdmin, 'data-folder="Paris" data-folder-url="/Paris/"') && str_contains($acAdmin, 'data-files="2"'));
+check('[server checks] the browser is only ever sent addresses that really exist under the gallery: a photo from elsewhere on the server, and a folder that is only a mount, are not used as test targets (they would read as "refused" and "tidy links not working" for the wrong reason)', preg_match('~id="server-probe" hidden data-any-private="[01]" data-photo="/loose\.mp4"~', $acAdmin) === 1 && str_contains($acAdmin, 'data-folder="Paris" data-folder-url="/Paris/"') && str_contains($acAdmin, 'data-files="2"'));
 $fxAo = new_fixture_dir('onlyextra'); $fxAoExtra = new_fixture_dir('onlyextra2'); mkdir("$fxAoExtra/Paris");
 make_jpeg("$fxAoExtra/Paris/far.jpg", 60, 60, 90, 90, 90);
 file_put_contents("$fxAo/.gallery-config.php", cfg_text(['EXTRA_ROOTS' => [$fxAoExtra], 'AUTO_GROUP_BY_FOLDER' => true, 'ADMIN_PASSWORD' => 'ao-admin-pw']));
 copy(__DIR__ . '/../index.php', "$fxAo/index.php");
 $portAo = find_free_port(); start_server($fxAo, $portAo);
 [, $aoAdmin] = http_get("http://127.0.0.1:$portAo/?admin", ['Authorization: Basic ' . base64_encode('admin:ao-admin-pw')]);
-check('[server checks] a gallery whose photos all come from elsewhere on the server has nothing to ask a web server for (data-photo is empty, but the gallery knows it has files and a folder), so the browser can say the lock is not needed instead of "nothing to test"', str_contains($aoAdmin, 'id="server-probe" hidden data-photo=""') && str_contains($aoAdmin, 'data-files="1"') && str_contains($aoAdmin, 'data-folder="Paris"') && str_contains($aoAdmin, 'lock-outside-text'));
+check('[server checks] a gallery whose photos all come from elsewhere on the server has nothing to ask a web server for (data-photo is empty, but the gallery knows it has files and a folder), so the browser can say the lock is not needed instead of "nothing to test"', preg_match('~id="server-probe" hidden data-any-private="[01]" data-photo=""~', $aoAdmin) === 1 && str_contains($aoAdmin, 'data-files="1"') && str_contains($aoAdmin, 'data-folder="Paris"') && str_contains($aoAdmin, 'lock-outside-text'));
 
 // ---- The order of the photos inside a folder: base order, direction, and what goes first.
 echo "== the order of the photos inside a folder ==\n";
@@ -1365,10 +1419,40 @@ check('[toolbar] the download and gallery buttons keep the same 8px gap as the m
 // The sort button is left out of a listing laid out by a notes file (the for-sale pattern), and can be switched off.
 $fxSl = new_fixture_dir('sortlisting');
 make_jpeg("$fxSl/alpha_01.jpg", 40, 40, 1, 2, 3); make_jpeg("$fxSl/bravo_01.jpg", 40, 40, 3, 2, 1);
-file_put_contents("$fxSl/forsale.md", "{gallery}\n# Listing\nAlpha thing {sold}\nBravo thing\n");
+file_put_contents("$fxSl/forsale.md", "{gallery}\n# Listing\nalpha_01 thing {sold}\nbravo_01 thing\n");   // (paragraphs that name photos: the notes lay the page out)
 write_patched_index("$fxSl/index.php", $indexContents, []);
 $portSl = find_free_port(); start_server($fxSl, $portSl);
 check('[sort] a listing laid out by a notes file (no folders) has no sort button', !str_contains(http_get("http://127.0.0.1:$portSl/")[1], 'id="sort-combo"'));
+$fxSw = new_fixture_dir('sortwords'); make_jpeg("$fxSw/IMG_1001.jpg", 40, 40, 1, 2, 3); make_jpeg("$fxSw/IMG_1002.jpg", 40, 40, 3, 2, 1);
+file_put_contents("$fxSw/notes.md", "{gallery}\n# Title\n\nJust a test\n");
+write_patched_index("$fxSw/index.php", $indexContents, []);
+$portSw = find_free_port(); start_server($fxSw, $portSw);
+check('[sort] a notes file that is only a title and some words (it places no photo) keeps the sort button: the notes box and the sort button live together', str_contains(http_get("http://127.0.0.1:$portSw/")[1], 'id="sort-combo"'));
+file_put_contents("$fxSw/notes.md", "{gallery}\n# Title\n\nThe first one is IMG_1001 and nothing else\n");
+check('[sort] ...but one whose paragraph names a photo (so it is laid out by the notes) does not', !str_contains(http_get("http://127.0.0.1:$portSw/")[1], 'id="sort-combo"'));
+file_put_contents("$fxSw/notes.md", "{gallery}\n# Title\n\n{photos: IMG_1002.jpg}\nHere\n");
+check('[sort] ...nor does one with a {photos:} directive', !str_contains(http_get("http://127.0.0.1:$portSw/")[1], 'id="sort-combo"'));
+$fxNf = new_fixture_dir('nofolders'); make_jpeg("$fxNf/a.jpg", 40, 40, 1, 2, 3); make_jpeg("$fxNf/b.jpg", 40, 40, 3, 2, 1);
+file_put_contents("$fxNf/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nf-admin-pw-1']));
+write_patched_index("$fxNf/index.php", $indexContents, []);
+$portNf = find_free_port(); start_server($fxNf, $portNf);
+$nfAdmin = http_get("http://127.0.0.1:$portNf/?admin", ['Authorization: Basic ' . base64_encode('u:nf-admin-pw-1')])[1];
+check('[admin nav] a gallery with no subfolders still lists Root in the Folders list (the way back to the folder\'s own tabs from Settings), and never says "No subfolders."', str_contains($nfAdmin, '<nav class="admin-folder-nav"') && str_contains($nfAdmin, '<span class="fname">Root</span>') && !str_contains($nfAdmin, 'No subfolders.'));
+// first run in the admin: what the front page tells the owner is also in the Health check, with names and a button
+$fxHu = new_fixture_dir('headsup'); make_jpeg("$fxHu/a.jpg", 40, 40, 1, 2, 3); mkdir("$fxHu/PNGs"); make_jpeg("$fxHu/PNGs/p1.jpg", 40, 40, 3, 2, 1); make_jpeg("$fxHu/PNGs/p2.jpg", 40, 40, 5, 2, 1);
+file_put_contents("$fxHu/clip.mp4", 'x'); file_put_contents("$fxHu/notes.md", "no marker here\n");
+write_patched_index("$fxHu/index.php", $indexContents, []);
+$portHu = find_free_port(); start_server($fxHu, $portHu);
+$huPublic = http_get("http://127.0.0.1:$portHu/")[1];   // (no admin password yet: the notices are shown to whoever opens the page, so they name nothing)
+check('[heads-up] the front page notices speak in the Settings\' own words (Show subfolders, Show videos) and name no constant, no folder and no file', str_contains($huPublic, 'turn on Show subfolders (Settings → Folders and photos)') && str_contains($huPublic, 'because Show videos is off') && !str_contains($huPublic, 'AUTO_GROUP_BY_FOLDER') && !str_contains($huPublic, 'ENABLE_VIDEO') && !str_contains($huPublic, 'PNGs') && !str_contains($huPublic, 'notes.md'));
+file_put_contents("$fxHu/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'hu-admin-pw-12']));
+$huAdmin = http_get("http://127.0.0.1:$portHu/?admin", ['Authorization: Basic ' . base64_encode('u:hu-admin-pw-12')])[1];
+check('[heads-up] the Health check lists hidden subfolders by name and count, always visible and not counted, with a Show subfolders button', str_contains($huAdmin, '<h3 class="subhead">Heads-up</h3>') && str_contains($huAdmin, '2 photos in 1 subfolder aren&#039;t shown') && str_contains($huAdmin, 'the folder PNGs (2) doesn&#039;t appear in your gallery') && str_contains($huAdmin, 'data-health-switch="AUTO_GROUP_BY_FOLDER"') && preg_match('~class="health-row health-note note"~', $huAdmin) === 1);
+check('[heads-up] ...and the video files that are not shown, with a Show videos button', str_contains($huAdmin, '1 video (.mov / .mp4) isn&#039;t shown') && str_contains($huAdmin, 'data-health-switch="ENABLE_VIDEO"'));
+check('[heads-up] ...and a notes file that is not active, by name (the admin may be told; the front page does not name it), with a button to the Notes tab', str_contains($huAdmin, 'The notes file notes.md isn&#039;t active') && str_contains($huAdmin, 'adminGoTo(\'notes\')'));
+check('[heads-up] the sidebar shows the hidden folder greyed with its count and a "hidden" tag, and a way to turn subfolders on, instead of "No subfolders."', str_contains($huAdmin, '<li class="hidden-folder"') && str_contains($huAdmin, '<span class="fname">PNGs</span><span class="fcount">2</span><span class="ftag">hidden</span>') && str_contains($huAdmin, 'Subfolders are off.') && !str_contains($huAdmin, 'No subfolders.'));
+check('[heads-up] the lock check knows nothing is private here (it is then an optional grey row and shows no warning banner)', str_contains($huAdmin, 'id="server-probe" hidden data-any-private="0"') && preg_match('~data-health-row="lock" data-optional="1"~', $huAdmin) === 1);
+check('[heads-up] no sentence a visitor or the owner reads names an ENABLE_… / AUTO_GROUP_… constant or sends them to edit index.php', !preg_match('~\$galleryNotices\[\][^;]*(ENABLE_[A-Z_]+|AUTO_GROUP_[A-Z_]+)~s', (string) file_get_contents($indexSrc)) && !str_contains((string) file_get_contents($indexSrc), 'is off in index.php'));
 $fxSs = new_fixture_dir('sortswitch'); make_jpeg("$fxSs/a.jpg", 40, 40, 1, 2, 3); make_jpeg("$fxSs/b.jpg", 40, 40, 3, 2, 1);
 write_patched_index("$fxSs/index.php", $indexContents, []);
 $portSs = find_free_port(); start_server($fxSs, $portSs);
@@ -1574,7 +1658,8 @@ check('[folder pills] with more than ten siblings it shows a window of nine arou
 $plEnd = $plPills('Many%2FF14');
 check('[folder pills] ...and at the end of a long row the window stays full', $plEnd !== null && array_column(array_slice($plEnd, 0, 9), 0)[0] === 'F06' && in_array(['F14', true, false], $plEnd, true));
 check('[folder pills] the gallery front page has none, and no crumb bar or jump arrows (they would be of little use there)', (function ($b) { return !str_contains($b, 'class="folder-pills"') && !str_contains($b, 'id="crumb-bar"') && !str_contains($b, 'data-jump='); })(http_get("http://127.0.0.1:$portPl/")[1]));
-check('[folder pills] a folder with no siblings has none', !str_contains(http_get("http://127.0.0.1:$portPl/?folder=Solo%2FOnly")[1], 'class="folder-pills"'));
+$plOnly = http_get("http://127.0.0.1:$portPl/?folder=Solo%2FOnly")[1];
+check('[folder pills] a folder with no siblings has no row of other folders, but its own blue pill after the way up (so the bar says where you are)', !str_contains($plOnly, 'aria-label="Other folders here"') && preg_match('#<nav class="folder-pills" aria-label="This folder"><a href="\?folder=Solo%2FOnly" class="current" aria-current="page">Only</a></nav>#', $plOnly) === 1 && substr_count($plOnly, 'class="current"') === 1);
 $plOg = []; for ($i = 0; $i < 3; $i++) $plOg[] = $ogOf($portPl);
 check('[preview] among several folders it is one of their covers, never a private folder\'s, and the same on every request that day', count(array_unique($plOg)) === 1 && preg_match('#^(Alpha|Bravo|Charlie|Many|Solo)/(.+/)?x\.jpg$#', (string) $plOg[0]) === 1 && !str_starts_with((string) $plOg[0], 'Secret/'), json_encode($plOg));
 
@@ -1609,7 +1694,7 @@ file_put_contents("$fxVm/.gallery-health.php", data_file_guard_line_for_tests() 
 check('[health] after an upgrade the panel says what it was upgraded from, and the file is brought up to date', str_contains($vmHealthUp, 'Upgraded from 2.0.1') && str_contains((string) file_get_contents("$fxVm/.gallery-health.php"), '"from":"2.0.1"'));
 file_put_contents("$fxVm/Reels/.gallery-items.php", data_file_guard_line_for_tests() . '{"items": {"reel.mp4": {"caption": "unfinished');
 [, $vmHealthBad] = http_get("$baseVm/?admin", $vmAuth);
-check('[health] a folder data file that is not valid JSON is called out with its folder (it would otherwise be read as empty and overwritten by the next save)', str_contains($vmHealthBad, '1 folder data file can&#039;t be read') && str_contains($vmHealthBad, 'Reels') && str_contains($vmHealthBad, 'would overwrite') && str_contains($vmHealthBad, 'health-row health-bad loud') && str_contains($vmHealthBad, 'to look at.'));
+check('[health] a folder data file that is not valid JSON is called out with its folder (its photos are hidden from visitors and nothing is saved over it)', str_contains($vmHealthBad, '1 folder data file can&#039;t be read') && str_contains($vmHealthBad, 'Reels') && str_contains($vmHealthBad, 'hidden from visitors until the file is restored') && str_contains($vmHealthBad, 'health-row health-bad loud') && str_contains($vmHealthBad, 'to look at.'));
 unlink("$fxVm/Reels/.gallery-items.php");
 @chmod("$fxVm/Reels", 0555);
 [, $vmHealthRo] = http_get("$baseVm/?admin", $vmAuth);
@@ -1661,11 +1746,11 @@ check('a video file is invisible when ENABLE_VIDEO is off (the default)', !str_c
 [$videoOffStatus] = http_get("$base1/?video=ignored.mp4");
 check('?video= 404s when ENABLE_VIDEO is off, even for a file that really exists', $videoOffStatus === 404);
 
-// ?admin is completely inert — not just unauthenticated — when
-// ADMIN_PASSWORD is unset, which $fx1/$base1 (the "defaults" fixture)
-// never sets.
-[$adminInertStatus] = http_get("$base1/?admin");
-check('?admin 404s outright when ADMIN_PASSWORD is unset (the default)', $adminInertStatus === 404);
+// With ADMIN_PASSWORD unset (which $fx1/$base1, the "defaults" fixture, never sets) there is no admin at all: ?admin is only the
+// one-time page that chooses a password, and it asks for a code first.
+[$adminInertStatus, $adminInertBody] = http_get("$base1/?admin");
+check('?admin with ADMIN_PASSWORD unset (the default) is only the set-up page, which asks for a code: no admin, no Settings, no photo list', $adminInertStatus === 200 && str_contains($adminInertBody, 'Set up your gallery') && str_contains($adminInertBody, 'name="setup_code"') && !str_contains($adminInertBody, 'Gallery Admin') && !str_contains($adminInertBody, 'csrf_token'));
+@unlink("$fx1/gallery-setup-code.php");
 
 /* ======================================================================= *
  * FIXTURE: "admin" — ADMIN_PASSWORD set. Covers HTTP Basic Auth, the
@@ -1816,7 +1901,7 @@ http_post("$baseAdmin/?admin", [
 ], [$authHeader, "Cookie: $sessionCookie"]);
 check('overwriting an existing notes file replaces its content exactly', trim((string) file_get_contents("$fxAdmin/newnotes.md")) === trim("{gallery}\nUpdated content."));
 [, $editorPage] = http_get("$baseAdmin/?admin", [$authHeader, "Cookie: $sessionCookie"]);
-preg_match('#<textarea name="content" class="adm-textarea">(.*?)</textarea>#s', substr($editorPage, (int) strpos($editorPage, 'newnotes.md')), $editorTa);
+preg_match('#<textarea name="content" class="adm-textarea"[^>]*>(.*?)</textarea>#s', substr($editorPage, (int) strpos($editorPage, 'newnotes.md')), $editorTa);
 check('[notes editor] an active notes file is shown exactly as stored, {gallery} line included (hiding it made every save switch the note off)', str_starts_with(html_entity_decode($editorTa[1] ?? ''), "{gallery}\nUpdated content."));
 [, $savedNoMarker] = http_post("$baseAdmin/?admin", ['action' => 'save_notes', 'md_file' => 'newnotes.md', 'new_name' => '', 'content' => "Updated again.\n", 'csrf_token' => $csrf], [$authHeader, "Cookie: $sessionCookie"]);
 check('[notes editor] saving text with no {gallery} first line says the file is not active', str_contains($savedNoMarker, 'not active'));
@@ -1901,7 +1986,7 @@ $revealWrongAuth = 'Authorization: Basic ' . base64_encode('x:wrong');
 
 // Public baseline: everything visible, footer carries the Private view link.
 [, $privateBaselineBody] = http_get("$basePrivate/");
-check('with an admin password the closed lock is there from the start (it is the way to the admin), and there is no "Private view" footer link', str_contains($privateBaselineBody, 'class="map-combo-btn lock-link" href="?reveal"') && !str_contains($privateBaselineBody, '>Private view</a>'));
+check('with an admin password there is no lock icon in the gallery (the admin address is the way in), and no "Private view" footer link', !str_contains($privateBaselineBody, 'lock-link') && !str_contains($privateBaselineBody, '>Private view</a>'));
 check('nothing is hidden yet — loose1.jpg is visible', str_contains($privateBaselineBody, 'loose1.jpg'));
 
 // Log into admin, flag loose1.jpg hidden.
@@ -1914,7 +1999,7 @@ http_post("$basePrivate/?admin", [
 
 [, $afterHideBody] = http_get("$basePrivate/");
 check('a hidden item is omitted from the public page entirely', !str_contains($afterHideBody, 'loose1.jpg'));
-check('[lock] once something is private, a closed lock appears in the icon strip (not beside the title) and links to the password form; the old footer link is gone', str_contains($afterHideBody, 'class="map-combo-btn lock-link" href="?reveal"') && preg_match('#<h1>(.*?)</h1>#s', $afterHideBody, $lockH1) === 1 && !str_contains($lockH1[1], 'lock-link') && !str_contains($lockH1[1], 'title-admin') && preg_match('#<span class="page-tools">.*?class="map-combo-btn lock-link".*?class="map-combo-btn page-about"#s', $afterHideBody) === 1 && str_contains($afterHideBody, ui_lock_probe('lock')) && !str_contains($afterHideBody, '>Private view</a>'));
+check('[lock] once something is private the gallery still has no lock icon (a visitor is never shown a way to sign in; ?admin and ?reveal are typed), and the old footer link is gone', !str_contains($afterHideBody, 'lock-link') && preg_match('#<h1>(.*?)</h1>#s', $afterHideBody, $lockH1) === 1 && !str_contains($lockH1[1], 'title-admin') && !str_contains($afterHideBody, '>Private view</a>'));
 [$hiddenImgStatus] = http_get("$basePrivate/?img=loose1.jpg&size=thumb");
 check('?img= refuses a hidden item to an unrevealed visitor', $hiddenImgStatus === 404);
 [, $hiddenPhotoBody] = http_get("$basePrivate/?photo=loose1.jpg");
@@ -1969,9 +2054,11 @@ check('[counts] a signed-in viewer is not the owner: with public counts off, no 
 [, $ownerCountsBody] = http_get("$basePrivate/", ["Cookie: $sessCookie"]);
 check('[counts] the owner always sees each photo\'s view count, even with public counts off and a count of zero (loose2.jpg: no view yet)', (bool) preg_match('#<span class="view-badge" data-photo="loose2\.jpg"><svg[^>]*><use href="\#i-eye"></use></svg> 0</span>#', $ownerCountsBody) && str_contains($ownerCountsBody, 'const showCountsPublicly = true;'), substr($ownerCountsBody, 0, 0));
 check('[counts] ...and visitors still see none', (bool) preg_match('#class="view-badge hidden"[^>]*data-photo="loose2\.jpg"#', http_get("$basePrivate/")[1]));
-check('[lock] a viewer who has the password sees the lock open: a button in a small form that posts to ?reveal', str_contains($revealedBody, 'class="lock-form"') && str_contains($revealedBody, 'name="logout"') && str_contains($revealedBody, ui_lock_probe('unlock')) && !str_contains($revealedBody, 'href="?reveal"'));
+check('[lock] a viewer who has the password has the small sign-out form (posting to ?reveal) but no lock icon in the strip', str_contains($revealedBody, 'class="lock-form"') && !str_contains($revealedBody, 'lock-link') && !str_contains($revealedBody, 'href="?reveal"'));
 [$lockOutStatus, , $lockOutHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => ''], ["Cookie: $revealCookie"], false);
 $lockOutCookie = (string) extract_cookie_header($lockOutHd);
+$lockDeadCookie = $revealCookie;
+$revealCookie = extract_cookie_header(http_get("$basePrivate/?reveal", [$revealAuth], false)[2]);   // (Log out ended that browser's token on the server: the tests below sign in again)
 check('[lock] pressing it forgets this browser\'s private-view cookie and goes back to the page, which is then locked again', $lockOutStatus === 303 && (bool) array_filter($lockOutHd, fn($h) => stripos($h, 'Location: ./') === 0) && !str_contains(http_get("$basePrivate/", ['Cookie: ' . ($lockOutCookie !== '' ? $lockOutCookie : 'x=y')])[1], 'loose1.jpg'));
 [, $lockAdminBody] = http_get("$basePrivate/", ["Cookie: $sessCookie"]);
 check('[lock] the owner (signed in to the admin) sees it open too, and it is the same sign-out button', str_contains($lockAdminBody, 'class="lock-form"') && str_contains($lockAdminBody, 'name="logout"') && str_contains($lockAdminBody, 'signed in as the owner'));
@@ -1984,6 +2071,7 @@ $adminCsrf = extract_csrf_token($adminLoginBody);
 [, $lockFolderBody] = http_get("$basePrivate/?folder=Paris", ["Cookie: $revealCookie"]);
 check('[lock] on a folder\'s page the lock remembers the folder, so locking or unlocking brings you back to it', str_contains($lockFolderBody, 'name="folder" value="Paris"'));
 [, , $lockBackHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => 'Paris'], ["Cookie: $revealCookie"], false);
+$revealCookie = extract_cookie_header(http_get("$basePrivate/?reveal", [$revealAuth], false)[2]);
 check('[lock] ...pressing it there returns to that folder', (bool) array_filter($lockBackHd, fn($h) => stripos($h, 'Location: ./?folder=Paris') === 0));
 [, , $loginBackHd] = http_get("$basePrivate/?reveal&folder=Paris", [$revealAuth], false);
 check('[lock] ...and unlocking from a folder\'s page returns there too', (bool) array_filter($loginBackHd, fn($h) => stripos($h, 'Location: ./?folder=Paris') === 0));
@@ -2021,7 +2109,7 @@ check('the admin shows an Edited entry in the sidebar, above the folder list, wi
 check('[hover] the admin\'s plain buttons answer a mouse and a press (zero strength, so a button\'s own hover wins), and the filter chips and +N answer too', str_contains($adminGridBody, ':where(button:not(.linklike):not(:disabled):hover, .btn:hover) { filter:brightness(1.14); }') && str_contains($adminGridBody, ':where(button:not(.linklike):not(:disabled):active, .btn:active) { transform:scale(0.97); }') && str_contains($adminGridBody, 'button.secondary:hover:not(:disabled) { background:#3a3a42; color:#fff; }') && str_contains($adminGridBody, '.ed-chip:not([aria-pressed=true]):hover') && str_contains($adminGridBody, '.ed-more:hover'));
 check('[tab names] the sidebar says Settings (not Site settings), the folder-level tab is Folder settings, and the Root\'s card on the Edited tab is called Root', str_contains($adminGridBody, 'data-tab="site" class="side-link">Settings</a>') && str_contains($adminGridBody, 'data-tab="settings">Folder settings</a>') && !str_contains($adminGridBody, '>Site settings<') && !str_contains($adminGridBody, 'Main page'));
 check('...and the top tabs stay the same four sections (Hidden is not one of them)', (bool) preg_match('#<nav class="admin-tabs".*?</nav>#s', $adminGridBody, $tabNav) && !str_contains($tabNav[0], 'hidden'));
-check('...with the tabs in the same bar as the title and Log out (one header row), in that order', (function ($b) { $p1 = strpos($b, '<h1>Gallery Admin</h1>'); $p2 = strpos($b, '<nav class="admin-tabs"'); $p3 = strpos($b, 'class="logout-form"'); return $p1 !== false && $p1 < $p2 && $p2 < $p3 && substr_count(substr($b, 0, $p3), '<header') === 1 && strpos($b, '</header>') > $p3; })($adminGridBody));
+check('...with only the title and Log out in the header (one row); the folder\'s own tabs sit under its heading in the page, not up there', (function ($b) { $p1 = strpos($b, '<h1>Gallery Admin</h1>'); $p3 = strpos($b, 'class="logout-form"'); $pe = strpos($b, '</header>'); $ph = strpos($b, 'id="admin-folder-head"'); $p2 = strpos($b, '<nav class="admin-tabs"'); return $p1 !== false && $p1 < $p3 && substr_count(substr($b, 0, $p3), '<header') === 1 && $pe > $p3 && $ph > $pe && $p2 > $ph && !str_contains(substr($b, 0, $pe), '<nav class="admin-tabs"'); })($adminGridBody));
 
 // Hidden-items summary: three tiers, not a flat list.
 [, $hiddenSummaryBody] = http_get("$basePrivate/?admin&hidden=1", [$adminAuth, "Cookie: $sessCookie"]);
@@ -2146,12 +2234,13 @@ check('?mapicon serves a 1200x630 JPEG', $iconStatus === 200 && $iconIsJpeg && $
 
 check('a hidden item never appears on the map at all', !str_contains($mapBody, 'hidden.jpg'));
 
+function slugify_for_test($t) { return trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($t)), '-'); }
 // Find the Paris cluster specifically (2 members) to check its link/color.
 $parisCluster = null;
 foreach ($clusters as $c) {
     if (count($c) === 2) { $parisCluster = $c; break; }
 }
-check('a folder-group member\'s popup link points at its ?folder= page', $parisCluster !== null && $parisCluster[0]['link'] === '?folder=Paris');
+check('a folder-group member\'s popup link opens the folder it is in, on that photo (?folder=...#group-<its name>), not just the top of the folder', $parisCluster !== null && $parisCluster[0]['link'] === '?folder=Paris#group-' . slugify_for_test(pathinfo(basename($parisCluster[0]['file']), PATHINFO_FILENAME)));
 check('both members of the same folder-group share the same color', $parisCluster !== null && $parisCluster[0]['color'] === $parisCluster[1]['color']);
 
 $standaloneCluster = null;
@@ -2531,7 +2620,7 @@ check('a stale folder-settings save is refused too', str_contains($folderStale, 
 check('...leaving the newer value in place', str_contains($folderAfter, 'Changed in tab B') && !str_contains($folderAfter, 'Stale overwrite'));
 
 // Admin page pieces.
-check('the Export section warns that the file records hidden items and GPS', str_contains($parisAdminBody, 'Handle the file with care') && str_contains($parisAdminBody, 'hidden'));
+check('the readable copy under Files this gallery has made warns that the file holds hidden items and GPS, so it is to be kept private', str_contains($parisAdminBody, 'keep it private') && str_contains($parisAdminBody, 'which things are hidden') && str_contains($parisAdminBody, 'GPS'));
 preg_match('#<aside class="notes-reference".*?</aside>#s', $depthAdminBody, $refM); $ref = $refM[0] ?? '';
 check('the notes reference is on the Notes tab in full, once (not folded away, and not repeated inside every editor), never collapsed', $ref !== '' && substr_count($depthAdminBody, 'How notes work') === 1 && !str_contains($depthAdminBody, '<details class="admin-reference"') && !str_contains($ref, '<details'));
 foreach (['Start here', 'Formatting', 'Directives', 'Attaching photos to a paragraph', 'Where a directive applies', 'Notes and folders', 'Showing a directive as text', "If something doesn't work"] as $section) {
@@ -2611,7 +2700,7 @@ write_patched_index("$fxSubNotice/index.php", $indexContents, []);
 $portSubNotice = find_free_port();
 start_server($fxSubNotice, $portSubNotice);
 [, $subNoticeBody] = http_get("http://127.0.0.1:$portSubNotice/");
-check('photos in subfolders with AUTO_GROUP_BY_FOLDER off produce a setup notice with the right count', str_contains($subNoticeBody, '2 photos/videos were found in subfolders but aren&#039;t shown') && str_contains($subNoticeBody, 'AUTO_GROUP_BY_FOLDER'));
+check('photos in subfolders with AUTO_GROUP_BY_FOLDER off produce a setup notice with the right count', str_contains($subNoticeBody, '2 photos/videos were found in subfolders but aren&#039;t shown') && str_contains($subNoticeBody, 'turn on Show subfolders'));
 check('...which names no folder or file', !str_contains($subNoticeBody, 'TopSecretTrip') && !str_contains($subNoticeBody, 'Day1'));
 check('...and the gallery itself still shows only the loose photo', str_contains($subNoticeBody, 'alt="loose.jpg"') && !str_contains($subNoticeBody, 'a.jpg') && !str_contains($subNoticeBody, 'b.jpg'));
 check('the defaults fixture (a flat folder) gets no such notice', $mapOffBody !== '' && !str_contains($mapOffBody, 'found in subfolders'));
@@ -2631,7 +2720,7 @@ foreach (['grouping off' => 'false', 'grouping on' => 'true'] as $label => $grou
     $portVid = find_free_port();
     start_server($fxVid, $portVid);
     [, $vidBody] = http_get("http://127.0.0.1:$portVid/");
-    check("[video notice, $label] videos with ENABLE_VIDEO off produce a setup notice with the right count", str_contains($vidBody, '3 video files (.mov/.mp4) were found but aren&#039;t shown, because ENABLE_VIDEO is off') && str_contains($vidBody, 'setup notice'));
+    check("[video notice, $label] videos with ENABLE_VIDEO off produce a setup notice with the right count", str_contains($vidBody, '3 video files (.mov/.mp4) were found but aren&#039;t shown, because Show videos is off') && str_contains($vidBody, 'setup notice'));
     check("[video notice, $label] ...which names no folder or file", !str_contains($vidBody, 'SecretVideos') && !str_contains($vidBody, 'Day1') && !str_contains($vidBody, 'a.mp4') && !str_contains($vidBody, 'loose.mov'));
     check("[video notice, $label] ...and the banner stays collapsed when there are photos to look at", str_contains($vidBody, '<details class="gallery-notices">'));
     check("[video notice, $label] ...and the videos really are not shown (the photo is)", str_contains($vidBody, 'alt="loose.jpg"') && http_get("http://127.0.0.1:$portVid/?folder=SecretVideos")[0] === 404);
@@ -2646,7 +2735,7 @@ $portVidOnly = find_free_port();
 start_server($fxVidOnly, $portVidOnly);
 [, $vidOnlyBody] = http_get("http://127.0.0.1:$portVidOnly/");
 check('[video notice] ...and, with nothing else to show, the banner is already open rather than collapsed', str_contains($vidOnlyBody, '<details class="gallery-notices" open>'));
-check('[video notice] a gallery holding only a Videos/ folder says why it is empty (singular wording)', str_contains($vidOnlyBody, '1 video file (.mov/.mp4) was found but isn&#039;t shown, because ENABLE_VIDEO is off') && str_contains($vidOnlyBody, '1 setup notice'));
+check('[video notice] a gallery holding only a Videos/ folder says why it is empty (singular wording)', str_contains($vidOnlyBody, '1 video file (.mov/.mp4) was found but isn&#039;t shown, because Show videos is off') && str_contains($vidOnlyBody, '1 setup notice'));
 
 // With ENABLE_VIDEO on, nothing is ignored, so there is nothing to say.
 $fxVidOn = new_fixture_dir('vidon');
@@ -2657,9 +2746,9 @@ write_patched_index("$fxVidOn/index.php", $indexContents, ['ENABLE_VIDEO' => 'tr
 $portVidOn = find_free_port();
 start_server($fxVidOn, $portVidOn);
 [, $vidOnBody] = http_get("http://127.0.0.1:$portVidOn/");
-check('[video notice] with ENABLE_VIDEO on there is no such notice', !str_contains($vidOnBody, 'ENABLE_VIDEO is off') && str_contains($vidOnBody, 'loose.mp4'));
-check('[video notice] a folder with no videos at all gets no such notice', $subNoticeBody !== '' && !str_contains($subNoticeBody, 'ENABLE_VIDEO is off'));
-check('[video notice] the defaults fixture, which does hold a video, does get it (that is the point)', str_contains($mapOffBody, 'ENABLE_VIDEO is off'));
+check('[video notice] with ENABLE_VIDEO on there is no such notice', !str_contains($vidOnBody, 'Show videos is off') && str_contains($vidOnBody, 'loose.mp4'));
+check('[video notice] a folder with no videos at all gets no such notice', $subNoticeBody !== '' && !str_contains($subNoticeBody, 'Show videos is off'));
+check('[video notice] the defaults fixture, which does hold a video, does get it (that is the point)', str_contains($mapOffBody, 'Show videos is off'));
 
 // Root folder order: natural name order (Day 2 before Day 10, case-blind),
 // not scan order — and folder mtime when PHOTO_SORT_ORDER = 'mtime'.
@@ -2956,68 +3045,74 @@ mkdir("$fxAr2/Paris"); make_jpeg("$fxAr2/Paris/hidden.jpg", 300, 200, 1, 2, 3);
 write_data_file("$fxAr2/Paris/.gallery-items.php", ['items' => ['hidden.jpg' => ['restriction' => 'private']], 'groups' => []]);
 file_put_contents("$fxAr2/.gallery-config.php", cfg_text(['AUTO_GROUP_BY_FOLDER' => true]));
 copy(__DIR__ . '/../index.php', "$fxAr2/index.php");
-$portAr2 = find_free_port(); start_server($fxAr2, $portAr2); touch("$fxAr2/index.php", time());
-[, , $arClaimHd] = http_post("http://127.0.0.1:$portAr2/?admin", ['setup_password' => 'first-run-admin-pw-1', 'setup_password2' => 'first-run-admin-pw-1'], [], false);
+$portAr2 = find_free_port(); start_server($fxAr2, $portAr2);
+http_get("http://127.0.0.1:$portAr2/?admin");   // (the first request makes the setup code file)
+[, , $arClaimHd] = http_post("http://127.0.0.1:$portAr2/?admin", ['setup_code' => setup_code_for_tests($fxAr2), 'setup_password' => 'first-run-admin-pw-1', 'setup_password2' => 'first-run-admin-pw-1'], [], false);
 check('[admin reveal] a person who has just set their admin password in the first-run page can already see their hidden photos', http_get("http://127.0.0.1:$portAr2/?img=Paris%2Fhidden.jpg&size=thumb")[0] === 404 && http_get("http://127.0.0.1:$portAr2/?img=Paris%2Fhidden.jpg&size=thumb", ['Cookie: ' . extract_cookie_header($arClaimHd)])[0] === 200);
 
-echo "== first-run setup: choosing the admin password in the browser, for five minutes after upload ==\n";
+echo "== first-run setup: choosing the admin password in the browser, with the code from a file ==\n";
 
 $fxSetup = new_fixture_dir('setup');
 make_jpeg("$fxSetup/photo.jpg", 60, 60, 10, 10, 10);
 copy(__DIR__ . '/../index.php', "$fxSetup/index.php");
-$portSetup = find_free_port(); start_server($fxSetup, $portSetup); $baseSetup = "http://127.0.0.1:$portSetup";   // the harness ages index.php: "uploaded an hour ago"
-$setupCfg = "$fxSetup/.gallery-config.php"; $setupIndex = "$fxSetup/index.php";
-check('[setup] an index.php uploaded long ago with no password: ?admin does not exist (404), as before', http_get("$baseSetup/?admin")[0] === 404);
-touch($setupIndex, time() - 290);
+$portSetup = find_free_port(); start_server($fxSetup, $portSetup); $baseSetup = "http://127.0.0.1:$portSetup";
+$setupCfg = "$fxSetup/.gallery-config.php"; $setupCodeFile = "$fxSetup/gallery-setup-code.php";
+check('[setup] a gallery that has never been asked for its admin has no code file yet, and the public page does not make one', !file_exists($setupCodeFile) && http_get("$baseSetup/")[0] === 200 && !file_exists($setupCodeFile));
 [$sst, $sbody, $shd] = http_get("$baseSetup/?admin");
-check('[setup] just after upload (inside the five minutes) ?admin offers to choose a password: a form, never indexed, never cached', $sst === 200 && str_contains($sbody, 'Set up your gallery') && str_contains($sbody, 'name="setup_password"') && str_contains($sbody, 'noindex') && (bool) array_filter($shd, fn($h) => stripos($h, 'Cache-Control: no-store') === 0) && (bool) array_filter($shd, fn($h) => stripos($h, 'X-Robots-Tag: noindex') === 0));
-check('[setup] ...and it says plainly that whoever opens it first sets the password, and that it closes by itself', str_contains($sbody, 'Whoever opens this page first') && str_contains($sbody, '5 minutes'));
-check('[setup] ...and nothing on the public page advertises it', !str_contains(http_get("$baseSetup/")[1], 'Set up your gallery') && !str_contains(http_get("$baseSetup/")[1], 'name="setup_password"') && !str_contains(http_get("$baseSetup/")[1], 'href="?admin"'));
-touch($setupIndex, time() - 310);
-check('[setup] after the five minutes it is gone again (404)', http_get("$baseSetup/?admin")[0] === 404);
-file_put_contents("$fxSetup/.gallery-setup", '');
-check('[setup] an empty .gallery-setup file next to index.php reopens it, for coming back later', str_contains(http_get("$baseSetup/?admin")[1], 'name="setup_password"'));
+$setupCode = setup_code_for_tests($fxSetup);
+check('[setup] the first ?admin offers to choose a password, never indexed, never cached, and makes the file gallery-setup-code.php beside index.php: a guard line, then the code (eight letters and digits, in two fours)', $sst === 200 && str_contains($sbody, 'Set up your gallery') && str_contains($sbody, 'name="setup_password"') && str_contains($sbody, 'noindex') && (bool) array_filter($shd, fn($h) => stripos($h, 'Cache-Control: no-store') === 0) && (bool) array_filter($shd, fn($h) => stripos($h, 'X-Robots-Tag: noindex') === 0) && preg_match('/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/', $setupCode) === 1 && str_starts_with((string) file_get_contents($setupCodeFile), "<?php http_response_code(404); exit; ?>\nSetup code: $setupCode\n"));
+check('[setup] ...the page asks for the code and says where to find it (that file, its second line), has no timer, and never shows the code itself', str_contains($sbody, 'name="setup_code"') && str_contains($sbody, 'gallery-setup-code.php') && str_contains($sbody, 'second line') && !str_contains($sbody, $setupCode) && !str_contains($sbody, 'data-left') && !str_contains($sbody, 'setInterval') && !str_contains($sbody, 'Whoever opens this page first'));
+check('[setup] ...and the file cannot be read over the web (it answers 404 like the other guarded files), nor does anything on the public page advertise the setup', http_get("$baseSetup/gallery-setup-code.php")[0] === 404 && !str_contains(http_get("$baseSetup/gallery-setup-code.php")[1], $setupCode) && !str_contains(http_get("$baseSetup/")[1], 'Set up your gallery') && !str_contains(http_get("$baseSetup/")[1], 'name="setup_password"') && !str_contains(http_get("$baseSetup/")[1], 'href="?admin"'));
+check('[setup] a second visitor does not get a different code: the file is made once and kept', (function () use ($baseSetup, $fxSetup, $setupCode) { http_get("$baseSetup/?admin"); http_get("$baseSetup/?admin"); return setup_code_for_tests($fxSetup) === $setupCode; })());
+check('[setup] it does not matter how long ago index.php was uploaded or re-uploaded: no five minutes, no .gallery-setup file (an old one is simply ignored)', (function () use ($fxSetup, $baseSetup) { touch("$fxSetup/index.php", time()); file_put_contents("$fxSetup/.gallery-setup", ''); touch("$fxSetup/.gallery-setup", time() - 7200); $r = http_get("$baseSetup/?admin")[0] === 200; unlink("$fxSetup/.gallery-setup"); touch("$fxSetup/index.php", time() - 7200); return $r; })());
+// A wrong code writes nothing and is throttled.
+[, $rWrong] = http_post("$baseSetup/?admin", ['setup_code' => 'AAAA-BBBB', 'setup_password' => 'a-good-long-password-1', 'setup_password2' => 'a-good-long-password-1']);
+[, $rNoCode] = http_post("$baseSetup/?admin", ['setup_password' => 'a-good-long-password-1', 'setup_password2' => 'a-good-long-password-1']);
+check('[setup] a wrong code, or none, is refused with the reason and nothing is written (no settings file, and the password is not even looked at)', str_contains($rWrong, 'not the code in gallery-setup-code.php') && str_contains($rNoCode, 'not the code in gallery-setup-code.php') && !file_exists($setupCfg) && file_exists($setupCodeFile));
+$setupStatuses = []; for ($si = 0; $si < 6; $si++) $setupStatuses[] = http_post("$baseSetup/?admin", ['setup_code' => 'ZZZZ-' . $si . 'ZZZ', 'setup_password' => 'x', 'setup_password2' => 'x'])[0];
+check('[setup] guessing the code is throttled like guessing a password: after a few wrong tries even the right code is turned away for a moment (429)', end($setupStatuses) === 429 && http_post("$baseSetup/?admin", ['setup_code' => $setupCode, 'setup_password' => 'a-good-long-password-1', 'setup_password2' => 'a-good-long-password-1'])[0] === 429 && !file_exists($setupCfg));
+@unlink("$fxSetup/.gallery-login-attempts.php");
 // Bad input writes nothing.
-[, $rMismatch] = http_post("$baseSetup/?admin", ['setup_password' => 'a-good-long-password-1', 'setup_password2' => 'another-long-password']);
-[, $rShort] = http_post("$baseSetup/?admin", ['setup_password' => 'short', 'setup_password2' => 'short']);
-check('[setup] two passwords that differ, or one under 8 characters, or one without a letter and a number, are refused with the reason and nothing is written', (str_contains($rMismatch, "don't match") || str_contains($rMismatch, 'don&#039;t match')) && str_contains($rShort, 'at least 8 characters') && !file_exists($setupCfg));
+[, $rMismatch] = http_post("$baseSetup/?admin", ['setup_code' => strtolower($setupCode), 'setup_password' => 'a-good-long-password-1', 'setup_password2' => 'another-long-password']);
+[, $rShort] = http_post("$baseSetup/?admin", ['setup_code' => str_replace('-', ' ', $setupCode), 'setup_password' => 'short', 'setup_password2' => 'short']);
+check('[setup] with the right code (typed in lower case, or with a space for the dash), two passwords that differ, or one under 8 characters, or one without a letter and a number, are refused with the reason and nothing is written', (str_contains($rMismatch, "don't match") || str_contains($rMismatch, 'don&#039;t match')) && str_contains($rShort, 'at least 8 characters') && !file_exists($setupCfg) && file_exists($setupCodeFile));
 // A settings file that exists but isn't valid is never overwritten.
 file_put_contents($setupCfg, $cfgGuard . "{\"ENABLE_VIDEO\": true,\n");
 $brokenBytes = (string) file_get_contents($setupCfg);
-[, $rBroken] = http_post("$baseSetup/?admin", ['setup_password' => 'a-good-long-password-1', 'setup_password2' => 'a-good-long-password-1']);
+[, $rBroken] = http_post("$baseSetup/?admin", ['setup_code' => $setupCode, 'setup_password' => 'a-good-long-password-1', 'setup_password2' => 'a-good-long-password-1']);
 check('[setup] a settings file that is not valid is never overwritten: it says so and leaves the file exactly as it was', str_contains($rBroken, 'isn&#039;t valid') && (string) file_get_contents($setupCfg) === $brokenBytes);
 // Settings that were already there are kept when the password is added.
 file_put_contents($setupCfg, cfg_text(['ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true]));
 $claimPw = "my 'first' admin password 1 // with, odd } chars";
-[$cst, , $chd] = http_post("$baseSetup/?admin", ['setup_password' => $claimPw, 'setup_password2' => $claimPw], [], false);
+[$cst, , $chd] = http_post("$baseSetup/?admin", ['setup_code' => $setupCode, 'setup_password' => $claimPw, 'setup_password2' => $claimPw], [], false);
 $claimLoc = ''; foreach ($chd as $h) if (stripos($h, 'Location:') === 0) $claimLoc = trim(substr($h, 9));
 $claimCookie = extract_cookie_header($chd);
-check('[setup] choosing a password redirects into the admin\'s Settings, already signed in (a session cookie)', $cst === 303 && $claimLoc === '?admin#site' && str_contains($claimCookie, 'gallery_admin_'));
+check('[setup] the right code and a good password redirect into the admin\'s Settings, already signed in (a session cookie)', $cst === 303 && $claimLoc === '?admin#site' && str_contains($claimCookie, 'gallery_admin_'));
 $claimCfg = cfg_read($setupCfg); ksort($claimCfg);
 check('[setup] the password is stored in the settings file next to the settings that were already there, and nowhere else', pw_stored_ok($claimCfg['ADMIN_PASSWORD'] ?? null, $claimPw) && !str_contains((string) file_get_contents($setupCfg), 'first') && array_diff_key($claimCfg, ['ADMIN_PASSWORD' => 1]) === ['ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true] && (fileperms($setupCfg) & 0o077) === 0 && str_starts_with((string) file_get_contents($setupCfg), $cfgGuard));
 [, $claimedPage] = http_get("$baseSetup/?admin", ["Cookie: $claimCookie"]);
 check('[setup] with that session the admin opens with no further password, and says it is set and where it is kept', str_contains($claimedPage, 'Gallery Admin') && str_contains($claimedPage, 'Your admin password is set'));
-check('[setup] the .gallery-setup file has done its job and is removed', !file_exists("$fxSetup/.gallery-setup"));
+check('[setup] the code file has done its job and is removed', !file_exists($setupCodeFile));
 // Closed for good.
-touch($setupIndex, time());
 file_put_contents("$fxSetup/.gallery-setup", '');
 [, $loginAgain] = http_get("$baseSetup/?admin");
 $beforeSecond = (string) file_get_contents($setupCfg);
-[, $second] = http_post("$baseSetup/?admin", ['setup_password' => 'an-attackers-password-1', 'setup_password2' => 'an-attackers-password-1']);
-check('[setup] once a password exists, setup never appears again, even with a fresh index.php and a .gallery-setup file: it is the login form', str_contains($loginAgain, 'name="access_code"') && !str_contains($loginAgain, 'name="setup_password"'));
+[, $second] = http_post("$baseSetup/?admin", ['setup_code' => $setupCode, 'setup_password' => 'an-attackers-password-1', 'setup_password2' => 'an-attackers-password-1']);
+check('[setup] once a password exists, setup never appears again, even with the old code and a .gallery-setup file: it is the login form, and no code file is made', str_contains($loginAgain, 'name="access_code"') && !str_contains($loginAgain, 'name="setup_password"') && !file_exists($setupCodeFile));
 check('[setup] ...and a second visitor posting a new password changes nothing', !str_contains($second, 'Your admin password is set') && (string) file_get_contents($setupCfg) === $beforeSecond && pw_stored_ok(cfg_read($setupCfg)['ADMIN_PASSWORD'] ?? null, $claimPw));
 check('[setup] ...the chosen password (with quotes, slashes, a comma and a brace in it) logs in through the form', http_post("$baseSetup/?admin", ['login_password' => $claimPw], [], false)[0] === 303 && http_post("$baseSetup/?admin", ['login_password' => 'an-attackers-password-1'], [], false)[0] === 200);
 unlink("$fxSetup/.gallery-setup");
-// An unwritable folder: say so and hand over the exact file.
+// An unwritable folder: no code can be made and nothing can be saved, so say so and hand over the exact file.
 $fxSetupRo = new_fixture_dir('setup-ro');
 make_jpeg("$fxSetupRo/a.jpg", 60, 60, 1, 2, 3);
 copy(__DIR__ . '/../index.php', "$fxSetupRo/index.php");
 $portSetupRo = find_free_port(); start_server($fxSetupRo, $portSetupRo);
-touch("$fxSetupRo/index.php", time());
 chmod($fxSetupRo, 0555);
+[, $roPage] = http_get("http://127.0.0.1:$portSetupRo/?admin");
 [, $roSetup] = http_post("http://127.0.0.1:$portSetupRo/?admin", ['setup_password' => 'read-only-folder-password-1', 'setup_password2' => 'read-only-folder-password-1']);
 chmod($fxSetupRo, 0775);
-check('[setup] when the folder can\'t be written it says so, saves nothing, and shows the exact settings file to create by hand', str_contains($roSetup, 'isn&#039;t writable') && str_contains($roSetup, '&quot;ADMIN_PASSWORD&quot;: &quot;$2y$') && !str_contains($roSetup, 'read-only-folder-password-1') && !file_exists("$fxSetupRo/.gallery-config.php"));
+check('[setup] when the folder can\'t be written there is no code to ask for (nothing could be saved anyway): the page still opens, saves nothing, says so, and shows the exact settings file to create by hand', str_contains($roPage, 'name="setup_password"') && !str_contains($roPage, 'name="setup_code"') && str_contains($roSetup, 'isn&#039;t writable') && str_contains($roSetup, '&quot;ADMIN_PASSWORD&quot;: &quot;$2y$') && !str_contains($roSetup, 'read-only-folder-password-1') && !file_exists("$fxSetupRo/.gallery-config.php") && !file_exists("$fxSetupRo/gallery-setup-code.php"));
+check('[setup] the places that tell you how to set it up again (the Forgotten? line, both Delete screens) point at the code file, not at a timed marker', substr_count((string) file_get_contents($indexSrc), 'gallery-setup-code.php') >= 6 && !str_contains((string) file_get_contents($indexSrc), 'within 15 minutes (<code>touch'));
 
 echo "== settings file: .gallery-config.php overrides the defaults and survives an update ==\n";
 
@@ -3029,10 +3124,11 @@ copy(__DIR__ . '/../index.php', "$fxCfg/index.php");
 $portCfg = find_free_port(); start_server($fxCfg, $portCfg); $baseCfg = "http://127.0.0.1:$portCfg";
 $cfgHome = fn () => http_get("$baseCfg/")[1];
 $h0 = $cfgHome();
-check('[settings file] with no settings file, the defaults apply (video off, no admin, no subfolders, no title link to the admin)', !str_contains($h0, 'clip.mp4') && http_get("$baseCfg/?admin")[0] === 404 && !str_contains($h0, 'href="?admin"'));
+check('[settings file] with no settings file, the defaults apply (video off, no admin, only the set-up page behind ?admin, no subfolders, no title link to the admin)', !str_contains($h0, 'clip.mp4') && str_contains(http_get("$baseCfg/?admin")[1], 'Set up your gallery') && !str_contains($h0, 'href="?admin"'));
+@unlink("$fxCfg/gallery-setup-code.php");
 file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true]));
 $h1 = $cfgHome();
-check('[settings file] a .gallery-config.php beside index.php overrides the defaults (video shown, folders on, admin exists, a lock beside the title leads to the sign-in)', str_contains($h1, 'alt="clip.mp4"') && str_contains($h1, 'id="group-sub"') && str_contains($h1, 'class="map-combo-btn lock-link" href="?reveal"') && http_get("$baseCfg/?admin")[0] === 200);
+check('[settings file] a .gallery-config.php beside index.php overrides the defaults (video shown, folders on, admin exists)', str_contains($h1, 'alt="clip.mp4"') && str_contains($h1, 'id="group-sub"') && !str_contains($h1, 'lock-link') && http_get("$baseCfg/?admin")[0] === 200);
 check('[settings file] ...and the password in it really works for the admin login', str_contains(http_post("$baseCfg/?admin", ['login_password' => 'cfg-pw-123'])[1] . http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')])[1], 'Gallery Admin'));
 check('[settings file] a direct request for the file answers 404 and shows nothing', (function () use ($baseCfg) { [$st, $b] = http_get("$baseCfg/.gallery-config.php"); return $st === 404 && !str_contains($b, 'cfg-pw-123') && !str_contains($b, 'ADMIN_PASSWORD'); })());
 // An update: index.php is replaced by a fresh copy. The settings stay.
@@ -3082,7 +3178,8 @@ check('[settings file] the root Settings tab no longer carries a "settings file"
 unlink("$fxCfg/.gallery-config.php");
 [, $cfgAdmin2] = http_get("$baseCfg/?admin", ['Authorization: Basic ' . base64_encode('x:cfg-pw-123')]);
 touch("$fxCfg/index.php", time() - 3600);
-check('[settings file] with no password anywhere and an old index.php, ?admin does not exist (404)', http_get("$baseCfg/?admin")[0] === 404);
+check('[settings file] with no password anywhere, ?admin is only the set-up page (however old index.php is)', str_contains(http_get("$baseCfg/?admin")[1], 'Set up your gallery') && !str_contains(http_get("$baseCfg/?admin")[1], 'Gallery Admin'));
+@unlink("$fxCfg/gallery-setup-code.php");
 
 echo "== note colours reach the map pins ==\n";
 $fxPin = new_fixture_dir('pincolor');
@@ -3171,11 +3268,11 @@ check('[cover mark] the editor knows it already is the cover (its Cover switch i
 check('[cover mark] the folder\'s settings carry no cover paragraph (the cover is chosen with the star or the editor\'s Cover switch)', !str_contains($flCoverPage, 'click "Set as cover" on any photo below') && !str_contains($flCoverPage, 'Shared links use the first photo as their picture') && !str_contains($flCoverPage, 'data-tab="photos"'));
 [, $flRootAdmin] = http_get("$baseFl/?admin", $flHdrs);
 check('[cover mark] nor does the gallery\'s own settings page', !str_contains($flRootAdmin, 'Shared links use the first photo as their picture') && !str_contains($flRootAdmin, 'Cover photo (the picture in shared-link previews)'));
-check('[rules] the Private page offers ready-made nginx and Apache rules, collapsed, written for this gallery\'s address, with copy buttons', str_contains($flCoverPage, '<h2 class="section-title">Lock the files themselves</h2>') && substr_count($flCoverPage, 'class="secondary copy-rules"') >= 2);
+check('[rules] the Edited page offers ready-made nginx and Apache rules, collapsed inside the not-locked banner under "Fix this", written for this gallery\'s address, with copy buttons', str_contains($flCoverPage, '<details class="fold lock-fix" data-lock-rules-panel hidden>') && str_contains($flCoverPage, '<summary>Fix this: the rules to add</summary>') && !str_contains($flCoverPage, 'Lock the files themselves') && substr_count($flCoverPage, 'class="secondary copy-rules"') >= 2);
 check('[rules] Settings carries the same rules in its Server setup section', str_contains($flRootAdmin, 'class="site-rules"') && str_contains($flRootAdmin, '<summary><strong>nginx</strong>') && str_contains($flRootAdmin, '<summary><strong>Apache</strong>') && str_contains($flRootAdmin, 'location ~* ^/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$') && str_contains($flRootAdmin, 'FilesMatch') && str_contains($flRootAdmin, 'class="secondary copy-rules"'));
 check('[rules] Settings also has the optional tidy-folder-link rules for nginx and Apache, exactly as the README gives them', str_contains($flRootAdmin, 'rewrite ^/(.+)/$ /index.php?folder=$1 last;') && str_contains($flRootAdmin, 'RewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]') && substr_count($flRootAdmin, '<summary><strong>') >= 4);
-check('[rules] the Private page keeps to the privacy rules (two drop-downs) and points to Settings for the optional ones and the nginx redirect setting', (preg_match('#Lock the files themselves.*?</section>#s', $flCoverPage, $lockSec) === 1 && substr_count($lockSec[0], '<summary><strong>') === 2) && str_contains($lockSec[0] ?? '', 'tidy folder links and the nginx redirect') && !str_contains($lockSec[0] ?? '', 'RewriteRule ^(.+)/$') && !str_contains($lockSec[0] ?? '', 'rewrite ^'));
-check('[pin grouping] in Settings the pin-grouping row is set in under the map and hidden while the map is off', (bool) preg_match('#<div class="site-row sub-row" id="setting-MAP_CLUSTER_RADIUS_MILES" data-requires="set_ENABLE_MAP" hidden>#', $flRootAdmin));
+check('[rules] the Private page keeps to the privacy rules (two drop-downs) and points to Settings for the optional ones and the nginx redirect setting', (preg_match('#<details class="fold lock-fix".*?data-tidy-rules.*?</details>#s', $flCoverPage, $lockSec) === 1 && substr_count($lockSec[0], '<summary><strong>') === 2) && str_contains($lockSec[0] ?? '', 'tidy folder links and the nginx redirect') && !str_contains($lockSec[0] ?? '', 'RewriteRule ^(.+)/$') && !str_contains($lockSec[0] ?? '', 'rewrite ^'));
+check('[pin grouping] in Settings the pin-grouping row is set in under Allow photo locations (the same depth as the other rows that hang on one switch)', (bool) preg_match('#<div class="site-row sub-row" id="setting-MAP_CLUSTER_RADIUS_MILES" data-requires="set_ENABLE_PHOTO_LOCATION"#', $flRootAdmin));
 // Passwords.
 $flFields = fn ($pw) => user_submit("$baseFl/?admin", http_get("$baseFl/?admin#site", $flHdrs)[1], 'value="save_site_settings"', ['pw_admin' => $pw, 'pw_admin2' => $pw], $flHdrs)[1];
 foreach (['abcdefghijkl' => 'letters only', '1234567890' => 'numbers only', 'abc123' => 'under 8', '          ' => 'spaces'] as $pw => $why) {
@@ -3197,7 +3294,7 @@ $portLk = find_free_port(); start_server($fxLk, $portLk); $baseLk = "http://127.
 check('[lock] with only a private-view password and nothing private there is nothing to unlock, so no lock', !str_contains(http_get("$baseLk/")[1], 'class="lock-link'));
 write_data_file("$fxLk/.gallery-items.php", ['items' => ['b.jpg' => ['restriction' => 'private']], 'groups' => []]);
 $lkHome = http_get("$baseLk/")[1];
-check('[lock] ...and once a photo is private the closed lock appears', str_contains($lkHome, 'class="map-combo-btn lock-link" href="?reveal"') && !str_contains($lkHome, 'alt="b.jpg"'));
+check('[lock] ...and once a photo is private it is hidden and still there is no lock icon', !str_contains($lkHome, 'lock-link') && !str_contains($lkHome, 'alt="b.jpg"'));
 [, $lkForm] = http_get("$baseLk/?reveal");
 $lkFormText = preg_replace('#<(script|style)\b.*?</\1>#s', '', $lkForm);
 check('[lock] the sign-in page is bare: one large lock drawing and one box, with no heading, no button and no words about passwords or signing in', substr_count($lkFormText, '<h1') === 0 && !str_contains($lkForm, '<button') && !str_contains($lkFormText, 'Continue') && !str_contains($lkFormText, 'Go Back') && str_contains($lkForm, 'class="mark" id="goback"') && str_contains($lkForm, 'name="access_code"') && !preg_match('/password|sign in|admin|private-view/i', trim(strip_tags($lkFormText))));
@@ -3216,17 +3313,19 @@ check('[lock] ...and that really is a signed-in admin session (the admin page op
 [$lkVwSt, , $lkVwHd] = http_post("$baseLk2/?reveal", ['login_password' => 'view-only'], [], false);
 check('[lock] the private-view password typed into the same box shows the private items, and is not the admin', $lkVwSt === 302 && (bool) array_filter($lkVwHd, fn($h) => stripos($h, 'Location: ./') === 0) && !str_contains(http_get("$baseLk2/?admin", ['Cookie: ' . (string) extract_cookie_header($lkVwHd)])[1], 'Gallery Admin'));
 [, $lkOwnerHome] = http_get("$baseLk2/?folder=Sub", ['Cookie: ' . $lkOwnerCookie]);
-check('[lock] a signed-in owner has no Admin link in the footer (there is no footer any more); the title is the way back to the admin, for the folder they are in', !str_contains($lkOwnerHome, '>Admin</a>') && !str_contains($lkOwnerHome, '<footer') && str_contains($lkOwnerHome, '<a class="title-admin" rel="nofollow" href="?admin&amp;folder=Sub">'));
+check('[lock] a signed-in owner has no Admin link in the footer (there is no footer any more); the title is the way back to the admin, for the folder they are in', !str_contains($lkOwnerHome, '>Admin</a>') && !str_contains($lkOwnerHome, '<footer') && str_contains($lkOwnerHome, '<a class="title-admin" rel="nofollow" href="?admin&amp;shell=1&amp;folder=Sub">'));
 [, , $lkOutHd] = http_post("$baseLk2/?reveal", ['logout' => '1', 'folder' => 'Sub', 'photo' => 'Sub/b.jpg', 'map' => '1'], ['Cookie: ' . $lkOwnerCookie], false);
 check('[lock] signing out returns to the very same page, not just the same folder: the open photo and the open map are kept', (bool) array_filter($lkOutHd, fn($h) => stripos($h, 'Location: ./?folder=Sub&photo=Sub%2Fb.jpg&map') === 0));
 [, $lkPageHome] = http_get("$baseLk2/?folder=Sub&photo=Sub%2Fb.jpg");
-check('[lock] the closed lock on such a page carries the photo too, so signing in brings you back to it', str_contains($lkPageHome, 'href="?reveal&amp;folder=Sub&amp;photo=Sub%2Fb.jpg"'));
+check('[lock] a page with a photo open has no lock icon either', !str_contains($lkPageHome, 'lock-link'));
 [, , $lkAdHd2] = http_post("$baseLk2/?reveal&folder=Sub", ['login_password' => 'owner-pw-12345'], [], false);
 $lkOwnerCookie = (string) extract_cookie_header($lkAdHd2);
 [, $lkAdmForm] = http_get("$baseLk2/?admin&folder=Sub", ['Cookie: ' . $lkOwnerCookie]);
 $lkAdmOutHd = [];
 foreach (html_post_forms($lkAdmForm) as $lkF) if (str_contains($lkF['html'], 'value="logout"')) { [, , $lkAdmOutHd] = http_post("$baseLk2/?admin&folder=Sub", form_default_fields($lkF['html']), ['Cookie: ' . $lkOwnerCookie], false); break; }
 check('[lock] the admin\'s own Log out from a folder lands on that folder\'s gallery page, signed out', (bool) array_filter($lkAdmOutHd, fn($h) => stripos($h, 'Location: ?folder=Sub') === 0));
+[, , $lkAdHd3] = http_post("$baseLk2/?reveal&folder=Sub", ['login_password' => 'owner-pw-12345'], [], false);
+$lkOwnerCookie = (string) extract_cookie_header($lkAdHd3);   // (Log out ended that browser's token: sign in again for the checks below)
 [, $lkCancelRoot] = http_get("$baseLk2/?reveal");
 [, $lkCancelFolder] = http_get("$baseLk2/?reveal&folder=Sub&photo=Sub%2Fb.jpg");
 [, $lkCancelAdmin] = http_get("$baseLk2/?admin&folder=Sub");
@@ -3234,7 +3333,7 @@ check('[lock] the lock drawing is the way back: it returns to the page the visit
 check('[lock] a visitor\'s title is still plain text: it leads to the admin only for the signed-in owner', !str_contains(http_get("$baseLk2/")[1], 'class="title-admin"') && !str_contains(http_get("$baseLk2/?folder=Sub")[1], 'class="title-admin"'));
 [, $lkOwnerRoot] = http_get("$baseLk2/", ['Cookie: ' . $lkOwnerCookie]);
 check('[lock] ...and it looks and behaves exactly like plain text: no hover, focus or cursor rule, and no tooltip', (bool) preg_match('/header h1 a\\.title-admin \\{ color: inherit; text-decoration: none; cursor: inherit;/', $lkOwnerRoot) && !str_contains($lkOwnerRoot, 'title-admin:hover') && !str_contains($lkOwnerRoot, 'title-admin:focus') && !str_contains($lkOwnerRoot, 'title="Back to the admin"'));
-check('[lock] ...and at the top of the gallery it leads to the admin\'s own front page', str_contains($lkOwnerRoot, '<a class="title-admin" rel="nofollow" href="?admin">'));
+check('[lock] ...and at the top of the gallery it leads to the admin\'s own front page', str_contains($lkOwnerRoot, '<a class="title-admin" rel="nofollow" href="?admin&amp;shell=1">'));
 
 echo "== a folder opens on its chosen cover photo ==\n";
 $fxCv = new_fixture_dir('covertarget');
@@ -3362,7 +3461,7 @@ http_get("$baseSite/?track=photo.jpg"); http_get("$baseSite/?track=photo.jpg"); 
 $siteHdrs = [$siteAuth, 'Cookie: ' . extract_cookie_header($sAdminHd)];
 $siteForm = function ($page) { foreach (html_post_forms($page) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; };
 $sForm = $siteForm($sAdmin);
-check('[site settings] the admin has a "Settings" entry in the sidebar and a form with every managed setting', str_contains($sAdmin, 'data-tab="site" class="side-link"') && $sForm !== '' && str_contains($sForm, 'name="set_ENABLE_VIDEO"') && str_contains($sForm, 'name="set_AUTO_GROUP_BY_FOLDER"') && str_contains($sForm, 'name="set_PHOTO_SORT_ORDER"') && str_contains($sForm, 'name="set_MAP_CLUSTER_RADIUS_MILES"') && str_contains($sForm, 'name="pw_admin"'));
+check('[site settings] the admin has a "Settings" entry in the sidebar and a form with every managed setting', str_contains($sAdmin, 'data-tab="site" class="side-link"') && $sForm !== '' && str_contains($sForm, 'name="set_ENABLE_VIDEO"') && str_contains($sForm, 'name="set_AUTO_GROUP_BY_FOLDER"') && str_contains($sForm, 'name="pair_PHOTO_ORDER"') && str_contains($sForm, 'name="set_MAP_CLUSTER_RADIUS_MILES"') && str_contains($sForm, 'name="pw_admin"'));
 check('[site settings] ...it shows what comes from the settings file, never the password itself, and offers the server settings (extra folders, nginx prefix) as editable controls', str_contains($sAdmin, 'your setting') && !str_contains($sAdmin, 'first-admin-pw-123') && str_contains($sForm, 'data-name="set_EXTRA_FOLDERS"') && str_contains($sForm, 'name="set_NGINX_ACCEL_REDIRECT_PREFIX"') && str_contains($sForm, 'class="extra-add-btn'));
 check('[site settings] each setting says what the default is', str_contains($sForm, 'default: off') && str_contains($sForm, 'default: on'));
 // Snapshot everything that is NOT the settings file.
@@ -3371,7 +3470,7 @@ $siteSnap = function () use ($fxSite) {
     $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($fxSite, FilesystemIterator::SKIP_DOTS));
     foreach ($it as $f) {
         $rel = substr($f->getPathname(), strlen($fxSite) + 1);
-        if ($rel === '.gallery-config.php' || $rel === 'index.php' || str_contains($rel, '.gallery-cache/') || str_contains($rel, '.tmp.')) continue;
+        if ($rel === '.gallery-config.php' || $rel === '.gallery-browsers.php' || $rel === 'index.php' || str_contains($rel, '.gallery-cache/') || str_contains($rel, '.tmp.')) continue;   // (who is signed in is not a data file)
         $snap[$rel] = md5_file($f->getPathname());
     }
     ksort($snap); return $snap;
@@ -3612,7 +3711,7 @@ check('[root identity] saving the gallery settings works', str_contains($r, 'cla
 [, $rHome1] = http_get("$baseRoot/");
 check('[root identity] the form\'s title beats the "# Heading" (page title, tab and h1)', str_contains($rHome1, '<title>Summer 2026 — Gallery</title>') && preg_match('#<h1>Summer 2026(<form|<a class="lock-link"|</h1>)#', $rHome1) === 1 && !str_contains($rHome1, 'From The Heading'));
 check('[root identity] the dates show under the title, like a folder\'s', str_contains($rHome1, '<p class="folder-dates">June 1–9</p>'));
-check('[root identity] the description is a centered note box above the notes box, like a folder\'s', (bool) preg_match('#</header>\s*<div class="notes">\s*<div class="note-box folder-description"><p>Two weeks of nothing but sun\.</p></div>.*?Some longer notes\.#s', $rHome1));
+check('[root identity] the description is a centered note box above the notes box, like a folder\'s', (bool) preg_match('#</header>\s*<main id="content">\s*<div class="notes">\s*<div class="note-box folder-description"><p>Two weeks of nothing but sun\.</p></div>.*?Some longer notes\.#s', $rHome1));
 check('[root identity] shared-link previews use the title and the description', str_contains($rHome1, 'property="og:title" content="Summer 2026"') && str_contains($rHome1, 'property="og:description" content="Two weeks of nothing but sun."'));
 [, $rFolder] = http_get("$baseRoot/?folder=Sub");
 check('[root identity] a folder\'s way back uses the gallery title', str_contains($rFolder, '&larr; Summer 2026</a>') || str_contains($rFolder, '← Summer 2026</a>'));
@@ -3655,6 +3754,9 @@ $mapFiles = function ($html) { if (!preg_match('/var clusters = (\[.*?\]);/s', $
 $mapForm = function ($pg) { foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_map_settings"')) return $f['html']; return ''; };
 $rootMapPage = http_get("$baseMapF/")[1]; $rm = $mapFiles($rootMapPage);
 check('[folder maps] the gallery root keeps its map by default, plotting every visible located photo from every folder (and no hidden or location-off ones)', $rm !== null && $rm['files'] === ['Lisbon/l.jpg', 'Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg', 'top.jpg'] && str_contains($rootMapPage, 'View full map'));
+check('[map links] a pin pressed on one page that opens another page\'s photo leaves a note, and the page it lands on offers "Back to the map" (to the page the pin was pressed on, with its map open)', str_contains($rootMapPage, "closest('.leaflet-popup a[href^=\"?folder=\"]')") && str_contains($rootMapPage, "sessionStorage.setItem('galleryMapBack'") && str_contains($rootMapPage, "showPill(false, /[?&]map\\b/.test(back) ? back : back + '#map')") && str_contains($rootMapPage, 'function showPill(fromModal, backHref)') && !str_contains($rootMapPage, "if (!modal && !peek) return;"));
+check('[map links] landing on #group-<name> (a pin from another page, a copied link) scrolls that tile to the middle and rings it for a moment', str_contains($rootMapPage, "if (/[?&]find=/.test(location.search) || location.hash.indexOf('#group-') !== 0) return;") && str_contains($rootMapPage, "tile.classList.add('find-ring'); ringedTile = tile;") && str_contains($rootMapPage, "window.addEventListener('hashchange', function () { land(false); });"));
+check('[map links] from the gallery root a pin\'s photo opens the folder it is really in, on that photo (a photo in Paris/Montmartre: ?folder=Paris%2FMontmartre#group-m; one directly in Paris: ?folder=Paris#group-a), not the top of the top-level folder', str_contains($rootMapPage, '"link":"?folder=Paris%2FMontmartre#group-m"') && str_contains($rootMapPage, '"link":"?folder=Paris#group-a"') && !str_contains($rootMapPage, '"link":"?folder=Paris"'));
 check('[folder maps] a folder has NO map until it is switched on (a folder page must not start loading a third-party map by surprise)', $mapFiles(http_get("$baseMapF/?folder=Paris")[1]) === null && http_get("$baseMapF/?map&folder=Paris")[0] === 404);
 check('[folder maps] the admin offers the same map settings for a folder and for the gallery: show it, and the pin grouping', (function () use ($mapForm, $mAdminPg, $baseMapF, $mapHdrs) { $f = $mapForm($mAdminPg); $r = $mapForm(http_get("$baseMapF/?admin", $mapHdrs)[1]); return $f !== '' && $r !== '' && str_contains($f, 'name="map_enabled"') && str_contains($f, 'name="map_radius"') && str_contains($r, 'name="map_enabled"') && str_contains($r, 'name="map_radius"'); })());
 [, $mSaved] = user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => ''], $mapHdrs);
@@ -3662,7 +3764,7 @@ check('[folder maps] switching on Paris\'s map saves, and says what it does', st
 $parisPage = http_get("$baseMapF/?folder=Paris")[1]; $pm = $mapFiles($parisPage);
 check('[folder maps] Paris\'s page then shows a map of just what is in Paris and below it: not Lisbon, not the loose photo at the root, not the hidden photo, not the location-off folder', $pm !== null && $pm['files'] === ['Paris/Montmartre/m.jpg', 'Paris/a.jpg', 'Paris/b.jpg'] && str_contains($parisPage, 'href="?map&amp;folder=Paris"'));
 $colors = []; foreach ($pm['raw'] as $c) foreach ($c as $pt) $colors[basename(dirname($pt['file'])) . '|' . $pt['label']] = $pt['color'];
-check('[folder maps] points are coloured by sub-folder: the photos directly in Paris under the folder\'s name, the photos in Montmartre under its display name, in two colours, linking to it', count(array_unique($colors)) === 2 && isset($colors['Paris|Paris']) && isset($colors['Montmartre|The Hill']) && str_contains($parisPage, '"link":"?folder=Paris%2FMontmartre"'));
+check('[folder maps] points are coloured by sub-folder: the photos directly in Paris under the folder\'s name, the photos in Montmartre under its display name, in two colours, linking to it', count(array_unique($colors)) === 2 && isset($colors['Paris|Paris']) && isset($colors['Montmartre|The Hill']) && str_contains($parisPage, '"link":"?folder=Paris%2FMontmartre#group-m"'));
 check('[folder maps] with the site-wide pin grouping (50 miles) all three Paris photos are one pin', $pm['clusters'] === 1);
 [, $mAdminPg2] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
 user_submit("$baseMapF/?admin&folder=Paris", $mAdminPg2, 'value="save_map_settings"', ['map_enabled' => '1', 'map_radius' => '1'], $mapHdrs);
@@ -3727,9 +3829,9 @@ check('[instant] ...and on answers JSON and turns it back on', ($jLocOn['ok'] ??
 [, $mapAdminAgain] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
 check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 4);   // (the page's own confirms: Prepare media's "read everything again", "tidy up" and "delete the backups", and one more elsewhere)
 
-// The whole map feature off: nothing anywhere.
-file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => true]));
-check('[folder maps] with the trip map off for the whole gallery there is no map anywhere, whatever each folder says, and the admin says why', $mapFiles(http_get("$baseMapF/?folder=Paris")[1]) === null && $mapFiles(http_get("$baseMapF/")[1]) === null && str_contains(http_get("$baseMapF/?admin&folder=Paris", $mapHdrs)[1], 'switched off for the whole gallery') && !str_contains(http_get("$baseMapF/?map&folder=Paris")[1], 'trip-map-full'));
+// Locations off for the whole gallery (the map is part of that): nothing anywhere.
+file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => false]));
+check('[folder maps] with locations off for the whole gallery there is no map anywhere, whatever each folder says, and the admin says why', $mapFiles(http_get("$baseMapF/?folder=Paris")[1]) === null && $mapFiles(http_get("$baseMapF/")[1]) === null && str_contains(http_get("$baseMapF/?admin&folder=Paris", $mapHdrs)[1], 'Locations are off for the whole gallery, so nothing shows on a map yet') && !str_contains(http_get("$baseMapF/?map&folder=Paris")[1], 'trip-map-full'));
 
 echo "== visits: the site total counts one per visitor per half hour, not every page load ==\n";
 
@@ -3831,13 +3933,13 @@ check('[login] a wrong password re-shows the form with a plain message (200), an
 $loginCookie = $cookieOf($h2); $loc2 = ''; foreach ($h2 as $h) if (stripos($h, 'Location:') === 0) $loc2 = trim(substr($h, 9));
 check('[login] the right password redirects to the very URL asked for, and sets the session cookie', $s2 === 303 && $loc2 === '?admin&folder=Sub' && str_contains($loginCookie, 'gallery_admin_'));
 [$s3, $b3] = http_get("$baseLogin/?admin&folder=Sub", ["Cookie: $loginCookie"]);
-check('[login] with just that cookie (no Authorization header) the admin page opens, on the right folder', $s3 === 200 && str_contains($b3, 'Gallery Admin') && str_contains($b3, 'Editing: Sub'));
-check('[admin layout] a sticky top bar carries the title, the folder being edited, section links and Log out', str_contains($b3, '<header class="admin-bar">') && str_contains($b3, 'Editing: Sub') && !str_contains($b3, 'href="#photos"') && str_contains($b3, 'href="#settings"') && str_contains($b3, 'value="logout"'));
+check('[login] with just that cookie (no Authorization header) the admin page opens, on the right folder', $s3 === 200 && str_contains($b3, 'Gallery Admin') && str_contains($b3, '<span class="muted">Folder</span> <strong>Sub</strong>'));
+check('[admin layout] a sticky top bar carries the title and Log out; the folder being edited and its section links sit under that folder\'s own heading', str_contains($b3, '<header class="admin-bar">') && str_contains($b3, '<span class="muted">Folder</span> <strong>Sub</strong>') && !str_contains($b3, 'Editing: Sub') && !str_contains($b3, 'href="#photos"') && str_contains($b3, 'href="#settings"') && str_contains($b3, 'value="logout"'));
 check('[admin layout] folders are a tree beside the content, with the current one marked', str_contains($b3, 'class="admin-folder-nav"') && str_contains($b3, 'class="current" aria-current="page"') && str_contains($b3, '<main class="admin-main"'));
-check('[admin layout] the sections are real tabs (Folder settings, Notes, Export; no Photos tab any more: photos are edited in the gallery), each with its own panel; no Hidden tab when nothing is hidden', str_contains($b3, 'role="tablist"') && !str_contains($b3, 'data-tab="photos"') && str_contains($b3, 'data-tab="settings"') && str_contains($b3, 'data-tab="notes"') && str_contains($b3, 'data-tab="export"') && str_contains($b3, '<div class="tab-panel" data-tab="export">') && !str_contains($b3, 'data-tab="hidden"'));
+check('[admin layout] the sections are real tabs (Folder settings, Notes; no Photos tab any more: photos are edited in the gallery, and no Export tab: the JSON copy is under Files this gallery has made), each with its own panel; no Hidden tab when nothing is hidden', str_contains($b3, 'role="tablist"') && !str_contains($b3, 'data-tab="photos"') && str_contains($b3, 'data-tab="settings"') && str_contains($b3, 'data-tab="notes"') && !str_contains($b3, 'data-tab="export"') && !str_contains($b3, '<div class="tab-panel" data-tab="export">') && !str_contains($b3, 'data-tab="hidden"'));
 check('[admin layout] the page has no thumbnail grid, per-photo forms or Select bar (the pencil and the Select button on the gallery do all of that)', !str_contains($b3, 'class="photo-editor"') && !str_contains($b3, 'class="thumb-grid"') && !str_contains($b3, 'class="item-editor"') && !str_contains($b3, 'id="bulk-bar"') && !str_contains($b3, 'name="loaded_hash" value="' . md5('x') . '"'));
 check('[admin layout] the Folder settings tab is the one that opens first', str_contains($b3, "names.indexOf('settings') >= 0 ? 'settings' : names[0]"));
-check('[admin layout] the anchors inside the panels still exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="notes"') && str_contains($b3, 'id="export"'));
+check('[admin layout] the anchors inside the panels still exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="notes"') && !str_contains($b3, 'id="export"'));
 check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="access_code"'));
 check('[login] a login also counts as private view (the viewer cookie is set too)', str_contains($loginCookie, '=') && substr_count($loginCookie, '=') >= 2);
 // A saved change from an expired session must not be saved, and must say why.
@@ -3887,9 +3989,9 @@ check('[stale password] the source never sends a WWW-Authenticate header at all 
 
 // The gallery title is the (unmarked) way to the admin.
 [, $homeLogin] = http_get("$baseLogin/");
-check('[login] to a visitor the gallery title is plain text, and the lock that leads to the sign-in is an icon in the strip below it', str_contains($homeLogin, '<h1>Summer in Lisbon</h1>') && str_contains($homeLogin, 'class="map-combo-btn lock-link" href="?reveal"') && !str_contains($homeLogin, 'class="title-admin"'));
+check('[login] to a visitor the gallery title is plain text and there is no lock icon (the admin is reached by its own address)', str_contains($homeLogin, '<h1>Summer in Lisbon</h1>') && !str_contains($homeLogin, 'lock-link') && !str_contains($homeLogin, 'class="title-admin"'));
 [, $subLogin] = http_get("$baseLogin/?folder=Sub");
-check('[login] on a folder page the lock remembers the folder, so signing in brings you back to that folder', str_contains($subLogin, 'class="map-combo-btn lock-link" href="?reveal&amp;folder=Sub"'));
+check('[login] a folder page has no lock icon either', !str_contains($subLogin, 'lock-link'));
 $fxPlainTitle = new_fixture_dir('plaintitle'); make_jpeg("$fxPlainTitle/a.jpg", 60, 60, 1, 2, 3); copy(__DIR__ . '/../index.php', "$fxPlainTitle/index.php");
 $portPlainTitle = find_free_port(); start_server($fxPlainTitle, $portPlainTitle);
 $plainTitle = http_get("http://127.0.0.1:$portPlainTitle/")[1];
@@ -3899,6 +4001,114 @@ check('[login] with no ADMIN_PASSWORD (the default) the title is plain text, not
 check('[login] a notes file holding only a "# Title" becomes the title, with no empty "trip.md" box', str_contains($homeLogin, 'Summer in Lisbon') && !str_contains($homeLogin, 'class="note-box"') && !str_contains($homeLogin, 'trip.md'));
 file_put_contents("$fxLogin/trip.md", "{gallery}\n# Summer in Lisbon\n\nBring sunscreen.\n");
 check('[login] ...but the box comes back as soon as the file has any text', str_contains(http_get("$baseLogin/")[1], 'class="note-box"') && str_contains(http_get("$baseLogin/")[1], 'Bring sunscreen.'));
+
+echo "== signed-in browsers: one token each, for the owner and for private view; the owner can end any one ==\n";
+
+$fxSt = new_fixture_dir('browsers');
+mkdir("$fxSt/Sub"); make_jpeg("$fxSt/one.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxSt/Sub/secret.jpg", 60, 60, 90, 10, 10);
+write_data_file("$fxSt/Sub/.gallery-items.php", ['items' => ['secret.jpg' => ['restriction' => 'private']], 'groups' => []] + items_default_for_tests());
+$stCfg = fn (array $o = []) => file_put_contents("$fxSt/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => 'stay-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'stay-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+$stCfg();
+copy($indexSrc, "$fxSt/index.php");
+$portSt = find_free_port(); start_server($fxSt, $portSt); $baseSt = "http://127.0.0.1:$portSt";
+$stName = 'gallery_reveal_' . substr(hash('sha256', $fxSt), 0, 10);
+$stLegacyName = 'gallery_stay_' . substr(hash('sha256', $fxSt), 0, 10);
+$stLogin = function ($pw = 'stay-admin-pw-1') use ($baseSt) { [, , $h] = http_post("$baseSt/?admin", ['access_code' => $pw], [], false); return $h; };
+$stGuest = function () use ($baseSt) { [, , $h] = http_post("$baseSt/?reveal", ['access_code' => 'stay-view-pw-1'], [], false); return $h; };
+$stLine = function (array $h, string $name) { foreach ($h as $x) if (stripos($x, "Set-Cookie: $name=") === 0) return trim(substr($x, 11)); return ''; };
+$stTok = fn (string $line) => explode(';', explode('=', $line, 2)[1] ?? '')[0];
+$stSession = function (array $h) { foreach ($h as $x) if (stripos($x, 'Set-Cookie: gallery_admin_') === 0) return explode(';', trim(substr($x, 11)))[0]; return ''; };
+$stFile = fn () => json_decode(explode("\n", (string) @file_get_contents("$fxSt/.gallery-browsers.php"), 2)[1] ?? '[]', true) ?: [];
+$stPutFile = function (array $d) use ($fxSt) { file_put_contents("$fxSt/.gallery-browsers.php", "<?php http_response_code(404); exit; ?>\n" . json_encode($d)); };
+$stIsLogin = fn (string $body) => str_contains($body, 'name="access_code"');
+$stSecret = fn ($tok) => http_get("$baseSt/?img=Sub%2Fsecret.jpg&size=thumb", $tok === '' ? [] : ["Cookie: $stName=$tok"])[0];
+
+$stH1 = $stLogin(); $stC1 = $stLine($stH1, $stName); $stT1 = $stTok($stC1); $stS1 = $stSession($stH1);
+check('[browsers] signing in as the owner gives one long-lived cookie (3 days to start with), HttpOnly and SameSite=Lax, holding a random token', preg_match('/^[0-9a-f]{64}$/', $stT1) === 1 && preg_match('/Max-Age=(\d+)/i', $stC1, $stM) === 1 && (int) $stM[1] > 2.9 * 86400 && (int) $stM[1] <= 3 * 86400 && stripos($stC1, 'HttpOnly') !== false && stripos($stC1, 'SameSite=Lax') !== false, $stC1);
+$stRec = $stFile(); $stK = hash('sha256', $stT1);
+check('[browsers] the server keeps only a hash of the token (never the token), with who it is for, when it was made, its end and a plain label for the device; the file starts with the guard line and is in .gitignore', ($stRec[$stK]['kind'] ?? '') === 'owner' && ($stRec[$stK]['exp'] ?? 0) > time() + 2.9 * 86400 && ($stRec[$stK]['label'] ?? '') !== '' && !str_contains((string) file_get_contents("$fxSt/.gallery-browsers.php"), $stT1) && str_starts_with((string) file_get_contents("$fxSt/.gallery-browsers.php"), '<?php') && str_contains((string) file_get_contents(__DIR__ . '/../.gitignore'), '.gallery-browsers.php'));
+check('[browsers] the owner\'s token shows private photos on the public pages; nobody else sees them, and a stranger\'s guess at a token gets nothing', $stSecret($stT1) === 200 && $stSecret('') === 404 && $stSecret(str_repeat('a', 64)) === 404 && $stSecret('zz') === 404);
+[$stS, $stB, $stHd] = http_get("$baseSt/?admin", ["Cookie: $stName=$stT1"], false);
+check('[browsers] with only that cookie (the session cookie lost, as iOS does when a Home Screen app is closed) the admin opens without the password, on a fresh session', $stS === 200 && str_contains($stB, 'Gallery Admin') && $stSession($stHd) !== '' && !str_contains($stSession($stHd), $stS1));
+check('[browsers] a visit within the hour does not send the cookie again (the file is not rewritten on every request)', $stLine($stHd, $stName) === '');
+$stBad = substr($stT1, 0, -1) . (substr($stT1, -1) === '0' ? '1' : '0');
+check('[browsers] a changed token, one that is not hex, and an empty one all give the sign-in form', $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stName=$stBad"])[1]) && $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stName=" . str_repeat('z', 64)])[1]) && $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stName="])[1]));
+[, $stPost] = http_post("$baseSt/?admin", ['action' => 'save_item', 'file' => 'one.jpg', 'caption' => 'should not stick'], ["Cookie: $stName=$stT1"]);
+check('[browsers] it signs you in to look, but a change still needs the page\'s own CSRF token: nothing is saved', !is_file("$fxSt/.gallery-items.php") || !str_contains((string) file_get_contents("$fxSt/.gallery-items.php"), 'should not stick'));
+// An hour later the end is pushed out (a regular user is never signed out).
+$stRec = $stFile(); $stRec[$stK]['seen'] = time() - 2 * 86400; $stRec[$stK]['exp'] = time() + 1 * 86400; $stPutFile($stRec);
+[, , $stHd3] = http_get("$baseSt/?admin", ["Cookie: $stName=$stT1"], false);
+$stNow = $stFile();
+check('[browsers] using the admin again after a while pushes the end out to 3 days again, sends the cookie again, and notes when it was last seen', $stLine($stHd3, $stName) !== '' && $stTok($stLine($stHd3, $stName)) === $stT1 && ($stNow[$stK]['exp'] ?? 0) > time() + 2.9 * 86400 && ($stNow[$stK]['seen'] ?? 0) > time() - 60, json_encode($stNow[$stK] ?? null));
+$stRec = $stFile(); $stRec[$stK]['exp'] = time() - 5; $stPutFile($stRec);
+check('[browsers] a token past its end gives the sign-in form and shows nothing private', $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stName=$stT1"])[1]) && $stSecret($stT1) === 404);
+// Log out: this browser's token is deleted on the server, so a copy of the cookie is useless too.
+$stH2 = $stLogin(); $stT2 = $stTok($stLine($stH2, $stName)); $stJar2 = extract_cookie_header($stH2);
+[, $stAdm] = http_get("$baseSt/?admin", ["Cookie: $stJar2"]);
+$stLogoutForm = ''; foreach (html_post_forms($stAdm) as $f) if (str_contains($f['html'], 'value="logout"')) $stLogoutForm = $f['html'];
+[$stOut, , $stOutHd] = http_post("$baseSt/?admin", form_default_fields($stLogoutForm), ["Cookie: $stJar2"], false);
+check('[browsers] Log out clears the cookie in the browser...', $stOut === 303 && stripos($stLine($stOutHd, $stName), '1970') !== false, $stLine($stOutHd, $stName));
+check('[browsers] ...removes its token from the server...', !isset($stFile()[hash('sha256', $stT2)]));
+check('[browsers] ...so replaying the whole old cookie jar (session and token) no longer opens the admin or shows anything private', $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stJar2"])[1]) && $stSecret($stT2) === 404);
+// Private view: a guest's token.
+$stHg = $stGuest(); $stCg = $stLine($stHg, $stName); $stTg = $stTok($stCg);
+check('[browsers] the private-view password gives a guest\'s token the same way (3 days, HttpOnly, SameSite=Lax), recorded as a guest\'s', preg_match('/^[0-9a-f]{64}$/', $stTg) === 1 && preg_match('/Max-Age=(\d+)/i', $stCg, $stMg) === 1 && (int) $stMg[1] > 2.9 * 86400 && (int) $stMg[1] <= 3 * 86400 && stripos($stCg, 'HttpOnly') !== false && ($stFile()[hash('sha256', $stTg)]['kind'] ?? '') === 'view');
+check('[browsers] ...it shows private photos but is not the owner: the admin is the sign-in form and no owner tools are on the page', $stSecret($stTg) === 200 && $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stName=$stTg"])[1]) && !str_contains(http_get("$baseSt/", ["Cookie: $stName=$stTg"])[1], 'id="lightbox-edit"'));
+// The list in Settings, and ending browsers one by one.
+$stHo = $stLogin(); $stTo = $stTok($stLine($stHo, $stName)); $stJarO = extract_cookie_header($stHo);
+$stHg2 = $stGuest(); $stTg2 = $stTok($stLine($stHg2, $stName));
+[, $stSet] = http_get("$baseSt/?admin", ["Cookie: $stJarO"]);
+$stCsrf = extract_csrf_token($stSet);
+check('[browsers] Settings → Signing in lists the browsers: this one marked, the guests with a Sign out button, who and when, no token anywhere', str_contains($stSet, 'id="browsers-row"') && str_contains($stSet, 'Browsers signed in') && str_contains($stSet, 'this browser') && substr_count($stSet, 'data-br="cancel"') >= 2 && str_contains($stSet, 'Private view') && str_contains($stSet, 'You (admin)') && !str_contains($stSet, $stTg) && !str_contains($stSet, $stTo));
+check('[browsers] Settings has both lengths, in the Signing in group: admin and private view', str_contains($stSet, 'name="set_ADMIN_STAY_SIGNED_IN_DAYS"') && str_contains($stSet, 'name="set_PRIVATE_VIEW_SIGNED_IN_DAYS"') && str_contains($stSet, 'Stay in private view for (days)') && str_contains($stSet, '>Signing in and passwords<'));
+$stId = fn ($tok) => substr(hash('sha256', $tok), 0, 12);
+$stPost2 = fn (array $f) => json_decode(http_post("$baseSt/?admin", $f + ['csrf_token' => $stCsrf], ["Cookie: $stJarO", 'X-Requested-With: gallery-fetch'])[1], true) ?: [];
+$stNoCsrf = json_decode(http_post("$baseSt/?admin", ['action' => 'browser_cancel', 'id' => $stId($stTg)], ["Cookie: $stJarO", 'X-Requested-With: gallery-fetch'])[1], true) ?: [];
+check('[browsers] signing one out needs the page\'s CSRF token: without it nothing is ended', ($stNoCsrf['ok'] ?? null) === false && $stSecret($stTg) === 200);
+$stBadId = $stPost2(['action' => 'browser_cancel', 'id' => 'not-an-id']);
+check('[browsers] an id that is not one is refused', ($stBadId['ok'] ?? null) === false);
+$stOwn = $stPost2(['action' => 'browser_cancel', 'id' => $stId($stTo)]);
+check('[browsers] the browser asking cannot end itself here (that is Log out): nothing happens', ($stOwn['count'] ?? -1) === 0 && $stSecret($stTo) === 200);
+$stEnd = $stPost2(['action' => 'browser_cancel', 'id' => $stId($stTg)]);
+check('[browsers] Sign out signs one guest out: their cookie shows nothing private any more, the other guest and the owner are untouched', ($stEnd['ok'] ?? null) === true && ($stEnd['count'] ?? 0) === 1 && $stSecret($stTg) === 404 && $stSecret($stTg2) === 200 && $stSecret($stTo) === 200);
+$stAll = $stPost2(['action' => 'browser_cancel_others']);
+check('[browsers] "Sign out all other browsers" ends every other one and keeps the owner\'s own', ($stAll['ok'] ?? null) === true && $stSecret($stTg2) === 404 && $stSecret($stTo) === 200 && count($stFile()) >= 1 && isset($stFile()[hash('sha256', $stTo)]));
+// Changing a password ends the tokens made under the old one.
+$stHg3 = $stGuest(); $stTg3 = $stTok($stLine($stHg3, $stName)); $stHb = $stLogin(); $stTb = $stTok($stLine($stHb, $stName));
+[, $stSet2] = http_get("$baseSt/?admin", ["Cookie: $stJarO"]);
+$stF = form_default_fields((function ($pg) { foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; })($stSet2));
+[, $stPwBody, $stPwHd] = http_post("$baseSt/?admin", ['csrf_token' => $stF['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $stF['config_hash'], 'pw_admin' => 'stay-new-admin-pw-2', 'pw_admin2' => 'stay-new-admin-pw-2'], ["Cookie: $stJarO", 'X-Requested-With: gallery-fetch'], false);
+$stTnew = $stTok($stLine($stPwHd, $stName));
+check('[browsers] changing the admin password works, and hands the browser that changed it a new token', (json_decode($stPwBody, true)['ok'] ?? null) === true && preg_match('/^[0-9a-f]{64}$/', $stTnew) === 1, $stPwBody);
+check('[browsers] ...while another browser\'s owner token, made under the old password, no longer opens the admin or shows private photos; the guest\'s token (another password) is unaffected', $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stName=$stTb"])[1]) && $stSecret($stTb) === 404 && $stSecret($stTg3) === 200);
+check('[browsers] ...and the new token does', str_contains(http_get("$baseSt/?admin", ["Cookie: $stName=$stTnew"])[1], 'Gallery Admin') && $stSecret($stTnew) === 200);
+// Private-view password changed (in the file here): every guest token ends, the owner's does not.
+$stCfgNow = cfg_read("$fxSt/.gallery-config.php"); $stCfgNow['PRIVATE_VIEW_PASSWORD'] = 'stay-view-pw-NEW-3'; file_put_contents("$fxSt/.gallery-config.php", cfg_text($stCfgNow));
+check('[browsers] a new private-view password ends every guest token (at once), and not the owner\'s', $stSecret($stTg3) === 404 && $stSecret($stTnew) === 200);
+$stCfgNow['PRIVATE_VIEW_PASSWORD'] = 'stay-view-pw-1'; file_put_contents("$fxSt/.gallery-config.php", cfg_text($stCfgNow));
+// The lengths are settings: 1 day for guests; 0 = until the browser closes.
+file_put_contents("$fxSt/.gallery-config.php", cfg_text($stCfgNow + ['PRIVATE_VIEW_SIGNED_IN_DAYS' => 1]));
+$stHg4 = $stGuest(); $stCg4 = $stLine($stHg4, $stName);
+check('[browsers] PRIVATE_VIEW_SIGNED_IN_DAYS sets the guest\'s length (1 day here), separately from the admin\'s', preg_match('/Max-Age=(\d+)/i', $stCg4, $stM4) === 1 && (int) $stM4[1] > 0.9 * 86400 && (int) $stM4[1] <= 86400);
+file_put_contents("$fxSt/.gallery-config.php", cfg_text($stCfgNow + ['ADMIN_STAY_SIGNED_IN_DAYS' => 0, 'PRIVATE_VIEW_SIGNED_IN_DAYS' => 0, 'ADMIN_PASSWORD' => $stCfgNow['ADMIN_PASSWORD']]));
+$stH0 = http_post("$baseSt/?admin", ['access_code' => 'stay-new-admin-pw-2'], [], false)[2]; $stC0 = $stLine($stH0, $stName); $stT0 = $stTok($stC0);
+check('[browsers] with the length at 0 the cookie ends when the browser closes (no Max-Age, no expiry) and the server ends it after a day', $stT0 !== '' && !preg_match('/Max-Age|expires=/i', $stC0) && ($stFile()[hash('sha256', $stT0)]['exp'] ?? 0) <= time() + 86400 && ($stFile()[hash('sha256', $stT0)]['exp'] ?? 0) > time() + 80000);
+check('[browsers] ...it still shows private photos, but a lost session is not resumed from it (the admin asks for the password)', $stSecret($stT0) === 200 && $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stName=$stT0"])[1]));
+file_put_contents("$fxSt/.gallery-config.php", cfg_text($stCfgNow + ['ADMIN_PASSWORD' => $stCfgNow['ADMIN_PASSWORD']]));
+// A script that sends the password with every request makes a token each time: kept to ten, and never pushing a person out.
+$stKeep = $stGuest(); $stTkeep = $stTok($stLine($stKeep, $stName));
+for ($si = 0; $si < 14; $si++) http_get("$baseSt/?admin", ['Authorization: Basic ' . base64_encode('x:stay-new-admin-pw-2')]);
+$stScripts = count(array_filter($stFile(), fn ($r) => ($r['via'] ?? '') === 'script'));
+check('[browsers] a script that sends the password with every request leaves at most ten short-lived tokens, and a person\'s browser is still signed in afterwards', $stScripts >= 1 && $stScripts <= 10 && $stSecret($stTkeep) === 200 && count(array_filter($stFile(), fn ($r) => ($r['via'] ?? '') === 'script' && ($r['exp'] ?? 0) > time() + 3700)) === 0);
+// A browser that still holds a 2.3.2 stay token is signed in once more and moved to the new kind.
+$stCfgNow = cfg_read("$fxSt/.gallery-config.php"); $stStored = $stCfgNow['ADMIN_PASSWORD']; $stOld = bin2hex(random_bytes(32));
+file_put_contents("$fxSt/.gallery-stay.php", "<?php http_response_code(404); exit; ?>\n" . json_encode([hash('sha256', $stOld) => ['exp' => time() + 86400, 'made' => time(), 'seen' => time(), 'pw' => hash('sha256', 'admin|' . $stStored . '|' . $fxSt)]]));
+[$stLs, $stLb, $stLh] = http_get("$baseSt/?admin", ["Cookie: $stLegacyName=$stOld"], false);
+check('[browsers] a token from 2.3.2 (its own cookie and file) signs the owner in without the password once more, is used up, and the browser leaves with a token of the new kind', $stLs === 200 && str_contains($stLb, 'Gallery Admin') && preg_match('/^[0-9a-f]{64}$/', $stTok($stLine($stLh, $stName))) === 1 && stripos($stLine($stLh, $stLegacyName), '1970') !== false && !isset((json_decode(explode("\n", (string) file_get_contents("$fxSt/.gallery-stay.php"), 2)[1], true) ?: [])[hash('sha256', $stOld)]));
+check('[browsers] ...and the old token does not work a second time', $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stLegacyName=$stOld"])[1]));
+// Without a password of its kind, no token of that kind is good.
+file_put_contents("$fxSt/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => $stStored, 'AUTO_GROUP_BY_FOLDER' => true]));
+check('[browsers] with no private-view password set, a guest\'s old token shows nothing', $stSecret($stTkeep) === 404);
 
 echo "== recipe: trip album (folders, admin forms, GPS, map, video, share links) ==\n";
 
@@ -3929,7 +4139,7 @@ check('[trip] no map yet: ENABLE_MAP is on, but no photo has a *visible* locatio
 [, $pAdmin, $pAdminHd] = http_get("$baseTrip/?admin&folder=Paris", [$tripAuth]);
 $tripCookie = extract_cookie_header($pAdminHd); $tripHdrs = [$tripAuth, "Cookie: $tripCookie"];
 $parisUrl = "$baseTrip/?admin&folder=Paris";
-check('[trip] the folder admin page shows the settings form and the location switch (its photos are edited in the gallery)', str_contains($pAdmin, 'Save folder settings') && str_contains($pAdmin, 'Show photo locations publicly for this folder') && !str_contains($pAdmin, 'class="item-editor"'));
+check('[trip] the folder admin page shows the settings form and the location switch (its photos are edited in the gallery)', str_contains($pAdmin, 'Save folder settings') && str_contains($pAdmin, 'Show photo locations to visitors for this folder') && !str_contains($pAdmin, 'class="item-editor"'));
 
 // 3. Fill in the folder's own settings: name, dates, description, position.
 [, $r] = user_submit($parisUrl, $pAdmin, 'value="save_folder_identity"', ['display_name' => 'Paris, France', 'dates' => 'May 3–7, 2026', 'description' => 'Five days of croissants.', 'sort_order' => '1'], $tripHdrs);
@@ -3942,7 +4152,7 @@ check('[trip] ...and Position 1 moved Paris ahead of Lisbon', strpos($tripHome2,
 // pre-fill the photo's coordinates from its EXIF without being asked.
 [, $pAdmin] = http_get($parisUrl, $tripHdrs);
 [, $r] = user_submit($parisUrl, $pAdmin, 'value="toggle_location_enabled"', ['enabled' => '1'], $tripHdrs);
-check('[trip] ticking "Show photo locations publicly for this folder" saves', str_contains($r, 'class="flash ok"'));
+check('[trip] ticking "Show photo locations to visitors for this folder" saves', str_contains($r, 'class="flash ok"'));
 [, $pAdmin] = http_get($parisUrl, $tripHdrs);
 $eiffelFields = item_get($baseTrip, $tripHdrs, 'Paris/eiffel.jpg');
 check('[trip] the editor has the photo\'s location from its EXIF GPS (48.8584, 2.2945) before anything is typed', abs((float) ($eiffelFields['auto']['lat'] ?? 0) - 48.8584) < 0.0001 && abs((float) ($eiffelFields['auto']['lng'] ?? 0) - 2.2945) < 0.0001 && ($eiffelFields['lat'] ?? 'x') === '');
@@ -3990,7 +4200,8 @@ check('[trip] ...and the preview image is the cover photo chosen in the admin (l
 
 // 9. The whole tree exports as one backup file carrying everything typed.
 $exportPage = http_get($parisUrl, $tripHdrs)[1];
-[, $treeJson] = user_submit($parisUrl, $exportPage, 'value="export_tree"', [], $tripHdrs);
+$exportCsrf = extract_csrf_token($exportPage);   // (the button builds its own small form: a POST with the page's token)
+[, $treeJson] = http_post($parisUrl, ['csrf_token' => $exportCsrf, 'action' => 'export_tree'], $tripHdrs);
 $tree = json_decode($treeJson, true);
 check('[trip] "Export the whole tree as JSON" contains the typed settings and captions for both folders', ($tree['Paris']['displayName'] ?? '') === 'Paris, France' && ($tree['Paris']['dates'] ?? '') === 'May 3–7, 2026' && ($tree['Paris']['items']['eiffel.jpg']['caption'] ?? '') === 'The iron lady' && ($tree['Lisbon']['items']['tram.jpg']['caption'] ?? '') === 'Tram 28');
 
@@ -4056,7 +4267,7 @@ write_patched_index("$fxFam/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' 
 $portFam = find_free_port(); start_server($fxFam, $portFam); $baseFam = "http://127.0.0.1:$portFam";
 $famAuth = 'Authorization: Basic ' . base64_encode('admin:fam-admin');
 [, $famHome] = http_get("$baseFam/");
-check('[family] everyone sees everything at first (the lock is already there, as the way to the admin)', str_contains($famHome, 'alt="kids.jpg"') && str_contains($famHome, 'id="group-birthday"') && str_contains($famHome, 'class="map-combo-btn lock-link" href="?reveal"') && str_contains($famHome, '5 photos'));
+check('[family] everyone sees everything at first', str_contains($famHome, 'alt="kids.jpg"') && str_contains($famHome, 'id="group-birthday"') && !str_contains($famHome, 'lock-link') && str_contains($famHome, '5 photos'));
 [, $fAdmin, $fHd] = http_get("$baseFam/?admin", [$famAuth]); $famCookie = extract_cookie_header($fHd); $famHdrs = [$famAuth, "Cookie: $famCookie"];
 $r = flag_post("$baseFam/?admin", $fAdmin, $famHdrs, 'private', true, ['kids.jpg']);
 check('[family] switching "Private" on for kids.jpg works, in place', ($r['ok'] ?? null) === true && str_contains((string) $r['text'], 'now private'));
@@ -4244,14 +4455,17 @@ copy(__DIR__ . '/../index.php', "$fxPlain/index.php");
 $before = array_diff(scandir($fxPlain), ['.', '..']); sort($before);
 $portPlain = find_free_port(); start_server($fxPlain, $portPlain); $basePlain = "http://127.0.0.1:$portPlain";
 [, $plain] = http_get("$basePlain/");
-foreach (['/', '/?photo=one.jpg', '/?about', '/?img=one.jpg&size=thumb', '/?track=one.jpg', '/?map', '/?folder=Subfolder', '/?admin', '/?reveal'] as $u) http_get("$basePlain$u");
+foreach (['/', '/?photo=one.jpg', '/?about', '/?img=one.jpg&size=thumb', '/?track=one.jpg', '/?map', '/?folder=Subfolder', '/?reveal'] as $u) http_get("$basePlain$u");
 $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
 check('[plain] a copy of index.php with no settings changed shows the root photos, and not the ones in the subfolder', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && !str_contains($plain, 'three.jpg') && !str_contains($plain, 'Subfolder'));
 $newEntries = array_values(array_diff($after, $before));
 $plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
 check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken3.json', 'meta1.php'], true)));
+http_get("$basePlain/?admin");
+check('[plain] ...asking for ?admin before any password exists is the one request that writes more: the set-up code file beside index.php (gallery-setup-code.php, a guard line and the code), and nothing else', array_values(array_diff(array_diff(scandir($fxPlain), ['.', '..']), $after)) === ['gallery-setup-code.php']);
+@unlink("$fxPlain/gallery-setup-code.php");
 check('[plain] ...makes no request to any third party (no external host in any src/href except github)', !preg_match('#(src|href)="https?://(?!github\.com|127\.0\.0\.1)#', $plain));
-check('[plain] ...?admin, ?reveal, ?map, ?folder= are all inert (404 / the normal page)', http_get("$basePlain/?admin")[0] === 404 && http_get("$basePlain/?reveal")[0] === 404 && http_get("$basePlain/?folder=Subfolder")[0] === 404 && !str_contains(http_get("$basePlain/?map")[1], 'cdnjs.cloudflare.com'));
+check('[plain] ...?admin, ?reveal, ?map, ?folder= are all inert (404 / the normal page)', !str_contains(http_get("$basePlain/?admin")[1], 'Gallery Admin') && http_get("$basePlain/?reveal")[0] === 404 && http_get("$basePlain/?folder=Subfolder")[0] === 404 && !str_contains(http_get("$basePlain/?map")[1], 'cdnjs.cloudflare.com'));
 check('[plain] ...and says (in the collapsed notices banner) that a photo in a subfolder is being skipped', str_contains($plain, '1 photo/video was found in subfolders but isn&#039;t shown'));
 
 if (class_exists('Imagick') && count(Imagick::queryFormats('HEIC')) > 0) {
@@ -4320,7 +4534,7 @@ check('GET / returns 200 (nonotesbox)', $status === 200);
 check('no note-box renders when every .md is rejected', !str_contains($body, 'class="note-box"'));
 check(
     'the notices banner still appears, right after the header, when there is no notes box to sit in',
-    (bool) preg_match('#</header>\s*<div class="notes">\s*<details class="gallery-notices">#', $body)
+    (bool) preg_match('#</header>\s*<main id="content">\s*<div class="notes">\s*<details class="gallery-notices">#', $body)
 );
 check(
     'the rejected .md\'s filename is never revealed here either',
@@ -4547,7 +4761,7 @@ check('[viewer video] ...and so is a part of it fetched with a Range request (wh
 check('[download] the files on the server were not changed by any of it', (string) file_get_contents("$fxDl/hidden.jpg") === $dlOrig && (string) file_get_contents("$fxDl/clip.mov") === $dlMov);
 // Settings offers the switch, off, with its warning.
 [, $dlSettings] = http_get("$baseDl/?admin", $dlAdmin);
-check('[download] Settings has the "Let visitors download originals" switch, with its orange warning', str_contains($dlSettings, 'name="set_ENABLE_PUBLIC_DOWNLOAD"') && str_contains($dlSettings, 'Anyone can save every photo at full resolution'));
+check('[download] Settings has "Let visitors download originals" (Off / Everything / Only some folders), with its orange warning', str_contains($dlSettings, 'name="set_PUBLIC_DOWNLOAD_MODE"') && str_contains($dlSettings, 'anyone can save those photos at full resolution'));
 
 /* --------------------------------------------------------------------- */
 
@@ -4869,8 +5083,9 @@ $slForm = fn (array $o = []) => $o + ['action' => 'link_create', 'label' => 'Aun
 // The nginx rule as the tab writes it (decoded), and whether nginx would accept it: nginx reads an unquoted { as the start of a block, so every { in a pattern must sit inside quotes
 $slNginxRule = function ($page) { return preg_match('/<pre><code>(location ~ [^<]*?index\.php\?link=[^<]*?)<\/code><\/pre>/s', $page, $m) ? html_entity_decode($m[1], ENT_QUOTES) : ''; };
 $slNginxOk = function ($rule) { $bare = preg_replace('/"[^"\n]*"/', '""', $rule); return $rule !== '' && !str_contains($bare, '{16}') && substr_count($bare, '{') === 1 && substr_count($bare, '}') === 1; };
-check('[share links] the admin has a Share tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slNginxRule($slAdminPage), 'location ~ "^/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$" {') && str_contains($slNginxRule($slAdminPage), 'index.php?link=$1 last;') && $slNginxOk($slNginxRule($slAdminPage)) && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9])$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
-check('[tidy share address] it lives with the other server setup: a row in Settings → Server setup with its rules and a status line, and a Health check row with a link there; the Share tab has neither the dropdown nor the banner', str_contains($slAdminPage, 'data-sharetidy-status') && str_contains($slAdminPage, 'data-sharetidy-rules') && str_contains($slAdminPage, 'data-health-row="sharetidy"') && str_contains($slAdminPage, 'Open Settings &rarr; Server setup') && str_contains($slAdminPage, 'data-share-probe="') && !str_contains($slAdminPage, 'data-sl-check') && !str_contains($slAdminPage, 'class="sl-rules"') && !str_contains($slAdminPage, 'The tidy address needs a server rule'));
+check('[share links] the admin has a Shares tab and the tab\'s panel, with the server rule written for this install\'s own address', str_contains($slAdminPage, 'data-tab="links"') && str_contains($slAdminPage, 'id="sl-root"') && str_contains($slNginxRule($slAdminPage), 'location ~ "^/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$" {') && str_contains($slNginxRule($slAdminPage), 'index.php?link=$1 last;') && $slNginxOk($slNginxRule($slAdminPage)) && str_contains($slAdminPage, 'RewriteRule ^([A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9])$ index.php?link=$1 [L,QSA]') && str_contains($slAdminPage, 'At the top of the site'));
+check('[tidy share address] it lives with the other server setup: a row in Settings → Server setup with its rules and a status line, and a Health check row with a link there; the Shares tab has neither the dropdown nor the banner', str_contains($slAdminPage, 'data-sharetidy-status') && str_contains($slAdminPage, 'data-sharetidy-rules') && str_contains($slAdminPage, 'data-health-row="sharetidy"') && str_contains($slAdminPage, 'Open Settings &rarr; Server setup') && str_contains($slAdminPage, 'data-share-probe="') && !str_contains($slAdminPage, 'data-sl-check') && !str_contains($slAdminPage, 'class="sl-rules"') && !str_contains($slAdminPage, 'The tidy address needs a server rule'));
+check('[tidy share address] the example link the check shows is the gallery\'s address and a code (the probe\'s own name is taken off), and the phone has a rule that hides the folder picker on the whole-gallery tabs', str_contains($slAdminPage, "url.replace(/0000-probe-0000$/, '') + 'k7QpR2mXv9LwTb4e'") && !str_contains($slAdminPage, "url.replace(/0+$/, '')") && str_contains($slAdminPage, 'body.pb-on .admin-layout.off-folder .admin-side { display:none; }'));
 $slMade = $slAdmin($slForm());
 $slAll = $slLinks()['links'] ?? [];
 $slId = $slMade['id'] ?? '';
@@ -4950,11 +5165,34 @@ $slPatchLink = function (array $patch) use ($fxSl, $slId) { $f = read_data_file(
 $slPatchLink(['endsAt' => time() - 60]);
 $slExt = $slAdmin(['action' => 'link_extend', 'id' => $slId, 'ends_at' => time() + 7200]);
 check('[share links] extending an expired link makes it live again (and a past end time is refused)', ($slExt['ok'] ?? false) && link_state_for_tests($slLinks()['links'][$slId]) === 'active' && ($slAdmin(['action' => 'link_extend', 'id' => $slId, 'ends_at' => time() - 5])['ok'] ?? true) === false);
+// Extend asks only the relevant question: a used-up link gets more opens (or none of the limit), an expired one a new end; neither touches the other.
+$slXs = $slAdmin($slForm(['label' => 'Extend me', 'max_opens' => 2, 'ends_at' => time() + 30 * 86400])); $slXid = $slXs['id'] ?? '';
+$slXset = function (array $patch) use ($fxSl, $slXid) { $f = read_data_file("$fxSl/.gallery-links.php"); $f['links'][$slXid] = array_replace($f['links'][$slXid], $patch); write_data_file("$fxSl/.gallery-links.php", $f); };
+$slXend = (int) ($slLinks()['links'][$slXid]['endsAt'] ?? 0);
+$slXset(['opens' => 2]);
+$slXstate = fn () => link_state_for_tests($slLinks()['links'][$slXid]);
+check('[extend] a link whose opens are all used is "used up"', $slXstate() === 'used_up' && $slXend > time());
+$slXa = $slAdmin(['action' => 'link_extend', 'id' => $slXid, 'add_opens' => 3]); $slXl = $slLinks()['links'][$slXid];
+check('[extend] more opens (no end sent) raises the limit by that many, opens the link again and leaves its end date alone: it never gains or loses one', ($slXa['ok'] ?? false) && (int) $slXl['maxOpens'] === 5 && (int) $slXl['opens'] === 2 && (int) $slXl['endsAt'] === $slXend && $slXstate() === 'active');
+$slXset(['opens' => 5]);
+$slXb = $slAdmin(['action' => 'link_extend', 'id' => $slXid, 'no_limit' => '1']); $slXl = $slLinks()['links'][$slXid];
+check('[extend] Unlimited lifts the open limit (it opens again with no limit, the opens already used stay counted, the end date is untouched)', ($slXb['ok'] ?? false) && (int) $slXl['maxOpens'] === 0 && (int) $slXl['opens'] === 5 && (int) $slXl['endsAt'] === $slXend && $slXstate() === 'active');
+$slXset(['maxOpens' => 3, 'opens' => 3, 'endsAt' => time() - 60]);
+check('[extend] a link that is expired and out of opens is not live until both are dealt with', $slXstate() === 'expired');
+$slXc = $slAdmin(['action' => 'link_extend', 'id' => $slXid, 'ends_at' => time() + 3 * 86400]);
+check('[extend] a new end alone does not bring back a link that is also used up', ($slXc['ok'] ?? false) && $slXstate() === 'used_up');
+$slXd = $slAdmin(['action' => 'link_extend', 'id' => $slXid, 'add_opens' => 2]);
+check('[extend] ...and more opens as well makes it live', ($slXd['ok'] ?? false) && (int) ($slLinks()['links'][$slXid]['maxOpens'] ?? 0) === 5 && $slXstate() === 'active');
+$slAdmin(['action' => 'link_revoke', 'id' => $slXid]);
+check('[extend] a revoked link cannot be extended, not even with Unlimited', ($slAdmin(['action' => 'link_extend', 'id' => $slXid, 'no_limit' => '1'])['ok'] ?? true) === false);
+$slAdmin(['action' => 'link_delete', 'id' => $slXid]);
+check('[extend] the page hands the dialog what it needs: how many opens are used, and the Extend dialog asks only the relevant question', str_contains($indexSrcText = (string) file_get_contents($indexSrc), "'opens' => (int) (\$l['opens'] ?? 0)") && str_contains($indexSrcText, "needOpens = !!link && link.maxOpens > 0 && link.opens >= link.maxOpens, needEnd = !!link && link.state === 'expired'") && str_contains($indexSrcText, "extra.no_limit = '1'") && str_contains($indexSrcText, "\$state === 'expired' || \$state === 'used_up'): ?><button type=\"button\" class=\"secondary sl-quick\" data-sl=\"extend\""));
 $slEdit = $slAdmin($slForm(['action' => 'link_save', 'id' => $slId, 'label' => 'Aunt Carol (Rome)', 'title_mode' => 'neutral', 'max_opens' => 9, 'heads_up' => 'on', 'locations' => 'all', 'downloads' => 'all']));
 $slEdited = $slLinks()['links'][$slId] ?? [];
 check('[share links] editing a link saves its fields without touching its token or its opens', ($slEdit['ok'] ?? false) && ($slEdited['label'] ?? '') === 'Aunt Carol (Rome)' && ($slEdited['titleMode'] ?? '') === 'neutral' && ($slEdited['maxOpens'] ?? 0) === 9 && ($slEdited['headsUp'] ?? '') === 'on' && ($slEdited['locations'] ?? '') === 'all' && ($slEdited['downloads']['mode'] ?? '') === 'all' && ($slEdited['token'] ?? '') === $slToken && ($slEdited['opens'] ?? -1) === 1);
 $slThrottleReset();
-check('[share links] a neutral title shows "A shared gallery" on the opening page, with no photo or folder name', str_contains(http_get("$baseSl/?link=$slToken")[1], '<h1>A shared gallery</h1>') && !str_contains(http_get("$baseSl/?link=$slToken")[1], basename($fxSl)));
+$neutralRx = '#<h1>(A shared gallery|Some photos for you|A few photos to look at|Shared with you|A little gallery|Something to look at|Photos, shared|A collection of photos|Take a look|Photos for you)</h1>#';   // (one of a few plain titles, picked by the link: the same one every time)
+check('[share links] a neutral title shows one of the plain neutral titles on the opening page (the same every time for the link), with no photo or folder name', preg_match($neutralRx, http_get("$baseSl/?link=$slToken")[1], $nt1) === 1 && preg_match($neutralRx, http_get("$baseSl/?link=$slToken")[1], $nt2) === 1 && $nt1[1] === $nt2[1] && !str_contains(http_get("$baseSl/?link=$slToken")[1], basename($fxSl)));
 $slThrottleReset();
 $slRev = $slAdmin(['action' => 'link_revoke', 'id' => $slId]);
 check('[share links] revoking keeps the link in the list as revoked (it can\'t be edited, replaced or extended), and it no longer opens', ($slRev['ok'] ?? false) && ($slLinks()['links'][$slId]['status'] ?? '') === 'revoked' && ($slAdmin(['action' => 'link_extend', 'id' => $slId, 'ends_at' => time() + 100])['ok'] ?? true) === false && ($slAdmin(['action' => 'link_replace', 'id' => $slId])['ok'] ?? true) === false && $slInvalid(http_get("$baseSl/?link=$slToken")[1], http_get("$baseSl/?link=$slToken")[0]));
@@ -5034,6 +5272,273 @@ check('[share links] the probe token answers 200 (a browser logs no 404 in its c
 check('[share links] a real wrong 16-character token still answers 404 (with the marker header)', $slSubWrongStatus === 404 && in_array('X-Gallery-Link: invalid', $slSubWrongHeaders, true));
 
 
+echo "== files this gallery has made: the list, the ZIP and the delete (it must never touch anything that is not the gallery's own) ==\n";
+
+$fxF = new_fixture_dir('filesmade'); $fxFMap = new_fixture_dir('filesmapped'); $fxFOut = new_fixture_dir('filesoutside');
+foreach (['Pics', 'Notes', 'Linked', 'NoGuard', 'deep'] as $d) mkdir("$fxF/$d", 0775, true);
+foreach (['one.jpg' => 1, 'Pics/a.jpg' => 2, 'Pics/b.jpg' => 3, 'Notes/n.jpg' => 4, 'Linked/l.jpg' => 5, 'NoGuard/g.jpg' => 6] as $f => $n) make_jpeg("$fxF/$f", 60 + $n, 50, 20 * $n % 255, 90, 30 * $n % 255);
+make_jpeg("$fxFMap/m.jpg", 70, 50, 10, 200, 90);
+$fGuard = "<?php http_response_code(404); exit; ?>\n";
+// the gallery's own data, as the gallery writes it
+write_data_file("$fxF/Pics/.gallery-items.php", ['items' => ['a.jpg' => ['caption' => 'Alpha']], 'groups' => []]);
+write_data_file("$fxF/Pics/.gallery-stats.php", ['views' => ['a.jpg' => 3]]);
+write_data_file("$fxF/Pics/.gallery-items.before-tidy-20261001-120000.php", ['items' => [], 'groups' => []]);
+write_data_file("$fxFMap/.gallery-items.php", ['items' => ['m.jpg' => ['caption' => 'Mapped one']], 'groups' => []]);
+foreach (["$fxF/Pics/.gallery-cache", "$fxFMap/.gallery-cache"] as $cd) { mkdir($cd, 0775, true); }
+$fThumbA = md5('a.jpg|thumb|1') . '.jpg'; $fThumbM = md5('m.jpg|thumb|1') . '.jpg';
+file_put_contents("$fxF/Pics/.gallery-cache/$fThumbA", 'thumb-a'); file_put_contents("$fxFMap/.gallery-cache/$fThumbM", 'thumb-m');
+file_put_contents("$fxF/Pics/.gallery-cache/meta1.php", $fGuard . '{}');
+// decoys: nothing below is the gallery's, and none of it may ever be touched
+file_put_contents("$fxF/Pics/.gallery-cache/notes.txt", 'a note somebody kept in a folder with this name');   // (in a .gallery-cache folder, but not a thumbnail)
+file_put_contents("$fxF/Notes/gallery.md", "# Notes\nmy words\n");
+file_put_contents("$fxF/.gallery-items.php.bak", 'a backup somebody made by hand');
+file_put_contents("$fxF/.gallery-config.php.old", 'an old copy of the settings');
+file_put_contents("$fxF/.gallery-linklog-zz.php", $fGuard . '{}');   // (right guard line, wrong name)
+file_put_contents("$fxF/.gallery-signin-0123456789ab.php", $fGuard . '{"t":1,"ip":"192.0.2.1"}' . "\n"); file_put_contents("$fxF/.gallery-browsers-log.php", $fGuard . '{"ended":[],"sizes":{}}');   // (a browser's address history and the list of signed-out ones: the gallery's own)
+file_put_contents("$fxF/.gallery-signin-0123456789ab.php.bak", $fGuard . 'a copy'); file_put_contents("$fxF/.gallery-signin-notahexid1234.php", $fGuard . '{}'); file_put_contents("$fxF/.gallery-signin-0123456789cd.php", '{"t":1,"ip":"192.0.2.2"}');   // (decoys: a copy, a name that is not one of ours, and the right name with no guard line)
+file_put_contents("$fxF/Pics/my.gallery-items.php", $fGuard . '{}');
+file_put_contents("$fxF/NoGuard/.gallery-items.php", '{"items":{"g.jpg":{"caption":"hand-made, no guard line"}}}');   // (right name, no guard line)
+file_put_contents("$fxFOut/important.txt", 'a file outside the gallery that a link points at');
+@symlink("$fxFOut/important.txt", "$fxF/Linked/.gallery-items.php");
+file_put_contents("$fxF/deep/.gallery-items.php", $fGuard . '{}');   // (a folder with no photos: the gallery does not look there)
+file_put_contents("$fxF/.gallery-setup", '');
+file_put_contents("$fxF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'files-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'EXTRA_FOLDERS' => ['Mapped' => $fxFMap]]));
+copy($indexSrc, "$fxF/index.php");
+$portF = find_free_port(); start_server($fxF, $portF); $baseF = "http://127.0.0.1:$portF";
+[, , $fLogin] = http_post("$baseF/?admin", ['access_code' => 'files-admin-pw-1'], [], false);
+$fCookie = extract_cookie_header($fLogin);
+$fCsrf = extract_csrf_token(http_get("$baseF/?admin", ["Cookie: $fCookie"])[1]);
+$fAct = function (array $fields) use ($baseF, $fCookie, $fCsrf) {
+    [, $body] = http_post("$baseF/?admin", $fields + ['csrf_token' => $fCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $fCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+// make some real data: a share link (its log and file), a wrong password (the throttle file)
+$fMade = $fAct(['action' => 'link_create', 'label' => 'Files test', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'off', 'scope_type' => 'public', 'downloads' => 'off', 'zip' => 'off']);
+http_post("$baseF/?admin", ['access_code' => 'not-the-password'], [], false);
+// (what the gallery rewrites by itself while it is used: a sign-in or a link being made is not "something changing by accident")
+$fVolatile = '~/\.gallery-(login-attempts|stay|browsers-log|browsers|signin-[0-9a-f]{12}|health|links|secret|linklog-[0-9a-f]{10}(-items|-q)?)\.php$~';
+$fPlain = fn (array $t) => array_filter($t, fn ($v, $k) => !preg_match($fVolatile, $k), ARRAY_FILTER_USE_BOTH);
+$fTree = function (string $root) { $out = []; $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST); foreach ($it as $f) { $out[substr($f->getPathname(), strlen($root))] = $f->isLink() ? 'link:' . readlink($f->getPathname()) : ($f->isDir() ? 'dir' : md5_file($f->getPathname())); } ksort($out); return $out; };
+
+// the list
+$fList = $fAct(['action' => 'files_list']);
+$fKinds = array_column($fList['rows'] ?? [], 'files', 'kind');
+check('[files made] the list finds what the gallery made: its settings, share links and logs, secret, sign-in records, the folders\' captions, view counts, tidy-up backup, thumbnails (and the one in the mapped folder), and says how many and how big', ($fList['ok'] ?? false) && ($fKinds['settings'] ?? 0) === 1 && ($fKinds['links'] ?? 0) >= 1 && ($fKinds['secret'] ?? 0) === 1 && ($fKinds['signin'] ?? 0) >= 1 && ($fKinds['items'] ?? 0) === 2 && ($fKinds['stats'] ?? 0) === 1 && ($fKinds['backups'] ?? 0) === 1 && ($fKinds['meta'] ?? 0) === 1 && ($fList['thumbs'] ?? 0) === 2 && ($fList['folders'] ?? 0) >= 3, json_encode($fKinds));
+check('[files made] the list names every file in the paths it gives (the mapped folder under its name in the gallery), and never a photo, a note or a decoy', in_array('Mapped/.gallery-items.php', $fList['paths'] ?? [], true) && in_array('Pics/.gallery-items.php', $fList['paths'] ?? [], true) && in_array('.gallery-config.php', $fList['paths'] ?? [], true) && !array_filter($fList['paths'] ?? [], fn ($x) => preg_match('/\.(jpg|md|bak|old|txt)$|index\.php$|NoGuard|Linked|deep/', $x)));
+check('[files made] names that only look like the gallery\'s own (a hand-made copy, a lookalike, a file with the right name but no guard line, a link) are listed as "left alone", not as the gallery\'s', ($fList['ok'] ?? false) && count(array_intersect($fList['unknown'] ?? [], ['.gallery-items.php.bak', '.gallery-config.php.old', '.gallery-linklog-zz.php', 'NoGuard/.gallery-items.php', 'Linked/.gallery-items.php'])) === 5 && !in_array('.gallery-setup', $fList['unknown'] ?? [], true));
+check('[files made] the Settings page has the group, closed, with the three buttons', ($fPage = http_get("$baseF/?admin", ["Cookie: $fCookie"])[1]) !== '' && preg_match('/<details class="site-group" id="files-made">/', $fPage) === 1 && str_contains($fPage, 'data-fm="list"') && str_contains($fPage, 'data-fm="zip"') && str_contains($fPage, 'data-fm="delete"') && str_contains($fPage, 'Files this gallery has made'));
+$fPanel = $fAct(['action' => 'media_panel']);
+check('[prepare media] the Settings page keeps a slot under the Thumbnails switch, and the media_panel action hands back the whole panel (so it can appear the moment Thumbnails is turned on, with no reload)', str_contains($fPage, 'id="media-slot"') && ($fPanel['ok'] ?? false) && ($fPanel['cache'] ?? false) === true && str_contains((string) ($fPanel['html'] ?? ''), 'id="media-panel"') && str_contains((string) ($fPanel['html'] ?? ''), 'data-csrf="' . $fCsrf . '"') && str_contains((string) ($fPanel['html'] ?? ''), 'media-go') && http_post("$baseF/?admin", ['action' => 'media_panel', 'csrf_token' => 'wrong'], ['X-Requested-With: gallery-fetch', "Cookie: $fCookie"])[1] !== '' && !str_contains(http_post("$baseF/?admin", ['action' => 'media_panel', 'csrf_token' => 'wrong'], ['X-Requested-With: gallery-fetch', "Cookie: $fCookie"])[1], 'media-panel'));
+
+// the gates: each is refused by the server on its own
+$fBefore = $fTree($fxF); $fMapBefore = $fTree($fxFMap); $fPlainBefore = $fPlain($fBefore);
+$fFp = $fList['fingerprint'] ?? '';
+$fNo = fn (array $f) => ($fAct(['action' => 'files_delete', 'nocopy' => '1'] + $f)['ok'] ?? true) === false;
+check('[files made] the delete is refused without the password, with a wrong one, without DELETE typed, with a list that is not the current one, and without a copy taken or declined: nothing changes', $fNo(['typed' => 'DELETE', 'fingerprint' => $fFp]) && $fNo(['password' => 'wrong-pw-here', 'typed' => 'DELETE', 'fingerprint' => $fFp]) && $fNo(['password' => 'files-admin-pw-1', 'typed' => 'delete', 'fingerprint' => $fFp]) && $fNo(['password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => 'abc']) && !($fAct(['action' => 'files_delete', 'password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => $fFp])['ok'] ?? true) && $fPlain($fTree($fxF)) === $fPlainBefore && array_keys($fTree($fxF)) === array_keys($fBefore) && $fTree($fxFMap) === $fMapBefore);
+check('[files made] the ZIP also needs the password again', !($fAct(['action' => 'files_zip_prepare', 'password' => 'nope'])['ok'] ?? true) && !($fAct(['action' => 'files_zip_prepare'])['ok'] ?? true) && http_get("$baseF/?admin&filesdownload=" . str_repeat('a', 32), ["Cookie: $fCookie"])[0] === 404);
+
+// the ZIP: exactly the gallery's files, laid out as on disk, with a README, no thumbnails unless asked
+$fZipFetch = function (bool $thumbs) use ($fAct, $baseF, $fCookie) {
+    $r = $fAct(['action' => 'files_zip_prepare', 'password' => 'files-admin-pw-1', 'thumbs' => $thumbs ? '1' : '0']);
+    if (!($r['ok'] ?? false)) return [null, [], $r];
+    [$st, $body] = http_get("$baseF/" . $r['url'], ["Cookie: $fCookie"]);
+    $tmp = tempnam(sys_get_temp_dir(), 'fz'); file_put_contents($tmp, $body);
+    return [$st, $tmp, $r];
+};
+if ($haveUnzip) {
+    $fListZ = $fAct(['action' => 'files_list']);
+    [$fSt, $fZ, $fR] = $fZipFetch(false);
+    $fNames = $fSt === 200 ? $zipNames($fZ) : [];
+    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count($fListZ['paths']) + 1, json_encode($fNames));
+    $fReadme = (string) $zipEntry($fZ, 'README.txt');
+    check('[files made] the README says what the files are, how to put them back and where the mapped folder is from, and warns that it is private', str_contains($fReadme, 'unzip this file over the same folder') && str_contains($fReadme, 'Mapped/') && str_contains($fReadme, $fxFMap) && str_contains($fReadme, 'private'));
+    $fToken = basename((string) ($fR['url'] ?? ''));
+    check('[files made] a ZIP address works once: asking for it again is a 404', http_get("$baseF/" . ($fR['url'] ?? '?x'), ["Cookie: $fCookie"])[0] === 404);
+    @unlink($fZ);
+    [$fSt2, $fZ2] = $fZipFetch(true);
+    $fNames2 = $fSt2 === 200 ? $zipNames($fZ2) : [];
+    check('[files made] with the thumbnails ticked the ZIP also holds them, laid out in their .gallery-cache folders, and nothing else is added', $fSt2 === 200 && in_array("Pics/.gallery-cache/$fThumbA", $fNames2, true) && in_array("Mapped/.gallery-cache/$fThumbM", $fNames2, true) && count($fNames2) === count($fNames) + 2 && !in_array('Pics/.gallery-cache/notes.txt', $fNames2, true));
+    if (is_string($fZ2)) @unlink($fZ2);
+    // a data file bigger than anything a person would have: the ZIP is not limited to what fits in memory, takes it whole, and leaves nothing behind
+    $fBigName = 'Pics/.gallery-items.before-tidy-20261002-120000.php';
+    $fBigPath = "$fxF/$fBigName";
+    $fBigFh = fopen($fBigPath, 'wb'); fwrite($fBigFh, $fGuard); $fBigChunk = random_bytes(1048576); for ($fBi = 0; $fBi < 70; $fBi++) fwrite($fBigFh, $fBigChunk); fclose($fBigFh);
+    $fTempBefore = glob(sys_get_temp_dir() . '/gallery-files-*') ?: [];
+    [$fStB, $fZB, $fRB] = $fZipFetch(false);
+    $fNamesB = $fStB === 200 ? $zipNames($fZB) : [];
+    $fBigOk = $fStB === 200 && in_array($fBigName, $fNamesB, true) && is_string($fZB) && filesize($fZB) > 70 * 1048576 && md5((string) $zipEntry($fZB, $fBigName)) === md5_file($fBigPath);
+    for ($fWait = 0; $fWait < 20 && array_diff(glob(sys_get_temp_dir() . '/gallery-files-*') ?: [], $fTempBefore); $fWait++) usleep(100000);
+    check('[files made] a data file of 70 MB goes into the ZIP whole and unchanged (there is no size limit: the file is copied disk to disk, never held in memory), and the temporary copies are gone when the download ends', $fBigOk && !array_diff(glob(sys_get_temp_dir() . '/gallery-files-*') ?: [], $fTempBefore), "status $fStB " . json_encode(array_slice($fNamesB, 0, 6)));
+    if (is_string($fZB)) @unlink($fZB);
+    @unlink($fBigPath);
+}
+check('[files made] making the ZIP changed nothing on disk (every file that is not rewritten by use is byte for byte the same, and none was added or lost)', $fPlain($fTree($fxF)) === $fPlainBefore && array_keys($fTree($fxF)) === array_keys($fBefore) && $fTree($fxFMap) === $fMapBefore);
+
+// the delete itself, after a copy was taken (above) with everything right
+touch("$fxF/index.php", time() - 3600);
+$fBefore = $fTree($fxF);
+$fListNow = $fAct(['action' => 'files_list']); $fFp2 = $fListNow['fingerprint'] ?? '';
+$fDel = $fAct(['action' => 'files_delete', 'password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => $fFp2, 'nocopy' => '1']);
+$fAfter = $fTree($fxF); $fMapAfter = $fTree($fxFMap);
+$fGone = array_diff_key($fBefore, $fAfter); $fGoneMap = array_diff_key($fMapBefore, $fMapAfter);
+$fKept = array_intersect_key($fAfter, $fBefore);
+check('[files made] the delete reports what it did and removes only the gallery\'s own files', ($fDel['ok'] ?? false) && ($fDel['deleted'] ?? 0) >= 8 && ($fDel['thumbs'] ?? 0) === 2 && !is_file("$fxF/.gallery-config.php") && !is_file("$fxF/.gallery-links.php") && !is_file("$fxF/.gallery-secret.php") && !is_file("$fxF/Pics/.gallery-items.php") && !is_file("$fxF/Pics/.gallery-stats.php") && !is_file("$fxFMap/.gallery-items.php") && !is_file("$fxFMap/.gallery-cache/$fThumbM") && !is_file("$fxF/Pics/.gallery-cache/$fThumbA"), json_encode($fDel));
+$fNotOurs = ['/one.jpg', '/Pics/a.jpg', '/Pics/b.jpg', '/Notes/n.jpg', '/Notes/gallery.md', '/Linked/l.jpg', '/NoGuard/g.jpg', '/index.php', '/.gallery-items.php.bak', '/.gallery-config.php.old', '/.gallery-linklog-zz.php', '/.gallery-signin-0123456789ab.php.bak', '/.gallery-signin-notahexid1234.php', '/.gallery-signin-0123456789cd.php', '/Pics/my.gallery-items.php', '/NoGuard/.gallery-items.php', '/deep/.gallery-items.php', '/.gallery-setup', '/Pics/.gallery-cache/notes.txt'];
+$fSame = true; foreach ($fNotOurs as $k) if (($fBefore[$k] ?? null) !== ($fAfter[$k] ?? 'gone')) { $fSame = false; echo "    changed or gone: $k\n"; }
+check('[files made] every photo, note, decoy, lookalike and index.php is exactly as it was (checksums before and after), the symlink still points where it did, and the file outside is untouched', $fSame && ($fAfter['/Linked/.gallery-items.php'] ?? '') === 'link:' . "$fxFOut/important.txt" && file_get_contents("$fxFOut/important.txt") === 'a file outside the gallery that a link points at' && ($fMapAfter['/m.jpg'] ?? '') === ($fMapBefore['/m.jpg'] ?? 'x'));
+check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-signin-[0-9a-f]{12}\.php$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
+@unlink("$fxF/.gallery-setup");   // (the owner's own marker file is left by the delete; here it is removed by hand to see the plain state)
+check('[files made] afterwards the gallery has no admin (only the set-up page, which asks for a code), the old sign-in cookie opens nothing, and the gallery itself is plain and public', !str_contains(http_get("$baseF/?admin", [])[1], 'Gallery Admin') && str_contains(http_get("$baseF/?admin", [])[1], 'Set up your gallery') && !str_contains(http_get("$baseF/?admin", ["Cookie: $fCookie"])[1], 'Gallery Admin') && http_get("$baseF/")[0] === 200);
+@unlink("$fxF/gallery-setup-code.php");
+
+// Fail closed: one path in the plan that does not check out stops everything (the delete is run on its own, on a copy of its code)
+$fSrc = (string) file_get_contents($indexSrc);
+$fFrom = strpos($fSrc, '/* -----------------------------------------------------------------------' . "\n" . ' * "Files this gallery has made"');
+$fTo = strpos($fSrc, 'function files_admin_action');
+$fCode = ($fFrom !== false && $fTo !== false) ? substr($fSrc, $fFrom, $fTo - $fFrom) : '';
+$fDelCode = ($fDelAt = strpos($fCode, 'function owned_delete')) !== false ? substr($fCode, $fDelAt) : '';
+check('[files made] the delete\'s code is found in index.php (for the checks that read it)', $fCode !== '' && str_contains($fCode, 'function owned_delete'));
+check('[files made] the delete never uses a wildcard, a recursive walk or a shell command: one unlink at a time from the plan (two places: the thumbnails, the data files), and rmdir only on an emptied .gallery-cache', !preg_match('/\bglob\s*\(|RecursiveDirectoryIterator|RecursiveIteratorIterator|\bexec\s*\(|shell_exec|\bsystem\s*\(|passthru|proc_open|popen/', $fCode) && substr_count($fCode, '@rmdir(') === 1 && substr_count($fCode, '@rmdir($c[\'path\'])') === 1 && substr_count($fDelCode, '@unlink(') === 2 && substr_count($fDelCode, 'unlink(') === 2);
+check('[files made] the ZIP\'s temporary copies are removed by one guarded function (only entries it made, only files named gallery-files-…, never a link), nothing is read whole into memory, and there is no size cap', substr_count($fCode, 'unlink(') === 3 && str_contains($fCode, "strncmp(basename(\$e['path']), 'gallery-files-', 14)") && str_contains($fCode, '!is_link($e[\'path\'])) @unlink') && !str_contains($fCode, 'owned_read_locked') && !str_contains($fCode, '64 * 1048576') && str_contains($fCode, 'stream_copy_to_stream'));
+$fHarness = tempnam(sys_get_temp_dir(), 'fh') . '.php';
+$fWork = new_fixture_dir('failclosed'); mkdir("$fWork/P", 0775, true); file_put_contents("$fWork/P/.gallery-items.php", $fGuard . '{}'); file_put_contents("$fWork/P/a.jpg", 'photo'); file_put_contents("$fWork/.gallery-config.php", $fGuard . '{}'); file_put_contents("$fWork/P/keep.txt", 'x');
+file_put_contents($fHarness, "<?php\nconst MEDIA_META_FILE = 'meta1.php'; const GALLERY_VERSION = 'x';\nfunction data_file_guard_line() { return \"<?php http_response_code(404); exit; ?>\\n\"; }\nfunction all_folder_paths(\$f) { return ['P']; }\nfunction resolve_real_path(\$d, \$r) { return \$d . '/' . \$r; }\nfunction gallery_mounts() { return []; }\n" . substr($fCode, strpos($fCode, '/** The files the gallery makes beside') ) . "\n\$plan = owned_plan(" . var_export($fWork, true) . ", ['P/a.jpg']);\n\$n0 = count(\$plan['entries']);\n// a path that does not check out: the plan points one entry at a photo\n\$bad = \$plan; foreach (\$bad['entries'] as \$i => \$e) if (\$e['kind'] === 'items') \$bad['entries'][\$i]['path'] = " . var_export("$fWork/P/a.jpg", true) . ";\n\$r = owned_delete(\$bad);\necho json_encode(['n0' => \$n0, 'ok' => \$r['ok'], 'deleted' => \$r['deleted'], 'cfg' => is_file(" . var_export("$fWork/.gallery-config.php", true) . "), 'items' => is_file(" . var_export("$fWork/P/.gallery-items.php", true) . "), 'photo' => is_file(" . var_export("$fWork/P/a.jpg", true) . ")]);\n");
+$fRes = json_decode((string) shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($fHarness) . ' 2>&1'), true) ?: [];
+check('[files made] a plan with one entry that does not check out deletes nothing at all (not even the files that were fine): the settings file, the data file and the photo are all still there', ($fRes['n0'] ?? 0) === 2 && ($fRes['ok'] ?? true) === false && ($fRes['deleted'] ?? 1) === 0 && !empty($fRes['cfg']) && !empty($fRes['items']) && !empty($fRes['photo']), json_encode($fRes));
+@unlink($fHarness);
+
+echo "== the new link form, the links list, the Settings page and the QR code (2.4.0) ==\n";
+
+$fxN = new_fixture_dir('page233');
+foreach (['Rome', 'Pisa'] as $d) mkdir("$fxN/$d", 0775, true);
+foreach (['pub.jpg' => 1, 'Rome/r1.jpg' => 2, 'Pisa/p1.jpg' => 3] as $f => $n) make_jpeg("$fxN/$f", 60 + $n, 50, 20 * $n % 255, 90, 30 * $n % 255);
+foreach (['Rome', 'Pisa'] as $d) write_data_file("$fxN/$d/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'DEFAULT_LINK_USES' => 0]));
+copy($indexSrc, "$fxN/index.php");
+$portN = find_free_port(); start_server($fxN, $portN); $baseN = "http://127.0.0.1:$portN";
+[, , $nLogin] = http_post("$baseN/?admin", ['access_code' => 'n233-admin-pw-1'], [], false);
+$nCookie = extract_cookie_header($nLogin);
+$nCsrf = extract_csrf_token(http_get("$baseN/?admin", ["Cookie: $nCookie"])[1]);
+$nAct = function (array $f) use ($baseN, $nCookie, $nCsrf) {
+    [, $b] = http_post("$baseN/?admin", $f + ['csrf_token' => $nCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $nCookie"]);
+    return json_decode($b, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($b, 0, 80)];
+};
+$nBase = ['action' => 'link_create', 'title_mode' => 'gallery', 'picture' => '1', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'public', 'downloads' => 'off', 'zip' => 'off'];
+$nLinksFile = fn () => read_data_file("$fxN/.gallery-links.php");
+$nPlain = $nAct(['label' => 'Plain one'] + $nBase);
+$nBusy = $nAct(['label' => 'Busy one', 'max_opens' => 10, 'ends_at' => time() + 5 * 86400, 'scope_type' => 'folders', 'scope_folders' => json_encode(['Rome']), 'only' => '1', 'downloads' => 'some', 'downloads_folders' => json_encode(['Rome']), 'zip' => 'public', 'locations' => 'all', 'note' => 'Hi Carol', 'title_mode' => 'neutral', 'picture' => '1', 'heads_up' => 'on'] + $nBase);
+$nPause = $nAct(['label' => 'Paused one'] + $nBase); $nAct(['action' => 'link_pause', 'id' => $nPause['id']]);
+$nGone = $nAct(['label' => 'Revoked one'] + $nBase); $nAct(['action' => 'link_revoke', 'id' => $nGone['id']]);
+$nAlias = $nAct(['label' => 'Old ones'] + $nBase);
+$nAct(['action' => 'link_save', 'id' => $nAlias['id'], 'label' => 'Old ones', 'address' => 'brand-new-name', 'keep_old' => '1'] + $nBase);
+// two openings on one link, one on another (the counts the list says)
+$nLf = $nLinksFile(); $nLf['links'][$nBusy['id']]['opens'] = 1; $nLf['links'][$nPlain['id']]['opens'] = 2; write_data_file("$fxN/.gallery-links.php", $nLf);
+$nTab = http_get("$baseN/?admin", ["Cookie: $nCookie"])[1];
+$nRow = function (string $id) use ($nTab) { preg_match('~<details class="sl-row" data-id="' . preg_quote($id, '~') . '".*?</details>(?=\s*(?:<details class="sl-row"|</div>|<!--|\s*$))~s', $nTab . '</div>', $m); return $m[0] ?? ''; };
+$nRows = [$nPlain['id'] => $nRow($nPlain['id']), $nBusy['id'] => $nRow($nBusy['id']), $nPause['id'] => $nRow($nPause['id']), $nGone['id'] => $nRow($nGone['id']), $nAlias['id'] => $nRow($nAlias['id'])];
+check('[links list] the five links are all in the page', count(array_filter($nRows)) === 5);
+$nSub = fn ($id) => (preg_match('~<span class="sl-sub">(.*?)</span></span>~s', $nRows[$id] ?? '', $m) ? strip_tags($m[1]) : '');
+check('[links list] a link with no limit and no end says how many times it was opened and nothing about a limit or an end ("2 browsers"; never "no limit" or "no end date")', str_starts_with(trim($nSub($nPlain['id'])), '2 browsers') && !str_contains($nTab, 'no limit') && !str_contains(implode(' ', preg_match_all('~<span class="sl-sub">(.*?)</span></span>~s', $nTab, $nSubs) ? $nSubs[1] : []), 'no end date'), $nSub($nPlain['id']));
+check('[links list] a link that has a limit and an end says "of 10" and when it ends', str_contains($nSub($nBusy['id']), '1 of 10 browsers') && str_contains($nSub($nBusy['id']), 'ends '));
+$nUnopened = $nAct(['label' => 'Nobody yet'] + $nBase);
+check('[links list] a link nobody has opened says "Not opened yet"', str_contains(preg_replace('/\s+/', ' ', strip_tags(preg_match('~<details class="sl-row" data-id="' . $nUnopened['id'] . '".*?</summary>~s', http_get("$baseN/?admin", ["Cookie: $nCookie"])[1], $m) ? $m[0] : '')), 'Not opened yet'));
+$nLf = $nLinksFile(); $nLf['links'][$nPlain['id']]['opens'] = 1; write_data_file("$fxN/.gallery-links.php", $nLf);
+check('[links list] ...and "1 browser" (not "1 browsers") for a single one', str_contains(strip_tags(preg_match('~<span class="sl-sub">(.*?)</span></span>~s', preg_match('~<details class="sl-row" data-id="' . $nPlain['id'] . '".*?</details>~s', http_get("$baseN/?admin", ["Cookie: $nCookie"])[1], $m2) ? $m2[0] : '', $m3) ? $m3[1] : ''), '1 browser') && !str_contains(strip_tags(preg_match('~<span class="sl-sub">(.*?)</span></span>~s', $m2[0] ?? '', $m4) ? $m4[1] : ''), '1 browsers'));
+// the paragraph
+$nPara = fn ($id) => (preg_match('~<p class="sl-para">(.*?)</p>~s', $nRows[$id] ?? '', $m) ? $m[1] : '');
+$nPlainPara = $nPara($nPlain['id']); $nBusyPara = $nPara($nBusy['id']);
+check('[link summary] a link that uses every default reads in plain grey, clause by clause (the public gallery, as many browsers as they like, never stops, downloads and ZIP off, locations shown only, the gallery\'s title, an automatic preview photo, no note), with the made date, and none of it is marked as changed', substr_count($nPlainPara, 'class="sl-cl"') === 7 && !str_contains($nPlainPara, 'sl-cl-ch') && str_contains($nPlainPara, 'They see the public gallery and nothing private.') && str_contains($nPlainPara, 'It can be opened in as many browsers as they like,') && str_contains($nPlainPara, 'and never stops working.') && str_contains($nPlainPara, 'Downloads and ZIP are off.') && str_contains($nPlainPara, 'shown only where you set them to show') && str_contains($nPlainPara, 'the gallery\'s title and an automatic preview photo, with no note') && str_contains($nPlainPara, 'Made '), $nPlainPara);
+check('[link summary] a link with settings of its own marks exactly those clauses (what they see, the limit, the end, downloads and ZIP, locations, the page), in plain words', str_contains($nBusyPara, '<span class="sl-cl-ch">They see Rome (with everything inside) and nothing else on their pages (a tidy view: the rest of the gallery stays public to everyone).</span>') && str_contains($nBusyPara, '<span class="sl-cl-ch">It can be opened in up to 10 browsers,</span>') && str_contains($nBusyPara, 'sl-cl-ch">and stops working on ') && str_contains($nBusyPara, 'Downloads: only some folders: Rome; ZIP: everything but private.') && str_contains($nBusyPara, '<span class="sl-cl-ch">All saved locations are shown.</span>') && str_contains($nBusyPara, 'a neutral title and an automatic preview photo, with the note “Hi Carol”. The heads-up line is on.') && str_contains($nBusyPara, '<span class="sl-cl">Made '), $nBusyPara);
+check('[link summary] the paragraph ends with Edit… and the Settings list, the address box and its own Copy button are gone from an opened link', str_contains($nBusyPara, 'data-sl="edit">Edit…</button>') && !str_contains($nRows[$nBusy['id']], '<dt>') && !str_contains($nRows[$nBusy['id']], 'class="sl-linkline"') && str_contains($nRows[$nBusy['id']], '<input type="hidden" class="sl-url"') && substr_count($nRows[$nBusy['id']], 'data-sl="copy"') === 1);
+check('[link summary] a revoked link says so in the paragraph, has no Edit…, no address and no Share… or QR code; a paused link has the Copy button in the share kit (its row button is Resume), an active one has not', str_contains($nPara($nGone['id']), 'Revoked ') && !str_contains($nPara($nGone['id']), 'Edit…') && !str_contains($nRows[$nGone['id']], 'class="gs-mount"') && str_contains($nRows[$nPause['id']], 'class="gs-mount" data-name="Paused one" data-copy="1"') && str_contains($nRows[$nBusy['id']], 'data-copy="0"'));
+check('[link summary] a link with an old address that still works has a one-line "Old addresses" row that opens the Pause, Resume and Kill buttons; a link without any has none', str_contains($nRows[$nAlias['id']], '<details class="sl-old"') && str_contains($nRows[$nAlias['id']], 'Old addresses (1)') && str_contains($nRows[$nAlias['id']], 'Manage…') && str_contains($nRows[$nAlias['id']], 'data-sl="aliaspause"') && !str_contains($nRows[$nPlain['id']], 'sl-old'));
+// the form
+check('[new link form] the name comes first, then the address with the box "Use the name as the address" ticked and the placeholders that go together (Aunt Carol, auntcarol), the sentence, and four folded rows', preg_match('/name="label" maxlength="80" placeholder="Aunt Carol".*?name="addr_name" checked.*?Use the name as the address.*?placeholder="auntcarol".*?data-asis.*?data-grp="scope".*?data-grp="limits".*?data-grp="privacy".*?data-grp="page"/s', $nTab) === 1 && substr_count($nTab, '<details class="sl-grp"') === 4 && !str_contains($nTab, '<details class="sl-grp" open') && substr_count($nTab, 'data-cl="') === 6);
+check('[new link form] with the default set to Unlimited (0) the defaults are Unlimited and Never (not 10 and 1 week), Immediately, downloads and ZIP Off, locations "Shown only", the public gallery', preg_match('/name="opens_pick" value="0" checked/', $nTab) === 1 && preg_match('/name="ends_pick" value="0" checked/', $nTab) === 1 && preg_match('/name="starts_pick" value="now" checked/', $nTab) === 1 && preg_match('/name="downloads" value="off" checked/', $nTab) === 1 && preg_match('/name="zip" value="off" checked/', $nTab) === 1 && preg_match('/name="locations" value="public" checked/', $nTab) === 1 && preg_match('/name="scope_type" value="public" checked/', $nTab) === 1 && str_contains($nTab, 'data-default-uses="0"') && !str_contains($nTab, 'data-uses-note'));
+check('[new link form] downloads and ZIP offer Off, Everything, Everything but private and Only some folders; locations are "Shown only" and "All" (never "as the public sees them")', substr_count($nTab, 'Everything but private') >= 2 && str_contains($nTab, '<span>Only some folders</span>') && str_contains($nTab, '<span>Shown only</span>') && str_contains($nTab, '<span>All</span>') && !str_contains($nTab, 'As the public sees them') && !str_contains($nTab, 'as the public sees them'));
+check('[new link form] the preview photo keeps its Choose… and Automatic buttons inside the opening page row', preg_match('/data-grp="page".*?name="picture".*?data-cover-choose.*?data-cover-auto.*?name="note"/s', $nTab) === 1);
+check('[new link form] an address made from the name has no hyphen (letters and digits only); a new link always starts on the name, and one that opens private photos says why that is easy to guess and that unticking gives a random one', str_contains($nTab, "return s.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 40);") && str_contains($nTab, "form._addrMode = editing ? (v.address ? 'custom' : 'random') : (v.addrMode || 'name')") && str_contains($nTab, 'An address made from a name is easy to guess, so untick the box to get a random one') && !str_contains($nTab, 'Switched to a random address') && str_contains($nTab, "radioValue(form, 'scope_type') === 'public' ? 'custom' : 'random'"));
+check('[quick popup] the "Share this folder / photos" popup has no browsers or Stops working rows (the setting\'s number and Never are what it makes), and says so in words', !str_contains($nTab, "seg('opens'") && !str_contains($nTab, "seg('ends'") && str_contains($nTab, ': +cfg.defaultUses || 0, endsAt: 0') && str_contains($nTab, 'As many browsers as they like can open it and it never stops working.') && str_contains($nTab, '"defaultUses":0'));
+check('[quick popup] the address: ticked for a folder, unticked (random) for one private photo or a group that are all private, with the yellow note, "Type my own instead…" and an address made from the name sent with address_auto', str_contains($nTab, "var oneOff = photos && opts.allPrivate === true") && str_contains($nTab, "(oneOff ? '' : ' checked')") && str_contains($nTab, 'data-gs="own">Type my own instead…') && str_contains($nTab, "body.set('address', ck.checked ? slug(nameIn.value) : ''); body.set('address_auto', ck.checked ? '1' : '0');") && str_contains($nTab, "addrMode: ck.checked ? 'name' : 'random'") && str_contains($ixq = (string) file_get_contents($indexSrc), 'allPrivate: true, anyPrivate: true') && str_contains($ixq, 'allPrivate: !!ownerState && pf.every(function (f) { return !!ownerState.priv[f]; })'));
+check('[quick popup] only "Type my own instead…" (or More options…) opens the full form; unticking just gives a random address in the popup', str_contains($nTab, "what === 'more' || what === 'own'") && str_contains($nTab, "d.addrMode = 'custom'; d.focusAddress = true;") && str_contains($nTab, "function syncAddr() { var on = ck.checked;") && !str_contains($nTab, "ck.addEventListener('change', function () { closeModal"));
+// the QR code
+check('[qr] the QR code button opens the large code at once, with Copy, Save and Done; the small code and its side panel are gone', str_contains($nTab, "else if (what === 'qr') showLarge(url, opts.name, b);") && str_contains($nTab, 'data-gs="saveimg">Save</button><button type="button" class="gs-btn gs-dark" data-gs="done">Done') && !str_contains($nTab, 'gs-qrbox') && !str_contains($nTab, 'Show large') && !str_contains($nTab, 'Scan to open') && str_contains($nTab, "d.id = 'gs-addrbox'") && str_contains($nTab, "select it and copy by hand."));
+// the Settings page
+$nGroups = (preg_match_all('~<details class="site-group"[^>]*>\s*<summary><span class="site-group-title">(.*?)</span> <span class="muted">(.*?)</span>~s', $nTab, $gm) ? $gm : [[], [], []]);
+check('[settings page] the groups are, in this order: Folders and photos, Videos and thumbnails, Visitors and logs, Locations and the map, Sharing and access, Signing in and passwords, Server setup (advanced), then Files this gallery has made; "What is shown", "Share links" and "Passwords" are gone as groups', $nGroups[1] === ['Folders and photos', 'Videos and thumbnails', 'Visitors and logs', 'Locations and the map', 'Sharing and access', 'Signing in and passwords', 'Server setup (advanced)', 'Files this gallery has made'] && !str_contains($nTab, '>What is shown<') && !str_contains($nTab, '>Passwords<'), json_encode($nGroups[1]));
+check('[settings page] every group starts closed (the first one no longer opens by itself)', !preg_match('/<details class="site-group"[^>]*\sopen/', $nTab));
+check('[settings page] the sign-in group holds both passwords, both signed-in lengths and the list of signed-in browsers, and says "11 settings"', preg_match('~Signing in and passwords</span> <span class="muted">11 settings</span>.*?name="pw_admin".*?name="pw_private".*?name="set_ADMIN_STAY_SIGNED_IN_DAYS".*?name="set_PRIVATE_VIEW_SIGNED_IN_DAYS".*?id="browsers-row".*?</details>~s', $nTab) === 1);
+check('[settings page] the visitor download setting is in Sharing and access (after "Close the public gallery"), and the video settings are in Videos', preg_match('~Sharing and access</span>.*?set_CLOSE_PUBLIC_GALLERY.*?id="setting-PUBLIC_DOWNLOAD_MODE".*?</details>~s', $nTab) === 1 && preg_match('~>Videos and thumbnails</span>.*?set_ENABLE_VIDEO".*?set_ENABLE_VIDEO_THUMBNAILS.*?set_ENABLE_VIDEO_PREVIEWS.*?</details>~s', $nTab) === 1);
+check('[settings page] Prepare media is inside Videos and thumbnails, right under the Thumbnails switch, and is not a panel of its own above Settings', preg_match('~Videos and thumbnails</span>.*?set_ENABLE_THUMBNAIL_CACHE.*?id="media-panel".*?Visitors and logs~s', $nTab) === 1 && substr_count($nTab, 'id="media-panel"') === 1 && !preg_match('~<section class="panel media-panel"~', $nTab));
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_THUMBNAIL_CACHE' => false]));
+check('[settings page] with Thumbnails off the Prepare media panel is not drawn at all', substr_count(http_get("$baseN/?admin", ["Cookie: $nCookie"])[1], 'id="media-panel"') === 0);
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+check('[settings page] the settings that follow another switch still follow it (the live script knows the rows that hide while a switch is on, and follows the chain: what needs the map goes when its own switch goes)', str_contains($nTab, "form.querySelectorAll('.site-row[data-hidden-when=\"' + name + '\"]'), function (r) {\n            r.hidden = shown;") && str_contains($nTab, "if (c) follow(shown && c.checked, c.name);"));
+
+// the declutter pass (2.4.0): rows that do nothing are hidden, "default" only when different, one order control, shorter texts, one chevron
+check('[settings page] the rows that only matter while another switch is on say so, in a chain: view counts follow Count views, the pin grouping follows Allow photo locations, the log\'s length follows the log (which follows share links)', preg_match('~id="setting-SHOW_VIEW_COUNTS_PUBLICLY"[^>]*data-requires="set_TRACK_VIEWS"~', $nTab) === 1 && preg_match('~id="setting-MAP_CLUSTER_RADIUS_MILES"[^>]*data-requires="set_ENABLE_PHOTO_LOCATION"~', $nTab) === 1 && preg_match('~id="setting-LOG_PUBLIC_DAYS"[^>]*data-requires="set_LOG_PUBLIC_VISITS"~', $nTab) === 1 && preg_match('~id="setting-LOG_PUBLIC_VISITS"[^>]*data-requires="set_ENABLE_SHARE_LINKS"~', $nTab) === 1);
+$nRelog = function () use ($baseN) { [, , $h] = http_post("$baseN/?admin", ['access_code' => 'n233-admin-pw-1'], [], false); return extract_cookie_header($h); };   // (rewriting the password line in the file ends the old session, so each look after a rewrite signs in again)
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => false, 'ENABLE_MAP' => true, 'TRACK_VIEWS' => false]));
+$nCookieOff = $nRelog();
+$nTabOff = http_get("$baseN/?admin", ["Cookie: $nCookieOff"])[1];
+check('[settings page] with locations off the pin grouping row is hidden, and with Count views off the visitor view counts row is', preg_match('~id="setting-MAP_CLUSTER_RADIUS_MILES"[^>]*data-requires="set_ENABLE_PHOTO_LOCATION" hidden~', $nTabOff) === 1 && preg_match('~id="setting-SHOW_VIEW_COUNTS_PUBLICLY"[^>]*data-requires="set_TRACK_VIEWS" hidden~', $nTabOff) === 1, substr(preg_replace('~\s+~', ' ', (string) strstr($nTabOff, 'id="setting-ENABLE_MAP"')), 0, 200) . ' // ' . substr(preg_replace('~\s+~', ' ', $nTabOff), 0, 120));
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+check('[settings page] the tag "your setting · default: …" shows only while a value differs from the default: Show subfolders is on here so it shows; Folder style is at its default so its tag is there but not shown; the live script keeps them right', preg_match('~id="setting-AUTO_GROUP_BY_FOLDER".*?<span class="src" data-default="0"~s', $nTab) === 1 && preg_match('~id="setting-FOLDER_DISPLAY_MODE".*?<span class="src is-default" data-default="overview"~s', $nTab) === 1 && str_contains($nTab, 'function refreshMeta()'));
+check('[settings page] Photo order and Last first are one control with four choices (Date oldest first, Date newest first, Name A to Z, Name Z to A); each choice saves both settings together; Last first has no row of its own', substr_count($nTab, 'name="pair_PHOTO_ORDER"') === 4 && str_contains($nTab, 'Date, oldest first') && str_contains($nTab, 'Date, newest first') && str_contains($nTab, 'Name, A to Z') && str_contains($nTab, 'Name, Z to A') && !str_contains($nTab, 'name="set_PHOTO_SORT_DESC"') && str_contains($nTab, "set_PHOTO_SORT_ORDER: parts[0], set_PHOTO_SORT_DESC: parts[1] === 'desc' ? '1' : '0'"));
+$nCookie2 = $nRelog();
+$nTab2 = http_get("$baseN/?admin", ["Cookie: $nCookie2"])[1];
+[, $pairR] = user_submit("$baseN/?admin", $nTab2, 'value="save_site_settings"', ['set_PHOTO_SORT_ORDER' => 'taken', 'set_PHOTO_SORT_DESC' => '1'], ["Cookie: $nCookie2"]);
+$pairCfg = (string) @file_get_contents("$fxN/.gallery-config.php");
+$pairPage = http_get("$baseN/?admin", ["Cookie: $nCookie2"])[1];
+check('[settings page] the two settings behind the order control are still saved separately, as they always were: one request with both lands both (the direction in the file, the order as the control\'s choice)', str_contains($pairCfg, '"PHOTO_SORT_DESC": true') && preg_match('~name="pair_PHOTO_ORDER" value="taken_desc" checked~', $pairPage) === 1, substr($pairCfg, 0, 300));
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+check('[settings page] where visitors\' IP addresses come from lives in Server setup (advanced), no longer in Sharing and access', preg_match('~Server setup \(advanced\)</span>.*?set_TRUSTED_PROXY~s', $nTab) === 1 && preg_match('~Sharing and access</span>.*?set_TRUSTED_PROXY.*?Signing in and passwords~s', $nTab) !== 1);
+check('[settings page] Visitors and logs holds Count views, the visitor view counts, the public visitor log and how long it is kept, in that order', preg_match('~Visitors and logs</span> <span class="muted">4 settings</span>.*?set_TRACK_VIEWS.*?set_SHOW_VIEW_COUNTS_PUBLICLY.*?set_LOG_PUBLIC_VISITS.*?set_LOG_PUBLIC_DAYS.*?</details>~s', $nTab) === 1);
+$nHelps = preg_match_all('~<div class="site-row[^"]*"[^>]*>.*?<div class="help">(.*?)</div>~s', $nTab, $hm) ? array_map(fn ($h) => strlen(html_entity_decode(strip_tags($h))), $hm[1]) : [];
+check('[settings page] no setting\'s explanation runs on: every help text is 340 characters or fewer (the longest used to be 551)', $nHelps !== [] && max($nHelps) <= 340, (string) max($nHelps ?: [0]));
+check('[settings page] every plain fold (Prepare media\'s, the server rules, "How to read this") has the one bold chevron style, and a row lights up under the pointer', !preg_match('~<details>~', $nTab) && str_contains($nTab, 'details:is(.fold, .media-more, .media-tidy-box, .media-again-box, .media-attn, .md-file, .sort-details) > summary::before') && str_contains($nTab, '.site-settings .site-row:hover { background:rgba(255,255,255,0.035)'));
+check('[health] the Health check counts only what needs fixing: optional things (passwords still stored as plain text, ffmpeg missing, old marks) are grey "optional" rows; the fold is a chevron button, and a failing lock check gets a "Fix this" link', str_contains($nTab, 'class="secondary health-toggle" aria-expanded="false"') && str_contains($nTab, '<span class="ht-label">Details</span>') && str_contains((string) file_get_contents($indexSrc), '\'opt\', $label . \': stored as plain text\'') && str_contains((string) file_get_contents($indexSrc), '$add(\'Videos\', $ff !== \'\' ? \'ok\' : \'opt\'') && str_contains($nTab, "a.className = 'secondary health-fix'") && str_contains($nTab, "const optional = row.getAttribute('data-optional') === '1' && cls === 'note-text';") && substr_count($nTab, 'data-optional="1"') === 3, json_encode([str_contains($nTab, 'class="secondary health-toggle" aria-expanded="false"'), str_contains($nTab, '<span class="ht-label">Details</span>'), preg_match('~<div class="health-row health-opt quiet optional">.{0,400}stored as plain text~s', $nTab), substr_count($nTab, 'data-optional="1"'), substr_count($nTab, 'health-row health-')]));
+check('[heads-up] with something private the lock check is the real one (not optional)', str_contains($nTab, 'data-any-private="1"') && preg_match('~data-health-row="lock">~', $nTab) === 1);
+// the fourth pass: menus, chips, no Map switch, effects with counts, Export moved, the Features page
+check('[menu] Photo order, where visitors\' IP addresses come from and the visitor download choice are menu buttons (a button that opens a dark list with a tick), not pills and never a browser dropdown; two short choices (Folder style) stay pills', substr_count($nTab, '<div class="menu" data-menu>') === 3 && preg_match('~name="pair_PHOTO_ORDER"~', $nTab) === 1 && preg_match('~<div class="menu" data-menu>.{0,900}name="set_PUBLIC_DOWNLOAD_MODE"~s', $nTab) === 1 && preg_match('~<div class="menu" data-menu>.{0,900}name="set_TRUSTED_PROXY"~s', $nTab) === 1 && preg_match('~<div class="seg"[^>]*aria-label="Folder style"~', $nTab) === 1 && !preg_match('~<select~', (string) preg_replace('~<script.*?</script>~s', '', substr($nTab, strpos($nTab, 'class="panel site-settings"')))));
+check('[menu] the menu has its script (open, close, the label follows the choice, Escape closes) and its look (44 px rows, a tick on the chosen one)', str_contains($nTab, "btn.addEventListener('click', function () { if (pop.hidden) show(m); else close(m); });") && str_contains($nTab, "m.querySelector('.menu-label').textContent = t;") && str_contains($nTab, '.menu-opt { display:flex; justify-content:space-between; align-items:center; gap:16px; min-height:44px;') && str_contains($nTab, '.menu-opt:has(input:checked) .menu-tick { opacity:1; }'));
+check('[settings page] "your setting · default: x" is the tag beside the name (shown only while the value differs), not a line in the control column: the controls sit flush right', preg_match('~id="setting-AUTO_GROUP_BY_FOLDER".*?<span class="src" data-default="0"[^>]*>your setting &middot; default: off</span>~s', $nTab) === 1 && preg_match('~id="setting-FOLDER_DISPLAY_MODE".*?<span class="src is-default" data-default="overview"~s', $nTab) === 1 && !str_contains($nTab, 'class="meta') && str_contains($nTab, '.site-row .ctl .rowstate { order:-1; }') && str_contains($nTab, '.rowstate:empty { display:none; }'));
+check('[settings page] Expand all / Collapse all sit at the right of the Settings heading and show only the one that can do something', str_contains($nTab, 'data-sg-tools hidden><button type="button" class="linklike" data-sg="all">Expand all</button><span class="sg-sep">') && str_contains($nTab, 'all.hidden = open === groups.length; none.hidden = open === 0;') && str_contains($nTab, 'e.hidden = all.length > 0 && open === all.length; c.hidden = open === 0;'));
+check('[map] the gallery-wide Map switch is gone from Settings; the pin grouping hangs on Allow photo locations; the OpenStreetMap remark is one calm sentence in that help', !str_contains($nTab, 'name="set_ENABLE_MAP"') && preg_match('~id="setting-MAP_CLUSTER_RADIUS_MILES"[^>]*data-requires="set_ENABLE_PHOTO_LOCATION"~', $nTab) === 1 && str_contains($nTab, 'Maps use OpenStreetMap, which the visitor&#039;s browser contacts.') && !str_contains($nTab, 'Visitors&#039; browsers load code from cdnjs'));
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_MAP' => false]));
+$nCookieMap = $nRelog();
+$nTabMap = http_get("$baseN/?admin", ["Cookie: $nCookieMap"])[1];
+check('[map] an older settings file with "ENABLE_MAP": false is still understood (no "isn\'t a setting" notice), ignored (the map follows the locations), and the next save in Settings drops the line', !str_contains($nTabMap, 'isn&#039;t a setting') && !str_contains($nTabMap, 'Settings problem'));
+[, $mapSave] = user_submit("$baseN/?admin", $nTabMap, 'value="save_site_settings"', ['set_SHOW_SORT_BUTTON' => '0'], ["Cookie: $nCookieMap"]);
+check('[map] ...after that save the file no longer has the line', !str_contains((string) file_get_contents("$fxN/.gallery-config.php"), 'ENABLE_MAP'));
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+check('[effects] Show subfolders says what turning it on shows, with the numbers and the names, and what turning it off would hide; the note follows the switch in the page', preg_match('~data-effect="off">Turning this on shows 2 photos in 1 folder to visitors: PNGs\.</div>~', $huAdmin) === 1 && str_contains((string) file_get_contents($indexSrc), "e.hidden = (e.getAttribute('data-effect') === 'on') !== state;"));
+check('[effects] Show videos says it too ("Turning this on shows 1 video to visitors."), and Allow photo locations says how many photos have a location', str_contains($huAdmin, 'Turning this on shows 1 video to visitors.') && str_contains($huAdmin, 'data-effect="off">No photo has a location yet. Turning this on lets each folder and photo show one.'));
+check('[effects] with Show subfolders on, the note says what turning it off would hide (the folders and their photos, by name) and that nothing is deleted', str_contains((string) file_get_contents($indexSrc), '\'Turning this off hides \' . $plural(count($top), \'folder\', \'folders\') . \' and \' . $plural(array_sum($top), \'photo\', \'photos\') . \' from visitors (\'') && str_contains((string) file_get_contents($indexSrc), 'links to them stop working. Nothing is deleted.'));
+check('[export] there is no Export tab any more; the two JSON downloads live under Files this gallery has made, with a note that they hold no passwords or visitor records', !str_contains($nTab, 'data-tab="export"') && !str_contains($nTab, 'class="export-cards"') && preg_match('~id="files-made".*?data-export="export_items".*?this folder.*?data-export="export_tree".*?the whole gallery~s', $nTab) === 1 && str_contains($nTab, 'without passwords or visitor records'));
+check('[prepare media] the panel is folded by default, with a one-line summary, and says why it is optional; the count words are unchanged', preg_match('~<details class="fold media-outer">\s*<summary><span class="media-title">Prepare media</span> <span class="muted media-sum">(everything is ready|optional: \d+ of \d+ ready ahead of time)</span></summary>~', $nTab) === 1 && str_contains($nTab, 'The gallery makes each picture, and reads each file') && str_contains($nTab, 'This does them all <strong>now</strong>'));
+check('[folder settings] the location switch\'s "(locations are off for the whole gallery, in Settings)" has a jump link to Allow photo locations, the two notes under it tell folder-off from gallery-off, and no text names a constant or sends the owner to index.php', str_contains((string) file_get_contents($indexSrc), "(locations are off for the whole gallery, in <a href=\"#site\" onclick=\"return adminGoTo(\\'site\\', \\'setting-ENABLE_PHOTO_LOCATION\\');\">Settings</a>)") && str_contains((string) file_get_contents($indexSrc), 'Locations are off for the whole gallery, so nothing shows on a map yet.') && str_contains((string) file_get_contents($indexSrc), 'Locations are off for this folder, so its map has nothing to show.') && !str_contains((string) file_get_contents($indexSrc), 'is off in index.php') && !str_contains((string) file_get_contents($indexSrc), 'Locations are off here'));
+check('[folder settings] "Prepare media reads the rest" is only said when something is unread or could not be read (and links to the Prepare media panel)', str_contains((string) file_get_contents($indexSrc), '(($s_[\'unread\'] > 0 || $s_[\'unreadable\'] > 0) ? \' <a href="#site" onclick="return adminGoTo(\\\'site\\\', \\\'media-panel\\\');">Prepare media</a> reads the rest.\' : \'\')'));
+check('[buttons] one size for every action button in the admin (no per-place override such as the Health check\'s small Check again)', str_contains($nTab, '.admin-main button.secondary, .admin-main button.primary, .admin-main button.danger, .admin-main button:not([class]), .admin-bar button.secondary { min-height:40px; padding:0 16px; font-size:0.9rem; }') && !str_contains($nTab, '.health-summary .secondary {') && !str_contains($nTab, 'padding:3px 12px; font-size:0.8rem'));
+check('[features] Features is the first entry of the sidebar\'s whole-gallery group and has its own tab; it holds no switch, only state chips and buttons that jump to the setting or open the gallery with "Show me"', preg_match('~<div class="side-label">The whole gallery</div>\s*<a href="#features" data-tab="features" class="side-link">Features(?: <span class="count[^>]*>[^<]*</span>)*</a>~', $nTab) === 1 && preg_match('~<div class="tab-panel" data-tab="features">(.*?)</section>~s', $nTab, $ftm) === 1 && !str_contains($ftm[1], 'type="checkbox"') && str_contains($ftm[1], 'Features you can switch on') && str_contains($ftm[1], 'Things you do on the gallery itself') && substr_count($ftm[1], '?show=') === 4 && str_contains($ftm[1], 'adminGoTo(\'site\', \'setting-AUTO_GROUP_BY_FOLDER\')'));
+check('[qr] Save image opens the share sheet only on a device with a touchscreen (a computer\'s Safari can share files too, and there it popped up a sheet of contacts instead of saving): the same guard as the photo download', str_contains((string) file_get_contents($indexSrc), "if (file && (navigator.maxTouchPoints || 0) > 0 && navigator.canShare && navigator.canShare({ files: [file] }))"));
+check('[features] "Show me" goes to the first folder that has photos of its own when none sit at the top level (a gallery of folders has nothing to point at on its front page)', str_contains((string) file_get_contents($indexSrc), '$showAt = substr($f, 0, $i);') && str_contains((string) file_get_contents($indexSrc), '\'?\' . ($showAt !== \'\' ? \'folder=\' . rawurlencode($showAt) . \'&\' : \'\') . \'show=\' . $key'));
+$srcF5 = (string) file_get_contents($indexSrc);
+check('[features] there is ONE "Act on many photos at once" row (no second row about sharing), and its words mention sharing only when Share links is on', substr_count($nTab, 'Act on many photos at once') === 1 && !str_contains($nTab, 'Share something privately') && substr_count($srcF5, "(ENABLE_SHARE_LINKS ? ', share them' : '')") === 2);
+check('[show me] the note has a tail aimed at the button, and is placed again whenever the page moves (scroll, resize, load), with an instant scroll so nothing is still moving when it is placed', str_contains($srcF5, '.show-me-note::before') && str_contains($srcF5, '.show-me-note.below::before') && str_contains($srcF5, '.show-me-note.above::before') && str_contains($srcF5, "window.addEventListener('scroll', later, true)") && str_contains($srcF5, "window.addEventListener('resize', later)") && str_contains($srcF5, "window.addEventListener('load', later)") && str_contains($srcF5, "behavior: 'instant'") && str_contains($srcF5, "note.style.setProperty('--tail-x'"));
+check('[show me] the Select note says "share them" only when Share links is on (the page tells the browser which)', str_contains($srcF5, "json_encode('Select: press it, then tap photos to make them private or public' . (ENABLE_SHARE_LINKS ? ', share them' : '')"));
+check('[select] the bar offers only what would change something: Make private unless every picked photo is already private on its own, Make public only when one is (or, in a private folder, is not yet public on its own), Folder only when one has a setting of its own to take back', str_contains($srcF5, "const canPrivate = !n || picked.some(function (f) { return ownOf(f) !== 'private'; });") && str_contains($srcF5, "ownerState.inh[f] ? ownOf(f) !== 'public' : ownOf(f) === 'private'") && str_contains($srcF5, "bar.querySelector('[data-select=inherit]').hidden = !inPriv || !canFolder;") && str_contains($srcF5, '.select-bar .select-btns button[hidden] { display: none; }'));
+check('[visitor downloads] the folder chooser is the Settings menu with ticks (a button, a list with a tick on each chosen folder, folders indented as a tree, saved as you tick), with no browser checkbox showing, no chips and no Done button', str_contains($srcF5, 'class="menu dl-menu" data-menu') && str_contains($srcF5, 'class="menu-btn dl-btn"') && str_contains($srcF5, ".dl-opt input { position:absolute; opacity:0;") && str_contains($srcF5, "l.className = 'dl-opt'") && !str_contains($srcF5, 'dl-chip') && !str_contains($srcF5, 'dl-pick') && !str_contains($srcF5, 'dl-list'));
+check('[path bar] a folder with no sibling has its own blue pill after the way up (so the bar says where you are), and a folder with siblings keeps its row of folders exactly as before', str_contains($srcF5, '<nav class="folder-pills" aria-label="This folder"><a href="?folder=<?= htmlspecialchars(rawurlencode($currentFolderPath)') && str_contains($srcF5, 'count($folderPills) >= 2') && str_contains($srcF5, 'aria-label="Other folders here"'));
+check('[link form] the small uppercase label style is for the headings above a list (div.sl-grp) only: the form\'s collapsible sections (details.sl-grp) share the class and must not inherit it', str_contains($srcF5, "  .sl-grp { margin:20px 0 4px; }\n  div.sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }") && !str_contains($srcF5, "  .sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase;"));
+check('[mixed link] choosing "some folders and some photos" ticks "Show only what they can see here", like "only some photos" (a link with picks shows just the picks, not the public gallery too); folders alone start unticked', str_contains((string) file_get_contents($indexSrc), "checked = e.target.value === 'photos' || e.target.value === 'mixed';"));
+check('[buttons] the one-size button rule has exceptions for the small controls with a size of their own (the x on a folder chip and on a photo thumbnail, and the notes reference\'s little tabs), after it so they win', preg_match('~button:not\(\[class\]\), \.admin-bar button\.secondary \{ min-height:40px;.*?\.admin-main \.sl-chip button \{ min-height:0;.*?\.admin-main \.sl-pth button \{ min-height:0;.*?\.admin-main \.ref-tabs button \{ min-height:0;~s', $srcF5) === 1);
+check('[features] a fresh install (nothing configured but the passwords) lands on Features, one that has settings does not, and the folder\'s tabs are not shown there', (str_contains($nTab, "if (!saved && !landed && !/[?&]folder=/.test(location.search) && main.getAttribute('data-land') === 'features' && names.indexOf('features') >= 0) {") && str_contains($nTab, "sessionStorage.setItem('galleryAdminLanded', '1');")) && str_contains($nTab, "var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features';") && !str_contains($nTab, 'data-land="features"') && str_contains($huAdmin, '<main class="admin-main" data-land="features">'));
+check('[features] "Show me" opens the gallery with a pointer on the button (?show=lock|pencil|star|select|share): a ring, a label, gone at the first press, a key or ten seconds, and the address is cleaned', str_contains((string) file_get_contents($indexSrc), "const m = /[?&]show=([a-z]+)/.exec(location.search); if (!m) return;") && str_contains((string) file_get_contents($indexSrc), "timer = setTimeout(done, 10000);") && str_contains((string) file_get_contents($indexSrc), '.show-me-ring { outline: 3px solid #aab2ff !important;'));
+check('[select mode] the Private pill (also the dashed one of a photo that follows a private folder) and the cover star stay on the tiles in Select mode but no longer answer a press; the picked tick moves to the bottom left', str_contains((string) file_get_contents($indexSrc), '.selecting .card .priv-toggle:not(.is-private):not(.is-folder), .selecting .card .cover-toggle:not(.is-cover), .selecting .card .edit-toggle { display: none; }') && str_contains((string) file_get_contents($indexSrc), '.selecting .card .priv-toggle, .selecting .card .cover-toggle { pointer-events: none; }') && str_contains((string) file_get_contents($indexSrc), '.card .sel-mark { position: absolute; bottom: 8px; left: 8px;'));
+check('[admin layout] the sidebar names its top group "The whole gallery" (Edited, Share, Settings) apart from the folder list; the folder\'s own tabs are hidden on those three pages by the page script', preg_match('~<aside class="admin-side">\s*<div class="side-group" role="group" aria-label="The whole gallery">\s*<div class="side-label">The whole gallery</div>.*?</div>\s*<details class="admin-folders"~s', $nTab) === 1 && str_contains($nTab, "var fh = document.getElementById('admin-folder-head'); if (fh) fh.hidden = whole;"));
+check('[log notes] each log tab\'s explanation is folded under "How to read this" (the timeline\'s "full" warning stays in view)', substr_count((string) file_get_contents($indexSrc), '<details class="fold sl-howto"><summary>How to read this</summary>') === 3);
+
 echo "== share links: folder and photo scopes, downloads, ZIPs and locations: what a link holder can reach and nothing more ==\n";
 
 $fxS2 = new_fixture_dir('slscope');
@@ -5075,6 +5580,35 @@ check('[share links] links for a folder, two folders, two photos and everything 
 [$idE, $tokE, $ckE] = $s2Make('E two photos, only those', ['scope_type' => 'photos', 'scope_photos' => json_encode(['Rome/r1.jpg', 'Florence/f2.jpg']), 'only' => '1']);
 [$idG, $tokG, $ckG] = $s2Make('G Rome, only that', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Rome']), 'open_in' => 'Rome', 'only' => '1']);
 [$idH, , ] = $s2Make('H everything, only?', ['only' => '1']);
+// "Some folders and some photos": a picked folder (with everything inside it) plus single photos from anywhere, in one link
+[$idM, $tokM, $ckM] = $s2Make('M Pisa and one Florence photo', ['scope_type' => 'mixed', 'scope_folders' => json_encode(['Pisa']), 'scope_photos' => json_encode(['Florence/f2.jpg'])]);
+[$idN, $tokN, $ckN] = $s2Make('N Rome and one Florence photo, only those', ['scope_type' => 'mixed', 'scope_folders' => json_encode(['Rome']), 'scope_photos' => json_encode(['Florence/f2.jpg']), 'only' => '1']);
+[$idP, $tokP, $ckP] = $s2Make('P one photo, through the mixed choice', ['scope_type' => 'mixed', 'scope_folders' => json_encode([]), 'scope_photos' => json_encode(['Rome/r1.jpg'])]);
+// The automatic preview picture of a limited link comes from the public photos it covers; none public inside it: no picture (the icon)
+[$idR, $tokR] = $s2Make('R Pisa and a public Florence photo, with a picture', ['scope_type' => 'mixed', 'scope_folders' => json_encode(['Pisa']), 'scope_photos' => json_encode(['Florence/f1.jpg']), 'picture' => '1', 'picture_seed' => '0a1b2c3d']);
+[$idS, $tokS] = $s2Make('S one private photo, with a picture', ['scope_type' => 'photos', 'scope_photos' => json_encode(['Pisa/p1.jpg']), 'picture' => '1', 'picture_seed' => '0a1b2c3d']);
+$mixEmpty = $s2Admin(['action' => 'link_create', 'label' => 'Q nothing', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'mixed', 'scope_folders' => '[]', 'scope_photos' => '[]', 'downloads' => 'off', 'zip' => 'off']);
+check('[mixed link] "some folders and some photos" keeps both lists (type mixed, one folder, one photo), also with photos only, and refuses a link that picks nothing', $idM && $idN && $idP && ($s2Links()['links'][$idM]['scope']['type'] ?? '') === 'mixed' && count($s2Links()['links'][$idM]['scope']['folders'] ?? []) === 1 && count($s2Links()['links'][$idM]['scope']['photos'] ?? []) === 1 && count($s2Links()['links'][$idP]['scope']['folders'] ?? ['x']) === 0 && empty($mixEmpty['ok']) && str_contains((string) ($mixEmpty['text'] ?? ''), 'Choose at least one folder or photo'));
+$s2Open = fn ($tok) => http_get("$baseS2/?link=$tok")[1];
+$s2PicOf = function ($html) { return preg_match('/<img class="pic" src="[^"]*img=([^&"]+)/', $html, $m) ? rawurldecode(html_entity_decode($m[1])) : null; };
+$s2CoverQ = fn ($q) => json_decode(http_get("$baseS2/?admin&linkcover=1&seed=0a1b2c3d&" . $q, ["Cookie: $s2AdminCookie"])[1], true);
+check('[preview photo] a link limited to some folders and photos takes its automatic picture from the PUBLIC photos it covers (here the one public Florence photo, never the gallery\'s other public photo), and a link whose picks hold no public photo shows no picture at all', $s2PicOf($s2Open($tokR)) === 'Florence/f1.jpg' && $s2PicOf($s2Open($tokS)) === null && str_contains($s2Open($tokS), '<div class="ico">'));
+$cvMixed = $s2CoverQ('scope_type=mixed&scope_folders=' . rawurlencode(json_encode(['Pisa'])) . '&scope_photos=' . rawurlencode(json_encode(['Florence/f1.jpg'])));
+$cvPriv = $s2CoverQ('scope_type=photos&scope_folders=%5B%5D&scope_photos=' . rawurlencode(json_encode(['Pisa/p1.jpg'])));
+$cvAll = $s2CoverQ('scope_type=all&scope_folders=%5B%5D&scope_photos=%5B%5D');
+check('[preview photo] the form\'s own preview follows what the link covers before it is saved: the covered public photo, nothing for private picks, and any public photo for a link to everything', ($cvMixed['file'] ?? null) === 'Florence/f1.jpg' && array_key_exists('file', $cvPriv) && $cvPriv['file'] === null && in_array($cvAll['file'] ?? null, ['pub.jpg', 'Florence/f1.jpg'], true));
+$covScope = 'scope_type=mixed&scope_folders=' . rawurlencode(json_encode(['Pisa'])) . '&scope_photos=' . rawurlencode(json_encode(['Florence/f1.jpg']));
+$cvFolders = json_decode(http_get("$baseS2/?admin&linkcover=folders&" . $covScope, ["Cookie: $s2AdminCookie"])[1], true);
+$cvFrontPhotos = http_get("$baseS2/?admin&linkphotos=&cover=1&" . $covScope, ["Cookie: $s2AdminCookie"])[1];
+$cvFlorence = http_get("$baseS2/?admin&linkphotos=Florence&cover=1&" . $covScope, ["Cookie: $s2AdminCookie"])[1];
+$cvAllFolders = json_decode(http_get("$baseS2/?admin&linkcover=folders&scope_type=all&scope_folders=%5B%5D&scope_photos=%5B%5D", ["Cookie: $s2AdminCookie"])[1], true);
+check('[preview photo] the "Choose…" picker is scoped to what the link covers: only the folders holding a covered public photo (here Florence, not the front page whose public photo the link does not cover), and in the front page the list says there is nothing to pick; a link to everything still lists every public folder', array_column($cvFolders['folders'] ?? [], 'p') === ['Florence'] && str_contains($cvFrontPhotos, 'no public photos the link covers') && !str_contains($cvFrontPhotos, 'pub.jpg') && str_contains($cvFlorence, 'f1.jpg') && count($cvAllFolders['folders'] ?? []) >= 2);
+$cvChosen = $s2CoverQ('file=' . rawurlencode('pub.jpg') . '&' . $covScope);
+check('[preview photo] a photo the owner chose that the link does not cover is not used: the covered one takes over (shown as picked automatically)', ($cvChosen['file'] ?? null) === 'Florence/f1.jpg' && ($cvChosen['how'] ?? '') === 'auto');
+[$idT, ] = $s2Make('T chose an uncovered photo', ['scope_type' => 'mixed', 'scope_folders' => json_encode(['Pisa']), 'scope_photos' => json_encode(['Florence/f1.jpg']), 'picture' => '1', 'picture_file' => 'pub.jpg']);
+[$idU, ] = $s2Make('U chose a photo of a link to everything', ['scope_type' => 'all', 'picture' => '1', 'picture_file' => 'pub.jpg']);
+check('[preview photo] saving a link drops a chosen preview photo it does not cover, and keeps one that a link to everything may use', ($s2Links()['links'][$idT]['pictureFile'] ?? 'x') === '' && ($s2Links()['links'][$idU]['pictureFile'] ?? '') === 'pub.jpg');
+check('[mixed link] "only" is kept for a mixed link (it leaves the public rest of the gallery out too)', !empty($s2Links()['links'][$idN]['only']) && empty($s2Links()['links'][$idM]['only']));
 check('[share links] a link made with "only" keeps it for photos and folders, and ignores it for a link to everything (nothing to leave out)', !empty($s2Links()['links'][$idE]['only']) && !empty($s2Links()['links'][$idG]['only']) && empty($s2Links()['links'][$idH]['only']) && empty($s2Links()['links'][$idA]['only']) && empty($s2Links()['links'][$idC]['only']));
 
 $s2All = ['pub.jpg', 'secret.jpg', 'Florence/f1.jpg', 'Florence/f2.jpg', 'Rome/r1.jpg', 'Rome/r2.jpg', 'Rome/geo.jpg', 'Rome/clip.mp4', 'Rome/Sub/s1.jpg', 'Pisa/p1.jpg', 'Other/o1.jpg'];
@@ -5088,6 +5622,9 @@ $s2Viewers = [   // name => [cookie, the files that viewer may reach]
     'a link to everything' => [$ckD, $s2All],
     'a link to two photos, only those' => [$ckE, ['Rome/r1.jpg', 'Florence/f2.jpg']],
     'a link to Rome, only that' => [$ckG, $s2Rome],
+    'a link to Pisa and one Florence photo (mixed)' => [$ckM, array_merge($s2Public, ['Pisa/p1.jpg', 'Florence/f2.jpg'])],
+    'a link to Rome and one Florence photo, only those (mixed)' => [$ckN, array_merge($s2Rome, ['Florence/f2.jpg'])],
+    'a link to one photo through the mixed choice' => [$ckP, array_merge($s2Public, ['Rome/r1.jpg'])],
 ];
 $s2Hdr = fn ($c) => $c ? ["Cookie: $c"] : [];
 $s2Visible = function ($body) { return preg_match('/const files = (\[[^\n]*\]);/', $body, $m) ? (json_decode($m[1], true) ?: []) : null; };
@@ -5125,7 +5662,7 @@ foreach ($s2Viewers as $name => [$ck, $expect]) {
 
 // The form and the row: the checkbox, what the row says, and that it can be changed later.
 $s2Tab = http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1];
-check('[share links] the full form has the "Show only what they can see here" box (with the tidy-view-not-a-lock line), the row for a link says what the rest of the public gallery does, and the form gets the setting for editing', str_contains($s2Tab, 'name="only"') && str_contains($s2Tab, 'A tidy view, not a lock') && str_contains($s2Tab, '<dt>The rest of the gallery</dt><dd>Not listed: they see only what the link covers.') && str_contains($s2Tab, '<dt>The rest of the gallery</dt><dd>Listed too: they also see everything that is already public.') && str_contains($s2Tab, '&quot;only&quot;:true'));
+check('[share links] the full form has the "Show only what they can see here" box (with the tidy-view-not-a-lock line), the paragraph for a link says what the rest of the public gallery does, and the form gets the setting for editing', str_contains($s2Tab, 'name="only"') && str_contains($s2Tab, 'so this is a tidy view, not a lock') && str_contains($s2Tab, 'and nothing else on their pages (a tidy view: the rest of the gallery stays public to everyone).') && str_contains($s2Tab, ' and the public gallery.') && str_contains($s2Tab, '&quot;only&quot;:true'));
 $s2Edit = $s2Admin(['action' => 'link_save', 'id' => $idE, 'label' => 'E two photos, only those', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'photos', 'scope_photos' => json_encode(['Rome/r1.jpg', 'Florence/f2.jpg']), 'downloads' => 'off', 'zip' => 'off', 'only' => '0']);
 check('[share links] changing it later (Edit, unticked) lists the public photos again for that same link, with no new sign-in', ($s2Edit['ok'] ?? false) && empty($s2Links()['links'][$idE]['only']) && $s2Same($s2Visible(http_get("$baseS2/", $s2Hdr($ckE))[1]) ?? [], array_merge($s2Public, ['Rome/r1.jpg', 'Florence/f2.jpg'])), json_encode($s2Edit));
 $s2Edit2 = $s2Admin(['action' => 'link_save', 'id' => $idE, 'label' => 'E two photos, only those', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'photos', 'scope_photos' => json_encode(['Rome/r1.jpg', 'Florence/f2.jpg']), 'downloads' => 'off', 'zip' => 'off', 'only' => '1']);
@@ -5141,14 +5678,70 @@ $s2RootA = http_get("$baseS2/", $s2Hdr($ckA))[1];
 check('[share links] ...and on the front page the folder card counts only what the link may see', preg_match('/folder-cover-count[^>]*>[^<]*4 photos\s*(?:·|&middot;)\s*1 video/', $s2RootA) === 1);
 
 // The viewer's buttons: a link to Rome has downloads (originals) but a plain link to a private photo is not offered.
-check('[share links] the viewer\'s download button exists for a link that allows downloads, and is per file (private files only)', str_contains($s2RootA, 'id="lightbox-download"') && preg_match('/const downloadOk = (\[[^\n]*\]);/', $s2RootA, $dm) === 1 && count(array_filter(json_decode($dm[1], true))) === 5);
+check('[share links] the viewer\'s download button exists for a link that allows downloads, and is per file (every file the link shows: its five private files and the two public ones)', str_contains($s2RootA, 'id="lightbox-download"') && preg_match('/const downloadOk = (\[[^\n]*\]);/', $s2RootA, $dm) === 1 && count(array_filter(json_decode($dm[1], true))) === 7);
 check('[share links] and for a link with downloads off there is no download button at all', !str_contains(http_get("$baseS2/", $s2Hdr($ckC))[1], 'id="lightbox-download"'));
 
 // Downloads of originals.
 $s2Dl = fn ($ck, $f) => http_get("$baseS2/?original=" . rawurlencode($f), $s2Hdr($ck))[0];
-check('[share links] a link that allows downloads everywhere hands out the originals of what it covers, and never a private file outside it or a public one the gallery doesn\'t offer', $s2Dl($ckA, 'Rome/r1.jpg') === 200 && $s2Dl($ckA, 'Pisa/p1.jpg') === 404 && $s2Dl($ckA, 'pub.jpg') === 404 && $s2Dl($ckA, 'secret.jpg') === 404);
+check('[share links] a link whose downloads say "Everything" hands out the originals of everything it shows, public ones too, and never a private file outside it', $s2Dl($ckA, 'Rome/r1.jpg') === 200 && $s2Dl($ckA, 'Pisa/p1.jpg') === 404 && $s2Dl($ckA, 'pub.jpg') === 200 && $s2Dl($ckA, 'Florence/f1.jpg') === 200 && $s2Dl($ckA, 'secret.jpg') === 404);
 check('[share links] "only in some folders" means exactly those folders (here Pisa, not Rome), and a link with downloads off gives nothing', $s2Dl($ckB, 'Pisa/p1.jpg') === 200 && $s2Dl($ckB, 'Rome/r1.jpg') === 404 && $s2Dl($ckC, 'Rome/r1.jpg') === 404 && $s2Dl(null, 'Rome/r1.jpg') === 404);
 check('[share links] a link to everything with downloads on reaches every private original', $s2Dl($ckD, 'secret.jpg') === 200 && $s2Dl($ckD, 'Other/o1.jpg') === 200);
+
+// The answers a link can give for downloads and ZIP: Off, Everything, Everything but private, Only some folders. The link's own answer decides
+// for the people using it; the gallery-wide switch is for people who came in without a link.
+[$idP, , $ckP] = $s2Make('P Rome, everything but private', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Rome']), 'downloads' => 'public', 'zip' => 'public']);
+check('[downloads] "Everything but private" gives the public originals the link shows and no private one', $s2Dl($ckP, 'pub.jpg') === 200 && $s2Dl($ckP, 'Florence/f1.jpg') === 200 && $s2Dl($ckP, 'Rome/r1.jpg') === 404 && $s2Dl($ckP, 'secret.jpg') === 404 && ($s2Links()['links'][$idP]['downloads']['mode'] ?? '') === 'public');
+[$idQ, , $ckQ] = $s2Make('Q just the public gallery, downloads on', ['scope_type' => 'public', 'downloads' => 'all', 'zip' => 'all']);
+check('[downloads] a link to just the public gallery can allow downloads: the public originals come, a private one never', $s2Dl($ckQ, 'pub.jpg') === 200 && $s2Dl($ckQ, 'Florence/f1.jpg') === 200 && $s2Dl($ckQ, 'secret.jpg') === 404 && $s2Dl($ckQ, 'Rome/r1.jpg') === 404 && ($s2Links()['links'][$idQ]['downloads']['mode'] ?? '') === 'all');
+[$idR, , ] = $s2Make('R public scope asking for "everything but private"', ['scope_type' => 'public', 'downloads' => 'public', 'zip' => 'public']);
+check('[downloads] for a link that shows nothing private "everything but private" is stored as "everything" (the same thing)', ($s2Links()['links'][$idR]['downloads']['mode'] ?? '') === 'all' && ($s2Links()['links'][$idR]['zip']['mode'] ?? '') === 'all');
+[$idS, , $ckS] = $s2Make('S Rome, downloads off', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Rome'])]);
+$s2Std = ['ADMIN_PASSWORD' => cfg_read("$fxS2/.gallery-config.php")['ADMIN_PASSWORD'], 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true];
+file_put_contents("$fxS2/.gallery-config.php", cfg_text($s2Std + ['ENABLE_PUBLIC_DOWNLOAD' => true]));
+check('[downloads] the gallery-wide switch is for people without a link: with it on a stranger gets a public original, but a person on a link whose downloads say Off does not', $s2Dl(null, 'pub.jpg') === 200 && $s2Dl($ckS, 'pub.jpg') === 404 && $s2Dl($ckA, 'pub.jpg') === 200 && !str_contains(http_get("$baseS2/", $s2Hdr($ckS))[1], 'id="lightbox-download"'));
+$s2Settings = http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1];
+check('[downloads] the gallery-wide setting is in "Sharing and access", and is hidden (still saved) while the gallery is closed', preg_match('/id="setting-PUBLIC_DOWNLOAD_MODE"(?![^>]*\shidden)/', $s2Settings) === 1);
+file_put_contents("$fxS2/.gallery-config.php", cfg_text($s2Std + ['ENABLE_PUBLIC_DOWNLOAD' => true, 'CLOSE_PUBLIC_GALLERY' => true]));
+check('[downloads] ...closed: the row is drawn hidden', preg_match('/id="setting-PUBLIC_DOWNLOAD_MODE"[^>]*\shidden/', http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1]) === 1);
+// People without a link: Off / Everything / Only some folders (the older on/off line still reads as Everything until the new setting is chosen).
+$s2Mode = function (array $extra) use ($fxS2, $s2Std) { file_put_contents("$fxS2/.gallery-config.php", cfg_text($s2Std + $extra)); };
+$s2Mode(['PUBLIC_DOWNLOAD_MODE' => 'all']);
+check('[visitor downloads] Everything: a stranger gets the original of any public photo, and never a private one', [$s2Dl(null, 'pub.jpg'), $s2Dl(null, 'Florence/f1.jpg'), $s2Dl(null, 'secret.jpg'), $s2Dl(null, 'Rome/r1.jpg')] === [200, 200, 404, 404]);
+[$s2ZipSt, $s2ZipBody] = http_get("$baseS2/?archive");
+check('[visitor downloads] ...and still no ZIP of a folder for a stranger, ever', ($s2ZipSt !== 200 || !str_starts_with($s2ZipBody, 'PK')) && !str_contains(http_get("$baseS2/")[1], '<a class="map-combo-btn page-archive"') && !str_contains(http_get("$baseS2/?folder=Florence")[1], '<a class="map-combo-btn page-archive"'));
+check('[visitor downloads] Everything: the viewer knows no per-photo limits (the button list is null)', preg_match('/const downloadOk = null;/', http_get("$baseS2/")[1]) === 1);
+$s2Mode(['PUBLIC_DOWNLOAD_MODE' => 'some', 'PUBLIC_DOWNLOAD_FOLDERS' => ['Florence']]);
+check('[visitor downloads] Only some folders: the folder chosen (here Florence) and nothing else, public or not', [$s2Dl(null, 'Florence/f1.jpg'), $s2Dl(null, 'pub.jpg'), $s2Dl(null, 'secret.jpg'), $s2Dl(null, 'Rome/r1.jpg')] === [200, 404, 404, 404]);
+$s2VBody = http_get("$baseS2/")[1]; preg_match('/const downloadOk = (\[[^\n]*\]);/', $s2VBody, $s2Vm); $s2VOk = json_decode($s2Vm[1] ?? 'null', true);
+check('[visitor downloads] ...and the viewer shows the download button only on photos in those folders (a list per photo)', str_contains($s2VBody, 'id="lightbox-download"') && is_array($s2VOk) && in_array(true, $s2VOk, true) && in_array(false, $s2VOk, true));
+$s2Mode(['PUBLIC_DOWNLOAD_MODE' => 'some']);
+check('[visitor downloads] Only some folders with none chosen: nobody can download yet', [$s2Dl(null, 'Florence/f1.jpg'), $s2Dl(null, 'pub.jpg')] === [404, 404]);
+$s2Mode(['PUBLIC_DOWNLOAD_MODE' => 'off']);
+check('[visitor downloads] Off: nothing, and no button', [$s2Dl(null, 'pub.jpg'), $s2Dl(null, 'Florence/f1.jpg')] === [404, 404] && !str_contains(http_get("$baseS2/")[1], 'id="lightbox-download"'));
+$s2Mode(['ENABLE_PUBLIC_DOWNLOAD' => true]);
+check('[visitor downloads] a settings file from before (the old switch on) still reads as Everything', [$s2Dl(null, 'pub.jpg'), $s2Dl(null, 'secret.jpg')] === [200, 404]);
+$s2Mode(['ENABLE_PUBLIC_DOWNLOAD' => true, 'PUBLIC_DOWNLOAD_MODE' => 'off']);
+check('[visitor downloads] ...and once the new setting is there it wins', $s2Dl(null, 'pub.jpg') === 404);
+$s2Mode(['PUBLIC_DOWNLOAD_MODE' => 'some', 'PUBLIC_DOWNLOAD_FOLDERS' => ['Florence']]);
+$s2VSet = http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1];
+preg_match('/data-dlfolders data-options="([^"]*)" data-chosen="([^"]*)"/', $s2VSet, $s2Vo);
+$s2VOpt = json_decode(html_entity_decode($s2Vo[1] ?? '[]'), true) ?: []; $s2VPaths = array_column($s2VOpt, 'path');
+check('[visitor downloads] the Settings picker lists the public folders only (never a private one), and shows what is chosen', in_array('Florence', $s2VPaths, true) && !array_intersect($s2VPaths, ['Rome', 'Pisa', 'Other']) && json_decode(html_entity_decode($s2Vo[2] ?? '[]'), true) === ['Florence'] && !preg_match('/data-dlfolders[^>]*\shidden/', $s2VSet));
+$s2Mode(['ENABLE_PUBLIC_DOWNLOAD' => true]);
+[, $s2VR] = user_submit("$baseS2/?admin", http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1], 'value="save_site_settings"', ['set_PUBLIC_DOWNLOAD_MODE' => 'some', 'set_PUBLIC_DOWNLOAD_FOLDERS' => json_encode(['Florence'])], ["Cookie: $s2AdminCookie"]);
+$s2VCfg = cfg_read("$fxS2/.gallery-config.php");
+check('[visitor downloads] choosing Only some folders saves the mode and the folders, and drops the older on/off line (it would only get in the way)', ($s2VCfg['PUBLIC_DOWNLOAD_MODE'] ?? '') === 'some' && ($s2VCfg['PUBLIC_DOWNLOAD_FOLDERS'] ?? null) === ['Florence'] && !array_key_exists('ENABLE_PUBLIC_DOWNLOAD', $s2VCfg), json_encode($s2VCfg));
+[, $s2VR] = user_submit("$baseS2/?admin", http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1], 'value="save_site_settings"', ['set_PUBLIC_DOWNLOAD_MODE' => 'off'], ["Cookie: $s2AdminCookie"]);
+$s2VCfg = cfg_read("$fxS2/.gallery-config.php");
+check('[visitor downloads] choosing Off stores nothing for it (Off is the default) and leaves no old line behind', !array_key_exists('PUBLIC_DOWNLOAD_MODE', $s2VCfg) && !array_key_exists('ENABLE_PUBLIC_DOWNLOAD', $s2VCfg) && $s2Dl(null, 'pub.jpg') === 404, json_encode($s2VCfg));
+$s2Mode(['PUBLIC_DOWNLOAD_MODE' => 'some', 'PUBLIC_DOWNLOAD_FOLDERS' => ['Florence']]);
+foreach (['../x', '/etc', 'a/../b', ''] as $s2Bad) {
+    [, $s2VR] = user_submit("$baseS2/?admin", http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1], 'value="save_site_settings"', ['set_PUBLIC_DOWNLOAD_FOLDERS' => json_encode([$s2Bad])], ["Cookie: $s2AdminCookie"]);
+    $s2VOk2 = (cfg_read("$fxS2/.gallery-config.php")['PUBLIC_DOWNLOAD_FOLDERS'] ?? null) === ['Florence'];
+    if (!$s2VOk2) break;
+}
+check('[visitor downloads] a folder list that is not folders of the gallery (a ../, a leading /, an empty name) is refused and the saved list stays', $s2VOk2);
+file_put_contents("$fxS2/.gallery-config.php", cfg_text($s2Std));
 
 // Locations: "as the public sees them" removes a hidden location from the copy (same size), "all saved locations" leaves the file as it is.
 $s2Orig = (string) file_get_contents("$fxS2/Rome/geo.jpg");
@@ -5166,7 +5759,7 @@ $s2Zip = function ($ck, $query) use ($baseS2, $s2Hdr, $haveUnzip, $zipNames, $zi
 if ($haveUnzip) {
     [$zStA, $zNamesA, $zFileA] = $s2Zip($ckA, '');
     $zBare = array_map(fn ($n) => preg_replace('#^[^/]+/#', '', $n), $zNamesA);
-    check('[share links] a link with ZIP on gets a ZIP of exactly the private files it covers (the public photos stay out: the gallery doesn\'t offer them as downloads)', $zStA === 200 && $s2Same($zBare, $s2Rome));
+    check('[share links] a link with ZIP on ("Everything") gets a ZIP of exactly what it shows: the private files it covers and the public photos', $zStA === 200 && $s2Same($zBare, array_merge($s2Rome, $s2Public)));
     $zGeo = (string) $zipEntry($zFileA, $zNamesA[array_search('Rome/geo.jpg', $zBare)]);
     check('[share links] ...with the hidden location taken out of the copy of geo.jpg in the ZIP (same size, different bytes)', strlen($zGeo) === strlen($s2Orig) && $zGeo !== $s2Orig);
     [, $zNamesD, $zFileD] = $s2Zip($ckD, '&folder=Rome');
@@ -5175,9 +5768,102 @@ if ($haveUnzip) {
     foreach ([$zFileA ?? null, $zFileD ?? null] as $zf) if ($zf) @unlink($zf);
 }
 check('[share links] a link with ZIP off (B), the public, and a link to photos get no ZIP', http_get("$baseS2/?archive", $s2Hdr($ckB))[0] === 404 && http_get("$baseS2/?archive", $s2Hdr($ckC))[0] === 404 && http_get("$baseS2/?archive")[0] === 404);
+if ($haveUnzip) {
+    [$zStP, $zNamesP, $zFileP] = $s2Zip($ckP, '');
+    $zBareP = array_map(fn ($n) => preg_replace('#^[^/]+/#', '', $n), $zNamesP);
+    check('[downloads] ...and its ZIP holds the public photos only', $zStP === 200 && $s2Same($zBareP, $s2Public));
+    if (!empty($zFileP)) @unlink($zFileP);
+}
 
 // Where the button leads.
-check('[share links] pressing the button leads where the link opens: a chosen folder, the first photo of a link to photos, else the front page', $locA === './?folder=Rome' && $locC === './?folder=Rome&photo=Rome%2Fr1.jpg');
+check('[share links] pressing the button leads where the link opens: a chosen folder, else the front page (a link to photos opens on its photos as a grid)', $locA === './?folder=Rome' && $locC === './');
+// A link's own photos are loose tiles on its front page; a folder it shares stays a folder card.
+[, $loosePage] = http_get("$baseS2/", ["Cookie: $ckN"]);
+$looseCovers = preg_match_all('/<div class="folder-cover[ "]/', $loosePage);
+check('[loose photos] a link to a folder and one photo shows the folder as a card (just that one)', $looseCovers === 1 && str_contains($loosePage, 'folder-cover-label') && str_contains($loosePage, '?folder=Rome'), "covers=$looseCovers");
+check('[loose photos] ...and the picked photo as its own tile, not inside a folder card for its folder', str_contains($loosePage, '?img=Florence%2Ff2.jpg') && !str_contains($loosePage, '?folder=Florence'));
+[, $loosePageC] = http_get("$baseS2/", ["Cookie: $ckC"]);
+check('[loose photos] a link to photos shows each of its photos as a tile of its own (a tile with the photo\'s own name, not a folder card)', str_contains($loosePageC, 'id="group-r1"') && str_contains($loosePageC, 'id="group-f2"'));
+check('[loose photos] the folder\'s own page still works for the link (the photo is there)', str_contains(http_get("$baseS2/?folder=Rome", ["Cookie: $ckC"])[1], '?img=Rome%2Fr1.jpg'));
+// --- the owner's shell: ?admin&shell=1 and the pages it frames (&inframe=1) ---
+$shOwner = ["Cookie: $s2AdminCookie"];
+[$shSt0, $shBodyAnon, $shHdAnon] = http_get("$baseS2/?admin&shell=1&folder=Rome");
+check('[shell] a stranger asking for the shell gets the sign-in page, not the shell, and it can\'t be framed', !str_contains($shBodyAnon, 'id="sh-frame"') && $hv($shHdAnon, 'X-Frame-Options') === 'DENY');
+[$shSt, $shBody, $shHd] = http_get("$baseS2/?admin&shell=1&folder=Rome", $shOwner);
+check('[shell] signed in, the shell page is there: a frame on the gallery page of that folder, the path and the folder tree', $shSt === 200 && str_contains($shBody, 'id="sh-frame"') && str_contains($shBody, 'folder=Rome&amp;inframe=1') && str_contains($shBody, 'class="sh-tree"') && str_contains($shBody, 'data-path="Rome"') && str_contains($shBody, 'data-path="Pisa"'));
+check('[shell] ...and the shell page itself is still never framed or cached, like every admin page', $hv($shHd, 'X-Frame-Options') === 'DENY' && str_contains((string) $hv($shHd, 'Content-Security-Policy'), "frame-ancestors 'none'") && str_contains((string) $hv($shHd, 'Cache-Control'), 'no-store'));
+check('[shell] the shell page has Folder settings and Notes as buttons with no text, a way to open the gallery on its own and Log out', str_contains($shBody, 'data-tool="settings"') && str_contains($shBody, 'data-tool="notes"') && str_contains($shBody, 'id="sh-alone"') && str_contains($shBody, 'Log out') && !str_contains($shBody, '>Folder settings<'));
+[, $shTabBody] = http_get("$baseS2/?admin&shell=1&folder=Rome&tab=settings", $shOwner);
+[, $shBadTab] = http_get("$baseS2/?admin&shell=1&tab=%22%3E%3Cscript%3E", $shOwner);
+check('[shell] a tab in the address opens the frame on that admin page; a made-up one is ignored (nothing of it is echoed)', str_contains($shTabBody, 'src="?admin&amp;folder=Rome&amp;inframe=1#settings"') && !str_contains($shBadTab, '<script>alert') && str_contains($shBadTab, 'inframe=1"') && !str_contains($shBadTab, '#"&gt;'));
+[, $shLinksTab] = http_get("$baseS2/?admin&shell=1&tab=links", $shOwner);
+check('[shell] the whole-gallery entries are there (Features, Share when share links are on, Settings)', str_contains($shBody, 'data-tab="features"') && str_contains($shBody, 'data-tab="links"') && str_contains($shBody, 'data-tab="site"') && str_contains($shLinksTab, '#links'));
+[$shFrSt, $shFrBody, $shFrHd] = http_get("$baseS2/?admin&folder=Rome&inframe=1", $shOwner);
+check('[shell] an admin page asked for with &inframe=1 may be framed by this site only (and says so), and hides its own bar and sidebar', $shFrSt === 200 && $hv($shFrHd, 'X-Frame-Options') === 'SAMEORIGIN' && str_contains((string) $hv($shFrHd, 'Content-Security-Policy'), "frame-ancestors 'self'") && str_contains($shFrBody, '<body class="inframe">') && str_contains($shFrBody, 'galleryShell'));
+[, $shFrNoBody, $shFrNoHd] = http_get("$baseS2/?admin&folder=Rome&inframe=1");
+[, , $shPlainHd] = http_get("$baseS2/?admin&folder=Rome", $shOwner);
+check('[shell] ...but only for a signed-in request: a stranger\'s &inframe=1 is the unframeable sign-in page, and a plain admin page stays unframeable', $hv($shFrNoHd, 'X-Frame-Options') === 'DENY' && !str_contains($shFrNoBody, 'galleryShell') && $hv($shPlainHd, 'X-Frame-Options') === 'DENY' && str_contains((string) $hv($shPlainHd, 'Content-Security-Policy'), "frame-ancestors 'none'"));
+[, $shGalOwner] = http_get("$baseS2/?folder=Rome", $shOwner);
+[, $shGalFrame] = http_get("$baseS2/?folder=Rome&inframe=1", $shOwner);
+[, $shGalVisitor] = http_get("$baseS2/?folder=Rome&inframe=1");
+check('[shell] the owner\'s gallery page has no Admin pill: its title opens the shell on that folder; in the shell\'s frame the title is plain text and the page hides its own bar', !str_contains($shGalOwner, 'admin-pill') && str_contains($shGalOwner, '<a class="title-admin" rel="nofollow" href="?admin&amp;shell=1&amp;folder=Rome">') && !str_contains($shGalFrame, 'class="title-admin"') && str_contains($shGalFrame, '<body class="inframe">') && str_contains($shGalFrame, 'galleryShell'));
+check('[shell] a visitor gets neither: no pill, no frame mode, no shell script, even if they ask with &inframe=1 or follow a link', !str_contains($shGalVisitor, 'admin-pill"') && !str_contains($shGalVisitor, '<body class="inframe">') && !str_contains($shGalVisitor, 'galleryShell') && !str_contains($shGalVisitor, 'shell=1'));
+check('[shell] the shell is no wider than the gallery itself (1400px, centred), and a framed admin page keeps the classic admin\'s column width', preg_match('~body \\{[^}]*max-width:1400px~', $shBody) === 1);
+[, $shFrameAdm] = http_get("$baseS2/?admin&folder=Rome&inframe=1", $shOwner);
+check('[shell] the framed admin page is centred at the classic admin\'s column width, not stretched to the window', str_contains($shFrameAdm, 'body.inframe .admin-layout { display:block; max-width:968px; margin:0 auto;'));
+check('[shell] the icons the shell draws are in the set (a gear, a sheet of paper for Notes, an arrow out of a box), and Notes does not borrow the pencil', str_contains($shBody, 'id="i-gear"') && str_contains($shBody, 'id="i-notes"') && str_contains($shBody, 'id="i-external"') && preg_match('~data-tool="notes"[^>]*><svg class="ico"[^>]*><use href="#i-notes"~', $shBody) === 1);
+// --- the owner's bar on a phone (no frame there) ---
+[, $pbGal] = http_get("$baseS2/?folder=Rome", $shOwner);
+[, $pbAdm] = http_get("$baseS2/?admin&folder=Rome", $shOwner);
+[, $pbFrame] = http_get("$baseS2/?admin&folder=Rome&inframe=1", $shOwner);
+[, $pbVisitor] = http_get("$baseS2/?folder=Rome", []);
+check('[phone bar] the owner\'s gallery page carries the bar (Gallery, Folder, Notes, Menu) keeping the folder, and the Menu sheet lists the whole-gallery pages and the folders', str_contains($pbGal, '<nav class="pb" id="pb"') && str_contains($pbGal, 'data-context="gallery"') && str_contains($pbGal, 'href="?admin&amp;folder=Rome#settings" data-pb="settings"') && str_contains($pbGal, 'href="?admin&amp;folder=Rome#notes" data-pb="notes"') && str_contains($pbGal, 'data-pb-tab="features"') && str_contains($pbGal, 'data-pb-tab="site"') && str_contains($pbGal, 'class="pb-f cur"') && str_contains($pbGal, '<body class="pb-on">'));
+check('[phone bar] ...and Log out is the line-drawn icon button at the top right of the sheet, next to the gallery\'s title: the gallery page\'s own sign-out button', preg_match('~<div class="pb-head"><span class="pb-title">[^<]*</span><button type="submit" form="lock-form" name="logout" value="1" title="Log out" aria-label="Log out"><svg class="ico"[^>]*><use href="\#i-logout"></use></svg></button></div>~', $pbGal) === 1);
+check('[phone bar] the admin page carries it too, with in-page links (a tab changes without a new page) and no second Log out in the sheet (the page\'s header has one)', str_contains($pbAdm, 'data-context="admin"') && str_contains($pbAdm, 'href="#settings" data-pb="settings"') && str_contains($pbAdm, 'href="#notes" data-pb="notes"') && str_contains($pbAdm, 'data-keep') && preg_match('~<div class="pb-head"><span class="pb-title">[^<]*</span></div>~', $pbAdm) === 1);
+check('[phone bar] the Menu on an admin page already has its numbers (Features, Shares), the one on the gallery page asks for them when it is opened, and the admin page\'s own rows of tabs (the whole-gallery pages, and Folder settings / Notes) are not drawn on a phone, the bar and the Menu have them (the folder picker stays), and the bar follows the page whichever way the tab changed', preg_match('~data-pb-tab="features"><span>Features</span><span class="pb-b" data-b="features"> <span class="count[^"]*"~', $pbAdm) === 1 && !str_contains($pbAdm, 'id="pb-sheet" hidden data-lazy') && str_contains($pbGal, 'id="pb-sheet" hidden data-lazy') && str_contains($pbAdm, 'body.pb-on .admin-side .side-group { display:none; }') && str_contains($pbAdm, 'body.pb-on .admin-folder-head .admin-tabs { display:none; }') && str_contains($pbAdm, 'body.pb-on .admin-bar h1 { position:absolute; width:1px; height:1px; overflow:hidden;') && str_contains($pbAdm, 'new MutationObserver(mark)') && str_contains($pbAdm, 'document.addEventListener("DOMContentLoaded",arm)'));
+[$pbcSt, $pbcBody] = http_get("$baseS2/?admin&pbcounts=1", $shOwner); $pbcJ = json_decode($pbcBody, true);
+check('[phone bar] the numbers come as JSON for the owner only (features, links, site, edited), never for a stranger', $pbcSt === 200 && is_array($pbcJ) && isset($pbcJ['features'][0]['text'], $pbcJ['edited']) && !is_array(json_decode(http_get("$baseS2/?admin&pbcounts=1")[1], true)));
+check('[phone bar] the sheet can be dragged down to dismiss it (touch handlers, with a grab handle at its top)', str_contains($pbGal, 'class="pb-grab"') && str_contains($pbGal, 'sheet.addEventListener("touchmove"') && str_contains($pbGal, 'if(dy>80)close_()') && str_contains($pbGal, 'class="pb-top"') && str_contains($pbGal, 'class="pb-scroll"'));
+check('[phone bar] the admin page\'s way back is a chevron and the title of the page it returns to (the gallery\'s title, or the folder\'s name in a folder), not "← Gallery"', preg_match('~<a class="back" href="[^"]*" title="Back to [^"]+"><svg class="ico"[^>]*><use href="\#i-chev-left"></use></svg><span>[^<]+</span></a>~', $pbAdm) === 1 && !str_contains($pbAdm, '&larr; Gallery') && str_contains($pbAdm, '<span>Rome</span></a>'));
+check('[phone bar] a tap from the gallery page lands the admin page at its top (a flag is kept for the next page, and the page scrolls to the top once)', str_contains($pbGal, 'sessionStorage.setItem("pbTop","1")') && str_contains($pbAdm, 'sessionStorage.getItem("pbTop")==="1"'));
+[, $pbGalDeep] = http_get("$baseS2/?folder=Rome%2FSub", $shOwner);
+[, $pbGalRoot] = http_get("$baseS2/", $shOwner);
+check('[phone bar] on the gallery page the Gallery button knows where "up" is: nothing at the front page, the front page from a top-level folder, the parent folder from a deeper one', preg_match('~data-pb="gallery" data-up="">~', $pbGalRoot) === 1 && preg_match('~data-pb="gallery" data-up="\./">~', $pbGal) === 1 && preg_match('~data-pb="gallery" data-up="\./\?folder=Rome">~', $pbGalDeep) === 1 && !preg_match('~data-pb="gallery" data-up~', $pbAdm));
+check('[phone bar] ...and pressing it scrolls to the top first, then goes up one level (and does nothing at the top of the front page)', str_contains($pbGal, 'if(!admin&&a.getAttribute("data-pb")==="gallery"&&a.hasAttribute("data-up")){e.preventDefault();if(window.pageYOffset>8){') && str_contains($pbGal, 'else if(a.getAttribute("data-up")!=="")location.href=a.getAttribute("data-up")'));
+check('[phone bar] the folders in the Menu have the tree\'s lines, and the Menu remembers how they were left folded (the branch to the folder you are in stays open)', str_contains($pbGal, '.pb-kids > .pb-g::before') && str_contains($pbGal, '.pb-kids > .pb-g > .pb-fr::before') && str_contains($pbGal, 'galleryMenuFolders|') && str_contains($pbGal, 'data-path="Rome" data-here') && str_contains($pbGal, 'fs[g.getAttribute("data-path")]=c?0:1'));
+check('[shell] in the shell\'s folder tree a folder with nothing inside it keeps its name right at the end of its elbow (room for a fold arrow only where there is one)', str_contains($shBody, '.sh-tree li > ul > li > a { padding-left:6px; }') && str_contains($shBody, '.sh-tree li > ul > li.has-children > a { padding-left:24px; }'));
+check('[bulk links] the Shares tab has a select button (the gallery\'s Select icon) in its head, and the script for select mode: pills tick, a bar with the count, Select all, Clear, Done and Pause, Resume, Extend, Revoke, Delete, each done link by link through the actions a row\'s own buttons use', preg_match('~<button type="button" class="sl-sel-btn" data-sl="select" aria-pressed="false"[^>]*><svg class="ico"[^>]*><use href="\#i-select"~', $pbAdm) === 1 && str_contains($pbAdm, 'class="sl-bulk-n"') && str_contains($pbAdm, "selRun('link_pause'") && str_contains($pbAdm, "selRun('link_resume'") && str_contains($pbAdm, "selRun('link_revoke'") && str_contains($pbAdm, "selRun('link_delete'") && str_contains($pbAdm, "selRun('link_extend'") && str_contains($pbAdm, '>Select all</button>') && str_contains($pbAdm, 'summary > .sl-pill:first-child'));
+check('[bulk links] deleting several asks for a tick first (their logs go with them), listing the names, and the public address\'s log is never part of a selection', str_contains($pbAdm, 'id="sl-bulk-sure"') && str_contains($pbAdm, 'okBtn.disabled = !ev.target.checked') && str_contains($pbAdm, "details.sl-row:not(.sl-public)") && !str_contains($pbAdm, "selRows().concat"));
+check('[admin on a computer] the plain admin page sends a computer-sized window to the shell (with its folder and tab), unless ?classic=1 keeps it, and the page inside the shell\'s frame never does', str_contains($pbAdm, "(min-width: 801px)") && str_contains($pbAdm, "'&shell=1'") && str_contains($pbAdm, "galleryClassic=1") && !str_contains($pbFrame, "galleryClassic") && !str_contains($pbFrame, "(min-width: 801px)"));
+check('[phone bar] a visitor has no bar, and a page inside the shell\'s frame has none either (the shell draws its own chrome)', !str_contains($pbVisitor, 'id="pb"') && !str_contains($pbFrame, 'id="pb"') && !str_contains($pbVisitor, 'owner_phone') && !str_contains($shBody, 'id="pb"'));
+check('[phone bar] the bar only exists on a narrow screen (hidden by default, drawn under 800px) and gets out of the way of the Select bar', str_contains($pbGal, '.pb, .pb-sheet { display:none; }') && str_contains($pbGal, '@media (max-width: 800px) {') && str_contains($pbGal, 'body.selecting .pb, body.selecting .pb-sheet { display:none; }'));
+// --- the numbers beside Features, Shares and Settings ---
+$ncLinks = read_data_file("$fxS2/.gallery-links.php");
+$ncIsLive = fn ($l) => is_array($l) && ($l['kind'] ?? '') !== 'public' && ($l['status'] ?? 'active') === 'active' && ((int) ($l['endsAt'] ?? 0) === 0 || (int) $l['endsAt'] > time()) && (int) ($l['startsAt'] ?? 0) <= time() && ((int) ($l['maxOpens'] ?? 0) === 0 || (int) ($l['opens'] ?? 0) < (int) $l['maxOpens']);
+$ncLive = count(array_filter((array) ($ncLinks['links'] ?? []), $ncIsLive));
+check('[shell] the sidebar entry is called Shares, with the number of links in use beside it (muted), and the same in the classic admin\'s sidebar', $ncLive > 0 && preg_match('~data-tab="links">Shares\s*(<span class="count"[^>]*>' . $ncLive . '</span>)~', $shBody) === 1 && !preg_match('~data-tab="links">Share[ <]~', $shBody) && preg_match('~data-tab="links" class="side-link">Shares~', http_get("$baseS2/?admin", $shOwner)[1]) === 1, "live=$ncLive");
+$ncPause = array_key_first(array_filter((array) ($ncLinks['links'] ?? []), $ncIsLive));
+$ncSave = $ncLinks; $ncLinks['links'][$ncPause]['status'] = 'paused'; write_data_file("$fxS2/.gallery-links.php", $ncLinks);
+$ncAfter = http_get("$baseS2/?admin&shell=1", $shOwner)[1];
+check('[shell] a paused link is not counted as in use', ($ncLive - 1 > 0 ? preg_match('~data-tab="links">Shares\s*<span class="count"[^>]*>' . ($ncLive - 1) . '</span>~', $ncAfter) === 1 : !preg_match('~data-tab="links">Shares\s*<span class="count"[^>]*>\d+</span>~', $ncAfter)));
+write_data_file("$fxS2/.gallery-links.php", $ncSave);
+preg_match_all('~ft-chip ft-on~', http_get("$baseS2/?admin", $shOwner)[1], $ncOn); preg_match_all('~ft-chip ft-need~', http_get("$baseS2/?admin", $shOwner)[1], $ncNeed);
+check('[shell] Features shows how many of the 9 features you can switch on are on, and that is the number of "On" chips on the Features page (one that needs setup is shown alone, in amber)', $ncNeed[0] ? preg_match('~data-tab="features">Features\s*<span class="count warn"[^>]*>' . count($ncNeed[0]) . '</span>~', $shBody) === 1 : preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>' . count($ncOn[0]) . '/9</span>~', $shBody) === 1, 'on=' . count($ncOn[0]));
+$ncHealth = preg_match('~(\d+) things? to look at~', http_get("$baseS2/?admin", $shOwner)[1], $ncH) ? (int) $ncH[1] : 0;
+check('[shell] Settings has a red number only when the Health check has something to fix, and it is that number', $ncHealth > 0 ? preg_match('~data-tab="site">Settings\s*<span class="count bad"[^>]*>' . $ncHealth . '</span>~', $shBody) === 1 : !str_contains($shBody, 'count bad'), "health=$ncHealth");
+[, $ncFrag] = http_get("$baseS2/?admin&shellcounts=1", $shOwner);
+check('[shell] the sidebar\'s numbers can be asked for again (a fragment, signed in only), so they follow what is done in the frame', str_contains($ncFrag, 'data-tab="features"') && !str_contains($ncFrag, '<html') && !str_contains(http_get("$baseS2/?admin&shellcounts=1")[1], 'data-tab="features"'));
+// A notes page that is in use shows "On" on Features; one without {gallery} says it needs setup (this used to say "Not used" whenever the page was in use).
+$fxNc = new_fixture_dir('navnotes'); make_jpeg("$fxNc/a.jpg", 80, 50, 20, 90, 30);
+file_put_contents("$fxNc/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nc-admin-pw-1']));
+file_put_contents("$fxNc/notes.md", "{gallery}\n\nHello\n"); copy($indexSrc, "$fxNc/index.php");
+$portNc = find_free_port(); start_server($fxNc, $portNc); $baseNc = "http://127.0.0.1:$portNc";
+[, , $ncLogin] = http_post("$baseNc/?admin", ['access_code' => 'nc-admin-pw-1'], [], false); $ncCk = ["Cookie: " . extract_cookie_header($ncLogin)];
+$ncFeat = http_get("$baseNc/?admin", $ncCk)[1];
+check('[features] a notes page that is in use shows On (with its sentence), and the count of features on includes it', preg_match('~Notes <span class="ft-chip ft-on">On</span>~', $ncFeat) === 1 && str_contains($ncFeat, 'A notes page is in use.') && preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>(\d)/9</span>~', http_get("$baseNc/?admin&shell=1", $ncCk)[1], $ncM) === 1 && (int) $ncM[1] === preg_match_all('~ft-chip ft-on~', $ncFeat));
+file_put_contents("$fxNc/other.md", "no marker here\n");
+$ncFeat2 = http_get("$baseNc/?admin", $ncCk)[1];
+check('[features] a notes file without {gallery} makes the row say Needs setup, and the sidebar shows that alone, in amber', str_contains($ncFeat2, 'ft-need') && preg_match('~data-tab="features">Features\s*<span class="count warn"[^>]*>1</span>~', http_get("$baseNc/?admin&shell=1", $ncCk)[1]) === 1);
 
 // Folders are remembered by a hidden id, not by name.
 $s2Id = fn ($rel) => (read_data_file("$fxS2/$rel/.gallery-items.php")['folderId'] ?? '');
@@ -5187,7 +5873,7 @@ $s2Reset();
 $s2AfterRename = $s2Visible(http_get("$baseS2/", $s2Hdr($ckA))[1]);
 check('[share links] renaming a folder keeps the link working (the id travels with it): the link now shows Roma, and the old name shows nothing', $s2AfterRename !== null && in_array('Roma/r1.jpg', $s2AfterRename, true) && !array_filter($s2AfterRename, fn ($x) => str_starts_with($x, 'Rome/')) && http_get("$baseS2/?img=" . rawurlencode('Roma/r1.jpg') . '&size=thumb', $s2Hdr($ckA))[0] === 200);
 $s2AdminTab = http_get("$baseS2/?admin", ["Cookie: $s2AdminCookie"])[1];
-check('[share links] the tab shows no problem for a renamed folder, and lists it under its new name', !str_contains($s2AdminTab, 'Folder missing') && str_contains($s2AdminTab, 'Only Roma'));
+check('[share links] the tab shows no problem for a renamed folder, and lists it under its new name', !str_contains($s2AdminTab, 'Folder missing') && str_contains($s2AdminTab, 'They see Roma'));
 // A copy of the folder, with its settings file and so its id: the id now points at two folders, so it points at nothing.
 mkdir("$fxS2/Roma copy", 0775, true); copy("$fxS2/Roma/r1.jpg", "$fxS2/Roma copy/r1.jpg"); copy("$fxS2/Roma/.gallery-items.php", "$fxS2/Roma copy/.gallery-items.php");
 http_get("$baseS2/", $s2Hdr($ckA));   // the first page the link holder loads notices the duplicate
@@ -5217,12 +5903,12 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     chmod("$fxS2/Other", 0555); chmod("$fxS2/Other/.gallery-items.php", 0444);   // (a folder's settings file that already exists can be written even in a locked folder: lock both)
     $s2Locked = $s2Admin(['action' => 'link_create', 'label' => 'x', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'folders', 'scope_folders' => json_encode(['Other']), 'downloads' => 'off', 'zip' => 'off']);
     chmod("$fxS2/Other", 0775); chmod("$fxS2/Other/.gallery-items.php", 0664);
-    check('[share links] a link can\'t be limited to a folder the web server can\'t write in (it says why), and nothing is made', ($s2Locked['ok'] ?? true) === false && str_contains($s2Locked['text'] ?? '', 'can\'t write') && count($s2Links()['links']) === 7);
+    check('[share links] a link can\'t be limited to a folder the web server can\'t write in (it says why), and nothing is made', ($s2Locked['ok'] ?? true) === false && str_contains($s2Locked['text'] ?? '', 'can\'t write') && count($s2Links()['links']) === 18);
 }
 
 // Checking the form's choices.
 $s2Bad = fn (array $f) => ($s2Admin($f + ['action' => 'link_create', 'label' => 'bad', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off'])['ok'] ?? true) === false;
-check('[share links] a link to folders needs at least one, a folder that isn\'t there is refused, downloads "only in some folders" need folders among those the link covers, and it can only open in a folder it covers', $s2Bad(['scope_type' => 'folders', 'scope_folders' => '[]']) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Nope'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'downloads' => 'some', 'downloads_folders' => json_encode(['Other'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'open_in' => 'Other']) && $s2Bad(['scope_type' => 'photos', 'scope_photos' => json_encode(['nope.jpg'])]) && count($s2Links()['links']) === 7);
+check('[share links] a link to folders needs at least one, a folder that isn\'t there is refused, downloads "only in some folders" need folders among those the link covers, and it can only open in a folder it covers', $s2Bad(['scope_type' => 'folders', 'scope_folders' => '[]']) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Nope'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'downloads' => 'some', 'downloads_folders' => json_encode(['Other'])]) && $s2Bad(['scope_type' => 'folders', 'scope_folders' => json_encode(['Pisa']), 'open_in' => 'Other']) && $s2Bad(['scope_type' => 'photos', 'scope_photos' => json_encode(['nope.jpg'])]) && count($s2Links()['links']) === 18);
 
 // The heads-up line.
 $s2Ends = time() + 3 * 86400;
@@ -5341,7 +6027,7 @@ check('[share log] these fragments and downloads are for the owner only', http_g
 // The list's summary line and the "new" markers.
 $lgTab = http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1];
 check('[share log] the link\'s summary line in the tab carries the log: its addresses and views', preg_match('/<b>1<\/b> IP\s*<span class="sl-dot">&middot;<\/span>\s*\d+ views/', $lgTab) === 1);
-check('[share log] until the owner has looked, the row says how many are new since, and the sidebar counts the links with news', str_contains($lgTab, 'new since you last looked') && preg_match('/data-tab="links" class="side-link">Share <span class="count">1<\/span>/', $lgTab) === 1);
+check('[share log] until the owner has looked, the row says how many are new since, and the sidebar counts the links with news', str_contains($lgTab, 'new since you last looked') && preg_match('/data-tab="links" class="side-link">Shares.*?<span class="count new"[^>]*>1 new<\/span>/s', $lgTab) === 1);
 check('[share log] telling the server the tab was looked at clears them (a later page load shows none)', ($lgAdmin(['action' => 'link_seen'])['ok'] ?? false) && !str_contains(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1], 'new since you last looked'));
 
 // Blocked tries and a replaced address.
@@ -5468,8 +6154,10 @@ check('[photo picker] ...the front page lists only its own photos, an unknown fo
 
 // Preview as this link (a link nobody has opened, so that "nothing counted or logged" can be checked against zero)
 $pvMade = $shNew([]); $pvId = $pvMade['id'] ?? '';
-$shStart = function ($token, $cookies = null) use ($baseS, $pvId, $shOwner) { return http_get("$baseS/?admin&linkpreview=$pvId&csrf_token=" . rawurlencode($token), $cookies ?? $shOwner, false); };
-[$pc1] = $shStart('wrong'); [$pc0] = http_get("$baseS/?admin&linkpreview=$pvId&csrf_token=" . rawurlencode($shCsrf), [], false);
+$shStart = function ($token, $cookies = null) use ($baseS, $pvId, $shOwner) { return http_post("$baseS/?admin", ['linkpreview' => $pvId, 'csrf_token' => $token], $cookies ?? $shOwner, false); };
+[$pc1] = $shStart('wrong'); [$pc0] = http_post("$baseS/?admin", ['linkpreview' => $pvId, 'csrf_token' => $shCsrf], [], false);
+[$pcGet, $pcGetBody, $pcGetHd] = http_get("$baseS/?admin&linkpreview=$pvId&csrf_token=" . rawurlencode($shCsrf), $shOwner, false);
+check('[preview] the preview is only started by a form: asked for by address (token in the URL, so in history and logs) it is refused with 405 and sets no cookie', $pcGet === 405 && !array_filter($pcGetHd, fn ($h) => stripos($h, 'Set-Cookie: gallery_preview_') === 0));
 [$pc2, , $pvH] = $shStart($shCsrf);
 $pvLoc = ''; $pvSet = '';
 foreach ($pvH as $h) { if (stripos($h, 'Location:') === 0) $pvLoc = trim(substr($h, 9)); if (stripos($h, 'Set-Cookie: gallery_preview_') === 0) $pvSet = $h; }
@@ -5495,8 +6183,8 @@ check('[preview] a changed cookie is no preview (the owner just sees the owner\'
 [$exC, , $exH] = http_get("$baseS/?exitpreview", $pvBoth, false);
 $exLoc = ''; $exSet = '';
 foreach ($exH as $h) { if (stripos($h, 'Location:') === 0) $exLoc = trim(substr($h, 9)); if (stripos($h, 'Set-Cookie: gallery_preview_') === 0) $exSet = $h; }
-check('[preview] Exit preview clears the cookie and goes back to the Share tab', $exC === 303 && str_contains($exLoc, '?admin#links') && (str_contains($exSet, 'Max-Age=0') || str_contains($exSet, '1970') || str_contains($exSet, '=deleted')));
-check('[preview] the Share tab says a preview is open in this browser (with a way to end it), and says nothing when there is none', str_contains($adminPageDuring, 'A preview of &ldquo;Mark&rdquo; is open in this browser') && str_contains($adminPageDuring, 'href="?exitpreview"') && !str_contains(http_get("$baseS/?admin", $shOwner)[1], 'is open in this browser') && !str_contains($pvTampered ? http_get("$baseS/?admin", $pvTampered)[1] : '', 'is open in this browser'));
+check('[preview] Exit preview clears the cookie and goes back to the Shares tab', $exC === 303 && str_contains($exLoc, '?admin#links') && (str_contains($exSet, 'Max-Age=0') || str_contains($exSet, '1970') || str_contains($exSet, '=deleted')));
+check('[preview] the Shares tab says a preview is open in this browser (with a way to end it), and says nothing when there is none', str_contains($adminPageDuring, 'A preview of &ldquo;Mark&rdquo; is open in this browser') && str_contains($adminPageDuring, 'href="?exitpreview"') && !str_contains(http_get("$baseS/?admin", $shOwner)[1], 'is open in this browser') && !str_contains($pvTampered ? http_get("$baseS/?admin", $pvTampered)[1] : '', 'is open in this browser'));
 $shAdmin(['action' => 'link_pause', 'id' => $pvId]);
 [$pc3, , $pvH3] = $shStart($shCsrf); $pvPaused = http_get("$baseS/", ["Cookie: $shAdminCookie; " . extract_cookie_header($pvH3)])[1];
 check('[preview] a paused link can still be previewed, and the strip says that the people who have it see nothing for now', $pc3 === 303 && str_contains($pvPaused, 'Previewing as Mark') && str_contains($pvPaused, 'paused right now'));
@@ -5538,6 +6226,9 @@ $loSees = function (array $headers, $folder) use ($baseO) {
 };
 $loPhoto = $loMake('one photo', ['scope_type' => 'photos', 'scope_photos' => '["Rome/r1.jpg"]', 'locations' => 'public']);
 $loHold = $loHolder($loPhoto);
+[, , $loOpenH] = http_post("$baseO/?link=" . $loPhoto['token'], ['go' => '1'], [], false);
+$loOpenAt = ''; foreach ($loOpenH as $x) if (stripos($x, 'Location:') === 0) $loOpenAt = trim(substr($x, 9));
+check('[loose photos] a link to exactly one photo opens straight in the viewer on it (several open on the grid)', $loOpenAt === './?photo=Rome%2Fr1.jpg', $loOpenAt);
 check('[share links locations] with Rome\'s public locations on, a link for one photo shows the locations the public sees in Rome (and the shared photo\'s), exactly as in any other folder', $loSees([], 'Rome') === ['Rome/r2.jpg'] && $loSees($loHold, 'Rome') === ['Rome/r1.jpg', 'Rome/r2.jpg'] && $loSees($loHold, 'Florence') === ['Florence/f1.jpg', 'Florence/f2.jpg'] && $loSees([], 'Florence') === ['Florence/f1.jpg', 'Florence/f2.jpg']);
 $loWrite(false);
 check('[share links locations] with Rome\'s public locations off, the public and a link set to "as the public sees them" get none in Rome, and other folders are unaffected', $loSees([], 'Rome') === [] && $loSees($loHold, 'Rome') === [] && $loSees($loHold, 'Florence') === ['Florence/f1.jpg', 'Florence/f2.jpg']);
@@ -5605,7 +6296,7 @@ check('[share picture] a link always shows the same picture, and someone holding
 [, $pxOffBody, $pxOffHeaders] = $pxOpen($pxNeutral['token']);
 check('[share picture] with the picture off there is no og:image, the opening page keeps the gallery\'s icon, and its policy allows no pictures', $pxOg($pxOffBody) === '' && !str_contains($pxOffBody, 'twitter:card') && str_contains($pxOffBody, '<div class="ico">') && !str_contains($pxOffBody, '<img') && !str_contains($pxCsp($pxOffHeaders), 'img-src'));
 [, $pxOnNeutralBody] = $pxOpen($pxOnNeutral['token']);
-check('[share picture] a neutral title with the picture switched on shows the picture with the title "A shared gallery"', $pxOg($pxOnNeutralBody) !== '' && str_contains($pxOnNeutralBody, '<h1>A shared gallery</h1>'));
+check('[share picture] a neutral title with the picture switched on shows the picture with one of the plain neutral titles', $pxOg($pxOnNeutralBody) !== '' && preg_match($neutralRx, $pxOnNeutralBody) === 1);
 check('[share picture] a link that doesn\'t work shows no picture, whatever its setting', $pxOg(http_get("$baseP/?link=ZZZZZZZZZZZZZZZZ")[1]) === '' && !str_contains(http_get("$baseP/?link=ZZZZZZZZZZZZZZZZ")[1], '<img'));
 
 // The gallery's own cover, when it has one and it is public, represents it; a private one is ignored.
@@ -5635,7 +6326,7 @@ check('[share picture] a link made before this setting existed shows no picture,
 
 // The tab.
 $pxTab = http_get("$baseP/?admin", ["Cookie: $pxCookie"])[1];
-check('[share picture] the New link form has the "Show a preview photo" box, it is saved with the form, follows the title choice on a new link, and the tab lists each link\'s setting', str_contains($pxTab, 'name="picture"') && str_contains($pxTab, 'Show a preview photo') && !str_contains($pxTab, 'Show a cover photo') && str_contains($pxTab, "picture: form.querySelector('[name=picture]').checked ? '1' : '0'") && str_contains($pxTab, "e.target.name === 'title_mode'") && str_contains($pxTab, '<dt>Preview photo</dt>') && !str_contains($pxTab, '<dt>Cover photo</dt>') && str_contains($pxTab, '&quot;picture&quot;:'));
+check('[share picture] the New link form has the "Show a preview photo" box, it is saved with the form, follows the title choice on a new link, and the tab lists each link\'s setting', str_contains($pxTab, 'name="picture"') && str_contains($pxTab, 'Show a preview photo') && !str_contains($pxTab, 'Show a cover photo') && str_contains($pxTab, "picture: form.querySelector('[name=picture]').checked ? '1' : '0'") && str_contains($pxTab, "e.target.name === 'title_mode'") && str_contains($pxTab, 'an automatic preview photo, with') && !str_contains($pxTab, 'Cover photo') && str_contains($pxTab, '&quot;picture&quot;:'));
 check('[share picture] the quick "Share this folder…" form makes its link with the picture on, and the old wording "no photo is ever shown" is gone', str_contains($pxTab, "body.set('picture', '1')") && !str_contains($pxTab, 'no photo or folder name is ever shown'));
 
 // Without folders (Show subfolders off): a public photo from the front page.
@@ -5697,7 +6388,7 @@ check('[preview photo] when the front page has no public photo it is not listed,
 write_data_file("$fxP/.gallery-items.php", ['items' => ['sec.jpg' => ['restriction' => 'private']], 'groups' => []]);
 check('[preview photo] the folder list is for the owner only', !str_contains(http_get("$baseP/?admin&linkcover=folders")[1], '"folders"'));
 $pxTab2 = http_get("$baseP/?admin", ["Cookie: $pxCookie"])[1];
-check('[cover choice] the form has the preview row with Choose… and Automatic and the two hidden fields; Opens in is a menu behind a hidden field (no dropdown), as is the photo picker\'s folder; a link\'s settings line is filled in when it opens (Off for a link with the picture off)', str_contains($pxTab2, 'data-coverrow') && str_contains($pxTab2, 'data-cover-choose') && str_contains($pxTab2, 'data-cover-auto') && str_contains($pxTab2, 'name="picture_seed"') && str_contains($pxTab2, 'name="picture_file"') && str_contains($pxTab2, '<div data-openin-menu></div>') && !str_contains($pxTab2, '<select name="open_in"') && !str_contains($pxTab2, 'id="sl-pp-folder"') && str_contains($pxTab2, "popHtml('ppfolder'") && str_contains($pxTab2, 'class="sl-cover" data-cover-id="' . $pxCoverId . '"') && str_contains($pxTab2, '<dt>Preview photo</dt><dd>Off</dd>'));
+check('[cover choice] the form has the preview row with Choose… and Automatic and the two hidden fields; Opens in is a menu behind a hidden field (no dropdown), as is the photo picker\'s folder; a link\'s settings line is filled in when it opens (Off for a link with the picture off)', str_contains($pxTab2, 'data-coverrow') && str_contains($pxTab2, 'data-cover-choose') && str_contains($pxTab2, 'data-cover-auto') && str_contains($pxTab2, 'name="picture_seed"') && str_contains($pxTab2, 'name="picture_file"') && str_contains($pxTab2, '<div data-openin-menu></div>') && !str_contains($pxTab2, '<select name="open_in"') && !str_contains($pxTab2, 'id="sl-pp-folder"') && str_contains($pxTab2, "popHtml('ppfolder'") && str_contains($pxTab2, 'an automatic preview photo, with') && str_contains($pxTab2, 'no preview photo, with'));
 check('[cover choice] the words "the gallery\'s cover" are gone from the form: it says the front page\'s own cover photo, else a public folder\'s cover, or a photo you choose', str_contains($pxTab2, 'the front page\'s own cover photo if it has one') && !str_contains($pxTab2, 'your gallery\'s cover'));
 
 echo "== share links: a link to just the public gallery, and the log of the public address ==\n";
@@ -5743,8 +6434,8 @@ $qBad = $qAdmin($qForm(['scope_type' => 'public', 'open_in' => 'Rome']));
 $qMade = $qAdmin($qForm(['scope_type' => 'public', 'only' => '1', 'downloads' => 'all', 'zip' => 'all', 'open_in' => 'Pisa']));
 $qRec = $qLinks()[$qMade['id'] ?? ''] ?? [];
 $qToken = $qRec['token'] ?? '';
-check('[public scope] a link can be made for "just the public gallery": it grants nothing, so "show only" and downloads are forced off even if asked for, and it can open in a public folder but not a private one',
-    !($qBad['ok'] ?? true) && str_contains($qBad['text'] ?? '', 'private folder') && ($qMade['ok'] ?? false) && ($qRec['scope']['type'] ?? '') === 'public' && ($qRec['only'] ?? null) === false && ($qRec['downloads']['mode'] ?? '') === 'off' && ($qRec['zip']['mode'] ?? '') === 'off' && ($qRec['openIn'] ?? '') !== '');
+check('[public scope] a link can be made for "just the public gallery": "show only" is forced off even if asked for, its downloads and ZIP follow what was asked (everything it shows is public), and it can open in a public folder but not a private one',
+    !($qBad['ok'] ?? true) && str_contains($qBad['text'] ?? '', 'private folder') && ($qMade['ok'] ?? false) && ($qRec['scope']['type'] ?? '') === 'public' && ($qRec['only'] ?? null) === false && ($qRec['downloads']['mode'] ?? '') === 'all' && ($qRec['zip']['mode'] ?? '') === 'all' && ($qRec['openIn'] ?? '') !== '');
 [, , $qGoH] = http_post("$baseQ/?link=$qToken", ['go' => '1'], [$qPhone], false);
 $qLinkCookie = extract_cookie_header($qGoH);
 [, $qHolderPage] = http_get("$baseQ/", ["Cookie: $qLinkCookie", $qPhone]);
@@ -5757,7 +6448,7 @@ $qHolderItems = read_data_file("$fxQ/.gallery-linklog-$qLid-items.php")['t'] ?? 
 $qHolderVid = array_key_first(read_data_file("$fxQ/.gallery-linklog-$qLid.php")['visitors'] ?? []);
 check('[public scope] the link\'s log records what they looked at in the public gallery (a public photo seen, a public photo opened) and drops a private photo and a private folder', $qSt === 204 && isset($qHolderItems["$qHolderVid|pub.jpg"]['sf']) && ($qHolderItems["$qHolderVid|Pisa/p1.jpg"]['on'] ?? 0) === 1 && !isset($qHolderItems["$qHolderVid|sec.jpg"]) && !isset(read_data_file("$fxQ/.gallery-linklog-$qLid-items.php")['f']["$qHolderVid|Rome"]));
 $qTab0 = http_get("$baseQ/?admin", ["Cookie: $qCookie"])[1];
-check('[public scope] the New link form offers "Just the public gallery" (and hides the download choices for it), and the list says "Nothing private: just the public gallery"', str_contains($qTab0, 'name="scope_type" value="public"') && str_contains($qTab0, 'Just the public gallery') && substr_count($qTab0, '<div class="sl-f" data-nopublic>') === 2 && str_contains($qTab0, 'Nothing private: just the public gallery'));
+check('[public scope] the New link form offers "Just the public gallery" (downloads and ZIP are its own choices too, with "Everything but private" in the list and left out by the page for this scope), and the list says it in the paragraph', str_contains($qTab0, 'name="scope_type" value="public"') && str_contains($qTab0, 'Just the public gallery') && !str_contains($qTab0, 'data-nopublic') && str_contains($qTab0, 'name="downloads" value="public"') && str_contains($qTab0, 'They see the public gallery and nothing private.'));
 
 // --- the public address's own log
 check('[public log] nothing is logged before anyone is: no record, no log file', !isset($qLinks()[$qPub]) && !is_file("$fxQ/.gallery-linklog-$qPub.php"));
@@ -5788,18 +6479,18 @@ $qTab1 = http_get("$baseQ/?admin", ["Cookie: $qCookie"])[1];
 $qFrag = http_get("$baseQ/?admin&linkview=$qPub", ["Cookie: $qCookie"])[1];
 $qIps = http_get("$baseQ/?admin&linkips=1", ["Cookie: $qCookie"])[1];
 $qCsv = http_get("$baseQ/?admin&linkexport=$qPub&what=visitors", ["Cookie: $qCookie"])[1];
-check('[public log] the Share tab shows "The public address" above the links (logging, visits, addresses, views), its Visitors list names the address and says Visits, and it is not counted among the links',
+check('[public log] the Shares tab shows "The public address" above the links (logging, visits, addresses, views), its Visitors list names the address and says Visits, and it is not counted among the links',
     str_contains($qTab1, 'The public address') && str_contains($qTab1, 'sl-public') && preg_match('/class="sl-pill active">Logging</', $qTab1) === 1 && str_contains($qTab1, '<b>2</b> visit') && str_contains($qFrag, 'data-ip="127.0.0.1"') && str_contains($qFrag, '<th>Visits</th>') && str_contains($qTab1, '1 not ended'));
 check('[public log] the list of every IP address shows the public address as a chip of its own beside the links the address used, and the CSV export has the address', str_contains($qIps, 'sl-lchip sl-golink pub" data-golink="' . $qPub . '">Public address</button>') && str_contains($qIps, '>Reddit post</button>') && str_contains($qCsv, '127.0.0.1'));
 preg_match_all('~<details class="sl-settings">(.*?)</details>~s', $qTab1, $qSet);
-$qLinkSet = array_values(array_filter($qSet[1], fn ($h) => str_contains($h, 'What they can see')))[0] ?? ''; $qPubSet = array_values(array_filter($qSet[1], fn ($h) => str_contains($h, 'Who is logged')))[0] ?? '';
+preg_match('~<p class="sl-para">(.*?)</p>~s', $qTab1, $qParaM); $qLinkSet = $qParaM[1] ?? ''; $qPubSet = array_values(array_filter($qSet[1], fn ($h) => str_contains($h, 'Who is logged')))[0] ?? '';
 preg_match('~<details class="sl-row" data-id="[0-9a-f]{10}".*?<div class="sl-acts">(.*?)</div>\s*</div>\s*</details>~s', $qTab1, $qActs);
 $abSrc = (string) file_get_contents(__DIR__ . '/../index.php');
 preg_match_all('/^\s*\.(sl-[a-z-]+)\s*\{[^}]*\bwidth\s*:\s*\d+px/m', $abSrc, $abW);
 check('[old address buttons] the Pause, Resume, Kill and Clear buttons use a class of their own: no other rule sets a fixed width on it (the Timeline pictures\' class once cut "Pause" short), and none of them uses the picture class', !in_array('sl-abtn', $abW[1], true) && substr_count($abSrc, 'secondary sl-abtn') >= 4 && !str_contains($abSrc, 'secondary sl-mini') && substr_count($abSrc, "\n  .sl-abtn {") === 1);
 check('[link hover] a plain link in a Settings facts line (a dd), a table cell or a hint gets the same hover highlight as a link in a paragraph (the "Log visitors to the public address" link had none)', preg_match('/\.admin-main p a:hover[^{]*\.admin-main dd a:hover[^{]*\.admin-main td a:hover[^{]*\.admin-main \.hint a:hover[^{]*\{[^}]*background:rgba\(170,178,255/', $abSrc) === 1);
-check('[settings fold] an opened link keeps its address, Copy, Share… and QR code in view and puts its settings lines in a section called Settings that starts closed, with Edit… inside it (not with Export log, Preview, Pause…)', $qLinkSet !== '' && str_contains($qLinkSet, 'Original downloads') && str_contains($qLinkSet, 'Made') && str_contains($qLinkSet, 'data-sl="edit"') && !str_contains($qActs[1] ?? '', 'data-sl="edit"') && str_contains($qActs[1] ?? '', 'data-sl="preview"') && str_contains($qTab1, '<details class="sl-settings"><summary>Settings</summary>') && !str_contains($qTab1, '<details class="sl-settings" open') && strpos($qTab1, 'What they can see') < strpos($qTab1, 'data-act="link"', strpos($qTab1, 'What they can see')) && str_contains($qTab1, 'class="gs-mount"'));
-check('[settings fold] the public address\'s card folds its three lines the same way', $qPubSet !== '' && str_contains($qPubSet, 'Kept for') && !str_contains($qPubSet, 'data-sl="edit"'));
+check('[link summary] an opened link keeps Share… and QR code in view and tells its settings in one plain paragraph that ends with Edit… (not with Export log, Preview, Pause…), with no Settings list and no address box', $qLinkSet !== '' && str_contains($qLinkSet, 'They see') && str_contains($qLinkSet, 'Downloads') && str_contains($qLinkSet, 'Made') && str_contains($qLinkSet, 'data-sl="edit"') && !str_contains($qActs[1] ?? '', 'data-sl="edit"') && str_contains($qActs[1] ?? '', 'data-sl="preview"') && str_contains($qTab1, 'class="gs-mount"') && !str_contains($qTab1, 'class="sl-linkline"') && !str_contains($qTab1, 'type="text" class="sl-url"') && !str_contains($qTab1, '<dt>Original downloads</dt>'));
+check('[link summary] the public address\'s card still folds its three lines', $qPubSet !== '' && str_contains($qPubSet, 'Kept for') && !str_contains($qPubSet, 'data-sl="edit"'));
 // The Media tab's three menus (addresses, folders, and one choice from a list), which narrow the same set of photos and videos together (works for any link's log; here the public address's).
 $qItemsKeep = read_data_file("$fxQ/.gallery-linklog-$qPub-items.php"); $qItemsMore = $qItemsKeep; $qNow = time(); $qVid2 = array_key_first($qLog()['visitors']);
 $qItemsMore['t']["$qVid2|seenonly.jpg"] = ['sf' => $qNow, 'sl' => $qNow + 100]; $qItemsMore['t']["$qVid2|played.mp4"] = ['sf' => $qNow, 'sl' => $qNow, 'pn' => 2, 'pl' => $qNow]; $qItemsMore['t']["$qVid2|saved.jpg"] = ['sf' => $qNow, 'sl' => $qNow, 'dn' => 1, 'dl' => $qNow]; $qItemsMore['t']["$qVid2|sec.jpg"] = ['sf' => $qNow, 'sl' => $qNow];
@@ -5812,7 +6503,7 @@ check('[media filter] the Media tab has one line of three menus in this order: t
 check('[media filter] Most viewed (the default) lists everything seen with what was opened most first (the video played twice leads), Most recent lists the same photos newest first (the one touched last leads)', $qHas($qAllHtml, 'seenonly.jpg') && $qHas($qAllHtml, 'played.mp4') && $qHas($qAllHtml, 'pub.jpg') && $qHas($qAllHtml, 'saved.jpg') && $qOrder($qAllHtml)[0] === 'played.mp4' && $qOrder($qRecent)[0] === 'seenonly.jpg' && count($qOrder($qRecent)) === count($qOrder($qAllHtml)));
 check('[media filter] Photos has the photos and not the video, Videos only the video, Private only what is private (the one in the private folder), Opened what was opened or played (not what was only seen), Downloaded only what had its original downloaded', $qHas($qPhotos, 'pub.jpg') && !$qHas($qPhotos, 'played.mp4') && $qOrder($qVideos) === ['played.mp4'] && $qOrder($qPrivate) === ['sec.jpg'] && $qHas($qOpenedHtml, 'pub.jpg') && $qHas($qOpenedHtml, 'Pisa/p1.jpg') && $qHas($qOpenedHtml, 'played.mp4') && !$qHas($qOpenedHtml, 'seenonly.jpg') && !$qHas($qOpenedHtml, 'saved.jpg') && $qOrder($qDown) === ['saved.jpg']);
 check('[media filter] the chosen choice names the menu and is ticked, an unknown choice means Most viewed, and the three menus narrow together: a folder and a kind with nothing in common says so', preg_match('~data-pop="what".*?sl-popbtn on".*?sl-poplab">Opened<.*?<input type="radio" name="pop-what" value="opened" checked>~s', $qOpenedHtml) === 1 && !str_contains($qAllHtml, 'sl-popbtn on"') && $qOrder($qMedia('&what=nonsense')) === $qOrder($qAllHtml) && $qOrder($qMedia('&folders%5B%5D=Pisa')) === ['Pisa/p1.jpg'] && str_contains($qMedia('&what=videos&folders%5B%5D=Pisa'), 'No photo or video matches that.') && $qOrder($qMedia('&what=opened&folders%5B%5D=%2F')) === ['played.mp4', 'pub.jpg'] && $qOrder($qMedia('&what=photos&ips%5B%5D=10.9.9.9')) === [], json_encode([preg_match('~data-pop="what".*?sl-popbtn on".*?sl-poplab">Opened<.*?<input type="radio" name="pop-what" value="opened" checked>~s', $qOpenedHtml), !str_contains($qAllHtml, 'sl-popbtn on"'), $qOrder($qMedia('&what=nonsense')) === $qOrder($qAllHtml), $qOrder($qMedia('&folders%5B%5D=Pisa')), $qOrder($qMedia('&what=opened&folders%5B%5D=%2F')), $qOrder($qMedia('&what=photos&ips%5B%5D=10.9.9.9'))]));
-check('[media filter] the Share tab\'s script sends the three choices with each request, applies a menu of several ticks as each is made (a moment later, so quick ticks make one request) and keeps it open, and the "All" row clears the others', str_contains($qTab1, "(st.what ? '&what=' + st.what : '')") && str_contains($qTab1, "list('ips', st.ips)") && str_contains($qTab1, "list('folders', st.folders)") && str_contains($qTab1, "pop._t = setTimeout(function () { pop._t = null; popApply(pop); }, 220)") && str_contains($qTab1, "if (menu.hidden || pop.getAttribute('data-multi') !== '1') return;") && str_contains($qTab1, "inp.hasAttribute('data-all')") && !str_contains($qTab1, "st.did"));
+check('[media filter] the Shares tab\'s script sends the three choices with each request, applies a menu of several ticks as each is made (a moment later, so quick ticks make one request) and keeps it open, and the "All" row clears the others', str_contains($qTab1, "(st.what ? '&what=' + st.what : '')") && str_contains($qTab1, "list('ips', st.ips)") && str_contains($qTab1, "list('folders', st.folders)") && str_contains($qTab1, "pop._t = setTimeout(function () { pop._t = null; popApply(pop); }, 220)") && str_contains($qTab1, "if (menu.hidden || pop.getAttribute('data-multi') !== '1') return;") && str_contains($qTab1, "inp.hasAttribute('data-all')") && !str_contains($qTab1, "st.did"));
 $qEvil = http_get("$baseQ/?admin&linkview=$qPub&tab=media&ips%5B%5D=%3Cscript%3Ealert(1)%3C%2Fscript%3E&folders%5B%5D=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E&what=%22%3E%3Cscript%3Ealert(2)", ["Cookie: $qCookie"])[1];
 $qEvil2 = http_get("$baseQ/?admin&linkview=$qPub&tab=media&folders%5B%5D=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E", ["Cookie: $qCookie"])[1];
 check('[media filter] addresses, folders and a choice that are not real are ignored and never come back as markup', !str_contains($qEvil, '<script>alert') && !str_contains($qEvil, '<img src=x') && !str_contains($qEvil2, '<img src=x') && !str_contains($qEvil2, 'onerror=alert') && str_contains($qEvil2, 'No photo or video matches that.') && str_contains($qEvil2, 'data-pop="what"'));
@@ -5956,16 +6647,44 @@ foreach (['?img=Rome%2Frome-a.jpg&size=thumb&link=x', '?img=Rome%2Frome-a.jpg&si
     [$cSt, $cBody] = http_get("$baseC/$cQs", [], false);
     check('[closed] a stranger can\'t slip past the gate by adding a sign-in or link parameter to another request (' . $cQs . '): that request is answered by its own route first', $cSt === 404 && str_contains($cBody, 'This link is not valid') && !str_contains($cBody, 'JFIF'), "$cSt " . substr($cBody, 0, 40));
 }
+// The route table: one list that the gate and every handler read.
+preg_match('/function request_routes\(\) \{\s*return \[(.*?)\n    \];/s', $indexContents, $rtM);
+preg_match_all("/'(\w+)'\s*=> \['params' => \[([^\]]*)\]/", $rtM[1] ?? '', $rtN);
+$rtNames = $rtN[1]; $rtParams = array_map(fn ($x) => array_map(fn ($y) => trim($y, " '"), explode(',', $x)), $rtN[2]);
+preg_match_all("/^if \(request_route\(\) === '(\w+)'\) \{/m", $indexContents, $rtH);
+check('[route table] every route in the table has a handler in the file, in the same order, and every handler is for a route in the table (' . count($rtNames) . ' routes)', count($rtNames) >= 16 && $rtNames === $rtH[1], implode(',', $rtNames) . ' / ' . implode(',', $rtH[1]));
+$rtDirect = []; foreach ($rtParams as $rtI => $rtP) foreach ($rtP as $rtX) if (preg_match("/^if \((?:ENABLE_\w+ && )?isset\(\\\$_GET\['" . $rtX . "'\]\)/m", $indexContents)) $rtDirect[] = $rtX;
+check('[route table] no handler asks for its own parameter any more (nothing can answer ahead of, or behind, the table\'s order)', $rtDirect === [], implode(',', $rtDirect));
+$rtOpen = ['reveal', 'admin'];   // (?link=x also opens the gate, but answers with the same page a closed gallery shows)
+$rtBad = [];
+foreach ($rtNames as $rtI => $rtA) {
+    if ($rtA === 'mapicon' || $rtA === 'link') continue;
+    foreach (array_slice($rtNames, $rtI + 1) as $rtB) {
+        if ($rtB === 'mapicon') continue;
+        [$rtSt, $rtBody] = http_get("$baseC/?" . $rtParams[$rtI][0] . '=x&' . $rtParams[array_search($rtB, $rtNames, true)][0] . '=x', [], false);
+        $rtInvalid = $rtSt === 404 && str_contains($rtBody, 'This link is not valid');
+        if (in_array($rtA, $rtOpen, true) ? $rtInvalid : !$rtInvalid) $rtBad[] = "$rtA+$rtB:$rtSt";
+    }
+}
+check('[route table] for every pair of routes, a stranger asking for both is turned away unless the one the table tries first is a way in (sign-in or admin): the first one answers, whatever is added to the address', $rtBad === [], implode(' ', array_slice($rtBad, 0, 8)));
 check('[closed] nobody who was turned away is written to the public address\'s log', !isset(($cLinkFile()['links'] ?? [])['ffffffffff']) && !glob("$fxC/.gallery-linklog-" . 'ffffffffff' . '*'));
 $cRevoke = http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_revoke', 'id' => $cId], $cOwn);
 check('[closed] when the link is revoked its holder is turned away too (the cookie alone no longer opens the gallery)', http_get("$baseC/", $cHold, false)[0] === 404 && str_contains(http_get("$baseC/", $cHold, false)[1], 'This link is not valid'));
 $cShare = http_get("$baseC/?admin", $cOwn)[1];
-check('[closed] the Share tab says the public address is closed (nothing is logged), and Settings tells how to sign in', str_contains($cShare, '<strong>Closed.</strong>') && str_contains($cShare, 'name="set_CLOSE_PUBLIC_GALLERY"') && str_contains($cShare, 'Close the public gallery'));
+check('[closed] while the gallery is closed, the public-log setting says nothing more is logged (the sentence lives with the row, shown only then)', str_contains($cShare, 'The gallery is closed, so nobody opens it without a link: nothing more is logged here while it stays closed.'));
+check('[closed] Features does not say "Visitors cannot download" while the gallery is closed: the row says it is each link\'s own choice and its button goes to Shares (the setting it would point at is hidden)', str_contains($cShare, 'Visitor downloads <span class="ft-chip ft-opt">Per link</span>') && str_contains($cShare, 'Each share link has its own choice of whether its visitors may download.') && str_contains($cShare, 'adminGoTo(\'links\');">Shares →') && !str_contains($cShare, 'Visitors cannot download original photos.'));
+check('[closed] Settings says how many settings a group hides, and why on hover: "Sharing and access" reads "(1 hidden)" while the gallery is closed', preg_match('~Sharing and access</span> <span class="muted">\d+ settings<span class="site-hid" data-hid-group title="[^"]*each share link has its own download choice[^"]*"> \(<span data-hid-n>1</span> hidden\)~', $cShare) === 1);
+check('[closed] the sidebar\'s Features number counts 8 switches while the gallery is closed (downloads are each link\'s own)', preg_match('~data-tab="features">Features\s*<span class="count"[^>]*>\d/8</span>~', http_get("$baseC/?admin&shell=1", $cOwn)[1]) === 1);
+check('[settings] an open gallery shows no "hidden" note on the group (the note is there, hidden, for the page to show the moment the gallery is closed)', preg_match('~<span class="site-hid" data-hid-group hidden title="[^"]*"> \(<span data-hid-n>0</span> hidden\)~', http_get("$baseNc/?admin", $ncCk)[1]) === 1);
+check('[closed] a closed gallery with nothing logged shows no "public address" section on the Shares tab (it would have nothing to say), and Settings tells how to sign in', !str_contains($cShare, '<strong>Closed.</strong>') && !str_contains($cShare, 'The public address') && str_contains($cShare, 'name="set_CLOSE_PUBLIC_GALLERY"') && str_contains($cShare, 'Close the public gallery'));
 
 echo "-- /admin and a folder typed without its slash --\n";
 $cAdm = http_get("$baseC/?link=admin", [], false); $cAdm2 = http_get("$baseC/?link=Admin", [], false); $cAdm3 = http_get("$baseC/?folder=admin%2F", [], false); $cAdm4 = http_get("$baseC/?folder=admin", [], false);
 $cLoc = fn ($r) => implode("\n", array_filter($r[2], fn ($h) => stripos($h, 'Location:') === 0));
 check('[admin address] "admin" (any case), and "admin/" as a folder address, go to the one sign-in, even while the gallery is closed', $cAdm[0] === 302 && str_contains($cLoc($cAdm), '?reveal') && $cAdm2[0] === 302 && str_contains($cLoc($cAdm2), '?reveal') && $cAdm3[0] === 302 && str_contains($cLoc($cAdm3), '?reveal') && $cAdm4[0] === 302);
+$cRev = http_get("$baseC/?link=reveal", [], false); $cRev2 = http_get("$baseC/?link=Reveal", [], false); $cRev3 = http_get("$baseC/?folder=reveal%2F", [], false); $cRev4 = http_get("$baseC/?folder=reveal", [], false);
+check('[reveal address] "reveal" (any case), and "reveal/" as a folder address, go to the one sign-in just like "admin", even while the gallery is closed', $cRev[0] === 302 && str_contains($cLoc($cRev), '?reveal') && $cRev2[0] === 302 && str_contains($cLoc($cRev2), '?reveal') && $cRev3[0] === 302 && str_contains($cLoc($cRev3), '?reveal') && $cRev4[0] === 302);
+check('[reveal address] ?reveal and ?admin themselves still work as before (the gallery\'s own buttons use them)', http_get("$baseC/?reveal", [], false)[0] !== 404 && http_get("$baseC/?admin", [], false)[0] !== 404);
 check('[closed] a stranger is not told which folders exist: a folder typed without its slash is the same page as any bad address', ($r = http_get("$baseC/?link=Rome", [], false))[0] === 404 && $r[1] === $cBad[1] && !str_contains($cLoc($r), 'Rome'));
 $cRome = http_get("$baseC/?link=Rome", $cOwn, false);
 check('[closed] ...while the owner is sent on to the folder as the server itself would have', $cRome[0] === 302 && str_contains($cLoc($cRome), 'Rome/'), $cLoc($cRome));
@@ -5993,43 +6712,52 @@ check('[closed] switched on by hand but with share links off, it does nothing: t
 check('[closed] ...and the setup notice says what it needs (share links on and an admin password)', str_contains(http_get("$baseC2/?admin", $c2Own)[1], 'needs share links on and an admin password'));
 
 echo "-- custom share addresses --\n";
-$cNew = $cMake(['label' => 'Dyllen and Brenden', 'address' => 'dyllen-and-brenden']);
+$cNew = $cMake(['label' => 'Carol and Sam', 'address' => 'carol-and-sam']);
 $cNewId = $cNew['id'] ?? ''; $cRec = $cLinkFile()['links'][$cNewId] ?? [];
-check('[custom address] a link can have an address of its own: it is stored as the link\'s address and marked as custom, and the answer gives its short and long forms', ($cNew['ok'] ?? false) && ($cRec['token'] ?? '') === 'dyllen-and-brenden' && ($cRec['custom'] ?? false) === true && str_ends_with($cNew['urls']['short'] ?? '', '/dyllen-and-brenden') && str_ends_with($cNew['urls']['long'] ?? '', '?link=dyllen-and-brenden'));
+check('[custom address] a link can have an address of its own: it is stored as the link\'s address and marked as custom, and the answer gives its short and long forms', ($cNew['ok'] ?? false) && ($cRec['token'] ?? '') === 'carol-and-sam' && ($cRec['custom'] ?? false) === true && str_ends_with($cNew['urls']['short'] ?? '', '/carol-and-sam') && str_ends_with($cNew['urls']['long'] ?? '', '?link=carol-and-sam'));
 $cNoAddr = $cMake(['label' => 'No address given']); $cNoRec = $cLinkFile()['links'][$cNoAddr['id'] ?? ''] ?? [];
 check('[custom address] left empty, the address is the random one it always was (16 letters and digits, not custom)', preg_match('/^[A-Za-z0-9]{16}$/', $cNoRec['token'] ?? '') === 1 && ($cNoRec['custom'] ?? true) === false);
 // (the gallery is closed here; a stranger can still use a link's address)
-$cOpenCustom = http_get("$baseC/?link=dyllen-and-brenden", [], false); $cOpenUpper = http_get("$baseC/?link=Dyllen-And-BRENDEN", [], false);
+$cOpenCustom = http_get("$baseC/?link=carol-and-sam", [], false); $cOpenUpper = http_get("$baseC/?link=Carol-And-SAM", [], false);
 check('[custom address] the custom address opens the link\'s page, in any letter case', $cOpenCustom[0] === 200 && str_contains($cOpenCustom[1], 'Open the gallery') && $cOpenUpper[0] === 200 && str_contains($cOpenUpper[1], 'Open the gallery'));
 $cRefuse = function ($addr, $label = 'Refused') use ($cMake, $cLinkFile) { $n = count($cLinkFile()['links'] ?? []); $r = $cMake(['label' => $label, 'address' => $addr]); return [($r['ok'] ?? true) === false, (string) ($r['text'] ?? ''), count($cLinkFile()['links'] ?? []) === $n]; };
 foreach ([
     ['rome', 'folder', 'A folder or file called "Rome"'], ['PARIS', 'folder, any case', 'A folder or file called "Paris"'], ['notes', 'file with no extension', 'A folder or file called "notes"'],
     ['admin', 'the sign-in', 'an address the gallery uses itself'], ['index', 'reserved', 'an address the gallery uses itself'], ['abc', 'too short', 'needs 4 to 40'], [str_repeat('a', 41), 'too long', 'needs 4 to 40'],
     ['-start-hyphen', 'hyphen at the start', 'needs 4 to 40'], ['end-hyphen-', 'hyphen at the end', 'needs 4 to 40'], ['has space', 'a space', 'needs 4 to 40'], ['dot.name', 'a dot', 'needs 4 to 40'], ['slash/name', 'a slash', 'needs 4 to 40'],
-    ['dyllen-and-brenden', 'already used by another link', 'Another link has'],
+    ['carol-and-sam', 'already used by another link', 'Another link has'],
 ] as [$cAddr, $cWhy, $cMsg]) {
     [$cRefused, $cText, $cNone] = $cRefuse($cAddr);
     check("[custom address] \"$cAddr\" is refused ($cWhy), says why, and no link is made", $cRefused && str_contains($cText, $cMsg) && $cNone, $cText);
 }
 check('[custom address] 4 and 40 characters are the edges that work, with hyphens inside', ($cMake(['label' => 'Edge four', 'address' => 'abcd'])['ok'] ?? false) && ($cMake(['label' => 'Edge forty', 'address' => 'a' . str_repeat('b-', 19) . 'c'])['ok'] ?? false));
 
+// An address made from the link's name (the "Use the name as the address" box): a number goes on the end when it is taken or is one the gallery uses.
+$aaA = $cMake(['label' => 'John Doe', 'address' => 'johndoe', 'address_auto' => '1']);
+$aaB = $cMake(['label' => 'John Doe', 'address' => 'johndoe', 'address_auto' => '1']);
+$aaC = $cMake(['label' => 'Admin', 'address' => 'admin', 'address_auto' => '1']);
+check('[address from the name] the first "johndoe" is johndoe; a second link with the same name gets johndoe2 and is told so; the word "admin" (used by the gallery) becomes admin2', ($aaA['ok'] ?? false) && ($cLinkFile()['links'][$aaA['id']]['token'] ?? '') === 'johndoe' && !str_contains($aaA['text'] ?? '', 'taken') && ($aaB['ok'] ?? false) && ($cLinkFile()['links'][$aaB['id']]['token'] ?? '') === 'johndoe2' && str_contains($aaB['text'] ?? '', '"johndoe2"') && ($aaC['ok'] ?? false) && ($cLinkFile()['links'][$aaC['id']]['token'] ?? '') === 'admin2');
+$aaD = $cMake(['label' => 'Jo', 'address' => 'jo', 'address_auto' => '1']);
+$aaE = $cMake(['label' => 'John Doe', 'address' => 'johndoe']);
+check('[address from the name] a name under 4 letters is still refused, and without the box (a typed address) a taken name is refused, never renamed', !($aaD['ok'] ?? true) && !($aaE['ok'] ?? true) && str_contains($aaE['text'] ?? '', 'another'));
+
 // Editing: a new address makes the old one a "replaced" address; empty goes back to a random one.
-$cEdit = function ($id, $addr, $label = 'Dyllen and Brenden') use ($baseC, $cOwn, $cCsrf) {
+$cEdit = function ($id, $addr, $label = 'Carol and Sam') use ($baseC, $cOwn, $cCsrf) {
     [, $b] = http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_save', 'id' => $id, 'label' => $label, 'address' => $addr, 'title_mode' => 'gallery', 'picture' => '1', 'max_opens' => 0, 'ends_at' => 0, 'scope_type' => 'all', 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off'], $cOwn);
     return json_decode($b, true) ?: [];
 };
-[, , $cHoldH] = http_post("$baseC/?link=dyllen-and-brenden", ['go' => '1'], [$qPhone], false); $cHoldDy = ['Cookie: ' . extract_cookie_header($cHoldH)];
+[, , $cHoldH] = http_post("$baseC/?link=carol-and-sam", ['go' => '1'], [$qPhone], false); $cHoldDy = ['Cookie: ' . extract_cookie_header($cHoldH)];
 check('[custom address] before the change, the person signed in through it sees the gallery', http_get("$baseC/", $cHoldDy, false)[0] === 200);
-$cEd1 = $cEdit($cNewId, 'brenden-and-dyllen'); $cRec2 = $cLinkFile()['links'][$cNewId] ?? [];
-check('[custom address] changing the address keeps the old one in the list of replaced addresses and uses the new one', ($cEd1['ok'] ?? false) && ($cRec2['token'] ?? '') === 'brenden-and-dyllen' && in_array('dyllen-and-brenden', (array) ($cRec2['oldTokens'] ?? []), true) && ($cRec2['custom'] ?? false) === true);
-$cOldTry = http_get("$baseC/?link=dyllen-and-brenden", [], false);
-check('[custom address] the old address shows the invalid page and is noted as "replaced" in the log; the new one opens', $cOldTry[0] === 404 && str_contains($cOldTry[1], 'This link is not valid') && http_get("$baseC/?link=brenden-and-dyllen", [], false)[0] === 200);
+$cEd1 = $cEdit($cNewId, 'sam-and-carol'); $cRec2 = $cLinkFile()['links'][$cNewId] ?? [];
+check('[custom address] changing the address keeps the old one in the list of replaced addresses and uses the new one', ($cEd1['ok'] ?? false) && ($cRec2['token'] ?? '') === 'sam-and-carol' && in_array('carol-and-sam', (array) ($cRec2['oldTokens'] ?? []), true) && ($cRec2['custom'] ?? false) === true);
+$cOldTry = http_get("$baseC/?link=carol-and-sam", [], false);
+check('[custom address] the old address shows the invalid page and is noted as "replaced" in the log; the new one opens', $cOldTry[0] === 404 && str_contains($cOldTry[1], 'This link is not valid') && http_get("$baseC/?link=sam-and-carol", [], false)[0] === 200);
 check('[custom address] anyone signed in through the old address is signed out (the cookie belongs to the address)', http_get("$baseC/", $cHoldDy, false)[0] === 404);
-check('[custom address] saving a link without touching the address leaves it exactly as it is (no replaced address added)', ($cEdit($cNewId, 'brenden-and-dyllen')['ok'] ?? false) && ($cLinkFile()['links'][$cNewId]['oldTokens'] ?? []) === ['dyllen-and-brenden']);
-check('[custom address] a name that another link used to have is refused as well', ($r = $cRefuse('dyllen-and-brenden', 'Takes an old one'))[0] && str_contains($r[1], 'Another link has'));
-check('[custom address] ...while its own link can take its old name back', ($cEdit($cNewId, 'dyllen-and-brenden')['ok'] ?? false) && ($cLinkFile()['links'][$cNewId]['token'] ?? '') === 'dyllen-and-brenden');
+check('[custom address] saving a link without touching the address leaves it exactly as it is (no replaced address added)', ($cEdit($cNewId, 'sam-and-carol')['ok'] ?? false) && ($cLinkFile()['links'][$cNewId]['oldTokens'] ?? []) === ['carol-and-sam']);
+check('[custom address] a name that another link used to have is refused as well', ($r = $cRefuse('carol-and-sam', 'Takes an old one'))[0] && str_contains($r[1], 'Another link has'));
+check('[custom address] ...while its own link can take its old name back', ($cEdit($cNewId, 'carol-and-sam')['ok'] ?? false) && ($cLinkFile()['links'][$cNewId]['token'] ?? '') === 'carol-and-sam');
 $cEd3 = $cEdit($cNewId, ''); $cRec3 = $cLinkFile()['links'][$cNewId] ?? [];
-check('[custom address] emptying the field gives the link a new random address and takes the custom flag off (the name goes to the replaced list)', ($cEd3['ok'] ?? false) && preg_match('/^[A-Za-z0-9]{16}$/', $cRec3['token'] ?? '') === 1 && ($cRec3['custom'] ?? true) === false && in_array('dyllen-and-brenden', (array) ($cRec3['oldTokens'] ?? []), true));
+check('[custom address] emptying the field gives the link a new random address and takes the custom flag off (the name goes to the replaced list)', ($cEd3['ok'] ?? false) && preg_match('/^[A-Za-z0-9]{16}$/', $cRec3['token'] ?? '') === 1 && ($cRec3['custom'] ?? true) === false && in_array('carol-and-sam', (array) ($cRec3['oldTokens'] ?? []), true));
 $cRep = http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_replace', 'id' => $cNewId], $cOwn);
 $cTwo = $cMake(['label' => 'Replace me', 'address' => 'replace-me-please']); $cTwoId = $cTwo['id'] ?? '';
 http_post("$baseC/?admin", ['csrf_token' => $cCsrf, 'action' => 'link_replace', 'id' => $cTwoId], $cOwn); $cRecR = $cLinkFile()['links'][$cTwoId] ?? [];
@@ -6078,7 +6806,7 @@ $kGone = http_get("$baseC/?link=$kTok0", [], false);
 check('[kept address] removing a kept address stops it for good (the invalid page, no redirect) and keeps it reserved as a replaced address', ($kRm['ok'] ?? false) && count($kRec['aliases'] ?? []) === 8 && in_array($kTok0, (array) ($kRec['oldTokens'] ?? []), true) && $kGone[0] === 404 && str_contains($kGone[1], 'This link is not valid') && $kLoc($kGone[2]) === '');
 check('[kept address] removing one that is not kept says so', ($kAct('link_alias_pause', $kId, ['alias' => $kTok0])['ok'] ?? true) === false);
 $kAdmin = http_get("$baseC/?admin", $cOwn)[1];
-check('[kept address] the Share tab lists the kept addresses under Settings, each with a Remove button, how many visits it sent and when the last was', str_contains($kAdmin, 'Also works at') && str_contains($kAdmin, 'data-sl="aliaspause" data-alias="keep-me-three"') && str_contains($kAdmin, 'sent 0 visits here'));
+check('[kept address] the Shares tab lists the kept addresses under Settings, each with a Remove button, how many visits it sent and when the last was', str_contains($kAdmin, 'Also works at') && str_contains($kAdmin, 'data-sl="aliaspause" data-alias="keep-me-three"') && str_contains($kAdmin, 'sent 0 visits here'));
 check('[kept address] the Edit form has the "Keep the old address working too" box (hidden until an address is being changed), and sends it', str_contains($kAdmin, 'name="keep_old"') && str_contains($kAdmin, 'data-keeprow hidden') && str_contains($kAdmin, 'Keep the old address working too') && str_contains($kAdmin, 'keep_old: form.querySelector'));
 $kAct('link_pause', $kId);
 [$kSt5, $kB5, $kHd5] = http_get("$baseC/?link=keep-me-three", [], false);
@@ -6098,11 +6826,11 @@ $vLabel = function ($n) { return preg_match('/^[A-Za-z0-9]{16}$/', $n) === 1 && 
 $vFrag = function ($q) use ($baseC, $cOwn) { return http_get("$baseC/?admin&$q", $cOwn)[1]; };
 $vMade = $cMake(['label' => 'Via test']); $vId = $vMade['id'] ?? ''; $vTok0 = $cLinkFile()['links'][$vId]['token'] ?? '';
 $vAdmin0 = http_get("$baseC/?admin", $cOwn)[1];
-check('[address line] a link with a random address says so and shows only the tail of the code', str_contains($vAdmin0, '<dt>Address</dt><dd>a random code, ending <code>…' . substr($vTok0, -4) . '</code></dd>') && !str_contains($vAdmin0, '…' . substr($vTok0, 0, 12)));
+check('[address line] a link with a random address shows only the start and the tail of the code beside its name (the full address is not printed in the page)', str_contains($vAdmin0, '<span class="sl-tail">' . substr($vTok0, 0, 4) . '…' . substr($vTok0, -4) . '</span>') && !str_contains($vAdmin0, substr($vTok0, 0, 12) . substr($vTok0, 12, 2) . '</span>'));
 http_post("$baseC/?link=$vTok0", ['go' => '1'], [$vUaLinux], false);   // opens before it has a second address
 sleep(1); $vE = $kEdit($vId, 'via-test-name', true); sleep(1);   // (a visitor counts as coming after the change when they are first seen after the second it was made)
 $vAdmin1 = http_get("$baseC/?admin", $cOwn)[1];
-check('[address line] a custom name is shown whole, with "a name of your own"', str_contains($vAdmin1, '<dt>Address</dt><dd><code>…/via-test-name</code> <span class="muted">a name of your own</span></dd>'));
+check('[address line] a custom name is shown whole beside the link\'s name', str_contains($vAdmin1, '<span class="sl-tail">via-test-name</span>'));
 http_get("$baseC/?link=$vTok0", [$qPhone], false); http_get("$baseC/?link=$vTok0", [$vUaMac], false); http_get("$baseC/?link=$vTok0", [$qPhone], false);
 $vFresh = function () use ($vId, $cLinkFile, $fxC) { $f = $cLinkFile(); $f['links'][$vId]['lastOpen'] = ['ip' => '', 'at' => 0]; write_data_file("$fxC/.gallery-links.php", $f); };   // (the same address pressing again within 15 minutes isn't a new opening)
 $vFresh(); http_post("$baseC/?link=via-test-name", ['go' => '1'], [$qPhone], false);
@@ -6210,6 +6938,7 @@ $kcFree = $cMake(['label' => 'Takes the name', 'address' => 'free-this-name']);
 check('[kill] ...and the name is free: another link can now use it, and it opens that link', ($kcFree['ok'] ?? false) && ($r = http_get("$baseC/?link=free-this-name", [], false))[0] === 200 && str_contains($r[1], 'Open the gallery'));
 $kcClear = $kAct('link_killed_clear', $kcId);
 check('[kill] Clear removes the summary lines and nothing else', ($kcClear['ok'] ?? false) && ($cLinkFile()['links'][$kcId]['killed'] ?? null) === [] && ($cLinkFile()['links'][$kcId]['token'] ?? '') === 'free-this-name-2');
+check('[kill] the Clear button asks first, says how many records go and that it cannot be undone (the page asks; the action itself is unchanged)', str_contains($ix = (string) file_get_contents($indexSrc), "ask('Clear ' + (kn === 1 ? 'this record' : 'these ' + (kn || '') + ' records') + '?'") && str_contains($ix, 'It cannot be brought back.') && str_contains($ix, "'killedCount' => count(array_filter((array) (\$l['killed'] ?? []), 'is_array'))") && str_contains($ix, "then(function (yes) { if (yes) act('link_killed_clear', row); })") && !str_contains($ix, "if (what === 'killedclear') { act('link_killed_clear', row); return; }"));
 
 // The link names in the all-addresses list go to the link
 $tw1 = $cMake(['label' => 'Twin']); $tw2 = $cMake(['label' => 'Twin']);
@@ -6224,12 +6953,12 @@ echo "-- the rule that sends names to the gallery --\n";
 $cRules = http_get("$baseC/?admin", $cOwn)[1];
 check('[custom address] the nginx rule matches one word of 4 to 40 letters, digits and hyphens (quoted), the Apache rule has no folder check, and both say they replace the older one', str_contains($cRules, '[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]') && str_contains($cRules, 'location ~ &quot;^/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$&quot;') && !str_contains($cRules, 'RewriteCond %{REQUEST_FILENAME} !-d') && str_contains($cRules, 'RewriteCond %{REQUEST_FILENAME} !-f') && str_contains($cRules, 'It replaces the older rule'));
 check('[custom address] the probe is a hyphenated name, so "tidy addresses work" is only said once the new rule is in place', str_contains($cRules, 'data-probe="/0000-probe-0000"') && http_get("$baseC/?link=0000-probe-0000", [], false)[0] === 200);
-check('[custom address] the form has the address field and the button that turns the name into one', str_contains($cRules, 'name="address"') && str_contains($cRules, 'data-sl="addrname"') && str_contains($cRules, 'function slugName(') && str_contains($cRules, 'Use the name'));
+check('[custom address] the form has the address field, the box that makes the address from the name, and the Random button', str_contains($cRules, 'name="address"') && str_contains($cRules, 'name="addr_name"') && str_contains($cRules, 'data-sl="addrrandom"') && str_contains($cRules, 'function slugName(') && str_contains($cRules, 'Use the name as the address') && str_contains($cRules, 'placeholder="auntcarol"'));
 
-check('[setting links] every setting row has an address (setting-NAME) the admin can jump to, and the jump opens the fold the row is in (or its group, when the row is hidden), scrolls to it and marks it', str_contains($cRules, 'id="setting-LOG_PUBLIC_VISITS"') && str_contains($cRules, 'id="setting-ENABLE_SHARE_LINKS"') && str_contains($cRules, 'id="setting-ENABLE_MAP"') && str_contains($cRules, "up.tagName === 'DETAILS'") && str_contains($cRules, "e.closest('details')") && str_contains($cRules, '.site-row.flash-target'));
-check('[setting links] the public address\'s "Turn it on or off" line is one link that goes to the Log visitors setting; the prompts to turn on Allow share links and the Map go to their settings too', str_contains($qTab1, "adminGoTo('site', 'setting-LOG_PUBLIC_VISITS');\">Settings &rarr; Share links &rarr; Log visitors to the public address</a>") && str_contains($indexContents, "adminGoTo('site', 'setting-ENABLE_SHARE_LINKS')") && str_contains($indexContents, "adminGoTo('site', 'setting-ENABLE_MAP')"));
+check('[setting links] every setting row has an address (setting-NAME) the admin can jump to, and the jump opens the fold the row is in (or its group, when the row is hidden), scrolls to it and marks it', str_contains($cRules, 'id="setting-LOG_PUBLIC_VISITS"') && str_contains($cRules, 'id="setting-ENABLE_SHARE_LINKS"') && str_contains($cRules, 'id="setting-ENABLE_PHOTO_LOCATION"') && str_contains($cRules, "up.tagName === 'DETAILS'") && str_contains($cRules, "e.closest('details')") && str_contains($cRules, '.site-row.flash-target'));
+check('[setting links] the public address\'s "Turn it on or off" line is one link that goes to the Log visitors setting; the prompts to turn on Allow share links and Allow photo locations go to their settings too', str_contains($qTab1, "adminGoTo('site', 'setting-LOG_PUBLIC_VISITS');\">Settings &rarr; Share links &rarr; Log visitors to the public address</a>") && str_contains($indexContents, "adminGoTo('site', 'setting-ENABLE_SHARE_LINKS')") && str_contains($indexContents, "adminGoTo('site', 'setting-ENABLE_PHOTO_LOCATION')"));
 check('[new link default] the new link form starts on "Just the public gallery" (nothing private), not on "Everything private"; the form script\'s defaults say the same', str_contains($cRules, 'name="scope_type" value="public" checked') && !str_contains($cRules, 'name="scope_type" value="all" checked') && str_contains($cRules, "scopeType: 'public', only: false"));
-check('[replace dialog] the Share tab\'s dialog has a hidden third button for Custom…, the Replace dialog is Cancel, Random and Custom… (the row\'s action is still called Replace address…), and Custom… opens Edit on the Address field', str_contains($cRules, 'data-sl-modal="extra" hidden') && str_contains($cRules, "'Random', false, 'Custom…'") && str_contains($cRules, 'Replace address…') && str_contains($cRules, "openForm(link, 'address')") && str_contains($cRules, "focusField === 'address' ? '[name=address]'"));
+check('[replace dialog] the Shares tab\'s dialog has a hidden third button for Custom…, the Replace dialog is Cancel, Random and Custom… (the row\'s action is still called Replace address…), and Custom… opens Edit on the Address field', str_contains($cRules, 'data-sl-modal="extra" hidden') && str_contains($cRules, "'Random', false, 'Custom…'") && str_contains($cRules, 'Replace address…') && str_contains($cRules, "openForm(link, 'address')") && str_contains($cRules, "focusField === 'address' ? '[name=address]'"));
 check('[replace dialog] for a custom address the text says Random drops the name; for a random one it keeps the old text and points to Custom…', str_contains($cRules, 'the name is gone, the address you sent stops working right away') && str_contains($cRules, 'To pick a different name of your own, press <em>Custom…</em>.') && str_contains($cRules, 'To use a name of your own instead, press <em>Custom…</em>.'));
 [$cHSt, $cHBody, $cHHd] = http_get("$baseC/?folder=Rome", [], false);
 check('[health, closed] a closed gallery answers the Health check\'s cookie-less folder request with the invalid page AND the gallery\'s marker header (a server without the tidy rule would send its own 404 with no marker), and the page\'s script reads that as "works"', $cHSt === 404 && in_array('X-Gallery-Link: invalid', $cHHd, true) && str_contains($cRules, "r.headers.get('X-Gallery-Link') === 'invalid'") && str_contains($cRules, 'reaches the gallery'));
@@ -6325,7 +7054,7 @@ $portGc = find_free_port(); start_server($fxGc, $portGc); $baseGc = "http://127.
 $gcHdrs = ['Cookie: ' . extract_cookie_header($gcLogin), 'X-Requested-With: gallery-fetch'];
 first_look($baseGc, ['p.jpg']);
 $gcRun = json_decode(http_post("$baseGc/?admin", ['csrf_token' => admin_token($baseGc, $gcHdrs), 'action' => 'prepare_media', 'from' => '0'], $gcHdrs)[1], true) ?: [];
-check('[prepare media] with the thumbnail cache switched off nothing is recorded anywhere, Prepare media says why, and the panel explains', !is_dir("$fxGc/.gallery-cache") && ($gcRun['ok'] ?? null) === false && str_contains($gcRun['text'] ?? '', 'thumbnail cache is switched off') && str_contains(http_get("$baseGc/?admin", $gcHdrs)[1], 'there is nowhere to keep what is made or read'));
+check('[prepare media] with the thumbnail cache switched off nothing is recorded anywhere, Prepare media says why, and the panel is not drawn', !is_dir("$fxGc/.gallery-cache") && ($gcRun['ok'] ?? null) === false && str_contains($gcRun['text'] ?? '', 'thumbnail cache is switched off') && !str_contains(http_get("$baseGc/?admin", $gcHdrs)[1], 'id="media-panel"'));
 check('[prepare media] ...a photo\'s file location is then not shown to visitors (it would have to be read on every page), but the editor still offers it to the owner', substr_count(http_get("$baseGc/")[1], 'location-badge') === 0 && abs((float) (item_get($baseGc, $gcHdrs, 'p.jpg')['auto']['lat'] ?? 0) - 41.9) < 0.01);
 
 echo "== tidy up: the files' own locations leave the folder data, the owner's things stay ==\n";
@@ -6451,7 +7180,7 @@ first_look($baseT4, ['Rome/imp.jpg', 'Rome/dif.jpg', 'Rome/lab.jpg', 'Rome/hid.j
 $tgPage0 = http_get("$baseT4/?admin", $cookieT4)[1];
 check('[tidy] the Tidy up box is there when saved copies and old marks exist', str_contains($tgPage0, '<details class="media-tidy-box">') && !str_contains($tgPage0, '<details class="media-tidy-box" hidden>') && !str_contains($tgPage0, 'class="hint media-backups-line"'), json_encode(array_map(fn ($x) => substr($x, 0, 60), array_slice(explode('media-tidy-box', $tgPage0), 1, 2))));
 $tgPage0d = html_entity_decode($tgPage0, ENT_QUOTES);
-check('[health] the old marks are an amber Media row ("2 old "nothing found" marks"), listing the photos with a link to each editor', str_contains($tgPage0d, '2 old "nothing found" marks') && (bool) preg_match('/<div class="health-row health-warn loud">.{0,300}old "nothing found" marks/s', $tgPage0d) && str_contains($tgPage0, 'href="?folder=Rome&amp;find=Rome%2Fchk.jpg"'), (string) $vmHealthRow($tgPage0));
+check('[health] the old marks are an optional (grey, not counted) Media row ("2 old "nothing found" marks"), listing the photos with a link to each editor', str_contains($tgPage0d, '2 old "nothing found" marks') && (bool) preg_match('/<div class="health-row health-opt quiet optional">.{0,300}old "nothing found" marks/s', $tgPage0d) && str_contains($tgPage0, 'href="?folder=Rome&amp;find=Rome%2Fchk.jpg"'), (string) $vmHealthRow($tgPage0));
 check('[health] "saved locations that differ from their file" is a quiet row (for information), with a link to the photo', (bool) preg_match('/<div class="health-row health-info quiet">.{0,300}saved location that differ from their file/s', $tgPage0d) && str_contains($tgPage0, 'href="?folder=Rome&amp;find=Rome%2Fdif.jpg"'));
 $tgApply = $tidyCall($baseT4, $hdrT4, ['mode' => 'refresh', 'apply' => '1']);
 $tgPage1 = http_get("$baseT4/?admin", $cookieT4)[1];
@@ -6502,7 +7231,7 @@ $edRome = $edFolder('Rome');
 check('[edited] the private folder shows a "hidden folder" tag, its photo that is public on its own (an open lock) and the one private on its own as lock thumbnails, its caption as a row, and not the one with only an old mark', str_contains($edRome, 'hidden folder') && str_contains($edRome, 'class="pv-lock pub" data-file="Rome/r1.jpg"') && str_contains($edRome, 'Public though its folder is private') && str_contains($edRome, 'class="pv-lock own" data-file="Rome/r2.jpg"') && str_contains($edRome, 'Colosseum') && !str_contains($edRome, 'r3.jpg'));
 $edOpts = $edFolder('Opts');
 check('[edited] a folder with only its own settings shows them (name, dates, locations on) as pills with no "Folder settings:" label, and its cover as a picture with the star that links to the folder, scrolled to it (no cover pill), and no photos', str_contains($edOpts, 'Own name: Options trip') && str_contains($edOpts, 'Dates: 3-9 May 2024') && str_contains($edOpts, 'Locations on') && !str_contains($edOpts, 'Folder settings:') && !str_contains($edOpts, 'Cover: o1.jpg') && str_contains($edOpts, '<a class="ed-cover" href="?folder=Opts&amp;find=Opts%2Fo1.jpg&amp;as=cover"') && str_contains($edOpts, 'alt="Cover photo: o1.jpg"') && !str_contains($edOpts, 'class="ed-it') && !str_contains($edRoot, 'class="ed-cover"'));
-check('[edited] there is no separate Private folders section any more; the not-a-lock banner is there but hidden until the browser finds private is not locked, above the Edited list, and the rules panel too', !str_contains($edPage, 'id="ed-priv"') && !str_contains($edPage, 'id="pv-overview"') && !str_contains($edPage, 'What is private') && str_contains($edPage, 'id="lock-banner" hidden') && strpos($edPage, 'id="lock-banner"') < strpos($edPage, 'id="ed-panel"') && str_contains($edPage, 'data-lock-rules-panel hidden'));
+check('[edited] there is no separate Private folders section any more; the not-a-lock banner is there but hidden until the browser finds private is not locked, above the Edited list, and the rules fold sits inside it', !str_contains($edPage, 'id="ed-priv"') && !str_contains($edPage, 'id="pv-overview"') && !str_contains($edPage, 'What is private') && str_contains($edPage, 'id="lock-banner" hidden') && strpos($edPage, 'id="lock-banner"') < strpos($edPage, 'id="ed-panel"') && str_contains($edPage, 'data-lock-rules-panel hidden') && strpos($edPage, 'id="lock-banner"') < strpos($edPage, 'data-lock-rules-panel'));
 $fxE3 = new_fixture_dir('edited-cover'); make_jpeg("$fxE3/a.jpg", 60, 50, 90, 60, 60); mkdir("$fxE3/Gone"); make_jpeg("$fxE3/Gone/g.jpg", 61, 50, 90, 60, 60);
 write_data_file("$fxE3/.gallery-items.php", ['items' => [], 'groups' => [], 'cover' => 'a.jpg'] + items_default_for_tests()); write_data_file("$fxE3/Gone/.gallery-items.php", ['items' => [], 'groups' => [], 'cover' => 'vanished.jpg', 'stacks' => [['anchor' => 'g.jpg', 'files' => ['g.jpg', 'h.jpg']]]] + items_default_for_tests());
 file_put_contents("$fxE3/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'edited-pw-3', 'AUTO_GROUP_BY_FOLDER' => true])); copy($indexSrc, "$fxE3/index.php");
@@ -6519,6 +7248,431 @@ $edGallery = http_get("$baseE/", [$hdrE[0]])[1];
 check('[editor] for a photo whose location comes only from its file there is no "Keep the location from the photo" button any more, and a hint says nothing needs saving', !str_contains($edGallery, 'lbe-useauto') && !str_contains($edGallery, 'Keep the location from the photo') && str_contains($edGallery, 'id="lbe-autohint"') && str_contains($edGallery, 'Shown as it is, nothing to save. Type a label to name the place, or change the numbers to set your own.') && str_contains($edGallery, 'From the photo’s file') && !str_contains($edGallery, 'not saved yet'));
 check('[edited] the gallery page can scroll to and ring one tile when asked (?find=)', str_contains($edGallery, '/[?&]find=([^&#]+)/') && str_contains($edGallery, '.card.find-ring') );
 check('[edited] the old #hidden address and the ?hidden link still lead to the tab', str_contains($edPage2, 'href="#hidden" data-tab="hidden"') && in_array('Location: ?admin#hidden', http_get("$baseE2/?admin&hidden=1", [$hdrE2[0]])[2], true));
+
+/* --------------------------------------------------------------------- */
+
+echo "== damaged settings files fail closed, saves are whole-file ==\n";
+$fxDm = new_fixture_dir('damaged');
+mkdir("$fxDm/a"); make_jpeg("$fxDm/a/IMG_1.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxDm/a/IMG_2.jpg", 60, 60, 20, 10, 10);
+make_jpeg("$fxDm/root1.jpg", 60, 60, 30, 10, 10);
+write_data_file("$fxDm/a/.gallery-items.php", ['items' => ['IMG_1.jpg' => ['restriction' => 'private', 'caption' => 'secret']]] + items_default_for_tests());
+write_data_file("$fxDm/.gallery-items.php", ['items' => ['root1.jpg' => ['restriction' => 'private']]] + items_default_for_tests());
+file_put_contents("$fxDm/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'damaged-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxDm/index.php");
+$portDm = find_free_port(); start_server($fxDm, $portDm); $baseDm = "http://127.0.0.1:$portDm";
+$dmThumb = fn ($f) => http_get("$baseDm/?img=" . rawurlencode($f) . '&size=thumb')[0];
+$dmGood = (string) file_get_contents("$fxDm/a/.gallery-items.php");
+check('[damaged settings] with the folder\'s settings file intact the private photo is 404 and the other one is served', $dmThumb('a/IMG_1.jpg') === 404 && $dmThumb('a/IMG_2.jpg') === 200);
+foreach (['empty' => '', 'cut short' => substr($dmGood, 0, 60), 'a stray comma' => str_replace('"items":{', '"items":{,', $dmGood), 'not JSON' => "<?php http_response_code(404); exit; ?>\nhello"] as $dmWhat => $dmBytes) {
+    file_put_contents("$fxDm/a/.gallery-items.php", $dmBytes);
+    [, $dmFolder] = http_get("$baseDm/?folder=a");
+    check("[damaged settings] a settings file that is $dmWhat hides everything in that folder from a visitor (the private photo is not served, not listed)", $dmThumb('a/IMG_1.jpg') === 404 && $dmThumb('a/IMG_2.jpg') === 404 && !str_contains($dmFolder, 'a/IMG_1.jpg') && !str_contains($dmFolder, 'a/IMG_2.jpg') && !str_contains(http_get("$baseDm/")[1], 'a/IMG_1.jpg'));
+}
+file_put_contents("$fxDm/a/.gallery-items.php", $dmGood);
+check('[damaged settings] restoring the file brings everything back as it was', $dmThumb('a/IMG_1.jpg') === 404 && $dmThumb('a/IMG_2.jpg') === 200);
+file_put_contents("$fxDm/.gallery-items.php", '');
+check('[damaged settings] a damaged settings file at the top hides the photos loose in the top folder', $dmThumb('root1.jpg') === 404 && $dmThumb('a/IMG_2.jpg') === 200);
+$dmRootBytes = '';
+file_put_contents("$fxDm/.gallery-items.php", '{{');
+file_put_contents("$fxDm/a/.gallery-items.php", $dmGood . ' ');
+$dmAuth = 'Authorization: Basic ' . base64_encode('x:damaged-pw-1');
+[, $dmAdmin, $dmHd] = http_get("$baseDm/?admin&folder=a", [$dmAuth]);
+$dmHdrs = [$dmAuth, 'Cookie: ' . extract_cookie_header($dmHd)];
+file_put_contents("$fxDm/a/.gallery-items.php", '{"items":');
+$dmBytes = '{"items":'; $dmTop = '{{';
+http_get("$baseDm/", $dmHdrs); http_get("$baseDm/?folder=a", $dmHdrs);
+check('[damaged settings] just opening pages (as a visitor or as the owner) never rewrites a file it could not read', file_get_contents("$fxDm/a/.gallery-items.php") === $dmBytes && file_get_contents("$fxDm/.gallery-items.php") === $dmTop);
+[, $dmOwner] = http_get("$baseDm/", $dmHdrs);
+check('[damaged settings] the owner is told which folders have a file that can\'t be read, and that their photos are hidden from visitors', str_contains($dmOwner, 'The settings file of the folder &quot;a&quot; can&#039;t be read') && str_contains($dmOwner, 'The settings file of the top folder can&#039;t be read') && str_contains($dmOwner, 'hidden from visitors'));
+$dmSave = flag_post("$baseDm/?admin&folder=a", $dmAdmin, $dmHdrs, 'private', true, ['IMG_2.jpg']);
+check('[damaged settings] a save in that folder says nothing was saved because the file can\'t be read (not "not writable"), and leaves the file byte for byte as it was', ($dmSave['ok'] ?? null) === false && str_contains((string) ($dmSave['text'] ?? ''), 'can\'t be read') && !str_contains((string) ($dmSave['text'] ?? ''), 'writable') && file_get_contents("$fxDm/a/.gallery-items.php") === $dmBytes);
+check('[damaged settings] no stray temporary file is left beside it', array_values(array_filter(scandir("$fxDm/a"), fn ($n) => str_starts_with($n, '.gallery-items.php.'))) === []);
+[, $dmHealth] = http_get("$baseDm/?admin&health=1", $dmHdrs);
+check('[damaged settings] the Health check counts them as files that can\'t be read', str_contains(http_get("$baseDm/?admin", $dmHdrs)[1], '2 folder data files can&#039;t be read') || str_contains(http_get("$baseDm/?admin", $dmHdrs)[1], '2 folder data files can\'t be read') || str_contains($dmHealth, '2 folder data files'));
+unlink("$fxDm/a/.gallery-items.php");
+$dmFresh = flag_post("$baseDm/?admin&folder=a", $dmAdmin, $dmHdrs, 'private', true, ['IMG_2.jpg']);
+check('[damaged settings] with the damaged file deleted the folder starts fresh and saves work again', ($dmFresh['ok'] ?? null) === true && ($dmFresh['text'] ?? '') !== '' && (read_data_file("$fxDm/a/.gallery-items.php")['items']['IMG_2.jpg']['restriction'] ?? null) === 'private');
+
+// Saves while visitors read: the file is replaced whole, so no reader ever finds it empty or half-written.
+$fxAt = new_fixture_dir('atomic');
+mkdir("$fxAt/a");
+foreach (['p', 'q', 'r', 's', 'w0', 'w1', 'w2', 'w3', 'w4', 'w5'] as $atI => $atN) make_jpeg("$fxAt/a/$atN.jpg", 60, 60, 10 * $atI, 10, 10);
+write_data_file("$fxAt/a/.gallery-items.php", ['items' => ['p.jpg' => ['restriction' => 'private']]] + items_default_for_tests());
+file_put_contents("$fxAt/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'atomic-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxAt/index.php");
+putenv('PHP_CLI_SERVER_WORKERS=6');
+$portAt = find_free_port(); start_server($fxAt, $portAt); $baseAt = "http://127.0.0.1:$portAt";
+putenv('PHP_CLI_SERVER_WORKERS');
+$atAuth = 'Authorization: Basic ' . base64_encode('x:atomic-pw-1');
+[, $atPage, $atHd] = http_get("$baseAt/?admin&folder=a", [$atAuth]);
+$atHdrs = [$atAuth, 'Cookie: ' . extract_cookie_header($atHd)];
+$atReader = tempnam(sys_get_temp_dir(), 'atr'); $atFileReader = tempnam(sys_get_temp_dir(), 'atf');
+file_put_contents($atReader, '<?php $n = [200 => 0, 404 => 0, 0 => 0]; for ($i = 0; $i < 700; $i++) { @file_get_contents($argv[1] . "/?img=a/p.jpg&size=thumb"); $c = 0; foreach ($http_response_header ?? [] as $h) if (preg_match("#^HTTP/\\S+\\s+(\\d+)#", $h, $m)) $c = (int) $m[1]; $n[$c] = ($n[$c] ?? 0) + 1; } echo json_encode($n);');
+file_put_contents($atFileReader, '<?php $stop = microtime(true) + (float) $argv[2]; $bad = 0; $reads = 0; while (microtime(true) < $stop) { $raw = @file_get_contents($argv[1]); $reads++; $j = json_decode(strncmp((string) $raw, "<?php", 5) === 0 ? substr($raw, strpos($raw, "\n") + 1) : (string) $raw, true); if (!is_array($j)) $bad++; } echo json_encode(["bad" => $bad, "reads" => $reads]);');
+$atProcs = [];
+foreach ([[$atReader, [$baseAt]], [$atReader, [$baseAt]], [$atReader, [$baseAt]], [$atFileReader, ["$fxAt/a/.gallery-items.php", '6']]] as [$atScript, $atArgs]) {
+    $atProcs[] = proc_open(array_merge([PHP_BINARY, $atScript], $atArgs), [1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $atPipes[count($atProcs)]);
+}
+$atOk = 0; $atFail = 0;
+for ($atK = 0; $atK < 100; $atK++) {
+    $atR = flag_post("$baseAt/?admin&folder=a", $atPage, $atHdrs, 'private', $atK % 2 === 0, [['q.jpg', 'r.jpg', 's.jpg'][$atK % 3]]);
+    ($atR['ok'] ?? null) === true ? $atOk++ : $atFail++;
+}
+$atOut = [];
+foreach ($atProcs as $atIx => $atProc) { $atOut[$atIx] = json_decode((string) stream_get_contents($atPipes[$atIx][1]), true); proc_close($atProc); }
+unlink($atReader); unlink($atFileReader);
+$atLeaks = 0; $atReqs = 0; foreach ([0, 1, 2] as $atIx) { $atLeaks += (int) ($atOut[$atIx][200] ?? 999); $atReqs += array_sum((array) $atOut[$atIx]); }
+check("[atomic saves] 100 saves went through while visitors asked for a private photo $atReqs times: none was served (got $atLeaks)", $atOk === 100 && $atFail === 0 && $atReqs >= 2000 && $atLeaks === 0);
+check('[atomic saves] and a reader that kept opening the settings file for six seconds ( ' . ($atOut[3]['reads'] ?? 0) . ' reads) never found it empty or cut short', ($atOut[3]['reads'] ?? 0) > 1000 && ($atOut[3]['bad'] ?? 1) === 0);
+check('[atomic saves] the data file is still the guarded one-line-then-JSON file, readable, with no temporary files left beside it', strncmp((string) file_get_contents("$fxAt/a/.gallery-items.php"), "<?php http_response_code(404); exit; ?>\n", 40) === 0 && is_array(read_data_file("$fxAt/a/.gallery-items.php")) && array_values(array_filter(scandir("$fxAt/a"), fn ($n) => str_starts_with($n, '.gallery-items.php.'))) === []);
+// Several writers at once must all land: a writer that waited for the lock must not save on top of a file that was replaced under it.
+$atWriter = tempnam(sys_get_temp_dir(), 'atw');
+file_put_contents($atWriter, '<?php [$base, $file, $csrf, $auth, $cookie] = array_slice($argv, 1); $ok = 0;
+for ($i = 0; $i < 16; $i++) {
+    $ctx = stream_context_create(["http" => ["method" => "POST", "header" => implode("\r\n", ["Content-Type: application/x-www-form-urlencoded", "X-Requested-With: gallery-fetch", $auth, "Cookie: " . $cookie]), "content" => http_build_query(["csrf_token" => $csrf, "action" => "set_item_flag", "flag" => "private", "file" => $file, "on" => $i % 2 === 1 ? "1" : "0"]), "ignore_errors" => true, "timeout" => 10]]);
+    $j = json_decode((string) @file_get_contents($base . "/?admin&folder=a", false, $ctx), true); if (($j["ok"] ?? false) === true) $ok++;
+} echo $ok;');
+$atCsrf = preg_match('/name="csrf_token" value="([^"]+)"/', $atPage, $atM) ? $atM[1] : '';
+$atW = [];
+foreach (['w0', 'w1', 'w2', 'w3', 'w4', 'w5'] as $atIx => $atName) {
+    $atW[$atIx] = proc_open([PHP_BINARY, $atWriter, $baseAt, "$atName.jpg", $atCsrf, $atAuth, extract_cookie_header($atHd)], [1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $atWPipes[$atIx]);
+}
+$atWOk = 0; foreach ($atW as $atIx => $atProc) { $atWOk += (int) stream_get_contents($atWPipes[$atIx][1]); proc_close($atProc); }
+unlink($atWriter);
+$atFinal = read_data_file("$fxAt/a/.gallery-items.php")['items'] ?? [];
+$atMissing = array_filter(['w0', 'w1', 'w2', 'w3', 'w4', 'w5'], fn ($n) => ($atFinal["$n.jpg"]['restriction'] ?? null) !== 'private');
+check('[atomic saves] six writers saving at the same moment (16 saves each) all succeed and every one of their changes is in the file afterwards (none lost)', $atWOk === 96 && $atMissing === [], 'ok ' . $atWOk . ', missing ' . implode(',', $atMissing));
+
+echo "== cookies stay on the gallery's own path ==\n";
+$fxCk = new_fixture_dir('cookiepath'); mkdir("$fxCk/trip"); make_jpeg("$fxCk/trip/a.jpg", 60, 60, 10, 10, 10);
+file_put_contents("$fxCk/trip/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'cookie-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'cookie-view-1']));
+copy($indexSrc, "$fxCk/trip/index.php");
+$portCk = find_free_port(); start_server("$fxCk/trip", $portCk); $baseCkRoot = "http://127.0.0.1:$portCk";
+$portCk2 = find_free_port(); start_server($fxCk, $portCk2); $baseCkTrip = "http://127.0.0.1:$portCk2/trip";
+$ckAuth = 'Authorization: Basic ' . base64_encode('x:cookie-pw-1');
+$ckCookies = fn (array $hd) => array_values(array_filter($hd, fn ($h) => stripos($h, 'Set-Cookie:') === 0));
+$ckPaths = fn (array $hd) => array_map(fn ($h) => preg_match('/;\s*path=([^;]*)/i', $h, $m) ? $m[1] : '?', $ckCookies($hd));
+[, , $ckRootHd] = http_get("$baseCkRoot/?admin", [$ckAuth]);
+[, , $ckTripHd] = http_get("$baseCkTrip/?admin", [$ckAuth]);
+check('[cookie path] a gallery installed at the top of its address keeps its cookies on / (the session and the private-view cookie)', count($ckPaths($ckRootHd)) >= 2 && array_unique($ckPaths($ckRootHd)) === ['/']);
+check('[cookie path] a gallery installed in /trip/ keeps its sign-in cookies on /trip, so the rest of the domain is never sent them', count($ckPaths($ckTripHd)) >= 2 && array_unique($ckPaths($ckTripHd)) === ['/trip'], implode(' | ', $ckPaths($ckTripHd)));
+$ckSent = extract_cookie_header($ckTripHd);
+[$ckOutSt, , $ckOutHd] = http_post("$baseCkTrip/?reveal", ['logout' => '1', 'folder' => ''], ['Cookie: ' . $ckSent], false);
+$ckOutPaths = array_unique($ckPaths($ckOutHd)); sort($ckOutPaths);
+check('[cookie path] signing out ends the cookies on /trip and on / (where earlier versions kept them)', $ckOutPaths === ['/', '/trip'], implode(' | ', $ckOutPaths));
+
+echo "== the sign-in throttle file does not grow ==\n";
+$fxTh = new_fixture_dir('throttle'); make_jpeg("$fxTh/a.jpg", 60, 60, 10, 10, 10);
+file_put_contents("$fxTh/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'throttle-pw-1']));
+copy($indexSrc, "$fxTh/index.php");
+$portTh = find_free_port(); start_server($fxTh, $portTh); $baseTh = "http://127.0.0.1:$portTh";
+$thOld = []; for ($thI = 0; $thI < 60; $thI++) $thOld["admin|203.0.113.$thI"] = ['attempts' => [], 'lockUntil' => time() - 7200];
+$thOld['admin|198.51.100.9'] = ['attempts' => [time() - 30], 'lockUntil' => 0];
+$thOld['link|198.51.100.10'] = ['attempts' => [], 'lockUntil' => time() + 50];
+write_data_file("$fxTh/.gallery-login-attempts.php", $thOld);
+http_get("$baseTh/?admin", ['Authorization: Basic ' . base64_encode('x:wrong-one')]);
+$thNow = read_data_file("$fxTh/.gallery-login-attempts.php");
+check('[throttle] a wrong password forgets every address whose lockout ended long ago and that has no recent failure, and keeps the ones that still count', count($thNow) === 3 && isset($thNow['admin|127.0.0.1']) && isset($thNow['admin|198.51.100.9']) && isset($thNow['link|198.51.100.10']), implode(',', array_keys($thNow)));
+$fxTh6 = new_fixture_dir('throttle6'); make_jpeg("$fxTh6/a.jpg", 60, 60, 10, 10, 10);
+file_put_contents("$fxTh6/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'throttle-pw-6'])); copy($indexSrc, "$fxTh6/index.php"); @touch("$fxTh6/index.php", time() - 3600);
+$thPort6 = find_free_port();
+$thProc6 = proc_open([PHP_BINARY, '-d', 'opcache.enable=0', '-S', "[::1]:$thPort6", '-t', $fxTh6], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $thPipes6);
+if (is_resource($thProc6)) $cleanupProcs[] = $thProc6;
+usleep(600000);
+if (@fsockopen('tcp://[::1]', $thPort6, $thErrno, $thErr, 0.5)) {
+    http_get("http://[::1]:$thPort6/?admin", ['Authorization: Basic ' . base64_encode('x:wrong-one')]);
+    $th6 = read_data_file("$fxTh6/.gallery-login-attempts.php") ?: [];
+    check('[throttle] an IPv6 visitor is counted by their /64, not their single address', array_keys($th6) === ['admin|' . bin2hex(substr(inet_pton('::1'), 0, 8)) . '/64'], implode(',', array_keys($th6)));
+}
+
+echo "== made files are named with a keyed hash ==\n";
+$fxCn = new_fixture_dir('cachenames'); make_jpeg("$fxCn/a.jpg", 600, 400, 10, 10, 10); make_jpeg("$fxCn/b.jpg", 600, 400, 40, 10, 10); make_jpeg("$fxCn/c.jpg", 600, 400, 70, 10, 10);
+write_patched_index("$fxCn/index.php", $indexContents, ['ENABLE_THUMBNAIL_CACHE' => 'true']);
+$portCn = find_free_port(); start_server($fxCn, $portCn); $baseCn = "http://127.0.0.1:$portCn";
+http_get("$baseCn/?img=c.jpg&size=thumb");
+check('[cache names] a visitor to a gallery nobody has signed in to makes no key file (a plain install still writes only thumbnails), and the thumbnail is named as before', !file_exists("$fxCn/.gallery-secret.php") && is_file("$fxCn/.gallery-cache/" . md5('c.jpg|thumb|' . filemtime("$fxCn/c.jpg")) . '.jpg'));
+$cnMt = filemtime("$fxCn/a.jpg");
+// the install's key exists once someone has signed in; a thumbnail made the way 2.3.2 named it is then moved, not made again
+file_put_contents("$fxCn/.gallery-secret.php", "<?php http_response_code(404); exit; ?>\n" . bin2hex(random_bytes(32)) . "\n");
+$cnLegacy = md5("a.jpg|thumb|$cnMt") . '.jpg'; file_put_contents("$fxCn/.gallery-cache/$cnLegacy", 'made by 2.3.2');
+http_get("$baseCn/");   // a page view sweeps the cache folder
+$cnNew = cache_name_for_tests($fxCn, 'a.jpg', 'thumb', $cnMt) . '.jpg';
+check('[cache names] once the install has its key, an earlier version\'s thumbnail is moved to its keyed name by a page view, not made again', !file_exists("$fxCn/.gallery-cache/$cnLegacy") && is_file("$fxCn/.gallery-cache/$cnNew") && file_get_contents("$fxCn/.gallery-cache/$cnNew") === 'made by 2.3.2' && !is_file("$fxCn/.gallery-cache/" . md5('c.jpg|thumb|' . filemtime("$fxCn/c.jpg")) . '.jpg'));
+http_get("$baseCn/?img=b.jpg&size=thumb");
+$cnB = cache_name_for_tests($fxCn, 'b.jpg', 'thumb', filemtime("$fxCn/b.jpg")) . '.jpg';
+check('[cache names] a new thumbnail is kept under the keyed name, and the plain md5 of its path and date names nothing', is_file("$fxCn/.gallery-cache/$cnB") && !file_exists("$fxCn/.gallery-cache/" . md5('b.jpg|thumb|' . filemtime("$fxCn/b.jpg")) . '.jpg') && preg_match('/^[0-9a-f]{32}\.jpg$/', $cnB) === 1 && $cnB !== md5('b.jpg|thumb|' . filemtime("$fxCn/b.jpg")) . '.jpg');
+
+echo "== hardening: headers, links in notes, the map library ==\n";
+$fxHd = new_fixture_dir('hardening'); make_jpeg("$fxHd/a.jpg", 60, 60, 10, 10, 10);
+$fxHdTree = new_fixture_dir('hardening-tree'); mkdir("$fxHdTree/Sub"); make_jpeg("$fxHdTree/Sub/s.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxHdTree/r.jpg", 60, 60, 20, 10, 10);
+write_patched_index("$fxHdTree/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'true']);
+$portHdTree = find_free_port(); start_server($fxHdTree, $portHdTree); $baseHdTree = "http://127.0.0.1:$portHdTree";
+file_put_contents("$fxHd/n.md", "{gallery}\n\nSee [the *site*](https://example.com/a_b_c*d*~~e~~) and [**bold** label](https://example.com/x__y__z) and **bold**, _it_, ~~gone~~.\n");
+copy($indexSrc, "$fxHd/index.php");
+$portHd = find_free_port(); start_server($fxHd, $portHd); $baseHd = "http://127.0.0.1:$portHd";
+[, $hdBody, $hdHeaders] = http_get("$baseHd/");
+check('[hardening] no X-Powered-By header tells a stranger which PHP this is', !array_filter($hdHeaders, fn ($h) => stripos($h, 'X-Powered-By:') === 0) && $hdBody !== '');
+check('[hardening] an address in a note keeps its * _ ~ characters (no tags inside the href), while the words around and in the label still format', str_contains($hdBody, 'href="https://example.com/a_b_c*d*~~e~~"') && str_contains($hdBody, 'href="https://example.com/x__y__z"') && str_contains($hdBody, '<strong>bold</strong> label</a>') && str_contains($hdBody, '<em>site</em></a>') && str_contains($hdBody, '<del>gone</del>') && !preg_match('/href="[^"]*<(em|strong|u|del)>/', $hdBody));
+[, $hdAbout] = http_get("$baseHd/index.php/zz/yy?about");
+check('[hardening] the address the About page gives for itself does not repeat extra path the visitor typed after index.php', str_contains($hdAbout, "$baseHd/?about") && !str_contains($hdAbout, 'index.php/zz'));
+$fxHdOut = new_fixture_dir('hardening-out'); make_jpeg("$fxHdOut/elsewhere.jpg", 60, 60, 90, 10, 10);
+symlink("$fxHdOut/elsewhere.jpg", "$fxHd/linked.jpg"); symlink("$fxHd/a.jpg", "$fxHd/linked-inside.jpg");
+[, $hdLinked] = http_get("$baseHd/");
+check('[hardening] a photo that is a symlink is not listed and not served, whether it points outside the gallery or at another photo in it (a real photo beside them is)', !str_contains($hdLinked, 'linked.jpg') && !str_contains($hdLinked, 'linked-inside.jpg') && str_contains($hdLinked, 'a.jpg') && http_get("$baseHd/?img=linked.jpg&size=thumb")[0] === 404 && http_get("$baseHd/?img=linked-inside.jpg&size=thumb")[0] === 404 && http_get("$baseHd/?img=a.jpg&size=thumb")[0] === 200);
+check('[hardening] the page has one main landmark holding the notes and the photos (the title block before it, the viewer after it)', substr_count($hdBody, '<main id="content">') === 1 && substr_count($hdBody, '</main>') === 1 && strpos($hdBody, '<main id="content">') > strpos($hdBody, '</header>') && strpos($hdBody, 'class="gallery') > strpos($hdBody, '<main id="content">') && strpos($hdBody, 'class="gallery') < strpos($hdBody, '</main>') && strpos($hdBody, 'id="lightbox"') > strpos($hdBody, '</main>'));
+check('[hardening] a folder page\'s path bar is a navigation landmark', str_contains(http_get("$baseHdTree/?folder=Sub")[1], 'class="crumb-bar" id="crumb-bar" role="navigation"'));
+check('[hardening] the map library is loaded with its integrity hash both ways (the page tag and the one added by script), so a changed file on the CDN would not run', substr_count($indexContents, 'crossorigin="anonymous"') >= 2 && preg_match('/leaflet\.css" integrity="sha384-[A-Za-z0-9+\/]{64}" crossorigin/', $indexContents) === 1 && preg_match('/leaflet\.js" integrity="sha384-[A-Za-z0-9+\/]{64}" crossorigin/', $indexContents) === 1 && str_contains($indexContents, "css.integrity = 'sha384-") && str_contains($indexContents, "js.integrity = 'sha384-") && str_contains($indexContents, "js.crossOrigin = 'anonymous'"));
+
+echo "== new links start at a limit of browsers (the DEFAULT_LINK_USES setting) ==\n";
+$fxDu = new_fixture_dir('defaultuses'); mkdir("$fxDu/Rome"); make_jpeg("$fxDu/a.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxDu/Rome/r.jpg", 60, 60, 20, 10, 10);
+$duCfg = fn (array $o = []) => file_put_contents("$fxDu/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => (is_file("$fxDu/.gallery-config.php") ? (cfg_read("$fxDu/.gallery-config.php")['ADMIN_PASSWORD'] ?? 'du-admin-pw-1') : 'du-admin-pw-1'), 'ENABLE_SHARE_LINKS' => true, 'AUTO_GROUP_BY_FOLDER' => true]));   // (the sign-in turned the password into a hash: keep that one, or every sign-in made under it would end)
+$duCfg(); copy($indexSrc, "$fxDu/index.php");
+$portDu = find_free_port(); start_server($fxDu, $portDu); $baseDu = "http://127.0.0.1:$portDu";
+[, , $duHd] = http_post("$baseDu/?admin", ['access_code' => 'du-admin-pw-1'], [], false); $duCk = ['Cookie: ' . extract_cookie_header($duHd)];   // (a real sign-in: its session keeps one security token for the page and the requests that follow)
+$duTab = fn () => http_get("$baseDu/?admin", $duCk)[1];
+$duPage = $duTab();
+check('[default uses] with nothing set, new links start at 2 browsers: the form\'s row is labelled for browsers, offers Just one, 2, 5, 10, Unlimited and Other…, and starts on 2', str_contains($duPage, 'How many browsers can open it?') && !str_contains($duPage, 'How many times can it be opened?') && preg_match('/name="opens_pick" value="2" checked/', $duPage) === 1 && preg_match('/name="opens_pick" value="1"[^>]*>\s*(<span[^>]*>)?\s*Just one|Just one/', $duPage) === 1 && str_contains($duPage, 'data-default-uses="2"'));
+check('[default uses] the form says, after its sentence, where to raise it for a group', str_contains($duPage, 'data-uses-note') && str_contains($duPage, 'Meant for more than one person? Open &ldquo;How long and how often&rdquo; and raise how many browsers can open it.'));
+check('[default uses] the quick-share window is handed the number, makes links with it, and says it in words: "Up to 2 browsers can open it (their phone and their computer, say)", with a "Meant for more than one person?" box that makes it unlimited (the changed words in bold)', str_contains($duPage, '"defaultUses":2') && str_contains($duPage, ': +cfg.defaultUses || 0, endsAt: 0') && str_contains($duPage, "' (their phone and their computer, say)'") && str_contains($duPage, 'id="gs-many"') && str_contains($duPage, 'Meant for more than one person?</span>') && !str_contains($duPage, 'Raise it in Shares') && str_contains($duPage, '<b>As many browsers as they like</b> can open it') && str_contains($duPage, "'up to ' + d.maxOpens + ' browsers'"));
+check('[default uses] the Extend questions ask about browsers, for one link and for several at once', str_contains($duPage, 'How many more browsers can open it?') && !str_contains($duPage, 'How many more times can it be opened?') && str_contains($duPage, "<span class=\"sl-k\">Browsers</span>' + radios('sl-bx-o'"));
+check('[default uses] Settings has the setting in Sharing and access, with the label that says browsers', str_contains($duPage, 'name="set_DEFAULT_LINK_USES"') && str_contains($duPage, 'New links can be opened by (browsers)'));
+$duMake = function (array $o) use ($baseDu, $duCk, $duPage) {
+    $f = ['csrf_token' => extract_csrf_token($duPage), 'action' => 'link_create', 'label' => 'Du ' . bin2hex(random_bytes(2)), 'title_mode' => 'gallery', 'picture' => '1', 'max_opens' => 2, 'ends_at' => 0, 'scope_type' => 'all', 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off', 'zip' => 'off'];
+    return json_decode(http_post("$baseDu/?admin", $o + $f, array_merge($duCk, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+};
+$duPara = function ($id) use ($duTab) { return preg_match('~<details class="sl-row" data-id="' . $id . '".*?<p class="sl-para">(.*?)</p>~s', $duTab(), $m) ? $m[1] : ''; };
+$duL2 = $duMake(['max_opens' => 2]); $duL5 = $duMake(['max_opens' => 5]); $duL1 = $duMake(['max_opens' => 1]); $duL0 = $duMake(['max_opens' => 0]);
+$p2 = $duPara($duL2['id'] ?? ''); $p5 = $duPara($duL5['id'] ?? ''); $p1 = $duPara($duL1['id'] ?? ''); $p0 = $duPara($duL0['id'] ?? '');
+check('[default uses] a saved link\'s paragraph says "in up to 2 browsers," in plain grey when it is the default, and marks every other answer as its own: "just one browser", "up to 5 browsers", "as many browsers as they like"', str_contains($p2, '<span class="sl-cl">It can be opened in up to 2 browsers,</span>') && str_contains($p5, '<span class="sl-cl-ch">It can be opened in up to 5 browsers,</span>') && str_contains($p1, '<span class="sl-cl-ch">It can be opened in just one browser,</span>') && str_contains($p0, '<span class="sl-cl-ch">It can be opened in as many browsers as they like,</span>'));
+check('[default uses] a link with no number in the request (a script that predates the setting) is still unlimited: only the form and the quick window apply the default', (($duMake(['max_opens' => 0])['ok'] ?? null) === true) && str_contains($duPara($duL0['id'] ?? ''), 'as many browsers as they like'));
+$duCfg(['DEFAULT_LINK_USES' => 5]); $duP5 = $duTab();
+check('[default uses] set to 5, the 5 pill is the one that starts selected, and the quick window is told 5', preg_match('/name="opens_pick" value="5" checked/', $duP5) === 1 && str_contains($duP5, 'data-default-uses="5"') && str_contains($duP5, '"defaultUses":5'));
+$duCfg(['DEFAULT_LINK_USES' => 7]); $duP7 = $duTab();
+check('[default uses] set to a number with no pill of its own (7), Other… starts selected with 7 in its box', preg_match('/name="opens_pick" value="n" checked/', $duP7) === 1 && preg_match('/name="opens_other"[^>]*value="7"(?![^>]*hidden)/', $duP7) === 1);
+$duCfg(['DEFAULT_LINK_USES' => 0]); $duP0 = $duTab();
+check('[default uses] set to 0 it is Unlimited as before: that pill starts selected and the note about more than one person is not there', preg_match('/name="opens_pick" value="0" checked/', $duP0) === 1 && !str_contains($duP0, 'data-uses-note') && str_contains($duP0, '"defaultUses":0'));
+check('[default uses] in the admin shell, "More options…" goes to the framed Shares page (&inframe=1), not to a plain admin address that would show a blank frame', str_contains($duP0, "(window.parent !== window ? '&inframe=1' : '') + '#links'"));
+$duCfg(['DEFAULT_LINK_USES' => 5000]); $duBig = $duTab();
+check('[default uses] a number that is too big is held at 1,000', str_contains($duBig, 'data-default-uses="1000"'));
+
+echo "== signed-in browsers: address history, flags, Looks fine, ended list, auto sign-out ==\n";
+$fxHi = new_fixture_dir('history'); mkdir("$fxHi/Sub"); make_jpeg("$fxHi/a.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxHi/Sub/secret.jpg", 60, 60, 90, 10, 10);
+write_data_file("$fxHi/Sub/.gallery-items.php", ['items' => ['secret.jpg' => ['restriction' => 'private']], 'groups' => []] + items_default_for_tests());
+$hiCfg = fn (array $o = []) => file_put_contents("$fxHi/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => (is_file("$fxHi/.gallery-config.php") ? (cfg_read("$fxHi/.gallery-config.php")['ADMIN_PASSWORD'] ?? 'hi-admin-pw-1') : 'hi-admin-pw-1'), 'PRIVATE_VIEW_PASSWORD' => 'hi-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'TRUSTED_PROXY' => 'cloudflare', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32']]));
+$hiCfg(); copy($indexSrc, "$fxHi/index.php");
+$portHi = find_free_port(); start_server($fxHi, $portHi); $baseHi = "http://127.0.0.1:$portHi";
+$hiName = 'gallery_reveal_' . substr(hash('sha256', $fxHi), 0, 10);
+$uaIphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+$uaIpad = 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+$uaWin = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+$hiH = fn ($ip, $cc, $ua, $tok = '') => array_filter(["CF-Connecting-IP: $ip", $cc === '' ? '' : "CF-IPCountry: $cc", "User-Agent: $ua", $tok === '' ? '' : "Cookie: $hiName=$tok"]);
+$hiSecret = fn ($ip, $cc, $ua, $tok) => http_get("$baseHi/?img=Sub%2Fsecret.jpg&size=thumb", $hiH($ip, $cc, $ua, $tok))[0];
+$hiCore = fn () => json_decode(explode("\n", (string) @file_get_contents("$fxHi/.gallery-browsers.php"), 2)[1] ?? '[]', true) ?: [];
+$hiLog = fn () => json_decode(explode("\n", (string) @file_get_contents("$fxHi/.gallery-browsers-log.php"), 2)[1] ?? '[]', true) ?: [];
+$hiLines = function ($id) use ($fxHi) { $o = []; foreach (explode("\n", (string) @file_get_contents("$fxHi/.gallery-signin-$id.php")) as $l) if ($l !== '' && $l[0] === '{') $o[] = json_decode($l, true); return $o; };
+$hiGuest = function ($ip, $cc, $ua) use ($baseHi, $hiName) { [, , $h] = http_post("$baseHi/?reveal", ['access_code' => 'hi-view-pw-1'], ['CF-Connecting-IP: ' . $ip, 'CF-IPCountry: ' . $cc, 'User-Agent: ' . $ua], false); foreach ($h as $x) if (stripos($x, "Set-Cookie: $hiName=") === 0) return explode(';', explode('=', trim(substr($x, 11)), 2)[1])[0]; return ''; };
+$hiTok = $hiGuest('203.0.113.9', 'US', $uaIphone); $hiId = substr(hash('sha256', $hiTok), 0, 12);
+$hiFile = "$fxHi/.gallery-signin-$hiId.php"; $hiFirst = $hiLines($hiId); $hiRec = $hiCore()[hash('sha256', $hiTok)] ?? [];
+check('[history] a sign-in starts its history: a file of its own with the guard line first, then one line with the time, the full address, the country and what the browser said', is_file($hiFile) && str_starts_with((string) file_get_contents($hiFile), "<?php http_response_code(404); exit; ?>\n") && count($hiFirst) === 1 && $hiFirst[0]['ip'] === '203.0.113.9' && $hiFirst[0]['cc'] === 'US' && $hiFirst[0]['ua'] === $uaIphone && $hiFirst[0]['e'] === 'signin', json_encode($hiFirst));
+check('[history] its record keeps what it was made on ("iPhone · Safari"), its last address and country, and starts the counts', ($hiRec['lab0'] ?? '') === 'iPhone · Safari' && ($hiRec['ip'] ?? '') === '203.0.113.9' && ($hiRec['ccs'] ?? []) === ['US'] && ($hiRec['n'] ?? 0) === 1 && ($hiRec['peak'] ?? 0) === 1 && ($hiRec['flags'] ?? null) === [], json_encode($hiRec));
+check('[history] the file cannot be read over the web (404, guard line)', http_get("$baseHi/.gallery-signin-$hiId.php")[0] === 404 && !str_contains(http_get("$baseHi/.gallery-signin-$hiId.php")[1], '203.0.113.9'));
+$sz0 = filesize($hiFile);
+for ($i = 0; $i < 5; $i++) $hiSecret('203.0.113.9', 'US', $uaIphone, $hiTok);
+check('[history] the same address again and again adds nothing to the history (only "last seen" moves, at most hourly)', filesize($hiFile) === $sz0 && count($hiLines($hiId)) === 1 && $hiSecret('203.0.113.9', 'US', $uaIphone, $hiTok) === 200);
+$hiSecret('198.51.100.7', 'US', $uaIphone, $hiTok);
+check('[history] a new address is written at once, with its country; it is shown but is not a flag', count($hiLines($hiId)) === 2 && ($hiLines($hiId)[1]['ip'] ?? '') === '198.51.100.7' && ($hiCore()[hash('sha256', $hiTok)]['flags'] ?? null) === [] && ($hiCore()[hash('sha256', $hiTok)]['ip'] ?? '') === '198.51.100.7');
+$hiSecret('203.0.113.9', 'US', $uaIphone, $hiTok);
+check('[history] going back to an address used before is written too (the latest address is always the latest)', count($hiLines($hiId)) === 3 && ($hiLines($hiId)[2]['ip'] ?? '') === '203.0.113.9' && ($hiCore()[hash('sha256', $hiTok)]['ip'] ?? '') === '203.0.113.9' && ($hiCore()[hash('sha256', $hiTok)]['n'] ?? 0) === 3);
+$hiSecret('203.0.113.9', 'US', $uaIpad, $hiTok);
+$hiF1 = $hiCore()[hash('sha256', $hiTok)]['flags'] ?? [];
+check('[flags] the same kind of device but another one (iPhone to iPad) raises an amber warning, and no other flag', array_keys($hiF1) === ['device'] && str_contains($hiF1['device']['d'], 'iPhone · Safari') && str_contains($hiF1['device']['d'], 'iPad · Safari') && ($hiF1['device']['a'] ?? 1) === 0);
+$hiSecret('203.0.113.9', 'US', $uaWin, $hiTok);
+$hiF2 = $hiCore()[hash('sha256', $hiTok)]['flags'] ?? [];
+check('[flags] a different kind of device (an iPhone sign-in used as a Windows PC) raises the red one', isset($hiF2['family']) && str_contains($hiF2['family']['d'], 'Windows · Chrome'));
+$hiSecret('192.0.2.44', 'DE', $uaWin, $hiTok);
+$hiF3 = $hiCore()[hash('sha256', $hiTok)]['flags'] ?? [];
+check('[flags] a country the browser has not been used from raises the red country flag, naming the countries; going there again raises nothing new', isset($hiF3['country']) && str_contains($hiF3['country']['d'], 'US') && str_contains($hiF3['country']['d'], 'DE') && ($hiCore()[hash('sha256', $hiTok)]['ccs'] ?? []) === ['US', 'DE']);
+check('[flags] and none of this took the sign-in away: a flag only shows, the private photo still opens', $hiSecret('192.0.2.44', 'DE', $uaWin, $hiTok) === 200);
+// the owner's side
+[, , $hiOh] = http_post("$baseHi/?admin", ['access_code' => 'hi-admin-pw-1'], ['CF-Connecting-IP: 203.0.113.200', 'CF-IPCountry: US', 'User-Agent: ' . $uaIphone], false);
+$hiOwnTok = ''; foreach ($hiOh as $x) if (stripos($x, "Set-Cookie: $hiName=") === 0) $hiOwnTok = explode(';', explode('=', trim(substr($x, 11)), 2)[1])[0];
+$hiOwnHdr = array_merge($hiH('203.0.113.200', 'US', $uaIphone, $hiOwnTok), ['Cookie: ' . extract_cookie_header($hiOh)]);
+$hiOwnHdr = array_values(array_filter($hiOwnHdr, fn ($h) => !str_starts_with($h, 'Cookie: gallery_reveal') || true)); $hiOwnCk = ['Cookie: ' . extract_cookie_header($hiOh), 'CF-Connecting-IP: 203.0.113.200', 'CF-IPCountry: US', 'User-Agent: ' . $uaIphone];
+[, $hiSet] = http_get("$baseHi/?admin", $hiOwnCk);
+$hiCsrf = extract_csrf_token($hiSet);
+check('[list] Settings lists each browser with its last address and country, how many times its address changed, the size of its history and its busiest 24 hours; red and amber flags with a Looks fine button', str_contains($hiSet, 'id="browsers-row"') && str_contains($hiSet, '<code>192.0.2.44</code> <span class="br-cc">DE</span>') && str_contains($hiSet, 'class="br-table"') && preg_match('/data-label="Address changes"><span class="br-v">\d+ <span class="muted">· [0-9.]+ [KB]/', $hiSet) === 1 && str_contains($hiSet, 'most networks in 24 hours: <b>') && str_contains($hiSet, 'class="br-flag bad"') && str_contains($hiSet, 'class="br-flag warn"') && substr_count($hiSet, 'data-br="ack"') >= 3);
+[, $hiHealth] = http_get("$baseHi/?admin", $hiOwnCk);
+check('[health] each showing flag is a row in the Health check (red for action needed, amber for the warning), naming the browser and what happened', str_contains($hiHealth, 'A different kind of device: private view on Windows · Chrome') && str_contains($hiHealth, 'A new country: private view') && str_contains($hiHealth, 'A different device of the same kind: private view'));
+check('[health] ...and the Settings number in the sidebar counts them (they are in the Health check\'s count of things to look at)', (function () use ($baseHi, $hiOwnCk) { $j = http_get("$baseHi/?admin&shellcounts=1", $hiOwnCk)[1]; return preg_match('/data-tab="site"[^>]*>.*?<span class="count bad"[^>]*>(\d+)</s', $j, $m) === 1 && (int) $m[1] >= 3; })());
+$hiAck = fn ($flag) => json_decode(http_post("$baseHi/?admin", ['csrf_token' => $hiCsrf, 'action' => 'browser_ack', 'id' => $hiId, 'flag' => $flag], array_merge($hiOwnCk, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$a1 = $hiAck('family');
+check('[flags] "Looks fine" clears that flag (and only that one): it leaves the list and the Health check, the others stay', ($a1['ok'] ?? null) === true && ($a1['count'] ?? 0) === 1 && !str_contains(http_get("$baseHi/?admin", $hiOwnCk)[1], 'A different kind of device: private view') && str_contains(http_get("$baseHi/?admin", $hiOwnCk)[1], 'A new country: private view'));
+$hiSecret('192.0.2.44', 'DE', $uaWin, $hiTok); $hiSecret('192.0.2.45', 'DE', $uaWin, $hiTok);
+check('[flags] a cleared flag does not come back while the browser just carries on as it is (more addresses, same device, same countries)', (($hiCore()[hash('sha256', $hiTok)]['flags']['family']['a'] ?? 0) > 0));
+$hiSecret('192.0.2.45', 'DE', $uaIphone, $hiTok); $hiSecret('192.0.2.45', 'DE', $uaWin, $hiTok);
+check('[flags] ...but it comes back when something new happens (the device changes again)', ($hiCore()[hash('sha256', $hiTok)]['flags']['family']['a'] ?? 1) === 0);
+$a2 = $hiAck('nonsense'); $a3 = json_decode(http_post("$baseHi/?admin", ['action' => 'browser_ack', 'id' => $hiId, 'flag' => 'country'], array_merge($hiOwnCk, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+check('[flags] Looks fine needs a flag that exists and the page\'s security token', ($a2['ok'] ?? null) === false && ($a3['ok'] ?? null) === false);
+// the details view and the CSV
+$hiDet = json_decode(http_get("$baseHi/?admin&browserhist=$hiId", array_merge($hiOwnCk, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+check('[details] "Addresses" gives every day newest first with its networks and every address (with country and times), and every device it said it was, and a link to the whole history as a CSV', ($hiDet['ok'] ?? null) === true && str_contains($hiDet['html'], '203.0.113.9') && str_contains($hiDet['html'], '198.51.100.7') && str_contains($hiDet['html'], '192.0.2.44') && str_contains($hiDet['html'], 'class="br-cc">DE') && str_contains($hiDet['html'], 'What it said it was') && str_contains($hiDet['html'], 'browserhist=' . $hiId . '&amp;csv=1'));
+[$csvSt, $csvBody, $csvHd] = http_get("$baseHi/?admin&browserhist=$hiId&csv=1", $hiOwnCk);
+check('[details] the CSV has every line, as a download, and is safe to open in a spreadsheet', $csvSt === 200 && (bool) array_filter($csvHd, fn ($h) => stripos($h, 'Content-Disposition: attachment') === 0) && substr_count($csvBody, "\n") === count($hiLines($hiId)) + 1 && str_starts_with($csvBody, 'time,address,country,event,what it said it was'));
+check('[details] a made-up or missing id is a 404, and a guest or a stranger cannot ask (it is an admin address)', http_get("$baseHi/?admin&browserhist=ffffffffffff", $hiOwnCk)[0] === 404 && http_get("$baseHi/?admin&browserhist=notanid", $hiOwnCk)[0] === 404 && !str_contains(http_get("$baseHi/?admin&browserhist=$hiId", $hiH('203.0.113.9', 'US', $uaIphone, $hiTok))[1], '198.51.100.7') && !str_contains(http_get("$baseHi/?admin&browserhist=$hiId")[1], '198.51.100.7'));
+// what the browser says is stored and shown as text, never as markup; a spreadsheet formula is made safe
+$hiEvil = $hiGuest('203.0.113.77', 'US', '=HYPERLINK("http://x")<script>alert(1)</script>"><img src=x onerror=1>'); $hiEvilId = substr(hash('sha256', $hiEvil), 0, 12);
+$hiEvilDet = json_decode(http_get("$baseHi/?admin&browserhist=$hiEvilId", array_merge($hiOwnCk, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '';
+$hiEvilCsv = http_get("$baseHi/?admin&browserhist=$hiEvilId&csv=1", $hiOwnCk)[1];
+check('[details] a browser that says something hostile about itself is shown as plain text and its spreadsheet cell cannot run as a formula', !str_contains($hiEvilDet, '<script>') && !str_contains($hiEvilDet, '<img src=x') && str_contains($hiEvilDet, '&lt;script&gt;') && str_contains($hiEvilCsv, "\"'=HYPERLINK") && !str_contains(http_get("$baseHi/?admin", $hiOwnCk)[1], '<script>alert(1)'));
+// ending a browser: the list keeps it, with the reason, and its history
+$hiOut = json_decode(http_post("$baseHi/?admin", ['csrf_token' => $hiCsrf, 'action' => 'browser_cancel', 'id' => $hiId], array_merge($hiOwnCk, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$hiEnded = $hiLog()['ended'] ?? [];
+check('[ended] signing a browser out moves it to "Recently signed out" with who, what, when and why ("you"), the number of address changes and its busiest day, and keeps its history file', ($hiOut['count'] ?? 0) === 1 && $hiSecret('192.0.2.45', 'DE', $uaWin, $hiTok) === 404 && count(array_filter($hiEnded, fn ($e) => $e['id'] === $hiId && $e['reason'] === 'you' && $e['kind'] === 'view' && $e['n'] >= 5 && !empty($e['flags']))) === 1 && is_file($hiFile));
+$hiPage = http_get("$baseHi/?admin", $hiOwnCk)[1];
+check('[ended] the list shows it under "Recently signed out", with the reason in words, and its addresses can still be opened', str_contains($hiPage, 'Recently signed out (') && str_contains($hiPage, 'Signed out by you') && str_contains($hiPage, '<tbody class="br-item" data-id="' . $hiId . '">'));
+// logout, password change, expiry
+$hiG2 = $hiGuest('203.0.113.10', 'US', $uaIphone); $hiG2Id = substr(hash('sha256', $hiG2), 0, 12);
+http_post("$baseHi/?reveal", ['logout' => '1', 'folder' => ''], $hiH('203.0.113.10', 'US', $uaIphone, $hiG2), false);
+check('[ended] Log out is noted with its reason, and the browser is gone from the list', count(array_filter($hiLog()['ended'] ?? [], fn ($e) => $e['id'] === $hiG2Id && $e['reason'] === 'logout')) === 1 && !isset($hiCore()[hash('sha256', $hiG2)]));
+$hiG3 = $hiGuest('203.0.113.11', 'US', $uaIphone); $hiG3Hash = hash('sha256', $hiG3);
+$hc = $hiCore(); $hc[$hiG3Hash]['exp'] = time() - 10; file_put_contents("$fxHi/.gallery-browsers.php", "<?php http_response_code(404); exit; ?>\n" . json_encode($hc));
+http_get("$baseHi/?admin", $hiOwnCk);
+check('[ended] a browser whose time has run out is moved to the list as expired (at its end time) the next time the list is built', count(array_filter($hiLog()['ended'] ?? [], fn ($e) => $e['id'] === substr($hiG3Hash, 0, 12) && $e['reason'] === 'expired')) === 1 && !isset($hiCore()[$hiG3Hash]));
+$hiG4 = $hiGuest('203.0.113.12', 'US', $uaIphone); $hiG4Id = substr(hash('sha256', $hiG4), 0, 12);
+$hiCfg(['PRIVATE_VIEW_PASSWORD' => 'hi-view-pw-NEW']); file_put_contents("$fxHi/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => cfg_read("$fxHi/.gallery-config.php")['ADMIN_PASSWORD'], 'PRIVATE_VIEW_PASSWORD' => 'hi-view-pw-NEW', 'AUTO_GROUP_BY_FOLDER' => true, 'TRUSTED_PROXY' => 'cloudflare', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32']]));
+http_get("$baseHi/?admin", $hiOwnCk);
+check('[ended] a new private-view password is noted too: every guest browser made under the old one is listed as ended by the password change', count(array_filter($hiLog()['ended'] ?? [], fn ($e) => $e['id'] === $hiG4Id && $e['reason'] === 'password')) === 1);
+$hiCfg(['PRIVATE_VIEW_PASSWORD' => 'hi-view-pw-1']); file_put_contents("$fxHi/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => cfg_read("$fxHi/.gallery-config.php")['ADMIN_PASSWORD'], 'PRIVATE_VIEW_PASSWORD' => 'hi-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'TRUSTED_PROXY' => 'cloudflare', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32'], 'BROWSER_NETWORKS_ALARM' => 3, 'BROWSER_END_ON_FAMILY' => true]));
+// networks in 24 hours, and the sign-out switch
+$hiN = $hiGuest('203.0.113.20', 'US', $uaIphone); $hiNId = substr(hash('sha256', $hiN), 0, 12);
+$hiSecret('203.0.113.21', 'US', $uaIphone, $hiN); $hiSecret('203.0.113.22', 'US', $uaIphone, $hiN); $hiSecret('2001:db8:1:1::1', 'US', $uaIphone, $hiN); $hiSecret('2001:db8:1:1::2', 'US', $uaIphone, $hiN);
+$hiNRec = $hiCore()[hash('sha256', $hiN)] ?? [];
+$hiNRec = $hiCore()[hash('sha256', $hiN)] ?? [];
+$hiKeys = array_keys($hiNRec['nets'] ?? []); sort($hiKeys);
+check('[networks] an address is counted by its network (an IPv4 /24, an IPv6 /64): .20, .21 and .22 are one network, the two addresses in one /64 are another, so five addresses are two networks and nothing is flagged yet', $hiKeys === ['2001:0db8:0001:0001', '203.0.113'] && !isset($hiNRec['flags']['networks']) && ($hiNRec['peak'] ?? 0) === 2, json_encode($hiNRec['nets'] ?? []));
+$hiSecret('198.51.100.1', 'US', $uaIphone, $hiN); $hiSecret('192.0.2.1', 'US', $uaIphone, $hiN);
+$hiNRec = $hiCore()[hash('sha256', $hiN)] ?? [];
+check('[networks] four networks in a day pass the limit of 3: the red flag says how many, and the busiest day is 4', isset($hiNRec['flags']['networks']) && str_contains($hiNRec['flags']['networks']['d'], '4 networks') && ($hiNRec['peak'] ?? 0) >= 4);
+$hiW = $hiGuest('203.0.113.30', 'US', $uaIphone); $hiWId = substr(hash('sha256', $hiW), 0, 12);
+$hiBefore = $hiSecret('203.0.113.30', 'US', $uaIphone, $hiW);
+$hiAfter = $hiSecret('203.0.113.30', 'US', $uaWin, $hiW);
+check('[auto sign-out] with the switch on for "a different kind of device", the request that shows it signs the browser out at once: no private photo, no token, the history stays, and the list says why', $hiBefore === 200 && $hiAfter === 404 && !isset($hiCore()[hash('sha256', $hiW)]) && is_file("$fxHi/.gallery-signin-$hiWId.php") && count(array_filter($hiLog()['ended'] ?? [], fn ($e) => $e['id'] === $hiWId && $e['reason'] === 'auto' && str_contains($e['detail'], 'Windows'))) === 1 && $hiSecret('203.0.113.30', 'US', $uaIphone, $hiW) === 404);
+$hiDev = $hiGuest('203.0.113.31', 'US', $uaIphone); $hiDevId = substr(hash('sha256', $hiDev), 0, 12);
+$hiSecret('203.0.113.31', 'US', $uaIpad, $hiDev);
+check('[auto sign-out] the other switches are separate: with only "different kind" on, a same-kind change (iPhone to iPad) is flagged and nothing more', $hiSecret('203.0.113.31', 'US', $uaIpad, $hiDev) === 200 && isset($hiCore()[hash('sha256', $hiDev)]['flags']['device']));
+// scripts that send the password with every request: no history, no flags
+$before = count(glob("$fxHi/.gallery-signin-*.php"));
+for ($i = 0; $i < 6; $i++) http_get("$baseHi/?admin", ['Authorization: Basic ' . base64_encode('x:' . 'hi-admin-pw-1'), "CF-Connecting-IP: 198.18.0.$i", 'User-Agent: curl/8']);
+check('[script tokens] a script that sends the password every time leaves no history files and no flags', count(glob("$fxHi/.gallery-signin-*.php")) === $before);
+// a flood of addresses: nothing is dropped
+$hiF = $hiGuest('100.64.0.1', 'US', $uaIphone); $hiFId = substr(hash('sha256', $hiF), 0, 12);
+for ($i = 2; $i <= 120; $i++) $hiSecret('100.64.' . intdiv($i, 250) . '.' . ($i % 250 + 1), 'US', $uaIphone, $hiF);
+check('[flood] 120 different addresses make 120 more lines in the history (no limit on what is kept), the record that is read on every request stays small, and the flag is up', count($hiLines($hiFId)) >= 120 && strlen(json_encode($hiCore()[hash('sha256', $hiF)] ?? [])) < 20000 && isset($hiCore()[hash('sha256', $hiF)]['flags']['networks']) === (count($hiCore()[hash('sha256', $hiF)]['nets'] ?? []) > 3));
+// retention and size notes
+$old = time() - 100 * 86400; $lines = $hiLines($hiFId);
+$body = "<?php http_response_code(404); exit; ?>\n" . json_encode(['t' => $old, 'ip' => '9.9.9.9', 'cc' => '', 'ua' => 'old', 'e' => 'change']) . "\n";
+foreach ($lines as $l) $body .= json_encode($l) . "\n";
+file_put_contents("$fxHi/.gallery-signin-$hiFId.php", $body);
+$hc = $hiCore(); unset($hc[hash('sha256', $hiF)]['trim']); file_put_contents("$fxHi/.gallery-browsers.php", "<?php http_response_code(404); exit; ?>\n" . json_encode($hc));
+$hiOldEnded = $hiLog(); $hiOldEnded['ended'][] = ['id' => 'abcdefabcdef', 'kind' => 'view', 'label' => 'x', 'made' => $old, 'ended' => $old, 'reason' => 'you', 'detail' => '', 'n' => 1, 'peak' => 1, 'flags' => []];
+file_put_contents("$fxHi/.gallery-browsers-log.php", "<?php http_response_code(404); exit; ?>\n" . json_encode($hiOldEnded)); file_put_contents("$fxHi/.gallery-signin-abcdefabcdef.php", "<?php http_response_code(404); exit; ?>\n{\"t\":1,\"ip\":\"1.1.1.1\"}\n");
+http_get("$baseHi/?admin", $hiOwnCk);
+check('[retention] lines older than the days kept (90) leave a live history, an ended browser past its days (30) goes with its file, and today\'s size is noted', !str_contains((string) file_get_contents("$fxHi/.gallery-signin-$hiFId.php"), '9.9.9.9') && count($hiLines($hiFId)) >= 120 && !is_file("$fxHi/.gallery-signin-abcdefabcdef.php") && count(array_filter($hiLog()['ended'] ?? [], fn ($e) => $e['id'] === 'abcdefabcdef')) === 0 && isset($hiLog()['sizes'][date('Y-m-d')]) && $hiLog()['sizes'][date('Y-m-d')][1] >= 1);
+$hiHealth2 = http_get("$baseHi/?admin", $hiOwnCk)[1];
+check('[size] the Health check says how big the address histories are (the total, the largest and whose, and what it was a week and a month ago)', preg_match('/Address history: [0-9.]+ (KB|MB|B) in \d+ files?/', $hiHealth2) === 1 && str_contains($hiHealth2, 'The largest is') && str_contains($hiHealth2, 'A week ago the total was'));
+// Settings
+$hiSettings = http_get("$baseHi/?admin", $hiOwnCk)[1];
+check('[settings] the new settings are in Signing in and passwords with their labels: days of history, days signed-out browsers stay listed, the networks limit, and one switch for each flag, all off to start with', str_contains($hiSettings, 'Keep each browser&#039;s address history for (days)') && str_contains($hiSettings, 'Keep signed-out browsers listed for (days)') && str_contains($hiSettings, 'more than this many networks in 24 hours') && str_contains($hiSettings, 'name="set_BROWSER_END_ON_DEVICE"') && str_contains($hiSettings, 'name="set_BROWSER_END_ON_FAMILY"') && str_contains($hiSettings, 'name="set_BROWSER_END_ON_COUNTRY"') && str_contains($hiSettings, 'name="set_BROWSER_END_ON_NETWORKS"'));
+
+echo "== the country of an address: the country file, its download and its refresh ==\n";
+$fxGe = new_fixture_dir('geo'); make_jpeg("$fxGe/a.jpg", 60, 60, 10, 10, 10);
+$geoRanges = ['203.0.113.0/24' => 'US', '198.51.100.0/24' => 'DE', '192.0.2.0/24' => 'FR', '2001:db8:1::/48' => 'JP', '2001:db8:2::/48' => 'BR'];
+$geCfg = fn (array $o = []) => file_put_contents("$fxGe/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => (is_file("$fxGe/.gallery-config.php") ? (cfg_read("$fxGe/.gallery-config.php")['ADMIN_PASSWORD'] ?? 'ge-admin-pw-1') : 'ge-admin-pw-1'), 'PRIVATE_VIEW_PASSWORD' => 'ge-view-pw-1', 'TRUSTED_PROXY' => 'proxy', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32']]));
+$geCfg(); copy($indexSrc, "$fxGe/index.php");
+$portGe = find_free_port(); start_server($fxGe, $portGe); $baseGe = "http://127.0.0.1:$portGe";
+$geName = 'gallery_reveal_' . substr(hash('sha256', $fxGe), 0, 10);
+$geGuest = function ($ip) use ($baseGe, $geName) { [, , $h] = http_post("$baseGe/?reveal", ['access_code' => 'ge-view-pw-1'], ['X-Forwarded-For: ' . $ip, 'User-Agent: ge-test'], false); foreach ($h as $x) if (stripos($x, "Set-Cookie: $geName=") === 0) return explode(';', explode('=', trim(substr($x, 11)), 2)[1])[0]; return ''; };
+$geCc = function ($ip) use ($geGuest, $fxGe) { $t = $geGuest($ip); $id = substr(hash('sha256', $t), 0, 12); foreach (explode("\n", (string) @file_get_contents("$fxGe/.gallery-signin-$id.php")) as $l) if ($l !== '' && $l[0] === '{') return json_decode($l, true)['cc'] ?? 'MISSING'; return 'NOFILE'; };
+$gePlace = fn ($bytes, $guard = true) => file_put_contents("$fxGe/.gallery-geo.php", ($guard ? "<?php http_response_code(404); exit; ?>\n" : '') . $bytes);
+check('[country] with the option off nothing is looked up, whatever file is lying there', ($gePlace(make_test_mmdb($geoRanges)) > 0) && $geCc('203.0.113.9') === '');
+$geCfg(['COUNTRY_LOOKUP' => true]);
+check('[country] with it on, an address is looked up in the file: IPv4 and IPv6, one that is in no range gives nothing, an IPv4 address written the IPv6 way is found too', $geCc('203.0.113.9') === 'US' && $geCc('198.51.100.200') === 'DE' && $geCc('2001:db8:1::5') === 'JP' && $geCc('2001:db8:2:9::1') === 'BR' && $geCc('8.8.4.4') === '' && $geCc('::ffff:192.0.2.77') === 'FR');
+foreach ([[6, 24], [6, 28], [6, 32], [4, 24], [4, 28], [4, 32]] as [$v, $r]) {
+    $gePlace(make_test_mmdb($v === 4 ? ['203.0.113.0/24' => 'US', '198.51.100.0/24' => 'DE'] : $geoRanges, $v, $r));
+    check("[country] the reader understands a file whose tree is IPv$v with $r-bit records" . ($v === 4 ? ' (IPv6 addresses are not in it)' : ''), $geCc('198.51.100.7') === 'DE' && $geCc('203.0.113.1') === 'US' && $geCc('8.8.4.4') === '' && ($v === 4 ? $geCc('2001:db8:1::5') === '' : $geCc('2001:db8:1::5') === 'JP'));
+}
+$gePlace(make_test_mmdb($geoRanges), false);
+check('[country] a file with no guard line in front (as DB-IP publishes it) reads too; a file that is not a country list gives nothing and breaks nothing', $geCc('203.0.113.9') === 'US' && ($gePlace('this is not a country file at all, just some text of a decent length to get past a size check ........................................') > 0) && $geCc('203.0.113.9') === '' && ($gePlace('') >= 0) && $geCc('203.0.113.9') === '');
+$gePlace(make_test_mmdb($geoRanges));
+// a country header from a proxy still wins for the visitor's own address
+$geCfg(['COUNTRY_LOOKUP' => true, 'TRUSTED_PROXY' => 'cloudflare']);
+[, , $geHc] = http_post("$baseGe/?reveal", ['access_code' => 'ge-view-pw-1'], ['CF-Connecting-IP: 203.0.113.9', 'CF-IPCountry: CA', 'User-Agent: ge-test'], false);
+$geHt = ''; foreach ($geHc as $x) if (stripos($x, "Set-Cookie: $geName=") === 0) $geHt = explode(';', explode('=', trim(substr($x, 11)), 2)[1])[0];
+$geHl = json_decode(explode("\n", (string) file_get_contents("$fxGe/.gallery-signin-" . substr(hash('sha256', $geHt), 0, 12) . ".php"))[1], true);
+check('[country] what a trusted proxy says about the visitor (CF-IPCountry: CA) is used for that address, ahead of the file (which would say US)', ($geHl['cc'] ?? '') === 'CA');
+$geCfg(['COUNTRY_LOOKUP' => true, 'TRUSTED_PROXY' => 'proxy']);
+[, , $geHc2] = http_post("$baseGe/?reveal", ['access_code' => 'ge-view-pw-1'], ['X-Forwarded-For: 203.0.113.9', 'CloudFront-Viewer-Country: NZ', 'User-Agent: ge-test'], false);
+$geHt2 = ''; foreach ($geHc2 as $x) if (stripos($x, "Set-Cookie: $geName=") === 0) $geHt2 = explode(';', explode('=', trim(substr($x, 11)), 2)[1])[0];
+$geHl2 = json_decode(explode("\n", (string) file_get_contents("$fxGe/.gallery-signin-" . substr(hash('sha256', $geHt2), 0, 12) . ".php"))[1], true);
+check('[country] behind "another proxy" the CloudFront header is believed too (only from the proxy you named), and a visitor who sends that header to a gallery with no proxy named gets nothing from it', ($geHl2['cc'] ?? '') === 'NZ');
+// the download, from a file server of our own
+$fxGs = new_fixture_dir('geoserver'); $geYm = gmdate('Y-m'); $gePrev = gmdate('Y-m', strtotime('first day of last month 00:00:00 UTC'));
+file_put_contents("$fxGs/dbip-country-lite-$geYm.mmdb.gz", gzencode(make_test_mmdb(['203.0.113.0/24' => 'ES', '198.51.100.0/24' => 'IT'])));
+$portGs = find_free_port(); start_server($fxGs, $portGs);
+$geCfg(['COUNTRY_DB_URL' => "http://127.0.0.1:$portGs/dbip-country-lite-{ym}.mmdb.gz"]);
+@unlink("$fxGe/.gallery-geo.php");
+[, , $geOh] = http_post("$baseGe/?admin", ['access_code' => 'ge-admin-pw-1'], ['X-Forwarded-For: 203.0.113.250', 'User-Agent: ge-test'], false);
+$geOwn = ['Cookie: ' . extract_cookie_header($geOh), 'X-Forwarded-For: 203.0.113.250', 'User-Agent: ge-test'];
+$geSet = http_get("$baseGe/?admin", $geOwn)[1]; $geCsrf = extract_csrf_token($geSet);
+$gePost = fn (array $f) => json_decode(http_post("$baseGe/?admin", $f + ['csrf_token' => $geCsrf], array_merge($geOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+check('[country] switched off, the row wears a grey Off chip and Features has a Country lookup row that is Off, with a button to the setting', preg_match('~Look up the country of each address <span class="ft-chip ft-off">Off</span>~', $geSet) === 1 && preg_match('~Country lookup <span class="ft-chip ft-off">Off</span>~', $geSet) === 1 && str_contains($geSet, "adminGoTo('site', 'geo-row')"));
+check('[country] Settings has the row for it, off, with the licence credit to DB-IP and the room it needs said before anything is switched on', str_contains($geSet, 'id="geo-row"') && str_contains($geSet, 'Look up the country of each address') && str_contains($geSet, 'IP geolocation by DB-IP') && str_contains($geSet, 'Needs about 9 MB of disk') && str_contains($geSet, 'data-geo="on"') && !is_file("$fxGe/.gallery-geo.php"));
+$gePr = $gePost(['action' => 'geo_probe']);
+check('[country] "Turn on…" first asks what it would need: the size to download, the size on disk, the room needed and the room there is (read from the file server, which here cannot say the unpacked size exactly)', ($gePr['ok'] ?? null) === true && preg_match('/KB|MB|B$/', (string) $gePr['gz']) === 1 && ($gePr['enough'] ?? null) === true && ($gePr['canFetch'] ?? null) === true && ($gePr['zlib'] ?? null) === true && str_contains((string) $gePr['url'], "dbip-country-lite-$geYm") && !is_file("$fxGe/.gallery-geo.php"));
+$geBad = $gePost(['action' => 'geo_enable']);
+check('[country] turning it on fetches the file, checks it reads, puts it in place as a guarded file, and only then writes the setting', ($geBad['ok'] ?? null) === true && is_file("$fxGe/.gallery-geo.php") && str_starts_with((string) file_get_contents("$fxGe/.gallery-geo.php"), "<?php http_response_code(404); exit; ?>\n") && (cfg_read("$fxGe/.gallery-config.php")['COUNTRY_LOOKUP'] ?? null) === true && http_get("$baseGe/.gallery-geo.php")[0] === 404, json_encode($geBad));
+check('[country] ...and it is used at once (203.0.113.x is now Spain, from the downloaded file)', $geCc('203.0.113.9') === 'ES' && $geCc('198.51.100.7') === 'IT');
+$geSet2 = http_get("$baseGe/?admin", $geOwn)[1];
+check('[country] the row now says it is on, which edition it holds and offers Refresh now and Turn off; Health shows the file and its date', str_contains($geSet2, 'data-geo="refresh"') && str_contains($geSet2, 'data-geo="off"') && str_contains($geSet2, date('F Y')) && str_contains($geSet2, 'Country file: the ' . date('F Y') . ' edition'));
+check('[country] switched on, the row wears a green On chip and a status box (edition, size, when it was fetched, when it looks again), and Features shows Country lookup On and counts it', preg_match('~Look up the country of each address <span class="ft-chip ft-on">On</span>~', $geSet2) === 1 && preg_match('~<div class="geo-status" data-geo-state><b>' . date('F Y') . ' edition</b> in use · [0-9.]+ [KMB]+ · fetched [A-Z][a-z]{2} \d+ · next check [A-Z][a-z]{2} \d+~', $geSet2) === 1 && preg_match('~Country lookup <span class="ft-chip ft-on">On</span>~', $geSet2) === 1);
+// refresh: nothing newer, something newer, a failure
+$geMt = filemtime("$fxGe/.gallery-geo.php"); sleep(1);
+$geR1 = $gePost(['action' => 'geo_refresh']);
+check('[country] Refresh now with nothing newer on offer says so and leaves the file alone', ($geR1['ok'] ?? null) === true && str_contains($geR1['text'], 'already have the newest') && filemtime("$fxGe/.gallery-geo.php") === $geMt && $geCc('203.0.113.9') === 'ES');
+file_put_contents("$fxGs/dbip-country-lite-$geYm.mmdb.gz", gzencode(make_test_mmdb(['203.0.113.0/24' => 'PT', '198.51.100.0/24' => 'IT', '192.0.2.0/24' => 'GR']))); touch("$fxGs/dbip-country-lite-$geYm.mmdb.gz", time() + 120);
+$geR2 = $gePost(['action' => 'geo_refresh']);
+check('[country] a newer file on offer (a new date and size) is fetched and replaces the old one', ($geR2['ok'] ?? null) === true && str_contains($geR2['text'], 'Fetched') && $geCc('203.0.113.9') === 'PT' && $geCc('192.0.2.5') === 'GR');
+$geKeep = (string) file_get_contents("$fxGe/.gallery-geo.php");
+file_put_contents("$fxGs/dbip-country-lite-$geYm.mmdb.gz", gzencode('not a country file, only some text that is long enough to pass the size check, repeated: ' . str_repeat('xyz ', 400))); touch("$fxGs/dbip-country-lite-$geYm.mmdb.gz", time() + 240);
+$geR3 = $gePost(['action' => 'geo_refresh']);
+check('[country] a download that is not a country file is refused and the file we have is kept exactly as it was; the reason is kept for the Health check', ($geR3['ok'] ?? null) === false && str_contains($geR3['text'], 'not a country list') && (string) file_get_contents("$fxGe/.gallery-geo.php") === $geKeep && $geCc('203.0.113.9') === 'PT' && !glob("$fxGe/.gallery-geo.*.php"));
+check('[country] ...and the Health check says when it last failed and why, as information, not as a warning', str_contains(http_get("$baseGe/?admin", $geOwn)[1], 'did not work: The downloaded file is not a country list') && !preg_match('/health-row health-(bad|warn)[^>]*>[^<]*<[^>]*>[^<]*Country file/', http_get("$baseGe/?admin", $geOwn)[1]));
+unlink("$fxGs/dbip-country-lite-$geYm.mmdb.gz");
+$geR4 = $gePost(['action' => 'geo_refresh']);
+check('[country] a server that has no file (the month not out yet, and none for last month) is a failure with its reason, and the file we have is kept', ($geR4['ok'] ?? null) === false && (string) file_get_contents("$fxGe/.gallery-geo.php") === $geKeep);
+// when it is looked at: only after 7 days, from the admin here (this server cannot answer first), with a day's wait after a failure
+file_put_contents("$fxGs/dbip-country-lite-$geYm.mmdb.gz", gzencode(make_test_mmdb(['203.0.113.0/24' => 'NO']))); touch("$fxGs/dbip-country-lite-$geYm.mmdb.gz", time() + 400);
+touch("$fxGe/.gallery-geo-state.php", time() - 6 * 86400 + 600);
+http_get("$baseGe/?admin", $geOwn);
+check('[country] just after a failure it is not tried again for a day: opening the admin changes nothing', $geCc('203.0.113.9') === 'PT');
+touch("$fxGe/.gallery-geo-state.php", time() - 8 * 86400);
+http_get("$baseGe/");
+check('[country] an ordinary visitor\'s page never makes the download itself here (no way to answer first on this server): a due refresh waits for the admin', $geCc('203.0.113.9') === 'PT');
+http_get("$baseGe/?admin", $geOwn);
+check('[country] after 7 days the next admin visit looks, finds a newer file and fetches it', $geCc('203.0.113.9') === 'NO' && time() - filemtime("$fxGe/.gallery-geo-state.php") < 30);
+// what may be fetched
+$geCfg(['COUNTRY_LOOKUP' => true, 'COUNTRY_DB_URL' => 'ftp://example.com/x.gz']); $geP2 = $gePost(['action' => 'geo_probe']);
+$geCfg(['COUNTRY_LOOKUP' => true, 'COUNTRY_DB_URL' => 'http://example.com/x-{ym}.gz']); $geP3 = $gePost(['action' => 'geo_probe']);
+check('[country] only https is fetched (plain http only to this machine, for tests): ftp, file and http to anywhere else are refused before any request is made', ($geP2['ok'] ?? null) === false && ($geP3['ok'] ?? null) === false && str_contains((string) ($geP2['text'] ?? ''), 'not allowed') && str_contains((string) ($geP3['text'] ?? ''), 'not allowed'));
+$geCfg(['COUNTRY_LOOKUP' => true, 'COUNTRY_DB_URL' => "http://127.0.0.1:$portGs/dbip-country-lite-{ym}.mmdb.gz"]);
+// turn off
+file_put_contents("$fxGe/.gallery-geo.php.bak", 'a copy somebody kept'); file_put_contents("$fxGe/.gallery-geo.php.lock", '');
+$geOff1 = $gePost(['action' => 'geo_disable']);
+check('[country] turning it off keeps the file unless asked: lookups stop, the setting goes, the file and its notes stay', ($geOff1['ok'] ?? null) === true && !isset(cfg_read("$fxGe/.gallery-config.php")['COUNTRY_LOOKUP']) && is_file("$fxGe/.gallery-geo.php") && $geCc('203.0.113.9') === '');
+$geCfg(['COUNTRY_LOOKUP' => true, 'COUNTRY_DB_URL' => "http://127.0.0.1:$portGs/dbip-country-lite-{ym}.mmdb.gz"]);
+$geOff2 = $gePost(['action' => 'geo_disable', 'delete' => '1']);
+check('[country] ...and with "also delete the file" it removes the file and its notes and nothing else (a copy someone kept beside them is left alone)', ($geOff2['ok'] ?? null) === true && !is_file("$fxGe/.gallery-geo.php") && !is_file("$fxGe/.gallery-geo-state.php") && is_file("$fxGe/.gallery-geo.php.bak") && is_file("$fxGe/a.jpg") && is_file("$fxGe/index.php"));
+check('[country] its actions need the page\'s security token and an owner', (json_decode(http_post("$baseGe/?admin", ['action' => 'geo_disable', 'delete' => '1'], array_merge($geOwn, ['X-Requested-With: gallery-fetch']))[1], true)['ok'] ?? null) === false && !str_contains(http_post("$baseGe/?admin", ['action' => 'geo_enable'], ['X-Forwarded-For: 203.0.113.9'])[1], '"ok":true'));
 
 /* --------------------------------------------------------------------- */
 

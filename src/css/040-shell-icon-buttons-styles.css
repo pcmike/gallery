@@ -1,0 +1,68 @@
+  a { color:inherit; text-decoration:none; }
+  button { font:inherit; color:inherit; }
+  .sh-bar { flex:none; display:flex; align-items:center; padding:0 24px 0 0; min-height:56px; border-bottom:1px solid var(--line); background:var(--bg); }
+  .sh-lead { flex:none; width:230px; align-self:stretch; display:flex; align-items:center; padding:0 14px 0 18px; border-right:1px solid var(--line); min-width:0; }  /* (the same width as the sidebar under it, so this edge is that edge) */
+  .sh-path { flex:1; min-width:0; display:flex; align-items:center; font-size:16px; white-space:nowrap; }
+  .sh-path > * { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .sh-path .sh-title { flex:0 1 auto; font-size:1.05em; font-weight:700; color:#fff; }
+  .sh-path .sh-title:not(:only-child) { flex:none; max-width:70%; }  /* (with a folder beside it, the gallery's title keeps its room and the folder's name gives way first) */
+  .sh-path .sep { flex:none; color:#55555c; margin:0 8px; }
+  .sh-path .sh-crumb, .sh-path .sh-here { flex:0 4 auto; color:#c9c9cd; font-size:.95em; }
+  .sh-path .sh-crumb:hover, .sh-path .sh-title:hover { color:#fff; }
+  .sh-tools { margin-left:24px; flex:none; }  /* (24px past the sidebar: where the gallery's own icon strip starts in the frame) */
+  .sh-tools[hidden] { display:none; }
+  .sh-bar form { margin:0 0 0 8px; flex:none; }
+  .sh-bar #sh-alone-box { margin-left:auto; }
+  .sh-bar .map-combo-btn:focus-visible { outline:2px solid #fff; outline-offset:-2px; }
+  /* The gallery's own joined icon buttons, as they are on its pages. */
+  .map-combo { display: inline-flex; border: 1px solid #2c2c30; border-radius: 8px; overflow: hidden; background: var(--card); }
+  .map-combo-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 34px; padding: 0; background: none; border: 0; color: var(--text); font-size: 1.05rem; cursor: pointer; text-decoration: none; }
+  .map-combo-btn + .map-combo-btn { border-left: 1px solid #2c2c30; }
+  .map-combo-btn:hover { background: #26262a; }
+  .map-combo-btn:active { background: #303036; }
+  .map-combo-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .sh-body { flex:1; min-height:0; display:flex; }
+  .sh-side { flex:none; width:230px; padding:16px 12px; border-right:1px solid var(--line); overflow-y:auto; }
+  .sh-label { font-size:0.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 8px 2px; }
+  .sh-label.folders { margin-top:18px; }
+  .sh-whole a { display:flex; align-items:center; min-height:34px; padding:0 12px; border-radius:8px; border:1px solid #34343a; margin-bottom:6px; color:#c9c9cd; font-size:0.9rem; }  /* (as tall as the header's icon buttons) */
+  .sh-whole a:hover { color:#fff; background:#18181b; }
+  .sh-whole a.active { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .sh-whole .count { font-size:0.72rem; color:#a0a0a8; margin-left:6px; }
+  .sh-whole .count:first-of-type { margin-left:auto; }
+  .sh-whole .count.new, .sh-whole .count.warn, .sh-whole .count.bad { font-weight:600; padding:1px 7px; border-radius:10px; }
+  .sh-whole .count.new { background:#252b63; color:#aab2ff; }
+  .sh-whole .count.warn { background:rgba(245,194,107,.16); color:#f5c26b; }
+  .sh-whole .count.bad { background:rgba(237,66,69,.25); color:#ff9a9c; }
+  .sh-whole a.active .count { color:rgba(255,255,255,.85); }
+  .sh-whole a.active .count.new { background:#fff; color:var(--accent); }
+  .sh-whole a.active .count.warn, .sh-whole a.active .count.bad { background:rgba(0,0,0,.28); color:#fff; }
+  .sh-tree ul { list-style:none; margin:0; padding:0; }
+  .sh-tree li { position:relative; margin:1px 0; }
+  .sh-tree li > ul { margin-left:4px; }
+  .sh-tree li > ul > li { padding-left:8px; }
+  .sh-tree ul ul ul ul ul ul ul { margin-left:0; }   /* (a folder more than five levels down lines up with the one above it, so a deep tree keeps room for the names) */
+  .sh-tree ul ul ul ul ul ul ul > li { padding-left:0; }
+  .sh-tree ul ul ul ul ul ul ul > li::before, .sh-tree ul ul ul ul ul ul ul > li::after { display:none; }
+  .sh-tree li > ul > li::before { content:""; position:absolute; left:0; top:0; bottom:0; border-left:1px solid #34343a; }
+  .sh-tree li > ul > li:last-child::before { bottom:auto; height:17px; }
+  .sh-tree li > ul > li::after { content:""; position:absolute; left:0; top:17px; width:8px; border-top:1px solid #34343a; }
+  .sh-tree a { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--muted); padding:6px 8px 6px 24px; border-radius:6px; font-size:0.88rem; }
+  .sh-tree li > ul > li > a { padding-left:6px; }   /* (a folder with nothing inside it: its name sits right at the end of its elbow) */
+  .sh-tree li > ul > li.has-children > a { padding-left:24px; }   /* (one that holds folders: room for its fold arrow) */
+  .sh-tree a .fname { display:flex; align-items:center; gap:7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .sh-tree a .fcount { flex:none; font-size:0.72rem; color:#6f6f78; font-variant-numeric:tabular-nums; }
+  .sh-tree a:hover { color:var(--text); background:var(--card); }
+  .sh-tree a.current { color:#fff; background:var(--accent); font-weight:600; }
+  .sh-tree a.current .fcount { color:rgba(255,255,255,.85); }
+  .sh-tree.quiet a.current { color:var(--text); background:rgba(255,255,255,.06); font-weight:500; }
+  .sh-tree.quiet a.current .fcount { color:#6f6f78; }
+  .sh-tree .ftoggle { position:absolute; left:-4px; top:4px; width:26px; height:26px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; }
+  .sh-tree li > ul > li > .ftoggle { left:4px; }
+  .sh-tree .ftoggle::before { content:"\25BE"; font-size:1.3rem; display:block; line-height:26px; text-align:center; transition:transform .12s; }
+  .sh-tree li.collapsed > .ftoggle::before { transform:rotate(-90deg); }
+  .sh-tree .ftoggle:hover { color:var(--text); }
+  .sh-tree a.current + .ftoggle { color:#fff; }
+  .sh-tree li.collapsed > ul { display:none; }
+  .sh-main { flex:1; min-width:0; }
+  .sh-main iframe { display:block; width:100%; height:100%; border:0; background:var(--bg); }

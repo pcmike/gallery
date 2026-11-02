@@ -35,3 +35,8 @@ php tests/tools/fuzz/build_fixture.php /tmp/kitchen-sink && php -S localhost:800
 # ?admin password: adm-pw    ?reveal password: viewer-pw
 ```
 (The fuzzer *mutates* its fixture with random admin writes, so it always builds a fresh one — don't point it at yours.)
+
+## Skeleton of a real gallery (for trying the delete)
+[`skeleton/`](skeleton/README.md): `make-skeleton.sh` (read-only; run on the server that holds a real gallery, mapped folders included) writes a tarball of the gallery's own files plus the names, sizes and dates of everything else; `build_fixture.py` rebuilds a stand-in from it and runs the *Files this gallery has made* delete on it, checking that nothing but the gallery's own files went and that unzipping the copy restores the whole tree byte for byte.
+
+`skeleton/selftest.py` builds three small synthetic galleries (a named mapped folder, a mapped place whose folders appear at the top, and both with a name clash), takes a skeleton of each and runs the round trip on it, checking that the plan finds exactly the mapped places' own files. It is part of the full chain. The round trip finds the mapped folders with the gallery's own `gallery_mounts()` (cut out of `index.php`), not a copy of the rule.

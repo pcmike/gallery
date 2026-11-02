@@ -1,0 +1,449 @@
+  .view-badge {
+    background: rgba(0,0,0,0.65);
+    color: #eaeaea;
+    font-size: 0.68rem;
+    padding: 2px 7px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    pointer-events: none;
+  }
+  .item-badge {
+    background: rgba(0,0,0,0.65);
+    color: #eaeaea;
+    font-size: 0.7rem;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    line-height: 1;
+  }
+  a.item-badge { pointer-events: auto; }
+  .item-badge.caption-badge { pointer-events: auto; cursor: pointer; }
+  /* The same answer as the owner's lock and star: over a caption, location or link badge it lights up (a ring, the accent colour, a
+     little larger), and pressing it sinks it, so it is clear it is a button. */
+  .item-badge { transition: background .15s, transform .12s, box-shadow .12s; cursor: pointer; }
+  .item-badge:active { transform: scale(0.9); }
+  @media (hover: hover) {
+    .item-badge:hover { transform: scale(1.2); box-shadow: 0 0 0 2px #fff; background: var(--accent); color: #fff; }
+    .item-badge:hover:active { transform: scale(1.04); }
+  }
+  .caption-popover {
+    position: absolute; left: 8px; right: 8px; bottom: 34px; z-index: 3;
+    background: rgba(0,0,0,0.88); color: #fff; padding: 8px 10px;
+    border-radius: 8px; font-size: 0.85rem; line-height: 1.35;
+    pointer-events: none; overflow-wrap: anywhere;
+  }
+  /* The owner's lock on a tile: red and labelled when private; a faint open lock when public (on a desktop only on hover). */
+  .priv-toggle { position: absolute; top: 6px; left: 6px; z-index: 4; display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; font-size: 0.72rem; line-height: 1; cursor: pointer; opacity: 0.6; transition: opacity .15s, background .15s; }
+  .priv-toggle .ico { width: 1em; height: 1em; }
+  .priv-toggle.is-private { background: rgba(237,66,69,0.88); border-color: rgba(255,255,255,0.35); opacity: 1; }
+  /* Private only because its folder is: dashed, not solid (it becomes public when the folder opens). */
+  .priv-toggle.is-folder { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; }
+  .priv-toggle.busy { opacity: 0.35; pointer-events: none; }
+  @media (hover: hover) { .priv-toggle:not(.is-private) { opacity: 0; } .card:hover .priv-toggle:not(.is-private), .priv-toggle:focus-visible { opacity: 0.9; } }
+  .cover-toggle { position: absolute; top: 6px; right: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.6; transition: opacity .15s, background .15s; }
+  .cover-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
+  .cover-toggle.is-cover { background: #f5c542; border-color: rgba(255,255,255,0.35); color: #1a1a1c; opacity: 1; }
+  .cover-toggle.is-cover .ico { fill: currentColor; }
+  .cover-toggle.busy { opacity: 0.35; pointer-events: none; }
+  @media (hover: hover) { .cover-toggle:not(.is-cover) { opacity: 0; } .card:hover .cover-toggle:not(.is-cover), .cover-toggle:focus-visible { opacity: 0.9; } }
+  /* The pencil, in the lower left corner (opposite the caption, place and link badges it changes): opens the editor in the viewer. */
+  .edit-toggle { position: absolute; bottom: 6px; left: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.75; }
+  .edit-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
+  .edit-toggle.busy { opacity: 0.35; pointer-events: none; }
+  @media (hover: hover) { .edit-toggle { opacity: 0; } .card:hover .edit-toggle, .edit-toggle:focus-visible { opacity: 0.9; } }
+  .owner-card .video-duration { left: 38px; }
+  .priv-toggle::after, .cover-toggle::after, .edit-toggle::after { content: ''; position: absolute; inset: -6px; }   /* a bigger target for a finger */
+  /* Over one of these two, the button itself answers: full strength, a white ring, a little larger, and a colour of its own
+     (the accent for a plain one, a lighter red or gold for one that is already lit); pressed, it sinks back. */
+  .priv-toggle, .cover-toggle, .edit-toggle { transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; }
+  .priv-toggle:active, .cover-toggle:active, .edit-toggle:active { transform: scale(0.92); }
+  @media (hover: hover) {
+    .priv-toggle:hover, .cover-toggle:hover, .edit-toggle:hover { opacity: 1 !important; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; }
+    .priv-toggle.is-private:hover { background: #f4585b; }
+    .priv-toggle.is-folder:hover { background: rgba(237,66,69,0.38); border-color: #ff9a9c; color: #fff; }
+    .cover-toggle.is-cover:hover { background: #ffd86b; }
+    .priv-toggle:hover:active, .cover-toggle:hover:active, .edit-toggle:hover:active { transform: scale(1.02); }
+  }
+  .lb-sharepop { position: fixed; z-index: 150; top: 66px; right: 12px; box-sizing: border-box; width: min(460px, calc(100vw - 24px)); padding: 14px 16px; background: #1b1b1e; border: 1px solid #38383f; border-radius: 12px; color: #eaeaea; box-shadow: 0 14px 44px rgba(0,0,0,0.6); font-size: 0.92rem; line-height: 1.45; }
+  .lb-sharepop p { margin: 6px 0 12px; color: #c2c2c9; }
+  .lb-sharepop .lsp-h { display: flex; align-items: center; gap: 8px; font-size: 1.02rem; font-weight: 700; color: #fff; }
+  .lb-sharepop .lsp-h .ico { color: #ed4245; }
+  .lb-sharepop .lsp-btns { display: flex; gap: 8px; }
+  .lb-sharepop .lsp-btns button { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 8px 12px; background: #26262b; border: 1px solid #3a3a42; border-radius: 9px; color: #eaeaea; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .lb-sharepop .lsp-btns .lsp-share { flex: 1.6 1 0; background: #5865f2; border-color: #5865f2; color: #fff; }
+  .lb-sharepop .lsp-btns .lsp-share:hover { background: #6b77f0; }
+  .lb-sharepop .lsp-btns .lsp-copy:hover { background: #303036; }
+  .lb-sharepop .lsp-btns .ico { width: 16px; height: 16px; vertical-align: 0; }
+  .lb-sharepop .lsp-fine { margin: 10px 0 0; font-size: 0.82rem; color: #8e8e96; }
+  .select-bar .sb-share { display: inline-flex; align-items: center; gap: 5px; }
+  .lightbox .caption-row .lightbox-copy.owner-cover.on { color: #f5c542; opacity: 1; }
+  .lightbox .caption-row .lightbox-copy.owner-cover.on .ico { fill: currentColor; }
+  .lightbox .caption-row .lightbox-copy.owner-priv.on { color: #ed4245; opacity: 1; }
+  .lightbox .caption-row .lightbox-copy.owner-priv.on.folder { color: #ff9a9c; position: relative; }
+  .lightbox .caption-row .lightbox-copy.owner-priv.on.folder::after { content: ''; position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; transform: translate(-50%, -50%); border: 1.5px dashed rgba(255,120,122,0.9); border-radius: 50%; pointer-events: none; }
+  .card.owner-card .sold-badge-corner, .card.owner-card .reserved-badge-corner { top: 40px; }
+  .video-duration {
+    position: absolute;
+    bottom: 6px;
+    left: 6px;
+    background: rgba(0,0,0,0.65);
+    color: #eaeaea;
+    font-size: 0.68rem;
+    padding: 2px 7px;
+    border-radius: 10px;
+    pointer-events: none;
+  }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 60px 20px;
+  }
+  .page-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.85rem; }
+  /* Same column as the photo grid below it (max-width and side padding
+     match .gallery), so the map lines up with the tiles instead of
+     running to the edges of the window. */
+  .map-preview { max-width: 1400px; margin: 8px auto 0; padding: 0 24px; }
+  /* The strip of buttons stays at the top of the screen while the photos scroll under it. */
+  .map-bar { position: sticky; top: calc(var(--stick-top, 0px) + var(--crumb-h, 0px)); z-index: 40; margin-top: 0; padding-top: 8px; padding-bottom: 10px; background: var(--bg); transition: box-shadow .15s; }
+  .map-bar.stuck { box-shadow: 0 1px 0 #26262a, 0 10px 16px -10px rgba(0,0,0,0.9); }
+  html { scroll-padding-top: calc(64px + var(--stick-top, 0px) + var(--crumb-h, 0px)); }   /* a link that scrolls to a photo or group stops below the strip, not under it */
+  .map-preview-heading {
+    font-size: 1rem; margin: 0; font-weight: 400;
+    display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px;
+  }
+  .map-modal { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .map-modal[hidden] { display: none; }
+  .map-modal-card { position: relative; width: min(100%, 1100px); background: var(--card); border-radius: 12px; padding: 12px; box-shadow: 0 12px 48px rgba(0,0,0,0.6); max-height: 100%; overflow: auto; }
+  .map-modal-close { position: absolute; top: 10px; right: 10px; z-index: 5; width: 34px; height: 34px; padding: 0; border-radius: 50%; border: none; background: rgba(0,0,0,0.7); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; }
+  /* A round button over a map answers like a badge on a tile: a ring, the accent colour, a little larger; pressed, it sinks. */
+  .map-modal-close, .lbmap-close { transition: background .15s, transform .12s, box-shadow .12s; }
+  .map-modal-close:active, .lbmap-close:active { transform: scale(0.92); }
+  @media (hover: hover) { .map-modal-close:hover, .lbmap-close:hover { transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); } .map-modal-close:hover:active, .lbmap-close:hover:active { transform: scale(1.02); } }
+  .map-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 0.8rem; color: var(--muted); }
+  .map-legend-item { display: flex; align-items: center; gap: 6px; }
+  .map-legend-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .leaflet-popup-content-wrapper { background: var(--card); color: var(--text); }
+  .leaflet-popup-tip { background: var(--card); }
+  /* Lightbox */
+  .lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    height: 100vh; height: 100dvh;   /* dvh: what is really visible, so the phone browser's own bars never cover the caption and buttons */
+    background: rgba(0,0,0,0.92);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    touch-action: none;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox img, .lightbox video {
+    object-fit: contain;   /* whatever size the box ends up, the picture inside keeps its own shape (Safari clamps one side of an image in a flex box without the other) */
+    max-width: 90vw;
+    max-height: 82vh;
+    max-height: min(82vh, calc(100dvh - 130px - env(safe-area-inset-bottom, 0px)));   /* a tall photo leaves room for its caption row */
+    border-radius: 6px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .caption-row {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .lightbox .caption {
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  .lightbox-copy {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+    padding: 8px;
+    line-height: 1;
+    opacity: 0.75;
+  }
+  .lightbox-copy:hover { opacity: 1; }
+  /* Zoom: the photo is shown to fit the screen; one press fills the width of the window (scroll up and down, never
+     distorted, from the original file), another shows it at its real pixel size (scroll both ways). */
+  .lightbox img { cursor: zoom-in; }
+  .lightbox.zoom-width, .lightbox.zoom-actual { overflow: auto; justify-content: flex-start; color-scheme: dark; }
+  .lightbox.zoom-width { touch-action: pan-y; }
+  .lightbox.zoom-actual { touch-action: pan-x pan-y; }
+  .lightbox.zoom-width img, .lightbox.zoom-actual img {
+    flex: none; max-height: none; height: auto; margin: auto; border-radius: 0; box-shadow: none;
+  }
+  .lightbox.zoom-width img { width: 100%; max-width: var(--nat, 100%); }
+  .lightbox.zoom-actual img { width: var(--act, auto); max-width: none; cursor: zoom-out; }
+  .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
+    position: fixed; left: 50%; right: auto; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); margin: 0;
+    width: max-content; max-width: calc(100vw - 40px); padding: 3px 14px; justify-content: center; z-index: 6;
+    border-radius: 999px; background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);   /* a soft dark pill: the controls stay readable and usable over the photo */
+  }
+  .lightbox.zoom-width .caption-row .caption, .lightbox.zoom-actual .caption-row .caption { color: #e4e4e8; }
+  /* (not the ones in a state of their own: the map button when it is on, the pulsing pin, "copied", "ready": those keep their colour) */
+  .lightbox.zoom-width .caption-row .lightbox-copy:not(.on):not(.nudge):not(.copied):not(.ready),
+  .lightbox.zoom-actual .caption-row .lightbox-copy:not(.on):not(.nudge):not(.copied):not(.ready) { color: #e4e4e8; opacity: 0.95; }
+  /* Zoomed in, the photo runs under the other controls too: the same soft backing for the close button and the arrows. */
+  .lightbox.zoom-width .close, .lightbox.zoom-actual .close, .lightbox.zoom-width .nav, .lightbox.zoom-actual .nav {
+    background: rgba(0,0,0,0.4); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); opacity: 0.9;
+  }
+  .lightbox.is-video .lightbox-zoom { display: none; }
+  .lightbox-close-row { display: none; }
+  .lightbox-tools-wrap, .lightbox-tools { display: contents; }   /* (on a phone they become a strip you can swipe: see below) */
+  .tools-more { display: none; }
+  .caption .cap-sep { white-space: pre; }
+  /* On a touch screen the counter and buttons, the close button last among them, are a row across the TOP, and the photo takes
+     everything below it down to the bottom of the visible area (a tall photo on a phone is height-limited, so every point
+     counts). Nothing to tap near the bottom edge, where Safari answers a tap by bringing its toolbar back (which costs a
+     second tap), and nothing laid over the photo. The viewer is sized to what is really visible (dvh), so Safari's bars never
+     cover the photo. In the zoomed modes the same row stays put while the photo scrolls under it. */
+  @media (pointer: coarse) {
+    .lightbox { padding: calc(env(safe-area-inset-top, 0px) + 54px) 0 calc(env(safe-area-inset-bottom, 0px) + 8px); background: #000; }   /* the page behind does not show through */
+    .lightbox img, .lightbox video { max-height: calc(100dvh - 62px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+    .lightbox .caption-row, .lightbox.zoom-width .caption-row, .lightbox.zoom-actual .caption-row {
+      position: fixed; top: 0; left: 0; right: 0; bottom: auto; transform: none; margin: 0; z-index: 6; width: auto; max-width: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none;
+      padding: calc(env(safe-area-inset-top, 0px) + 6px) 5px 4px 16px; justify-content: flex-start; align-items: center; gap: 0;
+      background: linear-gradient(rgba(0,0,0,0.7), transparent);
+    }
+    .lightbox .caption-row { pointer-events: none; }
+    /* The counter always shows (first, never cut off), the caption after it gives way first, then the buttons become a strip you can
+       swipe sideways; the close button stays put at the right end. */
+    .lightbox .caption-row .caption { flex: 1 1 0; min-width: 9ch; display: flex; flex-direction: row-reverse; justify-content: flex-end; white-space: nowrap; }
+    .lightbox .caption-row .caption .cap-n { flex: none; }
+    .lightbox .caption-row .caption .cap-sep { display: none; }
+    .lightbox .caption-row .caption .cap-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; }
+    .lightbox .caption-row .caption .cap-t:empty { display: none; }
+    .lightbox-tools-wrap { position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
+    /* The strip itself is masked, so nothing of a scrolled-off icon is painted within 18px of an end that has an arrow (laying a dark
+       backing over it instead left a hairline of the icon showing on Safari). */
+    .lightbox-tools { --ml: -10px; --mr: -10px; display: flex; align-items: center; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; pointer-events: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+      -webkit-mask-image: linear-gradient(to right, transparent var(--ml), #000 calc(var(--ml) + 10px), #000 calc(100% - var(--mr) - 10px), transparent calc(100% - var(--mr)));
+      mask-image: linear-gradient(to right, transparent var(--ml), #000 calc(var(--ml) + 10px), #000 calc(100% - var(--mr) - 10px), transparent calc(100% - var(--mr))); }
+    .lightbox-tools-wrap.can-left .lightbox-tools { --ml: 18px; }
+    .lightbox-tools-wrap.can-right .lightbox-tools { --mr: 18px; }
+    .lightbox-tools::-webkit-scrollbar { display: none; }
+    .lightbox-tools > * { flex: none; }
+    /* A small arrow at whichever end has more to swipe to, in the clear zone the mask leaves there. */
+    .tools-more { position: absolute; top: 0; bottom: 0; width: 18px; align-items: center; pointer-events: none; color: #e4e4e8; }
+    .tools-more .ico { width: 16px; height: 16px; stroke-width: 2.4; }
+    .tools-more-l { left: 0; justify-content: center; }
+    .tools-more-r { right: 0; justify-content: center; }
+    .lightbox-tools-wrap.can-left .tools-more-l, .lightbox-tools-wrap.can-right .tools-more-r { display: flex; }
+    .lightbox .caption-row .lightbox-close-row { flex: none; }
+    /* Every button of the row is the same box (44 points high) with the same drawn icon size, so the close button, which is
+       the last of them, cannot differ from its neighbours in size or in where it sits. */
+    .lightbox .caption-row .lightbox-copy { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 9px; font-size: 0.95rem; pointer-events: auto; }
+    .lightbox .caption-row .lightbox-copy .ico { width: 18px; height: 18px; vertical-align: 0; }
+    .lightbox .caption-row .lightbox-copy[hidden] { display: none; }   /* the row's own display must not show a button that has nothing to do (no web link, no location) */
+    .lightbox .caption-row .lightbox-close-row { display: inline-flex; }
+    .lightbox .caption-row .lightbox-close-row .ico { transform: translateY(0.67px); }   /* two device pixels on a 3x phone, to sit level with its neighbours by eye */
+    .lightbox button.close { display: none; }
+  }
+  .lightbox-web, .lightbox-download { text-decoration: none; font-size: 1rem; }
+  .lightbox-copy.busy { opacity: 0.35; pointer-events: none; }
+  .lightbox-copy.ready { color: var(--accent); opacity: 1; }
+  .lightbox-toast { position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); max-width: calc(100vw - 40px); padding: 8px 14px; background: rgba(30,30,34,0.96); color: var(--text); border: 1px solid #3a3a42; border-radius: 999px; font-size: 0.85rem; text-align: center; z-index: 110; pointer-events: none; }
+  .lightbox-toast[hidden] { display: none; }
+  /* The map button reads like the other caption icons when the map is off, and in the accent colour when it is on. */
+  .lightbox-map-toggle.on { opacity: 1; color: var(--accent); }
+  .lightbox-map-toggle.nudge { opacity: 1; color: var(--accent); animation: map-nudge 0.6s ease-in-out 2; }
+  @keyframes map-nudge { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.5); } }
+  @media (prefers-reduced-motion: reduce) { .lightbox-map-toggle.nudge { animation: none; } }
+  /* The little map in the viewer: over the photo's top left corner; click to enlarge. */
+  .lightbox-map {
+    position: fixed; z-index: 5; width: 170px; height: 130px;
+    border-radius: 8px; overflow: hidden; border: 2px solid rgba(255,255,255,0.85);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.55); cursor: zoom-in; background: #1a1a1c;
+  }
+  .lightbox-map[hidden] { display: none; }
+  .lightbox-map.expanded {
+    left: 50% !important; top: 50% !important; transform: translate(-50%, -50%);
+    width: min(88vw, 900px); height: min(70vh, 640px); height: min(70dvh, 640px); cursor: auto;
+  }
+  .lightbox-map img { max-width: none !important; max-height: none !important; border-radius: 0; box-shadow: none; }
+  .lbmap-close, .lbmap-osm { display: none; position: absolute; z-index: 1000; }
+  .lightbox-map.expanded .lbmap-close, .lightbox-map.expanded .lbmap-osm { display: block; }
+  .lbmap-close {
+    top: 8px; right: 8px; width: 34px; height: 34px; padding: 0; border-radius: 50%;
+    background: rgba(0,0,0,0.7); color: #fff; font-size: 1.4rem; line-height: 1; border: none; cursor: pointer;
+  }
+  .leaflet-container a.lbmap-osm {
+    left: 8px; bottom: 22px; background: rgba(0,0,0,0.7); color: #fff; padding: 5px 10px;
+    border-radius: 6px; font-size: 0.78rem; text-decoration: none;
+  }
+  /* Leaflet's panes use large z-indexes; keep them inside their own box so no map can land on top of the viewer. */
+  .leaflet-container { isolation: isolate; z-index: 0; }
+  .lightbox-map.leaflet-container { z-index: 5; }
+  /* Two icon buttons joined into one control: show/hide the map, and open it large. */
+  .map-combo { display: inline-flex; border: 1px solid #2c2c30; border-radius: 8px; overflow: hidden; background: var(--card); }
+  .map-combo-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 34px; padding: 0; background: none; border: 0; color: var(--text); font-size: 1.05rem; cursor: pointer; text-decoration: none; }
+  .map-combo-btn + .map-combo-btn { border-left: 1px solid #2c2c30; }
+  .map-combo-btn:hover { background: #26262a; }
+  .map-combo-btn:active { background: #303036; }
+  .map-combo-btn[aria-expanded="true"], .map-combo-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .map-preview-heading { position: relative; }
+  .sort-pop { position: absolute; top: 40px; left: 0; z-index: 30; min-width: 230px; max-width: calc(100vw - 32px); padding: 10px; background: var(--card); border: 1px solid #2c2c30; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); font-size: 0.85rem; }
+  .sort-pop[hidden] { display: none; }
+  .sort-pop-title { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 6px; }
+  .sort-pop-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+  .sort-pop-row button { padding: 6px 12px; background: none; border: 1px solid #34343a; border-radius: 999px; color: var(--muted); font: inherit; cursor: pointer; }
+  .sort-pop-row button:hover { color: var(--text); border-color: #4a4a52; }
+  .sort-pop-row button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sort-reset { background: none; border: 0; padding: 2px 0; color: var(--muted); font: inherit; font-size: 0.8rem; text-decoration: none; border-radius: 3px; cursor: pointer; }
+  .sort-reset:hover { color: var(--text); }
+  /* On a phone the buttons keep their places (map and sort at the left, download and about at the right) and never wrap:
+     they get a little narrower if they have to. */
+  @media (max-width: 600px) {
+    .map-preview-heading { gap: 4px; flex-wrap: nowrap; }
+    .map-combo { flex: 0 1 auto; min-width: 0; }
+    .map-combo-btn { width: 36px; flex: 0 1 36px; min-width: 28px; }
+    .page-tools { gap: 4px; min-width: 0; flex: 0 1 auto; }
+  }
+  .map-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .map-preview-body[hidden] { display: none; }
+  .map-hint { position: absolute; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(0,0,0,0.45); color: #fff; font-size: 0.95rem; font-weight: 600; text-align: center; pointer-events: none; border-radius: 10px; }
+  .map-hint[hidden] { display: none; }
+  .map-preview-body { position: relative; isolation: isolate; }   /* (the copy-link button on the map has a high z-index so it sits above the map: kept inside this box, it can no longer float over the sticky bars, the Menu sheet or anything else that scrolls past) */
+  /* Copy-link icon in the map's top right corner, built like Leaflet's own zoom buttons (top left) so the two look like a pair. */
+  .map-corner-link { position: absolute; top: 10px; right: 10px; z-index: 1000; width: 34px; height: 34px; padding: 0; display: flex; align-items: center; justify-content: center; background: #fff; color: #333; border: 2px solid rgba(0,0,0,0.2); border-radius: 4px; background-clip: padding-box; cursor: pointer; }
+  .map-corner-link .ico { width: 18px; height: 18px; }
+  @media (hover: hover) { .map-corner-link:hover { background: #f4f4f4; } }
+  .map-corner-link.copied { color: #3ba55c; }
+  /* On the full-screen map the same icon sits in the bottom left corner (the card has 12px padding; the map is as tall as the call that draws it says). */
+  .map-modal-card .map-corner-link { top: calc(12px + min(72vh, 720px) - 44px); right: auto; left: 22px; }
+  .map-preview-body.peek-hit { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 10px; animation: item-flash 2s ease-out; }   /* the same mark a photo gets when a link snaps to it */
+  .lightbox-copy.copied { color: #3ba55c; opacity: 1; }
+  .lightbox .close,
+  .lightbox .nav {
+    position: fixed;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 2rem;
+    cursor: pointer;
+    padding: 10px 16px;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+  }
+  .lightbox .close:hover,
+  .lightbox .nav:hover { opacity: 1; }
+  /* The close button and the arrows are drawn icons in identical square boxes, centred by the box (not by a text glyph's metrics). */
+  .lightbox .close, .lightbox .nav { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; padding: 0; line-height: 1; border-radius: 50%; }
+  .lightbox .nav .ico { width: 1em; height: 1em; vertical-align: 0; stroke-width: 2; }
+  .lightbox .close { top: 10px; top: calc(10px + env(safe-area-inset-top, 0px)); right: 14px; font-size: 2.2rem; }
+  .lightbox .close .ico { width: 0.85em; height: 0.85em; vertical-align: 0; stroke-width: 1.6; }
+  /* Hovering a control (where there is a mouse) lights its own round or rounded box, so you can see which one you are over, in the
+     plain view and on the dark pill over a zoomed photo alike. */
+  .lightbox .caption-row .lightbox-copy, .lightbox .close, .lightbox .nav { transition: background .12s, opacity .12s, color .12s; }
+  .lightbox .caption-row .lightbox-copy { border-radius: 8px; }
+  @media (hover: hover) {
+    .lightbox .caption-row .lightbox-copy:hover, .lightbox .close:hover, .lightbox .nav:hover,
+    .lightbox.zoom-width .caption-row .lightbox-copy:hover, .lightbox.zoom-actual .caption-row .lightbox-copy:hover,
+    .lightbox.zoom-width .close:hover, .lightbox.zoom-actual .close:hover, .lightbox.zoom-width .nav:hover, .lightbox.zoom-actual .nav:hover {
+      background: rgba(255,255,255,0.2); opacity: 1;
+    }
+    .lightbox .caption-row .lightbox-copy:not(.on):not(.nudge):not(.copied):not(.ready):hover, .lightbox .close:hover, .lightbox .nav:hover { color: #fff; }
+  }
+  .lightbox .close:active { transform: scale(0.92); }
+  .lightbox .prev:active, .lightbox .next:active { transform: translateY(-50%) scale(0.92); }   /* the arrows sit centred by a translate, so keep it */
+  .lightbox .close, .lightbox .nav { transition: background .12s, opacity .12s, color .12s, transform .12s; }
+  /* The owner's editor in the viewer: a sheet under the photo on a phone, a panel beside it on a wide screen. */
+  .lightbox .caption-row .lightbox-copy.owner-edit.on { color: #aab2ff; opacity: 1; }
+  .lb-editor { position: fixed; z-index: 9; box-sizing: border-box; display: flex; flex-direction: column; background: #1a1a1c; color: var(--text); touch-action: pan-y; font-size: 0.95rem; }
+  .lb-editor[hidden] { display: none; }
+  .lightbox.lb-sheet .lb-editor { left: 0; right: 0; bottom: 0; max-height: calc(var(--lbh, 100dvh) - 150px); border-radius: 18px 18px 0 0; box-shadow: 0 -6px 24px rgba(0,0,0,0.5); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .lightbox.lb-side .lb-editor { top: 0; right: 0; bottom: 0; width: 360px; border-left: 1px solid #2c2c30; }
+  @media (pointer: coarse) { .lightbox.lb-side .lb-editor { top: calc(env(safe-area-inset-top, 0px) + 54px); } }
+  .lbe-grip { display: none; align-items: center; justify-content: center; height: 24px; flex: none; touch-action: none; cursor: grab; }
+  .lightbox.lb-sheet .lbe-grip { display: flex; }
+  .lbe-handle { width: 38px; height: 4px; border-radius: 2px; background: #4a4a50; }
+  .lightbox.lb-sheet .lbe-head { touch-action: none; }
+  .lbe-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 10px 16px 4px; min-height: 40px; flex: none; }
+  .lbe-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .lbe-status { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+  .lbe-status.ok { color: #3ba55c; }
+  .lbe-status.err { color: #ed4245; flex-basis: 100%; }
+  .lbe-hidekb { display: none; align-items: center; gap: 5px; height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid #34343a; background: #26262a; color: var(--text); font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+  .lb-editor.kb .lbe-hidekb { display: inline-flex; }
+  .lbe-hidekb:active { transform: scale(0.97); }
+  @media (hover: hover) { .lbe-hidekb:hover { background: #303036; } }
+  .lbe-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 16px 10px; display: flex; flex-direction: column; gap: 12px; }
+  .lbe-field { display: block; }
+  .lbe-field > span { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 5px; }
+  .lbe-field input { width: 100%; height: 46px; box-sizing: border-box; padding: 0 13px; border-radius: 10px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; font-size: 16px; }
+  .lbe-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,101,242,0.28); }
+  .lbe-field input.bad { border-color: #ed4245; box-shadow: 0 0 0 3px rgba(237,66,69,0.25); }
+  .lbe-field input:disabled { opacity: 0.5; }
+  @media (hover: hover) and (pointer: fine) { .lbe-field input { height: 42px; font-size: 14.5px; } }
+  .lbe-err { display: block; min-height: 0; margin-top: 4px; font-style: normal; font-size: 0.78rem; color: #ed4245; }
+  .lbe-err:empty { display: none; }
+  .lbe-pills { display: flex; gap: 8px; }
+  .lbe-pill { flex: 1 1 0; min-width: 0; height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 999px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; font-size: 0.9rem; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; }
+  .lbe-pill .ico { width: 1.1em; height: 1.1em; vertical-align: 0; }
+  .lbe-pill[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #lbe-private[aria-pressed="true"] { background: #ed4245; border-color: rgba(255,255,255,0.3); }
+  #lbe-private.is-folder, #lbe-private.is-folder[aria-pressed="false"] { background: rgba(237,66,69,0.12); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; }
+  #lbe-private[aria-pressed="true"] { background: #ed4245; border-color: #ed4245; }
+  #lbe-cover[aria-pressed="true"] { background: #f5c542; border-color: #f5c542; color: #1a1a1c; }
+  #lbe-cover[aria-pressed="true"] .ico { fill: currentColor; }
+  .lbe-pill:active:not(:disabled) { transform: scale(0.97); }
+  .lbe-pill:disabled { opacity: 0.5; cursor: default; }
+  @media (hover: hover) { .lbe-pill:hover:not(:disabled) { border-color: #6b77f0; } .lbe-pill[aria-pressed="true"]:hover:not(:disabled) { filter: brightness(1.12); } }
+  .lbe-note { margin: -4px 0 0; font-size: 0.78rem; color: var(--muted); line-height: 1.35; }
+  .lbe-note[hidden] { display: none; }
+  .lbe-locrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 0 13px; border-radius: 10px; border: 1px solid #34343a; background: #0f0f10; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .lbe-locrow .ico { flex: none; color: #aab2ff; }
+  .lbe-locrow #lbe-locsum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
+  .lbe-locrow .lbe-chev { color: var(--muted); transition: transform .15s; }
+  .lb-editor.loc-open .lbe-chev { transform: rotate(180deg); }
+  @media (hover: hover) { .lbe-locrow:hover { border-color: #4a4a52; background: #16161a; } }
+  .lbe-locfields { display: none; margin-top: 10px; flex-direction: column; gap: 10px; }
+  .lb-editor.loc-open .lbe-locfields { display: flex; }
+  .lbe-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .lbe-autohint { margin: 2px 0 0; font-size: 0.82rem; line-height: 1.45; color: var(--muted, #9a9aa2); }
+  .lbe-autohint[hidden] { display: none; }
+  .lb-editor.typing .lbe-pills, .lb-editor.typing .lbe-note, .lb-editor.typing .lbe-loc { display: none; }
+  .lbe-foot { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 8px; padding: 8px 16px 14px; flex: none; }
+  /* On a phone the sheet is kept low, so the photo above it has room. */
+  .lightbox.lb-sheet .lbe-head { padding-top: 0; min-height: 32px; }
+  .lightbox.lb-sheet .lbe-body { gap: 9px; padding-top: 2px; padding-bottom: 8px; }
+  .lightbox.lb-sheet .lbe-field > span { margin-bottom: 3px; }
+  .lightbox.lb-sheet .lbe-field input { height: 42px; }
+  .lightbox.lb-sheet .lbe-pill { height: 40px; }
+  .lightbox.lb-sheet .lbe-locrow { min-height: 44px; }
+  .lightbox.lb-sheet .lbe-foot { padding: 6px 16px 10px; }
+  .lightbox.lb-sheet .lbe-btn { height: 42px; }
+  .lbe-btn { height: 46px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 10px; border: 1px solid #34343a; background: #26262a; color: var(--text); font: inherit; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: background .12s, transform .12s; }
+  .lbe-btn .ico { width: 1.1em; height: 1.1em; vertical-align: 0; }
+  .lbe-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .lbe-btn:active { transform: scale(0.97); }
+  @media (hover: hover) { .lbe-btn:hover { background: #303036; } .lbe-btn.primary:hover { background: #6b77f0; } }
+  /* The photo takes what the editor leaves. */
+  .lightbox.editing .lightbox-zoom { display: none; }
+  .lightbox.editing img { cursor: default; }
+  .lightbox.editing.lb-side { padding-right: 360px; }
+  .lightbox.editing.lb-side img, .lightbox.editing.lb-side video { max-width: calc(100vw - 400px); }
+  .lightbox.editing.lb-side .next { right: 366px; }
+  .lightbox.editing.lb-side .close { right: 374px; }
+  .lightbox.editing.lb-sheet { padding-bottom: var(--sheet-h, 0px); }
+  .lightbox.editing.lb-sheet img, .lightbox.editing.lb-sheet video { max-height: calc(var(--lbh, 100dvh) - var(--sheet-h, 0px) - 90px); }
+  @media (pointer: coarse) { .lightbox.editing.lb-sheet img, .lightbox.editing.lb-sheet video { max-height: calc(var(--lbh, 100dvh) - var(--sheet-h, 0px) - 62px - env(safe-area-inset-top, 0px)); } }
+  .lightbox.editing.lb-sheet .prev, .lightbox.editing.lb-sheet .next { top: calc((var(--lbh, 100dvh) - var(--sheet-h, 0px)) / 2); }   /* the arrows sit level with the photo, not with the whole screen */
+  .lightbox .prev { left: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
+  .lightbox .next { right: 6px; top: 50%; transform: translateY(-50%); font-size: 3rem; }
+  @media (max-width: 600px) {
+    .lightbox .prev, .lightbox .next { font-size: 2.2rem; }
+    .lightbox .nav { width: 44px; height: 44px; }
+  }
+  /* The owner's shell: the page without its own sticky bar (the shell's path and tree do that job). */
+  html:has(> body.inframe) { scrollbar-gutter: stable; }

@@ -1,0 +1,6 @@
+  body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.6; margin:0; }
+  .wrap { max-width:560px; margin:0 auto; padding:48px 24px; }
+  h1 { font-size:1.4rem; }
+  a { color:#aab2ff; text-decoration:none; border-radius:3px; }
+  p a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
+  code { background:rgba(255,255,255,0.08); padding:1px 6px; border-radius:4px; }

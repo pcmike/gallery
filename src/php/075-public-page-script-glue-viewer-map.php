@@ -1,0 +1,1 @@
+<?php if (ENABLE_PHOTO_LOCATION): ?>

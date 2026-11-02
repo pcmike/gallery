@@ -4,7 +4,19 @@ This started as a personal tool, so there's no formal process yet — just a few
 
 ## Local testing
 
-No build step. Drop `index.php` into a folder with a few test images (and optionally a `.md` file, first line `{gallery}` — see the README) and run PHP's built-in server:
+## Where the code lives
+
+`index.php` is what people download and drop into a folder: one file, no dependencies. It is **built from the parts in `src/`**, so the source is in pieces you can find your way around:
+
+- `src/php/NNN-name.php`: the PHP and the HTML around it, in the order they appear in the file (settings, data files, sign-in, share links, the admin, the public page, ...). A part is a stretch of the file, not a PHP file of its own: it can begin or end inside a function, so `php -l` is for the built `index.php`.
+- `src/js/*.js` and `src/css/*.css`: scripts and styles as plain files (the build pastes them back between the `<script>` / `<style>` tags). A script or style that needs nothing from PHP is one file (`login-page-script.js`, `shell-script.js`, `admin-page-script.js`, `setup-script.js`, the `*-styles.css` files) that a linter can read as it is. The gallery page's script, the map's and the Files panel's have PHP values written into them (the photo list, the owner's state, an on/off flag), so they are cut into pieces at those places (`gallery-script-*.js`, `map-script-pins.js`, `files-made-script-*.js`); the small `php/*-glue-*.php` parts between them hold the lines with the PHP in them. A piece is not a program on its own: `tests/tools/js/run_js_checks.py` checks the whole script as the page renders it.
+- `src/manifest.txt`: the order. The build is the plain concatenation of the parts, byte for byte.
+
+**Edit the parts, then run `php build.php`** (it rewrites `index.php`; `php build.php --check` says whether it is up to date). Commit both `src/` and the built `index.php`: the release ships the built file, and `tests/run.php` stops at once if `index.php` is not what `src/` builds. Never edit `index.php` directly.
+
+## Local testing
+
+No build step to *run* it: drop `index.php` into a folder with a few test images (and optionally a `.md` file, first line `{gallery}` — see the README) and run PHP's built-in server:
 
 ```
 php -S localhost:8000 -t /path/to/test-folder
@@ -16,7 +28,7 @@ Then visit `http://localhost:8000/`. Useful endpoints while testing:
 - `/?img=somefile.jpg&size=thumb` — the resize/cache endpoint directly (set `ENABLE_THUMBNAIL_CACHE` to `true` to actually exercise caching/resizing)
 - `/?track=somefile.jpg` — the view-tracking ping, returns JSON (set `TRACK_VIEWS` to `true` to see it actually track)
 - `/?folder=Europe/France` — a folder's own page (set `AUTO_GROUP_BY_FOLDER` to `true`; works at any depth)
-- `/?map` — the gallery page with the map overlay open (needs `ENABLE_MAP` and `ENABLE_PHOTO_LOCATION`, plus photos with a visible location); `/?map&folder=Europe` does the same for a folder
+- `/?map` — the gallery page with the map overlay open (needs `ENABLE_PHOTO_LOCATION`, plus photos with a visible location); `/?map&folder=Europe` does the same for a folder
 - `/?admin` and `/?reveal` — a password form (set `ADMIN_PASSWORD` / `PRIVATE_VIEW_PASSWORD` in your test copy; both are allowed over plain HTTP on `localhost`)
 
 Remember most of these are off by default — if you're testing view stats or thumbnail caching specifically, flip the relevant constant near the top of your test copy of `index.php` first.
@@ -41,7 +53,7 @@ Run both `php -l index.php` and `php tests/run.php` before committing, and add a
 
 ## PHP versions
 
-The minimum is **PHP 8.3**, and it's a tested claim: the whole suite and every tool in `tests/tools/` pass on 8.3 and on 8.4 (the version this is developed on). Before raising or lowering the minimum, run them on the new floor. A throwaway second PHP needs no install — grab a static CLI build from <https://dl.static-php.dev/static-php-cli/common/> and run `php83 tests/run.php` and, for the tools, `PHP_SERVER=/path/to/php83 python3 tests/tools/fuzz/fuzz.py` (see [`tests/tools/README.md`](tests/tools/README.md)). Such a build has GD and SQLite but no Imagick, so the HEIC tests skip and thumbnails use the GD path — which is useful coverage of its own.
+The minimum is **PHP 8.3**, and it's a tested claim: the whole suite and every tool in `tests/tools/` pass on 8.3, 8.4 (the version this is developed on) and 8.5 (last checked on the 2.4.0 work). Before raising or lowering the minimum, run them on the new floor. A throwaway second PHP needs no install — grab a static CLI build from <https://dl.static-php.dev/static-php-cli/common/> and run `php83 tests/run.php` and, for the tools, `PHP_SERVER=/path/to/php83 python3 tests/tools/fuzz/fuzz.py` (see [`tests/tools/README.md`](tests/tools/README.md)). Such a build has GD and SQLite but no Imagick, so the HEIC tests skip and thumbnails use the GD path — which is useful coverage of its own.
 
 ## Optional tools: fuzzing and JavaScript checks
 

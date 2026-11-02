@@ -7,7 +7,7 @@ $src = file_get_contents($argv[2] ?? (dirname(__DIR__, 3) . '/index.php'));
 // A setting is define('NAME', gallery_setting('NAME', default...)); replace the whole define.
 foreach ([
   'AUTO_GROUP_BY_FOLDER' => 'true', 'AUTO_GROUP_BY_FILENAME' => 'true', 'ENABLE_VIDEO' => 'true', 'ENABLE_THUMBNAIL_CACHE' => 'true',
-  'TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true', 'ENABLE_PHOTO_LOCATION' => 'true', 'ENABLE_MAP' => 'true',
+  'TRACK_VIEWS' => 'true', 'SHOW_VIEW_COUNTS_PUBLICLY' => 'true', 'ENABLE_PHOTO_LOCATION' => 'true',
   'ADMIN_PASSWORD' => "'adm-pw'", 'PRIVATE_VIEW_PASSWORD' => "'viewer-pw'", 'ENABLE_SHARE_LINKS' => 'true', 'SHARE_HEADS_UP' => 'true',
 ] as $name => $value) {
   $src = preg_replace("/define\\('" . $name . "',\\s*gallery_setting\\([^)]*\\)\\)/", "define('$name', $value)", $src, 1, $n);

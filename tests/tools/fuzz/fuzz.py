@@ -78,7 +78,7 @@ linkTokA,linkA=make_link("all",downloads="all",zip="all",locations="all")
 sess=[("anon",{}),("revealed",{"Cookie":revealC}),("admin",adminAuth),("link-folders",{"Cookie":linkF}),("link-photos",{"Cookie":linkP}),("link-all",{"Cookie":linkA})]
 # --- Preview as this link: the owner's own browser (admin cookie and all) as a holder of each link, and the routes that start and end it
 def preview_for(lid):
-    r=urllib.request.Request(B+f"/?admin&linkpreview={lid}&csrf_token={_csrf()}",headers=adminAuth)
+    r=urllib.request.Request(B+"/?admin",data=urllib.parse.urlencode({"linkpreview":lid,"csrf_token":_csrf()}).encode(),headers=adminAuth,method="POST")
     try: resp=op.open(r,timeout=10)
     except urllib.error.HTTPError as e: resp=e
     pairs=[h.split(';')[0] for h in resp.headers.get_all('Set-Cookie') or [] if h.startswith('gallery_preview_')]
@@ -88,8 +88,9 @@ _raw=open(SITE+"/.gallery-links.php").read(); _byLabel={l["label"]:i for i,l in 
 sess_preview=[("preview-folders",{"Cookie":preview_for(_byLabel["folder"])}),("preview-photos",{"Cookie":preview_for(_byLabel["photos"])}),("preview-all",{"Cookie":preview_for(_byLabel["all"])})]
 for lid in list(_byLabel.values())+['nope','','../','a'*40,'%00']:
     for tk in (_csrf(),'','x','a'*500,'%00'):
-        req(f"/?admin&linkpreview={q(lid,safe='')}&csrf_token={q(tk,safe='')}",headers=adminAuth,label=f"linkpreview {lid[:12]} {tk[:6]}")
-    req(f"/?admin&linkpreview={q(lid,safe='')}",headers=adminAuth,label=f"linkpreview no token {lid[:12]}")
+        req("/?admin",method="POST",data={"linkpreview":lid,"csrf_token":tk},headers=adminAuth,label=f"linkpreview {lid[:12]} {tk[:6]}")
+    req("/?admin",method="POST",data={"linkpreview":lid},headers=adminAuth,label=f"linkpreview no token {lid[:12]}")
+    req(f"/?admin&linkpreview={q(lid,safe='')}&csrf_token={q(_csrf(),safe='')}",headers=adminAuth,label=f"linkpreview as an address (refused) {lid[:12]}")
 for f in folders+junk: req("/?admin&linkphotos="+q(f,safe=''),headers=adminAuth,label=f"linkphotos {f[:30]}")
 req("/?admin&linkphotos=",headers=adminAuth,label="linkphotos root"); req("/?admin&linkphotos[]=x",headers=adminAuth,label="linkphotos array")
 for name,h in sess:

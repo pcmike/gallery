@@ -1,0 +1,567 @@
+  :root {
+    --bg: #0f0f10;
+    --card: #1a1a1c;
+    --text: #eaeaea;
+    --muted: #8a8a8f;
+    --accent: #5865f2;
+    --sold: #e5484d;
+    --reserved: #f5a623;
+  }
+  * { box-sizing: border-box; }
+  .link-preview { position: sticky; top: 0; z-index: 95; background: #262046; border-bottom: 1px solid #3d3470; color: #e9e6ff; font-size: 0.88rem; }
+  .link-preview .lp-bar { display: flex; align-items: center; gap: 12px; padding: 9px 14px; }
+  .link-preview .lp-bar .ico { flex: none; color: #b9b2ff; }
+  .link-preview .lp-t { flex: 1 1 auto; line-height: 1.4; }
+  .link-preview .lp-more { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 6px 4px; background: none; border: 0; color: #cfc9ff; font: inherit; cursor: pointer; }
+  .link-preview .lp-more:hover { text-decoration: underline; }
+  .link-preview .lp-exit { flex: none; padding: 7px 14px; background: #14141a; border: 1px solid #4a4380; border-radius: 9px; color: #fff; font-weight: 700; text-decoration: none; white-space: nowrap; }
+  .link-preview .lp-exit:hover { background: #000; }
+  .link-preview .lp-panel { position: absolute; right: 14px; top: calc(100% + 8px); box-sizing: border-box; width: min(420px, calc(100vw - 28px)); padding: 16px 18px; background: #1a1a1d; border: 1px solid #38383f; border-radius: 12px; color: #eaeaea; box-shadow: 0 14px 44px rgba(0,0,0,0.6); }
+  .link-preview .lp-panel[hidden] { display: none; }
+  .link-preview .lp-panel h3 { margin: 0 0 10px; font-size: 1.05rem; }
+  .link-preview .lp-panel ul { list-style: none; margin: 0; padding: 0; }
+  .link-preview .lp-panel li { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 9px; line-height: 1.4; }
+  .link-preview .lp-panel li .ico { flex: none; width: 16px; height: 16px; margin-top: 3px; }
+  .link-preview .lp-panel li.yes .ico { color: #57c47a; }
+  .link-preview .lp-panel li.no .ico { color: #9a9aa2; }
+  .link-preview .lp-note { margin: 12px 0 0; font-size: 0.8rem; color: #8e8e96; }
+  @media (max-width: 640px) { .link-preview .lp-bar { flex-wrap: wrap; } .link-preview .lp-t { flex-basis: 100%; order: 1; } .link-preview .lp-bar .ico { display: none; } .link-preview .lp-more { order: 2; margin-right: auto; } .link-preview .lp-exit { order: 3; } }
+  .link-headsup { position:relative; display:flex; align-items:center; justify-content:center; text-align:center; gap:10px; padding:8px 44px; background:#1f2233; border-bottom:1px solid #2f3350; font-size:0.85rem; line-height:1.35; color:#d9dcff; }
+  .link-headsup.soon { background:#33290f; border-color:#6b5316; color:#ffe2a3; }
+  .link-headsup[hidden] { display:none; }
+  .link-headsup .lh-x { position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:0; color:inherit; opacity:.75; font-size:1.3rem; line-height:1; cursor:pointer; padding:0 4px; }
+  .link-headsup .lh-x { border-radius:4px; transition:opacity .15s, background .15s, box-shadow .15s, transform .12s; }
+  .link-headsup .lh-x:hover { opacity:1; background:rgba(255,255,255,0.14); box-shadow:0 0 0 3px rgba(255,255,255,0.14); }
+  .link-headsup .lh-x:active { transform:translateY(-50%) scale(0.9); }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 32px 24px 16px;
+    text-align: center;
+  }
+  /* For the signed-in owner the title leads back to the admin, and looks and behaves exactly like plain text: no underline,
+     colour, cursor or tooltip change, on hover or otherwise (keyboard focus still shows the browser's normal ring). */
+  header h1 a.title-admin { color: inherit; text-decoration: none; cursor: inherit; -webkit-tap-highlight-color: transparent; }
+  /* The lock is one of the icons in the strip (beside the archive icon): green while signed in. */
+  /* Breadcrumb: a row of pills (the separators in the markup are hidden)
+     with a chevron before each level after the first. */
+  p.breadcrumb {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 6px;
+    font-size: 0; margin: 0 0 14px;
+  }
+  p.breadcrumb a {
+    font-size: 0.82rem; line-height: 1;
+    color: var(--muted); text-decoration: none;
+    background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07);
+    padding: 7px 13px; border-radius: 999px;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  p.breadcrumb a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  p.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  p.breadcrumb a + a::before { content: "\203A"; margin-right: 9px; opacity: 0.55; }
+  /* The way back and the pills stay at the top of the screen, like the icon strip (which sticks just under them). Two arrows at the right,
+     once the page has scrolled, jump to the bottom and the top. */
+  .crumb-bar { position: sticky; top: var(--stick-top, 0px); z-index: 41; display: flex; align-items: center; gap: 8px; padding: 10px 24px 6px; background: var(--bg); transition: box-shadow .15s; }
+  .crumb-bar.stuck { box-shadow: 0 1px 0 #26262a; }
+  .crumb-bar + header { padding-top: 10px; }
+  .jump-btns { flex: none; display: flex; gap: 6px; }
+  .jump-btns[hidden] { display: none; }
+  .jump-btn { width: 34px; height: 34px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.12); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; }
+  .jump-btn .ico { width: 18px; height: 18px; }
+  .jump-btn:active { transform: scale(0.9); }
+  @media (hover: hover) { .jump-btn:hover { transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; } .jump-btn:hover:active { transform: scale(1.02); } }
+  @media (max-width: 600px) { .crumb-bar { padding: 8px 16px 4px; } }
+  /* The way back and the folders beside this one share ONE line: the way back stays put at the left while the sibling pills
+     swipe; the current folder is lit. When it all fits it is centred. */
+  .crumb-row { position: relative; display: flex; align-items: center; gap: 10px; overflow-x: auto; flex: 1 1 auto; min-width: 0; margin: 0; padding: 2px 2px 2px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .crumb-row::-webkit-scrollbar { display: none; }
+  .crumb-row p.breadcrumb { flex: none; flex-wrap: nowrap; margin: 0 0 0 auto; }
+  .crumb-row p.breadcrumb:only-child { margin-right: auto; }
+  .crumb-row nav.folder-pills { margin-right: auto; }
+  .crumb-row p.breadcrumb:not(:only-child) { position: sticky; left: 0; z-index: 2; background: var(--bg); box-shadow: 8px 0 8px -4px var(--bg); }
+  .crumb-row p.breadcrumb:not(:only-child)::after { content: "\2022"; font-size: 1rem; line-height: 1; color: var(--muted); opacity: 0.7; align-self: center; margin-left: 4px; margin-right: 0; }
+  nav.folder-pills { flex: none; display: flex; gap: 6px; }
+  nav.folder-pills a { flex: none; font-size: 0.82rem; line-height: 1; color: var(--muted); text-decoration: none; background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07); padding: 7px 13px; border-radius: 999px; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }   /* the same pill as the breadcrumb's */
+  nav.folder-pills a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  nav.folder-pills a.current { color: #fff; background: var(--accent); border-color: var(--accent); }
+  nav.folder-pills a.all { border-style: dashed; }
+  nav.folder-pills a.priv { display: inline-flex; align-items: center; gap: 6px; }   /* the owner's lock in a private folder's button */
+  nav.folder-pills a.priv .ico { width: 0.95em; height: 0.95em; color: #ff8a8c; }
+  nav.folder-pills a.priv.current .ico { color: #fff; }
+  header h1 {
+    margin: 0 0 4px;
+    font-size: 1.6rem;
+    font-weight: 600;
+  }
+  header p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .hidden { display: none !important; }
+
+  /* Markdown note / announcement box */
+  .notes {
+    max-width: 700px;
+    margin: 0 auto 8px;
+    padding: 0 24px;
+  }
+  .gallery-notices {
+    background: rgba(245, 166, 35, 0.08);
+    border: 1px solid rgba(245, 166, 35, 0.35);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+  }
+  .gallery-notices summary {
+    cursor: pointer;
+    color: var(--reserved);
+    font-weight: 600;
+  }
+  .gallery-notices ul {
+    margin: 10px 0 0;
+    padding-left: 20px;
+    color: var(--muted);
+  }
+  .gallery-notices li {
+    margin-bottom: 6px;
+  }
+  .gallery-notices li:last-child {
+    margin-bottom: 0;
+  }
+  .note-box {
+    background: #202225;
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+  .note-box .note-filename {
+    display: block;
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+  .note-box p { margin: 0 0 10px; }
+  .note-box p:last-child { margin-bottom: 0; }
+  .note-box h1, .note-box h2, .note-box h3 {
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  .note-box h1 { font-size: 1.2rem; }
+  .note-box h2 { font-size: 1.1rem; }
+  .note-box h3 { font-size: 1rem; }
+  .note-box ul, .note-box ol {
+    margin: 0 0 10px;
+    padding-left: 22px;
+  }
+  .note-box li { margin-bottom: 4px; }
+  .note-box code {
+    background: rgba(255,255,255,0.08);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.88em;
+  }
+  .note-box pre {
+    background: rgba(255,255,255,0.08);
+    padding: 10px 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 0 0 10px;
+  }
+  .note-box pre code { background: none; padding: 0; }
+  .note-box blockquote {
+    margin: 0 0 10px;
+    padding-left: 12px;
+    border-left: 3px solid var(--muted);
+    color: var(--muted);
+  }
+  .note-box a { color: #aab2ff; border-radius: 3px; transition: color .15s, background .15s, box-shadow .15s; }
+  .note-box a:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
+  .note-box u { text-decoration: underline; }
+  .note-box del { color: var(--muted); }
+  .sold-item p { opacity: 0.55; text-decoration: line-through; margin-bottom: 6px; }
+  .reserved-item p { opacity: 0.7; margin-bottom: 6px; }
+  .sold-badge, .sold-badge-corner {
+    display: inline-block;
+    background: var(--sold);
+    color: #fff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .reserved-badge, .reserved-badge-corner {
+    display: inline-block;
+    background: var(--reserved);
+    color: #1a1305;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .sold-badge, .reserved-badge { margin-bottom: 6px; }
+
+  /* Per-item permalinks (#item-...) and the highlight flash when landing on one */
+  .permalink-copy {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.8rem;
+    opacity: 0.75;
+  }
+  .permalink-copy:hover { opacity: 1; }
+  /* An inline link icon (beside a heading or a paragraph) answers like the text links around it: the soft halo. A folder card's round one has its own, below. */
+  .permalink-copy { transition: color .15s, background .15s, box-shadow .15s, transform .12s; }
+  .permalink-copy:not(.folder-permalink-copy) { border-radius: 4px; }
+  .permalink-copy:active { transform: scale(0.9); }
+  @media (hover: hover) { .permalink-copy:not(.folder-permalink-copy):hover { color: #e1e4ff; background: rgba(170,178,255,0.16); box-shadow: 0 0 0 3px rgba(170,178,255,0.16); } }
+  .permalink-copy.copied { color: #3ba55c; opacity: 1; }
+  .note-box p, .note-box .sold-item, .note-box .reserved-item { scroll-margin-top: 20px; }
+  .note-box p:target,
+  .note-box .sold-item:target,
+  .note-box .reserved-item:target {
+    border-radius: 6px;
+    animation: item-flash 2s ease-out;
+  }
+  @keyframes item-flash {
+    0% { background: rgba(88, 101, 242, 0.35); }
+    100% { background: rgba(88, 101, 242, 0); }
+  }
+
+  /* Thumbnail strip auto-linked from note text to a photo group */
+  .linked-photos {
+    margin: 4px 0 14px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  .linked-photos-thumbs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .linked-photos-thumbs img {
+    width: 56px;
+    height: 56px;
+    object-fit: cover;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: transform 0.15s ease;
+  }
+  .linked-photos-thumbs img:hover { transform: scale(1.08); }
+  .linked-photos.sold .linked-photos-thumbs img { filter: grayscale(1) brightness(0.65); }
+  .linked-photos-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .linked-photos-jump {
+    color: #aab2ff;
+    font-size: 0.8rem;
+    text-decoration: none;
+    border-radius: 3px;
+    transition: color .15s, background .15s, box-shadow .15s;
+  }
+  .linked-photos-jump:hover { color:#e1e4ff; background:rgba(170,178,255,0.16); box-shadow:0 0 0 3px rgba(170,178,255,0.16); border-radius:3px; }
+
+  /* Gallery */
+  .gallery {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 16px 24px 48px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+  }
+  /* A few folder cards and nothing else: larger on a wide screen, centred. Narrower screens keep the normal grid. */
+  .gallery[class*="covers-"] .folder-cover-label { font-size: 1.1rem; }
+  /* The box is as wide as its cards need, so the map buttons above (same class) share the first card's left edge. */
+  .gallery.covers-1, .map-preview.covers-1 { max-width: 608px; }
+  .gallery.covers-2, .map-preview.covers-2 { max-width: 1106px; }
+  .gallery.covers-3, .map-preview.covers-3 { max-width: 1280px; }
+  .gallery.covers-4, .map-preview.covers-4 { max-width: 1290px; }
+  /* Five or six folders: the normal grid would make room for more columns than there are cards and leave the right side
+     empty. auto-fit drops the empty columns, so the cards share the full width (the box is as wide as the normal grid). */
+  .gallery.covers-5, .gallery.covers-6 { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
+  @media (max-width: 639px) {
+    .gallery.one-up { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  }
+  @media (min-width: 640px) {
+    .gallery.covers-1 { grid-template-columns: minmax(0, 1fr); }
+    .gallery.covers-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  }
+  @media (min-width: 860px) {
+    .gallery.covers-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  }
+  @media (min-width: 1080px) {
+    .gallery.covers-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  }
+  .group-box {
+    grid-column: 1 / -1;
+    margin: 6px 0;
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left: 4px solid rgba(255,255,255,0.18);
+    border-radius: 12px;
+    padding: 18px;
+    scroll-margin-top: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .group-box:target {
+    animation: item-flash 2s ease-out;
+  }
+  .group-box.sold::after,
+  .group-box.reserved::after {
+    position: absolute;
+    top: 14px;
+    right: -34px;
+    width: 130px;
+    padding: 4px 0;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-align: center;
+    transform: rotate(45deg);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  }
+  .group-box.sold::after {
+    content: "SOLD";
+    background: var(--sold);
+    color: #fff;
+  }
+  .group-box.reserved::after {
+    content: "RESERVED";
+    background: var(--reserved);
+    color: #1a1305;
+  }
+  .group-box.sold .card img { filter: grayscale(1) brightness(0.6); }
+  .group-box.sold .group-label { opacity: 0.6; }
+  .group-box.reserved .group-label { opacity: 0.75; }
+
+  /* Folder-group cover card (FOLDER_DISPLAY_MODE='overview') — a normal
+     grid tile, not a full-width row, so several albums sit side by side. */
+  .folder-cover {
+    position: relative;
+    background: var(--card);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .folder-cover-link {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+  }
+  .folder-cover-link img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.25s ease;
+  }
+  .folder-cover-link:hover img { transform: scale(1.05); }
+  .folder-cover.sold img { filter: grayscale(1) brightness(0.6); }
+  /* The sold picture has a filter, which makes it paint over an earlier, positioned sibling: lift the ribbon above it. */
+  .folder-cover .sold-badge-corner, .folder-cover .reserved-badge-corner { z-index: 2; }
+  .folder-cover-label {
+    display: block;
+    padding: 10px 12px 2px;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .folder-cover-dates { display:block; padding:0 12px; font-size:0.78rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .folder-dates { margin:2px 0 0; color:var(--muted); font-size:0.9rem; }
+  .note-box.folder-description { text-align: center; }
+  .note-box.folder-description ul, .note-box.folder-description ol { display: inline-block; text-align: left; margin: 4px 0 10px; }
+  /* A straight bar drawn inside the paragraph (a border curved whenever the paragraph was the target of a link). */
+  .note-box p.accent-note { box-shadow: inset 4px 0 0 var(--bar); padding-left: 14px; border-radius: 0; }
+  .note-box p.accent-note:target { border-radius: 0; }
+  .folder-cover-count {
+    display: block;
+    padding: 0 12px 10px;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  /* The owner's mark on a folder card: the same two pills as a photo's lock. The count of what is private inside is its own link. */
+  .folder-priv { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 0.72rem; line-height: 1; color: #fff; font-family: inherit; }
+  .folder-priv .ico { width: 1em; height: 1em; }
+  .folder-priv.own { background: rgba(237,66,69,0.92); border: 1px solid rgba(255,255,255,0.35); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; -webkit-tap-highlight-color: transparent; }
+  .folder-priv.own::after { content: ''; position: absolute; inset: -6px; }   /* a bigger target for a finger */
+  .folder-priv.own:active { transform: scale(0.94); }
+  .folder-priv.own:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  @media (hover: hover) { .folder-priv.own:hover { background: #f4585b; transform: scale(1.06); box-shadow: 0 0 0 2px #fff; } }
+  .folder-priv.inh { background: rgba(0,0,0,0.55); border: 1.5px dashed rgba(255,120,122,0.95); color: #ff9a9c; pointer-events: none; }
+  .folder-cover.has-priv .sold-badge-corner, .folder-cover.has-priv .reserved-badge-corner { top: 40px; }
+  .folder-cover-count.has-priv-count { position: relative; }
+  .folder-cover-count .fc-main { color: inherit; text-decoration: none; }
+  .folder-cover-count .fc-main::before { content: ''; position: absolute; inset: 0; }   /* the whole line still opens the folder */
+  .folder-cover-count .fc-priv { position: relative; z-index: 1; white-space: nowrap; color: #ff8a8c; text-decoration: none; padding: 2px 4px; margin: 0 -1px 0 -1px; border-radius: 6px; transition: color .15s, background .15s; }   /* the padding is the chip's room, so its edge keeps clear of the words beside it */
+  .folder-cover-count .fc-priv .ico { width: 0.95em; height: 0.95em; margin: 0 -1px 0 0; vertical-align: -2.5px; stroke-width: 2.2; }   /* the arrow that says it is pressable, on a phone too */
+  @media (hover: hover) { .folder-cover-count .fc-priv:hover { color: #fff; background: rgba(237,66,69,0.38); } }
+  .folder-cover-count .fc-priv:active { background: rgba(237,66,69,0.55); }
+  .folder-cover-count .fc-priv:focus-visible { outline: 2px solid #ff8a8c; outline-offset: 2px; }
+  .folder-permalink-copy {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(0,0,0,0.65);
+    color: #eaeaea;
+    opacity: 1;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s, transform .12s, box-shadow .12s;
+  }
+  /* The same answer as the caption, place and link badges on a tile: over it a ring, the accent colour, a little larger; pressed, it sinks. */
+  .folder-permalink-copy:active { transform: scale(0.9); }
+  @media (hover: hover) {
+    .folder-permalink-copy:hover { transform: scale(1.2); box-shadow: 0 0 0 2px #fff; background: var(--accent); color: #fff; }
+    .folder-permalink-copy:hover:active { transform: scale(1.04); }
+  }
+  .folder-permalink-copy.copied, .folder-permalink-copy.copied:hover { background: #3ba55c; color: #fff; opacity: 1; }
+  .group-label {
+    margin: 0 0 12px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text);
+  }
+  .group-views {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .group-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+  }
+  /* Any link without a style of its own looks like this (never the browser's blue and purple). */
+  a { color:#aab2ff; text-decoration:none; }
+  .card {
+    background: var(--card);
+    border-radius: 10px;
+    overflow: hidden;
+    aspect-ratio: 1 / 1;
+    cursor: pointer;
+    position: relative;
+    scroll-margin-top: 16px;
+  }
+  .card.find-ring { outline: 3px solid #aab2ff; outline-offset: 3px; box-shadow: 0 0 0 8px rgba(170,178,255,0.28); transition: outline-color .6s, box-shadow .6s; }
+  .card.find-ring.as-cover { outline-color: #f5c542; box-shadow: 0 0 0 8px rgba(245,197,66,0.25); }
+  .show-me-ring { outline: 3px solid #aab2ff !important; outline-offset: 3px; box-shadow: 0 0 0 8px rgba(170,178,255,0.28) !important; }
+  .show-me-force, .show-me-card .priv-toggle, .show-me-card .edit-toggle, .show-me-card .cover-toggle { opacity: 1 !important; visibility: visible !important; }
+  .show-me-note { position: fixed; z-index: 200; padding: 10px 14px; border-radius: 10px; background: #2d3a8c; color: #fff; font-size: 0.9rem; line-height: 1.45; box-shadow: 0 6px 20px rgba(0,0,0,0.55); pointer-events: none; }
+  .show-me-note::before { content: ''; position: absolute; left: var(--tail-x, 50%); width: 12px; height: 12px; background: #2d3a8c; transform: translateX(-50%) rotate(45deg); display: none; }   /* the pointer: a small tail aimed at the button */
+  .show-me-note.below::before { display: block; top: -6px; }
+  .show-me-note.above::before { display: block; bottom: -6px; }
+  .group-box.find-ring { outline: 3px solid #aab2ff; outline-offset: 3px; box-shadow: 0 0 0 8px rgba(170,178,255,0.28); transition: outline-color .6s, box-shadow .6s; }
+  /* After a pin's thumbnail sends you to its photo: the way back to the map, for a few seconds */
+  .map-back { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 85; display: flex; width: max-content; max-width: calc(100vw - 24px); white-space: nowrap; align-items: center; gap: 2px; padding: 4px 4px 4px 8px; border-radius: 999px; background: #2d3a8c; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.5); transition: opacity .25s; }
+  .map-back.fading { opacity: 0; }
+  .map-back button { min-height: 44px; border: 0; background: transparent; color: #fff; font: inherit; font-size: 0.95rem; cursor: pointer; border-radius: 999px; }
+  .map-back .map-back-go { padding: 0 14px; font-weight: 600; }
+  .map-back .map-back-x { width: 44px; padding: 0; font-size: 1.4rem; line-height: 1; }
+  @media (hover: hover) { .map-back button:hover { background: rgba(255,255,255,0.14); } }
+  @media (prefers-reduced-motion: reduce) { .map-back { transition: none; } }
+  /* Select (the owner's way to act on several photos): tiles are picked with a tap; where the photos sit one by one a picked tile
+     can also be held and dragged next to another (Arrange). */
+  .select-bar { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; background: rgba(30,30,34,0.97); border: 1px solid #3a3a42; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 90; display: flex; flex-direction: column; gap: 8px; }
+  .select-bar[hidden] { display: none; }
+  .select-top { display: flex; align-items: center; gap: 4px; }
+  .select-count { flex: 1; min-width: 0; font-size: 0.95rem; font-weight: 600; }
+  .select-hint { flex: 1 1 100%; font-size: 0.8rem; color: var(--muted); line-height: 1.35; }
+  .select-btns, .select-arr { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .select-bar button { flex: 0 1 auto; padding: 7px 12px; background: none; border: 1px solid #34343a; border-radius: 999px; color: var(--text); font: inherit; font-size: 0.85rem; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .select-btns button { flex: 1 1 0; padding: 10px 12px; font-size: 0.9rem; }
+  /* In a private folder the three buttons are the three states of the lock: Private (solid), Public, Folder (dashed). */
+  .folder-priv-banner { display: flex; gap: 10px; align-items: flex-start; width: calc(100% - 48px); max-width: 1352px; margin: 8px auto 0; padding: 10px 12px; border-radius: 10px; background: rgba(237,66,69,0.12); border: 1px solid rgba(237,66,69,0.45); font-size: 0.85rem; line-height: 1.4; box-sizing: border-box; }
+  .folder-priv-banner > .ico { width: 1.3em; height: 1.3em; color: #ff7a7c; margin-top: 1px; flex: none; }
+  .folder-priv-banner { cursor: pointer; transition: background .15s, border-color .15s, transform .12s; -webkit-tap-highlight-color: transparent; }
+  .folder-priv-banner:hover { background: rgba(237,66,69,0.2); border-color: rgba(237,66,69,0.75); }
+  .folder-priv-banner:active { transform: scale(0.995); background: rgba(237,66,69,0.26); }
+  .folder-priv-banner:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .folder-priv-banner .fpb-hint { display: block; margin-top: 2px; font-style: normal; font-weight: 600; color: #aab2ff; }
+  .fp-modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.62); }
+  .fp-modal[hidden] { display: none; }
+  .fp-modal-card { width: min(420px, 100%); box-sizing: border-box; background: var(--card); border: 1px solid #34343a; border-radius: 14px; padding: 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.6); }
+  .fp-modal-card h3 { margin: 0 0 10px; font-size: 1.15rem; }
+  .fp-row { display: flex; align-items: center; gap: 9px; margin: 4px 0; font-size: 0.95rem; }
+  .fp-row .ico { width: 1.2em; height: 1.2em; flex: none; }
+  .fp-stay .ico { color: #ff7a7c; } .fp-open .ico { color: #3ba55c; }
+  .fp-hint { margin: 10px 0 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+  .fp-btns { display: flex; gap: 8px; margin-top: 16px; }
+  .fp-btns button { flex: 1; padding: 10px 14px; font: inherit; font-size: 0.9rem; border-radius: 8px; border: 1px solid #34343a; background: #26262a; color: var(--text); cursor: pointer; transition: background .12s, transform .12s; }
+  .fp-btns button:hover { background: #303036; } .fp-btns button:active { transform: scale(0.97); }
+  .fp-btns .primary { background: var(--accent); border-color: var(--accent); color: #fff; } .fp-btns .primary:hover { background: #6b77f0; }
+  .folder-priv-banner strong { display: block; }
+  .folder-priv-banner span { color: #c9c9ce; }
+  .select-bar .sb-p { display: none; }
+  .select-bar.in-private .sb-n { display: none; }
+  .select-bar.in-private .sb-p { display: inline; }
+  .select-bar.in-private .select-btns { flex-wrap: nowrap; }
+  .select-bar.in-private .select-btns button { padding: 10px 4px; }
+  .select-bar.in-private .sb-private:not(:disabled) { background: #ed4245; border-color: rgba(255,255,255,0.3); color: #fff; }
+  .select-bar.in-private .sb-private:hover:not(:disabled) { background: #f4585b; border-color: rgba(255,255,255,0.4); }
+  .select-bar.in-private .sb-folder { border: 1.5px dashed rgba(255,120,122,0.95); background: rgba(237,66,69,0.12); color: #ff9a9c; }
+  .select-bar .sb-folder[hidden], .select-bar .select-btns button[hidden] { display: none; }
+  .select-top button { border-color: transparent; color: #aab2ff; padding: 6px 9px; }
+  .select-bar button:hover:not(:disabled) { background: #26262a; border-color: #4a4a52; }
+  .select-bar button:active:not(:disabled) { transform: scale(0.96); }
+  .select-bar button:disabled { opacity: 0.4; cursor: default; }
+  .select-bar .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .select-bar .select-top .primary { color: #fff; }
+  .select-bar .primary:hover:not(:disabled) { background: #6b77f0; border-color: #6b77f0; }
+  body.selecting { padding-bottom: 190px; }
+  .selecting .card[data-file] { cursor: pointer; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .selecting.can-arrange .gallery > .card[data-file] { cursor: grab; }
+  .selecting .card[data-file] img { pointer-events: none; -webkit-user-drag: none; }
+  /* In Select mode the red Private pill (and the dashed one of a photo that follows a private folder) and the cover star stay on the tile, so private photos can be picked out; they only stop answering presses (a press picks the tile). The pencil and the faint public lock go. */
+  .selecting .card .priv-toggle:not(.is-private):not(.is-folder), .selecting .card .cover-toggle:not(.is-cover), .selecting .card .edit-toggle { display: none; }
+  .selecting .card .priv-toggle, .selecting .card .cover-toggle { pointer-events: none; }
+  .selecting .card .item-badge { pointer-events: none; }
+  .selecting .card:hover img { transform: none; }
+  @media (hover: hover) { .selecting .card[data-file]:hover { outline: 2px solid rgba(255,255,255,0.55); outline-offset: -2px; } }
+  .selecting .card[data-file].sel { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .card .sel-mark { position: absolute; bottom: 8px; left: 8px;   /* (bottom left: the top corners hold the Private pill and the cover star) */ z-index: 5; display: none; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; box-shadow: 0 0 0 2px #fff; }
+  .card .sel-mark .ico { width: 15px; height: 15px; stroke-width: 2.6; }
+  .selecting .card.sel .sel-mark { display: flex; }
+  .selecting .gallery > .card.dragging { opacity: 0.35; }
+  .selecting .gallery > .card.is-stacked::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 5px; z-index: 3; background: hsl(var(--stack-hue, 220) 70% 62%); pointer-events: none; }
+  .arrange-ghost { position: fixed; left: 0; top: 0; width: 88px; height: 88px; z-index: 200; pointer-events: none; border: 2px solid var(--accent); border-radius: 10px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.6); opacity: 0.92; }
+  .arrange-ghost img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .arrange-ghost b { position: absolute; right: 4px; top: 4px; padding: 1px 7px; background: var(--accent); border-radius: 999px; color: #fff; font-size: 0.8rem; }
+  .arrange-line { position: fixed; z-index: 150; width: 4px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 2px rgba(88,101,242,0.35); pointer-events: none; }
+  .card.ringed::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: inset 0 0 0 3px var(--ring);
+  }
+  .card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.25s ease;
+  }
+  .card:hover img {
+    transform: scale(1.05);
+  }

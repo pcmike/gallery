@@ -118,6 +118,12 @@ class Browser:
         self.ws = WS(page["webSocketDebuggerUrl"]); self.id = 0; self.events = []; self.pending = {}
         for m in ("Page.enable", "Runtime.enable", "Log.enable", "Network.enable"): self.call(m)
         self.call("Page.addScriptToEvaluateOnNewDocument", {"source": SETTLE_JS})
+        self.classic(True)
+    def classic(self, on=True):
+        """The admin page on a computer-sized window goes to the shell; these checks drive the admin page itself, so the browser starts with the cookie that keeps it there (classic(False) to see the redirect)."""
+        for host in ("127.0.0.1", "localhost"):
+            if on: self.call("Network.setCookie", {"name": "galleryClassic", "value": "1", "domain": host, "path": "/"})
+            else: self.call("Network.deleteCookies", {"name": "galleryClassic", "domain": host})
     def call(self, method, params=None, timeout=30):
         self.id += 1; mid = self.id; self.ws.send(json.dumps({"id": mid, "method": method, "params": params or {}})); end = time.time() + timeout
         while time.time() < end:
@@ -194,6 +200,25 @@ class Browser:
             self.call("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x1 + (x2 - x1) * i / steps, "y": y1 + (y2 - y1) * i / steps}]})
         self.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
         self.drain(0.3)
+    def touch(self, on=True):
+        """Touch emulation on or off (a phone: viewport(w, h, mobile=True) and touch(True))."""
+        self.call("Emulation.setTouchEmulationEnabled", {"enabled": on, "maxTouchPoints": 5 if on else 1})
+    def tap(self, x, y):
+        """A finger tap at a point (needs touch emulation on)."""
+        self.call("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]}); time.sleep(0.06)
+        self.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    def drag(self, x1, y1, x2, y2, steps=12):
+        """One finger moving slowly enough for a map to take it as a drag (swipe() is quick, for page gestures)."""
+        self.call("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x1, "y": y1}]}); time.sleep(0.05)
+        for i in range(1, steps + 1):
+            self.call("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x1 + (x2 - x1) * i / steps, "y": y1 + (y2 - y1) * i / steps}]}); time.sleep(0.02)
+        self.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []}); self.drain(0.5)
+    def pinch(self, cx, cy, d0, d1, steps=8):
+        """Two fingers around a point, moving apart (d1 > d0) or together."""
+        pt = lambda d: [{"x": cx - d / 2, "y": cy, "id": 1}, {"x": cx + d / 2, "y": cy, "id": 2}]
+        self.call("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": pt(d0)})
+        for i in range(1, steps + 1): self.call("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": pt(d0 + (d1 - d0) * i / steps)})
+        self.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []}); self.drain(0.8)
     def screenshot(self, path):
         open(path, "wb").write(base64.b64decode(self.call("Page.captureScreenshot", {"format": "png"})["data"]))
     def problems(self, ignore=()):
