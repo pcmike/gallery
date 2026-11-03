@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.4.2] - 2026-11-03
+
+### Changed
+- **The license is now MIT with the Commons Clause.** You may use, change and share the software freely, including for your own business's gallery; you may not sell it, or sell a product or service (including hosting or paid support) whose value comes mainly from it. The full text is in `LICENSE` and a line in the header of `index.php`. **Versions up to and including 2.4.1 stay under plain MIT**: a license cannot be withdrawn from copies already given out, and their releases remain available. Contributions are taken under the same license.
+
 ## [2.4.1] - 2026-11-03
 
 ### Changed

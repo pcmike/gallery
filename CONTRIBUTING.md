@@ -74,6 +74,10 @@ QJS=/path/to/qjs python3 tests/tools/js/run_js_checks.py
 - Keep the Markdown subset intentionally small. This isn't meant to become a full Markdown implementation.
 - Bump `GALLERY_VERSION` and add a `CHANGELOG.md` entry for any user-facing change.
 
+## License of contributions
+
+By contributing you agree that your contribution is licensed under the project's license (MIT with the Commons Clause, see [LICENSE](LICENSE)).
+
 ## Reporting issues / suggesting features
 
 Open a GitHub issue with what you were trying to do, what happened, and your PHP version + which optional extensions (Imagick/GD/pdo_sqlite) are installed, since a lot of behavior here depends on what's available on the host.

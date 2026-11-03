@@ -5,7 +5,7 @@
 <p align="center">
 <a href="https://github.com/pcmike/gallery/releases/latest"><img src="https://img.shields.io/github/v/release/pcmike/gallery?color=5865f2" alt="Latest release"></a>
 <a href="docs/guide/getting-started.md"><img src="https://img.shields.io/badge/PHP-8.3%2B-5865f2" alt="PHP 8.3+"></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5865f2" alt="MIT license"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-5865f2" alt="MIT license with the Commons Clause"></a>
 </p>
 
 <p align="center"><img src="docs/images/gallery-desktop.webp" alt="A trip gallery on a computer: three folder cards with covers, dates and photo counts" width="860"></p>
@@ -71,7 +71,9 @@ The full manual is in **[docs/guide](docs/guide/README.md)**. What changed in ea
 
 ## Status
 
-A personal project, actively developed. Contributions: see [CONTRIBUTING](CONTRIBUTING.md). MIT licensed, see [LICENSE](LICENSE).
+A personal project, actively developed. Contributions: see [CONTRIBUTING](CONTRIBUTING.md).
+
+**License:** MIT with the [Commons Clause](https://commonsclause.com), see [LICENSE](LICENSE). In plain words: use it, change it and share it freely, for yourself or for your own business's gallery; you may not sell it, or sell a product or service (including hosting or paid support) whose value comes mainly from it. Versions up to 2.4.1 were released under plain MIT and stay that way.
 
 ---
 

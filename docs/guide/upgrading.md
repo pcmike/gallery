@@ -8,6 +8,8 @@ What changes at each version, and what to back up.
 
 **Updating** means replacing `index.php`. Settings (`.gallery-config.php`), captions and everything else live beside it and are untouched; the Health check then shows what it was upgraded from.
 
+**Upgrading to 2.4.2** from 2.4.1: replace `index.php`. Nothing stored changes, and nothing in how it works. Only the license changed: from 2.4.2 it is MIT with the Commons Clause (see [LICENSE](../../LICENSE)); versions up to 2.4.1 stay plain MIT.
+
 **Upgrading to 2.4.1** from 2.4.0: replace `index.php`. Nothing stored changes. The signed-in browsers table now shows **Addresses** and **Device changes** counted from each browser's history file, so existing browsers show the right numbers at once. A browser that was flagged *a different device of the same kind* only because of an iPhone's own networking stays flagged until you press *Looks fine* (new ones are not flagged). The About icon now opens a new tab, and the new-link form's "easy to guess" note only appears when the link really opens something private.
 
 **Upgrading to 2.4.0** from 2.3.2: replace `index.php` and open the admin. Things to know:

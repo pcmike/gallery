@@ -4,6 +4,10 @@
  * Single PHP file, no dependencies, no build step. Drop into any folder
  * of photos and it renders a gallery for that folder.
  *
+ * License: MIT with the Commons Clause (use, change and share it freely;
+ * do not sell it). The full text is the LICENSE file in the repository,
+ * github.com/pcmike/gallery. Versions up to 2.4.1 were plain MIT.
+ *
  * Full documentation (grouping, nested folders, video, captions and
  * locations, the admin editor, hiding items, the maps, Markdown
  * notes, {color}/{sold}/{reserved}/{group}/{photos} directives, view
@@ -81,7 +85,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.4.1');
+define('GALLERY_VERSION', '2.4.2');
 
 /**
  * The optional settings file. Everything below is configured by the
