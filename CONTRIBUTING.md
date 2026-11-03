@@ -16,14 +16,14 @@ This started as a personal tool, so there's no formal process yet — just a few
 
 ## Local testing
 
-No build step to *run* it: drop `index.php` into a folder with a few test images (and optionally a `.md` file, first line `{gallery}` — see the README) and run PHP's built-in server:
+No build step to *run* it: drop `index.php` into a folder with a few test images (and optionally a `.md` file, first line `{gallery}` — see the [guide](docs/guide/README.md)) and run PHP's built-in server:
 
 ```
 php -S localhost:8000 -t /path/to/test-folder
 ```
 
 Then visit `http://localhost:8000/`. Useful endpoints while testing:
-- `/?about` — short in-app pitch, links to the README
+- `/?about` — short in-app pitch, links to the repo (the manual is `docs/guide/`)
 - `/?download` — redirects to the GitHub repo (it used to serve the script itself; see CHANGELOG)
 - `/?img=somefile.jpg&size=thumb` — the resize/cache endpoint directly (set `ENABLE_THUMBNAIL_CACHE` to `true` to actually exercise caching/resizing)
 - `/?track=somefile.jpg` — the view-tracking ping, returns JSON (set `TRACK_VIEWS` to `true` to see it actually track)
@@ -45,7 +45,7 @@ php tests/run.php
 
 Requires the GD extension (to synthesize fixture images) — that's it, no other dependencies. It cleans up its own fixture folders and server processes on exit, including on failure. If you interrupt it mid-run (Ctrl-C), check for and kill any stray `php -S` process it may have left running. A normal run leaves none behind — it starts each server directly (no shell wrapper) so the shutdown handler really terminates it; an earlier version orphaned about ten per run, which adds up on a small machine. On a constrained host it's worth running it as `(ulimit -v 4000000; timeout 300 php tests/run.php)` and confirming afterward that no `php -S` is still running.
 
-It covers, through real HTTP requests against many fixtures (unmodified defaults, opted-in settings, folders, video, maps, admin, private items, downloads, the health check and more): the `{gallery}` marker rule, the directive behaviour matrix in the README, layout and ordering, filename and folder grouping, thumbnails and their cleanup, view stats, path validation, the guarded data files, sign-in and throttling, private items and what a visitor can reach, location gating and scrubbing, the streamed ZIP, photo order, the server-rule and health checks, and every recipe in the README followed as a person would. Each past bug has a case so it can't silently regress.
+It covers, through real HTTP requests against many fixtures (unmodified defaults, opted-in settings, folders, video, maps, admin, private items, downloads, the health check and more): the `{gallery}` marker rule, the directive behaviour matrix in the guide, layout and ordering, filename and folder grouping, thumbnails and their cleanup, view stats, path validation, the guarded data files, sign-in and throttling, private items and what a visitor can reach, location gating and scrubbing, the streamed ZIP, photo order, the server-rule and health checks, and every recipe in the guide followed as a person would. Each past bug has a case so it can't silently regress.
 
 The black-box suite does **not** cover things that need a real browser (lightbox JS, swipe gestures, live-updating badges, the map overlay): those are exercised by `tests/tools/` (real Chromium, QuickJS, XSS and fuzz runs; see its README), which are run before a release. It also does not cover `?admin`/`?reveal`'s HTTPS requirement when the request is genuinely non-local (the black-box test harness only ever connects over loopback, so `REMOTE_ADDR` is always recognized as local — the refusal page is covered by code review, not an automated request), nor the nginx `X-Accel-Redirect` handoff itself (`NGINX_ACCEL_REDIRECT_PREFIX` needs a real nginx `internal` location configured outside this script to actually verify against) — those stay manual testing.
 
