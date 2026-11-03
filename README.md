@@ -1,4 +1,12 @@
-<p align="center">[![Latest release](https://img.shields.io/github/v/release/pcmike/gallery?color=5865f2)](https://github.com/pcmike/gallery/releases/latest) [![PHP 8.3+](https://img.shields.io/badge/PHP-8.3%2B-5865f2)](docs/guide/getting-started.md) [![MIT license](https://img.shields.io/badge/license-MIT-5865f2)](LICENSE)</p>
+# Gallery
+
+**A single-file, drop-in PHP photo gallery** for trips, family albums and "for sale" listings. No database, no dependencies, no build step: put `index.php` in a folder of photos and it shows a gallery.
+
+<p align="center">
+<a href="https://github.com/pcmike/gallery/releases/latest"><img src="https://img.shields.io/github/v/release/pcmike/gallery?color=5865f2" alt="Latest release"></a>
+<a href="docs/guide/getting-started.md"><img src="https://img.shields.io/badge/PHP-8.3%2B-5865f2" alt="PHP 8.3+"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5865f2" alt="MIT license"></a>
+</p>
 
 <p align="center"><img src="docs/images/gallery-desktop.webp" alt="A trip gallery on a computer: three folder cards with covers, dates and photo counts" width="860"></p>
 
