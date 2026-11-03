@@ -298,7 +298,7 @@ function gallery_setting_definitions() {
             ['name' => 'BROWSER_NETWORKS_ALARM', 'type' => 'number', 'label' => 'Flag a browser used from more than this many networks in 24 hours', 'min' => 2, 'max' => 1000, 'step' => 1,
              'help' => 'A network is an IPv4 block of 256 addresses or an IPv6 /64 (one home, one phone connection). A phone moving between wifi and mobile data uses a few; a stolen cookie sent through a rotating pool uses many. Each row shows its busiest day: set this above your own.'],
             ['name' => 'BROWSER_END_ON_DEVICE', 'type' => 'bool', 'label' => 'Sign a browser out if it is used from a different device of the same kind',
-             'help' => 'For example a sign-in made on an iPhone that is then used as an iPad or a Mac. Always flagged in amber; this also signs it out.'],
+             'help' => 'A sign-in made on an iPhone, then seen as an iPad or a Mac. An iPad (and an iPhone using "Request Desktop Website") says it is a Mac, so this can sign the right person out. Always flagged in amber; best left off.'],
             ['name' => 'BROWSER_END_ON_FAMILY', 'type' => 'bool', 'label' => 'Sign a browser out if it is used from a different kind of device',
              'help' => 'Apple (iPhone, iPad, Mac), Android, Windows and Linux are kinds: a sign-in made on an iPhone that is then used as a Windows PC. Always flagged in red; this also signs it out.'],
             ['name' => 'BROWSER_END_ON_COUNTRY', 'type' => 'bool', 'label' => 'Sign a browser out if it is used from a new country',

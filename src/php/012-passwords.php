@@ -121,8 +121,8 @@ function browser_marker($kind, $stored = null) {
 }
 
 /** A short, plain name for the device that is asking ("iPhone · Safari"), for the owner's list. Never the raw user-agent. */
-function browser_label() {
-    $ua = (string) ($_SERVER['HTTP_USER_AGENT'] ?? '');
+function browser_label($ua = null) {
+    $ua = $ua ?? (string) ($_SERVER['HTTP_USER_AGENT'] ?? '');
     $dev = preg_match('/iPhone/i', $ua) ? 'iPhone' : (preg_match('/iPad/i', $ua) ? 'iPad' : (preg_match('/Android/i', $ua) ? 'Android' : (preg_match('/Macintosh|Mac OS X/i', $ua) ? 'Mac' : (preg_match('/Windows/i', $ua) ? 'Windows' : (preg_match('/Linux|X11/i', $ua) ? 'Linux' : 'A device')))));
     $app = preg_match('/Edg(e|A|iOS)?\//', $ua) ? 'Edge' : (preg_match('/OPR\/|Opera/', $ua) ? 'Opera' : (preg_match('/Firefox|FxiOS/', $ua) ? 'Firefox' : (preg_match('/CriOS|Chrome\//', $ua) ? 'Chrome' : (preg_match('/Safari\//', $ua) ? 'Safari' : ($ua === '' ? '' : 'a browser')))));
     return $dev . ($app !== '' ? ' · ' . $app : '');
@@ -221,7 +221,7 @@ function browser_rows() {
         $m = browser_marker($r['kind']);
         if ($m === '' || !hash_equals($m, (string) ($r['pw'] ?? ''))) continue;
         $id = substr((string) $h, 0, 12);
-        $rows[] = ['id' => $id, 'kind' => $r['kind'], 'label' => (string) ($r['label'] ?? ''), 'lab' => (string) ($r['lab'] ?? $r['label'] ?? ''), 'made' => (int) ($r['made'] ?? 0), 'seen' => (int) ($r['seen'] ?? 0), 'exp' => (int) $r['exp'],
+        $rows[] = ['id' => $id, 'kind' => $r['kind'], 'label' => (string) ($r['label'] ?? ''), 'lab' => signin_real_label($r), 'made' => (int) ($r['made'] ?? 0), 'seen' => (int) ($r['seen'] ?? 0), 'exp' => (int) $r['exp'],
             'ip' => (string) ($r['ip'] ?? ''), 'n' => (int) ($r['n'] ?? 0), 'peak' => (int) ($r['peak'] ?? 0), 'peakAt' => (int) ($r['peakAt'] ?? 0), 'size' => signin_history_size($id),
             'ccs' => array_values((array) ($r['ccs'] ?? [])), 'flags' => browser_flags_of($r), 'current' => $me !== null && $me['hash'] === $h];
     }

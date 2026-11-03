@@ -46,7 +46,7 @@ function render_admin_health_panel() {
     <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel">
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong>
-        <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary" onclick="location.reload()">Check again</button></p>
+        <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary health-refresh" onclick="location.reload()" title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></p>
       <p class="muted health-intro" style="margin-top:0;">Looks only; nothing is changed (apart from noting the running version).</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
@@ -219,17 +219,17 @@ function render_admin_browsers_panel($csrfToken) {
           <?php if ($hint !== ''): ?><div class="warn-note"><?= $e($hint) ?> Until then every visitor looks like the proxy, so the addresses here tell you nothing.</div><?php endif; ?>
           <div class="br-scroll">
           <table class="br-table">
-            <thead><tr><th>Browser</th><th>Signed in</th><th>Last here</th><th>Stays until</th><th>Last address</th><th>Address changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
-            <?php foreach ($rows as $r): ?>
+            <thead><tr><th>Browser</th><th>Signed in</th><th>Last here</th><th>Last address</th><th>Addresses</th><th>Device changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
+            <?php foreach ($rows as $r): $hs = signin_history_stats($r['id']); ?>
             <tbody class="br-item <?= trim(($r['current'] ? 'br-me ' : '') . ($r['flags'] ? 'br-flagged' : '')) ?>" data-id="<?= $e($r['id']) ?>">
               <tr class="br-main">
                 <td data-label="Browser"><strong class="br-who <?= $e($r['kind']) ?>"><?= $r['kind'] === 'owner' ? 'You (admin)' : 'Private view' ?></strong><?= $r['current'] ? ' <span class="br-this">this browser</span>' : '' ?><span class="br-dev"><?= $e($r['lab'] !== '' ? $r['lab'] : 'A device') ?></span></td>
                 <td data-label="Signed in"><span class="br-v"><?= $e(date('M j', $r['made'])) ?></span></td>
-                <td data-label="Last here"><span class="br-v"><?= $e(signin_ago($r['seen'], $now)) ?></span></td>
-                <td data-label="Stays until"><span class="br-v"><?= $e(date('M j', $r['exp'])) ?></span></td>
+                <td data-label="Last here"><span class="br-v"><?= $e(signin_ago($r['seen'], $now)) ?><span class="br-sub">stays until <?= $e(date('M j', $r['exp'])) ?></span></span></td>
                 <td data-label="Last address"><span class="br-v"><?= $r['ip'] !== '' ? '<code>' . $e($r['ip']) . '</code>' . ($r['ccs'] ? ' <span class="br-cc">' . $e(end($r['ccs'])) . '</span>' : '') : '<span class="muted">none yet</span>' ?></span></td>
-                <td data-label="Address changes"><span class="br-v"><?= number_format($r['n']) ?> <span class="muted">· <?= $e(signin_size_text($r['size'])) ?></span><?= $r['peak'] > 0 ? '<span class="br-sub">most networks in 24 hours: <b>' . (int) $r['peak'] . '</b>' . ($r['peakAt'] > 0 ? ' (' . $e(date('M j', $r['peakAt'])) . ')' : '') . '</span>' : '' ?></span></td>
-                <td class="br-acts"><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">Addresses</button><?php if (!$r['current']): ?><button type="button" class="secondary" data-br="cancel">Sign out</button><?php endif; ?></td>
+                <td data-label="Addresses"><span class="br-v"><button type="button" class="linklike br-num" data-br="details"><?= number_format($hs['ips']) ?></button><?= $r['peak'] > 0 ? '<span class="br-sub">most networks in 24 hours: <b>' . (int) $r['peak'] . '</b>' . ($r['peakAt'] > 0 ? ' (' . $e(date('M j', $r['peakAt'])) . ')' : '') . '</span>' : '' ?></span></td>
+                <td data-label="Device changes"><span class="br-v"><button type="button" class="linklike br-num" data-br="details"><?= number_format($hs['dev']) ?></button><?= $hs['sys'] > 0 ? '<span class="br-sub">' . ($hs['sys'] === $hs['dev'] ? ($hs['dev'] === 1 ? 'it was' : 'all') : number_format($hs['sys']) . ' of them') . ' Apple system networking, not flagged</span>' : '' ?></span></td>
+                <td class="br-acts"><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">History</button><?php if (!$r['current']): ?><button type="button" class="secondary" data-br="cancel">Sign out</button><?php endif; ?></td>
               </tr>
               <?php foreach ($r['flags'] as $fname => [$fdetail, $fat, $floud]): ?>
               <tr class="br-flagrow"><td colspan="7"><div class="br-flag <?= $e($floud) ?>" data-flag="<?= $e($fname) ?>"><span><strong><?= $e(signin_flag_info($fname)[0]) ?></strong> · <?= $e($fdetail) ?> (<?= $e(date('M j, g:i a', $fat)) ?>)</span><button type="button" class="secondary" data-br="ack">Looks fine</button></div></td></tr>
@@ -246,21 +246,22 @@ function render_admin_browsers_panel($csrfToken) {
             <summary>Recently signed out (<?= count($ended) ?>)<span class="muted"> · kept <?= (int) BROWSER_ENDED_DAYS ?> days</span></summary>
             <div class="br-scroll">
             <table class="br-table br-table-ended">
-              <thead><tr><th>Browser</th><th>Signed in</th><th>Signed out</th><th>Why</th><th>Address changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
-              <?php foreach ($ended as $r): ?>
+              <thead><tr><th>Browser</th><th>Signed in</th><th>Signed out</th><th>Why</th><th>Addresses</th><th>Device changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <?php foreach ($ended as $r): $hasH = is_file(signin_history_path($r['id'])); $hs = $hasH ? signin_history_stats($r['id']) : null; ?>
               <tbody class="br-item" data-id="<?= $e($r['id']) ?>">
                 <tr class="br-main">
                   <td data-label="Browser"><strong class="br-who <?= $e($r['kind']) ?>"><?= $r['kind'] === 'owner' ? 'You (admin)' : 'Private view' ?></strong><span class="br-dev"><?= $e($r['label'] !== '' ? $r['label'] : 'A device') ?></span></td>
                   <td data-label="Signed in"><span class="br-v"><?= $e(date('M j', (int) $r['made'])) ?></span></td>
                   <td data-label="Signed out"><span class="br-v"><?= $e(date('M j, g:i a', (int) $r['ended'])) ?></span></td>
                   <td data-label="Why"><span class="br-v"><b><?= $e(signin_reason_text($r['reason'])) ?></b><?= !empty($r['detail']) ? ' <span class="muted">· ' . $e($r['detail']) . '</span>' : '' ?></span></td>
-                  <td data-label="Address changes"><span class="br-v"><?= number_format((int) $r['n']) ?> <span class="muted">· <?= $e(signin_size_text(signin_history_size($r['id']))) ?></span><?= (int) $r['peak'] > 0 ? '<span class="br-sub">most networks in 24 hours: <b>' . (int) $r['peak'] . '</b></span>' : '' ?></span></td>
-                  <td class="br-acts"><?php if (is_file(signin_history_path($r['id']))): ?><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">Addresses</button><?php endif; ?></td>
+                  <td data-label="Addresses"><span class="br-v"><?= $hs ? '<button type="button" class="linklike br-num" data-br="details">' . number_format($hs['ips']) . '</button>' : '<span class="muted">none</span>' ?></span></td>
+                  <td data-label="Device changes"><span class="br-v"><?= $hs ? '<button type="button" class="linklike br-num" data-br="details">' . number_format($hs['dev']) . '</button>' . ($hs['sys'] > 0 ? '<span class="br-sub">' . ($hs['sys'] === $hs['dev'] ? ($hs['dev'] === 1 ? 'it was' : 'all') : number_format($hs['sys']) . ' of them') . ' Apple system networking, not flagged</span>' : '') : '<span class="muted">none</span>' ?></span></td>
+                  <td class="br-acts"><?php if ($hasH): ?><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">History</button><?php endif; ?></td>
                 </tr>
-                <tr class="br-detailrow" hidden><td colspan="6"><div class="br-detail"></div></td></tr>
+                <tr class="br-detailrow" hidden><td colspan="7"><div class="br-detail"></div></td></tr>
               </tbody>
               <?php endforeach; ?>
-              <?php if (!$ended): ?><tbody class="br-none"><tr><td colspan="6">None lately.</td></tr></tbody><?php endif; ?>
+              <?php if (!$ended): ?><tbody class="br-none"><tr><td colspan="7">None lately.</td></tr></tbody><?php endif; ?>
             </table>
             </div>
           </details>
@@ -269,37 +270,19 @@ function render_admin_browsers_panel($csrfToken) {
 <?php
 }
 
-/** One browser's history as the list's "Addresses" opens it: the days newest first with the networks and addresses of each, then every
- *  device it has said it was. At most the newest 3,000 lines are drawn (the CSV has all of them). */
+/** One browser's history as the list's "History" opens it: the counts, then the stored lines as they are, newest first (the CSV has all of them). */
 function render_browser_history_html($id) {
     $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $lines = signin_history_read($id);
     if (!$lines) return '<p class="muted">Nothing is recorded for this browser.</p>';
-    $total = count($lines); $shown = array_slice($lines, -3000);
-    $days = []; $uas = [];
-    foreach ($shown as $l) {
-        $days[date('Y-m-d', (int) $l['t'])][] = $l;
-        $u = (string) ($l['ua'] ?? '');
-        if (!isset($uas[$u])) $uas[$u] = ['first' => (int) $l['t'], 'last' => (int) $l['t'], 'n' => 0];
-        $uas[$u]['last'] = (int) $l['t']; $uas[$u]['n']++;
+    $total = count($lines); $shown = array_slice($lines, -200);
+    $h = '<p class="br-sum">' . $e(signin_stats_text(signin_history_stats($id, $lines))) . '</p>';
+    $h .= '<p class="br-dl"><a href="?admin&amp;browserhist=' . $e($id) . '&amp;csv=1">Download all ' . number_format($total) . ' line' . ($total === 1 ? '' : 's') . ' (CSV)</a>' . ($total > count($shown) ? ' · showing the newest ' . number_format(count($shown)) : '') . '</p>';
+    $h .= '<div class="br-log">';
+    foreach (array_reverse($shown) as $l) {
+        $h .= '<div class="br-ln"><span class="br-lt">' . $e(date('Y-m-d H:i:s', (int) $l['t'])) . '</span> <span class="br-le">' . $e($l['e'] ?? '') . '</span> <b class="br-lip">' . $e($l['ip']) . '</b> <span class="br-lc">' . $e(($l['cc'] ?? '') !== '' ? $l['cc'] : '--') . '</span> <span class="br-lu">' . $e((string) ($l['ua'] ?? '') !== '' ? $l['ua'] : '(nothing)') . '</span></div>';
     }
-    krsort($days);
-    $h = '<p class="br-dl"><a href="?admin&amp;browserhist=' . $e($id) . '&amp;csv=1">Download all ' . number_format($total) . ' line' . ($total === 1 ? '' : 's') . ' (CSV)</a>' . ($total > count($shown) ? ' · showing the newest ' . number_format(count($shown)) : '') . '</p>';
-    $h .= '<table class="br-days"><thead><tr><th>Day</th><th>Networks</th><th>Addresses (newest first)</th></tr></thead><tbody>';
-    foreach ($days as $day => $ls) {
-        $byAddr = []; $nets = [];
-        foreach (array_reverse($ls) as $l) {
-            $ip = (string) $l['ip']; $nets[signin_net_key($ip)] = true;
-            if (!isset($byAddr[$ip])) $byAddr[$ip] = ['cc' => (string) ($l['cc'] ?? ''), 'first' => (int) $l['t'], 'last' => (int) $l['t'], 'n' => 0];
-            $byAddr[$ip]['first'] = (int) $l['t']; $byAddr[$ip]['n']++;
-        }
-        $items = '';
-        foreach ($byAddr as $ip => $a) $items .= '<li><code>' . $e($ip) . '</code>' . ($a['cc'] !== '' ? ' <span class="br-cc">' . $e($a['cc']) . '</span>' : '') . ' <span class="muted">' . $e(date('g:i a', $a['first'])) . ($a['last'] !== $a['first'] ? ' – ' . $e(date('g:i a', $a['last'])) : '') . '</span></li>';
-        $h .= '<tr><td>' . $e(date('D M j', (int) strtotime($day))) . '</td><td>' . count($nets) . '</td><td><ul class="br-addrs">' . $items . '</ul></td></tr>';
-    }
-    $h .= '</tbody></table><div class="br-uas"><strong>What it said it was</strong><ul>';
-    foreach ($uas as $u => $x) $h .= '<li><code>' . $e($u !== '' ? $u : '(nothing)') . '</code> <span class="muted">' . $e(date('M j', $x['first'])) . ($x['last'] !== $x['first'] ? ' – ' . $e(date('M j', $x['last'])) : '') . ' · ' . number_format($x['n']) . ' line' . ($x['n'] === 1 ? '' : 's') . '</span></li>';
-    return $h . '</ul></div>';
+    return $h . '</div>';
 }
 
 /** ?admin&browserhist=<id>: that browser's history as HTML (what the list opens), or with &csv=1 all of it as a spreadsheet file. */

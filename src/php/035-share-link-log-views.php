@@ -508,7 +508,7 @@ function health_checks($dir, $files) {
     foreach (browser_rows() as $br) {
         foreach ($br['flags'] as $flagName => [$flagDetail, $flagAt, $flagLoud]) {
             $add('Signed-in browsers', $flagLoud, signin_flag_info($flagName)[0] . ': ' . ($br['kind'] === 'owner' ? 'you' : 'private view') . ' on ' . ($br['lab'] !== '' ? $br['lab'] : 'a device'),
-                $flagDetail . ' (' . date('M j, g:i a', $flagAt) . '). In Settings → Signing in and passwords: Looks fine clears it, Sign out ends that browser.');
+                $flagDetail . ' (' . date('M j, g:i a', $flagAt) . '). Looks fine clears it, Sign out ends that browser.', ['site', 'browsers-row', 'Open the list']);
         }
     }
     $sgFiles = (array) @glob(__DIR__ . '/.gallery-signin-*.php'); $sgTotal = 0; $sgBig = 0; $sgBigId = '';
@@ -518,14 +518,14 @@ function health_checks($dir, $files) {
         $sgAgo = function ($days) use ($sgSizes) { $want = date('Y-m-d', time() - $days * 86400); foreach ($sgSizes as $day => $v) if ($day <= $want) return signin_size_text((int) ($v[0] ?? 0)); return 'not noted yet'; };
         $sgWho = ''; foreach (browser_rows() as $sgR) if ($sgR['id'] === $sgBigId) $sgWho = ' (' . ($sgR['kind'] === 'owner' ? 'you' : 'private view') . ' on ' . $sgR['lab'] . ')';
         $add('Signed-in browsers', 'info', 'Address history: ' . signin_size_text($sgTotal) . ' in ' . count($sgFiles) . ' file' . (count($sgFiles) === 1 ? '' : 's'),
-            'The largest is ' . signin_size_text($sgBig) . $sgWho . '. A week ago the total was ' . $sgAgo(7) . ', a month ago ' . $sgAgo(30) . '. It is kept ' . BROWSER_HISTORY_DAYS . ' days and nothing else caps it; a history that grows fast is worth a look.');
+            'The largest is ' . signin_size_text($sgBig) . $sgWho . '. A week ago the total was ' . $sgAgo(7) . ', a month ago ' . $sgAgo(30) . '. It is kept ' . BROWSER_HISTORY_DAYS . ' days and nothing else caps it; a history that grows fast is worth a look.', ['site', 'browsers-row', 'Open the list']);
     }
 
     // --- the country file
     if (COUNTRY_LOOKUP) {
         $gs = geo_state(); $gHave = is_file(geo_db_path());
         $add('Signed-in browsers', 'info', $gHave ? 'Country file: the ' . ($gs['ym'] !== '' ? date('F Y', (int) strtotime($gs['ym'] . '-01')) : 'current') . ' edition, ' . signin_size_text((int) @filesize(geo_db_path())) : 'Country file: not fetched yet',
-            ($gHave ? 'IP geolocation by DB-IP (CC BY 4.0); fetched ' . date('M j', (int) ($gs['at'] ?: @filemtime(geo_db_path()))) . ', and it looks for a newer one every 7 days.' : 'It is fetched at the next visit, or press Refresh now in Settings.') . ($gs['error'] !== '' ? ' The last try (' . date('M j, g:i a', (int) $gs['triedAt']) . ') did not work: ' . $gs['error'] : ''));
+            ($gHave ? 'IP geolocation by DB-IP (CC BY 4.0); fetched ' . date('M j', (int) ($gs['at'] ?: @filemtime(geo_db_path()))) . ', and it looks for a newer one every 7 days.' : 'It is fetched at the next visit, or press Refresh now in Settings.') . ($gs['error'] !== '' ? ' The last try (' . date('M j, g:i a', (int) $gs['triedAt']) . ') did not work: ' . $gs['error'] : ''), ['site', 'geo-row', 'Open the setting']);
     }
 
     // --- videos

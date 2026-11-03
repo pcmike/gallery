@@ -229,8 +229,10 @@ function owner_phone_bar_css() {
     .pb-f { font-size:0.9rem; color:#c9c9cd; }
     .pb-f .n { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pb-f .c { flex:none; font-size:0.72rem; color:#8a8a8f; }
-    .pb-f.cur { color:#fff; font-weight:600; }
-    .pb-f.cur .n::before { content:"\\25CF\\00a0"; color:#aab2ff; font-size:0.7em; }
+    .pb-w.cur, .pb-f.cur { color:#fff; font-weight:600; background:#5865f2; border-radius:8px; border-top-color:transparent; padding-left:12px; padding-right:12px; }
+    .pb-w.cur .count, .pb-w.cur .c, .pb-f.cur .c { background:rgba(0,0,0,0.3); color:#fff; }
+    .pb-f.cur .c { background:none; }
+    .pb-sheet.off-folder .pb-f.cur { background:rgba(255,255,255,0.07); font-weight:500; }
   }';
 }
 

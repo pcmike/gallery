@@ -40,6 +40,21 @@ function signin_net_key($ip) {
 }
 
 /** The kind of device a label ("iPhone · Safari") is: apple (iPhone, iPad, Mac), android, windows, linux, or other (not known). */
+/** True for the identities Apple's own networking sends on a phone's behalf (NetworkingExtension, CFNetwork, Darwin): the same device, not a new one. */
+function signin_is_system_ua($ua) {
+    return (bool) preg_match('~NetworkingExtension|CFNetwork|Darwin/~', (string) $ua);
+}
+
+/** The device a browser really is, as far as its last ordinary request said: its record's 'real', else its last label unless that was
+ *  a system identity (then the one it was made on). */
+function signin_real_label(array $r) {
+    $real = (string) ($r['real'] ?? '');
+    if ($real !== '') return $real;
+    $lab0 = (string) ($r['lab0'] ?? $r['label'] ?? '');
+    $lab = (string) ($r['lab'] ?? $lab0);
+    return $lab === 'A device · a browser' ? $lab0 : $lab;
+}
+
 function signin_family($label) {
     $dev = explode(' · ', (string) $label)[0];
     if (in_array($dev, ['iPhone', 'iPad', 'Mac'], true)) return 'apple';
@@ -70,6 +85,26 @@ function signin_history_read($id) {
         if (is_array($j) && isset($j['t'], $j['ip'])) $out[] = $j;
     }
     return $out;
+}
+
+/** What a history file holds, counted: ['lines', 'ips' (different addresses), 'dev' (times the identity changed from one line to the next),
+ *  'sys' (how many of those changes were to or from Apple's system networking, which is never flagged)]. */
+function signin_history_stats($id, $lines = null) {
+    $lines = $lines ?? signin_history_read($id);
+    $ips = []; $dev = 0; $sys = 0; $prev = null; $prevSys = false;
+    foreach ($lines as $l) {
+        $ips[(string) $l['ip']] = true;
+        $ua = (string) ($l['ua'] ?? ''); $lab = browser_label($ua); $isSys = signin_is_system_ua($ua);
+        if ($prev !== null && $lab !== $prev) { $dev++; if ($isSys || $prevSys) $sys++; }
+        $prev = $lab; $prevSys = $isSys;
+    }
+    return ['lines' => count($lines), 'ips' => count($ips), 'dev' => $dev, 'sys' => $sys];
+}
+
+/** "1 address · 0 device changes · 3 lines", the line that heads a history. */
+function signin_stats_text(array $st) {
+    return number_format($st['ips']) . ' address' . ($st['ips'] === 1 ? '' : 'es') . ' · ' . number_format($st['dev']) . ' device change' . ($st['dev'] === 1 ? '' : 's')
+        . ($st['sys'] > 0 ? ' (' . ($st['sys'] === $st['dev'] ? ($st['dev'] === 1 ? 'it was' : 'all') : $st['sys'] . ' of them') . ' Apple system networking, not flagged)' : '') . ' · ' . number_format($st['lines']) . ' line' . ($st['lines'] === 1 ? '' : 's');
 }
 
 /** Why a browser's sign-in ended, in words. */
@@ -106,15 +141,17 @@ function signin_ended_add($id, array $rec, $reason, $detail = '', $at = null) {
 function browser_note_event($h, $ip, $label) {
     $now = time(); $id = substr($h, 0, 12); $cc = geo_country($ip); $net = signin_net_key($ip);
     $ua = substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 300);
+    $sys = signin_is_system_ua($ua);
     $raised = []; $detailOf = []; $ended = null;
-    json_file_update(browsers_path(), [], function (&$d) use ($h, $now, $ip, $label, $cc, $net, &$raised, &$detailOf, &$ended) {
+    json_file_update(browsers_path(), [], function (&$d) use ($h, $now, $ip, $label, $cc, $net, $sys, &$raised, &$detailOf, &$ended) {
         if (!isset($d[$h]) || !is_array($d[$h])) return;
         $r =& $d[$h];
         $days = browser_days($r['kind']);
         $r['exp'] = $now + ($days >= 1 ? $days * 86400 : 86400);
         $lab0 = (string) ($r['lab0'] ?? $r['label'] ?? '');
-        $prevLab = (string) ($r['lab'] ?? $lab0);
+        $prevReal = signin_real_label($r);
         $r['seen'] = $now; $r['ip'] = $ip; $r['lab'] = $label; $r['n'] = (int) ($r['n'] ?? 0) + 1;
+        if (!$sys) $r['real'] = $label;
         $nets = [];
         foreach ((array) ($r['nets'] ?? []) as $k => $t) if ((int) $t > $now - 86400) $nets[(string) $k] = (int) $t;
         $nets[$net] = $now;
@@ -128,7 +165,7 @@ function browser_note_event($h, $ip, $label) {
             if ($again) { $r['flags'][$name] = ['t' => $now, 'd' => $detail, 'a' => 0, 'v' => $v]; $raised[] = $name; $detailOf[$name] = $detail; }
             else { $r['flags'][$name]['d'] = $detail; $r['flags'][$name]['v'] = $v; }
         };
-        if ($label !== $prevLab && $label !== $lab0) {
+        if (!$sys && $label !== $prevReal && $label !== $lab0) {   // (a system identity is logged and counted but never flagged)
             $f0 = signin_family($lab0); $f1 = signin_family($label);
             if ($f0 !== 'other' && $f1 !== 'other' && $f0 !== $f1) $flag('family', 'Made on ' . $lab0 . ', now used as ' . $label);
             else $flag('device', 'Made on ' . $lab0 . ', now used as ' . $label);

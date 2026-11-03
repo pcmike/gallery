@@ -506,6 +506,10 @@
       var lay = document.querySelector('.admin-layout');
       var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features';
       if (lay) lay.classList.toggle('off-folder', whole);
+      // The phone's Menu and bottom bar say the same thing as the sidebar: the page you are on is the one blue entry; the folder stays marked, quietly, on a whole-gallery page.
+      [].forEach.call(document.querySelectorAll('.pb-w[data-pb-tab]'), function (a) { var on = a.getAttribute('data-pb-tab') === name; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+      [].forEach.call(document.querySelectorAll('#pb .pb-i[data-pb=settings], #pb .pb-i[data-pb=notes]'), function (a) { a.classList.toggle('on', a.getAttribute('data-pb') === name); });
+      var pbSheet = document.getElementById('pb-sheet'); if (pbSheet) pbSheet.classList.toggle('off-folder', whole);
       var fh = document.getElementById('admin-folder-head'); if (fh) fh.hidden = whole;   // (the folder's own tabs belong to a folder, not to the whole-gallery pages)
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
@@ -1183,10 +1187,23 @@
     }
     // Three ways to have the address: the name (letters and digits only), a name typed in, or a random code. The field named "address" always holds
     // the final value ('' = random), so the rest of the form needs no change.
+    // Does this link, as the form stands, open anything that is private? A folder counts if it is private, is inside a private folder, or has a
+    // private photo or folder inside it; a photo if it is private itself or sits in a private folder without being made public.
+    function opensPrivate(form) {
+      var pv; try { pv = JSON.parse(form.getAttribute('data-private') || '{}'); } catch (x) { pv = {}; }
+      var pf = pv.f || [], pi = pv.i || [], ps = pv.s || [];
+      var inside = function (p, root) { return p === root || p.indexOf(root + '/') === 0; };
+      var folderPriv = function (p) { if (p === '') return pf.length > 0 || pi.length > 0; return pf.some(function (r) { return inside(p, r) || inside(r, p); }) || pi.some(function (i) { return inside(i, p); }); };
+      var photoPriv = function (p) { return pi.indexOf(p) >= 0 || (ps.indexOf(p) < 0 && pf.some(function (r) { return inside(p, r); })); };
+      var sc = radioValue(form, 'scope_type');
+      if (sc === 'public') return false;
+      if (sc === 'all') return pf.length > 0 || pi.length > 0;
+      return (sc !== 'photos' && st.scope.some(folderPriv)) || (sc !== 'folders' && st.photos.some(photoPriv));
+    }
     function addrSync(form) {
       var mode = form._addrMode || 'name', ck = form.querySelector('[name=addr_name]'), inp = form.querySelector('[name=address]'), row = form.querySelector('[data-addrrow]'), prev = form.querySelector('[data-addrprev]');
       ck.checked = mode === 'name'; row.hidden = mode !== 'custom';
-      form.querySelector('[data-addrnote]').hidden = !(mode === 'name' && radioValue(form, 'scope_type') !== 'public');   // (a name can be guessed: said whenever a link that opens private photos has its address made from the name)
+      form.querySelector('[data-addrnote]').hidden = !(mode === 'name' && opensPrivate(form));   // (a name can be guessed: said whenever a link that opens private photos has its address made from the name)
       if (mode === 'name') inp.value = slugName(form.querySelector('[name=label]').value); else if (mode === 'random') inp.value = '';
       prev.textContent = mode === 'name' ? '…/' + (inp.value || 'auntcarol') : '';
       addrHint(form);
@@ -1204,7 +1221,7 @@
       if (row.hidden) keepBox.checked = false; else if (wasHidden) keepBox.checked = true;   // (ticked whenever it appears: the address that was sent out is meant to keep working)
       var kept = keepBox.checked, ending = kept ? ' The old address keeps working and sends people on to the new one; anyone signed in through it is signed out.' : ' The old address is paused: it shows the “not valid” page (you can resume it from Settings), and anyone signed in through it is signed out.';
       if (mode === 'random') { h.innerHTML = 'A random code is made for you, one that can\'t be guessed.' + (was !== '' ? esc(ending) : '') + ' <button type="button" class="linklike" data-sl="addrcustom">Type my own instead</button>'; return; }
-      if (mode === 'name') msg = v === '' ? '' : (v.length < 4 ? 'An address needs at least 4 letters or digits: add to the name, or untick the box.' : (v.length < 12 && radioValue(form, 'scope_type') === 'public' ? 'A name can be guessed by someone who tries. A random address can\'t be.' : '')) + (was !== v && was !== '' ? ending : '');
+      if (mode === 'name') msg = v === '' ? '' : (v.length < 4 ? 'An address needs at least 4 letters or digits: add to the name, or untick the box.' : (v.length < 12 && !opensPrivate(form) ? 'A name can be guessed by someone who tries. A random address can\'t be.' : '')) + (was !== v && was !== '' ? ending : '');
       else if (v === '') msg = was ? 'Saving with this empty gives the link a new random address.' + ending : 'Type the address, or press Random.';
       else if (v.length < 4) msg = 'At least 4 letters, digits or hyphens.';
       else msg = (v.length < 12 ? 'A short name can be guessed by someone who tries. A random address can\'t be.' : 'Anyone who learns or guesses this name can open the link.') + (was !== v && was !== '' ? ending : '');
@@ -1220,6 +1237,7 @@
     function fdate(v) { var t = new Date(v); return isNaN(t.getTime()) || v === '' ? 'the date you pick' : t.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
     var DL_SAY = { off: 'off', all: 'everything', 'public': 'everything but private', some: 'some folders' };
     function summarize(form) {
+      var addrNote = form.querySelector('[data-addrnote]'); if (addrNote) addrNote.hidden = !((form._addrMode || 'name') === 'name' && opensPrivate(form));
       var f = formState(form), form_ = form, names = function (list) { return list.map(function (p) { return labelOf(form_, p); }).join(', '); };
       var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'every private folder and photo' : f.scope === 'folders' ? (st.scope.length ? names(st.scope) : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? names(st.scope) : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
       var usesNow = usesOf(f), usesIsDefault = usesNow === DEFAULT_USES && (f.opens !== 'n' || f.opensN !== '');
@@ -1312,7 +1330,7 @@
       if (e.target.name === 'title_mode' && !form.querySelector('[name=id]').value) form.querySelector('[name=picture]').checked = e.target.value === 'gallery';
       if (e.target.name === 'picture' || e.target.name === 'title_mode') { form.querySelector('[data-coverrow]')._loaded = false; }   // (a new link: the photo follows the title until you decide)
       if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'photos' || e.target.value === 'mixed';   // (photos, and folders with photos: on to start with, so a link with picks shows just the picks; folders alone: off)
-      if (e.target.name === 'addr_name') { setAddrMode(form, e.target.checked ? 'name' : (radioValue(form, 'scope_type') === 'public' ? 'custom' : 'random'), true); return; }   // (unticking: a public link opens the box to type in; one that opens private photos gets a random address, which a name can't be)
+      if (e.target.name === 'addr_name') { setAddrMode(form, e.target.checked ? 'name' : (!opensPrivate(form) ? 'custom' : 'random'), true); return; }   // (unticking: a public link opens the box to type in; one that opens private photos gets a random address, which a name can't be)
       if (e.target.name === 'scope_type') addrSync(form);
       if (e.target.name === 'scope_type' && (e.target.value === 'folders' || e.target.value === 'mixed')) {
         // folders already chosen for downloads and ZIPs that the new scope doesn't cover are dropped
@@ -2179,7 +2197,8 @@
       var what = b.getAttribute('data-br');
       if (what === 'details') {   // a browser's addresses, fetched when first asked for
         var item = b.closest('tbody[data-id]'), drow = item.querySelector('.br-detailrow'), box = drow.querySelector('.br-detail'), open = drow.hidden;
-        drow.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.textContent = open ? 'Hide addresses' : 'Addresses';
+        var tog = item.querySelector('.br-more'); drow.hidden = !open;
+        if (tog) { tog.setAttribute('aria-expanded', open ? 'true' : 'false'); tog.textContent = open ? 'Hide history' : 'History'; }
         if (open && !box.getAttribute('data-loaded')) {
           box.innerHTML = '<p class="muted">Loading…</p>';
           fetch('?admin&browserhist=' + encodeURIComponent(item.getAttribute('data-id')), { credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })

@@ -377,7 +377,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         <?php if (ENABLE_SHARE_LINKS && is_admin_browser() && $currentFolderPath !== null && folder_is_private($dir, $currentFolderPath)): ?>
         <span class="map-combo"><button type="button" class="map-combo-btn page-share" data-gs-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-gs-label="<?= htmlspecialchars(link_folder_label($dir, $currentFolderPath), ENT_QUOTES, 'UTF-8') ?>" title="Share this folder…" aria-label="Share this folder…"><?= ui_icon('share') ?></button></span>
         <?php endif; ?>
-        <span class="map-combo"><a class="map-combo-btn page-about" href="?about" title="About this gallery software" aria-label="About this gallery software"><?= ui_icon('gallery') ?></a></span>
+        <span class="map-combo"><a class="map-combo-btn page-about" href="?about" target="_blank" rel="noopener" title="About this gallery software (opens in a new tab)" aria-label="About this gallery software (opens in a new tab)"><?= ui_icon('gallery') ?></a></span>
       </span>
     </div>
   </div>

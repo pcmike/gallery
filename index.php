@@ -7,7 +7,7 @@
  * Full documentation (grouping, nested folders, video, captions and
  * locations, the admin editor, hiding items, the maps, Markdown
  * notes, {color}/{sold}/{reserved}/{group}/{photos} directives, view
- * stats, deep linking, image caching, etc.) lives in the repo's README: github.com/pcmike/gallery. The
+ * stats, deep linking, image caching, etc.) lives in the repo's guide (docs/guide): github.com/pcmike/gallery. The
  * "?about" page this script serves itself (open any deployed gallery and
  * press the small gallery icon above the photos, or visit "?about" directly) is a short
  * in-app pitch that links to the GitHub repo, including a "Get it on
@@ -24,7 +24,7 @@
  *     MAP_CLUSTER_RADIUS_MILES constants are just below, and are only the
  *     DEFAULTS: a .gallery-config.php beside this file overrides them and
  *     survives replacing this file with a newer version (see
- *     gallery_setting() below and the README). TRACK_VIEWS,
+ *     gallery_setting() below and the guide). TRACK_VIEWS,
  *     AUTO_GROUP_BY_FOLDER, ENABLE_VIDEO and ENABLE_PHOTO_LOCATION are
  *     off by default — this script writes nothing to disk
  *     (apart from thumbnails in .gallery-cache, what the admin saves and,
@@ -81,7 +81,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.4.0');
+define('GALLERY_VERSION', '2.4.1');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -260,7 +260,7 @@ function count_loose_media_in_roots() {
 // script writes nothing to the folder's disk unless you turn something
 // on. Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
 // into the folder, and is what enables the live view-count badges. See
-// the README for details.
+// the guide for details.
 define('TRACK_VIEWS', gallery_setting('TRACK_VIEWS', false));
 
 // Whether view counts are shown publicly once TRACK_VIEWS is on. Off by
@@ -294,7 +294,7 @@ define('ENABLE_PUBLIC_DOWNLOAD', PUBLIC_DOWNLOAD_MODE !== 'off');   // (the ques
 // nothing that isn't already in the gallery, and if that folder can't be
 // written (or GD/Imagick is missing) the original photo is served as
 // before. Set to false for a gallery that must never write to its folder.
-// See the README for details.
+// See the guide for details.
 define('ENABLE_THUMBNAIL_CACHE', gallery_setting('ENABLE_THUMBNAIL_CACHE', true));
 // The two pictures a tile can show (size=tile and size=tilehd), both square cuts from the middle of the photo, which is all
 // a tile ever shows of it: [side in pixels, JPEG quality]. A tile is 180 to 250 points wide (a phone in portrait with one
@@ -311,7 +311,7 @@ const TILE_SIZES = ['tile' => [560, 82], 'tilehd' => [1080, 80]];
 // angles) — leaving it on for an arbitrary folder of camera photos can
 // falsely merge unrelated shots that just happen to share a numeric
 // filename pattern (e.g. IMG_0234.jpg / IMG_0235.jpg from two different,
-// unrelated photos). See the README for details, and for how to define
+// unrelated photos). See the guide for details, and for how to define
 // groups explicitly via {group:}/{photos:} directives in a .md file
 // instead, regardless of filename.
 define('AUTO_GROUP_BY_FILENAME', gallery_setting('AUTO_GROUP_BY_FILENAME', false));
@@ -335,7 +335,7 @@ define('SHOW_SORT_BUTTON', gallery_setting('SHOW_SORT_BUTTON', true));
 // Scan subfolders recursively (to any depth) and group photos by which
 // one they're in. Off by default — a flat folder behaves exactly as it
 // always has. Turn this on for a trip folder like /trip/Paris,
-// /trip/StTropez, etc. See the README for FOLDER_DISPLAY_MODE and
+// /trip/StTropez, etc. See the guide for FOLDER_DISPLAY_MODE and
 // EXTRA_FOLDERS, which only matter once this is on.
 define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', false));
 
@@ -382,7 +382,7 @@ define('EXTRA_FOLDERS', gallery_setting('EXTRA_FOLDERS', []));
 // it (with HTTP Range support for seeking), and shown in the grid behind
 // a generic placeholder graphic rather than an actual frame, since that
 // would mean adding a video-processing dependency this project doesn't
-// carry. See the README for the real limitations this implies: codec
+// carry. See the guide for the real limitations this implies: codec
 // compatibility isn't guaranteed (HEVC-encoded .mov plays natively on
 // Apple platforms only), there's real bandwidth cost serving uncompressed
 // clips in full, and EXIF-style location auto-fill doesn't carry over
@@ -410,7 +410,7 @@ define('ENABLE_VIDEO_PREVIEWS', gallery_setting('ENABLE_VIDEO_PREVIEWS', true));
 // can read the folder knows), and the choice is saved in the settings file. Set this to a long random token, not a
 // memorable phrase — this is the one credential in this script that, if
 // guessed, grants write access, so it deserves the strongest value you'd
-// put in any constant here. See the README for the HTTPS requirement and
+// put in any constant here. See the guide for the HTTPS requirement and
 // the failed-login throttle this password is protected by.
 define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 
@@ -457,7 +457,7 @@ define('PRIVATE_VIEW_PASSWORD', gallery_setting('PRIVATE_VIEW_PASSWORD', ''));
 // limited by number of opens and by time, and optionally to chosen folders or photos. Off by default. Made and managed in
 // the admin's Shares tab. A link is a secret in an address, so the page it opens asks for one press of a button
 // before it counts as used (a chat app that fetches a link to draw its preview never uses it up), and a link can be
-// paused, revoked or replaced at any time. See the README.
+// paused, revoked or replaced at any time. See the guide.
 define('ENABLE_SHARE_LINKS', gallery_setting('ENABLE_SHARE_LINKS', false));
 
 // Whether a person using a share link sees "The link being used to access this media expires on ..." at the top of the
@@ -3986,6 +3986,21 @@ function signin_net_key($ip) {
 }
 
 /** The kind of device a label ("iPhone · Safari") is: apple (iPhone, iPad, Mac), android, windows, linux, or other (not known). */
+/** True for the identities Apple's own networking sends on a phone's behalf (NetworkingExtension, CFNetwork, Darwin): the same device, not a new one. */
+function signin_is_system_ua($ua) {
+    return (bool) preg_match('~NetworkingExtension|CFNetwork|Darwin/~', (string) $ua);
+}
+
+/** The device a browser really is, as far as its last ordinary request said: its record's 'real', else its last label unless that was
+ *  a system identity (then the one it was made on). */
+function signin_real_label(array $r) {
+    $real = (string) ($r['real'] ?? '');
+    if ($real !== '') return $real;
+    $lab0 = (string) ($r['lab0'] ?? $r['label'] ?? '');
+    $lab = (string) ($r['lab'] ?? $lab0);
+    return $lab === 'A device · a browser' ? $lab0 : $lab;
+}
+
 function signin_family($label) {
     $dev = explode(' · ', (string) $label)[0];
     if (in_array($dev, ['iPhone', 'iPad', 'Mac'], true)) return 'apple';
@@ -4016,6 +4031,26 @@ function signin_history_read($id) {
         if (is_array($j) && isset($j['t'], $j['ip'])) $out[] = $j;
     }
     return $out;
+}
+
+/** What a history file holds, counted: ['lines', 'ips' (different addresses), 'dev' (times the identity changed from one line to the next),
+ *  'sys' (how many of those changes were to or from Apple's system networking, which is never flagged)]. */
+function signin_history_stats($id, $lines = null) {
+    $lines = $lines ?? signin_history_read($id);
+    $ips = []; $dev = 0; $sys = 0; $prev = null; $prevSys = false;
+    foreach ($lines as $l) {
+        $ips[(string) $l['ip']] = true;
+        $ua = (string) ($l['ua'] ?? ''); $lab = browser_label($ua); $isSys = signin_is_system_ua($ua);
+        if ($prev !== null && $lab !== $prev) { $dev++; if ($isSys || $prevSys) $sys++; }
+        $prev = $lab; $prevSys = $isSys;
+    }
+    return ['lines' => count($lines), 'ips' => count($ips), 'dev' => $dev, 'sys' => $sys];
+}
+
+/** "1 address · 0 device changes · 3 lines", the line that heads a history. */
+function signin_stats_text(array $st) {
+    return number_format($st['ips']) . ' address' . ($st['ips'] === 1 ? '' : 'es') . ' · ' . number_format($st['dev']) . ' device change' . ($st['dev'] === 1 ? '' : 's')
+        . ($st['sys'] > 0 ? ' (' . ($st['sys'] === $st['dev'] ? ($st['dev'] === 1 ? 'it was' : 'all') : $st['sys'] . ' of them') . ' Apple system networking, not flagged)' : '') . ' · ' . number_format($st['lines']) . ' line' . ($st['lines'] === 1 ? '' : 's');
 }
 
 /** Why a browser's sign-in ended, in words. */
@@ -4052,15 +4087,17 @@ function signin_ended_add($id, array $rec, $reason, $detail = '', $at = null) {
 function browser_note_event($h, $ip, $label) {
     $now = time(); $id = substr($h, 0, 12); $cc = geo_country($ip); $net = signin_net_key($ip);
     $ua = substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 300);
+    $sys = signin_is_system_ua($ua);
     $raised = []; $detailOf = []; $ended = null;
-    json_file_update(browsers_path(), [], function (&$d) use ($h, $now, $ip, $label, $cc, $net, &$raised, &$detailOf, &$ended) {
+    json_file_update(browsers_path(), [], function (&$d) use ($h, $now, $ip, $label, $cc, $net, $sys, &$raised, &$detailOf, &$ended) {
         if (!isset($d[$h]) || !is_array($d[$h])) return;
         $r =& $d[$h];
         $days = browser_days($r['kind']);
         $r['exp'] = $now + ($days >= 1 ? $days * 86400 : 86400);
         $lab0 = (string) ($r['lab0'] ?? $r['label'] ?? '');
-        $prevLab = (string) ($r['lab'] ?? $lab0);
+        $prevReal = signin_real_label($r);
         $r['seen'] = $now; $r['ip'] = $ip; $r['lab'] = $label; $r['n'] = (int) ($r['n'] ?? 0) + 1;
+        if (!$sys) $r['real'] = $label;
         $nets = [];
         foreach ((array) ($r['nets'] ?? []) as $k => $t) if ((int) $t > $now - 86400) $nets[(string) $k] = (int) $t;
         $nets[$net] = $now;
@@ -4074,7 +4111,7 @@ function browser_note_event($h, $ip, $label) {
             if ($again) { $r['flags'][$name] = ['t' => $now, 'd' => $detail, 'a' => 0, 'v' => $v]; $raised[] = $name; $detailOf[$name] = $detail; }
             else { $r['flags'][$name]['d'] = $detail; $r['flags'][$name]['v'] = $v; }
         };
-        if ($label !== $prevLab && $label !== $lab0) {
+        if (!$sys && $label !== $prevReal && $label !== $lab0) {   // (a system identity is logged and counted but never flagged)
             $f0 = signin_family($lab0); $f1 = signin_family($label);
             if ($f0 !== 'other' && $f1 !== 'other' && $f0 !== $f1) $flag('family', 'Made on ' . $lab0 . ', now used as ' . $label);
             else $flag('device', 'Made on ' . $lab0 . ', now used as ' . $label);
@@ -4659,8 +4696,8 @@ function browser_marker($kind, $stored = null) {
 }
 
 /** A short, plain name for the device that is asking ("iPhone · Safari"), for the owner's list. Never the raw user-agent. */
-function browser_label() {
-    $ua = (string) ($_SERVER['HTTP_USER_AGENT'] ?? '');
+function browser_label($ua = null) {
+    $ua = $ua ?? (string) ($_SERVER['HTTP_USER_AGENT'] ?? '');
     $dev = preg_match('/iPhone/i', $ua) ? 'iPhone' : (preg_match('/iPad/i', $ua) ? 'iPad' : (preg_match('/Android/i', $ua) ? 'Android' : (preg_match('/Macintosh|Mac OS X/i', $ua) ? 'Mac' : (preg_match('/Windows/i', $ua) ? 'Windows' : (preg_match('/Linux|X11/i', $ua) ? 'Linux' : 'A device')))));
     $app = preg_match('/Edg(e|A|iOS)?\//', $ua) ? 'Edge' : (preg_match('/OPR\/|Opera/', $ua) ? 'Opera' : (preg_match('/Firefox|FxiOS/', $ua) ? 'Firefox' : (preg_match('/CriOS|Chrome\//', $ua) ? 'Chrome' : (preg_match('/Safari\//', $ua) ? 'Safari' : ($ua === '' ? '' : 'a browser')))));
     return $dev . ($app !== '' ? ' · ' . $app : '');
@@ -4759,7 +4796,7 @@ function browser_rows() {
         $m = browser_marker($r['kind']);
         if ($m === '' || !hash_equals($m, (string) ($r['pw'] ?? ''))) continue;
         $id = substr((string) $h, 0, 12);
-        $rows[] = ['id' => $id, 'kind' => $r['kind'], 'label' => (string) ($r['label'] ?? ''), 'lab' => (string) ($r['lab'] ?? $r['label'] ?? ''), 'made' => (int) ($r['made'] ?? 0), 'seen' => (int) ($r['seen'] ?? 0), 'exp' => (int) $r['exp'],
+        $rows[] = ['id' => $id, 'kind' => $r['kind'], 'label' => (string) ($r['label'] ?? ''), 'lab' => signin_real_label($r), 'made' => (int) ($r['made'] ?? 0), 'seen' => (int) ($r['seen'] ?? 0), 'exp' => (int) $r['exp'],
             'ip' => (string) ($r['ip'] ?? ''), 'n' => (int) ($r['n'] ?? 0), 'peak' => (int) ($r['peak'] ?? 0), 'peakAt' => (int) ($r['peakAt'] ?? 0), 'size' => signin_history_size($id),
             'ccs' => array_values((array) ($r['ccs'] ?? [])), 'flags' => browser_flags_of($r), 'current' => $me !== null && $me['hash'] === $h];
     }
@@ -9259,7 +9296,7 @@ function gallery_setting_definitions() {
             ['name' => 'BROWSER_NETWORKS_ALARM', 'type' => 'number', 'label' => 'Flag a browser used from more than this many networks in 24 hours', 'min' => 2, 'max' => 1000, 'step' => 1,
              'help' => 'A network is an IPv4 block of 256 addresses or an IPv6 /64 (one home, one phone connection). A phone moving between wifi and mobile data uses a few; a stolen cookie sent through a rotating pool uses many. Each row shows its busiest day: set this above your own.'],
             ['name' => 'BROWSER_END_ON_DEVICE', 'type' => 'bool', 'label' => 'Sign a browser out if it is used from a different device of the same kind',
-             'help' => 'For example a sign-in made on an iPhone that is then used as an iPad or a Mac. Always flagged in amber; this also signs it out.'],
+             'help' => 'A sign-in made on an iPhone, then seen as an iPad or a Mac. An iPad (and an iPhone using "Request Desktop Website") says it is a Mac, so this can sign the right person out. Always flagged in amber; best left off.'],
             ['name' => 'BROWSER_END_ON_FAMILY', 'type' => 'bool', 'label' => 'Sign a browser out if it is used from a different kind of device',
              'help' => 'Apple (iPhone, iPad, Mac), Android, Windows and Linux are kinds: a sign-in made on an iPhone that is then used as a Windows PC. Always flagged in red; this also signs it out.'],
             ['name' => 'BROWSER_END_ON_COUNTRY', 'type' => 'bool', 'label' => 'Sign a browser out if it is used from a new country',
@@ -10791,6 +10828,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
     $seenAt = (int) ($data['seenAt'] ?? 0);
     $folderOpts = [];
     foreach (folder_tree_rows($dir, all_folder_paths($files)) as $r) $folderOpts[] = ['p' => $r['p'], 'l' => link_folder_label($dir, $r['p']), 'n' => $r['n'], 'd' => $r['d'], 'x' => folder_is_private($dir, $r['p'])];
+    $privNow = admin_hidden_data($dir, $files);   // (what is private right now: the form says "opens private photos" only when the link would)
     $current = []; $ended = []; $problemLinks = 0; $pubRec = null;
     foreach ($data['links'] as $l) {
         if (!is_array($l) || !isset($l['id'], $l['token'])) continue;
@@ -10904,7 +10942,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       </div>
       <div id="sl-ips-view" class="sl-ipsview" hidden><div class="sl-act" data-act="ips"><p class="muted sl-none">Loading…</p></div>
         <p class="note"><a href="?admin&amp;linkexport=all&amp;what=items" class="linklike">Export everything as CSV</a> (what each address looked at, for every link) &middot; <button type="button" class="linklike" data-sl="trim">Trim the log&hellip;</button></p></div>
-      <form class="sl-form" id="sl-form" hidden data-folders="<?= $esc(json_encode($folderOpts, JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
+      <form class="sl-form" id="sl-form" hidden data-folders="<?= $esc(json_encode($folderOpts, JSON_HEX_TAG | JSON_HEX_AMP)) ?>" data-private="<?= $esc(json_encode(['f' => $privNow['folders'], 'i' => $privNow['items'], 's' => $privNow['shown']], JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
         <div class="sl-form-head"><h3 class="sl-form-title">New share link</h3><button type="button" class="linklike sl-resetall" data-sl="resetall" hidden></button></div>
         <input type="hidden" name="id" value="">
         <label class="sl-f"><span class="sl-k">Name <span class="muted">(only you see it)</span></span><input type="text" name="label" maxlength="80" placeholder="Aunt Carol" autocomplete="off"></label>
@@ -11851,7 +11889,7 @@ function health_checks($dir, $files) {
     foreach (browser_rows() as $br) {
         foreach ($br['flags'] as $flagName => [$flagDetail, $flagAt, $flagLoud]) {
             $add('Signed-in browsers', $flagLoud, signin_flag_info($flagName)[0] . ': ' . ($br['kind'] === 'owner' ? 'you' : 'private view') . ' on ' . ($br['lab'] !== '' ? $br['lab'] : 'a device'),
-                $flagDetail . ' (' . date('M j, g:i a', $flagAt) . '). In Settings → Signing in and passwords: Looks fine clears it, Sign out ends that browser.');
+                $flagDetail . ' (' . date('M j, g:i a', $flagAt) . '). Looks fine clears it, Sign out ends that browser.', ['site', 'browsers-row', 'Open the list']);
         }
     }
     $sgFiles = (array) @glob(__DIR__ . '/.gallery-signin-*.php'); $sgTotal = 0; $sgBig = 0; $sgBigId = '';
@@ -11861,14 +11899,14 @@ function health_checks($dir, $files) {
         $sgAgo = function ($days) use ($sgSizes) { $want = date('Y-m-d', time() - $days * 86400); foreach ($sgSizes as $day => $v) if ($day <= $want) return signin_size_text((int) ($v[0] ?? 0)); return 'not noted yet'; };
         $sgWho = ''; foreach (browser_rows() as $sgR) if ($sgR['id'] === $sgBigId) $sgWho = ' (' . ($sgR['kind'] === 'owner' ? 'you' : 'private view') . ' on ' . $sgR['lab'] . ')';
         $add('Signed-in browsers', 'info', 'Address history: ' . signin_size_text($sgTotal) . ' in ' . count($sgFiles) . ' file' . (count($sgFiles) === 1 ? '' : 's'),
-            'The largest is ' . signin_size_text($sgBig) . $sgWho . '. A week ago the total was ' . $sgAgo(7) . ', a month ago ' . $sgAgo(30) . '. It is kept ' . BROWSER_HISTORY_DAYS . ' days and nothing else caps it; a history that grows fast is worth a look.');
+            'The largest is ' . signin_size_text($sgBig) . $sgWho . '. A week ago the total was ' . $sgAgo(7) . ', a month ago ' . $sgAgo(30) . '. It is kept ' . BROWSER_HISTORY_DAYS . ' days and nothing else caps it; a history that grows fast is worth a look.', ['site', 'browsers-row', 'Open the list']);
     }
 
     // --- the country file
     if (COUNTRY_LOOKUP) {
         $gs = geo_state(); $gHave = is_file(geo_db_path());
         $add('Signed-in browsers', 'info', $gHave ? 'Country file: the ' . ($gs['ym'] !== '' ? date('F Y', (int) strtotime($gs['ym'] . '-01')) : 'current') . ' edition, ' . signin_size_text((int) @filesize(geo_db_path())) : 'Country file: not fetched yet',
-            ($gHave ? 'IP geolocation by DB-IP (CC BY 4.0); fetched ' . date('M j', (int) ($gs['at'] ?: @filemtime(geo_db_path()))) . ', and it looks for a newer one every 7 days.' : 'It is fetched at the next visit, or press Refresh now in Settings.') . ($gs['error'] !== '' ? ' The last try (' . date('M j, g:i a', (int) $gs['triedAt']) . ') did not work: ' . $gs['error'] : ''));
+            ($gHave ? 'IP geolocation by DB-IP (CC BY 4.0); fetched ' . date('M j', (int) ($gs['at'] ?: @filemtime(geo_db_path()))) . ', and it looks for a newer one every 7 days.' : 'It is fetched at the next visit, or press Refresh now in Settings.') . ($gs['error'] !== '' ? ' The last try (' . date('M j, g:i a', (int) $gs['triedAt']) . ') did not work: ' . $gs['error'] : ''), ['site', 'geo-row', 'Open the setting']);
     }
 
     // --- videos
@@ -11950,7 +11988,7 @@ function render_admin_health_panel() {
     <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel">
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong>
-        <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary" onclick="location.reload()">Check again</button></p>
+        <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary health-refresh" onclick="location.reload()" title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></p>
       <p class="muted health-intro" style="margin-top:0;">Looks only; nothing is changed (apart from noting the running version).</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
@@ -12123,17 +12161,17 @@ function render_admin_browsers_panel($csrfToken) {
           <?php if ($hint !== ''): ?><div class="warn-note"><?= $e($hint) ?> Until then every visitor looks like the proxy, so the addresses here tell you nothing.</div><?php endif; ?>
           <div class="br-scroll">
           <table class="br-table">
-            <thead><tr><th>Browser</th><th>Signed in</th><th>Last here</th><th>Stays until</th><th>Last address</th><th>Address changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
-            <?php foreach ($rows as $r): ?>
+            <thead><tr><th>Browser</th><th>Signed in</th><th>Last here</th><th>Last address</th><th>Addresses</th><th>Device changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
+            <?php foreach ($rows as $r): $hs = signin_history_stats($r['id']); ?>
             <tbody class="br-item <?= trim(($r['current'] ? 'br-me ' : '') . ($r['flags'] ? 'br-flagged' : '')) ?>" data-id="<?= $e($r['id']) ?>">
               <tr class="br-main">
                 <td data-label="Browser"><strong class="br-who <?= $e($r['kind']) ?>"><?= $r['kind'] === 'owner' ? 'You (admin)' : 'Private view' ?></strong><?= $r['current'] ? ' <span class="br-this">this browser</span>' : '' ?><span class="br-dev"><?= $e($r['lab'] !== '' ? $r['lab'] : 'A device') ?></span></td>
                 <td data-label="Signed in"><span class="br-v"><?= $e(date('M j', $r['made'])) ?></span></td>
-                <td data-label="Last here"><span class="br-v"><?= $e(signin_ago($r['seen'], $now)) ?></span></td>
-                <td data-label="Stays until"><span class="br-v"><?= $e(date('M j', $r['exp'])) ?></span></td>
+                <td data-label="Last here"><span class="br-v"><?= $e(signin_ago($r['seen'], $now)) ?><span class="br-sub">stays until <?= $e(date('M j', $r['exp'])) ?></span></span></td>
                 <td data-label="Last address"><span class="br-v"><?= $r['ip'] !== '' ? '<code>' . $e($r['ip']) . '</code>' . ($r['ccs'] ? ' <span class="br-cc">' . $e(end($r['ccs'])) . '</span>' : '') : '<span class="muted">none yet</span>' ?></span></td>
-                <td data-label="Address changes"><span class="br-v"><?= number_format($r['n']) ?> <span class="muted">· <?= $e(signin_size_text($r['size'])) ?></span><?= $r['peak'] > 0 ? '<span class="br-sub">most networks in 24 hours: <b>' . (int) $r['peak'] . '</b>' . ($r['peakAt'] > 0 ? ' (' . $e(date('M j', $r['peakAt'])) . ')' : '') . '</span>' : '' ?></span></td>
-                <td class="br-acts"><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">Addresses</button><?php if (!$r['current']): ?><button type="button" class="secondary" data-br="cancel">Sign out</button><?php endif; ?></td>
+                <td data-label="Addresses"><span class="br-v"><button type="button" class="linklike br-num" data-br="details"><?= number_format($hs['ips']) ?></button><?= $r['peak'] > 0 ? '<span class="br-sub">most networks in 24 hours: <b>' . (int) $r['peak'] . '</b>' . ($r['peakAt'] > 0 ? ' (' . $e(date('M j', $r['peakAt'])) . ')' : '') . '</span>' : '' ?></span></td>
+                <td data-label="Device changes"><span class="br-v"><button type="button" class="linklike br-num" data-br="details"><?= number_format($hs['dev']) ?></button><?= $hs['sys'] > 0 ? '<span class="br-sub">' . ($hs['sys'] === $hs['dev'] ? ($hs['dev'] === 1 ? 'it was' : 'all') : number_format($hs['sys']) . ' of them') . ' Apple system networking, not flagged</span>' : '' ?></span></td>
+                <td class="br-acts"><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">History</button><?php if (!$r['current']): ?><button type="button" class="secondary" data-br="cancel">Sign out</button><?php endif; ?></td>
               </tr>
               <?php foreach ($r['flags'] as $fname => [$fdetail, $fat, $floud]): ?>
               <tr class="br-flagrow"><td colspan="7"><div class="br-flag <?= $e($floud) ?>" data-flag="<?= $e($fname) ?>"><span><strong><?= $e(signin_flag_info($fname)[0]) ?></strong> · <?= $e($fdetail) ?> (<?= $e(date('M j, g:i a', $fat)) ?>)</span><button type="button" class="secondary" data-br="ack">Looks fine</button></div></td></tr>
@@ -12150,21 +12188,22 @@ function render_admin_browsers_panel($csrfToken) {
             <summary>Recently signed out (<?= count($ended) ?>)<span class="muted"> · kept <?= (int) BROWSER_ENDED_DAYS ?> days</span></summary>
             <div class="br-scroll">
             <table class="br-table br-table-ended">
-              <thead><tr><th>Browser</th><th>Signed in</th><th>Signed out</th><th>Why</th><th>Address changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
-              <?php foreach ($ended as $r): ?>
+              <thead><tr><th>Browser</th><th>Signed in</th><th>Signed out</th><th>Why</th><th>Addresses</th><th>Device changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <?php foreach ($ended as $r): $hasH = is_file(signin_history_path($r['id'])); $hs = $hasH ? signin_history_stats($r['id']) : null; ?>
               <tbody class="br-item" data-id="<?= $e($r['id']) ?>">
                 <tr class="br-main">
                   <td data-label="Browser"><strong class="br-who <?= $e($r['kind']) ?>"><?= $r['kind'] === 'owner' ? 'You (admin)' : 'Private view' ?></strong><span class="br-dev"><?= $e($r['label'] !== '' ? $r['label'] : 'A device') ?></span></td>
                   <td data-label="Signed in"><span class="br-v"><?= $e(date('M j', (int) $r['made'])) ?></span></td>
                   <td data-label="Signed out"><span class="br-v"><?= $e(date('M j, g:i a', (int) $r['ended'])) ?></span></td>
                   <td data-label="Why"><span class="br-v"><b><?= $e(signin_reason_text($r['reason'])) ?></b><?= !empty($r['detail']) ? ' <span class="muted">· ' . $e($r['detail']) . '</span>' : '' ?></span></td>
-                  <td data-label="Address changes"><span class="br-v"><?= number_format((int) $r['n']) ?> <span class="muted">· <?= $e(signin_size_text(signin_history_size($r['id']))) ?></span><?= (int) $r['peak'] > 0 ? '<span class="br-sub">most networks in 24 hours: <b>' . (int) $r['peak'] . '</b></span>' : '' ?></span></td>
-                  <td class="br-acts"><?php if (is_file(signin_history_path($r['id']))): ?><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">Addresses</button><?php endif; ?></td>
+                  <td data-label="Addresses"><span class="br-v"><?= $hs ? '<button type="button" class="linklike br-num" data-br="details">' . number_format($hs['ips']) . '</button>' : '<span class="muted">none</span>' ?></span></td>
+                  <td data-label="Device changes"><span class="br-v"><?= $hs ? '<button type="button" class="linklike br-num" data-br="details">' . number_format($hs['dev']) . '</button>' . ($hs['sys'] > 0 ? '<span class="br-sub">' . ($hs['sys'] === $hs['dev'] ? ($hs['dev'] === 1 ? 'it was' : 'all') : number_format($hs['sys']) . ' of them') . ' Apple system networking, not flagged</span>' : '') : '<span class="muted">none</span>' ?></span></td>
+                  <td class="br-acts"><?php if ($hasH): ?><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">History</button><?php endif; ?></td>
                 </tr>
-                <tr class="br-detailrow" hidden><td colspan="6"><div class="br-detail"></div></td></tr>
+                <tr class="br-detailrow" hidden><td colspan="7"><div class="br-detail"></div></td></tr>
               </tbody>
               <?php endforeach; ?>
-              <?php if (!$ended): ?><tbody class="br-none"><tr><td colspan="6">None lately.</td></tr></tbody><?php endif; ?>
+              <?php if (!$ended): ?><tbody class="br-none"><tr><td colspan="7">None lately.</td></tr></tbody><?php endif; ?>
             </table>
             </div>
           </details>
@@ -12173,37 +12212,19 @@ function render_admin_browsers_panel($csrfToken) {
 <?php
 }
 
-/** One browser's history as the list's "Addresses" opens it: the days newest first with the networks and addresses of each, then every
- *  device it has said it was. At most the newest 3,000 lines are drawn (the CSV has all of them). */
+/** One browser's history as the list's "History" opens it: the counts, then the stored lines as they are, newest first (the CSV has all of them). */
 function render_browser_history_html($id) {
     $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $lines = signin_history_read($id);
     if (!$lines) return '<p class="muted">Nothing is recorded for this browser.</p>';
-    $total = count($lines); $shown = array_slice($lines, -3000);
-    $days = []; $uas = [];
-    foreach ($shown as $l) {
-        $days[date('Y-m-d', (int) $l['t'])][] = $l;
-        $u = (string) ($l['ua'] ?? '');
-        if (!isset($uas[$u])) $uas[$u] = ['first' => (int) $l['t'], 'last' => (int) $l['t'], 'n' => 0];
-        $uas[$u]['last'] = (int) $l['t']; $uas[$u]['n']++;
+    $total = count($lines); $shown = array_slice($lines, -200);
+    $h = '<p class="br-sum">' . $e(signin_stats_text(signin_history_stats($id, $lines))) . '</p>';
+    $h .= '<p class="br-dl"><a href="?admin&amp;browserhist=' . $e($id) . '&amp;csv=1">Download all ' . number_format($total) . ' line' . ($total === 1 ? '' : 's') . ' (CSV)</a>' . ($total > count($shown) ? ' · showing the newest ' . number_format(count($shown)) : '') . '</p>';
+    $h .= '<div class="br-log">';
+    foreach (array_reverse($shown) as $l) {
+        $h .= '<div class="br-ln"><span class="br-lt">' . $e(date('Y-m-d H:i:s', (int) $l['t'])) . '</span> <span class="br-le">' . $e($l['e'] ?? '') . '</span> <b class="br-lip">' . $e($l['ip']) . '</b> <span class="br-lc">' . $e(($l['cc'] ?? '') !== '' ? $l['cc'] : '--') . '</span> <span class="br-lu">' . $e((string) ($l['ua'] ?? '') !== '' ? $l['ua'] : '(nothing)') . '</span></div>';
     }
-    krsort($days);
-    $h = '<p class="br-dl"><a href="?admin&amp;browserhist=' . $e($id) . '&amp;csv=1">Download all ' . number_format($total) . ' line' . ($total === 1 ? '' : 's') . ' (CSV)</a>' . ($total > count($shown) ? ' · showing the newest ' . number_format(count($shown)) : '') . '</p>';
-    $h .= '<table class="br-days"><thead><tr><th>Day</th><th>Networks</th><th>Addresses (newest first)</th></tr></thead><tbody>';
-    foreach ($days as $day => $ls) {
-        $byAddr = []; $nets = [];
-        foreach (array_reverse($ls) as $l) {
-            $ip = (string) $l['ip']; $nets[signin_net_key($ip)] = true;
-            if (!isset($byAddr[$ip])) $byAddr[$ip] = ['cc' => (string) ($l['cc'] ?? ''), 'first' => (int) $l['t'], 'last' => (int) $l['t'], 'n' => 0];
-            $byAddr[$ip]['first'] = (int) $l['t']; $byAddr[$ip]['n']++;
-        }
-        $items = '';
-        foreach ($byAddr as $ip => $a) $items .= '<li><code>' . $e($ip) . '</code>' . ($a['cc'] !== '' ? ' <span class="br-cc">' . $e($a['cc']) . '</span>' : '') . ' <span class="muted">' . $e(date('g:i a', $a['first'])) . ($a['last'] !== $a['first'] ? ' – ' . $e(date('g:i a', $a['last'])) : '') . '</span></li>';
-        $h .= '<tr><td>' . $e(date('D M j', (int) strtotime($day))) . '</td><td>' . count($nets) . '</td><td><ul class="br-addrs">' . $items . '</ul></td></tr>';
-    }
-    $h .= '</tbody></table><div class="br-uas"><strong>What it said it was</strong><ul>';
-    foreach ($uas as $u => $x) $h .= '<li><code>' . $e($u !== '' ? $u : '(nothing)') . '</code> <span class="muted">' . $e(date('M j', $x['first'])) . ($x['last'] !== $x['first'] ? ' – ' . $e(date('M j', $x['last'])) : '') . ' · ' . number_format($x['n']) . ' line' . ($x['n'] === 1 ? '' : 's') . '</span></li>';
-    return $h . '</ul></div>';
+    return $h . '</div>';
 }
 
 /** ?admin&browserhist=<id>: that browser's history as HTML (what the list opens), or with &csv=1 all of it as a spreadsheet file. */
@@ -12841,8 +12862,10 @@ function owner_phone_bar_css() {
     .pb-f { font-size:0.9rem; color:#c9c9cd; }
     .pb-f .n { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pb-f .c { flex:none; font-size:0.72rem; color:#8a8a8f; }
-    .pb-f.cur { color:#fff; font-weight:600; }
-    .pb-f.cur .n::before { content:"\\25CF\\00a0"; color:#aab2ff; font-size:0.7em; }
+    .pb-w.cur, .pb-f.cur { color:#fff; font-weight:600; background:#5865f2; border-radius:8px; border-top-color:transparent; padding-left:12px; padding-right:12px; }
+    .pb-w.cur .count, .pb-w.cur .c, .pb-f.cur .c { background:rgba(0,0,0,0.3); color:#fff; }
+    .pb-f.cur .c { background:none; }
+    .pb-sheet.off-folder .pb-f.cur { background:rgba(255,255,255,0.07); font-weight:500; }
   }';
 }
 
@@ -13721,6 +13744,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sort-details > summary .muted { font-size:0.8rem; }
   .health-panel:not(.show-all) .health-row.quiet, .health-panel:not(.show-all) .health-group.all-quiet, .health-panel:not(.show-all) .health-intro { display:none; }
   .health-panel.is-checking .health-toggle { display:none; }
+  .health-refresh { display:inline-flex; align-items:center; justify-content:center; padding-left:10px; padding-right:10px; }
+  .health-refresh .ico { width:20px; height:20px; fill:none; stroke:#aab2ff; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
   .health-toggle { display:inline-flex; align-items:center; gap:8px; padding-left:10px; font-weight:600; }
   .health-toggle .chev { width:20px; height:20px; flex:none; transition:transform .15s; }
   .health-panel.show-all .health-toggle .chev { transform:rotate(90deg); }
@@ -14032,7 +14057,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .br-table tbody.br-none td { color:var(--muted); }
   .br-dev { display:block; font-size:0.8rem; color:#a8a8ae; margin-top:2px; }
   .br-sub { display:block; font-size:0.78rem; color:#a8a8ae; margin-top:2px; }
-  .br-table td { white-space:nowrap; } .br-table td:first-child, .br-table td[data-label='Why'], .br-table td[data-label='Address changes'] { white-space:normal; }
+  .br-table td { white-space:nowrap; } .br-table td:first-child, .br-table td[data-label='Why'], .br-table td[data-label='Device changes'], .br-table td[data-label='Addresses'], .br-table .br-flagrow td, .br-table .br-detailrow td { white-space:normal; }
   .br-acts { text-align:right; }
   .br-acts button.secondary { padding:6px 12px; font-size:0.85rem; }
   .br-table td[data-label='Last address'] { white-space:normal; overflow-wrap:anywhere; min-width:9.5em; }
@@ -14065,13 +14090,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .br-more { font-size:0.85rem; color:#aab2ff; }
   .br-detail { font-size:0.85rem; }
   .br-dl { margin:0 0 8px; }
-  .br-days { width:100%; border-collapse:collapse; }
-  .br-days th, .br-days td { text-align:left; vertical-align:top; padding:4px 8px 4px 0; border-top:1px solid #26262a; }
-  .br-days th { font-size:0.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); border-top:0; }
-  .br-addrs { list-style:none; margin:0; padding:0; }
-  .br-addrs li { display:block; padding:0 0 2px; }
+  .br-num { font-size:1rem; font-weight:700; color:#aab2ff; padding:0; }
+  .br-sum { margin:0 0 6px; font-weight:600; }
+  .br-log { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.78rem; line-height:1.5; }
+  .br-ln { padding:3px 0; border-top:1px solid #1d1d20; overflow-wrap:anywhere; }
+  .br-ln:first-child { border-top:0; }
+  .br-lt, .br-lc { color:#8c8c93; } .br-le { color:#aab2ff; } .br-lu { color:#a8a8ae; }
   .br-cc { font-size:0.72rem; padding:0 6px; border-radius:8px; background:rgba(255,255,255,0.09); }
-  .br-uas { margin-top:10px; } .br-uas ul { margin:4px 0 0; padding-left:18px; } .br-uas code { overflow-wrap:anywhere; }
   .br-ended { margin-top:12px; } .br-ended summary { cursor:pointer; font-weight:600; }
 
   .geo-status { margin-top:8px; padding:8px 12px; border-radius:8px; background:rgba(126,226,160,0.08); border:1px solid rgba(126,226,160,0.35); color:#c9f0d6; font-size:0.88rem; line-height:1.5; }
@@ -14784,6 +14809,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var lay = document.querySelector('.admin-layout');
       var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features';
       if (lay) lay.classList.toggle('off-folder', whole);
+      // The phone's Menu and bottom bar say the same thing as the sidebar: the page you are on is the one blue entry; the folder stays marked, quietly, on a whole-gallery page.
+      [].forEach.call(document.querySelectorAll('.pb-w[data-pb-tab]'), function (a) { var on = a.getAttribute('data-pb-tab') === name; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+      [].forEach.call(document.querySelectorAll('#pb .pb-i[data-pb=settings], #pb .pb-i[data-pb=notes]'), function (a) { a.classList.toggle('on', a.getAttribute('data-pb') === name); });
+      var pbSheet = document.getElementById('pb-sheet'); if (pbSheet) pbSheet.classList.toggle('off-folder', whole);
       var fh = document.getElementById('admin-folder-head'); if (fh) fh.hidden = whole;   // (the folder's own tabs belong to a folder, not to the whole-gallery pages)
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
@@ -15461,10 +15490,23 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     // Three ways to have the address: the name (letters and digits only), a name typed in, or a random code. The field named "address" always holds
     // the final value ('' = random), so the rest of the form needs no change.
+    // Does this link, as the form stands, open anything that is private? A folder counts if it is private, is inside a private folder, or has a
+    // private photo or folder inside it; a photo if it is private itself or sits in a private folder without being made public.
+    function opensPrivate(form) {
+      var pv; try { pv = JSON.parse(form.getAttribute('data-private') || '{}'); } catch (x) { pv = {}; }
+      var pf = pv.f || [], pi = pv.i || [], ps = pv.s || [];
+      var inside = function (p, root) { return p === root || p.indexOf(root + '/') === 0; };
+      var folderPriv = function (p) { if (p === '') return pf.length > 0 || pi.length > 0; return pf.some(function (r) { return inside(p, r) || inside(r, p); }) || pi.some(function (i) { return inside(i, p); }); };
+      var photoPriv = function (p) { return pi.indexOf(p) >= 0 || (ps.indexOf(p) < 0 && pf.some(function (r) { return inside(p, r); })); };
+      var sc = radioValue(form, 'scope_type');
+      if (sc === 'public') return false;
+      if (sc === 'all') return pf.length > 0 || pi.length > 0;
+      return (sc !== 'photos' && st.scope.some(folderPriv)) || (sc !== 'folders' && st.photos.some(photoPriv));
+    }
     function addrSync(form) {
       var mode = form._addrMode || 'name', ck = form.querySelector('[name=addr_name]'), inp = form.querySelector('[name=address]'), row = form.querySelector('[data-addrrow]'), prev = form.querySelector('[data-addrprev]');
       ck.checked = mode === 'name'; row.hidden = mode !== 'custom';
-      form.querySelector('[data-addrnote]').hidden = !(mode === 'name' && radioValue(form, 'scope_type') !== 'public');   // (a name can be guessed: said whenever a link that opens private photos has its address made from the name)
+      form.querySelector('[data-addrnote]').hidden = !(mode === 'name' && opensPrivate(form));   // (a name can be guessed: said whenever a link that opens private photos has its address made from the name)
       if (mode === 'name') inp.value = slugName(form.querySelector('[name=label]').value); else if (mode === 'random') inp.value = '';
       prev.textContent = mode === 'name' ? '…/' + (inp.value || 'auntcarol') : '';
       addrHint(form);
@@ -15482,7 +15524,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (row.hidden) keepBox.checked = false; else if (wasHidden) keepBox.checked = true;   // (ticked whenever it appears: the address that was sent out is meant to keep working)
       var kept = keepBox.checked, ending = kept ? ' The old address keeps working and sends people on to the new one; anyone signed in through it is signed out.' : ' The old address is paused: it shows the “not valid” page (you can resume it from Settings), and anyone signed in through it is signed out.';
       if (mode === 'random') { h.innerHTML = 'A random code is made for you, one that can\'t be guessed.' + (was !== '' ? esc(ending) : '') + ' <button type="button" class="linklike" data-sl="addrcustom">Type my own instead</button>'; return; }
-      if (mode === 'name') msg = v === '' ? '' : (v.length < 4 ? 'An address needs at least 4 letters or digits: add to the name, or untick the box.' : (v.length < 12 && radioValue(form, 'scope_type') === 'public' ? 'A name can be guessed by someone who tries. A random address can\'t be.' : '')) + (was !== v && was !== '' ? ending : '');
+      if (mode === 'name') msg = v === '' ? '' : (v.length < 4 ? 'An address needs at least 4 letters or digits: add to the name, or untick the box.' : (v.length < 12 && !opensPrivate(form) ? 'A name can be guessed by someone who tries. A random address can\'t be.' : '')) + (was !== v && was !== '' ? ending : '');
       else if (v === '') msg = was ? 'Saving with this empty gives the link a new random address.' + ending : 'Type the address, or press Random.';
       else if (v.length < 4) msg = 'At least 4 letters, digits or hyphens.';
       else msg = (v.length < 12 ? 'A short name can be guessed by someone who tries. A random address can\'t be.' : 'Anyone who learns or guesses this name can open the link.') + (was !== v && was !== '' ? ending : '');
@@ -15498,6 +15540,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function fdate(v) { var t = new Date(v); return isNaN(t.getTime()) || v === '' ? 'the date you pick' : t.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
     var DL_SAY = { off: 'off', all: 'everything', 'public': 'everything but private', some: 'some folders' };
     function summarize(form) {
+      var addrNote = form.querySelector('[data-addrnote]'); if (addrNote) addrNote.hidden = !((form._addrMode || 'name') === 'name' && opensPrivate(form));
       var f = formState(form), form_ = form, names = function (list) { return list.map(function (p) { return labelOf(form_, p); }).join(', '); };
       var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'every private folder and photo' : f.scope === 'folders' ? (st.scope.length ? names(st.scope) : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? names(st.scope) : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
       var usesNow = usesOf(f), usesIsDefault = usesNow === DEFAULT_USES && (f.opens !== 'n' || f.opensN !== '');
@@ -15590,7 +15633,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (e.target.name === 'title_mode' && !form.querySelector('[name=id]').value) form.querySelector('[name=picture]').checked = e.target.value === 'gallery';
       if (e.target.name === 'picture' || e.target.name === 'title_mode') { form.querySelector('[data-coverrow]')._loaded = false; }   // (a new link: the photo follows the title until you decide)
       if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'photos' || e.target.value === 'mixed';   // (photos, and folders with photos: on to start with, so a link with picks shows just the picks; folders alone: off)
-      if (e.target.name === 'addr_name') { setAddrMode(form, e.target.checked ? 'name' : (radioValue(form, 'scope_type') === 'public' ? 'custom' : 'random'), true); return; }   // (unticking: a public link opens the box to type in; one that opens private photos gets a random address, which a name can't be)
+      if (e.target.name === 'addr_name') { setAddrMode(form, e.target.checked ? 'name' : (!opensPrivate(form) ? 'custom' : 'random'), true); return; }   // (unticking: a public link opens the box to type in; one that opens private photos gets a random address, which a name can't be)
       if (e.target.name === 'scope_type') addrSync(form);
       if (e.target.name === 'scope_type' && (e.target.value === 'folders' || e.target.value === 'mixed')) {
         // folders already chosen for downloads and ZIPs that the new scope doesn't cover are dropped
@@ -16457,7 +16500,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var what = b.getAttribute('data-br');
       if (what === 'details') {   // a browser's addresses, fetched when first asked for
         var item = b.closest('tbody[data-id]'), drow = item.querySelector('.br-detailrow'), box = drow.querySelector('.br-detail'), open = drow.hidden;
-        drow.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.textContent = open ? 'Hide addresses' : 'Addresses';
+        var tog = item.querySelector('.br-more'); drow.hidden = !open;
+        if (tog) { tog.setAttribute('aria-expanded', open ? 'true' : 'false'); tog.textContent = open ? 'Hide history' : 'History'; }
         if (open && !box.getAttribute('data-loaded')) {
           box.innerHTML = '<p class="muted">Loading…</p>';
           fetch('?admin&browserhist=' + encodeURIComponent(item.getAttribute('data-id')), { credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
@@ -18595,6 +18639,7 @@ function ui_icon_paths() {
         'link'    => '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
         'eye'     => '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
         'check'   => '<path d="M4.5 12.5 9.5 17.5 19.5 7"/>',
+        'refresh' => '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
         'warn'    => '<path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.4h.01"/>',
         'play'    => '<path d="M8 5.5v13l10.5-6.5z"/>',
         'star'    => '<path d="m12 3.5 2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8z"/>',
@@ -19010,7 +19055,7 @@ function render_about_page() {
   </ul>
 
   <h2>Documentation</h2>
-  <p>Setup, settings and every feature: <a href="<?= htmlspecialchars($repoUrl) ?>" target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($repoUrl) ?></a></p>
+  <p>Screenshots and a quick start: <a href="<?= htmlspecialchars($repoUrl) ?>" target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($repoUrl) ?></a>. Setup, settings and every feature: <a href="<?= htmlspecialchars($repoUrl) ?>/tree/main/docs/guide" target="_blank" rel="noopener noreferrer">the user guide</a>.</p>
 
 </div>
 </body>
@@ -20606,7 +20651,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         <?php if (ENABLE_SHARE_LINKS && is_admin_browser() && $currentFolderPath !== null && folder_is_private($dir, $currentFolderPath)): ?>
         <span class="map-combo"><button type="button" class="map-combo-btn page-share" data-gs-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-gs-label="<?= htmlspecialchars(link_folder_label($dir, $currentFolderPath), ENT_QUOTES, 'UTF-8') ?>" title="Share this folder…" aria-label="Share this folder…"><?= ui_icon('share') ?></button></span>
         <?php endif; ?>
-        <span class="map-combo"><a class="map-combo-btn page-about" href="?about" title="About this gallery software" aria-label="About this gallery software"><?= ui_icon('gallery') ?></a></span>
+        <span class="map-combo"><a class="map-combo-btn page-about" href="?about" target="_blank" rel="noopener" title="About this gallery software (opens in a new tab)" aria-label="About this gallery software (opens in a new tab)"><?= ui_icon('gallery') ?></a></span>
       </span>
     </div>
   </div>

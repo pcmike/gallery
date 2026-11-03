@@ -7,7 +7,7 @@
  * Full documentation (grouping, nested folders, video, captions and
  * locations, the admin editor, hiding items, the maps, Markdown
  * notes, {color}/{sold}/{reserved}/{group}/{photos} directives, view
- * stats, deep linking, image caching, etc.) lives in the repo's README: github.com/pcmike/gallery. The
+ * stats, deep linking, image caching, etc.) lives in the repo's guide (docs/guide): github.com/pcmike/gallery. The
  * "?about" page this script serves itself (open any deployed gallery and
  * press the small gallery icon above the photos, or visit "?about" directly) is a short
  * in-app pitch that links to the GitHub repo, including a "Get it on
@@ -24,7 +24,7 @@
  *     MAP_CLUSTER_RADIUS_MILES constants are just below, and are only the
  *     DEFAULTS: a .gallery-config.php beside this file overrides them and
  *     survives replacing this file with a newer version (see
- *     gallery_setting() below and the README). TRACK_VIEWS,
+ *     gallery_setting() below and the guide). TRACK_VIEWS,
  *     AUTO_GROUP_BY_FOLDER, ENABLE_VIDEO and ENABLE_PHOTO_LOCATION are
  *     off by default — this script writes nothing to disk
  *     (apart from thumbnails in .gallery-cache, what the admin saves and,
@@ -81,7 +81,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.4.0');
+define('GALLERY_VERSION', '2.4.1');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -260,7 +260,7 @@ function count_loose_media_in_roots() {
 // script writes nothing to the folder's disk unless you turn something
 // on. Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
 // into the folder, and is what enables the live view-count badges. See
-// the README for details.
+// the guide for details.
 define('TRACK_VIEWS', gallery_setting('TRACK_VIEWS', false));
 
 // Whether view counts are shown publicly once TRACK_VIEWS is on. Off by
@@ -294,7 +294,7 @@ define('ENABLE_PUBLIC_DOWNLOAD', PUBLIC_DOWNLOAD_MODE !== 'off');   // (the ques
 // nothing that isn't already in the gallery, and if that folder can't be
 // written (or GD/Imagick is missing) the original photo is served as
 // before. Set to false for a gallery that must never write to its folder.
-// See the README for details.
+// See the guide for details.
 define('ENABLE_THUMBNAIL_CACHE', gallery_setting('ENABLE_THUMBNAIL_CACHE', true));
 // The two pictures a tile can show (size=tile and size=tilehd), both square cuts from the middle of the photo, which is all
 // a tile ever shows of it: [side in pixels, JPEG quality]. A tile is 180 to 250 points wide (a phone in portrait with one
@@ -311,7 +311,7 @@ const TILE_SIZES = ['tile' => [560, 82], 'tilehd' => [1080, 80]];
 // angles) — leaving it on for an arbitrary folder of camera photos can
 // falsely merge unrelated shots that just happen to share a numeric
 // filename pattern (e.g. IMG_0234.jpg / IMG_0235.jpg from two different,
-// unrelated photos). See the README for details, and for how to define
+// unrelated photos). See the guide for details, and for how to define
 // groups explicitly via {group:}/{photos:} directives in a .md file
 // instead, regardless of filename.
 define('AUTO_GROUP_BY_FILENAME', gallery_setting('AUTO_GROUP_BY_FILENAME', false));
@@ -335,7 +335,7 @@ define('SHOW_SORT_BUTTON', gallery_setting('SHOW_SORT_BUTTON', true));
 // Scan subfolders recursively (to any depth) and group photos by which
 // one they're in. Off by default — a flat folder behaves exactly as it
 // always has. Turn this on for a trip folder like /trip/Paris,
-// /trip/StTropez, etc. See the README for FOLDER_DISPLAY_MODE and
+// /trip/StTropez, etc. See the guide for FOLDER_DISPLAY_MODE and
 // EXTRA_FOLDERS, which only matter once this is on.
 define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', false));
 
@@ -382,7 +382,7 @@ define('EXTRA_FOLDERS', gallery_setting('EXTRA_FOLDERS', []));
 // it (with HTTP Range support for seeking), and shown in the grid behind
 // a generic placeholder graphic rather than an actual frame, since that
 // would mean adding a video-processing dependency this project doesn't
-// carry. See the README for the real limitations this implies: codec
+// carry. See the guide for the real limitations this implies: codec
 // compatibility isn't guaranteed (HEVC-encoded .mov plays natively on
 // Apple platforms only), there's real bandwidth cost serving uncompressed
 // clips in full, and EXIF-style location auto-fill doesn't carry over
@@ -410,7 +410,7 @@ define('ENABLE_VIDEO_PREVIEWS', gallery_setting('ENABLE_VIDEO_PREVIEWS', true));
 // can read the folder knows), and the choice is saved in the settings file. Set this to a long random token, not a
 // memorable phrase — this is the one credential in this script that, if
 // guessed, grants write access, so it deserves the strongest value you'd
-// put in any constant here. See the README for the HTTPS requirement and
+// put in any constant here. See the guide for the HTTPS requirement and
 // the failed-login throttle this password is protected by.
 define('ADMIN_PASSWORD', gallery_setting('ADMIN_PASSWORD', ''));
 
@@ -457,7 +457,7 @@ define('PRIVATE_VIEW_PASSWORD', gallery_setting('PRIVATE_VIEW_PASSWORD', ''));
 // limited by number of opens and by time, and optionally to chosen folders or photos. Off by default. Made and managed in
 // the admin's Shares tab. A link is a secret in an address, so the page it opens asks for one press of a button
 // before it counts as used (a chat app that fetches a link to draw its preview never uses it up), and a link can be
-// paused, revoked or replaced at any time. See the README.
+// paused, revoked or replaced at any time. See the guide.
 define('ENABLE_SHARE_LINKS', gallery_setting('ENABLE_SHARE_LINKS', false));
 
 // Whether a person using a share link sees "The link being used to access this media expires on ..." at the top of the

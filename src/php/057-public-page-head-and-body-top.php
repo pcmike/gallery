@@ -67,7 +67,7 @@
   </ul>
 
   <h2>Documentation</h2>
-  <p>Setup, settings and every feature: <a href="<?= htmlspecialchars($repoUrl) ?>" target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($repoUrl) ?></a></p>
+  <p>Screenshots and a quick start: <a href="<?= htmlspecialchars($repoUrl) ?>" target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($repoUrl) ?></a>. Setup, settings and every feature: <a href="<?= htmlspecialchars($repoUrl) ?>/tree/main/docs/guide" target="_blank" rel="noopener noreferrer">the user guide</a>.</p>
 
 </div>
 </body>

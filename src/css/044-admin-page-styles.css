@@ -586,6 +586,8 @@
   .sort-details > summary .muted { font-size:0.8rem; }
   .health-panel:not(.show-all) .health-row.quiet, .health-panel:not(.show-all) .health-group.all-quiet, .health-panel:not(.show-all) .health-intro { display:none; }
   .health-panel.is-checking .health-toggle { display:none; }
+  .health-refresh { display:inline-flex; align-items:center; justify-content:center; padding-left:10px; padding-right:10px; }
+  .health-refresh .ico { width:20px; height:20px; fill:none; stroke:#aab2ff; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
   .health-toggle { display:inline-flex; align-items:center; gap:8px; padding-left:10px; font-weight:600; }
   .health-toggle .chev { width:20px; height:20px; flex:none; transition:transform .15s; }
   .health-panel.show-all .health-toggle .chev { transform:rotate(90deg); }
@@ -897,7 +899,7 @@
   .br-table tbody.br-none td { color:var(--muted); }
   .br-dev { display:block; font-size:0.8rem; color:#a8a8ae; margin-top:2px; }
   .br-sub { display:block; font-size:0.78rem; color:#a8a8ae; margin-top:2px; }
-  .br-table td { white-space:nowrap; } .br-table td:first-child, .br-table td[data-label='Why'], .br-table td[data-label='Address changes'] { white-space:normal; }
+  .br-table td { white-space:nowrap; } .br-table td:first-child, .br-table td[data-label='Why'], .br-table td[data-label='Device changes'], .br-table td[data-label='Addresses'], .br-table .br-flagrow td, .br-table .br-detailrow td { white-space:normal; }
   .br-acts { text-align:right; }
   .br-acts button.secondary { padding:6px 12px; font-size:0.85rem; }
   .br-table td[data-label='Last address'] { white-space:normal; overflow-wrap:anywhere; min-width:9.5em; }
@@ -930,13 +932,13 @@
   .br-more { font-size:0.85rem; color:#aab2ff; }
   .br-detail { font-size:0.85rem; }
   .br-dl { margin:0 0 8px; }
-  .br-days { width:100%; border-collapse:collapse; }
-  .br-days th, .br-days td { text-align:left; vertical-align:top; padding:4px 8px 4px 0; border-top:1px solid #26262a; }
-  .br-days th { font-size:0.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); border-top:0; }
-  .br-addrs { list-style:none; margin:0; padding:0; }
-  .br-addrs li { display:block; padding:0 0 2px; }
+  .br-num { font-size:1rem; font-weight:700; color:#aab2ff; padding:0; }
+  .br-sum { margin:0 0 6px; font-weight:600; }
+  .br-log { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.78rem; line-height:1.5; }
+  .br-ln { padding:3px 0; border-top:1px solid #1d1d20; overflow-wrap:anywhere; }
+  .br-ln:first-child { border-top:0; }
+  .br-lt, .br-lc { color:#8c8c93; } .br-le { color:#aab2ff; } .br-lu { color:#a8a8ae; }
   .br-cc { font-size:0.72rem; padding:0 6px; border-radius:8px; background:rgba(255,255,255,0.09); }
-  .br-uas { margin-top:10px; } .br-uas ul { margin:4px 0 0; padding-left:18px; } .br-uas code { overflow-wrap:anywhere; }
   .br-ended { margin-top:12px; } .br-ended summary { cursor:pointer; font-weight:600; }
 
   .geo-status { margin-top:8px; padding:8px 12px; border-radius:8px; background:rgba(126,226,160,0.08); border:1px solid rgba(126,226,160,0.35); color:#c9f0d6; font-size:0.88rem; line-height:1.5; }

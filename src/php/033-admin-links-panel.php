@@ -9,6 +9,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
     $seenAt = (int) ($data['seenAt'] ?? 0);
     $folderOpts = [];
     foreach (folder_tree_rows($dir, all_folder_paths($files)) as $r) $folderOpts[] = ['p' => $r['p'], 'l' => link_folder_label($dir, $r['p']), 'n' => $r['n'], 'd' => $r['d'], 'x' => folder_is_private($dir, $r['p'])];
+    $privNow = admin_hidden_data($dir, $files);   // (what is private right now: the form says "opens private photos" only when the link would)
     $current = []; $ended = []; $problemLinks = 0; $pubRec = null;
     foreach ($data['links'] as $l) {
         if (!is_array($l) || !isset($l['id'], $l['token'])) continue;
@@ -122,7 +123,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       </div>
       <div id="sl-ips-view" class="sl-ipsview" hidden><div class="sl-act" data-act="ips"><p class="muted sl-none">Loading…</p></div>
         <p class="note"><a href="?admin&amp;linkexport=all&amp;what=items" class="linklike">Export everything as CSV</a> (what each address looked at, for every link) &middot; <button type="button" class="linklike" data-sl="trim">Trim the log&hellip;</button></p></div>
-      <form class="sl-form" id="sl-form" hidden data-folders="<?= $esc(json_encode($folderOpts, JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
+      <form class="sl-form" id="sl-form" hidden data-folders="<?= $esc(json_encode($folderOpts, JSON_HEX_TAG | JSON_HEX_AMP)) ?>" data-private="<?= $esc(json_encode(['f' => $privNow['folders'], 'i' => $privNow['items'], 's' => $privNow['shown']], JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
         <div class="sl-form-head"><h3 class="sl-form-title">New share link</h3><button type="button" class="linklike sl-resetall" data-sl="resetall" hidden></button></div>
         <input type="hidden" name="id" value="">
         <label class="sl-f"><span class="sl-k">Name <span class="muted">(only you see it)</span></span><input type="text" name="label" maxlength="80" placeholder="Aunt Carol" autocomplete="off"></label>
