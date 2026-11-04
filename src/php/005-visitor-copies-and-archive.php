@@ -159,7 +159,7 @@ function archive_files_for_viewer($dir, $files) {
     if ($l === null || ($l['zip']['mode'] ?? 'off') === 'off') return [];
     global $itemsData;
     return array_values(array_filter($files, function ($f) use ($dir, $l, $itemsData) {
-        return (!file_is_hidden($dir, $f, $itemsData) || link_allows_item($l, $dir, $f)) && link_capability_allows($l, 'zip', $dir, $f, $itemsData);
+        return (!file_is_hidden($dir, $f, $itemsData) || link_allows_item($l, $dir, $f, $itemsData)) && link_capability_allows($l, 'zip', $dir, $f, $itemsData);
     }));
 }
 

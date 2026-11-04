@@ -166,20 +166,23 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     }
     $h .= '<div class="pb-lab">Folders</div>' . $node('', 'Root', 0) . '</div></div>';
     return $h . '<script>window.galleryFolderLock=window.galleryFolderLock||function(b){if(b.disabled)return;var on=b.classList.contains("on");b.disabled=true;var body=new URLSearchParams({csrf_token:b.getAttribute("data-csrf"),action:"toggle_folder_restriction",hidden:on?"":"1"});fetch("?admin&folder="+encodeURIComponent(b.getAttribute("data-lock-path")),{method:"POST",body:body,credentials:"same-origin",headers:{"X-Requested-With":"gallery-fetch"}}).then(function(r){return r.json()}).then(function(j){b.disabled=false;if(j&&j.ok){var now=!on;b.classList.toggle("on",now);b.setAttribute("aria-pressed",now?"true":"false");b.title=now?"Private: press to make it visible":"Visible: press to make it private";var u=b.querySelector("use");if(u)u.setAttribute("href",now?"#i-lock":"#i-unlock")}}).catch(function(){b.disabled=false})};</script><script>(function(){var bar=document.getElementById("pb"),sheet=document.getElementById("pb-sheet"),btn=document.getElementById("pb-menu");if(!bar||!sheet||!btn)return;'
-        . 'var admin=bar.getAttribute("data-context")==="admin",loaded=0,busy=false;'
+        . 'var admin=bar.getAttribute("data-context")==="admin",loaded=0,busy=false,stale=false,sBusy=false;'
         . 'function top(){setTimeout(function(){scrollTo(0,0)},30);setTimeout(function(){scrollTo(0,0)},200)}'
         . 'function flag(){try{sessionStorage.setItem("pbTop","1")}catch(x){}}'
         . 'function badge(o){var s=document.createElement("span");s.className="count"+(o.kind?" "+o.kind:"");s.title=o.title||"";s.textContent=o.text;return s}'
         . 'function fill(d){["features","links","site"].forEach(function(k){var h=sheet.querySelector(\'[data-b="\'+k+\'"]\');if(!h)return;h.textContent="";(d[k]||[]).forEach(function(o){h.appendChild(document.createTextNode(" "));h.appendChild(badge(o))})});var e=sheet.querySelector(\'[data-b="hidden"]\');if(e&&typeof d.edited==="number"){e.textContent="";if(d.edited>0){e.appendChild(document.createTextNode(" "));e.appendChild(badge({text:d.edited.toLocaleString("en-US")}))}}}'
         . 'function counts(){if(!sheet.hasAttribute("data-lazy")||busy||Date.now()-loaded<20000)return;busy=true;fetch("?admin&pbcounts=1",{credentials:"same-origin",cache:"no-store"}).then(function(r){return r.json()}).then(function(d){fill(d);loaded=Date.now()}).catch(function(){}).then(function(){busy=false})}'
-        . 'function open_(on){if(on){sheet.style.transition="";sheet.style.transform=""}sheet.hidden=!on;btn.setAttribute("aria-expanded",on?"true":"false");bar.classList.toggle("sheet",on);if(on)counts()}'
+        . 'function open_(on){if(on){sheet.style.transition="";sheet.style.transform=""}sheet.hidden=!on;btn.setAttribute("aria-expanded",on?"true":"false");bar.classList.toggle("sheet",on);if(on){if(stale)refresh();counts()}}'
         . 'function close_(){sheet.style.transition="transform .18s ease-out";sheet.style.transform="translateY(100%)";setTimeout(function(){open_(false)},170)}'
         . 'btn.addEventListener("click",function(){if(sheet.hidden)open_(true);else close_()});'
         . 'document.addEventListener("click",function(e){if(!sheet.hidden&&!sheet.contains(e.target)&&!btn.contains(e.target))close_()});'
         . 'document.addEventListener("keydown",function(e){if(e.key==="Escape"&&!sheet.hidden)close_()});'
         // how the folders were left folded is remembered in this browser (the branch to the folder you are in is always open)
         . 'var FK="galleryMenuFolders|"+location.pathname.replace(/index\.php$/,""),fs={};try{fs=JSON.parse(localStorage.getItem(FK)||"{}")||{}}catch(x){fs={}}'
-        . '[].forEach.call(sheet.querySelectorAll(".pb-g[data-path]"),function(g){var p=g.getAttribute("data-path");if(g.hasAttribute("data-here")||!(p in fs))return;var t=g.querySelector(":scope > .pb-fr > button.pb-t");if(!t)return;g.classList.toggle("collapsed",fs[p]===0);t.setAttribute("aria-expanded",fs[p]===0?"false":"true")});'
+        . 'function applyFolds(){[].forEach.call(sheet.querySelectorAll(".pb-g[data-path]"),function(g){var p=g.getAttribute("data-path");if(g.hasAttribute("data-here")||!(p in fs))return;var t=g.querySelector(":scope > .pb-fr > button.pb-t");if(!t)return;g.classList.toggle("collapsed",fs[p]===0);t.setAttribute("aria-expanded",fs[p]===0?"false":"true")})}applyFolds();'
+        // something was changed on this page (a setting, a folder\'s privacy): the Menu is asked for again, from the page itself, the next time it opens, so its locks and counts are not out of date
+        . 'document.addEventListener("change",function(e){if(admin&&!sheet.contains(e.target))stale=true});'
+        . 'function refresh(){if(sBusy)return;sBusy=true;fetch(location.pathname+location.search,{credentials:"same-origin",cache:"no-store"}).then(function(r){return r.text()}).then(function(h){var d=new DOMParser().parseFromString(h,"text/html"),n=d.querySelector("#pb-sheet .pb-scroll"),o=sheet.querySelector(".pb-scroll");if(!n||!o)return;o.innerHTML=n.innerHTML;applyFolds();stale=false;loaded=0}).catch(function(){}).then(function(){sBusy=false})}'
         . 'sheet.addEventListener("click",function(e){var lk=e.target.closest?e.target.closest(".flock"):null;if(lk){e.preventDefault();window.galleryFolderLock&&window.galleryFolderLock(lk);return}var t=e.target.closest?e.target.closest(".pb-t"):null;if(t&&t.tagName==="BUTTON"){var g=t.closest(".pb-g"),c=g.classList.toggle("collapsed");t.setAttribute("aria-expanded",c?"false":"true");fs[g.getAttribute("data-path")]=c?0:1;try{localStorage.setItem(FK,JSON.stringify(fs))}catch(x){}return}var a=e.target.closest?e.target.closest("a"):null;if(!a)return;if(a.hasAttribute("data-keep")){e.preventDefault();location.href=a.getAttribute("href").split("#")[0]+location.hash;return}if(!admin&&a.getAttribute("href").indexOf("?admin")===0)flag();open_(false);if(admin&&a.getAttribute("href").charAt(0)==="#")top()});'
         . 'bar.addEventListener("click",function(e){var a=e.target.closest?e.target.closest("a.pb-i"):null;if(!a)return;var h=a.getAttribute("href")||"";'
         // on the gallery page the Gallery button is also "up": scrolled down it goes to the top of this page, at the top it goes up one folder
@@ -250,11 +253,22 @@ function owner_phone_bar_css() {
     .pb-w.cur, .pb-f.cur { color:#fff; font-weight:600; background:#5865f2; border-radius:8px; border-top-color:transparent; padding-left:12px; padding-right:12px; }
     .pb-w.cur .count, .pb-w.cur .c, .pb-f.cur .c { background:rgba(0,0,0,0.3); color:#fff; }
     .pb-f.cur .c { background:none; }
-    .pb-lk { all:unset; box-sizing:border-box; flex:none; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; width:44px; min-height:44px; color:#77777e; }
+    .pb-fr:has(> .pb-lk) { position:relative; }
+    .pb-fr:has(> .pb-lk) .pb-f .n { margin-right:44px; }   /* (room for the lock, which sits just before the count, same as the desktop tree) */
+    .pb-lk { all:unset; box-sizing:border-box; flex:none; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; width:44px; min-height:44px; color:#77777e; position:absolute; right:26px; top:0; bottom:0; }
     .pb-lk .ico { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
     .pb-lk.on { color:#ffb3b5; } .pb-lk.inh { opacity:.45; cursor:default; }
     .pb-sheet.off-folder .pb-f.cur { background:rgba(255,255,255,0.07); font-weight:500; }
   }';
+}
+
+/** The folders that have a display name of their own, as path => name (the shell's path line shows these; a gallery with a great many
+ *  folders leaves them out). */
+function shell_folder_labels($dir, $files) {
+    $labels = [];
+    $paths = all_folder_paths($files);
+    if (count($paths) <= 400) foreach ($paths as $path) { $l = folder_display_meta($dir, $path)['label']; if ($l !== '') $labels[$path] = $l; }
+    return $labels;
 }
 
 /** The shell page itself. $adminFolderPath is the folder it opens on (null: the front page). */
@@ -268,9 +282,7 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
     $tab = (string) ($_GET['tab'] ?? '');
     if ($tab !== '' && $tab !== 'settings' && $tab !== 'notes' && !isset($whole[$tab])) $tab = '';
     if (($tab === 'hidden' && !$showEdited) || ($tab === 'links' && !ENABLE_SHARE_LINKS)) $tab = '';
-    $labels = [];
-    $paths = all_folder_paths($files);
-    if (count($paths) <= 400) foreach ($paths as $path) { $l = folder_display_meta($dir, $path)['label']; if ($l !== '') $labels[$path] = $l; }
+    $labels = shell_folder_labels($dir, $files);
     $rootHref = gallery_root_href();
     $folderQ = $adminFolderPath !== null ? 'folder=' . rawurlencode($adminFolderPath) . '&' : '';
     $src = $tab === '' ? $rootHref . '?' . $folderQ . 'inframe=1' : '?admin&' . $folderQ . 'inframe=1#' . $tab;

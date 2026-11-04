@@ -125,7 +125,13 @@ function link_input_from_post($now, $existing, $dir, $files) {
         $photos = $scopeType === 'mixed' ? $stampPhotos($list('scope_photos')) : [];
         if ($scopeType === 'folders' && !$scopeFolderPaths) $errors[] = 'Choose at least one folder, or choose "Everything private".';
         if ($scopeType === 'mixed' && !$scopeFolderPaths && !$photos) $errors[] = 'Choose at least one folder or photo.';
-        $scope = ['type' => $scopeType, 'folders' => $ids, 'photos' => $photos];
+        // "Public items only", folder by folder: the private photos and videos inside it are left out (unless one is named in this link).
+        $pubIds = [];
+        foreach (array_values(array_intersect($list('scope_public_only'), $scopeFolderPaths)) as $rel) {
+            if (folder_is_private($dir, $rel)) { $errors[] = '"' . link_clip($rel, 60) . '" is private as a whole, so "Public items only" would show nothing in it. Choose "Everything" for it, or make the folder visible first.'; continue; }
+            $id = $stamp($rel); if ($id !== null) $pubIds[] = $id;
+        }
+        $scope = ['type' => $scopeType, 'folders' => $ids, 'photos' => $photos, 'publicOnly' => $pubIds];
     } elseif ($scopeType === 'photos') {
         $photos = $stampPhotos($list('scope_photos'));
         if (!$photos) $errors[] = 'Choose at least one photo.';
@@ -295,6 +301,7 @@ function links_admin_action($action, $dir, $files) {
             if ($had && count($d['links'][$id]['scope']['folders']) < 2 && !(($d['links'][$id]['scope']['type'] ?? '') === 'mixed' && $photosLeft > 0)) { $problem = 'A link has to keep at least one folder: pick another one with Edit, or delete the link.'; return; }
             $keep = function ($ids) use ($fid) { return array_values(array_filter((array) $ids, function ($x) use ($fid) { return $x !== $fid; })); };
             $d['links'][$id]['scope']['folders'] = $keep($d['links'][$id]['scope']['folders'] ?? []);
+            $d['links'][$id]['scope']['publicOnly'] = $keep($d['links'][$id]['scope']['publicOnly'] ?? []);
             $d['links'][$id]['scope']['photos'] = array_values(array_filter((array) ($d['links'][$id]['scope']['photos'] ?? []), function ($p) use ($fid) { return ($p['fid'] ?? '') !== $fid; }));
             foreach (['downloads', 'zip'] as $c) $d['links'][$id][$c]['folders'] = $keep($d['links'][$id][$c]['folders'] ?? []);
             if (($d['links'][$id]['openIn'] ?? '') === $fid) $d['links'][$id]['openIn'] = '';

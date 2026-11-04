@@ -220,6 +220,16 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         echo shell_whole_nav($dir, $files, $folderGroupKeys);
         return;
     }
+    if (isset($_GET['shellmeta'])) {   // the shell asks again for the gallery's title and the folders' display names (changed in the frame)
+        header('Cache-Control: no-store');
+        admin_json_exit(['ok' => true, 'title' => (string) ($GLOBALS['pageTitle'] ?? 'Gallery'), 'labels' => (object) shell_folder_labels($dir, $files)]);
+    }
+    if (isset($_GET['shelltree'])) {   // the shell asks again for its folder tree (its locks, counts and folders change as things are done in the frame)
+        header('Cache-Control: no-store');
+        header('Content-Type: text/html; charset=UTF-8');
+        echo shell_folder_tree($files, null);
+        return;
+    }
     if (isset($_GET['shell']) && empty($_GET['inframe'])) {   // the owner's shell: this page's header and sidebar around one frame (the frame's pages ask for ?inframe=1)
         render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys);
         return;

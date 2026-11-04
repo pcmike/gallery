@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.6.0] - 2026-11-04
+
+### Added
+- **A share link can take only the public items of a folder.** Each folder you pick for a link ("Only some folders", or "Some folders and some photos") has a small switch, *Everything* or *Public items only*. With the switch on, the private photos and videos in that folder (and in the folders inside it) are left out, the rest is shown, and a private item is shown only if you named it as a photo in the same link. One gallery can hold `sunrises` and `sunsets`, a few items marked private, and one link takes only the public sunrises while another takes the whole of `sunsets`. A link made before keeps *Everything*; a folder that is private as a whole can't be set to public items only (the form says why). The link's paragraph on the Shares tab, and the preview, count it folder by folder (*Sunrises (public items only: 31 of 38; 7 private left out)*). Downloads, ZIPs, the preview photo, the viewer and every folder page follow the same rule (tested for every size of every photo).
+
+### Changed
+- **The folder lock sits in the same place on desktop and phone**: left of the count, as in the shell's tree (the phone Menu had it on the right).
+
+### Fixed
+- **The admin shell keeps up with changes made inside it.** The folder tree (its locks, counts and folders), the gallery's title in the header and the browser tab, and the folder names in the path line were drawn once and left as they were until a reload: switching Flat off in Settings left the locks, and renaming a folder or the gallery left the old name. The tree and names are now asked for again whenever the sidebar's numbers are (folders you folded stay folded). On a phone the Menu is asked for again the next time it opens after something was changed on the page.
+
 ## [2.5.0] - 2026-11-03
 
 ### Changed

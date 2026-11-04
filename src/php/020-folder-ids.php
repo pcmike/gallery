@@ -67,13 +67,44 @@ function link_item_under_folder_ids($dir, $file, $fids) {
     return false;
 }
 
+/** Is the item public (not private)? Without the gallery's item settings to ask, it is not: a link never shows what it can't be sure of. */
+function link_item_is_public($dir, $file, $itemsData = null) {
+    $data = $itemsData ?? ($GLOBALS['itemsData'] ?? null);
+    return is_array($data) && !file_is_hidden($dir, $file, $data);
+}
+
+/** How a link's folders cover an item: 'all' (it is under a folder the link shares with everything inside), 'public' (it is under folders
+ *  the link shares as "public items only", and under no other), or '' (under none of them). A private folder's items are all private,
+ *  so a public-only folder that is itself private covers nothing. */
+function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
+    $set = array_fill_keys(array_filter((array) $fids, 'is_string'), true);
+    if (!$set) return '';
+    $pub = array_fill_keys(array_filter((array) $publicOnly, 'is_string'), true);
+    $amb = link_ambiguous_set();
+    $parts = explode('/', $file); array_pop($parts);
+    $prefix = '';
+    $cover = '';
+    foreach ($parts as $seg) {
+        $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
+        $id = folder_id_cached($dir, $prefix);
+        if ($id === '' || !isset($set[$id]) || isset($amb[$id])) continue;
+        if (!isset($pub[$id])) return 'all';
+        $cover = 'public';
+    }
+    return $cover;
+}
+
 /** May the link $l show this item? */
-function link_allows_item($l, $dir, $file) {
+function link_allows_item($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
     if ($type === 'all') return true;
-    if ($type === 'folders') return link_item_under_folder_ids($dir, $file, $l['scope']['folders'] ?? []);
-    if ($type === 'photos' || $type === 'mixed') {
-        if ($type === 'mixed' && link_item_under_folder_ids($dir, $file, $l['scope']['folders'] ?? [])) return true;   // ("some folders and some photos": under a picked folder, or a picked photo)
+    if ($type === 'folders' || $type === 'mixed') {
+        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? []);
+        if ($cover === 'all') return true;
+        if ($cover === 'public' && link_item_is_public($dir, $file, $itemsData)) return true;   // ("public items only": the private ones are left out, unless one is named below)
+        if ($type === 'folders') return false;
+    }
+    if ($type === 'photos' || $type === 'mixed') {   // ("some folders and some photos": under a picked folder, or a picked photo)
         $set = [];
         foreach ((array) ($l['scope']['photos'] ?? []) as $p) if (is_array($p) && is_string($p['fid'] ?? null) && is_string($p['name'] ?? null)) $set[$p['fid'] . "\0" . $p['name']] = true;
         if (!$set) return false;
@@ -85,20 +116,23 @@ function link_allows_item($l, $dir, $file) {
 }
 
 /** Is this item one the link names as a photo (not merely one inside a folder it shares)? Those are shown as loose tiles, not inside a folder card. */
-function link_item_is_picked_photo($l, $dir, $file) {
+function link_item_is_picked_photo($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
     if ($type !== 'photos' && $type !== 'mixed') return false;
-    if ($type === 'mixed' && link_item_under_folder_ids($dir, $file, $l['scope']['folders'] ?? [])) return false;
-    return link_allows_item($l, $dir, $file);
+    if ($type === 'mixed') {   // (inside a folder the link shares, it is part of that folder; named as well as private inside a "public items only" folder, it is a tile of its own)
+        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? []);
+        if ($cover === 'all' || ($cover === 'public' && link_item_is_public($dir, $file, $itemsData))) return false;
+    }
+    return link_allows_item($l, $dir, $file, $itemsData);
 }
 
 /** May this visitor see the item (a public one, or a private one they were given)? */
 function viewer_may_see_item($dir, $file, $itemsData) {
     if (is_revealed()) return true;
     $l = link_viewer();
-    if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file)) return false;   // a link that shows only its own things: not the public rest of the gallery either
+    if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file, $itemsData)) return false;   // a link that shows only its own things: not the public rest of the gallery either
     if (!file_is_hidden($dir, $file, $itemsData)) return true;
-    return $l !== null && link_allows_item($l, $dir, $file);
+    return $l !== null && link_allows_item($l, $dir, $file, $itemsData);
 }
 
 /** Is this link set to show only what it covers (its photos or folders), the public rest of the gallery left out of the pages it shows? */
@@ -122,7 +156,7 @@ function viewer_may_download($dir, $file, $itemsData) {
     if (is_revealed()) return true;
     $l = link_viewer();
     // Someone using a share link: the link's own answer decides (the gallery-wide switch is for people who came in without one).
-    if ($l !== null) return (!file_is_hidden($dir, $file, $itemsData) || link_allows_item($l, $dir, $file)) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData);
+    if ($l !== null) return (!file_is_hidden($dir, $file, $itemsData) || link_allows_item($l, $dir, $file, $itemsData)) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData);
     if (PUBLIC_DOWNLOAD_MODE === 'off' || file_is_hidden($dir, $file, $itemsData)) return false;
     return PUBLIC_DOWNLOAD_MODE === 'all' || public_download_folder_covers($file);
 }

@@ -862,7 +862,7 @@
     var box = document.getElementById('sl-root'); if (!box) return;
     var csrf = box.getAttribute('data-csrf') || '';
     var toastTimer = null, pretty = null;
-    var st = { scope: [], downloads: [], zip: [], photos: [] };   // the folders and photos the form is holding, as paths
+    var st = { scope: [], pub: [], downloads: [], zip: [], photos: [] };   // the folders and photos the form is holding, as paths (pub: the chosen folders that show only their public items)
     function modalEl() { return document.getElementById('sl-modal'); }   // (looked up each time: the tab's own markup is replaced when it refreshes)
     function say(text, bad) {
       var toast = document.getElementById('sl-toast');
@@ -1112,7 +1112,7 @@
     function usesOf(f) { return f.opens === 'n' ? (+f.opensN || 0) : +f.opens; }
     function usesClause(n) { return n === 0 ? 'in as many browsers as they like' : n === 1 ? 'in just one browser' : 'in up to ' + n + ' browsers'; }
     var DEFAULTS = { label: '', address: '', note: '', titleMode: 'gallery', titleText: '', picture: true, pictureSeed: '', pictureFile: '', maxOpens: DEFAULT_USES, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default',
-      scopeType: 'public', only: false, scopeFolders: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
+      scopeType: 'public', only: false, scopeFolders: [], scopePublicOnly: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
     function localValue(ts) {
       var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
       return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
@@ -1125,7 +1125,14 @@
     function under(path, roots) { return roots.some(function (r) { return path === r || path.indexOf(r + '/') === 0; }); }
     function chipsHtml(form, kind) {
       var list = st[kind] || [];
-      return list.map(function (p) { return '<span class="sl-chip">' + esc(labelOf(form, p)) + ' <button type="button" data-chip-x="' + kind + '" data-p="' + esc(p) + '" aria-label="Take it out">×</button></span>'; }).join('')
+      return list.map(function (p) {
+        var mode = '';
+        if (kind === 'scope') {   // (each folder the link covers: everything inside it, or only its public items)
+          var on = st.pub.indexOf(p) >= 0, priv = folderList(form).some(function (o) { return o.p === p && o.x; });
+          mode = '<button type="button" class="sl-chipmode' + (on ? ' on' : '') + '" data-chip-mode data-p="' + esc(p) + '"' + (priv ? ' disabled title="This folder is private as a whole, so nothing in it is public"' : ' title="' + (on ? 'Only the public photos and videos in it are shown. Press for everything inside it.' : 'Everything inside it is shown, private photos and videos too. Press for only the public ones.') + '"') + ' aria-pressed="' + (on ? 'true' : 'false') + '">' + (on ? 'Public items only' : 'Everything') + '</button>';
+        }
+        return '<span class="sl-chip">' + esc(labelOf(form, p)) + mode + ' <button type="button" data-chip-x="' + kind + '" data-p="' + esc(p) + '" aria-label="Take it out">×</button></span>';
+      }).join('')
         + '<button type="button" class="linklike sl-add" data-chip-add="' + kind + '">+ Add folder</button>';
     }
     // A one-choice menu for the form and its dialogs (the same look and behaviour as the filter menus): rows are { v: value, t: text, s: short text for the button, d: depth in the tree }; the choice is kept in a hidden field.
@@ -1172,7 +1179,7 @@
       };
       if (scope === 'folders') { sc.hidden = false; sc.innerHTML = chipsHtml(form, 'scope'); }
       else if (scope === 'photos') { sc.hidden = false; sc.innerHTML = photosHtml(); }
-      else if (scope === 'mixed') { sc.hidden = false; sc.innerHTML = '<div class="sl-mixg"><div class="sl-mixl">Folders <small>(each with everything inside it)</small></div><div class="sl-mixc">' + chipsHtml(form, 'scope') + '</div></div><div class="sl-mixg"><div class="sl-mixl">Photos</div>' + photosHtml() + '</div>'; }
+      else if (scope === 'mixed') { sc.hidden = false; sc.innerHTML = '<div class="sl-mixg"><div class="sl-mixl">Folders <small>(each with everything inside it, or only its public items)</small></div><div class="sl-mixc">' + chipsHtml(form, 'scope') + '</div></div><div class="sl-mixg"><div class="sl-mixl">Photos</div>' + photosHtml() + '</div>'; }
       else sc.hidden = true;
       form.querySelector('[data-only-row]').hidden = scope === 'all' || scope === 'public';
       [['downloads', dl], ['zip', zp]].forEach(function (pair) {
@@ -1211,7 +1218,7 @@
       var sc = radioValue(form, 'scope_type');
       if (sc === 'public') return false;
       if (sc === 'all') return pf.length > 0 || pi.length > 0;
-      return (sc !== 'photos' && st.scope.some(folderPriv)) || (sc !== 'folders' && st.photos.some(photoPriv));
+      return (sc !== 'photos' && st.scope.some(function (p) { return st.pub.indexOf(p) < 0 && folderPriv(p); })) || (sc !== 'folders' && st.photos.some(photoPriv));
     }
     function addrSync(form) {
       var mode = form._addrMode || 'name', ck = form.querySelector('[name=addr_name]'), inp = form.querySelector('[name=address]'), row = form.querySelector('[data-addrrow]'), prev = form.querySelector('[data-addrprev]');
@@ -1252,7 +1259,8 @@
     function summarize(form) {
       var addrNote = form.querySelector('[data-addrnote]'); if (addrNote) addrNote.hidden = !((form._addrMode || 'name') === 'name' && opensPrivate(form));
       var f = formState(form), form_ = form, names = function (list) { return list.map(function (p) { return labelOf(form_, p); }).join(', '); };
-      var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'every private folder and photo' : f.scope === 'folders' ? (st.scope.length ? names(st.scope) : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? names(st.scope) : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
+      var scopeNames = function () { return st.scope.map(function (p) { return labelOf(form_, p) + (st.pub.indexOf(p) >= 0 ? ' (public items only)' : ''); }).join(', '); };
+      var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'every private folder and photo' : f.scope === 'folders' ? (st.scope.length ? scopeNames() : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? scopeNames() : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
       var usesNow = usesOf(f), usesIsDefault = usesNow === DEFAULT_USES && (f.opens !== 'n' || f.opensN !== '');
       var endsSay = f.ends === '0' ? 'never stops working' : f.ends === 'pick' ? 'stops working on ' + fdate(f.endsAt) : 'stops working after ' + ({ '86400': '1 day', '604800': '1 week', '2592000': '30 days' }[f.ends] || '');
       var titleSay = { gallery: 'the gallery\'s title', neutral: 'a neutral title', custom: 'a title of your own' }[f.title];
@@ -1281,7 +1289,7 @@
       var ra = form.querySelector('[data-sl=resetall]'); ra.hidden = changed === 0; ra.textContent = changed + (changed === 1 ? ' setting' : ' settings') + ' changed · Reset all';
     }
     function resetGroup(form, g) {
-      if (g === 'scope') { radio(form, 'scope_type', 'public'); st.scope = []; st.photos = []; form.querySelector('[name=only]').checked = false; form.querySelector('[data-openin-menu]').setAttribute('data-want', ''); }
+      if (g === 'scope') { radio(form, 'scope_type', 'public'); st.scope = []; st.pub = []; st.photos = []; form.querySelector('[name=only]').checked = false; form.querySelector('[data-openin-menu]').setAttribute('data-want', ''); }
       if (g === 'limits') { setUses(form, DEFAULT_USES); radio(form, 'ends_pick', '0'); radio(form, 'starts_pick', 'now'); }
       if (g === 'privacy') { radio(form, 'downloads', 'off'); radio(form, 'zip', 'off'); radio(form, 'locations', 'public'); st.downloads = []; st.zip = []; }
       if (g === 'page') { radio(form, 'title_mode', 'gallery'); form.querySelector('[name=title_text]').value = ''; form.querySelector('[name=picture]').checked = true; form.querySelector('[name=picture_file]').value = ''; form.querySelector('[name=note]').value = ''; radio(form, 'heads_up', 'default'); form.querySelector('[data-coverrow]')._loaded = false; }
@@ -1290,7 +1298,7 @@
     function openForm(link, focusField) {
       var form = box.querySelector('#sl-form'), v = Object.assign({}, DEFAULTS, link || {});
       form.reset();
-      st = { scope: (v.scopeFolders || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
+      st = { scope: (v.scopeFolders || []).slice(), pub: (v.scopePublicOnly || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
       var editing = !!(link && link.id);
       form.querySelector('[name=id]').value = editing ? link.id : '';
       form.querySelector('.sl-form-title').textContent = editing ? 'Edit link' : 'New share link';
@@ -1318,7 +1326,7 @@
         action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
         label: form.querySelector('[name=label]').value, address: form.querySelector('[name=address]').value, address_auto: form._addrMode === 'name' ? '1' : '0', keep_old: form.querySelector('[name=keep_old]').checked && !form.querySelector('[data-keeprow]').hidden ? '1' : '0', note: form.querySelector('[name=note]').value,
         title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value, picture: form.querySelector('[name=picture]').checked ? '1' : '0', picture_seed: form.querySelector('[name=picture_seed]').value, picture_file: form.querySelector('[name=picture_file]').value,
-        scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.scope : []), scope_photos: JSON.stringify(scope === 'photos' || scope === 'mixed' ? st.photos : []),
+        scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.scope : []), scope_public_only: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }) : []), scope_photos: JSON.stringify(scope === 'photos' || scope === 'mixed' ? st.photos : []),
         only: (scope === 'folders' || scope === 'photos' || scope === 'mixed') && form.querySelector('[name=only]').checked ? '1' : '0',
         open_in: form.querySelector('[name=open_in]').value,
         downloads: radioValue(form, 'downloads'), downloads_folders: JSON.stringify(st.downloads), zip: radioValue(form, 'zip'), zip_folders: JSON.stringify(st.zip),
@@ -1359,10 +1367,10 @@
       var rows = list.map(function (o, i) {
         return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"' + (st[kind].indexOf(o.p) >= 0 ? ' checked' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n || o.l) + '</span></label>';
       }).join('') || '<p class="muted">There are no folders to choose from.</p>';
-      return ask(kind === 'scope' ? 'Choose the folders it covers' : 'Choose the folders', '<div class="sl-picklist">' + rows + '</div><p class="hint">A folder includes everything inside it. A lock marks a private folder.</p>', 'Done', false).then(function (yes) {
+      return ask(kind === 'scope' ? 'Choose the folders it covers' : 'Choose the folders', '<div class="sl-picklist">' + rows + '</div><p class="hint">A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.</p>', 'Done', false).then(function (yes) {
         if (!yes) return false;
         st[kind] = [].map.call(modalEl().querySelectorAll('.sl-picklist input:checked'), function (c) { return c.value; });
-        if (kind === 'scope') ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope); }); });
+        if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope); }); }); }
         syncForm(form);
         return true;
       });
@@ -1440,8 +1448,10 @@
       return post(f).then(function (j) { if (!j.ok) { say(j.text || 'Not saved', true); return; } return refresh().then(function () { say(j.text || 'Saved.'); }); }).catch(failed);
     }
     box.addEventListener('click', function (e) {
+      var cm = e.target.closest ? e.target.closest('[data-chip-mode]') : null;
+      if (cm) { if (cm.disabled) return; var cp = cm.getAttribute('data-p'), at = st.pub.indexOf(cp); if (at >= 0) st.pub.splice(at, 1); else st.pub.push(cp); syncForm(box.querySelector('#sl-form')); return; }
       var x = e.target.closest ? e.target.closest('[data-chip-x]') : null;
-      if (x) { var k = x.getAttribute('data-chip-x'), p = x.getAttribute('data-p'); st[k] = st[k].filter(function (q) { return q !== p; }); if (k === 'scope') ['downloads', 'zip'].forEach(function (kk) { st[kk] = st[kk].filter(function (q) { return under(q, st.scope); }); }); syncForm(box.querySelector('#sl-form')); return; }
+      if (x) { var k = x.getAttribute('data-chip-x'), p = x.getAttribute('data-p'); st[k] = st[k].filter(function (q) { return q !== p; }); if (k === 'scope') st.pub = st.pub.filter(function (q) { return q !== p; }); if (k === 'scope') ['downloads', 'zip'].forEach(function (kk) { st[kk] = st[kk].filter(function (q) { return under(q, st.scope); }); }); syncForm(box.querySelector('#sl-form')); return; }
       if (e.target.closest && e.target.closest('[data-cover-choose]')) { pickCover(box.querySelector('#sl-form')); return; }
       if (e.target.closest && e.target.closest('[data-cover-auto]')) { var cf = box.querySelector('#sl-form'); cf.querySelector('[name=picture_file]').value = ''; coverRefresh(cf); return; }
       var add = e.target.closest ? e.target.closest('[data-chip-add]') : null;

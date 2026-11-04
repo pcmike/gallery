@@ -13,8 +13,8 @@ function link_paragraph_html($l, $state, $report, $map, $index, $dir, $rootFid) 
     $rest = $only ? (gallery_is_closed() ? ' and nothing else.' : ' and nothing else on their pages (a tidy view: the rest of the gallery stays public to everyone).') : ' and the public gallery.';
     if ($type === 'public') $c1 = $cl('They see the public gallery and nothing private.', false);
     elseif ($type === 'all') $c1 = $cl('They see every private folder and photo, including ones you add later, and the public gallery.', true);
-    elseif ($type === 'folders') $c1 = $cl('They see ' . implode(', ', array_map($item, $report['folders'])) . ' (with everything inside)' . $rest, true);
-    elseif ($type === 'mixed') { $n = count($report['photos']); $c1 = $cl('They see ' . ($report['folders'] ? implode(', ', array_map($item, $report['folders'])) . ' (with everything inside)' : '') . ($report['folders'] && $n ? ' and ' : '') . ($n ? $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') : '') . $rest, true); }
+    elseif ($type === 'folders') $c1 = $cl('They see ' . link_folder_list_html($report, $item) . $rest, true);
+    elseif ($type === 'mixed') { $n = count($report['photos']); $c1 = $cl('They see ' . ($report['folders'] ? link_folder_list_html($report, $item) : '') . ($report['folders'] && $n ? ' and ' : '') . ($n ? $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') : '') . $rest, true); }
     else { $n = count($report['photos']); $c1 = $cl('They see ' . ($only ? 'only ' : '') . $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') . $rest, true); }
     if (($l['openIn'] ?? '') !== '' && $type !== 'photos') $c1 .= ' ' . $cl('It opens in ' . ($report['paths']['openIn'] !== '' ? $esc(link_folder_label($dir, $report['paths']['openIn'])) : '<span class="sl-bad">a folder that can\'t be found (it opens the front page)</span>') . '.', true);
     $max = (int) ($l['maxOpens'] ?? 0); $ends = (int) ($l['endsAt'] ?? 0); $starts = (int) ($l['startsAt'] ?? 0);
@@ -75,13 +75,13 @@ function link_fid_state($fid, $map, $index, $rootFid) {
 /** What a link covers, for the tab: lists of [label, state] for its folders and photos, how many are not found, and the paths
  *  the edit form starts from. */
 function link_scope_report($l, $map, $index, $dir, $rootFid) {
-    $out = ['folders' => [], 'photos' => [], 'problems' => 0, 'paths' => ['scope' => [], 'downloads' => [], 'zip' => [], 'photos' => [], 'openIn' => '']];
+    $out = ['folders' => [], 'photos' => [], 'problems' => 0, 'paths' => ['scope' => [], 'publicOnly' => [], 'downloads' => [], 'zip' => [], 'photos' => [], 'openIn' => '']];
     $one = function ($fid) use ($map, $index, $dir, $rootFid, &$out) {
         [$state, $rel] = link_fid_state($fid, $map, $index, $rootFid);
         if ($state !== 'ok') $out['problems']++;
         return [$state, $rel, $rel === '' ? 'the gallery\'s own folder' : link_folder_label($dir, $rel)];
     };
-    foreach ((array) ($l['scope']['folders'] ?? []) as $fid) { [$s, $rel, $label] = $one($fid); $out['folders'][] = ['fid' => $fid, 'state' => $s, 'label' => $s === 'missing' && $rel === '' ? 'a folder that is gone' : $label]; if ($s === 'ok') $out['paths']['scope'][] = $rel; }
+    foreach ((array) ($l['scope']['folders'] ?? []) as $fid) { [$s, $rel, $label] = $one($fid); $pub = in_array($fid, (array) ($l['scope']['publicOnly'] ?? []), true); $out['folders'][] = ['fid' => $fid, 'state' => $s, 'pub' => $pub, 'counts' => $s === 'ok' ? link_folder_item_counts($dir, $rel) : null, 'label' => $s === 'missing' && $rel === '' ? 'a folder that is gone' : $label]; if ($s === 'ok') { $out['paths']['scope'][] = $rel; if ($pub) $out['paths']['publicOnly'][] = $rel; } }
     foreach ((array) ($l['scope']['photos'] ?? []) as $p) {
         if (!is_array($p)) continue;
         [$s, $rel] = link_fid_state((string) ($p['fid'] ?? ''), $map, $index, $rootFid);
@@ -94,14 +94,38 @@ function link_scope_report($l, $map, $index, $dir, $rootFid) {
     return $out;
 }
 
+/** How many photos and videos are inside a folder (at any depth), and how many of those are public: [all, public]. */
+function link_folder_item_counts($dir, $rel) {
+    [$all, $public] = link_public_media($dir);
+    if ($rel === '') return [count($all), count($public)];
+    $pre = $rel . '/'; $n = strlen($pre); $a = 0; $p = 0;
+    foreach ($all as $f) if (strncmp($f, $pre, $n) === 0) $a++;
+    foreach ($public as $f) if (strncmp($f, $pre, $n) === 0) $p++;
+    return [$a, $p];
+}
+
+/** The folders a link covers, as a phrase that says for each what the link takes from it and how many items that is: everything inside (and
+ *  how many of those are private), or only the public ones (and how many private ones are left out). */
+function link_folder_list_html($report, $item) {
+    return implode(', ', array_map(function ($x) use ($item) {
+        $say = '';
+        if ($x['state'] === 'ok' && is_array($x['counts'] ?? null)) {
+            [$all, $pub] = $x['counts']; $priv = $all - $pub;
+            if (!empty($x['pub'])) $say = ' (public items only: ' . ($priv > 0 ? $pub . ' of ' . $all . '; ' . $priv . ' private left out' : $all) . ')';
+            else $say = ' (everything inside: ' . $all . ($priv > 0 ? ', ' . $priv . ' private' : '') . ')';
+        } elseif (!empty($x['pub'])) $say = ' (public items only)';
+        return $item($x) . $say;
+    }, $report['folders']));
+}
+
 function link_scope_text_html($l, $report) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $item = function ($x) use ($esc) {
         return $x['state'] === 'ok' ? $esc($x['label']) : '<span class="sl-bad">' . $esc($x['label']) . ' <em>(' . ($x['state'] === 'ambiguous' ? 'found in more than one folder, so it is not shown' : 'can\'t be found: renamed away, moved or deleted?') . ')</em></span>';
     };
     $type = $l['scope']['type'] ?? 'all';
-    if ($type === 'folders') return 'Only ' . implode(', ', array_map($item, $report['folders']));
-    if ($type === 'mixed') { $n = count($report['photos']); return 'Only ' . implode(', ', array_map($item, $report['folders'])) . ' (with everything inside)' . ($n ? ' and ' . $n . ' photo' . ($n === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 4))) . ($n > 4 ? ' and ' . ($n - 4) . ' more' : '') : ''); }
+    if ($type === 'folders') return 'Only ' . link_folder_list_html($report, $item);
+    if ($type === 'mixed') { $n = count($report['photos']); return 'Only ' . link_folder_list_html($report, $item) . ($n ? ' and ' . $n . ' photo' . ($n === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 4))) . ($n > 4 ? ' and ' . ($n - 4) . ' more' : '') : ''); }
     if ($type === 'photos') return count($report['photos']) . ' photo' . (count($report['photos']) === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 6))) . (count($report['photos']) > 6 ? ' and ' . (count($report['photos']) - 6) . ' more' : '');
     if ($type === 'public') return 'Nothing private: just the public gallery';
     return 'Everything private';

@@ -7,7 +7,7 @@
     return;
   }
   var frame = document.getElementById('sh-frame'), pathBox = document.getElementById('sh-path'), toolsBox = document.getElementById('sh-tools');
-  var alone = document.getElementById('sh-alone'), tree = document.querySelector('.sh-tree');
+  var alone = document.getElementById('sh-alone'), tree = document.querySelector('.sh-tree'), treeRaw = null;
   function esc(t) { var d = document.createElement('div'); d.textContent = t; return d.innerHTML.replace(/"/g, '&quot;'); }
   function label(f) { return f === '' ? C.title : (C.labels[f] || f.split('/').pop()); }
   function srcFor(folder, tab) {
@@ -89,7 +89,30 @@
       [].forEach.call(whole.querySelectorAll('a'), function (a) { a.classList.toggle('active', a.getAttribute('data-tab') === st.tab); });
     }).catch(function () {});
   }
-  function refreshSoon() { clearTimeout(cTimer); cTimer = setTimeout(refreshCounts, 500); }
+  function refreshTree() {   // the folder tree is asked for again too (a setting that shows or hides the locks, a folder made private in the frame, a new folder); what was folded stays folded
+    fetch('?admin&shelltree=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : null; }).then(function (html) {
+      if (!html || html.indexOf('class="sh-tree"') < 0 || html === treeRaw) return;
+      treeRaw = html;
+      var box = document.createElement('div'); box.innerHTML = html;
+      var fresh = box.firstChild, folded = {};
+      [].forEach.call(tree.querySelectorAll('li.has-children'), function (li) { var a = li.querySelector(':scope > a'); if (a) folded[a.getAttribute('data-path')] = li.classList.contains('collapsed'); });
+      [].forEach.call(fresh.querySelectorAll('li.has-children'), function (li) {
+        var a = li.querySelector(':scope > a'), p = a && a.getAttribute('data-path');
+        if (p !== null && folded[p]) { li.classList.add('collapsed'); li.querySelector(':scope > .ftoggle').setAttribute('aria-expanded', 'false'); }
+      });
+      tree.parentNode.replaceChild(fresh, tree); tree = fresh;
+      tree.classList.toggle('quiet', !!WHOLE[st.tab]);
+      [].forEach.call(tree.querySelectorAll('a'), function (a) { var cur = a.getAttribute('data-path') === st.folder; a.classList.toggle('current', cur); if (cur) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+    }).catch(function () {});
+  }
+  function refreshMeta() {   // the gallery's title and the folders' display names, which the header and the path line show
+    fetch('?admin&shellmeta=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      if (!j || !j.ok || (j.title === C.title && JSON.stringify(j.labels) === JSON.stringify(C.labels))) return;
+      C.title = j.title; C.labels = j.labels;
+      frame.title = C.title; chrome();
+    }).catch(function () {});
+  }
+  function refreshSoon() { clearTimeout(cTimer); cTimer = setTimeout(function () { refreshCounts(); refreshTree(); refreshMeta(); }, 500); }
   window.addEventListener('focus', refreshSoon);
   window.addEventListener('message', function (e) {
     var m = e.data;
