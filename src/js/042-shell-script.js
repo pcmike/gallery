@@ -47,7 +47,31 @@
     var u = new URL(srcFor(folder, tab), location.href).href;
     try { frame.contentWindow.location.assign(u); } catch (e) { frame.src = u; }   // (a step in the history, so the browser's Back button walks back through what you opened)
   }
+  // The lock beside a folder (shown while the gallery is Flat): one press makes the folder private or visible.
+  function folderLock(b) {
+    if (b.disabled) return;
+    var on = b.classList.contains('on'); b.disabled = true;
+    var body = new URLSearchParams({ csrf_token: b.getAttribute('data-csrf'), action: 'toggle_folder_restriction', hidden: on ? '' : '1' });
+    fetch('?admin&folder=' + encodeURIComponent(b.getAttribute('data-lock-path')), { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        b.disabled = false;
+        if (!j || !j.ok) return;
+        var now = !on;
+        [].forEach.call(document.querySelectorAll('.sh-tree .flock'), function (x) {   // (the folders inside it follow: private because a folder above is)
+          var p = x.getAttribute('data-lock-path'), me = b.getAttribute('data-lock-path');
+          if (x === b) return;
+          if (p.indexOf(me + '/') === 0 && !x.dataset.own) { x.classList.toggle('on', now); x.classList.toggle('inh', now); x.disabled = now; x.setAttribute('aria-pressed', now ? 'true' : 'false'); var u2 = x.querySelector('use'); if (u2) u2.setAttribute('href', now ? '#i-lock' : '#i-unlock'); }
+        });
+        b.classList.toggle('on', now); b.setAttribute('aria-pressed', now ? 'true' : 'false');
+        b.title = now ? 'Private: press to make it visible' : 'Visible: press to make it private';
+        var u = b.querySelector('use'); if (u) u.setAttribute('href', now ? '#i-lock' : '#i-unlock');
+      })
+      .catch(function () { b.disabled = false; });
+  }
   document.addEventListener('click', function (e) {
+    var lock = e.target.closest ? e.target.closest('.flock') : null;
+    if (lock) { e.preventDefault(); folderLock(lock); return; }
     var t = e.target.closest ? e.target.closest('[data-go], .sh-tool, #sh-whole a, .sh-tree a, .ftoggle') : null;
     if (!t) return;
     if (t.classList.contains('ftoggle')) { var li = t.parentNode, f = li.classList.toggle('collapsed'); t.setAttribute('aria-expanded', f ? 'false' : 'true'); return; }

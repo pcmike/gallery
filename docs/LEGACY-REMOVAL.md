@@ -47,3 +47,6 @@ Older versions copied each photo's location from its file into the folder data a
 
 ## How this list was made
 By searching `index.php` for `gpsChecked`, `warm_thumbnails`, `login_password`, `legacy`, `older`, `upgrade`, `not yet`. It may miss something; when a removal pass starts, search again and add what turns up.
+
+## Folder style words (2.5.0)
+- [ ] `FOLDER_DISPLAY_MODE` values `cards` and `inline` (now `overview` and `flat`, with `inline` meaning Flat with `FOLDER_FLAT_NAMES` on): the allowed list in `001-settings-and-config.php`, the `FOLDER_FLAT_NAMES` default that follows `inline`, `folder_style_flat()`, and the line in the settings page that shows an older value as today's two choices (`036`, search `older words show as today's two choices`).

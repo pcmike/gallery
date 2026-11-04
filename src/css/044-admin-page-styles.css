@@ -945,3 +945,13 @@
   .geo-status.geo-wait { background:rgba(245,194,107,0.1); border-color:rgba(245,194,107,0.45); color:#f5c26b; }
   .geo-err { margin-top:4px; color:#ffb3b5; }
   .br-table .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+  /* Folder settings: choices where one is what Settings says (outlined) and the other is the folder's own (solid). */
+  .flat-choices { display:flex; flex-wrap:wrap; gap:14px 28px; align-items:flex-start; }
+  .flat-choice { min-width:0; }
+  .flat-choice > label { display:block; margin:0 0 6px; }
+  .seg-site > label.site span { border-color:#5865f2; background:rgba(88,101,242,0.16); color:#d4d8ff; }
+  .seg-site > label.site input:checked + span { background:rgba(88,101,242,0.16); border-color:#5865f2; color:#fff; font-weight:600; }
+  .seg-site > label:not(.site) input:checked + span { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700; }
+  .seg-site > label.site:not(:has(input:checked)):hover span { color:#fff; }
+  @media (max-width:520px) { .flat-choices { flex-direction:column; flex-wrap:nowrap; gap:12px; } .seg-site { width:100%; } .seg-site > label { flex:1; } .seg-site > label span { text-align:center; } }

@@ -87,6 +87,22 @@
     copyToClipboard(cleanUrl).then(() => flashCopied(link));
   });
 
+  // A Flat folder label or divider: pressing the name copies a link to that place and the name says so for a moment.
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.label-copy');
+    if (!b) return;
+    const f = new URLSearchParams(window.location.search).get('folder');
+    const id = b.getAttribute('data-anchor');
+    const url = window.location.origin + window.location.pathname + (f ? '?folder=' + encodeURIComponent(f) : '') + '#' + id;
+    copyToClipboard(url).then(() => {
+      const t = b.querySelector('.lc-t');
+      if (!t || b.classList.contains('copied')) return;
+      const keep = t.innerHTML; t.textContent = 'Link copied'; b.classList.add('copied');
+      setTimeout(() => { t.innerHTML = keep; b.classList.remove('copied'); }, 1400);
+    });
+    try { history.replaceState(null, '', '#' + id); } catch (x) {}
+  });
+
   // Copies a "?photo=" deep link to the photo currently open in the lightbox.
   const lightboxCopyBtn = document.getElementById('lightbox-copy-btn');
   const copyPhotoLink = () => {

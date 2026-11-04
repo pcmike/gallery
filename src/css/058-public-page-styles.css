@@ -565,3 +565,20 @@
   .card:hover img {
     transform: scale(1.05);
   }
+
+  /* Flat with folder names: the label and the divider are buttons that copy a link to themselves. */
+  .label-copy { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; }
+  .label-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  @media (hover: hover) { .label-copy:hover .lc-t, .label-copy:focus-visible .lc-t { text-decoration: underline dotted; text-underline-offset: 5px; } }
+  .label-copy.copied .lc-t { color: #aab2ff; }
+  .group-divider { grid-column: 1 / -1; display: flex; align-items: baseline; padding: 12px 2px 2px; margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 0.95rem; scroll-margin-top: 16px; }
+  .group-divider:first-child { border-top: 0; margin-top: 0; }
+  .group-divider:target { animation: item-flash 2s ease-out; }
+  .group-divider .gd-path { color: var(--muted); font-weight: 400; }
+  .group-divider .gd-name { font-weight: 700; }
+  .gd-dates { margin-left: 10px; font-size: 0.78rem; font-weight: 400; color: var(--muted); letter-spacing: 0; text-transform: none; }
+  .group-extra { grid-column: 1 / -1; margin: 0 0 6px; }
+  .group-extra.box-extra { margin: 0 0 10px; }
+  .gd-desc { margin: 2px 0 6px; font-size: 0.85rem; color: var(--muted); }
+  .gd-notes { margin: 0 0 8px; padding: 8px 12px; border-left: 3px solid var(--accent); border-radius: 6px; background: rgba(255,255,255,0.04); font-size: 0.88rem; }
+  .gd-notes p { margin: 0 0 6px; } .gd-notes p:last-child { margin-bottom: 0; }

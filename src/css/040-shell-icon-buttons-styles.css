@@ -66,3 +66,11 @@
   .sh-tree li.collapsed > ul { display:none; }
   .sh-main { flex:1; min-width:0; }
   .sh-main iframe { display:block; width:100%; height:100%; border:0; background:var(--bg); }
+
+  /* The lock beside a folder (only while the gallery is shown Flat): closed = private, open = visible. */
+  .flock { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 6px; color: #77777e; }
+  .flock .ico { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .flock.on { color: #ffb3b5; } .flock.inh { opacity: .45; cursor: default; }
+  .flock:focus-visible { outline: 2px solid #5865f2; }
+  @media (hover: hover) { .flock:not(.inh):hover { background: rgba(255,255,255,0.08); color: #fff; } }
+  .sh-tree li > .flock { position: absolute; right: 34px; top: 4px; }

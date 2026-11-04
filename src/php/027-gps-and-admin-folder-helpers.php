@@ -688,6 +688,16 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
                 return ['type' => 'error', 'text' => 'Position must be a whole number (or blank for natural order).'];
             }
         }
+        foreach (['flat_names' => 'flatNames', 'flat_notes' => 'flatNotes'] as $postKey => $itemKey) {   // this folder's own choice for Flat: "" = what Settings says
+            if ($adminFolderPath !== null && array_key_exists($postKey, $_POST)) {
+                $v = (string) $_POST[$postKey];
+                $updates[$itemKey] = $v === '1' ? true : ($v === '0' ? false : null);
+            }
+        }
+        if ($adminFolderPath !== null && array_key_exists('subfolder_style', $_POST)) {   // how this folder's own page shows the folders under it: "" = the site's
+            $style = (string) $_POST['subfolder_style'];
+            $updates['subfolderStyle'] = in_array($style, ['overview', 'flat'], true) ? $style : null;
+        }
         if (array_key_exists('photo_sort_order', $_POST)) {   // this folder's own order of photos: "" = the site's
             $own = [];
             $order = (string) $_POST['photo_sort_order'];

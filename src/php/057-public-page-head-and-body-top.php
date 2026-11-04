@@ -60,7 +60,7 @@
   <h2>Careful by default</h2>
   <ul>
     <li>Writes only its own small files (thumbnails, settings, captions) and never touches your photos</li>
-    <li>Locations, maps, video, subfolders, share links and passwords stay off until you turn them on, and the admin says what each one publishes</li>
+    <li>Locations, maps, video, share links and passwords stay off until you turn them on (folders show as albums from the start, as cover cards or flattened into one page), and the admin says what each one publishes</li>
     <li>Private items are removed outright for anyone without the password, and the sign-in box is built so browsers don't offer to save it</li>
     <li>A settings file that cannot be read hides its folder instead of opening it, and every save swaps in a whole file, so nothing is seen half-done</li>
     <li>It contacts no other site on its own, except the optional country file; a map, once someone opens one, loads its code and tiles from a CDN and OpenStreetMap</li>
@@ -100,7 +100,7 @@ foreach ($folderGroupKeys as $folderKey => $_true) {
         $folderCovers[$folderKey] = $m['cover'];
     }
     $folderMeta[$folderKey] = ['description' => $m['description'], 'dates' => $m['dates']];
-    if (FOLDER_DISPLAY_MODE === 'overview') {
+    if (!folder_style_flat()) {
         $folderMentionLinks[$folderKey] = '?folder=' . rawurlencode($folderKey);
     }
 }

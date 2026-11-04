@@ -462,6 +462,12 @@ if (isset($_GET['folder'])) {
         exit;
     }
     $currentFolderPath = $requestedFolder;
+    // A folder can say how its own page shows the folders under it (its own choice, else the gallery's).
+    $folderStyleOwn = items_read(resolve_real_path($dir, $requestedFolder))['subfolderStyle'] ?? null;
+    if ($folderStyleOwn === 'flat' || $folderStyleOwn === 'overview') $GLOBALS['__folder_style_flat'] = $folderStyleOwn === 'flat';
+    $folderItemsOwn = items_read(resolve_real_path($dir, $requestedFolder));
+    if (is_bool($folderItemsOwn['flatNames'] ?? null)) $GLOBALS['__flat_names'] = $folderItemsOwn['flatNames'];
+    if (is_bool($folderItemsOwn['flatNotes'] ?? null)) $GLOBALS['__flat_notes'] = $folderItemsOwn['flatNotes'];
     // Quick links to the folders beside this one (same level), in the order the parent's page shows them: up to ten, else a
     // window of nine around this one plus "All" back to the parent.
     $pillParent = strpos($currentFolderPath, '/') === false ? '' : dirname($currentFolderPath);

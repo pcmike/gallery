@@ -633,7 +633,7 @@
       clearTimeout(node._t);
       if (kind === 'ok') node._t = setTimeout(function () { node.textContent = ''; node.className = 'rowstate'; }, 3000);
     }
-    function stateOf(el) { var h = el.closest('.field') || el.closest('details'); return h ? h.querySelector('.rowstate') : null; }
+    function stateOf(el) { var h = el.closest('.flat-choice') || el.closest('.field') || el.closest('details'); return h ? h.querySelector('.rowstate') : null; }   // (each of the three Flat choices says Saved beside its own label)
     function post(fields, node, onOk, onErr) {
       chain = chain.then(function () {
         say(node, 'Saving…', 'busy');
@@ -650,6 +650,19 @@
           .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); if (onErr) onErr(); });
       });
     }
+    // How this folder shows the folders under it (and, in Flat, their names and notes): each press saves at once; the names and notes rows only show while they matter.
+    var flatBox = form.querySelector('.flat-choices');
+    function flatSync() {
+      if (!flatBox) return;
+      var val = function (n) { var c = flatBox.querySelector('input[name=' + n + ']:checked'); return c ? c.value : ''; };
+      var flat = val('subfolder_style') === 'flat' || (val('subfolder_style') === '' && flatBox.getAttribute('data-site-flat') === '1');
+      var names = val('flat_names') === '1' || (val('flat_names') === '' && flatBox.getAttribute('data-site-names') === '1');
+      var rn = flatBox.querySelector('[data-flat-row=names]'), rt = flatBox.querySelector('[data-flat-row=notes]');
+      if (rn) rn.hidden = !flat; if (rt) rt.hidden = !(flat && names);
+    }
+    [].forEach.call(form.querySelectorAll('.seg-site input[type=radio]'), function (r) {
+      r.addEventListener('change', function () { flatSync(); post([[r.name, r.value]], stateOf(r)); });
+    });
     [].forEach.call(form.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]'), function (el) {
       var saved = el.value, timer = 0;
       function go() {
@@ -2061,6 +2074,15 @@
       });
       document.addEventListener('click', function (e) { if (open && !open.contains(e.target)) close(open); });
     })();
+    // Rows that only matter for one choice of another setting (the Flat switches under Folder style) follow that choice.
+    function syncShown() {
+      [].forEach.call(form.querySelectorAll('.site-row[data-shown-when]'), function (r) {
+        var spec = r.getAttribute('data-shown-when').split('='), c = form.querySelector('input[name="set_' + spec[0] + '"]:checked'), ok = !!c && c.value === spec[1], req = r.getAttribute('data-requires');
+        if (ok && req) { var rc = form.querySelector('input[type=checkbox][name="' + req + '"]'); ok = !!(rc && rc.checked); }
+        r.hidden = !ok;
+      });
+    }
+    form.addEventListener('change', function () { setTimeout(syncShown, 0); });
     // Photo order: one control for the order and its direction; each choice saves both settings together.
     [].forEach.call(form.querySelectorAll('.seg, [data-menu]'), function (seg) {
       var radios = seg.querySelectorAll('input[type=radio][name=pair_PHOTO_ORDER]');

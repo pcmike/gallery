@@ -61,7 +61,14 @@ if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)
   <?php if ($headerMeta['dates'] !== ''): ?>
     <p class="folder-dates"><?= htmlspecialchars($headerMeta['dates']) ?></p>
   <?php endif; ?>
-  <p><?= htmlspecialchars(media_count_label($currentFolderPath !== null ? $currentFolderFiles : $files), ENT_QUOTES, 'UTF-8') ?><?php if ($viewCount > 0 && view_counts_shown()): ?> &middot; <span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
+  <?php // Flat, for the owner: how many folders the photos below come from (so a flat grid never hides that there are folders)
+  $flatFolderCount = 0;
+  if (is_admin_browser() && AUTO_GROUP_BY_FOLDER && folder_style_flat()) {
+      $flatDirs = [];
+      foreach ($currentFolderPath !== null ? $currentFolderFiles : $files as $ff) { $fd = dirname($ff); if ($fd !== '.' && $fd !== $currentFolderPath) $flatDirs[$fd] = true; }
+      $flatFolderCount = count($flatDirs);
+  } ?>
+  <p><?= $flatFolderCount > 0 ? number_format($flatFolderCount) . ' folder' . ($flatFolderCount === 1 ? '' : 's') . ' &middot; ' : '' ?><?= htmlspecialchars(media_count_label($currentFolderPath !== null ? $currentFolderFiles : $files), ENT_QUOTES, 'UTF-8') ?><?php if ($viewCount > 0 && view_counts_shown()): ?> &middot; <span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
 </header>
 <main id="content">
 
@@ -151,9 +158,7 @@ if ($currentFolderPath !== null) {
     // directly here is a flat card, and the same logic repeats on that
     // subfolder's own page — to any depth. 'inline' mode never reaches
     // a cover card, so a folder's page just shows everything beneath it.
-    $level = FOLDER_DISPLAY_MODE === 'overview'
-        ? split_folder_level($folderFiles, $folderPrefix)
-        : ['folders' => [], 'loose' => $folderFiles];
+    $level = split_folder_level($folderFiles, $folderPrefix);   // (Flat shows the same folders, in one grid or in boxes, instead of as cards)
 
     $groups = [];
     $folderGroupKeys = [];
@@ -298,7 +303,7 @@ if ($currentFolderPath !== null) {
 // A page of nothing but a few folder cards gets bigger cards on a wide screen (two folders shouldn't be two small tiles
 // in a big empty page). The map buttons above them use the same width, so they line up with the first card's corner.
 // Anything else, and every phone, keeps the usual grid.
-$coverCount = FOLDER_DISPLAY_MODE === 'overview' ? count($folderGroupKeys) : 0;
+$coverCount = !folder_style_flat() ? count($folderGroupKeys) : 0;
 $fewCovers = ($coverCount >= 1 && $coverCount <= 6 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
 $GLOBALS['__big_covers'] = $fewCovers !== '';
 // A page with fewer than ten things in its grid (folder cards, photos and videos together) shows one per row on a phone: a few big pictures read better than a few small ones. Ten or more keep the usual grid.
@@ -316,10 +321,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // The sort button: for the photos shown at this level (the folder's own, or all of them when folders are shown inline), what
   // there is to put first, and the order in force here. Hidden when there is nothing to put in order.
   $sortScope = array_values(array_filter($files, function ($f) use ($currentFolderPath) {
-      if (FOLDER_DISPLAY_MODE !== 'overview' || !AUTO_GROUP_BY_FOLDER) return true;
+      if (folder_style_flat() || !AUTO_GROUP_BY_FOLDER) return true;
       return ($currentFolderPath === null ? '' : $currentFolderPath) === (strpos($f, '/') === false ? '' : dirname($f));
   }));
-  $notesLayOut = !AUTO_GROUP_BY_FOLDER && !empty($mdFiles) && notes_place_photos($mdContents, $groups, $explicitGroups, $positionalClusters);   // (a notes file that places photos sets their order; one that is only words does not)
+  $notesLayOut = (!AUTO_GROUP_BY_FOLDER || !$folderGroupKeys) && !empty($mdFiles) && notes_place_photos($mdContents, $groups, $explicitGroups, $positionalClusters);   // (a notes file that places photos sets their order; one that is only words does not)
   $sortShown = SHOW_SORT_BUTTON && count($sortScope) >= 2 && !$notesLayOut;
   $sortHasVideo = false; $sortHasLocated = false; $sortHasPrivate = false;
   if ($sortShown) {

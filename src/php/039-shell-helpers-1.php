@@ -27,6 +27,23 @@ function shell_frame_script($kind) {
         . 'if(/^\?(img|video|archive|map|about|track|linkexport|filesdownload|reveal)/.test(u.search))return;u.searchParams.set("inframe","1");a.href=u.href},true);})();</script>';
 }
 
+/** Does the admin offer a lock beside each folder (a one-press private/visible)? Only while the gallery is shown Flat: there are no folder
+ *  cards then to carry the lock the cards have. */
+function folder_lock_toggles_shown() {
+    return AUTO_GROUP_BY_FOLDER && in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
+}
+
+/** The lock beside a folder in a tree: closed when the folder is private, open when it is visible, dimmed (and not pressable) when a
+ *  folder above it makes it private. */
+function folder_lock_button($path, $csrf, $cls = 'flock') {
+    $dir = $GLOBALS['dir'];
+    $own = folder_restriction_cached($dir, $path) === 'private';
+    $inh = !$own && folder_above_is_private($dir, $path);
+    $on = $own || $inh;
+    return '<button type="button" class="' . $cls . ($on ? ' on' : '') . ($inh ? ' inh' : '') . '" data-lock-path="' . htmlspecialchars($path, ENT_QUOTES, 'UTF-8') . '"' . ($own ? ' data-own="1"' : '') . ' data-csrf="' . htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') . '"' . ($inh ? ' disabled' : '')
+        . ' aria-pressed="' . ($on ? 'true' : 'false') . '" title="' . ($inh ? 'Private because a folder above it is private' : ($on ? 'Private: press to make it visible' : 'Visible: press to make it private')) . '" aria-label="Private">' . ui_icon($on ? 'lock' : 'unlock') . '</button>';
+}
+
 /** The folders as the shell's tree: Root on top with the gallery's own picture, every folder nested inside it, a count of
  *  what is directly in each and a fold arrow beside the ones that hold folders. */
 function shell_folder_tree($files, $current) {
@@ -43,11 +60,12 @@ function shell_folder_tree($files, $current) {
              . '<span class="fname">' . $icon . $e($label) . '</span><span class="fcount">' . (int) ($own[$path] ?? 0) . '</span></a>';
     };
     $toggle = function ($name) use ($e) { return '<button type="button" class="ftoggle" aria-expanded="true" aria-label="Show or hide the folders inside ' . $e($name) . '"></button>'; };
-    $branch = function ($parent) use (&$branch, $children, $row, $toggle) {
+    $lockCsrf = folder_lock_toggles_shown() ? admin_csrf_token() : '';
+    $branch = function ($parent) use (&$branch, $children, $row, $toggle, $lockCsrf) {
         $out = '';
         foreach ($children[$parent] ?? [] as $path) {
             $kids = !empty($children[$path]);
-            $out .= '<li' . ($kids ? ' class="has-children"' : '') . '>' . $row($path, basename($path)) . ($kids ? $toggle(basename($path)) : '');
+            $out .= '<li' . ($kids ? ' class="has-children"' : '') . '>' . $row($path, basename($path)) . ($lockCsrf !== '' ? folder_lock_button($path, $lockCsrf) : '') . ($kids ? $toggle(basename($path)) : '');
             if ($kids) $out .= '<ul>' . $branch($path) . '</ul>';
             $out .= '</li>';
         }
@@ -131,7 +149,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     $node = function ($path, $label, $depth) use (&$node, $children, $folderLink, $folder, $e) {
         $kids = $children[$path] ?? [];
         $open = $path === '' || ($folder !== null && ($folder === $path || strpos($folder . '/', $path . '/') === 0));
-        $row = '<div class="pb-fr">' . ($kids ? '<button type="button" class="pb-t" aria-expanded="' . ($open ? 'true' : 'false') . '" aria-label="Show or hide the folders inside ' . $e($label) . '"></button>' : '<span class="pb-t pb-t0"></span>') . $folderLink($path, $label) . '</div>';
+        $row = '<div class="pb-fr">' . ($kids ? '<button type="button" class="pb-t" aria-expanded="' . ($open ? 'true' : 'false') . '" aria-label="Show or hide the folders inside ' . $e($label) . '"></button>' : '<span class="pb-t pb-t0"></span>') . $folderLink($path, $label) . ($path !== '' && folder_lock_toggles_shown() ? folder_lock_button($path, admin_csrf_token(), 'flock pb-lk') : '') . '</div>';
         $inner = '';
         foreach ($kids as $k) $inner .= $node($k, basename($k), $depth + 1);
         return '<div class="pb-g' . ($kids ? '' : ' leaf') . ($kids && !$open ? ' collapsed' : '') . '" style="--d:' . $depth . '" data-path="' . $e($path) . '"' . ($open ? ' data-here' : '') . '>' . $row . ($kids ? '<div class="pb-kids">' . $inner . '</div>' : '') . '</div>';
@@ -147,7 +165,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
         $h .= '<a class="pb-w" href="' . $e($tab($t)) . '" data-pb-tab="' . $t . '"><span>' . $e($label) . '</span><span class="pb-b" data-b="' . $t . '">' . $badges . '</span></a>';
     }
     $h .= '<div class="pb-lab">Folders</div>' . $node('', 'Root', 0) . '</div></div>';
-    return $h . '<script>(function(){var bar=document.getElementById("pb"),sheet=document.getElementById("pb-sheet"),btn=document.getElementById("pb-menu");if(!bar||!sheet||!btn)return;'
+    return $h . '<script>window.galleryFolderLock=window.galleryFolderLock||function(b){if(b.disabled)return;var on=b.classList.contains("on");b.disabled=true;var body=new URLSearchParams({csrf_token:b.getAttribute("data-csrf"),action:"toggle_folder_restriction",hidden:on?"":"1"});fetch("?admin&folder="+encodeURIComponent(b.getAttribute("data-lock-path")),{method:"POST",body:body,credentials:"same-origin",headers:{"X-Requested-With":"gallery-fetch"}}).then(function(r){return r.json()}).then(function(j){b.disabled=false;if(j&&j.ok){var now=!on;b.classList.toggle("on",now);b.setAttribute("aria-pressed",now?"true":"false");b.title=now?"Private: press to make it visible":"Visible: press to make it private";var u=b.querySelector("use");if(u)u.setAttribute("href",now?"#i-lock":"#i-unlock")}}).catch(function(){b.disabled=false})};</script><script>(function(){var bar=document.getElementById("pb"),sheet=document.getElementById("pb-sheet"),btn=document.getElementById("pb-menu");if(!bar||!sheet||!btn)return;'
         . 'var admin=bar.getAttribute("data-context")==="admin",loaded=0,busy=false;'
         . 'function top(){setTimeout(function(){scrollTo(0,0)},30);setTimeout(function(){scrollTo(0,0)},200)}'
         . 'function flag(){try{sessionStorage.setItem("pbTop","1")}catch(x){}}'
@@ -162,7 +180,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
         // how the folders were left folded is remembered in this browser (the branch to the folder you are in is always open)
         . 'var FK="galleryMenuFolders|"+location.pathname.replace(/index\.php$/,""),fs={};try{fs=JSON.parse(localStorage.getItem(FK)||"{}")||{}}catch(x){fs={}}'
         . '[].forEach.call(sheet.querySelectorAll(".pb-g[data-path]"),function(g){var p=g.getAttribute("data-path");if(g.hasAttribute("data-here")||!(p in fs))return;var t=g.querySelector(":scope > .pb-fr > button.pb-t");if(!t)return;g.classList.toggle("collapsed",fs[p]===0);t.setAttribute("aria-expanded",fs[p]===0?"false":"true")});'
-        . 'sheet.addEventListener("click",function(e){var t=e.target.closest?e.target.closest(".pb-t"):null;if(t&&t.tagName==="BUTTON"){var g=t.closest(".pb-g"),c=g.classList.toggle("collapsed");t.setAttribute("aria-expanded",c?"false":"true");fs[g.getAttribute("data-path")]=c?0:1;try{localStorage.setItem(FK,JSON.stringify(fs))}catch(x){}return}var a=e.target.closest?e.target.closest("a"):null;if(!a)return;if(a.hasAttribute("data-keep")){e.preventDefault();location.href=a.getAttribute("href").split("#")[0]+location.hash;return}if(!admin&&a.getAttribute("href").indexOf("?admin")===0)flag();open_(false);if(admin&&a.getAttribute("href").charAt(0)==="#")top()});'
+        . 'sheet.addEventListener("click",function(e){var lk=e.target.closest?e.target.closest(".flock"):null;if(lk){e.preventDefault();window.galleryFolderLock&&window.galleryFolderLock(lk);return}var t=e.target.closest?e.target.closest(".pb-t"):null;if(t&&t.tagName==="BUTTON"){var g=t.closest(".pb-g"),c=g.classList.toggle("collapsed");t.setAttribute("aria-expanded",c?"false":"true");fs[g.getAttribute("data-path")]=c?0:1;try{localStorage.setItem(FK,JSON.stringify(fs))}catch(x){}return}var a=e.target.closest?e.target.closest("a"):null;if(!a)return;if(a.hasAttribute("data-keep")){e.preventDefault();location.href=a.getAttribute("href").split("#")[0]+location.hash;return}if(!admin&&a.getAttribute("href").indexOf("?admin")===0)flag();open_(false);if(admin&&a.getAttribute("href").charAt(0)==="#")top()});'
         . 'bar.addEventListener("click",function(e){var a=e.target.closest?e.target.closest("a.pb-i"):null;if(!a)return;var h=a.getAttribute("href")||"";'
         // on the gallery page the Gallery button is also "up": scrolled down it goes to the top of this page, at the top it goes up one folder
         . 'if(!admin&&a.getAttribute("data-pb")==="gallery"&&a.hasAttribute("data-up")){e.preventDefault();if(window.pageYOffset>8){var calm=window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches;window.scrollTo({top:0,behavior:calm?"auto":"smooth"})}else if(a.getAttribute("data-up")!=="")location.href=a.getAttribute("data-up");return}'
@@ -232,6 +250,9 @@ function owner_phone_bar_css() {
     .pb-w.cur, .pb-f.cur { color:#fff; font-weight:600; background:#5865f2; border-radius:8px; border-top-color:transparent; padding-left:12px; padding-right:12px; }
     .pb-w.cur .count, .pb-w.cur .c, .pb-f.cur .c { background:rgba(0,0,0,0.3); color:#fff; }
     .pb-f.cur .c { background:none; }
+    .pb-lk { all:unset; box-sizing:border-box; flex:none; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; width:44px; min-height:44px; color:#77777e; }
+    .pb-lk .ico { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+    .pb-lk.on { color:#ffb3b5; } .pb-lk.inh { opacity:.45; cursor:default; }
     .pb-sheet.off-folder .pb-f.cur { background:rgba(255,255,255,0.07); font-weight:500; }
   }';
 }

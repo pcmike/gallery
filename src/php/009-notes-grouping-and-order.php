@@ -316,7 +316,9 @@ function order_within_zone($keysInZone, $mdContents, $groups, $explicitGroups, $
 function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank, $rankOverride = [], $folderGroupKeys = []) {
     $boxKeys = [];
     $singleKeys = [];
+    $folderKeys = [];   // (Flat: the folders' photos come after the page's own, in one run)
     foreach ($groups as $key => $groupFiles) {
+        if (isset($folderGroupKeys[$key]) && folder_style_flat()) { $folderKeys[] = $key; continue; }
         // A folder-group is always in the box zone, even with one photo:
         // its cover card is a folder, not a single photo's card, and an
         // admin-set position has to be able to reorder it against every
@@ -329,7 +331,7 @@ function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalCl
     }
     $boxOrder = order_within_zone($boxKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride);
     $singleOrder = order_within_zone($singleKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride);
-    return array_merge($boxOrder, $singleOrder);
+    return array_merge($boxOrder, $singleOrder, $folderKeys ? order_within_zone($folderKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride) : []);
 }
 
 // Reorders $groups per compute_zone_order() (boxes first, singles+

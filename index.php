@@ -29,8 +29,8 @@
  *     DEFAULTS: a .gallery-config.php beside this file overrides them and
  *     survives replacing this file with a newer version (see
  *     gallery_setting() below and the guide). TRACK_VIEWS,
- *     AUTO_GROUP_BY_FOLDER, ENABLE_VIDEO and ENABLE_PHOTO_LOCATION are
- *     off by default — this script writes nothing to disk
+ *     ENABLE_VIDEO and ENABLE_PHOTO_LOCATION are off by default
+ *     (subfolders are on by default since 2.5.0) — this script writes nothing to disk
  *     (apart from thumbnails in .gallery-cache, what the admin saves and,
  *     once, the setup code file when ?admin is first opened with no password),
  *     makes no outbound/third-party requests of its own (a map, which only appears
@@ -38,7 +38,8 @@
  *     from OpenStreetMap when a visitor opens it; the country file,
  *     COUNTRY_LOOKUP, is the one thing the server fetches, only once
  *     switched on), and doesn't show a single
- *     subfolder, video file, or photo location unless you turn one on.
+ *     video file or photo location unless you turn one on; subfolders
+ *     show as albums unless you switch them off.
  *     (With AUTO_GROUP_BY_FOLDER off it still peeks into subfolders, read-
  *     only and capped, solely to warn that photos there are being skipped.)
  *     ADMIN_PASSWORD and PRIVATE_VIEW_PASSWORD are empty by default,
@@ -85,7 +86,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.4.2');
+define('GALLERY_VERSION', '2.5.0');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -341,7 +342,12 @@ define('SHOW_SORT_BUTTON', gallery_setting('SHOW_SORT_BUTTON', true));
 // always has. Turn this on for a trip folder like /trip/Paris,
 // /trip/StTropez, etc. See the guide for FOLDER_DISPLAY_MODE and
 // EXTRA_FOLDERS, which only matter once this is on.
-define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', false));
+define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', true));   // (on by default since 2.5.0: most people keep photos in folders)
+// Folders the scan never enters (system, recycle and thumbnail folders that file managers and NAS boxes create), and the most one visit
+// will scan: past either limit the rest is left out and the Health check says so.
+const SCAN_SKIP_FOLDERS = ['@eaDir', '__MACOSX', '#recycle', '$RECYCLE.BIN', 'System Volume Information', 'Thumbs', 'node_modules', 'cgi-bin'];
+const SCAN_MAX_FOLDERS = 2000;
+const SCAN_MAX_FILES = 60000;
 
 // How a folder-group renders once AUTO_GROUP_BY_FOLDER is on: 'overview'
 // (default) shows one cover card per subfolder — a highlight photo, a
@@ -354,7 +360,24 @@ define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', false));
 // owner's own convenience, where everything should stay visible at once
 // (this script's other real use case — a seller with a few items, each
 // in its own folder). Only read when AUTO_GROUP_BY_FOLDER is on.
-define('FOLDER_DISPLAY_MODE', gallery_setting('FOLDER_DISPLAY_MODE', 'overview', ['overview', 'inline']));
+// Since 2.5.0 the style is Cover cards ('overview') or Flat ('flat'). The older words keep working: 'cards' is 'overview', and 'inline' is Flat
+// with the folder names shown, which is how Inline always looked (one labelled box per folder).
+define('FOLDER_DISPLAY_MODE', gallery_setting('FOLDER_DISPLAY_MODE', 'overview', ['overview', 'cards', 'flat', 'inline']));
+// Flat's two switches: show each folder's name (a box for the folders directly under the page, a divider for those inside), and show
+// each folder's notes under it (needs the names).
+define('FOLDER_FLAT_NAMES', gallery_setting('FOLDER_FLAT_NAMES', FOLDER_DISPLAY_MODE === 'inline'));
+define('FOLDER_FLAT_NOTES', gallery_setting('FOLDER_FLAT_NOTES', false) && FOLDER_FLAT_NAMES);
+/** Folder names and folder notes in Flat for the page being built: the folder's own choice, else the gallery's. */
+function flat_names_on() {
+    return $GLOBALS['__flat_names'] ?? FOLDER_FLAT_NAMES;
+}
+function flat_notes_on() {
+    return flat_names_on() && ($GLOBALS['__flat_notes'] ?? FOLDER_FLAT_NOTES);
+}
+/** Is the page being built shown Flat? The gallery's style, unless the page's folder says otherwise (set per page once the folder is known). */
+function folder_style_flat() {
+    return $GLOBALS['__folder_style_flat'] ?? in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
+}
 
 // Map a virtual top-level folder name to a real path elsewhere on the
 // server, e.g. ['OldTrip2020' => '/mnt/archive-disk/trip-photos-2020'].
@@ -653,6 +676,11 @@ if (ENABLE_VIDEO) {
  */
 function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     $node = ['files' => [], 'subdirs' => []];
+    // A folder it has no business walking into (a system or recycle folder), and a ceiling on how much one visit scans, so a gallery
+    // dropped into a huge tree (a whole web root) cannot make every page crawl. The Health check says when the ceiling was hit.
+    static $dirs = 0, $files = 0;
+    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; }
+    if (++$dirs > SCAN_MAX_FOLDERS || $files > SCAN_MAX_FILES) { $GLOBALS['__scan_truncated'] = true; return $node; }
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
     $parentReal = realpath($realDir);
@@ -664,12 +692,12 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
         if (is_file($path)) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
             if (in_array($ext, $mediaExtensions, true)) {
-                $node['files'][] = $entry;
+                $node['files'][] = $entry; $files++;
             }
             continue;
         }
-        if (!is_dir($path) || $entry === '.gallery-cache' || is_link($path)) {
-            continue;
+        if (!is_dir($path) || $entry[0] === '.' || is_link($path) || in_array($entry, SCAN_SKIP_FOLDERS, true)) {
+            continue;   // (dot folders such as .git and .gallery-cache are never photo folders)
         }
         $childReal = realpath($path);
         if ($childReal === false || $parentReal === false
@@ -875,6 +903,9 @@ function valid_media_path($dir, $rel, $mediaExtensions, $self) {
         if ($seg === '' || $seg === '.' || $seg === '..') return false;
     }
     $file = array_pop($segments);
+    foreach ($segments as $seg) {   // (the scan never enters a dot folder or a system folder, so nothing in one is a gallery photo)
+        if ($seg[0] === '.' || in_array($seg, SCAN_SKIP_FOLDERS, true)) return false;
+    }
     if (!empty($segments) && !AUTO_GROUP_BY_FOLDER) return false;
     if (!in_array(strtolower(pathinfo($file, PATHINFO_EXTENSION)), $mediaExtensions, true)) return false;
     if (empty($segments) && $file === $self) return false;
@@ -3539,7 +3570,9 @@ function order_within_zone($keysInZone, $mdContents, $groups, $explicitGroups, $
 function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalClusters, $explicitGroupKeys, $naturalRank, $rankOverride = [], $folderGroupKeys = []) {
     $boxKeys = [];
     $singleKeys = [];
+    $folderKeys = [];   // (Flat: the folders' photos come after the page's own, in one run)
     foreach ($groups as $key => $groupFiles) {
+        if (isset($folderGroupKeys[$key]) && folder_style_flat()) { $folderKeys[] = $key; continue; }
         // A folder-group is always in the box zone, even with one photo:
         // its cover card is a folder, not a single photo's card, and an
         // admin-set position has to be able to reorder it against every
@@ -3552,7 +3585,7 @@ function compute_zone_order($mdContents, $groups, $explicitGroups, $positionalCl
     }
     $boxOrder = order_within_zone($boxKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride);
     $singleOrder = order_within_zone($singleKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride);
-    return array_merge($boxOrder, $singleOrder);
+    return array_merge($boxOrder, $singleOrder, $folderKeys ? order_within_zone($folderKeys, $mdContents, $groups, $explicitGroups, $positionalClusters, $naturalRank, $rankOverride) : []);
 }
 
 // Reorders $groups per compute_zone_order() (boxes first, singles+
@@ -6422,7 +6455,7 @@ function map_group_color($index) {
  *  standalone single) gets its #group-<slug> anchor on the current page,
  *  not a separate linking system. */
 function map_point_link($file, $groupKey, $folderGroupKeys) {
-    if ($groupKey !== null && isset($folderGroupKeys[$groupKey]) && FOLDER_DISPLAY_MODE === 'overview') {
+    if ($groupKey !== null && isset($folderGroupKeys[$groupKey]) && !folder_style_flat()) {
         // The photo is inside a folder this page shows only as a card: open the folder it is really in, on that photo (a bare folder link
         // left you at the top of a page of hundreds with no sign of the one you pressed). If the photo is part of a group there, the
         // anchor finds nothing and the folder's page simply opens.
@@ -6743,7 +6776,7 @@ function items_path($folderPath) {
  *  locationEnabled is this folder's own
  *  location-sharing toggle (see ENABLE_PHOTO_LOCATION's doc comment). */
 function items_default() {
-    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
+    return ['items' => [], 'groups' => [], 'displayName' => null, 'description' => null, 'dates' => null, 'sortOrder' => null, 'subfolderStyle' => null, 'flatNames' => null, 'flatNotes' => null, 'cover' => null, 'locationEnabled' => false, 'mapEnabled' => null, 'mapRadius' => null, 'photoSort' => null, 'stacks' => [], 'folderId' => null];
 }
 
 function items_read($folderPath) {
@@ -8318,6 +8351,16 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
                 return ['type' => 'error', 'text' => 'Position must be a whole number (or blank for natural order).'];
             }
         }
+        foreach (['flat_names' => 'flatNames', 'flat_notes' => 'flatNotes'] as $postKey => $itemKey) {   // this folder's own choice for Flat: "" = what Settings says
+            if ($adminFolderPath !== null && array_key_exists($postKey, $_POST)) {
+                $v = (string) $_POST[$postKey];
+                $updates[$itemKey] = $v === '1' ? true : ($v === '0' ? false : null);
+            }
+        }
+        if ($adminFolderPath !== null && array_key_exists('subfolder_style', $_POST)) {   // how this folder's own page shows the folders under it: "" = the site's
+            $style = (string) $_POST['subfolder_style'];
+            $updates['subfolderStyle'] = in_array($style, ['overview', 'flat'], true) ? $style : null;
+        }
         if (array_key_exists('photo_sort_order', $_POST)) {   // this folder's own order of photos: "" = the site's
             $own = [];
             $order = (string) $_POST['photo_sort_order'];
@@ -9095,6 +9138,20 @@ function ui_segmented($name, $options, $current, $label = '') {
     return $out . '</div>';
 }
 
+/** Two choices for something a folder can set for itself while Settings has an answer too: the choice that is what Settings says is drawn
+ *  outlined and, picked, means "follow Settings" (its radio's value is ""); the other, picked, is the folder's own and is drawn filled.
+ *  $options: [value => label], two of them; $current: the folder's own value, or "" for none. */
+function ui_segmented_site($name, $options, $siteValue, $current, $label = '') {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $out = '<div class="seg seg-site" role="radiogroup" aria-label="' . $esc($label) . '">';
+    foreach ($options as $value => $text) {
+        $isSite = (string) $value === (string) $siteValue;
+        $checked = $isSite ? ($current === '' || (string) $current === (string) $value) : (string) $current === (string) $value;
+        $out .= '<label' . ($isSite ? ' class="site" title="What Settings says"' : '') . '><input type="radio" name="' . $esc($name) . '" value="' . $esc($isSite ? '' : $value) . '"' . ($checked ? ' checked' : '') . '><span>' . $esc($text) . '</span></label>';
+    }
+    return $out . '</div>';
+}
+
 /** A choice of three or more (or with long labels): a button showing the current choice, which opens a small dark list with a tick on the
  *  chosen row. The choices are real radio buttons inside it (so the page's scripts that listen to radios work unchanged); the menu code
  *  only opens, closes and shows the label. No browser dropdown anywhere. */
@@ -9142,6 +9199,26 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <label>Position <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="number" name="sort_order" aria-label="Position" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
           <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
+        </div>
+        <?php endif; ?>
+        <?php if (!$isRoot && AUTO_GROUP_BY_FOLDER):
+          $siteFlat = in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
+          $ownStyle = (string) ($itemsHere['subfolderStyle'] ?? ''); $ownNames = $itemsHere['flatNames'] ?? null; $ownNotes = $itemsHere['flatNotes'] ?? null;
+          $nowFlat = $ownStyle !== '' ? $ownStyle === 'flat' : $siteFlat;
+          $nowNames = is_bool($ownNames) ? $ownNames : FOLDER_FLAT_NAMES; ?>
+        <div class="field wide flat-choices" data-site-flat="<?= $siteFlat ? '1' : '0' ?>" data-site-names="<?= FOLDER_FLAT_NAMES ? '1' : '0' ?>">
+          <div class="flat-choice">
+            <label>Folders under this one appear as <span class="rowstate" role="status" aria-live="polite"></span></label>
+            <?= ui_segmented_site('subfolder_style', ['overview' => 'Cards', 'flat' => 'Flat'], $siteFlat ? 'flat' : 'overview', $ownStyle, 'Folders under this one appear as') ?>
+          </div>
+          <div class="flat-choice" data-flat-row="names"<?= $nowFlat ? '' : ' hidden' ?>>
+            <label>Show folder names <span class="rowstate" role="status" aria-live="polite"></span></label>
+            <?= ui_segmented_site('flat_names', ['0' => 'Off', '1' => 'On'], FOLDER_FLAT_NAMES ? '1' : '0', is_bool($ownNames) ? ($ownNames ? '1' : '0') : '', 'Show folder names') ?>
+          </div>
+          <div class="flat-choice" data-flat-row="notes"<?= $nowFlat && $nowNames ? '' : ' hidden' ?>>
+            <label>Show folder notes <span class="rowstate" role="status" aria-live="polite"></span></label>
+            <?= ui_segmented_site('flat_notes', ['0' => 'Off', '1' => 'On'], FOLDER_FLAT_NOTES ? '1' : '0', is_bool($ownNotes) ? ($ownNotes ? '1' : '0') : '', 'Show folder notes') ?>
+          </div>
         </div>
         <?php endif; ?>
         <?php $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : []; $psSel = function ($key) use ($ps) { return isset($ps[$key]) && is_bool($ps[$key]) ? ($ps[$key] ? 'on' : 'off') : ''; }; ?>
@@ -9208,8 +9285,12 @@ function gallery_setting_definitions() {
              'risk' => 'Every photo in every subfolder becomes visible.',
              'offwarn' => 'Subfolders and links to them disappear. Nothing is deleted.'],
             ['name' => 'FOLDER_DISPLAY_MODE', 'type' => 'enum', 'label' => 'Folder style',
-             'options' => ['overview' => 'Cover cards', 'inline' => 'Inline'],
-             'help' => 'Cover cards open each folder; inline shows all on one page. Only used when subfolders are shown.'],
+             'options' => ['overview' => 'Cover cards', 'flat' => 'Flat'],
+             'help' => 'Cover cards open each folder. Flat puts every photo from the folders on one page, folder by folder.'],
+            ['name' => 'FOLDER_FLAT_NAMES', 'type' => 'bool', 'label' => 'Show folder names',
+             'help' => 'Only used in Flat. Each folder directly under a page gets a box with its name, and folders inside it a divider, so people can see how the photos are organised.', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
+            ['name' => 'FOLDER_FLAT_NOTES', 'type' => 'bool', 'label' => 'Show folder notes',
+             'help' => 'Only used in Flat, with folder names on. Each folder\'s notes text shows under its name.', 'requires' => 'FOLDER_FLAT_NAMES', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
              'help' => 'alpha_01.jpg and alpha_02.jpg become one group. Good for listings; on a camera roll it can merge unrelated photos.'],
             ['name' => 'PHOTO_SORT_ORDER', 'type' => 'enum', 'label' => 'Photo order',
@@ -11889,6 +11970,8 @@ function health_checks($dir, $files) {
     $videos = 0; foreach ($files as $f) if (is_video_file($f)) $videos++;
     $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
 
+    if (!empty($GLOBALS['__scan_truncated'])) $add('Folders and files', 'warn', 'The folder scan stopped early', 'This gallery looks at no more than ' . number_format(SCAN_MAX_FOLDERS) . ' folders and ' . number_format(SCAN_MAX_FILES) . ' photos on one visit, and this folder has more, so the rest are left out. Move the gallery into a smaller folder, or the extra folders out of it.');
+
     // --- signed-in browsers: what looks wrong, and how big the histories have grown
     foreach (browser_rows() as $br) {
         foreach ($br['flags'] as $flagName => [$flagDetail, $flagAt, $flagLoud]) {
@@ -12269,7 +12352,7 @@ function render_admin_features_panel($adminEdited, $adminHidden) {
       <p class="muted" style="margin-top:0;">Two kinds of things: features you can switch on, and things you do right on the gallery. Nothing is hidden; what is off is just off.</p>
       <h3 class="subhead">Features you can switch on</h3>
       <p class="muted ft-sub">Each is switched on or off in Settings; these buttons take you straight to it.</p>
-      <?= $row('Subfolders', $onOff(AUTO_GROUP_BY_FOLDER), AUTO_GROUP_BY_FOLDER ? ($fx['AUTO_GROUP_BY_FOLDER']['on'] !== '' ? 'Showing your subfolders as albums.' : 'No subfolders here yet.') : $fx['AUTO_GROUP_BY_FOLDER']['off'], $goSetting(AUTO_GROUP_BY_FOLDER ? 'Settings →' : 'Turn on →', 'setting-AUTO_GROUP_BY_FOLDER')) ?>
+      <?= $row('Subfolders', $onOff(AUTO_GROUP_BY_FOLDER), AUTO_GROUP_BY_FOLDER ? ($fx['AUTO_GROUP_BY_FOLDER']['on'] !== '' ? 'Showing your subfolders ' . (folder_style_flat() ? 'flat, all their photos on one page, folder by folder' . (FOLDER_FLAT_NAMES ? ', with their names' . (FOLDER_FLAT_NOTES ? ' and notes' : '') : '') : 'as cover cards') . '.' : 'No subfolders here yet.') : $fx['AUTO_GROUP_BY_FOLDER']['off'], $goSetting(AUTO_GROUP_BY_FOLDER ? 'Folder style →' : 'Turn on →', AUTO_GROUP_BY_FOLDER ? 'setting-FOLDER_DISPLAY_MODE' : 'setting-AUTO_GROUP_BY_FOLDER')) ?>
       <?= $row('Videos', $onOff(ENABLE_VIDEO), ENABLE_VIDEO ? 'Videos play in the viewer, sent as recorded.' : 'Shows .mov and .mp4 files. ' . $fx['ENABLE_VIDEO']['off'], $goSetting(ENABLE_VIDEO ? 'Settings →' : 'Turn on →', 'setting-ENABLE_VIDEO')) ?>
       <?= $row('Photo locations and maps', $onOff(ENABLE_PHOTO_LOCATION), ENABLE_PHOTO_LOCATION ? 'Each folder and photo can show its location, and each folder its own map.' : $fx['ENABLE_PHOTO_LOCATION']['off'], $goSetting(ENABLE_PHOTO_LOCATION ? 'Settings →' : 'Turn on →', 'setting-ENABLE_PHOTO_LOCATION')) ?>
       <?= $row('Share links', $onOff(ENABLE_SHARE_LINKS), ENABLE_SHARE_LINKS ? ($links > 0 ? $links . ' link' . ($links === 1 ? '' : 's') . ' made.' : 'None made yet: press Share on a private folder, or press Select, tick photos and press Share….') : 'Temporary links that let someone see private photos, with a log of what they looked at.', $goSetting(ENABLE_SHARE_LINKS ? 'Settings →' : 'Turn on →', 'setting-ENABLE_SHARE_LINKS')) ?>
@@ -12386,6 +12469,7 @@ function render_admin_site_settings($csrfToken) {
             if ($hidAll): $nHid = gallery_is_closed() ? count($hidAll) : 0; ?><span class="site-hid" data-hid-group<?= $nHid ? '' : ' hidden' ?> title="<?= $esc(implode(' ', array_map(function ($i) { return $i['label'] . ': ' . ($i['hidden_why'] ?? 'Not needed with the current settings.'); }, $hidAll))) ?>"> (<span data-hid-n><?= $nHid ?></span> hidden)</span><?php endif; ?></span></summary>
           <?php if ($group['title'] === 'Signing in and passwords'): render_admin_password_rows($fromFile); endif; ?>
           <?php foreach ($group['items'] as $d): if (!empty($d['in'])) continue; $name = $d['name']; $now = defined($name) ? constant($name) : ($defaults[$name] ?? null); $def = $defaults[$name] ?? null;
+            if ($name === 'FOLDER_DISPLAY_MODE') $now = in_array($now, ['flat', 'inline'], true) ? 'flat' : 'overview';   // (the older words show as today's two choices)
             // "default: …" is part of the tag beside the name ("your setting · default: off"), shown only while the value differs from the default
             $showDefault = !in_array($d['type'], ['folders', 'sortfirst', 'pathlist'], true);
             $defKey = $nowKey = $defText = ''; $isDef = true;
@@ -12393,8 +12477,10 @@ function render_admin_site_settings($csrfToken) {
             elseif ($name === 'PHOTO_SORT_ORDER') { $defKey = ($def === 'mtime' ? 'taken' : $def) . '_' . (($defaults['PHOTO_SORT_DESC'] ?? false) ? 'desc' : 'asc'); $nowKey = $orderPairKey(); $defText = $orderPairOptions[$defKey] ?? $defKey; }
             else { $defKey = is_bool($def) ? ($def ? '1' : '0') : (string) $def; $nowKey = is_bool($now) ? ($now ? '1' : '0') : (string) $now; $defText = ($d['type'] === 'enum' && isset($d['options'][$def])) ? $d['options'][$def] : $show($def); }
             if ($showDefault) $isDef = $defKey === $nowKey || (is_numeric($defKey) && is_numeric($nowKey) && (float) $defKey === (float) $nowKey); ?>
-            <?php $reqOn = $settingOn($d); ?>
-            <div class="site-row<?= !empty($d['requires']) ? ' sub-row' . ($settingDepth($d) >= 2 ? ' depth-2' : '') : '' ?>" id="setting-<?= $esc($name) ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn ? '' : ' hidden') : '' ?><?= !empty($d['hidden_when']) ? ' data-hidden-when="set_' . $esc($d['hidden_when']) . '"' . (gallery_is_closed() ? ' hidden' : '') : '' ?>>
+            <?php $reqOn = $settingOn($d);
+              $swOk = true;   // (a row that only matters for one choice of another setting, such as the Flat switches under Folder style, is shown only then)
+              if (!empty($d['shown_when'])) { [$swName, $swWant] = explode('=', $d['shown_when'], 2); $swNow = $swName === 'FOLDER_DISPLAY_MODE' ? (in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true) ? 'flat' : 'overview') : (string) (defined($swName) ? constant($swName) : ''); $swOk = $swNow === $swWant; } ?>
+            <div class="site-row<?= !empty($d['requires']) ? ' sub-row' . ($settingDepth($d) >= 2 ? ' depth-2' : '') : '' ?>" id="setting-<?= $esc($name) ?>"<?= !empty($d['requires']) ? ' data-requires="set_' . $esc($d['requires']) . '"' . ($reqOn && $swOk ? '' : ' hidden') : '' ?><?= !empty($d['shown_when']) ? ' data-shown-when="' . $esc($d['shown_when']) . '"' . (empty($d['requires']) && !$swOk ? ' hidden' : '') : '' ?><?= !empty($d['hidden_when']) ? ' data-hidden-when="set_' . $esc($d['hidden_when']) . '"' . (gallery_is_closed() ? ' hidden' : '') : '' ?>>
               <div>
                 <div class="name"><?= $esc($d['label']) ?>
                   <?php if ($showDefault): ?><span class="src<?= $isDef ? ' is-default' : '' ?>" data-default="<?= $esc($defKey) ?>" title="This value is not the default, so it is kept in .gallery-config.php">your setting &middot; default: <?= $esc($defText) ?></span>
@@ -12664,6 +12750,23 @@ function shell_frame_script($kind) {
         . 'if(/^\?(img|video|archive|map|about|track|linkexport|filesdownload|reveal)/.test(u.search))return;u.searchParams.set("inframe","1");a.href=u.href},true);})();</script>';
 }
 
+/** Does the admin offer a lock beside each folder (a one-press private/visible)? Only while the gallery is shown Flat: there are no folder
+ *  cards then to carry the lock the cards have. */
+function folder_lock_toggles_shown() {
+    return AUTO_GROUP_BY_FOLDER && in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
+}
+
+/** The lock beside a folder in a tree: closed when the folder is private, open when it is visible, dimmed (and not pressable) when a
+ *  folder above it makes it private. */
+function folder_lock_button($path, $csrf, $cls = 'flock') {
+    $dir = $GLOBALS['dir'];
+    $own = folder_restriction_cached($dir, $path) === 'private';
+    $inh = !$own && folder_above_is_private($dir, $path);
+    $on = $own || $inh;
+    return '<button type="button" class="' . $cls . ($on ? ' on' : '') . ($inh ? ' inh' : '') . '" data-lock-path="' . htmlspecialchars($path, ENT_QUOTES, 'UTF-8') . '"' . ($own ? ' data-own="1"' : '') . ' data-csrf="' . htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') . '"' . ($inh ? ' disabled' : '')
+        . ' aria-pressed="' . ($on ? 'true' : 'false') . '" title="' . ($inh ? 'Private because a folder above it is private' : ($on ? 'Private: press to make it visible' : 'Visible: press to make it private')) . '" aria-label="Private">' . ui_icon($on ? 'lock' : 'unlock') . '</button>';
+}
+
 /** The folders as the shell's tree: Root on top with the gallery's own picture, every folder nested inside it, a count of
  *  what is directly in each and a fold arrow beside the ones that hold folders. */
 function shell_folder_tree($files, $current) {
@@ -12680,11 +12783,12 @@ function shell_folder_tree($files, $current) {
              . '<span class="fname">' . $icon . $e($label) . '</span><span class="fcount">' . (int) ($own[$path] ?? 0) . '</span></a>';
     };
     $toggle = function ($name) use ($e) { return '<button type="button" class="ftoggle" aria-expanded="true" aria-label="Show or hide the folders inside ' . $e($name) . '"></button>'; };
-    $branch = function ($parent) use (&$branch, $children, $row, $toggle) {
+    $lockCsrf = folder_lock_toggles_shown() ? admin_csrf_token() : '';
+    $branch = function ($parent) use (&$branch, $children, $row, $toggle, $lockCsrf) {
         $out = '';
         foreach ($children[$parent] ?? [] as $path) {
             $kids = !empty($children[$path]);
-            $out .= '<li' . ($kids ? ' class="has-children"' : '') . '>' . $row($path, basename($path)) . ($kids ? $toggle(basename($path)) : '');
+            $out .= '<li' . ($kids ? ' class="has-children"' : '') . '>' . $row($path, basename($path)) . ($lockCsrf !== '' ? folder_lock_button($path, $lockCsrf) : '') . ($kids ? $toggle(basename($path)) : '');
             if ($kids) $out .= '<ul>' . $branch($path) . '</ul>';
             $out .= '</li>';
         }
@@ -12768,7 +12872,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     $node = function ($path, $label, $depth) use (&$node, $children, $folderLink, $folder, $e) {
         $kids = $children[$path] ?? [];
         $open = $path === '' || ($folder !== null && ($folder === $path || strpos($folder . '/', $path . '/') === 0));
-        $row = '<div class="pb-fr">' . ($kids ? '<button type="button" class="pb-t" aria-expanded="' . ($open ? 'true' : 'false') . '" aria-label="Show or hide the folders inside ' . $e($label) . '"></button>' : '<span class="pb-t pb-t0"></span>') . $folderLink($path, $label) . '</div>';
+        $row = '<div class="pb-fr">' . ($kids ? '<button type="button" class="pb-t" aria-expanded="' . ($open ? 'true' : 'false') . '" aria-label="Show or hide the folders inside ' . $e($label) . '"></button>' : '<span class="pb-t pb-t0"></span>') . $folderLink($path, $label) . ($path !== '' && folder_lock_toggles_shown() ? folder_lock_button($path, admin_csrf_token(), 'flock pb-lk') : '') . '</div>';
         $inner = '';
         foreach ($kids as $k) $inner .= $node($k, basename($k), $depth + 1);
         return '<div class="pb-g' . ($kids ? '' : ' leaf') . ($kids && !$open ? ' collapsed' : '') . '" style="--d:' . $depth . '" data-path="' . $e($path) . '"' . ($open ? ' data-here' : '') . '>' . $row . ($kids ? '<div class="pb-kids">' . $inner . '</div>' : '') . '</div>';
@@ -12784,7 +12888,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
         $h .= '<a class="pb-w" href="' . $e($tab($t)) . '" data-pb-tab="' . $t . '"><span>' . $e($label) . '</span><span class="pb-b" data-b="' . $t . '">' . $badges . '</span></a>';
     }
     $h .= '<div class="pb-lab">Folders</div>' . $node('', 'Root', 0) . '</div></div>';
-    return $h . '<script>(function(){var bar=document.getElementById("pb"),sheet=document.getElementById("pb-sheet"),btn=document.getElementById("pb-menu");if(!bar||!sheet||!btn)return;'
+    return $h . '<script>window.galleryFolderLock=window.galleryFolderLock||function(b){if(b.disabled)return;var on=b.classList.contains("on");b.disabled=true;var body=new URLSearchParams({csrf_token:b.getAttribute("data-csrf"),action:"toggle_folder_restriction",hidden:on?"":"1"});fetch("?admin&folder="+encodeURIComponent(b.getAttribute("data-lock-path")),{method:"POST",body:body,credentials:"same-origin",headers:{"X-Requested-With":"gallery-fetch"}}).then(function(r){return r.json()}).then(function(j){b.disabled=false;if(j&&j.ok){var now=!on;b.classList.toggle("on",now);b.setAttribute("aria-pressed",now?"true":"false");b.title=now?"Private: press to make it visible":"Visible: press to make it private";var u=b.querySelector("use");if(u)u.setAttribute("href",now?"#i-lock":"#i-unlock")}}).catch(function(){b.disabled=false})};</script><script>(function(){var bar=document.getElementById("pb"),sheet=document.getElementById("pb-sheet"),btn=document.getElementById("pb-menu");if(!bar||!sheet||!btn)return;'
         . 'var admin=bar.getAttribute("data-context")==="admin",loaded=0,busy=false;'
         . 'function top(){setTimeout(function(){scrollTo(0,0)},30);setTimeout(function(){scrollTo(0,0)},200)}'
         . 'function flag(){try{sessionStorage.setItem("pbTop","1")}catch(x){}}'
@@ -12799,7 +12903,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
         // how the folders were left folded is remembered in this browser (the branch to the folder you are in is always open)
         . 'var FK="galleryMenuFolders|"+location.pathname.replace(/index\.php$/,""),fs={};try{fs=JSON.parse(localStorage.getItem(FK)||"{}")||{}}catch(x){fs={}}'
         . '[].forEach.call(sheet.querySelectorAll(".pb-g[data-path]"),function(g){var p=g.getAttribute("data-path");if(g.hasAttribute("data-here")||!(p in fs))return;var t=g.querySelector(":scope > .pb-fr > button.pb-t");if(!t)return;g.classList.toggle("collapsed",fs[p]===0);t.setAttribute("aria-expanded",fs[p]===0?"false":"true")});'
-        . 'sheet.addEventListener("click",function(e){var t=e.target.closest?e.target.closest(".pb-t"):null;if(t&&t.tagName==="BUTTON"){var g=t.closest(".pb-g"),c=g.classList.toggle("collapsed");t.setAttribute("aria-expanded",c?"false":"true");fs[g.getAttribute("data-path")]=c?0:1;try{localStorage.setItem(FK,JSON.stringify(fs))}catch(x){}return}var a=e.target.closest?e.target.closest("a"):null;if(!a)return;if(a.hasAttribute("data-keep")){e.preventDefault();location.href=a.getAttribute("href").split("#")[0]+location.hash;return}if(!admin&&a.getAttribute("href").indexOf("?admin")===0)flag();open_(false);if(admin&&a.getAttribute("href").charAt(0)==="#")top()});'
+        . 'sheet.addEventListener("click",function(e){var lk=e.target.closest?e.target.closest(".flock"):null;if(lk){e.preventDefault();window.galleryFolderLock&&window.galleryFolderLock(lk);return}var t=e.target.closest?e.target.closest(".pb-t"):null;if(t&&t.tagName==="BUTTON"){var g=t.closest(".pb-g"),c=g.classList.toggle("collapsed");t.setAttribute("aria-expanded",c?"false":"true");fs[g.getAttribute("data-path")]=c?0:1;try{localStorage.setItem(FK,JSON.stringify(fs))}catch(x){}return}var a=e.target.closest?e.target.closest("a"):null;if(!a)return;if(a.hasAttribute("data-keep")){e.preventDefault();location.href=a.getAttribute("href").split("#")[0]+location.hash;return}if(!admin&&a.getAttribute("href").indexOf("?admin")===0)flag();open_(false);if(admin&&a.getAttribute("href").charAt(0)==="#")top()});'
         . 'bar.addEventListener("click",function(e){var a=e.target.closest?e.target.closest("a.pb-i"):null;if(!a)return;var h=a.getAttribute("href")||"";'
         // on the gallery page the Gallery button is also "up": scrolled down it goes to the top of this page, at the top it goes up one folder
         . 'if(!admin&&a.getAttribute("data-pb")==="gallery"&&a.hasAttribute("data-up")){e.preventDefault();if(window.pageYOffset>8){var calm=window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches;window.scrollTo({top:0,behavior:calm?"auto":"smooth"})}else if(a.getAttribute("data-up")!=="")location.href=a.getAttribute("data-up");return}'
@@ -12869,6 +12973,9 @@ function owner_phone_bar_css() {
     .pb-w.cur, .pb-f.cur { color:#fff; font-weight:600; background:#5865f2; border-radius:8px; border-top-color:transparent; padding-left:12px; padding-right:12px; }
     .pb-w.cur .count, .pb-w.cur .c, .pb-f.cur .c { background:rgba(0,0,0,0.3); color:#fff; }
     .pb-f.cur .c { background:none; }
+    .pb-lk { all:unset; box-sizing:border-box; flex:none; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; width:44px; min-height:44px; color:#77777e; }
+    .pb-lk .ico { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+    .pb-lk.on { color:#ffb3b5; } .pb-lk.inh { opacity:.45; cursor:default; }
     .pb-sheet.off-folder .pb-f.cur { background:rgba(255,255,255,0.07); font-weight:500; }
   }';
 }
@@ -12975,6 +13082,14 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
   .sh-tree li.collapsed > ul { display:none; }
   .sh-main { flex:1; min-width:0; }
   .sh-main iframe { display:block; width:100%; height:100%; border:0; background:var(--bg); }
+
+  /* The lock beside a folder (only while the gallery is shown Flat): closed = private, open = visible. */
+  .flock { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 6px; color: #77777e; }
+  .flock .ico { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .flock.on { color: #ffb3b5; } .flock.inh { opacity: .45; cursor: default; }
+  .flock:focus-visible { outline: 2px solid #5865f2; }
+  @media (hover: hover) { .flock:not(.inh):hover { background: rgba(255,255,255,0.08); color: #fff; } }
+  .sh-tree li > .flock { position: absolute; right: 34px; top: 4px; }
 </style>
 </head>
 <body>
@@ -13054,7 +13169,31 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
     var u = new URL(srcFor(folder, tab), location.href).href;
     try { frame.contentWindow.location.assign(u); } catch (e) { frame.src = u; }   // (a step in the history, so the browser's Back button walks back through what you opened)
   }
+  // The lock beside a folder (shown while the gallery is Flat): one press makes the folder private or visible.
+  function folderLock(b) {
+    if (b.disabled) return;
+    var on = b.classList.contains('on'); b.disabled = true;
+    var body = new URLSearchParams({ csrf_token: b.getAttribute('data-csrf'), action: 'toggle_folder_restriction', hidden: on ? '' : '1' });
+    fetch('?admin&folder=' + encodeURIComponent(b.getAttribute('data-lock-path')), { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        b.disabled = false;
+        if (!j || !j.ok) return;
+        var now = !on;
+        [].forEach.call(document.querySelectorAll('.sh-tree .flock'), function (x) {   // (the folders inside it follow: private because a folder above is)
+          var p = x.getAttribute('data-lock-path'), me = b.getAttribute('data-lock-path');
+          if (x === b) return;
+          if (p.indexOf(me + '/') === 0 && !x.dataset.own) { x.classList.toggle('on', now); x.classList.toggle('inh', now); x.disabled = now; x.setAttribute('aria-pressed', now ? 'true' : 'false'); var u2 = x.querySelector('use'); if (u2) u2.setAttribute('href', now ? '#i-lock' : '#i-unlock'); }
+        });
+        b.classList.toggle('on', now); b.setAttribute('aria-pressed', now ? 'true' : 'false');
+        b.title = now ? 'Private: press to make it visible' : 'Visible: press to make it private';
+        var u = b.querySelector('use'); if (u) u.setAttribute('href', now ? '#i-lock' : '#i-unlock');
+      })
+      .catch(function () { b.disabled = false; });
+  }
   document.addEventListener('click', function (e) {
+    var lock = e.target.closest ? e.target.closest('.flock') : null;
+    if (lock) { e.preventDefault(); folderLock(lock); return; }
     var t = e.target.closest ? e.target.closest('[data-go], .sh-tool, #sh-whole a, .sh-tree a, .ftoggle') : null;
     if (!t) return;
     if (t.classList.contains('ftoggle')) { var li = t.parentNode, f = li.classList.toggle('collapsed'); t.setAttribute('aria-expanded', f ? 'false' : 'true'); return; }
@@ -14107,6 +14246,16 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .geo-status.geo-wait { background:rgba(245,194,107,0.1); border-color:rgba(245,194,107,0.45); color:#f5c26b; }
   .geo-err { margin-top:4px; color:#ffb3b5; }
   .br-table .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+  /* Folder settings: choices where one is what Settings says (outlined) and the other is the folder's own (solid). */
+  .flat-choices { display:flex; flex-wrap:wrap; gap:14px 28px; align-items:flex-start; }
+  .flat-choice { min-width:0; }
+  .flat-choice > label { display:block; margin:0 0 6px; }
+  .seg-site > label.site span { border-color:#5865f2; background:rgba(88,101,242,0.16); color:#d4d8ff; }
+  .seg-site > label.site input:checked + span { background:rgba(88,101,242,0.16); border-color:#5865f2; color:#fff; font-weight:600; }
+  .seg-site > label:not(.site) input:checked + span { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700; }
+  .seg-site > label.site:not(:has(input:checked)):hover span { color:#fff; }
+  @media (max-width:520px) { .flat-choices { flex-direction:column; flex-wrap:nowrap; gap:12px; } .seg-site { width:100%; } .seg-site > label { flex:1; } .seg-site > label span { text-align:center; } }
   <?= owner_phone_bar_css() ?>
   html:has(> body.inframe) { scrollbar-gutter:stable; }  /* (the scrollbar's room is always kept, blank when there is nothing to scroll, so a short page is not centred a few pixels differently from a long one) */
   body.inframe .admin-bar, body.inframe .admin-side, body.inframe .admin-folder-head { display:none !important; }
@@ -14940,7 +15089,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       clearTimeout(node._t);
       if (kind === 'ok') node._t = setTimeout(function () { node.textContent = ''; node.className = 'rowstate'; }, 3000);
     }
-    function stateOf(el) { var h = el.closest('.field') || el.closest('details'); return h ? h.querySelector('.rowstate') : null; }
+    function stateOf(el) { var h = el.closest('.flat-choice') || el.closest('.field') || el.closest('details'); return h ? h.querySelector('.rowstate') : null; }   // (each of the three Flat choices says Saved beside its own label)
     function post(fields, node, onOk, onErr) {
       chain = chain.then(function () {
         say(node, 'Saving…', 'busy');
@@ -14957,6 +15106,19 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); if (onErr) onErr(); });
       });
     }
+    // How this folder shows the folders under it (and, in Flat, their names and notes): each press saves at once; the names and notes rows only show while they matter.
+    var flatBox = form.querySelector('.flat-choices');
+    function flatSync() {
+      if (!flatBox) return;
+      var val = function (n) { var c = flatBox.querySelector('input[name=' + n + ']:checked'); return c ? c.value : ''; };
+      var flat = val('subfolder_style') === 'flat' || (val('subfolder_style') === '' && flatBox.getAttribute('data-site-flat') === '1');
+      var names = val('flat_names') === '1' || (val('flat_names') === '' && flatBox.getAttribute('data-site-names') === '1');
+      var rn = flatBox.querySelector('[data-flat-row=names]'), rt = flatBox.querySelector('[data-flat-row=notes]');
+      if (rn) rn.hidden = !flat; if (rt) rt.hidden = !(flat && names);
+    }
+    [].forEach.call(form.querySelectorAll('.seg-site input[type=radio]'), function (r) {
+      r.addEventListener('change', function () { flatSync(); post([[r.name, r.value]], stateOf(r)); });
+    });
     [].forEach.call(form.querySelectorAll('input[type=text][name], input[type=number][name], textarea[name]'), function (el) {
       var saved = el.value, timer = 0;
       function go() {
@@ -16368,6 +16530,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       });
       document.addEventListener('click', function (e) { if (open && !open.contains(e.target)) close(open); });
     })();
+    // Rows that only matter for one choice of another setting (the Flat switches under Folder style) follow that choice.
+    function syncShown() {
+      [].forEach.call(form.querySelectorAll('.site-row[data-shown-when]'), function (r) {
+        var spec = r.getAttribute('data-shown-when').split('='), c = form.querySelector('input[name="set_' + spec[0] + '"]:checked'), ok = !!c && c.value === spec[1], req = r.getAttribute('data-requires');
+        if (ok && req) { var rc = form.querySelector('input[type=checkbox][name="' + req + '"]'); ok = !!(rc && rc.checked); }
+        r.hidden = !ok;
+      });
+    }
+    form.addEventListener('change', function () { setTimeout(syncShown, 0); });
     // Photo order: one control for the order and its direction; each choice saves both settings together.
     [].forEach.call(form.querySelectorAll('.seg, [data-menu]'), function (seg) {
       var radios = seg.querySelectorAll('input[type=radio][name=pair_PHOTO_ORDER]');
@@ -17473,6 +17644,12 @@ if (isset($_GET['folder'])) {
         exit;
     }
     $currentFolderPath = $requestedFolder;
+    // A folder can say how its own page shows the folders under it (its own choice, else the gallery's).
+    $folderStyleOwn = items_read(resolve_real_path($dir, $requestedFolder))['subfolderStyle'] ?? null;
+    if ($folderStyleOwn === 'flat' || $folderStyleOwn === 'overview') $GLOBALS['__folder_style_flat'] = $folderStyleOwn === 'flat';
+    $folderItemsOwn = items_read(resolve_real_path($dir, $requestedFolder));
+    if (is_bool($folderItemsOwn['flatNames'] ?? null)) $GLOBALS['__flat_names'] = $folderItemsOwn['flatNames'];
+    if (is_bool($folderItemsOwn['flatNotes'] ?? null)) $GLOBALS['__flat_notes'] = $folderItemsOwn['flatNotes'];
     // Quick links to the folders beside this one (same level), in the order the parent's page shows them: up to ten, else a
     // window of nine around this one plus "All" back to the parent.
     $pillParent = strpos($currentFolderPath, '/') === false ? '' : dirname($currentFolderPath);
@@ -18802,6 +18979,64 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     return $html;
 }
 
+/** What a Flat folder carries besides its name: the description typed in Folder settings, its dates, and (when Show folder notes is on)
+ *  its notes text; and from its own notes file the {color:} and {sold}/{reserved} that style its box (the page's own notes, which name
+ *  the folder, win over these). Read once per folder per request. */
+function flat_folder_own($folderRel) {
+    static $memo = [];
+    if (isset($memo[$folderRel])) return $memo[$folderRel];
+    $dir = $GLOBALS['dir'];
+    $meta = folder_display_meta($dir, $folderRel);
+    $out = ['desc' => trim($meta['description']), 'dates' => trim($meta['dates']), 'notes' => '', 'color' => null, 'status' => ''];
+    $md = scan_gallery_md_files(resolve_real_path($dir, $folderRel));
+    $raw = implode("\n\n", $md['contents']);
+    if ($raw !== '') {
+        if (preg_match('/\{color:\s*([^}]+)\}/i', $raw, $m) && preg_match('/^(#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20}|rgba?\([0-9 ,.%]+\))$/', trim($m[1]))) $out['color'] = trim($m[1]);
+        if (preg_match('/\{(sold|reserved)\}/i', $raw, $m)) $out['status'] = strtolower($m[1]);
+        if (flat_notes_on()) {
+            $paras = [];
+            foreach (preg_split('/\n\s*\n/', $raw) as $p) {
+                $p = trim(preg_replace('/\{[a-z]+(:[^}]*)?\}/i', '', $p));   // (directives style photos; they are not words)
+                $p = trim(preg_replace('/^#{1,6}\s*/m', '', $p));
+                if ($p !== '') $paras[] = '<p>' . nl2br(inline_markdown($p), false) . '</p>';
+            }
+            $out['notes'] = implode('', $paras);
+        }
+    }
+    return $memo[$folderRel] = $out;
+}
+
+/** The description and notes under a Flat folder's label or divider (nothing when it has neither). */
+function flat_extras_html($folderRel, $class = 'group-extra') {
+    $o = flat_folder_own($folderRel);
+    if ($o['desc'] === '' && $o['notes'] === '') return '';
+    return '<div class="' . $class . '">' . ($o['desc'] !== '' ? '<p class="gd-desc">' . htmlspecialchars($o['desc'], ENT_QUOTES, 'UTF-8') . '</p>' : '') . ($o['notes'] !== '' ? '<div class="gd-notes">' . $o['notes'] . '</div>' : '') . '</div>';
+}
+
+/** A label that copies a link to its own place when pressed (Flat with folder names): the folder's name, with a small link icon that shows
+ *  on hover. $anchorId is the element's id on the page; the script turns the press into a copied address and a brief "Link copied". */
+function flat_label_button($anchorId, $textHtml, $title) {
+    return '<button type="button" class="label-copy" data-anchor="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '" title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '"><span class="lc-t">' . $textHtml . '</span></button>';
+}
+
+/** The divider row inside a Flat box for a folder below it: its parent folders in muted text, then its own name, on one line, with the path
+ *  measured from the box ($boxKey, the top folder). $sub is the folder's path from the gallery root. */
+function flat_divider_html($boxKey, $sub, $boxSlug) {
+    $dir = $GLOBALS['dir'];
+    $rel = array_values(array_filter(explode('/', substr($sub, strlen($boxKey) + 1)), 'strlen'));
+    if (!$rel) return '';
+    $name = array_pop($rel);
+    $meta = folder_display_meta($dir, $sub);
+    $label = $meta['label'] !== '' ? $meta['label'] : $name;
+    $path = '';
+    foreach ($rel as $p) $path .= htmlspecialchars($p, ENT_QUOTES, 'UTF-8') . ' &rsaquo; ';
+    $id = 'group-' . $boxSlug . '-' . slugify(implode('-', explode('/', substr($sub, strlen($boxKey) + 1))));
+    $own = flat_folder_own($sub);
+    return '<div class="group-divider" id="' . htmlspecialchars($id, ENT_QUOTES, 'UTF-8') . '">'
+        . flat_label_button($id, ($path !== '' ? '<span class="gd-path">' . $path . '</span>' : '') . '<span class="gd-name">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>', 'Copy a link to ' . $label)
+        . ($own['dates'] !== '' ? '<span class="gd-dates">' . htmlspecialchars($own['dates'], ENT_QUOTES, 'UTF-8') . '</span>' : '') . '</div>' . flat_extras_html($sub);
+}
+
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
@@ -18818,7 +19053,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // advance by the group's full member count regardless, to stay
         // in sync with $files — the global flat list every other
         // rendered card's lightbox index is drawn from.
-        if (isset($folderGroupKeys[$key]) && FOLDER_DISPLAY_MODE === 'overview') {
+        if (isset($folderGroupKeys[$key]) && !folder_style_flat()) {
             $label = $groupLabels[$key] ?? $key;
             $coverStatus = $groupStatus[$key] ?? '';
             $html .= render_folder_cover_card($folderLinkPrefix . $key, $label, $groupFiles, $folderCovers[$key] ?? null, $key, $folderMeta[$key] ?? null, $coverStatus, status_accent_color($coverStatus, $groupColors[$key] ?? null));
@@ -18826,8 +19061,20 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
             continue;
         }
 
-        $status = $groupStatus[$key] ?? '';
-        $accentColor = status_accent_color($status, $groupColors[$key] ?? null);
+        // Flat without folder names: the folder's photos are part of the page's one grid, no box and no label.
+        $isFlatFolder = isset($folderGroupKeys[$key]) && folder_style_flat();
+        if ($isFlatFolder && !flat_names_on()) {
+            foreach ($groupFiles as $file) {
+                $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
+                $flatIndex++;
+            }
+            continue;
+        }
+
+        $flatPath = $folderLinkPrefix . $key;   // (the folder's path from the gallery root; on a folder's own page the keys are its children's names)
+        $flatOwn = $isFlatFolder ? flat_folder_own($flatPath) : null;
+        $status = $groupStatus[$key] ?? ($flatOwn['status'] ?? '');
+        $accentColor = status_accent_color($status, $groupColors[$key] ?? ($flatOwn['color'] ?? null));
         // An auto-detected single (one file, no explicit {group:} naming
         // it) never gets its own box. An explicitly named group always
         // does, even with just one photo — that's the point of naming
@@ -18836,7 +19083,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // part of one uninterrupted run — no box ever lands in the
         // middle of it to fragment the grid.
         $slug = slugify($key);
-        if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key])) {
+        if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key]) && !$isFlatFolder) {   // (a folder shown with its name gets its box even for one photo)
             $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor, 'group-' . $slug, $videoDurations[$groupFiles[0]] ?? null, $itemsData[$groupFiles[0]] ?? null);
             $flatIndex++;
             continue;
@@ -18858,12 +19105,23 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         $viewsHidden = (view_counts_shown() && ($groupTotal > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';
 
         $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
-        $html .= '<h2 class="group-label"' . $labelStyle . '>' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
+        $labelText = $isFlatFolder
+            ? flat_label_button('group-' . $slug, htmlspecialchars($label, ENT_QUOTES, 'UTF-8'), 'Copy a link to ' . $label)
+            : htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
+        $html .= '<h2 class="group-label"' . $labelStyle . '>' . $labelText
+                . ($isFlatFolder && $flatOwn['dates'] !== '' ? ' <span class="gd-dates">' . htmlspecialchars($flatOwn['dates'], ENT_QUOTES, 'UTF-8') . '</span>' : '')
                 . ' <span class="group-views' . $viewsHidden . '" data-group="' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">&middot; '
                 . number_format($groupTotal) . ' view' . ($groupTotal === 1 ? '' : 's') . '</span> '
-                . render_permalink_button('group-' . $slug) . '</h2>';
+                . ($isFlatFolder ? '' : render_permalink_button('group-' . $slug)) . '</h2>';
+        if ($isFlatFolder) $html .= flat_extras_html($flatPath, 'group-extra box-extra');
         $html .= '<div class="group-grid">';
+        $prevSub = $flatPath;
         foreach ($groupFiles as $file) {
+            if ($isFlatFolder) {
+                // A divider each time the photos move to another folder inside this box (the box's own photos come first and need none).
+                $sub = dirname($file);
+                if ($sub !== $prevSub) { $prevSub = $sub; if ($sub !== $flatPath) $html .= flat_divider_html($flatPath, $sub, $slug); }
+            }
             $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
             $flatIndex++;
         }
@@ -19052,7 +19310,7 @@ function render_about_page() {
   <h2>Careful by default</h2>
   <ul>
     <li>Writes only its own small files (thumbnails, settings, captions) and never touches your photos</li>
-    <li>Locations, maps, video, subfolders, share links and passwords stay off until you turn them on, and the admin says what each one publishes</li>
+    <li>Locations, maps, video, share links and passwords stay off until you turn them on (folders show as albums from the start, as cover cards or flattened into one page), and the admin says what each one publishes</li>
     <li>Private items are removed outright for anyone without the password, and the sign-in box is built so browsers don't offer to save it</li>
     <li>A settings file that cannot be read hides its folder instead of opening it, and every save swaps in a whole file, so nothing is seen half-done</li>
     <li>It contacts no other site on its own, except the optional country file; a map, once someone opens one, loads its code and tiles from a CDN and OpenStreetMap</li>
@@ -19092,7 +19350,7 @@ foreach ($folderGroupKeys as $folderKey => $_true) {
         $folderCovers[$folderKey] = $m['cover'];
     }
     $folderMeta[$folderKey] = ['description' => $m['description'], 'dates' => $m['dates']];
-    if (FOLDER_DISPLAY_MODE === 'overview') {
+    if (!folder_style_flat()) {
         $folderMentionLinks[$folderKey] = '?folder=' . rawurlencode($folderKey);
     }
 }
@@ -19810,6 +20068,23 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .card:hover img {
     transform: scale(1.05);
   }
+
+  /* Flat with folder names: the label and the divider are buttons that copy a link to themselves. */
+  .label-copy { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; }
+  .label-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  @media (hover: hover) { .label-copy:hover .lc-t, .label-copy:focus-visible .lc-t { text-decoration: underline dotted; text-underline-offset: 5px; } }
+  .label-copy.copied .lc-t { color: #aab2ff; }
+  .group-divider { grid-column: 1 / -1; display: flex; align-items: baseline; padding: 12px 2px 2px; margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 0.95rem; scroll-margin-top: 16px; }
+  .group-divider:first-child { border-top: 0; margin-top: 0; }
+  .group-divider:target { animation: item-flash 2s ease-out; }
+  .group-divider .gd-path { color: var(--muted); font-weight: 400; }
+  .group-divider .gd-name { font-weight: 700; }
+  .gd-dates { margin-left: 10px; font-size: 0.78rem; font-weight: 400; color: var(--muted); letter-spacing: 0; text-transform: none; }
+  .group-extra { grid-column: 1 / -1; margin: 0 0 6px; }
+  .group-extra.box-extra { margin: 0 0 10px; }
+  .gd-desc { margin: 2px 0 6px; font-size: 0.85rem; color: var(--muted); }
+  .gd-notes { margin: 0 0 8px; padding: 8px 12px; border-left: 3px solid var(--accent); border-radius: 6px; background: rgba(255,255,255,0.04); font-size: 0.88rem; }
+  .gd-notes p { margin: 0 0 6px; } .gd-notes p:last-child { margin-bottom: 0; }
   <?= video_tile_css() ?>
   .card:hover .tile-video { transform: scale(1.05); }
   .card.sold img, .card.sold .tile-video { filter: grayscale(1) brightness(0.6); }
@@ -20339,7 +20614,14 @@ if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)
   <?php if ($headerMeta['dates'] !== ''): ?>
     <p class="folder-dates"><?= htmlspecialchars($headerMeta['dates']) ?></p>
   <?php endif; ?>
-  <p><?= htmlspecialchars(media_count_label($currentFolderPath !== null ? $currentFolderFiles : $files), ENT_QUOTES, 'UTF-8') ?><?php if ($viewCount > 0 && view_counts_shown()): ?> &middot; <span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
+  <?php // Flat, for the owner: how many folders the photos below come from (so a flat grid never hides that there are folders)
+  $flatFolderCount = 0;
+  if (is_admin_browser() && AUTO_GROUP_BY_FOLDER && folder_style_flat()) {
+      $flatDirs = [];
+      foreach ($currentFolderPath !== null ? $currentFolderFiles : $files as $ff) { $fd = dirname($ff); if ($fd !== '.' && $fd !== $currentFolderPath) $flatDirs[$fd] = true; }
+      $flatFolderCount = count($flatDirs);
+  } ?>
+  <p><?= $flatFolderCount > 0 ? number_format($flatFolderCount) . ' folder' . ($flatFolderCount === 1 ? '' : 's') . ' &middot; ' : '' ?><?= htmlspecialchars(media_count_label($currentFolderPath !== null ? $currentFolderFiles : $files), ENT_QUOTES, 'UTF-8') ?><?php if ($viewCount > 0 && view_counts_shown()): ?> &middot; <span class="page-visits"><?= number_format($viewCount) ?> visit<?= $viewCount === 1 ? '' : 's' ?></span><?php endif; ?><?php if ($lastUpdatedMtime > 0): ?> &middot; Last updated <?= htmlspecialchars(date('F j, Y', $lastUpdatedMtime)) ?><?php endif; ?></p>
 </header>
 <main id="content">
 
@@ -20429,9 +20711,7 @@ if ($currentFolderPath !== null) {
     // directly here is a flat card, and the same logic repeats on that
     // subfolder's own page — to any depth. 'inline' mode never reaches
     // a cover card, so a folder's page just shows everything beneath it.
-    $level = FOLDER_DISPLAY_MODE === 'overview'
-        ? split_folder_level($folderFiles, $folderPrefix)
-        : ['folders' => [], 'loose' => $folderFiles];
+    $level = split_folder_level($folderFiles, $folderPrefix);   // (Flat shows the same folders, in one grid or in boxes, instead of as cards)
 
     $groups = [];
     $folderGroupKeys = [];
@@ -20576,7 +20856,7 @@ if ($currentFolderPath !== null) {
 // A page of nothing but a few folder cards gets bigger cards on a wide screen (two folders shouldn't be two small tiles
 // in a big empty page). The map buttons above them use the same width, so they line up with the first card's corner.
 // Anything else, and every phone, keeps the usual grid.
-$coverCount = FOLDER_DISPLAY_MODE === 'overview' ? count($folderGroupKeys) : 0;
+$coverCount = !folder_style_flat() ? count($folderGroupKeys) : 0;
 $fewCovers = ($coverCount >= 1 && $coverCount <= 6 && count($groups) === $coverCount) ? ' covers-' . $coverCount : '';
 $GLOBALS['__big_covers'] = $fewCovers !== '';
 // A page with fewer than ten things in its grid (folder cards, photos and videos together) shows one per row on a phone: a few big pictures read better than a few small ones. Ten or more keep the usual grid.
@@ -20594,10 +20874,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // The sort button: for the photos shown at this level (the folder's own, or all of them when folders are shown inline), what
   // there is to put first, and the order in force here. Hidden when there is nothing to put in order.
   $sortScope = array_values(array_filter($files, function ($f) use ($currentFolderPath) {
-      if (FOLDER_DISPLAY_MODE !== 'overview' || !AUTO_GROUP_BY_FOLDER) return true;
+      if (folder_style_flat() || !AUTO_GROUP_BY_FOLDER) return true;
       return ($currentFolderPath === null ? '' : $currentFolderPath) === (strpos($f, '/') === false ? '' : dirname($f));
   }));
-  $notesLayOut = !AUTO_GROUP_BY_FOLDER && !empty($mdFiles) && notes_place_photos($mdContents, $groups, $explicitGroups, $positionalClusters);   // (a notes file that places photos sets their order; one that is only words does not)
+  $notesLayOut = (!AUTO_GROUP_BY_FOLDER || !$folderGroupKeys) && !empty($mdFiles) && notes_place_photos($mdContents, $groups, $explicitGroups, $positionalClusters);   // (a notes file that places photos sets their order; one that is only words does not)
   $sortShown = SHOW_SORT_BUTTON && count($sortScope) >= 2 && !$notesLayOut;
   $sortHasVideo = false; $sortHasLocated = false; $sortHasPrivate = false;
   if ($sortShown) {
@@ -22392,6 +22672,22 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       ? window.location.origin + window.location.pathname + folderQuery() + link.hash
       : window.location.origin + window.location.pathname + link.getAttribute('href');
     copyToClipboard(cleanUrl).then(() => flashCopied(link));
+  });
+
+  // A Flat folder label or divider: pressing the name copies a link to that place and the name says so for a moment.
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.label-copy');
+    if (!b) return;
+    const f = new URLSearchParams(window.location.search).get('folder');
+    const id = b.getAttribute('data-anchor');
+    const url = window.location.origin + window.location.pathname + (f ? '?folder=' + encodeURIComponent(f) : '') + '#' + id;
+    copyToClipboard(url).then(() => {
+      const t = b.querySelector('.lc-t');
+      if (!t || b.classList.contains('copied')) return;
+      const keep = t.innerHTML; t.textContent = 'Link copied'; b.classList.add('copied');
+      setTimeout(() => { t.innerHTML = keep; b.classList.remove('copied'); }, 1400);
+    });
+    try { history.replaceState(null, '', '#' + id); } catch (x) {}
   });
 
   // Copies a "?photo=" deep link to the photo currently open in the lightbox.

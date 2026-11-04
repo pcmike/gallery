@@ -93,6 +93,20 @@ function ui_segmented($name, $options, $current, $label = '') {
     return $out . '</div>';
 }
 
+/** Two choices for something a folder can set for itself while Settings has an answer too: the choice that is what Settings says is drawn
+ *  outlined and, picked, means "follow Settings" (its radio's value is ""); the other, picked, is the folder's own and is drawn filled.
+ *  $options: [value => label], two of them; $current: the folder's own value, or "" for none. */
+function ui_segmented_site($name, $options, $siteValue, $current, $label = '') {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $out = '<div class="seg seg-site" role="radiogroup" aria-label="' . $esc($label) . '">';
+    foreach ($options as $value => $text) {
+        $isSite = (string) $value === (string) $siteValue;
+        $checked = $isSite ? ($current === '' || (string) $current === (string) $value) : (string) $current === (string) $value;
+        $out .= '<label' . ($isSite ? ' class="site" title="What Settings says"' : '') . '><input type="radio" name="' . $esc($name) . '" value="' . $esc($isSite ? '' : $value) . '"' . ($checked ? ' checked' : '') . '><span>' . $esc($text) . '</span></label>';
+    }
+    return $out . '</div>';
+}
+
 /** A choice of three or more (or with long labels): a button showing the current choice, which opens a small dark list with a tick on the
  *  chosen row. The choices are real radio buttons inside it (so the page's scripts that listen to radios work unchanged); the menu code
  *  only opens, closes and shows the label. No browser dropdown anywhere. */
@@ -140,6 +154,26 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <label>Position <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="number" name="sort_order" aria-label="Position" min="-99999" max="99999" step="1" value="<?= isset($itemsHere['sortOrder']) && is_int($itemsHere['sortOrder']) ? (int) $itemsHere['sortOrder'] : '' ?>">
           <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
+        </div>
+        <?php endif; ?>
+        <?php if (!$isRoot && AUTO_GROUP_BY_FOLDER):
+          $siteFlat = in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
+          $ownStyle = (string) ($itemsHere['subfolderStyle'] ?? ''); $ownNames = $itemsHere['flatNames'] ?? null; $ownNotes = $itemsHere['flatNotes'] ?? null;
+          $nowFlat = $ownStyle !== '' ? $ownStyle === 'flat' : $siteFlat;
+          $nowNames = is_bool($ownNames) ? $ownNames : FOLDER_FLAT_NAMES; ?>
+        <div class="field wide flat-choices" data-site-flat="<?= $siteFlat ? '1' : '0' ?>" data-site-names="<?= FOLDER_FLAT_NAMES ? '1' : '0' ?>">
+          <div class="flat-choice">
+            <label>Folders under this one appear as <span class="rowstate" role="status" aria-live="polite"></span></label>
+            <?= ui_segmented_site('subfolder_style', ['overview' => 'Cards', 'flat' => 'Flat'], $siteFlat ? 'flat' : 'overview', $ownStyle, 'Folders under this one appear as') ?>
+          </div>
+          <div class="flat-choice" data-flat-row="names"<?= $nowFlat ? '' : ' hidden' ?>>
+            <label>Show folder names <span class="rowstate" role="status" aria-live="polite"></span></label>
+            <?= ui_segmented_site('flat_names', ['0' => 'Off', '1' => 'On'], FOLDER_FLAT_NAMES ? '1' : '0', is_bool($ownNames) ? ($ownNames ? '1' : '0') : '', 'Show folder names') ?>
+          </div>
+          <div class="flat-choice" data-flat-row="notes"<?= $nowFlat && $nowNames ? '' : ' hidden' ?>>
+            <label>Show folder notes <span class="rowstate" role="status" aria-live="polite"></span></label>
+            <?= ui_segmented_site('flat_notes', ['0' => 'Off', '1' => 'On'], FOLDER_FLAT_NOTES ? '1' : '0', is_bool($ownNotes) ? ($ownNotes ? '1' : '0') : '', 'Show folder notes') ?>
+          </div>
         </div>
         <?php endif; ?>
         <?php $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : []; $psSel = function ($key) use ($ps) { return isset($ps[$key]) && is_bool($ps[$key]) ? ($ps[$key] ? 'on' : 'off') : ''; }; ?>
@@ -206,8 +240,12 @@ function gallery_setting_definitions() {
              'risk' => 'Every photo in every subfolder becomes visible.',
              'offwarn' => 'Subfolders and links to them disappear. Nothing is deleted.'],
             ['name' => 'FOLDER_DISPLAY_MODE', 'type' => 'enum', 'label' => 'Folder style',
-             'options' => ['overview' => 'Cover cards', 'inline' => 'Inline'],
-             'help' => 'Cover cards open each folder; inline shows all on one page. Only used when subfolders are shown.'],
+             'options' => ['overview' => 'Cover cards', 'flat' => 'Flat'],
+             'help' => 'Cover cards open each folder. Flat puts every photo from the folders on one page, folder by folder.'],
+            ['name' => 'FOLDER_FLAT_NAMES', 'type' => 'bool', 'label' => 'Show folder names',
+             'help' => 'Only used in Flat. Each folder directly under a page gets a box with its name, and folders inside it a divider, so people can see how the photos are organised.', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
+            ['name' => 'FOLDER_FLAT_NOTES', 'type' => 'bool', 'label' => 'Show folder notes',
+             'help' => 'Only used in Flat, with folder names on. Each folder\'s notes text shows under its name.', 'requires' => 'FOLDER_FLAT_NAMES', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
              'help' => 'alpha_01.jpg and alpha_02.jpg become one group. Good for listings; on a camera roll it can merge unrelated photos.'],
             ['name' => 'PHOTO_SORT_ORDER', 'type' => 'enum', 'label' => 'Photo order',

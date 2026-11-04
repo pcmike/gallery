@@ -307,6 +307,64 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     return $html;
 }
 
+/** What a Flat folder carries besides its name: the description typed in Folder settings, its dates, and (when Show folder notes is on)
+ *  its notes text; and from its own notes file the {color:} and {sold}/{reserved} that style its box (the page's own notes, which name
+ *  the folder, win over these). Read once per folder per request. */
+function flat_folder_own($folderRel) {
+    static $memo = [];
+    if (isset($memo[$folderRel])) return $memo[$folderRel];
+    $dir = $GLOBALS['dir'];
+    $meta = folder_display_meta($dir, $folderRel);
+    $out = ['desc' => trim($meta['description']), 'dates' => trim($meta['dates']), 'notes' => '', 'color' => null, 'status' => ''];
+    $md = scan_gallery_md_files(resolve_real_path($dir, $folderRel));
+    $raw = implode("\n\n", $md['contents']);
+    if ($raw !== '') {
+        if (preg_match('/\{color:\s*([^}]+)\}/i', $raw, $m) && preg_match('/^(#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20}|rgba?\([0-9 ,.%]+\))$/', trim($m[1]))) $out['color'] = trim($m[1]);
+        if (preg_match('/\{(sold|reserved)\}/i', $raw, $m)) $out['status'] = strtolower($m[1]);
+        if (flat_notes_on()) {
+            $paras = [];
+            foreach (preg_split('/\n\s*\n/', $raw) as $p) {
+                $p = trim(preg_replace('/\{[a-z]+(:[^}]*)?\}/i', '', $p));   // (directives style photos; they are not words)
+                $p = trim(preg_replace('/^#{1,6}\s*/m', '', $p));
+                if ($p !== '') $paras[] = '<p>' . nl2br(inline_markdown($p), false) . '</p>';
+            }
+            $out['notes'] = implode('', $paras);
+        }
+    }
+    return $memo[$folderRel] = $out;
+}
+
+/** The description and notes under a Flat folder's label or divider (nothing when it has neither). */
+function flat_extras_html($folderRel, $class = 'group-extra') {
+    $o = flat_folder_own($folderRel);
+    if ($o['desc'] === '' && $o['notes'] === '') return '';
+    return '<div class="' . $class . '">' . ($o['desc'] !== '' ? '<p class="gd-desc">' . htmlspecialchars($o['desc'], ENT_QUOTES, 'UTF-8') . '</p>' : '') . ($o['notes'] !== '' ? '<div class="gd-notes">' . $o['notes'] . '</div>' : '') . '</div>';
+}
+
+/** A label that copies a link to its own place when pressed (Flat with folder names): the folder's name, with a small link icon that shows
+ *  on hover. $anchorId is the element's id on the page; the script turns the press into a copied address and a brief "Link copied". */
+function flat_label_button($anchorId, $textHtml, $title) {
+    return '<button type="button" class="label-copy" data-anchor="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '" title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '"><span class="lc-t">' . $textHtml . '</span></button>';
+}
+
+/** The divider row inside a Flat box for a folder below it: its parent folders in muted text, then its own name, on one line, with the path
+ *  measured from the box ($boxKey, the top folder). $sub is the folder's path from the gallery root. */
+function flat_divider_html($boxKey, $sub, $boxSlug) {
+    $dir = $GLOBALS['dir'];
+    $rel = array_values(array_filter(explode('/', substr($sub, strlen($boxKey) + 1)), 'strlen'));
+    if (!$rel) return '';
+    $name = array_pop($rel);
+    $meta = folder_display_meta($dir, $sub);
+    $label = $meta['label'] !== '' ? $meta['label'] : $name;
+    $path = '';
+    foreach ($rel as $p) $path .= htmlspecialchars($p, ENT_QUOTES, 'UTF-8') . ' &rsaquo; ';
+    $id = 'group-' . $boxSlug . '-' . slugify(implode('-', explode('/', substr($sub, strlen($boxKey) + 1))));
+    $own = flat_folder_own($sub);
+    return '<div class="group-divider" id="' . htmlspecialchars($id, ENT_QUOTES, 'UTF-8') . '">'
+        . flat_label_button($id, ($path !== '' ? '<span class="gd-path">' . $path . '</span>' : '') . '<span class="gd-name">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>', 'Copy a link to ' . $label)
+        . ($own['dates'] !== '' ? '<span class="gd-dates">' . htmlspecialchars($own['dates'], ENT_QUOTES, 'UTF-8') . '</span>' : '') . '</div>' . flat_extras_html($sub);
+}
+
 /** Builds the whole gallery section: boxed groups (with optional per-group
  *  accent color, sold/reserved ribbon, and a live-updatable total view
  *  count) + a plain row for standalone singles. */
@@ -323,7 +381,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // advance by the group's full member count regardless, to stay
         // in sync with $files — the global flat list every other
         // rendered card's lightbox index is drawn from.
-        if (isset($folderGroupKeys[$key]) && FOLDER_DISPLAY_MODE === 'overview') {
+        if (isset($folderGroupKeys[$key]) && !folder_style_flat()) {
             $label = $groupLabels[$key] ?? $key;
             $coverStatus = $groupStatus[$key] ?? '';
             $html .= render_folder_cover_card($folderLinkPrefix . $key, $label, $groupFiles, $folderCovers[$key] ?? null, $key, $folderMeta[$key] ?? null, $coverStatus, status_accent_color($coverStatus, $groupColors[$key] ?? null));
@@ -331,8 +389,20 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
             continue;
         }
 
-        $status = $groupStatus[$key] ?? '';
-        $accentColor = status_accent_color($status, $groupColors[$key] ?? null);
+        // Flat without folder names: the folder's photos are part of the page's one grid, no box and no label.
+        $isFlatFolder = isset($folderGroupKeys[$key]) && folder_style_flat();
+        if ($isFlatFolder && !flat_names_on()) {
+            foreach ($groupFiles as $file) {
+                $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
+                $flatIndex++;
+            }
+            continue;
+        }
+
+        $flatPath = $folderLinkPrefix . $key;   // (the folder's path from the gallery root; on a folder's own page the keys are its children's names)
+        $flatOwn = $isFlatFolder ? flat_folder_own($flatPath) : null;
+        $status = $groupStatus[$key] ?? ($flatOwn['status'] ?? '');
+        $accentColor = status_accent_color($status, $groupColors[$key] ?? ($flatOwn['color'] ?? null));
         // An auto-detected single (one file, no explicit {group:} naming
         // it) never gets its own box. An explicitly named group always
         // does, even with just one photo — that's the point of naming
@@ -341,7 +411,7 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // part of one uninterrupted run — no box ever lands in the
         // middle of it to fragment the grid.
         $slug = slugify($key);
-        if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key])) {
+        if (count($groupFiles) === 1 && !isset($explicitGroupKeys[$key]) && !$isFlatFolder) {   // (a folder shown with its name gets its box even for one photo)
             $html .= render_card($groupFiles[0], $flatIndex, $photoViews, $status, $accentColor, 'group-' . $slug, $videoDurations[$groupFiles[0]] ?? null, $itemsData[$groupFiles[0]] ?? null);
             $flatIndex++;
             continue;
@@ -363,12 +433,23 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         $viewsHidden = (view_counts_shown() && ($groupTotal > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';
 
         $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
-        $html .= '<h2 class="group-label"' . $labelStyle . '>' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
+        $labelText = $isFlatFolder
+            ? flat_label_button('group-' . $slug, htmlspecialchars($label, ENT_QUOTES, 'UTF-8'), 'Copy a link to ' . $label)
+            : htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
+        $html .= '<h2 class="group-label"' . $labelStyle . '>' . $labelText
+                . ($isFlatFolder && $flatOwn['dates'] !== '' ? ' <span class="gd-dates">' . htmlspecialchars($flatOwn['dates'], ENT_QUOTES, 'UTF-8') . '</span>' : '')
                 . ' <span class="group-views' . $viewsHidden . '" data-group="' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">&middot; '
                 . number_format($groupTotal) . ' view' . ($groupTotal === 1 ? '' : 's') . '</span> '
-                . render_permalink_button('group-' . $slug) . '</h2>';
+                . ($isFlatFolder ? '' : render_permalink_button('group-' . $slug)) . '</h2>';
+        if ($isFlatFolder) $html .= flat_extras_html($flatPath, 'group-extra box-extra');
         $html .= '<div class="group-grid">';
+        $prevSub = $flatPath;
         foreach ($groupFiles as $file) {
+            if ($isFlatFolder) {
+                // A divider each time the photos move to another folder inside this box (the box's own photos come first and need none).
+                $sub = dirname($file);
+                if ($sub !== $prevSub) { $prevSub = $sub; if ($sub !== $flatPath) $html .= flat_divider_html($flatPath, $sub, $slug); }
+            }
             $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
             $flatIndex++;
         }

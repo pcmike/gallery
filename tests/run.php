@@ -1441,7 +1441,7 @@ check('[admin nav] a gallery with no subfolders still lists Root in the Folders 
 // first run in the admin: what the front page tells the owner is also in the Health check, with names and a button
 $fxHu = new_fixture_dir('headsup'); make_jpeg("$fxHu/a.jpg", 40, 40, 1, 2, 3); mkdir("$fxHu/PNGs"); make_jpeg("$fxHu/PNGs/p1.jpg", 40, 40, 3, 2, 1); make_jpeg("$fxHu/PNGs/p2.jpg", 40, 40, 5, 2, 1);
 file_put_contents("$fxHu/clip.mp4", 'x'); file_put_contents("$fxHu/notes.md", "no marker here\n");
-write_patched_index("$fxHu/index.php", $indexContents, []);
+write_patched_index("$fxHu/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'false']);
 $portHu = find_free_port(); start_server($fxHu, $portHu);
 $huPublic = http_get("http://127.0.0.1:$portHu/")[1];   // (no admin password yet: the notices are shown to whoever opens the page, so they name nothing)
 check('[heads-up] the front page notices speak in the Settings\' own words (Show subfolders, Show videos) and name no constant, no folder and no file', str_contains($huPublic, 'turn on Show subfolders (Settings → Folders and photos)') && str_contains($huPublic, 'because Show videos is off') && !str_contains($huPublic, 'AUTO_GROUP_BY_FOLDER') && !str_contains($huPublic, 'ENABLE_VIDEO') && !str_contains($huPublic, 'PNGs') && !str_contains($huPublic, 'notes.md'));
@@ -2696,7 +2696,7 @@ mkdir("$fxSubNotice/TopSecretTrip/Day1", 0777, true);
 make_jpeg("$fxSubNotice/loose.jpg", 60, 60, 10, 10, 10);
 make_jpeg("$fxSubNotice/TopSecretTrip/a.jpg", 60, 60, 20, 20, 20);
 make_jpeg("$fxSubNotice/TopSecretTrip/Day1/b.jpg", 60, 60, 30, 30, 30);
-write_patched_index("$fxSubNotice/index.php", $indexContents, []);
+write_patched_index("$fxSubNotice/index.php", $indexContents, ['AUTO_GROUP_BY_FOLDER' => 'false']);
 $portSubNotice = find_free_port();
 start_server($fxSubNotice, $portSubNotice);
 [, $subNoticeBody] = http_get("http://127.0.0.1:$portSubNotice/");
@@ -3137,13 +3137,13 @@ check('[settings file] replacing index.php with a fresh copy (an update) keeps e
 // The settings file beats an edit made in index.php itself: someone changed the
 // defaults in index.php (video off, folders off here would be the defaults, so
 // flip the other way), and the file says otherwise.
-$edited = str_replace(["gallery_setting('ENABLE_VIDEO', false)", "gallery_setting('AUTO_GROUP_BY_FOLDER', false)"], ["gallery_setting('ENABLE_VIDEO', true)", "gallery_setting('AUTO_GROUP_BY_FOLDER', true)"], $indexContents, $editedCount);
-file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => false, 'AUTO_GROUP_BY_FOLDER' => false]));
+$edited = str_replace(["gallery_setting('ENABLE_VIDEO', false)", "gallery_setting('AUTO_GROUP_BY_FOLDER', true)"], ["gallery_setting('ENABLE_VIDEO', true)", "gallery_setting('AUTO_GROUP_BY_FOLDER', false)"], $indexContents, $editedCount);
+file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => false, 'AUTO_GROUP_BY_FOLDER' => true]));
 file_put_contents("$fxCfg/index.php", $edited);
 $hEdit = $cfgHome();
-check('[settings file] it wins over a value edited into index.php (file says off, index.php says on: off)', $editedCount === 2 && !str_contains($hEdit, 'clip.mp4') && !str_contains($hEdit, 'id="group-sub"'));
+check('[settings file] it wins over a value edited into index.php (the file says folders on and video off; index.php says folders off and video on: the file wins)', $editedCount === 2 && !str_contains($hEdit, 'clip.mp4') && str_contains($hEdit, 'id="group-sub"'));
 unlink("$fxCfg/.gallery-config.php");
-check('[settings file] ...and without the file, the edited index.php applies as before (on)', str_contains($cfgHome(), 'alt="clip.mp4"'));
+check('[settings file] ...and without the file, the edited index.php applies as before (video on)', str_contains($cfgHome(), 'alt="clip.mp4"'));
 file_put_contents("$fxCfg/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ADMIN_PASSWORD' => 'cfg-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true]));
 copy(__DIR__ . '/../index.php', "$fxCfg/index.php");
 // Anything wrong in the file is reported, never fatal, and the rest still applies.
@@ -3451,7 +3451,7 @@ write_data_file("$fxSite/.gallery-items.php", ['items' => [
     'clip.mp4' => ['caption' => 'Video caption', 'restriction' => 'private'],
 ], 'groups' => [], 'displayName' => 'Kept title', 'description' => 'Kept description', 'locationEnabled' => true]);
 write_data_file("$fxSite/Sub/.gallery-items.php", ['items' => ['deep.jpg' => ['caption' => 'Deep caption', 'location' => ['lat' => 1.5, 'lng' => 2.5, 'label' => '']]], 'groups' => [], 'description' => 'Sub description', 'locationEnabled' => true]);
-copy(__DIR__ . '/../index.php', "$fxSite/index.php");
+file_put_contents("$fxSite/index.php", str_replace("gallery_setting('AUTO_GROUP_BY_FOLDER', true)", "gallery_setting('AUTO_GROUP_BY_FOLDER', false)", $indexContents));   // (this fixture walks turning subfolders on, so its default is off, as for an owner who edited it)
 $siteCfg = "$fxSite/.gallery-config.php";
 $siteHead = $cfgGuard;
 file_put_contents($siteCfg, cfg_text(['ADMIN_PASSWORD' => 'first-admin-pw-123', 'TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true]));
@@ -3479,14 +3479,14 @@ $siteSnap = function () use ($fxSite) {
 $snapBefore = $siteSnap();
 // A real save: turn video, folders and the map on, thumbnails off, change two enums and the number.
 [, $r] = user_submit("$baseSite/?admin", $sAdmin, 'value="save_site_settings"', [
-    'set_ENABLE_VIDEO' => '1', 'set_AUTO_GROUP_BY_FOLDER' => '1', 'set_ENABLE_THUMBNAIL_CACHE' => '0', 'set_FOLDER_DISPLAY_MODE' => 'inline',
+    'set_ENABLE_VIDEO' => '1', 'set_AUTO_GROUP_BY_FOLDER' => '1', 'set_ENABLE_THUMBNAIL_CACHE' => '0', 'set_FOLDER_DISPLAY_MODE' => 'flat', 'set_FOLDER_FLAT_NAMES' => '1',
     'set_PHOTO_SORT_ORDER' => 'filename', 'set_MAP_CLUSTER_RADIUS_MILES' => '25',
 ], $siteHdrs);
 check('[site settings] a save redirects back and then shows a confirmation that says nothing else was touched', str_contains($r, 'Settings saved') && str_contains($r, 'were not touched') && str_contains($r, 'class="flash ok"'));
 $snapAfterSave = $siteSnap();   // before any public page is viewed (a view is counted, legitimately)
 $written = (string) file_get_contents($siteCfg);
 $loadedCfg = cfg_plain(cfg_read($siteCfg), ['ADMIN_PASSWORD' => 'first-admin-pw-123']);
-$expectedCfg = ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'ENABLE_VIDEO' => true, 'FOLDER_DISPLAY_MODE' => 'inline', 'MAP_CLUSTER_RADIUS_MILES' => 25, 'PHOTO_SORT_ORDER' => 'filename', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true];
+$expectedCfg = ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_THUMBNAIL_CACHE' => false, 'ENABLE_VIDEO' => true, 'FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true, 'MAP_CLUSTER_RADIUS_MILES' => 25, 'PHOTO_SORT_ORDER' => 'filename', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true];
 ksort($loadedCfg);
 check('[site settings] the settings file is the 404 guard plus JSON holding exactly the intended settings, keeping the ones already there', str_starts_with($written, $siteHead) && $loadedCfg === $expectedCfg);
 check('[site settings] the file is private to the web server user (not world-readable), since it holds the passwords', (fileperms($siteCfg) & 0o077) === 0);
@@ -3497,7 +3497,7 @@ check('[site settings] NOTHING ELSE changed: every caption, location, hide flag,
 // Setting something back to its default removes it from the file.
 [, $sAdmin2] = http_get("$baseSite/?admin", $siteHdrs);
 $snapBaseline2 = $siteSnap();
-user_submit("$baseSite/?admin", $sAdmin2, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '0', 'set_AUTO_GROUP_BY_FOLDER' => '0', 'set_ENABLE_THUMBNAIL_CACHE' => '1', 'set_FOLDER_DISPLAY_MODE' => 'overview', 'set_PHOTO_SORT_ORDER' => 'taken', 'set_MAP_CLUSTER_RADIUS_MILES' => '1'], $siteHdrs);
+user_submit("$baseSite/?admin", $sAdmin2, 'value="save_site_settings"', ['set_ENABLE_VIDEO' => '0', 'set_AUTO_GROUP_BY_FOLDER' => '0', 'set_ENABLE_THUMBNAIL_CACHE' => '1', 'set_FOLDER_DISPLAY_MODE' => 'overview', 'set_FOLDER_FLAT_NAMES' => '0', 'set_PHOTO_SORT_ORDER' => 'taken', 'set_MAP_CLUSTER_RADIUS_MILES' => '1'], $siteHdrs);
 $backCfg = cfg_plain(cfg_read($siteCfg), ['ADMIN_PASSWORD' => 'first-admin-pw-123']); ksort($backCfg);
 check('[site settings] putting settings back to their defaults removes them from the file, so later default improvements still reach you', $backCfg == ['ADMIN_PASSWORD' => 'first-admin-pw-123', 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'TRACK_VIEWS' => true]);
 check('[site settings] ...and, again, no data file changed (compared with a baseline taken after the public page was viewed)', $siteSnap() === $snapBaseline2);
@@ -4458,7 +4458,7 @@ $portPlain = find_free_port(); start_server($fxPlain, $portPlain); $basePlain = 
 [, $plain] = http_get("$basePlain/");
 foreach (['/', '/?photo=one.jpg', '/?about', '/?img=one.jpg&size=thumb', '/?track=one.jpg', '/?map', '/?folder=Subfolder', '/?reveal'] as $u) http_get("$basePlain$u");
 $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
-check('[plain] a copy of index.php with no settings changed shows the root photos, and not the ones in the subfolder', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && !str_contains($plain, 'three.jpg') && !str_contains($plain, 'Subfolder'));
+check('[plain] a copy of index.php with no settings changed shows the root photos and the subfolder as a cover card (subfolders are on by default)', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && str_contains($plain, 'Subfolder') && str_contains($plain, '?folder=Subfolder'));
 $newEntries = array_values(array_diff($after, $before));
 $plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
 check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken3.json', 'meta1.php'], true)));
@@ -4466,8 +4466,8 @@ http_get("$basePlain/?admin");
 check('[plain] ...asking for ?admin before any password exists is the one request that writes more: the set-up code file beside index.php (gallery-setup-code.php, a guard line and the code), and nothing else', array_values(array_diff(array_diff(scandir($fxPlain), ['.', '..']), $after)) === ['gallery-setup-code.php']);
 @unlink("$fxPlain/gallery-setup-code.php");
 check('[plain] ...makes no request to any third party (no external host in any src/href except github)', !preg_match('#(src|href)="https?://(?!github\.com|127\.0\.0\.1)#', $plain));
-check('[plain] ...?admin, ?reveal, ?map, ?folder= are all inert (404 / the normal page)', !str_contains(http_get("$basePlain/?admin")[1], 'Gallery Admin') && http_get("$basePlain/?reveal")[0] === 404 && http_get("$basePlain/?folder=Subfolder")[0] === 404 && !str_contains(http_get("$basePlain/?map")[1], 'cdnjs.cloudflare.com'));
-check('[plain] ...and says (in the collapsed notices banner) that a photo in a subfolder is being skipped', str_contains($plain, '1 photo/video was found in subfolders but isn&#039;t shown'));
+check('[plain] ...?admin, ?reveal, ?map, an unknown ?folder= are all inert (404 / the normal page)', !str_contains(http_get("$basePlain/?admin")[1], 'Gallery Admin') && http_get("$basePlain/?reveal")[0] === 404 && http_get("$basePlain/?folder=NoSuchFolder")[0] === 404 && !str_contains(http_get("$basePlain/?map")[1], 'cdnjs.cloudflare.com'));
+check('[plain] ...and so has no notice about photos in subfolders being skipped (none are)', !str_contains($plain, 'found in subfolders'));
 
 if (class_exists('Imagick') && count(Imagick::queryFormats('HEIC')) > 0) {
     foreach (['off' => false, 'on' => true] as $mode => $cache) {
@@ -5522,7 +5522,7 @@ check('[prepare media] the panel is folded by default, with a one-line summary, 
 check('[folder settings] the location switch\'s "(locations are off for the whole gallery, in Settings)" has a jump link to Allow photo locations, the two notes under it tell folder-off from gallery-off, and no text names a constant or sends the owner to index.php', str_contains((string) file_get_contents($indexSrc), "(locations are off for the whole gallery, in <a href=\"#site\" onclick=\"return adminGoTo(\\'site\\', \\'setting-ENABLE_PHOTO_LOCATION\\');\">Settings</a>)") && str_contains((string) file_get_contents($indexSrc), 'Locations are off for the whole gallery, so nothing shows on a map yet.') && str_contains((string) file_get_contents($indexSrc), 'Locations are off for this folder, so its map has nothing to show.') && !str_contains((string) file_get_contents($indexSrc), 'is off in index.php') && !str_contains((string) file_get_contents($indexSrc), 'Locations are off here'));
 check('[folder settings] "Prepare media reads the rest" is only said when something is unread or could not be read (and links to the Prepare media panel)', str_contains((string) file_get_contents($indexSrc), '(($s_[\'unread\'] > 0 || $s_[\'unreadable\'] > 0) ? \' <a href="#site" onclick="return adminGoTo(\\\'site\\\', \\\'media-panel\\\');">Prepare media</a> reads the rest.\' : \'\')'));
 check('[buttons] one size for every action button in the admin (no per-place override such as the Health check\'s small Check again)', str_contains($nTab, '.admin-main button.secondary, .admin-main button.primary, .admin-main button.danger, .admin-main button:not([class]), .admin-bar button.secondary { min-height:40px; padding:0 16px; font-size:0.9rem; }') && !str_contains($nTab, '.health-summary .secondary {') && !str_contains($nTab, 'padding:3px 12px; font-size:0.8rem'));
-check('[features] Features is the first entry of the sidebar\'s whole-gallery group and has its own tab; it holds no switch, only state chips and buttons that jump to the setting or open the gallery with "Show me"', preg_match('~<div class="side-label">The whole gallery</div>\s*<a href="#features" data-tab="features" class="side-link">Features(?: <span class="count[^>]*>[^<]*</span>)*</a>~', $nTab) === 1 && preg_match('~<div class="tab-panel" data-tab="features">(.*?)</section>~s', $nTab, $ftm) === 1 && !str_contains($ftm[1], 'type="checkbox"') && str_contains($ftm[1], 'Features you can switch on') && str_contains($ftm[1], 'Things you do on the gallery itself') && substr_count($ftm[1], '?show=') === 4 && str_contains($ftm[1], 'adminGoTo(\'site\', \'setting-AUTO_GROUP_BY_FOLDER\')'));
+check('[features] Features is the first entry of the sidebar\'s whole-gallery group and has its own tab; it holds no switch, only state chips and buttons that jump to the setting or open the gallery with "Show me"', preg_match('~<div class="side-label">The whole gallery</div>\s*<a href="#features" data-tab="features" class="side-link">Features(?: <span class="count[^>]*>[^<]*</span>)*</a>~', $nTab) === 1 && preg_match('~<div class="tab-panel" data-tab="features">(.*?)</section>~s', $nTab, $ftm) === 1 && !str_contains($ftm[1], 'type="checkbox"') && str_contains($ftm[1], 'Features you can switch on') && str_contains($ftm[1], 'Things you do on the gallery itself') && substr_count($ftm[1], '?show=') === 4 && str_contains($ftm[1], 'adminGoTo(\'site\', \'setting-FOLDER_DISPLAY_MODE\')'));
 check('[qr] Save image opens the share sheet only on a device with a touchscreen (a computer\'s Safari can share files too, and there it popped up a sheet of contacts instead of saving): the same guard as the photo download', str_contains((string) file_get_contents($indexSrc), "if (file && (navigator.maxTouchPoints || 0) > 0 && navigator.canShare && navigator.canShare({ files: [file] }))"));
 check('[features] "Show me" goes to the first folder that has photos of its own when none sit at the top level (a gallery of folders has nothing to point at on its front page)', str_contains((string) file_get_contents($indexSrc), '$showAt = substr($f, 0, $i);') && str_contains((string) file_get_contents($indexSrc), '\'?\' . ($showAt !== \'\' ? \'folder=\' . rawurlencode($showAt) . \'&\' : \'\') . \'show=\' . $key'));
 $srcF5 = (string) file_get_contents($indexSrc);
@@ -7686,6 +7686,102 @@ $geCfg(['COUNTRY_LOOKUP' => true, 'COUNTRY_DB_URL' => "http://127.0.0.1:$portGs/
 $geOff2 = $gePost(['action' => 'geo_disable', 'delete' => '1']);
 check('[country] ...and with "also delete the file" it removes the file and its notes and nothing else (a copy someone kept beside them is left alone)', ($geOff2['ok'] ?? null) === true && !is_file("$fxGe/.gallery-geo.php") && !is_file("$fxGe/.gallery-geo-state.php") && is_file("$fxGe/.gallery-geo.php.bak") && is_file("$fxGe/a.jpg") && is_file("$fxGe/index.php"));
 check('[country] its actions need the page\'s security token and an owner', (json_decode(http_post("$baseGe/?admin", ['action' => 'geo_disable', 'delete' => '1'], array_merge($geOwn, ['X-Requested-With: gallery-fetch']))[1], true)['ok'] ?? null) === false && !str_contains(http_post("$baseGe/?admin", ['action' => 'geo_enable'], ['X-Forwarded-For: 203.0.113.9'])[1], '"ok":true'));
+
+/* ======================================================================= *
+ * 2.5.0: subfolders on by default, the Cards / Flat style and what goes with it.
+ * ======================================================================= */
+
+echo "== folders on by default, Flat, folder names and notes, a folder's own style, the owner's line and locks (2.5.0) ==\n";
+
+$fxFl = new_fixture_dir('flat250');
+make_jpeg("$fxFl/loose.jpg", 60, 60, 10, 10, 10);
+foreach (['sub1', 'sub1/deep', 'sub2', '@eaDir', '__MACOSX', '.hidden'] as $flD) mkdir("$fxFl/$flD", 0777, true);
+make_jpeg("$fxFl/sub1/a.jpg", 60, 60, 20, 20, 20); make_jpeg("$fxFl/sub1/dup.jpg", 60, 60, 21, 21, 21);
+make_jpeg("$fxFl/sub1/deep/b.jpg", 60, 60, 30, 30, 30);
+make_jpeg("$fxFl/sub2/c.jpg", 60, 60, 40, 40, 40); make_jpeg("$fxFl/sub2/dup.jpg", 60, 60, 41, 41, 41);
+make_jpeg("$fxFl/@eaDir/skip1.jpg", 60, 60, 50, 50, 50); make_jpeg("$fxFl/__MACOSX/skip2.jpg", 60, 60, 51, 51, 51); make_jpeg("$fxFl/.hidden/skip3.jpg", 60, 60, 52, 52, 52);
+$flItems = ['items' => [], 'groups' => [], 'displayName' => null, 'description' => 'DESC-ONE a short blurb', 'dates' => 'Oct 1-2, 2026', 'sortOrder' => null, 'cover' => null, 'locationEnabled' => false];
+write_data_file("$fxFl/sub1/.gallery-items.php", $flItems);
+file_put_contents("$fxFl/sub1/notes.md", "{gallery}\n\nNOTES-ONE some **words** {color: gold}\n");
+file_put_contents("$fxFl/sub1/deep/notes.md", "{gallery}\n\nNOTES-DEEP more words\n");
+file_put_contents("$fxFl/sub2/notes.md", "{gallery}\n\n{sold}\n");
+copy(__DIR__ . '/../index.php', "$fxFl/index.php");
+$portFl = find_free_port(); start_server($fxFl, $portFl); $baseFl = "http://127.0.0.1:$portFl";
+$flPwHash = password_hash('fl-admin-pw-123', PASSWORD_DEFAULT);   // (a hash, so rewriting the settings file does not change the password the owner's sign-in was made under)
+$flCfg = fn (array $c) => file_put_contents("$fxFl/.gallery-config.php", cfg_text($c + ['ADMIN_PASSWORD' => $flPwHash]));
+$flCfg([]);
+[, , $flLoginH] = http_post("$baseFl/?admin", ['access_code' => 'fl-admin-pw-123'], [], false);
+$flAuth = ['Cookie: ' . extract_cookie_header($flLoginH)];
+$flWrite = function ($path, $data) { write_data_file($path, $data); clearstatcache(); static $n = 0; touch($path, time() + (++$n) * 3); };   // (a distinct modified time each write: a file read is remembered by it)
+$flCards = http_get("$baseFl/")[1];
+check('[2.5.0] with nothing configured, subfolders are on: each is a cover card that opens its own page', str_contains($flCards, '?folder=sub1') && str_contains($flCards, '?folder=sub2') && http_get("$baseFl/?folder=sub1")[0] === 200);
+check('[2.5.0] system and dot folders are never scanned (@eaDir, __MACOSX, .hidden): none of their photos or pages exist', !str_contains($flCards, 'skip') && http_get("$baseFl/?folder=%40eaDir")[0] === 404 && http_get("$baseFl/?folder=__MACOSX")[0] === 404 && http_get("$baseFl/?img=.hidden%2Fskip3.jpg&size=thumb")[0] === 404);
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat']);
+$flOff = http_get("$baseFl/")[1];
+$flPos = fn ($needle) => strpos($flOff, 'alt="' . $needle . '"');   // (a photo in a folder has its path as its alt text)
+check('[Flat] with folder names off every photo from every folder is in the one grid, no box and no label, and the page\'s own photo comes first', !str_contains($flOff, 'id="group-sub1"') && !str_contains($flOff, 'class="group-divider"') && $flPos('loose.jpg') !== false && $flPos('sub1/a.jpg') !== false && $flPos('sub1/deep/b.jpg') !== false && $flPos('sub2/c.jpg') !== false && $flPos('loose.jpg') < $flPos('sub1/a.jpg') && $flPos('sub1/a.jpg') < $flPos('sub1/deep/b.jpg') && $flPos('sub1/deep/b.jpg') < $flPos('sub2/c.jpg'));
+check('[Flat] ...and it shows no folder name, description, date or notes text', !str_contains($flOff, 'DESC-ONE') && !str_contains($flOff, 'NOTES-ONE') && !str_contains($flOff, 'Oct 1-2, 2026') && !str_contains($flOff, '>sub1<'));
+check('[Flat] two photos with the same file name in different folders are both there, each by its own path', str_contains($flOff, 'sub1%2Fdup.jpg') && str_contains($flOff, 'sub2%2Fdup.jpg'));
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true]);
+$flOn = http_get("$baseFl/")[1];
+check('[Flat] with folder names on, each folder directly under the page is a box with its name (a button that copies its link), and the folders inside it get a divider', str_contains($flOn, 'id="group-sub1"') && str_contains($flOn, 'id="group-sub2"') && str_contains($flOn, 'class="label-copy" data-anchor="group-sub1"') && preg_match('~class="group-divider" id="group-sub1-deep">.*?class="gd-name">deep</span>~s', $flOn) === 1);
+check('[Flat] ...the folder\'s description and dates sit under and beside its name, and its notes text is not shown while Show folder notes is off', str_contains($flOn, 'DESC-ONE a short blurb') && str_contains($flOn, 'Oct 1-2, 2026') && !str_contains($flOn, 'NOTES-ONE') && !str_contains($flOn, 'NOTES-DEEP'));
+check('[Flat] ...a {color:} in the folder\'s own notes colours its box, and {sold} in them puts the sold ribbon on it', str_contains($flOn, 'border-left-color: gold') && preg_match('~class="group-box sold"[^>]*id="group-sub2"~', $flOn) === 1);
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true, 'FOLDER_FLAT_NOTES' => true]);
+$flNotes = http_get("$baseFl/")[1];
+check('[Flat] with Show folder notes on, a folder\'s notes text shows under its name (rendered, the directives left out), also for a folder inside a box', str_contains($flNotes, '<strong>words</strong>') && str_contains($flNotes, 'NOTES-ONE') && str_contains($flNotes, 'NOTES-DEEP') && !str_contains($flNotes, '{color') && !str_contains($flNotes, '{sold}'));
+$flCfg(['FOLDER_FLAT_NOTES' => true]);
+check('[Flat] Show folder notes does nothing in Cover cards, or while folder names are off', !str_contains(http_get("$baseFl/")[1], 'NOTES-ONE'));
+$flCfg(['FOLDER_DISPLAY_MODE' => 'inline']);
+check('[Flat] an older settings file that says "inline" still works: it is Flat with the folder names shown', str_contains(http_get("$baseFl/")[1], 'id="group-sub1"') && str_contains(http_get("$baseFl/")[1], 'class="group-divider"'));
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true]);
+check('[Flat] a folder\'s own page shows the folders under it the same way (boxes and dividers)', str_contains(http_get("$baseFl/?folder=sub1")[1], 'id="group-deep"'));
+$flWrite("$fxFl/sub1/.gallery-items.php", $flItems + ['subfolderStyle' => 'overview']);
+$flOwn = http_get("$baseFl/?folder=sub1")[1];
+check('[Flat] a folder can choose Cards for itself: its page then shows the folder under it as a card, while the gallery stays Flat', str_contains($flOwn, '?folder=sub1%2Fdeep') && !str_contains($flOwn, 'class="group-box') && str_contains(http_get("$baseFl/")[1], 'id="group-sub1"'));
+$flWrite("$fxFl/sub1/.gallery-items.php", $flItems);
+$flCfg([]);
+$flWrite("$fxFl/sub1/.gallery-items.php", $flItems + ['subfolderStyle' => 'flat']);
+$flOwn2 = http_get("$baseFl/?folder=sub1")[1];
+check('[Flat] ...and a folder can choose Flat while the gallery shows Cards', !str_contains($flOwn2, '?folder=sub1%2Fdeep') && str_contains($flOwn2, 'sub1%2Fdeep%2Fb.jpg') && str_contains(http_get("$baseFl/")[1], '?folder=sub1'));
+$flWrite("$fxFl/sub1/.gallery-items.php", $flItems);
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat']);
+check('[Flat] the owner\'s line says how many folders the photos come from (3), and a visitor\'s does not', str_contains(http_get("$baseFl/", $flAuth)[1], '3 folders &middot; ') && !str_contains(http_get("$baseFl/")[1], 'folders &middot; '));
+$flCfg([]);
+check('[Flat] ...and in Cover cards nobody gets that line', !str_contains(http_get("$baseFl/", $flAuth)[1], 'folders &middot; '));
+$flCfg([]); $flShellCards = http_get("$baseFl/?admin&shell=1", $flAuth)[1];
+// a folder's own Flat choices: names and notes for itself, while the gallery shows Cards (or says otherwise)
+$flCfg([]);
+$flWrite("$fxFl/sub1/.gallery-items.php", $flItems + ['subfolderStyle' => 'flat', 'flatNames' => true, 'flatNotes' => true]);
+$flOwnFlat = http_get("$baseFl/?folder=sub1")[1];
+check('[Flat] a folder set to Flat with its own "names" and "notes" shows them even though the gallery shows Cards: the box for its folder, the description, and the notes text', str_contains($flOwnFlat, 'id="group-deep"') && str_contains($flOwnFlat, 'NOTES-DEEP') && str_contains(http_get("$baseFl/")[1], '?folder=sub1') && !str_contains(http_get("$baseFl/")[1], 'NOTES-DEEP'));
+$flWrite("$fxFl/sub1/.gallery-items.php", $flItems + ['subfolderStyle' => 'flat', 'flatNames' => false]);
+check('[Flat] ...and its own "names off" shows its folders as one plain grid', !str_contains(http_get("$baseFl/?folder=sub1")[1], 'class="group-box') && str_contains(http_get("$baseFl/?folder=sub1")[1], 'sub1%2Fdeep%2Fb.jpg'));
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true]);
+$flWrite("$fxFl/sub1/.gallery-items.php", $flItems + ['flatNames' => false]);
+check('[Flat] with no choice of its own a folder follows the gallery (Flat with names), and with "names off" of its own it differs from it', !str_contains(http_get("$baseFl/?folder=sub1")[1], 'class="group-box') && str_contains(http_get("$baseFl/")[1], 'id="group-sub1"'));
+$flWrite("$fxFl/sub1/.gallery-items.php", $flItems);
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat']);
+$flFolderForm = http_get("$baseFl/?admin&folder=sub1", $flAuth)[1];
+check('[Flat] Folder settings has the three choices as two buttons each; the one that is what Settings says is marked (Flat for the style, Off for names and notes here), and the names and notes rows are shown only while the folder is Flat', substr_count($flFolderForm, 'class="seg seg-site"') === 3 && preg_match('~<label class="site" title="What Settings says"><input type="radio" name="subfolder_style" value="" checked><span>Flat</span>~', $flFolderForm) === 1 && preg_match('~<label class="site" title="What Settings says"><input type="radio" name="flat_names" value="" checked><span>Off</span>~', $flFolderForm) === 1 && !preg_match('~data-flat-row="names" hidden~', $flFolderForm) && preg_match('~data-flat-row="notes" hidden~', $flFolderForm) === 1);
+$flCfg([]);
+$flFolderForm2 = http_get("$baseFl/?admin&folder=sub1", $flAuth)[1];
+check('[Flat] ...with Cover cards in Settings the style choice marks Cards, and the names and notes rows are hidden (the folder has not chosen Flat)', preg_match('~<label class="site" title="What Settings says"><input type="radio" name="subfolder_style" value="" checked><span>Cards</span>~', $flFolderForm2) === 1 && preg_match('~data-flat-row="names" hidden~', $flFolderForm2) === 1 && preg_match('~data-flat-row="notes" hidden~', $flFolderForm2) === 1);
+$flPost = fn (array $f) => json_decode(http_post("$baseFl/?admin&folder=sub1", ['csrf_token' => (preg_match('/name="csrf_token" value="([a-f0-9]+)"/', $flFolderForm2, $mm) ? $mm[1] : ''), 'action' => 'save_folder_identity', 'loaded_hash' => (preg_match('/name="loaded_hash" value="([^"]*)"/', $flFolderForm2, $mh) ? $mh[1] : '')] + $f, array_merge($flAuth, ['X-Requested-With: gallery-fetch']))[1], true);
+$flSaved = $flPost(['flat_names' => '1']);
+check('[Flat] pressing the other choice saves it for the folder (names On)', ($flSaved['ok'] ?? null) === true && ((json_decode(explode("\n", (string) file_get_contents("$fxFl/sub1/.gallery-items.php"), 2)[1] ?? '[]', true) ?: [])['flatNames'] ?? null) === true);
+$flCfg([]); $flSetCards = http_get("$baseFl/?admin", $flAuth)[1];
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true]); $flSetFlat = http_get("$baseFl/?admin", $flAuth)[1];
+check('[Flat] Settings shows the two Flat switches only while Folder style is Flat (hidden with Cover cards; the notes switch also needs folder names on)', preg_match('~id="setting-FOLDER_FLAT_NAMES"[^>]*data-shown-when="FOLDER_DISPLAY_MODE=flat" hidden~', $flSetCards) === 1 && preg_match('~id="setting-FOLDER_FLAT_NOTES"[^>]* hidden~', $flSetCards) === 1 && preg_match('~id="setting-FOLDER_FLAT_NAMES"[^>]*data-shown-when="FOLDER_DISPLAY_MODE=flat">~', $flSetFlat) === 1 && preg_match('~id="setting-FOLDER_FLAT_NOTES"[^>]*data-shown-when="FOLDER_DISPLAY_MODE=flat">~', $flSetFlat) === 1);
+check('[Features] the Subfolders row says how they are shown (cover cards, or flat with the names and notes switches) and its button goes to Folder style', str_contains($flSetCards, 'Showing your subfolders as cover cards.') && str_contains($flSetFlat, 'Showing your subfolders flat, all their photos on one page, folder by folder, with their names.') && str_contains($flSetCards, "adminGoTo('site', 'setting-FOLDER_DISPLAY_MODE')"));
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat']);
+$flShell = http_get("$baseFl/?admin&shell=1", $flAuth)[1];
+check('[Flat] the admin tree has a lock beside each folder (3) while the gallery is Flat, with the folder\'s path on it', substr_count($flShell, 'class="flock') === 3 && str_contains($flShell, 'data-lock-path="sub1"') && str_contains($flShell, 'data-lock-path="sub1/deep"'));
+check('[Flat] ...and with Cover cards there are no locks in the tree (the cards carry their own)', !str_contains($flShellCards, 'class="flock'));
+$flCfg(['FOLDER_DISPLAY_MODE' => 'flat']);
+$flTok = preg_match('/data-csrf="([a-f0-9]+)"/', $flShell, $flM) ? $flM[1] : '';
+$flLock = json_decode(http_post("$baseFl/?admin&folder=sub2", ['csrf_token' => $flTok, 'action' => 'toggle_folder_restriction', 'hidden' => '1'], array_merge($flAuth, ['X-Requested-With: gallery-fetch']))[1], true);
+check('[Flat] pressing a folder\'s lock makes it private (visitors no longer see it), and the lock then shows closed', ($flLock['ok'] ?? null) === true && !str_contains(http_get("$baseFl/")[1], 'sub2%2Fc.jpg') && str_contains(http_get("$baseFl/?admin&shell=1", $flAuth)[1], 'class="flock on" data-lock-path="sub2"'));
 
 /* --------------------------------------------------------------------- */
 

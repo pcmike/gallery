@@ -141,6 +141,11 @@ if (ENABLE_VIDEO) {
  */
 function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     $node = ['files' => [], 'subdirs' => []];
+    // A folder it has no business walking into (a system or recycle folder), and a ceiling on how much one visit scans, so a gallery
+    // dropped into a huge tree (a whole web root) cannot make every page crawl. The Health check says when the ceiling was hit.
+    static $dirs = 0, $files = 0;
+    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; }
+    if (++$dirs > SCAN_MAX_FOLDERS || $files > SCAN_MAX_FILES) { $GLOBALS['__scan_truncated'] = true; return $node; }
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
     $parentReal = realpath($realDir);
@@ -152,12 +157,12 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
         if (is_file($path)) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
             if (in_array($ext, $mediaExtensions, true)) {
-                $node['files'][] = $entry;
+                $node['files'][] = $entry; $files++;
             }
             continue;
         }
-        if (!is_dir($path) || $entry === '.gallery-cache' || is_link($path)) {
-            continue;
+        if (!is_dir($path) || $entry[0] === '.' || is_link($path) || in_array($entry, SCAN_SKIP_FOLDERS, true)) {
+            continue;   // (dot folders such as .git and .gallery-cache are never photo folders)
         }
         $childReal = realpath($path);
         if ($childReal === false || $parentReal === false
@@ -363,6 +368,9 @@ function valid_media_path($dir, $rel, $mediaExtensions, $self) {
         if ($seg === '' || $seg === '.' || $seg === '..') return false;
     }
     $file = array_pop($segments);
+    foreach ($segments as $seg) {   // (the scan never enters a dot folder or a system folder, so nothing in one is a gallery photo)
+        if ($seg[0] === '.' || in_array($seg, SCAN_SKIP_FOLDERS, true)) return false;
+    }
     if (!empty($segments) && !AUTO_GROUP_BY_FOLDER) return false;
     if (!in_array(strtolower(pathinfo($file, PATHINFO_EXTENSION)), $mediaExtensions, true)) return false;
     if (empty($segments) && $file === $self) return false;

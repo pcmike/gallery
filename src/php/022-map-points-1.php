@@ -59,7 +59,7 @@ function map_group_color($index) {
  *  standalone single) gets its #group-<slug> anchor on the current page,
  *  not a separate linking system. */
 function map_point_link($file, $groupKey, $folderGroupKeys) {
-    if ($groupKey !== null && isset($folderGroupKeys[$groupKey]) && FOLDER_DISPLAY_MODE === 'overview') {
+    if ($groupKey !== null && isset($folderGroupKeys[$groupKey]) && !folder_style_flat()) {
         // The photo is inside a folder this page shows only as a card: open the folder it is really in, on that photo (a bare folder link
         // left you at the top of a page of hundreds with no sign of the one you pressed). If the photo is part of a group there, the
         // anchor finds nothing and the folder's page simply opens.

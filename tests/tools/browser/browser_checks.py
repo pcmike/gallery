@@ -450,7 +450,7 @@ try:
     SITEB = WORK + "/siteback"; os.makedirs(SITEB)
     for i in range(1, 4):
         subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagefill($i,0,0,imagecolorallocate($i,%d,90,160)); imagejpeg($i,$argv[1]);" % (40 + i * 30), SITEB + "/p%d.jpg" % i], check=True)
-    shutil.copy(HERE + "/../../../index.php", SITEB + "/index.php")
+    open(SITEB + "/index.php", "w").write(open(HERE + "/../../../index.php").read().replace("gallery_setting('AUTO_GROUP_BY_FOLDER', true)", "gallery_setting('AUTO_GROUP_BY_FOLDER', false)"))   # (this site starts with subfolders off: they are on by default since 2.5.0)
     open(SITEB + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": "back-admin-pw-1"}) + "\n")
     open(SITEB + "/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"items": {"p1.jpg": {"restriction": "private"}}, "groups": []}) + "\n")
     sb_ = socket.socket(); sb_.bind(("127.0.0.1", 0)); PORTB = sb_.getsockname()[1]; sb_.close(); BB = f"http://127.0.0.1:{PORTB}"
@@ -1322,7 +1322,8 @@ try:
     # ---------------- Settings (a real person, real clicks) ----------------
     print("== site settings")
     SITE2 = WORK + "/site2"; os.makedirs(SITE2 + "/Sub")
-    shutil.copy(HERE + "/../../../index.php", SITE2 + "/index.php")
+    # (this site walks turning subfolders on in Settings, so its default is off, as for an owner who edited it: they are on by default since 2.5.0)
+    open(SITE2 + "/index.php", "w").write(open(HERE + "/../../../index.php").read().replace("gallery_setting('AUTO_GROUP_BY_FOLDER', true)", "gallery_setting('AUTO_GROUP_BY_FOLDER', false)"))
     subprocess.run(["php", "-r", "$i=imagecreatetruecolor(80,60); imagejpeg($i, $argv[1]); imagejpeg($i, $argv[2]);", SITE2 + "/p.jpg", SITE2 + "/Sub/q.jpg"], check=True)
     open(SITE2 + "/clip.mp4", "wb").write(b"x")
     open(SITE2 + "/Sub/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"items":{"q.jpg":{"restriction":"private","caption":"a hidden one"}},"groups":[]}')
@@ -3779,6 +3780,61 @@ try:
         shot(b, "50-country-file-ask")
     finally:
         srvH.terminate(); srvH.wait()
+        b.viewport(1280, 900)
+    # ---------------- Flat: the lock beside each folder in the admin tree, the label that copies its link, the phone Menu's lock ----------------
+    print("== Flat: tree locks, copy-a-link labels and the phone Menu's locks ==")
+    SITE_F = WORK + "/flatsite"; os.makedirs(SITE_F + "/Paris/Montmartre"); os.makedirs(SITE_F + "/Rome")
+    shutil.copy(HERE + "/../../../index.php", SITE_F + "/index.php"); os.utime(SITE_F + "/index.php", (time.time() - 7200,) * 2)
+    for f_ in ("top.jpg", "Paris/a.jpg", "Paris/Montmartre/b.jpg", "Rome/c.jpg"): subprocess.run(["php", "-r", "$i=imagecreatetruecolor(90,60); imagejpeg($i, $argv[1]);", SITE_F + "/" + f_], check=True)
+    fhash = subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "flat-admin-pw-1"], capture_output=True, text=True).stdout
+    open(SITE_F + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": fhash, "FOLDER_DISPLAY_MODE": "flat", "FOLDER_FLAT_NAMES": True}) + "\n")
+    sf_ = socket.socket(); sf_.bind(("127.0.0.1", 0)); PF = sf_.getsockname()[1]; sf_.close(); BF = f"http://127.0.0.1:{PF}"
+    srvF = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PF}", "-t", SITE_F], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.viewport(1280, 900); b.goto(BF + "/?admin&shell=1", 1.2)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "flat-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.5)
+        locks = b.js("[...document.querySelectorAll('.sh-tree .flock')].map(x => x.dataset.lockPath + ':' + x.classList.contains('on'))")
+        ok(locks == ["Paris:False", "Paris/Montmartre:False", "Rome:False"] or locks == ["Paris:false", "Paris/Montmartre:false", "Rome:false"], "[flat tree] a lock beside every folder, all open (visible) to start with", str(locks))
+        b.js("[...document.querySelectorAll('.sh-tree .flock')].find(x => x.dataset.lockPath === 'Paris').click()"); b.drain(1.5)
+        st = b.js("(() => { const l = [...document.querySelectorAll('.sh-tree .flock')]; return l.map(x => x.dataset.lockPath + ':' + x.classList.contains('on') + ':' + x.classList.contains('inh')); })()")
+        ok([x.lower() for x in st] == ["paris:true:false", "paris/montmartre:true:true", "rome:false:false"], "[flat tree] pressing Paris's lock closes it at once, and the folder inside it shows closed and dimmed (private because Paris is)", str(st))
+        ok('"restriction":"private"' in open(SITE_F + "/Paris/.gallery-items.php").read(), "[flat tree] ...and the folder is private on disk")
+        # the visitor's page: a label copies its link
+        b.goto(BF + "/?reveal", 1.0)
+        b.js("document.cookie.split(';').forEach(c => document.cookie = c.split('=')[0] + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/')")
+        b.call("Network.clearBrowserCookies"); b.goto(BF + "/", 2.0)
+        lab = b.js("(() => { const l = document.querySelector('.group-label .label-copy'); return l ? {anchor: l.dataset.anchor, text: l.querySelector('.lc-t').textContent, tag: l.tagName} : null; })()")
+        ok(lab is not None and lab["tag"] == "BUTTON" and lab["anchor"] == "group-rome" and lab["text"] == "Rome", "[flat label] a visitor sees Rome's box (Paris is private now) with its name as a button", str(lab))
+        b.js("window.__copied = ''; navigator.clipboard.writeText = t => { window.__copied = t; return Promise.resolve(); }; document.querySelector('.group-label .label-copy').click()"); b.drain(0.6)
+        cp = b.js("({url: window.__copied, text: document.querySelector('.group-label .label-copy .lc-t').textContent})")
+        ok(cp["url"].endswith("/#group-rome") and cp["text"] == "Link copied", "[flat label] pressing the name copies a link to that box and says \"Link copied\" for a moment", str(cp))
+        b.drain(1.8)
+        ok(b.js("document.querySelector('.group-label .label-copy .lc-t').textContent") == "Rome", "[flat label] ...then goes back to the folder's name")
+        # the phone Menu of the owner: a lock beside each folder
+        b.goto(BF + "/?admin&classic=1", 1.0)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "flat-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
+        b.viewport(390, 844, True); b.goto(BF + "/?admin&classic=1&again=1", 1.2)
+        b.js("document.getElementById('pb-menu').click()"); b.drain(0.6)
+        pl = b.js("[...document.querySelectorAll('#pb-sheet .pb-lk')].map(x => x.dataset.lockPath + ':' + x.classList.contains('on'))")
+        ok(len(pl) == 3, "[flat menu] the phone Menu has a lock beside each of the three folders", str(pl))
+        b.js("[...document.querySelectorAll('#pb-sheet .pb-lk')].find(x => x.dataset.lockPath === 'Rome').click()"); b.drain(1.2)
+        ok(b.js("[...document.querySelectorAll('#pb-sheet .pb-lk')].find(x => x.dataset.lockPath === 'Rome').classList.contains('on')") and b.js("document.getElementById('pb-sheet').hidden === false"), "[flat menu] pressing Rome's lock closes it and leaves the Menu open", "")
+        # Folder settings: two buttons for each choice, the one Settings says outlined; pressing the other turns it solid, saves at once and the notes row follows
+        b.viewport(1280, 900); b.goto(BF + "/?admin&classic=1&folder=Rome&again=2", 1.5)
+        fc = b.js("(() => { const rows = [...document.querySelectorAll('.flat-choice')]; return {n: rows.length, hidden: rows.map(r => r.hidden), sites: [...document.querySelectorAll('.seg-site label.site')].map(l => l.textContent.trim()), outline: getComputedStyle(document.querySelector('.seg-site label.site span')).borderTopColor}; })()")
+        ok(fc["n"] == 3 and fc["hidden"] == [False, False, False] and fc["sites"] == ["Flat", "On", "Off"] and fc["outline"] == "rgb(88, 101, 242)", "[folder settings] three choices, each with the option Settings says outlined in the accent colour (Flat, names On, notes Off here), all shown because the gallery is Flat with names on", str(fc))
+        b.js("document.querySelector('input[name=flat_names][value=\"0\"]').click()"); b.drain(1.5)
+        sv = b.js("[...document.querySelectorAll('.flat-choice .rowstate')].map(x => x.textContent.trim())")
+        ok(sv == ["", "Saved", ""], "[folder settings] \"Saved\" appears beside the label of the choice that was pressed (Show folder names), not beside another one", str(sv))
+        fc2 = b.js("(() => ({hidden: [...document.querySelectorAll('.flat-choice')].map(r => r.hidden), solid: getComputedStyle(document.querySelector('input[name=flat_names][value=\"0\"]').nextElementSibling).backgroundColor}))()")
+        ok(fc2["hidden"] == [False, False, True] and fc2["solid"] == "rgb(88, 101, 242)" and '"flatNames":false' in open(SITE_F + "/Rome/.gallery-items.php").read(), "[folder settings] pressing Off for names turns it solid, hides the notes row, and saves", str(fc2))
+        shot(b, "51-folder-flat-choices")
+        b.viewport(390, 844, True); b.goto(BF + "/?admin&classic=1&folder=Rome&again=3", 1.5)
+        ph2 = b.js("(() => ({fits: document.documentElement.scrollWidth <= window.innerWidth, stacked: (() => { const r = [...document.querySelectorAll('.flat-choice')].filter(x => !x.hidden).map(x => Math.round(x.getBoundingClientRect().top)); return r.every((v, i) => i === 0 || v > r[i - 1]); })()}))()")
+        ok(ph2["fits"] and ph2["stacked"], "[folder settings] on a phone the choices stack one under another and the page does not scroll sideways", str(ph2))
+    finally:
+        srvF.terminate(); srvF.wait()
         b.viewport(1280, 900)
 except Exception as e:
     fails += 1; print("  FAIL  the browser run crashed:", type(e).__name__, e)

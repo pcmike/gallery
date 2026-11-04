@@ -29,8 +29,8 @@
  *     DEFAULTS: a .gallery-config.php beside this file overrides them and
  *     survives replacing this file with a newer version (see
  *     gallery_setting() below and the guide). TRACK_VIEWS,
- *     AUTO_GROUP_BY_FOLDER, ENABLE_VIDEO and ENABLE_PHOTO_LOCATION are
- *     off by default — this script writes nothing to disk
+ *     ENABLE_VIDEO and ENABLE_PHOTO_LOCATION are off by default
+ *     (subfolders are on by default since 2.5.0) — this script writes nothing to disk
  *     (apart from thumbnails in .gallery-cache, what the admin saves and,
  *     once, the setup code file when ?admin is first opened with no password),
  *     makes no outbound/third-party requests of its own (a map, which only appears
@@ -38,7 +38,8 @@
  *     from OpenStreetMap when a visitor opens it; the country file,
  *     COUNTRY_LOOKUP, is the one thing the server fetches, only once
  *     switched on), and doesn't show a single
- *     subfolder, video file, or photo location unless you turn one on.
+ *     video file or photo location unless you turn one on; subfolders
+ *     show as albums unless you switch them off.
  *     (With AUTO_GROUP_BY_FOLDER off it still peeks into subfolders, read-
  *     only and capped, solely to warn that photos there are being skipped.)
  *     ADMIN_PASSWORD and PRIVATE_VIEW_PASSWORD are empty by default,
@@ -85,7 +86,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.4.2');
+define('GALLERY_VERSION', '2.5.0');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -341,7 +342,12 @@ define('SHOW_SORT_BUTTON', gallery_setting('SHOW_SORT_BUTTON', true));
 // always has. Turn this on for a trip folder like /trip/Paris,
 // /trip/StTropez, etc. See the guide for FOLDER_DISPLAY_MODE and
 // EXTRA_FOLDERS, which only matter once this is on.
-define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', false));
+define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', true));   // (on by default since 2.5.0: most people keep photos in folders)
+// Folders the scan never enters (system, recycle and thumbnail folders that file managers and NAS boxes create), and the most one visit
+// will scan: past either limit the rest is left out and the Health check says so.
+const SCAN_SKIP_FOLDERS = ['@eaDir', '__MACOSX', '#recycle', '$RECYCLE.BIN', 'System Volume Information', 'Thumbs', 'node_modules', 'cgi-bin'];
+const SCAN_MAX_FOLDERS = 2000;
+const SCAN_MAX_FILES = 60000;
 
 // How a folder-group renders once AUTO_GROUP_BY_FOLDER is on: 'overview'
 // (default) shows one cover card per subfolder — a highlight photo, a
@@ -354,7 +360,24 @@ define('AUTO_GROUP_BY_FOLDER', gallery_setting('AUTO_GROUP_BY_FOLDER', false));
 // owner's own convenience, where everything should stay visible at once
 // (this script's other real use case — a seller with a few items, each
 // in its own folder). Only read when AUTO_GROUP_BY_FOLDER is on.
-define('FOLDER_DISPLAY_MODE', gallery_setting('FOLDER_DISPLAY_MODE', 'overview', ['overview', 'inline']));
+// Since 2.5.0 the style is Cover cards ('overview') or Flat ('flat'). The older words keep working: 'cards' is 'overview', and 'inline' is Flat
+// with the folder names shown, which is how Inline always looked (one labelled box per folder).
+define('FOLDER_DISPLAY_MODE', gallery_setting('FOLDER_DISPLAY_MODE', 'overview', ['overview', 'cards', 'flat', 'inline']));
+// Flat's two switches: show each folder's name (a box for the folders directly under the page, a divider for those inside), and show
+// each folder's notes under it (needs the names).
+define('FOLDER_FLAT_NAMES', gallery_setting('FOLDER_FLAT_NAMES', FOLDER_DISPLAY_MODE === 'inline'));
+define('FOLDER_FLAT_NOTES', gallery_setting('FOLDER_FLAT_NOTES', false) && FOLDER_FLAT_NAMES);
+/** Folder names and folder notes in Flat for the page being built: the folder's own choice, else the gallery's. */
+function flat_names_on() {
+    return $GLOBALS['__flat_names'] ?? FOLDER_FLAT_NAMES;
+}
+function flat_notes_on() {
+    return flat_names_on() && ($GLOBALS['__flat_notes'] ?? FOLDER_FLAT_NOTES);
+}
+/** Is the page being built shown Flat? The gallery's style, unless the page's folder says otherwise (set per page once the folder is known). */
+function folder_style_flat() {
+    return $GLOBALS['__folder_style_flat'] ?? in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
+}
 
 // Map a virtual top-level folder name to a real path elsewhere on the
 // server, e.g. ['OldTrip2020' => '/mnt/archive-disk/trip-photos-2020'].

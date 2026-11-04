@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.5.0] - 2026-11-03
+
+### Changed
+- **Subfolders are on by default.** Most people keep photos in folders, and a gallery that quietly skipped them was the surprise. `AUTO_GROUP_BY_FOLDER` now defaults to on (anyone who has it saved keeps their choice; switch it off in Settings for the old behaviour). The scan now skips dot folders (`.git`, `.gallery-cache`) and system folders (`@eaDir`, `__MACOSX`, `#recycle`, `$RECYCLE.BIN`, `System Volume Information`, `Thumbs`, `node_modules`, `cgi-bin`), looks at no more than 2,000 folders and 60,000 photos on one visit (a Health row says when it stops), and a photo in such a folder can no longer be fetched by its address either. A notes file that lays out photos still works in a folder that has no subfolders.
+- **Folder style is Cover cards or Flat.** Flat (the old Inline, finished) puts every photo from the folders on the page, folder by folder, with the page's own photos first; each folder keeps its photo order and the sort button re-sorts within each. Two new switches, shown with it: **Show folder names** (a box for each folder directly under the page whose name copies a link to it when pressed, a one-line divider such as `France › Paris › Montmartre` for the folders inside, each folder's description under its name and its dates beside it, and a `{color:}`/`{sold}`/`{reserved}` in the folder's own notes styling its box) and **Show folder notes** (each folder's notes text under its description). With both off Flat is one plain grid with no folder names. An older `inline` setting keeps working: it is Flat with folder names on. A folder's page shows the folders under it the same way.
+- **A folder can choose for itself** how its own page shows the folders under it, and in Flat whether it shows folder names and notes (Folder settings: two buttons each, the one Settings says outlined and the folder's own choice solid), for example Cards on the main page and one trip folder Flat with names. A folder shown with its name gets its box even when it holds one photo. The Features page's Subfolders row says how they are shown and jumps to Folder style.
+- **For the owner, while Flat:** "N folders ·" before the photo count, and a lock beside each folder in the admin's tree and the phone Menu that makes it private or visible with one press (a folder inside a private one shows dimmed).
+
 ## [2.4.2] - 2026-11-03
 
 ### Changed
