@@ -27,7 +27,7 @@ Then visit `http://localhost:8000/`. Useful endpoints while testing:
 - `/?download` — redirects to the GitHub repo (it used to serve the script itself; see CHANGELOG)
 - `/?img=somefile.jpg&size=thumb` — the resize/cache endpoint directly (set `ENABLE_THUMBNAIL_CACHE` to `true` to actually exercise caching/resizing)
 - `/?track=somefile.jpg` — the view-tracking ping, returns JSON (set `TRACK_VIEWS` to `true` to see it actually track)
-- `/?folder=Europe/France` — a folder's own page (set `AUTO_GROUP_BY_FOLDER` to `true`; works at any depth)
+- `/?folder=Europe/France` — a folder's own page (subfolders are on by default; works at any depth)
 - `/?map` — the gallery page with the map overlay open (needs `ENABLE_PHOTO_LOCATION`, plus photos with a visible location); `/?map&folder=Europe` does the same for a folder
 - `/?admin` and `/?reveal` — a password form (set `ADMIN_PASSWORD` / `PRIVATE_VIEW_PASSWORD` in your test copy; both are allowed over plain HTTP on `localhost`)
 

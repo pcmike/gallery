@@ -16,7 +16,7 @@
 - **Made for phones as much as computers.** A sharp, fast grid, a full-screen viewer with swipe, captions and a small map, and an admin that works with your thumb.
 - **Private photos you can still share.** Hide any photo or folder, then send a temporary link that shows only what you chose, can be limited to a number of browsers or a date, and can be paused or revoked at once. You see who opened it.
 - **Edit on the page.** A pencil on every photo for the caption, place and privacy; select many photos to change them together.
-- **Everything is opt-in.** Maps, video, subfolders, share links and passwords stay off until you switch them on, and the admin says what each one publishes. Nothing leaves your server unless you turn it on (a map loads its tiles from OpenStreetMap when someone opens one).
+- **Everything else is opt-in.** Folders show as albums from the start; maps, video, share links and passwords stay off until you switch them on, and the admin says what each one publishes. Nothing leaves your server unless you turn it on (a map loads its tiles from OpenStreetMap when someone opens one).
 - **Looks after itself.** A health check for the server, a built-in backup of everything it has made, and guarded data files.
 
 ## Quick start
@@ -60,7 +60,7 @@ More: [Getting started](docs/guide/getting-started.md), with recipes for a plain
 
 ## What it does
 
-- **Albums and notes:** folders, captions, places, Markdown notes with sold/reserved markers, photo order you control. [Notes, folders and the viewer](docs/guide/notes-and-folders.md)
+- **Albums and notes:** folders (as cover cards, or flattened into one page, folder by folder), captions, places, Markdown notes with sold/reserved markers, photo order you control. [Notes, folders and the viewer](docs/guide/notes-and-folders.md)
 - **Private items and share links:** hide photos, then send links that show only what you choose. [Private items, share links and sharing](docs/guide/private-and-sharing.md)
 - **The admin:** a shell on computers, a bottom bar on phones, a health check, a list of every signed-in browser with its address history. [The admin](docs/guide/admin.md)
 - **Settings:** every setting, its default and where to change it. [Settings](docs/guide/settings.md)

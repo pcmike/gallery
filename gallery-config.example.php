@@ -18,8 +18,10 @@
 // it holds your passwords (the gallery stores them as hashes once you sign in).
 {
     // --- What gets shown ---------------------------------------------------
-    // "AUTO_GROUP_BY_FOLDER": true,        // default false: show subfolders, each as a group (README: Folders)
-    // "FOLDER_DISPLAY_MODE": "overview",   // "overview" (one cover card per folder) or "inline"
+    // "AUTO_GROUP_BY_FOLDER": false,       // default true (since 2.5.0): subfolders show as albums; false shows only the photos directly in the folder
+    // "FOLDER_DISPLAY_MODE": "overview",   // how a page shows its folders: "overview" (one cover card per folder) or "flat" (every photo on one page, folder by folder); the older "cards" and "inline" still work
+    // "FOLDER_FLAT_NAMES": false,          // Flat only: a box for each folder (with its description and dates) and a divider for the folders inside it
+    // "FOLDER_FLAT_NOTES": false,          // Flat only, with names on: each folder's notes text under its name
     // "ENABLE_VIDEO": true,                // default false: show .mov / .mp4 files
     // "AUTO_GROUP_BY_FILENAME": true,      // default false: group photos named alpha_01.jpg, alpha_02.jpg
     // "PHOTO_SORT_ORDER": "taken",         // "taken" (when it was taken, else the file's date; the default) or "filename" (the default if photos are grouped by filename)

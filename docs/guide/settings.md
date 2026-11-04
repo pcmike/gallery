@@ -10,8 +10,10 @@ Changed in **Settings** (no Save button: each change saves as you make it) or in
 
 | Setting | Default | What it does |
 |---|---|---|
-| `AUTO_GROUP_BY_FOLDER` | off | Subfolders become albums, to any depth |
-| `FOLDER_DISPLAY_MODE` | `overview` | `overview`: cover cards; `inline`: a folder's photos in a box |
+| `AUTO_GROUP_BY_FOLDER` | on | Subfolders become albums, to any depth (on by default since 2.5.0) |
+| `FOLDER_DISPLAY_MODE` | `overview` | How a page shows its folders: `overview` (cover cards) or `flat` (all their photos on the page, folder by folder). The older `cards` and `inline` (Flat with folder names) still work |
+| `FOLDER_FLAT_NAMES` | off | Flat only: a box for each folder directly under the page and a divider for the folders inside it, with each folder's description and dates |
+| `FOLDER_FLAT_NOTES` | off | Flat only, with folder names on: each folder's notes text under its name |
 | `AUTO_GROUP_BY_FILENAME` | off | `alpha_01.jpg`, `alpha_02.jpg` group as "alpha" |
 | `ENABLE_VIDEO` | off | Show `.mov` / `.mp4` |
 | `ENABLE_VIDEO_THUMBNAILS` | on | Real video pictures (needs ffmpeg) |
@@ -52,7 +54,7 @@ Replacing `index.php` with a newer version would reset anything you edited into 
 <?php http_response_code(404); exit; ?>
 {
     "ENABLE_VIDEO": true,
-    "AUTO_GROUP_BY_FOLDER": true   // notes after // are ignored; a trailing comma is fine
+    "FOLDER_DISPLAY_MODE": "flat"   // notes after // are ignored; a trailing comma is fine
 }
 ```
 

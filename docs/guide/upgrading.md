@@ -8,6 +8,8 @@ What changes at each version, and what to back up.
 
 **Updating** means replacing `index.php`. Settings (`.gallery-config.php`), captions and everything else live beside it and are untouched; the Health check then shows what it was upgraded from.
 
+**Upgrading to 2.5.0** from 2.4.2: replace `index.php`. **Subfolders are now on by default**: a gallery that never set `AUTO_GROUP_BY_FOLDER` will start showing its subfolders as cover cards (the scan skips dot and system folders). If you want the old behaviour, switch *Show subfolders* off in Settings. A gallery that had it set keeps its choice. *Folder style* is now Cover cards or Flat; an older `inline` still works and means Flat with *Show folder names* on. New files: none.
+
 **Upgrading to 2.4.2** from 2.4.1: replace `index.php`. Nothing stored changes, and nothing in how it works. Only the license changed: from 2.4.2 it is MIT with the Commons Clause (see [LICENSE](../../LICENSE)); versions up to 2.4.1 stay plain MIT.
 
 **Upgrading to 2.4.1** from 2.4.0: replace `index.php`. Nothing stored changes. The signed-in browsers table now shows **Addresses** and **Device changes** counted from each browser's history file, so existing browsers show the right numbers at once. A browser that was flagged *a different device of the same kind* only because of an iPhone's own networking stays flagged until you press *Looks fine* (new ones are not flagged). The About icon now opens a new tab, and the new-link form's "easy to guess" note only appears when the link really opens something private.

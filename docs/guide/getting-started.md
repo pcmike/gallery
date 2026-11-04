@@ -35,7 +35,7 @@ Settings are switched in the admin's **Settings**, or in a [settings file](setti
 | Show iPhone (HEIC) photos | [iPhone photos](#iphone-photos) |
 
 ### Plain gallery
-Copy `index.php` into the folder. Visitors see every photo in it (not its subfolders) by date taken, oldest first, with a full-screen viewer (arrows, swipe). `?photo=name.jpg` opens one photo and previews correctly when pasted into Discord or Reddit. Until you ask, nothing is written but thumbnails. If subfolders hold photos, or videos exist while video is off, a collapsed owner-only notice gives a count.
+Copy `index.php` into the folder. Visitors see every photo in it, and each subfolder as a cover card, by date taken, oldest first, with a full-screen viewer (arrows, swipe). `?photo=name.jpg` opens one photo and previews correctly when pasted into Discord or Reddit. Until you ask, nothing is written but thumbnails. If videos exist while video is off, a collapsed owner-only notice gives a count.
 
 ### For-sale listing
 Settings: `AUTO_GROUP_BY_FILENAME` on; optionally `TRACK_VIEWS` on (and `SHOW_VIEW_COUNTS_PUBLICLY` off to keep the numbers to yourself).
@@ -47,8 +47,8 @@ Settings: `AUTO_GROUP_BY_FILENAME` on; optionally `TRACK_VIEWS` on (and `SHOW_VI
 Visitors see each item's text with its photos beneath ("View 2 photos"), a box per multi-photo item, a red SOLD ribbon with greyed photos, an orange RESERVED tag. Paste a `?photo=` link or a box's copy-link button into your post.
 
 ### Trip album
-Settings: `AUTO_GROUP_BY_FOLDER`, `ENABLE_PHOTO_LOCATION` (maps come with it, and contact a third party from the visitor's browser: OpenStreetMap), `ENABLE_VIDEO`, and an admin password.
-1. Folders like `trip/Paris/`, `trip/Lisbon/` appear as cover cards (natural name order). They nest to any depth.
+Settings: `ENABLE_PHOTO_LOCATION` (maps come with it, and contact a third party from the visitor's browser: OpenStreetMap), `ENABLE_VIDEO`, and an admin password.
+1. Folders like `trip/Paris/`, `trip/Lisbon/` appear as cover cards (natural name order; subfolders are on by default). They nest to any depth. *Settings → Folders and photos → Folder style* can instead put every photo on one page, folder by folder (*Flat*), with the folder names, descriptions and notes shown if you want them; a folder can choose for itself in its own settings.
 2. In `?admin`, open a folder and fill in *Display name*, *Dates* (it suggests the span of the photos), *Description* and *Position*.
 3. Tick **Show photo locations publicly for this folder**. This publishes the GPS of every photo there that has some (a warning says how many); a single photo opts out with its own *Location* switch (press its pencil).
 4. Press a photo's pencil to give it a *Caption* and *Information link* and correct a location, and press its star to pick the folder card's picture.
