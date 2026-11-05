@@ -6,6 +6,7 @@
 <a href="https://github.com/pcmike/gallery/releases/latest"><img src="https://img.shields.io/github/v/release/pcmike/gallery?color=5865f2" alt="Latest release"></a>
 <a href="docs/guide/getting-started.md"><img src="https://img.shields.io/badge/PHP-8.3%2B-5865f2" alt="PHP 8.3+"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-5865f2" alt="MIT license with the Commons Clause"></a>
+<a href="src"><img src="https://img.shields.io/badge/source-23k%20lines-5865f2" alt="About 23,000 lines of source (PHP, JavaScript and CSS), built into one file"></a>
 </p>
 
 <p align="center"><img src="docs/images/gallery-desktop.webp" alt="A trip gallery on a computer: three folder cards with covers, dates and photo counts" width="860"></p>
@@ -60,7 +61,7 @@ More: [Getting started](docs/guide/getting-started.md), with recipes for a plain
 
 ## What it does
 
-- **Albums and notes:** folders (as cover cards, or flattened into one page, folder by folder), captions, places, Markdown notes with sold/reserved markers, photo order you control. [Notes, folders and the viewer](docs/guide/notes-and-folders.md)
+- **Albums and notes:** folders (as cover cards, or flattened into one page, folder by folder, with pills to jump between them), captions, places, Markdown notes with sold/reserved markers, photo order you control. [Notes, folders and the viewer](docs/guide/notes-and-folders.md)
 - **Private items and share links:** hide photos, then send links that show only what you choose. [Private items, share links and sharing](docs/guide/private-and-sharing.md)
 - **The admin:** a shell on computers, a bottom bar on phones, a health check, a list of every signed-in browser with its address history. [The admin](docs/guide/admin.md)
 - **Settings:** every setting, its default and where to change it. [Settings](docs/guide/settings.md)

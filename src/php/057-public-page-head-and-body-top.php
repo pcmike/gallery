@@ -19,7 +19,7 @@
     <li><strong>Built for phones:</strong> the counter and buttons sit in one row across the top, so the photo is as big as the screen allows and nothing needs tapping near Safari's toolbar; download opens the share sheet at once</li>
     <li><strong>Over a zoomed photo</strong> the controls sit on a soft dark pill so they stay readable, and each lights up when you point at it</li>
     <li>Video: length badges, silent hover clips and finger-scrubbing on the tiles, real playback in the viewer</li>
-    <li>Trips as folders: cover cards with dates and counts, to any depth, and a viewer that stays inside the folder</li>
+    <li>Trips as folders: cover cards with dates and counts, or every folder flattened onto one page with a pill to jump to each, to any depth, and a viewer that stays inside the folder</li>
     <li>Optional maps, loaded only when someone opens one</li>
     <li>Sorting by name or date either way round, with videos, located photos or private items first; visitors can re-sort for themselves with one button</li>
     <li>Drag and drop to place photos next to each other (the church shots taken on other days), kept together under every sort</li>

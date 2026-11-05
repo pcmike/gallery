@@ -243,7 +243,7 @@ function gallery_setting_definitions() {
              'options' => ['overview' => 'Cover cards', 'flat' => 'Flat'],
              'help' => 'Cover cards open each folder. Flat puts every photo from the folders on one page, folder by folder.'],
             ['name' => 'FOLDER_FLAT_NAMES', 'type' => 'bool', 'label' => 'Show folder names',
-             'help' => 'Only used in Flat. Each folder directly under a page gets a box with its name, and folders inside it a divider, so people can see how the photos are organised.', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
+             'help' => 'Only used in Flat. Each folder directly under a page gets a box with its name, and folders inside it a divider, so people can see how the photos are organised. The row at the top gets a pill for each folder to jump to it.', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
             ['name' => 'FOLDER_FLAT_NOTES', 'type' => 'bool', 'label' => 'Show folder notes',
              'help' => 'Only used in Flat, with folder names on. Each folder\'s notes text shows under its name.', 'requires' => 'FOLDER_FLAT_NAMES', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',

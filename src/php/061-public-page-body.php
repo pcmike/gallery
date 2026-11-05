@@ -1,11 +1,19 @@
   <?= owner_phone_bar_css() ?>
   body.inframe .crumb-bar { display: none; }
+  body.inframe .crumb-bar.has-sec { display: flex; }   /* (inside the admin the tree and the title line are the way back and the folders beside this one; the pills for the page's own folders stay) */
+  body.inframe .crumb-row > :not(.sec-pills) { display: none; }
+  body.inframe .crumb-row nav.sec-pills { margin-left: auto; }
   body.inframe header { padding-top: 10px; }  /* (the same start under the shell's bar on the front page as in a folder, where the crumb bar's rule gives it) */
 </style>
 </head>
 <?php $shellOwner = ADMIN_PASSWORD !== '' && is_admin_browser(); $shellInframe = $shellOwner && !empty($_GET['inframe']); ?>
 <body<?= $shellInframe ? ' class="inframe"' : ($shellOwner ? ' class="pb-on"' : '') ?>>
 <?= ui_icon_sprite() ?>
+<?php // Once the page has scrolled, two round buttons float at the bottom right of the screen: to the top, and to the bottom. The same on every page and device. ?>
+<div class="jump-fab" id="jump-fab" hidden>
+  <button type="button" class="jump-btn" data-jump="top" title="Jump to the top" aria-label="Jump to the top of the page"><?= ui_icon('jump-up') ?></button>
+  <button type="button" class="jump-btn" data-jump="bottom" title="Jump to the bottom" aria-label="Jump to the bottom of the page"><?= ui_icon('jump-down') ?></button>
+</div>
 <?= $shellInframe ? shell_frame_script('gallery') : '' ?>
 <?php if (($previewLink = link_preview()) !== null) echo render_link_preview_banner($previewLink, $dir, $allFiles); ?>
 <?php if (($headsUpLink = link_viewer()) !== null && !is_revealed() && link_headsup_on($headsUpLink)) echo render_link_headsup($headsUpLink); ?>
@@ -44,10 +52,11 @@ if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)
     <nav class="folder-pills" aria-label="This folder"><a href="?folder=<?= htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') ?>" class="current" aria-current="page"><?= htmlspecialchars($currentFolderName, ENT_QUOTES, 'UTF-8') ?></a></nav>
     <?php endif; ?>
     </div>
-  <div class="jump-btns" hidden>
-    <button type="button" class="jump-btn" data-jump="bottom" title="Jump to the bottom" aria-label="Jump to the bottom of the page"><?= ui_icon('jump-down') ?></button>
-    <button type="button" class="jump-btn" data-jump="top" title="Jump to the top" aria-label="Jump to the top of the page"><?= ui_icon('jump-up') ?></button>
-  </div>
+</div>
+<?php elseif (AUTO_GROUP_BY_FOLDER && folder_style_flat() && (flat_names_on() || is_admin_browser()) && count(split_folder_level($files, '')['folders']) >= 2): ?>
+<?php // The gallery's own page, Flat with folder names (or the owner, who gets them without): no way back and no folders beside it, but the folders below get their row of pills (the script fills it in and takes the bar away if it finds fewer than two). ?>
+<div class="crumb-bar" id="crumb-bar" role="navigation" aria-label="Folders on this page">
+  <div class="crumb-row"></div>
 </div>
 <?php endif; ?>
 <header>

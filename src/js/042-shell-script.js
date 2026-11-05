@@ -8,6 +8,18 @@
   }
   var frame = document.getElementById('sh-frame'), pathBox = document.getElementById('sh-path'), toolsBox = document.getElementById('sh-tools');
   var alone = document.getElementById('sh-alone'), tree = document.querySelector('.sh-tree'), treeRaw = null;
+  // The page in the frame has a scrollbar of its own (where scrollbars take room), which narrows it from the right: the bar above gives up the
+  // same room, so its icons line up with the page's icons below them.
+  var frameRO = null;
+  function syncBarEdge() {
+    var bar = document.querySelector('.sh-bar'); if (!bar) return;
+    try { var d = frame.contentDocument, w = d ? frame.clientWidth - d.documentElement.getBoundingClientRect().width : 0; bar.style.paddingRight = (24 + Math.max(0, w)) + 'px'; } catch (e) {}
+  }
+  frame.addEventListener('load', function () {
+    syncBarEdge();
+    try { if (typeof ResizeObserver !== 'undefined') { if (frameRO) frameRO.disconnect(); frameRO = new ResizeObserver(syncBarEdge); frameRO.observe(frame.contentDocument.documentElement); } } catch (e) {}
+  });
+  window.addEventListener('resize', syncBarEdge);
   function esc(t) { var d = document.createElement('div'); d.textContent = t; return d.innerHTML.replace(/"/g, '&quot;'); }
   function label(f) { return f === '' ? C.title : (C.labels[f] || f.split('/').pop()); }
   function srcFor(folder, tab) {

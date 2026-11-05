@@ -86,7 +86,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.0');
+define('GALLERY_VERSION', '2.6.1');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -3404,7 +3404,7 @@ foreach ($folderGroups as $folderKey => $members) {
 // back into individually-keyed standalone singles instead of merging
 // files that just happen to share a name.
 foreach ($groups as $key => $groupFiles) {
-    if (count($groupFiles) < 2) continue;
+    if (count($groupFiles) < 2 || isset($folderGroups[$key])) continue;   // (a folder's photos are its own by their folders: the same file name in two of its subfolders is nothing to split)
     $rawBases = array_map(function ($f) { return pathinfo($f, PATHINFO_FILENAME); }, $groupFiles);
     $counts = array_count_values($rawBases);
     $keep = [];
@@ -9323,7 +9323,7 @@ function gallery_setting_definitions() {
              'options' => ['overview' => 'Cover cards', 'flat' => 'Flat'],
              'help' => 'Cover cards open each folder. Flat puts every photo from the folders on one page, folder by folder.'],
             ['name' => 'FOLDER_FLAT_NAMES', 'type' => 'bool', 'label' => 'Show folder names',
-             'help' => 'Only used in Flat. Each folder directly under a page gets a box with its name, and folders inside it a divider, so people can see how the photos are organised.', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
+             'help' => 'Only used in Flat. Each folder directly under a page gets a box with its name, and folders inside it a divider, so people can see how the photos are organised. The row at the top gets a pill for each folder to jump to it.', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
             ['name' => 'FOLDER_FLAT_NOTES', 'type' => 'bool', 'label' => 'Show folder notes',
              'help' => 'Only used in Flat, with folder names on. Each folder\'s notes text shows under its name.', 'requires' => 'FOLDER_FLAT_NAMES', 'shown_when' => 'FOLDER_DISPLAY_MODE=flat'],
             ['name' => 'AUTO_GROUP_BY_FILENAME', 'type' => 'bool', 'label' => 'Group photos by filename',
@@ -13208,6 +13208,18 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
   }
   var frame = document.getElementById('sh-frame'), pathBox = document.getElementById('sh-path'), toolsBox = document.getElementById('sh-tools');
   var alone = document.getElementById('sh-alone'), tree = document.querySelector('.sh-tree'), treeRaw = null;
+  // The page in the frame has a scrollbar of its own (where scrollbars take room), which narrows it from the right: the bar above gives up the
+  // same room, so its icons line up with the page's icons below them.
+  var frameRO = null;
+  function syncBarEdge() {
+    var bar = document.querySelector('.sh-bar'); if (!bar) return;
+    try { var d = frame.contentDocument, w = d ? frame.clientWidth - d.documentElement.getBoundingClientRect().width : 0; bar.style.paddingRight = (24 + Math.max(0, w)) + 'px'; } catch (e) {}
+  }
+  frame.addEventListener('load', function () {
+    syncBarEdge();
+    try { if (typeof ResizeObserver !== 'undefined') { if (frameRO) frameRO.disconnect(); frameRO = new ResizeObserver(syncBarEdge); frameRO.observe(frame.contentDocument.documentElement); } } catch (e) {}
+  });
+  window.addEventListener('resize', syncBarEdge);
   function esc(t) { var d = document.createElement('div'); d.textContent = t; return d.innerHTML.replace(/"/g, '&quot;'); }
   function label(f) { return f === '' ? C.title : (C.labels[f] || f.split('/').pop()); }
   function srcFor(folder, tab) {
@@ -19143,6 +19155,13 @@ function flat_label_button($anchorId, $textHtml, $title) {
     return '<button type="button" class="label-copy" data-anchor="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '" title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '"><span class="lc-t">' . $textHtml . '</span></button>';
 }
 
+/** What a Flat folder's first element on the page carries so the row at the top can have a pill that goes to it: its name and, for the
+ *  owner, whether it is private. (A visitor's pills come from the boxes that Show folder names makes; the owner also gets them without.) */
+function flat_sec_attrs($label, $folderPath) {
+    $priv = owner_folder_privacy($GLOBALS['dir'], [], $folderPath, false)['state'];
+    return ' data-sec="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '"' . ($priv !== '' ? ' data-sec-priv="' . $priv . '"' : '');
+}
+
 /** The divider row inside a Flat box for a folder below it: its parent folders in muted text, then its own name, on one line, with the path
  *  measured from the box ($boxKey, the top folder). $sub is the folder's path from the gallery root. */
 function flat_divider_html($boxKey, $sub, $boxSlug) {
@@ -19188,8 +19207,11 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // Flat without folder names: the folder's photos are part of the page's one grid, no box and no label.
         $isFlatFolder = isset($folderGroupKeys[$key]) && folder_style_flat();
         if ($isFlatFolder && !flat_names_on()) {
-            foreach ($groupFiles as $file) {
-                $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
+            foreach ($groupFiles as $i => $file) {
+                // (the owner's row of pills still has one for this folder: its first photo is what a press scrolls to)
+                $first = $i === 0 && is_admin_browser();
+                $card = render_card($file, $flatIndex, $photoViews, '', null, $first ? 'group-' . slugify($key) : null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
+                $html .= $first ? preg_replace('/^<div /', '<div' . flat_sec_attrs($groupLabels[$key] ?? $key, $folderLinkPrefix . $key) . ' ', $card, 1) : $card;
                 $flatIndex++;
             }
             continue;
@@ -19228,7 +19250,9 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         }
         $viewsHidden = (view_counts_shown() && ($groupTotal > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';
 
-        $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
+        // A Flat folder's box says what it is called (and, for the owner, whether it is private) so the row at the top can have a pill that goes to it.
+        $secAttrs = $isFlatFolder ? flat_sec_attrs($label, $flatPath) : '';
+        $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . $secAttrs . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
         $labelText = $isFlatFolder
             ? flat_label_button('group-' . $slug, htmlspecialchars($label, ENT_QUOTES, 'UTF-8'), 'Copy a link to ' . $label)
             : htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
@@ -19393,7 +19417,7 @@ function render_about_page() {
     <li><strong>Built for phones:</strong> the counter and buttons sit in one row across the top, so the photo is as big as the screen allows and nothing needs tapping near Safari's toolbar; download opens the share sheet at once</li>
     <li><strong>Over a zoomed photo</strong> the controls sit on a soft dark pill so they stay readable, and each lights up when you point at it</li>
     <li>Video: length badges, silent hover clips and finger-scrubbing on the tiles, real playback in the viewer</li>
-    <li>Trips as folders: cover cards with dates and counts, to any depth, and a viewer that stays inside the folder</li>
+    <li>Trips as folders: cover cards with dates and counts, or every folder flattened onto one page with a pill to jump to each, to any depth, and a viewer that stays inside the folder</li>
     <li>Optional maps, loaded only when someone opens one</li>
     <li>Sorting by name or date either way round, with videos, located photos or private items first; visitors can re-sort for themselves with one button</li>
     <li>Drag and drop to place photos next to each other (the church shots taken on other days), kept together under every sort</li>
@@ -19690,17 +19714,27 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   p.breadcrumb a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
   p.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   p.breadcrumb a + a::before { content: "\203A"; margin-right: 9px; opacity: 0.55; }
-  /* The way back and the pills stay at the top of the screen, like the icon strip (which sticks just under them). Two arrows at the right,
-     once the page has scrolled, jump to the bottom and the top. */
-  .crumb-bar { position: sticky; top: var(--stick-top, 0px); z-index: 41; display: flex; align-items: center; gap: 8px; padding: 10px 24px 6px; background: var(--bg); transition: box-shadow .15s; }
+  /* The way back and the pills stay at the top of the screen, like the icon strip (which sticks just under them). */
+  .crumb-bar { position: sticky; top: var(--stick-top, 0px); z-index: 41; display: flex; align-items: center; gap: 8px; padding: 10px max(24px, calc((100% - 1400px) / 2 + 24px)) 6px; background: var(--bg); transition: box-shadow .15s; }   /* (its contents are as wide as the gallery below) */
   .crumb-bar.stuck { box-shadow: 0 1px 0 #26262a; }
   .crumb-bar + header { padding-top: 10px; }
-  .jump-btns { flex: none; display: flex; gap: 6px; }
-  .jump-btns[hidden] { display: none; }
-  .jump-btn { width: 34px; height: 34px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.12); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; }
-  .jump-btn .ico { width: 18px; height: 18px; }
-  .jump-btn:active { transform: scale(0.9); }
-  @media (hover: hover) { .jump-btn:hover { transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; } .jump-btn:hover:active { transform: scale(1.02); } }
+  /* Two round buttons float at the bottom right of the screen once the page has scrolled: to the top, to the bottom. They are the same on every page and device;
+     their right edge is the gallery's (the script sets it from the strip), so on a wide window they stay by the photos, and a phone's owner bar and Select's bar are cleared. */
+  .jump-fab { position: fixed; right: max(calc(14px + env(safe-area-inset-right, 0px)), calc((100vw - 1400px) / 2 + 24px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 55; display: flex; flex-direction: column; gap: 8px; }
+  .jump-fab[hidden] { display: none; }
+  .jump-btn { width: 40px; height: 40px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2); box-shadow: 0 2px 10px rgba(0,0,0,0.45); cursor: pointer; opacity: 0.85; transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; -webkit-tap-highlight-color: transparent; }
+  .jump-btn .ico { width: 19px; height: 19px; }
+  .jump-btn:active { transform: scale(0.92); }
+  /* Over one, the button answers the way a photo's own buttons do: full strength, a white ring, a little larger, in the accent colour. */
+  @media (hover: hover) { .jump-btn:hover, .jump-btn:focus-visible { opacity: 1; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; } .jump-btn:hover:active { transform: scale(1.02); } }
+  @media (max-width: 800px) { body.pb-on .jump-fab { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); } }   /* (above the owner's bar, not on its buttons) */
+  body.selecting .jump-fab { display: none; }
+  /* A row with more pills than fit has a small button at each end where there is a pointer (a touch screen swipes), and the wheel moves it sideways. */
+  .row-chev { flex: none; width: 28px; height: 28px; padding: 0; border-radius: 50%; display: none; align-items: center; justify-content: center; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.12); cursor: pointer; }
+  .row-chev .ico { width: 15px; height: 15px; }
+  .row-chev.on { display: inline-flex; }
+  .row-chev:hover { border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  @media (hover: none) { .row-chev.on { display: none; } }
   @media (max-width: 600px) { .crumb-bar { padding: 8px 16px 4px; } }
   /* The way back and the folders beside this one share ONE line: the way back stays put at the left while the sibling pills
      swipe; the current folder is lit. When it all fits it is centred. */
@@ -19708,9 +19742,15 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .crumb-row::-webkit-scrollbar { display: none; }
   .crumb-row p.breadcrumb { flex: none; flex-wrap: nowrap; margin: 0 0 0 auto; }
   .crumb-row p.breadcrumb:only-child { margin-right: auto; }
-  .crumb-row nav.folder-pills { margin-right: auto; }
+  .crumb-row nav.folder-pills:last-child { margin-right: auto; }
+  .crumb-row nav.folder-pills:only-child { margin-left: auto; }
+  /* Flat with folder names: after the folders beside this one, a dot and a pill for each folder's section on the page. The one you are in
+     is outlined (the lit solid pill stays the folder you are on). */
+  .crumb-dot { flex: none; font-size: 1rem; line-height: 1; color: var(--muted); opacity: 0.7; }
+  nav.sec-pills a.here { color: #fff; border-color: var(--accent); background: rgba(88, 101, 242, 0.16); }
   .crumb-row p.breadcrumb:not(:only-child) { position: sticky; left: 0; z-index: 2; background: var(--bg); box-shadow: 8px 0 8px -4px var(--bg); }
   .crumb-row p.breadcrumb:not(:only-child)::after { content: "\2022"; font-size: 1rem; line-height: 1; color: var(--muted); opacity: 0.7; align-self: center; margin-left: 4px; margin-right: 0; }
+  .crumb-row.crumb-free p.breadcrumb:not(:only-child) { position: static; box-shadow: none; }   /* (most of the row: it swipes away with the rest) */
   nav.folder-pills { flex: none; display: flex; gap: 6px; }
   nav.folder-pills a { flex: none; font-size: 0.82rem; line-height: 1; color: var(--muted); text-decoration: none; background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07); padding: 7px 13px; border-radius: 999px; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }   /* the same pill as the breadcrumb's */
   nav.folder-pills a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
@@ -20677,12 +20717,20 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   html:has(> body.inframe) { scrollbar-gutter: stable; }
   <?= owner_phone_bar_css() ?>
   body.inframe .crumb-bar { display: none; }
+  body.inframe .crumb-bar.has-sec { display: flex; }   /* (inside the admin the tree and the title line are the way back and the folders beside this one; the pills for the page's own folders stay) */
+  body.inframe .crumb-row > :not(.sec-pills) { display: none; }
+  body.inframe .crumb-row nav.sec-pills { margin-left: auto; }
   body.inframe header { padding-top: 10px; }  /* (the same start under the shell's bar on the front page as in a folder, where the crumb bar's rule gives it) */
 </style>
 </head>
 <?php $shellOwner = ADMIN_PASSWORD !== '' && is_admin_browser(); $shellInframe = $shellOwner && !empty($_GET['inframe']); ?>
 <body<?= $shellInframe ? ' class="inframe"' : ($shellOwner ? ' class="pb-on"' : '') ?>>
 <?= ui_icon_sprite() ?>
+<?php // Once the page has scrolled, two round buttons float at the bottom right of the screen: to the top, and to the bottom. The same on every page and device. ?>
+<div class="jump-fab" id="jump-fab" hidden>
+  <button type="button" class="jump-btn" data-jump="top" title="Jump to the top" aria-label="Jump to the top of the page"><?= ui_icon('jump-up') ?></button>
+  <button type="button" class="jump-btn" data-jump="bottom" title="Jump to the bottom" aria-label="Jump to the bottom of the page"><?= ui_icon('jump-down') ?></button>
+</div>
 <?= $shellInframe ? shell_frame_script('gallery') : '' ?>
 <?php if (($previewLink = link_preview()) !== null) echo render_link_preview_banner($previewLink, $dir, $allFiles); ?>
 <?php if (($headsUpLink = link_viewer()) !== null && !is_revealed() && link_headsup_on($headsUpLink)) echo render_link_headsup($headsUpLink); ?>
@@ -20721,10 +20769,11 @@ if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)
     <nav class="folder-pills" aria-label="This folder"><a href="?folder=<?= htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') ?>" class="current" aria-current="page"><?= htmlspecialchars($currentFolderName, ENT_QUOTES, 'UTF-8') ?></a></nav>
     <?php endif; ?>
     </div>
-  <div class="jump-btns" hidden>
-    <button type="button" class="jump-btn" data-jump="bottom" title="Jump to the bottom" aria-label="Jump to the bottom of the page"><?= ui_icon('jump-down') ?></button>
-    <button type="button" class="jump-btn" data-jump="top" title="Jump to the top" aria-label="Jump to the top of the page"><?= ui_icon('jump-up') ?></button>
-  </div>
+</div>
+<?php elseif (AUTO_GROUP_BY_FOLDER && folder_style_flat() && (flat_names_on() || is_admin_browser()) && count(split_folder_level($files, '')['folders']) >= 2): ?>
+<?php // The gallery's own page, Flat with folder names (or the owner, who gets them without): no way back and no folders beside it, but the folders below get their row of pills (the script fills it in and takes the bar away if it finds fewer than two). ?>
+<div class="crumb-bar" id="crumb-bar" role="navigation" aria-label="Folders on this page">
+  <div class="crumb-row"></div>
 </div>
 <?php endif; ?>
 <header>
@@ -22192,6 +22241,111 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     });
   })();
 <?php endif; ?>
+  // Once the page has scrolled, the two round buttons at the bottom right (to the top, to the bottom) show.
+  (function () {
+    const fab = document.getElementById('jump-fab'); if (!fab) return;
+    const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const show = function () { const on = window.scrollY > 120; if (fab.hidden === on) fab.hidden = !on; };
+    window.addEventListener('scroll', show, { passive: true }); show();
+    // Their right edge is the gallery's own (where the strip's last button ends), not the window's: on a wide screen they stay by the photos.
+    const strip = document.getElementById('map-bar');
+    const edge = function () {
+      if (!strip) return;
+      const r = strip.getBoundingClientRect(), side = document.documentElement.clientWidth - (r.right - 24);
+      if (r.width > 0) fab.style.right = 'max(' + Math.max(14, Math.round(side)) + 'px, calc(14px + env(safe-area-inset-right, 0px)))';
+    };
+    window.addEventListener('resize', edge); window.addEventListener('load', edge); edge();
+    if (strip && typeof ResizeObserver !== 'undefined') new ResizeObserver(edge).observe(strip);
+    fab.addEventListener('click', function (e) {
+      const b = e.target.closest('.jump-btn'); if (!b) return;
+      window.scrollTo({ top: b.getAttribute('data-jump') === 'top' ? 0 : document.documentElement.scrollHeight, behavior: calm ? 'auto' : 'smooth' });
+    });
+  })();
+  // A row with more pills than fit gets a small button at each end (where there is a pointer; a touch screen swipes), and the wheel moves it sideways.
+  (function () {
+    const bar = document.getElementById('crumb-bar'), row = bar && bar.querySelector('.crumb-row'); if (!row) return;
+    if (window.matchMedia && window.matchMedia('(hover: none)').matches) return;   // (a touch screen swipes)
+    const mk = function (name, icon) { const b = document.createElement('button'); b.type = 'button'; b.className = 'row-chev'; b.setAttribute('aria-label', name); b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + icon + '"></use></svg>'; return b; };
+    const left = mk('Scroll the folders left', 'chev-left'), right = mk('Scroll the folders right', 'chev-right');
+    bar.insertBefore(left, row); bar.insertBefore(right, row.nextSibling);
+    const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const sync = function () {
+      const room = (left.classList.contains('on') ? 36 : 0) + (right.classList.contains('on') ? 36 : 0);   // (what the buttons take: without it a row that just fits would flip them on and off)
+      const over = row.scrollWidth > row.clientWidth + room + 2;
+      left.classList.toggle('on', over && row.scrollLeft > 2); right.classList.toggle('on', over && row.scrollLeft + row.clientWidth < row.scrollWidth - 2);
+    };
+    const by = function (d) { row.scrollBy({ left: d * Math.max(160, row.clientWidth * 0.6), behavior: calm ? 'auto' : 'smooth' }); };
+    left.addEventListener('click', function () { by(-1); }); right.addEventListener('click', function () { by(1); });
+    row.addEventListener('scroll', sync, { passive: true });
+    row.addEventListener('wheel', function (e) {
+      if (row.scrollWidth <= row.clientWidth + 2 || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+      e.preventDefault(); row.scrollLeft += e.deltaY;
+    }, { passive: false });
+    window.addEventListener('resize', sync);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(sync).observe(row);
+    setTimeout(sync, 0); window.addEventListener('load', sync);
+  })();
+  // The way back stays pinned at the left of the row while the pills swipe, unless it is nearly all of the width (a phone with a deep path):
+  // then it swipes away too, so the pills have the room.
+  (function () {
+    const row = document.querySelector('.crumb-row'), back = row && row.querySelector('.breadcrumb'); if (!back) return;
+    const fit = function () { row.classList.toggle('crumb-free', back.offsetWidth > window.innerWidth * 0.7); };
+    fit(); window.addEventListener('resize', fit);
+  })();
+  // Flat with folder names: the top row gets a pill for each folder's section on this page (after the folders beside this one, past a dot).
+  // A press scrolls to the section; the one you are in is outlined, and the row swipes to keep it in view.
+  (function () {
+    const bar = document.getElementById('crumb-bar'), row = bar && bar.querySelector('.crumb-row');
+    if (!row) return;
+    const secs = Array.prototype.slice.call(document.querySelectorAll('[data-sec]'));
+    if (secs.length < 2) { if (!row.querySelector('.breadcrumb')) bar.remove(); return; }
+    const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (row.children.length) { const dot = document.createElement('span'); dot.className = 'crumb-dot'; dot.setAttribute('aria-hidden', 'true'); dot.textContent = '•'; row.appendChild(dot); }
+    const nav = document.createElement('nav'); nav.className = 'folder-pills sec-pills'; nav.setAttribute('aria-label', 'Folders on this page');
+    const pills = secs.map(function (sec) {
+      const a = document.createElement('a'); a.href = '#' + sec.id;
+      const priv = sec.getAttribute('data-sec-priv');
+      if (priv) {
+        a.className = 'priv'; a.title = priv === 'own' ? 'Private folder' : 'Hidden because a folder above it is private';
+        a.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg>';
+      }
+      a.appendChild(document.createTextNode(sec.getAttribute('data-sec')));
+      nav.appendChild(a); return a;
+    });
+    row.appendChild(nav); bar.classList.add('has-sec');
+    nav.addEventListener('click', function (e) {
+      const a = e.target.closest('a'), at = a ? pills.indexOf(a) : -1; if (at < 0) return;
+      e.preventDefault(); pinned = at; secs[at].scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' });
+    });
+    // (a section near the end of the page may never reach the top: the pill you pressed stays the lit one until you scroll yourself)
+    let lit = -1, queued = false, pinned = -1;
+    ['pointerdown', 'wheel', 'touchstart', 'keydown'].forEach(function (t) { window.addEventListener(t, function () { pinned = -1; }, { passive: true }); });
+    const spy = function () {
+      queued = false;
+      const strip = document.getElementById('map-bar'), line = (strip ? strip.getBoundingClientRect().bottom : bar.getBoundingClientRect().bottom) + 12;
+      let now = -1;
+      secs.forEach(function (sec, i) { if (sec.getBoundingClientRect().top <= line) now = i; });
+      if (pinned >= 0) now = pinned;
+      else if (now >= 0 && window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) now = secs.length - 1;
+      if (now === lit) return;
+      if (lit >= 0) { pills[lit].classList.remove('here'); pills[lit].removeAttribute('aria-current'); }
+      lit = now;
+      if (lit < 0) return;
+      pills[lit].classList.add('here'); pills[lit].setAttribute('aria-current', 'location'); reveal(calm ? 'auto' : 'smooth');
+    };
+    // (the row swipes to keep the lit pill in view; it also does when the row's width changes, as it does when the arrows appear at its right)
+    const reveal = function (how) {
+      const a = pills[lit]; if (!a) return;
+      const back = row.querySelector('.breadcrumb'), backW = back && back.offsetWidth && !row.classList.contains('crumb-free') ? back.offsetWidth + 10 : 0;
+      if (a.offsetLeft < row.scrollLeft + backW || a.offsetLeft + a.offsetWidth > row.scrollLeft + row.clientWidth) {
+        row.scrollTo({ left: a.offsetLeft - backW - (row.clientWidth - backW - a.offsetWidth) / 2, behavior: how });
+      }
+    };
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(function () { reveal('auto'); }).observe(row);
+    window.addEventListener('scroll', function () { if (!queued) { queued = true; requestAnimationFrame(spy); } }, { passive: true });
+    window.addEventListener('resize', spy);
+    spy();
+  })();
   // The strip of buttons sticks to the top; once the page has scrolled under it, it gets a soft edge.
   (function () {
     const bar = document.getElementById('map-bar'); if (!bar) return;
@@ -22205,27 +22359,23 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       root.style.setProperty('--stick-top', pvH + 'px');
       root.style.setProperty('--crumb-h', crH + 'px');
       topAt = pvH + crH;
+      // A page of just a few folder cards has a narrower column than the usual: the row above takes the strip's own width.
+      if (crumbs) {
+        const r = bar.getBoundingClientRect(), narrow = /covers-\d/.test(bar.className) && r.left > 0;
+        crumbs.style.paddingLeft = narrow ? r.left + 24 + 'px' : ''; crumbs.style.paddingRight = narrow ? root.clientWidth - r.right + 24 + 'px' : '';
+      }
       edge();
     };
     window.addEventListener('scroll', edge, { passive: true }); window.addEventListener('resize', sizes);
     if (crumbs && typeof ResizeObserver !== 'undefined') new ResizeObserver(sizes).observe(crumbs);
     sizes();
-    const jumps = crumbs && crumbs.querySelector('.jump-btns');
-    if (jumps) {
-      // Down and up arrows (in that order) at the right of the row, once the page has scrolled: to the bottom, to the top.
-      const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const show = function () { const on = window.scrollY > 120; if (jumps.hidden === on) jumps.hidden = !on; crumbs.classList.toggle('stuck', window.scrollY > 0); };
-      window.addEventListener('scroll', show, { passive: true }); show();
-      crumbs.addEventListener('click', function (e) {
-        const b = e.target.closest('.jump-btn'); if (!b) return;
-        window.scrollTo({ top: b.getAttribute('data-jump') === 'top' ? 0 : document.documentElement.scrollHeight, behavior: calm ? 'auto' : 'smooth' });
-      });
-    }
+    window.addEventListener('scroll', function () { if (crumbs) crumbs.classList.toggle('stuck', window.scrollY > 0); }, { passive: true });
   })();
   // The row of sibling folders starts with the current one in view.
   (function () {
     const row = document.querySelector('.crumb-row'), cur = row && row.querySelector('.folder-pills .current'), back = row && row.querySelector('.breadcrumb');
-    if (cur) row.scrollLeft = cur.offsetLeft - (back ? back.offsetWidth : 0) - (row.clientWidth - (back ? back.offsetWidth : 0) - cur.offsetWidth) / 2;
+    const bw = back && !row.classList.contains('crumb-free') ? back.offsetWidth : 0;
+    if (cur) row.scrollLeft = cur.offsetLeft - bw - (row.clientWidth - bw - cur.offsetWidth) / 2;
   })();
   // The archive always asks first, saying how many files and how big: it is a long, heavy download, and nothing is done on the server until the answer is yes.
   document.querySelectorAll('.page-archive').forEach(function (a) {

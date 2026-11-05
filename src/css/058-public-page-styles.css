@@ -63,17 +63,27 @@
   p.breadcrumb a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
   p.breadcrumb a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   p.breadcrumb a + a::before { content: "\203A"; margin-right: 9px; opacity: 0.55; }
-  /* The way back and the pills stay at the top of the screen, like the icon strip (which sticks just under them). Two arrows at the right,
-     once the page has scrolled, jump to the bottom and the top. */
-  .crumb-bar { position: sticky; top: var(--stick-top, 0px); z-index: 41; display: flex; align-items: center; gap: 8px; padding: 10px 24px 6px; background: var(--bg); transition: box-shadow .15s; }
+  /* The way back and the pills stay at the top of the screen, like the icon strip (which sticks just under them). */
+  .crumb-bar { position: sticky; top: var(--stick-top, 0px); z-index: 41; display: flex; align-items: center; gap: 8px; padding: 10px max(24px, calc((100% - 1400px) / 2 + 24px)) 6px; background: var(--bg); transition: box-shadow .15s; }   /* (its contents are as wide as the gallery below) */
   .crumb-bar.stuck { box-shadow: 0 1px 0 #26262a; }
   .crumb-bar + header { padding-top: 10px; }
-  .jump-btns { flex: none; display: flex; gap: 6px; }
-  .jump-btns[hidden] { display: none; }
-  .jump-btn { width: 34px; height: 34px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.12); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; }
-  .jump-btn .ico { width: 18px; height: 18px; }
-  .jump-btn:active { transform: scale(0.9); }
-  @media (hover: hover) { .jump-btn:hover { transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; } .jump-btn:hover:active { transform: scale(1.02); } }
+  /* Two round buttons float at the bottom right of the screen once the page has scrolled: to the top, to the bottom. They are the same on every page and device;
+     their right edge is the gallery's (the script sets it from the strip), so on a wide window they stay by the photos, and a phone's owner bar and Select's bar are cleared. */
+  .jump-fab { position: fixed; right: max(calc(14px + env(safe-area-inset-right, 0px)), calc((100vw - 1400px) / 2 + 24px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 55; display: flex; flex-direction: column; gap: 8px; }
+  .jump-fab[hidden] { display: none; }
+  .jump-btn { width: 40px; height: 40px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2); box-shadow: 0 2px 10px rgba(0,0,0,0.45); cursor: pointer; opacity: 0.85; transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; -webkit-tap-highlight-color: transparent; }
+  .jump-btn .ico { width: 19px; height: 19px; }
+  .jump-btn:active { transform: scale(0.92); }
+  /* Over one, the button answers the way a photo's own buttons do: full strength, a white ring, a little larger, in the accent colour. */
+  @media (hover: hover) { .jump-btn:hover, .jump-btn:focus-visible { opacity: 1; transform: scale(1.14); box-shadow: 0 0 0 2px #fff; background: var(--accent); border-color: #fff; } .jump-btn:hover:active { transform: scale(1.02); } }
+  @media (max-width: 800px) { body.pb-on .jump-fab { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); } }   /* (above the owner's bar, not on its buttons) */
+  body.selecting .jump-fab { display: none; }
+  /* A row with more pills than fit has a small button at each end where there is a pointer (a touch screen swipes), and the wheel moves it sideways. */
+  .row-chev { flex: none; width: 28px; height: 28px; padding: 0; border-radius: 50%; display: none; align-items: center; justify-content: center; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.12); cursor: pointer; }
+  .row-chev .ico { width: 15px; height: 15px; }
+  .row-chev.on { display: inline-flex; }
+  .row-chev:hover { border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }
+  @media (hover: none) { .row-chev.on { display: none; } }
   @media (max-width: 600px) { .crumb-bar { padding: 8px 16px 4px; } }
   /* The way back and the folders beside this one share ONE line: the way back stays put at the left while the sibling pills
      swipe; the current folder is lit. When it all fits it is centred. */
@@ -81,9 +91,15 @@
   .crumb-row::-webkit-scrollbar { display: none; }
   .crumb-row p.breadcrumb { flex: none; flex-wrap: nowrap; margin: 0 0 0 auto; }
   .crumb-row p.breadcrumb:only-child { margin-right: auto; }
-  .crumb-row nav.folder-pills { margin-right: auto; }
+  .crumb-row nav.folder-pills:last-child { margin-right: auto; }
+  .crumb-row nav.folder-pills:only-child { margin-left: auto; }
+  /* Flat with folder names: after the folders beside this one, a dot and a pill for each folder's section on the page. The one you are in
+     is outlined (the lit solid pill stays the folder you are on). */
+  .crumb-dot { flex: none; font-size: 1rem; line-height: 1; color: var(--muted); opacity: 0.7; }
+  nav.sec-pills a.here { color: #fff; border-color: var(--accent); background: rgba(88, 101, 242, 0.16); }
   .crumb-row p.breadcrumb:not(:only-child) { position: sticky; left: 0; z-index: 2; background: var(--bg); box-shadow: 8px 0 8px -4px var(--bg); }
   .crumb-row p.breadcrumb:not(:only-child)::after { content: "\2022"; font-size: 1rem; line-height: 1; color: var(--muted); opacity: 0.7; align-self: center; margin-left: 4px; margin-right: 0; }
+  .crumb-row.crumb-free p.breadcrumb:not(:only-child) { position: static; box-shadow: none; }   /* (most of the row: it swipes away with the rest) */
   nav.folder-pills { flex: none; display: flex; gap: 6px; }
   nav.folder-pills a { flex: none; font-size: 0.82rem; line-height: 1; color: var(--muted); text-decoration: none; background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07); padding: 7px 13px; border-radius: 999px; white-space: nowrap; transition: color .15s, border-color .15s, background .15s; }   /* the same pill as the breadcrumb's */
   nav.folder-pills a:hover { color: var(--text); border-color: var(--accent); background: rgba(88, 101, 242, 0.12); }

@@ -347,6 +347,13 @@ function flat_label_button($anchorId, $textHtml, $title) {
     return '<button type="button" class="label-copy" data-anchor="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '" title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '"><span class="lc-t">' . $textHtml . '</span></button>';
 }
 
+/** What a Flat folder's first element on the page carries so the row at the top can have a pill that goes to it: its name and, for the
+ *  owner, whether it is private. (A visitor's pills come from the boxes that Show folder names makes; the owner also gets them without.) */
+function flat_sec_attrs($label, $folderPath) {
+    $priv = owner_folder_privacy($GLOBALS['dir'], [], $folderPath, false)['state'];
+    return ' data-sec="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '"' . ($priv !== '' ? ' data-sec-priv="' . $priv . '"' : '');
+}
+
 /** The divider row inside a Flat box for a folder below it: its parent folders in muted text, then its own name, on one line, with the path
  *  measured from the box ($boxKey, the top folder). $sub is the folder's path from the gallery root. */
 function flat_divider_html($boxKey, $sub, $boxSlug) {
@@ -392,8 +399,11 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         // Flat without folder names: the folder's photos are part of the page's one grid, no box and no label.
         $isFlatFolder = isset($folderGroupKeys[$key]) && folder_style_flat();
         if ($isFlatFolder && !flat_names_on()) {
-            foreach ($groupFiles as $file) {
-                $html .= render_card($file, $flatIndex, $photoViews, '', null, null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
+            foreach ($groupFiles as $i => $file) {
+                // (the owner's row of pills still has one for this folder: its first photo is what a press scrolls to)
+                $first = $i === 0 && is_admin_browser();
+                $card = render_card($file, $flatIndex, $photoViews, '', null, $first ? 'group-' . slugify($key) : null, $videoDurations[$file] ?? null, $itemsData[$file] ?? null);
+                $html .= $first ? preg_replace('/^<div /', '<div' . flat_sec_attrs($groupLabels[$key] ?? $key, $folderLinkPrefix . $key) . ' ', $card, 1) : $card;
                 $flatIndex++;
             }
             continue;
@@ -432,7 +442,9 @@ function build_gallery_html($groups, $groupColors, $groupStatus, $photoViews, $g
         }
         $viewsHidden = (view_counts_shown() && ($groupTotal > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';
 
-        $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
+        // A Flat folder's box says what it is called (and, for the owner, whether it is private) so the row at the top can have a pill that goes to it.
+        $secAttrs = $isFlatFolder ? flat_sec_attrs($label, $flatPath) : '';
+        $html .= '<div class="group-box' . ($status ? ' ' . $status : '') . '"' . $boxStyle . $secAttrs . ' id="group-' . htmlspecialchars($slug, ENT_QUOTES, 'UTF-8') . '">';
         $labelText = $isFlatFolder
             ? flat_label_button('group-' . $slug, htmlspecialchars($label, ENT_QUOTES, 'UTF-8'), 'Copy a link to ' . $label)
             : htmlspecialchars($label, ENT_QUOTES, 'UTF-8');

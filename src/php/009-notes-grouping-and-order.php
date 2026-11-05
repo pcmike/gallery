@@ -150,7 +150,7 @@ foreach ($folderGroups as $folderKey => $members) {
 // back into individually-keyed standalone singles instead of merging
 // files that just happen to share a name.
 foreach ($groups as $key => $groupFiles) {
-    if (count($groupFiles) < 2) continue;
+    if (count($groupFiles) < 2 || isset($folderGroups[$key])) continue;   // (a folder's photos are its own by their folders: the same file name in two of its subfolders is nothing to split)
     $rawBases = array_map(function ($f) { return pathinfo($f, PATHINFO_FILENAME); }, $groupFiles);
     $counts = array_count_values($rawBases);
     $keep = [];

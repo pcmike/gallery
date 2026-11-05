@@ -887,22 +887,44 @@ try:
         os.makedirs(SITE14 + "/Tall", exist_ok=True)
         for n in range(40):
             subprocess.run(["php", "-r", "$i=imagecreatetruecolor(600,450); imagejpeg($i,$argv[1]);", SITE14 + "/Tall/t%02d.jpg" % n], check=True)
-        stackq = """(() => { const c = document.getElementById('crumb-bar'), m = document.getElementById('map-bar'), j = c.querySelector('.jump-btns'), cr = c.getBoundingClientRect(), mr = m.getBoundingClientRect(); return {y: Math.round(scrollY), crumbTop: Math.round(cr.top), crumbH: Math.round(cr.height), mapTop: Math.round(mr.top), jumpsHidden: j.hidden, order: [...j.querySelectorAll('button')].map(x => x.dataset.jump), jumpsRight: !j.hidden && Math.round(j.getBoundingClientRect().right) <= Math.round(cr.right), mapStuck: m.classList.contains('stuck'), crumbStuck: c.classList.contains('stuck'), bottom: Math.round(document.documentElement.scrollHeight - innerHeight)}; })()"""
-        for label, vw, vh, mob in (("desktop", 1280, 900, False), ("phone", 390, 844, True)):
+        stackq = """(() => { const c = document.getElementById('crumb-bar'), m = document.getElementById('map-bar'), f = document.getElementById('jump-fab'), cr = c.getBoundingClientRect(), mr = m.getBoundingClientRect(), fr = f.getBoundingClientRect(); return {y: Math.round(scrollY), crumbTop: Math.round(cr.top), crumbH: Math.round(cr.height), mapTop: Math.round(mr.top), fabHidden: f.hidden, order: [...f.querySelectorAll('button')].map(x => x.dataset.jump), fabRight: Math.round(innerWidth - fr.right), fabBottom: Math.round(innerHeight - fr.bottom), mapStuck: m.classList.contains('stuck'), bottom: Math.round(document.documentElement.scrollHeight - innerHeight)}; })()"""
+        for label, vw, vh, mob in (("desktop", 1280, 900, False), ("phone", 390, 844, True), ("wide", 1900, 900, False)):
             b.viewport(vw, vh, mobile=mob); b.goto(B14 + "/?folder=Tall", 1.5)
             top0 = b.js(stackq)
-            ok(top0["jumpsHidden"] and top0["crumbTop"] == 0, f"[sticky crumbs] ({label}) at the top of the page the arrows are not shown yet", str(top0))
+            ok(top0["fabHidden"] and top0["crumbTop"] == 0, f"[sticky crumbs] ({label}) at the top of the page the round jump buttons are not shown yet", str(top0))
             b.js("window.scrollTo(0, 900)"); b.drain(0.6)
             mid = b.js(stackq)
             ok(mid["crumbTop"] == 0 and abs(mid["mapTop"] - mid["crumbH"]) <= 1 and mid["mapStuck"] and mid["y"] >= 500, f"[sticky crumbs] ({label}) scrolled down, the way back and the pills stay at the top and the icon strip sticks right under them", str(mid))
-            ok(not mid["jumpsHidden"] and mid["order"] == ["bottom", "top"] and mid["jumpsRight"], f"[sticky crumbs] ({label}) the down arrow and then the up arrow appear at the right of the row", str(mid))
-            shot(b, "43-sticky-crumbs-" + label)
+            stripR = b.js("Math.round(document.documentElement.clientWidth - Math.max(...[...document.querySelectorAll('#map-bar .map-combo-btn')].map(e => e.getBoundingClientRect().right)))")
+            ok(not mid["fabHidden"] and mid["order"] == ["top", "bottom"] and abs(mid["fabRight"] - stripR) <= 2 and 8 <= mid["fabBottom"] <= 30, f"[sticky crumbs] ({label}) the up and down buttons float at the bottom right, their right edge where the gallery's own strip ends (by the photos on a wide screen)", str([mid, stripR]))
+            if label != "wide": shot(b, "43-sticky-crumbs-" + label)
             b.js("document.querySelector('.jump-btn[data-jump=top]').click()"); b.drain(1.5)
-            ok(b.js("Math.round(scrollY)") == 0, f"[sticky crumbs] ({label}) the up arrow goes to the top")
-            b.js("document.querySelector('.jump-btns').hidden = false; document.querySelector('.jump-btn[data-jump=bottom]').click()"); b.drain(2.0)
-            ok(abs(b.js("Math.round(scrollY)") - mid["bottom"]) <= 3, f"[sticky crumbs] ({label}) the down arrow goes to the bottom", b.js("Math.round(scrollY)"))
+            ok(b.js("Math.round(scrollY)") == 0, f"[sticky crumbs] ({label}) the up button goes to the top")
+            b.js("document.getElementById('jump-fab').hidden = false; document.querySelector('.jump-btn[data-jump=bottom]').click()"); b.drain(2.0)
+            ok(abs(b.js("Math.round(scrollY)") - mid["bottom"]) <= 3, f"[sticky crumbs] ({label}) the down button goes to the bottom", b.js("Math.round(scrollY)"))
         b.viewport(1280, 900); b.goto(B14 + "/", 1.2)
-        ok(b.js("document.getElementById('crumb-bar') === null && document.querySelector('.jump-btn') === null"), "[sticky crumbs] the main page has neither the bar nor the arrows")
+        ok(b.js("document.getElementById('crumb-bar') === null && !!document.getElementById('jump-fab')"), "[sticky crumbs] the main page has no bar, but the same round jump buttons")
+        # Flat with folder names: the row goes on, past a dot, with a pill for each folder box on the page (2.6.1)
+        open(SITE14 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"AUTO_GROUP_BY_FOLDER": True, "FOLDER_DISPLAY_MODE": "flat", "FOLDER_FLAT_NAMES": True}) + "\n")
+        secq = """(() => { const row = document.querySelector('.crumb-row'); if (!row) return null; const rr = row.getBoundingClientRect(), pills = [...row.querySelectorAll('.sec-pills a')], back = row.querySelector('.breadcrumb'), tops = [...new Set([...row.querySelectorAll('a')].map(a => Math.round(a.getBoundingClientRect().top)))], here = row.querySelector('.sec-pills a.here'), m = document.getElementById('map-bar').getBoundingClientRect(); const hr = here ? here.getBoundingClientRect() : null, free = row.classList.contains('crumb-free'), bl = back && !free ? back.getBoundingClientRect().right : rr.left; const box = here ? document.getElementById(here.getAttribute('href').slice(1)) : null; return {n: pills.length, first: pills.length ? pills[0].textContent : '', dot: !!row.querySelector('.crumb-dot'), lines: tops.length, here: here ? here.textContent : '', hereIn: !!hr && hr.left >= bl - 1 && hr.right <= rr.right + 1, boxBelowBar: !!box && box.getBoundingClientRect().top >= m.bottom - 3, y: Math.round(scrollY), curSolid: !!row.querySelector('.folder-pills .current')}; })()"""
+        for label, vw, vh, mob in (("desktop", 1280, 900, False), ("phone", 390, 844, True)):
+            b.viewport(vw, vh, mobile=mob); b.goto(B14 + "/?folder=Many", 1.5)
+            sp = b.js(secq)
+            ok(sp is not None and sp["n"] == 14 and sp["first"] == "F01" and sp["dot"] and sp["lines"] == 1 and sp["here"] == "", f"[section pills] ({label}) the row has the 14 folders on the page after a dot, on the one line, and none is lit before the first box", str(sp))
+            b.js("[...document.querySelectorAll('.sec-pills a')].pop().click()"); b.drain(1.8)
+            sp = b.js(secq)
+            ok(sp["here"] == "F14" and sp["hereIn"] and sp["y"] > 300, f"[section pills] ({label}) pressing the last pill scrolls to its box, lights it and keeps it in view in the row", str(sp))
+            b.js("document.querySelectorAll('.sec-pills a')[4].click()"); b.drain(1.8)
+            sp = b.js(secq)
+            ok(sp["here"] == "F05" and sp["hereIn"] and sp["boxBelowBar"], f"[section pills] ({label}) pressing a middle one stops its box below the bars, not under them", str(sp))
+            if not mob: shot(b, "44-section-pills-" + label)
+        b.viewport(1280, 900); b.goto(B14 + "/", 1.5)
+        sp = b.js(secq)
+        ok(sp is not None and sp["n"] == 3 and sp["lines"] == 1 and not sp["curSolid"], "[section pills] the gallery's own page has the row too, with just the folders on it", str(sp))
+        midq = "(() => { const a = [...document.querySelectorAll('.sec-pills a')], l = a[0].getBoundingClientRect().left, r = a[a.length - 1].getBoundingClientRect().right; return {mid: Math.round((l + r) / 2), vw: innerWidth, y: Math.round(scrollY)}; })()"
+        m0 = b.js(midq); b.js("window.scrollTo(0, 900)"); b.drain(0.8); m1 = b.js(midq)
+        ok(m1["y"] > 300 and abs(m0["mid"] - m0["vw"] / 2) <= 3 and abs(m1["mid"] - m0["mid"]) <= 1, "[section pills] on a wide screen the row stays centred, and does not shift sideways when the page scrolls (the arrows appearing)", str([m0, m1]))
+        open(SITE14 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"AUTO_GROUP_BY_FOLDER": True}) + "\n")
     finally:
         srv14.terminate(); srv14.wait()
         b.viewport(1280, 900)

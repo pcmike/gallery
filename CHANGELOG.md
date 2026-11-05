@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.6.1] - 2026-11-04
+
+### Added
+- **Flat has pills for the folders on the page.** The row at the top (the way back and the folders beside this one) continues after a dot with a pill for each folder, in the order they run down the page; a press scrolls to it, and the folder you are in is outlined as you scroll. The gallery's own page gets the row too. A visitor gets the pills with folder names on; **the owner gets them with names off as well** (a press goes to the folder's first photo), and **inside the admin the page keeps just this row** (the tree and the title line already do the rest), so the owner can jump between a Flat page's folders there too.
+- **A row with more pills than fit has a small button at each end where there is a pointer, and the mouse wheel moves it sideways** (a touch screen swipes, as before).
+
+### Changed
+- **The jump arrows are two round buttons at the bottom right of the screen.** They used to sit at the right end of the top row, on a folder's page only, which on a wide window put them far from the photos. Now, once a page has scrolled, they float there (to the top, to the bottom) on every page and device, outside and inside the admin, with their right edge where the gallery's own strip ends, and on a phone above the owner's bottom bar. A press or hover answers the way a photo's own buttons do (full strength, a white ring, a little larger, in the accent colour).
+- **On a phone, a very long way back (`← Our summer in Europe / Europe`) no longer sits pinned over the pills**: when it is nearly the whole width of the row it swipes away with the rest.
+- **Inside the admin the top bar keeps its icons in line with the page's below them** (it gives up the width of the page's scrollbar).
+
+### Fixed
+- **Photos with the same file name in two folders of one folder** (`France/Paris/IMG.jpg` and `France/Lyon/IMG.jpg`) were pulled out of their folder's box in Flat and shown loose at the top of the page; they now stay in their folder.
+
 ## [2.6.0] - 2026-11-04
 
 ### Added

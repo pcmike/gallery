@@ -12,7 +12,7 @@ Changed in **Settings** (no Save button: each change saves as you make it) or in
 |---|---|---|
 | `AUTO_GROUP_BY_FOLDER` | on | Subfolders become albums, to any depth (on by default since 2.5.0) |
 | `FOLDER_DISPLAY_MODE` | `overview` | How a page shows its folders: `overview` (cover cards) or `flat` (all their photos on the page, folder by folder). The older `cards` and `inline` (Flat with folder names) still work |
-| `FOLDER_FLAT_NAMES` | off | Flat only: a box for each folder directly under the page and a divider for the folders inside it, with each folder's description and dates |
+| `FOLDER_FLAT_NAMES` | off | Flat only: a box for each folder directly under the page and a divider for the folders inside it, with each folder's description and dates, and a pill for each folder in the row at the top to jump to it |
 | `FOLDER_FLAT_NOTES` | off | Flat only, with folder names on: each folder's notes text under its name |
 | `AUTO_GROUP_BY_FILENAME` | off | `alpha_01.jpg`, `alpha_02.jpg` group as "alpha" |
 | `ENABLE_VIDEO` | off | Show `.mov` / `.mp4` |
