@@ -52,6 +52,9 @@ define('BROWSER_END_ON_NETWORKS', (bool) gallery_setting('BROWSER_END_ON_NETWORK
 // Settings, which fetches the file. COUNTRY_DB_URL is only for a mirror of your own or a test: {ym} stands for the month ("2026-11").
 define('COUNTRY_LOOKUP', (bool) gallery_setting('COUNTRY_LOOKUP', false));
 define('COUNTRY_DB_URL', (string) gallery_setting('COUNTRY_DB_URL', ''));
+// Looking for a new version once a day (see "New versions"); UPDATE_FEED_URL is only for a mirror of your own or a test.
+define('CHECK_FOR_UPDATES', (bool) gallery_setting('CHECK_FOR_UPDATES', true));
+define('UPDATE_FEED_URL', (string) gallery_setting('UPDATE_FEED_URL', ''));
 // (the cookie 2.3.2 kept the owner's token in; only read now to move a browser over to the one above, see LEGACY-REMOVAL)
 define('ADMIN_STAY_COOKIE_NAME', 'gallery_stay_' . substr(hash('sha256', __DIR__), 0, 10));
 

@@ -11,6 +11,7 @@ php/010-json-data-files.php
 php/011-sign-in-throttle.php
 php/011b-signin-history.php
 php/011c-country-file.php
+php/011d-update-check.php
 php/012-passwords.php
 css/013-login-page-styles.css
 php/014-login-page-markup.php

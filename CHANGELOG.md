@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.6.2] - 2026-11-05
+
+### Added
+- **The Health check says when a newer version is out, and can install it.** Once a day (asked after Settings has loaded, so it never slows the page, and never while a visitor's page is built) the gallery asks GitHub's releases page for the newest version. Only when it is newer than yours, a *Version X is out* notice appears at the top of the Health check with **Update now** and **View release**. *New versions → Check now* looks at once; `CHECK_FOR_UPDATES` (Settings → Server setup) turns the daily look off. **Update now** downloads the release's `index.php` and checksum from the project's own release address, refuses a download whose checksum differs, that is cut short or whose version isn't the release's (changing nothing), keeps the file it replaces as `.gallery-previous.php` (guarded), swaps the new one in with one rename and reads it back. For a day the Health check offers **Go back**, which puts the kept file back exactly. Photos and settings are never touched. Where the web server can't write `index.php`, only *View release* is offered, with the reason.
+
+### Changed
+- **In the link form, *Show only what they can see here* starts ticked for every choice that limits what they see** (some folders, some photos, or both), not only for photos. A link that covers some folders now shows just those unless you untick it. *Everything* and *Just the public gallery* have no box. **The quick Share on a folder gets the same box (*Show only this folder*), ticked**, and *More options…* carries it over to the full form.
+- **"Everything private" is now just "Everything"**, since that choice is the whole gallery, public and private (the form, the link's paragraph, the log's list and the guide say so).
+
+### Fixed
+- **The Health check no longer calls a step back to an older version an upgrade.** Putting an older copy over a newer one now reads "Went back from 2.6.2 on …" instead of "Upgraded from 2.6.2 …", and its intro line says plainly that the check only looks.
+- **On a phone, the "Opens in" menu on a share link's form opened out of sight** (about a screen above the button), so it looked as if "The front page" was the only choice. It now opens under its button, and lists the front page and the folders the link covers.
+
 ## [2.6.1] - 2026-11-04
 
 ### Added

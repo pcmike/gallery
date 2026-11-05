@@ -13,7 +13,7 @@
 /** The files the gallery makes beside index.php, by exact name: name => kind. */
 function owned_top_names() {
     return ['.gallery-config.php' => 'settings', '.gallery-links.php' => 'links', '.gallery-secret.php' => 'secret', '.gallery-stay.php' => 'signin', '.gallery-browsers.php' => 'signin', '.gallery-browsers-log.php' => 'signin',
-            '.gallery-login-attempts.php' => 'signin', '.gallery-health.php' => 'health', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo'];
+            '.gallery-login-attempts.php' => 'signin', '.gallery-health.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo'];
 }
 
 /** The kind of a file name, or '' when the gallery makes no file with that name. $isTop: the folder is the gallery's own (the one index.php is in). */
@@ -43,6 +43,8 @@ function owned_kind_info() {
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],
         'geo' => ['Country file', 'beside index.php', 'The list of address ranges per country (from DB-IP) that says which country an address is in, and when it was fetched.', 'Countries are no longer looked up; turning the option on again fetches it again.'],
         'health' => ['Version record', 'beside index.php', 'Which version last ran here.', 'Made again by the next visit.'],
+        'update' => ['New-version check', 'beside index.php', 'The newest version GitHub last reported, and when this gallery was last updated.', 'Made again by the next check.'],
+        'previous' => ['Earlier version kept', 'beside index.php', 'The index.php that Update now replaced, kept so Go back can put it in again.', 'Go back is no longer possible; the gallery itself is not affected.'],
         'items' => ['Captions, locations, private marks, folder names', 'in each folder', 'What you typed or chose for the photos and folders in it.', 'All of it is lost.'],
         'stats' => ['View counts', 'in each folder', 'How many times each photo was looked at.', 'Counts start again from 0.'],
         'backups' => ['Tidy-up backups', 'in each folder', 'Copies kept when Tidy up changed a folder\'s data.', 'The backups are gone.'],
@@ -200,7 +202,7 @@ function owned_delete($plan) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
     // order: everything in the folders and the thumbnails first, then the gallery's own data, the settings file last
-    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'signin', 'geo', 'health', 'secret', 'settings'];
+    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
     $deleted = 0; $thumbs = 0; $left = [];
     $byKind = [];
     foreach ($plan['entries'] as $e) $byKind[$e['kind']][] = $e;
@@ -618,8 +620,7 @@ KIT_CSS;
   function when(sec) { return sec > 0 ? new Date((Math.floor(Date.now() / 1000) + sec) * 1000).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''; }
   // What the person will see, said plainly: what the link covers, and the public rest of the gallery (listed too, or not).
   function fineText(photos, one, only) {
-    if (!photos) return 'They can see this folder and what is inside it, and everything that is already public. ';
-    var what = one ? 'this photo' : 'these photos';
+    var what = !photos ? 'this folder and what is inside it' : (one ? 'this photo' : 'these photos');
     return only ? 'They can see only ' + what + (cfg.closed ? ', and nothing else can be opened through the gallery. ' : '. The rest of the gallery stays public to everyone: this is a tidy view, not a lock. ') : 'They can see ' + what + ', and everything that is already public. ';
   }
   // What the quick form says about how many browsers can open the link (the number is the setting; 0 is unlimited). `more` is the
@@ -647,7 +648,7 @@ KIT_CSS;
       + '<div class="gs-f gs-addr"><label class="gs-only"><input type="checkbox" id="gs-addr"' + (oneOff ? '' : ' checked') + '> <span>Use the name as the address <code class="gs-addrprev"></code></span></label>'
       + '<div class="gs-addrnote" role="status" hidden>This link opens private photos. An address made from a name is easy to guess, so untick the box to get a random one that can\'t be.</div>'
       + '<div class="gs-fine gs-addrrand" hidden>A random code is made for you, one that can\'t be guessed. <button type="button" class="gs-link" data-gs="own">Type my own instead…</button></div></div>'
-      + (photos ? '<label class="gs-only"><input type="checkbox" id="gs-only" checked> <span>Show only ' + (one ? 'this photo' : 'these photos') + '</span></label>' : '')
+      + '<label class="gs-only"><input type="checkbox" id="gs-only" checked> <span>Show only ' + (photos ? (one ? 'this photo' : 'these photos') : 'this folder') + '</span></label>'
       + ((+cfg.defaultUses || 0) > 0 ? '<label class="gs-only"><input type="checkbox" id="gs-many"> <span>Meant for more than one person?</span></label>' : '')
       + '<p class="gs-fine"><span class="gs-fine-t">' + fineText(photos, one, true) + '</span><span class="gs-fine-u">' + usesFine(+cfg.defaultUses || 0, false) + '</span>Downloads off, locations shown only where set to show, no note. <button type="button" class="gs-link" data-gs="more">More options…</button></p>'
       + '<div class="gs-err" role="alert"></div></div>'
@@ -671,7 +672,7 @@ KIT_CSS;
       var what = b.getAttribute('data-gs');
       if (what === 'cancel') { closeModal(); return; }
       var draftOf = function () {
-        return { label: nameIn.value.trim(), scopeType: photos ? 'photos' : 'folders', only: photos && !!card.querySelector('#gs-only').checked, scopeFolders: photos ? [] : [opts.path], scopePhotos: photos ? files : [], openIn: photos ? '' : opts.path, maxOpens: (card.querySelector('#gs-many') || {}).checked ? 0 : +cfg.defaultUses || 0, endsAt: 0, addrMode: ck.checked ? 'name' : 'random' };
+        return { label: nameIn.value.trim(), scopeType: photos ? 'photos' : 'folders', only: !!card.querySelector('#gs-only').checked, scopeFolders: photos ? [] : [opts.path], scopePhotos: photos ? files : [], openIn: photos ? '' : opts.path, maxOpens: (card.querySelector('#gs-many') || {}).checked ? 0 : +cfg.defaultUses || 0, endsAt: 0, addrMode: ck.checked ? 'name' : 'random' };
       };
       if (what === 'more' || what === 'own') {
         var d = draftOf(); closeModal();

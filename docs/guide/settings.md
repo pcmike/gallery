@@ -43,6 +43,7 @@ Changed in **Settings** (no Save button: each change saves as you make it) or in
 | `BROWSER_NETWORKS_ALARM` | 20 | Flag a browser used from more than this many networks in 24 hours |
 | `BROWSER_END_ON_DEVICE` / `_FAMILY` / `_COUNTRY` / `_NETWORKS` | off | Sign a browser out by itself when the matching flag is raised |
 | `COUNTRY_LOOKUP` | off | The [country file](admin.md#the-country-file) (DB-IP, downloaded to your server about monthly); `COUNTRY_DB_URL` names another source |
+| `CHECK_FOR_UPDATES` | on | Once a day the [Health check](admin.md#new-versions-and-update-now) asks GitHub for the newest version and offers *View release* and *Update now* when it is newer; `UPDATE_FEED_URL` names another source |
 | `CLOSE_PUBLIC_GALLERY` | off | [Close the public gallery](private-and-sharing.md#closing-the-public-gallery): only you, private-view sign-ins and people using a share link see anything (needs share links on and an admin password) |
 | `TRUSTED_PROXY` / `TRUSTED_PROXY_RANGES` | `direct` / none | Where visitors' addresses come from, for share-link logs and the sign-in throttle: `direct` (the connection), `cloudflare`, or `proxy` (the `X-Forwarded-For` header, believed only from the ranges you list) |
 | `NGINX_ACCEL_REDIRECT_PREFIX` | none | The gallery's URL path (e.g. `/kb`), once nginx has the matching rules |

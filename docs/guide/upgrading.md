@@ -6,7 +6,7 @@ What changes at each version, and what to back up.
 
 ## Upgrading and backups
 
-**Updating** means replacing `index.php`. Settings (`.gallery-config.php`), captions and everything else live beside it and are untouched; the Health check then shows what it was upgraded from.
+**Updating** means replacing `index.php`, by hand or with **Update now** in the Health check when a newer version is out ([how it works](admin.md#new-versions-and-update-now)). Settings (`.gallery-config.php`), captions and everything else live beside it and are untouched; the Health check then shows what it was upgraded from.
 
 **Upgrading to 2.5.0** from 2.4.2: replace `index.php`. **Subfolders are now on by default**: a gallery that never set `AUTO_GROUP_BY_FOLDER` will start showing its subfolders as cover cards (the scan skips dot and system folders). If you want the old behaviour, switch *Show subfolders* off in Settings. A gallery that had it set keeps its choice. *Folder style* is now Cover cards or Flat; an older `inline` still works and means Flat with *Show folder names* on. New files: none.
 
@@ -52,6 +52,8 @@ What changes at each version, and what to back up.
 .gallery-stay.php
 .gallery-secret.php
 .gallery-health.php
+.gallery-update.php
+.gallery-previous.php
 .gallery-links.php
 .gallery-linklog-*.php
 ```

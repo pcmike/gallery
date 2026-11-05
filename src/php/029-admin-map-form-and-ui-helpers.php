@@ -345,6 +345,9 @@ function gallery_setting_definitions() {
              'help' => 'The limit above. Always flagged in red; this also signs it out.'],
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
+            ['name' => 'CHECK_FOR_UPDATES', 'type' => 'bool', 'label' => 'Look for a new version of the gallery',
+             'help' => 'Once a day the Health check asks GitHub which version is newest and says so when it is newer, with View release and Update now. Only an ordinary request is made (GitHub sees this server\'s address); nothing about your gallery is sent. Off: no automatic look; Check now still works.'],
+            ['name' => 'UPDATE_FEED_URL', 'type' => 'text', 'in' => true, 'label' => 'Where new versions are announced', 'help' => ''],
             ['name' => 'TRUSTED_PROXY', 'type' => 'enum', 'label' => 'Where visitors\' IP addresses come from', 'status' => 'clientip',
              'options' => ['direct' => 'The connection', 'cloudflare' => 'Cloudflare', 'proxy' => 'Another proxy'],
              'help' => 'Behind Cloudflare or another CDN, every visitor looks the same unless the gallery reads their real address. Choose yours; leave it on "The connection" if your web server already passes the real address on (the Visitors tab then shows no country, which comes from Cloudflare). Another proxy: set TRUSTED_PROXY_RANGES in .gallery-config.php.'],

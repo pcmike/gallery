@@ -142,7 +142,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
          <div class="sl-grp-b">
         <div class="sl-f"><span class="sl-k">What they can see</span>
           <div class="sl-radios" role="radiogroup" aria-label="What they can see">
-            <label class="sl-radio"><input type="radio" name="scope_type" value="all"><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
+            <label class="sl-radio"><input type="radio" name="scope_type" value="all"><span><strong>Everything</strong><small>The whole gallery, public and private, including what you add later.</small></span></label>
             <label class="sl-radio"><input type="radio" name="scope_type" value="folders"<?= AUTO_GROUP_BY_FOLDER ? '' : ' disabled' ?>><span><strong>Only some folders</strong><small>Each folder includes everything inside it, or only its public items. They are never told other private folders exist.<?= AUTO_GROUP_BY_FOLDER ? '' : ' (Turn on “Show subfolders” in Settings first.)' ?></small></span></label>
             <label class="sl-radio"><input type="radio" name="scope_type" value="public" checked><span><strong>Just the public gallery</strong><small>Nothing private. They see what any visitor sees, and the log shows who looked at what. Useful for finding out who opens a link you post or send.</small></span></label>
             <label class="sl-radio" data-photos-only><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note">Only the photos you pick, wherever they are. Anything already public stays visible too, unless you tick the box below.</small></span></label>

@@ -86,7 +86,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.1');
+define('GALLERY_VERSION', '2.6.2');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -587,6 +587,9 @@ define('BROWSER_END_ON_NETWORKS', (bool) gallery_setting('BROWSER_END_ON_NETWORK
 // Settings, which fetches the file. COUNTRY_DB_URL is only for a mirror of your own or a test: {ym} stands for the month ("2026-11").
 define('COUNTRY_LOOKUP', (bool) gallery_setting('COUNTRY_LOOKUP', false));
 define('COUNTRY_DB_URL', (string) gallery_setting('COUNTRY_DB_URL', ''));
+// Looking for a new version once a day (see "New versions"); UPDATE_FEED_URL is only for a mirror of your own or a test.
+define('CHECK_FOR_UPDATES', (bool) gallery_setting('CHECK_FOR_UPDATES', true));
+define('UPDATE_FEED_URL', (string) gallery_setting('UPDATE_FEED_URL', ''));
 // (the cookie 2.3.2 kept the owner's token in; only read now to move a browser over to the one above, see LEGACY-REMOVAL)
 define('ADMIN_STAY_COOKIE_NAME', 'gallery_stay_' . substr(hash('sha256', __DIR__), 0, 10));
 
@@ -4611,6 +4614,225 @@ function geo_admin_action($action) {
 }
 
 /* -----------------------------------------------------------------------
+ * New versions. The gallery can ask GitHub (the project's releases page) which version is the newest, at most once a day, from the Settings
+ * page and never while a page is being built: the page asks afterwards, in the background, and says nothing when it can't be reached. If the
+ * newest is newer than this one, the Health check says so with two buttons, View release and Update now. The only thing sent is an ordinary
+ * request for the releases page (so GitHub sees this server's address); nothing about the gallery, its photos or its visitors. CHECK_FOR_UPDATES
+ * turns the daily check off (the Check now button still works).
+ *
+ * Update now replaces this file (index.php) and nothing else. It downloads the release's index.php and its .sha256 from the project's own
+ * release address, refuses anything whose checksum differs or that isn't a PHP file for the version named, keeps the file it replaces
+ * (guarded, as .gallery-previous.php) and swaps the new one in with a single rename. Go back puts the kept file in again. Photos, settings and
+ * every other file are never touched.
+ * ----------------------------------------------------------------------- */
+
+function update_state_path() {
+    return __DIR__ . '/.gallery-update.php';
+}
+function update_backup_path() {
+    return __DIR__ . '/.gallery-previous.php';
+}
+
+/** What we last learned: ['triedAt' => when we last asked, 'checkedAt' => when an answer last came, 'latest' => '2.7.0' or '', 'page' => the release's page, 'indexUrl'/'sumUrl' => its two files,
+ *  'error' => why the last try failed or '', 'updatedFrom' => the version we replaced, 'updatedAt' => when]. */
+function update_state() {
+    return json_file_read(update_state_path(), ['triedAt' => 0, 'checkedAt' => 0, 'latest' => '', 'page' => '', 'indexUrl' => '', 'sumUrl' => '', 'error' => '', 'updatedFrom' => '', 'updatedAt' => 0]);
+}
+function update_state_save(array $state) {
+    return @file_put_contents(update_state_path(), data_file_encode($state), LOCK_EX) !== false;
+}
+
+/** Where the newest release is announced: GitHub's own, unless the setting UPDATE_FEED_URL names another (a mirror of your own, or a test). */
+function update_feed_url() {
+    return UPDATE_FEED_URL !== '' ? UPDATE_FEED_URL : 'https://api.github.com/repos/pcmike/gallery/releases/latest';
+}
+/** The start every address the feed names must have: the project's own release files, or (with a feed of your own) the feed's own server. */
+function update_allowed_prefix() {
+    if (UPDATE_FEED_URL === '') return 'https://github.com/pcmike/gallery/releases/';
+    $p = parse_url(UPDATE_FEED_URL);
+    return is_array($p) && !empty($p['host']) ? ($p['scheme'] ?? 'https') . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '') . '/' : '';
+}
+
+/** Asks the feed what the newest release is and remembers the answer (or the failure). Returns the state. */
+function update_fetch() {
+    $st = update_state();
+    $st['triedAt'] = time();
+    $fail = function ($why) use (&$st) { $st['error'] = $why; update_state_save($st); return $st; };
+    $r = geo_http(update_feed_url(), 'GET', ['Accept: application/vnd.github+json'], 1000000, 10);
+    if ($r['status'] === 0) return $fail($r['error'] !== '' ? $r['error'] : 'Could not reach the releases page.');
+    if ($r['status'] !== 200) return $fail('The releases page answered ' . $r['status'] . '.');
+    $j = json_decode($r['body'], true);
+    $tag = is_array($j) ? ltrim((string) ($j['tag_name'] ?? ''), 'vV') : '';
+    if (!preg_match('/^\d+\.\d+\.\d+$/', $tag)) return $fail('The releases page did not name a version.');
+    $prefix = update_allowed_prefix();
+    $ok = function ($u) use ($prefix) { return is_string($u) && $prefix !== '' && strncmp($u, $prefix, strlen($prefix)) === 0 && geo_url_ok($u); };
+    $st['latest'] = $tag; $st['checkedAt'] = time(); $st['error'] = '';
+    $st['page'] = $ok($j['html_url'] ?? null) ? (string) $j['html_url'] : '';
+    $st['indexUrl'] = ''; $st['sumUrl'] = '';
+    foreach ((array) ($j['assets'] ?? []) as $a) {
+        if (!is_array($a)) continue;
+        if (($a['name'] ?? '') === 'index.php' && $ok($a['browser_download_url'] ?? null)) $st['indexUrl'] = (string) $a['browser_download_url'];
+        if (($a['name'] ?? '') === 'index.php.sha256' && $ok($a['browser_download_url'] ?? null)) $st['sumUrl'] = (string) $a['browser_download_url'];
+    }
+    update_state_save($st);
+    return $st;
+}
+
+/** Is it time for the daily look? (Only where the answer can be kept: without that, every Settings page would ask.) */
+function update_check_due() {
+    if (!CHECK_FOR_UPDATES || !is_writable(__DIR__)) return false;
+    return time() - (int) update_state()['triedAt'] >= 86400;
+}
+
+/** The newest version, when it is newer than this one (from what we last learned; nothing is asked here). Else null. */
+function update_newer() {
+    $st = update_state();
+    if ($st['latest'] === '' || !version_compare($st['latest'], GALLERY_VERSION, '>')) return null;
+    return $st;
+}
+
+/** Can this file be replaced here? ['ok' => bool, 'why' => the reason when not]. */
+function update_can_write() {
+    if (is_link(__FILE__)) return ['ok' => false, 'why' => 'index.php is a link to a file elsewhere'];
+    if (!is_writable(__FILE__) || !is_writable(__DIR__)) return ['ok' => false, 'why' => 'the web server can\'t write to index.php here'];
+    return ['ok' => true, 'why' => ''];
+}
+/** Can this gallery fetch a new one and replace its own file here? */
+function update_can_replace() {
+    if (!function_exists('curl_init') && !filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) return ['ok' => false, 'why' => 'this server doesn\'t let PHP fetch addresses'];
+    return update_can_write();
+}
+
+/** The version a PHP text says it is (its GALLERY_VERSION line), or ''. */
+function update_text_version($code) {
+    return preg_match("/define\\('GALLERY_VERSION', '(\\d+\\.\\d+\\.\\d+)'\\)/", (string) $code, $m) ? $m[1] : '';
+}
+
+/** Does this text read as PHP, start to end? (A download cut short, or a page of something else, does not.) Without the tokenizer, true: the checksum has already agreed. */
+function update_php_parses($code) {
+    if (!function_exists('token_get_all') || !defined('TOKEN_PARSE')) return true;
+    $limit = (string) ini_get('memory_limit');
+    if ($limit !== '-1' && (int) $limit < 256 && !preg_match('/[gG]$/', $limit)) @ini_set('memory_limit', '256M');
+    try { $t = token_get_all((string) $code, TOKEN_PARSE); unset($t); return true; } catch (\Throwable $e) { return false; }
+}
+
+/** The version of the file kept by the last update ('' when there is none). */
+function update_backup_version() {
+    $raw = is_file(update_backup_path()) ? @file_get_contents(update_backup_path(), false, null, 0, 40000) : '';
+    return is_string($raw) ? update_text_version($raw) : '';
+}
+
+/** Puts $content where index.php is, in one rename, and checks what landed. Returns '' or why not. */
+function update_swap_in($content) {
+    $tmp = __DIR__ . '/.gallery-update-' . bin2hex(random_bytes(4)) . '.tmp';
+    if (@file_put_contents($tmp, $content) !== strlen($content)) { @unlink($tmp); return 'The new file could not be written beside index.php.'; }
+    @chmod($tmp, @fileperms(__FILE__) & 0777 ?: 0644);
+    if (!@rename($tmp, __FILE__)) { @unlink($tmp); return 'index.php could not be replaced.'; }
+    clearstatcache(true, __FILE__);
+    if (function_exists('opcache_invalidate')) @opcache_invalidate(__FILE__, true);
+    return hash_file('sha256', __FILE__) === hash('sha256', $content) ? '' : 'The file that was written did not read back the same.';
+}
+
+/** Update now. Returns ['ok' => bool, 'text' => what to tell the owner, 'version' => the new one]. */
+function update_apply() {
+    $can = update_can_replace();
+    if (!$can['ok']) return ['ok' => false, 'text' => 'Nothing was changed: ' . $can['why'] . '. Download it from the release page instead.'];
+    $st = update_fetch();
+    if ($st['error'] !== '') return ['ok' => false, 'text' => 'Nothing was changed: ' . $st['error']];
+    $new = $st['latest'];
+    if (!version_compare($new, GALLERY_VERSION, '>')) return ['ok' => false, 'text' => 'You already have the newest version.'];
+    if ($st['indexUrl'] === '' || $st['sumUrl'] === '') return ['ok' => false, 'text' => 'Nothing was changed: that release has no index.php with a checksum to update from. Download it from the release page.'];
+    $lock = @fopen(__FILE__, 'r');
+    if ($lock) flock($lock, LOCK_EX);
+    try {
+        $f = geo_http($st['indexUrl'], 'GET', [], 12000000, 120);
+        if ($f['status'] !== 200 || strlen($f['body']) < 100000) return ['ok' => false, 'text' => 'Nothing was changed: the file could not be downloaded' . ($f['error'] !== '' ? ' (' . $f['error'] . ')' : '') . '.'];
+        $s = geo_http($st['sumUrl'], 'GET', [], 4096, 30);
+        if ($s['status'] !== 200 || !preg_match('/^([0-9a-fA-F]{64})\b/', trim($s['body']), $m)) return ['ok' => false, 'text' => 'Nothing was changed: the checksum could not be downloaded.'];
+        $code = $f['body'];
+        if (!hash_equals(strtolower($m[1]), hash('sha256', $code))) return ['ok' => false, 'text' => 'Nothing was changed: the download did not match its checksum.'];
+        if (strncmp($code, '<?php', 5) !== 0 || update_text_version($code) !== $new || !update_php_parses($code)) return ['ok' => false, 'text' => 'Nothing was changed: the download is not the PHP file for version ' . $new . '.'];
+        $old = (string) @file_get_contents(__FILE__);
+        $guarded = data_file_guard_line() . $old;
+        if ($old === '' || @file_put_contents(update_backup_path(), $guarded) !== strlen($guarded)) return ['ok' => false, 'text' => 'Nothing was changed: the current file could not be kept first (is the folder writable?).'];
+        $why = update_swap_in($code);
+        if ($why !== '') {
+            $back = update_swap_in($old);
+            return ['ok' => false, 'text' => 'Updating failed: ' . $why . ($back === '' ? ' The old file is back in place.' : ' The old file could not be put back either: it is kept as ' . basename(update_backup_path()) . '.')];
+        }
+        $st['updatedFrom'] = GALLERY_VERSION; $st['updatedAt'] = time();
+        update_state_save($st);
+        return ['ok' => true, 'text' => 'Updated to ' . $new . '.', 'version' => $new];
+    } finally {
+        if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+    }
+}
+
+/** Go back: puts the file the last update kept back in place. Returns ['ok' => bool, 'text' => ...]. */
+function update_undo() {
+    $can = update_can_write();
+    if (!is_file(update_backup_path())) return ['ok' => false, 'text' => 'There is no earlier version kept.'];
+    if (!$can['ok']) return ['ok' => false, 'text' => 'Nothing was changed: ' . $can['why'] . '.'];
+    $lock = @fopen(__FILE__, 'r');
+    if ($lock) flock($lock, LOCK_EX);
+    try {
+        $old = data_file_strip_guard((string) @file_get_contents(update_backup_path()));
+        $v = update_text_version($old);
+        if (strncmp($old, '<?php', 5) !== 0 || $v === '' || !update_php_parses($old)) return ['ok' => false, 'text' => 'Nothing was changed: the kept file is not a whole gallery file.'];
+        $why = update_swap_in($old);
+        if ($why !== '') return ['ok' => false, 'text' => 'Going back failed: ' . $why];
+        @unlink(update_backup_path());
+        $st = update_state(); $st['updatedFrom'] = ''; $st['updatedAt'] = 0; update_state_save($st);
+        return ['ok' => true, 'text' => 'Back on ' . $v . '.', 'version' => $v];
+    } finally {
+        if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+    }
+}
+
+/** The "new version" heads-up for the Health check, or the "just updated" one (with Go back), or null. Same shape as health_headsups(): label, detail, html (buttons). */
+function update_headsups() {
+    $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $out = [];
+    $st = update_state();
+    $back = update_backup_version();
+    if ($back !== '' && $st['updatedAt'] > 0 && time() - (int) $st['updatedAt'] < 86400 && version_compare($back, GALLERY_VERSION, '<'))
+        $out[] = ['label' => 'Updated from ' . $back . ' to ' . GALLERY_VERSION, 'detail' => 'The file it replaced is kept, in case something doesn\'t look right.',
+            'html' => '<div class="health-act"><button type="button" class="secondary" data-update="undo">Go back to ' . $e($back) . '</button></div>', 'attr' => ' data-update-row'];
+    $n = update_newer();
+    if ($n !== null) {
+        $can = update_can_replace();
+        $btns = ($can['ok'] ? '<button type="button" class="secondary" data-update="apply">Update now</button> ' : '')
+            . ($n['page'] !== '' ? '<a class="secondary btn-link" href="' . $e($n['page']) . '" target="_blank" rel="noopener noreferrer">View release</a>' : '');
+        $out[] = ['label' => 'Version ' . $n['latest'] . ' is out', 'detail' => 'You are on ' . GALLERY_VERSION . '.' . ($can['ok'] ? '' : ' This gallery can\'t update itself here (' . $can['why'] . '), so download it from the release page.') . ' ',
+            'html' => '<div class="health-act">' . $btns . '</div>', 'attr' => ' data-update-row'];
+    }
+    return $out;
+}
+
+/** What the "Updates" row says: when it was last looked, and what it found. */
+function update_status_text() {
+    $st = update_state();
+    if ($st['error'] !== '' && $st['triedAt'] > 0) return 'Could not check (' . $st['error'] . ')';
+    if ($st['checkedAt'] > 0) return (update_newer() ? 'A newer version is out' : 'Up to date') . ' · checked ' . date('M j, g:i a', (int) $st['checkedAt']);
+    return CHECK_FOR_UPDATES ? 'Not checked yet' : 'Not checking (switched off in Settings)';
+}
+/** The "Updates" row's own line, under its label: what it found, and Check now. */
+function update_status_html() {
+    return '<div class="health-detail"><span data-update-text>' . htmlspecialchars(update_status_text(), ENT_QUOTES, 'UTF-8') . '</span> <button type="button" class="linklike" data-update="check">Check now</button></div>';
+}
+
+/** The Health check's buttons for this (Settings, answers JSON and ends the request): update_check, update_apply, update_undo. */
+function update_admin_action($action) {
+    if ($action === 'update_check') {
+        if (($_POST['force'] ?? '') === '1' || update_check_due()) update_fetch();
+        $rows = array_map('health_headsup_row_html', update_headsups());
+        admin_json_exit(['ok' => true, 'rows' => $rows, 'text' => update_status_text(), 'newer' => update_newer() !== null]);
+    }
+    if ($action === 'update_apply') admin_json_exit(update_apply());
+    if ($action === 'update_undo') admin_json_exit(update_undo());
+    admin_json_exit(['ok' => false, 'text' => 'Unknown action.']);
+}
+/* -----------------------------------------------------------------------
  * Passwords at rest. The settings file keeps each password as a bcrypt hash
  * (password_hash), so a copy of that file — a backup, a zip, a repository, a
  * server that sends .php files as text — does not hand over the password
@@ -5711,7 +5933,7 @@ function render_link_preview_banner($l, $dir, $files) {
     $yes = function ($html) { return '<li class="yes">' . ui_icon('check') . '<span>' . $html . '</span></li>'; };
     $no = function ($html) { return '<li class="no">' . ui_icon('close') . '<span>' . $html . '</span></li>'; };
     $items = [];
-    if ($type !== 'public') $items[] = $yes(($type === 'all' ? 'Every private folder and photo, including ones you add later' : ($type === 'folders' && !array_filter(array_column($report['folders'], 'pub')) ? $esc(implode(', ', array_map(function ($x) { return $x['label']; }, $report['folders']))) . ' and everything inside ' . (count($report['folders']) === 1 ? 'it' : 'them') : link_scope_text_html($l, $report))));
+    if ($type !== 'public') $items[] = $yes(($type === 'all' ? 'The whole gallery, public and private, including what you add later' : ($type === 'folders' && !array_filter(array_column($report['folders'], 'pub')) ? $esc(implode(', ', array_map(function ($x) { return $x['label']; }, $report['folders']))) . ' and everything inside ' . (count($report['folders']) === 1 ? 'it' : 'them') : link_scope_text_html($l, $report))));
     $items[] = $yes('All public folders and photos, as any visitor sees them');
     if ($type === 'public') $items[] = $no('<strong>Nothing private</strong> is shown or hinted at');
     elseif ($type !== 'all') $items[] = $no('Your other private folders and photos are <strong>not shown and not hinted at</strong>');
@@ -8150,6 +8372,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if (strncmp($action, 'link_', 5) === 0) {   // the Shares tab (answers JSON and ends the request)
         links_admin_action($action, $dir, $files);
     }
+    if (strncmp($action, 'update_', 7) === 0) update_admin_action($action);   // the Health check's new-version buttons (answers JSON and ends the request)
     if (strncmp($action, 'geo_', 4) === 0) geo_admin_action($action);   // Settings > Signing in: the country file (answers JSON and ends the request)
     if ($action === 'browser_ack') {   // "Looks fine": that flag is cleared until something new raises it
         $bid = (string) ($_POST['id'] ?? ''); $bflag = (string) ($_POST['flag'] ?? '');
@@ -9425,6 +9648,9 @@ function gallery_setting_definitions() {
              'help' => 'The limit above. Always flagged in red; this also signs it out.'],
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
+            ['name' => 'CHECK_FOR_UPDATES', 'type' => 'bool', 'label' => 'Look for a new version of the gallery',
+             'help' => 'Once a day the Health check asks GitHub which version is newest and says so when it is newer, with View release and Update now. Only an ordinary request is made (GitHub sees this server\'s address); nothing about your gallery is sent. Off: no automatic look; Check now still works.'],
+            ['name' => 'UPDATE_FEED_URL', 'type' => 'text', 'in' => true, 'label' => 'Where new versions are announced', 'help' => ''],
             ['name' => 'TRUSTED_PROXY', 'type' => 'enum', 'label' => 'Where visitors\' IP addresses come from', 'status' => 'clientip',
              'options' => ['direct' => 'The connection', 'cloudflare' => 'Cloudflare', 'proxy' => 'Another proxy'],
              'help' => 'Behind Cloudflare or another CDN, every visitor looks the same unless the gallery reads their real address. Choose yours; leave it on "The connection" if your web server already passes the real address on (the Visitors tab then shows no country, which comes from Cloudflare). Another proxy: set TRUSTED_PROXY_RANGES in .gallery-config.php.'],
@@ -9760,7 +9986,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
         $ids = [];
         foreach ($scopeFolderPaths as $rel) { $id = $stamp($rel); if ($id !== null) $ids[] = $id; }
         $photos = $scopeType === 'mixed' ? $stampPhotos($list('scope_photos')) : [];
-        if ($scopeType === 'folders' && !$scopeFolderPaths) $errors[] = 'Choose at least one folder, or choose "Everything private".';
+        if ($scopeType === 'folders' && !$scopeFolderPaths) $errors[] = 'Choose at least one folder, or choose "Everything".';
         if ($scopeType === 'mixed' && !$scopeFolderPaths && !$photos) $errors[] = 'Choose at least one folder or photo.';
         // "Public items only", folder by folder: the private photos and videos inside it are left out (unless one is named in this link).
         $pubIds = [];
@@ -10110,7 +10336,7 @@ function link_paragraph_html($l, $state, $report, $map, $index, $dir, $rootFid) 
     $only = link_shows_only_its_own($l);
     $rest = $only ? (gallery_is_closed() ? ' and nothing else.' : ' and nothing else on their pages (a tidy view: the rest of the gallery stays public to everyone).') : ' and the public gallery.';
     if ($type === 'public') $c1 = $cl('They see the public gallery and nothing private.', false);
-    elseif ($type === 'all') $c1 = $cl('They see every private folder and photo, including ones you add later, and the public gallery.', true);
+    elseif ($type === 'all') $c1 = $cl('They see the whole gallery, public and private, including what you add later.', true);
     elseif ($type === 'folders') $c1 = $cl('They see ' . link_folder_list_html($report, $item) . $rest, true);
     elseif ($type === 'mixed') { $n = count($report['photos']); $c1 = $cl('They see ' . ($report['folders'] ? link_folder_list_html($report, $item) : '') . ($report['folders'] && $n ? ' and ' : '') . ($n ? $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') : '') . $rest, true); }
     else { $n = count($report['photos']); $c1 = $cl('They see ' . ($only ? 'only ' : '') . $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') . $rest, true); }
@@ -10226,7 +10452,7 @@ function link_scope_text_html($l, $report) {
     if ($type === 'mixed') { $n = count($report['photos']); return 'Only ' . link_folder_list_html($report, $item) . ($n ? ' and ' . $n . ' photo' . ($n === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 4))) . ($n > 4 ? ' and ' . ($n - 4) . ' more' : '') : ''); }
     if ($type === 'photos') return count($report['photos']) . ' photo' . (count($report['photos']) === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 6))) . (count($report['photos']) > 6 ? ' and ' . (count($report['photos']) - 6) . ' more' : '');
     if ($type === 'public') return 'Nothing private: just the public gallery';
-    return 'Everything private';
+    return 'Everything, public and private';
 }
 
 function link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootFid) {
@@ -10255,7 +10481,7 @@ function link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootF
 /** The files the gallery makes beside index.php, by exact name: name => kind. */
 function owned_top_names() {
     return ['.gallery-config.php' => 'settings', '.gallery-links.php' => 'links', '.gallery-secret.php' => 'secret', '.gallery-stay.php' => 'signin', '.gallery-browsers.php' => 'signin', '.gallery-browsers-log.php' => 'signin',
-            '.gallery-login-attempts.php' => 'signin', '.gallery-health.php' => 'health', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo'];
+            '.gallery-login-attempts.php' => 'signin', '.gallery-health.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo'];
 }
 
 /** The kind of a file name, or '' when the gallery makes no file with that name. $isTop: the folder is the gallery's own (the one index.php is in). */
@@ -10285,6 +10511,8 @@ function owned_kind_info() {
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],
         'geo' => ['Country file', 'beside index.php', 'The list of address ranges per country (from DB-IP) that says which country an address is in, and when it was fetched.', 'Countries are no longer looked up; turning the option on again fetches it again.'],
         'health' => ['Version record', 'beside index.php', 'Which version last ran here.', 'Made again by the next visit.'],
+        'update' => ['New-version check', 'beside index.php', 'The newest version GitHub last reported, and when this gallery was last updated.', 'Made again by the next check.'],
+        'previous' => ['Earlier version kept', 'beside index.php', 'The index.php that Update now replaced, kept so Go back can put it in again.', 'Go back is no longer possible; the gallery itself is not affected.'],
         'items' => ['Captions, locations, private marks, folder names', 'in each folder', 'What you typed or chose for the photos and folders in it.', 'All of it is lost.'],
         'stats' => ['View counts', 'in each folder', 'How many times each photo was looked at.', 'Counts start again from 0.'],
         'backups' => ['Tidy-up backups', 'in each folder', 'Copies kept when Tidy up changed a folder\'s data.', 'The backups are gone.'],
@@ -10442,7 +10670,7 @@ function owned_delete($plan) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
     // order: everything in the folders and the thumbnails first, then the gallery's own data, the settings file last
-    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'signin', 'geo', 'health', 'secret', 'settings'];
+    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
     $deleted = 0; $thumbs = 0; $left = [];
     $byKind = [];
     foreach ($plan['entries'] as $e) $byKind[$e['kind']][] = $e;
@@ -10860,8 +11088,7 @@ KIT_CSS;
   function when(sec) { return sec > 0 ? new Date((Math.floor(Date.now() / 1000) + sec) * 1000).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''; }
   // What the person will see, said plainly: what the link covers, and the public rest of the gallery (listed too, or not).
   function fineText(photos, one, only) {
-    if (!photos) return 'They can see this folder and what is inside it, and everything that is already public. ';
-    var what = one ? 'this photo' : 'these photos';
+    var what = !photos ? 'this folder and what is inside it' : (one ? 'this photo' : 'these photos');
     return only ? 'They can see only ' + what + (cfg.closed ? ', and nothing else can be opened through the gallery. ' : '. The rest of the gallery stays public to everyone: this is a tidy view, not a lock. ') : 'They can see ' + what + ', and everything that is already public. ';
   }
   // What the quick form says about how many browsers can open the link (the number is the setting; 0 is unlimited). `more` is the
@@ -10889,7 +11116,7 @@ KIT_CSS;
       + '<div class="gs-f gs-addr"><label class="gs-only"><input type="checkbox" id="gs-addr"' + (oneOff ? '' : ' checked') + '> <span>Use the name as the address <code class="gs-addrprev"></code></span></label>'
       + '<div class="gs-addrnote" role="status" hidden>This link opens private photos. An address made from a name is easy to guess, so untick the box to get a random one that can\'t be.</div>'
       + '<div class="gs-fine gs-addrrand" hidden>A random code is made for you, one that can\'t be guessed. <button type="button" class="gs-link" data-gs="own">Type my own instead…</button></div></div>'
-      + (photos ? '<label class="gs-only"><input type="checkbox" id="gs-only" checked> <span>Show only ' + (one ? 'this photo' : 'these photos') + '</span></label>' : '')
+      + '<label class="gs-only"><input type="checkbox" id="gs-only" checked> <span>Show only ' + (photos ? (one ? 'this photo' : 'these photos') : 'this folder') + '</span></label>'
       + ((+cfg.defaultUses || 0) > 0 ? '<label class="gs-only"><input type="checkbox" id="gs-many"> <span>Meant for more than one person?</span></label>' : '')
       + '<p class="gs-fine"><span class="gs-fine-t">' + fineText(photos, one, true) + '</span><span class="gs-fine-u">' + usesFine(+cfg.defaultUses || 0, false) + '</span>Downloads off, locations shown only where set to show, no note. <button type="button" class="gs-link" data-gs="more">More options…</button></p>'
       + '<div class="gs-err" role="alert"></div></div>'
@@ -10913,7 +11140,7 @@ KIT_CSS;
       var what = b.getAttribute('data-gs');
       if (what === 'cancel') { closeModal(); return; }
       var draftOf = function () {
-        return { label: nameIn.value.trim(), scopeType: photos ? 'photos' : 'folders', only: photos && !!card.querySelector('#gs-only').checked, scopeFolders: photos ? [] : [opts.path], scopePhotos: photos ? files : [], openIn: photos ? '' : opts.path, maxOpens: (card.querySelector('#gs-many') || {}).checked ? 0 : +cfg.defaultUses || 0, endsAt: 0, addrMode: ck.checked ? 'name' : 'random' };
+        return { label: nameIn.value.trim(), scopeType: photos ? 'photos' : 'folders', only: !!card.querySelector('#gs-only').checked, scopeFolders: photos ? [] : [opts.path], scopePhotos: photos ? files : [], openIn: photos ? '' : opts.path, maxOpens: (card.querySelector('#gs-many') || {}).checked ? 0 : +cfg.defaultUses || 0, endsAt: 0, addrMode: ck.checked ? 'name' : 'random' };
       };
       if (what === 'more' || what === 'own') {
         var d = draftOf(); closeModal();
@@ -11112,7 +11339,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
          <div class="sl-grp-b">
         <div class="sl-f"><span class="sl-k">What they can see</span>
           <div class="sl-radios" role="radiogroup" aria-label="What they can see">
-            <label class="sl-radio"><input type="radio" name="scope_type" value="all"><span><strong>Everything private</strong><small>Every private folder and photo in the gallery, including ones you add later.</small></span></label>
+            <label class="sl-radio"><input type="radio" name="scope_type" value="all"><span><strong>Everything</strong><small>The whole gallery, public and private, including what you add later.</small></span></label>
             <label class="sl-radio"><input type="radio" name="scope_type" value="folders"<?= AUTO_GROUP_BY_FOLDER ? '' : ' disabled' ?>><span><strong>Only some folders</strong><small>Each folder includes everything inside it, or only its public items. They are never told other private folders exist.<?= AUTO_GROUP_BY_FOLDER ? '' : ' (Turn on “Show subfolders” in Settings first.)' ?></small></span></label>
             <label class="sl-radio"><input type="radio" name="scope_type" value="public" checked><span><strong>Just the public gallery</strong><small>Nothing private. They see what any visitor sees, and the log shows who looked at what. Useful for finding out who opens a link you post or send.</small></span></label>
             <label class="sl-radio" data-photos-only><input type="radio" name="scope_type" value="photos"><span><strong>Only some photos</strong><small class="sl-photos-note">Only the photos you pick, wherever they are. Anything already public stays visible too, unless you tick the box below.</small></span></label>
@@ -11977,8 +12204,9 @@ function health_checks($dir, $files) {
     // --- this install
     $rec = health_version_record($dir);
     if ($rec === null) $add('This install', 'warn', 'Running ' . GALLERY_VERSION, 'The folder is not writable by the web server, so the version history can\'t be kept.');
-    elseif (($rec['from'] ?? '') !== '') $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'Upgraded from ' . $rec['from'] . ' on ' . $rec['at'] . ' (first recorded ' . $rec['first'] . ').');
+    elseif (($rec['from'] ?? '') !== '') $add('This install', 'ok', 'Running ' . GALLERY_VERSION, (version_compare((string) $rec['from'], GALLERY_VERSION, '>') ? 'Went back from ' : 'Upgraded from ') . $rec['from'] . ' on ' . $rec['at'] . ' (first recorded ' . $rec['first'] . ').');
     else $add('This install', 'ok', 'Running ' . GALLERY_VERSION, 'First recorded ' . ($rec['first'] ?? $rec['at'] ?? '') . '; upgrades are noted here.');
+    $add('This install', 'ok', 'New versions', '', null, update_status_html());
     $add('This install', PHP_VERSION_ID >= 80300 ? 'ok' : 'bad', 'PHP ' . PHP_VERSION, PHP_VERSION_ID >= 80300 ? '' : 'This gallery needs PHP 8.3 or newer.');
     $hasGd = extension_loaded('gd'); $hasImagick = class_exists('Imagick');
     $add('This install', ($hasGd || $hasImagick) ? 'ok' : 'bad', 'Picture resizing: ' . ($hasImagick && $hasGd ? 'GD and Imagick' : ($hasImagick ? 'Imagick' : ($hasGd ? 'GD' : 'none')) ),
@@ -12126,33 +12354,36 @@ function health_headsups($dir, $files) {
     return $out;
 }
 
+/** One heads-up as its row of markup (the Health check prints these; the new-version buttons bring one in without a reload). */
+function health_headsup_row_html($n) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    return '<div class="health-row health-note note"' . ($n['attr'] ?? '') . '>'
+        . '<span class="health-mark">&#9432;</span>'
+        . '<div class="health-main"><div class="health-label">' . $esc($n['label']) . '</div><div class="health-detail">' . $esc($n['detail']) . '</div></div>'
+        . $n['html'] . '</div>';
+}
+
 /** The health panel at the top of Settings: the server-side rows from health_checks(), then three the browser fills in
  *  (see the script: the web server rules can only be tested by asking for addresses the way a visitor would). */
 function render_admin_health_panel() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $rows = health_checks($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
-    $notes = health_headsups($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
+    $notes = array_merge(update_headsups(), health_headsups($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []));
     $loud = 0;
     foreach ($rows as $r) if ($r[1] === 'bad' || $r[1] === 'warn') $loud++;
     $mark = ['ok' => 'check', 'warn' => 'warn', 'bad' => 'warn'];
     $groups = [];
     foreach ($rows as $r) $groups[$r[0]][] = $r;
 ?>
-    <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel">
+    <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel" data-csrf="<?= $esc(admin_csrf_token()) ?>"<?= update_check_due() ? ' data-update-due="1"' : '' ?>>
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong>
         <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary health-refresh" onclick="location.reload()" title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></p>
-      <p class="muted health-intro" style="margin-top:0;">Looks only; nothing is changed (apart from noting the running version).</p>
+      <p class="muted health-intro" style="margin-top:0;">This only looks; it never changes your gallery (it just notes the running version and, once a day, looks for a new one).</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
           <h3 class="subhead">Heads-up</h3>
-          <?php foreach ($notes as $n): ?>
-            <div class="health-row health-note note">
-              <span class="health-mark">&#9432;</span>
-              <div class="health-main"><div class="health-label"><?= $esc($n['label']) ?></div><div class="health-detail"><?= $esc($n['detail']) ?></div></div>
-              <?= $n['html'] ?>
-            </div>
-          <?php endforeach; ?>
+          <?php foreach ($notes as $n) echo health_headsup_row_html($n), "\n"; ?>
         </div>
       <?php endif; ?>
       <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn') $allQuiet = false; ?>
@@ -13724,7 +13955,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-popopt:hover { background:#2c2c31; }
   .sl-popopt input { accent-color:var(--accent); flex:none; margin:0; }
   .sl-popopt span { min-width:0; overflow-wrap:anywhere; }
-  @media (max-width:640px) { .sl-pop { position:static; } .sl-popmenu { left:0; right:0; max-width:none; } }
+  @media (max-width:640px) { .sl-pop { position:static; } .sl-pop.sl-popform { position:relative; } .sl-popmenu { left:0; right:0; max-width:none; } }   /* (a menu in the link form stays under its own button; the ones in the filter bars hang from the bar) */
   .sl-lchip.pub { background:rgba(59,165,92,0.16); border-color:rgba(59,165,92,0.6); color:#b8e6c6; }
   .sl-lchip { display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 4px 0 10px; border-radius:999px; font-size:0.78rem; background:rgba(88,101,242,0.18); border:1px solid rgba(88,101,242,0.6); color:#c9ceff; }
   .sl-lchip { background:#26262a; border-color:#34343a; color:var(--text); padding:0 10px; margin:0 6px 4px 0; }
@@ -13974,6 +14205,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-mark { flex:none; width:1.3em; text-align:center; line-height:1.5; }
   .health-label { font-weight:600; }
   .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
+  .health-detail .linklike { color:#aab2ff; font-size:inherit; margin-left:6px; }   /* (Check now: a periwinkle link, like the other links in these rows) */
+  @media (hover: hover) { .health-detail .linklike:hover { text-decoration:underline; } }
   .health-more { display:inline-block; margin-top:2px; font-size:0.8rem; color:#aab2ff; }
   .health-summary { margin:0 0 6px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .site-group { scroll-margin-top:70px; margin:0 0 10px; border:1px solid #26262a; border-radius:9px; padding:0 12px; }
@@ -14015,7 +14248,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-folder-nav .hidden-note { padding:2px 12px 6px; font-size:0.78rem; color:var(--muted); }
   .health-note .health-mark { color:#8fa0ff; }
   .health-row .health-main { flex:1; min-width:0; }
-  .health-row .health-act { flex:none; margin-left:auto; align-self:center; }
+  .health-row .health-act { flex:none; margin-left:auto; align-self:center; display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
+  @media (max-width:640px) { .health-note { flex-wrap:wrap; } .health-note .health-act { flex-basis:100%; margin-left:0; justify-content:flex-start; padding-left:calc(1.3em + 10px); } }   /* (on a phone the buttons go under the words, not squeezing them) */
   .lock-fix { margin-top:10px; padding:2px 12px 8px; background:var(--card); color:var(--text); border-radius:10px; font-weight:400; }
   .lock-fix > summary { color:var(--text); }
   .health-row.optional .health-label { color:var(--muted); font-weight:500; }
@@ -14091,8 +14325,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .field-row { display:flex; gap:10px; flex-wrap:wrap; }
   .field-row .field { flex:1; min-width:140px; }
   button, .btn { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px; font-size:0.85rem; cursor:pointer; }
-  button.secondary { background:#2a2a2e; color:var(--text); }
+  button.secondary, a.secondary.btn-link { background:#2a2a2e; color:var(--text); }
+  a.secondary.btn-link { display:inline-flex; align-items:center; text-decoration:none; }   /* (a link that looks like a grey button: View release) */
   /* One size for every action button in the admin (Check again, Prepare the rest, Show subfolders, Log out, Save ...): the same height, padding and type. */
+  .admin-main a.secondary.btn-link { min-height:40px; padding:0 16px; font-size:0.9rem; border-radius:6px; }
   .admin-main button.secondary, .admin-main button.primary, .admin-main button.danger, .admin-main button:not([class]), .admin-bar button.secondary { min-height:40px; padding:0 16px; font-size:0.9rem; }
   /* Small controls that have a size of their own (the one rule above is for action buttons): the × on a folder chip and on a photo thumbnail, and the little tabs of the notes reference. */
   .admin-main .sl-chip button { min-height:0; padding:0 6px; font-size:1rem; }
@@ -14102,7 +14338,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   /* Every plain button answers a mouse (a little lighter) and a press (it sinks). :where() keeps this at zero strength, so a button with a hover of its own keeps it. */
   @media (hover: hover) { :where(button:not(.linklike):not(:disabled):hover, .btn:hover) { filter:brightness(1.14); } }
   /* A grey button is too dark for a brighter shade to show, so it gets a lighter grey of its own (Copy link, Resume, Pause, Edit… and the rest). */
-  @media (hover: hover) { button.secondary:hover:not(:disabled) { background:#3a3a42; color:#fff; } }
+  @media (hover: hover) { button.secondary:hover:not(:disabled) { background:#3a3a42; color:#fff; } a.secondary.btn-link:hover { background:#3a3a42; color:#fff; } }
   :where(button:not(.linklike):not(:disabled):active, .btn:active) { transform:scale(0.97); }
   .md-file { border-top:1px solid #26262a; padding:14px 0; }
   .md-file:first-child { border-top:none; }
@@ -14850,6 +15086,47 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         setTimeout(function () { location.reload(); }, 1400);
       });
     });
+    // New versions: the daily look (asked after the page is up, so a slow or blocked GitHub never slows Settings), Check now, Update now and Go back.
+    (function () {
+      var panel = document.getElementById('health-panel');
+      if (!panel) return;
+      var csrf = panel.getAttribute('data-csrf');
+      function post(fields, done, fail) {
+        fetch('?admin', { method: 'POST', body: new URLSearchParams(Object.assign({ csrf_token: csrf }, fields)), credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); }).then(done).catch(fail || function () {});
+      }
+      function say(t) { var s = panel.querySelector('[data-update-text]'); if (s && t) s.textContent = t; }
+      function showRows(rows) {   // (the new-version and just-updated heads-ups: replace what is there, add the group when there was none)
+        [].forEach.call(panel.querySelectorAll('[data-update-row]'), function (r) { r.remove(); });
+        if (!rows || !rows.length) return;
+        var group = panel.querySelector('.health-notes');
+        if (!group) {
+          group = document.createElement('div'); group.className = 'health-group health-notes'; group.innerHTML = '<h3 class="subhead">Heads-up</h3>';
+          var first = panel.querySelector('.health-group'); first ? first.parentNode.insertBefore(group, first) : panel.appendChild(group);
+        }
+        var h = group.querySelector('.subhead'); h.insertAdjacentHTML('afterend', rows.join(''));
+      }
+      panel.addEventListener('click', function (ev) {
+        var b = ev.target.closest ? ev.target.closest('[data-update]') : null;
+        if (!b || b.disabled) return;
+        var what = b.getAttribute('data-update'), was = b.textContent;
+        b.disabled = true;
+        if (what === 'check') {
+          say('Checking…'); b.textContent = 'Checking…';
+          post({ action: 'update_check', force: '1' }, function (j) { b.disabled = false; b.textContent = was; say(j.text); showRows(j.rows); }, function () { b.disabled = false; b.textContent = was; say('Could not reach the gallery.'); });
+          return;
+        }
+        b.textContent = what === 'apply' ? 'Updating…' : 'Going back…';
+        var row = b.closest('.health-row'), detail = row && row.querySelector('.health-detail');
+        post({ action: what === 'apply' ? 'update_apply' : 'update_undo' }, function (j) {
+          if (j.ok) { if (detail) detail.textContent = j.text + ' Reloading…'; setTimeout(function () { location.reload(); }, 700); return; }
+          b.disabled = false; b.textContent = was; if (detail) detail.textContent = j.text;
+        }, function () { b.disabled = false; b.textContent = was; if (detail) detail.textContent = 'Could not reach the gallery.'; });
+      });
+      if (panel.getAttribute('data-update-due') === '1') setTimeout(function () {
+        post({ action: 'update_check' }, function (j) { if (j && j.ok) { say(j.text); showRows(j.rows); } });
+      }, 1500);
+    })();
     const toggle = document.querySelector('.health-toggle');
     if (toggle) toggle.addEventListener('click', function () {
       const panel = document.getElementById('health-panel');
@@ -15832,7 +16109,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var addrNote = form.querySelector('[data-addrnote]'); if (addrNote) addrNote.hidden = !((form._addrMode || 'name') === 'name' && opensPrivate(form));
       var f = formState(form), form_ = form, names = function (list) { return list.map(function (p) { return labelOf(form_, p); }).join(', '); };
       var scopeNames = function () { return st.scope.map(function (p) { return labelOf(form_, p) + (st.pub.indexOf(p) >= 0 ? ' (public items only)' : ''); }).join(', '); };
-      var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'every private folder and photo' : f.scope === 'folders' ? (st.scope.length ? scopeNames() : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? scopeNames() : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
+      var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'the whole gallery, public and private' : f.scope === 'folders' ? (st.scope.length ? scopeNames() : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? scopeNames() : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
       var usesNow = usesOf(f), usesIsDefault = usesNow === DEFAULT_USES && (f.opens !== 'n' || f.opensN !== '');
       var endsSay = f.ends === '0' ? 'never stops working' : f.ends === 'pick' ? 'stops working on ' + fdate(f.endsAt) : 'stops working after ' + ({ '86400': '1 day', '604800': '1 week', '2592000': '30 days' }[f.ends] || '');
       var titleSay = { gallery: 'the gallery\'s title', neutral: 'a neutral title', custom: 'a title of your own' }[f.title];
@@ -15847,7 +16124,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       ];
       [].forEach.call(form.querySelectorAll('[data-cl]'), function (el) { var c = cl[+el.getAttribute('data-cl') - 1]; el.textContent = c[0]; el.className = c[1] ? 'sl-cl-ch' : 'sl-cl'; });
       var sums = {
-        scope: [(f.scope === 'public' ? 'Just the public gallery' : f.scope === 'all' ? 'Everything private' : f.scope === 'folders' ? 'Only some folders' + (st.scope.length ? ': ' + names(st.scope) : '') : f.scope === 'mixed' ? 'Some folders and some photos' + (st.scope.length || st.photos.length ? ' (' + st.scope.length + ' folder' + (st.scope.length === 1 ? '' : 's') + ', ' + st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ')' : '') : 'Only some photos' + (st.photos.length ? ' (' + st.photos.length + ')' : '')), f.scope !== 'public' || f.openIn !== ''],
+        scope: [(f.scope === 'public' ? 'Just the public gallery' : f.scope === 'all' ? 'Everything' : f.scope === 'folders' ? 'Only some folders' + (st.scope.length ? ': ' + names(st.scope) : '') : f.scope === 'mixed' ? 'Some folders and some photos' + (st.scope.length || st.photos.length ? ' (' + st.scope.length + ' folder' + (st.scope.length === 1 ? '' : 's') + ', ' + st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ')' : '') : 'Only some photos' + (st.photos.length ? ' (' + st.photos.length + ')' : '')), f.scope !== 'public' || f.openIn !== ''],
         limits: [[usesNow === 0 && f.opens !== 'n' ? 'Unlimited browsers' : usesNow === 1 ? 'Just one browser' : (f.opens === 'n' ? (f.opensN || '?') : f.opens) + ' browsers', f.ends === '0' ? 'never stops' : f.ends === 'pick' ? 'stops ' + fdate(f.endsAt) : 'stops after ' + ({ '86400': '1 day', '604800': '1 week', '2592000': '30 days' }[f.ends] || ''), f.starts === 'now' ? 'starts now' : 'starts ' + fdate(f.startsAt)].join(' · '), !usesIsDefault || f.ends !== '0' || f.starts !== 'now'],
         privacy: [['Downloads: ' + DL_SAY[f.dl], 'ZIP: ' + DL_SAY[f.zip], f.loc === 'public' ? 'locations shown only' : 'all locations'].join(' · '), f.dl !== 'off' || f.zip !== 'off' || f.loc !== 'public'],
         page: [[{ gallery: 'The gallery\'s title', neutral: 'A neutral title', custom: 'Your own title' }[f.title], f.pic ? (f.picFile ? 'preview photo chosen' : 'automatic preview photo') : 'no preview photo', f.note ? 'with a note' : 'no note', f.heads === 'default' ? 'heads-up as the site setting' : 'heads-up ' + f.heads].join(' · '), f.title !== 'gallery' || !f.pic || f.picFile !== '' || f.note !== '' || f.heads !== 'default']
@@ -15922,7 +16199,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (e.target.name === 'keep_old') { addrHint(form); return; }
       if (e.target.name === 'title_mode' && !form.querySelector('[name=id]').value) form.querySelector('[name=picture]').checked = e.target.value === 'gallery';
       if (e.target.name === 'picture' || e.target.name === 'title_mode') { form.querySelector('[data-coverrow]')._loaded = false; }   // (a new link: the photo follows the title until you decide)
-      if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'photos' || e.target.value === 'mixed';   // (photos, and folders with photos: on to start with, so a link with picks shows just the picks; folders alone: off)
+      if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'folders' || e.target.value === 'photos' || e.target.value === 'mixed';   // (any link that limits what they see: on to start with, so it shows just what it covers; everything and the public gallery: off, and the box is hidden)
       if (e.target.name === 'addr_name') { setAddrMode(form, e.target.checked ? 'name' : (!opensPrivate(form) ? 'custom' : 'random'), true); return; }   // (unticking: a public link opens the box to type in; one that opens private photos gets a random address, which a name can't be)
       if (e.target.name === 'scope_type') addrSync(form);
       if (e.target.name === 'scope_type' && (e.target.value === 'folders' || e.target.value === 'mixed')) {

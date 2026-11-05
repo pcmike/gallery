@@ -12,7 +12,7 @@ function link_paragraph_html($l, $state, $report, $map, $index, $dir, $rootFid) 
     $only = link_shows_only_its_own($l);
     $rest = $only ? (gallery_is_closed() ? ' and nothing else.' : ' and nothing else on their pages (a tidy view: the rest of the gallery stays public to everyone).') : ' and the public gallery.';
     if ($type === 'public') $c1 = $cl('They see the public gallery and nothing private.', false);
-    elseif ($type === 'all') $c1 = $cl('They see every private folder and photo, including ones you add later, and the public gallery.', true);
+    elseif ($type === 'all') $c1 = $cl('They see the whole gallery, public and private, including what you add later.', true);
     elseif ($type === 'folders') $c1 = $cl('They see ' . link_folder_list_html($report, $item) . $rest, true);
     elseif ($type === 'mixed') { $n = count($report['photos']); $c1 = $cl('They see ' . ($report['folders'] ? link_folder_list_html($report, $item) : '') . ($report['folders'] && $n ? ' and ' : '') . ($n ? $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') : '') . $rest, true); }
     else { $n = count($report['photos']); $c1 = $cl('They see ' . ($only ? 'only ' : '') . $n . ' photo' . ($n === 1 ? '' : 's') . ' you picked: ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 3))) . ($n > 3 ? ' and ' . ($n - 3) . ' more' : '') . $rest, true); }
@@ -128,7 +128,7 @@ function link_scope_text_html($l, $report) {
     if ($type === 'mixed') { $n = count($report['photos']); return 'Only ' . link_folder_list_html($report, $item) . ($n ? ' and ' . $n . ' photo' . ($n === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 4))) . ($n > 4 ? ' and ' . ($n - 4) . ' more' : '') : ''); }
     if ($type === 'photos') return count($report['photos']) . ' photo' . (count($report['photos']) === 1 ? '' : 's') . ': ' . implode(', ', array_map($item, array_slice($report['photos'], 0, 6))) . (count($report['photos']) > 6 ? ' and ' . (count($report['photos']) - 6) . ' more' : '');
     if ($type === 'public') return 'Nothing private: just the public gallery';
-    return 'Everything private';
+    return 'Everything, public and private';
 }
 
 function link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootFid) {

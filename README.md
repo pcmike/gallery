@@ -18,7 +18,7 @@
 - **Private photos you can still share.** Hide any photo or folder, then send a temporary link that shows only what you chose, can be limited to a number of browsers or a date, and can be paused or revoked at once. You see who opened it.
 - **Edit on the page.** A pencil on every photo for the caption, place and privacy; select many photos to change them together.
 - **Everything else is opt-in.** Folders show as albums from the start; maps, video, share links and passwords stay off until you switch them on, and the admin says what each one publishes. Nothing leaves your server unless you turn it on (a map loads its tiles from OpenStreetMap when someone opens one).
-- **Looks after itself.** A health check for the server, a built-in backup of everything it has made, and guarded data files.
+- **Looks after itself.** A health check for the server (it says when a new version is out, and can install it with one press and go back), a built-in backup of everything it has made, and guarded data files.
 
 ## Quick start
 

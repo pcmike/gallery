@@ -1692,6 +1692,9 @@ check('[health] the version file is a guarded data file (a direct request for it
 file_put_contents("$fxVm/.gallery-health.php", data_file_guard_line_for_tests() . json_encode(['version' => '2.0.1', 'from' => '', 'at' => '2026-01-02', 'first' => '2026-01-02']));
 [, $vmHealthUp] = http_get("$baseVm/?admin", $vmAuth);
 check('[health] after an upgrade the panel says what it was upgraded from, and the file is brought up to date', str_contains($vmHealthUp, 'Upgraded from 2.0.1') && str_contains((string) file_get_contents("$fxVm/.gallery-health.php"), '"from":"2.0.1"'));
+file_put_contents("$fxVm/.gallery-health.php", data_file_guard_line_for_tests() . json_encode(['version' => '99.0.0', 'from' => '', 'at' => '2026-01-02', 'first' => '2026-01-02']));
+[, $vmHealthBack] = http_get("$baseVm/?admin", $vmAuth);
+check('[health] a copy of an older version over a newer one is called going back, not an upgrade', str_contains($vmHealthBack, 'Went back from 99.0.0') && !str_contains($vmHealthBack, 'Upgraded from 99.0.0'));
 file_put_contents("$fxVm/Reels/.gallery-items.php", data_file_guard_line_for_tests() . '{"items": {"reel.mp4": {"caption": "unfinished');
 [, $vmHealthBad] = http_get("$baseVm/?admin", $vmAuth);
 check('[health] a folder data file that is not valid JSON is called out with its folder (its photos are hidden from visitors and nothing is saved over it)', str_contains($vmHealthBad, '1 folder data file can&#039;t be read') && str_contains($vmHealthBad, 'Reels') && str_contains($vmHealthBad, 'hidden from visitors until the file is restored') && str_contains($vmHealthBad, 'health-row health-bad loud') && str_contains($vmHealthBad, 'to look at.'));
@@ -5533,7 +5536,7 @@ check('[select] the bar offers only what would change something: Make private un
 check('[visitor downloads] the folder chooser is the Settings menu with ticks (a button, a list with a tick on each chosen folder, folders indented as a tree, saved as you tick), with no browser checkbox showing, no chips and no Done button', str_contains($srcF5, 'class="menu dl-menu" data-menu') && str_contains($srcF5, 'class="menu-btn dl-btn"') && str_contains($srcF5, ".dl-opt input { position:absolute; opacity:0;") && str_contains($srcF5, "l.className = 'dl-opt'") && !str_contains($srcF5, 'dl-chip') && !str_contains($srcF5, 'dl-pick') && !str_contains($srcF5, 'dl-list'));
 check('[path bar] a folder with no sibling has its own blue pill after the way up (so the bar says where you are), and a folder with siblings keeps its row of folders exactly as before', str_contains($srcF5, '<nav class="folder-pills" aria-label="This folder"><a href="?folder=<?= htmlspecialchars(rawurlencode($currentFolderPath)') && str_contains($srcF5, 'count($folderPills) >= 2') && str_contains($srcF5, 'aria-label="Other folders here"'));
 check('[link form] the small uppercase label style is for the headings above a list (div.sl-grp) only: the form\'s collapsible sections (details.sl-grp) share the class and must not inherit it', str_contains($srcF5, "  .sl-grp { margin:20px 0 4px; }\n  div.sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }") && !str_contains($srcF5, "  .sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase;"));
-check('[mixed link] choosing "some folders and some photos" ticks "Show only what they can see here", like "only some photos" (a link with picks shows just the picks, not the public gallery too); folders alone start unticked', str_contains((string) file_get_contents($indexSrc), "checked = e.target.value === 'photos' || e.target.value === 'mixed';"));
+check('[mixed link] choosing some folders, some photos, or both ticks "Show only what they can see here" (a limited link shows just what it covers, not the public gallery too); everything and the public gallery have no box', str_contains((string) file_get_contents($indexSrc), "checked = e.target.value === 'folders' || e.target.value === 'photos' || e.target.value === 'mixed';"));
 check('[buttons] the one-size button rule has exceptions for the small controls with a size of their own (the x on a folder chip and on a photo thumbnail, and the notes reference\'s little tabs), after it so they win', preg_match('~button:not\(\[class\]\), \.admin-bar button\.secondary \{ min-height:40px;.*?\.admin-main \.sl-chip button \{ min-height:0;.*?\.admin-main \.sl-pth button \{ min-height:0;.*?\.admin-main \.ref-tabs button \{ min-height:0;~s', $srcF5) === 1);
 check('[features] a fresh install (nothing configured but the passwords) lands on Features, one that has settings does not, and the folder\'s tabs are not shown there', (str_contains($nTab, "if (!saved && !landed && !/[?&]folder=/.test(location.search) && main.getAttribute('data-land') === 'features' && names.indexOf('features') >= 0) {") && str_contains($nTab, "sessionStorage.setItem('galleryAdminLanded', '1');")) && str_contains($nTab, "var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features';") && !str_contains($nTab, 'data-land="features"') && str_contains($huAdmin, '<main class="admin-main" data-land="features">'));
 check('[features] "Show me" opens the gallery with a pointer on the button (?show=lock|pencil|star|select|share): a ring, a label, gone at the first press, a key or ten seconds, and the address is cleaned', str_contains((string) file_get_contents($indexSrc), "const m = /[?&]show=([a-z]+)/.exec(location.search); if (!m) return;") && str_contains((string) file_get_contents($indexSrc), "timer = setTimeout(done, 10000);") && str_contains((string) file_get_contents($indexSrc), '.show-me-ring { outline: 3px solid #aab2ff !important;'));
@@ -6979,7 +6982,7 @@ check('[custom address] the form has the address field, the box that makes the a
 
 check('[setting links] every setting row has an address (setting-NAME) the admin can jump to, and the jump opens the fold the row is in (or its group, when the row is hidden), scrolls to it and marks it', str_contains($cRules, 'id="setting-LOG_PUBLIC_VISITS"') && str_contains($cRules, 'id="setting-ENABLE_SHARE_LINKS"') && str_contains($cRules, 'id="setting-ENABLE_PHOTO_LOCATION"') && str_contains($cRules, "up.tagName === 'DETAILS'") && str_contains($cRules, "e.closest('details')") && str_contains($cRules, '.site-row.flash-target'));
 check('[setting links] the public address\'s "Turn it on or off" line is one link that goes to the Log visitors setting; the prompts to turn on Allow share links and Allow photo locations go to their settings too', str_contains($qTab1, "adminGoTo('site', 'setting-LOG_PUBLIC_VISITS');\">Settings &rarr; Share links &rarr; Log visitors to the public address</a>") && str_contains($indexContents, "adminGoTo('site', 'setting-ENABLE_SHARE_LINKS')") && str_contains($indexContents, "adminGoTo('site', 'setting-ENABLE_PHOTO_LOCATION')"));
-check('[new link default] the new link form starts on "Just the public gallery" (nothing private), not on "Everything private"; the form script\'s defaults say the same', str_contains($cRules, 'name="scope_type" value="public" checked') && !str_contains($cRules, 'name="scope_type" value="all" checked') && str_contains($cRules, "scopeType: 'public', only: false"));
+check('[new link default] the new link form starts on "Just the public gallery" (nothing private), not on "Everything"; the form script\'s defaults say the same', str_contains($cRules, 'name="scope_type" value="public" checked') && !str_contains($cRules, 'name="scope_type" value="all" checked') && str_contains($cRules, "scopeType: 'public', only: false"));
 check('[replace dialog] the Shares tab\'s dialog has a hidden third button for Custom…, the Replace dialog is Cancel, Random and Custom… (the row\'s action is still called Replace address…), and Custom… opens Edit on the Address field', str_contains($cRules, 'data-sl-modal="extra" hidden') && str_contains($cRules, "'Random', false, 'Custom…'") && str_contains($cRules, 'Replace address…') && str_contains($cRules, "openForm(link, 'address')") && str_contains($cRules, "focusField === 'address' ? '[name=address]'"));
 check('[replace dialog] for a custom address the text says Random drops the name; for a random one it keeps the old text and points to Custom…', str_contains($cRules, 'the name is gone, the address you sent stops working right away') && str_contains($cRules, 'To pick a different name of your own, press <em>Custom…</em>.') && str_contains($cRules, 'To use a name of your own instead, press <em>Custom…</em>.'));
 [$cHSt, $cHBody, $cHHd] = http_get("$baseC/?folder=Rome", [], false);
@@ -7830,6 +7833,104 @@ $flCfg(['FOLDER_DISPLAY_MODE' => 'flat']);
 $flTok = preg_match('/data-csrf="([a-f0-9]+)"/', $flShell, $flM) ? $flM[1] : '';
 $flLock = json_decode(http_post("$baseFl/?admin&folder=sub2", ['csrf_token' => $flTok, 'action' => 'toggle_folder_restriction', 'hidden' => '1'], array_merge($flAuth, ['X-Requested-With: gallery-fetch']))[1], true);
 check('[Flat] pressing a folder\'s lock makes it private (visitors no longer see it), and the lock then shows closed', ($flLock['ok'] ?? null) === true && !str_contains(http_get("$baseFl/")[1], 'sub2%2Fc.jpg') && str_contains(http_get("$baseFl/?admin&shell=1", $flAuth)[1], 'class="flock on" data-lock-path="sub2"'));
+
+/* --------------------------------------------------------------------- *
+ * New versions: the daily look, the notice, Update now and Go back, against a release server of our own.
+ * --------------------------------------------------------------------- */
+$fxUp = new_fixture_dir('update'); make_jpeg("$fxUp/a.jpg", 60, 60, 10, 10, 10);
+$fxUpRel = new_fixture_dir('updaterelease');
+$upOld = (string) file_get_contents($indexSrc);
+preg_match("/define\\('GALLERY_VERSION', '(\\d+\\.\\d+\\.\\d+)'\\)/", $upOld, $upM); $upCur = $upM[1] ?? '0.0.0';
+$upDef = "define('GALLERY_VERSION', '$upCur')";
+$upNew = str_replace($upDef, "define('GALLERY_VERSION', '9.9.9')", $upOld);
+check('[update] the test release is the real file with only its version line changed', substr_count($upOld, $upDef) === 1 && strlen($upNew) === strlen($upOld) - strlen($upCur) + 5 && $upNew !== $upOld);
+$portUp = find_free_port(); start_server($fxUpRel, $portUp); $baseUpRel = "http://127.0.0.1:$portUp";
+$upRelease = function (string $tag, string $code, ?string $sum = null, ?array $assets = null) use ($fxUpRel, $baseUpRel) {
+    file_put_contents("$fxUpRel/code.txt", $code); file_put_contents("$fxUpRel/sum.txt", ($sum ?? hash('sha256', $code)) . "  index.php\n");
+    file_put_contents("$fxUpRel/feed.json", json_encode(['tag_name' => $tag, 'html_url' => "$baseUpRel/releases/tag/$tag", 'assets' => $assets ?? [
+        ['name' => 'index.php', 'browser_download_url' => "$baseUpRel/code.txt"], ['name' => 'index.php.sha256', 'browser_download_url' => "$baseUpRel/sum.txt"]]]));
+};
+$upRelease('v9.9.9', $upNew);
+$upCfg = fn (array $o = []) => file_put_contents("$fxUp/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => (is_file("$fxUp/.gallery-config.php") ? (cfg_read("$fxUp/.gallery-config.php")['ADMIN_PASSWORD'] ?? 'up-admin-pw-1') : 'up-admin-pw-1'), 'UPDATE_FEED_URL' => "$baseUpRel/feed.json"]));
+$upCfg(); copy($indexSrc, "$fxUp/index.php");
+$portUpG = find_free_port(); start_server($fxUp, $portUpG); $baseUp = "http://127.0.0.1:$portUpG";
+[, , $upH] = http_post("$baseUp/?admin", ['access_code' => 'up-admin-pw-1'], ['User-Agent: up-test'], false);
+$upOwn = ['Cookie: ' . extract_cookie_header($upH), 'User-Agent: up-test'];
+$upCsrf = (string) extract_csrf_token(http_get("$baseUp/?admin", $upOwn)[1]);
+$upPost = fn (array $f) => json_decode(http_post("$baseUp/?admin", $f + ['csrf_token' => $upCsrf], array_merge($upOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$upPage = fn () => http_get("$baseUp/?admin", $upOwn)[1];
+$upState = fn () => json_decode((string) substr((string) @file_get_contents("$fxUp/.gallery-update.php"), (int) strpos((string) @file_get_contents("$fxUp/.gallery-update.php"), "\n") + 1), true) ?: [];
+$upP0 = $upPage();
+check('[update] before the first look the Health check says it has not looked, and the page will ask for itself (once, afterwards, in the background)', str_contains($upP0, 'id="health-panel"') && str_contains($upP0, 'data-update-due="1"') && str_contains($upP0, 'Not checked yet') && !str_contains($upP0, 'is out'));
+$upC1 = $upPost(['action' => 'update_check']);
+check('[update] the daily look finds the newer version and brings the notice, with Update now and View release', ($upC1['ok'] ?? null) === true && ($upC1['newer'] ?? null) === true && count($upC1['rows'] ?? []) === 1 && str_contains($upC1['rows'][0], 'Version 9.9.9 is out') && str_contains($upC1['rows'][0], 'data-update="apply"') && str_contains($upC1['rows'][0], 'View release') && str_contains($upC1['rows'][0], "$baseUpRel/releases/tag/v9.9.9"));
+check('[update] ...what it learned is kept in a guarded file (a direct request for it answers 404 with nothing else)', str_starts_with((string) file_get_contents("$fxUp/.gallery-update.php"), "<?php http_response_code(404); exit; ?>\n") && ($upState()['latest'] ?? '') === '9.9.9' && http_get("$baseUp/.gallery-update.php")[0] === 404 && !str_contains(http_get("$baseUp/.gallery-update.php")[1], '9.9.9'));
+$upP1 = $upPage();
+check('[update] the Health check shows the notice from what was kept, with no new look needed, and says when it looked; no notice text says what changed (only that it is out, and what you are on)', str_contains($upP1, 'Version 9.9.9 is out') && str_contains($upP1, "You are on $upCur.") && !str_contains($upP1, 'data-update-due="1"') && str_contains($upP1, 'A newer version is out · checked'));
+$upRelease('v0.0.1', $upNew);
+$upC2 = $upPost(['action' => 'update_check']);
+check('[update] asked again within a day it does not ask GitHub again (the answer kept is still the one shown)', ($upC2['newer'] ?? null) === true && ($upState()['latest'] ?? '') === '9.9.9');
+$upC3 = $upPost(['action' => 'update_check', 'force' => '1']);
+check('[update] Check now asks at once; an older release is no notice, and the row says up to date', ($upC3['ok'] ?? null) === true && ($upC3['newer'] ?? null) === false && ($upC3['rows'] ?? null) === [] && str_contains($upC3['text'], 'Up to date') && !str_contains($upPage(), 'is out'));
+$upRelease("v$upCur", $upOld); $upC4 = $upPost(['action' => 'update_check', 'force' => '1']);
+check('[update] the same version as this one is no notice either', ($upC4['newer'] ?? null) === false && !str_contains($upPage(), 'is out'));
+$upRelease('v9.9.9', $upNew);
+// switched off: no automatic look, but Check now still works
+$upCfg(['CHECK_FOR_UPDATES' => false]); @unlink("$fxUp/.gallery-update.php");
+$upPo = $upPage(); $upCo = $upPost(['action' => 'update_check']);
+check('[update] with the setting off the page does not ask for a look, the row says so, and an unforced check does nothing', !str_contains($upPo, 'data-update-due="1"') && str_contains($upPo, 'switched off in Settings') && ($upCo['ok'] ?? null) === true && !is_file("$fxUp/.gallery-update.php"));
+$upCf = $upPost(['action' => 'update_check', 'force' => '1']);
+check('[update] ...and Check now with it off still looks (the setting is only about the automatic look)', ($upCf['newer'] ?? null) === true && is_file("$fxUp/.gallery-update.php"));
+check('[update] Settings has the switch for it (on by default) in Server setup', str_contains($upPo, 'Look for a new version of the gallery') && str_contains((string) file_get_contents($indexSrc), "gallery_setting('CHECK_FOR_UPDATES', true)"));
+$upCfg(); @unlink("$fxUp/.gallery-update.php");
+// the feed cannot be reached
+$upFeed = (string) file_get_contents("$fxUpRel/feed.json"); unlink("$fxUpRel/feed.json");
+$upCe = $upPost(['action' => 'update_check', 'force' => '1']);
+check('[update] a feed that cannot be reached is no notice and no error page: the row says it could not check, and no new look is made for a day', ($upCe['ok'] ?? null) === true && ($upCe['rows'] ?? null) === [] && str_contains($upCe['text'], 'Could not check') && str_contains($upPage(), 'Could not check') && !str_contains($upPage(), 'data-update-due="1"'));
+file_put_contents("$fxUpRel/feed.json", $upFeed); @unlink("$fxUp/.gallery-update.php");
+// what Update now refuses (each leaves index.php exactly as it was and keeps nothing)
+$upSame = fn () => (string) file_get_contents("$fxUp/index.php") === $upOld && !is_file("$fxUp/.gallery-previous.php") && !glob("$fxUp/.gallery-update-*.tmp");
+$upRelease('v9.9.9', $upNew, str_repeat('0', 64)); $upR1 = $upPost(['action' => 'update_apply']);
+check('[update] a download that does not match its checksum is refused, and nothing changes', ($upR1['ok'] ?? null) === false && str_contains($upR1['text'], 'did not match') && $upSame());
+$upCut = substr($upNew, 0, 600000); $upRelease('v9.9.9', $upCut); $upR2 = $upPost(['action' => 'update_apply']);
+check('[update] a download cut short (the checksum agrees with what was cut) is refused because it is not a whole PHP file, and nothing changes', ($upR2['ok'] ?? null) === false && str_contains($upR2['text'], 'not the PHP file') && $upSame());
+$upRelease('v9.9.9', str_replace("define('GALLERY_VERSION', '9.9.9')", "define('GALLERY_VERSION', '9.9.8')", $upNew)); $upR3 = $upPost(['action' => 'update_apply']);
+check('[update] a file whose own version is not the release\'s is refused, and nothing changes', ($upR3['ok'] ?? null) === false && str_contains($upR3['text'], 'not the PHP file') && $upSame());
+$upRelease('v9.9.9', '<html><body>' . str_repeat('this is a web page, not the gallery. ', 4000) . '</body></html>'); $upR4 = $upPost(['action' => 'update_apply']);
+check('[update] a page of something else is refused, and nothing changes', ($upR4['ok'] ?? null) === false && $upSame());
+$upRelease('v9.9.9', $upNew, null, [['name' => 'index.php', 'browser_download_url' => 'http://127.0.0.1:1/code.txt'], ['name' => 'index.php.sha256', 'browser_download_url' => 'https://example.com/sum.txt']]); $upR5 = $upPost(['action' => 'update_apply']);
+check('[update] files the release names on any other server are not used: there is nothing to update from, and nothing changes', ($upR5['ok'] ?? null) === false && str_contains($upR5['text'], 'no index.php with a checksum') && $upSame());
+$upRelease('v9.9.9', $upNew);
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    chmod("$fxUp/index.php", 0444); $upR6 = $upPost(['action' => 'update_apply']); $upP6 = $upPage();
+    check('[update] where the web server can\'t write to index.php the update is refused with the reason, and the notice offers only View release', ($upR6['ok'] ?? null) === false && str_contains($upR6['text'], 'can\'t write to index.php') && str_contains($upP6, 'Version 9.9.9 is out') && !str_contains($upP6, 'data-update="apply"') && str_contains($upP6, 'View release') && $upSame());
+    chmod("$fxUp/index.php", 0644);
+}
+// Update now
+$upMode = fileperms("$fxUp/index.php") & 0777;
+$upR7 = $upPost(['action' => 'update_apply']);
+check('[update] Update now downloads the release, checks it, keeps the old file and puts the new one in: index.php is the release byte for byte, with its own permissions', ($upR7['ok'] ?? null) === true && ($upR7['version'] ?? '') === '9.9.9' && (string) file_get_contents("$fxUp/index.php") === $upNew && (fileperms("$fxUp/index.php") & 0777) === $upMode && !glob("$fxUp/.gallery-update-*.tmp"));
+$upBk = (string) @file_get_contents("$fxUp/.gallery-previous.php");
+check('[update] ...the file it replaced is kept as a guarded file (a request for it answers 404 and nothing runs), and it holds the old gallery exactly', str_starts_with($upBk, "<?php http_response_code(404); exit; ?>\n") && substr($upBk, strlen("<?php http_response_code(404); exit; ?>\n")) === $upOld && http_get("$baseUp/.gallery-previous.php")[0] === 404 && !str_contains(http_get("$baseUp/.gallery-previous.php")[1], 'GALLERY_VERSION'));
+$upP7 = $upPage();
+check('[update] the gallery runs as the new version, says it was updated from the old one, and offers Go back for a day', str_contains($upP7, 'Running 9.9.9') && str_contains($upP7, "Updated from $upCur to 9.9.9") && str_contains($upP7, 'data-update="undo"') && !str_contains($upP7, 'Version 9.9.9 is out'));
+check('[update] the photos and the settings are where they were', is_file("$fxUp/a.jpg") && (cfg_read("$fxUp/.gallery-config.php")['UPDATE_FEED_URL'] ?? '') === "$baseUpRel/feed.json" && http_get("$baseUp/")[0] === 200);
+$upR8 = $upPost(['action' => 'update_apply']);
+check('[update] pressing Update now on a gallery that already has the newest says so and changes nothing', ($upR8['ok'] ?? null) === false && str_contains($upR8['text'], 'already have the newest') && (string) file_get_contents("$fxUp/index.php") === $upNew);
+// Go back
+$upU1 = $upPost(['action' => 'update_undo']);
+check('[update] Go back puts the kept file in again, exactly, and the kept copy is used up', ($upU1['ok'] ?? null) === true && ($upU1['version'] ?? '') === $upCur && (string) file_get_contents("$fxUp/index.php") === $upOld && !is_file("$fxUp/.gallery-previous.php") && !glob("$fxUp/.gallery-update-*.tmp"));
+$upP9 = $upPage();
+check('[update] ...the gallery runs as the old version again, and the notice for the newer one is back', str_contains($upP9, "Running $upCur") && str_contains($upP9, 'Version 9.9.9 is out') && !str_contains($upP9, 'data-update="undo"'));
+$upU2 = $upPost(['action' => 'update_undo']);
+check('[update] Go back with nothing kept says so and changes nothing', ($upU2['ok'] ?? null) === false && str_contains($upU2['text'], 'no earlier version') && (string) file_get_contents("$fxUp/index.php") === $upOld);
+file_put_contents("$fxUp/.gallery-previous.php", data_file_guard_line_for_tests() . '<?php this is not a whole file');
+$upU3 = $upPost(['action' => 'update_undo']);
+check('[update] a kept file that is not a whole gallery is not put in, and index.php is untouched', ($upU3['ok'] ?? null) === false && (string) file_get_contents("$fxUp/index.php") === $upOld);
+unlink("$fxUp/.gallery-previous.php");
+$upBad = http_post("$baseUp/?admin", ['action' => 'update_apply'], array_merge($upOwn, ['X-Requested-With: gallery-fetch']));
+check('[update] without the page\'s own token (a forged request) nothing is done', (string) file_get_contents("$fxUp/index.php") === $upOld && str_contains($upBad[1], 'session expired'));
+check('[update] the two new files are on the list of files the gallery made (so "remove what this gallery made" knows them, and nothing else is touched)', str_contains($upOld, "'.gallery-update.php' => 'update'") && str_contains($upOld, "'.gallery-previous.php' => 'previous'"));
 
 /* --------------------------------------------------------------------- */
 

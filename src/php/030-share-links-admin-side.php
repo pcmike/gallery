@@ -123,7 +123,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
         $ids = [];
         foreach ($scopeFolderPaths as $rel) { $id = $stamp($rel); if ($id !== null) $ids[] = $id; }
         $photos = $scopeType === 'mixed' ? $stampPhotos($list('scope_photos')) : [];
-        if ($scopeType === 'folders' && !$scopeFolderPaths) $errors[] = 'Choose at least one folder, or choose "Everything private".';
+        if ($scopeType === 'folders' && !$scopeFolderPaths) $errors[] = 'Choose at least one folder, or choose "Everything".';
         if ($scopeType === 'mixed' && !$scopeFolderPaths && !$photos) $errors[] = 'Choose at least one folder or photo.';
         // "Public items only", folder by folder: the private photos and videos inside it are left out (unless one is named in this link).
         $pubIds = [];

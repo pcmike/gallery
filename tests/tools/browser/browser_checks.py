@@ -1058,6 +1058,35 @@ try:
         ok(ho["web"][0]["ico"] and ho["web"][2]["ico"], "[health] ...and those two rows say why, with the green check mark", str(ho["web"]))
     finally:
         srv12.terminate(); srv12.wait()
+    # a newer version is out: the notice (found by the page's own daily look, in the background), Update now and Go back, on a copy of the gallery against a release server of our own
+    SITEU = WORK + "/siteu"; RELU = WORK + "/releaseu"; os.makedirs(SITEU); os.makedirs(RELU)
+    uold = open(HERE + "/../../../index.php").read(); unew = re.sub(r"define\('GALLERY_VERSION', '[\d.]+'\)", "define('GALLERY_VERSION', '9.9.9')", uold, count=1)
+    su = socket.socket(); su.bind(("127.0.0.1", 0)); PUR = su.getsockname()[1]; su.close(); su2 = socket.socket(); su2.bind(("127.0.0.1", 0)); PUS = su2.getsockname()[1]; su2.close()
+    open(RELU + "/code.txt", "w").write(unew); open(RELU + "/sum.txt", "w").write(__import__("hashlib").sha256(unew.encode()).hexdigest() + "  index.php\n")
+    open(RELU + "/feed.json", "w").write(json.dumps({"tag_name": "v9.9.9", "html_url": f"http://127.0.0.1:{PUR}/releases/tag/v9.9.9", "assets": [{"name": "index.php", "browser_download_url": f"http://127.0.0.1:{PUR}/code.txt"}, {"name": "index.php.sha256", "browser_download_url": f"http://127.0.0.1:{PUR}/sum.txt"}]}))
+    open(SITEU + "/index.php", "w").write(uold)
+    open(SITEU + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "up-admin-pw"], capture_output=True, text=True).stdout, "UPDATE_FEED_URL": f"http://127.0.0.1:{PUR}/feed.json"}) + "\n")
+    srvUR = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PUR}", "-t", RELU], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    srvUS = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PUS}", "-t", SITEU], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.call("Network.setExtraHTTPHeaders", {"headers": {"Authorization": "Basic " + base64.b64encode(b"admin:up-admin-pw").decode()}})
+        b.viewport(390, 844, mobile=True)
+        b.goto(f"http://127.0.0.1:{PUS}/?admin", 2.5); b.js("location.hash = '#site'"); b.drain(3.0)
+        un = b.js("""(() => { const r = document.querySelector('[data-update-row]'); if (!r) return null; const vw = document.documentElement.clientWidth, lab = r.querySelector('.health-label').getBoundingClientRect(), bs = [...r.querySelectorAll('[data-update=apply], a.btn-link')].map(x => x.getBoundingClientRect());
+            return {text: r.innerText.replace(/\\s+/g, ' '), n: bs.length, inside: bs.every(x => x.left >= 0 && x.right <= vw + 1), below: bs.every(x => x.top >= lab.bottom - 2), wide: lab.width, noSide: document.documentElement.scrollWidth <= innerWidth + 1, href: r.querySelector('a.btn-link').getAttribute('href')}; })()""")
+        shot(b, "26-new-version-notice-phone")
+        ok(un and "Version 9.9.9 is out" in un["text"] and un["n"] == 2 and un["inside"] and un["below"] and un["wide"] > 200 and un["noSide"] and un["href"].endswith("/releases/tag/v9.9.9"), "[new version] the page's own daily look finds the newer version and shows the notice, with Update now and View release under the words on a phone, inside the screen", str(un))
+        b.js("document.querySelector('[data-update=apply]').click()"); b.drain(5.0)
+        ok(open(SITEU + "/index.php").read() == unew and os.path.isfile(SITEU + "/.gallery-previous.php"), "[new version] Update now replaces index.php with the release, byte for byte, and keeps the old file")
+        ug = b.js("""(() => { const r = document.querySelector('[data-update-row]'); return r ? r.innerText.replace(/\\s+/g, ' ') : null; })()""")
+        ok(ug and "Updated from" in ug and "Go back to" in ug and "Version 9.9.9 is out" not in ug, "[new version] the page reloads on the new version and offers Go back instead", str(ug))
+        shot(b, "26b-updated-phone")
+        b.js("document.querySelector('[data-update=undo]').click()"); b.drain(5.0)
+        ok(open(SITEU + "/index.php").read() == uold and not os.path.exists(SITEU + "/.gallery-previous.php"), "[new version] Go back puts the old file back exactly, and the kept copy is used up")
+        ok(not b.problems(IGN), "[new version] ...and the Health check has no console or CSP errors through all of that", "; ".join(b.problems(IGN))[:300])
+    finally:
+        srvUS.terminate(); srvUS.wait(); srvUR.terminate(); srvUR.wait()
     b.call("Network.setExtraHTTPHeaders", {"headers": {}})
     b.viewport(1280, 900)
     # ---------------- a folder opens on its chosen cover photo ----------------
@@ -2803,6 +2832,11 @@ try:
             const els = [...f.querySelectorAll('input, textarea, select')].filter(vis); const small = els.filter(e => parseFloat(getComputedStyle(e).fontSize) < 16).map(e => (e.name || e.id || e.type) + ':' + getComputedStyle(e).fontSize);
             return {coarse: matchMedia('(pointer: coarse)').matches, n: els.length, small}; })()""")
         ok(fz["coarse"] and fz["n"] >= 3 and not fz["small"], "[touch fields] on a touch screen every field of the link form is 16 px or more (so the phone does not zoom in when one is touched)", str(fz))
+        b.js("document.querySelector('#sl-form [data-openin-menu] .sl-popbtn').scrollIntoView({block: 'center'}); document.querySelector('#sl-form [data-openin-menu] .sl-popbtn').click()"); b.drain(0.4)
+        om = b.js("""(() => { const btn = document.querySelector('#sl-form [data-openin-menu] .sl-popbtn').getBoundingClientRect(), m = document.querySelector('#sl-form [data-openin-menu] .sl-popmenu'), r = m.getBoundingClientRect(); return {open: !m.hidden, gap: Math.round(r.top - btn.bottom), inside: r.left >= 0 && r.right <= document.documentElement.clientWidth + 1 && r.bottom <= innerHeight + 1, rows: m.querySelectorAll('.sl-popopt').length}; })()""")
+        shot(b, "25e-opens-in-phone")
+        ok(om["open"] and 0 <= om["gap"] <= 12 and om["inside"] and om["rows"] >= 1, "[link form phone] the \"Opens in\" menu opens right under its button and inside the screen (it used to open far above, out of sight, so only \"The front page\" ever showed)", str(om))
+        b.js("document.querySelector('#sl-form [data-openin-menu] .sl-popbtn').click()"); b.drain(0.2)
         cs = b.js("""(() => { const f = document.querySelector('#sl-form'); f.querySelectorAll('details.sl-grp').forEach(d => { d.open = true; }); const words = [...f.querySelectorAll('details.sl-grp .sl-grp-b strong, details.sl-grp .sl-grp-b small, details.sl-grp .sl-grp-b .sl-k, details.sl-grp .sl-grp-b button, details.sl-grp .sl-grp-b label')].filter(e => e.textContent.trim()); const lab = document.querySelector('div.sl-grp'); return {n: words.length, caps: words.filter(e => getComputedStyle(e).textTransform !== 'none').length, titles: [...f.querySelectorAll('details.sl-grp')].map(d => getComputedStyle(d).textTransform), label: lab ? getComputedStyle(lab).textTransform : 'uppercase'}; })()""")
         ok(cs["n"] > 20 and cs["caps"] == 0 and all(x == "none" for x in cs["titles"]) and cs["label"] == "uppercase", "[link form] the form's sections are in ordinary sentence case (the small-capitals label style belongs to the list headings, and no longer leaks into the form: every question, button, pill and sentence was in capitals)", str(cs))
         b.js("document.querySelector('#sl-form [data-sl=cancel]').click()"); b.drain(0.3)
@@ -2987,7 +3021,10 @@ try:
         ok(b.js("!document.querySelector('.gs-modal')"), "[share this folder] Done closes it")
         # More options… hands over to the full form, filled in
         b.js("document.querySelector('.page-share').click()"); b.drain(0.4); type_in(".gs-name", "Handed over")
+        qf = b.js("""(() => { const c = document.getElementById('gs-only'), t = () => document.querySelector('.gs-fine-t').textContent; const first = {box: !!c && c.checked, label: c ? c.parentNode.innerText.trim() : '', text: t()}; c.click(); const off = t(); c.click(); return {first, off, on: t()}; })()""")
+        ok(qf["first"]["box"] and qf["first"]["label"] == "Show only this folder" and qf["first"]["text"].startswith("They can see only this folder and what is inside it.") and qf["off"].startswith("They can see this folder and what is inside it, and everything that is already public.") and qf["on"] == qf["first"]["text"], "[share this folder] the quick form for a folder has Show only this folder ticked to start with, and says what each state means", str(qf))
         b.js("document.querySelector('[data-gs=more]').click()"); b.drain(2.5)
+        ok(lwait("!document.getElementById('sl-form').hidden") and b.js("document.querySelector('#sl-form [name=only]').checked") and not b.js("document.querySelector('#sl-form [data-only-row]').hidden"), "[share this folder] More options… carries the ticked Show only box over to the full form")
         ok(lwait("!document.getElementById('sl-form').hidden") and b.js("document.querySelector('#sl-form [name=label]').value") == "Handed over" and b.js("document.querySelector('#sl-form input[name=scope_type]:checked').value") == "folders" and b.js("document.querySelector('#sl-form input[name=opens_pick]:checked').value") == "0" and b.js("document.querySelector('#sl-form [name=addr_name]').checked") and b.js("document.querySelector('#sl-form [name=address]').value") == "handedover" and b.js("!document.querySelector('#sl-form [data-addrnote]').hidden"), "[share form] More options… opens the full form on the Shares tab with the name, the folder and the address (the name, with the note about private photos) carried over")
         b.js("document.querySelector('#sl-form [data-sl=cancel]').click()"); b.drain(0.3)
         # "Type my own instead…" is the way to the full form with the address box open and the cursor in it
@@ -3086,13 +3123,13 @@ try:
         b.js("document.querySelector('#sl-form .sl-save').click()"); b.drain(1.5)
         mx = link_named("Mixed"); ok(mx is not None and mx["scope"]["type"] == "mixed" and len(mx["scope"]["folders"]) == 1 and len(mx["scope"]["photos"]) == 1, "[mixed link] saving keeps the folder and the photo in one link", str(mx))
         ok(not b.problems(IGN), "[sharing] no console or CSP errors anywhere in the share forms", "; ".join(b.problems(IGN))[:300])
-        # the full form's "show only" box follows the scope: hidden for everything, ticked for photos, unticked for folders
+        # the full form's "show only" box follows the scope: hidden for everything, ticked for photos and folders
         b.goto(BL + "/?admin&onlybox=1", 1.5); b.js("location.hash = '#links'"); b.drain(1.0)
         ok(b.js("document.querySelector('#sl-root').getAttribute('data-probe')").endswith("0000-probe-0000") and not [x for x in b.problems(()) if "0000-probe-0000" in x], "[share links] the tab's check of the tidy address leaves no 404 line in the browser's console")
         b.js("document.querySelector('[data-sl=new]').click()"); b.drain(0.5)
         box = b.js("""(() => { const f = document.getElementById('sl-form'), row = f.querySelector('[data-only-row]'), cb = f.querySelector('[name=only]'), pick = v => { const r = f.querySelector('input[name=scope_type][value="' + v + '"]'); r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); };
             const all = {hidden: row.hidden}; pick('photos'); const ph = {hidden: row.hidden, checked: cb.checked}; pick('mixed'); const mx = {hidden: row.hidden, checked: cb.checked}; pick('folders'); const fo = {hidden: row.hidden, checked: cb.checked}; pick('all'); return {all, ph, mx, fo, again: row.hidden, text: row.textContent.replace(/\\s+/g, ' ')}; })()""")
-        ok(box["all"]["hidden"] and not box["ph"]["hidden"] and box["ph"]["checked"] and not box["mx"]["hidden"] and box["mx"]["checked"] and not box["fo"]["hidden"] and not box["fo"]["checked"] and box["again"] and "not a lock" in box["text"], "[share form] the full form's \"Show only what they can see here\" box: hidden for everything private, ticked for photos, unticked for folders, and it says it is a tidy view and not a lock", str(box))
+        ok(box["all"]["hidden"] and not box["ph"]["hidden"] and box["ph"]["checked"] and not box["mx"]["hidden"] and box["mx"]["checked"] and not box["fo"]["hidden"] and box["fo"]["checked"] and box["again"] and "not a lock" in box["text"], "[share form] the full form's \"Show only what they can see here\" box: hidden for everything, ticked for photos, for folders with photos and for folders alone, and it says it is a tidy view and not a lock", str(box))
         pic = b.js("""(() => { const f = document.getElementById('sl-form'), cb = f.querySelector('[name=picture]'), pick = v => { const r = f.querySelector('input[name=title_mode][value="' + v + '"]'); r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); };
             const start = cb.checked; pick('neutral'); const n = cb.checked; pick('custom'); const c = cb.checked; pick('gallery'); const g = cb.checked; cb.checked = false; pick('custom'); pick('gallery'); return {start, n, c, g, label: cb.closest('label').textContent.replace(/\\s+/g, ' ').trim().slice(0, 40)}; })()""")
         ok(pic["start"] and not pic["n"] and not pic["c"] and pic["g"] and pic["label"].startswith("Show a preview photo"), "[share form] the \"Show a preview photo\" box starts ticked for the gallery's title, unticks itself for a neutral or your own title and ticks again for the gallery's", str(pic))
@@ -3174,7 +3211,7 @@ try:
         # a link that opens private photos: still the name, with a yellow note that a name is easy to guess; unticking then gives a random address, and ticking again the name
         b.js("document.querySelector('#sl-form input[name=scope_type][value=all]').click()"); b.drain(0.3)
         pr = fm("""({v: f.querySelector('[name=address]').value, ck: f.querySelector('[name=addr_name]').checked, note: !f.querySelector('[data-addrnote]').hidden, noteText: f.querySelector('[data-addrnote]').textContent})""")
-        ok(pr["v"] == "johndoe" and pr["ck"] and pr["note"] and "private photos" in pr["noteText"] and "easy to guess" in pr["noteText"] and "get a random one" in pr["noteText"], "[address field] choosing Everything private keeps the name as the address and says that a name is easy to guess and that unticking gives a random one", str(pr))
+        ok(pr["v"] == "johndoe" and pr["ck"] and pr["note"] and "private photos" in pr["noteText"] and "easy to guess" in pr["noteText"] and "get a random one" in pr["noteText"], "[address field] choosing Everything keeps the name as the address and says that a name is easy to guess and that unticking gives a random one", str(pr))
         b.js("document.querySelector('#sl-form [name=addr_name]').click()"); b.drain(0.3)
         pr2 = fm("""({v: f.querySelector('[name=address]').value, ck: f.querySelector('[name=addr_name]').checked, note: !f.querySelector('[data-addrnote]').hidden, rowHidden: f.querySelector('[data-addrrow]').hidden, hint: f.querySelector('[data-addrhint]').textContent})""")
         ok(pr2["v"] == "" and not pr2["ck"] and not pr2["note"] and pr2["rowHidden"] and "random code" in pr2["hint"], "[address field] ...unticking it there gives a random address (the box stays closed, the note goes) instead of an empty box", str(pr2))

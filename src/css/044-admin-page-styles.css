@@ -310,7 +310,7 @@
   .sl-popopt:hover { background:#2c2c31; }
   .sl-popopt input { accent-color:var(--accent); flex:none; margin:0; }
   .sl-popopt span { min-width:0; overflow-wrap:anywhere; }
-  @media (max-width:640px) { .sl-pop { position:static; } .sl-popmenu { left:0; right:0; max-width:none; } }
+  @media (max-width:640px) { .sl-pop { position:static; } .sl-pop.sl-popform { position:relative; } .sl-popmenu { left:0; right:0; max-width:none; } }   /* (a menu in the link form stays under its own button; the ones in the filter bars hang from the bar) */
   .sl-lchip.pub { background:rgba(59,165,92,0.16); border-color:rgba(59,165,92,0.6); color:#b8e6c6; }
   .sl-lchip { display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 4px 0 10px; border-radius:999px; font-size:0.78rem; background:rgba(88,101,242,0.18); border:1px solid rgba(88,101,242,0.6); color:#c9ceff; }
   .sl-lchip { background:#26262a; border-color:#34343a; color:var(--text); padding:0 10px; margin:0 6px 4px 0; }
@@ -560,6 +560,8 @@
   .health-mark { flex:none; width:1.3em; text-align:center; line-height:1.5; }
   .health-label { font-weight:600; }
   .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
+  .health-detail .linklike { color:#aab2ff; font-size:inherit; margin-left:6px; }   /* (Check now: a periwinkle link, like the other links in these rows) */
+  @media (hover: hover) { .health-detail .linklike:hover { text-decoration:underline; } }
   .health-more { display:inline-block; margin-top:2px; font-size:0.8rem; color:#aab2ff; }
   .health-summary { margin:0 0 6px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .site-group { scroll-margin-top:70px; margin:0 0 10px; border:1px solid #26262a; border-radius:9px; padding:0 12px; }
@@ -601,7 +603,8 @@
   .admin-folder-nav .hidden-note { padding:2px 12px 6px; font-size:0.78rem; color:var(--muted); }
   .health-note .health-mark { color:#8fa0ff; }
   .health-row .health-main { flex:1; min-width:0; }
-  .health-row .health-act { flex:none; margin-left:auto; align-self:center; }
+  .health-row .health-act { flex:none; margin-left:auto; align-self:center; display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
+  @media (max-width:640px) { .health-note { flex-wrap:wrap; } .health-note .health-act { flex-basis:100%; margin-left:0; justify-content:flex-start; padding-left:calc(1.3em + 10px); } }   /* (on a phone the buttons go under the words, not squeezing them) */
   .lock-fix { margin-top:10px; padding:2px 12px 8px; background:var(--card); color:var(--text); border-radius:10px; font-weight:400; }
   .lock-fix > summary { color:var(--text); }
   .health-row.optional .health-label { color:var(--muted); font-weight:500; }
@@ -677,8 +680,10 @@
   .field-row { display:flex; gap:10px; flex-wrap:wrap; }
   .field-row .field { flex:1; min-width:140px; }
   button, .btn { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px; font-size:0.85rem; cursor:pointer; }
-  button.secondary { background:#2a2a2e; color:var(--text); }
+  button.secondary, a.secondary.btn-link { background:#2a2a2e; color:var(--text); }
+  a.secondary.btn-link { display:inline-flex; align-items:center; text-decoration:none; }   /* (a link that looks like a grey button: View release) */
   /* One size for every action button in the admin (Check again, Prepare the rest, Show subfolders, Log out, Save ...): the same height, padding and type. */
+  .admin-main a.secondary.btn-link { min-height:40px; padding:0 16px; font-size:0.9rem; border-radius:6px; }
   .admin-main button.secondary, .admin-main button.primary, .admin-main button.danger, .admin-main button:not([class]), .admin-bar button.secondary { min-height:40px; padding:0 16px; font-size:0.9rem; }
   /* Small controls that have a size of their own (the one rule above is for action buttons): the × on a folder chip and on a photo thumbnail, and the little tabs of the notes reference. */
   .admin-main .sl-chip button { min-height:0; padding:0 6px; font-size:1rem; }
@@ -688,7 +693,7 @@
   /* Every plain button answers a mouse (a little lighter) and a press (it sinks). :where() keeps this at zero strength, so a button with a hover of its own keeps it. */
   @media (hover: hover) { :where(button:not(.linklike):not(:disabled):hover, .btn:hover) { filter:brightness(1.14); } }
   /* A grey button is too dark for a brighter shade to show, so it gets a lighter grey of its own (Copy link, Resume, Pause, Edit… and the rest). */
-  @media (hover: hover) { button.secondary:hover:not(:disabled) { background:#3a3a42; color:#fff; } }
+  @media (hover: hover) { button.secondary:hover:not(:disabled) { background:#3a3a42; color:#fff; } a.secondary.btn-link:hover { background:#3a3a42; color:#fff; } }
   :where(button:not(.linklike):not(:disabled):active, .btn:active) { transform:scale(0.97); }
   .md-file { border-top:1px solid #26262a; padding:14px 0; }
   .md-file:first-child { border-top:none; }

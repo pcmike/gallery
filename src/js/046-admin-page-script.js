@@ -278,6 +278,47 @@
         setTimeout(function () { location.reload(); }, 1400);
       });
     });
+    // New versions: the daily look (asked after the page is up, so a slow or blocked GitHub never slows Settings), Check now, Update now and Go back.
+    (function () {
+      var panel = document.getElementById('health-panel');
+      if (!panel) return;
+      var csrf = panel.getAttribute('data-csrf');
+      function post(fields, done, fail) {
+        fetch('?admin', { method: 'POST', body: new URLSearchParams(Object.assign({ csrf_token: csrf }, fields)), credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); }).then(done).catch(fail || function () {});
+      }
+      function say(t) { var s = panel.querySelector('[data-update-text]'); if (s && t) s.textContent = t; }
+      function showRows(rows) {   // (the new-version and just-updated heads-ups: replace what is there, add the group when there was none)
+        [].forEach.call(panel.querySelectorAll('[data-update-row]'), function (r) { r.remove(); });
+        if (!rows || !rows.length) return;
+        var group = panel.querySelector('.health-notes');
+        if (!group) {
+          group = document.createElement('div'); group.className = 'health-group health-notes'; group.innerHTML = '<h3 class="subhead">Heads-up</h3>';
+          var first = panel.querySelector('.health-group'); first ? first.parentNode.insertBefore(group, first) : panel.appendChild(group);
+        }
+        var h = group.querySelector('.subhead'); h.insertAdjacentHTML('afterend', rows.join(''));
+      }
+      panel.addEventListener('click', function (ev) {
+        var b = ev.target.closest ? ev.target.closest('[data-update]') : null;
+        if (!b || b.disabled) return;
+        var what = b.getAttribute('data-update'), was = b.textContent;
+        b.disabled = true;
+        if (what === 'check') {
+          say('Checking…'); b.textContent = 'Checking…';
+          post({ action: 'update_check', force: '1' }, function (j) { b.disabled = false; b.textContent = was; say(j.text); showRows(j.rows); }, function () { b.disabled = false; b.textContent = was; say('Could not reach the gallery.'); });
+          return;
+        }
+        b.textContent = what === 'apply' ? 'Updating…' : 'Going back…';
+        var row = b.closest('.health-row'), detail = row && row.querySelector('.health-detail');
+        post({ action: what === 'apply' ? 'update_apply' : 'update_undo' }, function (j) {
+          if (j.ok) { if (detail) detail.textContent = j.text + ' Reloading…'; setTimeout(function () { location.reload(); }, 700); return; }
+          b.disabled = false; b.textContent = was; if (detail) detail.textContent = j.text;
+        }, function () { b.disabled = false; b.textContent = was; if (detail) detail.textContent = 'Could not reach the gallery.'; });
+      });
+      if (panel.getAttribute('data-update-due') === '1') setTimeout(function () {
+        post({ action: 'update_check' }, function (j) { if (j && j.ok) { say(j.text); showRows(j.rows); } });
+      }, 1500);
+    })();
     const toggle = document.querySelector('.health-toggle');
     if (toggle) toggle.addEventListener('click', function () {
       const panel = document.getElementById('health-panel');
@@ -1260,7 +1301,7 @@
       var addrNote = form.querySelector('[data-addrnote]'); if (addrNote) addrNote.hidden = !((form._addrMode || 'name') === 'name' && opensPrivate(form));
       var f = formState(form), form_ = form, names = function (list) { return list.map(function (p) { return labelOf(form_, p); }).join(', '); };
       var scopeNames = function () { return st.scope.map(function (p) { return labelOf(form_, p) + (st.pub.indexOf(p) >= 0 ? ' (public items only)' : ''); }).join(', '); };
-      var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'every private folder and photo' : f.scope === 'folders' ? (st.scope.length ? scopeNames() : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? scopeNames() : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
+      var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'the whole gallery, public and private' : f.scope === 'folders' ? (st.scope.length ? scopeNames() : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? scopeNames() : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
       var usesNow = usesOf(f), usesIsDefault = usesNow === DEFAULT_USES && (f.opens !== 'n' || f.opensN !== '');
       var endsSay = f.ends === '0' ? 'never stops working' : f.ends === 'pick' ? 'stops working on ' + fdate(f.endsAt) : 'stops working after ' + ({ '86400': '1 day', '604800': '1 week', '2592000': '30 days' }[f.ends] || '');
       var titleSay = { gallery: 'the gallery\'s title', neutral: 'a neutral title', custom: 'a title of your own' }[f.title];
@@ -1275,7 +1316,7 @@
       ];
       [].forEach.call(form.querySelectorAll('[data-cl]'), function (el) { var c = cl[+el.getAttribute('data-cl') - 1]; el.textContent = c[0]; el.className = c[1] ? 'sl-cl-ch' : 'sl-cl'; });
       var sums = {
-        scope: [(f.scope === 'public' ? 'Just the public gallery' : f.scope === 'all' ? 'Everything private' : f.scope === 'folders' ? 'Only some folders' + (st.scope.length ? ': ' + names(st.scope) : '') : f.scope === 'mixed' ? 'Some folders and some photos' + (st.scope.length || st.photos.length ? ' (' + st.scope.length + ' folder' + (st.scope.length === 1 ? '' : 's') + ', ' + st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ')' : '') : 'Only some photos' + (st.photos.length ? ' (' + st.photos.length + ')' : '')), f.scope !== 'public' || f.openIn !== ''],
+        scope: [(f.scope === 'public' ? 'Just the public gallery' : f.scope === 'all' ? 'Everything' : f.scope === 'folders' ? 'Only some folders' + (st.scope.length ? ': ' + names(st.scope) : '') : f.scope === 'mixed' ? 'Some folders and some photos' + (st.scope.length || st.photos.length ? ' (' + st.scope.length + ' folder' + (st.scope.length === 1 ? '' : 's') + ', ' + st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ')' : '') : 'Only some photos' + (st.photos.length ? ' (' + st.photos.length + ')' : '')), f.scope !== 'public' || f.openIn !== ''],
         limits: [[usesNow === 0 && f.opens !== 'n' ? 'Unlimited browsers' : usesNow === 1 ? 'Just one browser' : (f.opens === 'n' ? (f.opensN || '?') : f.opens) + ' browsers', f.ends === '0' ? 'never stops' : f.ends === 'pick' ? 'stops ' + fdate(f.endsAt) : 'stops after ' + ({ '86400': '1 day', '604800': '1 week', '2592000': '30 days' }[f.ends] || ''), f.starts === 'now' ? 'starts now' : 'starts ' + fdate(f.startsAt)].join(' · '), !usesIsDefault || f.ends !== '0' || f.starts !== 'now'],
         privacy: [['Downloads: ' + DL_SAY[f.dl], 'ZIP: ' + DL_SAY[f.zip], f.loc === 'public' ? 'locations shown only' : 'all locations'].join(' · '), f.dl !== 'off' || f.zip !== 'off' || f.loc !== 'public'],
         page: [[{ gallery: 'The gallery\'s title', neutral: 'A neutral title', custom: 'Your own title' }[f.title], f.pic ? (f.picFile ? 'preview photo chosen' : 'automatic preview photo') : 'no preview photo', f.note ? 'with a note' : 'no note', f.heads === 'default' ? 'heads-up as the site setting' : 'heads-up ' + f.heads].join(' · '), f.title !== 'gallery' || !f.pic || f.picFile !== '' || f.note !== '' || f.heads !== 'default']
@@ -1350,7 +1391,7 @@
       if (e.target.name === 'keep_old') { addrHint(form); return; }
       if (e.target.name === 'title_mode' && !form.querySelector('[name=id]').value) form.querySelector('[name=picture]').checked = e.target.value === 'gallery';
       if (e.target.name === 'picture' || e.target.name === 'title_mode') { form.querySelector('[data-coverrow]')._loaded = false; }   // (a new link: the photo follows the title until you decide)
-      if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'photos' || e.target.value === 'mixed';   // (photos, and folders with photos: on to start with, so a link with picks shows just the picks; folders alone: off)
+      if (e.target.name === 'scope_type') form.querySelector('[name=only]').checked = e.target.value === 'folders' || e.target.value === 'photos' || e.target.value === 'mixed';   // (any link that limits what they see: on to start with, so it shows just what it covers; everything and the public gallery: off, and the box is hidden)
       if (e.target.name === 'addr_name') { setAddrMode(form, e.target.checked ? 'name' : (!opensPrivate(form) ? 'custom' : 'random'), true); return; }   // (unticking: a public link opens the box to type in; one that opens private photos gets a random address, which a name can't be)
       if (e.target.name === 'scope_type') addrSync(form);
       if (e.target.name === 'scope_type' && (e.target.value === 'folders' || e.target.value === 'mixed')) {

@@ -31,33 +31,36 @@ function health_headsups($dir, $files) {
     return $out;
 }
 
+/** One heads-up as its row of markup (the Health check prints these; the new-version buttons bring one in without a reload). */
+function health_headsup_row_html($n) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    return '<div class="health-row health-note note"' . ($n['attr'] ?? '') . '>'
+        . '<span class="health-mark">&#9432;</span>'
+        . '<div class="health-main"><div class="health-label">' . $esc($n['label']) . '</div><div class="health-detail">' . $esc($n['detail']) . '</div></div>'
+        . $n['html'] . '</div>';
+}
+
 /** The health panel at the top of Settings: the server-side rows from health_checks(), then three the browser fills in
  *  (see the script: the web server rules can only be tested by asking for addresses the way a visitor would). */
 function render_admin_health_panel() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $rows = health_checks($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
-    $notes = health_headsups($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
+    $notes = array_merge(update_headsups(), health_headsups($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []));
     $loud = 0;
     foreach ($rows as $r) if ($r[1] === 'bad' || $r[1] === 'warn') $loud++;
     $mark = ['ok' => 'check', 'warn' => 'warn', 'bad' => 'warn'];
     $groups = [];
     foreach ($rows as $r) $groups[$r[0]][] = $r;
 ?>
-    <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel">
+    <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel" data-csrf="<?= $esc(admin_csrf_token()) ?>"<?= update_check_due() ? ' data-update-due="1"' : '' ?>>
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong>
         <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary health-refresh" onclick="location.reload()" title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></p>
-      <p class="muted health-intro" style="margin-top:0;">Looks only; nothing is changed (apart from noting the running version).</p>
+      <p class="muted health-intro" style="margin-top:0;">This only looks; it never changes your gallery (it just notes the running version and, once a day, looks for a new one).</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
           <h3 class="subhead">Heads-up</h3>
-          <?php foreach ($notes as $n): ?>
-            <div class="health-row health-note note">
-              <span class="health-mark">&#9432;</span>
-              <div class="health-main"><div class="health-label"><?= $esc($n['label']) ?></div><div class="health-detail"><?= $esc($n['detail']) ?></div></div>
-              <?= $n['html'] ?>
-            </div>
-          <?php endforeach; ?>
+          <?php foreach ($notes as $n) echo health_headsup_row_html($n), "\n"; ?>
         </div>
       <?php endif; ?>
       <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn') $allQuiet = false; ?>

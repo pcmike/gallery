@@ -452,6 +452,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if (strncmp($action, 'link_', 5) === 0) {   // the Shares tab (answers JSON and ends the request)
         links_admin_action($action, $dir, $files);
     }
+    if (strncmp($action, 'update_', 7) === 0) update_admin_action($action);   // the Health check's new-version buttons (answers JSON and ends the request)
     if (strncmp($action, 'geo_', 4) === 0) geo_admin_action($action);   // Settings > Signing in: the country file (answers JSON and ends the request)
     if ($action === 'browser_ack') {   // "Looks fine": that flag is cleared until something new raises it
         $bid = (string) ($_POST['id'] ?? ''); $bflag = (string) ($_POST['flag'] ?? '');
