@@ -419,6 +419,7 @@ function link_export($which, $what, $ip, $data, $dir) {
         else foreach ($log['events'] as $e) { $v = $log['visitors'][$e['v'] ?? ''] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $k = $e['k'] ?? ''; $f = $e['f'] ?? ($e['d'] ?? ''); $rows[] = [$iso($e['t']), $l['label'], $v['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : $k), ($k === 'scroll' || $k === 'folder' || $k === 'zip') ? $f : link_item_folder((string) $f), ($k === 'scroll' || $k === 'folder' || $k === 'zip') ? '' : basename((string) $f), $e['n'] ?? 1]; }
     }
     header('Content-Type: text/csv; charset=UTF-8');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="share-links-' . $what . '.csv"');
     header('X-Content-Type-Options: nosniff');
     echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";

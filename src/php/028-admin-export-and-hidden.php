@@ -17,6 +17,7 @@ function admin_export_tree($dir, $files) {
         }
     }
     header('Content-Type: application/json');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="whole-tree-gallery-items.json"');
     echo json_encode($tree, JSON_PRETTY_PRINT);
 }
@@ -25,6 +26,7 @@ function admin_export_items($adminFolderPath, $adminFolderReal) {
     $data = items_read($adminFolderReal);
     $name = ($adminFolderPath === null ? 'root' : slugify($adminFolderPath)) . '-gallery-items.json';
     header('Content-Type: application/json');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $name . '"');
     echo json_encode($data, JSON_PRETTY_PRINT);
 }

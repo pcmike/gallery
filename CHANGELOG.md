@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.6.3] - 2026-11-06
+
+### Fixed
+- **Download ZIP did nothing on a desktop.** On a desktop the admin runs inside a frame, and every download (the ZIP of the files the gallery made, a folder's ZIP, an original photo, the exports) was sent with a "never show this in a frame" rule. A browser that holds a download to that rule drops it without a word; the phone's admin page is not framed, which is why it worked there. A download may now be framed by this site's own pages (and no other site's); anything that is refused still carries the strict rule.
+- **The Download ZIP dialog no longer starts the download by itself after waiting for the server.** It says "Your copy is ready" and gives a Download ZIP button to press, which every browser accepts. (The delete's "keep a copy first" step works the same way.)
+
 ## [2.6.2] - 2026-11-05
 
 ### Added

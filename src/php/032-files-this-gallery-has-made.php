@@ -284,6 +284,7 @@ function files_download_route($dir, $files) {
     @ini_set('zlib.output_compression', '0');
     while (ob_get_level() > 0) @ob_end_clean();
     header('Content-Type: application/zip');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="gallery-files-' . gmdate('Y-m-d') . '.zip"');
     header('Content-Length: ' . $total);
     header('X-Content-Type-Options: nosniff');

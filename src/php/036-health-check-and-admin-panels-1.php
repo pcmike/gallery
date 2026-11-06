@@ -295,6 +295,7 @@ function admin_browser_history_route() {
     header('Cache-Control: no-store');
     if (($_GET['csv'] ?? '') === '1') {
         header('Content-Type: text/csv; charset=UTF-8');
+        shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
         header('Content-Disposition: attachment; filename="signin-' . $id . '.csv"');
         echo "time,address,country,event,what it said it was\n";
         foreach (signin_history_read($id) as $l) echo implode(',', [link_csv_cell(date('Y-m-d H:i:s', (int) $l['t'])), link_csv_cell($l['ip']), link_csv_cell($l['cc'] ?? ''), link_csv_cell($l['e'] ?? ''), link_csv_cell($l['ua'] ?? '')]) . "\n";
