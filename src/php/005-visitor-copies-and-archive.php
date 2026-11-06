@@ -154,7 +154,8 @@ function archive_take_slot() {
 /** The files of $files this visitor may have in a ZIP: everything for the owner and the private-view password; for someone using a
  *  share link, what their link's ZIP answer covers, public or private; nothing for anyone else. */
 function archive_files_for_viewer($dir, $files) {
-    if (is_revealed()) return $files;
+    if (is_admin_browser()) return $files;
+    if (is_revealed()) return array_values(array_filter($files, function ($f) use ($dir) { return !file_is_unlisted($dir, $f); }));   // (a Not listed folder is in nobody's ZIP but the owner's)
     $l = link_viewer();
     if ($l === null || ($l['zip']['mode'] ?? 'off') === 'off') return [];
     global $itemsData;

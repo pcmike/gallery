@@ -630,7 +630,7 @@
   });
   // Settings that are a single switch or number save the moment they change, in place: the control, the little status
   // beside it, and nothing else on the page moves. (The small Save button exists only without JavaScript.)
-  [].forEach.call(document.querySelectorAll('.instant-form'), function (form) {
+  [].forEach.call(document.querySelectorAll('.instant-form, .unlisted-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
     var csrf = form.querySelector('input[name=csrf_token]').value, action = form.querySelector('input[name=action]').value;
     function say(node, text, kind) {
@@ -1774,6 +1774,11 @@
         })
         .catch(function () { say('Couldn\'t check: reload the page and try again.', 'err'); });
     }
+    // The Not listed switch below this one makes the folder private as well, and making the folder public ends it: keep the two in step.
+    document.addEventListener('instant-saved', function (ev) {
+      var d = ev.detail || {};
+      if (typeof d.private === 'boolean' && typeof d.unlisted === 'boolean') { box.checked = d.private; if (d.counts) counts = { stay: d.counts.stay, open: d.counts.open }; paint(); }
+    });
     box.addEventListener('change', function () {
       if (box.checked) { send(true, function (ok) { if (!ok) box.checked = false; }); return; }
       box.checked = true;   // stays on until it is confirmed
@@ -1785,7 +1790,7 @@
       modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeModal(); } });
       document.getElementById('pm-ok').addEventListener('click', function () {
         modal.hidden = true;
-        send(false, function () { box.focus(); });
+        send(false, function () { var u = document.querySelector('.unlisted-form input[type=checkbox][name=unlisted]'); if (u) u.checked = false; box.focus(); });
       });
     }
     paint();

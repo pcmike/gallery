@@ -2267,6 +2267,15 @@ try:
         b.js("document.querySelector('.priv-folder-form input[type=checkbox]').click()"); b.drain(0.8)
         b.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}); b.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27}); b.drain(0.3)
         ok(not b.js("!document.getElementById('priv-modal').hidden") and items18().get("restriction") == "private", "[privacy] Escape closes it too")
+        # Not listed: a second switch under the folder's own, private plus a flag
+        un = "document.querySelector('.unlisted-form input[type=checkbox][name=unlisted]')"
+        ok(b.js("(() => { const a = document.querySelector('.priv-folder-form .switch').getBoundingClientRect(), u = %s.closest('.switch').getBoundingClientRect(), l = document.querySelector('.instant-form input[type=checkbox][name=enabled]').closest('.switch').getBoundingClientRect(); return a.top < u.top && u.top < l.top && Math.round(a.left) === Math.round(u.left); })()" % un), "[not listed] the Not listed switch sits under the folder's own switch and above the location switch, lined up with them")
+        ok(not b.js("%s.checked" % un), "[not listed] it starts off for a folder that is private but not Not listed")
+        b.js("%s.click()" % un)
+        ok(wait18("%s.closest('.unlisted-form').querySelector('.rowstate').textContent.indexOf('only you can open') >= 0" % un) and items18().get("unlisted") is True and items18().get("restriction") == "private" and b.js("document.querySelector('.priv-folder-form input[type=checkbox]').checked"), "[not listed] pressing it saves the flag (the folder stays private) and says what it means")
+        b.js("%s.click()" % un)
+        ok(wait18("%s.closest('.unlisted-form').querySelector('.rowstate').textContent.indexOf('No longer not listed') >= 0" % un) and "unlisted" not in items18() and items18().get("restriction") == "private" and b.js("document.querySelector('.priv-folder-form input[type=checkbox]').checked"), "[not listed] pressing it again takes the flag off and leaves the folder private")
+        ok(not b.js("document.getElementById('map-under').classList.contains('no-loc')"), "[not listed] the map row still follows the location switch, not this one")
         # the gallery: locks in three states
         b.goto(B18 + "/?folder=Churches", 1.5)
         lock18 = lambda f: b.js("(() => { const e = document.querySelector(\".priv-toggle[data-file='Churches/%s']\"); return e.className.replace('priv-toggle', '').trim() + '|' + e.textContent.trim(); })()" % f)

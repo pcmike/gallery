@@ -494,6 +494,7 @@
   details.subtle { margin-top:10px; }
   details.subtle > summary { cursor:pointer; color:var(--muted); font-size:0.85rem; }
   .hint { color:var(--muted); font-size:0.75rem; margin:3px 0 0; }
+  .hint.unlisted-note { margin:4px 0 14px; }
   h3.subhead { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:18px 0 8px; font-weight:600; }
   .settings-grid { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px 14px; }
   .settings-grid.root { grid-template-columns:2fr 1fr; }
@@ -824,7 +825,7 @@
   .warn-note::before { content:"\26A0\FE0E  "; }
   .instant-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   .instant-label { font-size:0.9rem; }
-  .instant-form { margin:0 0 6px; }
+  .instant-form, .unlisted-form { margin:0 0 6px; }
   .rowstate { font-size:0.78rem; color:var(--muted); }   /* (it sits left of the control and takes room only while it says something, so the controls stay flush right) */
   .site-row .ctl .rowstate { order:-1; }
   .rowstate:empty { display:none; }

@@ -74,7 +74,7 @@ function item_restriction($entry) {
 function file_is_hidden($dir, $file, $itemsData) {
     $own = item_restriction($itemsData[$file] ?? null);
     if ($own === 'private') return true;
-    if ($own === 'public') return false;
+    if ($own === 'public') return file_is_unlisted($dir, $file);   // (inside a Not listed folder a public mark changes nothing: the folder is the owner's alone)
     return folder_above_is_private($dir, $file);
 }
 
@@ -91,6 +91,52 @@ function folder_above_is_private($dir, $file) {
         }
     }
     return false;
+}
+
+/** Whether any folder $file sits in, at any depth, is Not listed: private, with the owner's "not listed" flag (a folder the owner keeps for
+ *  themselves and shares from one photo at a time). It is stored as private plus the flag, so a version that doesn't know the flag
+ *  still treats the folder as private. Anything beneath a Not listed folder is Not listed too. */
+function folder_above_is_unlisted($dir, $file) {
+    return unlisted_root_depth($dir, $file) > 0;
+}
+
+/** How many path segments of $file's folders it takes to reach the topmost Not listed folder above it (1 for a top-level folder), or 0
+ *  when none of them is. */
+function unlisted_root_depth($dir, $file) {
+    if (AUTO_GROUP_BY_FOLDER && strpos($file, '/') !== false) {
+        $path = ''; $depth = 0;
+        foreach (explode('/', dirname($file)) as $segment) {
+            $path = $path === '' ? $segment : $path . '/' . $segment;
+            $depth++;
+            if (folder_unlisted_cached($dir, $path)) return $depth;
+        }
+    }
+    return 0;
+}
+
+/** Is the item in a Not listed folder? (Its own marks make no difference: see file_is_hidden.) */
+function file_is_unlisted($dir, $file) {
+    return folder_above_is_unlisted($dir, $file);
+}
+
+/** Is this folder Not listed, on its own or because a folder above it is? */
+function folder_is_unlisted($dir, $folderPath) {
+    return folder_unlisted_cached($dir, $folderPath) || folder_above_is_unlisted($dir, $folderPath . '/x');
+}
+
+/** One folder's own Not listed flag, read once per request like folder_restriction_cached (and reset with it). True only while the
+ *  folder is also private, so removing the privacy removes this too. */
+function folder_unlisted_cached($dir, $folderRel, $reset = false) {
+    static $cache = [];
+    if ($reset) {
+        $cache = [];
+        return null;
+    }
+    if (!isset($cache[$folderRel])) {
+        $data = items_read(resolve_real_path($dir, $folderRel));
+        $cache[$folderRel] = item_restriction($data) === 'private' && ($data['unlisted'] ?? null) === true;
+    }
+    return $cache[$folderRel];
 }
 
 /** The owner's view of one photo's privacy: its own setting ("private", "public", or "" when it has none and follows its folder),
@@ -187,6 +233,7 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
     static $cache = [];
     if ($reset) {
         $cache = [];
+        folder_unlisted_cached(null, null, true);
         return null;
     }
     if (!isset($cache[$folderRel])) {

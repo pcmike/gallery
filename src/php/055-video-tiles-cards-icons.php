@@ -271,7 +271,9 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     // Only the owner sees this: solid red when the folder is private on its own, dashed when only a folder above it is.
     $pill = '';
-    if ($priv['state'] === 'own') $pill = '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
+    if ($priv['state'] === 'own') $pill = folder_unlisted_cached($dir, $folderPath)
+        ? '<button type="button" class="folder-priv own unlisted" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Not listed: only you can open this folder. Press to make it public">' . ui_icon('lock') . 'Not listed</button>'
+        : '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
     elseif ($priv['state'] === 'inh') $pill = '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
     if ($coverFile !== null) {
         // The picture is a square cut from the original photo (see generate_cover_jpeg): a small one for ordinary cards, and

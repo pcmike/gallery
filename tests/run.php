@@ -7932,6 +7932,96 @@ $upBad = http_post("$baseUp/?admin", ['action' => 'update_apply'], array_merge($
 check('[update] without the page\'s own token (a forged request) nothing is done', (string) file_get_contents("$fxUp/index.php") === $upOld && str_contains($upBad[1], 'session expired'));
 check('[update] the two new files are on the list of files the gallery made (so "remove what this gallery made" knows them, and nothing else is touched)', str_contains($upOld, "'.gallery-update.php' => 'update'") && str_contains($upOld, "'.gallery-previous.php' => 'previous'"));
 
+/* --------------------------------------------------------------------- *
+ * Not listed folders: the owner's own drawer. A folder with a sentinel name and sentinel files is requested every way there is, as a
+ * stranger, as someone with the private-view password, on share links and as the owner. The sentinel must turn up for the owner (and for
+ * a link that names the folder) and nowhere else.
+ * --------------------------------------------------------------------- */
+echo "== Not listed folders ==\n";
+$fxNl = new_fixture_dir('notlisted');
+foreach (['Open', 'Open/Hid', 'SecretDrawer', 'Plain'] as $nlD) mkdir("$fxNl/$nlD", 0777, true);
+foreach (['front.jpg' => 1, 'Open/open-1.jpg' => 2, 'Open/Hid/NOTLISTED-DEEP.jpg' => 3, 'SecretDrawer/NOTLISTED-SENTINEL.jpg' => 4, 'SecretDrawer/NOTLISTED-TWO.jpg' => 5, 'Plain/PRIVATE-PLAIN.jpg' => 6] as $nlF => $nlC) make_jpeg("$fxNl/$nlF", 60, 60, $nlC * 20, 40, 90);
+$nlWrite = fn (string $folder, array $data) => file_put_contents("$fxNl/$folder/.gallery-items.php", data_file_guard_line_for_tests() . json_encode($data));
+$nlWrite('SecretDrawer', ['restriction' => 'private', 'unlisted' => true, 'items' => ['NOTLISTED-SENTINEL.jpg' => ['restriction' => 'public']]]);   // (a public mark on one photo changes nothing)
+$nlWrite('Open/Hid', ['restriction' => 'private', 'unlisted' => true]);
+$nlWrite('Plain', ['restriction' => 'private']);
+file_put_contents("$fxNl/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nl-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'nl-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'PUBLIC_DOWNLOAD_MODE' => 'all']));
+copy($indexSrc, "$fxNl/index.php");
+$portNl = find_free_port(); start_server($fxNl, $portNl); $baseNl = "http://127.0.0.1:$portNl";
+[, , $nlH1] = http_post("$baseNl/?admin", ['access_code' => 'nl-admin-pw-1'], [], false);
+$nlOwn = ['Cookie: ' . extract_cookie_header($nlH1)];
+[, , $nlH2] = http_post("$baseNl/?reveal", ['access_code' => 'nl-view-pw-1'], [], false);
+$nlViewCookie = extract_cookie_header($nlH2); $nlView = $nlViewCookie ? ['Cookie: ' . $nlViewCookie] : [];
+check('[not listed] the fixture signs in as the owner and as a private-view viewer', count($nlOwn) === 1 && $nlOwn[0] !== 'Cookie: ' && $nlViewCookie !== null && $nlViewCookie !== extract_cookie_header($nlH1));
+$nlCsrf = (string) extract_csrf_token(http_get("$baseNl/?admin", $nlOwn)[1]);
+$nlAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseNl/?admin$q", $f + ['csrf_token' => $nlCsrf], array_merge($nlOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$nlLinks = fn () => read_data_file("$fxNl/.gallery-links.php");
+$nlMake = function (string $label, array $f) use ($nlAdmin, $nlLinks, $baseNl, $fxNl) {
+    $made = $nlAdmin($f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+    if (!($made['ok'] ?? false)) return null;
+    $token = $nlLinks()['links'][$made['id']]['token'];
+    @unlink("$fxNl/.gallery-login-attempts.php");
+    [, , $h] = http_post("$baseNl/?link=$token", ['go' => '1'], [], false);
+    $ck = extract_cookie_header($h);
+    return $ck ? ['Cookie: ' . $ck] : null;
+};
+$nlLinkAll = $nlMake('Everything', ['scope_type' => 'all']);
+$nlLinkOpen = $nlMake('Open only', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Open'])]);
+$nlLinkDrawer = $nlMake('The drawer', ['scope_type' => 'folders', 'scope_folders' => json_encode(['SecretDrawer'])]);
+check('[not listed] the three share links open (Everything, Open, and one that names the drawer)', $nlLinkAll !== null && $nlLinkOpen !== null && $nlLinkDrawer !== null);
+// every address that could name the drawer or what is in it
+$nlPaths = ['/', '/?folder=SecretDrawer', '/?folder=Open', '/?folder=Open%2FHid', '/?folder=Plain', '/?photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg', '/?photo=Open%2FHid%2FNOTLISTED-DEEP.jpg',
+    '/?archive', '/?archive&folder=Open', '/?archive&folder=SecretDrawer', '/?map', '/?link=SecretDrawer', '/?link=secretdrawer'];
+$nlMedia = ['/?img=SecretDrawer%2FNOTLISTED-SENTINEL.jpg', '/?img=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&size=thumb', '/?img=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&size=full', '/?img=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&size=share',
+    '/?original=SecretDrawer%2FNOTLISTED-SENTINEL.jpg', '/?img=SecretDrawer%2FNOTLISTED-TWO.jpg&size=thumb', '/?img=Open%2FHid%2FNOTLISTED-DEEP.jpg&size=thumb', '/?original=Open%2FHid%2FNOTLISTED-DEEP.jpg',
+    '/?strip=SecretDrawer%2FNOTLISTED-SENTINEL.jpg', '/?preview=SecretDrawer%2FNOTLISTED-SENTINEL.jpg', '/?video=SecretDrawer%2FNOTLISTED-SENTINEL.jpg'];
+// what a visitor is shown by every one of those addresses: any sentinel in a page, or any media answer that is a picture
+$nlCrawl = function (array $hdr) use ($baseNl, $nlPaths, $nlMedia) {
+    $leaks = [];
+    foreach ($nlPaths as $q) {
+        [$st, $body] = http_get("$baseNl$q", $hdr, true);
+        // (a signed-in visitor's page repeats the address they asked for in its sign-out form: what they typed is not something it told them)
+        if (preg_match('~(?:photo|folder)=([^&]*)~', $q, $nlM)) { $nlV = rawurldecode($nlM[1]); $body = str_replace([$nlV, rawurlencode($nlV), htmlspecialchars($nlV), htmlspecialchars(rawurlencode($nlV))], '', $body); }
+        if (str_contains($body, 'NOTLISTED') || str_contains($body, 'SecretDrawer') || str_contains($body, 'secretdrawer')) $leaks[] = "page $q ($st)"; }
+    foreach ($nlMedia as $q) { [$st, $body, $hd] = http_get("$baseNl$q", $hdr, true); if ($st === 200 && (str_starts_with($body, "\xFF\xD8") || preg_grep('~^Content-Type: *image~i', $hd))) $leaks[] = "media $q"; if (str_contains($body, 'NOTLISTED')) $leaks[] = "body $q"; }
+    return $leaks;
+};
+$nlWho = ['a stranger' => [], 'someone with the private-view password' => $nlView, 'a link to Everything' => $nlLinkAll ?? [], 'a link to the Open folder (which has a Not listed folder inside)' => $nlLinkOpen ?? []];
+foreach ($nlWho as $nlName => $nlHdr) {
+    $nlLeaks = $nlCrawl($nlHdr);
+    check("[not listed] $nlName never meets the drawer or its photos, on any page or media address (" . (count($nlPaths) + count($nlMedia)) . " addresses)", $nlLeaks === []);
+    if ($nlLeaks) echo "    leaks: " . implode('; ', $nlLeaks) . "\n";
+}
+$nlOwnFront = http_get("$baseNl/", $nlOwn)[1];
+check('[not listed] the owner sees the drawer, with the Not listed pill, and its photos open', str_contains($nlOwnFront, 'SecretDrawer') && str_contains($nlOwnFront, 'Not listed') && http_get("$baseNl/?img=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&size=thumb", $nlOwn)[0] === 200 && str_contains(http_get("$baseNl/?folder=SecretDrawer", $nlOwn)[1], 'NOTLISTED-SENTINEL'));
+// a Private folder is not changed by any of this: the private-view password still opens it, a stranger still meets nothing
+check('[not listed] a plain Private folder is unchanged: the private-view viewer sees it and its photos, a stranger does not', str_contains(http_get("$baseNl/?folder=Plain", $nlView)[1], 'PRIVATE-PLAIN') && !str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN') && http_get("$baseNl/?img=Plain%2FPRIVATE-PLAIN.jpg&size=thumb", $nlView)[0] === 200 && http_get("$baseNl/?img=Plain%2FPRIVATE-PLAIN.jpg&size=thumb")[0] !== 200);
+// a folder that is not there and one that is Not listed answer alike, so the answer says nothing
+[$nlS1, $nlB1] = http_get("$baseNl/?folder=SecretDrawer", [], false); [$nlS2, $nlB2] = http_get("$baseNl/?folder=NoSuchFolder", [], false);
+check('[not listed] the page of a Not listed folder answers a stranger exactly as a folder that is not there does (same status, same body)', $nlS1 === $nlS2 && $nlB1 === $nlB2 && $nlS1 === 404);
+[$nlS3, $nlB3, $nlH3] = http_get("$baseNl/?link=SecretDrawer", [], false); [$nlS4, $nlB4, $nlH4] = http_get("$baseNl/?link=NoSuchFolder", [], false);
+check('[not listed] ...and the folder\'s name typed as an address is sent nowhere, just as a name that is not a folder is (no redirect that gives it away)', $nlS3 === $nlS4 && $nlB3 === $nlB4 && !preg_grep('~^Location:~i', $nlH3));
+[$nlS5, , $nlH5] = http_get("$baseNl/?link=SecretDrawer", $nlOwn, false);
+check('[not listed] ...while the owner is sent on to it', $nlS5 === 302 && (bool) preg_grep('~^Location: .*SecretDrawer/~', $nlH5));
+// a link that names the folder opens it, and only it
+$nlDrawerPage = http_get("$baseNl/?folder=SecretDrawer", $nlLinkDrawer ?? []);
+check('[not listed] a link that names the drawer shows it (its photos are there), but not the Open folder\'s Not listed folder', str_contains($nlDrawerPage[1], 'NOTLISTED-SENTINEL') && !str_contains(http_get("$baseNl/?folder=Open", $nlLinkDrawer ?? [])[1], 'NOTLISTED-DEEP'));
+// the folder control
+$nlOn = $nlAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=Plain');
+$nlPlainItems = read_data_file("$fxNl/Plain/.gallery-items.php");
+$nlParts = [($nlOn['ok'] ?? null) === true, ($nlOn['private'] ?? null) === true, ($nlPlainItems['restriction'] ?? '') === 'private', ($nlPlainItems['unlisted'] ?? null) === true, !str_contains(http_get("$baseNl/?folder=Plain", $nlView)[1], 'PRIVATE-PLAIN'), http_get("$baseNl/?img=Plain%2FPRIVATE-PLAIN.jpg&size=thumb", $nlView)[0] !== 200];
+check('[not listed] the switch makes a folder Not listed: it is saved as private plus the flag, and the viewer who saw it a moment ago no longer does', !in_array(false, $nlParts, true));
+if (in_array(false, $nlParts, true)) echo '    parts: ' . json_encode($nlParts) . ' reply: ' . json_encode($nlOn) . "\n";
+$nlOff = $nlAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '0'], '&folder=Plain');
+$nlPlainItems = read_data_file("$fxNl/Plain/.gallery-items.php");
+check('[not listed] switching it off leaves the folder private (the viewer sees it again, a stranger still does not)', ($nlOff['ok'] ?? null) === true && ($nlPlainItems['restriction'] ?? '') === 'private' && !isset($nlPlainItems['unlisted']) && str_contains(http_get("$baseNl/?folder=Plain", $nlView)[1], 'PRIVATE-PLAIN') && !str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN'));
+$nlAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=Plain');
+$nlPub = $nlAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '0'], '&folder=Plain');
+$nlPlainItems = read_data_file("$fxNl/Plain/.gallery-items.php");
+check('[not listed] making the folder public again ends Not listed too (neither flag is left behind)', ($nlPub['ok'] ?? null) === true && !isset($nlPlainItems['restriction']) && !isset($nlPlainItems['unlisted']) && str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN'));
+check('[not listed] a flag on a folder that is not private does nothing (public folders stay public)', (function () use ($nlWrite, $baseNl) { $nlWrite('Plain', ['unlisted' => true]); return str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN'); })());
+check('[not listed] the folder\'s settings page offers the switch', str_contains(http_get("$baseNl/?admin&folder=SecretDrawer", $nlOwn)[1], 'aria-label="Not listed"') && str_contains(http_get("$baseNl/?admin&folder=SecretDrawer", $nlOwn)[1], 'toggle_folder_unlisted'));
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";

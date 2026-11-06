@@ -751,10 +751,25 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         }
         $hidden = !empty($_POST['hidden']);
         items_update($adminFolderReal, function (&$data) use ($hidden) {
-            if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction']); }
+            if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction'], $data['unlisted']); }   // (public again is not "not listed" either)
         });
         return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'private: visitors need the private-view password to see it.' : 'public again.'),
                 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath)];
+    }
+
+    // Not listed: private, and the contents are the owner's alone (someone with the private-view password does not see them either). It is
+    // stored as private plus a flag, so a version that doesn't know the flag still keeps the folder private. Turning it off leaves the
+    // folder private; the Private switch is what makes it public.
+    if ($action === 'toggle_folder_unlisted') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $on = !empty($_POST['unlisted']);
+        items_update($adminFolderReal, function (&$data) use ($on) {
+            if ($on) { $data['restriction'] = 'private'; $data['unlisted'] = true; } else { unset($data['unlisted']); }
+        });
+        $private = item_restriction(items_read($adminFolderReal)) === 'private';
+        return ['type' => 'ok', 'private' => $private, 'unlisted' => $on, 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath),
+                'text' => $on ? 'Not listed: only you can open this folder. Visitors and people with the private-view password see nothing of it.'
+                              : 'No longer not listed. The folder is still private, so people with the private-view password can open it.'];
     }
 
     if ($action === 'arrange_items') {

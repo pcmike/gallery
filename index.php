@@ -86,7 +86,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.2');
+define('GALLERY_VERSION', '2.6.3');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -1909,7 +1909,8 @@ function archive_take_slot() {
 /** The files of $files this visitor may have in a ZIP: everything for the owner and the private-view password; for someone using a
  *  share link, what their link's ZIP answer covers, public or private; nothing for anyone else. */
 function archive_files_for_viewer($dir, $files) {
-    if (is_revealed()) return $files;
+    if (is_admin_browser()) return $files;
+    if (is_revealed()) return array_values(array_filter($files, function ($f) use ($dir) { return !file_is_unlisted($dir, $f); }));   // (a Not listed folder is in nobody's ZIP but the owner's)
     $l = link_viewer();
     if ($l === null || ($l['zip']['mode'] ?? 'off') === 'off') return [];
     global $itemsData;
@@ -3677,7 +3678,7 @@ foreach ($allFiles as $privateProbe) {
 // here too, rather than rendering an empty "0 photos" box, which would
 // be its own tell that something's being withheld.
 if (!is_revealed() && ($linkHere = link_viewer()) !== null && ($linkHere['scope']['type'] ?? 'all') !== 'all') link_scan_ambiguity($dir, $allFiles);   // a folder copied with its id is shown to nobody
-if (!is_revealed()) {
+if (!is_admin_browser()) {   // (someone with the private-view password is filtered too, but only of what is Not listed: viewer_may_see_item says so)
     foreach ($groups as $key => $groupFiles) {
         $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData) {
             return viewer_may_see_item($dir, $f, $itemsData);
@@ -3699,7 +3700,7 @@ if (!is_revealed()) {
     }));
     // A link's own photos are loose tiles on the front page, not folder cards: each leaves its folder's group and stands alone,
     // after the rest. (A folder the link shares stays a card; ?folder= pages are built from $files and are not affected.)
-    if (($pickLink = link_viewer()) !== null) {
+    if (($pickLink = link_viewer()) !== null && !is_revealed()) {
         $pickedOut = [];
         foreach ($folderGroupKeys as $folderKey => $_true) {
             if (!isset($groups[$folderKey])) continue;
@@ -5387,7 +5388,7 @@ function item_restriction($entry) {
 function file_is_hidden($dir, $file, $itemsData) {
     $own = item_restriction($itemsData[$file] ?? null);
     if ($own === 'private') return true;
-    if ($own === 'public') return false;
+    if ($own === 'public') return file_is_unlisted($dir, $file);   // (inside a Not listed folder a public mark changes nothing: the folder is the owner's alone)
     return folder_above_is_private($dir, $file);
 }
 
@@ -5404,6 +5405,52 @@ function folder_above_is_private($dir, $file) {
         }
     }
     return false;
+}
+
+/** Whether any folder $file sits in, at any depth, is Not listed: private, with the owner's "not listed" flag (a folder the owner keeps for
+ *  themselves and shares from one photo at a time). It is stored as private plus the flag, so a version that doesn't know the flag
+ *  still treats the folder as private. Anything beneath a Not listed folder is Not listed too. */
+function folder_above_is_unlisted($dir, $file) {
+    return unlisted_root_depth($dir, $file) > 0;
+}
+
+/** How many path segments of $file's folders it takes to reach the topmost Not listed folder above it (1 for a top-level folder), or 0
+ *  when none of them is. */
+function unlisted_root_depth($dir, $file) {
+    if (AUTO_GROUP_BY_FOLDER && strpos($file, '/') !== false) {
+        $path = ''; $depth = 0;
+        foreach (explode('/', dirname($file)) as $segment) {
+            $path = $path === '' ? $segment : $path . '/' . $segment;
+            $depth++;
+            if (folder_unlisted_cached($dir, $path)) return $depth;
+        }
+    }
+    return 0;
+}
+
+/** Is the item in a Not listed folder? (Its own marks make no difference: see file_is_hidden.) */
+function file_is_unlisted($dir, $file) {
+    return folder_above_is_unlisted($dir, $file);
+}
+
+/** Is this folder Not listed, on its own or because a folder above it is? */
+function folder_is_unlisted($dir, $folderPath) {
+    return folder_unlisted_cached($dir, $folderPath) || folder_above_is_unlisted($dir, $folderPath . '/x');
+}
+
+/** One folder's own Not listed flag, read once per request like folder_restriction_cached (and reset with it). True only while the
+ *  folder is also private, so removing the privacy removes this too. */
+function folder_unlisted_cached($dir, $folderRel, $reset = false) {
+    static $cache = [];
+    if ($reset) {
+        $cache = [];
+        return null;
+    }
+    if (!isset($cache[$folderRel])) {
+        $data = items_read(resolve_real_path($dir, $folderRel));
+        $cache[$folderRel] = item_restriction($data) === 'private' && ($data['unlisted'] ?? null) === true;
+    }
+    return $cache[$folderRel];
 }
 
 /** The owner's view of one photo's privacy: its own setting ("private", "public", or "" when it has none and follows its folder),
@@ -5500,6 +5547,7 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
     static $cache = [];
     if ($reset) {
         $cache = [];
+        folder_unlisted_cached(null, null, true);
         return null;
     }
     if (!isset($cache[$folderRel])) {
@@ -6056,8 +6104,11 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
     $cover = '';
+    $from = max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above a Not listed one does not bring it along; the Not listed folder, or one inside it, has to be picked)
+    $n = 0;
     foreach ($parts as $seg) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
+        if ($n++ < $from) continue;
         $id = folder_id_cached($dir, $prefix);
         if ($id === '' || !isset($set[$id]) || isset($amb[$id])) continue;
         if (!isset($pub[$id])) return 'all';
@@ -6069,7 +6120,7 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
 /** May the link $l show this item? */
 function link_allows_item($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
-    if ($type === 'all') return true;
+    if ($type === 'all') return !file_is_unlisted($dir, $file);   // ("Everything" leaves out a Not listed folder: that one is shared only by picking it)
     if ($type === 'folders' || $type === 'mixed') {
         $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? []);
         if ($cover === 'all') return true;
@@ -6100,7 +6151,8 @@ function link_item_is_picked_photo($l, $dir, $file, $itemsData = null) {
 
 /** May this visitor see the item (a public one, or a private one they were given)? */
 function viewer_may_see_item($dir, $file, $itemsData) {
-    if (is_revealed()) return true;
+    if (is_admin_browser()) return true;
+    if (is_revealed()) return !file_is_unlisted($dir, $file);   // (what the private-view password opens is everything private except a Not listed folder, which is the owner's alone)
     $l = link_viewer();
     if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file, $itemsData)) return false;   // a link that shows only its own things: not the public rest of the gallery either
     if (!file_is_hidden($dir, $file, $itemsData)) return true;
@@ -6125,7 +6177,8 @@ function link_capability_allows($l, $cap, $dir, $file, $itemsData = null) {
 /** May this visitor download the original of an item they can see? The owner and the private-view password: always. Everyone
  *  else: a public photo when the gallery lets visitors, a private one when their link says so. */
 function viewer_may_download($dir, $file, $itemsData) {
-    if (is_revealed()) return true;
+    if (is_admin_browser()) return true;
+    if (is_revealed()) return !file_is_unlisted($dir, $file);
     $l = link_viewer();
     // Someone using a share link: the link's own answer decides (the gallery-wide switch is for people who came in without one).
     if ($l !== null) return (!file_is_hidden($dir, $file, $itemsData) || link_allows_item($l, $dir, $file, $itemsData)) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData);
@@ -6346,6 +6399,7 @@ function run_link_route($dir) {
         if (ENABLE_SHARE_LINKS && link_token_format_ok($token)) { $all = links_read(); $isLink = link_find_by_token($all, $token) !== null || link_find_by_alias($all, $token) !== null; }
         if (!$isLink && in_array(strtolower($token), ['admin', 'reveal'], true) && !is_dir($dir . '/' . $token)) sign_in_redirect();
         $mayLook = !gallery_is_closed() || is_revealed() || is_admin_browser() || link_viewer() !== null;   // (a closed gallery doesn't tell a stranger which folders exist)
+        if ($mayLook && !is_admin_browser() && is_dir($dir . '/' . $token) && folder_is_unlisted($dir, $token)) $mayLook = false;   // (nor does it say a Not listed folder is there: it answers as for a name that isn't)
         if (!$isLink && $mayLook && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]))) {
             header('Cache-Control: no-store');
             header('Location: ' . gallery_root_href() . rawurlencode($token) . '/', true, 302);
@@ -8671,10 +8725,25 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         }
         $hidden = !empty($_POST['hidden']);
         items_update($adminFolderReal, function (&$data) use ($hidden) {
-            if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction']); }
+            if ($hidden) { $data['restriction'] = 'private'; } else { unset($data['restriction'], $data['unlisted']); }   // (public again is not "not listed" either)
         });
         return ['type' => 'ok', 'text' => 'This entire folder is now ' . ($hidden ? 'private: visitors need the private-view password to see it.' : 'public again.'),
                 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath)];
+    }
+
+    // Not listed: private, and the contents are the owner's alone (someone with the private-view password does not see them either). It is
+    // stored as private plus a flag, so a version that doesn't know the flag still keeps the folder private. Turning it off leaves the
+    // folder private; the Private switch is what makes it public.
+    if ($action === 'toggle_folder_unlisted') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $on = !empty($_POST['unlisted']);
+        items_update($adminFolderReal, function (&$data) use ($on) {
+            if ($on) { $data['restriction'] = 'private'; $data['unlisted'] = true; } else { unset($data['unlisted']); }
+        });
+        $private = item_restriction(items_read($adminFolderReal)) === 'private';
+        return ['type' => 'ok', 'private' => $private, 'unlisted' => $on, 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath),
+                'text' => $on ? 'Not listed: only you can open this folder. Visitors and people with the private-view password see nothing of it.'
+                              : 'No longer not listed. The folder is still private, so people with the private-view password can open it.'];
     }
 
     if ($action === 'arrange_items') {
@@ -9233,10 +9302,10 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
 /** A setting that is one switch: flip it and it is saved on the spot (the page's
  *  script posts it; the small Save button only exists for a browser without
  *  JavaScript). The warning, if any, sits beside it in orange. */
-function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $warn = '', $labelHtml = '') {
+function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $warn = '', $labelHtml = '', $formClass = '') {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
 ?>
-    <form method="post" class="instant-form">
+    <form method="post" class="<?= $formClass !== '' ? $esc($formClass) : 'instant-form' ?>">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="<?= $esc($action) ?>">
       <input type="hidden" name="<?= $esc($field) ?>" value="0">
@@ -9275,6 +9344,8 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
       <p class="hint priv-folder-note" data-on="Visitors can't see this folder or anything in it. <strong>%stay%</strong> will stay private (marked private on their own, or in another private folder); <strong>%open%</strong> %becomes% public when you switch this off. You'll be asked first." data-off="Switch it on to hide this folder and everything in it. Photos you mark private on their own stay private when you switch it off again, so you can go through them first."></p>
       <div class="nojs-only"><button type="submit" class="<?= $private ? 'secondary' : 'danger' ?>"><?= $private ? 'Make this folder public again' : 'Make this entire folder private' ?></button></div>
     </form>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_unlisted', 'unlisted', $private && !empty($itemsHere['unlisted']), 'Not listed', '', ' <small class="muted">only you can open it</small>', 'unlisted-form'); ?>
+    <p class="hint unlisted-note">Only you see what is in this folder: visitors and people with the private-view password get nothing, and an "Everything" link leaves it out. Share it one photo at a time (each photo has its own address), or pick the folder in a link. Switching this on makes the folder private too.</p>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">
         <h3 id="priv-modal-title">Make this folder public?</h3>
@@ -14139,6 +14210,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   details.subtle { margin-top:10px; }
   details.subtle > summary { cursor:pointer; color:var(--muted); font-size:0.85rem; }
   .hint { color:var(--muted); font-size:0.75rem; margin:3px 0 0; }
+  .hint.unlisted-note { margin:4px 0 14px; }
   h3.subhead { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:18px 0 8px; font-weight:600; }
   .settings-grid { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px 14px; }
   .settings-grid.root { grid-template-columns:2fr 1fr; }
@@ -14469,7 +14541,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .warn-note::before { content:"\26A0\FE0E  "; }
   .instant-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   .instant-label { font-size:0.9rem; }
-  .instant-form { margin:0 0 6px; }
+  .instant-form, .unlisted-form { margin:0 0 6px; }
   .rowstate { font-size:0.78rem; color:var(--muted); }   /* (it sits left of the control and takes room only while it says something, so the controls stay flush right) */
   .site-row .ctl .rowstate { order:-1; }
   .rowstate:empty { display:none; }
@@ -15438,7 +15510,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   });
   // Settings that are a single switch or number save the moment they change, in place: the control, the little status
   // beside it, and nothing else on the page moves. (The small Save button exists only without JavaScript.)
-  [].forEach.call(document.querySelectorAll('.instant-form'), function (form) {
+  [].forEach.call(document.querySelectorAll('.instant-form, .unlisted-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
     var csrf = form.querySelector('input[name=csrf_token]').value, action = form.querySelector('input[name=action]').value;
     function say(node, text, kind) {
@@ -16582,6 +16654,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         })
         .catch(function () { say('Couldn\'t check: reload the page and try again.', 'err'); });
     }
+    // The Not listed switch below this one makes the folder private as well, and making the folder public ends it: keep the two in step.
+    document.addEventListener('instant-saved', function (ev) {
+      var d = ev.detail || {};
+      if (typeof d.private === 'boolean' && typeof d.unlisted === 'boolean') { box.checked = d.private; if (d.counts) counts = { stay: d.counts.stay, open: d.counts.open }; paint(); }
+    });
     box.addEventListener('change', function () {
       if (box.checked) { send(true, function (ok) { if (!ok) box.checked = false; }); return; }
       box.checked = true;   // stays on until it is confirmed
@@ -16593,7 +16670,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeModal(); } });
       document.getElementById('pm-ok').addEventListener('click', function () {
         modal.hidden = true;
-        send(false, function () { box.focus(); });
+        send(false, function () { var u = document.querySelector('.unlisted-form input[type=checkbox][name=unlisted]'); if (u) u.checked = false; box.focus(); });
       });
     }
     paint();
@@ -17573,7 +17650,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         }
         if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch' && in_array($resultMessage['type'] ?? '', ['ok', 'error'], true)) {
             // A setting flipped in place by the page's script: answer in JSON, no page.
-            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1]));
+            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1]));
         }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);
@@ -19356,7 +19433,9 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     elseif ($status === 'reserved') $html .= '<span class="reserved-badge-corner">RESERVED</span>';
     // Only the owner sees this: solid red when the folder is private on its own, dashed when only a folder above it is.
     $pill = '';
-    if ($priv['state'] === 'own') $pill = '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
+    if ($priv['state'] === 'own') $pill = folder_unlisted_cached($dir, $folderPath)
+        ? '<button type="button" class="folder-priv own unlisted" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Not listed: only you can open this folder. Press to make it public">' . ui_icon('lock') . 'Not listed</button>'
+        : '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
     elseif ($priv['state'] === 'inh') $pill = '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
     if ($coverFile !== null) {
         // The picture is a square cut from the original photo (see generate_cover_jpeg): a small one for ordinary cards, and

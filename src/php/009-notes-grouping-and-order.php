@@ -420,7 +420,7 @@ foreach ($allFiles as $privateProbe) {
 // here too, rather than rendering an empty "0 photos" box, which would
 // be its own tell that something's being withheld.
 if (!is_revealed() && ($linkHere = link_viewer()) !== null && ($linkHere['scope']['type'] ?? 'all') !== 'all') link_scan_ambiguity($dir, $allFiles);   // a folder copied with its id is shown to nobody
-if (!is_revealed()) {
+if (!is_admin_browser()) {   // (someone with the private-view password is filtered too, but only of what is Not listed: viewer_may_see_item says so)
     foreach ($groups as $key => $groupFiles) {
         $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData) {
             return viewer_may_see_item($dir, $f, $itemsData);
@@ -442,7 +442,7 @@ if (!is_revealed()) {
     }));
     // A link's own photos are loose tiles on the front page, not folder cards: each leaves its folder's group and stands alone,
     // after the rest. (A folder the link shares stays a card; ?folder= pages are built from $files and are not affected.)
-    if (($pickLink = link_viewer()) !== null) {
+    if (($pickLink = link_viewer()) !== null && !is_revealed()) {
         $pickedOut = [];
         foreach ($folderGroupKeys as $folderKey => $_true) {
             if (!isset($groups[$folderKey])) continue;

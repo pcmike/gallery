@@ -84,8 +84,11 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
     $cover = '';
+    $from = max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above a Not listed one does not bring it along; the Not listed folder, or one inside it, has to be picked)
+    $n = 0;
     foreach ($parts as $seg) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
+        if ($n++ < $from) continue;
         $id = folder_id_cached($dir, $prefix);
         if ($id === '' || !isset($set[$id]) || isset($amb[$id])) continue;
         if (!isset($pub[$id])) return 'all';
@@ -97,7 +100,7 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
 /** May the link $l show this item? */
 function link_allows_item($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
-    if ($type === 'all') return true;
+    if ($type === 'all') return !file_is_unlisted($dir, $file);   // ("Everything" leaves out a Not listed folder: that one is shared only by picking it)
     if ($type === 'folders' || $type === 'mixed') {
         $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? []);
         if ($cover === 'all') return true;
@@ -128,7 +131,8 @@ function link_item_is_picked_photo($l, $dir, $file, $itemsData = null) {
 
 /** May this visitor see the item (a public one, or a private one they were given)? */
 function viewer_may_see_item($dir, $file, $itemsData) {
-    if (is_revealed()) return true;
+    if (is_admin_browser()) return true;
+    if (is_revealed()) return !file_is_unlisted($dir, $file);   // (what the private-view password opens is everything private except a Not listed folder, which is the owner's alone)
     $l = link_viewer();
     if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file, $itemsData)) return false;   // a link that shows only its own things: not the public rest of the gallery either
     if (!file_is_hidden($dir, $file, $itemsData)) return true;
@@ -153,7 +157,8 @@ function link_capability_allows($l, $cap, $dir, $file, $itemsData = null) {
 /** May this visitor download the original of an item they can see? The owner and the private-view password: always. Everyone
  *  else: a public photo when the gallery lets visitors, a private one when their link says so. */
 function viewer_may_download($dir, $file, $itemsData) {
-    if (is_revealed()) return true;
+    if (is_admin_browser()) return true;
+    if (is_revealed()) return !file_is_unlisted($dir, $file);
     $l = link_viewer();
     // Someone using a share link: the link's own answer decides (the gallery-wide switch is for people who came in without one).
     if ($l !== null) return (!file_is_hidden($dir, $file, $itemsData) || link_allows_item($l, $dir, $file, $itemsData)) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData);
@@ -374,6 +379,7 @@ function run_link_route($dir) {
         if (ENABLE_SHARE_LINKS && link_token_format_ok($token)) { $all = links_read(); $isLink = link_find_by_token($all, $token) !== null || link_find_by_alias($all, $token) !== null; }
         if (!$isLink && in_array(strtolower($token), ['admin', 'reveal'], true) && !is_dir($dir . '/' . $token)) sign_in_redirect();
         $mayLook = !gallery_is_closed() || is_revealed() || is_admin_browser() || link_viewer() !== null;   // (a closed gallery doesn't tell a stranger which folders exist)
+        if ($mayLook && !is_admin_browser() && is_dir($dir . '/' . $token) && folder_is_unlisted($dir, $token)) $mayLook = false;   // (nor does it say a Not listed folder is there: it answers as for a name that isn't)
         if (!$isLink && $mayLook && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]))) {
             header('Cache-Control: no-store');
             header('Location: ' . gallery_root_href() . rawurlencode($token) . '/', true, 302);
