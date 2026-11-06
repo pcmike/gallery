@@ -449,6 +449,9 @@ $currentFolderFileCount = 0;
 $folderCrumbs = [];
 $folderPills = [];       // quick links to the folders beside this one: [href, label, is this one]
 $folderPillsAll = null;  // where "All" goes when only some of them are shown
+$navTop = '';            // how high this visitor may go (see nav_top): '' is all of it
+$navBack = null;         // where the way back leads when it stops short of the gallery's front: [href, label]
+if (!isset($_GET['folder'])) nav_top($dir, null);   // (the gallery's front page: someone who came in here is remembered as having come in above any folder)
 if (isset($_GET['folder'])) {
     if ($photoPass !== null) { http_response_code(404); exit; }   // (a photo's own address is not a way into its folder)
     $requestedFolder = $_GET['folder'];
@@ -510,7 +513,15 @@ if (isset($_GET['folder'])) {
     foreach ($segments as $segment) {
         $ancestor = $ancestor === '' ? $segment : $ancestor . '/' . $segment;
         $ancestorMeta = folder_display_meta($dir, $ancestor);
-        $folderCrumbs[] = ['?folder=' . rawurlencode($ancestor), $ancestorMeta['label'] !== '' ? $ancestorMeta['label'] : $segment];
+        $folderCrumbs[] = ['?folder=' . rawurlencode($ancestor), $ancestorMeta['label'] !== '' ? $ancestorMeta['label'] : $segment, $ancestor];
+    }
+    // Someone who arrived inside a folder marked "Gallery of its own" is offered nothing above it, nor beside it: the way back stops at that folder
+    // (the page is simply built without them, so their names are not in it).
+    $navTop = nav_top($dir, $currentFolderPath);
+    if ($navTop !== '') {
+        $folderCrumbs = array_values(array_filter($folderCrumbs, function ($c) use ($navTop) { return strncmp($c[2], $navTop . '/', strlen($navTop) + 1) === 0; }));
+        if ($currentFolderPath !== $navTop) { $topMeta = folder_display_meta($dir, $navTop); $navBack = ['?folder=' . rawurlencode($navTop), $topMeta['label'] !== '' ? $topMeta['label'] : basename($navTop)]; }
+        else { $folderPills = []; $folderPillsAll = null; }
     }
 }
 

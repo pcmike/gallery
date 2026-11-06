@@ -791,6 +791,18 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
                 'text' => $fresh ? 'New address copied. The old one no longer opens this photo.' : 'Address copied.'];
     }
 
+    // "Gallery of its own": visitors who arrive inside this folder are offered nothing above it (see nav_top). The gallery's own settings file
+    // keeps whether any folder is marked, so a gallery that uses none reads nothing more and sets no cookie.
+    if ($action === 'toggle_folder_own_gallery') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $on = !empty($_POST['owngallery']);
+        items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['ownGallery'] = true; else unset($data['ownGallery']); });
+        $any = false;
+        foreach (all_folder_paths($files) as $p) { if ($p !== '' && folder_own_gallery_cached($dir, $p)) { $any = true; break; } }
+        items_update($dir, function (&$data) use ($any) { if ($any) $data['ownGalleries'] = true; else unset($data['ownGalleries']); });
+        return ['type' => 'ok', 'text' => $on ? 'Visitors who arrive inside this folder are offered nothing above it.' : 'Back to ordinary: visitors who arrive inside this folder can go up as usual.'];
+    }
+
     if ($action === 'toggle_folder_originals') {
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['originals']);

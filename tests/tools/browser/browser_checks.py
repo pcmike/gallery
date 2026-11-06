@@ -2252,7 +2252,7 @@ try:
         # privacy section: three rows, the map under the locations
         rows = b.js("""(() => { const q = s => document.querySelector(s); const sw = [q('.priv-folder-form .switch'), q('.instant-form input[type=checkbox][name=enabled]').closest('.switch'), q('.map-form input[type=checkbox][name=map_enabled]').closest('.switch')].map(e => e.getBoundingClientRect());
             return {lefts: sw.map(r => Math.round(r.left)), tops: sw.map(r => Math.round(r.top)), mapTitle: [...document.querySelectorAll('#settings h3.subhead')].map(h => h.textContent.trim()).join('|')}; })()""")
-        ok(rows["mapTitle"] == "Privacy" and rows["tops"][0] < rows["tops"][1] < rows["tops"][2] and rows["lefts"][0] == rows["lefts"][1] and rows["lefts"][2] > rows["lefts"][1], "[settings] Privacy holds the folder switch, the location switch and, indented under them, the map's: the first two line up, none is boxed", str(rows))
+        ok(rows["mapTitle"] == "Privacy|Navigation" and rows["tops"][0] < rows["tops"][1] < rows["tops"][2] and rows["lefts"][0] == rows["lefts"][1] and rows["lefts"][2] > rows["lefts"][1], "[settings] Privacy holds the folder switch, the location switch and, indented under them, the map's: the first two line up, none is boxed", str(rows))
         ok(b.js("document.getElementById('map-under').classList.contains('no-loc')") and b.js("getComputedStyle(document.querySelector('#map-under .map-loc-note')).display") == "block", "[settings] with locations off the map row is dimmed and says it has nothing to show")
         b.js("document.querySelector('.instant-form input[type=checkbox][name=enabled]').click()"); b.drain(1.2)
         ok(not b.js("document.getElementById('map-under').classList.contains('no-loc')") and b.js("getComputedStyle(document.querySelector('#map-under .map-loc-note')).display") == "none", "[settings] ...and it is back to normal the moment locations are turned on")
@@ -2388,6 +2388,47 @@ try:
     finally:
         srv18.terminate(); srv18.wait()
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1280, 900)
+    # ---------------- a gallery of its own: a typed address and a click are told apart by the real browser ----------------
+    print("== gallery of its own: arriving inside a marked folder, and coming in through the gallery")
+    SITEOG = WORK + "/siteog"
+    for sub in ("Album/Sub", "Album/Other", "Elsewhere"):
+        os.makedirs(SITEOG + "/" + sub)
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITEOG + "/" + sub + "/p.jpg"], check=True)
+    shutil.copy(HERE + "/../../../index.php", SITEOG + "/index.php"); os.utime(SITEOG + "/index.php", (time.time() - 3600,) * 2)
+    guard_og = "<?php http_response_code(404); exit; ?>\n"
+    open(SITEOG + "/.gallery-config.php", "w").write(guard_og + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "pog-admin-pw"], capture_output=True, text=True).stdout}) + "\n")
+    open(SITEOG + "/Album/.gallery-items.php", "w").write(guard_og + json.dumps({"ownGallery": True}))
+    open(SITEOG + "/.gallery-items.php", "w").write(guard_og + json.dumps({"ownGalleries": True}))
+    sog = socket.socket(); sog.bind(("127.0.0.1", 0)); POG = sog.getsockname()[1]; sog.close(); BOG = f"http://127.0.0.1:{POG}"
+    srvog = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{POG}", "-t", SITEOG], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.viewport(1100, 800)
+        crumb_og = lambda: b.js("(() => { const c = document.querySelector('.breadcrumb'); return c ? c.innerText.replace(/\\s+/g, ' ').trim() : null; })()")
+        b.goto(BOG + "/?folder=Album%2FSub", 1.5)
+        ok(crumb_og() == "\u2190 Album" and not b.js("document.documentElement.innerHTML.indexOf('Elsewhere') >= 0"), "[own gallery] typing the address of a folder inside the album: the way back stops at the album, and the rest of the gallery is not in the page", str(crumb_og()))
+        b.goto(BOG + "/?folder=Album", 1.5)
+        ok(crumb_og() is None and not b.js("!!document.querySelector('.folder-pills a[href*=Elsewhere]')"), "[own gallery] typing the album's own address: no way up at all")
+        b.goto(BOG + "/", 1.5)
+        b.js("[...document.querySelectorAll('a')].find(a => (a.getAttribute('href') || '').indexOf('folder=Album') >= 0).click()"); b.drain(2.0)
+        ok((crumb_og() or "").startswith("\u2190") and "Album" not in (crumb_og() or "").split("/")[0] and b.js("!!document.querySelector('.folder-pills a[href*=Elsewhere]')"), "[own gallery] clicking into the album from the gallery's front page keeps the whole way back (a click is not a typed address), with the folders beside it", str(crumb_og()))
+        b.js("[...document.querySelectorAll('a')].find(a => (a.getAttribute('href') || '').indexOf('folder=Album%2FSub') >= 0).click()"); b.drain(2.0)
+        ok(" / Album" in (crumb_og() or ""), "[own gallery] ...and the next click, into a folder in it", str(crumb_og()))
+        b.js("location.reload()"); b.drain(2.0)
+        ok(" / Album" in (crumb_og() or ""), "[own gallery] ...and reloading it keeps that", str(crumb_og()))
+        b.goto(BOG + "/?folder=Album%2FSub", 1.5)
+        ok(crumb_og() == "\u2190 Album", "[own gallery] typing the address again, in the same browser, starts over: boxed in", str(crumb_og()))
+        # the folder's switch, in the admin
+        b.goto(BOG + "/?admin&classic=1", 1.5)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "pog-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(3.0)
+        b.goto(BOG + "/?admin&folder=Elsewhere&n=1", 1.5)
+        sw_og = "document.querySelector('.unlisted-form input[type=checkbox][name=owngallery]')"
+        ok(not b.js("%s.checked" % sw_og), "[own gallery] the folder's Navigation switch starts off for a folder that is not marked")
+        b.js("%s.click()" % sw_og); b.drain(1.5)
+        ok(json.loads(open(SITEOG + "/Elsewhere/.gallery-items.php").read().split("\n", 1)[1]).get("ownGallery") is True, "[own gallery] pressing it marks the folder")
+        ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
+    finally:
+        srvog.terminate(); srvog.wait()
     # ---------------- a private folder shows on the main page ----------------
     print("== private folders on the main page: a pill on the card, a count that opens the folder, a lock in the folder buttons")
     SITE19 = WORK + "/site19"

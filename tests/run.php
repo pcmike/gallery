@@ -8060,6 +8060,85 @@ foreach (['a stranger' => [], 'someone with the private-view password' => $nlVie
     check("[photo address] $nlName still meets nothing of the drawer on any address without a code, now that addresses exist", $nlLeaks === []);
 }
 
+/* --------------------------------------------------------------------- *
+ * Gallery of its own: someone who arrives inside a marked folder is offered nothing above it nor beside it.
+ * --------------------------------------------------------------------- */
+echo "== Gallery of its own ==\n";
+$fxNv = new_fixture_dir('owngallery');
+foreach (['Sunrises', 'Sunsets', 'Eurotrip/Italy/Florence', 'Eurotrip/France/Paris', 'Travel/Spain'] as $nvD) mkdir("$fxNv/$nvD", 0777, true);
+foreach (['front.jpg', 'Sunrises/s1.jpg', 'Sunsets/t1.jpg', 'Eurotrip/e1.jpg', 'Eurotrip/Italy/i1.jpg', 'Eurotrip/Italy/Florence/f1.jpg', 'Eurotrip/France/p1.jpg', 'Eurotrip/France/Paris/p2.jpg', 'Travel/Spain/sp1.jpg'] as $nvI => $nvF) make_jpeg("$fxNv/$nvF", 60, 60, 10 + $nvI * 20, 70, 40);
+$nvWrite = fn (string $folder, array $data) => file_put_contents(($folder === '' ? $fxNv : "$fxNv/$folder") . '/.gallery-items.php', data_file_guard_line_for_tests() . json_encode($data));
+foreach (['Sunrises', 'Sunsets', 'Eurotrip'] as $nvM) $nvWrite($nvM, ['ownGallery' => true]);
+$nvWrite('', ['ownGalleries' => true]);
+file_put_contents("$fxNv/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nv-admin-pw-1', 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxNv/index.php");
+$portNv = find_free_port(); start_server($fxNv, $portNv); $baseNv = "http://127.0.0.1:$portNv";
+// a visitor's browser: a cookie jar, and the header a browser sends to say how it got here (none: typed or pasted; same-origin: a click inside the gallery)
+$nvJar = '';
+$nvGo = function (string $q, ?string $site, bool $keepJar = true) use ($baseNv, &$nvJar) {
+    $h = ['User-Agent: Mozilla/5.0 test'] + ($site !== null ? [1 => "Sec-Fetch-Site: $site"] : []);
+    if ($keepJar && $nvJar !== '') $h[] = "Cookie: $nvJar";
+    $r = http_get("$baseNv/$q", $h, false);
+    $c = extract_cookie_header($r[2]); if ($c !== null && $c !== '') $nvJar = $c;
+    return $r;
+};
+$nvCrumb = fn (string $body) => preg_match('~<p class="breadcrumb">(.*?)</p>~s', $body, $m) ? $m[1] : null;
+$nvPills = fn (string $body) => preg_match_all('~<nav class="folder-pills"[^>]*>(.*?)</nav>~s', $body, $m) ? implode(' ', $m[1]) : '';
+$nvFresh = fn (string $q) => $nvGo($q, 'none', false);
+[, $nvE] = $nvFresh('?folder=Eurotrip');
+check('[own gallery] arriving on the marked folder itself: no way up and no folder beside it, in the page (none of their names or links is there)', $nvCrumb($nvE) === null && !str_contains($nvE, 'Sunrises') && !str_contains($nvE, 'Sunsets') && !str_contains($nvE, 'folder=Sunrises') && !str_contains($nvE, 'folder=Sunsets') && !str_contains($nvE, 'Travel'));
+check('[own gallery] ...while the folders inside it show as usual', str_contains($nvE, 'folder=Eurotrip%2FItaly') && str_contains($nvE, 'folder=Eurotrip%2FFrance'));
+[, $nvI] = $nvFresh('?folder=Eurotrip%2FItaly');
+check('[own gallery] arriving on Italy: the way back leads to Eurotrip (not the gallery), France is beside it, and the gallery\'s other folders are nowhere', str_contains((string) $nvCrumb($nvI), 'folder=Eurotrip"') && str_contains((string) $nvCrumb($nvI), 'Eurotrip') && !str_contains((string) $nvCrumb($nvI), 'href="./"') && str_contains($nvPills($nvI), 'folder=Eurotrip%2FFrance') && !str_contains($nvI, 'Sunrises') && !str_contains($nvI, 'Sunsets') && !str_contains($nvI, 'Travel'));
+[, $nvF] = $nvFresh('?folder=Eurotrip%2FItaly%2FFlorence');
+check('[own gallery] arriving on Florence: Eurotrip, then Italy, in the way back; still nothing above Eurotrip', str_contains((string) $nvCrumb($nvF), 'folder=Eurotrip"') && str_contains((string) $nvCrumb($nvF), 'folder=Eurotrip%2FItaly"') && !str_contains((string) $nvCrumb($nvF), 'href="./"') && !str_contains($nvF, 'Sunrises') && !str_contains($nvF, 'Sunsets'));
+[, $nvSp] = $nvFresh('?folder=Travel%2FSpain');
+check('[own gallery] a folder with none marked above it is as before (the way back goes to the gallery, folders beside it show)', str_contains((string) $nvCrumb($nvSp), 'href="./"'));
+// coming in through the gallery above keeps the way back, and a fresh arrival resets it
+$nvJar = '';
+[, $nvRoot, $nvRootH] = $nvGo('', 'none');
+check('[own gallery] the gallery\'s front page remembers that you came in there (a short cookie, for the browser only, not readable by scripts)', (bool) preg_grep('~^Set-Cookie: gallery_top=%2F;.*HttpOnly~i', $nvRootH) && (bool) preg_grep('~^Set-Cookie: .*SameSite=Lax~i', $nvRootH) && (bool) preg_grep('~^Cache-Control: private~i', $nvRootH) && (bool) preg_grep('~^Vary: .*Cookie~i', $nvRootH));
+[, $nvE2] = $nvGo('?folder=Eurotrip', 'same-origin');
+check('[own gallery] clicking into Eurotrip from the front page keeps the whole way back (the gallery above, Sunsets beside)', str_contains((string) $nvCrumb($nvE2), 'href="./"') && str_contains($nvPills($nvE2), 'folder=Sunsets'));
+[, $nvI2] = $nvGo('?folder=Eurotrip%2FItaly', 'same-origin');
+check('[own gallery] ...and so does the next click, into Italy', str_contains((string) $nvCrumb($nvI2), 'href="./"') && str_contains((string) $nvCrumb($nvI2), 'folder=Eurotrip"'));
+[, $nvE3, $nvE3H] = $nvGo('?folder=Eurotrip', 'none');
+check('[own gallery] pasting a link to Eurotrip in the same browser starts over: boxed in again, and the cookie now says Eurotrip', $nvCrumb($nvE3) === null && !str_contains($nvE3, 'Sunsets') && (bool) preg_grep('~^Set-Cookie: gallery_top=%2FEurotrip~i', $nvE3H));
+[, $nvI3] = $nvGo('?folder=Eurotrip%2FItaly', 'same-origin');
+check('[own gallery] ...and a click from there to Italy keeps it that way (the way back stops at Eurotrip)', !str_contains((string) $nvCrumb($nvI3), 'href="./"') && !str_contains($nvI3, 'Sunsets'));
+[, $nvR2] = $nvGo('', 'none');
+[, $nvE4] = $nvGo('?folder=Eurotrip', 'same-origin');
+check('[own gallery] typing the gallery\'s address always works, and then Eurotrip has its way back again', str_contains($nvR2, 'folder=Sunsets') && str_contains((string) $nvCrumb($nvE4), 'href="./"'));
+$nvJar = '';
+[, $nvE5] = $nvGo('?folder=Eurotrip', null);
+check('[own gallery] a browser that does not say how it got there, with no cookie, is treated as arriving (boxed in)', $nvCrumb($nvE5) === null);
+[, $nvR3] = $nvGo('', 'none', false); $nvJarRoot = $nvJar;
+[, $nvE6] = $nvGo('?folder=Eurotrip', null);
+check('[own gallery] ...but with the cookie from the front page it keeps the way back', str_contains((string) $nvCrumb($nvE6), 'href="./"'));
+// who is not affected
+$nvOwnJar = '';
+[, , $nvAh] = http_post("$baseNv/?admin", ['access_code' => 'nv-admin-pw-1'], [], false);
+$nvOwn = ['Cookie: ' . extract_cookie_header($nvAh), 'Sec-Fetch-Site: none'];
+[$nvOs, $nvO, $nvOh] = http_get("$baseNv/?folder=Eurotrip%2FItaly", $nvOwn, false);
+check('[own gallery] the owner always has the whole way back, and gets no cookie for it', str_contains((string) $nvCrumb($nvO), 'href="./"') && !preg_grep('~^Set-Cookie: gallery_top~i', $nvOh));
+$nvCsrf = (string) extract_csrf_token(http_get("$baseNv/?admin", $nvOwn)[1]);
+$nvAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseNv/?admin$q", $f + ['csrf_token' => $nvCsrf], array_merge($nvOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$nvLink = $nvAdmin(['action' => 'link_create', 'label' => 'Eurotrip link', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+$nvTok = read_data_file("$fxNv/.gallery-links.php")['links'][$nvLink['id'] ?? '']['token'] ?? '';
+@unlink("$fxNv/.gallery-login-attempts.php");
+[, , $nvLh] = http_post("$baseNv/?link=$nvTok", ['go' => '1'], [], false);
+[, $nvL] = http_get("$baseNv/?folder=Eurotrip%2FItaly", ['Cookie: ' . extract_cookie_header($nvLh), 'Sec-Fetch-Site: none'], false);
+check('[own gallery] someone on a share link is not affected (the link decides what they see): the whole way back, no cookie', $nvTok !== '' && str_contains((string) $nvCrumb($nvL), 'href="./"'));
+// the switch
+$nvOn = $nvAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '1'], '&folder=Travel%2FSpain');
+check('[own gallery] the folder\'s switch marks it (the folder keeps the mark, the gallery notes that some folder is marked)', ($nvOn['ok'] ?? null) === true && (read_data_file("$fxNv/Travel/Spain/.gallery-items.php")['ownGallery'] ?? null) === true && (read_data_file("$fxNv/.gallery-items.php")['ownGalleries'] ?? null) === true && ($nvAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '1'])['ok'] ?? null) === false);
+$nvJar = ''; [, $nvSp2] = $nvFresh('?folder=Travel%2FSpain');
+check('[own gallery] ...and once marked, arriving on Spain is arriving on a gallery of its own', $nvCrumb($nvSp2) === null);
+foreach (['Travel/Spain', 'Sunrises', 'Sunsets', 'Eurotrip'] as $nvU) $nvAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '0'], '&folder=' . rawurlencode($nvU));
+check('[own gallery] unmarking the last one takes the gallery\'s note away: no folder is marked, nobody is boxed in, and no cookie is set', !isset(read_data_file("$fxNv/.gallery-items.php")['ownGalleries']) && (function () use ($nvFresh, $nvCrumb) { [, $b, $h] = $nvFresh('?folder=Eurotrip%2FItaly'); return str_contains((string) $nvCrumb($b), 'href="./"') && !preg_grep('~^Set-Cookie: gallery_top~i', $h); })());
+check('[own gallery] a gallery that marks no folder sets no cookie at all, on its front page or a folder', (function () use ($baseNl) { foreach (['', '?folder=Open'] as $q) { $h = http_get("$baseNl/$q", ['Sec-Fetch-Site: none'], false)[2]; if (preg_grep('~^Set-Cookie: gallery_top~i', $h)) return false; } return true; })());
+check('[own gallery] the folder\'s settings page has the switch (not at the gallery\'s own settings)', str_contains(http_get("$baseNv/?admin&folder=Eurotrip", $nvOwn)[1], 'toggle_folder_own_gallery') && !str_contains(http_get("$baseNv/?admin", $nvOwn)[1], 'toggle_folder_own_gallery'));
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";

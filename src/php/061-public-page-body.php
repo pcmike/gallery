@@ -41,7 +41,9 @@ if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)
 <?php if ($currentFolderPath !== null): ?>
 <div class="crumb-bar" id="crumb-bar" role="navigation" aria-label="Where you are">
     <div class="crumb-row">
-    <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
+<?php if ($navTop === '' || $navBack !== null): ?>
+    <p class="breadcrumb"><a href="<?= htmlspecialchars($navTop === '' ? gallery_root_href() : $navBack[0], ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($navTop === '' ? $rootPageTitle : $navBack[1]) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
+<?php endif; ?>
     <?php if (count($folderPills) >= 2): ?>
     <nav class="folder-pills" aria-label="Other folders here">
       <?php foreach ($folderPills as [$pillHref, $pillText, $pillCurrent, $pillPriv]): ?><a href="<?= htmlspecialchars($pillHref, ENT_QUOTES, 'UTF-8') ?>" class="<?= trim(($pillCurrent ? 'current' : '') . ($pillPriv !== '' ? ' priv' : '')) ?>"<?= $pillCurrent ? ' aria-current="page"' : '' ?><?= $pillPriv !== '' ? ' title="' . ($pillPriv === 'own' ? 'Private folder' : 'Hidden because a folder above it is private') . '"' : '' ?>><?= $pillPriv !== '' ? ui_icon('lock') : '' ?><?= htmlspecialchars($pillText, ENT_QUOTES, 'UTF-8') ?></a><?php endforeach; ?>

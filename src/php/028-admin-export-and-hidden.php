@@ -462,6 +462,11 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
       <?php endif; ?>
       <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot); ?>
     </div>
+<?php if (!$isRoot): ?>
+    <h3 class="subhead">Navigation</h3>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_own_gallery', 'owngallery', !empty($itemsHere['ownGallery']), 'Gallery of its own', '', ' <small class="muted">visitors who arrive here can go no higher</small>', 'unlisted-form'); ?>
+    <p class="hint unlisted-note">Someone who arrives inside this folder (a link or address to it, or to a folder in it) is offered no way up past it and no folders beside it: the page is built without them. Someone who comes in through the main gallery keeps their way back. This is for showing one album on its own; it doesn't stop anyone typing the address of the main gallery.</p>
+<?php endif; ?>
 <?php
 }
 

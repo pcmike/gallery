@@ -5468,6 +5468,58 @@ function folder_unlisted_cached($dir, $folderRel, $reset = false) {
     return $cache[$folderRel];
 }
 
+/** One folder's own "Gallery of its own" mark, read once per request (and reset with the others when a folder's settings are saved). */
+function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
+    static $cache = [];
+    if ($reset) {
+        $cache = [];
+        return null;
+    }
+    if (!isset($cache[$folderRel])) $cache[$folderRel] = (items_read(resolve_real_path($dir, $folderRel))['ownGallery'] ?? null) === true;
+    return $cache[$folderRel];
+}
+
+/** Is any folder marked "Gallery of its own"? The gallery's own settings file says so (kept by the switch), so a gallery that uses none
+ *  reads nothing more and sets no cookie. */
+function own_galleries_in_use($dir) {
+    static $in = null;
+    return $in ?? ($in = (items_read($dir)['ownGalleries'] ?? null) === true);
+}
+
+/** The nearest folder at or above $folderPath marked "Gallery of its own", or null: the top of what someone who arrived inside it is offered. */
+function own_gallery_boundary($dir, $folderPath) {
+    $parts = explode('/', (string) $folderPath);
+    for ($n = count($parts); $n >= 1; $n--) {
+        $p = implode('/', array_slice($parts, 0, $n));
+        if ($p !== '' && folder_own_gallery_cached($dir, $p)) return $p;
+    }
+    return null;
+}
+
+/** How high this visitor may go from a folder page: '' for the whole gallery (nothing is limited), or the path of the folder that is the top.
+ *  It only matters where a folder is marked "Gallery of its own" and the visitor is not the owner or on a share link (a link decides what its
+ *  people see). Someone who arrives inside such a folder (a pasted or typed address, a link from a chat or another site: Sec-Fetch-Site is
+ *  not same-origin) has it as their top; someone who came through the gallery above it (a click on one of its own links) keeps the way back,
+ *  which a short cookie remembers. A browser that doesn't say keeps what the cookie says. This is tidiness, not a lock: the address of any
+ *  public page can still be typed. $folderPath null is a page of the gallery's own front. */
+function nav_top($dir, $folderPath) {
+    if (!own_galleries_in_use($dir) || is_admin_browser() || link_viewer() !== null || link_preview() !== null || is_bot_request()) return '';
+    $boundary = $folderPath === null ? null : own_gallery_boundary($dir, $folderPath);
+    $site = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? ''));
+    $fresh = $site !== '' && $site !== 'same-origin';
+    $raw = isset($_COOKIE['gallery_top']) && is_string($_COOKIE['gallery_top']) ? $_COOKIE['gallery_top'] : null;
+    $cookieTop = $raw !== null && $raw !== '' && $raw[0] === '/' && strpos($raw, '..') === false ? substr($raw, 1) : null;
+    $mine = $boundary ?? '';
+    if ($fresh || $cookieTop === null) $top = $mine;
+    elseif ($boundary === null) $top = '';
+    else $top = ($cookieTop === '' || $cookieTop === $boundary || strncmp($boundary, $cookieTop . '/', strlen($cookieTop) + 1) === 0) ? $cookieTop : $mine;   // (they came in above it, or at it; anything else is not a way they came)
+    if (($fresh || $cookieTop === null) && !headers_sent()) {
+        setcookie('gallery_top', '/' . $mine, ['path' => gallery_cookie_path(), 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+    }
+    if (!headers_sent()) { header('Cache-Control: private'); header('Vary: Cookie, Sec-Fetch-Site', false); }
+    return $top;
+}
+
 /** The owner's view of one photo's privacy: its own setting ("private", "public", or "" when it has none and follows its folder),
  *  whether a folder above it is private (what "" would give it), and what that makes it. */
 function owner_privacy_state($dir, $file, $itemsData) {
@@ -5563,6 +5615,7 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
     if ($reset) {
         $cache = [];
         folder_unlisted_cached(null, null, true);
+        folder_own_gallery_cached(null, null, true);
         return null;
     }
     if (!isset($cache[$folderRel])) {
@@ -8813,6 +8866,18 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
                 'text' => $fresh ? 'New address copied. The old one no longer opens this photo.' : 'Address copied.'];
     }
 
+    // "Gallery of its own": visitors who arrive inside this folder are offered nothing above it (see nav_top). The gallery's own settings file
+    // keeps whether any folder is marked, so a gallery that uses none reads nothing more and sets no cookie.
+    if ($action === 'toggle_folder_own_gallery') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $on = !empty($_POST['owngallery']);
+        items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['ownGallery'] = true; else unset($data['ownGallery']); });
+        $any = false;
+        foreach (all_folder_paths($files) as $p) { if ($p !== '' && folder_own_gallery_cached($dir, $p)) { $any = true; break; } }
+        items_update($dir, function (&$data) use ($any) { if ($any) $data['ownGalleries'] = true; else unset($data['ownGalleries']); });
+        return ['type' => 'ok', 'text' => $on ? 'Visitors who arrive inside this folder are offered nothing above it.' : 'Back to ordinary: visitors who arrive inside this folder can go up as usual.'];
+    }
+
     if ($action === 'toggle_folder_originals') {
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['originals']);
@@ -9446,6 +9511,11 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
       <?php endif; ?>
       <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot); ?>
     </div>
+<?php if (!$isRoot): ?>
+    <h3 class="subhead">Navigation</h3>
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_own_gallery', 'owngallery', !empty($itemsHere['ownGallery']), 'Gallery of its own', '', ' <small class="muted">visitors who arrive here can go no higher</small>', 'unlisted-form'); ?>
+    <p class="hint unlisted-note">Someone who arrives inside this folder (a link or address to it, or to a folder in it) is offered no way up past it and no folders beside it: the page is built without them. Someone who comes in through the main gallery keeps their way back. This is for showing one album on its own; it doesn't stop anyone typing the address of the main gallery.</p>
+<?php endif; ?>
 <?php
 }
 
@@ -18198,6 +18268,9 @@ $currentFolderFileCount = 0;
 $folderCrumbs = [];
 $folderPills = [];       // quick links to the folders beside this one: [href, label, is this one]
 $folderPillsAll = null;  // where "All" goes when only some of them are shown
+$navTop = '';            // how high this visitor may go (see nav_top): '' is all of it
+$navBack = null;         // where the way back leads when it stops short of the gallery's front: [href, label]
+if (!isset($_GET['folder'])) nav_top($dir, null);   // (the gallery's front page: someone who came in here is remembered as having come in above any folder)
 if (isset($_GET['folder'])) {
     if ($photoPass !== null) { http_response_code(404); exit; }   // (a photo's own address is not a way into its folder)
     $requestedFolder = $_GET['folder'];
@@ -18259,7 +18332,15 @@ if (isset($_GET['folder'])) {
     foreach ($segments as $segment) {
         $ancestor = $ancestor === '' ? $segment : $ancestor . '/' . $segment;
         $ancestorMeta = folder_display_meta($dir, $ancestor);
-        $folderCrumbs[] = ['?folder=' . rawurlencode($ancestor), $ancestorMeta['label'] !== '' ? $ancestorMeta['label'] : $segment];
+        $folderCrumbs[] = ['?folder=' . rawurlencode($ancestor), $ancestorMeta['label'] !== '' ? $ancestorMeta['label'] : $segment, $ancestor];
+    }
+    // Someone who arrived inside a folder marked "Gallery of its own" is offered nothing above it, nor beside it: the way back stops at that folder
+    // (the page is simply built without them, so their names are not in it).
+    $navTop = nav_top($dir, $currentFolderPath);
+    if ($navTop !== '') {
+        $folderCrumbs = array_values(array_filter($folderCrumbs, function ($c) use ($navTop) { return strncmp($c[2], $navTop . '/', strlen($navTop) + 1) === 0; }));
+        if ($currentFolderPath !== $navTop) { $topMeta = folder_display_meta($dir, $navTop); $navBack = ['?folder=' . rawurlencode($navTop), $topMeta['label'] !== '' ? $topMeta['label'] : basename($navTop)]; }
+        else { $folderPills = []; $folderPillsAll = null; }
     }
 }
 
@@ -21209,7 +21290,9 @@ if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)
 <?php if ($currentFolderPath !== null): ?>
 <div class="crumb-bar" id="crumb-bar" role="navigation" aria-label="Where you are">
     <div class="crumb-row">
-    <p class="breadcrumb"><a href="<?= htmlspecialchars(gallery_root_href(), ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($rootPageTitle) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
+<?php if ($navTop === '' || $navBack !== null): ?>
+    <p class="breadcrumb"><a href="<?= htmlspecialchars($navTop === '' ? gallery_root_href() : $navBack[0], ENT_QUOTES, 'UTF-8') ?>">&larr; <?= htmlspecialchars($navTop === '' ? $rootPageTitle : $navBack[1]) ?></a><?php foreach ($folderCrumbs as [$crumbHref, $crumbLabel]): ?> / <a href="<?= htmlspecialchars($crumbHref, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($crumbLabel) ?></a><?php endforeach; ?></p>
+<?php endif; ?>
     <?php if (count($folderPills) >= 2): ?>
     <nav class="folder-pills" aria-label="Other folders here">
       <?php foreach ($folderPills as [$pillHref, $pillText, $pillCurrent, $pillPriv]): ?><a href="<?= htmlspecialchars($pillHref, ENT_QUOTES, 'UTF-8') ?>" class="<?= trim(($pillCurrent ? 'current' : '') . ($pillPriv !== '' ? ' priv' : '')) ?>"<?= $pillCurrent ? ' aria-current="page"' : '' ?><?= $pillPriv !== '' ? ' title="' . ($pillPriv === 'own' ? 'Private folder' : 'Hidden because a folder above it is private') . '"' : '' ?>><?= $pillPriv !== '' ? ui_icon('lock') : '' ?><?= htmlspecialchars($pillText, ENT_QUOTES, 'UTF-8') ?></a><?php endforeach; ?>

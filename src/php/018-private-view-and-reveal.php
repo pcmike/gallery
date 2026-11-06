@@ -139,6 +139,58 @@ function folder_unlisted_cached($dir, $folderRel, $reset = false) {
     return $cache[$folderRel];
 }
 
+/** One folder's own "Gallery of its own" mark, read once per request (and reset with the others when a folder's settings are saved). */
+function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
+    static $cache = [];
+    if ($reset) {
+        $cache = [];
+        return null;
+    }
+    if (!isset($cache[$folderRel])) $cache[$folderRel] = (items_read(resolve_real_path($dir, $folderRel))['ownGallery'] ?? null) === true;
+    return $cache[$folderRel];
+}
+
+/** Is any folder marked "Gallery of its own"? The gallery's own settings file says so (kept by the switch), so a gallery that uses none
+ *  reads nothing more and sets no cookie. */
+function own_galleries_in_use($dir) {
+    static $in = null;
+    return $in ?? ($in = (items_read($dir)['ownGalleries'] ?? null) === true);
+}
+
+/** The nearest folder at or above $folderPath marked "Gallery of its own", or null: the top of what someone who arrived inside it is offered. */
+function own_gallery_boundary($dir, $folderPath) {
+    $parts = explode('/', (string) $folderPath);
+    for ($n = count($parts); $n >= 1; $n--) {
+        $p = implode('/', array_slice($parts, 0, $n));
+        if ($p !== '' && folder_own_gallery_cached($dir, $p)) return $p;
+    }
+    return null;
+}
+
+/** How high this visitor may go from a folder page: '' for the whole gallery (nothing is limited), or the path of the folder that is the top.
+ *  It only matters where a folder is marked "Gallery of its own" and the visitor is not the owner or on a share link (a link decides what its
+ *  people see). Someone who arrives inside such a folder (a pasted or typed address, a link from a chat or another site: Sec-Fetch-Site is
+ *  not same-origin) has it as their top; someone who came through the gallery above it (a click on one of its own links) keeps the way back,
+ *  which a short cookie remembers. A browser that doesn't say keeps what the cookie says. This is tidiness, not a lock: the address of any
+ *  public page can still be typed. $folderPath null is a page of the gallery's own front. */
+function nav_top($dir, $folderPath) {
+    if (!own_galleries_in_use($dir) || is_admin_browser() || link_viewer() !== null || link_preview() !== null || is_bot_request()) return '';
+    $boundary = $folderPath === null ? null : own_gallery_boundary($dir, $folderPath);
+    $site = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? ''));
+    $fresh = $site !== '' && $site !== 'same-origin';
+    $raw = isset($_COOKIE['gallery_top']) && is_string($_COOKIE['gallery_top']) ? $_COOKIE['gallery_top'] : null;
+    $cookieTop = $raw !== null && $raw !== '' && $raw[0] === '/' && strpos($raw, '..') === false ? substr($raw, 1) : null;
+    $mine = $boundary ?? '';
+    if ($fresh || $cookieTop === null) $top = $mine;
+    elseif ($boundary === null) $top = '';
+    else $top = ($cookieTop === '' || $cookieTop === $boundary || strncmp($boundary, $cookieTop . '/', strlen($cookieTop) + 1) === 0) ? $cookieTop : $mine;   // (they came in above it, or at it; anything else is not a way they came)
+    if (($fresh || $cookieTop === null) && !headers_sent()) {
+        setcookie('gallery_top', '/' . $mine, ['path' => gallery_cookie_path(), 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
+    }
+    if (!headers_sent()) { header('Cache-Control: private'); header('Vary: Cookie, Sec-Fetch-Site', false); }
+    return $top;
+}
+
 /** The owner's view of one photo's privacy: its own setting ("private", "public", or "" when it has none and follows its folder),
  *  whether a folder above it is private (what "" would give it), and what that makes it. */
 function owner_privacy_state($dir, $file, $itemsData) {
@@ -234,6 +286,7 @@ function folder_restriction_cached($dir, $folderRel, $reset = false) {
     if ($reset) {
         $cache = [];
         folder_unlisted_cached(null, null, true);
+        folder_own_gallery_cached(null, null, true);
         return null;
     }
     if (!isset($cache[$folderRel])) {
