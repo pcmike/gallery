@@ -7427,6 +7427,33 @@ http_get("$baseCn/?img=b.jpg&size=thumb");
 $cnB = cache_name_for_tests($fxCn, 'b.jpg', 'thumb', filemtime("$fxCn/b.jpg")) . '.jpg';
 check('[cache names] a new thumbnail is kept under the keyed name, and the plain md5 of its path and date names nothing', is_file("$fxCn/.gallery-cache/$cnB") && !file_exists("$fxCn/.gallery-cache/" . md5('b.jpg|thumb|' . filemtime("$fxCn/b.jpg")) . '.jpg') && preg_match('/^[0-9a-f]{32}\.jpg$/', $cnB) === 1 && $cnB !== md5('b.jpg|thumb|' . filemtime("$fxCn/b.jpg")) . '.jpg');
 
+echo "== downloads and the admin frame ==\n";
+// A download must be able to sit in this site's own admin frame (the desktop admin is one): a browser that holds a download to the frame
+// rules of the page it comes from drops it without a word otherwise. The file itself says SAMEORIGIN; a refusal keeps DENY.
+$fxDl = new_fixture_dir('dlframe'); mkdir("$fxDl/Pics", 0775, true);
+make_jpeg("$fxDl/Pics/a.jpg", 60, 50, 90, 40, 40); make_jpeg("$fxDl/Pics/b.jpg", 60, 50, 40, 90, 40);
+file_put_contents("$fxDl/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'dl-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxDl/index.php");
+$portDl = find_free_port(); start_server($fxDl, $portDl); $baseDl = "http://127.0.0.1:$portDl";
+[, , $dlH] = http_post("$baseDl/?admin", ['access_code' => 'dl-admin-pw-1'], [], false);
+$dlCookie = extract_cookie_header($dlH);
+$dlCsrf = extract_csrf_token(http_get("$baseDl/?admin", ["Cookie: $dlCookie"])[1]);
+$dlAct = fn (array $f) => json_decode(http_post("$baseDl/?admin", $f + ['csrf_token' => $dlCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $dlCookie"])[1], true) ?: [];
+$dlFrameOk = fn (array $h) => (bool) preg_grep('~^X-Frame-Options: SAMEORIGIN~i', $h) && !preg_grep('~DENY|frame-ancestors \'none\'~i', $h) && (bool) preg_grep("~^Content-Security-Policy: .*frame-ancestors 'self'~i", $h);
+$dlR = $dlAct(['action' => 'files_zip_prepare', 'password' => 'dl-admin-pw-1', 'thumbs' => '0']);
+[$dlS, , $dlHh] = http_get("$baseDl/" . ($dlR['url'] ?? '?x'), ["Cookie: $dlCookie"]);
+check('[downloads] the ZIP of the gallery\'s own files may be framed by this site\'s own pages and by no other (SAMEORIGIN, frame-ancestors \'self\'), so the desktop admin\'s frame can deliver it', $dlS === 200 && $dlFrameOk($dlHh));
+[$dlS2, , $dlH2] = http_get("$baseDl/" . ($dlR['url'] ?? '?x'), ["Cookie: $dlCookie"]);
+check('[downloads] ...while a refused request (the one-time address used a second time) still says DENY', $dlS2 === 404 && (bool) preg_grep('~^X-Frame-Options: DENY~i', $dlH2));
+[$dlS3, , $dlH3] = http_get("$baseDl/?archive&folder=Pics", ["Cookie: $dlCookie"]);
+check('[downloads] a folder\'s ZIP of originals is framed the same way', $dlS3 === 200 && (bool) preg_grep('~^Content-Disposition: attachment~i', $dlH3) && $dlFrameOk($dlH3));
+[$dlS4, , $dlH4] = http_get("$baseDl/?original=" . rawurlencode('Pics/a.jpg'), ["Cookie: $dlCookie"]);
+check('[downloads] an original photo is framed the same way', $dlS4 === 200 && (bool) preg_grep('~^Content-Disposition: attachment~i', $dlH4) && $dlFrameOk($dlH4));
+[$dlS5, , $dlH5] = http_get("$baseDl/?original=" . rawurlencode('Pics/nothing.jpg'));
+check('[downloads] ...and an original that is refused says DENY', $dlS5 === 404 && (bool) preg_grep('~^X-Frame-Options: DENY~i', $dlH5));
+[$dlS6, , $dlH6] = http_post("$baseDl/?admin&folder=Pics", ['action' => 'export_items', 'csrf_token' => $dlCsrf], ["Cookie: $dlCookie"]);
+check('[downloads] the folder\'s settings export is framed the same way', $dlS6 === 200 && (bool) preg_grep('~^Content-Disposition: attachment~i', $dlH6) && $dlFrameOk($dlH6));
+
 echo "== hardening: headers, links in notes, the map library ==\n";
 $fxHd = new_fixture_dir('hardening'); make_jpeg("$fxHd/a.jpg", 60, 60, 10, 10, 10);
 $fxHdTree = new_fixture_dir('hardening-tree'); mkdir("$fxHdTree/Sub"); make_jpeg("$fxHdTree/Sub/s.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxHdTree/r.jpg", 60, 60, 20, 10, 10);

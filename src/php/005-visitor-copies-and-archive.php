@@ -213,6 +213,7 @@ function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
     if (function_exists('apache_setenv')) @apache_setenv('no-gzip', '1');
     while (ob_get_level() > 0) @ob_end_clean();
     header('Content-Type: application/zip');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $ascii . '.zip"; filename*=UTF-8\'\'' . rawurlencode($root . '.zip'));
     header('Content-Length: ' . $total);
     header('X-Content-Type-Options: nosniff');
@@ -251,6 +252,7 @@ function serve_original_download($dir, $filename, $validFiles, $itemsData = []) 
         echo "This file's location can't be removed safely, so it isn't offered as a download.";
         return;
     }
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
     header('X-Content-Type-Options: nosniff');
     if (($linkNote = link_viewer()) !== null && !is_revealed()) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's log

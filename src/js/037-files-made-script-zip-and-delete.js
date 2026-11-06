@@ -43,7 +43,12 @@
             var th = o.querySelector('[data-fm-thumbs]');
             post({ action: 'files_zip_prepare', password: pw.value, thumbs: th && th.checked ? '1' : '0' }).then(function (r) {
               if (!r.ok) { err.textContent = r.text || 'Not allowed.'; return; }
-              copied = true; o._close(); location.href = r.url; if (after) after();
+              // The copy is made; the download itself is a link for the person to press (a browser may refuse a download that a page starts by itself after waiting for the server).
+              var card = o.querySelector('.fm-card');
+              card.innerHTML = '<h3>Your copy is ready</h3><p>Press the button to download it. The file is a ZIP; keep it private.</p>'
+                + '<div class="fm-acts"><button type="button" class="secondary" data-fm-x="cancel">Cancel</button><a class="fm-primary" data-fm-dl href="' + esc(r.url) + '" style="display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;text-decoration:none">Download ZIP</a></div>';
+              var dl = card.querySelector('[data-fm-dl]'); dl.focus();
+              dl.addEventListener('click', function () { copied = true; setTimeout(function () { o._close(); if (after) after(); }, 600); });
             }).catch(function () { err.textContent = 'Could not reach the gallery: check your connection.'; });
           }
           o.addEventListener('click', function (e) { var b = e.target.closest ? e.target.closest('[data-fm-x]') : null; if (!b) return; if (b.getAttribute('data-fm-x') === 'cancel') { o._close(); if (cancelled) cancelled(); } else go(); });

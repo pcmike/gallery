@@ -86,7 +86,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.3');
+define('GALLERY_VERSION', '2.6.4');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -1977,6 +1977,7 @@ function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
     if (function_exists('apache_setenv')) @apache_setenv('no-gzip', '1');
     while (ob_get_level() > 0) @ob_end_clean();
     header('Content-Type: application/zip');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $ascii . '.zip"; filename*=UTF-8\'\'' . rawurlencode($root . '.zip'));
     header('Content-Length: ' . $total);
     header('X-Content-Type-Options: nosniff');
@@ -2015,6 +2016,7 @@ function serve_original_download($dir, $filename, $validFiles, $itemsData = []) 
         echo "This file's location can't be removed safely, so it isn't offered as a download.";
         return;
     }
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
     header('X-Content-Type-Options: nosniff');
     if (($linkNote = link_viewer()) !== null && !is_revealed()) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's log
@@ -9084,6 +9086,7 @@ function admin_export_tree($dir, $files) {
         }
     }
     header('Content-Type: application/json');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="whole-tree-gallery-items.json"');
     echo json_encode($tree, JSON_PRETTY_PRINT);
 }
@@ -9092,6 +9095,7 @@ function admin_export_items($adminFolderPath, $adminFolderReal) {
     $data = items_read($adminFolderReal);
     $name = ($adminFolderPath === null ? 'root' : slugify($adminFolderPath)) . '-gallery-items.json';
     header('Content-Type: application/json');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $name . '"');
     echo json_encode($data, JSON_PRETTY_PRINT);
 }
@@ -10988,6 +10992,7 @@ function files_download_route($dir, $files) {
     @ini_set('zlib.output_compression', '0');
     while (ob_get_level() > 0) @ob_end_clean();
     header('Content-Type: application/zip');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="gallery-files-' . gmdate('Y-m-d') . '.zip"');
     header('Content-Length: ' . $total);
     header('X-Content-Type-Options: nosniff');
@@ -12442,6 +12447,7 @@ function link_export($which, $what, $ip, $data, $dir) {
         else foreach ($log['events'] as $e) { $v = $log['visitors'][$e['v'] ?? ''] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $k = $e['k'] ?? ''; $f = $e['f'] ?? ($e['d'] ?? ''); $rows[] = [$iso($e['t']), $l['label'], $v['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : ($k === 'arrive' ? 'arrived' : $k)), (($k === 'scroll' || $k === 'folder' || $k === 'zip') || ($k === 'arrive' && empty($e['u']))) ? $f : link_item_folder((string) $f), (($k === 'scroll' || $k === 'folder' || $k === 'zip') || ($k === 'arrive' && empty($e['u']))) ? '' : basename((string) $f), $e['n'] ?? 1]; }
     }
     header('Content-Type: text/csv; charset=UTF-8');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="share-links-' . $what . '.csv"');
     header('X-Content-Type-Options: nosniff');
     echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";
@@ -12882,6 +12888,7 @@ function admin_browser_history_route() {
     header('Cache-Control: no-store');
     if (($_GET['csv'] ?? '') === '1') {
         header('Content-Type: text/csv; charset=UTF-8');
+        shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
         header('Content-Disposition: attachment; filename="signin-' . $id . '.csv"');
         echo "time,address,country,event,what it said it was\n";
         foreach (signin_history_read($id) as $l) echo implode(',', [link_csv_cell(date('Y-m-d H:i:s', (int) $l['t'])), link_csv_cell($l['ip']), link_csv_cell($l['cc'] ?? ''), link_csv_cell($l['e'] ?? ''), link_csv_cell($l['ua'] ?? '')]) . "\n";
@@ -13201,7 +13208,12 @@ function render_admin_site_settings($csrfToken) {
             var th = o.querySelector('[data-fm-thumbs]');
             post({ action: 'files_zip_prepare', password: pw.value, thumbs: th && th.checked ? '1' : '0' }).then(function (r) {
               if (!r.ok) { err.textContent = r.text || 'Not allowed.'; return; }
-              copied = true; o._close(); location.href = r.url; if (after) after();
+              // The copy is made; the download itself is a link for the person to press (a browser may refuse a download that a page starts by itself after waiting for the server).
+              var card = o.querySelector('.fm-card');
+              card.innerHTML = '<h3>Your copy is ready</h3><p>Press the button to download it. The file is a ZIP; keep it private.</p>'
+                + '<div class="fm-acts"><button type="button" class="secondary" data-fm-x="cancel">Cancel</button><a class="fm-primary" data-fm-dl href="' + esc(r.url) + '" style="display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;text-decoration:none">Download ZIP</a></div>';
+              var dl = card.querySelector('[data-fm-dl]'); dl.focus();
+              dl.addEventListener('click', function () { copied = true; setTimeout(function () { o._close(); if (after) after(); }, 600); });
             }).catch(function () { err.textContent = 'Could not reach the gallery: check your connection.'; });
           }
           o.addEventListener('click', function (e) { var b = e.target.closest ? e.target.closest('[data-fm-x]') : null; if (!b) return; if (b.getAttribute('data-fm-x') === 'cancel') { o._close(); if (cancelled) cancelled(); } else go(); });
