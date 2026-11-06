@@ -1383,7 +1383,8 @@ try:
     open(SITE2 + "/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + '{"items":{"p.jpg":{"caption":"Keep this caption"}},"groups":[],"displayName":"Keep this title"}')
     cfgfile = SITE2 + "/.gallery-config.php"
     guard = "<?php http_response_code(404); exit; ?>\n"
-    open(cfgfile, "w").write(guard + '{"ADMIN_PASSWORD": "site-admin-pw-1"}\n')
+    # (the Health check's daily look for a new version would call GitHub from the one-at-a-time test server just as the next click's request arrives: point it at a closed port, which refuses at once)
+    open(cfgfile, "w").write(guard + '{"ADMIN_PASSWORD": "site-admin-pw-1", "UPDATE_FEED_URL": "http://127.0.0.1:1/feed.json"}\n')
     s2 = socket.socket(); s2.bind(("127.0.0.1", 0)); PORT2 = s2.getsockname()[1]; s2.close(); B2 = f"http://127.0.0.1:{PORT2}"
     srv2 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT2}", "-t", SITE2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)

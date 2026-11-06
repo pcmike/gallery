@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.6.3] - 2026-11-05
+
+### Added
+- **Not listed folders.** A folder can be Not listed (Privacy, under *Private folder*): a folder only you can open, for sharing one photo at a time. Strangers and people with the private-view password get the same "not found" as for a folder that isn't there, and it is left out of every list; you see it with a **Not listed** pill. It is stored as private plus a flag, so an older version still keeps it private.
+- **A Not listed photo's own address.** Each photo in one has an address (`?photo=<path>&k=<code>`) that opens that one photo, alone, for anyone who has it: no grid, no neighbours, no way into the folder, kept out of search engines, no Referer. The code is worked out from the folder's id, the file name and the install's secret, so nothing is stored. Beside the pencil on its tile (and in the viewer) are **Copy address** and **New address** (the link crossed out: it asks first, then the old address stops at once). A Not listed folder has its own **Allow downloading originals** switch, off to start with.
+- **Gallery of its own** (Navigation, in a folder's settings). Someone who arrives inside it, by a typed or pasted address or a link, is offered no way up past it and no folders beside it; the page is built without them. Someone who comes in through the gallery above keeps their way back (a short cookie, set only when a folder is marked, and the browser's own word for a click against a typed address). Nothing changes while no folder is marked.
+- **The public address's log says where each visit came in.** A **Came in at** column, an "Arrived at" line in the timeline and a `came_in_at` column in the CSV, for arrivals (a typed or pasted address, a bookmark, a link from another site), and Not listed photos opened by their address are logged and tagged.
+
+### Changed
+- **An "Everything" share link leaves out a Not listed folder.** To share one, pick it by name under *Only some folders*.
+
 ## [2.6.2] - 2026-11-05
 
 ### Added
