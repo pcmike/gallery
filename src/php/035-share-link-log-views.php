@@ -230,10 +230,10 @@ function render_link_scope($mode, $l, $ip, $tab, $flt, $dir, $files) {
         uasort($vis, function ($a, $b) { return (int) $b['last'] <=> (int) $a['last']; });
         if (!$vis) return $out . '<p class="muted sl-none">' . (link_is_public_log($l) ? 'Nobody has been logged yet.' : 'No one has opened this link yet.') . '</p></div>';
         $manyAddr = link_has_many_addresses($l, $log);
-        $out .= '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th>' . ($manyAddr ? '<th class="sl-viacol">Came in on</th>' : '') . '<th>First seen</th><th>Last seen</th><th>' . (link_is_public_log($l) ? 'Visits' : 'Opens') . '</th><th>Viewed</th></tr></thead><tbody>';
+        $out .= '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th>' . (link_is_public_log($l) ? '<th>Came in at</th>' : '') . ($manyAddr ? '<th class="sl-viacol">Came in on</th>' : '') . '<th>First seen</th><th>Last seen</th><th>' . (link_is_public_log($l) ? 'Visits' : 'Opens') . '</th><th>Viewed</th></tr></thead><tbody>';
         foreach ($vis as $vid => $v) {
             $via = $manyAddr ? link_visitor_via($l, $log, $vid, $v) : '';
-            $out .= '<tr><td><button type="button" class="linklike sl-ipt" data-ip="' . $esc($v['ip']) . '">' . $esc($v['ip']) . '</button>' . ($via !== '' ? '<span class="sl-via">via: ' . $esc($via) . '</span>' : '') . '</td><td>' . link_place_html($v['country'] ?? '') . '</td><td>' . $esc($v['ua']) . '</td>' . ($manyAddr ? '<td class="sl-viacol">' . ($via !== '' ? $esc($via) : '—') . '</td>' : '') . '<td>' . link_time_html($v['first']) . '</td><td>' . link_time_html($v['last']) . '</td><td>' . (int) $v['opens'] . '</td><td><button type="button" class="linklike sl-viewed" data-ip="' . $esc($v['ip']) . '" data-go="media">' . (int) $v['views'] . ' views &rsaquo;</button></td></tr>';
+            $out .= '<tr><td><button type="button" class="linklike sl-ipt" data-ip="' . $esc($v['ip']) . '">' . $esc($v['ip']) . '</button>' . ($via !== '' ? '<span class="sl-via">via: ' . $esc($via) . '</span>' : '') . '</td><td>' . link_place_html($v['country'] ?? '') . '</td><td>' . $esc($v['ua']) . '</td>' . (link_is_public_log($l) ? '<td>' . link_entry_html($dir, $v['entry'] ?? null) . '</td>' : '') . ($manyAddr ? '<td class="sl-viacol">' . ($via !== '' ? $esc($via) : '—') . '</td>' : '') . '<td>' . link_time_html($v['first']) . '</td><td>' . link_time_html($v['last']) . '</td><td>' . (int) $v['opens'] . '</td><td><button type="button" class="linklike sl-viewed" data-ip="' . $esc($v['ip']) . '" data-go="media">' . (int) $v['views'] . ' views &rsaquo;</button></td></tr>';
         }
         $out .= '</tbody></table></div>';
         if ((int) $log['folded'] > 0) $out .= '<p class="muted">+ ' . (int) $log['folded'] . ' earlier visitor' . ((int) $log['folded'] === 1 ? '' : 's') . ' (the log keeps the latest ' . number_format(LINK_LOG_VISITORS) . ' visitors; download the log to keep the rest, and trim it whenever you like).</p>';
@@ -301,9 +301,10 @@ function render_link_scope($mode, $l, $ip, $tab, $flt, $dir, $files) {
         }
         elseif ($k === 'opened' || $k === 'played' || $k === 'saved') {
             $verb = ['opened' => 'Opened', 'played' => 'Played', 'saved' => 'Downloaded the original of'][$k];
-            $text = $verb . ' <b>' . $esc(basename($e['f'])) . '</b>' . ($k === 'opened' ? '<div class="muted">' . $esc(link_folder_label($dir, link_item_folder($e['f']))) . '</div>' : '');
+            $text = $verb . ' <b>' . $esc(basename($e['f'])) . '</b>' . (file_is_unlisted($dir, $e['f']) ? ' <span class="sl-lock" title="Not listed">' . ui_icon('lock') . ' Not listed</span>' : '') . ($k === 'opened' ? '<div class="muted">' . $esc(link_folder_label($dir, link_item_folder($e['f']))) . '</div>' : '');
             $pic = link_pic_html($e['f']);
         }
+        elseif ($k === 'arrive') $text = 'Arrived at ' . link_entry_html($dir, $e) . '<div class="muted">' . $esc(['typed' => 'an address typed or pasted, or a bookmark or app', 'link' => 'a link on another site', 'other' => 'a way the browser did not say'][$e['h'] ?? ''] ?? '') . '</div>';
         elseif ($k === 'folder') $text = 'Opened the folder <b>' . $esc(($e['f'] ?? '') === '' ? 'front page' : link_folder_label($dir, $e['f'])) . '</b>';
         elseif ($k === 'zip') $text = 'Downloaded a ZIP of <b>' . $esc(($e['f'] ?? '') === '' ? 'the gallery' : link_folder_label($dir, $e['f'])) . '</b> (' . (int) ($e['n'] ?? 0) . ' files)';
         elseif ($k === 'link') $text = !empty($e['_pub']) ? 'Visited the gallery' : 'Opened the link';
@@ -312,6 +313,14 @@ function render_link_scope($mode, $l, $ip, $tab, $flt, $dir, $files) {
         $out .= '<div class="sl-ev"><span class="sl-evt">' . $when . '</span><div class="' . ($pic !== '' ? 'sl-evpic' : 'sl-evbody') . '">' . $pic . '<div>' . $text . '<div class="muted sl-evl">' . $who . '</div></div></div></div>';
     }
     return $out . '</div>' . ($sc['full'] ? '<p class="note">The timeline is full: it keeps the latest ' . number_format(LINK_LOG_EVENTS) . ' lines, so older ones were folded away. Download the log to keep them.</p>' : '') . '<details class="fold sl-howto"><summary>How to read this</summary><p class="note">Scrolling is one line per stretch. Opened, played and downloaded items get their own line. The Folders and Media tabs keep their own, exact tallies.</p></details></div>';
+}
+
+/** Where a visit came in, for the public address's log: a folder (or the front page), or a Not listed photo opened by its own address. */
+function link_entry_html($dir, $a) {
+    if (!is_array($a) || !is_string($a['f'] ?? null)) return '<span class="muted">—</span>';
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    if (!empty($a['u'])) return '<span class="sl-lock" title="Not listed">' . ui_icon('lock') . '</span> Not listed photo <b>' . $esc(basename($a['f'])) . '</b>';
+    return '<b>' . $esc($a['f'] === '' ? 'Front page' : link_folder_label($dir, $a['f'])) . '</b>';
 }
 
 /** Every address that has opened or tried any link, with the links each used. */
@@ -410,13 +419,18 @@ function link_export($which, $what, $ip, $data, $dir) {
     if (!$links) { http_response_code(404); header('Content-Type: text/plain; charset=UTF-8'); echo 'No such link.'; return; }
     if (!in_array($what, ['visitors', 'items', 'events'], true)) $what = 'items';
     $rows = [];
-    $head = ['visitors' => ['link', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on'], 'items' => ['link', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'link', 'ip', 'what', 'folder', 'file', 'count']][$what];
+    $head = ['visitors' => array_merge(['link', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on'], $which === PUBLIC_LOG_ID ? ['came_in_at'] : []), 'items' => ['link', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'link', 'ip', 'what', 'folder', 'file', 'count']][$what];
     $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
     foreach ($links as $l) {
         [$log, $items] = link_activity($l['id']);
-        if ($what === 'visitors') foreach ($log['visitors'] as $vid => $v) { if ($ip !== '' && $v['ip'] !== $ip) continue; $rows[] = [$l['label'], $v['ip'], $v['country'] ?? '', $v['ua'], $iso($v['first']), $iso($v['last']), $v['opens'], $v['views'], link_has_many_addresses($l, $log) ? link_visitor_via($l, $log, $vid, $v) : '']; }
+        if ($what === 'visitors') foreach ($log['visitors'] as $vid => $v) {
+            if ($ip !== '' && $v['ip'] !== $ip) continue;
+            $row = [$l['label'], $v['ip'], $v['country'] ?? '', $v['ua'], $iso($v['first']), $iso($v['last']), $v['opens'], $v['views'], link_has_many_addresses($l, $log) ? link_visitor_via($l, $log, $vid, $v) : ''];
+            if ($which === PUBLIC_LOG_ID) { $en = $v['entry'] ?? []; $row[] = !empty($en['u']) ? 'Not listed photo ' . basename((string) ($en['f'] ?? '')) : (is_string($en['f'] ?? null) ? ($en['f'] === '' ? 'Front page' : $en['f']) : ''); }
+            $rows[] = $row;
+        }
         elseif ($what === 'items') foreach (link_item_rows($items) as [$vid, $rel, $t]) { $v = $log['visitors'][$vid] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $rows[] = [$l['label'], $v['ip'], $v['ua'], link_item_folder($rel), basename($rel), $iso($t['sf'] ?? 0), (int) ($t['on'] ?? 0), (int) ($t['pn'] ?? 0), (int) ($t['dn'] ?? 0), $iso(max((int) ($t['sl'] ?? 0), (int) ($t['ol'] ?? 0), (int) ($t['pl'] ?? 0), (int) ($t['dl'] ?? 0)))]; }
-        else foreach ($log['events'] as $e) { $v = $log['visitors'][$e['v'] ?? ''] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $k = $e['k'] ?? ''; $f = $e['f'] ?? ($e['d'] ?? ''); $rows[] = [$iso($e['t']), $l['label'], $v['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : $k), ($k === 'scroll' || $k === 'folder' || $k === 'zip') ? $f : link_item_folder((string) $f), ($k === 'scroll' || $k === 'folder' || $k === 'zip') ? '' : basename((string) $f), $e['n'] ?? 1]; }
+        else foreach ($log['events'] as $e) { $v = $log['visitors'][$e['v'] ?? ''] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $k = $e['k'] ?? ''; $f = $e['f'] ?? ($e['d'] ?? ''); $rows[] = [$iso($e['t']), $l['label'], $v['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : ($k === 'arrive' ? 'arrived' : $k)), (($k === 'scroll' || $k === 'folder' || $k === 'zip') || ($k === 'arrive' && empty($e['u']))) ? $f : link_item_folder((string) $f), (($k === 'scroll' || $k === 'folder' || $k === 'zip') || ($k === 'arrive' && empty($e['u']))) ? '' : basename((string) $f), $e['n'] ?? 1]; }
     }
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="share-links-' . $what . '.csv"');

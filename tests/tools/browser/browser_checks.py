@@ -2396,7 +2396,7 @@ try:
         subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITEOG + "/" + sub + "/p.jpg"], check=True)
     shutil.copy(HERE + "/../../../index.php", SITEOG + "/index.php"); os.utime(SITEOG + "/index.php", (time.time() - 3600,) * 2)
     guard_og = "<?php http_response_code(404); exit; ?>\n"
-    open(SITEOG + "/.gallery-config.php", "w").write(guard_og + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "pog-admin-pw"], capture_output=True, text=True).stdout}) + "\n")
+    open(SITEOG + "/.gallery-config.php", "w").write(guard_og + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "pog-admin-pw"], capture_output=True, text=True).stdout, "ENABLE_SHARE_LINKS": True, "LOG_PUBLIC_VISITS": True, "LOG_PUBLIC_DAYS": 30}) + "\n")
     open(SITEOG + "/Album/.gallery-items.php", "w").write(guard_og + json.dumps({"ownGallery": True}))
     open(SITEOG + "/.gallery-items.php", "w").write(guard_og + json.dumps({"ownGalleries": True}))
     sog = socket.socket(); sog.bind(("127.0.0.1", 0)); POG = sog.getsockname()[1]; sog.close(); BOG = f"http://127.0.0.1:{POG}"
@@ -2407,6 +2407,10 @@ try:
         crumb_og = lambda: b.js("(() => { const c = document.querySelector('.breadcrumb'); return c ? c.innerText.replace(/\\s+/g, ' ').trim() : null; })()")
         b.goto(BOG + "/?folder=Album%2FSub", 1.5)
         ok(crumb_og() == "\u2190 Album" and not b.js("document.documentElement.innerHTML.indexOf('Elsewhere') >= 0"), "[own gallery] typing the address of a folder inside the album: the way back stops at the album, and the rest of the gallery is not in the page", str(crumb_og()))
+        b.js("window.dispatchEvent(new Event('pagehide'))"); b.drain(1.0)
+        lg_og = lambda: json.loads(open(SITEOG + "/.gallery-linklog-ffffffffff.php").read().split("\n", 1)[1])
+        arrivals_og = lambda: [e.get("f") for e in lg_og().get("events", []) if e.get("k") == "arrive"]
+        ok(arrivals_og() == ["Album/Sub"] and list(lg_og()["visitors"].values())[0].get("entry") == {"f": "Album/Sub", "h": "typed"}, "[came in at] typing an address in a real browser logs the arrival on the public address's log: where they came in, and that it was typed", str(arrivals_og()))
         b.goto(BOG + "/?folder=Album", 1.5)
         ok(crumb_og() is None and not b.js("!!document.querySelector('.folder-pills a[href*=Elsewhere]')"), "[own gallery] typing the album's own address: no way up at all")
         b.goto(BOG + "/", 1.5)
@@ -2414,6 +2418,8 @@ try:
         ok((crumb_og() or "").startswith("\u2190") and "Album" not in (crumb_og() or "").split("/")[0] and b.js("!!document.querySelector('.folder-pills a[href*=Elsewhere]')"), "[own gallery] clicking into the album from the gallery's front page keeps the whole way back (a click is not a typed address), with the folders beside it", str(crumb_og()))
         b.js("[...document.querySelectorAll('a')].find(a => (a.getAttribute('href') || '').indexOf('folder=Album%2FSub') >= 0).click()"); b.drain(2.0)
         ok(" / Album" in (crumb_og() or ""), "[own gallery] ...and the next click, into a folder in it", str(crumb_og()))
+        b.js("window.dispatchEvent(new Event('pagehide'))"); b.drain(1.0)
+        ok(arrivals_og() == ["Album/Sub", "Album", ""], "[came in at] the three typed addresses are three arrivals, and the two clicks inside the gallery are not", str(arrivals_og()))
         b.js("location.reload()"); b.drain(2.0)
         ok(" / Album" in (crumb_og() or ""), "[own gallery] ...and reloading it keeps that", str(crumb_og()))
         b.goto(BOG + "/?folder=Album%2FSub", 1.5)

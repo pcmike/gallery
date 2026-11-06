@@ -131,7 +131,7 @@ function link_note_blocked($link, $state) {
 }
 
 /** Applies a batch of happenings to a link's log: [[kind, item], ...] with kinds s (seen), o (opened), p (played), d (downloaded), f (a folder page). */
-function link_log_apply($link, $vid, $ip, $label, $country, $batch, $now = null) {
+function link_log_apply($link, $vid, $ip, $label, $country, $batch, $now = null, $arrive = null) {
     $now = $now ?? time();
     $id = $link['id'];
     $newSeen = [];   // folder => the items seen for the first time in this batch
@@ -158,12 +158,16 @@ function link_log_apply($link, $vid, $ip, $label, $country, $batch, $now = null)
         }
     });
     $isPublic = link_is_public_log($link); $didTrim = false;
-    link_log_update($id, function (&$log) use ($batch, $vid, $ip, $label, $country, $now, $newSeen, $isPublic, &$didTrim) {
+    link_log_update($id, function (&$log) use ($batch, $vid, $ip, $label, $country, $now, $newSeen, $isPublic, $arrive, &$didTrim) {
         $prev = (int) ($log['visitors'][$vid]['last'] ?? 0);
         link_log_touch_visitor($log, $vid, $ip, $label, $country, $now);
         if ($isPublic && $now - $prev > VISIT_WINDOW_SECONDS) {   // the public address has no button to press: a visit is a visitor back after half an hour
             $log['visitors'][$vid]['opens']++;
             link_log_add_event($log, ['t' => $now, 'v' => $vid, 'k' => 'link']);
+        }
+        if ($isPublic && $arrive !== null) {   // where this visit came in (the latest is kept on the visitor, each is a line of the timeline)
+            $log['visitors'][$vid]['entry'] = $arrive;
+            link_log_add_event($log, ['t' => $now, 'v' => $vid, 'k' => 'arrive'] + $arrive);
         }
         foreach ($batch as [$k, $item]) {
             if ($k === 'o' || $k === 'f') $log['visitors'][$vid]['views']++;
@@ -281,9 +285,19 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
             if ($mine[$item]) $batch[] = [$k, $item];
         }
     }
-    if ($batch) {
+    // How the visit began (the public address's log only): where someone came in, when it was an arrival and not a click inside the gallery.
+    $arrive = null;
+    if (is_array($in) && is_array($in['a'] ?? null) && link_is_public_log($link)) {
+        $a = $in['a']; $af = $a['f'] ?? null; $ah = $a['h'] ?? '';
+        if (is_string($af) && strlen($af) <= 600 && strpbrk($af, "\0\r\n") === false && in_array($ah, ['typed', 'link', 'other'], true)) {
+            if (!empty($a['u'])) {   // a Not listed photo opened by its own address (the code is on this request too)
+                if (valid_media_path($dir, $af, $mediaExtensions, $self) && file_is_unlisted($dir, $af) && viewer_may_see_item($dir, $af, items_get_all_for_files($dir, [$af]))) $arrive = ['f' => $af, 'h' => $ah, 'u' => 1];
+            } elseif ($af === '' || ($af[0] !== '/' && !str_contains($af, '..') && is_dir(resolve_real_path($dir, $af)) && !folder_is_private($dir, $af))) $arrive = ['f' => $af, 'h' => $ah];
+        }
+    }
+    if ($batch || $arrive) {
         [$vid, $ip, $label, $country] = link_visitor_identity();
-        link_log_apply($link, $vid, $ip, $label, $country, $batch);
+        link_log_apply($link, $vid, $ip, $label, $country, $batch, null, $arrive);
     }
     http_response_code(204);
 }

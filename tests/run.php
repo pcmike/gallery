@@ -8139,6 +8139,57 @@ check('[own gallery] unmarking the last one takes the gallery\'s note away: no f
 check('[own gallery] a gallery that marks no folder sets no cookie at all, on its front page or a folder', (function () use ($baseNl) { foreach (['', '?folder=Open'] as $q) { $h = http_get("$baseNl/$q", ['Sec-Fetch-Site: none'], false)[2]; if (preg_grep('~^Set-Cookie: gallery_top~i', $h)) return false; } return true; })());
 check('[own gallery] the folder\'s settings page has the switch (not at the gallery\'s own settings)', str_contains(http_get("$baseNv/?admin&folder=Eurotrip", $nvOwn)[1], 'toggle_folder_own_gallery') && !str_contains(http_get("$baseNv/?admin", $nvOwn)[1], 'toggle_folder_own_gallery'));
 
+/* --------------------------------------------------------------------- *
+ * The public address's log: where each visit came in (an arrival, not a click inside the gallery), and Not listed photos opened by their address.
+ * --------------------------------------------------------------------- */
+echo "== public log: came in at ==\n";
+$fxLg = new_fixture_dir('arrivelog');
+mkdir("$fxLg/Open"); mkdir("$fxLg/Drawer");
+make_jpeg("$fxLg/Open/o1.jpg", 60, 60, 40, 90, 40); make_jpeg("$fxLg/Drawer/secret1.jpg", 60, 60, 90, 40, 40);
+file_put_contents("$fxLg/Drawer/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['restriction' => 'private', 'unlisted' => true]));
+file_put_contents("$fxLg/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'lg-admin-pw-1', 'ENABLE_SHARE_LINKS' => true, 'LOG_PUBLIC_VISITS' => true, 'LOG_PUBLIC_DAYS' => 30]));
+copy($indexSrc, "$fxLg/index.php");
+$portLg = find_free_port(); start_server($fxLg, $portLg); $baseLg = "http://127.0.0.1:$portLg";
+[, , $lgAh] = http_post("$baseLg/?admin", ['access_code' => 'lg-admin-pw-1'], [], false);
+$lgOwn = ['Cookie: ' . extract_cookie_header($lgAh)];
+$lgCsrf = (string) extract_csrf_token(http_get("$baseLg/?admin", $lgOwn)[1]);
+$lgAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseLg/?admin$q", $f + ['csrf_token' => $lgCsrf], array_merge($lgOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$lgUA = 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+$lgPage = fn (string $q, ?string $site) => http_get("$baseLg/$q", [$lgUA] + ($site !== null ? [1 => "Sec-Fetch-Site: $site"] : []), false)[1];
+check('[came in at] a page reached by a typed or pasted address tells its script how (typed); one reached from another site says link; a click inside the gallery says nothing', str_contains($lgPage('?folder=Open', 'none'), 'galleryEntry = {"f":"Open","h":"typed"}') && str_contains($lgPage('?folder=Open', 'cross-site'), 'galleryEntry = {"f":"Open","h":"link"}') && str_contains($lgPage('?folder=Open', 'same-origin'), 'galleryEntry = null') && str_contains($lgPage('', 'none'), 'galleryEntry = {"f":"","h":"typed"}') && str_contains($lgPage('?folder=Open', null), 'galleryEntry = null'));
+$lgBeacon = function (array $payload, string $query = '') use ($baseLg, $lgUA) {
+    $opts = ['http' => ['method' => 'POST', 'header' => implode("\r\n", ['Content-Type: application/json', $lgUA]), 'content' => json_encode($payload), 'ignore_errors' => true, 'timeout' => 5]];
+    @file_get_contents("$baseLg/?linklog$query", false, stream_context_create($opts));
+};
+$lgLog = fn () => read_data_file("$fxLg/.gallery-linklog-ffffffffff.php");
+$lgView = fn (string $q) => http_get("$baseLg/?admin&$q", $lgOwn)[1];
+$lgBeacon(['e' => [['f', 'Open']], 'a' => ['f' => 'Open', 'h' => 'typed']]);
+$lgV = array_values($lgLog()['visitors'] ?? [])[0] ?? [];
+check('[came in at] the arrival is kept on the visitor (where they came in) and as a line of the timeline, with the visit', ($lgV['entry'] ?? null) === ['f' => 'Open', 'h' => 'typed'] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'arrive' && ($e['f'] ?? '') === 'Open' && ($e['h'] ?? '') === 'typed')) === 1);
+$lgBeacon(['e' => [['f', '']], 'a' => ['f' => 'Drawer', 'h' => 'link']]);
+$lgBeacon(['e' => [['f', '']], 'a' => ['f' => '../etc', 'h' => 'typed']]);
+$lgBeacon(['e' => [['f', '']], 'a' => ['f' => 'Open', 'h' => 'carrier pigeon']]);
+$lgBeacon(['e' => [['f', '']], 'a' => ['f' => str_repeat('a', 700), 'h' => 'typed']]);
+$lgBeacon(['e' => [['f', '']], 'a' => ['f' => 'NoSuchFolder', 'h' => 'typed']]);
+$lgV2 = array_values($lgLog()['visitors'] ?? [])[0] ?? [];
+check('[came in at] an arrival at a Not listed folder, a path with .., an unknown way of arriving, a long one and a folder that is not there are all ignored (nothing is kept for them)', ($lgV2['entry'] ?? null) === ['f' => 'Open', 'h' => 'typed'] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'arrive')) === 1);
+$lgBeacon(['e' => [], 'a' => ['f' => '', 'h' => 'link']]);
+check('[came in at] a later arrival (the front page, from a link) replaces where they came in and adds a line', (array_values($lgLog()['visitors'] ?? [])[0]['entry'] ?? null) === ['f' => '', 'h' => 'link'] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'arrive')) === 2);
+// a Not listed photo opened by its address
+$lgQ = $lgAdmin(['action' => 'photo_address', 'file' => 'secret1.jpg'], '&folder=Drawer')['query'] ?? '?';
+$lgCode = substr($lgQ, -12);
+check('[came in at] the page of a Not listed photo\'s address says it was reached that way (the photo, not a folder)', str_contains($lgPage($lgQ, 'none'), 'galleryEntry = {"f":"Drawer\/secret1.jpg","h":"typed","u":true}'));
+$lgBeacon(['e' => [['o', 'Drawer/secret1.jpg']], 'a' => ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1]]);
+check('[came in at] ...without its code (the beacon asks without it) neither the arrival nor the open is kept', ($lgV3 = array_values($lgLog()['visitors'] ?? [])[0] ?? []) && ($lgV3['entry'] ?? null) === ['f' => '', 'h' => 'link'] && !preg_grep('~Drawer~', array_map(fn ($e) => (string) ($e['f'] ?? ''), $lgLog()['events'] ?? [])));
+$lgBeacon(['e' => [['o', 'Drawer/secret1.jpg']], 'a' => ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1]], "&photo=Drawer%2Fsecret1.jpg&k=$lgCode");
+$lgV4 = array_values($lgLog()['visitors'] ?? [])[0] ?? [];
+check('[came in at] with its code the arrival and the open are kept, and the arrival is marked as a Not listed photo', ($lgV4['entry'] ?? null) === ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1] && count(array_filter($lgLog()['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'opened' && ($e['f'] ?? '') === 'Drawer/secret1.jpg')) === 1);
+$lgVis = $lgView('linkview=ffffffffff&tab=visitors'); $lgTl = $lgView('linkview=ffffffffff&tab=timeline');
+check('[came in at] the Visitors tab of the public address has a Came in at column (a Not listed photo is named as one), and the timeline says "Arrived at" and how', str_contains($lgVis, '<th>Came in at</th>') && str_contains($lgVis, 'Not listed photo') && str_contains($lgTl, 'Arrived at') && str_contains($lgTl, 'an address typed or pasted') && str_contains($lgTl, 'a link on another site') && str_contains($lgTl, 'Not listed'));
+$lgCsv = $lgView('linkexport=ffffffffff&what=visitors'); $lgCsvE = $lgView('linkexport=ffffffffff&what=events');
+check('[came in at] the public log\'s CSVs carry it (a came_in_at column; "arrived" lines), and an ordinary link\'s CSV keeps the columns it always had', str_contains($lgCsv, '"came_in_at"') && str_contains($lgCsv, 'Not listed photo secret1.jpg') && str_contains($lgCsvE, 'arrived') && !str_contains($lgView('linkexport=all&what=visitors'), 'came_in_at'));
+check('[came in at] a gallery that does not log its public address records nothing of this (no script, no entry)', (function () use ($baseNl) { return !str_contains(http_get("$baseNl/?folder=Open", ['Sec-Fetch-Site: none'], false)[1], 'galleryEntry'); })());
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";

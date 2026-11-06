@@ -34,3 +34,4 @@
   })();
 
 <?php if ((link_viewer() !== null && !is_revealed()) || public_log_wanted()): ?>
+  const galleryEntry = <?= json_encode(public_log_arrival()) ?>;   // (how this page was reached, for the public address's log: null unless it was an arrival)
