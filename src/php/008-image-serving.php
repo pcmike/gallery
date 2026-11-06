@@ -175,7 +175,7 @@ function file_version($file) {
 
 function img_url($file, $size) {
     $v = file_version($file);
-    return '?img=' . rawurlencode($file) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '');
+    return '?img=' . rawurlencode($file) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '') . (($GLOBALS['photoPass'] ?? null) === $file ? '&k=' . rawurlencode((string) ($_GET['k'] ?? '')) : '');   // (on a photo's own address its pictures ask with the same code)
 }
 
 /** The extra attributes that let the browser choose a tile's picture by how big the tile really is and how dense the screen

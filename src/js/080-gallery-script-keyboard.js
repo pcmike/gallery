@@ -110,6 +110,7 @@
     copyToClipboard(url).then(() => flashCopied(lightboxCopyBtn));
   };
   lightboxCopyBtn.addEventListener('click', () => {
+    if (ownerIsUnlisted(files[current])) { ownerAddress(files[current], false, lightboxCopyBtn); return; }   // (a Not listed photo is opened by its own address, not a plain link)
     // A plain link to a private photo only opens for people who already have access, so the owner is asked what they mean.
     if (ownerState && ownerState.priv[files[current]] && window.GalleryShare) { openPrivateLinkPopup(); return; }
     copyPhotoLink();

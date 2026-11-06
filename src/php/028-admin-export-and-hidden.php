@@ -435,6 +435,9 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
       <div class="nojs-only"><button type="submit" class="<?= $private ? 'secondary' : 'danger' ?>"><?= $private ? 'Make this folder public again' : 'Make this entire folder private' ?></button></div>
     </form>
     <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_unlisted', 'unlisted', $private && !empty($itemsHere['unlisted']), 'Not listed', '', ' <small class="muted">only you can open it</small>', 'unlisted-form'); ?>
+    <div class="unlisted-sub"<?= $private && !empty($itemsHere['unlisted']) ? '' : ' hidden' ?>>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s address</small>', 'unlisted-form'); ?>
+    </div>
     <p class="hint unlisted-note">Only you see what is in this folder: visitors and people with the private-view password get nothing, and an "Everything" link leaves it out. Share it one photo at a time (each photo has its own address), or pick the folder in a link. Switching this on makes the folder private too.</p>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">

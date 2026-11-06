@@ -80,6 +80,7 @@ php/077-public-page-script-glue-open-map.php
 js/078-gallery-script-map-pin-links.js
 php/079-public-page-script-glue-web-link.php
 js/080-gallery-script-keyboard.js
+js/080a-gallery-script-photo-address.js
 php/081-public-page-script-glue-share-popover.php
 js/082-gallery-script-link-reporting.js
 php/083-public-page-script-glue-deep-link.php

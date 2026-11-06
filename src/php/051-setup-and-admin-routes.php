@@ -271,7 +271,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         }
         if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch' && in_array($resultMessage['type'] ?? '', ['ok', 'error'], true)) {
             // A setting flipped in place by the page's script: answer in JSON, no page.
-            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1]));
+            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1, 'query' => 1, 'fresh' => 1]));
         }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);

@@ -1777,7 +1777,7 @@
     // The Not listed switch below this one makes the folder private as well, and making the folder public ends it: keep the two in step.
     document.addEventListener('instant-saved', function (ev) {
       var d = ev.detail || {};
-      if (typeof d.private === 'boolean' && typeof d.unlisted === 'boolean') { box.checked = d.private; if (d.counts) counts = { stay: d.counts.stay, open: d.counts.open }; paint(); }
+      if (typeof d.private === 'boolean' && typeof d.unlisted === 'boolean') { box.checked = d.private; if (d.counts) counts = { stay: d.counts.stay, open: d.counts.open }; paint(); var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = !d.unlisted; }
     });
     box.addEventListener('change', function () {
       if (box.checked) { send(true, function (ok) { if (!ok) box.checked = false; }); return; }
@@ -1790,7 +1790,7 @@
       modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeModal(); } });
       document.getElementById('pm-ok').addEventListener('click', function () {
         modal.hidden = true;
-        send(false, function () { var u = document.querySelector('.unlisted-form input[type=checkbox][name=unlisted]'); if (u) u.checked = false; box.focus(); });
+        send(false, function () { var u = document.querySelector('.unlisted-form input[type=checkbox][name=unlisted]'); if (u) u.checked = false; var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = true; box.focus(); });
       });
     }
     paint();

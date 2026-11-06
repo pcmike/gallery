@@ -408,7 +408,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   <?php // For the owner, on a private folder's own page: what making the folder public would do (the lock on each tile shows which is which). ?>
   <div class="folder-priv-banner" id="folder-priv-banner" role="button" tabindex="0" title="Make this folder public" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('lock') ?>
-    <div><strong>Private folder: visitors can't see it</strong>
+    <div><strong><?= folder_unlisted_cached($dir, $currentFolderPath) ? 'Not listed: only you can open this folder' : 'Private folder: visitors can\'t see it' ?></strong>
       <span class="fpb-counts" aria-live="polite"><?= count_noun($privCounts['stay']) ?> will stay private &middot; <?= count_noun($privCounts['open']) ?> <?= (int) $privCounts['open'] === 1 ? 'becomes' : 'become' ?> public when you open it</span>
       <em class="fpb-hint">Make it public&hellip;</em></div>
   </div>
@@ -422,6 +422,15 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       <div class="fp-row fp-open"><?= ui_icon('unlock') ?><span><strong id="fp-open">0 photos</strong> <span id="fp-open-v">become</span> public</span></div>
       <p class="fp-hint">Anyone with the link will see those. Not right? Cancel, mark more private first, then come back.</p>
       <div class="fp-btns"><button type="button" id="fp-cancel">Cancel</button><button type="button" class="primary" id="fp-ok">Make public</button></div>
+    </div>
+  </div>
+<?php endif; ?>
+<?php if (is_admin_browser()): ?>
+  <div class="fp-modal" id="addr-modal" role="dialog" aria-modal="true" aria-labelledby="addr-modal-title" hidden>
+    <div class="fp-modal-card">
+      <h3 id="addr-modal-title">Make a new address?</h3>
+      <p class="fp-hint" style="margin:0 0 8px">Anyone who has this photo's present address will no longer be able to open it. The new address is copied for you.</p>
+      <div class="fp-btns"><button type="button" id="addr-cancel">Cancel</button><button type="button" class="primary" id="addr-ok">New address</button></div>
     </div>
   </div>
 <?php endif; ?>
@@ -494,8 +503,11 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <button class="lightbox-copy owner-priv" id="lightbox-private" type="button" data-owner="private" title="Make this private" aria-label="Make this private"><?= ui_icon('unlock') ?></button>
 <?php endif; ?>
     <button class="lightbox-copy lightbox-zoom" id="lightbox-zoom" type="button" title="Fill the width of the screen" aria-label="Fill the width of the screen"><?= ui_icon('zoom-in') ?></button>
-<?php $linkViewer = link_viewer(); if (is_revealed() || ($linkViewer !== null ? ($linkViewer['downloads']['mode'] ?? 'off') !== 'off' : ENABLE_PUBLIC_DOWNLOAD)): ?>
+<?php $linkViewer = link_viewer(); if ($photoPass !== null ? viewer_may_download($dir, $photoPass, $itemsData) : (is_revealed() || ($linkViewer !== null ? ($linkViewer['downloads']['mode'] ?? 'off') !== 'off' : ENABLE_PUBLIC_DOWNLOAD))): ?>
     <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
+<?php endif; ?>
+<?php if (is_admin_browser()): ?>
+    <button class="lightbox-copy owner-newaddr" id="lightbox-newaddr" type="button" title="New address: the old one stops working" aria-label="New address: the old one stops working" hidden><?= ui_icon('linkoff') ?></button>
 <?php endif; ?>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link"><?= ui_icon('link') ?></button>
     <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
@@ -576,16 +588,16 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // viewer's two buttons are drawn from this, and kept in step when one is pressed).
   const ownerState = <?php
       if (is_admin_browser()) {
-          $ownerPriv = []; $ownerOwn = []; $ownerInh = [];
-          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; }
-          echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = [];
+          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = true; }
+          echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain
   // link to a private photo opens nothing for anyone without access, and a download is offered per what the person's link
   // allows. null means "all of them".
   const downloadOk = <?php
-      if (($linkViewer !== null || PUBLIC_DOWNLOAD_MODE === 'some') && !is_revealed()) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
+      if ($photoPass !== null || (($linkViewer !== null || PUBLIC_DOWNLOAD_MODE === 'some') && !is_revealed())) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
       else echo 'null';
   ?>;
   const copyLinkOk = <?php
@@ -593,5 +605,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       else echo 'null';
   ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
+  const galleryRootHref = <?= json_encode(gallery_root_href()) ?>;
+  const passQ = <?= json_encode($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '') ?>;   // (on a photo's own address, the viewer's own requests for it carry the code too)
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
   const showCountsPublicly = <?= view_counts_shown() ? 'true' : 'false' ?>;

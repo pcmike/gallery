@@ -312,7 +312,7 @@ function admin_record_hash($record) {
 /** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
  *  by themselves, so they are left out: flipping one must not make the photo's caption form look out of date. */
 function admin_item_record_hash($entry) {
-    unset($entry['restriction'], $entry['locationVisibility']);
+    unset($entry['restriction'], $entry['locationVisibility'], $entry['addr']);   // (the photo's address is replaced by itself too)
     return admin_record_hash($entry);
 }
 
@@ -770,6 +770,32 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'ok', 'private' => $private, 'unlisted' => $on, 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath),
                 'text' => $on ? 'Not listed: only you can open this folder. Visitors and people with the private-view password see nothing of it.'
                               : 'No longer not listed. The folder is still private, so people with the private-view password can open it.'];
+    }
+
+    // A Not listed folder's photo has an address (?photo=<path>&k=<code>) that opens that one photo for anyone who has it. This gives the
+    // owner the address, and with "fresh" a new one: the old stops working at once (a random string kept on the photo changes the code).
+    if ($action === 'photo_address') {
+        if ($adminFolderPath === null || !folder_is_unlisted($dir, $adminFolderPath)) return ['type' => 'error', 'text' => 'Only a photo in a Not listed folder has an address like this.'];
+        $name = basename((string) ($_POST['file'] ?? ''));
+        $rel = $adminFolderPath . '/' . $name;
+        if ($name === '' || !in_array($rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
+        if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo is marked private on its own, so it has no address. Make it public first (its lock).'];
+        if (install_secret(true) === '') return ['type' => 'error', 'text' => 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
+        $fid = folder_id_stamp($adminFolderReal);
+        if ($fid === '') return ['type' => 'error', 'text' => 'This folder is not writable, so it cannot be given the id its photos\' addresses need.'];
+        $fresh = !empty($_POST['fresh']);
+        if ($fresh) items_update($adminFolderReal, function (&$data) use ($name) { $data['items'][$name]['addr'] = bin2hex(random_bytes(6)); });
+        $code = photo_address_code($dir, $rel, items_get_all_for_files($dir, [$rel]), $fid);
+        if ($code === '') return ['type' => 'error', 'text' => 'Could not make the address.'];
+        return ['type' => 'ok', 'query' => '?photo=' . rawurlencode($rel) . '&k=' . $code, 'fresh' => $fresh,
+                'text' => $fresh ? 'New address copied. The old one no longer opens this photo.' : 'Address copied.'];
+    }
+
+    if ($action === 'toggle_folder_originals') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $on = !empty($_POST['originals']);
+        items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['allowOriginals'] = true; else unset($data['allowOriginals']); });
+        return ['type' => 'ok', 'text' => $on ? 'Someone opening a photo by its address can download the original.' : 'Photos opened by their address can\'t be downloaded.'];
     }
 
     if ($action === 'arrange_items') {

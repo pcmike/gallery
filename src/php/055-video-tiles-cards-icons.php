@@ -89,7 +89,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
     $vt = video_tile_parts($file, $videoDuration);
     // For the signed-in owner: a lock on the tile showing whether it is private, and pressing it flips that.
-    $ownerLock = '';
+    $ownerLock = ''; $hasAddr = false;
     if (is_admin_browser()) {
         $ps = owner_privacy_state($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
         $isPriv = $ps['priv']; $isFolder = $ps['own'] === '' && $ps['inh'];
@@ -105,10 +105,17 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         // And a pencil in the other lower corner: opens the viewer with the editor for this photo's caption, link, place and switches.
         $ownerLock .= '<button type="button" class="edit-toggle" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8')
             . '" title="Edit caption, link and location" aria-label="Edit caption, link and location">' . ui_icon('edit') . '</button>';
+        // A photo in a Not listed folder has an address of its own (see photo_address_code): beside the pencil, a button that makes a new one
+        // (the old stops working) and one that copies the present one.
+        if (file_is_unlisted($GLOBALS['dir'], $file)) {
+            $hasAddr = true;
+            $ownerLock .= '<button type="button" class="addr-toggle addr-new" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="New address: the old one stops working" aria-label="New address: the old one stops working">' . ui_icon('linkoff') . '</button>'
+                . '<button type="button" class="addr-toggle addr-cur" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy this photo\'s address" aria-label="Copy this photo\'s address">' . ui_icon('link') . '</button>';
+        }
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
     if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
-    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -146,6 +153,7 @@ function ui_icon_paths() {
         'caption' => '<path d="M20.5 15.5a2 2 0 0 1-2 2H9l-5 3.5V6.5a2 2 0 0 1 2-2h12.5a2 2 0 0 1 2 2z"/><path d="M8 9.5h8M8 13h5"/>',
         'globe'   => '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>',
         'link'    => '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+        'linkoff' => '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/><path d="M4 4 20 20"/>',
         'eye'     => '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
         'check'   => '<path d="M4.5 12.5 9.5 17.5 19.5 7"/>',
         'refresh' => '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',

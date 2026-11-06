@@ -8021,6 +8021,44 @@ $nlPlainItems = read_data_file("$fxNl/Plain/.gallery-items.php");
 check('[not listed] making the folder public again ends Not listed too (neither flag is left behind)', ($nlPub['ok'] ?? null) === true && !isset($nlPlainItems['restriction']) && !isset($nlPlainItems['unlisted']) && str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN'));
 check('[not listed] a flag on a folder that is not private does nothing (public folders stay public)', (function () use ($nlWrite, $baseNl) { $nlWrite('Plain', ['unlisted' => true]); return str_contains(http_get("$baseNl/?folder=Plain")[1], 'PRIVATE-PLAIN'); })());
 check('[not listed] the folder\'s settings page offers the switch', str_contains(http_get("$baseNl/?admin&folder=SecretDrawer", $nlOwn)[1], 'aria-label="Not listed"') && str_contains(http_get("$baseNl/?admin&folder=SecretDrawer", $nlOwn)[1], 'toggle_folder_unlisted'));
+// ---- a photo's own address
+$nlAddr = fn (string $folder, string $file, bool $fresh = false) => $nlAdmin(['action' => 'photo_address', 'file' => $file] + ($fresh ? ['fresh' => '1'] : []), '&folder=' . rawurlencode($folder));
+$nlA = $nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg'); $nlB = $nlAddr('SecretDrawer', 'NOTLISTED-TWO.jpg');
+check('[photo address] the owner gets an address for a photo in a Not listed folder: ?photo=<path>&k=<12 letters and digits>, a different one for each photo', ($nlA['ok'] ?? null) === true && preg_match('~^\?photo=SecretDrawer%2FNOTLISTED-SENTINEL\.jpg&k=([A-Za-z0-9_-]{12})$~', $nlA['query'] ?? '', $nlAm) === 1 && preg_match('~&k=([A-Za-z0-9_-]{12})$~', $nlB['query'] ?? '', $nlBm) === 1 && $nlAm[1] !== $nlBm[1]);
+$nlAQ = $nlA['query'] ?? '?'; $nlBQ = $nlB['query'] ?? '?';
+check('[photo address] asking again gives the same address (nothing is stored to make it)', ($nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg')['query'] ?? '') === $nlAQ && !str_contains((string) file_get_contents("$fxNl/SecretDrawer/.gallery-items.php"), '"addr"'));
+$nlPass = http_get("$baseNl/$nlAQ", [], false);
+check('[photo address] a stranger with the address gets that photo (and its pictures carry the code)', $nlPass[0] === 200 && str_contains($nlPass[1], 'NOTLISTED-SENTINEL.jpg') && str_contains($nlPass[1], '&amp;k=' . substr($nlAQ, -12)) || str_contains($nlPass[1], '&k=' . substr($nlAQ, -12)));
+check('[photo address] ...and nothing else: no other photo, no public photo, no other folder, in the page', !str_contains($nlPass[1], 'NOTLISTED-TWO') && !str_contains($nlPass[1], 'front.jpg') && !str_contains($nlPass[1], 'open-1') && !str_contains($nlPass[1], 'PRIVATE-PLAIN') && !str_contains($nlPass[1], 'NOTLISTED-DEEP') && !str_contains($nlPass[1], 'Open%2F') );
+check('[photo address] ...and the page is kept out of search engines and does not pass its address on', (bool) preg_grep('~^X-Robots-Tag: noindex~i', $nlPass[2]) && (bool) preg_grep('~^Referrer-Policy: no-referrer~i', $nlPass[2]) && (bool) preg_grep('~^Cache-Control: .*no-store~i', $nlPass[2]));
+$nlK = substr($nlAQ, -12);
+$nlImg = fn (string $file, ?string $k, array $h = []) => http_get("$baseNl/?img=" . rawurlencode($file) . '&size=full' . ($k !== null ? '&k=' . $k : ''), $h, false);
+check('[photo address] its picture opens with the code, and not without it or with a wrong one', $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', $nlK)[0] === 200 && $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', null)[0] !== 200 && $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', 'AAAAAAAAAAAA')[0] !== 200 && $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', substr($nlK, 0, 11))[0] !== 200);
+check('[photo address] one photo\'s code opens no other photo (not its neighbour, not the one in the Not listed folder inside Open)', $nlImg('SecretDrawer/NOTLISTED-TWO.jpg', $nlK)[0] !== 200 && $nlImg('Open/Hid/NOTLISTED-DEEP.jpg', $nlK)[0] !== 200 && $nlImg('SecretDrawer/NOTLISTED-TWO.jpg', substr($nlBQ, -12))[0] === 200);
+[$nlSw, $nlBw] = http_get("$baseNl/?photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=AAAAAAAAAAAA", [], false); [$nlSn, $nlBn] = http_get("$baseNl/?photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg", [], false);
+check('[photo address] a wrong code is answered exactly like no code (the ordinary page, nothing of the photo)', $nlSw === $nlSn && $nlBw === $nlBn && !str_contains($nlBw, 'NOTLISTED-SENTINEL'));
+check('[photo address] it is not a way into the folder: the folder\'s page with the code is not found', http_get("$baseNl/?folder=SecretDrawer&photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nlK", [], false)[0] === 404);
+check('[photo address] someone with the private-view password opens it the same way', str_contains(http_get("$baseNl/$nlAQ", $nlView)[1], 'NOTLISTED-SENTINEL.jpg') && !str_contains(http_get("$baseNl/$nlAQ", $nlView)[1], 'front.jpg'));
+check('[photo address] a photo marked private on its own has no address, and one that was opened stops', (function () use ($nlAddr, $nlWrite, $baseNl, $nlAQ, $fxNl) { $fid = read_data_file("$fxNl/SecretDrawer/.gallery-items.php")['folderId'] ?? ''; $nlWrite('SecretDrawer', ['restriction' => 'private', 'unlisted' => true, 'folderId' => $fid, 'items' => ['NOTLISTED-SENTINEL.jpg' => ['restriction' => 'private']]]); $stopped = http_get("$baseNl/$nlAQ", [], false)[1]; $refused = $nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg'); $nlWrite('SecretDrawer', ['restriction' => 'private', 'unlisted' => true, 'folderId' => $fid]); return ($refused['ok'] ?? null) === false && !str_contains($stopped, 'NOTLISTED-SENTINEL'); })());
+$nlFresh = $nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg', true); $nlFreshK = substr($nlFresh['query'] ?? '', -12);
+check('[photo address] "New address" gives that photo a different code: the old address stops at once, the new one works, the neighbour\'s is untouched', ($nlFresh['ok'] ?? null) === true && $nlFreshK !== $nlK && $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', $nlK)[0] !== 200 && $nlImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', $nlFreshK)[0] === 200 && $nlImg('SecretDrawer/NOTLISTED-TWO.jpg', substr($nlBQ, -12))[0] === 200);
+check('[photo address] ...and asking afterwards gives the new address again', ($nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg')['query'] ?? '') === ($nlFresh['query'] ?? 'x'));
+$nlDeep = $nlAddr('Open/Hid', 'NOTLISTED-DEEP.jpg');
+check('[photo address] a photo in a Not listed folder inside a public one has an address too, and it opens', ($nlDeep['ok'] ?? null) === true && $nlImg('Open/Hid/NOTLISTED-DEEP.jpg', substr($nlDeep['query'], -12))[0] === 200);
+check('[photo address] a photo in a public folder has none (the request is refused), and neither does a name that is not a photo', ($nlAddr('Open', 'open-1.jpg')['ok'] ?? null) === false && ($nlAddr('SecretDrawer', 'nothere.jpg')['ok'] ?? null) === false);
+check('[photo address] only the owner can ask for an address (a request without the owner\'s session is turned away)', !str_contains(http_post("$baseNl/?admin&folder=SecretDrawer", ['action' => 'photo_address', 'file' => 'NOTLISTED-TWO.jpg', 'csrf_token' => $nlCsrf], ['X-Requested-With: gallery-fetch'])[1], '"query"'));
+// downloads: the folder's own choice, off to start with, whatever the gallery says
+check('[photo address] the original can not be downloaded from a photo\'s address to start with, though the gallery lets visitors download (the folder says no): no button, and the address refuses', http_get("$baseNl/?original=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nlFreshK", [], false)[0] !== 200 && !str_contains(http_get("$baseNl/" . ($nlFresh['query'] ?? ''), [])[1], 'id="lightbox-download"'));
+$nlOn2 = $nlAdmin(['action' => 'toggle_folder_originals', 'originals' => '1'], '&folder=SecretDrawer');
+$nlPassOn = http_get("$baseNl/" . ($nlFresh['query'] ?? ''), []);
+check('[photo address] with the folder\'s "Allow downloading originals" on, the original downloads from the address (and only that photo\'s)', ($nlOn2['ok'] ?? null) === true && http_get("$baseNl/?original=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nlFreshK", [], false)[0] === 200 && http_get("$baseNl/?original=SecretDrawer%2FNOTLISTED-TWO.jpg&k=$nlFreshK", [], false)[0] !== 200 && str_contains($nlPassOn[1], 'id="lightbox-download"'));
+$nlAdmin(['action' => 'toggle_folder_originals', 'originals' => '0'], '&folder=SecretDrawer');
+check('[photo address] ...and switching it off stops them again', http_get("$baseNl/?original=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nlFreshK", [], false)[0] !== 200);
+// the crawl again, now that addresses exist: without the code nothing changes for anyone
+foreach (['a stranger' => [], 'someone with the private-view password' => $nlView] as $nlName => $nlHdr) {
+    $nlLeaks = $nlCrawl($nlHdr);
+    check("[photo address] $nlName still meets nothing of the drawer on any address without a code, now that addresses exist", $nlLeaks === []);
+}
 
 /* --------------------------------------------------------------------- */
 

@@ -450,6 +450,7 @@ $folderCrumbs = [];
 $folderPills = [];       // quick links to the folders beside this one: [href, label, is this one]
 $folderPillsAll = null;  // where "All" goes when only some of them are shown
 if (isset($_GET['folder'])) {
+    if ($photoPass !== null) { http_response_code(404); exit; }   // (a photo's own address is not a way into its folder)
     $requestedFolder = $_GET['folder'];
     // Valid only if the script's own (already hiding-filtered) file list
     // has something under it — a nested path like Europe/France/Paris

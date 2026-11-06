@@ -422,8 +422,8 @@ foreach ($allFiles as $privateProbe) {
 if (!is_revealed() && ($linkHere = link_viewer()) !== null && ($linkHere['scope']['type'] ?? 'all') !== 'all') link_scan_ambiguity($dir, $allFiles);   // a folder copied with its id is shown to nobody
 if (!is_admin_browser()) {   // (someone with the private-view password is filtered too, but only of what is Not listed: viewer_may_see_item says so)
     foreach ($groups as $key => $groupFiles) {
-        $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData) {
-            return viewer_may_see_item($dir, $f, $itemsData);
+        $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData, $photoPass) {
+            return $photoPass !== null ? $f === $photoPass : viewer_may_see_item($dir, $f, $itemsData);   // (opened by its own address: that photo, not the gallery's public rest)
         }));
         if (empty($visibleMembers)) {
             unset($groups[$key], $folderGroupKeys[$key], $explicitGroupKeys[$key]);
@@ -442,7 +442,13 @@ if (!is_admin_browser()) {   // (someone with the private-view password is filte
     }));
     // A link's own photos are loose tiles on the front page, not folder cards: each leaves its folder's group and stands alone,
     // after the rest. (A folder the link shares stays a card; ?folder= pages are built from $files and are not affected.)
-    if (($pickLink = link_viewer()) !== null && !is_revealed()) {
+    if ($photoPass !== null) {   // the photo stands alone: no folder card around it (its name would say where it lives)
+        foreach ($folderGroupKeys as $folderKey => $_true) { unset($groups[$folderKey], $folderGroupKeys[$folderKey], $explicitGroupKeys[$folderKey]); }
+        $looseKey = group_key(basename($photoPass));
+        if (isset($groups[$looseKey])) $looseKey = $photoPass;
+        $groups[$looseKey] = [$photoPass];
+        $fileToGroupKey[$photoPass] = $looseKey;
+    } elseif (($pickLink = link_viewer()) !== null && !is_revealed()) {
         $pickedOut = [];
         foreach ($folderGroupKeys as $folderKey => $_true) {
             if (!isset($groups[$folderKey])) continue;

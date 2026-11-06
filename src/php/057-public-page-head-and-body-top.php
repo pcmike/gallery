@@ -202,7 +202,7 @@ if ($currentFolderPath !== null) {
 }
 if ($requestedPhoto) {
     $ogImageUrl = $baseUrl . '/' . img_url($requestedPhoto, 'share');
-    $ogUrl = $baseUrl . '/?photo=' . rawurlencode($requestedPhoto);
+    $ogUrl = $baseUrl . '/?photo=' . rawurlencode($requestedPhoto) . ($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '');
     $photoGroupKey = group_key($requestedPhoto);
     if (isset($groups[$photoGroupKey])) {
         $ogTitle = $photoGroupKey . ' — ' . $pageTitle;

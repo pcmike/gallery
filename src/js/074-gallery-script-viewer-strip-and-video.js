@@ -1,16 +1,19 @@
-      lightboxVideo.src = '?video=' + encodeURIComponent(file) + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
+      lightboxVideo.src = '?video=' + encodeURIComponent(file) + (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ;
       lightboxVideo.load();
     } else {
       lightboxVideo.pause();
       lightboxVideo.style.display = 'none';
       lightboxVideo.src = '';
       lightboxImg.style.display = '';
-      lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
+      lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ;
     }
     paintCaption();
-    if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file); downloadLink.classList.remove('ready'); downloadLink.hidden = !!(downloadOk && !downloadOk[current]); }
+    if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file) + passQ; downloadLink.classList.remove('ready'); downloadLink.hidden = !!(downloadOk && !downloadOk[current]); }
     const copyBtn = document.getElementById('lightbox-copy-btn');
     if (copyBtn) copyBtn.hidden = !!(copyLinkOk && !copyLinkOk[current]);
+    const newAddrBtn = document.getElementById('lightbox-newaddr');
+    if (newAddrBtn) newAddrBtn.hidden = !ownerIsUnlisted(file);   // (a Not listed photo has an address of its own, and the owner can replace it)
+    if (copyBtn) copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s address' : 'Copy link';
     applyZoom();
     updateLightboxExtras();
     toolsFade();

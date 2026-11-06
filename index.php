@@ -1232,6 +1232,15 @@ if (isset($_GET['photo'])) {
         $requestedPhoto = $candidate;
     }
 }
+// A Not listed photo opened by its own address (?photo=<path>&k=<code>): the page is that one photo and nothing else (see the filter in
+// "GROUPING" below), kept out of search engines and not passed on in a Referer.
+$photoPass = null;
+if ($requestedPhoto !== null && !is_admin_browser() && isset($_GET['k']) && photo_pass_valid($dir, $requestedPhoto, $itemsData)) {
+    $photoPass = $requestedPhoto;
+    header('Referrer-Policy: no-referrer');
+    header('X-Robots-Tag: noindex, nofollow');
+    header('Cache-Control: private, no-store');
+}
 
 // ?download used to serve this file's own bytes directly. Redirects to
 // the GitHub repo instead, so anyone with an old bookmarked or shared
@@ -3128,7 +3137,7 @@ function file_version($file) {
 
 function img_url($file, $size) {
     $v = file_version($file);
-    return '?img=' . rawurlencode($file) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '');
+    return '?img=' . rawurlencode($file) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '') . (($GLOBALS['photoPass'] ?? null) === $file ? '&k=' . rawurlencode((string) ($_GET['k'] ?? '')) : '');   // (on a photo's own address its pictures ask with the same code)
 }
 
 /** The extra attributes that let the browser choose a tile's picture by how big the tile really is and how dense the screen
@@ -3680,8 +3689,8 @@ foreach ($allFiles as $privateProbe) {
 if (!is_revealed() && ($linkHere = link_viewer()) !== null && ($linkHere['scope']['type'] ?? 'all') !== 'all') link_scan_ambiguity($dir, $allFiles);   // a folder copied with its id is shown to nobody
 if (!is_admin_browser()) {   // (someone with the private-view password is filtered too, but only of what is Not listed: viewer_may_see_item says so)
     foreach ($groups as $key => $groupFiles) {
-        $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData) {
-            return viewer_may_see_item($dir, $f, $itemsData);
+        $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData, $photoPass) {
+            return $photoPass !== null ? $f === $photoPass : viewer_may_see_item($dir, $f, $itemsData);   // (opened by its own address: that photo, not the gallery's public rest)
         }));
         if (empty($visibleMembers)) {
             unset($groups[$key], $folderGroupKeys[$key], $explicitGroupKeys[$key]);
@@ -3700,7 +3709,13 @@ if (!is_admin_browser()) {   // (someone with the private-view password is filte
     }));
     // A link's own photos are loose tiles on the front page, not folder cards: each leaves its folder's group and stands alone,
     // after the rest. (A folder the link shares stays a card; ?folder= pages are built from $files and are not affected.)
-    if (($pickLink = link_viewer()) !== null && !is_revealed()) {
+    if ($photoPass !== null) {   // the photo stands alone: no folder card around it (its name would say where it lives)
+        foreach ($folderGroupKeys as $folderKey => $_true) { unset($groups[$folderKey], $folderGroupKeys[$folderKey], $explicitGroupKeys[$folderKey]); }
+        $looseKey = group_key(basename($photoPass));
+        if (isset($groups[$looseKey])) $looseKey = $photoPass;
+        $groups[$looseKey] = [$photoPass];
+        $fileToGroupKey[$photoPass] = $looseKey;
+    } elseif (($pickLink = link_viewer()) !== null && !is_revealed()) {
         $pickedOut = [];
         foreach ($folderGroupKeys as $folderKey => $_true) {
             if (!isset($groups[$folderKey])) continue;
@@ -6149,9 +6164,41 @@ function link_item_is_picked_photo($l, $dir, $file, $itemsData = null) {
     return link_allows_item($l, $dir, $file, $itemsData);
 }
 
+/** The topmost Not listed folder $file sits in ('' when it is in none): the one whose own choices (downloads) cover everything beneath it. */
+function unlisted_root_path($dir, $file) {
+    $depth = unlisted_root_depth($dir, $file);
+    return $depth > 0 ? implode('/', array_slice(explode('/', dirname($file)), 0, $depth)) : '';
+}
+
+/** The code in a photo's address (?photo=<path>&k=<code>) when the photo is in a Not listed folder: worked out from the folder's hidden id,
+ *  the file name, a secret of this install and, once the owner has asked for a new address, a random string kept on the photo. Nothing
+ *  else is stored, so there is no list of codes; the folder can be renamed or moved and its photos keep their addresses, while renaming the
+ *  photo ends its address. '' when it can't be worked out (no secret yet, or the folder has no id): nothing then matches. */
+function photo_address_code($dir, $file, $itemsData = null, $folderId = null) {
+    $secret = install_secret();
+    $slash = strrpos((string) $file, '/');
+    if ($secret === '' || $slash === false) return '';
+    $fid = $folderId ?? folder_id_cached($dir, substr($file, 0, $slash));
+    if ($fid === '') return '';
+    $salt = is_array($itemsData) && is_string($itemsData[$file]['addr'] ?? null) ? $itemsData[$file]['addr'] : '';
+    $raw = hash_hmac('sha256', 'photo|' . $fid . '|' . basename($file) . '|' . $salt, $secret, true);
+    return substr(rtrim(strtr(base64_encode($raw), '+/', '-_'), '='), 0, 12);
+}
+
+/** Does this request carry the right code for this very photo, and is the photo one that has an address (in a Not listed folder, and not
+ *  marked private on its own)? The code is for that one photo: it opens nothing else. */
+function photo_pass_valid($dir, $file, $itemsData) {
+    $k = $_GET['k'] ?? null;
+    if (!is_string($k) || $k === '' || strlen($k) > 40 || !is_string($file) || !file_is_unlisted($dir, $file)) return false;
+    if (item_restriction(is_array($itemsData) ? ($itemsData[$file] ?? null) : null) === 'private') return false;
+    $want = photo_address_code($dir, $file, $itemsData);
+    return $want !== '' && hash_equals($want, $k);
+}
+
 /** May this visitor see the item (a public one, or a private one they were given)? */
 function viewer_may_see_item($dir, $file, $itemsData) {
     if (is_admin_browser()) return true;
+    if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return true;   // (a Not listed photo, by its own address)
     if (is_revealed()) return !file_is_unlisted($dir, $file);   // (what the private-view password opens is everything private except a Not listed folder, which is the owner's alone)
     $l = link_viewer();
     if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file, $itemsData)) return false;   // a link that shows only its own things: not the public rest of the gallery either
@@ -6178,6 +6225,7 @@ function link_capability_allows($l, $cap, $dir, $file, $itemsData = null) {
  *  else: a public photo when the gallery lets visitors, a private one when their link says so. */
 function viewer_may_download($dir, $file, $itemsData) {
     if (is_admin_browser()) return true;
+    if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $file)))['allowOriginals']);   // (a photo opened by its address: its Not listed folder's own choice, not the gallery's)
     if (is_revealed()) return !file_is_unlisted($dir, $file);
     $l = link_viewer();
     // Someone using a share link: the link's own answer decides (the gallery-wide switch is for people who came in without one).
@@ -8286,7 +8334,7 @@ function admin_record_hash($record) {
 /** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
  *  by themselves, so they are left out: flipping one must not make the photo's caption form look out of date. */
 function admin_item_record_hash($entry) {
-    unset($entry['restriction'], $entry['locationVisibility']);
+    unset($entry['restriction'], $entry['locationVisibility'], $entry['addr']);   // (the photo's address is replaced by itself too)
     return admin_record_hash($entry);
 }
 
@@ -8744,6 +8792,32 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'ok', 'private' => $private, 'unlisted' => $on, 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath),
                 'text' => $on ? 'Not listed: only you can open this folder. Visitors and people with the private-view password see nothing of it.'
                               : 'No longer not listed. The folder is still private, so people with the private-view password can open it.'];
+    }
+
+    // A Not listed folder's photo has an address (?photo=<path>&k=<code>) that opens that one photo for anyone who has it. This gives the
+    // owner the address, and with "fresh" a new one: the old stops working at once (a random string kept on the photo changes the code).
+    if ($action === 'photo_address') {
+        if ($adminFolderPath === null || !folder_is_unlisted($dir, $adminFolderPath)) return ['type' => 'error', 'text' => 'Only a photo in a Not listed folder has an address like this.'];
+        $name = basename((string) ($_POST['file'] ?? ''));
+        $rel = $adminFolderPath . '/' . $name;
+        if ($name === '' || !in_array($rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
+        if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo is marked private on its own, so it has no address. Make it public first (its lock).'];
+        if (install_secret(true) === '') return ['type' => 'error', 'text' => 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
+        $fid = folder_id_stamp($adminFolderReal);
+        if ($fid === '') return ['type' => 'error', 'text' => 'This folder is not writable, so it cannot be given the id its photos\' addresses need.'];
+        $fresh = !empty($_POST['fresh']);
+        if ($fresh) items_update($adminFolderReal, function (&$data) use ($name) { $data['items'][$name]['addr'] = bin2hex(random_bytes(6)); });
+        $code = photo_address_code($dir, $rel, items_get_all_for_files($dir, [$rel]), $fid);
+        if ($code === '') return ['type' => 'error', 'text' => 'Could not make the address.'];
+        return ['type' => 'ok', 'query' => '?photo=' . rawurlencode($rel) . '&k=' . $code, 'fresh' => $fresh,
+                'text' => $fresh ? 'New address copied. The old one no longer opens this photo.' : 'Address copied.'];
+    }
+
+    if ($action === 'toggle_folder_originals') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $on = !empty($_POST['originals']);
+        items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['allowOriginals'] = true; else unset($data['allowOriginals']); });
+        return ['type' => 'ok', 'text' => $on ? 'Someone opening a photo by its address can download the original.' : 'Photos opened by their address can\'t be downloaded.'];
     }
 
     if ($action === 'arrange_items') {
@@ -9345,6 +9419,9 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
       <div class="nojs-only"><button type="submit" class="<?= $private ? 'secondary' : 'danger' ?>"><?= $private ? 'Make this folder public again' : 'Make this entire folder private' ?></button></div>
     </form>
     <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_unlisted', 'unlisted', $private && !empty($itemsHere['unlisted']), 'Not listed', '', ' <small class="muted">only you can open it</small>', 'unlisted-form'); ?>
+    <div class="unlisted-sub"<?= $private && !empty($itemsHere['unlisted']) ? '' : ' hidden' ?>>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s address</small>', 'unlisted-form'); ?>
+    </div>
     <p class="hint unlisted-note">Only you see what is in this folder: visitors and people with the private-view password get nothing, and an "Everything" link leaves it out. Share it one photo at a time (each photo has its own address), or pick the folder in a link. Switching this on makes the folder private too.</p>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">
@@ -16657,7 +16734,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     // The Not listed switch below this one makes the folder private as well, and making the folder public ends it: keep the two in step.
     document.addEventListener('instant-saved', function (ev) {
       var d = ev.detail || {};
-      if (typeof d.private === 'boolean' && typeof d.unlisted === 'boolean') { box.checked = d.private; if (d.counts) counts = { stay: d.counts.stay, open: d.counts.open }; paint(); }
+      if (typeof d.private === 'boolean' && typeof d.unlisted === 'boolean') { box.checked = d.private; if (d.counts) counts = { stay: d.counts.stay, open: d.counts.open }; paint(); var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = !d.unlisted; }
     });
     box.addEventListener('change', function () {
       if (box.checked) { send(true, function (ok) { if (!ok) box.checked = false; }); return; }
@@ -16670,7 +16747,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       modal.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeModal(); } });
       document.getElementById('pm-ok').addEventListener('click', function () {
         modal.hidden = true;
-        send(false, function () { var u = document.querySelector('.unlisted-form input[type=checkbox][name=unlisted]'); if (u) u.checked = false; box.focus(); });
+        send(false, function () { var u = document.querySelector('.unlisted-form input[type=checkbox][name=unlisted]'); if (u) u.checked = false; var sub = document.querySelector('.unlisted-sub'); if (sub) sub.hidden = true; box.focus(); });
       });
     }
     paint();
@@ -17650,7 +17727,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         }
         if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch' && in_array($resultMessage['type'] ?? '', ['ok', 'error'], true)) {
             // A setting flipped in place by the page's script: answer in JSON, no page.
-            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1]));
+            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1, 'query' => 1, 'fresh' => 1]));
         }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);
@@ -18122,6 +18199,7 @@ $folderCrumbs = [];
 $folderPills = [];       // quick links to the folders beside this one: [href, label, is this one]
 $folderPillsAll = null;  // where "All" goes when only some of them are shown
 if (isset($_GET['folder'])) {
+    if ($photoPass !== null) { http_response_code(404); exit; }   // (a photo's own address is not a way into its folder)
     $requestedFolder = $_GET['folder'];
     // Valid only if the script's own (already hiding-filtered) file list
     // has something under it — a nested path like Europe/France/Paris
@@ -19251,7 +19329,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     $idAttr = $anchorId ? ' id="' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8') . '"' : '';
     $vt = video_tile_parts($file, $videoDuration);
     // For the signed-in owner: a lock on the tile showing whether it is private, and pressing it flips that.
-    $ownerLock = '';
+    $ownerLock = ''; $hasAddr = false;
     if (is_admin_browser()) {
         $ps = owner_privacy_state($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
         $isPriv = $ps['priv']; $isFolder = $ps['own'] === '' && $ps['inh'];
@@ -19267,10 +19345,17 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         // And a pencil in the other lower corner: opens the viewer with the editor for this photo's caption, link, place and switches.
         $ownerLock .= '<button type="button" class="edit-toggle" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8')
             . '" title="Edit caption, link and location" aria-label="Edit caption, link and location">' . ui_icon('edit') . '</button>';
+        // A photo in a Not listed folder has an address of its own (see photo_address_code): beside the pencil, a button that makes a new one
+        // (the old stops working) and one that copies the present one.
+        if (file_is_unlisted($GLOBALS['dir'], $file)) {
+            $hasAddr = true;
+            $ownerLock .= '<button type="button" class="addr-toggle addr-new" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="New address: the old one stops working" aria-label="New address: the old one stops working">' . ui_icon('linkoff') . '</button>'
+                . '<button type="button" class="addr-toggle addr-cur" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy this photo\'s address" aria-label="Copy this photo\'s address">' . ui_icon('link') . '</button>';
+        }
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
     if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
-    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
+    return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
          . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
@@ -19308,6 +19393,7 @@ function ui_icon_paths() {
         'caption' => '<path d="M20.5 15.5a2 2 0 0 1-2 2H9l-5 3.5V6.5a2 2 0 0 1 2-2h12.5a2 2 0 0 1 2 2z"/><path d="M8 9.5h8M8 13h5"/>',
         'globe'   => '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>',
         'link'    => '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+        'linkoff' => '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/><path d="M4 4 20 20"/>',
         'eye'     => '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
         'check'   => '<path d="M4.5 12.5 9.5 17.5 19.5 7"/>',
         'refresh' => '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
@@ -19956,7 +20042,7 @@ if ($currentFolderPath !== null) {
 }
 if ($requestedPhoto) {
     $ogImageUrl = $baseUrl . '/' . img_url($requestedPhoto, 'share');
-    $ogUrl = $baseUrl . '/?photo=' . rawurlencode($requestedPhoto);
+    $ogUrl = $baseUrl . '/?photo=' . rawurlencode($requestedPhoto) . ($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '');
     $photoGroupKey = group_key($requestedPhoto);
     if (isset($groups[$photoGroupKey])) {
         $ogTitle = $photoGroupKey . ' — ' . $pageTitle;
@@ -20682,7 +20768,16 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .edit-toggle.busy { opacity: 0.35; pointer-events: none; }
   @media (hover: hover) { .edit-toggle { opacity: 0; } .card:hover .edit-toggle, .edit-toggle:focus-visible { opacity: 0.9; } }
   .owner-card .video-duration { left: 38px; }
+  .owner-card.has-addr .video-duration { left: 106px; }   /* (a Not listed photo's two address buttons sit beside the pencil) */
+  /* A Not listed folder's photos: along the bottom edge, pencil, then "new address" (the link crossed out), then "copy address". */
+  .addr-toggle { position: absolute; bottom: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.75; }
+  .addr-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
+  .addr-new { left: 40px; } .addr-cur { left: 74px; }
+  .addr-toggle.busy { opacity: 0.35; pointer-events: none; }
+  @media (hover: hover) { .addr-toggle { opacity: 0; } .card:hover .addr-toggle, .addr-toggle:focus-visible { opacity: 0.9; } }
+  .selecting .card .addr-toggle { display: none; }
   .priv-toggle::after, .cover-toggle::after, .edit-toggle::after { content: ''; position: absolute; inset: -6px; }   /* a bigger target for a finger */
+  .addr-toggle::after { content: ''; position: absolute; inset: -3px; }   /* (smaller: three buttons stand close together) */
   /* Over one of these two, the button itself answers: full strength, a white ring, a little larger, and a colour of its own
      (the accent for a plain one, a lighter red or gold for one that is already lit); pressed, it sinks back. */
   .priv-toggle, .cover-toggle, .edit-toggle { transition: opacity .15s, background .15s, transform .12s, box-shadow .12s; }
@@ -21481,7 +21576,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   <?php // For the owner, on a private folder's own page: what making the folder public would do (the lock on each tile shows which is which). ?>
   <div class="folder-priv-banner" id="folder-priv-banner" role="button" tabindex="0" title="Make this folder public" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('lock') ?>
-    <div><strong>Private folder: visitors can't see it</strong>
+    <div><strong><?= folder_unlisted_cached($dir, $currentFolderPath) ? 'Not listed: only you can open this folder' : 'Private folder: visitors can\'t see it' ?></strong>
       <span class="fpb-counts" aria-live="polite"><?= count_noun($privCounts['stay']) ?> will stay private &middot; <?= count_noun($privCounts['open']) ?> <?= (int) $privCounts['open'] === 1 ? 'becomes' : 'become' ?> public when you open it</span>
       <em class="fpb-hint">Make it public&hellip;</em></div>
   </div>
@@ -21495,6 +21590,15 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       <div class="fp-row fp-open"><?= ui_icon('unlock') ?><span><strong id="fp-open">0 photos</strong> <span id="fp-open-v">become</span> public</span></div>
       <p class="fp-hint">Anyone with the link will see those. Not right? Cancel, mark more private first, then come back.</p>
       <div class="fp-btns"><button type="button" id="fp-cancel">Cancel</button><button type="button" class="primary" id="fp-ok">Make public</button></div>
+    </div>
+  </div>
+<?php endif; ?>
+<?php if (is_admin_browser()): ?>
+  <div class="fp-modal" id="addr-modal" role="dialog" aria-modal="true" aria-labelledby="addr-modal-title" hidden>
+    <div class="fp-modal-card">
+      <h3 id="addr-modal-title">Make a new address?</h3>
+      <p class="fp-hint" style="margin:0 0 8px">Anyone who has this photo's present address will no longer be able to open it. The new address is copied for you.</p>
+      <div class="fp-btns"><button type="button" id="addr-cancel">Cancel</button><button type="button" class="primary" id="addr-ok">New address</button></div>
     </div>
   </div>
 <?php endif; ?>
@@ -21567,8 +21671,11 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <button class="lightbox-copy owner-priv" id="lightbox-private" type="button" data-owner="private" title="Make this private" aria-label="Make this private"><?= ui_icon('unlock') ?></button>
 <?php endif; ?>
     <button class="lightbox-copy lightbox-zoom" id="lightbox-zoom" type="button" title="Fill the width of the screen" aria-label="Fill the width of the screen"><?= ui_icon('zoom-in') ?></button>
-<?php $linkViewer = link_viewer(); if (is_revealed() || ($linkViewer !== null ? ($linkViewer['downloads']['mode'] ?? 'off') !== 'off' : ENABLE_PUBLIC_DOWNLOAD)): ?>
+<?php $linkViewer = link_viewer(); if ($photoPass !== null ? viewer_may_download($dir, $photoPass, $itemsData) : (is_revealed() || ($linkViewer !== null ? ($linkViewer['downloads']['mode'] ?? 'off') !== 'off' : ENABLE_PUBLIC_DOWNLOAD))): ?>
     <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
+<?php endif; ?>
+<?php if (is_admin_browser()): ?>
+    <button class="lightbox-copy owner-newaddr" id="lightbox-newaddr" type="button" title="New address: the old one stops working" aria-label="New address: the old one stops working" hidden><?= ui_icon('linkoff') ?></button>
 <?php endif; ?>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link"><?= ui_icon('link') ?></button>
     <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
@@ -21649,16 +21756,16 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // viewer's two buttons are drawn from this, and kept in step when one is pressed).
   const ownerState = <?php
       if (is_admin_browser()) {
-          $ownerPriv = []; $ownerOwn = []; $ownerInh = [];
-          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; }
-          echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = [];
+          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = true; }
+          echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain
   // link to a private photo opens nothing for anyone without access, and a download is offered per what the person's link
   // allows. null means "all of them".
   const downloadOk = <?php
-      if (($linkViewer !== null || PUBLIC_DOWNLOAD_MODE === 'some') && !is_revealed()) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
+      if ($photoPass !== null || (($linkViewer !== null || PUBLIC_DOWNLOAD_MODE === 'some') && !is_revealed())) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
       else echo 'null';
   ?>;
   const copyLinkOk = <?php
@@ -21666,6 +21773,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       else echo 'null';
   ?>;
   const initialPhoto = <?= json_encode($requestedPhoto) ?>;
+  const galleryRootHref = <?= json_encode(gallery_root_href()) ?>;
+  const passQ = <?= json_encode($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '') ?>;   // (on a photo's own address, the viewer's own requests for it carry the code too)
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
   const showCountsPublicly = <?= view_counts_shown() ? 'true' : 'false' ?>;
   let current = 0;
@@ -22794,20 +22903,23 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       lightboxImg.style.display = 'none';
       lightboxImg.src = '';
       lightboxVideo.style.display = '';
-      lightboxVideo.poster = <?= video_pictures_expected() ? 'true' : 'false' ?> ? '?img=' + encodeURIComponent(file) + '&size=share' + (fileVersions[current] ? '&v=' + fileVersions[current] : '') : '';
-      lightboxVideo.src = '?video=' + encodeURIComponent(file) + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
+      lightboxVideo.poster = <?= video_pictures_expected() ? 'true' : 'false' ?> ? '?img=' + encodeURIComponent(file) + '&size=share' + (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ : '';
+      lightboxVideo.src = '?video=' + encodeURIComponent(file) + (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ;
       lightboxVideo.load();
     } else {
       lightboxVideo.pause();
       lightboxVideo.style.display = 'none';
       lightboxVideo.src = '';
       lightboxImg.style.display = '';
-      lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '');
+      lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ;
     }
     paintCaption();
-    if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file); downloadLink.classList.remove('ready'); downloadLink.hidden = !!(downloadOk && !downloadOk[current]); }
+    if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file) + passQ; downloadLink.classList.remove('ready'); downloadLink.hidden = !!(downloadOk && !downloadOk[current]); }
     const copyBtn = document.getElementById('lightbox-copy-btn');
     if (copyBtn) copyBtn.hidden = !!(copyLinkOk && !copyLinkOk[current]);
+    const newAddrBtn = document.getElementById('lightbox-newaddr');
+    if (newAddrBtn) newAddrBtn.hidden = !ownerIsUnlisted(file);   // (a Not listed photo has an address of its own, and the owner can replace it)
+    if (copyBtn) copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s address' : 'Copy link';
     applyZoom();
     updateLightboxExtras();
     toolsFade();
@@ -23327,10 +23439,51 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     copyToClipboard(url).then(() => flashCopied(lightboxCopyBtn));
   };
   lightboxCopyBtn.addEventListener('click', () => {
+    if (ownerIsUnlisted(files[current])) { ownerAddress(files[current], false, lightboxCopyBtn); return; }   // (a Not listed photo is opened by its own address, not a plain link)
     // A plain link to a private photo only opens for people who already have access, so the owner is asked what they mean.
     if (ownerState && ownerState.priv[files[current]] && window.GalleryShare) { openPrivateLinkPopup(); return; }
     copyPhotoLink();
   });
+  // Not listed folders (the owner only): a photo in one has an address of its own that opens that one photo for anyone who has it. These
+  // copy it, and make a new one (the old stops working). The server makes the address; this puts it on the clipboard.
+  function ownerIsUnlisted(file) { return !!(ownerState && ownerState.unl && ownerState.unl[file]); }
+  function ownerAddress(file, fresh, btn) {
+    const slash = file.lastIndexOf('/'), folder = file.slice(0, slash), name = file.slice(slash + 1);
+    const json = (r) => { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); };
+    const headers = { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' };
+    btn.classList.add('busy');
+    return fetch('?admin&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(json).then((j) => {
+      const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'photo_address'); body.set('file', name); if (fresh) body.set('fresh', '1');
+      return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers });
+    }).then(json).then((j) => {
+      if (!j.ok) throw new Error(j.text || 'No address');
+      const root = new URL(galleryRootHref, window.location.href); root.search = ''; root.hash = '';
+      return copyToClipboard(root.href + j.query).then(() => { btn.classList.remove('busy'); flashCopied(btn); });
+    }).catch((err) => {
+      btn.classList.remove('busy');
+      window.alert(err && err.message === 'signed out' ? 'Your admin session ended: sign in again.' : 'No address: ' + (err && err.message ? err.message : 'try again'));
+    });
+  }
+  (function () {
+    const modal = document.getElementById('addr-modal');
+    if (!modal) return;
+    let pending = null;
+    const close = () => { modal.hidden = true; pending = null; };
+    const ask = (file, btn) => { pending = { file, btn }; modal.hidden = false; document.getElementById('addr-cancel').focus(); };
+    document.getElementById('addr-cancel').addEventListener('click', close);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    modal.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+    document.getElementById('addr-ok').addEventListener('click', () => { const p = pending; close(); if (p) ownerAddress(p.file, true, p.btn); });
+    // The two buttons on a tile (the card itself opens the viewer, so they keep the press to themselves), and the viewer's.
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('.addr-toggle');
+      if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      if (b.classList.contains('addr-new')) ask(b.getAttribute('data-file'), b); else ownerAddress(b.getAttribute('data-file'), false, b);
+    }, true);
+    const viewerNew = document.getElementById('lightbox-newaddr');
+    if (viewerNew) viewerNew.addEventListener('click', () => ask(files[current], viewerNew));
+  })();
 <?php if (is_admin_browser() && ENABLE_SHARE_LINKS): ?>
   let linkPop = null;
   function closeLinkPopup() { if (linkPop) { linkPop.remove(); linkPop = null; document.removeEventListener('keydown', linkPopKey, true); document.removeEventListener('pointerdown', linkPopAway, true); } }

@@ -129,9 +129,41 @@ function link_item_is_picked_photo($l, $dir, $file, $itemsData = null) {
     return link_allows_item($l, $dir, $file, $itemsData);
 }
 
+/** The topmost Not listed folder $file sits in ('' when it is in none): the one whose own choices (downloads) cover everything beneath it. */
+function unlisted_root_path($dir, $file) {
+    $depth = unlisted_root_depth($dir, $file);
+    return $depth > 0 ? implode('/', array_slice(explode('/', dirname($file)), 0, $depth)) : '';
+}
+
+/** The code in a photo's address (?photo=<path>&k=<code>) when the photo is in a Not listed folder: worked out from the folder's hidden id,
+ *  the file name, a secret of this install and, once the owner has asked for a new address, a random string kept on the photo. Nothing
+ *  else is stored, so there is no list of codes; the folder can be renamed or moved and its photos keep their addresses, while renaming the
+ *  photo ends its address. '' when it can't be worked out (no secret yet, or the folder has no id): nothing then matches. */
+function photo_address_code($dir, $file, $itemsData = null, $folderId = null) {
+    $secret = install_secret();
+    $slash = strrpos((string) $file, '/');
+    if ($secret === '' || $slash === false) return '';
+    $fid = $folderId ?? folder_id_cached($dir, substr($file, 0, $slash));
+    if ($fid === '') return '';
+    $salt = is_array($itemsData) && is_string($itemsData[$file]['addr'] ?? null) ? $itemsData[$file]['addr'] : '';
+    $raw = hash_hmac('sha256', 'photo|' . $fid . '|' . basename($file) . '|' . $salt, $secret, true);
+    return substr(rtrim(strtr(base64_encode($raw), '+/', '-_'), '='), 0, 12);
+}
+
+/** Does this request carry the right code for this very photo, and is the photo one that has an address (in a Not listed folder, and not
+ *  marked private on its own)? The code is for that one photo: it opens nothing else. */
+function photo_pass_valid($dir, $file, $itemsData) {
+    $k = $_GET['k'] ?? null;
+    if (!is_string($k) || $k === '' || strlen($k) > 40 || !is_string($file) || !file_is_unlisted($dir, $file)) return false;
+    if (item_restriction(is_array($itemsData) ? ($itemsData[$file] ?? null) : null) === 'private') return false;
+    $want = photo_address_code($dir, $file, $itemsData);
+    return $want !== '' && hash_equals($want, $k);
+}
+
 /** May this visitor see the item (a public one, or a private one they were given)? */
 function viewer_may_see_item($dir, $file, $itemsData) {
     if (is_admin_browser()) return true;
+    if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return true;   // (a Not listed photo, by its own address)
     if (is_revealed()) return !file_is_unlisted($dir, $file);   // (what the private-view password opens is everything private except a Not listed folder, which is the owner's alone)
     $l = link_viewer();
     if ($l !== null && link_shows_only_its_own($l) && !link_allows_item($l, $dir, $file, $itemsData)) return false;   // a link that shows only its own things: not the public rest of the gallery either
@@ -158,6 +190,7 @@ function link_capability_allows($l, $cap, $dir, $file, $itemsData = null) {
  *  else: a public photo when the gallery lets visitors, a private one when their link says so. */
 function viewer_may_download($dir, $file, $itemsData) {
     if (is_admin_browser()) return true;
+    if (isset($_GET['k']) && photo_pass_valid($dir, $file, $itemsData)) return !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $file)))['allowOriginals']);   // (a photo opened by its address: its Not listed folder's own choice, not the gallery's)
     if (is_revealed()) return !file_is_unlisted($dir, $file);
     $l = link_viewer();
     // Someone using a share link: the link's own answer decides (the gallery-wide switch is for people who came in without one).
