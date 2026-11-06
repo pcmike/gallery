@@ -8217,6 +8217,241 @@ $lgCsv = $lgView('linkexport=ffffffffff&what=visitors'); $lgCsvE = $lgView('link
 check('[came in at] the public log\'s CSVs carry it (a came_in_at column; "arrived" lines), and an ordinary link\'s CSV keeps the columns it always had', str_contains($lgCsv, '"came_in_at"') && str_contains($lgCsv, 'Not listed photo secret1.jpg') && str_contains($lgCsvE, 'arrived') && !str_contains($lgView('linkexport=all&what=visitors'), 'came_in_at'));
 check('[came in at] a gallery that does not log its public address records nothing of this (no script, no entry)', (function () use ($baseNl) { return !str_contains(http_get("$baseNl/?folder=Open", ['Sec-Fetch-Site: none'], false)[1], 'galleryEntry'); })());
 
+
+/* --------------------------------------------------------------------- *
+ * Mapped folders: a place elsewhere on the server (EXTRA_FOLDERS) that ANOTHER gallery already uses, with that gallery's files in it.
+ * What this gallery must do with them: honour what is in them, hide what it is told to hide (Not listed, private), add nothing a visitor can
+ * see, never touch a photo, never delete or change the other gallery's own files (settings, links, secret, sign-ins, index.php), keep the
+ * other gallery's thumbnails, and keep working when the place cannot be written. A copy of release 2.6.2 is run on the same folder to see that
+ * the two live together.
+ * --------------------------------------------------------------------- */
+echo "== Mapped folders: a place another gallery also uses ==\n";
+$mpTreeSha = function (string $root, bool $skipCache = false): array {
+    $out = [];
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $f) {
+        if (!$f->isFile()) continue;
+        $rel = substr($f->getPathname(), strlen($root) + 1);
+        if ($skipCache && preg_match('~(^|/)\.gallery-(cache/|stats\.)~', $rel)) continue;
+        $out[$rel] = sha1_file($f->getPathname());
+    }
+    ksort($out);
+    return $out;
+};
+$mpMediaOnly = fn (array $t) => array_filter($t, fn ($k) => (bool) preg_match('~\.(jpe?g|png|gif|webp)$~i', $k) && !str_contains($k, '.gallery-cache/'), ARRAY_FILTER_USE_KEY);
+$mpGuard = fn (string $path, array $data) => file_put_contents($path, data_file_guard_line_for_tests() . json_encode($data));
+$mpBuild = function (string $src) use ($mpGuard) {
+    foreach (['Italy/Florence', 'France/Paris', 'MapDrawer/Deep'] as $d) mkdir("$src/$d", 0777, true);
+    foreach (['top.jpg' => 1, 'Italy/rome.jpg' => 2, 'Italy/Florence/MAPPED-PRIVATE.jpg' => 3, 'France/Paris/tower.jpg' => 4, 'France/nice-private.jpg' => 5, 'MapDrawer/MAPSENTINEL-ONE.jpg' => 6, 'MapDrawer/Deep/MAPSENTINEL-DEEP.jpg' => 7] as $f => $c) make_jpeg("$src/$f", 60, 60, $c * 30, 50, 90);
+    // what a gallery of release 2.6.2 left in these folders: titles, captions, a private folder, a private photo, a Not listed drawer
+    $mpGuard("$src/.gallery-items.php", ['displayName' => 'Old trip', 'description' => 'ROOT-DESC', 'items' => ['top.jpg' => ['caption' => 'Top caption']]]);
+    $mpGuard("$src/Italy/.gallery-items.php", ['displayName' => 'Bella Italia', 'cover' => 'rome.jpg', 'items' => ['rome.jpg' => ['caption' => 'Colosseum']]]);
+    $mpGuard("$src/Italy/Florence/.gallery-items.php", ['restriction' => 'private']);
+    $mpGuard("$src/France/.gallery-items.php", ['items' => ['nice-private.jpg' => ['restriction' => 'private']]]);
+    $mpGuard("$src/MapDrawer/.gallery-items.php", ['restriction' => 'private', 'unlisted' => true]);
+    // ...and beside index.php: its settings, links, secret, sign-ins, notes and the index.php itself
+    file_put_contents("$src/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mp-old-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'PRIVATE_VIEW_PASSWORD' => 'mp-old-view-1']));
+    $mpGuard("$src/.gallery-links.php", ['links' => ['abcdef0123' => ['id' => 'abcdef0123', 'label' => 'OLD-LINK', 'token' => 'oldtoken']]]);
+    $mpGuard("$src/.gallery-secret.php", ['secret' => bin2hex(random_bytes(16))]);
+    $mpGuard("$src/.gallery-login-attempts.php", []);
+    file_put_contents("$src/notes.md", "{gallery}\n# Old notes\nOLD-NOTES-LINE\n");
+    file_put_contents("$src/index.php", "<?php // the other gallery's own index.php\n");
+    mkdir("$src/Italy/.gallery-cache", 0777, true);
+    file_put_contents("$src/Italy/.gallery-cache/" . str_repeat('ab', 16) . '.jpg', 'a thumbnail the other gallery made');
+};
+$fxMpSite = new_fixture_dir('mapsite'); $fxMpSrc = new_fixture_dir('mapsrc');
+$mpBuild($fxMpSrc);
+$mpFresh = $mpTreeSha($fxMpSrc);
+file_put_contents("$fxMpSite/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mp-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'mp-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_FOLDERS' => ['Eurotrip' => $fxMpSrc],
+    'ENABLE_SHARE_LINKS' => true, 'LOG_PUBLIC_VISITS' => true, 'LOG_PUBLIC_DAYS' => 30, 'PUBLIC_DOWNLOAD_MODE' => 'all']));
+copy($indexSrc, "$fxMpSite/index.php");
+$portMp = find_free_port(); start_server($fxMpSite, $portMp); $baseMp = "http://127.0.0.1:$portMp";
+[, , $mpH1] = http_post("$baseMp/?admin", ['access_code' => 'mp-admin-pw-1'], [], false);
+$mpOwn = ['Cookie: ' . extract_cookie_header($mpH1)];
+[, , $mpH2] = http_post("$baseMp/?reveal", ['access_code' => 'mp-view-pw-1'], [], false);
+$mpView = ['Cookie: ' . extract_cookie_header($mpH2)];
+$mpCsrf = (string) extract_csrf_token(http_get("$baseMp/?admin", $mpOwn)[1]);
+$mpAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseMp/?admin$q", $f + ['csrf_token' => $mpCsrf], array_merge($mpOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$mpFolder = fn (string $p) => '&folder=' . rawurlencode($p);
+
+// 1. what the other gallery left is honoured
+$mpFront = http_get("$baseMp/")[1];
+$mpEuro = http_get("$baseMp/?folder=Eurotrip")[1];
+check('[mapped] the place shows as one folder under its name, with the title and notes the other gallery left in it', str_contains($mpFront, 'id="group-eurotrip"') && str_contains($mpFront, 'Old trip') && str_contains($mpEuro, 'OLD-NOTES-LINE') && str_contains($mpEuro, 'Bella Italia'));
+check('[mapped] its private folder and private photo stay hidden from a stranger (the folder is not found, the photo is not on its page or served), and open for the private-view password', http_get("$baseMp/?folder=Eurotrip%2FItaly%2FFlorence")[0] === 404 && http_get("$baseMp/?img=Eurotrip%2FItaly%2FFlorence%2FMAPPED-PRIVATE.jpg&size=thumb")[0] === 404 && !str_contains(http_get("$baseMp/?folder=Eurotrip%2FFrance")[1], 'nice-private') && str_contains(http_get("$baseMp/?folder=Eurotrip%2FItaly%2FFlorence", $mpView)[1], 'MAPPED-PRIVATE'));
+check('[mapped] the other gallery\'s caption shows (the Colosseum), and its Not listed drawer is not found by a stranger or the private-view password', str_contains(http_get("$baseMp/?folder=Eurotrip%2FItaly")[1], 'Colosseum') && http_get("$baseMp/?folder=Eurotrip%2FMapDrawer")[0] === 404 && http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpView)[0] === 404 && str_contains(http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpOwn)[1], 'MAPSENTINEL-ONE'));
+
+// 3. visitors, and the owner browsing, change nothing in the mapped place (but thumbnails and view counts)
+foreach (['/', '/?folder=Eurotrip', '/?folder=Eurotrip%2FItaly', '/?folder=Eurotrip%2FFrance%2FParis', '/?img=Eurotrip%2FItaly%2Frome.jpg&size=thumb'] as $mpQ) { http_get("$baseMp$mpQ"); http_get("$baseMp$mpQ", $mpView); http_get("$baseMp$mpQ", $mpOwn); }
+$mpNow = $mpTreeSha($fxMpSrc, true); $mpWas = $mpTreeSha($fxMpSrc, true);
+$mpWasFresh = array_filter($mpFresh, fn ($k) => !preg_match('~(^|/)\.gallery-(cache/|stats\.)~', $k), ARRAY_FILTER_USE_KEY);
+check('[mapped] stranger, private-view and owner browsing changed none of the other gallery\'s files or photos (only thumbnails and view counts may appear)', $mpNow === $mpWasFresh);
+check('[mapped] the other gallery\'s thumbnail is still there after this gallery showed the folder (a place that is not this gallery\'s own is never swept)', is_file("$fxMpSrc/Italy/.gallery-cache/" . str_repeat('ab', 16) . '.jpg'));
+
+// 2. the sentinel crawl, as in the Not listed block, through the mapped name (and the same name in other letters)
+$mpLink = function (string $label, array $f) use ($mpAdmin, $baseMp, $fxMpSite) {
+    $made = $mpAdmin($f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+    if (!($made['ok'] ?? false)) return null;
+    $token = read_data_file("$fxMpSite/.gallery-links.php")['links'][$made['id']]['token'];
+    @unlink("$fxMpSite/.gallery-login-attempts.php");
+    [, , $h] = http_post("$baseMp/?link=$token", ['go' => '1'], [], false);
+    $ck = extract_cookie_header($h);
+    return $ck ? ['Cookie: ' . $ck] : null;
+};
+$mpLinkAll = $mpLink('Everything', ['scope_type' => 'all']);
+$mpLinkItaly = $mpLink('Italy', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Eurotrip/Italy'])]);
+$mpLinkEuro = $mpLink('Eurotrip', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Eurotrip'])]);
+$mpLinkMapDrawer = $mpLink('The drawer', ['scope_type' => 'folders', 'scope_folders' => json_encode(['Eurotrip/MapDrawer'])]);
+check('[mapped] share links over the mapped place open (Everything, one folder, the whole place, and one that names the drawer)', $mpLinkAll !== null && $mpLinkItaly !== null && $mpLinkEuro !== null && $mpLinkMapDrawer !== null);
+$mpPaths = ['/', '/?folder=Eurotrip', '/?folder=Eurotrip%2FMapDrawer', '/?folder=Eurotrip%2FMapDrawer%2FDeep', '/?folder=eurotrip%2Fmapdrawer', '/?folder=EUROTRIP%2FMAPDRAWER%2FDEEP', '/?link=Eurotrip%2FMapDrawer', '/?link=eurotrip%2Fmapdrawer',
+    '/?photo=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg', '/?photo=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=AAAAAAAAAAAA', '/?photo=Eurotrip%2FMapDrawer%2FDeep%2FMAPSENTINEL-DEEP.jpg&k=AAAAAAAAAAAA', '/?archive&folder=Eurotrip%2FMapDrawer', '/?archive&folder=Eurotrip', '/?archive', '/?map', '/?folder=Eurotrip%2FItaly', '/?folder=Eurotrip%2FFrance'];
+$mpMedia = ['/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg', '/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=thumb', '/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=full', '/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share',
+    '/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg', '/?img=Eurotrip%2FMapDrawer%2FDeep%2FMAPSENTINEL-DEEP.jpg&size=thumb', '/?original=Eurotrip%2FMapDrawer%2FDeep%2FMAPSENTINEL-DEEP.jpg', '/?strip=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg',
+    '/?preview=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg', '/?video=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg'];
+$mpCrawl = function (array $hdr) use ($baseMp, $mpPaths, $mpMedia) {
+    $leaks = [];
+    foreach ($mpPaths as $q) {
+        [$st, $body] = http_get("$baseMp$q", $hdr, true);
+        if (preg_match('~(?:photo|folder|link)=([^&]*)~', $q, $m)) { $v = rawurldecode($m[1]); $body = str_replace([$v, rawurlencode($v), htmlspecialchars($v), htmlspecialchars(rawurlencode($v))], '', $body); }
+        if (str_contains($body, 'MAPSENTINEL') || stripos($body, 'MapDrawer') !== false) $leaks[] = "page $q ($st)";
+    }
+    foreach ($mpMedia as $q) { [$st, $body, $hd] = http_get("$baseMp$q", $hdr, true); if ($st === 200 && (str_starts_with($body, "\xFF\xD8") || preg_grep('~^Content-Type: *image~i', $hd))) $leaks[] = "media $q"; if (str_contains($body, 'MAPSENTINEL')) $leaks[] = "media-text $q"; }
+    return $leaks;
+};
+foreach (['a stranger' => [], 'someone with the private-view password' => $mpView, 'a link to Everything' => $mpLinkAll ?? [], 'a link to one folder (Italy)' => $mpLinkItaly ?? [], 'a link to the whole mapped place' => $mpLinkEuro ?? []] as $mpName => $mpHdr) {
+    $mpLeaks = $mpCrawl($mpHdr);
+    check("[mapped] $mpName never meets the Not listed drawer inside the mapped place, on any page or media address (" . (count($mpPaths) + count($mpMedia)) . " addresses, the name also in other letters)", $mpLeaks === []);
+    if ($mpLeaks) echo "    leaks: " . implode('; ', $mpLeaks) . "\n";
+}
+check('[mapped] a link that names the drawer opens it, and the owner sees it with its pill', str_contains(http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpLinkMapDrawer ?? [])[1], 'MAPSENTINEL-ONE') && str_contains(http_get("$baseMp/?folder=Eurotrip", $mpOwn)[1], 'Not listed'));
+[$mpS1, $mpB1] = http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", [], false); [$mpS2, $mpB2] = http_get("$baseMp/?folder=Eurotrip%2FNoSuch", [], false);
+check('[mapped] the drawer inside the mapped place answers a stranger exactly as a folder that is not there does', $mpS1 === $mpS2 && $mpB1 === $mpB2 && $mpS1 === 404);
+
+// 4. the owner's switches on a mapped folder: stored in the folder, with the gallery's own note of it beside index.php
+$mpOn = $mpAdmin(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], $mpFolder('Eurotrip/France/Paris'));
+$mpParis = read_data_file("$fxMpSrc/France/Paris/.gallery-items.php");
+check('[mapped] Not listed on a folder in the mapped place is saved in that folder (private plus the mark), and a stranger then meets nothing of it', ($mpOn['ok'] ?? null) === true && ($mpParis['restriction'] ?? null) === 'private' && ($mpParis['unlisted'] ?? null) === true && http_get("$baseMp/?folder=Eurotrip%2FFrance%2FParis")[0] === 404 && http_get("$baseMp/?img=Eurotrip%2FFrance%2FParis%2Ftower.jpg&size=thumb")[0] === 404);
+$mpGo = $mpAdmin(['action' => 'toggle_folder_own_gallery', 'owngallery' => '1'], $mpFolder('Eurotrip/Italy'));
+check('[mapped] Gallery of its own on a mapped folder is saved in the folder, and the gallery notes beside its own index.php (not in the mapped place) that one is marked', ($mpGo['ok'] ?? null) === true && (read_data_file("$fxMpSrc/Italy/.gallery-items.php")['ownGallery'] ?? null) === true && (read_data_file("$fxMpSite/.gallery-items.php")['ownGalleries'] ?? null) === true && !isset(read_data_file("$fxMpSrc/.gallery-items.php")['ownGalleries']));
+$mpUA = 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+$mpTyped = http_get("$baseMp/?folder=Eurotrip%2FItaly", [$mpUA, 'Sec-Fetch-Site: none'])[1];
+$mpClick = http_get("$baseMp/?folder=Eurotrip%2FItaly", [$mpUA, 'Sec-Fetch-Site: same-origin'])[1];
+check('[mapped] arriving by a typed address inside a mapped folder that is its own gallery offers no way up (no link to the folder above, none to a folder beside it); a visitor who came in at the top of the gallery and clicked in keeps the way up', !str_contains($mpTyped, 'href="?folder=Eurotrip"') && stripos($mpTyped, 'France') === false
+    && str_contains(http_get("$baseMp/?folder=Eurotrip%2FItaly", [$mpUA, 'Sec-Fetch-Site: same-origin', 'Cookie: gallery_top=/'])[1], 'href="?folder=Eurotrip"'));
+
+// 5. a photo's own address, inside the mapped place
+$mpAddr = $mpAdmin(['action' => 'photo_address', 'file' => 'MAPSENTINEL-ONE.jpg'], $mpFolder('Eurotrip/MapDrawer'));
+$mpQ1 = (string) ($mpAddr['query'] ?? '?'); $mpK1 = substr($mpQ1, -12);
+$mpPage = http_get("$baseMp/$mpQ1", [$mpUA, 'Sec-Fetch-Site: none']);
+check('[mapped] a photo in a Not listed folder of the mapped place opens alone by its address (no neighbours, no folder, no way in), with its picture', ($mpAddr['ok'] ?? null) === true && $mpPage[0] === 200 && str_contains($mpPage[1], 'MAPSENTINEL-ONE') && !str_contains($mpPage[1], 'MAPSENTINEL-DEEP') && !preg_match('~href="\?folder=~', $mpPage[1]) && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=$mpK1")[0] === 200 && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=AAAAAAAAAAAA")[0] === 404);
+check('[mapped] ...its original needs the folder\'s own downloads switch (off to start with), and follows it', http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=$mpK1")[0] !== 200
+    && (($mpAdmin(['action' => 'toggle_folder_originals', 'originals' => '1'], $mpFolder('Eurotrip/MapDrawer'))['ok'] ?? null) === true) && http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=$mpK1")[0] === 200 && http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg")[0] !== 200);
+$mpFresh2 = $mpAdmin(['action' => 'photo_address', 'file' => 'MAPSENTINEL-ONE.jpg', 'fresh' => '1'], $mpFolder('Eurotrip/MapDrawer'));
+check('[mapped] New address on a photo in the mapped place stops the old address at once and the new one opens it', ($mpFresh2['query'] ?? '') !== $mpQ1 && !str_contains(http_get("$baseMp/$mpQ1")[1], 'MAPSENTINEL-ONE') && str_contains(http_get("$baseMp/" . ($mpFresh2['query'] ?? '?'))[1], 'MAPSENTINEL-ONE')
+    && (read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php")['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') !== '');
+
+// 6. the public log: where a visitor came in, with a Not listed photo of the mapped place
+$mpLogFile = "$fxMpSite/.gallery-linklog-ffffffffff.php";
+$mpK2 = substr((string) ($mpFresh2['query'] ?? ''), -12);
+$mpBeacon = function (array $payload, string $query = '') use ($baseMp, $mpUA) {
+    @file_get_contents("$baseMp/?linklog$query", false, stream_context_create(['http' => ['method' => 'POST', 'header' => implode("\r\n", ['Content-Type: application/json', $mpUA]), 'content' => json_encode($payload), 'ignore_errors' => true, 'timeout' => 5]]));
+};
+$mpBeacon(['e' => [['o', 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg']], 'a' => ['f' => 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg', 'h' => 'typed', 'u' => 1]], "&photo=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=$mpK2");
+$mpEv = read_data_file($mpLogFile)['events'] ?? [];
+check('[mapped] the public log keeps where a visitor came in at a Not listed photo of the mapped place (with its code), and not without the code', count(array_filter($mpEv, fn ($e) => ($e['k'] ?? '') === 'arrive' && str_contains((string) ($e['f'] ?? ''), 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg'))) === 1);
+$mpBeacon(['e' => [['o', 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg']], 'a' => ['f' => 'Eurotrip/MapDrawer/MAPSENTINEL-ONE.jpg', 'h' => 'typed', 'u' => 1]]);
+check('[mapped] ...a second arrival with no code at all is ignored', count(array_filter(read_data_file($mpLogFile)['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'arrive' && str_contains((string) ($e['f'] ?? ''), 'MAPSENTINEL'))) === 1);
+
+// 7. the other gallery (release 2.6.2) runs on the same folder: it keeps working, and it keeps what this gallery wrote
+$mpOldIndex = (string) shell_exec('git -C ' . escapeshellarg(dirname(__DIR__)) . ' show v2.6.2:index.php 2>/dev/null');
+check('[mapped] release 2.6.2 is available from the repository\'s tags, to run beside this gallery', str_starts_with($mpOldIndex, '<?php') && str_contains($mpOldIndex, "'2.6.2'"));
+if (str_starts_with($mpOldIndex, '<?php')) {
+    file_put_contents("$fxMpSrc/index.php", $mpOldIndex);
+    $portMo = find_free_port(); $mpProcOld = start_server($fxMpSrc, $portMo); $baseMo = "http://127.0.0.1:$portMo";
+    $mpOldFiles = fn () => array_intersect_key($mpTreeSha($fxMpSrc, true), array_flip(['index.php', '.gallery-links.php', '.gallery-secret.php', 'notes.md']));
+    $mpOldBefore = $mpOldFiles();
+    check('[mapped] the other gallery still shows the folders (the public ones), as before', http_get("$baseMo/")[0] === 200 && str_contains(http_get("$baseMo/?folder=Italy")[1], 'Colosseum') && http_get("$baseMo/?folder=MapDrawer")[0] === 404 && http_get("$baseMo/?folder=France%2FParis")[0] === 404);
+    [, , $mpHo] = http_post("$baseMo/?admin", ['access_code' => 'mp-old-pw-1'], [], false);
+    $mpOldOwn = ['Cookie: ' . extract_cookie_header($mpHo)];
+    $mpOldCsrf = (string) extract_csrf_token(http_get("$baseMo/?admin", $mpOldOwn)[1]);
+    $mpOldAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseMo/?admin$q", $f + ['csrf_token' => $mpOldCsrf], array_merge($mpOldOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $mpAddrBefore = (string) (read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php")['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '');
+    $mpOldAdmin(['action' => 'save_item', 'file' => 'MAPSENTINEL-ONE.jpg', 'caption' => 'a caption typed in the other gallery'], '&folder=MapDrawer');
+    $mpMapDrawer = read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php");
+    check('[mapped] a caption saved in the other gallery keeps this gallery\'s Not listed mark, the photo\'s own address and the downloads switch (they are not dropped)', ($mpMapDrawer['unlisted'] ?? null) === true && ($mpMapDrawer['restriction'] ?? null) === 'private' && ($mpMapDrawer['allowOriginals'] ?? null) === true && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') === ($mpFresh2['query'] ?? false ? read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php")['items']['MAPSENTINEL-ONE.jpg']['addr'] : '') && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') !== '' && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['caption'] ?? '') === 'a caption typed in the other gallery');
+    check('[mapped] ...and the photo\'s address still opens it here after that save', str_contains(http_get("$baseMp/" . ($mpFresh2['query'] ?? '?'))[1], 'MAPSENTINEL-ONE'));
+    $mpOldAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '0'], '&folder=MapDrawer');
+    $mpSeen = http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpView)[0];
+    check('[mapped] if the other gallery makes the drawer public, this gallery shows it as public (what it says is followed)', $mpSeen === 200);
+    $mpOldAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '1'], '&folder=MapDrawer');
+    check('[mapped] ...and when the other gallery makes it private again the old Not listed mark is still in the file, so here it is Not listed again (documented)', http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpView)[0] === 404);
+    check('[mapped] the other gallery\'s own pages and admin still work after all this', http_get("$baseMo/")[0] === 200 && http_get("$baseMo/?admin&folder=Italy", $mpOldOwn)[0] === 200 && http_get("$baseMo/?folder=Italy")[0] === 200);
+    check('[mapped] neither gallery changed the other gallery\'s index.php, links file, secret or notes (the other gallery rewrites its own settings file when its owner signs in, so that is not compared)', $mpOldBefore === $mpOldFiles() && count($mpOldBefore) === 4);
+    proc_terminate($mpProcOld);
+    file_put_contents("$fxMpSrc/index.php", "<?php // the other gallery's own index.php\n");
+}
+
+// 8. what "Delete the files this gallery made" would take from the mapped place, on a copy: the shared data files, never the other gallery's own
+$fxMpSrc2 = new_fixture_dir('mapsrc2'); $fxMpSite2 = new_fixture_dir('mapsite2');
+shell_exec('cp -a ' . escapeshellarg("$fxMpSrc/.") . ' ' . escapeshellarg($fxMpSrc2));
+file_put_contents("$fxMpSite2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mp-admin-pw-2', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_FOLDERS' => ['Eurotrip' => $fxMpSrc2]]));
+copy($indexSrc, "$fxMpSite2/index.php");
+$portMp2 = find_free_port(); $mpProc2 = start_server($fxMpSite2, $portMp2); $baseMp2 = "http://127.0.0.1:$portMp2";
+[, , $mpH3] = http_post("$baseMp2/?admin", ['access_code' => 'mp-admin-pw-2'], [], false);
+$mpOwn2 = ['Cookie: ' . extract_cookie_header($mpH3)];
+$mpCsrf2 = (string) extract_csrf_token(http_get("$baseMp2/?admin", $mpOwn2)[1]);
+$mpAdmin2 = fn (array $f) => json_decode(http_post("$baseMp2/?admin", $f + ['csrf_token' => $mpCsrf2], array_merge($mpOwn2, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$mpList = $mpAdmin2(['action' => 'files_list']);
+$mpPaths2 = (array) ($mpList['paths'] ?? []);
+check('[mapped] the list of what this gallery made includes the mapped place\'s data files (captions and marks, view counts), under its name in the gallery', in_array('Eurotrip/.gallery-items.php', $mpPaths2, true) && in_array('Eurotrip/Italy/.gallery-items.php', $mpPaths2, true) && ($mpList['mapped'] ?? 0) > 0);
+check('[mapped] ...and the other gallery\'s own files there (settings, links, secret, sign-ins, index.php, notes) are not on it: they are named as "other files" and never touched', !preg_grep('~^Eurotrip/\.gallery-(config|links|secret|login-attempts)\.php$~', $mpPaths2) && !in_array('Eurotrip/index.php', $mpPaths2, true) && in_array('Eurotrip/.gallery-config.php', (array) ($mpList['unknown'] ?? []), true));
+check('[mapped] the list and the delete\'s last step say that files in a mapped place may be in use by another gallery too (the page carries the words, the list carries the count)', str_contains(file_get_contents($indexSrc), 'in places added from elsewhere on the server') && str_contains(file_get_contents($indexSrc), '\'mapped\' => $plan[\'mapped\']'));
+$mpMediaBefore = $mpMediaOnly($mpTreeSha($fxMpSrc2)); $mpOtherBefore = array_filter($mpTreeSha($fxMpSrc2), fn ($k) => preg_match('~^(index\.php|notes\.md|\.gallery-(config|links|secret|login-attempts)\.php)$~', $k), ARRAY_FILTER_USE_KEY);
+$mpDel = $mpAdmin2(['action' => 'files_delete', 'password' => 'mp-admin-pw-2', 'typed' => 'DELETE', 'fingerprint' => (string) ($mpList['fingerprint'] ?? ''), 'nocopy' => '1']);
+$mpAfter2 = $mpTreeSha($fxMpSrc2);
+check('[mapped] deleting what this gallery made, on a copy: the mapped place\'s data files go, and every photo, the notes, the other gallery\'s index.php, settings, links, secret and sign-ins are byte for byte as they were', ($mpDel['ok'] ?? null) === true && !preg_grep('~\.gallery-items\.php$~', array_keys($mpAfter2)) && $mpMediaOnly($mpAfter2) === $mpMediaBefore && array_filter($mpAfter2, fn ($k) => preg_match('~^(index\.php|notes\.md|\.gallery-(config|links|secret|login-attempts)\.php)$~', $k), ARRAY_FILTER_USE_KEY) === $mpOtherBefore);
+proc_terminate($mpProc2);
+
+// 9. a place the web server can read but not write
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    $fxMpSrc3 = new_fixture_dir('mapsrc3'); $fxMpSite3 = new_fixture_dir('mapsite3');
+    shell_exec('cp -a ' . escapeshellarg("$fxMpSrc/.") . ' ' . escapeshellarg($fxMpSrc3));
+    file_put_contents("$fxMpSite3/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mp-admin-pw-3', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_FOLDERS' => ['Eurotrip' => $fxMpSrc3]]));
+    copy($indexSrc, "$fxMpSite3/index.php");
+    $portMp3 = find_free_port(); $mpProc3 = start_server($fxMpSite3, $portMp3); $baseMp3 = "http://127.0.0.1:$portMp3";
+    [, , $mpH4] = http_post("$baseMp3/?admin", ['access_code' => 'mp-admin-pw-3'], [], false);
+    $mpOwn3 = ['Cookie: ' . extract_cookie_header($mpH4)];
+    $mpCsrf3 = (string) extract_csrf_token(http_get("$baseMp3/?admin", $mpOwn3)[1]);
+    $mpAdmin3 = fn (array $f, string $q = '') => json_decode(http_post("$baseMp3/?admin$q", $f + ['csrf_token' => $mpCsrf3], array_merge($mpOwn3, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    shell_exec('chmod -R a-w ' . escapeshellarg($fxMpSrc3));
+    check('[mapped read-only] a place that cannot be written is still shown, with its thumbnails and photos served', http_get("$baseMp3/?folder=Eurotrip%2FItaly")[0] === 200 && http_get("$baseMp3/?img=Eurotrip%2FItaly%2Frome.jpg&size=thumb")[0] === 200 && http_get("$baseMp3/?img=Eurotrip%2FItaly%2Frome.jpg&size=full")[0] === 200);
+    $mpRo1 = $mpAdmin3(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=' . rawurlencode('Eurotrip/France'));
+    $mpRo2 = $mpAdmin3(['action' => 'toggle_folder_own_gallery', 'owngallery' => '1'], '&folder=' . rawurlencode('Eurotrip/France'));
+    $mpRo3 = $mpAdmin3(['action' => 'toggle_folder_originals', 'originals' => '1'], '&folder=' . rawurlencode('Eurotrip/MapDrawer'));
+    check('[mapped read-only] Not listed, Gallery of its own and the downloads switch say they could not be saved (nothing is claimed), and nothing in the place changed', ($mpRo1['ok'] ?? null) === false && str_contains((string) ($mpRo1['text'] ?? ''), 'writable') && ($mpRo2['ok'] ?? null) === false && ($mpRo3['ok'] ?? null) === false
+        && (read_data_file("$fxMpSrc3/France/.gallery-items.php")['unlisted'] ?? null) === null && (read_data_file("$fxMpSrc3/France/.gallery-items.php")['ownGallery'] ?? null) === null);
+    check('[mapped read-only] the drawer that was already Not listed in the place is still Not listed (a stranger and the private-view password still meet nothing)', http_get("$baseMp3/?folder=Eurotrip%2FMapDrawer")[0] === 404 && http_get("$baseMp3/?folder=Eurotrip%2FMapDrawer", [])[0] === 404);
+    shell_exec('chmod -R u+w ' . escapeshellarg($fxMpSrc3));
+    proc_terminate($mpProc3);
+} else {
+    echo "  (skipped: the read-only checks need a user who is not root)\n";
+}
+
+// 10. a place added without a name (EXTRA_ROOTS): its folders sit at the top of the gallery
+$fxMpSrc4 = new_fixture_dir('mapsrc4'); $fxMpSite4 = new_fixture_dir('mapsite4');
+shell_exec('cp -a ' . escapeshellarg("$fxMpSrc/.") . ' ' . escapeshellarg($fxMpSrc4));
+file_put_contents("$fxMpSite4/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mp-admin-pw-4', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_ROOTS' => [$fxMpSrc4], 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxMpSite4/index.php");
+$portMp4 = find_free_port(); $mpProc4 = start_server($fxMpSite4, $portMp4); $baseMp4 = "http://127.0.0.1:$portMp4";
+$mpTop = http_get("$baseMp4/")[1];
+check('[mapped, no name] the place\'s folders appear at the top (Italy; France has nothing a stranger may see), and its Not listed drawer does not, for a stranger', str_contains($mpTop, 'id="group-italy"') && !str_contains($mpTop, 'MAPSENTINEL') && stripos($mpTop, 'drawer') === false);
+check('[mapped, no name] the drawer at the top is not found by a stranger, its photos are not served, and its name typed as an address goes nowhere', http_get("$baseMp4/?folder=MapDrawer")[0] === 404 && http_get("$baseMp4/?img=MapDrawer%2FMAPSENTINEL-ONE.jpg&size=thumb")[0] === 404 && http_get("$baseMp4/?original=MapDrawer%2FMAPSENTINEL-ONE.jpg")[0] !== 200
+    && http_get("$baseMp4/?link=MapDrawer", [], false)[0] === http_get("$baseMp4/?link=NoSuchFolder", [], false)[0] && http_get("$baseMp4/?folder=mapdrawer")[0] === 404);
+proc_terminate($mpProc4);
+
+// 11. through all of it, no photo anywhere in the mapped place was changed
+check('[mapped] no photo in the mapped place was changed by anything above (every photo is byte for byte as it was made)', $mpMediaOnly($mpTreeSha($fxMpSrc)) === $mpMediaOnly($mpFresh));
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";

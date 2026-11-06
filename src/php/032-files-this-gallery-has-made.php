@@ -111,7 +111,9 @@ function owned_plan($dir, $files) {
     $lines = [];
     foreach ($entries as $e) $lines[] = $e['kind'] . '|' . $e['rel'] . '|' . $e['size'];
     foreach ($caches as $c) $lines[] = 'cache|' . $c['rel'];
-    return ['entries' => $entries, 'caches' => $caches, 'unknown' => $unknown, 'folders' => count($folders), 'fingerprint' => hash('sha256', implode("\n", $lines))];
+    $mapped = 0;   // (how many of these files lie in a place from elsewhere on the server: another gallery may use them too)
+    foreach ($entries as $e) if (strpos($e['path'], $dir . '/') !== 0) $mapped++;
+    return ['entries' => $entries, 'caches' => $caches, 'unknown' => $unknown, 'folders' => count($folders), 'mapped' => $mapped, 'fingerprint' => hash('sha256', implode("\n", $lines))];
 }
 
 /** The list for the page: per kind, how many files, how many bytes. */
@@ -123,7 +125,7 @@ function owned_summary($plan) {
     $files = 0; $bytes = 0; $thumbs = $rows['thumbs']['files'];
     foreach ($rows as $k => $r) { if ($k !== 'thumbs') $files += $r['files']; $bytes += $r['bytes']; }
     return ['rows' => array_values(array_filter($rows, function ($r) { return $r['files'] > 0; })), 'files' => $files, 'thumbs' => $thumbs, 'bytes' => $bytes, 'thumbBytes' => $rows['thumbs']['bytes'],
-            'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'fingerprint' => $plan['fingerprint'],
+            'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'fingerprint' => $plan['fingerprint'],
             'paths' => array_slice(array_column($plan['entries'], 'rel'), 0, 300), 'pathsMore' => max(0, count($plan['entries']) - 300)];
 }
 

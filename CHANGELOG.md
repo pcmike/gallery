@@ -10,8 +10,13 @@ All notable changes to this project are documented here. Versions correspond to 
 - **Gallery of its own** (Navigation, in a folder's settings). Someone who arrives inside it, by a typed or pasted address or a link, is offered no way up past it and no folders beside it; the page is built without them. Someone who comes in through the gallery above keeps their way back (a short cookie, set only when a folder is marked, and the browser's own word for a click against a typed address). Nothing changes while no folder is marked.
 - **The public address's log says where each visit came in.** A **Came in at** column, an "Arrived at" line in the timeline and a `came_in_at` column in the CSV, for arrivals (a typed or pasted address, a bookmark, a link from another site), and Not listed photos opened by their address are logged and tagged.
 
+### Fixed
+- **A Not listed folder in a place added from elsewhere on the server (with no name) could be found by typing its name as `?link=Name`**: a stranger was sent on to it, which told them it exists (the folder itself stayed closed). It now answers as for a name that is not there.
+- **The thumbnail clean-up no longer deletes in a place from elsewhere on the server.** Another gallery that shows the same folder keeps its thumbnails there (an older copy does clear this gallery's; see the guide).
+
 ### Changed
 - **An "Everything" share link leaves out a Not listed folder.** To share one, pick it by name under *Only some folders*.
+- **Files this gallery has made** says how many of the files are in places from elsewhere on the server, in the list and before the delete, because another gallery that shows those folders uses them too.
 
 ## [2.6.3] - 2026-11-06
 

@@ -6520,7 +6520,7 @@ function run_link_route($dir) {
         if (ENABLE_SHARE_LINKS && link_token_format_ok($token)) { $all = links_read(); $isLink = link_find_by_token($all, $token) !== null || link_find_by_alias($all, $token) !== null; }
         if (!$isLink && in_array(strtolower($token), ['admin', 'reveal'], true) && !is_dir($dir . '/' . $token)) sign_in_redirect();
         $mayLook = !gallery_is_closed() || is_revealed() || is_admin_browser() || link_viewer() !== null;   // (a closed gallery doesn't tell a stranger which folders exist)
-        if ($mayLook && !is_admin_browser() && is_dir($dir . '/' . $token) && folder_is_unlisted($dir, $token)) $mayLook = false;   // (nor does it say a Not listed folder is there: it answers as for a name that isn't)
+        if ($mayLook && !is_admin_browser() && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token])) && folder_is_unlisted($dir, $token)) $mayLook = false;   // (nor does it say a Not listed folder is there: it answers as for a name that isn't)
         if (!$isLink && $mayLook && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]))) {
             header('Cache-Control: no-store');
             header('Location: ' . gallery_root_href() . rawurlencode($token) . '/', true, 302);
@@ -10819,7 +10819,9 @@ function owned_plan($dir, $files) {
     $lines = [];
     foreach ($entries as $e) $lines[] = $e['kind'] . '|' . $e['rel'] . '|' . $e['size'];
     foreach ($caches as $c) $lines[] = 'cache|' . $c['rel'];
-    return ['entries' => $entries, 'caches' => $caches, 'unknown' => $unknown, 'folders' => count($folders), 'fingerprint' => hash('sha256', implode("\n", $lines))];
+    $mapped = 0;   // (how many of these files lie in a place from elsewhere on the server: another gallery may use them too)
+    foreach ($entries as $e) if (strpos($e['path'], $dir . '/') !== 0) $mapped++;
+    return ['entries' => $entries, 'caches' => $caches, 'unknown' => $unknown, 'folders' => count($folders), 'mapped' => $mapped, 'fingerprint' => hash('sha256', implode("\n", $lines))];
 }
 
 /** The list for the page: per kind, how many files, how many bytes. */
@@ -10831,7 +10833,7 @@ function owned_summary($plan) {
     $files = 0; $bytes = 0; $thumbs = $rows['thumbs']['files'];
     foreach ($rows as $k => $r) { if ($k !== 'thumbs') $files += $r['files']; $bytes += $r['bytes']; }
     return ['rows' => array_values(array_filter($rows, function ($r) { return $r['files'] > 0; })), 'files' => $files, 'thumbs' => $thumbs, 'bytes' => $bytes, 'thumbBytes' => $rows['thumbs']['bytes'],
-            'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'fingerprint' => $plan['fingerprint'],
+            'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'fingerprint' => $plan['fingerprint'],
             'paths' => array_slice(array_column($plan['entries'], 'rel'), 0, 300), 'pathsMore' => max(0, count($plan['entries']) - 300)];
 }
 
@@ -13181,6 +13183,7 @@ function render_admin_site_settings($csrfToken) {
           rows.forEach(function (r) { h += '<tr><td>' + esc(r.label) + '<span class="fm-sub">' + esc(r.what) + '</span></td><td>' + num(r.files) + '</td><td>' + size(r.bytes) + '</td><td>' + esc(r.ifgone) + '</td></tr>'; });
         });
         h += '</tbody></table><p class="muted" style="margin:8px 0 0">' + num(j.files) + ' file' + (j.files === 1 ? '' : 's') + (j.thumbs ? ' and ' + num(j.thumbs) + ' thumbnail' + (j.thumbs === 1 ? '' : 's') + ' (' + size(j.thumbBytes) + ')' : '') + '. Never touched: your photos, videos, .md files and index.php.</p>';
+        if (j.mapped) h += '<p class="fm-warn" style="margin:8px 0 0">' + num(j.mapped) + ' of these file' + (j.mapped === 1 ? ' is' : 's are') + ' in places added from elsewhere on the server. If another gallery also shows those places, it uses them too (its captions, private marks and view counts are in them), and a delete here removes them for it as well. Its own settings, share links and sign-ins are not on this list and are never touched.</p>';
         if (j.unknown && j.unknown.length) h += '<p class="muted" style="margin:6px 0 0">' + num(j.unknown.length) + ' other file' + (j.unknown.length === 1 ? ' starts' : 's start') + ' with <code>.gallery-</code> but ' + (j.unknown.length === 1 ? 'is not one' : 'are not ones') + ' the gallery makes, so ' + (j.unknown.length === 1 ? 'it is' : 'they are') + ' left alone: ' + esc(j.unknown.slice(0, 5).join(', ')) + '.</p>';
         return h;
       }
@@ -13261,6 +13264,7 @@ function render_admin_site_settings($csrfToken) {
         var o = overlay('<div class="fm-step">Step 3 of 3</div><h3 class="fm-bad">This can\'t be undone</h3>'
           + '<ul><li>' + num(n) + ' file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnail' + (t === 1 ? '' : 's') + ' (' + size(j.bytes) + ')' : '') + ' are deleted: settings, share links and their logs, captions, locations, private marks, view counts.</li>'
           + '<li class="fm-bad"><strong>Nothing stays private.</strong> The private marks are among the files deleted, so every photo, video and folder you had marked private can be seen by anyone who reaches the gallery, and a closed gallery opens. If that matters, move the private ones out of the gallery folder first.</li>'
+          + (j.mapped ? '<li class="fm-bad"><strong>' + num(j.mapped) + ' of the files are in places from elsewhere on the server.</strong> If another gallery also shows those places, it loses its captions, private marks and view counts there too.</li>' : '')
           + '<li>Every share link stops working, and everyone is signed out. The admin is gone, and so are folders from elsewhere on the server that you had added (the folders themselves are not touched).</li><li>Your photos, videos, .md files and index.php are not touched.</li>'
           + '<li>The gallery is then plain and public, and the admin page offers to set it up again: open <code>?admin</code>, type the code from the file <code>gallery-setup-code.php</code> it makes beside index.php, and choose a password.</li></ul>'
           + '<details class="fold"><summary style="cursor:pointer;font-weight:600">Show the ' + num(n) + ' files</summary><pre>' + esc(j.paths.join('\n')) + (j.pathsMore ? '\n… and ' + num(j.pathsMore) + ' more' : '') + (t ? '\n+ ' + num(t) + ' thumbnails in the .gallery-cache folders' : '') + '</pre></details>'
