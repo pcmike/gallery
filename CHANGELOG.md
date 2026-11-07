@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Versions correspond to the `GALLERY_VERSION` constant in `index.php`.
 
+## [2.6.4] - 2026-11-07
+
+### Fixed
+- **The thumbnail clean-up no longer deletes another gallery's thumbnails in a folder from elsewhere on the server.** The gallery tidies each folder's `.gallery-cache`, removing every file it does not recognise as its own. Two galleries showing the same folder (an older copy still running while a new one is set up, or a test copy) keep their thumbnails under names made with each one's own key, so each swept the other's on every page, and each made them again. Folders brought in with `EXTRA_FOLDERS` or `EXTRA_ROOTS` are now left alone; the gallery's own folder is tidied as before. Nothing but thumbnails was ever removed, and photos, captions, private marks and view counts were never touched. One effect to know: a gallery no longer tidies its own old thumbnails in such a folder (for example ones left by a photo that was deleted), so a few can build up there; they are safe to delete by hand.
+
 ## [2.6.3] - 2026-11-06
 
 ### Fixed

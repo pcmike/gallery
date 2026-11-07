@@ -86,7 +86,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.3');
+define('GALLERY_VERSION', '2.6.4');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -2502,9 +2502,13 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
     foreach ($files as $file) {
         $byFolder[containing_folder_real_path($dir, $file)][] = $file;
     }
+    $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
     foreach ($byFolder as $folderPath => $folderFiles) {
         $cacheDir = $folderPath . '/.gallery-cache';
         if (!is_dir($cacheDir)) continue;
+        // A place from elsewhere on the server may also be shown by another gallery (an older copy still running there): its
+        // thumbnails are named with that gallery's own key, so to this one they look like leftovers. Nothing is swept there.
+        if (strpos(rtrim((string) (realpath($folderPath) ?: $folderPath), '/') . '/', $ownRoot) !== 0) continue;
         $valid = []; $renamed = [];
         foreach ($folderFiles as $file) {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));

@@ -7454,6 +7454,27 @@ check('[downloads] ...and an original that is refused says DENY', $dlS5 === 404 
 [$dlS6, , $dlH6] = http_post("$baseDl/?admin&folder=Pics", ['action' => 'export_items', 'csrf_token' => $dlCsrf], ["Cookie: $dlCookie"]);
 check('[downloads] the folder\'s settings export is framed the same way', $dlS6 === 200 && (bool) preg_grep('~^Content-Disposition: attachment~i', $dlH6) && $dlFrameOk($dlH6));
 
+echo "== thumbnail clean-up and places from elsewhere on the server ==\n";
+// A place from elsewhere (EXTRA_FOLDERS, EXTRA_ROOTS) may also be shown by another gallery, which keeps its own thumbnails there under names made with
+// its own key. To this gallery they look like leftovers, so its clean-up must leave that folder alone, and still tidy its own.
+$fxGc = new_fixture_dir('gcown'); $gcPlace = new_fixture_dir('gcplace'); $gcRoots = new_fixture_dir('gcroots');
+mkdir("$fxGc/Own", 0775, true); mkdir("$gcPlace/Trip", 0775, true); mkdir("$gcRoots/Pics", 0775, true);
+make_jpeg("$fxGc/Own/o.jpg", 60, 50, 90, 40, 40); make_jpeg("$gcPlace/Trip/p.jpg", 60, 50, 40, 90, 40); make_jpeg("$gcRoots/Pics/r.jpg", 60, 50, 40, 40, 90);
+$gcForeign = str_repeat('ab', 16) . '.jpg';
+foreach (["$fxGc/Own", "$gcPlace/Trip", "$gcRoots/Pics"] as $gcD) { mkdir("$gcD/.gallery-cache", 0775, true); file_put_contents("$gcD/.gallery-cache/$gcForeign", 'another gallery\'s thumbnail'); }
+file_put_contents("$fxGc/.gallery-config.php", cfg_text(['AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_FOLDERS' => ['Elsewhere' => $gcPlace], 'EXTRA_ROOTS' => [$gcRoots]]));
+copy($indexSrc, "$fxGc/index.php");
+$portGc = find_free_port(); start_server($fxGc, $portGc); $baseGc = "http://127.0.0.1:$portGc";
+[, $gcBody] = http_get("$baseGc/");
+check('[clean-up] the gallery shows the folders it was given from elsewhere (so the tests below look at the right places)', str_contains($gcBody, 'Elsewhere') && str_contains($gcBody, 'Pics') && str_contains($gcBody, 'Own'));
+[$gcS1] = http_get("$baseGc/?img=" . rawurlencode('Elsewhere/Trip/p.jpg') . '&size=thumb');
+[$gcS2] = http_get("$baseGc/?img=" . rawurlencode('Pics/r.jpg') . '&size=thumb');
+http_get("$baseGc/");
+check('[clean-up] a leftover in the gallery\'s own folder is still tidied away', !file_exists("$fxGc/Own/.gallery-cache/$gcForeign"));
+check('[clean-up] a thumbnail another gallery keeps in a named place from elsewhere is left alone', is_file("$gcPlace/Trip/.gallery-cache/$gcForeign"));
+check('[clean-up] ...and so is one in a folder brought in by EXTRA_ROOTS', is_file("$gcRoots/Pics/.gallery-cache/$gcForeign"));
+check('[clean-up] this gallery still makes and keeps its own thumbnail of a photo in a place from elsewhere', $gcS1 === 200 && $gcS2 === 200 && count(glob("$gcPlace/Trip/.gallery-cache/*.jpg")) >= 2 && count(glob("$gcRoots/Pics/.gallery-cache/*.jpg")) >= 2);
+
 echo "== hardening: headers, links in notes, the map library ==\n";
 $fxHd = new_fixture_dir('hardening'); make_jpeg("$fxHd/a.jpg", 60, 60, 10, 10, 10);
 $fxHdTree = new_fixture_dir('hardening-tree'); mkdir("$fxHdTree/Sub"); make_jpeg("$fxHdTree/Sub/s.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxHdTree/r.jpg", 60, 60, 20, 10, 10);
