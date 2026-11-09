@@ -626,7 +626,7 @@
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
-      if (name === 'visits' && window.__vtSeen) setTimeout(window.__vtSeen, 1500);
+      if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
       if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
@@ -2852,7 +2852,7 @@
     // The Visitors tab was opened: the lockouts so far count as seen, so the sidebar's red number goes back to grey (in this page's sidebar and in the desktop shell's own).
     window.__vtSeen = function () {
       post({ action: 'visits_seen' }).then(function () {
-        [].forEach.call(document.querySelectorAll('.side-link[data-tab=visits] .count.bad'), function (c) { c.classList.remove('bad'); c.title = c.title.replace(/, and .* you have not seen$/, ''); });
+        [].forEach.call(document.querySelectorAll('.side-link[data-tab=visits] .count.bad, .pb-w[data-pb-tab=visits] .count.bad'), function (c) { c.classList.remove('bad'); c.title = c.title.replace(/, and .* you have not seen$/, ''); });
         if (window.parent !== window) { try { window.parent.postMessage({ galleryShell: 1, tick: 1 }, location.origin); } catch (e) {} }
       }).catch(function () {});
     };
