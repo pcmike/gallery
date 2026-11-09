@@ -245,7 +245,7 @@ function files_admin_action($action, $dir, $files) {
     if ($action === 'files_list') admin_json_exit(['ok' => true] + owned_summary($plan));
     if ($action !== 'files_zip_prepare' && $action !== 'files_delete') $bad('Unknown action.');
     $ip = client_ip();
-    if (!login_throttle_allows($dir, 'admin', $ip)) $bad('Too many wrong passwords. Wait a few minutes and try again.');
+    if (!login_throttle_allows($dir, 'admin', $ip)) { $w = login_throttle_wait($dir, 'admin', $ip); $bad('Too many wrong passwords. Try again in ' . $w . ' second' . ($w === 1 ? '' : 's') . '.'); }
     if (!password_matches(ADMIN_PASSWORD, (string) ($_POST['password'] ?? ''))) { login_throttle_record_failure($dir, 'admin', $ip); $bad('That is not the admin password.'); }
     login_throttle_record_success($dir, 'admin', $ip);
     if ($action === 'files_zip_prepare') {

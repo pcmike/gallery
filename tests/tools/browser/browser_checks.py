@@ -1093,6 +1093,28 @@ try:
         ok("warn-text" in ar["cls"] and ar["text"].startswith("Not working") and ar["riskHidden"] is False and ar["fold"], "[nginx redirect row] with the setting on and nginx not serving a test photo through it, the row says Not working in red, the warning shows, and the rule is there to copy", str(ar))
     finally:
         srvAcc.terminate(); srvAcc.wait()
+    # a lockout (too many wrong access codes): a proper page that counts down and takes the visitor back to the sign-in form by itself
+    SITELK = WORK + "/sitelk"; os.makedirs(SITELK)
+    shutil.copy(HERE + "/../../../index.php", SITELK + "/index.php"); os.utime(SITELK + "/index.php", (time.time() - 3600,) * 2)
+    open(SITELK + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "lk-admin-pw"], capture_output=True, text=True).stdout}) + "\n")
+    open(SITELK + "/.gallery-login-attempts.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"admin|127.0.0.1": {"attempts": [], "lockUntil": int(time.time()) + 6}}) + "\n")
+    sLk = socket.socket(); sLk.bind(("127.0.0.1", 0)); PLK = sLk.getsockname()[1]; sLk.close()
+    srvLk = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PLK}", "-t", SITELK], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.call("Network.setExtraHTTPHeaders", {"headers": {}})
+        b.viewport(390, 800); b.goto(f"http://127.0.0.1:{PLK}/?admin", 1.0)
+        lk = b.js("""(() => { const e = document.getElementById('lock-secs'); return e ? {h: document.querySelector('h1').textContent, secs: e.textContent, over: document.documentElement.scrollWidth > innerWidth, retryHidden: getComputedStyle(document.getElementById('lock-again')).display === 'none'} : null; })()""")
+        ok(lk is not None and lk["h"] == "Sign-in paused" and re.fullmatch(r"0:0[1-6]", lk["secs"]) and not lk["over"] and lk["retryHidden"], "[lockout page] on a phone the lockout page says sign-in is paused, shows the seconds left, does not scroll sideways, and keeps its Try again button hidden until the time is up", str(lk))
+        t1 = b.js("document.getElementById('lock-secs').textContent"); b.drain(2.2); t2 = b.js("document.getElementById('lock-secs') ? document.getElementById('lock-secs').textContent : 'gone'")
+        ok(t1 != t2 and t2 != "gone", "[lockout page] the number counts down while the page is open", f"{t1} -> {t2}")
+        back = False; end = time.time() + 14
+        while time.time() < end:
+            b.drain(0.5)
+            if b.js("!!document.querySelector('input[name=access_code]')"): back = True; break
+        ok(back, "[lockout page] when the time is up the page takes the visitor back to the sign-in form by itself (a fresh visit, not the wrong code sent again)")
+    finally:
+        srvLk.terminate(); srvLk.wait(); b.viewport(1280, 900)
     # a newer version is out: the notice (found by the page's own daily look, in the background), Update now and Go back, on a copy of the gallery against a release server of our own
     SITEU = WORK + "/siteu"; RELU = WORK + "/releaseu"; os.makedirs(SITEU); os.makedirs(RELU)
     uold = open(HERE + "/../../../index.php").read(); unew = re.sub(r"define\('GALLERY_VERSION', '[\d.]+'\)", "define('GALLERY_VERSION', '9.9.9')", uold, count=1)

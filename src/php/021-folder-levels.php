@@ -181,9 +181,7 @@ function run_reveal_route($dir) {
     // looking at the form never is.
     $attempting = $formPass !== null || isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']);
     if ($attempting && (!login_throttle_allows($dir, 'reveal', $ip) || (ADMIN_PASSWORD !== '' && !login_throttle_allows($dir, 'admin', $ip)))) {
-        http_response_code(429);
-        header('Content-Type: text/plain; charset=UTF-8');
-        echo 'Too many failed attempts. Try again in a moment.';
+        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', max(login_throttle_wait($dir, 'reveal', $ip), login_throttle_wait($dir, 'admin', $ip)));
         return;
     }
     $asAdmin = is_string($supplied) && ADMIN_PASSWORD !== '' && password_matches(ADMIN_PASSWORD, $supplied);

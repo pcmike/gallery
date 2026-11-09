@@ -4142,6 +4142,13 @@ function login_throttle_allows($rootDir, $realm, $ip) {
     return time() >= ($entry['lockUntil'] ?? 0);
 }
 
+/** Seconds left on this realm's lockout for this address (0 when there is none). The lockout pages count these down. */
+function login_throttle_wait($rootDir, $realm, $ip) {
+    $data = json_file_read(login_throttle_path($rootDir), []);
+    $entry = $data[login_throttle_key($realm, $ip)] ?? null;
+    return $entry === null ? 0 : max(0, (int) ($entry['lockUntil'] ?? 0) - time());
+}
+
 /** Records one failed attempt; imposes a 60-second lockout once $limit (5 for a password, more for a guessed address) have
  *  landed from the same IP within the last 15 minutes. */
 function login_throttle_record_failure($rootDir, $realm, $ip, $limit = 5) {
@@ -6823,17 +6830,34 @@ function render_link_open_page($l, $dir) {
 
 /** The page for a visitor held back for guessing addresses: wait a minute and try again. A right address gets the same until the minute is over (or
  *  nothing would slow a guesser down). */
-function render_link_locked_page() {
+function render_link_locked_page($dir) {
+    render_lockout_page('Please wait a moment', 'Too many addresses that did not work were tried from your connection.', login_throttle_wait($dir, 'link', client_ip()));
+}
+
+/** The page for anyone held back by a lockout (wrong access codes, wrong setup codes, wrong addresses): says what happened in the words of where they
+ *  are, counts the seconds left down, and tries again by itself when they are up (a plain fresh visit, never a second post of what was typed, so it
+ *  can't count as another wrong guess). Without script it says how long and has a link to press. */
+function render_lockout_page($heading, $text, $seconds) {
+    $seconds = max(1, min(900, (int) $seconds));
     http_response_code(429);
-    header('Retry-After: 60');
-    echo link_standalone_head('Please wait a moment');
-    echo '<div class="ico" style="color:#8a8a8f">' . LINK_ICON_WARN . '</div><h1>Please wait a moment</h1><p>Too many addresses that did not work were tried from your connection. Wait a minute and try again.</p></div></body></html>';
+    header('Retry-After: ' . $seconds);
+    $h = htmlspecialchars($heading, ENT_QUOTES, 'UTF-8');
+    $clock = intdiv($seconds, 60) . ':' . str_pad((string) ($seconds % 60), 2, '0', STR_PAD_LEFT);
+    echo link_standalone_head($heading);
+    echo '<div class="ico" style="color:#8a8a8f">' . LINK_ICON_WARN . '</div><h1>' . $h . '</h1><p>' . htmlspecialchars($text, ENT_QUOTES, 'UTF-8') . '</p>'
+        . '<p id="lock-line" role="timer">Try again in <strong id="lock-secs" style="color:#fff;font-variant-numeric:tabular-nums">' . $clock . '</strong></p>'
+        . '<a class="big" id="lock-again" href="" style="display:none;align-items:center;justify-content:center;text-decoration:none">Try again</a>'
+        . '<noscript><a class="big" href="" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Try again</a></noscript>'
+        . '<script>(function(){var end=Date.now()+' . $seconds . '*1000,e=document.getElementById("lock-secs"),l=document.getElementById("lock-line"),b=document.getElementById("lock-again");'
+        . 'function tick(){var n=Math.max(0,Math.ceil((end-Date.now())/1000));e.textContent=Math.floor(n/60)+":"+("0"+n%60).slice(-2);'
+        . 'if(n>0){setTimeout(tick,250);return}l.textContent="You can try again now.";b.style.display="flex";setTimeout(function(){location.assign(location.href)},1500)}tick()})();</script>'
+        . '</div></body></html>';
 }
 
 /** Is this visitor held back for guessing? (You, and anyone with the private-view password, never are.) Says so with the page when they are. */
 function link_guess_locked($dir) {
     if (is_admin_browser() || is_revealed() || login_throttle_allows($dir, 'link', client_ip())) return false;
-    render_link_locked_page();
+    render_link_locked_page($dir);
     return true;
 }
 
@@ -7120,9 +7144,7 @@ function run_reveal_route($dir) {
     // looking at the form never is.
     $attempting = $formPass !== null || isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']);
     if ($attempting && (!login_throttle_allows($dir, 'reveal', $ip) || (ADMIN_PASSWORD !== '' && !login_throttle_allows($dir, 'admin', $ip)))) {
-        http_response_code(429);
-        header('Content-Type: text/plain; charset=UTF-8');
-        echo 'Too many failed attempts. Try again in a moment.';
+        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', max(login_throttle_wait($dir, 'reveal', $ip), login_throttle_wait($dir, 'admin', $ip)));
         return;
     }
     $asAdmin = is_string($supplied) && ADMIN_PASSWORD !== '' && password_matches(ADMIN_PASSWORD, $supplied);
@@ -12342,7 +12364,7 @@ function files_admin_action($action, $dir, $files) {
     if ($action === 'files_list') admin_json_exit(['ok' => true] + owned_summary($plan));
     if ($action !== 'files_zip_prepare' && $action !== 'files_delete') $bad('Unknown action.');
     $ip = client_ip();
-    if (!login_throttle_allows($dir, 'admin', $ip)) $bad('Too many wrong passwords. Wait a few minutes and try again.');
+    if (!login_throttle_allows($dir, 'admin', $ip)) { $w = login_throttle_wait($dir, 'admin', $ip); $bad('Too many wrong passwords. Try again in ' . $w . ' second' . ($w === 1 ? '' : 's') . '.'); }
     if (!password_matches(ADMIN_PASSWORD, (string) ($_POST['password'] ?? ''))) { login_throttle_record_failure($dir, 'admin', $ip); $bad('That is not the admin password.'); }
     login_throttle_record_success($dir, 'admin', $ip);
     if ($action === 'files_zip_prepare') {
@@ -19991,9 +20013,7 @@ function run_admin_setup() {
         $codeOk = true;
         if ($needCode) {
             if (!login_throttle_allows(__DIR__, 'setup', client_ip())) {
-                http_response_code(429);
-                header('Content-Type: text/plain; charset=UTF-8');
-                echo 'Too many wrong codes. Try again in a moment.';
+                render_lockout_page('Setup paused', 'Too many wrong setup codes were entered from your connection. Setting up is paused for a moment.', login_throttle_wait(__DIR__, 'setup', client_ip()));
                 return;
             }
             $given = admin_setup_code_normalize($_POST['setup_code'] ?? '');
@@ -20072,9 +20092,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     }
     $ip = client_ip();
     if (!login_throttle_allows($dir, 'admin', $ip)) {
-        http_response_code(429);
-        header('Content-Type: text/plain; charset=UTF-8');
-        echo 'Too many failed attempts. Try again in a moment.';
+        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', login_throttle_wait($dir, 'admin', $ip));
         return;
     }
     // Already logged in (the session carries it), or a Basic Authorization

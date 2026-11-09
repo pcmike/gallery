@@ -63,6 +63,13 @@ function login_throttle_allows($rootDir, $realm, $ip) {
     return time() >= ($entry['lockUntil'] ?? 0);
 }
 
+/** Seconds left on this realm's lockout for this address (0 when there is none). The lockout pages count these down. */
+function login_throttle_wait($rootDir, $realm, $ip) {
+    $data = json_file_read(login_throttle_path($rootDir), []);
+    $entry = $data[login_throttle_key($realm, $ip)] ?? null;
+    return $entry === null ? 0 : max(0, (int) ($entry['lockUntil'] ?? 0) - time());
+}
+
 /** Records one failed attempt; imposes a 60-second lockout once $limit (5 for a password, more for a guessed address) have
  *  landed from the same IP within the last 15 minutes. */
 function login_throttle_record_failure($rootDir, $realm, $ip, $limit = 5) {

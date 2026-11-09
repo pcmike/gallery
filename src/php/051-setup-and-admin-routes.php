@@ -15,9 +15,7 @@ function run_admin_setup() {
         $codeOk = true;
         if ($needCode) {
             if (!login_throttle_allows(__DIR__, 'setup', client_ip())) {
-                http_response_code(429);
-                header('Content-Type: text/plain; charset=UTF-8');
-                echo 'Too many wrong codes. Try again in a moment.';
+                render_lockout_page('Setup paused', 'Too many wrong setup codes were entered from your connection. Setting up is paused for a moment.', login_throttle_wait(__DIR__, 'setup', client_ip()));
                 return;
             }
             $given = admin_setup_code_normalize($_POST['setup_code'] ?? '');
@@ -96,9 +94,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     }
     $ip = client_ip();
     if (!login_throttle_allows($dir, 'admin', $ip)) {
-        http_response_code(429);
-        header('Content-Type: text/plain; charset=UTF-8');
-        echo 'Too many failed attempts. Try again in a moment.';
+        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', login_throttle_wait($dir, 'admin', $ip));
         return;
     }
     // Already logged in (the session carries it), or a Basic Authorization

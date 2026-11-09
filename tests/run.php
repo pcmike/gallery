@@ -2229,8 +2229,12 @@ for ($i = 0; $i < 5; $i++) {
 }
 [$adminLockedStatus] = http_get("$basePrivate/?admin", [$adminAuth]);
 check('5 failed admin attempts lock out the admin login', $adminLockedStatus === 429);
+[, $adLockBody, $adLockHd] = http_get("$basePrivate/?admin", [$adminAuth]);
+check('[lockout page] the admin lockout is a proper page, not bare text: it says sign-in is paused in its own words, counts the seconds left (and says so in Retry-After),', str_contains($adLockBody, 'Sign-in paused') && str_contains($adLockBody, 'id="lock-secs"') && str_contains($adLockBody, 'wrong access codes') && (bool) preg_grep('~^Retry-After: (\\d+)$~i', array_map('trim', $adLockHd)) && (bool) preg_grep('~^Content-Type: text/html~i', $adLockHd));
 [$revealStillWorksStatus] = http_get("$basePrivate/?reveal", [$revealAuth], false);
 check('...and the shared sign-in box holds it too (429 for that address, even with the right private-view password), so it can\'t be used to keep guessing the admin password', $revealStillWorksStatus === 429 && http_get("$basePrivate/?reveal")[0] === 200);
+[, $rvLockBody] = http_post("$basePrivate/?reveal", ['login_password' => 'wrong'], [], false);
+check('[lockout page] the shared sign-in box shows the same page for a locked address, and never a retry of what was typed (the page\'s own try-again is a plain visit)', str_contains($rvLockBody, 'Sign-in paused') && str_contains($rvLockBody, 'location.assign(location.href)') && !str_contains($rvLockBody, '<form'));
 
 // Neither password feature does anything when unset (the default).
 [$revealInertStatus] = http_get("$base1/?reveal");
@@ -3175,6 +3179,8 @@ check('[setup] it does not matter how long ago index.php was uploaded or re-uplo
 check('[setup] a wrong code, or none, is refused with the reason and nothing is written (no settings file, and the password is not even looked at)', str_contains($rWrong, 'not the code in gallery-setup-code.php') && str_contains($rNoCode, 'not the code in gallery-setup-code.php') && !file_exists($setupCfg) && file_exists($setupCodeFile));
 $setupStatuses = []; for ($si = 0; $si < 6; $si++) $setupStatuses[] = http_post("$baseSetup/?admin", ['setup_code' => 'ZZZZ-' . $si . 'ZZZ', 'setup_password' => 'x', 'setup_password2' => 'x'])[0];
 check('[setup] guessing the code is throttled like guessing a password: after a few wrong tries even the right code is turned away for a moment (429)', end($setupStatuses) === 429 && http_post("$baseSetup/?admin", ['setup_code' => $setupCode, 'setup_password' => 'a-good-long-password-1', 'setup_password2' => 'a-good-long-password-1'])[0] === 429 && !file_exists($setupCfg));
+[$suS, $suBody] = http_post("$baseSetup/?admin", ['setup_code' => 'ZZZZ-9ZZZ', 'setup_password' => 'x', 'setup_password2' => 'x']);
+check('[lockout page] the setup lockout says setup is paused (about setup codes), with the countdown', $suS === 429 && str_contains($suBody, 'Setup paused') && str_contains($suBody, 'setup codes') && str_contains($suBody, 'id="lock-secs"'));
 @unlink("$fxSetup/.gallery-login-attempts.php");
 // Bad input writes nothing.
 [, $rMismatch] = http_post("$baseSetup/?admin", ['setup_code' => strtolower($setupCode), 'setup_password' => 'a-good-long-password-1', 'setup_password2' => 'another-long-password']);
@@ -8640,6 +8646,7 @@ check('[lockout] nine wrong addresses are counted but pause no one: a right addr
 http_get("$baseNl/?Gu3ss10Z", [], false);
 $nlPaused = http_get("$baseNl/?$nlNewCode", [], false);
 check('[lockout] ten wrong ones pause that visitor for a minute: even a right address gets a friendly "Please wait" page (429, Retry-After) that says nothing of the photo', $nlPaused[0] === 429 && str_contains($nlPaused[1], 'Please wait a moment') && !str_contains($nlPaused[1], 'NOTLISTED') && (bool) preg_grep('~^Retry-After: 60~i', $nlPaused[2]));
+check('[lockout page] ...and that page counts the seconds left down (about a minute at the start), in the words of addresses', preg_match('~id="lock-secs"[^>]*>(\\d):(\\d\\d)<~', $nlPaused[1], $nlM) === 1 && ((int) $nlM[1] * 60 + (int) $nlM[2]) >= 55 && ((int) $nlM[1] * 60 + (int) $nlM[2]) <= 60 && str_contains($nlPaused[1], 'addresses that did not work'));
 check('[lockout] the pause is only for addresses: the gallery itself and the owner are not affected', http_get("$baseNl/", [], false)[0] === 200 && str_contains(http_get("$baseNl/?$nlNewCode", $nlOwn, false)[1], 'NOTLISTED-SENTINEL.jpg'));
 // a right code that is turned away for another reason (the folder's downloads are switched off) is not a guess
 file_put_contents($nlLockPath, data_file_guard_line_for_tests() . '{}');
