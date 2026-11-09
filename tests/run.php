@@ -1896,6 +1896,8 @@ check('[nginx redirect check] the admin can ask the gallery to answer as it woul
 [$ac2St, , $ac2Hd] = http_get("$baseAdmin/?admin&accelcheck=1&prefix=kb%2F..%2Fetc", [$authHeader]);
 [$ac3St, , $ac3Hd] = http_get("$baseAdmin/?admin&accelcheck=1&prefix=%2Fkb");
 check('[nginx redirect check] a prefix that is not a plain path is refused, and without signing in no X-Accel-Redirect is ever sent', $ac2St === 404 && $acH($ac2Hd, 'X-Accel-Redirect') === null && $acH($ac3Hd, 'X-Accel-Redirect') === null);
+check('[nginx redirect row] the setting\'s warning is on the page but hidden until the check says the setting is on and not known to work, and the help no longer points at the README for the rule', str_contains($adminBody, 'data-accel-risk hidden') && str_contains($adminBody, 'photos and videos stop loading') && !str_contains($adminBody, 'the README shows it') && str_contains($adminBody, 'the rule is under this row'));
+check('[nginx redirect row] a gallery at the top of a site has no rule to show under the setting (there it would block every image), and its status line is there for the check to fill', !str_contains($adminBody, 'class="fold accel-rule"') && str_contains($adminBody, 'data-accel-status'));
 
 check('?admin with the correct password returns 200', $okStatus === 200);
 check('the admin page actually renders', str_contains($adminBody, 'Gallery Admin'));

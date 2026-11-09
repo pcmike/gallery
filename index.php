@@ -9914,6 +9914,30 @@ function lock_probe_targets($dir, $files) {
     return $out;
 }
 
+/** The nginx location that keeps the photo and video files from being fetched by address (and that the internal redirect needs), for an address like /kb/. */
+function nginx_internal_location_rule($loc) {
+    return "location ~* ^" . $loc . ".*\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$ {\n    internal;\n}\n";
+}
+
+/** The one nginx location the "nginx internal redirect" setting needs, written for this gallery's address and folded under that setting. It is the same
+ *  rule as the one in "Keep private photos from being fetched by address", which also has the Apache version. Nothing at the top of a site: there the rule
+ *  would block every image, and the setting has no folder to be set to (render_server_rules_help says so). */
+function render_accel_rule_help() {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    if ($base === '') return '';
+    $loc = $base . '/';
+    ob_start();
+?>
+                <details class="fold accel-rule">
+                  <summary>Show the rule</summary>
+                  <p>Add inside the site's <code>server { }</code> block, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>. It is the same rule as the one under <em>Keep private photos from being fetched by address</em>, below.</p>
+                  <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc(nginx_internal_location_rule($loc)) ?></code></pre></div>
+                </details>
+<?php
+    return ob_get_clean();
+}
+
 /** Ready-to-use web server rules that keep the photo files themselves from being fetched by address (private items are
  *  only private through this script otherwise), written out for this gallery's own address, in two collapsed blocks:
  *  nginx and Apache. Shown on the Private page and in Settings so nobody has to leave the admin to set it up. */
@@ -9925,7 +9949,7 @@ function render_server_rules_help($withTidyLinks = false) {
         . "# never public. (A second layer: the .php ones already answer 404 on their own.)\n"
         . "location ~ /\\.gallery- {\n    return 404;\n}\n\n"
         . "# The photo and video files themselves: reachable only through index.php.\n"
-        . "location ~* ^" . $loc . ".*\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$ {\n    internal;\n}\n";
+        . nginx_internal_location_rule($loc);
     $apache = "# The photo and video files themselves: reachable only through index.php.\n"
         . "# ((?i) matters: camera files are often IMG_0412.JPG.)\n"
         . "<FilesMatch \"(?i)\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$\">\n    Require all denied\n</FilesMatch>\n\n"
@@ -10805,7 +10829,7 @@ function gallery_setting_definitions() {
              'help' => 'Show a place elsewhere on the server (an archive on another disk). Without a name, the folders inside it appear at the top of the gallery (/space/trip holding Paris and StTropez gives you Paris and StTropez); with a name, the whole place shows as that one folder. Needs "Show subfolders".',
              'risk' => 'Every photo and video there becomes visible.'],
             ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect', 'status' => 'accel',
-             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (the README shows it) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
+             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (the rule is under this row) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
              'risk' => 'Without the matching nginx location, photos and videos stop loading.'],
         ]],
     ];
@@ -14741,13 +14765,14 @@ function render_admin_site_settings($csrfToken) {
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
                 <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
+                <?= render_accel_rule_help() ?>
                 <?php endif; ?>
                 <?php if (isset($effects[$name])): ?>
                 <?php foreach (['off', 'on'] as $st): if ($effects[$name][$st] === '') continue; ?>
                 <div class="risk effect" data-effect="<?= $st ?>"<?= ($st === 'on') === (bool) $now ? '' : ' hidden' ?>><?= $esc($effects[$name][$st]) ?></div>
                 <?php endforeach; ?>
                 <?php else: ?>
-                <?php if (!empty($d['risk'])): ?><div class="risk"><?= $esc($d['risk']) ?></div><?php endif; ?>
+                <?php if (!empty($d['risk'])): ?><div class="risk"<?= ($d['status'] ?? '') === 'accel' ? ' data-accel-risk hidden' : '' ?>><?= $esc($d['risk']) ?></div><?php endif; ?>
                 <?php if (!empty($d['offwarn'])): ?><div class="warn-note offnote" hidden><?= $esc($d['offwarn']) ?></div><?php endif; ?>
                 <?php endif; ?>
               </div>
@@ -16361,6 +16386,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .rules-box { position:relative; }
   .rules-box pre { background:#101012; border-radius:6px; padding:10px 12px; margin:6px 0; overflow:auto; font-size:0.78rem; line-height:1.45; }
   .rules-box .copy-rules { position:absolute; top:12px; right:10px; padding:3px 10px; font-size:0.75rem; }
+  .accel-rule > p { color:var(--muted); font-size:0.8rem; margin:2px 0 6px; }
+  .accel-rule .rules-box pre { white-space:pre-wrap; word-break:break-all; padding-right:84px; }   /* (the column is narrow: the rule wraps instead of going under the Copy button) */
   .site-rules { padding:12px 0; border-top:1px solid #26262a; }
   .site-rules .name { font-weight:600; font-size:0.92rem; }
   .site-rules .help { color:var(--muted); font-size:0.8rem; margin-top:3px; }
@@ -16990,13 +17017,20 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     const folderUrl = probe.getAttribute('data-folder-url');
     const hasFiles = Number(probe.getAttribute('data-files')) > 0;
     const banner = document.getElementById('lock-banner');
+    // The "nginx internal redirect" row in Settings says what was found too (not only the Health check), and the warning under it shows only while the setting is on and not known to work.
+    const accelSay = function (cls, text, risk) {
+      const box = document.querySelector('[data-accel-status]'), warn = document.querySelector('[data-accel-risk]');
+      if (box) { box.textContent = ''; box.className = 'help accel-status ' + cls; box.appendChild(document.createTextNode(text)); }
+      if (warn) warn.hidden = !risk;
+    };
     const mirrorLater = function () {
       if (photo) { if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); return; }
       if (hasFiles) {
         mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
         mirror('accel', 'ok-text', 'Doesn\'t apply here: files from outside the gallery\'s own address are always sent by the gallery itself, whatever this is set to.');
+        accelSay('ok-text', 'Doesn\'t apply here: every photo and video comes from folders outside the gallery\'s own address, and those are always sent by the gallery itself, whatever this is set to.', false);
         if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).');
-      } else ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); });
+      } else { ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); }); accelSay('muted', 'Nothing to test with yet (no photos).', false); }
     };
     const hideAll = function (sel, on) { document.querySelectorAll(sel).forEach(function (el) { el.hidden = on; }); };
     const report = function (selector, ok, text, rulesSel) {
@@ -17457,12 +17491,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       const current = accel.getAttribute('data-accel-current'), candidate = accel.getAttribute('data-accel-candidate');
       const prefix = current || candidate;
       if (!photo) return;   // (mirrorLater has said why)
-      if (!prefix) { mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); return; }
+      if (!prefix) { mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); accelSay('muted', 'Not applicable: a gallery at the very top of a site has no folder to set it to.', false); return; }
       fetch('?admin&accelcheck=1&prefix=' + encodeURIComponent(prefix), { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { return r.ok && /^(image|video)\//.test(r.headers.get('content-type') || '') ? r.blob().then(function (b) { return b.size > 0; }) : false; })
         .catch(function () { return null; })
         .then(function (works) {
-          if (works === null) return mirror('accel', '', 'Couldn\'t tell (the request failed).');
+          const warn = document.querySelector('[data-accel-risk]'); if (warn) warn.hidden = !(current && works !== true);   // (the warning under the setting: only while it is on and not known to work)
+          if (works === null) { accelSay('muted', 'Couldn\'t tell (the request failed).', !!current); return mirror('accel', '', 'Couldn\'t tell (the request failed).'); }
           mirror('accel', current ? (works ? 'ok-text' : 'warn-text') : (works ? 'note-text' : ''), current
             ? (works ? 'Set to ' + current + ' and working: nginx sends the photos and videos itself.' : 'Set to ' + current + ' but nginx did not serve a test photo through it; photos may fail to load.')
             : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (see the Edited tab).'));

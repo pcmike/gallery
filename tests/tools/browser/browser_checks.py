@@ -979,9 +979,14 @@ try:
                 ok(b.js("document.getElementById('lock-banner').hidden") and b.js("(() => { const t = document.querySelector('.tab-panel[data-tab=hidden]'); return !!t && [...t.querySelectorAll('.flash')].every(e => e.offsetParent === null); })()"), "[lock check] ...and the Edited tab shows no banner at all when private is locked (the Health check says it)")
                 ok(st["lockRulesHidden"] and st["panelHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => h.hidden)"), "[lock check] ...and the nginx/Apache rules and the warning text in Settings go away, as does the Hidden tab's rules panel", str(st))
                 ok("note-text" in st["accelCls"] and "Not using it yet" in st["accel"] and "/trip" in st["accel"], "[nginx redirect check] with the nginx location in place but the setting empty, Settings points that out and offers to set it", str([st["accelCls"], st["accel"]]))
+                ar = b.js("""(() => { const w = document.querySelector('[data-accel-risk]'), f = document.querySelector('.accel-rule'); return {riskHidden: w ? w.hidden : null, rule: f ? f.querySelector('pre').textContent : '', copy: f ? !!f.querySelector('.copy-rules') : false, closed: f ? !f.open : null}; })()""")
+                ok(ar["riskHidden"] is True and "^/trip/" in ar["rule"] and "internal;" in ar["rule"] and ar["copy"] and ar["closed"], "[nginx redirect row] under the setting: no warning while it is empty, and the rule for this gallery's address in a fold (closed until pressed) with a Copy button", str(ar))
                 b.js("[...document.querySelectorAll('[data-accel-status] button')][0].click()"); b.drain(2.0)
                 saved = open(SITE11 + "/.gallery-config.php").read()
                 ok("NGINX_ACCEL_REDIRECT_PREFIX" in saved and "trip" in saved.split("NGINX_ACCEL_REDIRECT_PREFIX")[1][:20], "[nginx redirect check] its button fills in and saves the setting", saved[:300])
+                b.goto(B11 + "/trip/?admin", 2.5); b.drain(2.0)
+                aw = b.js("""(() => { const s = document.querySelector('[data-accel-status]'), w = document.querySelector('[data-accel-risk]'); return {cls: s.className, text: s.textContent, riskHidden: w.hidden}; })()""")
+                ok("ok-text" in aw["cls"] and aw["text"].startswith("Working") and aw["riskHidden"] is True, "[nginx redirect row] once the setting is on and nginx serves a test photo through it, the row says Working in green and the warning stays hidden", str(aw))
                 ok(st["tidyRulesHidden"] and any(t.startswith("lock-result ok-text|Tidy folder links work") for t in st["tidyStatus"]), "[tidy check] with /Folder/ sent to the gallery, Settings says in green that tidy folder links work and hides their rules", str(st["tidyStatus"]))
             else:
                 ok(st is not None and st["open"] and not st["locked"] and "error" in st["cls"].split() and "handed out" in st["status"], "[lock check] with nothing in place (the photo is served as a plain file) the warning stays, and says which address was handed out", str(st))
@@ -1057,7 +1062,7 @@ try:
     SITE12 = WORK + "/site12"; os.makedirs(SITE12); SITE12X = WORK + "/site12extra"; os.makedirs(SITE12X + "/Paris")
     shutil.copy(HERE + "/../../../index.php", SITE12 + "/index.php"); os.utime(SITE12 + "/index.php", (time.time() - 3600,) * 2)
     subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE12X + "/Paris/far.jpg"], check=True)
-    open(SITE12 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "out-admin-pw"], capture_output=True, text=True).stdout, "EXTRA_ROOTS": [SITE12X], "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    open(SITE12 + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "out-admin-pw"], capture_output=True, text=True).stdout, "EXTRA_ROOTS": [SITE12X], "AUTO_GROUP_BY_FOLDER": True, "NGINX_ACCEL_REDIRECT_PREFIX": "/p"}) + "\n")
     s12 = socket.socket(); s12.bind(("127.0.0.1", 0)); P12 = s12.getsockname()[1]; s12.close()
     srv12 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P12}", "-t", SITE12], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
@@ -1069,8 +1074,25 @@ try:
         byrow = {r["cls"].split("pending")[0]: r for r in ho["web"]}
         ok(ho["loud"] == 0 and len(ho["web"]) == 3 and ho["web"][0]["t"].startswith("Not needed") and ho["web"][2]["t"].startswith("Doesn't apply") and ho["web"][1]["t"].startswith("Not set up") and "optional" in ho["web"][1]["cls"].split(), "[health] a gallery whose photos all come from elsewhere on the server is not flagged for the lock or the nginx redirect (they do not apply); the tidy links (no rewrite rule on this plain server) are only an optional grey row, so nothing counts as a problem", str(ho))
         ok(ho["web"][0]["ico"] and ho["web"][2]["ico"], "[health] ...and those two rows say why, with the green check mark", str(ho["web"]))
+        ar = b.js("""(() => { const s = document.querySelector('[data-accel-status]'), w = document.querySelector('[data-accel-risk]'); return {cls: s.className, text: s.textContent, riskHidden: w.hidden}; })()""")
+        ok("ok-text" in ar["cls"] and ar["text"].startswith("Doesn't apply here") and ar["riskHidden"] is True, "[nginx redirect row] with every photo from elsewhere and the setting on, the row says in green that it doesn't apply, and the \"photos stop loading\" warning stays hidden (the same answer as the Health check's row)", str(ar))
     finally:
         srv12.terminate(); srv12.wait()
+    # the setting is on but nginx has no matching location: the row says it is not working, and only now shows the warning
+    SITEACC = WORK + "/siteacc"; os.makedirs(SITEACC); os.makedirs(WORK + "/siteaccroot"); os.symlink(SITEACC, WORK + "/siteaccroot/trip")
+    shutil.copy(HERE + "/../../../index.php", SITEACC + "/index.php"); os.utime(SITEACC + "/index.php", (time.time() - 3600,) * 2)
+    subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITEACC + "/photo.jpg"], check=True)
+    open(SITEACC + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "acc-admin-pw"], capture_output=True, text=True).stdout, "NGINX_ACCEL_REDIRECT_PREFIX": "/trip", "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    sAcc = socket.socket(); sAcc.bind(("127.0.0.1", 0)); PACC = sAcc.getsockname()[1]; sAcc.close()
+    srvAcc = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PACC}", "-t", WORK + "/siteaccroot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.call("Network.setExtraHTTPHeaders", {"headers": {"Authorization": "Basic " + base64.b64encode(b"admin:acc-admin-pw").decode()}})
+        b.goto(f"http://127.0.0.1:{PACC}/trip/?admin", 2.5); b.drain(2.5)
+        ar = b.js("""(() => { const s = document.querySelector('[data-accel-status]'), w = document.querySelector('[data-accel-risk]'); return {cls: s.className, text: s.textContent, riskHidden: w.hidden, fold: !!document.querySelector('.accel-rule')}; })()""")
+        ok("warn-text" in ar["cls"] and ar["text"].startswith("Not working") and ar["riskHidden"] is False and ar["fold"], "[nginx redirect row] with the setting on and nginx not serving a test photo through it, the row says Not working in red, the warning shows, and the rule is there to copy", str(ar))
+    finally:
+        srvAcc.terminate(); srvAcc.wait()
     # a newer version is out: the notice (found by the page's own daily look, in the background), Update now and Go back, on a copy of the gallery against a release server of our own
     SITEU = WORK + "/siteu"; RELU = WORK + "/releaseu"; os.makedirs(SITEU); os.makedirs(RELU)
     uold = open(HERE + "/../../../index.php").read(); unew = re.sub(r"define\('GALLERY_VERSION', '[\d.]+'\)", "define('GALLERY_VERSION', '9.9.9')", uold, count=1)

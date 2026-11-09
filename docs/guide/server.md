@@ -22,7 +22,7 @@ location ~* ^/kb/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$ {
 }
 ```
 
-Then `sudo nginx -t && sudo systemctl reload nginx` and check: `curl -I https://yoursite.com/kb/IMG_0412.jpg` should answer 404. The rules assume the usual `index index.php;` and a `location ~ \.php$` for php-fpm. Finally set **`NGINX_ACCEL_REDIRECT_PREFIX`** to `/kb`, matching the location: the gallery then answers with `X-Accel-Redirect` and nginx sends the file itself, which is faster and gives videos nginx's own Range handling. Leave it empty and PHP sends files (correct everywhere, just slower).
+Then `sudo nginx -t && sudo systemctl reload nginx` and check: `curl -I https://yoursite.com/kb/IMG_0412.jpg` should answer 404. The rules assume the usual `index index.php;` and a `location ~ \.php$` for php-fpm. Finally set **`NGINX_ACCEL_REDIRECT_PREFIX`** to `/kb`, matching the location: the gallery then answers with `X-Accel-Redirect` and nginx sends the file itself, which is faster and gives videos nginx's own Range handling. Leave it empty and PHP sends files (correct everywhere, just slower). The setting's row in Settings → Server setup says whether it works (a test photo is asked for through it), shows the same location under **Show the rule** with Copy, and says *Doesn't apply here* when every photo comes from folders elsewhere on the server.
 
 nginx can only send files under the gallery's own folder, so photos from [Archive elsewhere](getting-started.md#archive-elsewhere) are always sent by the gallery, with the setting on or off (they have no address of their own on the web server, so there is nothing to lock for them).
 

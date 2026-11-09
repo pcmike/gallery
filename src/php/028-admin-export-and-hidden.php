@@ -134,6 +134,30 @@ function lock_probe_targets($dir, $files) {
     return $out;
 }
 
+/** The nginx location that keeps the photo and video files from being fetched by address (and that the internal redirect needs), for an address like /kb/. */
+function nginx_internal_location_rule($loc) {
+    return "location ~* ^" . $loc . ".*\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$ {\n    internal;\n}\n";
+}
+
+/** The one nginx location the "nginx internal redirect" setting needs, written for this gallery's address and folded under that setting. It is the same
+ *  rule as the one in "Keep private photos from being fetched by address", which also has the Apache version. Nothing at the top of a site: there the rule
+ *  would block every image, and the setting has no folder to be set to (render_server_rules_help says so). */
+function render_accel_rule_help() {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    if ($base === '') return '';
+    $loc = $base . '/';
+    ob_start();
+?>
+                <details class="fold accel-rule">
+                  <summary>Show the rule</summary>
+                  <p>Add inside the site's <code>server { }</code> block, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>. It is the same rule as the one under <em>Keep private photos from being fetched by address</em>, below.</p>
+                  <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc(nginx_internal_location_rule($loc)) ?></code></pre></div>
+                </details>
+<?php
+    return ob_get_clean();
+}
+
 /** Ready-to-use web server rules that keep the photo files themselves from being fetched by address (private items are
  *  only private through this script otherwise), written out for this gallery's own address, in two collapsed blocks:
  *  nginx and Apache. Shown on the Private page and in Settings so nobody has to leave the admin to set it up. */
@@ -145,7 +169,7 @@ function render_server_rules_help($withTidyLinks = false) {
         . "# never public. (A second layer: the .php ones already answer 404 on their own.)\n"
         . "location ~ /\\.gallery- {\n    return 404;\n}\n\n"
         . "# The photo and video files themselves: reachable only through index.php.\n"
-        . "location ~* ^" . $loc . ".*\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$ {\n    internal;\n}\n";
+        . nginx_internal_location_rule($loc);
     $apache = "# The photo and video files themselves: reachable only through index.php.\n"
         . "# ((?i) matters: camera files are often IMG_0412.JPG.)\n"
         . "<FilesMatch \"(?i)\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$\">\n    Require all denied\n</FilesMatch>\n\n"

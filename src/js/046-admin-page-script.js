@@ -31,13 +31,20 @@
     const folderUrl = probe.getAttribute('data-folder-url');
     const hasFiles = Number(probe.getAttribute('data-files')) > 0;
     const banner = document.getElementById('lock-banner');
+    // The "nginx internal redirect" row in Settings says what was found too (not only the Health check), and the warning under it shows only while the setting is on and not known to work.
+    const accelSay = function (cls, text, risk) {
+      const box = document.querySelector('[data-accel-status]'), warn = document.querySelector('[data-accel-risk]');
+      if (box) { box.textContent = ''; box.className = 'help accel-status ' + cls; box.appendChild(document.createTextNode(text)); }
+      if (warn) warn.hidden = !risk;
+    };
     const mirrorLater = function () {
       if (photo) { if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); return; }
       if (hasFiles) {
         mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
         mirror('accel', 'ok-text', 'Doesn\'t apply here: files from outside the gallery\'s own address are always sent by the gallery itself, whatever this is set to.');
+        accelSay('ok-text', 'Doesn\'t apply here: every photo and video comes from folders outside the gallery\'s own address, and those are always sent by the gallery itself, whatever this is set to.', false);
         if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).');
-      } else ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); });
+      } else { ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); }); accelSay('muted', 'Nothing to test with yet (no photos).', false); }
     };
     const hideAll = function (sel, on) { document.querySelectorAll(sel).forEach(function (el) { el.hidden = on; }); };
     const report = function (selector, ok, text, rulesSel) {
@@ -498,12 +505,13 @@
       const current = accel.getAttribute('data-accel-current'), candidate = accel.getAttribute('data-accel-candidate');
       const prefix = current || candidate;
       if (!photo) return;   // (mirrorLater has said why)
-      if (!prefix) { mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); return; }
+      if (!prefix) { mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); accelSay('muted', 'Not applicable: a gallery at the very top of a site has no folder to set it to.', false); return; }
       fetch('?admin&accelcheck=1&prefix=' + encodeURIComponent(prefix), { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { return r.ok && /^(image|video)\//.test(r.headers.get('content-type') || '') ? r.blob().then(function (b) { return b.size > 0; }) : false; })
         .catch(function () { return null; })
         .then(function (works) {
-          if (works === null) return mirror('accel', '', 'Couldn\'t tell (the request failed).');
+          const warn = document.querySelector('[data-accel-risk]'); if (warn) warn.hidden = !(current && works !== true);   // (the warning under the setting: only while it is on and not known to work)
+          if (works === null) { accelSay('muted', 'Couldn\'t tell (the request failed).', !!current); return mirror('accel', '', 'Couldn\'t tell (the request failed).'); }
           mirror('accel', current ? (works ? 'ok-text' : 'warn-text') : (works ? 'note-text' : ''), current
             ? (works ? 'Set to ' + current + ' and working: nginx sends the photos and videos itself.' : 'Set to ' + current + ' but nginx did not serve a test photo through it; photos may fail to load.')
             : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (see the Edited tab).'));

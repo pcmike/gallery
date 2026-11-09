@@ -484,13 +484,14 @@ function render_admin_site_settings($csrfToken) {
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
                 <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
+                <?= render_accel_rule_help() ?>
                 <?php endif; ?>
                 <?php if (isset($effects[$name])): ?>
                 <?php foreach (['off', 'on'] as $st): if ($effects[$name][$st] === '') continue; ?>
                 <div class="risk effect" data-effect="<?= $st ?>"<?= ($st === 'on') === (bool) $now ? '' : ' hidden' ?>><?= $esc($effects[$name][$st]) ?></div>
                 <?php endforeach; ?>
                 <?php else: ?>
-                <?php if (!empty($d['risk'])): ?><div class="risk"><?= $esc($d['risk']) ?></div><?php endif; ?>
+                <?php if (!empty($d['risk'])): ?><div class="risk"<?= ($d['status'] ?? '') === 'accel' ? ' data-accel-risk hidden' : '' ?>><?= $esc($d['risk']) ?></div><?php endif; ?>
                 <?php if (!empty($d['offwarn'])): ?><div class="warn-note offnote" hidden><?= $esc($d['offwarn']) ?></div><?php endif; ?>
                 <?php endif; ?>
               </div>

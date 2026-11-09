@@ -5,6 +5,7 @@ All notable changes to this project are documented here. Versions correspond to 
 ## [2.6.5] - 2026-11-07
 
 ### Fixed
+- **The *nginx internal redirect* setting no longer looks like something is wrong when nothing is.** Its row only ever showed a fixed warning ("photos and videos stop loading"), because its own status line was filled in only when the gallery had a photo of its own to test with. Now the row says what was found, in the same way as the rows under it: *Doesn't apply here* in green when every photo comes from folders elsewhere on the server (which the gallery always sends itself), *Working* in green when nginx served a test photo, *Not working* in red when it did not. The warning shows only in that last case (or when the check could not tell), and the rule to add is under the row (**Show the rule**, with Copy) for the gallery's address. The help text pointed at the README for the rule, which has never held it.
 - **The Health check's list closed after Set aside or Remove them.** Both reload the page, and the list always starts closed, so it vanished under your finger. It now stays open after those two. A new check, `tests/tools/browser/health_checks.py`, covers it.
 - **The link icon on a folder's card copied a doubled address in the admin's frame** (`https://site/photos/https://site/photos/?folder=x&inframe=1`). The icon now copies the folder's own address, without the frame's `inframe=1`.
 
