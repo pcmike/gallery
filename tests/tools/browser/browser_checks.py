@@ -3097,6 +3097,34 @@ try:
         b.js("document.querySelector('#health-panel [data-vt-go]').click()"); b.drain(1.0)
         ok(lwait("document.querySelector('.tab-panel[data-tab=visits]').classList.contains('active') && document.querySelectorAll('#vt-root .vt-body tbody tr').length === 1 && document.querySelector('#vt-root [data-pill=src]').innerText.replace(/\\s+/g, ' ').trim() === 'Lockouts ▾ 1'"), "[lockouts] the link opens the Visitors tab already showing only the lockouts")
         vt_clear()
+        def lock_trip(tag):   # (a stranger from this address: ten wrong addresses; then the pause is lifted so the next one can start)
+            for i in range(10):
+                try: urllib.request.urlopen(BL + "/?link=%sX%d" % (tag, i))
+                except urllib.error.HTTPError: pass
+            try: os.unlink(SITE_L + "/.gallery-login-attempts.php")
+            except OSError: pass
+        # ---- live refresh: the page is left open while things happen in the background, and the window comes back
+        def comes_back(): b.js("document.dispatchEvent(new Event('visibilitychange'))"); b.drain(3.0)
+        time.sleep(1.2); b.goto(BL + "/?admin&classic=1&live=1#visits", 3.5)
+        b.js("window.__live.min = 0")   # (the real least time between two refreshes is 15 s)
+        tx0 = b.js("document.querySelector('#vt-root .vt-body').innerText")
+        time.sleep(1.2); lock_trip("LiveA"); comes_back()
+        tx1 = b.js("document.querySelector('#vt-root .vt-body').innerText"); nb1 = b.js("(() => { const c = document.querySelector('.side-link[data-tab=visits] .count'); return c.className + '|' + c.title; })()")
+        ok(tx1 != tx0 and "Locked out: addresses" in tx1, "[live refresh] with the Visitors tab open, a lockout that happens meanwhile shows in its list when the window comes back (no reload)", f"{tx0[:60]!r} -> {tx1[:60]!r}")
+        ok(nb1.startswith("count|") and "not seen" not in nb1, "[live refresh] ...and as the tab is the one being looked at, the sidebar's number stays grey: the lockout is seen as it appears", nb1)
+        b.js("document.querySelector('#vt-root [data-pill=src]').click()"); b.drain(0.4)
+        time.sleep(1.2); lock_trip("LiveB"); comes_back()
+        tx2 = b.js("document.querySelector('#vt-root .vt-body').innerText")
+        ok(tx2 == tx1 and b.js("!!document.querySelector('#vt-root .vt-pop')"), "[live refresh] while a list under a pill is open nothing is swapped under the person: the list is as it was and the menu is still open", f"{tx1[:50]!r} / {tx2[:50]!r}")
+        b.js("document.querySelector('#vt-root .vt-done').click()"); b.drain(3.0)
+        tx3 = b.js("document.querySelector('#vt-root .vt-body').innerText")
+        ok(tx3 != tx2, "[live refresh] ...and it catches up once the menu is closed", f"{tx2[:50]!r} -> {tx3[:50]!r}")
+        b.js("document.querySelector('.side-link[data-tab=site]').click()"); b.drain(0.8)
+        time.sleep(1.2); lock_trip("LiveC"); comes_back()
+        nb2 = b.js("(() => { const c = document.querySelector('.side-link[data-tab=visits] .count'); return c.className + '|' + c.title; })()")
+        ok(nb2.startswith("count bad|") and "not seen" in nb2, "[live refresh] on another tab (Settings) a lockout that happens meanwhile turns the sidebar's Visitors number red when the window comes back", nb2)
+        b.js("document.querySelector('.side-link[data-tab=visits]').click()"); b.drain(3.5)
+        ok(b.js("document.querySelector('.side-link[data-tab=visits] .count').className") == "count", "[live refresh] ...and opening the Visitors tab makes it grey again")
         for i in range(10):   # (another lockout, and the desktop shell's own sidebar: red, then grey after the tab is opened in its frame)
             try: urllib.request.urlopen(BL + "/?link=Again%d" % i)
             except urllib.error.HTTPError: pass
@@ -3107,12 +3135,10 @@ try:
         b.js("document.querySelector('.sh-whole a[data-tab=visits]').click()"); b.drain(4.5)
         sc2 = b.js("(() => { const c = document.querySelector('.sh-whole a[data-tab=visits] .count'); return c ? c.className : null; })()")
         ok(sc1 is not None and "bad" in sc1.split() and sc2 == "count", "[lockouts] in the desktop shell the sidebar's number is red for an unseen lockout and goes grey once the Visitors tab has been open for a moment", f"{sc1} -> {sc2}")
-        def lock_trip(tag):   # (a stranger from this address: ten wrong addresses; then the pause is lifted so the next one can start)
-            for i in range(10):
-                try: urllib.request.urlopen(BL + "/?link=%sX%d" % (tag, i))
-                except urllib.error.HTTPError: pass
-            try: os.unlink(SITE_L + "/.gallery-login-attempts.php")
-            except OSError: pass
+        time.sleep(1.2); lock_trip("ShellBack")
+        b.js("document.dispatchEvent(new Event('visibilitychange'))"); b.drain(2.5)
+        sc3 = b.js("(() => { const c = document.querySelector('.sh-whole a[data-tab=visits] .count'); return c ? c.className : null; })()")
+        ok(sc3 is not None and "bad" in sc3.split(), "[live refresh] in the desktop shell a browser tab brought back to the front (visibility, not only window focus) asks for the sidebar's numbers again: a lockout meanwhile turns the number red", str(sc3))
         time.sleep(1.2); lock_trip("Direct")
         b.goto(BL + "/?admin&classic=1#visits", 3.5)   # (the page opens ON the Visitors tab: a reload, the shell's restore, the phone menu's link)
         ok(b.js("document.querySelector('.side-link[data-tab=visits] .count').className") == "count", "[lockouts] a page that opens straight onto the Visitors tab marks the lockouts seen too (the number is grey a moment after), not only a click from another tab")

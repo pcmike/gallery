@@ -146,6 +146,7 @@
   }
   function refreshSoon() { clearTimeout(cTimer); cTimer = setTimeout(function () { refreshCounts(); refreshTree(); refreshMeta(); }, 500); }
   window.addEventListener('focus', refreshSoon);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshSoon(); });   // (a browser tab brought back to the front does not always give the window focus)
   window.addEventListener('message', function (e) {
     var m = e.data;
     if (e.origin !== location.origin || e.source !== frame.contentWindow || !m || m.galleryShell !== 1) return;

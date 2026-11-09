@@ -1,3 +1,42 @@
+  // ---- When the window comes back, what is shown may be out of date (a visitor came, a lockout happened, another browser changed something). Parts of the page
+  // register here. Each is refreshed when the window becomes visible or gets focus again, and when its tab is opened, at most once every 15 seconds (api.min), and never
+  // while the person is in the middle of something (a menu or dialog open): it waits and goes when that ends. A part keeps its own state across a refresh.
+  window.__live = (function () {
+    var parts = {}, last = {}, wait = {}, retryT = null, api = { min: 15000 };   // (min: the least time between two refreshes of one part; a test sets it to 0)
+    function ready(p) { return !p.tab || document.querySelector('.tab-panel[data-tab="' + p.tab + '"].active') !== null; }
+    function run(name, force) {
+      var p = parts[name]; if (!p || document.hidden || !ready(p)) return;
+      if (!force && Date.now() - (last[name] || 0) < api.min) return;
+      if (document.querySelector('.admin-modal:not([hidden])') || (p.busy && p.busy())) { wait[name] = true; return; }
+      last[name] = Date.now(); wait[name] = false;
+      try { var r = p.refresh(); if (r && r.catch) r.catch(function () {}); } catch (e) {}
+    }
+    function all() { Object.keys(parts).forEach(function (n) { run(n); }); }
+    function retry() { clearTimeout(retryT); retryT = setTimeout(function () { Object.keys(wait).forEach(function (n) { if (wait[n]) run(n, true); }); }, 700); }
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) all(); });
+    window.addEventListener('focus', all);
+    window.addEventListener('pageshow', function (e) { if (e.persisted) all(); });
+    ['click', 'keyup', 'change'].forEach(function (ev) { document.addEventListener(ev, function () { if (Object.keys(wait).some(function (n) { return wait[n]; })) retry(); }, true); });
+    api.register = function (name, part) { parts[name] = part; last[name] = Date.now(); };   // (it has just been drawn: the first refresh is not before api.min)
+    api.shown = function (tab) { Object.keys(parts).forEach(function (n) { if (parts[n].tab === tab) run(n); }); };
+    return api;
+  })();
+  // The numbers on the sidebar entries (and the phone Menu's) in the page itself. In the desktop shell the sidebar is the shell's own, which asks again by itself.
+  if (window.parent === window) window.__live.register('counts', { refresh: function () {
+    return fetch('?admin&pbcounts=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      if (!d) return;
+      var badge = function (o) { var s = document.createElement('span'); s.className = 'count' + (o.kind ? ' ' + o.kind : ''); s.title = o.title || ''; s.textContent = o.text; return s; };
+      ['features', 'links', 'site', 'visits'].forEach(function (k) {
+        var list = d[k] || [];
+        [].forEach.call(document.querySelectorAll('.side-link[data-tab="' + k + '"]'), function (a) {
+          [].forEach.call(a.querySelectorAll(':scope > .count'), function (c) { c.remove(); });
+          list.forEach(function (o) { a.appendChild(document.createTextNode(' ')); a.appendChild(badge(o)); });
+        });
+        [].forEach.call(document.querySelectorAll('.pb-b[data-b="' + k + '"]'), function (h) { h.textContent = ''; list.forEach(function (o) { h.appendChild(document.createTextNode(' ')); h.appendChild(badge(o)); }); });
+      });
+    });
+  } });
+
   // Scrolls to (and briefly marks) a place on this page, opening what is folded around it.
   function adminReveal(id) {
     document.dispatchEvent(new Event('gallery-settings-find-clear'));   // (a search in Settings would hide the place we are going to)
@@ -626,7 +665,8 @@
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
-      if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
+      if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);
+      if (window.__live) window.__live.shown(name);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
       if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
@@ -2679,12 +2719,14 @@
     }
     function fragUrl() { return '?admin&visits=1&tab=' + S.view + params(); }
     function filtered() { return S.cc.length > 0 || S.src.length > 0 || S.q !== ''; }
-    function load() {
-      var my = ++reqId, body = $('.vt-body'); root.classList.add('loading');
+    function load(quiet) {   // quiet: the window came back; nothing is dimmed, and what is on screen is left alone unless the answer is different
+      var my = ++reqId, body = $('.vt-body'); if (!quiet) root.classList.add('loading');
       return fetch(fragUrl(), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         if (my !== reqId) return;
-        root.classList.remove('loading'); body.innerHTML = html; times(); paintNote(); paintExport();
-      }).catch(function () { if (my !== reqId) return; root.classList.remove('loading'); body.innerHTML = '<p class="muted">Couldn\'t load: check your connection.</p>'; });
+        root.classList.remove('loading');
+        if (!quiet || body.innerHTML !== html) { body.innerHTML = html; times(); }
+        paintNote(); paintExport();
+      }).catch(function () { if (my !== reqId) return; root.classList.remove('loading'); if (!quiet) body.innerHTML = '<p class="muted">Couldn\'t load: check your connection.</p>'; });
     }
     function paintNote() {
       var f = $('.vt-frag'), n = $('.vt-note'); if (!f || !n) return;
@@ -2769,15 +2811,22 @@
     }
     function trimOpen() { var m = modal(); m.hidden = false; trimCheck(); m.querySelector('[data-vt-modal=cancel]').focus(); }
     function trimClose() { var m = modal(); if (m) m.hidden = true; trimStamp++; }
+    // The numbers behind the pills and the summary line are asked for again (a small answer, not the whole page), then the list, quietly. Used after a trim, and when
+    // the window comes back; the lockouts on screen then count as seen.
     function refreshPanel() {
-      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
-        var fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('vt-root');
-        if (!fresh) { location.reload(); return; }
-        root.setAttribute('data-info', fresh.getAttribute('data-info')); var sum = $('.vt-sum'), ns = fresh.querySelector('.vt-sum'); if (sum && ns) sum.innerHTML = ns.innerHTML;
-        var opt = $('#vt-trim-src'), nopt = fresh.querySelector('#vt-trim-src'); if (opt && nopt) opt.innerHTML = nopt.innerHTML;
-        paintPills(); return load();
+      return fetch('?admin&visits=1&tab=info', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j || !j.ok) return;
+        root.setAttribute('data-info', JSON.stringify(j.info));
+        var sum = $('.vt-sum'); if (sum) sum.innerHTML = j.sum;
+        var opt = $('#vt-trim-src'); if (opt) { var keep = opt.value; opt.innerHTML = j.trim; if ([].some.call(opt.options, function (o) { return o.value === keep; })) opt.value = keep; }
+        paintPills();
+        return load(true).then(function () { if (j.info.unseen > 0 && window.__vtSeen) window.__vtSeen(); });
       });
     }
+    if (window.__live) window.__live.register('visits', { tab: 'visits', refresh: refreshPanel, busy: function () {
+      var mn = $('.vt-menu'), md = modal();   // (a list under a pill, the export menu, the Trim dialog or one of the Media view's menus is open)
+      return S.pop !== '' || (!!mn && !mn.hidden) || (!!md && !md.hidden) || !!root.querySelector('.vt-body .sl-popmenu:not([hidden])');
+    } });
     // ---- clicks
     function setView(v) { S.view = v; S.all = false; paintPills(); load(); }
     function resetAll() { S.cc = []; S.src = []; S.q = ''; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); }

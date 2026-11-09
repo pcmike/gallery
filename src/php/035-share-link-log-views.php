@@ -386,7 +386,9 @@ function visits_tab_wanted() {
 }
 
 /** The Visitors tab: who opened the gallery without a link and who used each share link. The pills, search and views are the page's own; the table under them is a fragment (render_visits_fragment) fetched as they change. */
-function render_admin_visits_panel($csrfToken, $dir, $files) {
+/** What the top of the Visitors panel shows besides its table: whether the log is usable, the numbers behind the pills (info), the summary line (HTML), the
+ *  share links and how many public visitors there are. The panel draws from it, and asks for it again (as JSON, ?admin&visits=1&tab=info) when the window comes back. */
+function visits_panel_data() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $ok = visitlog_usable();
     if ($ok) visitlog_tx(function ($db) { visitlog_retention($db, time()); });
@@ -407,6 +409,22 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
     $plural = function ($n, $one, $many) { return number_format($n) . ' ' . ($n === 1 ? $one : $many); };
     $span = LOG_KEEP_DAYS > 0 ? 'in the last ' . ($plural(LOG_KEEP_DAYS, 'day', 'days')) : 'so far';
     $summary = $plural($pubN, 'public visitor', 'public visitors') . ' and ' . $plural($linkN, 'visitor', 'visitors') . ' on share links ' . $span . ' &middot; ' . $plural(count($links), 'share', 'shares') . ($lockTrips > 0 ? ' &middot; ' . $plural($lockTrips, 'lockout', 'lockouts') : '');
+    $info['unseen'] = $ok ? lockout_unseen_count() : 0;   // (lockouts since the tab was last opened: what the sidebar's red number counts)
+    return ['ok' => $ok, 'info' => $info, 'summary' => $summary, 'links' => $links, 'pubN' => $pubN];
+}
+
+/** The Trim dialog's choice of which records: all, the public address, the lockouts, each link. */
+function visits_trim_options(array $links) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $h = '<option value="all">All of them</option><option value="' . $esc(PUBLIC_LOG_ID) . '">The public address</option><option value="' . $esc(LOCKOUT_LOG_ID) . '">The lockouts</option>';
+    foreach ($links as $l) $h .= '<option value="' . $esc($l['id']) . '">' . $esc($l['label']) . '</option>';
+    return $h;
+}
+
+function render_admin_visits_panel($csrfToken, $dir, $files) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $d = visits_panel_data();
+    $ok = $d['ok']; $info = $d['info']; $summary = $d['summary']; $links = $d['links']; $pubN = $d['pubN'];
     $csrf = $esc($csrfToken);
 ?>
     <section class="panel vt" id="vt-root" data-csrf="<?= $csrf ?>" data-info="<?= $esc(json_encode($info, JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
@@ -445,7 +463,7 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
         <div class="admin-modal-card">
           <h3 id="vt-modal-title">Trim the log</h3>
           <div class="sl-modal-body">
-            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><option value="all">All of them</option><option value="<?= $esc(PUBLIC_LOG_ID) ?>">The public address</option><option value="<?= $esc(LOCKOUT_LOG_ID) ?>">The lockouts</option><?php foreach ($links as $l): ?><option value="<?= $esc($l['id']) ?>"><?= $esc($l['label']) ?></option><?php endforeach; ?></select></div>
+            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><?= visits_trim_options($links) ?></select></div>
             <div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="vt-trim-age"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="vt-trim-date" hidden></div>
             <p class="hint" id="vt-trim-out" role="status">Counting&hellip;</p>
             <p class="hint">Opens, views and the number of visitors stay. To keep the lines themselves, download them first: <a id="vt-trim-dl-events" href="#">the timeline</a> &middot; <a id="vt-trim-dl-items" href="#">what they looked at</a> &middot; <a id="vt-trim-dl-visitors" href="#">visitors</a> (CSV, with IP addresses).</p>
@@ -519,6 +537,12 @@ function run_links_view_route($dir, $files) {
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
     $data = links_read();
     if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir); return; }
+    if (isset($_GET['visits']) && $str('tab') === 'info') {   // the panel's numbers again (the window came back): small, and not the whole page
+        header('Content-Type: application/json; charset=UTF-8');
+        $d = visits_panel_data();
+        echo json_encode(['ok' => $d['ok'], 'info' => $d['info'], 'sum' => $d['summary'], 'trim' => visits_trim_options($d['links'])], JSON_HEX_TAG | JSON_HEX_AMP);
+        return;
+    }
     header('Content-Type: text/html; charset=UTF-8');
     if (isset($_GET['visits'])) {
         $tab = in_array($str('tab'), ['visitors', 'folders', 'media', 'timeline'], true) ? $str('tab') : 'visitors';

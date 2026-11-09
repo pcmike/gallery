@@ -9553,6 +9553,14 @@ sleep(2);
 for ($i = 0; $i < 10; $i++) http_get("$baseLk/?link=Another$i", [], false);
 [, $lkPageC] = http_get("$baseLk/?admin", $lkOwn);
 check('[lockouts] a lockout after that makes it red again, counting only the new one', str_contains($lkPageC, 'class="count bad" title="2 visitors in the log, and 1 lockout you have not seen"'));
+// the Visitors panel's numbers, asked for again when the window comes back: small JSON, for the signed-in admin only
+[$lkInfoS, $lkInfoB] = http_get("$baseLk/?admin&visits=1&tab=info", $lkOwn);
+$lkInfo = json_decode((string) $lkInfoB, true) ?: [];
+[$lkInfoAnS, $lkInfoAnB] = http_get("$baseLk/?admin&visits=1&tab=info");
+check('[live refresh] the Visitors panel\'s numbers can be asked for again as a small JSON answer (the counts behind the pills with the lockouts and how many are unseen, the summary line, the Trim dialog\'s choices), and only by the signed-in admin', $lkInfoS === 200 && ($lkInfo['ok'] ?? false) === true && ($lkInfo['info']['lock'] ?? -1) === 2 && ($lkInfo['info']['unseen'] ?? -1) === 1 && is_string($lkInfo['sum'] ?? null) && str_contains((string) ($lkInfo['trim'] ?? ''), 'The lockouts') && !str_contains((string) $lkInfoAnB, '"info"') && !is_array(json_decode((string) $lkInfoAnB, true)));
+[, $lkPb] = http_get("$baseLk/?admin&pbcounts=1", $lkOwn);
+$lkPbJ = json_decode((string) $lkPb, true) ?: [];
+check('[live refresh] the phone Menu\'s numbers (and the page\'s sidebar, which asks the same way) include Visitors, red while a lockout is unseen', ($lkPbJ['visits'][0]['kind'] ?? '') === 'bad' && str_contains((string) ($lkPbJ['visits'][0]['title'] ?? ''), '1 lockout you have not seen'));
 // a lockout started by someone else (sharing the address) does not hold back a session that is already signed in
 $fxLk3 = new_fixture_dir('lockouts3');
 mkdir("$fxLk3/Rome"); make_jpeg("$fxLk3/Rome/r1.jpg", 60, 50, 100, 60, 60);

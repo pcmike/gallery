@@ -13973,7 +13973,9 @@ function visits_tab_wanted() {
 }
 
 /** The Visitors tab: who opened the gallery without a link and who used each share link. The pills, search and views are the page's own; the table under them is a fragment (render_visits_fragment) fetched as they change. */
-function render_admin_visits_panel($csrfToken, $dir, $files) {
+/** What the top of the Visitors panel shows besides its table: whether the log is usable, the numbers behind the pills (info), the summary line (HTML), the
+ *  share links and how many public visitors there are. The panel draws from it, and asks for it again (as JSON, ?admin&visits=1&tab=info) when the window comes back. */
+function visits_panel_data() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $ok = visitlog_usable();
     if ($ok) visitlog_tx(function ($db) { visitlog_retention($db, time()); });
@@ -13994,6 +13996,22 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
     $plural = function ($n, $one, $many) { return number_format($n) . ' ' . ($n === 1 ? $one : $many); };
     $span = LOG_KEEP_DAYS > 0 ? 'in the last ' . ($plural(LOG_KEEP_DAYS, 'day', 'days')) : 'so far';
     $summary = $plural($pubN, 'public visitor', 'public visitors') . ' and ' . $plural($linkN, 'visitor', 'visitors') . ' on share links ' . $span . ' &middot; ' . $plural(count($links), 'share', 'shares') . ($lockTrips > 0 ? ' &middot; ' . $plural($lockTrips, 'lockout', 'lockouts') : '');
+    $info['unseen'] = $ok ? lockout_unseen_count() : 0;   // (lockouts since the tab was last opened: what the sidebar's red number counts)
+    return ['ok' => $ok, 'info' => $info, 'summary' => $summary, 'links' => $links, 'pubN' => $pubN];
+}
+
+/** The Trim dialog's choice of which records: all, the public address, the lockouts, each link. */
+function visits_trim_options(array $links) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $h = '<option value="all">All of them</option><option value="' . $esc(PUBLIC_LOG_ID) . '">The public address</option><option value="' . $esc(LOCKOUT_LOG_ID) . '">The lockouts</option>';
+    foreach ($links as $l) $h .= '<option value="' . $esc($l['id']) . '">' . $esc($l['label']) . '</option>';
+    return $h;
+}
+
+function render_admin_visits_panel($csrfToken, $dir, $files) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $d = visits_panel_data();
+    $ok = $d['ok']; $info = $d['info']; $summary = $d['summary']; $links = $d['links']; $pubN = $d['pubN'];
     $csrf = $esc($csrfToken);
 ?>
     <section class="panel vt" id="vt-root" data-csrf="<?= $csrf ?>" data-info="<?= $esc(json_encode($info, JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
@@ -14032,7 +14050,7 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
         <div class="admin-modal-card">
           <h3 id="vt-modal-title">Trim the log</h3>
           <div class="sl-modal-body">
-            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><option value="all">All of them</option><option value="<?= $esc(PUBLIC_LOG_ID) ?>">The public address</option><option value="<?= $esc(LOCKOUT_LOG_ID) ?>">The lockouts</option><?php foreach ($links as $l): ?><option value="<?= $esc($l['id']) ?>"><?= $esc($l['label']) ?></option><?php endforeach; ?></select></div>
+            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><?= visits_trim_options($links) ?></select></div>
             <div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="vt-trim-age"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="vt-trim-date" hidden></div>
             <p class="hint" id="vt-trim-out" role="status">Counting&hellip;</p>
             <p class="hint">Opens, views and the number of visitors stay. To keep the lines themselves, download them first: <a id="vt-trim-dl-events" href="#">the timeline</a> &middot; <a id="vt-trim-dl-items" href="#">what they looked at</a> &middot; <a id="vt-trim-dl-visitors" href="#">visitors</a> (CSV, with IP addresses).</p>
@@ -14106,6 +14124,12 @@ function run_links_view_route($dir, $files) {
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
     $data = links_read();
     if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir); return; }
+    if (isset($_GET['visits']) && $str('tab') === 'info') {   // the panel's numbers again (the window came back): small, and not the whole page
+        header('Content-Type: application/json; charset=UTF-8');
+        $d = visits_panel_data();
+        echo json_encode(['ok' => $d['ok'], 'info' => $d['info'], 'sum' => $d['summary'], 'trim' => visits_trim_options($d['links'])], JSON_HEX_TAG | JSON_HEX_AMP);
+        return;
+    }
     header('Content-Type: text/html; charset=UTF-8');
     if (isset($_GET['visits'])) {
         $tab = in_array($str('tab'), ['visitors', 'folders', 'media', 'timeline'], true) ? $str('tab') : 'visitors';
@@ -15296,7 +15320,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
         . 'function top(){setTimeout(function(){scrollTo(0,0)},30);setTimeout(function(){scrollTo(0,0)},200)}'
         . 'function flag(){try{sessionStorage.setItem("pbTop","1")}catch(x){}}'
         . 'function badge(o){var s=document.createElement("span");s.className="count"+(o.kind?" "+o.kind:"");s.title=o.title||"";s.textContent=o.text;return s}'
-        . 'function fill(d){["features","links","site"].forEach(function(k){var h=sheet.querySelector(\'[data-b="\'+k+\'"]\');if(!h)return;h.textContent="";(d[k]||[]).forEach(function(o){h.appendChild(document.createTextNode(" "));h.appendChild(badge(o))})});var e=sheet.querySelector(\'[data-b="hidden"]\');if(e&&typeof d.edited==="number"){e.textContent="";if(d.edited>0){e.appendChild(document.createTextNode(" "));e.appendChild(badge({text:d.edited.toLocaleString("en-US")}))}}}'
+        . 'function fill(d){["features","links","site","visits"].forEach(function(k){var h=sheet.querySelector(\'[data-b="\'+k+\'"]\');if(!h)return;h.textContent="";(d[k]||[]).forEach(function(o){h.appendChild(document.createTextNode(" "));h.appendChild(badge(o))})});var e=sheet.querySelector(\'[data-b="hidden"]\');if(e&&typeof d.edited==="number"){e.textContent="";if(d.edited>0){e.appendChild(document.createTextNode(" "));e.appendChild(badge({text:d.edited.toLocaleString("en-US")}))}}}'
         . 'function counts(){if(!sheet.hasAttribute("data-lazy")||busy||Date.now()-loaded<20000)return;busy=true;fetch("?admin&pbcounts=1",{credentials:"same-origin",cache:"no-store"}).then(function(r){return r.json()}).then(function(d){fill(d);loaded=Date.now()}).catch(function(){}).then(function(){busy=false})}'
         . 'function open_(on){if(on){sheet.style.transition="";sheet.style.transform=""}sheet.hidden=!on;btn.setAttribute("aria-expanded",on?"true":"false");bar.classList.toggle("sheet",on);if(on){if(stale)refresh();counts()}}'
         . 'function close_(){sheet.style.transition="transform .18s ease-out";sheet.style.transform="translateY(100%)";setTimeout(function(){open_(false)},170)}'
@@ -15684,6 +15708,7 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
   }
   function refreshSoon() { clearTimeout(cTimer); cTimer = setTimeout(function () { refreshCounts(); refreshTree(); refreshMeta(); }, 500); }
   window.addEventListener('focus', refreshSoon);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshSoon(); });   // (a browser tab brought back to the front does not always give the window focus)
   window.addEventListener('message', function (e) {
     var m = e.data;
     if (e.origin !== location.origin || e.source !== frame.contentWindow || !m || m.galleryShell !== 1) return;
@@ -17096,6 +17121,45 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </main>
 </div>
 <script>
+  // ---- When the window comes back, what is shown may be out of date (a visitor came, a lockout happened, another browser changed something). Parts of the page
+  // register here. Each is refreshed when the window becomes visible or gets focus again, and when its tab is opened, at most once every 15 seconds (api.min), and never
+  // while the person is in the middle of something (a menu or dialog open): it waits and goes when that ends. A part keeps its own state across a refresh.
+  window.__live = (function () {
+    var parts = {}, last = {}, wait = {}, retryT = null, api = { min: 15000 };   // (min: the least time between two refreshes of one part; a test sets it to 0)
+    function ready(p) { return !p.tab || document.querySelector('.tab-panel[data-tab="' + p.tab + '"].active') !== null; }
+    function run(name, force) {
+      var p = parts[name]; if (!p || document.hidden || !ready(p)) return;
+      if (!force && Date.now() - (last[name] || 0) < api.min) return;
+      if (document.querySelector('.admin-modal:not([hidden])') || (p.busy && p.busy())) { wait[name] = true; return; }
+      last[name] = Date.now(); wait[name] = false;
+      try { var r = p.refresh(); if (r && r.catch) r.catch(function () {}); } catch (e) {}
+    }
+    function all() { Object.keys(parts).forEach(function (n) { run(n); }); }
+    function retry() { clearTimeout(retryT); retryT = setTimeout(function () { Object.keys(wait).forEach(function (n) { if (wait[n]) run(n, true); }); }, 700); }
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) all(); });
+    window.addEventListener('focus', all);
+    window.addEventListener('pageshow', function (e) { if (e.persisted) all(); });
+    ['click', 'keyup', 'change'].forEach(function (ev) { document.addEventListener(ev, function () { if (Object.keys(wait).some(function (n) { return wait[n]; })) retry(); }, true); });
+    api.register = function (name, part) { parts[name] = part; last[name] = Date.now(); };   // (it has just been drawn: the first refresh is not before api.min)
+    api.shown = function (tab) { Object.keys(parts).forEach(function (n) { if (parts[n].tab === tab) run(n); }); };
+    return api;
+  })();
+  // The numbers on the sidebar entries (and the phone Menu's) in the page itself. In the desktop shell the sidebar is the shell's own, which asks again by itself.
+  if (window.parent === window) window.__live.register('counts', { refresh: function () {
+    return fetch('?admin&pbcounts=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      if (!d) return;
+      var badge = function (o) { var s = document.createElement('span'); s.className = 'count' + (o.kind ? ' ' + o.kind : ''); s.title = o.title || ''; s.textContent = o.text; return s; };
+      ['features', 'links', 'site', 'visits'].forEach(function (k) {
+        var list = d[k] || [];
+        [].forEach.call(document.querySelectorAll('.side-link[data-tab="' + k + '"]'), function (a) {
+          [].forEach.call(a.querySelectorAll(':scope > .count'), function (c) { c.remove(); });
+          list.forEach(function (o) { a.appendChild(document.createTextNode(' ')); a.appendChild(badge(o)); });
+        });
+        [].forEach.call(document.querySelectorAll('.pb-b[data-b="' + k + '"]'), function (h) { h.textContent = ''; list.forEach(function (o) { h.appendChild(document.createTextNode(' ')); h.appendChild(badge(o)); }); });
+      });
+    });
+  } });
+
   // Scrolls to (and briefly marks) a place on this page, opening what is folded around it.
   function adminReveal(id) {
     document.dispatchEvent(new Event('gallery-settings-find-clear'));   // (a search in Settings would hide the place we are going to)
@@ -17724,7 +17788,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
-      if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
+      if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);
+      if (window.__live) window.__live.shown(name);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
       if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
@@ -19777,12 +19842,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function fragUrl() { return '?admin&visits=1&tab=' + S.view + params(); }
     function filtered() { return S.cc.length > 0 || S.src.length > 0 || S.q !== ''; }
-    function load() {
-      var my = ++reqId, body = $('.vt-body'); root.classList.add('loading');
+    function load(quiet) {   // quiet: the window came back; nothing is dimmed, and what is on screen is left alone unless the answer is different
+      var my = ++reqId, body = $('.vt-body'); if (!quiet) root.classList.add('loading');
       return fetch(fragUrl(), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         if (my !== reqId) return;
-        root.classList.remove('loading'); body.innerHTML = html; times(); paintNote(); paintExport();
-      }).catch(function () { if (my !== reqId) return; root.classList.remove('loading'); body.innerHTML = '<p class="muted">Couldn\'t load: check your connection.</p>'; });
+        root.classList.remove('loading');
+        if (!quiet || body.innerHTML !== html) { body.innerHTML = html; times(); }
+        paintNote(); paintExport();
+      }).catch(function () { if (my !== reqId) return; root.classList.remove('loading'); if (!quiet) body.innerHTML = '<p class="muted">Couldn\'t load: check your connection.</p>'; });
     }
     function paintNote() {
       var f = $('.vt-frag'), n = $('.vt-note'); if (!f || !n) return;
@@ -19867,15 +19934,22 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function trimOpen() { var m = modal(); m.hidden = false; trimCheck(); m.querySelector('[data-vt-modal=cancel]').focus(); }
     function trimClose() { var m = modal(); if (m) m.hidden = true; trimStamp++; }
+    // The numbers behind the pills and the summary line are asked for again (a small answer, not the whole page), then the list, quietly. Used after a trim, and when
+    // the window comes back; the lockouts on screen then count as seen.
     function refreshPanel() {
-      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
-        var fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('vt-root');
-        if (!fresh) { location.reload(); return; }
-        root.setAttribute('data-info', fresh.getAttribute('data-info')); var sum = $('.vt-sum'), ns = fresh.querySelector('.vt-sum'); if (sum && ns) sum.innerHTML = ns.innerHTML;
-        var opt = $('#vt-trim-src'), nopt = fresh.querySelector('#vt-trim-src'); if (opt && nopt) opt.innerHTML = nopt.innerHTML;
-        paintPills(); return load();
+      return fetch('?admin&visits=1&tab=info', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j || !j.ok) return;
+        root.setAttribute('data-info', JSON.stringify(j.info));
+        var sum = $('.vt-sum'); if (sum) sum.innerHTML = j.sum;
+        var opt = $('#vt-trim-src'); if (opt) { var keep = opt.value; opt.innerHTML = j.trim; if ([].some.call(opt.options, function (o) { return o.value === keep; })) opt.value = keep; }
+        paintPills();
+        return load(true).then(function () { if (j.info.unseen > 0 && window.__vtSeen) window.__vtSeen(); });
       });
     }
+    if (window.__live) window.__live.register('visits', { tab: 'visits', refresh: refreshPanel, busy: function () {
+      var mn = $('.vt-menu'), md = modal();   // (a list under a pill, the export menu, the Trim dialog or one of the Media view's menus is open)
+      return S.pop !== '' || (!!mn && !mn.hidden) || (!!md && !md.hidden) || !!root.querySelector('.vt-body .sl-popmenu:not([hidden])');
+    } });
     // ---- clicks
     function setView(v) { S.view = v; S.all = false; paintPills(); load(); }
     function resetAll() { S.cc = []; S.src = []; S.q = ''; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); }
