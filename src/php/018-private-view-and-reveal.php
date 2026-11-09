@@ -146,7 +146,10 @@ function folder_own_gallery_cached($dir, $folderRel, $reset = false) {
         $cache = [];
         return null;
     }
-    if (!isset($cache[$folderRel])) $cache[$folderRel] = (items_read(resolve_real_path($dir, $folderRel))['ownGallery'] ?? null) === true;
+    if (!isset($cache[$folderRel])) {
+        $coll = $folderRel !== '' && collections_any() ? collection_at($dir, $folderRel) : null;   // (a collection keeps its own mark in its own record)
+        $cache[$folderRel] = $coll !== null ? !empty($coll['ownGallery']) : (items_read(resolve_real_path($dir, $folderRel))['ownGallery'] ?? null) === true;
+    }
     return $cache[$folderRel];
 }
 
@@ -167,6 +170,20 @@ function own_gallery_boundary($dir, $folderPath) {
     return null;
 }
 
+/** Does the collection at $collectionPath hold the folder at $folderPath (the folder itself or one above it, as a member)? That is what makes a click from the
+ *  collection into a folder a way someone came, and so a way back. */
+function collection_leads_to($dir, $collectionPath, $folderPath) {
+    $c = collection_at($dir, $collectionPath);
+    if ($c === null || empty($c['ownGallery'])) return false;
+    $reg = collections_registry($dir);
+    foreach ($c['items'] as $it) {
+        if (isset($it['file'])) continue;
+        $p = $reg['idPaths'][$it['fid']] ?? null;
+        if ($p !== null && $p !== '' && ($folderPath === $p || strpos($folderPath . '/', $p . '/') === 0)) return true;
+    }
+    return false;
+}
+
 /** How high this visitor may go from a folder page: '' for the whole gallery (nothing is limited), or the path of the folder that is the top.
  *  It only matters where a folder is marked "Gallery of its own" and the visitor is not the owner or on a share link (a link decides what its
  *  people see). Someone who arrives inside such a folder (a pasted or typed address, a link from a chat or another site: Sec-Fetch-Site is
@@ -182,7 +199,7 @@ function nav_top($dir, $folderPath) {
     $cookieTop = $raw !== null && $raw !== '' && $raw[0] === '/' && strpos($raw, '..') === false ? substr($raw, 1) : null;
     $mine = $boundary ?? '';
     if ($fresh || $cookieTop === null) $top = $mine;
-    elseif ($boundary === null) $top = '';
+    elseif ($boundary === null) $top = (!is_string($folderPath) || $cookieTop === '' || !collection_leads_to($dir, $cookieTop, $folderPath)) ? '' : $cookieTop;   // (someone who came in through a collection that is a gallery of its own, and clicked into one of its folders, keeps the way back to it)
     else $top = ($cookieTop === '' || $cookieTop === $boundary || strncmp($boundary, $cookieTop . '/', strlen($cookieTop) + 1) === 0) ? $cookieTop : $mine;   // (they came in above it, or at it; anything else is not a way they came)
     if (($fresh || $cookieTop === null) && !headers_sent()) {
         setcookie('gallery_top', '/' . $mine, ['path' => gallery_cookie_path(), 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);

@@ -90,10 +90,13 @@ function root_display_meta($dir) {
 }
 
 function folder_display_meta($dir, $folderRel) {
+    if ($folderRel !== '' && collections_any() && ($coll = collection_at($dir, $folderRel)) !== null) return collection_display_meta($coll);   // (a collection is a folder that exists only in the gallery: its own record answers)
     $d = items_read(resolve_real_path($dir, $folderRel));
+    $cover = is_string($d['cover'] ?? null) && $d['cover'] !== '' ? $d['cover'] : null;   // (a photo's name, or its path inside this folder when the photo is in a folder under it)
+    if ($cover === null && is_string($d['coverFollow'] ?? null) && $d['coverFollow'] !== '' && strpbrk($d['coverFollow'], "/\\") === false) $cover = 'follow:' . $d['coverFollow'];   // (the cover of a folder directly under it)
     return [
         'label' => is_string($d['displayName'] ?? null) ? $d['displayName'] : '',
-        'cover' => is_string($d['cover'] ?? null) && $d['cover'] !== '' ? $d['cover'] : null,
+        'cover' => $cover,
         'description' => is_string($d['description'] ?? null) ? $d['description'] : '',
         'dates' => is_string($d['dates'] ?? null) ? $d['dates'] : '',
         'sortOrder' => is_int($d['sortOrder'] ?? null) ? $d['sortOrder'] : null,

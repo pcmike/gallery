@@ -122,11 +122,29 @@ for lid in LINK_IDS+['nope','','../','a'*40,'%00']:
 req("/?admin&linkexport=all&what=items",headers=adminAuth,label="linkexport all"); req("/?admin&linkips=1",headers=adminAuth,label="linkips")
 for ip in ('127.0.0.1','nope','','::1','a'*300,'<script>','%00'):
     for tab in ('folders','media','timeline','bogus'): req(f"/?admin&linkip={q(ip,safe='')}&tab={tab}",headers=adminAuth,label=f"linkip {ip[:12]} {tab}")
+# the Visitors tab's own routes: the choices (sources, countries, a search, folders, the kind) and the CSVs, with hostile values
+for src in ('public','public,'+(LINK_IDS[0] if LINK_IDS else 'x'),'nope','','../','a'*40,'%00',',,,','<script>'):
+    for tab in ('visitors','folders','media','timeline','bogus',''):
+        req(f"/?admin&visits=1&tab={tab}&src={q(src,safe='')}",headers=adminAuth,label=f"visits {src[:12]} {tab}")
+for cc in ('US','US,GB','XX','us','<b>','%00','A'*50,'','US,'*40):
+    req(f"/?admin&visits=1&tab=visitors&cc={q(cc,safe='')}",headers=adminAuth,label=f"visits cc {cc[:12]}")
+for term in ('127.0.0.1','nope','','%','_','\\','a'*300,'<script>','%00',"' OR 1=1 --",'" OR "1"="1','germany','united states','x'*80+' y'):
+    for tab in ('visitors','media','timeline'): req(f"/?admin&visits=1&tab={tab}&q={q(term,safe='')}",headers=adminAuth,label=f"visits q {term[:12]} {tab}")
+req("/?admin&visits=1&tab=media&folders[]=Europe&folders[]=&what=opened&exact=1&all=1",headers=adminAuth,label="visits media filters")
+req("/?admin&visits=1&tab=media&folders=Europe&what[]=x",headers=adminAuth,label="visits media bad filters")
+for what in ('visitors','items','events','bogus',''):
+    for extra in ('','&cc=US','&src=public','&q=127','&src[]=x'): req(f"/?admin&visitsexport={what}{extra}",headers=adminAuth,label=f"visitsexport {what}{extra[:10]}")
+for body_ in ({'action':'visits_trim','id':'all','days':'30','apply':'0'},{'action':'visits_trim','id':'nope','days':'1'},{'action':'visits_trim','id':'','before':'0'},{'action':'visits_trim','id':'all','days':'-5'},{'action':'visits_trim','id':'all','before':'99999999999'},{'action':'health_remove_old_logs'}):
+    r=urllib.request.Request(B+"/?admin",data=urllib.parse.urlencode(dict(body_,csrf_token='x')).encode(),method="POST",headers=dict(adminAuth,**{"X-Requested-With":"gallery-fetch"}))
+    n+=1
+    try: resp=op.open(r,timeout=10); st=resp.status; bd=resp.read()
+    except urllib.error.HTTPError as e: st=e.code; bd=e.read()
+    if st>=500 or BAD.search(bd): problems.append((f"visits post {str(body_)[:40]}",f"HTTP {st} {bd[:80]!r}"))
 for name,h in sess:
     if name!='admin':
-        for p in ("/?admin&linkview="+LINK_IDS[0]+"&tab=visitors","/?admin&linkips=1","/?admin&linkexport=all&what=items"):
+        for p in ("/?admin&visits=1&tab=visitors","/?admin&visits=1&tab=timeline&src="+LINK_IDS[0],"/?admin&visitsexport=items","/?admin&visitsexport=visitors&q=127","/?admin&linkview="+LINK_IDS[0]+"&tab=visitors","/?admin&linkips=1","/?admin&linkexport=all&what=items"):
             s,b,_=req(p,headers=h,label=f"[{name}] {p[:40]}")
-            if s==200 and b'data-ip=' in b: problems.append((f"[{name}] {p[:40]}","the owner's log was served to a non-owner"))
+            if s==200 and (b'data-ip=' in b or b'"source","ip"' in b or b'"link","ip"' in b): problems.append((f"[{name}] {p[:40]}","the owner's log was served to a non-owner"))
 # --- GET sweeps (the previews too: their cookie is the owner's plus the preview's)
 sess=sess+sess_preview
 for name,h in sess:

@@ -169,7 +169,20 @@ if ($currentFolderPath !== null) {
     // directly here is a flat card, and the same logic repeats on that
     // subfolder's own page — to any depth. 'inline' mode never reaches
     // a cover card, so a folder's page just shows everything beneath it.
-    $level = split_folder_level($folderFiles, $folderPrefix);   // (Flat shows the same folders, in one grid or in boxes, instead of as cards)
+    if ($currentCollectionPage !== null) {
+        // A collection's page: its member folders are cards (each named by its real path, so the card leads to the real folder) and its single photos
+        // are loose tiles; nothing here is a path under the collection's own address, which only exists in the gallery.
+        $folderPrefix = ''; $folderLinkPrefix = '';
+        $level = ['folders' => $currentCollectionPage['folders'], 'loose' => $currentCollectionPage['loose']];
+    } else {
+        $level = split_folder_level($folderFiles, $folderPrefix);   // (Flat shows the same folders, in one grid or in boxes, instead of as cards)
+        // The collections that live in this folder are cards among its folders (never in Flat, which shows the photos in boxes).
+        if (AUTO_GROUP_BY_FOLDER && !folder_style_flat() && collections_any()) {
+            foreach (collection_cards($dir, $currentFolderPath, $allFiles, $files) as [$collectionKey, $collectionRec, $collectionFiles]) {
+                if (!isset($level['folders'][$collectionKey])) $level['folders'][$collectionKey] = $collectionFiles;
+            }
+        }
+    }
 
     $groups = [];
     $folderGroupKeys = [];
@@ -178,6 +191,7 @@ if ($currentFolderPath !== null) {
         $folderGroupKeys[$childName] = true;
         $m = folder_display_meta($dir, $folderPrefix . $childName);
         if ($m['label'] !== '') $groupLabels[$childName] = $m['label'];
+        elseif ($currentCollectionPage !== null) $groupLabels[$childName] = basename($childName);   // (on a collection's page a member folder is named by its full path: show its own name)
         if ($m['cover'] !== null) $folderCovers[$childName] = $m['cover'];
         $folderMeta[$childName] = ['description' => $m['description'], 'dates' => $m['dates']];
         $folderMentionLinks[$childName] = '?folder=' . rawurlencode($folderPrefix . $childName);
@@ -266,6 +280,7 @@ if ($currentFolderPath !== null) {
             $files[] = $f;
         }
     }
+    $files = array_values(array_unique($files));   // (a photo can be on two cards: in its folder and in a collection)
 } elseif (!is_revealed()) {
     // The front page: a link's own photos were moved into loose groups above, so the flat list follows the cards' order.
     $files = [];
@@ -331,7 +346,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php
   // The sort button: for the photos shown at this level (the folder's own, or all of them when folders are shown inline), what
   // there is to put first, and the order in force here. Hidden when there is nothing to put in order.
-  $sortScope = array_values(array_filter($files, function ($f) use ($currentFolderPath) {
+  $sortScope = array_values(array_filter($files, function ($f) use ($currentFolderPath, $currentCollectionPage) {
+      if ($currentCollectionPage !== null) return in_array($f, $currentCollectionPage['loose'], true);   // (a collection's own tiles are its single photos)
       if (folder_style_flat() || !AUTO_GROUP_BY_FOLDER) return true;
       return ($currentFolderPath === null ? '' : $currentFolderPath) === (strpos($f, '/') === false ? '' : dirname($f));
   }));
@@ -352,6 +368,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // The owner's Arrange button: photos shown one by one here (not in a filename group or a notes file's layout, which keep their own order).
   $arrangeShown = is_admin_browser() && !AUTO_GROUP_BY_FILENAME && count($sortScope) >= 2 && !$notesLayOut;
   $selectShown = is_admin_browser() && count($sortScope) >= 1;
+  $selectCollections = [];   // the collections the owner can add the picked photos to (the Select bar's "Add to collection", shown once there is one)
+  if ($selectShown && AUTO_GROUP_BY_FOLDER && collections_any()) {
+      foreach (collections_registry($dir, $allFiles)['byPath'] as $cPath => $cRec) $selectCollections[] = ['id' => $cRec['id'], 'title' => $cRec['title'] !== '' ? $cRec['title'] : $cRec['name'], 'where' => $cRec['parentPath'] === '' ? 'on the front page' : 'in ' . $cRec['parentPath'], 'private' => $cRec['private']];
+  }
   $arrangeStacks = [];
   if ($arrangeShown) {
       $arrangeByFolder = [];
@@ -473,7 +493,13 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (ENABLE_SHARE_LINKS): ?>
     <button type="button" data-select="share" class="sb-share" title="Make a share link for just these photos"><?= ui_icon('share') ?> Share&hellip;</button>
 <?php endif; ?>
+<?php if ($currentCollectionPage !== null): ?>
+    <button type="button" data-select="collrm" class="sb-share sb-coll" title="Take these photos out of this collection (nothing is deleted)"><?= ui_icon('close') ?> <span class="sb-n">Remove from collection</span><span class="sb-p">Remove</span></button>
+<?php elseif (!empty($selectCollections)): ?>
+    <button type="button" data-select="coll" class="sb-share sb-coll" title="Add these photos to a collection"><?= ui_icon('gallery') ?> <span class="sb-n">Add to collection&hellip;</span><span class="sb-p">Collection&hellip;</span></button>
+<?php endif; ?>
   </div>
+  <div id="select-coll" hidden data-collection-page="<?= $currentCollectionPage !== null ? htmlspecialchars($currentCollectionPage['rec']['id'], ENT_QUOTES, 'UTF-8') : '' ?>" data-list="<?= htmlspecialchars(json_encode($selectCollections ?? [], JSON_HEX_TAG | JSON_HEX_AMP), ENT_QUOTES, 'UTF-8') ?>"></div>
 <?php if (!empty($arrangeShown)): ?>
   <div class="select-arr">
     <span class="select-hint">Hold and drag a picked <?= media_word() === 'media' ? 'one' : 'photo' ?> beside another.</span>
@@ -591,7 +617,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   const ownerState = <?php
       if (is_admin_browser()) {
           $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = [];
-          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = true; }
+          foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; }   // (the address itself when it is known, so Copy needs no round trip)
           echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;

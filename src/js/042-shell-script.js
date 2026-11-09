@@ -17,9 +17,25 @@
   }
   frame.addEventListener('load', function () {
     syncBarEdge();
+    if (pendingReveal) setTimeout(reveal, 250);
     try { if (typeof ResizeObserver !== 'undefined') { if (frameRO) frameRO.disconnect(); frameRO = new ResizeObserver(syncBarEdge); frameRO.observe(frame.contentDocument.documentElement); } } catch (e) {}
   });
   window.addEventListener('resize', syncBarEdge);
+  // A link inside the page in the frame that opens one of its tabs asks the shell to do it, so the header, the folder buttons and the sidebar follow:
+  // a whole-gallery tab, or the folder tools (settings, notes) of the folder you are in. Then it scrolls to a place on that page, if one was named.
+  var pendingReveal = '';
+  function reveal() {
+    var id = pendingReveal; if (!id) return; pendingReveal = '';
+    try { if (frame.contentWindow.adminReveal) frame.contentWindow.adminReveal(id); } catch (e) {}
+  }
+  window.__shellGo = function (tab, id) {
+    if (!(WHOLE[tab] || tab === 'settings' || tab === 'notes')) return false;
+    pendingReveal = id || '';
+    if (st.tab === tab) { reveal(); return true; }
+    go(st.folder, tab);
+    setTimeout(reveal, 450);   // (a tab change on the same page raises no load event; a real load has already revealed it, and this finds nothing left to do)
+    return true;
+  };
   function esc(t) { var d = document.createElement('div'); d.textContent = t; return d.innerHTML.replace(/"/g, '&quot;'); }
   function label(f) { return f === '' ? C.title : (C.labels[f] || f.split('/').pop()); }
   function srcFor(folder, tab) {
@@ -91,7 +107,11 @@
     if (t.hasAttribute('data-go')) return go(t.getAttribute('data-go'), '');
     if (t.classList.contains('sh-tool')) { var tool = t.getAttribute('data-tool'); return go(st.folder, st.tab === tool ? '' : tool); }
     if (t.closest('#sh-whole')) return go(st.folder, t.getAttribute('data-tab'));
-    if (t.closest('.sh-tree')) return go(t.getAttribute('data-path'), WHOLE[st.tab] ? '' : st.tab);
+    if (t.closest('.sh-tree')) {
+      var path = t.getAttribute('data-path');
+      if (path === st.folder && !WHOLE[st.tab] && st.tab !== '') return go(path, '');   // (the folder you are already in, on one of its tabs: its gallery, as the lit tab button does)
+      return go(path, WHOLE[st.tab] ? '' : st.tab);
+    }
   });
   var whole = document.getElementById('sh-whole'), cTimer = null;
   function refreshCounts() {   // the sidebar's numbers (Features, Shares, Settings) are asked for again after something was done in the frame

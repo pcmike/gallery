@@ -124,6 +124,13 @@ if (AUTO_GROUP_BY_FOLDER && $folderTree !== null) {
         }
     }
 }
+// Collections shown on the front page (those in it, and those marked to show there) are cards among the folders. They claim no photo: every
+// member stays where it really is, and a card shows only the members this visitor may see (the filter below drops one with none).
+if (AUTO_GROUP_BY_FOLDER && !folder_style_flat() && collections_any()) {
+    foreach (collection_cards($dir, '', $files, $files) as [$collectionKey, $collectionRec, $collectionFiles]) {
+        if (!isset($folderGroups[$collectionKey])) $folderGroups[$collectionKey] = $collectionFiles;
+    }
+}
 $folderGroupKeys = array_fill_keys(array_keys($folderGroups), true);
 
 // Build the final groups: filename-based auto-detection (unless
@@ -371,6 +378,7 @@ foreach ($groups as $groupFiles) {
         $files[] = $f;
     }
 }
+$files = array_values(array_unique($files));   // (a photo can be on two cards: in its folder and in a collection)
 
 // Reverse lookup used by ?track below: which $groups key currently
 // contains a given filename. Needed because an explicit named group's
@@ -419,7 +427,7 @@ foreach ($allFiles as $privateProbe) {
 // every member of a group ends up hidden, the group itself disappears
 // here too, rather than rendering an empty "0 photos" box, which would
 // be its own tell that something's being withheld.
-if (!is_revealed() && ($linkHere = link_viewer()) !== null && ($linkHere['scope']['type'] ?? 'all') !== 'all') link_scan_ambiguity($dir, $allFiles);   // a folder copied with its id is shown to nobody
+if (is_admin_browser() || (!is_revealed() && ($linkHere = link_viewer()) !== null && ($linkHere['scope']['type'] ?? 'all') !== 'all')) link_scan_ambiguity($dir, $allFiles);   // (the owner's own look keeps the list current too, so a photo address in a copied folder is refused by the pictures as well)   // a folder copied with its id is shown to nobody
 if (!is_admin_browser()) {   // (someone with the private-view password is filtered too, but only of what is Not listed: viewer_may_see_item says so)
     foreach ($groups as $key => $groupFiles) {
         $visibleMembers = array_values(array_filter($groupFiles, function ($f) use ($dir, $itemsData, $photoPass) {

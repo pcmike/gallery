@@ -1,18 +1,23 @@
-  // A link inside the admin that opens one of its tabs and, if given, scrolls to (and briefly marks) a place in it.
+  // Scrolls to (and briefly marks) a place on this page, opening what is folded around it.
+  function adminReveal(id) {
+    document.dispatchEvent(new Event('gallery-settings-find-clear'));   // (a search in Settings would hide the place we are going to)
+    var e = document.getElementById(id);
+    if (!e) return;
+    if (e.hidden && e.closest) e = e.closest('details') || e;   // (a row hidden because the setting it needs is off: go to its group)
+    if (e.tagName === 'DETAILS') e.open = true;
+    for (var up = e.parentElement; up; up = up.parentElement) if (up.tagName === 'DETAILS') up.open = true;   // (a setting inside a folded group opens the group)
+    e.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    e.classList.add('flash-target');
+    setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
+  }
+  // A link inside the admin that opens one of its tabs and, if given, scrolls to (and briefly marks) a place in it. Inside the admin shell the shell
+  // opens it (so its header, its folder buttons and its sidebar say where you are); on its own page the tab is switched here.
   function adminGoTo(tab, id) {
+    try { if (window.parent !== window && /[?&]inframe=1/.test(location.search) && window.parent.__shellGo && window.parent.__shellGo(tab, id || '')) return false; } catch (x) {}
     var t = document.querySelector('.side-link[data-tab="' + tab + '"], .side-hidden[data-tab="' + tab + '"], .admin-tabs a[data-tab="' + tab + '"]');
     if (!t) return true;
     t.click();
-    if (id) setTimeout(function () {
-      var e = document.getElementById(id);
-      if (!e) return;
-      if (e.hidden && e.closest) e = e.closest('details') || e;   // (a row hidden because the setting it needs is off: go to its group)
-      if (e.tagName === 'DETAILS') e.open = true;
-      for (var up = e.parentElement; up; up = up.parentElement) if (up.tagName === 'DETAILS') up.open = true;   // (a setting inside a folded group opens the group)
-      e.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      e.classList.add('flash-target');
-      setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
-    }, 60);
+    if (id) setTimeout(function () { adminReveal(id); }, 60);
     return false;
   }
   // Are the web server rules in place (the ones on the Hidden tab and in Settings)? This browser asks, without any
@@ -78,6 +83,8 @@
       const go = panel.querySelector('.media-go'), stop = panel.querySelector('.media-stop'), count = panel.querySelector('.media-count'), bar = panel.querySelector('.media-bar'), fill = bar.firstElementChild;
       const again = panel.querySelector('.media-again'), remake = panel.querySelector('.media-remake'), more = panel.querySelector('.media-more'), reportBox = panel.querySelector('.media-report');
       const backupsBox = panel.querySelector('.media-backups');
+      const tidyHead = panel.querySelector('.media-tidy-head');   // ("Tidy up": there while Tidy up saved locations or the backups line is)
+      const syncTidyHead = function () { if (!tidyHead) return; const box = panel.querySelector('.media-tidy-box'); tidyHead.hidden = (!box || box.hidden) && !(backupsBox && backupsBox.querySelector('.media-backups-line')); };
       // Three requests work side by side, each on every third file, and each asks again the moment it is answered; a request
       // lasts about a second and a half, so the percentage moves several times a second. The percentage is of the files that
       // needed something when the page opened (or when the button was pressed): every file for "Read everything again".
@@ -104,11 +111,12 @@
         fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
           .then(function (r) { return r.json(); })
           .then(function (j) {
-            if (j.ok && backupsBox && typeof j.backupsHtml === 'string') backupsBox.innerHTML = j.backupsHtml;
+            if (j.ok && backupsBox && typeof j.backupsHtml === 'string') { backupsBox.innerHTML = j.backupsHtml; syncTidyHead(); }
             reportBox.textContent = '';
             if (!j.ok || !j.rows.length) { reportBox.appendChild(text('p', 'muted', j.ok ? 'There are no photos or videos yet.' : (j.text || 'The list could not be loaded.'))); return; }
             const wrap = text('div', 'media-table-wrap', ''), table = document.createElement('table'), thead = document.createElement('thead'), head = document.createElement('tr'), tbody = document.createElement('tbody');
-            const heads = ['Folder', 'Files', 'Thumbnails', 'Videos', 'Locations in the files', 'Capture dates', "Saved in the folder's data"];
+            const heads = ['Folder', 'Files', 'Thumbnails', 'Videos', 'In the files', 'Dates', 'Saved'];
+            if (j.earlierAny) heads.push('Earlier views');
             table.className = 'media-table';
             heads.forEach(function (h) { head.appendChild(text('th', '', h)); });
             thead.appendChild(head); table.appendChild(thead); table.appendChild(tbody);
@@ -132,15 +140,51 @@
               tr.appendChild(lc);
               tr.appendChild(text('td', '', r.dated + (r.undated ? ' of ' + (r.dated + r.undated) : '') + ' dated'));
               tr.appendChild(text('td', '', own.join(', ') || '—'));
+              if (j.earlierAny) tr.appendChild(text('td', r.earlier && !r.earlier.added ? 'note-text' : '', r.earlier ? (r.earlier.added ? 'added' : fmt(r.earlier.found) + ' found') : '—'));
               [].forEach.call(tr.children, function (td, i) { td.setAttribute('data-label', heads[i]); });
               tbody.appendChild(tr);
             });
             wrap.appendChild(table); reportBox.appendChild(wrap);
-            reportBox.appendChild(text('p', 'hint', 'Saved in the folder\'s data are locations kept next to the captions: copies an older version made from the files, or ones you set. "Tidy up saved locations" (below) compares them with the files.'));
+            reportBox.appendChild(text('p', 'hint', 'Saved are locations kept next to the captions: copies an older version made from the files, or ones you set. "Tidy up saved locations" (below) compares them with the files.'));
             if (legacy) reportBox.appendChild(text('p', 'hint', 'An old mark means an earlier version of the gallery looked at that photo and found no location. They are left alone; "Tidy up" and "Read everything again" deal with them.'));
           })
           .catch(function () { reportBox.textContent = ''; reportBox.appendChild(text('p', 'warn-text', 'The list could not be loaded.')); });
       };
+      // Moved in from another gallery: the views an older gallery counted for these photos (added to this one's, once), and the thumbnails it
+      // left behind in a place from elsewhere on the server (removed once the owner says no other gallery still shows the folders).
+      const moved = panel.querySelector('.media-moved'), outer = panel.querySelector('details.media-outer');
+      const leftBox = panel.querySelector('.media-leftover-box'), leftOk = panel.querySelector('.media-leftover-ok'), leftGo = panel.querySelector('.media-leftover-go'), leftOut = panel.querySelector('.media-leftover-out');
+      const mb = function (b) { return b >= 1048576 ? (b / 1048576).toFixed(b >= 10485760 ? 0 : 1).replace(/\.0$/, '') + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; };
+      const movedPost = function (action, extra) {
+        const body = new URLSearchParams(); body.set('csrf_token', panel.dataset.csrf); body.set('action', action);
+        Object.keys(extra || {}).forEach(function (k) { body.set(k, extra[k]); });
+        return fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); });
+      };
+      const loadMoved = function (keepText) {
+        if (!moved) return;
+        movedPost('media_moved').then(function (j) {
+          if (!j.ok) return;
+          const left = j.leftovers || { count: 0, folders: [] };
+          if (left.count > 0) {
+            leftBox.querySelector('.media-leftover-sum').textContent = '\u00b7 ' + fmt(left.count) + ' found, ' + mb(left.bytes);
+            leftBox.querySelector('.media-leftover-list').textContent = left.folders.map(function (f) { return f.folder + ': ' + fmt(f.count); }).join(' \u00b7 ') + (left.more ? ' \u00b7 and ' + many(left.more, 'more folder') : '') + ' (' + many(left.folders.length + (left.more || 0), 'folder') + ', ' + many(left.count, 'file') + ', ' + mb(left.bytes) + ')';
+            leftBox.hidden = false; leftOut.textContent = '';
+          } else if (!keepText) leftBox.hidden = true;
+          moved.hidden = leftBox.hidden;
+        }).catch(function () {});
+      };
+      if (outer) { outer.addEventListener('toggle', function () { if (outer.open) loadMoved(false); }); if (outer.open) loadMoved(false); }
+      if (leftOk) leftOk.addEventListener('change', function () { leftGo.disabled = !leftOk.checked; });
+      if (leftGo) leftGo.addEventListener('click', function () {
+        if (!leftOk.checked) return;
+        leftGo.disabled = true; leftOut.textContent = 'Removing\u2026';
+        movedPost('media_moved_remove', { others_gone: '1' }).then(function (j) {
+          if (!j.ok) { leftOut.textContent = j.text || 'Nothing was removed.'; leftGo.disabled = !leftOk.checked; return; }
+          leftOut.textContent = 'Removed ' + many(j.count, 'file') + ' (' + mb(j.bytes) + ').';
+          leftBox.querySelector('.media-leftover-sum').textContent = ''; leftBox.querySelector('.media-leftover-list').textContent = '';
+          leftOk.checked = false; leftGo.disabled = true; if (more.open) loadReport();
+        }).catch(function () { leftOut.textContent = 'The server did not answer.'; leftGo.disabled = !leftOk.checked; });
+      });
       more.addEventListener('toggle', function () { if (more.open) loadReport(); });
       // Tidy up saved locations: a preview first, then the real thing (every folder that changes is backed up first).
       const tidyOut = panel.querySelector('.media-tidy-out'), tidyBtn = panel.querySelector('.media-tidy-preview');
@@ -212,7 +256,7 @@
         body.set('csrf_token', panel.dataset.csrf); body.set('action', 'media_backups_delete');
         fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
           .then(function (r) { return r.json(); })
-          .then(function (j) { backupsBox.textContent = ''; backupsBox.appendChild(text('p', 'hint ' + (j.ok ? 'ok-text' : 'warn-text'), j.text || 'Done.')); })
+          .then(function (j) { backupsBox.textContent = ''; backupsBox.appendChild(text('p', 'hint ' + (j.ok ? 'ok-text' : 'warn-text'), j.text || 'Done.')); syncTidyHead(); })
           .catch(function () { del.disabled = false; const o = backupsBox.querySelector('.media-backups-out'); if (o) o.textContent = 'The server did not answer.'; });
       });
       const finish = function () {
@@ -320,11 +364,16 @@
       }, 1500);
     })();
     const toggle = document.querySelector('.health-toggle');
-    if (toggle) toggle.addEventListener('click', function () {
+    // The list starts closed. This button opens and closes it. The one time it starts open is straight after a button in the list reloaded the page
+    // (Set aside, Remove them), which set a one-shot note for it.
+    (function () {
       const panel = document.getElementById('health-panel');
-      const on = panel.classList.toggle('show-all');
-      toggle.setAttribute('aria-expanded', on ? 'true' : 'false');
-    });
+      if (!panel || !toggle) return;
+      const paint = function (on) { panel.classList.toggle('show-all', on); toggle.setAttribute('aria-expanded', on ? 'true' : 'false'); };
+      let reopen = false; try { reopen = sessionStorage.getItem('healthOpen') === '1'; sessionStorage.removeItem('healthOpen'); } catch (e) {}
+      if (reopen) paint(true);
+      toggle.addEventListener('click', function () { paint(!panel.classList.contains('show-all')); });
+    })();
     const mirror = function (key, cls, text) {
       document.querySelectorAll('[data-health="' + key + '"]').forEach(function (el) { el.textContent = text; el.className = 'health-detail ' + cls; });
       document.querySelectorAll('[data-health-row="' + key + '"]').forEach(function (row) {
@@ -377,6 +426,15 @@
         lockShow('unknown');
       });
     };
+    // Can the visitor log (a SQLite file with IP addresses in it) be downloaded by its plain address? The rule that refuses files starting with .gallery- keeps it private.
+    const runVisitLog = function () {
+      const url = probe.getAttribute('data-visits');
+      if (!url) return;
+      ask(url).then(function (state) {
+        mirror('visitlog', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
+          : state === 'open' ? 'Anyone can download the visitor log, which holds IP addresses: the server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+      });
+    };
     // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
     const runShareTidy = function () {
       const url = probe.getAttribute('data-share-probe');
@@ -385,15 +443,19 @@
         .then(function (r) { return r.headers.get('X-Gallery-Link') === 'invalid' ? 'works' : 'no'; })
         .catch(function () { return 'unknown'; })
         .then(function (state) {
-          const shown = location.origin + url.replace(/0000-probe-0000$/, '') + 'k7QpR2mXv9LwTb4e';   // (the probe's own name taken off the end: a link is the address and its code)
+          const shown = location.origin + url.replace(/0000-probe-0000$/, '') + 'k7QpR2mX';   // (the probe's own name taken off the end: a link is the address and its code)
           mirror('sharetidy', state === 'works' ? 'ok-text' : state === 'no' ? 'note-text' : '', state === 'works' ? 'A link looks like ' + shown + '.'
-            : state === 'no' ? 'Not set up (optional): links use the long form (…/?link=…). It works as it is; the rule only makes them shorter.' : 'Couldn\'t tell (the request failed).');
+            : state === 'no' ? 'Not set up (optional): links use the long form (…/?k7QpR2mX). It works as it is; the rule only makes them shorter.' : 'Couldn\'t tell (the request failed).');
+          document.querySelectorAll('[data-ft-sharetidy]').forEach(function (row) {   // (the Features list says the same: on, with a link as it looks now, and nothing to open)
+            var chip = row.querySelector('.ft-chip'), text = row.querySelector('.ft-text'), btn = row.querySelector('.ft-act button');
+            if (state === 'works') { chip.className = 'ft-chip ft-on'; chip.textContent = 'On'; text.textContent = 'The server rule is in place: a link looks like ' + shown + '.'; if (btn) btn.hidden = true; }
+          });
           if (state === 'works') {
             hideAll('[data-sharetidy-rules]', true);
             report('[data-sharetidy-status]', true, 'Tidy share addresses work: a link looks like ' + shown + ' (checked just now from this browser).', '[data-sharetidy-rules]');
           } else {
             hideAll('[data-sharetidy-rules]', false);
-            report('[data-sharetidy-status]', false, state === 'no' ? 'Tidy share addresses are not set up (optional): links use the long form (…/?link=…), which works as it is. Rules to add are below.' : 'Couldn\'t check tidy share addresses from this browser just now.', '[data-sharetidy-rules]');
+            report('[data-sharetidy-status]', false, state === 'no' ? 'Tidy share addresses are not set up (optional): links use the long form (…/?k7QpR2mX), which works as it is. Rules to add are below.' : 'Couldn\'t check tidy share addresses from this browser just now.', '[data-sharetidy-rules]');
           }
         });
     };
@@ -469,6 +531,7 @@
     document.querySelectorAll('.show-rules-btn').forEach(function (btn) { btn.addEventListener('click', function () { hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', false); btn.remove(); }); });
     mirrorLater();
     runLock();
+    runVisitLog();
     runTidy();
     runShareTidy();
     runAccel();
@@ -545,7 +608,7 @@
       });
       // On Settings or Private nothing in the folder list is selected: the folder you came from stays marked, quietly.
       var lay = document.querySelector('.admin-layout');
-      var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features';
+      var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits';
       if (lay) lay.classList.toggle('off-folder', whole);
       // The phone's Menu and bottom bar say the same thing as the sidebar: the page you are on is the one blue entry; the folder stays marked, quietly, on a whole-gallery page.
       [].forEach.call(document.querySelectorAll('.pb-w[data-pb-tab]'), function (a) { var on = a.getAttribute('data-pb-tab') === name; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -555,7 +618,7 @@
       // "Hidden" is a look at the whole tree, not a section of a folder:
       // moving to another folder shouldn't land you back on it.
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
-      if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
+      if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
       return name;
     }
     function fromLocation() {
@@ -578,7 +641,7 @@
         var target = t.getAttribute('data-tab');
         if (window.__siteDirty && target !== 'site') {
           // Something in Settings changed what the gallery shows: reload so the sidebar, counts and photos are current.
-          if (target !== 'hidden' && target !== 'links' && target !== 'features') { try { sessionStorage.setItem(KEY, target); } catch (e) {} }
+          if (target !== 'hidden' && target !== 'links' && target !== 'features' && target !== 'visits') { try { sessionStorage.setItem(KEY, target); } catch (e) {} }
           if (history.replaceState) history.replaceState(null, '', '#' + target);
           location.reload();
           return;
@@ -655,7 +718,7 @@
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
-            if (j.ok) { say(node, j.text, 'ok'); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); form.dispatchEvent(new CustomEvent('instant-saved', { bubbles: true, detail: j })); }
+            if (j.ok) { if (j.label && isBox) { var lab = el.closest('.instant-row').querySelector('.instant-label'); if (lab) lab.textContent = j.label; } say(node, j.text, 'ok'); window.__siteDirty = true; if (!isBox) el.setAttribute('data-prev', el.value); form.dispatchEvent(new CustomEvent('instant-saved', { bubbles: true, detail: j })); }
             else { say(node, j.text, 'err'); revert(); }
           })
           .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended — reload the page and sign in again.' : 'Couldn\'t save — check your connection.', 'err'); revert(); });
@@ -665,9 +728,12 @@
   // A folder's own settings save by themselves: a text field when you leave it or stop typing for a second, the order choices as they are
   // made. One request at a time, each checked against the record's fingerprint (so another tab's change is never overwritten), and each
   // field says "Saving…", "Saved" or what is wrong beside its own label. Nothing else in the folder's data is touched.
+  // (the folder's settings are two forms, the fields above its switches and the order of the photos below them; they share one fingerprint
+  // and one queue, so a save from either is checked against, and updates, the same record)
+  var identityChain = Promise.resolve();
   [].forEach.call(document.querySelectorAll('.identity-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
-    var csrf = form.querySelector('input[name=csrf_token]').value, hashInput = form.querySelector('input[name=loaded_hash]'), chain = Promise.resolve();
+    var csrf = form.querySelector('input[name=csrf_token]').value, hashInput = form.querySelector('input[name=loaded_hash]');
     function say(node, text, kind) {
       if (!node) return;
       node.textContent = text; node.className = 'rowstate ' + (kind || '');
@@ -676,7 +742,7 @@
     }
     function stateOf(el) { var h = el.closest('.flat-choice') || el.closest('.field') || el.closest('details'); return h ? h.querySelector('.rowstate') : null; }   // (each of the three Flat choices says Saved beside its own label)
     function post(fields, node, onOk, onErr) {
-      chain = chain.then(function () {
+      identityChain = identityChain.then(function () {
         say(node, 'Saving…', 'busy');
         var body = new URLSearchParams();
         body.set('csrf_token', csrf); body.set('action', 'save_folder_identity'); body.set('loaded_hash', hashInput.value);
@@ -685,7 +751,10 @@
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
-            if (j.ok) { if (j.hash) hashInput.value = j.hash; say(node, 'Saved', 'ok'); window.__siteDirty = true; if (onOk) onOk(); }
+            if (j.ok) {
+              if (j.hash) [].forEach.call(document.querySelectorAll('.identity-form input[name=loaded_hash]'), function (h) { h.value = j.hash; }); say(node, 'Saved', 'ok'); window.__siteDirty = true; if (onOk) onOk();
+              if (j.path) { var q = new URLSearchParams(location.search); if (q.get('folder') !== j.path) { q.set('folder', j.path); location.replace(location.pathname + '?' + q.toString() + location.hash); } }   // (a collection whose address was changed is now at another address)
+            }
             else { say(node, j.text, 'err'); if (onErr) onErr(); }
           })
           .catch(function (e) { say(node, e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); if (onErr) onErr(); });
@@ -920,53 +989,6 @@
     }
     function failed(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', true); }
     function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-    // ---- The Export log menu is a plain <details class="fold">: it closes when you press elsewhere, press Escape, choose an item or open another one
-    document.addEventListener('click', function (e) {
-      [].forEach.call(box.querySelectorAll('details.sl-export[open]'), function (d) {
-        if (!d.contains(e.target)) d.open = false;
-        else if (e.target.closest && e.target.closest('.sl-menu a, .sl-menu button')) setTimeout(function () { d.open = false; }, 0);
-      });
-    });
-    document.addEventListener('keydown', function (e) {
-      if (e.key !== 'Escape') return;
-      var d = box.querySelector('details.sl-export[open]'); if (!d) return;
-      d.open = false; var sm = d.querySelector('summary'); if (sm) sm.focus();
-    });
-    box.addEventListener('toggle', function (e) {
-      var d = e.target; if (!d.matches || !d.matches('details.sl-export') || !d.open) return;
-      [].forEach.call(box.querySelectorAll('details.sl-export[open]'), function (o) { if (o !== d) o.open = false; });
-    }, true);
-    // ---- Trim the log: pick a link (or all) and how old; it says what would go, then does it on a yes
-    function openTrim(pre) {
-      var opts = '<option value="all">All links</option>';
-      [].forEach.call(box.querySelectorAll('details.sl-row'), function (d) { var l = {}; try { l = JSON.parse(d.getAttribute('data-link')); } catch (x) {} opts += '<option value="' + esc(d.getAttribute('data-id')) + '">' + esc(l.label || d.getAttribute('data-id')) + '</option>'; });
-      var asked = ask('Trim the log', '<div class="sl-f"><span class="sl-k">Which link</span><select id="sl-trim-link">' + opts + '</select></div>'
-        + '<div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="sl-trim-age"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="sl-trim-date" hidden></div>'
-        + '<p class="hint" id="sl-trim-out" role="status">Counting&hellip;</p>'
-        + '<p class="hint">Opens, views and the number of visitors stay. To keep the lines themselves, download them first: <a id="sl-trim-dl-events" href="#">the timeline</a> &middot; <a id="sl-trim-dl-items" href="#">what they looked at</a> &middot; <a id="sl-trim-dl-visitors" href="#">visitors</a> (CSV, with IP addresses).</p>', 'Trim', true);
-      var m = modalEl(), sel = m.querySelector('#sl-trim-link'), age = m.querySelector('#sl-trim-age'), date = m.querySelector('#sl-trim-date'), out = m.querySelector('#sl-trim-out'), okBtn = m.querySelector('[data-sl-modal=ok]'), stamp = 0;
-      function params(apply) {
-        var f = { action: 'link_trim', id: sel.value, apply: apply ? '1' : '0' };
-        if (age.value === 'pick') f.before = date.value ? epoch(date.value + 'T00:00') : 0; else f.days = age.value;
-        return f;
-      }
-      function check() {
-        var mine = ++stamp, parts = ['events', 'items', 'visitors'];
-        parts.forEach(function (k) { m.querySelector('#sl-trim-dl-' + k).href = '?admin&linkexport=' + encodeURIComponent(sel.value) + '&what=' + k; });
-        date.hidden = age.value !== 'pick'; okBtn.disabled = true;
-        if (age.value === 'pick' && !date.value) { out.textContent = 'Pick a date: what is older than it goes.'; return; }
-        out.textContent = 'Counting…';
-        post(params(false)).then(function (j) { if (mine !== stamp) return; out.textContent = j.text || ''; okBtn.disabled = !j.ok || !!j.nothing; }).catch(function (e) { if (mine === stamp) out.textContent = e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t count: check your connection.'; });
-      }
-      if (pre) sel.value = pre;   // (opened from one link's own menu: that link first)
-      sel.addEventListener('change', check); age.addEventListener('change', check); date.addEventListener('change', check);
-      check();
-      asked.then(function (yes) {
-        stamp++;
-        if (!yes) return;
-        post(params(true)).then(function (j) { if (!j.ok) { say(j.text || 'Not trimmed', true); return; } return refresh().then(function () { say(j.text || 'Trimmed.'); }); }).catch(failed);
-      });
-    }
     function times() {
       [].forEach.call(box.querySelectorAll('time.sl-time[data-ts]'), function (t) {
         var d = new Date(+t.getAttribute('data-ts') * 1000); if (isNaN(d)) return;
@@ -992,7 +1014,6 @@
         times(); pretty = null; probe();
         var sideNow = document.querySelector('.side-link[data-tab="links"]'), sideNew = doc.querySelector('.side-link[data-tab="links"]');
         if (sideNow && sideNew) sideNow.innerHTML = sideNew.innerHTML;
-        [].forEach.call(box.querySelectorAll('details.sl-row[open] .sl-act'), function (a) { actLoad(a); });
         mountPanels();
         if (window.__slSelApply) window.__slSelApply();
       });
@@ -1005,28 +1026,7 @@
         window.GalleryShare.mount(m, { copy: m.getAttribute('data-copy') === '1', name: m.getAttribute('data-name') || '', url: function () { var u = row.querySelector('.sl-url'); return u ? u.value : ''; } });
       });
     }
-    // ---- the log: Visitors / Folders / Photos on a link, the page of one address, the list of every address
     function rowOf(el) { return el.closest ? el.closest('details.sl-row') : null; }
-    function actUrl(st) {
-      if (st.mode === 'ips') return '?admin&linkips=1';
-      var q = '';
-      function list(name, arr) { (arr || []).forEach(function (v) { q += '&' + name + '%5B%5D=' + encodeURIComponent(v); }); }
-      if (st.mode === 'ip') { list('folders', st.folders); return '?admin&linkip=' + encodeURIComponent(st.ip) + '&tab=' + (st.tab || 'folders') + (st.link ? '&linkid=' + st.link : '') + q + (st.what ? '&what=' + st.what : '') + (st.exact ? '&exact=1' : '') + (st.all ? '&all=1' : ''); }
-      list('ips', st.ips); list('folders', st.folders);
-      return '?admin&linkview=' + st.id + '&tab=' + (st.tab || 'visitors') + q + (st.what ? '&what=' + st.what : '') + (st.exact ? '&exact=1' : '') + (st.all ? '&all=1' : '');
-    }
-    function actLoad(el, patch, replaceState) {
-      var row = rowOf(el);
-      var st = replaceState || el._st || { mode: el.getAttribute('data-act') === 'ips' ? 'ips' : 'link', id: row ? row.getAttribute('data-id') : '', tab: null };
-      if (patch) st = Object.assign({}, st, patch);
-      el._st = st;
-      el.classList.add('loading');
-      return fetch(actUrl(st), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
-        el.classList.remove('loading');
-        var back = st.prev ? '<button type="button" class="linklike sl-back" data-back>‹ ' + esc(st.prev.mode === 'ips' ? 'All IP addresses' : (row ? row.querySelector('.sl-name').textContent : 'Back')) + '</button>' : '';
-        el.innerHTML = back + html; times();
-      }).catch(function () { el.classList.remove('loading'); el.textContent = 'Couldn\'t load: check your connection.'; });
-    }
     function coverLines(root) {   // the Preview photo line of a link's settings: the picture it will use, or that nothing public is there yet
       [].forEach.call(root.querySelectorAll('.sl-cover[data-cover-id]:not([data-done])'), function (el) {
         el.setAttribute('data-done', '1');
@@ -1038,40 +1038,9 @@
     box.addEventListener('toggle', function (e) {
       var d = e.target;
       if (d && d.classList && d.classList.contains('sl-settings') && d.open) coverLines(d);
-      if (d && d.classList && d.classList.contains('sl-row') && d.open) { var a = d.querySelector('.sl-act'); if (a && !a._st) actLoad(a); mountPanels(); }
+      if (d && d.classList && d.classList.contains('sl-row') && d.open) mountPanels();
     }, true);
-    box.addEventListener('click', function (e) {
-      var go = e.target.closest ? e.target.closest('[data-golink]') : null;
-      if (go) {   // a link's name in the log: the Links view, with that link opened (its Settings stay folded) and in sight
-        var linksTab = box.querySelector('.sl-viewswitch .sl-segbtn[data-view=links]'); if (linksTab && !linksTab.classList.contains('on')) linksTab.click();
-        var target = box.querySelector('details.sl-row[data-id="' + go.getAttribute('data-golink') + '"]');
-        if (target) {
-          target.open = true;
-          var tAct = target.querySelector('.sl-act');   // (a row that is showing one address's page goes back to the link's own log: what pressing the link's name means)
-          if (tAct && tAct._st && tAct._st.mode === 'ip') actLoad(tAct, null, { mode: 'link', id: target.getAttribute('data-id'), tab: null });
-          target.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        }
-        return;
-      }
-      var act = e.target.closest ? e.target.closest('.sl-act') : null;
-      var vs = e.target.closest ? e.target.closest('[data-view]') : null;
-      if (vs) {
-        var ipsView = vs.getAttribute('data-view') === 'ips';
-        box.querySelector('#sl-links-view').hidden = ipsView; box.querySelector('#sl-ips-view').hidden = !ipsView;
-        [].forEach.call(box.querySelectorAll('.sl-viewswitch .sl-segbtn'), function (b) { b.classList.toggle('on', b === vs); });
-        var ipsEl = box.querySelector('#sl-ips-view .sl-act'); if (ipsView && ipsEl && !ipsEl._st) actLoad(ipsEl);
-        return;
-      }
-      if (!act) return;
-      var tabBtn = e.target.closest('.sl-segbtn[data-tab]'), ipBtn = e.target.closest('[data-ip]'), numBtn = e.target.closest('[data-media]');
-      var st = act._st || {};
-      if (tabBtn) { actLoad(act, { tab: tabBtn.getAttribute('data-tab'), all: false }); return; }
-      if (ipBtn) { actLoad(act, { mode: 'ip', ip: ipBtn.getAttribute('data-ip'), tab: ipBtn.getAttribute('data-go') || 'folders', link: '', prev: st.prev ? st.prev : st, ips: [], folders: [], exact: false, what: '', all: false }, null); return; }
-      if (numBtn) { actLoad(act, { tab: 'media', folders: [numBtn.getAttribute('data-folder')], exact: true, what: numBtn.getAttribute('data-media'), all: false }); return; }   // (exact: the number counted this folder's own files, not the folders inside it)
-      if (e.target.closest('[data-more]')) { actLoad(act, { all: true }); return; }
-      if (e.target.closest('[data-back]') && st.prev) { actLoad(act, null, st.prev); return; }
-    });
-    // ---- menus (the filter line, and the choices in the link form and its dialogs): a button that opens a list under it.
+    // ---- menus (the choices in the link form and its dialogs): a button that opens a list under it.
     // A menu of several ticks applies as each one is made (a moment later, so quick ticks make one request) and stays open;
     // a menu of one choice applies at once and closes. "All" is the first row: ticked while nothing else is.
     function popValues(pop) { return [].map.call(pop.querySelectorAll('input:checked:not([data-all])'), function (i) { return i.value; }); }
@@ -1080,24 +1049,10 @@
       menu.hidden = true; pop.querySelector('.sl-popbtn').setAttribute('aria-expanded', 'false');
     }
     function popCloseAll(except) { [].forEach.call(box.querySelectorAll('.sl-pop'), function (p) { if (p !== except) popClose(p); }); }
-    function popApply(pop) {
-      var act = pop.closest('.sl-act'), k = pop.getAttribute('data-pop'), v = popValues(pop);
-      if (!act) {   // a menu in the form or a dialog keeps its choice in a hidden field and says it on its button
-        var r = pop.querySelector('input[type=radio]:checked'), h = pop.querySelector('input[type=hidden]');
-        if (r) pop.querySelector('.sl-poplab').textContent = r.getAttribute('data-short') || r.parentElement.textContent.trim();
-        if (h) { h.value = r ? r.value : ''; h.dispatchEvent(new Event('change', { bubbles: true })); }
-        return;
-      }
-      var patch = { all: false };
-      if (k === 'what') patch.what = v[0] || 'viewed'; else if (k === 'link') patch.link = v[0] || ''; else patch[k] = v;
-      if (k === 'folders') patch.exact = false;
-      var menu = pop.querySelector('.sl-popmenu'), top = menu.scrollTop, ae = document.activeElement, focusVal = ae && ae.type === 'checkbox' && pop.contains(ae) ? ae.value : null;
-      actLoad(act, patch).then(function () {
-        if (menu.hidden || pop.getAttribute('data-multi') !== '1') return;   // (put it back open only if it was still open when the new page arrived)
-        var np = act.querySelector('[data-pop="' + k + '"]'); if (!np) return;
-        var nm = np.querySelector('.sl-popmenu'); nm.hidden = false; np.querySelector('.sl-popbtn').setAttribute('aria-expanded', 'true'); nm.scrollTop = top;
-        if (focusVal !== null) { var inp = [].filter.call(nm.querySelectorAll('input'), function (i) { return i.value === focusVal; })[0]; if (inp) inp.focus(); }
-      });
+    function popApply(pop) {   // a menu in the form or a dialog keeps its choice in a hidden field and says it on its button
+      var r = pop.querySelector('input[type=radio]:checked'), h = pop.querySelector('input[type=hidden]');
+      if (r) pop.querySelector('.sl-poplab').textContent = r.getAttribute('data-short') || r.parentElement.textContent.trim();
+      if (h) { h.value = r ? r.value : ''; h.dispatchEvent(new Event('change', { bubbles: true })); }
     }
     box.addEventListener('click', function (e) {
       var btn = e.target.closest ? e.target.closest('.sl-popbtn') : null, pop = btn ? btn.closest('.sl-pop') : null;
@@ -1406,14 +1361,25 @@
       var list = (kind !== 'scope' && (scope === 'folders' || scope === 'mixed')) ? all.filter(function (o) { return under(o.p, roots); }) : all;
       if (kind !== 'scope' && (scope === 'folders' || scope === 'mixed') && !roots.length) { say('Choose the folders it covers first.', true); return Promise.resolve(false); }
       var rows = list.map(function (o, i) {
-        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"' + (st[kind].indexOf(o.p) >= 0 ? ' checked' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n || o.l) + '</span></label>';
+        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"' + (st[kind].indexOf(o.p) >= 0 ? ' checked' : '') + '> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Not listed</small>' : '') + '</span></label>';
       }).join('') || '<p class="muted">There are no folders to choose from.</p>';
       return ask(kind === 'scope' ? 'Choose the folders it covers' : 'Choose the folders', '<div class="sl-picklist">' + rows + '</div><p class="hint">A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.</p>', 'Done', false).then(function (yes) {
         if (!yes) return false;
+        var before = st[kind].slice();
         st[kind] = [].map.call(modalEl().querySelectorAll('.sl-picklist input:checked'), function (c) { return c.value; });
-        if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope); }); }); }
-        syncForm(form);
-        return true;
+        // A Not listed folder is the owner's private drawer: picking one into a link is allowed, but asked about, because everyone with the link then sees all of it.
+        var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
+        var finish = function () {
+          if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope); }); }); }
+          syncForm(form);
+          return true;
+        };
+        if (!newlyUnlisted.length) return finish();
+        var names = newlyUnlisted.map(function (o) { return '<strong>' + esc(o.n || o.l) + '</strong>'; }).join(', ');
+        return ask('Include a Not listed folder?', '<p>' + names + (newlyUnlisted.length === 1 ? ' is' : ' are') + ' Not listed: only you can open ' + (newlyUnlisted.length === 1 ? 'it' : 'them') + '. Everyone with this link will see all of ' + (newlyUnlisted.length === 1 ? 'it' : 'them') + '.</p>', 'Include ' + (newlyUnlisted.length === 1 ? 'it' : 'them'), true).then(function (answer) {
+          if (answer !== true) { var drop = newlyUnlisted.map(function (o) { return o.p; }); st[kind] = st[kind].filter(function (p) { return drop.indexOf(p) < 0; }); }
+          return finish();
+        });
       });
     }
     // The photo picker: choose a folder, tick its photos; what is ticked stays ticked while another folder is looked at.
@@ -1502,7 +1468,7 @@
       if (row) { try { link = JSON.parse(row.getAttribute('data-link')); } catch (x2) {} }
       if (b.closest('summary')) e.preventDefault();   // a button in a row's title line doesn't also fold the row
       if (what === 'new') { openForm(null); return; }
-      if (what === 'trim') { openTrim(b.getAttribute('data-trim-link') || ''); return; }
+      if (what === 'visitors') { var vrow = rowOf(b), vid = vrow ? vrow.getAttribute('data-id') : ''; if (window.__vtShow) window.__vtShow(vid); adminGoTo('visits'); return; }
       if (what === 'addrrandom') { setAddrMode(box.querySelector('#sl-form'), 'random', false); return; }
       if (what === 'addrcustom') { setAddrMode(box.querySelector('#sl-form'), 'custom', true); return; }
       if (what === 'grpreset') { var gd = b.closest('details.sl-grp'); resetGroup(box.querySelector('#sl-form'), gd.getAttribute('data-grp')); return; }
@@ -1709,7 +1675,6 @@
       if (!sel.on) return;
       var pill = t.closest('details.sl-row:not(.sl-public) > summary > .sl-pill:first-child');
       if (pill) { e.preventDefault(); e.stopPropagation(); selFlip(pill.closest('details.sl-row')); return; }
-      if (t.closest('.sl-viewswitch [data-view=ips]')) selMode(false);
     }, true);
     box.addEventListener('keydown', function (e) {
       if (!sel.on || (e.key !== ' ' && e.key !== 'Enter')) return;
@@ -1721,7 +1686,6 @@
     if (slPanel && window.MutationObserver) new MutationObserver(function () { if (sel.on) selApply(); }).observe(slPanel, { attributes: true, attributeFilter: ['class'] });
     times(); probe();
     if (box.closest('.tab-panel.active')) setTimeout(markSeen, 1500);
-    [].forEach.call(box.querySelectorAll('details.sl-row[open]'), function (d) { var a = d.querySelector('.sl-act'); if (a) actLoad(a); });
     mountPanels();
     // the short "Share this folder / photo" form hands over to the full form ("More options…"), here or from another page
     window.__slOpenForm = openForm; window.__slRefresh = refresh; window.__slSelApply = selApply;
@@ -1740,6 +1704,7 @@
     var noun = form.getAttribute('data-noun') || 'photo';
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
     function paint() {
+      var dlBlock = document.querySelector('.dl-block'); if (dlBlock) dlBlock.hidden = box.checked;   // (a private folder offers visitors nothing: the download switch is for a public one)
       if (!note) return;
       note.innerHTML = box.checked ? note.getAttribute('data-on').replace('%stay%', word(counts.stay)).replace('%open%', word(counts.open)).replace('%becomes%', counts.open === 1 ? 'becomes' : 'become') : note.getAttribute('data-off');
     }
@@ -1798,6 +1763,8 @@
   // The map sits under the location switch and only shows photos whose location is public, so it is dimmed (with a note) while
   // locations are off. (The note and dimming follow the switch once it has saved; with locations off for the whole gallery they stay.)
   (function () {
+    var keep = document.querySelector('.loc-keep'), box0 = document.querySelector('.instant-form input[type=checkbox][name=enabled]'), form0 = box0 && box0.closest('form');
+    if (keep && form0) form0.addEventListener('instant-saved', function () { keep.hidden = !box0.checked; });   // (the keep-the-location switch only matters where the folder shows its locations)
     var under = document.getElementById('map-under'); if (!under || under.getAttribute('data-global-off')) return;
     var box = document.querySelector('.instant-form input[type=checkbox][name=enabled]'), form = box && box.closest('form');
     if (form) form.addEventListener('instant-saved', function () { under.classList.toggle('no-loc', !box.checked); });
@@ -1956,6 +1923,9 @@
     var hashInput = form.querySelector('input[name=config_hash]');
     var csrf = form.querySelector('input[name=csrf_token]').value;
     var chain = Promise.resolve();
+    // Whole-gallery settings are not about any folder, so a save is sent to this page's address without its folder: removing the very place
+    // you are standing in (the Folders from elsewhere list) must not leave the next save pointing at a folder that is gone.
+    function siteUrl() { var q = new URLSearchParams(location.search); q.delete('folder'); var t = q.toString(); return location.pathname + (t ? '?' + t : '?admin'); }
     var sync = document.querySelector('.sitesync');
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });   // no submit button without JavaScript: Enter must not post the whole form
     function say(node, text, kind) {
@@ -1972,6 +1942,7 @@
       refreshTimer = setTimeout(function () {
         fetch(location.pathname + location.search, { credentials: 'same-origin' })
           .then(function (r) { return r.text(); })
+          .then(function (html) { return html.indexOf('admin-folders') >= 0 ? html : fetch(siteUrl(), { credentials: 'same-origin' }).then(function (r) { return r.text(); }); })   // (the folder you are in may be the place just removed)
           .then(function (html) {
             var doc = new DOMParser().parseFromString(html, 'text/html');
             var fresh = doc.querySelector('.admin-folders'), old = document.querySelector('.admin-folders');
@@ -1995,12 +1966,12 @@
       box.querySelector('textarea').value = text;
     }
     function post(fields, node, onFail, onOk) {
-      chain = chain.then(function () {
+      identityChain = identityChain.then(function () {
         say(node, 'Saving…', 'busy');
         var body = new URLSearchParams();
         body.set('csrf_token', csrf); body.set('action', 'save_site_settings'); body.set('config_hash', hashInput.value);
         Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
-        return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+        return fetch(siteUrl(), { method: 'POST', credentials: 'same-origin', body: body.toString(),
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
@@ -2031,7 +2002,7 @@
       var slot = document.getElementById('media-slot'); if (!slot) return;
       if (!on) { slot.textContent = ''; return; }
       var body = new URLSearchParams(); body.set('csrf_token', csrf); body.set('action', 'media_panel');
-      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      fetch(siteUrl(), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { return r.json(); })
         .then(function (j) {
           if (!j.ok || !j.html || !j.cache) return;
@@ -2108,6 +2079,115 @@
       tools.addEventListener('click', function (e) { var b = e.target.closest ? e.target.closest('[data-sg]') : null; if (!b) return; var want = b.getAttribute('data-sg') === 'all'; groups.forEach(function (g) { g.open = want; }); sync(); });
       sync();
     })();
+    // Set aside / Bring back, on the Health check's rows about what was left behind: one request, then the page is read again so the row moves.
+    document.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-aside], [data-aside-back]') : null; if (!b) return;
+      var panel = b.closest('#health-panel'); if (!panel) return;
+      var back = b.hasAttribute('data-aside-back'), body = new URLSearchParams();
+      body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_set_aside'); body.set('key', b.getAttribute(back ? 'data-aside-back' : 'data-aside')); if (back) body.set('back', '1');
+      b.disabled = true;
+      fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (e) {} location.reload(); } else { b.disabled = false; b.parentNode.appendChild(document.createTextNode(' ' + (j.text || 'Not saved.'))); } })
+        .catch(function () { b.disabled = false; });
+    });
+    // "Remove them" on the older visitor logs row: one request, then the page is read again so the row goes.
+    document.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-oldlogs-remove]') : null; if (!b) return;
+      var panel = b.closest('#health-panel'); if (!panel) return;
+      var body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_remove_old_logs');
+      b.disabled = true;
+      fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (e) {} location.reload(); } else { b.disabled = false; b.parentNode.appendChild(document.createTextNode(' ' + (j.text || 'Not removed.'))); } })
+        .catch(function () { b.disabled = false; });
+    });
+    // Count views: the views another gallery counted for the photos now shown here (found in each folder's own stats file under an older path)
+    // are offered under the setting they belong to, once something is found. Looked for when the group is opened (it reads each folder's file).
+    (function () {
+      var box = form.querySelector('[data-earlier]'); if (!box) return;
+      var text = box.querySelector('.earlier-text'), add = box.querySelector('.earlier-add'), hint = box.querySelector('.earlier-hint'), act = box.querySelector('.earlier-act');
+      var group = box.closest('details'), asked = false;
+      function fmtN(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+      function ask(extra) {
+        var body = new URLSearchParams(); body.set('csrf_token', box.getAttribute('data-csrf')); body.set('action', extra || 'media_moved');
+        return fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); });
+      }
+      function look() {
+        if (asked) return; asked = true;
+        ask().then(function (j) {
+          if (!j.ok || !j.track || !(j.views > 0)) return;
+          text.textContent = ''; var st = document.createElement('strong'); st.textContent = fmtN(j.views) + ' earlier views'; text.appendChild(st);
+          text.appendChild(document.createTextNode(' found for ' + j.viewFolders + (j.viewFolders === 1 ? ' folder' : ' folders') + ', counted by another gallery under their old addresses.'));
+          act.hidden = false; hint.hidden = false; add.disabled = false; box.hidden = false;
+        }).catch(function () { asked = false; });
+      }
+      if (group) { group.addEventListener('toggle', function () { if (group.open) look(); }); if (group.open) look(); }
+      add.addEventListener('click', function () {
+        add.disabled = true; text.textContent = 'Adding…';
+        ask('media_moved_views').then(function (j) {
+          if (!j.ok) { text.textContent = j.text || 'Not added.'; add.disabled = false; return; }
+          text.textContent = 'Added ' + fmtN(j.added) + ' views to ' + j.folders + (j.folders === 1 ? ' folder' : ' folders') + '.';
+          act.hidden = true; hint.hidden = true; window.__siteDirty = true;
+        }).catch(function () { text.textContent = 'The server did not answer.'; add.disabled = false; });
+      });
+    })();
+    // Search the settings: type a few words and only the settings that have all of them (in the name, the help, the choices, the setting's
+    // own word such as TRACK_VIEWS, or the group's title) stay; their groups open by themselves, and clearing the box puts every group back as it was.
+    (function () {
+      var box = document.querySelector('[data-site-find]'), wrap = document.querySelector('[data-site-find-wrap]'), note = document.querySelector('[data-site-find-count]');
+      if (!box || !wrap || !note) return;
+      var index = null, saved = null;
+      function norm(t) { return String(t || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+      function build() {
+        index = [].slice.call(form.querySelectorAll('details.site-group')).map(function (g) {
+          var title = norm((g.querySelector('summary') || { textContent: '' }).textContent);
+          return {
+            el: g, title: title,
+            rows: [].slice.call(g.children).filter(function (r) { return r.tagName !== 'SUMMARY'; }).map(function (r) {   // (every block in the group: the settings, and also the server rules and the Prepare media panel)
+              var c = r.cloneNode(true), key = (r.id || '').replace(/^setting-/, '');
+              [].forEach.call(c.querySelectorAll('.src, script, style, .rowstate'), function (n) { n.parentNode.removeChild(n); });
+              return { el: r, text: norm(title + ' ' + c.textContent + ' ' + key + ' ' + key.replace(/_/g, ' ')) };
+            })
+          };
+        });
+      }
+      function clear() {
+        if (!saved) return;
+        index.forEach(function (g, i) { g.el.classList.remove('find-miss'); g.rows.forEach(function (r) { r.el.classList.remove('find-miss'); }); g.el.open = saved[i]; });
+        saved = null; note.hidden = true;
+      }
+      function apply() {
+        var terms = norm(box.value).split(' ').filter(Boolean);
+        if (!terms.length) { clear(); return; }
+        if (!index) build();
+        if (!saved) saved = index.map(function (g) { return g.el.open; });
+        var shown = 0, later = 0;
+        function has(t) { return terms.every(function (w) { return t.indexOf(w) >= 0; }); }
+        index.forEach(function (g) {
+          var any = 0;
+          g.rows.forEach(function (r) {
+            var ok = has(r.text);
+            if (ok && r.el.hidden) { later++; ok = false; }   // (a setting that only shows while another is on: counted, not shown)
+            r.el.classList.toggle('find-miss', !ok);
+            if (ok) any++;
+          });
+          var own = !g.rows.length && has(g.title);   // (a group with nothing in it yet matches by its title)
+          g.el.classList.toggle('find-miss', !(any || own));
+          if (any) g.el.open = true;
+          shown += any + (own ? 1 : 0);
+        });
+        note.hidden = false;
+        note.textContent = (shown ? shown + ' found' : 'Nothing matches \u201c' + box.value.trim() + '\u201d.')
+          + (later ? (shown ? '. ' : ' ') + later + (later === 1 ? ' more matches' : ' more match') + ' but only show while another setting is on.' : '');
+      }
+      box.addEventListener('focus', function () { if (!saved) index = null; });   // (rows built later, such as the folder lists, are read again)
+      box.addEventListener('input', apply);
+      box.addEventListener('keydown', function (e) { if (e.key === 'Escape' && box.value) { e.preventDefault(); box.value = ''; apply(); } else if (e.key === 'Enter') e.preventDefault(); });
+      form.addEventListener('change', function () { if (saved) setTimeout(apply, 0); });
+      document.addEventListener('gallery-settings-find-clear', function () { if (box.value) { box.value = ''; apply(); } });
+      wrap.hidden = false;
+    })();
     // The menu buttons: open and close the list, show the chosen label; the radios inside do the saving (the handlers above and below).
     (function () {
       var open = null;
@@ -2151,43 +2231,6 @@
         });
       });
     });
-    // Visitors may download from: the folders chosen under "Only some folders" (the mode itself is saved by the segmented control above).
-    [].forEach.call(form.querySelectorAll('[data-dlfolders]'), function (box) {
-      var options = [], chosen = [], menu = box.querySelector('.dl-menu'), list = box.querySelector('.dl-pop'), none = box.querySelector('.dl-none'), pickBtn = box.querySelector('.dl-btn'), label = box.querySelector('.menu-label');
-      var holder = document.getElementById('setting-PUBLIC_DOWNLOAD_MODE'), status = holder ? holder.querySelector('.rowstate') : null;
-      try { options = JSON.parse(box.getAttribute('data-options')) || []; chosen = JSON.parse(box.getAttribute('data-chosen')) || []; } catch (e) {}
-      var labelOf = function (p) { for (var i = 0; i < options.length; i++) if (options[i].path === p) return options[i].label; return p + ' (not found)'; };
-      function paint() {
-        none.hidden = chosen.length > 0;
-        var names = chosen.map(labelOf);
-        label.textContent = !names.length ? 'Choose folders\u2026' : (names.length <= 2 ? names.join(', ') : names.length + ' folders');
-        pickBtn.setAttribute('aria-label', 'Folders visitors may download from: ' + (names.length ? names.join(', ') : 'none chosen'));
-        [].forEach.call(list.querySelectorAll('input'), function (i) { i.checked = chosen.indexOf(i.value) >= 0; });
-      }
-      function save(next, undo) {
-        var f = {}; f.set_PUBLIC_DOWNLOAD_FOLDERS = JSON.stringify(next);
-        post(f, status, function () { chosen = undo; paint(); }, function () { /* saved */ });
-        chosen = next; paint();
-      }
-      // The folders as a tree (each one indented under the one it is inside), ticked as you go; the list stays open until you click away.
-      options.forEach(function (o) {
-        var l = document.createElement('label'), i = document.createElement('input'), t = document.createElement('span'), k = document.createElement('span'), depth = Math.min(5, o.path.split('/').length - 1);
-        l.className = 'dl-opt' + (depth ? ' dl-d' + depth : ''); i.type = 'checkbox'; i.value = o.path;
-        t.className = 'dl-text'; t.textContent = o.label; k.className = 'dl-tick'; k.setAttribute('aria-hidden', 'true'); k.textContent = '\u2713';
-        l.appendChild(i); l.appendChild(t); l.appendChild(k); list.appendChild(l);
-      });
-      if (!options.length) { var empty = document.createElement('p'); empty.className = 'help dl-none-text'; empty.style.padding = '10px 14px'; empty.textContent = 'There are no public folders.'; list.appendChild(empty); }
-      list.addEventListener('change', function (e) {
-        var i = e.target; if (!i || i.type !== 'checkbox') return;
-        var before = chosen.slice(), next = before.filter(function (x) { return x !== i.value; });
-        if (i.checked) next.push(i.value);
-        save(next, before);
-      });
-      [].forEach.call(form.querySelectorAll('input[type=radio][name=set_PUBLIC_DOWNLOAD_MODE]'), function (r) {
-        r.addEventListener('change', function () { box.hidden = r.value !== 'some'; if (r.value === 'some' && !chosen.length && list.hidden) pickBtn.click(); paint(); });
-      });
-      paint();
-    });
     [].forEach.call(form.querySelectorAll('input[type=text][name^=set_]'), function (el) {
       el.setAttribute('data-prev', el.value);
       el.addEventListener('change', function () {
@@ -2205,7 +2248,10 @@
         what.className = 'extra-what';
         parts.forEach(function (p) { what.appendChild(p); what.appendChild(document.createTextNode(' ')); });
         btn.type = 'button'; btn.className = 'extra-remove secondary'; btn.textContent = 'Remove'; btn.setAttribute('data-kind', kind); btn.setAttribute('data-name', key);
-        li.appendChild(what); li.appendChild(btn);
+        var edit = document.createElement('button'), acts = document.createElement('span');
+        edit.type = 'button'; edit.className = 'extra-edit secondary'; edit.textContent = 'Edit'; edit.setAttribute('data-kind', kind); edit.setAttribute('data-name', key);
+        acts.className = 'extra-acts'; acts.appendChild(edit); acts.appendChild(btn);
+        li.appendChild(what); li.appendChild(acts);
         if (note) { var n = document.createElement('span'); n.className = 'muted extra-note'; n.textContent = note; li.appendChild(n); }
         list.appendChild(li);
       }
@@ -2217,8 +2263,9 @@
         none.hidden = state.roots.length + Object.keys(state.named).length > 0;
       }
       function copy() { var n = {}; Object.keys(state.named).forEach(function (k) { n[k] = state.named[k]; }); return { named: n, roots: state.roots.slice() }; }
-      function send(next, onOk) {
-        var f = {}; f[box.getAttribute('data-name')] = JSON.stringify(next);
+      function send(next, onOk, edit) {
+        var f = {}, payload = Object.assign({}, next); if (edit) payload.edit = edit;
+        f[box.getAttribute('data-name')] = JSON.stringify(payload);
         post(f, status, null, function (j) { state = (j.extra && typeof j.extra === 'object') ? { named: j.extra.named || {}, roots: j.extra.roots || [] } : next; draw(); if (onOk) onOk(); });
       }
       box.querySelector('.extra-add-btn').addEventListener('click', function () {
@@ -2228,7 +2275,38 @@
         if (n) next.named[n] = p; else next.roots.push(p);
         send(next, function () { box.querySelector('.extra-name').value = ''; box.querySelector('.extra-path').value = ''; });
       });
+      // Edit: the entry's name and path in two boxes in its own row; Save changes it in one step. The place keeps its identity, so its view counts
+      // follow it (the server remembers the names it has had); only addresses with the old name stop working.
+      function openEdit(b) {
+        var kind = b.getAttribute('data-kind'), key = b.getAttribute('data-name'), path = kind === 'root' ? key : state.named[key], li = b.closest('li');
+        var oldName = kind === 'root' ? '' : key;
+        li.textContent = ''; li.classList.add('extra-editing');
+        var row = document.createElement('div'); row.className = 'extra-add extra-editrow';
+        var nm = document.createElement('input'), pa = document.createElement('input'), hint = el('p', '', 'muted extra-ehint'), bar = document.createElement('div'), save = el('button', 'Save', 'extra-save'), cancel = el('button', 'Cancel', 'extra-cancel secondary');
+        nm.type = 'text'; nm.className = 'extra-ename'; nm.value = oldName; nm.placeholder = 'Name (optional)'; nm.maxLength = 60; nm.autocomplete = 'off'; nm.spellcheck = false; nm.setAttribute('aria-label', 'Name (optional)');
+        pa.type = 'text'; pa.className = 'extra-epath'; pa.value = path; pa.placeholder = '/full/path/to/the/place'; pa.autocomplete = 'off'; pa.spellcheck = false; pa.setAttribute('aria-label', 'Path to the place');
+        save.type = 'button'; cancel.type = 'button'; bar.className = 'extra-ebar'; bar.appendChild(save); bar.appendChild(cancel);
+        function words() {
+          var n = nm.value.trim(), t = [];
+          if (n !== oldName) t.push(oldName === '' ? 'Giving it a name shows the whole place as one folder with that name.' : (n === '' ? 'With no name, its folders appear at the top of the gallery.' : 'Addresses with the old name (\u201c?folder=' + oldName + '/\u2026\u201d) stop working.'));
+          if (n !== oldName && oldName !== '' && n !== '') t.push('Its view counts follow it. Share links and Not listed addresses are not affected.');
+          hint.textContent = t.join(' '); hint.hidden = !t.length;
+        }
+        nm.addEventListener('input', words); words();
+        row.appendChild(nm); row.appendChild(pa); row.appendChild(hint); row.appendChild(bar); li.appendChild(row); nm.focus();
+        cancel.addEventListener('click', draw);
+        save.addEventListener('click', function () {
+          var n = nm.value.trim(), p = pa.value.trim(), next = copy();
+          if (!p) { say(status, 'Give the full path of the place.', 'err'); return; }
+          if (kind === 'root') next.roots = next.roots.filter(function (r) { return r !== key; }); else delete next.named[key];
+          if (n) next.named[n] = p; else next.roots.push(p);
+          if (n === oldName && p === path) { draw(); return; }
+          send(next, function () { say(status, n !== oldName && oldName !== '' && n !== '' ? 'Saved. Its view counts follow the place; addresses with the old name no longer work.' : 'Saved.', 'ok'); }, { path: path, label: n });
+        });
+      }
       list.addEventListener('click', function (ev) {
+        var eb = ev.target.closest ? ev.target.closest('.extra-edit') : null;
+        if (eb) { openEdit(eb); return; }
         var b = ev.target.closest ? ev.target.closest('.extra-remove') : null;
         if (!b) return;
         var n = b.getAttribute('data-name'), next = copy();
@@ -2355,6 +2433,411 @@
         post({ action: 'geo_disable', delete: row.querySelector('[data-geo-delete]').checked ? '1' : '' }, function (j) { say(j.text, j.ok ? 'ok' : 'err'); if (j.ok) setTimeout(function () { location.reload(); }, 900); });
       }
     });
+  })();
+  // The line under a folder's download switch ("The 5 folders inside it have downloads off. Allow downloads in all"): one press does it, once (nothing
+  // links the folders afterwards), and the line is redrawn for where things now stand. It shows only while the folder's own switch is on.
+  [].forEach.call(document.querySelectorAll('[data-dl-inside]'), function (box) {
+    var csrf = box.getAttribute('data-csrf'), body = box.querySelector('.dl-inside-body'), state = box.querySelector('.rowstate');
+    var sw = box.closest('.dl-block').querySelector('input[type=checkbox][name=dl]'), swForm = sw && sw.closest('form');
+    if (swForm) swForm.addEventListener('instant-saved', function () { box.hidden = !sw.checked; });
+    function go(mode) {
+      var fd = new URLSearchParams(); fd.set('csrf_token', csrf); fd.set('action', 'downloads_inside'); fd.set('mode', mode); fd.set('apply', '1');
+      state.textContent = 'Saving…';
+      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: fd.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
+        .then(function (j) {
+          if (!j.ok) { state.textContent = j.text; return; }
+          if (j.html) body.innerHTML = j.html;
+          window.__siteDirty = true; state.textContent = j.short || ''; clearTimeout(state._t); state._t = setTimeout(function () { state.textContent = ''; }, 3000);
+        })
+        .catch(function (e) { state.textContent = e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.'; });
+    }
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('.dl-in-on, .dl-in-off') : null; if (!b) return;
+      go(b.classList.contains('dl-in-on') ? 'on' : 'off');
+    });
+  });
+  // The Cover photo row of a folder that holds folders: the cover in use, and a picker with a tile for each folder under it (the folder then
+  // follows that folder's cover), or any photo inside it by "Pick any photo instead". Each choice is one request and shows at once.
+  [].forEach.call(document.querySelectorAll('[data-cover]'), function (box) {
+    var form = box.closest('form'), csrf = form ? form.querySelector('input[name=csrf_token]').value : '';
+    var pick = box.querySelector('.cv-pick'), any = box.querySelector('.cv-anywhere'), state = box.querySelector('.rowstate');
+    function say(text, kind) { state.textContent = text; state.className = 'rowstate ' + (kind || ''); clearTimeout(state._t); if (kind === 'ok') state._t = setTimeout(function () { state.textContent = ''; state.className = 'rowstate'; }, 3000); }
+    function send(fields) {
+      var body = new URLSearchParams(); body.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+      return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
+    }
+    function fail(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); }
+    function show(c) {
+      var img = box.querySelector('.cv-img'); if (c.url) { img.src = c.url; img.hidden = false; } else img.hidden = true;
+      box.querySelector('.cv-title').textContent = c.title; box.querySelector('.cv-small').textContent = c.small;
+      box.querySelector('.cv-auto').hidden = c.mode === 'auto';
+      [].forEach.call(box.querySelectorAll('.cv-tile'), function (t) { t.classList.toggle('sel', t.getAttribute('data-child') === c.from); });
+    }
+    function choose(fields) {
+      say('Saving…', 'busy');
+      return send(Object.assign({ action: 'set_folder_cover' }, fields)).then(function (j) {
+        if (!j.ok) { say(j.text, 'err'); return; }
+        if (j.cover) show(j.cover); pick.hidden = true; say('Saved', 'ok'); window.__siteDirty = true;
+      }).catch(fail);
+    }
+    box.querySelector('.cv-choose').addEventListener('click', function () { pick.hidden = !pick.hidden; });
+    box.querySelector('.cv-cancel').addEventListener('click', function () { pick.hidden = true; any.hidden = true; });
+    box.querySelector('.cv-auto').addEventListener('click', function () { choose({ mode: 'auto' }); });
+    box.querySelector('.cv-any').addEventListener('click', function () { any.hidden = !any.hidden; });
+    box.addEventListener('click', function (e) {
+      var tile = e.target.closest ? e.target.closest('.cv-tile') : null;
+      if (tile) { choose({ mode: 'follow', child: tile.getAttribute('data-child') }); return; }
+      var ph = e.target.closest ? e.target.closest('.cv-photo') : null;
+      if (ph) { choose({ mode: 'pin', file: ph.getAttribute('data-path') }); return; }
+      var tab = e.target.closest ? e.target.closest('.cv-tab') : null;
+      if (!tab) return;
+      [].forEach.call(box.querySelectorAll('.cv-tab'), function (t) { t.classList.toggle('on', t === tab); });
+      var holder = box.querySelector('.cv-photos'); holder.textContent = 'Loading…';
+      send({ action: 'cover_photos', child: tab.getAttribute('data-child') }).then(function (j) {
+        holder.textContent = '';
+        if (!j.ok) { holder.textContent = j.text; return; }
+        var grid = document.createElement('div'); grid.className = 'cv-grid cv-photogrid';
+        (j.photos || []).forEach(function (p) {
+          var b = document.createElement('button'), i = document.createElement('img');
+          b.type = 'button'; b.className = 'cv-photo'; b.setAttribute('data-path', p.path); b.setAttribute('aria-label', p.path);
+          i.src = p.url; i.alt = ''; i.loading = 'lazy'; b.appendChild(i); grid.appendChild(b);
+        });
+        holder.appendChild(grid);
+        if (!(j.photos || []).length) holder.textContent = 'No photos here.';
+        if (j.more) { var n = document.createElement('p'); n.className = 'hint'; n.textContent = 'The first 300 are shown. For a photo further in, set the cover of the folder that holds it, then follow that folder.'; holder.appendChild(n); }
+      }).catch(function () { holder.textContent = 'Couldn\'t load the photos.'; });
+    });
+  });
+  // Collections, the owner's side: make one from a name, delete one, and look after a collection's members. Each press is one request to the page's own
+  // address; nothing here touches a folder or a photo.
+  (function () {
+    function request(csrf, fields) {
+      var body = new URLSearchParams(); body.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+      return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
+    }
+    function go(url) { location.href = url + (window.parent !== window && /[?&]inframe=1/.test(location.search) ? '&inframe=1' : ''); }
+    function note(node, text, kind) { if (!node) return; node.textContent = text; node.className = 'rowstate ' + (kind || ''); }
+    function failText(e) { return e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.'; }
+    function csrfOf(el) { var h = el.closest('[data-csrf]'); return h ? h.getAttribute('data-csrf') : ''; }
+    // New collection: just a name, then its own settings page.
+    document.addEventListener('submit', function (ev) {
+      var f = ev.target.closest ? ev.target.closest('.cm-new') : null; if (!f) return;
+      ev.preventDefault();
+      var sec = f.closest('.cm-section'), input = f.querySelector('input[name=title]'), st = f.querySelector('.rowstate'), btn = f.querySelector('button[type=submit]');
+      if (!input.value.trim()) { note(st, 'Give the collection a name.', 'err'); input.focus(); return; }
+      btn.disabled = true; note(st, 'Making…', 'busy');
+      request(csrfOf(f), { action: 'collection_create', parent: sec.getAttribute('data-parent') || '', title: input.value.trim() })
+        .then(function (j) { if (j.ok) go(j.url); else { btn.disabled = false; note(st, j.text, 'err'); } })
+        .catch(function (e) { btn.disabled = false; note(st, failText(e), 'err'); });
+    });
+    document.addEventListener('click', function (ev) {
+      var del = ev.target.closest ? ev.target.closest('.cm-del') : null;
+      if (del) {
+        if (!confirm('Delete the collection "' + del.getAttribute('data-title') + '"?\n\nOnly the collection is deleted. Every folder and photo in it stays exactly where it is.')) return;
+        del.disabled = true;
+        request(csrfOf(del), { action: 'collection_delete', id: del.getAttribute('data-id') }).then(function (j) { if (j.ok) location.reload(); else { del.disabled = false; alert(j.text); } }).catch(function (e) { del.disabled = false; alert(failText(e)); });
+        return;
+      }
+      var members = ev.target.closest ? ev.target.closest('.cm-members') : null; if (!members) return;
+      var csrf = members.getAttribute('data-csrf'), id = members.getAttribute('data-id');
+      var rm = ev.target.closest('.cm-rm');
+      if (rm) {
+        rm.disabled = true;
+        request(csrf, { action: 'collection_member_remove', id: id, key: rm.closest('.cm-row').getAttribute('data-key') }).then(function (j) { if (j.ok) location.reload(); else { rm.disabled = false; alert(j.text); } }).catch(function (e) { rm.disabled = false; alert(failText(e)); });
+        return;
+      }
+      if (ev.target.closest('.cm-add')) openPicker(members, csrf, id);
+    });
+    document.addEventListener('change', function (ev) {
+      var r = ev.target.closest ? ev.target.closest('.cm-seg input[type=radio]') : null; if (!r) return;
+      var members = r.closest('.cm-members'), row = r.closest('.cm-row');
+      request(members.getAttribute('data-csrf'), { action: 'collection_member_mode', id: members.getAttribute('data-id'), fid: row.getAttribute('data-fid'), mode: r.value }).then(function (j) { if (j.ok) location.reload(); else alert(j.text); }).catch(function (e) { alert(failText(e)); });
+    });
+    // Show on front page follows Private collection: a private collection is not on the front page, so that switch waits (and keeps what it was).
+    function syncFront(box, priv) {
+      var front = box.querySelector('.coll-front'); if (!front) return;
+      var cb = front.querySelector('input[type=checkbox]');
+      front.classList.toggle('is-off', priv);
+      if (cb) {
+        if (priv) { front.setAttribute('data-saved', cb.checked ? '1' : (front.getAttribute('data-saved') || '0')); cb.checked = false; cb.disabled = true; cb.title = 'A private collection is not shown on the front page'; }
+        else { cb.disabled = false; cb.title = ''; cb.checked = front.getAttribute('data-saved') === '1'; }
+      }
+    }
+    [].forEach.call(document.querySelectorAll('.coll-switches'), function (box) {
+      var front = box.querySelector('.coll-front'); if (front) front.setAttribute('data-saved', (front.querySelector('input[type=checkbox]') || {}).checked ? '1' : (box.getAttribute('data-saved-front') || '0'));
+      if (box.getAttribute('data-private') === '1') syncFront(box, true);
+    });
+    document.addEventListener('instant-saved', function (ev) {
+      var box = ev.target.closest ? ev.target.closest('.coll-switches') : null; if (!box) return;
+      var d = ev.detail || {};
+      if (ev.target.classList.contains('coll-front')) { var c = ev.target.querySelector('input[type=checkbox]'); ev.target.setAttribute('data-saved', c && c.checked ? '1' : '0'); }
+      if (typeof d.private === 'boolean') syncFront(box, d.private);
+    });
+    // The picker: folders as a tree to tick, a folder opened to tick single photos; one Add at the end.
+    function openPicker(members, csrf, id) {
+      var box = document.getElementById('cm-picker'), folders = [], have = { folders: [], photos: [] };
+      try { folders = JSON.parse(members.getAttribute('data-folders') || '[]'); have = JSON.parse(members.getAttribute('data-have') || '{}'); } catch (e) {}
+      var haveF = {}, haveP = {}; (have.folders || []).forEach(function (p) { haveF[p] = true; }); (have.photos || []).forEach(function (p) { haveP[p] = true; });
+      var chosenF = {}, chosenP = {};
+      function esc(t) { return String(t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+      var rows = folders.map(function (o) {
+        return '<li style="padding-left:' + (Math.min(o.d, 6) * 14) + 'px"><label><input type="checkbox" data-f="' + esc(o.p) + '"' + (haveF[o.p] ? ' checked disabled' : '') + '> <span>' + (o.x ? '🔒 ' : '') + esc(o.n) + (o.u ? ' <small class="muted">Not listed</small>' : '') + (haveF[o.p] ? ' <small class="muted">already in</small>' : '') + '</span></label> <button type="button" class="linklike" data-open="' + esc(o.p) + '">photos</button><div class="cm-grid" data-grid="' + esc(o.p) + '" hidden></div></li>';
+      }).join('');
+      box.innerHTML = '<div class="cm-pick"><strong>Add to ' + esc(members.getAttribute('data-title')) + '</strong><p class="hint" style="margin:2px 0 8px">Tick a folder to add all of it, or open a folder’s photos to pick single ones.</p><ul>' + rows + '</ul><div class="cm-foot"><button type="button" class="primary" data-pick-add disabled>Add</button><button type="button" class="secondary" data-pick-cancel>Cancel</button><span class="rowstate" role="status" aria-live="polite"></span></div></div>';
+      box.hidden = false;
+      var addBtn = box.querySelector('[data-pick-add]'), st = box.querySelector('.rowstate');
+      function count() { var n = Object.keys(chosenF).length + Object.keys(chosenP).length; addBtn.disabled = n === 0; addBtn.textContent = n === 0 ? 'Add' : 'Add ' + n + (n === 1 ? ' item' : ' items'); }
+      box.addEventListener('change', function (e) {
+        var c = e.target; if (c.tagName !== 'INPUT') return;
+        if (c.hasAttribute('data-f')) { if (c.checked) chosenF[c.getAttribute('data-f')] = true; else delete chosenF[c.getAttribute('data-f')]; }
+        else if (c.hasAttribute('data-p')) { if (c.checked) chosenP[c.getAttribute('data-p')] = true; else delete chosenP[c.getAttribute('data-p')]; }
+        count();
+      });
+      box.addEventListener('click', function (e) {
+        if (e.target.closest('[data-pick-cancel]')) { box.hidden = true; box.innerHTML = ''; return; }
+        var open = e.target.closest('[data-open]');
+        if (open) {
+          var folder = open.getAttribute('data-open'), grid = box.querySelector('.cm-grid[data-grid="' + (window.CSS && CSS.escape ? CSS.escape(folder) : folder) + '"]');
+          if (!grid) return;
+          if (!grid.hidden) { grid.hidden = true; return; }
+          if (grid.getAttribute('data-loaded')) { grid.hidden = false; return; }
+          grid.hidden = false; grid.textContent = 'Loading…';
+          request(csrf, { action: 'collection_photos', folder: folder }).then(function (j) {
+            grid.setAttribute('data-loaded', '1');
+            if (!j.ok || !j.photos.length) { grid.textContent = 'No photos directly in this folder.'; return; }
+            grid.innerHTML = j.photos.map(function (p) { var path = (folder === '' ? '' : folder + '/') + p.file, in_ = haveP[path]; return '<label title="' + esc(p.file) + '"><img src="' + esc(p.thumb) + '" alt="" loading="lazy"><input type="checkbox" data-p="' + esc(path) + '"' + (in_ ? ' checked disabled' : '') + (chosenP[path] ? ' checked' : '') + '></label>'; }).join('');
+          }).catch(function (er) { grid.textContent = failText(er); });
+          return;
+        }
+        if (e.target.closest('[data-pick-add]')) {
+          var items = Object.keys(chosenF).map(function (p) { return { path: p }; });
+          Object.keys(chosenP).forEach(function (path) { var i = path.lastIndexOf('/'); items.push({ path: i < 0 ? '' : path.slice(0, i), file: path.slice(i + 1) }); });
+          addBtn.disabled = true; note(st, 'Adding…', 'busy');
+          var send = function () { return request(csrf, { action: 'collection_member_add', id: id, items: JSON.stringify(items) }).then(function (j) { if (j.ok) location.reload(); else { addBtn.disabled = false; note(st, j.text, 'err'); } }); };
+          // A courtesy: if share links include this collection and what is being added is private, say what they would gain before it is done.
+          request(csrf, { action: 'collection_member_add', id: id, items: JSON.stringify(items), check: '1' }).then(function (j) {
+            if (j.ok && j.warn && !confirm(j.warn + '\n\nAdd it anyway?')) { addBtn.disabled = false; note(st, '', ''); return; }
+            return send();
+          }).catch(function (er) { addBtn.disabled = false; note(st, failText(er), 'err'); });
+        }
+      });
+      box.scrollIntoView({ block: 'nearest' });
+    }
+  })();
+  // ---- The Visitors tab: the pills (All = countries, Public, Share links), the search, the four views, the export menu and Trim the log.
+  // The table under them is a fragment the server builds (?admin&visits=1) from the same choices, so nothing is filtered here.
+  (function () {
+    var root = document.getElementById('vt-root');
+    if (!root || !root.getAttribute('data-info')) return;
+    var S = { cc: [], pub: false, links: [], q: '', view: 'visitors', folders: [], exact: false, what: 'viewed', all: false, pop: '' };
+    var reqId = 0, searchTimer = null, toastTimer = null;
+    function info() { try { return JSON.parse(root.getAttribute('data-info')); } catch (e) { return { total: 0, pub: 0, links: [], countries: [] }; } }
+    function $(sel) { return root.querySelector(sel); }
+    function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+    function say(text, bad) {
+      var t = document.getElementById('vt-toast'); if (!t) return;
+      clearTimeout(toastTimer); t.className = 'pv-toast' + (bad ? ' err' : ''); t.textContent = text; t.hidden = false;
+      toastTimer = setTimeout(function () { t.hidden = true; }, bad ? 6000 : 3500);
+    }
+    function times() {
+      [].forEach.call(root.querySelectorAll('time.sl-time[data-ts]'), function (t) {
+        var d = new Date(+t.getAttribute('data-ts') * 1000); if (isNaN(d)) return;
+        t.textContent = d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      });
+    }
+    function sources() { var a = []; if (S.pub) a.push('public'); return a.concat(S.links); }
+    function params(extra) {
+      var q = '', add = function (k, v) { q += '&' + k + '=' + encodeURIComponent(v); };
+      if (sources().length) add('src', sources().join(','));
+      if (S.cc.length) add('cc', S.cc.join(','));
+      if (S.q) add('q', S.q);
+      if (S.view === 'media') {
+        S.folders.forEach(function (f) { q += '&folders%5B%5D=' + encodeURIComponent(f); });
+        if (S.what && S.what !== 'viewed') add('what', S.what);
+        if (S.exact) q += '&exact=1';
+        if (S.all) q += '&all=1';
+      }
+      return q + (extra || '');
+    }
+    function fragUrl() { return '?admin&visits=1&tab=' + S.view + params(); }
+    function filtered() { return S.cc.length > 0 || S.pub || S.links.length > 0 || S.q !== ''; }
+    function load() {
+      var my = ++reqId, body = $('.vt-body'); root.classList.add('loading');
+      return fetch(fragUrl(), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+        if (my !== reqId) return;
+        root.classList.remove('loading'); body.innerHTML = html; times(); paintNote(); paintExport();
+      }).catch(function () { if (my !== reqId) return; root.classList.remove('loading'); body.innerHTML = '<p class="muted">Couldn\'t load: check your connection.</p>'; });
+    }
+    function paintNote() {
+      var f = $('.vt-frag'), n = $('.vt-note'); if (!f || !n) return;
+      var m = +f.getAttribute('data-match'), a = +f.getAttribute('data-all');
+      n.innerHTML = filtered() && a > 0 ? 'Showing ' + m.toLocaleString() + ' of ' + a.toLocaleString() + ' <button type="button" class="linklike" data-vt="clear">Clear</button>' : '';
+    }
+    function paintExport() {
+      [].forEach.call(root.querySelectorAll('[data-export]'), function (a) { a.href = '?admin&visitsexport=' + a.getAttribute('data-export') + params(); });
+    }
+    function paintSearch() { var x = $('.vt-sx'), i = $('.vt-search'); if (x && i) x.hidden = i.value === ''; }
+    function paintPills() {
+      var d = info(), cc = $('[data-pill=cc]'), pub = $('[data-pill=pub]'), lk = $('[data-pill=links]');
+      var ccN = d.countries.filter(function (c) { return S.cc.indexOf(c.c) >= 0; }).reduce(function (n, c) { return n + c.n; }, 0);
+      cc.querySelector('.vt-l').textContent = S.cc.length === 0 ? 'All' : (S.cc.length <= 3 ? S.cc.join(', ') : S.cc.length + ' countries');
+      cc.querySelector('em').textContent = (S.cc.length ? ccN : d.total).toLocaleString(); cc.classList.toggle('on', S.cc.length > 0);
+      pub.querySelector('em').textContent = d.pub.toLocaleString(); pub.classList.toggle('on', S.pub);
+      if (lk) {
+        var picked = d.links.filter(function (l) { return S.links.indexOf(l.id) >= 0; });
+        lk.querySelector('.vt-l').textContent = picked.length === 0 ? 'Share links' : (picked.length === 1 ? picked[0].name : picked.length + ' links');
+        lk.querySelector('em').textContent = (picked.length ? picked.reduce(function (n, l) { return n + l.n; }, 0) : d.total - d.pub).toLocaleString(); lk.classList.toggle('on', picked.length > 0);
+      }
+      paintSearch();
+      [].forEach.call(root.querySelectorAll('.vt-views [data-view]'), function (b) { b.classList.toggle('on', b.getAttribute('data-view') === S.view); });
+      [].forEach.call(root.querySelectorAll('.vt-chip[aria-haspopup]'), function (b) { b.setAttribute('aria-expanded', S.pop === b.getAttribute('data-pill') ? 'true' : 'false'); });
+    }
+    // ---- the two menus (a list under its pill; a sheet at the bottom on a phone): they stay open while you tick several
+    function optionRows() {
+      var d = info();
+      if (S.pop === 'cc') return '<div class="vt-opt' + (S.cc.length ? '' : ' on') + '" data-call="1">All countries' + (S.cc.length ? '' : '<span class="tk">&#10003;</span>') + '</div>' + d.countries.map(function (c) { var on = S.cc.indexOf(c.c) >= 0; return '<div class="vt-opt' + (on ? ' on' : '') + '" data-c="' + esc(c.c) + '"><b class="cc2">' + esc(c.c) + '</b> ' + esc(c.name) + ' <span class="muted vt-n">' + c.n + '</span>' + (on ? '<span class="tk">&#10003;</span>' : '') + '</div>'; }).join('');
+      return d.links.map(function (l) { var on = S.links.indexOf(l.id) >= 0; return '<div class="vt-opt' + (on ? ' on' : '') + '" data-l="' + esc(l.id) + '">' + esc(l.name) + ' <span class="muted vt-n">' + l.n + '</span>' + (on ? '<span class="tk">&#10003;</span>' : '') + '</div>'; }).join('') || '<p class="muted vt-none">No share links yet.</p>';
+    }
+    function closePop() { S.pop = ''; var p = $('.vt-pop'); if (p) p.remove(); var bg = $('.vt-sheetbg'); if (bg) bg.remove(); paintPills(); }
+    function openPop(kind) {
+      closePop(); S.pop = kind;
+      var wrap = $('[data-pill=' + kind + ']').parentNode, pop = document.createElement('div');
+      pop.className = 'vt-pop'; pop.setAttribute('data-kind', kind);
+      pop.innerHTML = '<div class="vt-pop-h">' + (kind === 'cc' ? 'Country' : 'Share links') + '</div><input type="search" class="vt-pop-find" placeholder="' + (kind === 'cc' ? 'Find a country' : 'Find a link') + '" aria-label="' + (kind === 'cc' ? 'Find a country' : 'Find a link') + '" autocomplete="off"><div class="vt-opts">' + optionRows() + '</div><button type="button" class="vt-done" data-vt="done">Done</button>';
+      var bg = document.createElement('div'); bg.className = 'vt-sheetbg'; root.appendChild(bg);
+      wrap.appendChild(pop); paintPills();
+      if (!matchMedia('(max-width: 800px)').matches) pop.querySelector('.vt-pop-find').focus();
+    }
+    function repaintOptions() { var o = $('.vt-pop .vt-opts'), f = $('.vt-pop .vt-pop-find'); if (!o) return; var top = o.scrollTop; o.innerHTML = optionRows(); o.scrollTop = top; applyFind(f ? f.value : ''); }
+    function applyFind(v) { v = (v || '').toLowerCase(); [].forEach.call(root.querySelectorAll('.vt-pop .vt-opt'), function (o) { o.style.display = !v || o.textContent.toLowerCase().indexOf(v) >= 0 ? '' : 'none'; }); }
+    function toggle(arr, v) { var i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); }
+    // ---- the Media view's own menus (folders, what): the server draws them in the fragment
+    function popValues(pop) { return [].map.call(pop.querySelectorAll('input:checked:not([data-all])'), function (i) { return i.value; }); }
+    function mpopClose(pop) { var m = pop.querySelector('.sl-popmenu'); if (m && !m.hidden) { m.hidden = true; pop.querySelector('.sl-popbtn').setAttribute('aria-expanded', 'false'); } }
+    function mpopCloseAll(except) { [].forEach.call(root.querySelectorAll('.vt-body .sl-pop'), function (p) { if (p !== except) mpopClose(p); }); }
+    function mpopApply(pop) {
+      var k = pop.getAttribute('data-pop'), v = popValues(pop);
+      if (k === 'what') S.what = v[0] || 'viewed'; else { S.folders = v; S.exact = false; }
+      S.all = false;
+      var menu = pop.querySelector('.sl-popmenu'), top = menu.scrollTop, multi = pop.getAttribute('data-multi') === '1', wasOpen = !menu.hidden;
+      load().then(function () {
+        if (!wasOpen || !multi) return;
+        var np = root.querySelector('.vt-body [data-pop="' + k + '"]'); if (!np) return;
+        var nm = np.querySelector('.sl-popmenu'); nm.hidden = false; np.querySelector('.sl-popbtn').setAttribute('aria-expanded', 'true'); nm.scrollTop = top;
+      });
+    }
+    // ---- Trim the log
+    function modal() { return document.getElementById('vt-modal'); }
+    function epoch(s) { var t = new Date(s).getTime(); return isNaN(t) ? 0 : Math.floor(t / 1000); }
+    function post(fields) {
+      var body = new URLSearchParams(); body.set('csrf_token', root.getAttribute('data-csrf'));
+      Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+      return fetch('?admin', { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
+    }
+    var trimStamp = 0;
+    function trimParams(apply) {
+      var m = modal(), f = { action: 'visits_trim', id: m.querySelector('#vt-trim-src').value, apply: apply ? '1' : '0' }, age = m.querySelector('#vt-trim-age'), date = m.querySelector('#vt-trim-date');
+      if (age.value === 'pick') f.before = date.value ? epoch(date.value + 'T00:00') : 0; else f.days = age.value;
+      return f;
+    }
+    function trimCheck() {
+      var m = modal(), mine = ++trimStamp, out = m.querySelector('#vt-trim-out'), ok = m.querySelector('[data-vt-modal=ok]'), age = m.querySelector('#vt-trim-age'), date = m.querySelector('#vt-trim-date'), src = m.querySelector('#vt-trim-src').value;
+      ['events', 'items', 'visitors'].forEach(function (k) { m.querySelector('#vt-trim-dl-' + k).href = '?admin&visitsexport=' + k + (src !== 'all' ? '&src=' + src : ''); });
+      date.hidden = age.value !== 'pick'; ok.disabled = true;
+      if (age.value === 'pick' && !date.value) { out.textContent = 'Pick a date: what is older than it goes.'; return; }
+      out.textContent = 'Counting…';
+      post(trimParams(false)).then(function (j) { if (mine !== trimStamp) return; out.textContent = j.text || ''; ok.disabled = !j.ok || !!j.nothing; })
+        .catch(function (e) { if (mine === trimStamp) out.textContent = e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t count: check your connection.'; });
+    }
+    function trimOpen() { var m = modal(); m.hidden = false; trimCheck(); m.querySelector('[data-vt-modal=cancel]').focus(); }
+    function trimClose() { var m = modal(); if (m) m.hidden = true; trimStamp++; }
+    function refreshPanel() {
+      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+        var fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('vt-root');
+        if (!fresh) { location.reload(); return; }
+        root.setAttribute('data-info', fresh.getAttribute('data-info')); var sum = $('.vt-sum'), ns = fresh.querySelector('.vt-sum'); if (sum && ns) sum.innerHTML = ns.innerHTML;
+        var opt = $('#vt-trim-src'), nopt = fresh.querySelector('#vt-trim-src'); if (opt && nopt) opt.innerHTML = nopt.innerHTML;
+        paintPills(); return load();
+      });
+    }
+    // ---- clicks
+    function setView(v) { S.view = v; S.all = false; paintPills(); load(); }
+    function resetAll() { S.cc = []; S.pub = false; S.links = []; S.q = ''; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); }
+    root.addEventListener('click', function (e) {
+      var t = e.target, el;
+      if ((el = t.closest('[data-pill]'))) {
+        var p = el.getAttribute('data-pill'); closeMenu();
+        if (p === 'pub') { S.pub = !S.pub; closePop(); paintPills(); load(); return; }
+        if (S.pop === p) closePop(); else openPop(p);
+        return;
+      }
+      if (t.closest('[data-call]')) { S.cc = []; closePop(); paintPills(); load(); return; }
+      if ((el = t.closest('.vt-opt[data-c]'))) { toggle(S.cc, el.getAttribute('data-c')); repaintOptions(); paintPills(); load(); return; }
+      if ((el = t.closest('.vt-opt[data-l]'))) { toggle(S.links, el.getAttribute('data-l')); repaintOptions(); paintPills(); load(); return; }
+      if (t.closest('[data-vt=done]') || t.classList.contains('vt-sheetbg')) { closePop(); return; }
+      if ((el = t.closest('.vt-views [data-view]'))) { closeMenu(); closePop(); setView(el.getAttribute('data-view')); return; }
+      if ((el = t.closest('.vt-cc'))) { var c = el.getAttribute('data-cc'); S.cc = S.cc.length === 1 && S.cc[0] === c ? [] : [c]; closePop(); paintPills(); load(); return; }
+      if ((el = t.closest('.vt-src'))) { var id = el.getAttribute('data-src'); if (!S.pub && S.links.length === 1 && S.links[0] === id) S.links = []; else { S.pub = false; S.links = [id]; } closePop(); paintPills(); load(); return; }
+      if ((el = t.closest('.vt-viewed'))) { var ip = el.getAttribute('data-ip'); S.q = ip; $('.vt-search').value = ip; S.view = 'media'; S.folders = []; S.exact = false; S.what = 'viewed'; S.all = false; paintPills(); load(); return; }
+      if ((el = t.closest('.vt-ip'))) { var ip2 = el.getAttribute('data-ip'); S.q = ip2; $('.vt-search').value = ip2; S.all = false; paintPills(); load(); return; }
+      if ((el = t.closest('[data-media]'))) { S.view = 'media'; S.folders = [el.getAttribute('data-folder')]; S.exact = true; S.what = el.getAttribute('data-media'); S.all = false; paintPills(); load(); return; }
+      if (t.closest('[data-more]')) { S.all = true; load(); return; }
+      if (t.closest('[data-vt=clear]')) { resetAll(); return; }
+      if (t.closest('[data-vt=clearq]')) { clearTimeout(searchTimer); var qi = $('.vt-search'); qi.value = ''; S.q = ''; S.all = false; paintPills(); load(); qi.focus(); return; }
+      if (t.closest('[data-vt=menu]')) { closePop(); var mn = $('.vt-menu'); mn.hidden = !mn.hidden; $('[data-vt=menu]').setAttribute('aria-expanded', mn.hidden ? 'false' : 'true'); paintExport(); return; }
+      if (t.closest('[data-vt=trim]')) { closeMenu(); trimOpen(); return; }
+      if (t.closest('.vt-menu a')) { setTimeout(closeMenu, 0); return; }   // (the download starts from the link itself)
+      var mb = t.closest('.vt-body .sl-popbtn'), mpop = mb ? mb.closest('.sl-pop') : null;
+      if (mpop) { mpopCloseAll(mpop); var mm = mpop.querySelector('.sl-popmenu'); if (mm.hidden) { mm.hidden = false; mb.setAttribute('aria-expanded', 'true'); } else mpopClose(mpop); return; }
+      if (!t.closest('.vt-body .sl-popmenu')) mpopCloseAll(null);
+    });
+    function closeMenu() { var mn = $('.vt-menu'); if (mn && !mn.hidden) { mn.hidden = true; var b = $('[data-vt=menu]'); if (b) b.setAttribute('aria-expanded', 'false'); } }
+    document.addEventListener('click', function (e) {   // a click outside the panel's menus closes them
+      if (!root.contains(e.target)) return;
+      if (S.pop && !e.target.closest('.vt-pw') && !e.target.closest('.vt-pop')) closePop();
+      if (!e.target.closest('.vt-menuwrap')) closeMenu();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      var m = modal(); if (m && !m.hidden) { e.preventDefault(); trimClose(); return; }
+      if (S.pop) closePop(); closeMenu(); mpopCloseAll(null);
+    });
+    root.addEventListener('change', function (e) {
+      var inp = e.target, pop = inp.closest ? inp.closest('.vt-body .sl-pop') : null;
+      if (pop && inp.type !== 'hidden') {
+        if (pop.getAttribute('data-multi') === '1') {
+          var all = pop.querySelector('input[data-all]');
+          if (inp.hasAttribute('data-all')) { [].forEach.call(pop.querySelectorAll('input:not([data-all])'), function (i) { i.checked = false; }); inp.checked = true; }
+          else if (all) all.checked = popValues(pop).length === 0;
+          clearTimeout(pop._t); pop._t = setTimeout(function () { pop._t = null; mpopApply(pop); }, 220);
+        } else { mpopClose(pop); mpopApply(pop); }
+        return;
+      }
+      if (inp.id === 'vt-trim-src' || inp.id === 'vt-trim-age' || inp.id === 'vt-trim-date') trimCheck();
+    });
+    root.addEventListener('input', function (e) {
+      if (e.target.classList.contains('vt-search')) { paintSearch(); clearTimeout(searchTimer); var v = e.target.value; searchTimer = setTimeout(function () { S.q = v.trim(); S.all = false; paintPills(); load(); }, 260); }
+      else if (e.target.classList.contains('vt-pop-find')) applyFind(e.target.value);
+    });
+    var m0 = modal();
+    if (m0) {
+      m0.addEventListener('click', function (e) {
+        var b = e.target.closest('[data-vt-modal]'), w = b ? b.getAttribute('data-vt-modal') : '';
+        if (e.target === m0 || w === 'cancel') { trimClose(); return; }
+        if (w === 'ok') {
+          var ok = b; ok.disabled = true;
+          post(trimParams(true)).then(function (j) { trimClose(); if (!j.ok) { say(j.text || 'Not trimmed', true); return; } return refreshPanel().then(function () { say(j.text || 'Trimmed.'); }); })
+            .catch(function (er) { trimClose(); say(er && er.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t trim: check your connection.', true); });
+        }
+      });
+    }
+    // the Shares tab's "See visitors" asks for one link
+    window.__vtShow = function (id) { S.cc = []; S.pub = false; S.links = id ? [id] : []; S.q = ''; S.view = 'visitors'; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); };
+    paintPills(); paintNote(); paintExport(); times();
   })();
   function admConfirmSaveAs(form) {
     const newNameField = form.querySelector('.adm-newname');

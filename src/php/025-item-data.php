@@ -83,6 +83,7 @@ function items_get_all_for_files($dir, $files) {
             // badge/pin, specifically) don't need a second lookup
             // structure just to find out which folder a file lives in.
             $entry['_folderLocationEnabled'] = !empty($data['locationEnabled']);
+            $entry['_folderKeepLocation'] = ($data['keepLocation'] ?? null) === true;   // (the folder's own "keep the location in files visitors get")
             $result[$file] = $entry;
         }
     }

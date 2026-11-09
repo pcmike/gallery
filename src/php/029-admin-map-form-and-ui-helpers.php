@@ -25,7 +25,7 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
             <input type="number" name="map_radius" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?>">
             <span class="rowstate" role="status" aria-live="polite"></span>
           </div>
-          <p class="hint">Photos closer than this always share one numbered pin; pressing it zooms in (pins that would overlap on screen also merge until you zoom in). <strong>0 turns grouping off.</strong> Blank uses the site setting (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).</p>
+          <p class="hint">Photos closer than this always share one numbered pin; pressing it zooms in (pins that would overlap on screen also merge until you zoom in). <strong>0 turns grouping off.</strong> Blank uses the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).</p>
         </div>
         <div class="nojs-only"><button type="submit" class="secondary">Save map settings</button></div>
       </form>
@@ -122,25 +122,37 @@ function ui_menu($name, $options, $current, $label = '') {
     return $out . '</div></div>';
 }
 
-function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $dateSuggestion = null) {
+function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $dateSuggestion = null, $part = 'main', $collection = null) {
     $isRoot = $adminFolderPath === null;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $name = $isRoot ? basename(__DIR__) : basename($adminFolderPath);
 ?>
-    <form method="post" class="identity-form">
+    <form method="post" class="identity-form<?= $part === 'sort' ? ' identity-sort' : '' ?>">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="save_folder_identity">
       <input type="hidden" name="loaded_hash" value="<?= admin_record_hash(folder_identity_record($itemsHere)) ?>">
       <div class="settings-grid<?= $isRoot ? ' root' : '' ?>">
+<?php if ($part === 'main'): ?>
+        <?php if ($collection !== null): ?><div class="field-col"><?php endif; ?>
         <div class="field">
           <label><?= $isRoot ? 'Gallery title' : 'Display name' ?> <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="text" name="display_name" aria-label="Name" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
           <?php if ($isRoot): ?>
             <p class="hint">Shown at the top of the page, in the browser tab and in shared links, instead of "<?= $esc($name) ?>". If blank, a "# Heading" at the top of a notes file is used, then the folder name.</p>
+          <?php elseif ($collection !== null): ?>
+            <p class="hint">Shown on its card and page.</p>
           <?php else: ?>
             <p class="hint">Shown on its cover card instead of "<?= $esc($name) ?>".</p>
           <?php endif; ?>
         </div>
+        <?php if ($collection !== null): ?>
+        <div class="field">
+          <label>Address <span class="rowstate" role="status" aria-live="polite"></span></label>
+          <input type="text" name="coll_address" aria-label="Address" maxlength="60" value="<?= $esc($collection['name']) ?>">
+          <p class="hint"><?= $esc(collection_address_text($collection['path'])) ?></p>
+        </div>
+        </div>
+        <?php endif; ?>
         <div class="field">
           <label>Dates (optional) <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="text" name="dates" aria-label="Dates" maxlength="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
@@ -156,6 +168,12 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <p class="hint">Among sibling folders, lowest first. Blank = natural order, after numbered ones.</p>
         </div>
         <?php endif; ?>
+        <?php if (!$isRoot && $collection === null && AUTO_GROUP_BY_FOLDER) render_admin_cover_row($adminFolderPath); ?>
+        <div class="field wide">
+          <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
+          <textarea name="description" aria-label="Description" maxlength="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
+          <p class="hint">Centred box at the top of <?= $isRoot ? 'the page' : 'its page' ?>, also used in shared-link previews. A little Markdown works (<code>**bold**</code>, <code>*italic*</code>, <code>[words](https://…)</code>, <code>- list</code>, <code>## heading</code>); <code>{left}</code>, <code>{center}</code> or <code>{right}</code> aligns a paragraph.</p>
+        </div>
         <?php if (!$isRoot && AUTO_GROUP_BY_FOLDER):
           $siteFlat = in_array(FOLDER_DISPLAY_MODE, ['flat', 'inline'], true);
           $ownStyle = (string) ($itemsHere['subfolderStyle'] ?? ''); $ownNames = $itemsHere['flatNames'] ?? null; $ownNotes = $itemsHere['flatNotes'] ?? null;
@@ -176,6 +194,8 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           </div>
         </div>
         <?php endif; ?>
+<?php endif; ?>
+<?php if ($part === 'sort'): ?>
         <?php $ps = is_array($itemsHere['photoSort'] ?? null) ? $itemsHere['photoSort'] : []; $psSel = function ($key) use ($ps) { return isset($ps[$key]) && is_bool($ps[$key]) ? ($ps[$key] ? 'on' : 'off') : ''; }; ?>
         <details class="field wide sort-details"<?= $ps ? ' open' : '' ?>>
           <summary>Order of the photos here <span class="muted"><?= $ps ? '&middot; custom' : "&middot; the site's order" ?></span> <span class="rowstate" role="status" aria-live="polite"></span></summary>
@@ -211,14 +231,10 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           </div>
           <p class="hint">"Put first" is the same list as in Settings. Until you change it here, this folder follows the site's. Visitors can change the order with the sort button. Photos placed with <code>{photos:}</code> or a group keep your order.</p>
         </details>
-        <div class="field wide">
-          <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
-          <textarea name="description" aria-label="Description" maxlength="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
-          <p class="hint">Centred box at the top of <?= $isRoot ? 'the page' : 'its page' ?>, also used in shared-link previews. A little Markdown works (<code>**bold**</code>, <code>*italic*</code>, <code>[words](https://…)</code>, <code>- list</code>, <code>## heading</code>); <code>{left}</code>, <code>{center}</code> or <code>{right}</code> aligns a paragraph.</p>
-        </div>
+<?php endif; ?>
       </div>
       <?php // Every field saves by itself as it is changed (the page's script); the button is only here for a browser without JavaScript. ?>
-      <div class="nojs-only"><button type="submit"><?= $isRoot ? 'Save gallery settings' : 'Save folder settings' ?></button></div>
+      <div class="nojs-only"><button type="submit"><?= $part === 'sort' ? 'Save the order' : ($isRoot ? 'Save gallery settings' : 'Save folder settings') ?></button></div>
     </form>
 <?php
 }
@@ -282,24 +298,28 @@ function gallery_setting_definitions() {
              'offwarn' => 'Photos are sent at full size, iPhone (HEIC) photos can\'t show, and nothing can be read from the files ahead of time, so photo locations read from the files stop showing. Nothing is deleted.'],
         ]],
         ['title' => 'Visitors and logs', 'items' => [
-            ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
+            ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views', 'status' => 'earlierviews',
              'help' => 'Visits (one per visitor per half hour) and each photo\'s views. You always see them here.'],
             ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
              'help' => 'Off keeps the numbers to yourself (you still see them when signed in).', 'requires' => 'TRACK_VIEWS'],
-            ['name' => 'LOG_PUBLIC_VISITS', 'type' => 'bool', 'label' => 'Log visitors to the public address', 'requires' => 'ENABLE_SHARE_LINKS',
-             'status' => 'closednote', 'help' => 'A log in the Shares tab of who opens the gallery without a link: IP address, browser, country and what they looked at. Left out: you, private-view visitors, link holders, preview bots and browsers that don\'t run scripts.',
+            ['name' => 'LOG_PUBLIC_VISITS', 'type' => 'bool', 'label' => 'Log visitors to the public address', 'status' => 'visitlog',
+             'help' => 'A log in the Visitors tab of who opens the gallery without a link: IP address, browser, country and what they looked at. Left out: you, private-view visitors, link holders, preview bots and browsers that don\'t run scripts.',
              'risk' => 'This stores every visitor\'s IP address. Check what your local privacy rules ask of you, and keep it only as long as you need it.',
-             'offwarn' => 'Nothing more is logged. The log so far stays in the Shares tab until you trim or delete it.'],
-            ['name' => 'LOG_PUBLIC_DAYS', 'type' => 'number', 'label' => 'Keep that log for (days)', 'min' => 0, 'max' => 3650, 'step' => 1, 'requires' => 'LOG_PUBLIC_VISITS',
-             'help' => 'Older lines go by themselves, once a day. 0 keeps everything until you trim it (at most the latest 2,000 visitors and 5,000 timeline lines either way).'],
+             'offwarn' => 'Nothing more is logged. The log so far stays in the Visitors tab until you trim it.'],
+            ['name' => 'LOG_KEEP_DAYS', 'type' => 'number', 'label' => 'Keep visitor records for (days)', 'min' => 0, 'max' => 3650, 'step' => 1, 'status' => 'visitlog',
+             'help' => 'Covers visits to the public address and to every share link. Older records are removed by themselves, once a day. 0 keeps them until you trim the log yourself.'],
+            ['name' => 'LOG_WARN_MB', 'type' => 'number', 'label' => 'Warn when visitor records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
+             'help' => 'Health shows a warning, with the size and the oldest record, when the visitor records take more room than this on disk. 0 turns the warning off.'],
         ]],
-        ['title' => 'Locations and the map', 'items' => [
+        ['title' => 'Location data', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
              'help' => 'Needed before any location shows; each folder and photo still has its own switch. Locations are read when thumbnails are made, or with Prepare media. Maps use OpenStreetMap, which the visitor\'s browser contacts.',
              'risk' => 'GPS can reveal where you live or have been. Nothing shows until a folder opts in.',
              'offwarn' => 'Locations and maps disappear. Nothing is deleted.'],   // (the map is part of this: no separate switch)
-            ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any', 'requires' => 'ENABLE_PHOTO_LOCATION',
+            ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any', 'requires' => 'ENABLE_PHOTO_LOCATION', 'in' => true,
              'help' => 'Photos closer than this always share one numbered pin; on top of that, pins that would overlap on screen merge until you zoom in. 1 suits a city trip, 0 turns grouping off (every photo keeps its own pin). Folders can override it.'],
+            ['name' => 'SCRUB_LOCATION_DATA', 'type' => 'bool', 'label' => 'Scrub location data',
+             'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from a Not listed photo\'s address and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
         ]],
         ['title' => 'Sharing and access', 'items' => [
             ['name' => 'ENABLE_SHARE_LINKS', 'type' => 'bool', 'label' => 'Allow share links',
@@ -314,10 +334,8 @@ function gallery_setting_definitions() {
              'help' => 'Strangers get the "link isn\'t valid" page; only you, private-view visitors and link holders see anything. Sign in at /admin. Needs share links on and an admin password.',
              'risk' => 'Nobody can see the gallery without a link. The web server can still hand out a photo file to anyone who knows its exact address unless the rule that makes a bare photo address answer 403 is in place (see the Health check).',
              'offwarn' => 'The public part of the gallery can be seen by anyone again.'],
-            ['name' => 'PUBLIC_DOWNLOAD_MODE', 'type' => 'enum', 'hidden_when' => 'CLOSE_PUBLIC_GALLERY', 'hidden_why' => 'The gallery is closed, so strangers see nothing to download; each share link has its own download choice.', 'label' => 'Let visitors download originals', 'status' => 'dlfolders',
-             'options' => ['off' => 'Off', 'all' => 'Everything', 'some' => 'Only some folders'],
-             'help' => 'A download button in the viewer for visitors without a link (you always have it). Public photos only, never a ZIP, hidden locations removed. A share link has its own answer.',
-             'risk' => 'With Everything, or a folder you choose, anyone can save those photos at full resolution.'],
+            ['name' => 'PUBLIC_DOWNLOAD_MODE', 'type' => 'enum', 'in' => true, 'label' => 'Let visitors download originals', 'help' => '',
+             'options' => ['off' => 'Off', 'all' => 'Everything', 'some' => 'Only some folders']],   // (no row: it is each folder's own switch now, and this entry only holds where they save)
             ['name' => 'PUBLIC_DOWNLOAD_FOLDERS', 'type' => 'pathlist', 'in' => true, 'label' => 'Folders visitors may download from', 'help' => ''],
         ]],
         ['title' => 'Signing in and passwords', 'items' => [
@@ -409,7 +427,33 @@ function site_settings_validate_extra_folders($raw, &$errors) {
         if (in_array($real, $roots, true)) { $errors[] = '"' . $real . '" is listed twice.'; $bad = true; continue; }
         $roots[] = $real;
     }
-    return $bad ? null : ['named' => $named, 'roots' => $roots];
+    $edit = null;   // (an Edit names the place it started from: its path, to carry that place's list of names to the new path)
+    if (isset($in['edit']) && is_array($in['edit']) && is_string($in['edit']['path'] ?? null) && is_string($in['edit']['label'] ?? null)) $edit = ['path' => rtrim($in['edit']['path'], '/\\'), 'label' => $in['edit']['label']];
+    return $bad ? null : ['named' => $named, 'roots' => $roots, 'edit' => $edit];
+}
+
+/** The names each named place has been shown under (path => [names]) after a save of the list: every name in the list before and after joins its
+ *  place's names, and an Edit that moved the place to another path takes its names along. Kept short. $after is the validated name => path. */
+function extra_folder_names_update($history, $before, $after, $edit) {
+    $h = [];
+    foreach ((array) $history as $path => $names) if (is_string($path) && is_array($names)) $h[$path] = array_values(array_filter($names, 'is_string'));
+    foreach ([(array) $before, (array) $after] as $map) {
+        foreach ($map as $label => $path) {
+            if (!is_string($path) || !is_string($label)) continue;
+            if (!isset($h[$path])) $h[$path] = [];
+            if (!in_array($label, $h[$path], true)) $h[$path][] = $label;
+        }
+    }
+    if ($edit !== null && isset($after[$edit['label']])) {
+        $new = $after[$edit['label']];
+        if ($edit['path'] !== '' && $edit['path'] !== $new && isset($h[$edit['path']]) && !in_array($edit['path'], array_values($after), true)) {
+            foreach ($h[$edit['path']] as $label) { if (!isset($h[$new])) $h[$new] = []; if (!in_array($label, $h[$new], true)) $h[$new][] = $label; }
+            unset($h[$edit['path']]);
+        }
+    }
+    $shown = array_values((array) $after);
+    foreach ($h as $path => $names) { if (count($names) < 2 && in_array($path, $shown, true)) unset($h[$path]); else $h[$path] = array_slice($names, -20); }   // (a place shown under one name needs no list; one taken out keeps its name for when it is added again)
+    return array_slice($h, -50, null, true);
 }
 
 /** The nginx prefix: empty, or a plain URL path such as /kb. */
@@ -428,7 +472,7 @@ function site_settings_valid_nginx_prefix($value) {
 function gallery_config_render($cfg) {
     $order = [];
     foreach (gallery_setting_definitions() as $group) foreach ($group['items'] as $d) $order[] = $d['name'];
-    foreach (['ADMIN_PASSWORD', 'PRIVATE_VIEW_PASSWORD', 'EXTRA_FOLDERS', 'EXTRA_ROOTS', 'NGINX_ACCEL_REDIRECT_PREFIX'] as $n) $order[] = $n;
+    foreach (['ADMIN_PASSWORD', 'PRIVATE_VIEW_PASSWORD', 'EXTRA_FOLDERS', 'EXTRA_FOLDER_NAMES', 'HEALTH_SET_ASIDE', 'PUBLIC_DOWNLOAD_MODE', 'PUBLIC_DOWNLOAD_FOLDERS', 'PUBLIC_DOWNLOAD_ROOT', 'EXTRA_ROOTS', 'NGINX_ACCEL_REDIRECT_PREFIX'] as $n) $order[] = $n;
     $keys = array_values(array_unique(array_merge(array_values(array_intersect($order, array_keys($cfg))), array_keys($cfg))));
     $ordered = [];
     foreach ($keys as $k) $ordered[$k] = $cfg[$k];
@@ -466,6 +510,8 @@ function site_settings_save($ajax = false) {
                 $value = site_settings_validate_extra_folders($raw, $errors);
                 if ($value === null) continue;
                 $setOrUnset('EXTRA_ROOTS', $value['roots']);
+                $history = extra_folder_names_update($cfg['EXTRA_FOLDER_NAMES'] ?? [], $state['cfg']['EXTRA_FOLDERS'] ?? [], $value['named'], $value['edit']);
+                if ($history) $cfg['EXTRA_FOLDER_NAMES'] = $history; else unset($cfg['EXTRA_FOLDER_NAMES']);
                 $value = $value['named'];
             } elseif ($d['type'] === 'text') {
                 if (!site_settings_valid_nginx_prefix($raw)) { $errors[] = '"' . $d['label'] . '" must be empty or a plain path like /kb (starting with /, no trailing slash, letters, digits and . _ ~ - only).'; continue; }
@@ -515,6 +561,8 @@ function site_settings_save($ajax = false) {
     // A closed gallery needs a way in: share links on and an admin password. Refused only when this save is what makes it so (a settings
     // file that was already that way by hand does not block every other change).
     $effective = function ($c, $n) use ($defaults) { return array_key_exists($n, $c) ? $c[$n] : ($defaults[$n] ?? false); };
+    // The visitor log needs SQLite and a folder it can write to: it can't be switched on without them (the page greys the switch; this is the same answer for a request made by hand).
+    if ($effective($cfg, 'LOG_PUBLIC_VISITS') === true && $effective($state['cfg'], 'LOG_PUBLIC_VISITS') !== true && !visitlog_usable()) $errors[] = '"Log visitors to the public address" can\'t be switched on here: ' . visitlog_check()[1];
     if ($effective($cfg, 'CLOSE_PUBLIC_GALLERY') === true
         && ($effective($cfg, 'CLOSE_PUBLIC_GALLERY') !== $effective($state['cfg'], 'CLOSE_PUBLIC_GALLERY') || $effective($cfg, 'ENABLE_SHARE_LINKS') !== $effective($state['cfg'], 'ENABLE_SHARE_LINKS'))) {
         if ($effective($cfg, 'ENABLE_SHARE_LINKS') !== true) $errors[] = '"Close the public gallery" needs share links: they are the only way in for anyone else. Turn "Allow share links" on, or switch "Close the public gallery" off first.';

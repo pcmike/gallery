@@ -214,7 +214,7 @@ TypesConfig "%(w)s/apache/mime.types"
     os.makedirs(os.path.join(work, 'apache'), exist_ok=True)
     open(os.path.join(work, 'apache', 'mime.types'), 'w').write('image/jpeg jpg jpeg\ntext/html html\n')
     open(os.path.join(work, 'apache.conf'), 'w').write(aconf)
-    open(os.path.join(trip, '.htaccess'), 'w').write('RewriteEngine On\nRewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]\n' + arule_t.replace('RewriteEngine On\n', '', 1))   # (the folder rule is the one from the README, with no RewriteBase of its own)
+    open(os.path.join(trip, '.htaccess'), 'w').write('RewriteEngine On\nRewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]\n' + arule_t.replace('RewriteEngine On\n', '', 1) + '\n<FilesMatch "^\\.gallery-">\n    Require all denied\n</FilesMatch>\n')   # (the folder rule is the one from the README, with no RewriteBase of its own; then the rule the guide gives for the generated data files: the visitor log's file is one)
     start([os.path.join(X, 'usr/sbin/apache2'), '-d', os.path.join(work, 'apache'), '-f', os.path.join(work, 'apache.conf'), '-DFOREGROUND'], {'LD_LIBRARY_PATH': LIBS}, os.path.join(work, 'apache.out'))
     up = wait_port(aport)
     check('Apache starts', up, open(os.path.join(work, 'apache.out')).read() + (open(os.path.join(work, 'apache', 'error.log')).read() if os.path.exists(os.path.join(work, 'apache', 'error.log')) else ''))
@@ -233,27 +233,51 @@ TypesConfig "%(w)s/apache/mime.types"
         return json.loads(body)
     a = make('Carol and Sam', 'carol-and-sam'); b = make('Random one'); c = make('Later', 'later-folder')
     check('links are made: a custom name, a random one, and a name a folder will share', a.get('ok') and b.get('ok') and c.get('ok'), (a, b, c))
-    tok = re.search(r'/([A-Za-z0-9]{16})$', b['urls']['short']).group(1)
+    tok = re.search(r'/([A-Za-z0-9]{8})$', b['urls']['short']).group(1)
     # a link whose random address was kept working when it got a name of its own
-    d = make('Kept one'); tok2 = re.search(r'/([A-Za-z0-9]{16})$', d['urls']['short']).group(1)
+    d = make('Kept one'); tok2 = re.search(r'/([A-Za-z0-9]{8})$', d['urls']['short']).group(1)
     import json
     st, body, _, _ = site.post('/trip/index.php?admin', {'csrf_token': csrf, 'action': 'link_save', 'id': d['id'], 'label': 'Kept one', 'address': 'kept-one-now', 'keep_old': '1', 'title_mode': 'gallery', 'picture': '1', 'max_opens': '0', 'ends_at': '0', 'scope_type': 'all', 'locations': 'public', 'heads_up': 'off', 'downloads': 'off', 'zip': 'off'})
     check('a link is given a name of its own and keeps its random address working', json.loads(body).get('ok'), body[:200])
     # the folder arrives afterwards (an FTP upload), with the same name as the last link
     os.makedirs(os.path.join(trip, 'later-folder')); shutil.copy(os.path.join(trip, 'Rome', 'photo-Rome.jpg'), os.path.join(trip, 'later-folder', 'photo-later-folder.jpg'))
 
+    import json
+    # a photo in a Not listed folder: its address (eight letters and digits) must open through the same one-word rule
+    os.makedirs(os.path.join(trip, 'drawer')); shutil.copy(os.path.join(trip, 'Rome', 'photo-Rome.jpg'), os.path.join(trip, 'drawer', 'photo-drawer.jpg'))
+    ajax = {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'gallery-fetch'}
+    site.raw('/trip/index.php?admin&folder=drawer', ajax, 'POST', urllib.parse.urlencode({'csrf_token': csrf, 'action': 'toggle_folder_unlisted', 'unlisted': '1'}), True)
+    st, body, _ = site.raw('/trip/index.php?admin&folder=drawer', ajax, 'POST', urllib.parse.urlencode({'csrf_token': csrf, 'action': 'photo_address', 'file': 'photo-drawer.jpg'}), True)
+    pcode = json.loads(body).get('code', '')
+    check('a photo in a Not listed folder is given its address: eight letters and digits', re.fullmatch(r'[A-Za-z0-9]{8}', pcode) is not None, body[:200])
+    pwrong = 'Zz9Zz9Zz' if pcode != 'Zz9Zz9Zz' else 'Yy8Yy8Yy'
+
     def reset_throttle():
         for f in glob.glob(os.path.join(trip, '.gallery-login*')): os.unlink(f)   # (wrong tries from one server's checks must not lock the next one out)
+    vname = '.gallery-visits-' + 'ab12cd34ef56ab12cd34ef56' + '.sqlite'   # (the visitor log's file, and the two side files SQLite keeps beside it: a sentinel in each, to see whether the server hands any of them out)
+    for suffix in ('', '-wal', '-shm'): open(os.path.join(trip, vname + suffix), 'w').write('SQLITE-SENTINEL-IP-203.0.113.9')
     for srv in (Site('nginx', nport), Site('Apache', aport)):
         n = srv.name
         reset_throttle()
         print('-- ' + n + ' --')
+        for suffix in ('', '-wal', '-shm'):
+            vst, vbody, vloc, vr = srv.get('/trip/' + vname + suffix)
+            check('[%s] the visitor log\'s file%s is refused (the .gallery- rule): %s' % (n, ' (side file %s)' % suffix if suffix else '', vst), vst in (403, 404) and 'SQLITE-SENTINEL' not in vbody, (vst, vbody[:60]))
         def opening(path): st, body, loc, r = srv.get(path); return st == 200 and 'Open the gallery' in body
         check('[%s] a custom name opens its link, in any case' % n, opening('/trip/carol-and-sam') and opening('/trip/Carol-And-SAM'))
         check('[%s] a random address still opens its link' % n, opening('/trip/' + tok))
         st, body, loc, r = srv.get('/trip/' + tok2)
         check('[%s] a kept old address sends people on to the present one, in the same short form (the address bar shows the new one)' % n, st == 302 and loc.endswith('/trip/kept-one-now'), (st, loc))
         check('[%s] ...and the present address opens the link' % n, opening('/trip/kept-one-now'))
+        reset_throttle()
+        st, body, loc, r = srv.get('/trip/' + pcode)
+        check('[%s] a Not listed photo\'s address opens that one photo through the same one-word rule, and nothing else of the gallery' % n, st == 200 and 'photo-drawer.jpg' in body and 'photo-Rome.jpg' not in body, (st, body[:120]))
+        st, body, loc, r = srv.get('/trip/' + pcode + '?file')
+        check('[%s] ...with ?file added the same address sends the picture itself (the suffix passes through the rule), with no page around it' % n, st == 200 and (r.getheader('Content-Type') or '').startswith('image/jpeg') and '<html' not in body.lower(), (st, r.getheader('Content-Type')))
+        st, body, loc, r = srv.get('/trip/' + pcode + '?view')
+        check('[%s] ...and with ?view it is the viewer page' % n, st == 200 and (r.getheader('Content-Type') or '').startswith('text/html') and 'photo-drawer.jpg' in body, (st, r.getheader('Content-Type')))
+        st, body, loc, r = srv.get('/trip/' + pwrong)
+        check('[%s] ...and a wrong one is the not-valid page' % n, st == 404 and 'This link is not valid' in body and 'photo-drawer' not in body, (st, body[:120]))
         check('[%s] the probe address answers (the admin\'s check that tidy addresses work)' % n, (lambda r: r[0] == 200 and r[3].getheader('X-Gallery-Link') == 'invalid')(srv.get('/trip/0000-probe-0000')))
         st, body, loc, r = srv.get('/trip/Rome')
         if n == 'nginx':

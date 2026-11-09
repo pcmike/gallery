@@ -191,11 +191,30 @@ function render_server_rules_help($withTidyLinks = false) {
     return ob_get_clean();
 }
 
+/** Everything a folder's own record or a photo's record in it can hold, and whether the Edited tab lists it ('shown') or it is kept for the gallery's own
+ *  use and is not something the owner set ('internal'). A test reads this list: any key the admin code saves that is on neither list fails until
+ *  it is put here, and any 'shown' key must be named in admin_edited_overview below. */
+function edited_record_keys() {
+    return [
+        'folder' => [
+            'displayName' => 'shown', 'description' => 'shown', 'dates' => 'shown', 'sortOrder' => 'shown', 'restriction' => 'shown', 'unlisted' => 'shown',
+            'ownGallery' => 'shown', 'allowOriginals' => 'shown', 'addressFile' => 'shown', 'keepLocation' => 'shown', 'subfolderStyle' => 'shown', 'flatNames' => 'shown', 'flatNotes' => 'shown', 'locationEnabled' => 'shown',
+            'mapEnabled' => 'shown', 'mapRadius' => 'shown', 'photoSort' => 'shown', 'groups' => 'shown', 'stacks' => 'shown', 'cover' => 'shown', 'coverFollow' => 'shown',
+            'folderId' => 'internal', 'pageviews' => 'internal', 'items' => 'internal',
+        ],
+        'photo' => [
+            'caption' => 'shown', 'web' => 'shown', 'location' => 'shown', 'locationCleared' => 'shown', 'locationVisibility' => 'shown', 'restriction' => 'shown', 'addr' => 'shown',
+            'gpsChecked' => 'internal',
+        ],
+    ];
+}
+
 /** Everything the owner has set by hand, for the Edited tab: per folder (those with anything), its own settings (hidden, name, description,
  *  dates, position, cover, location and map switches, photo order, stacks, groups) and, for each photo or video, what was set on it
  *  (private or public on its own, a caption, an information link, a location typed in, labelled or removed on purpose, its own location
  *  switch). What the gallery read from the files is never listed: it was not set by hand. $hidden is admin_hidden_data()'s result (or null). */
 function admin_edited_overview($dir, $files, $hidden) {
+    // ('restriction', private or public on its own, comes in through $hidden: the private and public flags of folders and photos.)
     $privFolders = array_fill_keys($hidden['folders'] ?? [], true);
     $privItems = array_fill_keys($hidden['items'] ?? [], true);
     $shownItems = array_fill_keys($hidden['shown'] ?? [], true);
@@ -212,7 +231,7 @@ function admin_edited_overview($dir, $files, $hidden) {
     $byFolder = [];
     foreach ($files as $file) { $slash = strrpos($file, '/'); $byFolder[$slash === false ? '' : substr($file, 0, $slash)][] = $file; }
     $paths = array_merge([''], all_folder_paths($files));
-    $folders = []; $c = ['all' => 0, 'private' => 0, 'caption' => 0, 'link' => 0, 'location' => 0, 'folder' => 0, 'photos' => 0];
+    $folders = []; $c = ['all' => 0, 'private' => 0, 'caption' => 0, 'link' => 0, 'location' => 0, 'address' => 0, 'folder' => 0, 'photos' => 0];
     foreach ($paths as $path) {
         $real = $path === '' ? $dir : resolve_real_path($dir, $path);
         if (!$real || !is_dir($real)) continue;
@@ -223,6 +242,16 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_string($d['description'] ?? null) && $d['description'] !== '') $set[] = ['', 'Description'];
         if (is_string($d['dates'] ?? null) && $d['dates'] !== '') $set[] = ['', 'Dates: ' . $d['dates']];
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
+        if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Not listed'];
+        if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
+        if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s address'];
+        if (($d['keepLocation'] ?? null) === true) $set[] = ['loc', 'Visitors\' copies keep the location'];
+        if (!empty($d['addressFile']) && !empty($d['unlisted'])) $set[] = ['', 'Photo addresses send the bare file'];
+        if (in_array($d['subfolderStyle'] ?? '', ['overview', 'flat'], true)) $set[] = ['', 'Folders under it: ' . ($d['subfolderStyle'] === 'flat' ? 'Flat' : 'Cards')];
+        if (is_bool($d['flatNames'] ?? null)) $set[] = ['', 'Folder names ' . ($d['flatNames'] ? 'shown' : 'hidden') . ' (Flat)'];
+        if (is_bool($d['flatNotes'] ?? null)) $set[] = ['', 'Folder notes ' . ($d['flatNotes'] ? 'shown' : 'hidden') . ' (Flat)'];
+        if (!empty($d['stacks']) && is_array($d['stacks'])) { $nStacks = count(array_filter($d['stacks'], function ($st) { return is_array($st) && count((array) ($st['files'] ?? [])) > 1; })); if ($nStacks) $set[] = ['', $nStacks . ' stack' . ($nStacks === 1 ? '' : 's') . ' of photos']; }
+        if (ENABLE_PUBLIC_DOWNLOAD && (($path === '' && PUBLIC_DOWNLOAD_ROOT) || ($path !== '' && in_array($path, PUBLIC_DOWNLOAD_FOLDERS, true)))) $set[] = ['', $path === '' ? 'Visitors can download the photos on this page' : 'Visitors can download originals'];
         if (!empty($d['locationEnabled'])) $set[] = ['loc', 'Locations on'];
         if (array_key_exists('mapEnabled', $d) && $d['mapEnabled'] !== null) $set[] = ['', 'Map ' . ($d['mapEnabled'] ? 'on' : 'off') . ' here'];
         if (array_key_exists('mapRadius', $d) && $d['mapRadius'] !== null) $set[] = ['', 'Map grouping set'];
@@ -231,8 +260,11 @@ function admin_edited_overview($dir, $files, $hidden) {
         // The folder's cover photo, shown as a picture in its card (not as a setting): its path, or missing when the file is gone.
         $cover = null;
         if (is_string($d['cover'] ?? null) && $d['cover'] !== '') {
-            $cf = ($path === '' ? '' : $path . '/') . $d['cover'];
-            $cover = ['name' => $d['cover'], 'file' => in_array($cf, $byFolder[$path] ?? [], true) ? $cf : null];
+            $cf = ($path === '' ? '' : $path . '/') . $d['cover'];   // (a photo in the folder itself, or, with a / in it, one in a folder under it)
+            $cover = ['name' => $d['cover'], 'file' => in_array($cf, strpos($d['cover'], '/') !== false ? $files : ($byFolder[$path] ?? []), true) ? $cf : null];
+        } elseif (is_string($d['coverFollow'] ?? null) && $d['coverFollow'] !== '' && $path !== '') {
+            $under = folder_files_under($files, $path . '/' . $d['coverFollow']);
+            $cover = ['name' => 'follows ' . $d['coverFollow'], 'file' => $under ? pick_folder_cover(folder_files_under($files, $path), 'follow:' . $d['coverFollow'], $path) : null];
         }
         $items = [];
         foreach ($byFolder[$path] ?? [] as $file) {
@@ -255,6 +287,7 @@ function admin_edited_overview($dir, $files, $hidden) {
                 if ($vis === 'show') $loc[] = 'Its location is shown to visitors (its own switch)';
                 elseif ($vis === 'hide') $loc[] = 'Its location is hidden from visitors (its own switch)';
                 if ($loc) { $kinds[] = 'location'; $tags[] = ['loc', 'location']; $text[] = ['loc', implode('. ', $loc)]; }
+                if (is_string($e['addr'] ?? null) && $e['addr'] !== '') { $kinds[] = 'address'; $tags[] = ['cap', 'new address']; $text[] = 'A new address was made for it: the one before stopped working.'; }
             }
             if (!$kinds) continue;
             $items[] = ['file' => $file, 'kinds' => $kinds, 'tags' => $tags, 'text' => $text, 'own' => $own];
@@ -278,7 +311,7 @@ function render_admin_edited_html($ov, $csrfToken) {
     global $dir;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $c = $ov['counts']; $noun = ENABLE_VIDEO ? 'item' : 'photo';
-    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Links'], ['location', 'Locations'], ['folder', 'Folder settings']];
+    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Links'], ['location', 'Locations'], ['address', 'Addresses'], ['folder', 'Folder settings']];
     $out = '<div class="ed" id="ed-root" data-csrf="' . $esc($csrfToken) . '" data-noun="' . $noun . '">';
     if ($ov['total'] === 0) return $out . '<p class="muted ed-empty">Nothing is set by hand yet. When you add a caption, a link or a private flag to a ' . $noun . ', or change a folder\'s own settings, it is listed here.</p></div>';
     $out .= '<p class="ed-sum"><span><b>' . number_format($c['all']) . '</b> edit' . ($c['all'] === 1 ? '' : 's') . ' in <b>' . number_format(count($ov['folders'])) . '</b> folder' . (count($ov['folders']) === 1 ? '' : 's') . '</span><span><b>' . number_format($c['private']) . '</b> private</span><span><b>' . number_format($c['caption']) . '</b> caption' . ($c['caption'] === 1 ? '' : 's') . '</span><span><b>' . number_format($c['link']) . '</b> link' . ($c['link'] === 1 ? '' : 's') . '</span></p>';
@@ -412,35 +445,171 @@ function render_admin_instant_toggle($csrfToken, $action, $field, $on, $label, $
 <?php
 }
 
-/** The "Privacy" section of a folder's (or the gallery's) settings: three rows with the same switch, each saved the moment it is
- *  pressed: the folder itself private (not at the top of the gallery), whether photo locations are public, and, under that because it
- *  only shows photos whose location is public, the map. */
-function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, $counts, $locWarn = '', $locStatus = '') {
-    $isRoot = $adminFolderPath === null;
+/** What the Cover photo row of a folder's settings shows, for the owner (every photo counts, private or not): the picture in use, how it was
+ *  chosen, and the folders directly under it with the cover each one shows. Null when the folder holds no folder with photos in it. */
+function admin_cover_state($dir, $files, $folderPath) {
+    $prefix = $folderPath . '/';
+    $members = folder_files_under($files, $folderPath);
+    $kids = []; $own = 0;
+    foreach ($members as $f) {
+        $rest = substr($f, strlen($prefix)); $slash = strpos($rest, '/');
+        if ($slash === false) $own++; else $kids[substr($rest, 0, $slash)] = true;
+    }
+    if (!$kids) return null;
+    $label = function ($path, $fallback) use ($dir) { $l = folder_display_meta($dir, $path)['label']; return $l !== '' ? $l : $fallback; };
+    $spec = folder_display_meta($dir, $folderPath)['cover'];
+    $file = pick_folder_cover($members, $spec, $folderPath);
+    $childOf = function ($f) use ($prefix) { $rest = substr((string) $f, strlen($prefix)); $slash = strpos($rest, '/'); return $slash === false ? '' : substr($rest, 0, $slash); };
+    $src = $childOf($file);
+    if ($spec === null) { $mode = 'auto'; $title = $own || $src === '' ? 'Automatic: the first photo in it' : 'Automatic: the cover of ' . $label($prefix . $src, $src); $small = $own || $src === '' ? 'Nothing chosen.' : 'Its first folder. Nothing chosen.'; }
+    elseif (strncmp($spec, 'follow:', 7) === 0) { $mode = 'follow'; $title = 'Follows the cover of ' . $label($prefix . substr($spec, 7), substr($spec, 7)); $small = 'Change that folder\'s cover and this changes too.'; }
+    elseif (strpos($spec, '/') !== false) { $mode = 'pin'; $title = 'Chosen: ' . $label($prefix . $childOf($prefix . $spec), $childOf($prefix . $spec)) . ' / ' . basename($spec); $small = 'That photo, whatever the folder\'s own cover is.'; }
+    else { $mode = 'pin'; $title = 'Chosen: ' . $spec; $small = 'A photo in this folder.'; }
+    $tiles = [];
+    foreach (order_folder_children($dir, $prefix, array_keys($kids)) as $name) {
+        $under = array_values(array_filter($members, function ($f) use ($prefix, $name) { return strncmp($f, $prefix . $name . '/', strlen($prefix . $name) + 1) === 0; }));
+        $cspec = folder_display_meta($dir, $prefix . $name)['cover'];
+        $cf = pick_folder_cover($under, $cspec, $prefix . $name);
+        $rec = items_read(resolve_real_path($dir, $prefix . $name));
+        $tiles[] = ['name' => $name, 'label' => $label($prefix . $name, $name), 'file' => $cf, 'url' => $cf !== null ? img_url($cf, 'cover') : '', 'chosen' => $cspec !== null,
+            'state' => ($rec['restriction'] ?? '') === 'private' ? (!empty($rec['unlisted']) ? 'not listed' : 'private') : ''];
+    }
+    return ['mode' => $mode, 'title' => $title, 'small' => $small, 'file' => $file, 'url' => $file !== null ? img_url($file, 'cover') : '', 'from' => $mode === 'follow' ? substr($spec, 7) : ($mode === 'auto' ? $src : ''), 'tiles' => $tiles];
+}
+
+/** The Cover photo row (folder settings, above the description) of a folder that holds folders: the cover in use and a picker with a tile for each
+ *  folder under it. The page's script (data-cover) does the rest. */
+function render_admin_cover_row($folderPath) {
+    $dir = $GLOBALS['dir']; $files = $GLOBALS['__admin_files'] ?? [];
+    $st = admin_cover_state($dir, $files, $folderPath);
+    if ($st === null) return;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $locOn = !empty($itemsHere['locationEnabled']) && ENABLE_PHOTO_LOCATION;
 ?>
-    <h3 class="subhead">Privacy</h3>
-<?php if (!$isRoot):
+        <div class="field wide cover-field" data-cover>
+          <label>Cover photo <span class="rowstate" role="status" aria-live="polite"></span></label>
+          <div class="cv-row">
+            <img class="cv-img" src="<?= $esc($st['url']) ?>" alt=""<?= $st['url'] === '' ? ' hidden' : '' ?>>
+            <div class="cv-main"><b class="cv-title"><?= $esc($st['title']) ?></b><small class="cv-small"><?= $esc($st['small']) ?></small></div>
+            <div class="cv-acts"><button type="button" class="secondary cv-choose">Choose&hellip;</button><button type="button" class="secondary cv-auto"<?= $st['mode'] === 'auto' ? ' hidden' : '' ?>>Automatic</button></div>
+          </div>
+          <div class="cv-pick" hidden>
+            <h4>Show the cover of&hellip;</h4>
+            <p>This folder follows that folder's cover: change it there and this changes too.</p>
+            <div class="cv-grid">
+<?php foreach ($st['tiles'] as $t): ?>
+              <button type="button" class="cv-tile<?= $t['name'] === $st['from'] ? ' sel' : '' ?>" data-child="<?= $esc($t['name']) ?>"><?php if ($t['url'] !== ''): ?><img src="<?= $esc($t['url']) ?>" alt="" loading="lazy"><?php endif; ?><i aria-hidden="true">&#10003;</i><span><?= $esc($t['label']) ?><?= $t['state'] !== '' ? ' <em>' . $esc($t['state']) . '</em>' : '' ?> <small><?= $t['chosen'] ? 'chosen' : 'automatic' ?></small></span></button>
+<?php endforeach; ?>
+            </div>
+            <div class="cv-foot"><button type="button" class="linklike cv-any">Pick any photo instead&hellip;</button><button type="button" class="secondary cv-cancel">Cancel</button></div>
+            <div class="cv-anywhere" hidden>
+              <p>A photo in:</p>
+              <div class="cv-tabs">
+<?php foreach ($st['tiles'] as $t): ?>
+                <button type="button" class="cv-tab" data-child="<?= $esc($t['name']) ?>"><?= $esc($t['label']) ?></button>
+<?php endforeach; ?>
+              </div>
+              <div class="cv-photos"></div>
+            </div>
+          </div>
+        </div>
+<?php
+}
+
+/** What visitors without a link may download: [the folders (paths) that allow it, whether the main page's own photos do]. Off reads as none. */
+function public_download_current() {
+    return [PUBLIC_DOWNLOAD_MODE === 'some' ? PUBLIC_DOWNLOAD_FOLDERS : [], PUBLIC_DOWNLOAD_MODE === 'some' && PUBLIC_DOWNLOAD_ROOT];
+}
+
+/** Saves that choice in the settings file (replacing an older "Everything" or on/off line), or says why not. Nothing is stored when nothing is on. */
+function public_download_write(array $folders, $root) {
+    $folders = array_values(array_unique($folders)); sort($folders, SORT_NATURAL | SORT_FLAG_CASE);
+    $on = $folders !== [] || $root;
+    return gallery_config_merge(['PUBLIC_DOWNLOAD_MODE' => $on ? 'some' : null, 'PUBLIC_DOWNLOAD_FOLDERS' => $folders ?: null, 'PUBLIC_DOWNLOAD_ROOT' => $root ? true : null, 'ENABLE_PUBLIC_DOWNLOAD' => null]);
+}
+
+/** The folders inside $folderPath, at any depth, that hold photos directly: [the public ones, the private ones (which never offer downloads)]. */
+function admin_download_folders_inside($dir, $files, $folderPath) {
+    $prefix = $folderPath . '/'; $have = [];
+    foreach ($files as $f) {
+        $slash = strrpos($f, '/'); if ($slash === false) continue;
+        $d = substr($f, 0, $slash);
+        if (strncmp($d, $prefix, strlen($prefix)) === 0) $have[$d] = true;
+    }
+    $names = array_keys($have); sort($names, SORT_NATURAL | SORT_FLAG_CASE);
+    $public = []; $private = [];
+    foreach ($names as $d) { if (folder_is_private($dir, $d)) $private[] = $d; else $public[] = $d; }
+    return [$public, $private];
+}
+
+/** The main page's own download switch, under its settings (outside the settings form: it is a form of its own, and forms do not nest). Only when
+ *  photos lie directly on the main page and the gallery is not closed. */
+function render_admin_root_downloads($csrfToken) {
+    if (gallery_is_closed() || !array_filter($GLOBALS['__admin_files'] ?? [], function ($f) { return strpos($f, '/') === false; })) return;
+?>
+    <div class="folder-switches root-dl">
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_downloads', 'dl', PUBLIC_DOWNLOAD_MODE === 'some' && PUBLIC_DOWNLOAD_ROOT, 'Visitors can download the photos on this page', '', '', 'unlisted-form'); ?>
+    </div>
+<?php
+}
+
+/** The line under a folder's download switch, worded for where things stand with the public folders inside it (at any depth): all off, all on, or
+ *  some on (named, each a link to that folder's settings), with the buttons that make sense. $list is the list of folders that allow it, when it
+ *  is not the saved one (just changed). '' when there is no public folder inside. */
+function admin_downloads_inside_html($dir, $files, $folderPath, $list = null) {
+    [$pub] = admin_download_folders_inside($dir, $files, $folderPath);
+    if (!$pub) return '';
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $on = $list !== null ? $list : public_download_current()[0];
+    $isOn = array_values(array_filter($pub, function ($p) use ($on) { return in_array($p, $on, true); }));
+    $n = count($pub); $k = count($isOn);
+    $short = function ($p) use ($folderPath) { return substr($p, strlen($folderPath) + 1); };
+    $btnOn = '<button type="button" class="linklike dl-in-on">Allow downloads in all</button>';
+    $btnOff = '<button type="button" class="linklike dl-in-off">Turn off in all</button>';
+    if ($k === 0) return '<span class="dl-inside-text">' . ($n === 1 ? 'The folder inside it has downloads off.' : 'The ' . $n . ' folders inside it have downloads off.') . '</span> ' . $btnOn;
+    if ($k === $n) return '<span class="dl-inside-text">' . ($n === 1 ? 'The folder inside it allows downloads.' : 'All ' . $n . ' folders inside it allow downloads.') . '</span> ' . $btnOff;
+    $names = implode(', ', array_map(function ($p) use ($esc, $short) { return '<a href="?admin&amp;folder=' . $esc(rawurlencode($p)) . '#settings">' . $esc($short($p)) . '</a>'; }, $isOn));
+    return '<span class="dl-inside-text">' . $k . ' of the ' . $n . ' folders inside it allow downloads: ' . $names . '.</span> ' . $btnOn . '<span class="dl-sep"> &middot; </span>' . $btnOff;
+}
+
+/** A folder's switches, in one run under the folder's description and its Cards/Flat choice: Gallery of its own, Private folder
+ *  (contents included) and Not listed (with, once it is on, Allow downloading originals). Each is saved the moment it is pressed.
+ *  The gallery's own top has none of them. */
+function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, $counts) {
+    if ($adminFolderPath === null) return;
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $private = !empty($itemsHere['restriction']) && $itemsHere['restriction'] === 'private';
 ?>
+    <div class="folder-switches">
+    <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_own_gallery', 'owngallery', !empty($itemsHere['ownGallery']), 'Gallery of its own', '', ' <small class="muted">(limits navigation)</small>', 'unlisted-form'); ?>
+    <?php if (!gallery_is_closed()): $dlFolders = public_download_current()[0]; ?>
+    <div class="dl-block"<?= $private ? ' hidden' : '' ?>>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_downloads', 'dl', in_array($adminFolderPath, $dlFolders, true), 'Visitors can download originals', '', '', 'unlisted-form'); ?>
+      <?php $dlRow = admin_downloads_inside_html($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? [], $adminFolderPath); if ($dlRow !== ''): ?>
+      <div class="dl-inside" data-dl-inside data-csrf="<?= $esc($csrfToken) ?>"<?= in_array($adminFolderPath, $dlFolders, true) ? '' : ' hidden' ?>>
+        <span class="dl-inside-body"><?= $dlRow ?></span>
+        <span class="rowstate" role="status" aria-live="polite"></span>
+      </div>
+      <?php endif; ?>
+    </div>
+    <?php endif; ?>
     <form method="post" class="priv-folder-form" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-stay="<?= (int) $counts['stay'] ?>" data-open="<?= (int) $counts['open'] ?>">
       <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
       <input type="hidden" name="action" value="toggle_folder_restriction">
       <input type="hidden" name="hidden" value="<?= $private ? '0' : '1' ?>">   <?php // what the Save button (no JavaScript) sends; the page's script sends its own request ?>
       <div class="instant-row">
         <label class="switch"><input type="checkbox" <?= $private ? 'checked' : '' ?> aria-label="Private folder"><span class="slider"></span></label>
-        <span class="instant-label">Private folder</span>
+        <span class="instant-label">Private folder <small class="muted">(contents included)</small></span>
         <span class="rowstate" role="status" aria-live="polite"></span>
       </div>
-      <p class="hint priv-folder-note" data-on="Visitors can't see this folder or anything in it. <strong>%stay%</strong> will stay private (marked private on their own, or in another private folder); <strong>%open%</strong> %becomes% public when you switch this off. You'll be asked first." data-off="Switch it on to hide this folder and everything in it. Photos you mark private on their own stay private when you switch it off again, so you can go through them first."></p>
       <div class="nojs-only"><button type="submit" class="<?= $private ? 'secondary' : 'danger' ?>"><?= $private ? 'Make this folder public again' : 'Make this entire folder private' ?></button></div>
     </form>
     <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_unlisted', 'unlisted', $private && !empty($itemsHere['unlisted']), 'Not listed', '', ' <small class="muted">only you can open it</small>', 'unlisted-form'); ?>
     <div class="unlisted-sub"<?= $private && !empty($itemsHere['unlisted']) ? '' : ' hidden' ?>>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_address_file', 'addrfile', !empty($itemsHere['addressFile']), !empty($itemsHere['addressFile']) ? 'Links send the bare file' : 'Links open in the gallery', '', '', 'unlisted-form'); ?>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s address</small>', 'unlisted-form'); ?>
     </div>
-    <p class="hint unlisted-note">Only you see what is in this folder: visitors and people with the private-view password get nothing, and an "Everything" link leaves it out. Share it one photo at a time (each photo has its own address), or pick the folder in a link. Switching this on makes the folder private too.</p>
+    <p class="hint unlisted-note">Only you see what is in this folder. Visitors and people with the private-view password get nothing, and an "Everything" share link leaves it out. To share it, send a photo's own address, or make a share link that picks this folder.</p>
+    </div>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">
         <h3 id="priv-modal-title">Make this folder public?</h3>
@@ -450,9 +619,23 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
         <div class="pm-btns"><button type="button" class="secondary" id="pm-cancel">Cancel</button><button type="button" id="pm-ok">Make public</button></div>
       </div>
     </div>
-<?php endif; ?>
+<?php
+}
+
+/** The "Locations" section, last on a folder's (or the gallery's) settings: whether photo locations show, and, under that because it
+ *  only shows photos whose location is public, the map. */
+function render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn = '', $locStatus = '') {
+    $isRoot = $adminFolderPath === null;
+    $locOn = !empty($itemsHere['locationEnabled']) && ENABLE_PHOTO_LOCATION;
+?>
+    <h3 class="subhead">Locations</h3>
     <?php $locJump = !ENABLE_PHOTO_LOCATION ? ' (locations are off for the whole gallery, in <a href="#site" onclick="return adminGoTo(\'site\', \'setting-ENABLE_PHOTO_LOCATION\');">Settings</a>)' : '';
           render_admin_instant_toggle($csrfToken, 'toggle_location_enabled', 'enabled', !empty($itemsHere['locationEnabled']), $isRoot ? 'Show photo locations to visitors at the root' : 'Show photo locations to visitors for this folder', $locWarn, $locJump); ?>
+    <?php if (ENABLE_PHOTO_LOCATION): ?>
+    <div class="loc-keep"<?= !empty($itemsHere['locationEnabled']) ? '' : ' hidden' ?>>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_keep_location', 'keeploc', ($itemsHere['keepLocation'] ?? null) === true, 'Keep the location in files visitors get', '', '', 'unlisted-form'); ?>
+    </div>
+    <?php endif; ?>
     <?php if ($locStatus !== ''): ?>
     <p class="hint loc-status"><?= $locStatus ?></p>
     <?php endif; ?>
@@ -464,11 +647,6 @@ function render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, 
       <?php endif; ?>
       <?php render_admin_map_form($itemsHere, $csrfToken, $isRoot); ?>
     </div>
-<?php if (!$isRoot): ?>
-    <h3 class="subhead">Navigation</h3>
-    <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_own_gallery', 'owngallery', !empty($itemsHere['ownGallery']), 'Gallery of its own', '', ' <small class="muted">visitors who arrive here can go no higher</small>', 'unlisted-form'); ?>
-    <p class="hint unlisted-note">Someone who arrives inside this folder (a link or address to it, or to a folder in it) is offered no way up past it and no folders beside it: the page is built without them. Someone who comes in through the main gallery keeps their way back. This is for showing one album on its own; it doesn't stop anyone typing the address of the main gallery.</p>
-<?php endif; ?>
 <?php
 }
 

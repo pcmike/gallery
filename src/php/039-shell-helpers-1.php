@@ -24,7 +24,7 @@ function shell_frame_script($kind) {
         . ($kind === 'admin' ? 'function top(){setTimeout(function(){scrollTo(0,0)},0)}window.addEventListener("load",top);window.addEventListener("hashchange",top);' : '')
         . 'document.addEventListener("click",function(e){var a=e.target&&e.target.closest?e.target.closest("a[href]"):null;if(!a||e.defaultPrevented||a.target==="_blank"||a.hasAttribute("download"))return;var u;try{u=new URL(a.href,location.href)}catch(x){return}'
         . 'if(u.origin!==origin||norm(u.pathname)!==norm(location.pathname)||u.searchParams.has("inframe")||u.search===location.search)return;'
-        . 'if(/^\?(img|video|archive|map|about|track|linkexport|filesdownload|reveal)/.test(u.search))return;u.searchParams.set("inframe","1");a.href=u.href},true);})();</script>';
+        . 'if(/^\?(img|video|archive|map|about|track|visitsexport|filesdownload|reveal)/.test(u.search))return;u.searchParams.set("inframe","1");a.href=u.href},true);})();</script>';
 }
 
 /** Does the admin offer a lock beside each folder (a one-press private/visible)? Only while the gallery is shown Flat: there are no folder
@@ -54,18 +54,28 @@ function shell_folder_tree($files, $current) {
         $children[$parent][] = $path;
     }
     [$own] = admin_folder_counts($files);
-    $row = function ($path, $label, $icon = '') use ($own, $current, $e) {
+    $collNodes = [];   // the collections stand among the folders they live beside, in italics: they are not folders on disk
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) {
+        foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $collNodes[$cPath] = $cRec; $own[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
+            $children[$cRec['parentPath']][] = $cPath;
+        }
+        foreach ($children as $cParent => $cList) { usort($cList, function ($a, $b) { return strnatcasecmp(basename($a), basename($b)); }); $children[$cParent] = $cList; }
+    }
+    $row = function ($path, $label, $icon = '') use ($own, $current, $e, $collNodes) {
         $cur = ($path === '' ? $current === null : $current === $path);
-        return '<a href="?admin&amp;shell=1' . ($path === '' ? '' : '&amp;folder=' . $e(rawurlencode($path))) . '" data-path="' . $e($path) . '" title="' . $e($label) . '"' . ($cur ? ' class="current" aria-current="page"' : '') . '>'
-             . '<span class="fname">' . $icon . $e($label) . '</span><span class="fcount">' . (int) ($own[$path] ?? 0) . '</span></a>';
+        $isColl = isset($collNodes[$path]);
+        return '<a href="?admin&amp;shell=1' . ($path === '' ? '' : '&amp;folder=' . $e(rawurlencode($path))) . '" data-path="' . $e($path) . '" title="' . $e($isColl ? 'Collection: ' . $label : $label) . '"' . ($cur ? ' class="current' . ($isColl ? ' coll' : '') . '" aria-current="page"' : ($isColl ? ' class="coll"' : '')) . '>'
+             . '<span class="fname' . ($isColl ? ' coll' : '') . '">' . $icon . $e($label) . '</span><span class="fcount">' . (int) ($own[$path] ?? 0) . '</span></a>';
     };
     $toggle = function ($name) use ($e) { return '<button type="button" class="ftoggle" aria-expanded="true" aria-label="Show or hide the folders inside ' . $e($name) . '"></button>'; };
     $lockCsrf = folder_lock_toggles_shown() ? admin_csrf_token() : '';
-    $branch = function ($parent) use (&$branch, $children, $row, $toggle, $lockCsrf) {
+    $branch = function ($parent) use (&$branch, $children, $row, $toggle, $lockCsrf, $collNodes) {
         $out = '';
         foreach ($children[$parent] ?? [] as $path) {
             $kids = !empty($children[$path]);
-            $out .= '<li' . ($kids ? ' class="has-children"' : '') . '>' . $row($path, basename($path)) . ($lockCsrf !== '' ? folder_lock_button($path, $lockCsrf) : '') . ($kids ? $toggle(basename($path)) : '');
+            $nodeLabel = isset($collNodes[$path]) && $collNodes[$path]['title'] !== '' ? $collNodes[$path]['title'] : basename($path);
+            $out .= '<li' . ($kids ? ' class="has-children"' : '') . '>' . $row($path, $nodeLabel) . ($lockCsrf !== '' && !isset($collNodes[$path]) ? folder_lock_button($path, $lockCsrf) : '') . ($kids ? $toggle(basename($path)) : '');
             if ($kids) $out .= '<ul>' . $branch($path) . '</ul>';
             $out .= '</li>';
         }
@@ -82,11 +92,11 @@ function shell_folder_tree($files, $current) {
  *  looked. Settings: nothing unless the Health check has something to fix (the rows the server can see: the web server rules are
  *  tested by the browser inside Settings itself). */
 function admin_nav_counts($dir, $files) {
-    $out = ['features' => [], 'links' => [], 'site' => []];
+    $out = ['features' => [], 'links' => [], 'site' => [], 'visits' => []];
     $inactive = count(array_filter(scan_md_candidates($dir), function ($f) use ($dir) { return !in_array($f, scan_gallery_md_files($dir)['files'], true); }));
     $notesOn = scan_gallery_md_files($dir)['files'] !== [];
     $closed = gallery_is_closed(); $of = $closed ? 8 : 9;   // (a closed gallery's downloads are each share link's own choice: not one of the switches)
-    $on = (int) AUTO_GROUP_BY_FOLDER + (int) ENABLE_VIDEO + (int) ENABLE_PHOTO_LOCATION + (int) ENABLE_SHARE_LINKS + (int) (PUBLIC_DOWNLOAD_MODE !== 'off' && !$closed)
+    $on = (int) AUTO_GROUP_BY_FOLDER + (int) ENABLE_VIDEO + (int) ENABLE_PHOTO_LOCATION + (int) ENABLE_SHARE_LINKS + (int) (ENABLE_PUBLIC_DOWNLOAD && !$closed)
         + (int) (TRACK_VIEWS || LOG_PUBLIC_VISITS) + (int) (!$inactive && $notesOn) + (int) ENABLE_THUMBNAIL_CACHE + (int) COUNTRY_LOOKUP;
     if ($inactive > 0) $out['features'][] = ['text' => (string) $inactive, 'kind' => 'warn', 'title' => $inactive . ' feature' . ($inactive === 1 ? '' : 's') . ' to set up'];
     else $out['features'][] = ['text' => $on . '/' . $of, 'kind' => '', 'title' => $on . ' of the ' . $of . ' features you can switch on are on'];
@@ -100,6 +110,7 @@ function admin_nav_counts($dir, $files) {
         if ($live > 0) $out['links'][] = ['text' => (string) $live, 'kind' => '', 'title' => $live . ' link' . ($live === 1 ? '' : 's') . ' in use'];
         if ($news > 0) $out['links'][] = ['text' => $news . ' new', 'kind' => 'new', 'title' => $news . ' link' . ($news === 1 ? ' has' : 's have') . ' news since you last looked'];
     }
+    if (visits_tab_wanted() && ($vn = visitlog_visitor_count()) > 0) $out['visits'][] = ['text' => number_format($vn), 'kind' => '', 'title' => number_format($vn) . ' visitor' . ($vn === 1 ? '' : 's') . ' in the log'];
     $loud = 0;
     foreach (health_checks($dir, $files) as $r) if ($r[1] === 'bad' || $r[1] === 'warn') $loud++;
     if ($loud > 0) $out['site'][] = ['text' => (string) $loud, 'kind' => 'bad', 'title' => $loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at in the Health check'];
@@ -119,7 +130,10 @@ function shell_whole_nav($dir, $files, $folderGroupKeys) {
     $h = '<a href="?admin&amp;shell=1&amp;tab=features" data-tab="features">Features' . admin_nav_badges($counts['features']) . '</a>';
     if ($hidden || $edited['total'] > 0) $h .= '<a href="?admin&amp;shell=1&amp;tab=hidden" data-tab="hidden">Edited <span class="count">' . number_format($edited['total']) . '</span></a>';
     if (ENABLE_SHARE_LINKS) $h .= '<a href="?admin&amp;shell=1&amp;tab=links" data-tab="links">Shares' . admin_nav_badges($counts['links']) . '</a>';
-    return $h . '<a href="?admin&amp;shell=1&amp;tab=site" data-tab="site">Settings' . admin_nav_badges($counts['site']) . '</a>';
+    if (collections_any()) $h .= '<a href="?admin&amp;shell=1&amp;tab=collections" data-tab="collections">Collections <span class="count">' . count(collections_list()) . '</span></a>';
+    $h .= '<a href="?admin&amp;shell=1&amp;tab=site" data-tab="site">Settings' . admin_nav_badges($counts['site']) . '</a>';
+    if (visits_tab_wanted()) $h .= '<a href="?admin&amp;shell=1&amp;tab=visits" data-tab="visits">Visitors' . admin_nav_badges($counts['visits']) . '</a>';
+    return $h;
 }
 
 /** The owner's bar on a phone. There is no frame on a phone (a frame and a fixed bar are trouble in iPhone Safari), so the pages stay the
@@ -135,23 +149,34 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     $whole = ['features' => 'Features'];
     if ($showEdited) $whole['hidden'] = 'Edited';
     if (ENABLE_SHARE_LINKS) $whole['links'] = 'Shares';
+    if (collections_any()) $whole['collections'] = 'Collections';
     $whole['site'] = 'Settings';
+    if (visits_tab_wanted()) $whole['visits'] = 'Visitors';
     $children = [];
     foreach (all_folder_paths($files) as $path) $children[strpos($path, '/') === false ? '' : substr($path, 0, strrpos($path, '/'))][] = $path;
     [$own] = admin_folder_counts($files);
-    $folderLink = function ($path, $label) use ($e, $inAdmin, $root, $folder, $own) {
+    $collNodes = [];   // collections stand among the folders they live beside, in italics
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) {
+        foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $collNodes[$cPath] = $cRec; $own[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
+            $children[$cRec['parentPath']][] = $cPath;
+        }
+        foreach ($children as $cParent => $cList) { usort($cList, function ($a, $b) { return strnatcasecmp(basename($a), basename($b)); }); $children[$cParent] = $cList; }
+    }
+    $folderLink = function ($path, $label) use ($e, $inAdmin, $root, $folder, $own, $collNodes) {
         $cur = ($path === '' ? $folder === null : $folder === $path);
         $href = $inAdmin ? '?admin' . ($path === '' ? '' : '&folder=' . rawurlencode($path)) : ($path === '' ? $root : $root . '?folder=' . rawurlencode($path));
-        return '<a class="pb-f' . ($cur ? ' cur' : '') . '" href="' . $e($href) . '"' . ($inAdmin ? ' data-keep' : '') . ($cur ? ' aria-current="page"' : '') . '><span class="n">' . $e($label) . '</span><span class="c">' . (int) ($own[$path] ?? 0) . '</span></a>';
+        $isColl = isset($collNodes[$path]);
+        return '<a class="pb-f' . ($cur ? ' cur' : '') . ($isColl ? ' coll' : '') . '" href="' . $e($href) . '"' . ($inAdmin ? ' data-keep' : '') . ($cur ? ' aria-current="page"' : '') . '><span class="n' . ($isColl ? ' coll' : '') . '">' . $e($label) . '</span><span class="c">' . (int) ($own[$path] ?? 0) . '</span></a>';
     };
     // Every folder is a row (a fold arrow when it holds folders, then the link); the folders inside it follow in a box that folds away. A branch
     // that does not lead to the folder you are in starts folded, like the shell's tree.
-    $node = function ($path, $label, $depth) use (&$node, $children, $folderLink, $folder, $e) {
+    $node = function ($path, $label, $depth) use (&$node, $children, $folderLink, $folder, $e, $collNodes) {
         $kids = $children[$path] ?? [];
         $open = $path === '' || ($folder !== null && ($folder === $path || strpos($folder . '/', $path . '/') === 0));
-        $row = '<div class="pb-fr">' . ($kids ? '<button type="button" class="pb-t" aria-expanded="' . ($open ? 'true' : 'false') . '" aria-label="Show or hide the folders inside ' . $e($label) . '"></button>' : '<span class="pb-t pb-t0"></span>') . $folderLink($path, $label) . ($path !== '' && folder_lock_toggles_shown() ? folder_lock_button($path, admin_csrf_token(), 'flock pb-lk') : '') . '</div>';
+        $row = '<div class="pb-fr">' . ($kids ? '<button type="button" class="pb-t" aria-expanded="' . ($open ? 'true' : 'false') . '" aria-label="Show or hide the folders inside ' . $e($label) . '"></button>' : '<span class="pb-t pb-t0"></span>') . $folderLink($path, $label) . ($path !== '' && !isset($collNodes[$path]) && folder_lock_toggles_shown() ? folder_lock_button($path, admin_csrf_token(), 'flock pb-lk') : '') . '</div>';
         $inner = '';
-        foreach ($kids as $k) $inner .= $node($k, basename($k), $depth + 1);
+        foreach ($kids as $k) $inner .= $node($k, isset($collNodes[$k]) && $collNodes[$k]['title'] !== '' ? $collNodes[$k]['title'] : basename($k), $depth + 1);
         return '<div class="pb-g' . ($kids ? '' : ' leaf') . ($kids && !$open ? ' collapsed' : '') . '" style="--d:' . $depth . '" data-path="' . $e($path) . '"' . ($open ? ' data-here' : '') . '>' . $row . ($kids ? '<div class="pb-kids">' . $inner . '</div>' : '') . '</div>';
     };
     $h = '<nav class="pb" id="pb" aria-label="Your pages" data-context="' . $e($context) . '">'
@@ -161,7 +186,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
        . '<button type="button" class="pb-i" id="pb-menu" data-pb="menu" aria-expanded="false" aria-controls="pb-sheet">' . ui_icon('menu') . '<span>Menu</span></button>'
        . '</nav><div class="pb-sheet" id="pb-sheet" hidden' . ($counts === null ? ' data-lazy' : '') . '><div class="pb-top"><div class="pb-grab" aria-hidden="true"></div><div class="pb-head"><span class="pb-title">' . $e((string) ($GLOBALS['pageTitle'] ?? 'Gallery')) . '</span>' . $logoutHtml . '</div></div><div class="pb-scroll"><div class="pb-lab">The whole gallery</div>';
     foreach ($whole as $t => $label) {
-        $badges = $t === 'hidden' ? ($editedTotal !== null ? ' <span class="count">' . number_format($editedTotal) . '</span>' : '') : admin_nav_badges($counts[$t === 'site' ? 'site' : $t] ?? []);
+        $badges = $t === 'hidden' ? ($editedTotal !== null ? ' <span class="count">' . number_format($editedTotal) . '</span>' : '') : ($t === 'collections' ? ' <span class="count">' . count(collections_list()) . '</span>' : admin_nav_badges($counts[$t === 'site' ? 'site' : $t] ?? []));
         $h .= '<a class="pb-w" href="' . $e($tab($t)) . '" data-pb-tab="' . $t . '"><span>' . $e($label) . '</span><span class="pb-b" data-b="' . $t . '">' . $badges . '</span></a>';
     }
     $h .= '<div class="pb-lab">Folders</div>' . $node('', 'Root', 0) . '</div></div>';
@@ -267,6 +292,7 @@ function owner_phone_bar_css() {
 function shell_folder_labels($dir, $files) {
     $labels = [];
     $paths = all_folder_paths($files);
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (array_keys(collections_registry($dir, $files)['byPath']) as $cPath) $paths[] = $cPath;   // (a collection's title is its display name)
     if (count($paths) <= 400) foreach ($paths as $path) { $l = folder_display_meta($dir, $path)['label']; if ($l !== '') $labels[$path] = $l; }
     return $labels;
 }
@@ -278,10 +304,10 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
     $hidden = admin_any_hidden($dir, $files, $folderGroupKeys) ? admin_hidden_data($dir, $files) : null;
     $edited = admin_edited_overview($dir, $files, $hidden);
     $showEdited = (bool) $hidden || $edited['total'] > 0;
-    $whole = ['features' => 'Features', 'hidden' => 'Edited', 'links' => 'Shares', 'site' => 'Settings'];
+    $whole = ['features' => 'Features', 'hidden' => 'Edited', 'links' => 'Shares', 'site' => 'Settings', 'visits' => 'Visitors'];
     $tab = (string) ($_GET['tab'] ?? '');
     if ($tab !== '' && $tab !== 'settings' && $tab !== 'notes' && !isset($whole[$tab])) $tab = '';
-    if (($tab === 'hidden' && !$showEdited) || ($tab === 'links' && !ENABLE_SHARE_LINKS)) $tab = '';
+    if (($tab === 'hidden' && !$showEdited) || ($tab === 'links' && !ENABLE_SHARE_LINKS) || ($tab === 'visits' && !visits_tab_wanted())) $tab = '';
     $labels = shell_folder_labels($dir, $files);
     $rootHref = gallery_root_href();
     $folderQ = $adminFolderPath !== null ? 'folder=' . rawurlencode($adminFolderPath) . '&' : '';

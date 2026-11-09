@@ -32,7 +32,13 @@
   <?php if (ENABLE_SHARE_LINKS): ?>
     <a href="#links" data-tab="links" class="side-link">Shares<?= admin_nav_badges($navCounts['links']) ?></a>
   <?php endif; ?>
+  <?php if (collections_any()): ?>
+    <a href="#collections" data-tab="collections" class="side-link">Collections <span class="count"><?= count(collections_list()) ?></span></a>
+  <?php endif; ?>
   <a href="#site" data-tab="site" class="side-link">Settings<?= admin_nav_badges($navCounts['site']) ?></a>
+  <?php if (visits_tab_wanted()): ?>
+    <a href="#visits" data-tab="visits" class="side-link">Visitors<?= admin_nav_badges($navCounts['visits']) ?></a>
+  <?php endif; ?>
   </div>
   <details class="admin-folders" open>
     <summary>Folders <span class="here">&middot; <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span></summary>
@@ -41,17 +47,19 @@
 </aside>
 <main class="admin-main"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
   <div class="admin-folder-head" id="admin-folder-head">
-    <div class="afh-title"><span class="muted">Folder</span> <strong><?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></strong></div>
-    <nav class="admin-tabs" role="tablist" aria-label="This folder">
-      <a href="#settings" role="tab" data-tab="settings">Folder settings</a>
+    <div class="afh-title"><span class="muted"><?= $adminCollection !== null ? 'Collection' : 'Folder' ?></span> <strong<?= $adminCollection !== null ? ' class="coll"' : '' ?>><?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></strong></div>
+    <nav class="admin-tabs" role="tablist" aria-label="<?= $adminCollection !== null ? 'This collection' : 'This folder' ?>">
+      <a href="#settings" role="tab" data-tab="settings"><?= $adminCollection !== null ? 'Collection settings' : 'Folder settings' ?></a>
+<?php if ($adminCollection === null): ?>
       <a href="#notes" role="tab" data-tab="notes">Notes <span class="count"><?= count($mdCandidates) ?></span></a>
+<?php endif; ?>
     </nav>
   </div>
   <?php if ($resultMessage): ?>
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div id="server-probe" hidden data-any-private="<?= !empty($GLOBALS['__lock_probe']['anyPrivate']) ? '1' : '0' ?>" data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>" data-share-probe="<?= htmlspecialchars(ENABLE_SHARE_LINKS ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . LINK_PROBE_TOKEN : '', ENT_QUOTES, 'UTF-8') ?>"></div>
+  <div id="server-probe" hidden data-any-private="<?= !empty($GLOBALS['__lock_probe']['anyPrivate']) ? '1' : '0' ?>" data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>" data-visits="<?= htmlspecialchars(is_file(visitlog_path()) ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . basename(visitlog_path()) : '', ENT_QUOTES, 'UTF-8') ?>" data-share-probe="<?= htmlspecialchars(ENABLE_SHARE_LINKS ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . LINK_PROBE_TOKEN : '', ENT_QUOTES, 'UTF-8') ?>"></div>
   <div class="tab-panel" data-tab="features">
 <?= render_admin_features_panel($adminEdited, $adminHidden ?: []) ?>
   </div>
@@ -65,6 +73,11 @@
 <?php render_admin_links_panel($csrfToken, $dir, $files); ?>
   </div>
 <?php endif; ?>
+<?php if (visits_tab_wanted()): ?>
+  <div class="tab-panel" data-tab="visits">
+<?php render_admin_visits_panel($csrfToken, $dir, $files); ?>
+  </div>
+<?php endif; ?>
   <div class="tab-panel" data-tab="settings">
   <?php if (ENABLE_PHOTO_LOCATION && empty($itemsHere['locationEnabled']) && $adminSummary['fromFile'] > 0): $unsavedCount = $adminSummary['fromFile']; ?>
     <div class="panel loc-unsaved-summary">
@@ -72,17 +85,25 @@
         <span class="muted">Nothing is public while this folder's location switch is off. Switching it on makes <?= $unsavedCount === 1 ? 'that location' : 'these ' . $unsavedCount . ' locations' ?> public on the gallery and the map, except for photos whose <em>Location</em> switch (in the pencil's editor) you turn off.</span>
     </div>
   <?php endif; ?>
-  <?php if ($adminFolderPath !== null): ?>
+  <?php if ($adminCollection !== null): ?>
+  <?php render_admin_collection_panel($dir, $files, $adminCollection, $csrfToken); ?>
+  <?php elseif ($adminFolderPath !== null): ?>
   <section class="panel" id="settings">
     <h2 class="section-title">This folder's own settings</h2>
-    <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, suggest_folder_dates($dir, folder_files_under($files, $adminFolderPath))); ?>
-    <?php render_admin_privacy_section($itemsHere, $csrfToken, $adminFolderPath, folder_privacy_counts($dir, $files, $adminFolderPath), $locWarn, $locStatus); ?>
+    <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, suggest_folder_dates($dir, folder_files_under($files, $adminFolderPath)), 'main'); ?>
+    <?php render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, folder_privacy_counts($dir, $files, $adminFolderPath)); ?>
+    <?php render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, null, 'sort'); ?>
+    <?php if (AUTO_GROUP_BY_FOLDER) render_admin_collections_section($dir, $files, $adminFolderPath, $csrfToken); ?>
+    <?php render_admin_locations_section($itemsHere, $csrfToken, $adminFolderPath, $locWarn, $locStatus); ?>
   </section>
   <?php else: ?>
   <section class="panel" id="settings">
     <h2 class="section-title">Gallery settings</h2>
-    <?php render_admin_identity_form($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files)); ?>
-    <?php render_admin_privacy_section($itemsHere, $csrfToken, null, ['stay' => 0, 'open' => 0], $locWarn, $locStatus); ?>
+    <?php render_admin_identity_form($itemsHere, $csrfToken, null, suggest_folder_dates($dir, $files), 'main'); ?>
+    <?php render_admin_root_downloads($csrfToken); ?>
+    <?php render_admin_identity_form($itemsHere, $csrfToken, null, null, 'sort'); ?>
+    <?php if (AUTO_GROUP_BY_FOLDER) render_admin_collections_section($dir, $files, '', $csrfToken); ?>
+    <?php render_admin_locations_section($itemsHere, $csrfToken, null, $locWarn, $locStatus); ?>
   </section>
   <?php endif; ?>
 
@@ -118,6 +139,7 @@
   <?php endif; ?>
 
   </div>
+<?php if ($adminCollection === null): ?>
   <div class="tab-panel" data-tab="notes">
   <div class="notes-layout">
   <div class="notes-main">
@@ -189,6 +211,12 @@
   <aside class="notes-reference" aria-label="Notes reference"><?= render_admin_notes_reference() ?></aside>
   </div>
   </div>
+<?php endif; ?>
+<?php if (collections_any()): ?>
+  <div class="tab-panel" data-tab="collections">
+<?php render_admin_collections_overview($dir, $files, $csrfToken); ?>
+  </div>
+<?php endif; ?>
   <div class="tab-panel" data-tab="site">
 <?php render_admin_health_panel(); render_admin_site_settings($csrfToken); ?>
   </div>

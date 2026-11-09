@@ -1,9 +1,13 @@
-/** What to overwrite in the original at $srcPath before it is given to this visitor: [] for nothing (a signed-in
- *  visitor, the owner or someone with the private-view password, gets the file exactly as it is, and so does anyone for
- *  a photo whose location the gallery shows), a plan for a visitor who isn't signed in and a photo whose location is
- *  hidden, or null when that can't be done safely, in which case the file must not be given out. */
+/** What to overwrite in the original at $srcPath before it is given to this visitor: [] for nothing (the owner, someone with the
+ *  private-view password or on a share link set to show every location gets the file exactly as it is; so does anyone, for a photo
+ *  whose location the gallery shows, when "Scrub location data" is switched off), a plan for any other visitor (the location is
+ *  taken out of the file, whether the gallery shows it on the page or not), or null when that can't be done safely, in which case
+ *  the file must not be given out. */
 function visitor_scrub_plan($srcPath, $filename, $itemsData) {
-    if (viewer_sees_all_locations() || photo_location_visible($itemsData[$filename] ?? [])) return [];
+    if (viewer_sees_all_locations()) return [];   // (the owner, the private-view password, a share link set to show every location: the file as it is)
+    $entry = $itemsData[$filename] ?? [];
+    // With the switch off, or in a folder that keeps the location in what visitors get, only a location the gallery hides is taken out.
+    if ((!SCRUB_LOCATION_DATA || !empty($entry['_folderKeepLocation'])) && photo_location_visible($entry)) return [];
     return location_scrub_plan($srcPath);
 }
 

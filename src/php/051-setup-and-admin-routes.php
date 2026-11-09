@@ -190,7 +190,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     if (isset($_GET['filesdownload'])) { files_download_route($dir, $files); return; }
-    if (isset($_GET['linkview']) || isset($_GET['linkip']) || isset($_GET['linkips']) || isset($_GET['linkexport']) || isset($_GET['linkphotos']) || isset($_GET['linkcover'])) {   // the Shares tab's fragments and CSV downloads
+    if (isset($_GET['visits']) || isset($_GET['visitsexport']) || isset($_GET['linkphotos']) || isset($_GET['linkcover'])) {   // the Shares tab's fragments and CSV downloads
         run_links_view_route($dir, $files);
         return;
     }
@@ -249,7 +249,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         $resultMessage = handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups);
         // A save that couldn't write must not read as a save: say what to fix.
         if (!empty($GLOBALS['__data_write_failed']) && ($resultMessage['type'] ?? '') === 'ok') {
-            $resultMessage = ['type' => 'error', 'text' => data_write_failure_text()];
+            $resultMessage = ['type' => 'error', 'text' => data_write_failure_text($adminFolderPath === null ? 'this folder' : data_write_failure_place($dir, $adminFolderReal))];
         }
         if ($resultMessage['type'] === 'redirect') {
             // Post, redirect, get: the new settings take effect on the next request, and the page shows them.
@@ -271,7 +271,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         }
         if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'gallery-fetch' && in_array($resultMessage['type'] ?? '', ['ok', 'error'], true)) {
             // A setting flipped in place by the page's script: answer in JSON, no page.
-            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1, 'query' => 1, 'fresh' => 1]));
+            admin_json_exit(['ok' => $resultMessage['type'] === 'ok', 'text' => (string) ($resultMessage['text'] ?? '')] + array_intersect_key($resultMessage, ['hash' => 1, 'stale' => 1, 'counts' => 1, 'private' => 1, 'unlisted' => 1, 'code' => 1, 'fresh' => 1, 'cover' => 1, 'photos' => 1, 'more' => 1, 'label' => 1, 'n' => 1, 'html' => 1, 'short' => 1]));
         }
         if ($resultMessage['type'] === 'export') {
             admin_export_items($adminFolderPath, $adminFolderReal);

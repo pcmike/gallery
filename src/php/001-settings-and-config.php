@@ -86,7 +86,7 @@ set_exception_handler(function ($e) {
 });
 
 // Version shown on the "?about" page and stamped in the page source.
-define('GALLERY_VERSION', '2.6.4');
+define('GALLERY_VERSION', '2.6.5');
 
 /**
  * The optional settings file. Everything below is configured by the
@@ -285,10 +285,19 @@ define('SHOW_VIEW_COUNTS_PUBLICLY', gallery_setting('SHOW_VIEW_COUNTS_PUBLICLY',
 define('PUBLIC_DOWNLOAD_MODE', (function () {
     $legacy = gallery_setting('ENABLE_PUBLIC_DOWNLOAD', false);
     $mode = gallery_setting('PUBLIC_DOWNLOAD_MODE', 'off', ['off', 'all', 'some']);
-    return (!array_key_exists('PUBLIC_DOWNLOAD_MODE', gallery_config_load()['cfg']) && $legacy) ? 'all' : $mode;
+    $mode = (!array_key_exists('PUBLIC_DOWNLOAD_MODE', gallery_config_load()['cfg']) && $legacy) ? 'all' : $mode;
+    // 2.6.5: each folder stands on its own (a folder's switch covers the photos directly in it), so there is no "Everything" any more. A settings
+    // file that still says so (or has the old on/off line) is read as Off: downloads are never on by accident. The line itself is left as it is until
+    // a download switch is used (then it is replaced), so going back to an older version still finds it.
+    return $mode === 'all' ? 'off' : $mode;
 })());
 define('PUBLIC_DOWNLOAD_FOLDERS', array_values(array_filter((array) gallery_setting('PUBLIC_DOWNLOAD_FOLDERS', []), 'is_string')));
-define('ENABLE_PUBLIC_DOWNLOAD', PUBLIC_DOWNLOAD_MODE !== 'off');   // (the question most of the code asks: is there a download button for strangers at all)
+define('PUBLIC_DOWNLOAD_ROOT', gallery_setting('PUBLIC_DOWNLOAD_ROOT', false) === true);   // (the photos lying directly on the gallery's main page)
+// 2.6.5: location data is taken out of every original sent to a visitor (the viewer's full-size picture, a download, a video that plays, a Not
+// listed photo's own address), not only where the gallery hides the location. On to start with; the owner, the private-view password and a share link
+// set to show every location are always sent the file as it is. See visitor_scrub_plan.
+define('SCRUB_LOCATION_DATA', gallery_setting('SCRUB_LOCATION_DATA', true));
+define('ENABLE_PUBLIC_DOWNLOAD', PUBLIC_DOWNLOAD_MODE === 'some' && (PUBLIC_DOWNLOAD_FOLDERS !== [] || PUBLIC_DOWNLOAD_ROOT));   // (the question most of the code asks: is there a download button for strangers at all)
 
 // Thumbnail generation/caching. On by default: without it every photo is
 // served at full original resolution as its own "thumbnail" (real
@@ -398,6 +407,16 @@ function folder_style_flat() {
 // directly in such a path aren't shown (put them in a folder); a setup notice says how many.
 define('EXTRA_ROOTS', gallery_setting('EXTRA_ROOTS', []));
 define('EXTRA_FOLDERS', gallery_setting('EXTRA_FOLDERS', []));
+// The names each named place (an EXTRA_FOLDERS path) has been shown under: path => [names]. Kept by the admin's Settings whenever the list is
+// saved, never typed by hand. A photo's views are recorded under the path as shown (so under the name), and its count is the sum over every name
+// the place has had, so renaming a place (and renaming it back) loses nothing.
+define('EXTRA_FOLDER_NAMES', gallery_setting('EXTRA_FOLDER_NAMES', []));
+// How long a repeat view of the same photo, from the same browser, goes uncounted (see view_debounce_recently_viewed). Here, not beside the view
+// counting, because a Not listed photo's address sent as a bare file counts its view before that code is reached.
+define('VIEW_DEBOUNCE_SECONDS', 1800);
+
+// Health check rows the owner has set aside: row key => how much there was at the time. A row comes back by itself if there is more than that.
+define('HEALTH_SET_ASIDE', gallery_setting('HEALTH_SET_ASIDE', []));
 
 // Recognize .mov and .mp4 (iPhone's two video formats) as media items,
 // eligible for everything a photo already is — filename auto-grouping,
@@ -492,10 +511,13 @@ define('ENABLE_SHARE_LINKS', gallery_setting('ENABLE_SHARE_LINKS', false));
 define('SHARE_HEADS_UP', gallery_setting('SHARE_HEADS_UP', false));
 
 // Whether the gallery keeps a log of who opens its plain, public address (their IP address, browser and what they looked at),
-// shown in the Shares tab beside the share links' logs. Off by default; needs share links switched on, since it uses their log.
-// Kept for LOG_PUBLIC_DAYS days (0: until you trim it).
+// shown in the Visitors tab beside the share links' visitors. Off by default. The visitor log (this and the share links') is kept in
+// SQLite, so it needs PHP's pdo_sqlite and a folder the web server may write to.
 define('LOG_PUBLIC_VISITS', gallery_setting('LOG_PUBLIC_VISITS', false));
-define('LOG_PUBLIC_DAYS', gallery_setting('LOG_PUBLIC_DAYS', 30));
+// How many days the visitor records (the public address's and every share link's) are kept; 0 keeps them until you trim the log.
+define('LOG_KEEP_DAYS', max(0, (int) gallery_setting('LOG_KEEP_DAYS', 0)));
+// Health warns when the visitor records together take more than this many megabytes on disk (0: no warning).
+define('LOG_WARN_MB', max(0, (int) gallery_setting('LOG_WARN_MB', 100)));
 
 // Whether the public address is closed: only the owner, someone with the private-view password and someone who came in through a
 // share link see anything; a stranger gets the page of a link that isn't valid. Off by default. It only takes effect while share
@@ -520,16 +542,11 @@ define('LINK_COOKIE_NAME', 'gallery_link_' . substr(hash('sha256', __DIR__), 0, 
 define('PREVIEW_COOKIE_NAME', 'gallery_preview_' . substr(hash('sha256', __DIR__), 0, 10));   // the owner previewing a link in this browser
 const PREVIEW_SECONDS = 14400;   // a preview ends by itself after four hours
 define('LINK_PROBE_TOKEN', '0000-probe-0000');   // the admin asks for this one to learn whether the tidy address reaches the script (it has hyphens, so only the rule that allows custom names lets it through)
-const LINK_TOKEN_LENGTH = 16;
+const LINK_TOKEN_LENGTH = 8;   // a new random address (the same length as a Not listed photo's); links made before keep their 16
+const LINK_GUESS_LIMIT = 10;   // wrong share-link or photo addresses from one visitor in 15 minutes before a one-minute pause (a sign-in keeps 5)
 const LINK_ALIASES_MAX = 9;   // old addresses a link may keep working at the same time (with its own, ten ways in)
 const LINK_ADDRESS_TAKEN = 'Another link has (or had) that address: pick another.';
 // Names a link may not take: addresses the gallery uses itself.
 const LINK_RESERVED_NAMES = ['admin', 'administrator', 'login', 'logout', 'signin', 'reveal', 'index', 'about', 'link', 'links', 'share', 'gallery', 'robots', 'sitemap', 'favicon', 'assets', 'static', 'public', 'private', 'photos', 'media', 'download', 'downloads', 'cache', 'config', 'null', 'none', 'test'];
 const LINK_REOPEN_GRACE_SECONDS = 900;   // the same address opening again this soon (an app's own browser, then Safari) is not a second use
-// The log of a share link keeps this much: the latest happenings on its timeline, visitors (an older one is folded into a count), per-item records, and tries turned away.
-// (Each report rewrites the link's log file, so there is a ceiling; a few megabytes at most, and the owner trims by age when they choose.)
-const LINK_LOG_EVENTS = 5000;     // the timeline keeps this many happenings
-const LINK_LOG_VISITORS = 2000;   // and this many visitors; an older one is folded into a count
-const LINK_LOG_ITEMS = 50000;     // per-item records (past this, new ones are not added)
-const LINK_LOG_BLOCKED = 500;
-const PUBLIC_LOG_ID = 'ffffffffff';   // the id of the public address's log, kept as a record in the links file (see "The public address's log")
+const PUBLIC_LOG_ID = 'ffffffffff';   // the source of the public address's records in the visitor log (an older version kept it as a record in the links file)

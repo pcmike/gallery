@@ -226,10 +226,37 @@ function status_accent_color($status, $customColor) {
  * photos at all. Shared by the cover card and the folder's link preview
  * so the two can never disagree about which photo represents a folder.
  */
-function pick_folder_cover($recursiveFiles, $manualCover = null) {
+function pick_folder_cover($recursiveFiles, $manualCover = null, $folderPath = null) {
+    $prefix = $folderPath !== null && $folderPath !== '' ? rtrim($folderPath, '/') . '/' : null;
     if ($manualCover !== null) {
+        if (strncmp($manualCover, 'follow:', 7) === 0) {
+            // The cover of a folder directly under this one: whatever that folder shows (its own choice, or its own automatic pick).
+            $child = substr($manualCover, 7);
+            if ($prefix !== null && $child !== '') {
+                $under = array_values(array_filter($recursiveFiles, function ($f) use ($prefix, $child) { return strncmp($f, $prefix . $child . '/', strlen($prefix . $child) + 1) === 0; }));
+                if ($under) return pick_folder_cover($under, folder_display_meta($GLOBALS['dir'], $prefix . $child)['cover'], $prefix . $child);
+            }
+        } elseif (strpos($manualCover, '/') !== false) {
+            // A photo chosen from inside a folder under this one, by its path in this folder.
+            if ($prefix !== null) foreach ($recursiveFiles as $f) if ($f === $prefix . $manualCover) return $f;
+        } else {
+            foreach ($recursiveFiles as $f) {
+                if (basename($f) === $manualCover) return $f;
+            }
+        }
+    }
+    // Nothing chosen: a folder that holds only folders shows the cover of its first card (the order the cards are shown in).
+    if ($prefix !== null) {
+        $own = 0; $kids = [];
         foreach ($recursiveFiles as $f) {
-            if (basename($f) === $manualCover) return $f;
+            if (strncmp($f, $prefix, strlen($prefix)) !== 0) continue;
+            $rest = substr($f, strlen($prefix)); $slash = strpos($rest, '/');
+            if ($slash === false) $own++; else $kids[substr($rest, 0, $slash)] = true;
+        }
+        if (!$own && $kids) {
+            $first = order_folder_children($GLOBALS['dir'], $prefix, array_keys($kids))[0];
+            $under = array_values(array_filter($recursiveFiles, function ($f) use ($prefix, $first) { return strncmp($f, $prefix . $first . '/', strlen($prefix . $first) + 1) === 0; }));
+            if ($under) return pick_folder_cover($under, folder_display_meta($GLOBALS['dir'], $prefix . $first)['cover'], $prefix . $first);
         }
     }
     foreach ($recursiveFiles as $f) {
@@ -267,7 +294,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     global $dir;
     $priv = owner_folder_privacy($dir, $recursiveFiles, $folderPath);   // the owner's lock and count; empty for everyone else
     $folderUrl = htmlspecialchars('?folder=' . rawurlencode($folderPath), ENT_QUOTES, 'UTF-8');
-    $coverFile = pick_folder_cover($recursiveFiles, $manualCover);
+    $coverFile = pick_folder_cover($recursiveFiles, $manualCover, $folderPath);
     $count = count($recursiveFiles);
     $slug = slugify($idKey ?? $folderPath);
     // The paragraph that mentions a folder can mark it sold or reserved, or give it a colour, like any other group.
@@ -283,6 +310,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
         ? '<button type="button" class="folder-priv own unlisted" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Not listed: only you can open this folder. Press to make it public">' . ui_icon('lock') . 'Not listed</button>'
         : '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
     elseif ($priv['state'] === 'inh') $pill = '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
+    elseif (is_admin_browser() && collections_any() && ($pillColl = collection_at($dir, $folderPath)) !== null) $pill = '<span class="folder-priv own coll-pill' . ($pillColl['private'] ? ' is-private' : '') . '" title="' . ($pillColl['private'] ? 'Private collection: visitors see nothing of it (its folders and photos stay as they are)' : 'A collection: a hand-picked set') . '">' . ($pillColl['private'] ? ui_icon('lock') . 'Private' : 'Collection') . '</span>';   // (the owner is told which cards are collections)
     if ($coverFile !== null) {
         // The picture is a square cut from the original photo (see generate_cover_jpeg): a small one for ordinary cards, and
         // a larger one offered too so a big card, or a sharp screen, takes it. The browser picks by the card's width.

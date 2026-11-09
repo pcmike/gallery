@@ -110,7 +110,8 @@ function admin_resolve_folder($files) {
     // Valid at any depth, but only if the script's own file list has
     // something under it — same allowlist-not-trust rule as the public
     // ?folder=.
-    return !empty(folder_files_under($files, $requested)) ? $requested : false;
+    if (!empty(folder_files_under($files, $requested))) return $requested;
+    return is_string($requested) && AUTO_GROUP_BY_FOLDER && collection_at($GLOBALS['dir'], $requested, $files) !== null ? $requested : false;   // (a collection has a settings page of its own)
 }
 
 /** Every folder at every depth, as a flat row of links labelled with the
@@ -144,20 +145,33 @@ function render_admin_folder_nav($files, $currentFolder) {
         $parent = strpos($path, '/') === false ? '' : substr($path, 0, strrpos($path, '/'));
         $children[$parent][] = $path;
     }
-    $link = function ($path, $label, $href) use ($own, $total, $currentFolder) {
+    $collNodes = []; $collCount = [];   // the collections stand among the folders they live beside, in italics (they are not folders on disk)
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) {
+        foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $collNodes[$cPath] = $cRec; $collCount[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
+            $children[$cRec['parentPath']][] = $cPath;
+        }
+        foreach ($children as $cParent => $cList) { usort($cList, function ($a, $b) { return strnatcasecmp(basename($a), basename($b)); }); $children[$cParent] = $cList; }
+    }
+    $link = function ($path, $label, $href) use ($own, $total, $currentFolder, $collNodes, $collCount) {
         $current = ($path === '' ? $currentFolder === null : $currentFolder === $path);
+        if (isset($collNodes[$path])) {
+            return '<a href="' . $href . '"' . ($current ? ' class="current coll" aria-current="page"' : ' class="coll"') . ' title="' . htmlspecialchars('Collection: ' . $collCount[$path] . ' photo' . ($collCount[$path] === 1 ? '' : 's') . ' in it', ENT_QUOTES, 'UTF-8') . '">'
+                 . '<span class="fname coll">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span><span class="fcount">' . $collCount[$path] . '</span></a>';
+        }
         $here = $own[$path] ?? 0; $all = $total[$path] ?? 0;
         $title = ($path === '' ? 'Root' : $path) . ': ' . $here . ' here' . ($all !== $here ? ', ' . $all . ' including subfolders' : '');
         return '<a href="' . $href . '"' . ($current ? ' class="current" aria-current="page"' : '') . ' title="' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '">'
              . '<span class="fname">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span><span class="fcount">' . $here . '</span></a>';
     };
-    $branch = function ($parent) use (&$branch, $children, $link) {
+    $branch = function ($parent) use (&$branch, $children, $link, $collNodes) {
         $out = '';
         foreach ($children[$parent] ?? [] as $path) {
             $kids = !empty($children[$path]);
+            $label = isset($collNodes[$path]) ? ($collNodes[$path]['title'] !== '' ? $collNodes[$path]['title'] : basename($path)) : basename($path);
             $out .= '<li' . ($kids ? ' class="has-children"' : '') . '>'
                   . ($kids ? '<button type="button" class="ftoggle" aria-expanded="true" aria-label="Show or hide the folders inside ' . htmlspecialchars(basename($path), ENT_QUOTES, 'UTF-8') . '"></button>' : '')
-                  . $link($path, basename($path), '?admin&amp;folder=' . htmlspecialchars(rawurlencode($path), ENT_QUOTES, 'UTF-8'));
+                  . $link($path, $label, '?admin&amp;folder=' . htmlspecialchars(rawurlencode($path), ENT_QUOTES, 'UTF-8'));
             if ($kids) $out .= '<ul>' . $branch($path) . '</ul>';
             $out .= '</li>';
         }
@@ -380,6 +394,36 @@ function admin_json_exit($payload) {
     exit;
 }
 
+/** A folder's own order of photos (or a collection's), as the settings form posts it: the array kept in its record, or [] for "follow the site's". */
+function admin_photo_sort_from_post() {
+    $own = [];
+    $order = (string) $_POST['photo_sort_order'];
+    if (in_array($order, ['name', 'taken', 'modified'], true)) $own['order'] = $order;
+    $dirChoice = (string) ($_POST['photo_sort_dir'] ?? '');
+    if ($dirChoice === 'asc' || $dirChoice === 'desc') $own['desc'] = $dirChoice === 'desc';
+    if (array_key_exists('photo_sort_first', $_POST)) {   // the list form: "" = follow the site's, "own" = this folder's own list
+        if ((string) $_POST['photo_sort_first'] === 'own') {
+            foreach (['private', 'video', 'located'] as $kind) $own[$kind] = ((string) ($_POST['photo_sort_' . $kind] ?? 'off')) === 'on';
+            $kinds = array_map('trim', explode(',', (string) ($_POST['photo_sort_priority'] ?? '')));
+            $want = ['private', 'video', 'located']; $sortedKinds = $kinds; sort($sortedKinds); sort($want);
+            if ($sortedKinds === $want) $own['priority'] = $kinds;
+            // A list that would sort exactly as the site's does is not a setting of this folder's own (so it keeps following the site).
+            if (isset($own['priority'])) {
+                $namesMap = sort_priority_names();
+                $ownEff = array_values(array_filter($own['priority'], function ($k) use ($own) { return !empty($own[$k]); }));
+                $siteEff = array_values(array_filter(sort_priority_list(), function ($k) use ($namesMap) { return (bool) constant($namesMap[$k][2]); }));
+                if ($ownEff === $siteEff) foreach (['private', 'video', 'located', 'priority'] as $drop) unset($own[$drop]);
+            }
+        }
+    } else {
+        foreach (['private', 'video', 'located'] as $kind) {
+            $choice = (string) ($_POST['photo_sort_' . $kind] ?? '');
+            if ($choice === 'on' || $choice === 'off') $own[$kind] = $choice === 'on';
+        }
+    }
+    return $own;
+}
+
 /** One photo's own record, as the editor in the viewer shows it: caption, link, place, the two switches, whether it is the
  *  folder's cover, and the fingerprint a later save is checked against. A place read from the photo's GPS but not saved yet
  *  comes back as `auto` (not as `lat`/`lng`), so opening the editor never turns it into a saved location by itself. */
@@ -449,9 +493,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'logout'];
     }
 
+    if ($action === 'visits_trim') visits_trim_action();   // the Visitors tab's Trim the log (answers JSON and ends the request)
     if (strncmp($action, 'link_', 5) === 0) {   // the Shares tab (answers JSON and ends the request)
         links_admin_action($action, $dir, $files);
     }
+    if (strncmp($action, 'collection_', 11) === 0 || $action === 'toggle_collection_flag' || ($action === 'save_folder_identity' && $adminFolderPath !== null && collection_at($dir, $adminFolderPath, $files) !== null)) collections_admin_action($action, $dir, $adminFolderPath, $files);   // (collections: a record in one file; answers JSON and ends the request)
     if (strncmp($action, 'update_', 7) === 0) update_admin_action($action);   // the Health check's new-version buttons (answers JSON and ends the request)
     if (strncmp($action, 'geo_', 4) === 0) geo_admin_action($action);   // Settings > Signing in: the country file (answers JSON and ends the request)
     if ($action === 'browser_ack') {   // "Looks fine": that flag is cleared until something new raises it
@@ -512,9 +558,48 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'media_report') {
         session_write_close();
         $out = [];
-        foreach (media_report($dir, $files) as $row) $out[] = $row;
+        $earlier = TRACK_VIEWS ? moved_in_earlier_views($dir, $files)['rows'] : [];   // (views an older gallery counted for these photos: shown as a column only when there are some)
+        foreach (media_report($dir, $files) as $row) { $row['earlier'] = $earlier[$row['folder']] ?? null; $out[] = $row; }
         $att = media_attention($dir, $files);
-        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out, 'attention' => $att['attention'], 'backupsHtml' => render_media_backups_html(media_tidy_backups($dir, $files))]);
+        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out, 'earlierAny' => count($earlier) > 0, 'attention' => $att['attention'], 'backupsHtml' => render_media_backups_html(media_tidy_backups($dir, $files))]);
+    }
+
+    // Moved in from another gallery (Prepare media): what an older gallery left in these folders, and the two things to do about it.
+    if ($action === 'media_moved') {
+        session_write_close();
+        $ev = TRACK_VIEWS ? moved_in_earlier_views($dir, $files) : ['views' => 0, 'folders' => 0];
+        $lo = moved_in_leftovers($dir, $files);
+        admin_json_exit(['ok' => true, 'text' => '', 'track' => TRACK_VIEWS, 'views' => $ev['views'], 'viewFolders' => $ev['folders'],
+            'leftovers' => ['count' => $lo['count'], 'bytes' => $lo['bytes'], 'folders' => array_map(function ($f) { return ['folder' => $f['folder'], 'count' => $f['count'], 'bytes' => $f['bytes']]; }, array_slice($lo['folders'], 0, 60)), 'more' => max(0, count($lo['folders']) - 60)]]);
+    }
+    if ($action === 'media_moved_views') {
+        if (!TRACK_VIEWS) admin_json_exit(['ok' => false, 'text' => 'Counting views is switched off in Settings, so there is nothing to add them to.']);
+        @set_time_limit(120);
+        $r = moved_in_earlier_views($dir, $files, true);
+        admin_json_exit(['ok' => true, 'text' => '', 'added' => $r['added'], 'folders' => $r['addedFolders']]);
+    }
+    if ($action === 'media_moved_remove') {
+        if (empty($_POST['others_gone'])) admin_json_exit(['ok' => false, 'text' => 'Tick the box that says no other gallery still shows these folders first.']);
+        @set_time_limit(120);
+        $r = moved_in_remove_leftovers($dir, $files);
+        admin_json_exit(['ok' => true, 'text' => '', 'count' => $r['count'], 'bytes' => $r['bytes']]);
+    }
+    // Set aside / Bring back a Health check row about something left behind. The amount noted is worked out here, now, never taken from the request:
+    // the row comes back by itself if there is more of it later.
+    if ($action === 'health_set_aside') {
+        $key = (string) ($_POST['key'] ?? '');
+        $amounts = ['earlier-views' => function () use ($dir, $files) { return moved_in_earlier_views($dir, $files)['views']; },
+                    'leftover-thumbs' => function () use ($dir, $files) { return moved_in_leftovers($dir, $files)['count']; },
+                    'loose-photos' => function () { return EXTRA_ROOTS ? count_loose_media_in_roots() : 0; }];
+        if (!isset($amounts[$key])) admin_json_exit(['ok' => false, 'text' => 'That row can\'t be set aside.']);
+        $now = is_array(HEALTH_SET_ASIDE) ? HEALTH_SET_ASIDE : [];
+        if (!empty($_POST['back'])) unset($now[$key]); else $now[$key] = (int) $amounts[$key]();
+        $why = gallery_config_merge(['HEALTH_SET_ASIDE' => $now ?: null]);
+        admin_json_exit($why === '' ? ['ok' => true, 'text' => !empty($_POST['back']) ? 'Brought back.' : 'Set aside.'] : ['ok' => false, 'text' => $why]);
+    }
+    if ($action === 'health_remove_old_logs') {   // the visitor logs of versions before 2.6.5 (Health > Left behind): the exact files and the stand-in record, nothing else
+        $n = visitlog_old_leftovers_remove();
+        admin_json_exit($n === null ? ['ok' => false, 'text' => 'Nothing was removed: one of the files didn\'t check out as the gallery\'s own.'] : ['ok' => true, 'removed' => $n, 'text' => 'Removed.']);
     }
     if ($action === 'media_backups_delete') {
         $n = media_tidy_backups_delete($dir, $files);
@@ -577,7 +662,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             return ['type' => 'error', 'text' => '"' . $bare . '"' . admin_stale_message()];
         }
         if ($isFetch) {
-            if (!empty($GLOBALS['__data_write_failed'])) admin_json_exit(['ok' => false, 'text' => data_write_failure_text()]);
+            if (!empty($GLOBALS['__data_write_failed'])) admin_json_exit(['ok' => false, 'text' => data_write_failure_text(data_write_failure_place($dir, $adminFolderReal))]);
             $saved = items_read($adminFolderReal)['items'][$bare] ?? [];
             admin_json_exit(['ok' => true, 'text' => 'Saved "' . $bare . '".', 'hash' => $newHash, 'caption' => (string) ($saved['caption'] ?? ''), 'web' => (string) ($saved['web'] ?? ''),
                 'lat' => isset($saved['location']) ? (string) $saved['location']['lat'] : '', 'lng' => isset($saved['location']) ? (string) $saved['location']['lng'] : '', 'label' => isset($saved['location']) ? (string) ($saved['location']['label'] ?? '') : '']);
@@ -700,31 +785,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $updates['subfolderStyle'] = in_array($style, ['overview', 'flat'], true) ? $style : null;
         }
         if (array_key_exists('photo_sort_order', $_POST)) {   // this folder's own order of photos: "" = the site's
-            $own = [];
-            $order = (string) $_POST['photo_sort_order'];
-            if (in_array($order, ['name', 'taken', 'modified'], true)) $own['order'] = $order;
-            $dirChoice = (string) ($_POST['photo_sort_dir'] ?? '');
-            if ($dirChoice === 'asc' || $dirChoice === 'desc') $own['desc'] = $dirChoice === 'desc';
-            if (array_key_exists('photo_sort_first', $_POST)) {   // the list form: "" = follow the site's, "own" = this folder's own list
-                if ((string) $_POST['photo_sort_first'] === 'own') {
-                    foreach (['private', 'video', 'located'] as $kind) $own[$kind] = ((string) ($_POST['photo_sort_' . $kind] ?? 'off')) === 'on';
-                    $kinds = array_map('trim', explode(',', (string) ($_POST['photo_sort_priority'] ?? '')));
-                    $want = ['private', 'video', 'located']; $sortedKinds = $kinds; sort($sortedKinds); sort($want);
-                    if ($sortedKinds === $want) $own['priority'] = $kinds;
-                    // A list that would sort exactly as the site's does is not a setting of this folder's own (so it keeps following the site).
-                    if (isset($own['priority'])) {
-                        $namesMap = sort_priority_names();
-                        $ownEff = array_values(array_filter($own['priority'], function ($k) use ($own) { return !empty($own[$k]); }));
-                        $siteEff = array_values(array_filter(sort_priority_list(), function ($k) use ($namesMap) { return (bool) constant($namesMap[$k][2]); }));
-                        if ($ownEff === $siteEff) foreach (['private', 'video', 'located', 'priority'] as $drop) unset($own[$drop]);
-                    }
-                }
-            } else {
-                foreach (['private', 'video', 'located'] as $kind) {
-                    $choice = (string) ($_POST['photo_sort_' . $kind] ?? '');
-                    if ($choice === 'on' || $choice === 'off') $own[$kind] = $choice === 'on';
-                }
-            }
+            $own = admin_photo_sort_from_post();
             $updates['photoSort'] = $own !== [] ? $own : null;
         }
         $loadedHash = isset($_POST['loaded_hash']) ? (string) $_POST['loaded_hash'] : null;
@@ -766,14 +827,16 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         items_update($adminFolderReal, function (&$data) use ($on) {
             if ($on) { $data['restriction'] = 'private'; $data['unlisted'] = true; } else { unset($data['unlisted']); }
         });
+        if ($on) { install_secret(true); folder_id_stamp($adminFolderReal); }   // (what a photo's address is worked out from: so every photo in it has one from now on, with nothing to press)
         $private = item_restriction(items_read($adminFolderReal)) === 'private';
         return ['type' => 'ok', 'private' => $private, 'unlisted' => $on, 'counts' => folder_privacy_counts($dir, $files, $adminFolderPath),
                 'text' => $on ? 'Not listed: only you can open this folder. Visitors and people with the private-view password see nothing of it.'
                               : 'No longer not listed. The folder is still private, so people with the private-view password can open it.'];
     }
 
-    // A Not listed folder's photo has an address (?photo=<path>&k=<code>) that opens that one photo for anyone who has it. This gives the
-    // owner the address, and with "fresh" a new one: the old stops working at once (a random string kept on the photo changes the code).
+    // A Not listed folder's photo has an address (eight letters and digits) that opens that one photo for anyone who has it. This gives the
+    // owner the address (the page already carries it, so this is for a folder that has no id yet and for "fresh"), and with "fresh" a new one:
+    // the old stops working at once (a random string kept on the photo changes the code).
     if ($action === 'photo_address') {
         if ($adminFolderPath === null || !folder_is_unlisted($dir, $adminFolderPath)) return ['type' => 'error', 'text' => 'Only a photo in a Not listed folder has an address like this.'];
         $name = basename((string) ($_POST['file'] ?? ''));
@@ -787,7 +850,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if ($fresh) items_update($adminFolderReal, function (&$data) use ($name) { $data['items'][$name]['addr'] = bin2hex(random_bytes(6)); });
         $code = photo_address_code($dir, $rel, items_get_all_for_files($dir, [$rel]), $fid);
         if ($code === '') return ['type' => 'error', 'text' => 'Could not make the address.'];
-        return ['type' => 'ok', 'query' => '?photo=' . rawurlencode($rel) . '&k=' . $code, 'fresh' => $fresh,
+        return ['type' => 'ok', 'code' => $code, 'fresh' => $fresh,
                 'text' => $fresh ? 'New address copied. The old one no longer opens this photo.' : 'Address copied.'];
     }
 
@@ -797,10 +860,58 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['owngallery']);
         items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['ownGallery'] = true; else unset($data['ownGallery']); });
-        $any = false;
-        foreach (all_folder_paths($files) as $p) { if ($p !== '' && folder_own_gallery_cached($dir, $p)) { $any = true; break; } }
-        items_update($dir, function (&$data) use ($any) { if ($any) $data['ownGalleries'] = true; else unset($data['ownGalleries']); });
+        own_galleries_recompute($dir, $files);
         return ['type' => 'ok', 'text' => $on ? 'Visitors who arrive inside this folder are offered nothing above it.' : 'Back to ordinary: visitors who arrive inside this folder can go up as usual.'];
+    }
+
+    // Whether visitors without a link may download the originals of the photos directly in this folder (or, with no folder, on the main page).
+    // Each folder stands on its own. The choice is kept in the gallery's own settings file, not in the folder.
+    if ($action === 'toggle_folder_downloads') {
+        $on = !empty($_POST['dl']);
+        [$cf, $cr] = public_download_current();
+        if ($adminFolderPath === null) {
+            $cr = $on;
+        } else {
+            if (!in_array($adminFolderPath, all_folder_paths($files), true)) return ['type' => 'error', 'text' => 'Unknown folder: nothing was changed.'];
+            if ($on && folder_is_private($dir, $adminFolderPath)) return ['type' => 'error', 'text' => 'A private folder offers nothing to visitors, so there is nothing to switch on.'];
+            $cf = array_values(array_diff($cf, [$adminFolderPath])); if ($on) $cf[] = $adminFolderPath;
+        }
+        $why = public_download_write($cf, $cr);
+        if ($why !== '') return ['type' => 'error', 'text' => $why];
+        return ['type' => 'ok', 'text' => $on ? 'Visitors can now download the originals of ' . ($adminFolderPath === null ? 'the photos on the main page' : 'the photos in this folder') . '.' : 'Visitors can no longer download them.'];
+    }
+    // The same for every folder inside this one, once (nothing links them afterwards). Asked first (no "apply"): what would change, for the
+    // confirmation; the list is always worked out here from the gallery's own files.
+    if ($action === 'downloads_inside') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the main page.'];
+        $mode = (string) ($_POST['mode'] ?? '');
+        if (!in_array($mode, ['on', 'off'], true)) return ['type' => 'error', 'text' => 'Unknown choice.'];
+        [$cf, $cr] = public_download_current();
+        [$inPub, $inPriv] = admin_download_folders_inside($dir, $files, $adminFolderPath);
+        $targets = $mode === 'on' ? $inPub : array_values(array_intersect(array_merge($inPub, $inPriv), $cf));
+        $short = function ($p) use ($adminFolderPath) { return substr($p, strlen($adminFolderPath) + 1); };
+        $names = implode(', ', array_map($short, array_slice($targets, 0, 3))) . (count($targets) > 3 ? ' and ' . (count($targets) - 3) . ' more' : '');
+        if (empty($_POST['apply'])) {
+            if (!$targets) return ['type' => 'ok', 'n' => 0, 'text' => $mode === 'on' ? 'There is no public folder inside this one to switch on.' : 'None of the folders inside this one has it switched on.'];
+            $text = $mode === 'on'
+                ? 'Switch on downloads in ' . count($targets) . ' folder' . (count($targets) === 1 ? '' : 's') . ' inside this one: ' . $names . '.' . ($inPriv ? ' ' . count($inPriv) . ' private folder' . (count($inPriv) === 1 ? ' is' : 's are') . ' skipped.' : '') . ' The original files of ' . (count($targets) === 1 ? 'that folder become' : 'these folders become') . ' downloadable by anyone who opens ' . (count($targets) === 1 ? 'it' : 'them') . '.'
+                : 'Switch off downloads in ' . count($targets) . ' folder' . (count($targets) === 1 ? '' : 's') . ' inside this one: ' . $names . '.';
+            return ['type' => 'ok', 'n' => count($targets), 'text' => $text];
+        }
+        $cf = $mode === 'on' ? array_merge($cf, $targets) : array_values(array_diff($cf, $targets));
+        $why = public_download_write($cf, $cr);
+        if ($why !== '') return ['type' => 'error', 'text' => $why];
+        $row = admin_downloads_inside_html($dir, $files, $adminFolderPath, array_values(array_unique($cf)));
+        if (!$targets) return ['type' => 'ok', 'n' => 0, 'html' => $row, 'short' => 'Nothing to change.', 'text' => $mode === 'on' ? 'There is no public folder inside this one to switch on.' : 'None of the folders inside this one had it switched on.'];
+        return ['type' => 'ok', 'n' => count($targets), 'html' => $row, 'short' => ($mode === 'on' ? 'Switched on in ' : 'Switched off in ') . count($targets) . ' folder' . (count($targets) === 1 ? '' : 's') . '.', 'text' => ($mode === 'on' ? 'Switched on in ' : 'Switched off in ') . count($targets) . ' folder' . (count($targets) === 1 ? '' : 's') . ': ' . $names . '.' . ($mode === 'on' && $inPriv ? ' ' . count($inPriv) . ' private folder' . (count($inPriv) === 1 ? '' : 's') . ' skipped.' : '')];
+    }
+
+    // What a Not listed folder's photo addresses open: off, the photo in the gallery's viewer; on, the bare picture or video.
+    if ($action === 'toggle_folder_address_file') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $on = !empty($_POST['addrfile']);
+        items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['addressFile'] = true; else unset($data['addressFile']); });
+        return ['type' => 'ok', 'label' => $on ? 'Links send the bare file' : 'Links open in the gallery', 'text' => $on ? 'A photo\'s address now sends the bare picture (or video), with no page around it.' : 'A photo\'s address opens the photo in the gallery.'];
     }
 
     if ($action === 'toggle_folder_originals') {
@@ -844,8 +955,42 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         }
         items_update($adminFolderReal, function (&$data) use ($bare) {
             $data['cover'] = $bare;
+            unset($data['coverFollow']);   // (the latest choice is the one that counts)
         });
         return ['type' => 'ok', 'text' => '"' . $bare . '" set as ' . ($adminFolderPath === null ? 'the front page\'s cover photo (a shared link\'s preview may use it).' : 'this folder\'s cover photo.')];
+    }
+
+    // The cover of a folder that holds folders: follow the cover of one folder under it, a photo from anywhere inside it, or back to automatic.
+    // What it follows or holds is checked against the folder's own files here, never taken from the request.
+    if ($action === 'set_folder_cover') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $prefix = $adminFolderPath . '/'; $mode = (string) ($_POST['mode'] ?? '');
+        if ($mode === 'auto') {
+            items_update($adminFolderReal, function (&$data) { unset($data['cover'], $data['coverFollow']); });
+            $text = 'The cover is automatic again.';
+        } elseif ($mode === 'follow') {
+            $child = (string) ($_POST['child'] ?? '');
+            $has = false; foreach ($files as $f) if (strncmp($f, $prefix . $child . '/', strlen($prefix . $child) + 1) === 0) { $has = true; break; }
+            if ($child === '' || strpbrk($child, "/\\") !== false || !$has) return ['type' => 'error', 'text' => 'Unknown folder: nothing was changed.'];
+            items_update($adminFolderReal, function (&$data) use ($child) { unset($data['cover']); $data['coverFollow'] = $child; });
+            $text = 'This folder now shows the cover of that folder.';
+        } elseif ($mode === 'pin') {
+            $rel = (string) ($_POST['file'] ?? '');
+            if ($rel === '' || strpos($rel, '/') === false || !in_array($prefix . $rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown photo: nothing was changed.'];
+            items_update($adminFolderReal, function (&$data) use ($rel) { $data['cover'] = $rel; unset($data['coverFollow']); });
+            $text = '"' . basename($rel) . '" is now this folder\'s cover.';
+        } else return ['type' => 'error', 'text' => 'Unknown choice.'];
+        return ['type' => 'ok', 'text' => $text, 'cover' => admin_cover_state($dir, $files, $adminFolderPath)];
+    }
+    // The photos inside one folder under this one (the first 300, in the folder's own order), for choosing one as the cover.
+    if ($action === 'cover_photos') {
+        if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
+        $prefix = $adminFolderPath . '/'; $child = (string) ($_POST['child'] ?? '');
+        if ($child === '' || strpbrk($child, "/\\") !== false) return ['type' => 'error', 'text' => 'Unknown folder.'];
+        $under = array_values(array_filter($files, function ($f) use ($prefix, $child) { return strncmp($f, $prefix . $child . '/', strlen($prefix . $child) + 1) === 0 && !is_video_file($f); }));
+        $out = [];
+        foreach (array_slice($under, 0, 300) as $f) $out[] = ['path' => substr($f, strlen($prefix)), 'url' => img_url($f, 'cover')];
+        return ['type' => 'ok', 'text' => '', 'photos' => $out, 'more' => count($under) > 300];
     }
 
     if ($action === 'save_map_settings') {
@@ -871,17 +1016,26 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (array_key_exists('mapEnabled', $updates)) {
             if ($updates['mapEnabled']) {
                 $part = 'A map now shows on ' . $where . ', from the photos whose location is visible.';
-                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Locations and the map.';
+                if (!ENABLE_PHOTO_LOCATION) $part .= ' It stays empty until Allow photo locations is switched on in Settings → Location data.';
             } else {
                 $part = 'The map no longer shows on ' . $where . '. Nothing is deleted.';
             }
             $parts[] = $part;
         }
         if (array_key_exists('mapRadius', $updates)) {
-            $parts[] = $updates['mapRadius'] === null ? 'This map uses the site-wide pin grouping.' : 'Photos within ' . $updates['mapRadius'] . ' mile' . ($updates['mapRadius'] == 1 ? '' : 's') . ' of each other share a pin.';
+            $parts[] = $updates['mapRadius'] === null ? 'This map uses the default pin grouping.' : 'Photos within ' . $updates['mapRadius'] . ' mile' . ($updates['mapRadius'] == 1 ? '' : 's') . ' of each other share a pin.';
         }
         $text = 'Saved. ' . implode(' ', $parts);
         return ['type' => 'ok', 'text' => $text];
+    }
+
+    // "Keep the location in files visitors get": this folder's photos whose location the gallery shows are sent with it, though Scrub location data is
+    // on for the gallery. A location the gallery hides is still taken out. Only the photos directly in the folder.
+    if ($action === 'toggle_keep_location') {
+        $on = !empty($_POST['keeploc']);
+        $targetReal = $adminFolderPath === null ? $dir : $adminFolderReal;
+        items_update($targetReal, function (&$data) use ($on) { if ($on) $data['keepLocation'] = true; else unset($data['keepLocation']); });
+        return ['type' => 'ok', 'text' => $on ? 'Files visitors get from here keep the location, where the gallery shows it.' : 'Files visitors get from here lose the location, as everywhere else.'];
     }
 
     if ($action === 'toggle_location_enabled') {
@@ -897,7 +1051,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $loose = split_folder_level($files, $prefix)['loose'];
         $text = 'Location sharing enabled for this folder.';
         if (!ENABLE_PHOTO_LOCATION) {
-            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Locations and the map).';
+            $text .= ' Nothing shows yet, because Allow photo locations is off for the whole gallery (Settings → Location data).';
         } else {
             // Nothing is read now: the gallery has already read what its files say (when their pictures were made, or by Prepare media).
             $shown = 0;

@@ -169,7 +169,7 @@ $ogVisible = array_flip($files);
 $ogCovers = [];
 foreach ($folderGroups as $ogTop => $ogMembers) {
     $ogMembers = array_values(array_filter($ogMembers, function ($f) use ($ogVisible) { return isset($ogVisible[$f]); }));
-    $ogCover = $ogMembers ? pick_folder_cover($ogMembers, folder_display_meta($dir, $ogTop)['cover']) : null;
+    $ogCover = $ogMembers ? pick_folder_cover($ogMembers, folder_display_meta($dir, $ogTop)['cover'], $ogTop) : null;
     if ($ogCover !== null && !is_video_file($ogCover)) $ogCovers[] = $ogCover;
 }
 $ogPhotos = array_values(array_filter($files, function ($f) { return !is_video_file($f); }));
@@ -197,12 +197,12 @@ if ($currentFolderPath !== null) {
         $ogDescription = markdown_to_plaintext($earlyFolderMdScan['contents'][$earlyFolderMdScan['files'][0]]);
     }
     if (!empty($folderMemberFiles)) {
-        $ogImageUrl = $baseUrl . '/' . img_url(pick_folder_cover($folderMemberFiles, $currentFolderMeta['cover']), 'share');
+        $ogImageUrl = $baseUrl . '/' . img_url(pick_folder_cover($folderMemberFiles, $currentFolderMeta['cover'], $currentFolderPath), 'share');
     }
 }
 if ($requestedPhoto) {
     $ogImageUrl = $baseUrl . '/' . img_url($requestedPhoto, 'share');
-    $ogUrl = $baseUrl . '/?photo=' . rawurlencode($requestedPhoto) . ($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '');
+    $ogUrl = $photoPass !== null ? $baseUrl . '/?' . rawurlencode((string) $_GET['k']) : $baseUrl . '/?photo=' . rawurlencode($requestedPhoto);
     $photoGroupKey = group_key($requestedPhoto);
     if (isset($groups[$photoGroupKey])) {
         $ogTitle = $photoGroupKey . ' — ' . $pageTitle;

@@ -1,7 +1,21 @@
   // Not listed folders (the owner only): a photo in one has an address of its own that opens that one photo for anyone who has it. These
   // copy it, and make a new one (the old stops working). The server makes the address; this puts it on the clipboard.
   function ownerIsUnlisted(file) { return !!(ownerState && ownerState.unl && ownerState.unl[file]); }
+  // Does the server's one-word rule reach the gallery (so /photos/<code> works), or only /photos/?<code>? Asked once, with the fixed probe address.
+  let shortAddressOk = false;
+  if (typeof ownerState !== 'undefined' && ownerState && ownerState.unl && Object.keys(ownerState.unl).length) {
+    const u = new URL(galleryRootHref, window.location.href); u.search = ''; u.hash = '';
+    fetch(u.href + '0000-probe-0000', { cache: 'no-store', credentials: 'omit' }).then((r) => { shortAddressOk = r.headers.get('X-Gallery-Link') === 'invalid'; }).catch(() => {});
+  }
+  function copyAddress(code, btn) {
+    const root = new URL(galleryRootHref, window.location.href); root.search = ''; root.hash = '';
+    return copyToClipboard(root.href + (shortAddressOk ? '' : '?') + code).then(() => { btn.classList.remove('busy'); flashCopied(btn); });
+  }
+  // The address of a photo in a Not listed folder is already worked out for the owner's page, so Copy is just a copy. Only a folder with no id yet
+  // (one marked Not listed before the address existed, or a folder inside one) and "New address" ask the server.
   function ownerAddress(file, fresh, btn) {
+    const known = ownerState && ownerState.unl ? ownerState.unl[file] : null;
+    if (!fresh && typeof known === 'string' && known !== '') { copyAddress(known, btn); return Promise.resolve(); }
     const slash = file.lastIndexOf('/'), folder = file.slice(0, slash), name = file.slice(slash + 1);
     const json = (r) => { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('signed out'); return r.json(); };
     const headers = { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' };
@@ -11,8 +25,8 @@
       return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers });
     }).then(json).then((j) => {
       if (!j.ok) throw new Error(j.text || 'No address');
-      const root = new URL(galleryRootHref, window.location.href); root.search = ''; root.hash = '';
-      return copyToClipboard(root.href + j.query).then(() => { btn.classList.remove('busy'); flashCopied(btn); });
+      ownerState.unl[file] = j.code;
+      return copyAddress(j.code, btn);
     }).catch((err) => {
       btn.classList.remove('busy');
       window.alert(err && err.message === 'signed out' ? 'Your admin session ended: sign in again.' : 'No address: ' + (err && err.message ? err.message : 'try again'));

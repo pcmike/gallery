@@ -91,6 +91,18 @@
   .lb-sharepop .lsp-btns .ico { width: 16px; height: 16px; vertical-align: 0; }
   .lb-sharepop .lsp-fine { margin: 10px 0 0; font-size: 0.82rem; color: #8e8e96; }
   .select-bar .sb-share { display: inline-flex; align-items: center; gap: 5px; }
+  .coll-pop { position: fixed; left: 50%; transform: translateX(-50%); bottom: 150px; width: min(360px, 92vw); max-height: 60vh; overflow: auto; background: #1b1b20; border: 1px solid #3a3a42; border-radius: 14px; padding: 14px; z-index: 99; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  .coll-pop h4 { margin: 0 0 8px; font-size: .95rem; color: #eaeaea; }
+  .coll-pop .coll-opt { display: block; width: 100%; text-align: left; padding: 9px 10px; border-radius: 8px; margin: 3px 0; background: #26262c; border: 0; color: #eaeaea; font-size: .9rem; cursor: pointer; }
+  .coll-pop .coll-opt:hover { background: #303038; }
+  .coll-pop .coll-opt small { display: block; color: #8e8e96; font-size: .78rem; }
+  .coll-pop .coll { font-style: italic; }
+  .coll-pop .cm-pill { display: inline-block; font-size: .68rem; padding: 2px 8px; border-radius: 10px; background: #3b2f12; color: #f2c86b; margin-left: 6px; }
+  .coll-pop .coll-newform { display: flex; gap: 8px; margin-top: 6px; }
+  .coll-pop .coll-newform input { flex: 1 1 auto; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid #3a3a42; background: #101012; color: #eaeaea; }
+  .coll-pop .coll-newform .primary { padding: 8px 14px; border-radius: 8px; border: 0; background: #5865f2; color: #fff; cursor: pointer; white-space: nowrap; }
+  .coll-pop .coll-cancel { margin-top: 8px; padding: 8px 14px; border-radius: 8px; border: 0; background: #2a2a2e; color: #eaeaea; cursor: pointer; }
+
   .lightbox .caption-row .lightbox-copy.owner-cover.on { color: #f5c542; opacity: 1; }
   .lightbox .caption-row .lightbox-copy.owner-cover.on .ico { fill: currentColor; }
   .lightbox .caption-row .lightbox-copy.owner-priv.on { color: #ed4245; opacity: 1; }

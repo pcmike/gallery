@@ -1,26 +1,11 @@
 /* -----------------------------------------------------------------------
- * What the log shows the owner (all server-rendered fragments, fetched into
- * the Shares tab): a link's visitors, its folders and its photos; one
- * address across every link (folders, media, timeline); the list of every
- * address; and the CSV exports.
+ * What the visitor log shows the owner (the Visitors tab; all server-rendered
+ * fragments fetched into it): the visitors of the public address and of every
+ * share link, the folders and photos they looked at, the timeline, and the CSV
+ * exports. Every view is a query over the SQLite log, narrowed by the same
+ * few choices: which sources (the public address, share links), which
+ * countries, and a search (an address, a browser, a country).
  * ----------------------------------------------------------------------- */
-
-/** A link's log with the server's queued notes folded in, plus its per-item tallies. */
-function link_activity($id) {
-    static $busy = false;
-    if (!$busy) { $busy = true; link_queue_merge($id); $busy = false; }
-    return [link_log_read($id), link_items_read($id)];
-}
-
-/** [[visitor id, item, tally], ...] from the items file, optionally for one visitor id. */
-function link_item_rows($items, $onlyVid = null) {
-    $out = [];
-    foreach ($items['t'] as $key => $t) {
-        [$vid, $rel] = explode('|', $key, 2) + [1 => ''];
-        if ($onlyVid === null || $vid === $onlyVid) $out[] = [$vid, $rel, $t];
-    }
-    return $out;
-}
 
 /** The folder an item lives in ('' for the gallery's own). */
 function link_item_folder($rel) { $s = strrpos($rel, '/'); return $s === false ? '' : substr($rel, 0, $s); }
@@ -44,10 +29,68 @@ function link_seg_html($name, $options, $current, $label = 'Choose one') {
     return $out . '</div>';
 }
 
-function link_place_html($country) { return htmlspecialchars($country !== '' ? $country : '—', ENT_QUOTES, 'UTF-8'); }
+/** Country names by their two-letter codes. */
+function visit_country_names() {
+    static $names = [
+        'AD' => 'Andorra', 'AE' => 'United Arab Emirates', 'AF' => 'Afghanistan', 'AG' => 'Antigua and Barbuda', 'AI' => 'Anguilla', 'AL' => 'Albania', 'AM' => 'Armenia', 'AO' => 'Angola', 'AQ' => 'Antarctica', 'AR' => 'Argentina',
+        'AS' => 'American Samoa', 'AT' => 'Austria', 'AU' => 'Australia', 'AW' => 'Aruba', 'AX' => 'Åland Islands', 'AZ' => 'Azerbaijan', 'BA' => 'Bosnia and Herzegovina', 'BB' => 'Barbados', 'BD' => 'Bangladesh', 'BE' => 'Belgium',
+        'BF' => 'Burkina Faso', 'BG' => 'Bulgaria', 'BH' => 'Bahrain', 'BI' => 'Burundi', 'BJ' => 'Benin', 'BL' => 'Saint Barthélemy', 'BM' => 'Bermuda', 'BN' => 'Brunei', 'BO' => 'Bolivia', 'BQ' => 'Caribbean Netherlands',
+        'BR' => 'Brazil', 'BS' => 'Bahamas', 'BT' => 'Bhutan', 'BV' => 'Bouvet Island', 'BW' => 'Botswana', 'BY' => 'Belarus', 'BZ' => 'Belize', 'CA' => 'Canada', 'CC' => 'Cocos Islands', 'CD' => 'DR Congo',
+        'CF' => 'Central African Republic', 'CG' => 'Congo', 'CH' => 'Switzerland', 'CI' => 'Côte d\'Ivoire', 'CK' => 'Cook Islands', 'CL' => 'Chile', 'CM' => 'Cameroon', 'CN' => 'China', 'CO' => 'Colombia', 'CR' => 'Costa Rica',
+        'CU' => 'Cuba', 'CV' => 'Cape Verde', 'CW' => 'Curaçao', 'CX' => 'Christmas Island', 'CY' => 'Cyprus', 'CZ' => 'Czechia', 'DE' => 'Germany', 'DJ' => 'Djibouti', 'DK' => 'Denmark', 'DM' => 'Dominica',
+        'DO' => 'Dominican Republic', 'DZ' => 'Algeria', 'EC' => 'Ecuador', 'EE' => 'Estonia', 'EG' => 'Egypt', 'EH' => 'Western Sahara', 'ER' => 'Eritrea', 'ES' => 'Spain', 'ET' => 'Ethiopia', 'FI' => 'Finland',
+        'FJ' => 'Fiji', 'FK' => 'Falkland Islands', 'FM' => 'Micronesia', 'FO' => 'Faroe Islands', 'FR' => 'France', 'GA' => 'Gabon', 'GB' => 'United Kingdom', 'GD' => 'Grenada', 'GE' => 'Georgia', 'GF' => 'French Guiana',
+        'GG' => 'Guernsey', 'GH' => 'Ghana', 'GI' => 'Gibraltar', 'GL' => 'Greenland', 'GM' => 'Gambia', 'GN' => 'Guinea', 'GP' => 'Guadeloupe', 'GQ' => 'Equatorial Guinea', 'GR' => 'Greece', 'GS' => 'South Georgia',
+        'GT' => 'Guatemala', 'GU' => 'Guam', 'GW' => 'Guinea-Bissau', 'GY' => 'Guyana', 'HK' => 'Hong Kong', 'HM' => 'Heard Island', 'HN' => 'Honduras', 'HR' => 'Croatia', 'HT' => 'Haiti', 'HU' => 'Hungary',
+        'ID' => 'Indonesia', 'IE' => 'Ireland', 'IL' => 'Israel', 'IM' => 'Isle of Man', 'IN' => 'India', 'IO' => 'British Indian Ocean Territory', 'IQ' => 'Iraq', 'IR' => 'Iran', 'IS' => 'Iceland', 'IT' => 'Italy',
+        'JE' => 'Jersey', 'JM' => 'Jamaica', 'JO' => 'Jordan', 'JP' => 'Japan', 'KE' => 'Kenya', 'KG' => 'Kyrgyzstan', 'KH' => 'Cambodia', 'KI' => 'Kiribati', 'KM' => 'Comoros', 'KN' => 'Saint Kitts and Nevis',
+        'KP' => 'North Korea', 'KR' => 'South Korea', 'KW' => 'Kuwait', 'KY' => 'Cayman Islands', 'KZ' => 'Kazakhstan', 'LA' => 'Laos', 'LB' => 'Lebanon', 'LC' => 'Saint Lucia', 'LI' => 'Liechtenstein', 'LK' => 'Sri Lanka',
+        'LR' => 'Liberia', 'LS' => 'Lesotho', 'LT' => 'Lithuania', 'LU' => 'Luxembourg', 'LV' => 'Latvia', 'LY' => 'Libya', 'MA' => 'Morocco', 'MC' => 'Monaco', 'MD' => 'Moldova', 'ME' => 'Montenegro',
+        'MF' => 'Saint Martin', 'MG' => 'Madagascar', 'MH' => 'Marshall Islands', 'MK' => 'North Macedonia', 'ML' => 'Mali', 'MM' => 'Myanmar', 'MN' => 'Mongolia', 'MO' => 'Macao', 'MP' => 'Northern Mariana Islands', 'MQ' => 'Martinique',
+        'MR' => 'Mauritania', 'MS' => 'Montserrat', 'MT' => 'Malta', 'MU' => 'Mauritius', 'MV' => 'Maldives', 'MW' => 'Malawi', 'MX' => 'Mexico', 'MY' => 'Malaysia', 'MZ' => 'Mozambique', 'NA' => 'Namibia',
+        'NC' => 'New Caledonia', 'NE' => 'Niger', 'NF' => 'Norfolk Island', 'NG' => 'Nigeria', 'NI' => 'Nicaragua', 'NL' => 'Netherlands', 'NO' => 'Norway', 'NP' => 'Nepal', 'NR' => 'Nauru', 'NU' => 'Niue',
+        'NZ' => 'New Zealand', 'OM' => 'Oman', 'PA' => 'Panama', 'PE' => 'Peru', 'PF' => 'French Polynesia', 'PG' => 'Papua New Guinea', 'PH' => 'Philippines', 'PK' => 'Pakistan', 'PL' => 'Poland', 'PM' => 'Saint Pierre and Miquelon',
+        'PN' => 'Pitcairn Islands', 'PR' => 'Puerto Rico', 'PS' => 'Palestine', 'PT' => 'Portugal', 'PW' => 'Palau', 'PY' => 'Paraguay', 'QA' => 'Qatar', 'RE' => 'Réunion', 'RO' => 'Romania', 'RS' => 'Serbia',
+        'RU' => 'Russia', 'RW' => 'Rwanda', 'SA' => 'Saudi Arabia', 'SB' => 'Solomon Islands', 'SC' => 'Seychelles', 'SD' => 'Sudan', 'SE' => 'Sweden', 'SG' => 'Singapore', 'SH' => 'Saint Helena', 'SI' => 'Slovenia',
+        'SJ' => 'Svalbard and Jan Mayen', 'SK' => 'Slovakia', 'SL' => 'Sierra Leone', 'SM' => 'San Marino', 'SN' => 'Senegal', 'SO' => 'Somalia', 'SR' => 'Suriname', 'SS' => 'South Sudan', 'ST' => 'São Tomé and Príncipe', 'SV' => 'El Salvador',
+        'SX' => 'Sint Maarten', 'SY' => 'Syria', 'SZ' => 'Eswatini', 'TC' => 'Turks and Caicos Islands', 'TD' => 'Chad', 'TF' => 'French Southern Territories', 'TG' => 'Togo', 'TH' => 'Thailand', 'TJ' => 'Tajikistan', 'TK' => 'Tokelau',
+        'TL' => 'Timor-Leste', 'TM' => 'Turkmenistan', 'TN' => 'Tunisia', 'TO' => 'Tonga', 'TR' => 'Türkiye', 'TT' => 'Trinidad and Tobago', 'TV' => 'Tuvalu', 'TW' => 'Taiwan', 'TZ' => 'Tanzania', 'UA' => 'Ukraine',
+        'UG' => 'Uganda', 'UM' => 'U.S. Outlying Islands', 'US' => 'United States', 'UY' => 'Uruguay', 'UZ' => 'Uzbekistan', 'VA' => 'Vatican City', 'VC' => 'Saint Vincent and the Grenadines', 'VE' => 'Venezuela', 'VG' => 'British Virgin Islands', 'VI' => 'U.S. Virgin Islands',
+        'VN' => 'Vietnam', 'VU' => 'Vanuatu', 'WF' => 'Wallis and Futuna', 'WS' => 'Samoa', 'XK' => 'Kosovo', 'YE' => 'Yemen', 'YT' => 'Mayotte', 'ZA' => 'South Africa', 'ZM' => 'Zambia', 'ZW' => 'Zimbabwe',
+    ];
+    return $names;
+}
 
-/** What the log pages take from the address bar besides the tab: addresses and folders (lists; "/" stands for the front page), the Media choice, one link, and "show all". */
-function link_scope_filters() {
+/** The English name of a country from its two-letter code (the code itself when unknown). */
+function visit_country_name($cc) { return visit_country_names()[strtoupper((string) $cc)] ?? (string) $cc; }
+
+/** The codes of the countries whose name holds this word (so searching "germany" finds the visitors from DE). */
+function visit_country_codes_matching($word) {
+    $out = [];
+    $w = strtolower($word);
+    if (strlen($w) < 3) return $out;
+    foreach (visit_country_names() as $cc => $name) if (stripos($name, $w) !== false) $out[] = $cc;
+    return $out;
+}
+
+/** The visitor log's name for a source: the public address, or a link's name. */
+function visits_source_labels() {
+    $out = [PUBLIC_LOG_ID => 'Public'];
+    foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && isset($l['id'], $l['label']) && !link_is_public_log($l)) $out[$l['id']] = (string) $l['label'];
+    return $out;
+}
+
+/** What the Visitors tab takes from the address bar: sources ("public" and link ids, comma separated), countries (codes), a search, and for the Media view the folders, the choice and "show all". */
+function visits_filters() {
+    $csv = function ($k, $rx) {
+        $out = [];
+        foreach (explode(',', isset($_GET[$k]) && is_string($_GET[$k]) ? substr($_GET[$k], 0, 1000) : '') as $v) {
+            $v = trim($v);
+            if ($k === 'src' && $v === 'public') $v = PUBLIC_LOG_ID;
+            if (preg_match($rx, $v)) $out[$v] = true;
+        }
+        return array_slice(array_keys($out), 0, 60);
+    };
     $list = function ($k) {
         $out = [];
         foreach (isset($_GET[$k]) && is_array($_GET[$k]) ? array_slice($_GET[$k], 0, 300) : [] as $v) if (is_string($v)) { $v = str_replace("\0", '', $v); if ($v !== '') $out[$v] = true; }
@@ -55,68 +98,70 @@ function link_scope_filters() {
     };
     $what = isset($_GET['what']) && is_string($_GET['what']) ? $_GET['what'] : '';
     return [
-        'ips' => array_map('strval', $list('ips')),
+        'src' => $csv('src', '/^[0-9a-f]{10}$/'),
+        'cc' => $csv('cc', '/^[A-Z]{2}$/'),
+        'q' => substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', isset($_GET['q']) && is_string($_GET['q']) ? $_GET['q'] : '')), 0, 80),
         'folders' => array_map(function ($f) { return $f === '/' ? '' : (string) $f; }, $list('folders')),
         'what' => in_array($what, ['viewed', 'recent', 'photos', 'videos', 'private', 'opened', 'downloaded'], true) ? $what : 'viewed',
-        'link' => isset($_GET['linkid']) && is_string($_GET['linkid']) && preg_match('/^[0-9a-f]{10}$/', $_GET['linkid']) ? $_GET['linkid'] : '',   // (not "link": that is a share link's own address)
         'all' => isset($_GET['all']) && $_GET['all'] === '1',
-        'exact' => isset($_GET['exact']) && $_GET['exact'] === '1',   // (a folder's own files only, not the folders inside it: what a number on the Folders tab counted)
+        'exact' => isset($_GET['exact']) && $_GET['exact'] === '1',   // (a folder's own files only, not the folders inside it: what a number on the Folders view counted)
     ];
 }
 
-/** One scope's log, read once: the given links, keeping only visitors at the given addresses (none given: everyone). */
-function link_scope_load($data, array $linkIds, array $ips) {
-    $sc = ['links' => [], 'allVis' => [], 'vis' => [], 'rows' => [], 'fopen' => [], 'events' => [], 'full' => false];
-    foreach ($linkIds as $lid) {
-        $l = $data['links'][$lid] ?? null;
-        if (!is_array($l)) continue;
-        [$log, $items] = link_activity($lid);
-        $sc['links'][$lid] = $l; $sc['allVis'][$lid] = $log['visitors'];
-        $keep = [];
-        foreach ($log['visitors'] as $vid => $v) if (!$ips || in_array($v['ip'], $ips, true)) $keep[$vid] = $v;
-        $sc['vis'][$lid] = $keep;
-        if (count($log['events']) >= LINK_LOG_EVENTS) $sc['full'] = true;
-        foreach (link_item_rows($items) as [$vid, $rel, $t]) if (isset($keep[$vid])) $sc['rows'][] = [$lid, $vid, $rel, $t];
-        foreach ($items['f'] as $key => $f) {
-            [$vid, $rel] = explode('|', $key, 2) + [1 => ''];
-            if (!isset($keep[$vid])) continue;
-            $a = &$sc['fopen'][$rel]; $a = $a ?? ['n' => 0, 'first' => 0, 'last' => 0];
-            $a['n'] += (int) $f[0]; $a['first'] = $a['first'] ? min($a['first'], (int) $f[1]) : (int) $f[1]; $a['last'] = max($a['last'], (int) $f[2]); unset($a);
-        }
-        foreach ($log['events'] as $e) if (isset($keep[$e['v'] ?? ''])) { $e['_link'] = $l['label']; $e['_pub'] = link_is_public_log($l); $e['_ip'] = $keep[$e['v']]['ip']; $sc['events'][] = $e; }
+/** [" WHERE ...", params] narrowing a query over the visitors table (or a table with the same src, ip, ua and country columns) to the chosen sources, countries and search. $a is the table's alias. */
+function visits_where(array $f, $a = 'v') {
+    $w = []; $p = [];
+    foreach ([['src', 'src'], ['cc', 'country']] as [$key, $col]) {
+        if (!$f[$key]) continue;
+        $w[] = $a . '.' . $col . ' IN (' . implode(',', array_fill(0, count($f[$key]), '?')) . ')';
+        foreach ($f[$key] as $x) $p[] = $x;
     }
-    return $sc;
+    foreach (preg_split('/\s+/', (string) $f['q'], -1, PREG_SPLIT_NO_EMPTY) as $word) {
+        $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $word) . '%';
+        $or = [$a . ".ip LIKE ? ESCAPE '\\'", $a . ".ua LIKE ? ESCAPE '\\'", $a . ".country LIKE ? ESCAPE '\\'"];
+        array_push($p, $like, $like, $like);
+        if ($codes = visit_country_codes_matching($word)) { $or[] = $a . '.country IN (' . implode(',', array_fill(0, count($codes), '?')) . ')'; foreach ($codes as $c) $p[] = $c; }
+        $w[] = '(' . implode(' OR ', $or) . ')';
+    }
+    return [$w ? ' WHERE ' . implode(' AND ', $w) : '', $p];
 }
 
-/** Per file, across the scope's visitors: when first seen, times opened / played / downloaded, last activity. */
-function link_scope_media($sc) {
+function visits_query($db, $sql, array $p = []) { $st = $db->prepare($sql); $st->execute($p); return $st; }
+
+/** The visitors the choices leave, newest first: [rows, how many there are in all]. */
+function visits_load_visitors($db, array $f, $limit) {
+    [$w, $p] = visits_where($f, 'v');
+    $total = (int) visits_query($db, 'SELECT COUNT(*) FROM visitors v' . $w, $p)->fetchColumn();
+    $rows = visits_query($db, 'SELECT v.* FROM visitors v' . $w . ' ORDER BY v.last DESC LIMIT ' . (int) $limit, $p)->fetchAll();
+    return [$rows, $total];
+}
+/** Per file, across the visitors the choices leave: when first seen, times opened / played / downloaded, last activity (file => ['sf', 'on', 'pn', 'dn', 'last']). */
+function visits_load_media($db, array $f) {
+    [$w, $p] = visits_where($f, 'v');
+    $st = visits_query($db, 'SELECT i.item, MIN(NULLIF(i.sf, 0)) AS sf, SUM(i.opn) AS opn, SUM(i.pln) AS pln, SUM(i.dwn) AS dwn, MAX(MAX(i.sl, i.opl, i.pll, i.dwl)) AS last FROM items i JOIN visitors v ON v.src = i.src AND v.vid = i.vid' . $w . ' GROUP BY i.item', $p);
     $m = [];
-    foreach ($sc['rows'] as [$lid, $vid, $rel, $t]) {
-        $a = &$m[$rel]; $a = $a ?? ['sf' => 0, 'on' => 0, 'pn' => 0, 'dn' => 0, 'last' => 0];
-        if (isset($t['sf'])) $a['sf'] = $a['sf'] ? min($a['sf'], (int) $t['sf']) : (int) $t['sf'];
-        $a['on'] += (int) ($t['on'] ?? 0); $a['pn'] += (int) ($t['pn'] ?? 0); $a['dn'] += (int) ($t['dn'] ?? 0);
-        $a['last'] = max($a['last'], (int) ($t['sl'] ?? 0), (int) ($t['ol'] ?? 0), (int) ($t['pl'] ?? 0), (int) ($t['dl'] ?? 0)); unset($a);
-    }
+    foreach ($st as $r) $m[$r['item']] = ['sf' => (int) $r['sf'], 'on' => (int) $r['opn'], 'pn' => (int) $r['pln'], 'dn' => (int) $r['dwn'], 'last' => (int) $r['last']];
     return $m;
 }
-
-/** Per folder: pages opened, files seen / opened (or played) / downloaded, first and last activity. Newest activity first. */
-function link_scope_folders($sc, $m) {
-    $f = [];
-    $blank = ['opens' => 0, 'seen' => 0, 'opened' => 0, 'down' => 0, 'first' => 0, 'last' => 0];
-    foreach ($m as $rel => $a) {
-        $d = link_item_folder($rel); $x = &$f[$d]; $x = $x ?? $blank;
-        if ($a['sf']) { $x['seen']++; $x['first'] = $x['first'] ? min($x['first'], $a['sf']) : $a['sf']; }
-        if ($a['on'] || $a['pn']) $x['opened']++;
-        if ($a['dn']) $x['down']++;
-        $x['last'] = max($x['last'], $a['last']); unset($x);
+/** Folder pages opened, across the visitors the choices leave (folder => ['n', 'first', 'last']). */
+function visits_load_folder_opens($db, array $f) {
+    [$w, $p] = visits_where($f, 'v');
+    $st = visits_query($db, 'SELECT o.folder, SUM(o.n) AS n, MIN(o.first) AS first, MAX(o.last) AS last FROM folders o JOIN visitors v ON v.src = o.src AND v.vid = o.vid' . $w . ' GROUP BY o.folder', $p);
+    $out = [];
+    foreach ($st as $r) $out[$r['folder']] = ['n' => (int) $r['n'], 'first' => (int) $r['first'], 'last' => (int) $r['last']];
+    return $out;
+}
+/** The happenings in order, newest first: [events, how many there are in all]. */
+function visits_load_events($db, array $f, $limit) {
+    [$w, $p] = visits_where($f, 'v');
+    $from = ' FROM events e JOIN visitors v ON v.src = e.src AND v.vid = e.vid' . $w;
+    $total = (int) visits_query($db, 'SELECT COUNT(*)' . $from, $p)->fetchColumn();
+    $out = [];
+    foreach (visits_query($db, 'SELECT e.*, v.ip AS _ip' . $from . ' ORDER BY e.t1 DESC, e.id DESC LIMIT ' . (int) $limit, $p) as $r) {
+        $e = ['t' => (int) $r['t'], 't1' => (int) $r['t1'], 'k' => $r['k'], 'f' => $r['f'], 'd' => $r['d'], 'n' => (int) $r['n'], 's' => $r['s'] !== null ? (array) json_decode($r['s'], true) : [], 'h' => (string) $r['h'], 'u' => (int) $r['u'], '_src' => $r['src'], '_ip' => $r['_ip']];
+        $out[] = $e;
     }
-    foreach ($sc['fopen'] as $d => $o) {
-        $x = &$f[$d]; $x = $x ?? $blank;
-        $x['opens'] = $o['n']; $x['first'] = $x['first'] ? min($x['first'], $o['first']) : $o['first']; $x['last'] = max($x['last'], $o['last']); unset($x);
-    }
-    uasort($f, function ($a, $b) { return $b['last'] <=> $a['last']; });
-    return $f;
+    return [$out, $total];
 }
 
 /** One menu of the filter line: a button that opens a list of tick boxes (any number; the first row, "All", is ticked while none of the others is) or of round buttons (one). Both apply as soon as they are touched.
@@ -147,211 +192,332 @@ function link_folder_selected($f, $set, $exact) {
     return false;
 }
 
-/** The filter line under the tabs. In a link's page the addresses can be chosen; in an address's page its own address is named, and a menu of the links it used shows when it used more than one. */
-function link_filter_bar($mode, $tab, $flt, $sc, $m, $dir, $ip, $linkOpts) {
-    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $out = '<div class="sl-filterbar">';
-    if ($mode === 'ip') $out .= '<span class="sl-popbtn sl-popfixed"><span class="sl-poplab">' . $esc($ip) . '</span></span>';
-    else {
-        $byIp = [];
-        foreach ($sc['allVis'] as $vs) foreach ($vs as $v) { $b = &$byIp[$v['ip']]; $b = $b ?? ['last' => 0, 'ua' => []]; $b['last'] = max($b['last'], (int) $v['last']); $b['ua'][$v['ua']] = true; unset($b); }
-        uasort($byIp, function ($a, $b) { return $b['last'] <=> $a['last']; });
-        $opts = []; foreach ($byIp as $addr => $b) $opts[(string) $addr] = [$addr . ' · ' . implode(', ', array_keys($b['ua'])), (string) $addr, 0];
-        $out .= link_pop_html('ips', true, 'All IPs', 'IPs', $opts, $flt['ips']);
-    }
-    if ($tab === 'media') {
-        $dirs = []; foreach (array_keys($m) as $rel) $dirs[link_item_folder($rel)] = true; foreach (array_keys($sc['fopen']) as $d) $dirs[(string) $d] = true;
-        $opts = [];
-        if (isset($dirs[''])) $opts['/'] = ['Front page', 'Front page', 0];   // (the front page first, then the folders as a tree in the gallery's own order)
-        $nested = false;
-        foreach (folder_tree_rows($dir, array_values(array_filter(array_map('strval', array_keys($dirs)), function ($d) { return $d !== ''; }))) as $r) { $opts[$r['p']] = [$r['n'], link_folder_label($dir, $r['p']), $r['d']]; if ($r['d'] > 0) $nested = true; }
-        $out .= link_pop_html('folders', true, 'All folders', 'folders', $opts, array_map(function ($f) { return $f === '' ? '/' : $f; }, $flt['folders']), '', $nested ? 'A folder includes the folders inside it.' : '', $flt['exact']);
-        $what = [];
-        foreach (['viewed' => 'Most viewed', 'recent' => 'Most recent', 'photos' => 'Photos', 'videos' => 'Videos', 'private' => 'Private', 'opened' => 'Opened', 'downloaded' => 'Downloaded'] as $k => $t) $what[$k] = [$t, $t, 0];
-        $out .= link_pop_html('what', false, 'Most viewed', '', $what, [$flt['what']], 'viewed');
-    }
-    if ($mode === 'ip' && count($linkOpts) > 1) {
-        $opts = ['' => ['All links (' . count($linkOpts) . ')', 'All links (' . count($linkOpts) . ')', 0]];
-        foreach ($linkOpts as $lid => $label) $opts[$lid] = [$label, $label, 0];
-        $out .= link_pop_html('link', false, 'All links', '', $opts, [$flt['link']]);
-    }
-    return $out . '</div>';
-}
-
 /** A small linked picture of a photo or video: it opens the folder at that photo, as the thumbnails everywhere else in the log do. */
 function link_pic_html($rel, $cls = 'sl-tth') {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     return '<a class="' . $cls . '" href="' . admin_find_href($rel) . '" title="' . $esc($rel) . '"><img src="' . $esc(img_url($rel, 'thumb')) . '" alt="" loading="lazy" decoding="async"></a>';
 }
 
-/** The Visitors / Folders / Media / Timeline of one link ($mode "link", $l its record) or the Folders / Media / Timeline of one address across every link it used ($mode "ip"). One set of tabs, the same tables and menus; the scope is what differs. */
-function render_link_scope($mode, $l, $ip, $tab, $flt, $dir, $files) {
+/** A folder (or the front page) as a link that opens it in the gallery, in a new tab. */
+function visits_folder_link($dir, $rel) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $data = links_read();
-    $linkOpts = [];   // an address's links: id => name
-    if ($mode === 'ip') {
-        foreach ($data['links'] as $x) {
-            if (!is_array($x) || !isset($x['id'])) continue;
-            [$lg] = link_activity($x['id']);
-            foreach ($lg['visitors'] as $v) if ($v['ip'] === $ip) { $linkOpts[$x['id']] = $x['label']; break; }
-        }
-        if (!$linkOpts) return '<div class="sl-ippage"><p class="muted">No link has seen this address.</p></div>';
-        $ids = ($flt['link'] !== '' && isset($linkOpts[$flt['link']])) ? [$flt['link']] : array_keys($linkOpts);
-        $sc = link_scope_load($data, $ids, [$ip]);
-    } else {
-        $sc = link_scope_load($data, [$l['id']], $flt['ips']);
+    $label = $rel === '' ? 'Front page' : link_folder_label($dir, $rel);
+    return '<a class="vt-ci" href="' . ($rel === '' ? '?' : '?folder=' . $esc(rawurlencode($rel))) . '" target="_blank" rel="noopener" title="Open it in the gallery"><b>' . $esc($label) . '</b></a>';
+}
+
+/** Where a visit came in (the public address's records): a folder or the front page, or a Not listed photo opened by its own address, each a link to it. */
+function visits_entry_html($dir, $a) {
+    if (!is_array($a) || !is_string($a['f'] ?? null)) return '<span class="muted">—</span>';
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    if (!empty($a['u'])) return '<a class="vt-ci" href="' . admin_find_href($a['f']) . '" target="_blank" rel="noopener" title="Open it in the gallery"><span class="sl-lock" title="Not listed">' . ui_icon('lock') . '</span> Not listed photo <b>' . $esc(basename($a['f'])) . '</b></a>';
+    return visits_folder_link($dir, $a['f']);
+}
+
+/** The country as a button that picks it in the All menu above (the name is its tooltip). */
+function visits_country_html($cc) {
+    if ($cc === '') return '<span class="muted">—</span>';
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    return '<button type="button" class="vt-cc" data-cc="' . $esc($cc) . '" title="' . $esc(visit_country_name($cc)) . '">' . $esc($cc) . '</button>';
+}
+
+/** The old addresses a link's visitors came in on, for the links that have had more than one: [src => [vid => "name, name"]]. */
+function visits_via_map($db, array $srcs, array $labels) {
+    $out = [];
+    if (!$srcs) return $out;
+    foreach (visits_query($db, 'SELECT src, vid, name FROM notes WHERE kind = \'via\' AND src IN (' . implode(',', array_fill(0, count($srcs), '?')) . ')', array_values($srcs))->fetchAll() as $r) {
+        $out[$r['src']][$r['vid']][] = link_address_label($r['name'], link_address_is_custom($r['name']));
     }
-    $m = link_scope_media($sc); $folders = link_scope_folders($sc, $m);
-    $tabs = $mode === 'ip' ? ['folders' => 'Folders', 'media' => 'Media', 'timeline' => 'Timeline'] : ['visitors' => 'Visitors', 'folders' => 'Folders', 'media' => 'Media', 'timeline' => 'Timeline'];
-    if (!isset($tabs[$tab])) $tab = array_key_first($tabs);
-    $out = '<div class="' . ($mode === 'ip' ? 'sl-ippage' : 'sl-activity') . '"' . ($mode === 'link' ? ' data-link="' . $esc($l['id']) . '"' : '') . '>';
-    if ($mode === 'ip') {
-        $country = ''; $uas = []; $first = 0; $last = 0; $linksUsed = '';
-        foreach ($data['links'] as $x) {
-            if (!is_array($x) || !isset($x['id']) || !isset($linkOpts[$x['id']])) continue;
-            $opens = 0;
-            foreach (link_activity($x['id'])[0]['visitors'] as $v) if ($v['ip'] === $ip) {
-                $opens += (int) $v['opens']; $uas[$v['ua']] = true; if (($v['country'] ?? '') !== '') $country = $v['country'];
-                $first = $first ? min($first, (int) $v['first']) : (int) $v['first']; $last = max($last, (int) $v['last']);
-            }
-            $linksUsed .= '<button type="button" class="sl-lchip sl-golink' . (link_is_public_log($x) ? ' pub' : '') . '" data-golink="' . $esc($x['id']) . '">' . $esc($x['label']) . ' &middot; ' . $opens . ' open' . ($opens === 1 ? '' : 's') . '</button>';
-        }
-        $seen = $opened = $down = 0; foreach ($m as $a) { if ($a['sf']) $seen++; if ($a['on'] || $a['pn']) $opened++; if ($a['dn']) $down++; }
-        $out .= '<div class="sl-ip-head"><span class="sl-ipbig">' . $esc($ip) . '</span> <span class="muted">' . $esc(($country !== '' ? $country . ' · ' : '') . implode(', ', array_keys($uas))) . '</span></div>'
-            . '<div class="sl-lchips">' . $linksUsed . '</div>'
-            . '<div class="sl-kpi"><div><b>' . count($folders) . '</b><span>folders</span></div><div><b>' . $seen . '</b><span>seen</span></div><div><b>' . $opened . '</b><span>opened</span></div><div><b>' . $down . '</b><span>downloaded</span></div><div><b>' . link_time_html($first) . '</b><span>first seen</span></div><div><b>' . link_time_html($last) . '</b><span>last seen</span></div></div>'
-            . '<p class="note" style="margin:6px 0"><b>Seen</b> it was on their screen, even as a thumbnail &middot; <b>Opened</b> shown large in the viewer (or played, for a video) &middot; <b>Downloaded</b> the original was downloaded</p>';
-    }
-    $out .= link_seg_html('tab', $tabs, $tab, 'Part of the log');
-    if ($tab !== 'visitors') $out .= link_filter_bar($mode, $tab, $flt, $sc, $m, $dir, $ip, $linkOpts);
+    return $out;
+}
+
+/** Which of a link's addresses a visitor came in on: the old addresses their notes name; else, for someone first seen after the link got a second address, the present one; else ''. Only for links that have had a second address. */
+function visits_via_text($l, $names, $anyVia, $first) {
+    if (!is_array($l) || (empty($l['aliases']) && !$anyVia)) return '';
+    $text = $names ? implode(', ', array_unique($names)) : '';
+    if ($text === '' && ($since = (int) ($l['aliasSince'] ?? 0)) > 0 && (int) $first > $since) $text = link_address_label($l['token'], !empty($l['custom']));
+    return $text;
+}
+
+/** The part of the Visitors tab that changes with the choices: the table (or grid, or timeline) of one view for the visitors the choices leave. Wrapped in a div that says how many visitors match. */
+function render_visits_fragment($tab, array $f, $dir, $files) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $db = is_file(visitlog_path()) && visitlog_ready() ? visitlog_db() : null;
+    $none = function ($text) { return '<div class="vt-frag" data-match="0" data-all="0"><p class="muted sl-none">' . $text . '</p></div>'; };
+    if ($db === null) return $none('The visitor log isn\'t available: ' . $esc(visitlog_check()[1]));
+    $all = (int) visits_query($db, 'SELECT COUNT(*) FROM visitors')->fetchColumn();
+    [$w0, $p0] = visits_where($f, 'v');
+    $match = (int) visits_query($db, 'SELECT COUNT(*) FROM visitors v' . $w0, $p0)->fetchColumn();
+    $wrap = function ($html) use ($match, $all) { return '<div class="vt-frag" data-match="' . $match . '" data-all="' . $all . '">' . $html . '</div>'; };
+    if ($all === 0) return $wrap('<p class="muted sl-none">Nobody has been logged yet.</p>');
+    if ($match === 0) return $wrap('<p class="muted sl-none">Nobody matches. <button type="button" class="linklike" data-vt="clear">Clear the choices</button></p>');
+    $labels = visits_source_labels();
+    $links = (array) (links_read()['links'] ?? []);
 
     if ($tab === 'visitors') {
-        $log = link_log_read($l['id']); $vis = $log['visitors'];
-        uasort($vis, function ($a, $b) { return (int) $b['last'] <=> (int) $a['last']; });
-        if (!$vis) return $out . '<p class="muted sl-none">' . (link_is_public_log($l) ? 'Nobody has been logged yet.' : 'No one has opened this link yet.') . '</p></div>';
-        $manyAddr = link_has_many_addresses($l, $log);
-        $out .= '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th>' . (link_is_public_log($l) ? '<th>Came in at</th>' : '') . ($manyAddr ? '<th class="sl-viacol">Came in on</th>' : '') . '<th>First seen</th><th>Last seen</th><th>' . (link_is_public_log($l) ? 'Visits' : 'Opens') . '</th><th>Viewed</th></tr></thead><tbody>';
-        foreach ($vis as $vid => $v) {
-            $via = $manyAddr ? link_visitor_via($l, $log, $vid, $v) : '';
-            $out .= '<tr><td><button type="button" class="linklike sl-ipt" data-ip="' . $esc($v['ip']) . '">' . $esc($v['ip']) . '</button>' . ($via !== '' ? '<span class="sl-via">via: ' . $esc($via) . '</span>' : '') . '</td><td>' . link_place_html($v['country'] ?? '') . '</td><td>' . $esc($v['ua']) . '</td>' . (link_is_public_log($l) ? '<td>' . link_entry_html($dir, $v['entry'] ?? null) . '</td>' : '') . ($manyAddr ? '<td class="sl-viacol">' . ($via !== '' ? $esc($via) : '—') . '</td>' : '') . '<td>' . link_time_html($v['first']) . '</td><td>' . link_time_html($v['last']) . '</td><td>' . (int) $v['opens'] . '</td><td><button type="button" class="linklike sl-viewed" data-ip="' . $esc($v['ip']) . '" data-go="media">' . (int) $v['views'] . ' views &rsaquo;</button></td></tr>';
+        [$rows, $total] = visits_load_visitors($db, $f, 300);
+        $linkSrcs = []; foreach ($rows as $r) if ($r['src'] !== PUBLIC_LOG_ID) $linkSrcs[$r['src']] = true;
+        $via = visits_via_map($db, array_keys($linkSrcs), $labels);
+        $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Came in at</th><th>First seen</th><th>Last seen</th><th>Opens</th><th>Viewed</th></tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $pub = $r['src'] === PUBLIC_LOG_ID; $l = $links[$r['src']] ?? null;
+            if ($pub) $came = visits_entry_html($dir, $r['entry_f'] !== null ? ['f' => $r['entry_f'], 'h' => $r['entry_h']] + ($r['entry_u'] ? ['u' => 1] : []) : null);
+            else {
+                $viaText = visits_via_text($l, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']);
+                $came = '<button type="button" class="vt-src" data-src="' . $esc($r['src']) . '" title="Show only visitors who came in on this link">' . $esc($labels[$r['src']] ?? 'A deleted link') . '</button>' . ($viaText !== '' ? '<span class="sl-via">via: ' . $esc($viaText) . '</span>' : '');
+            }
+            $out .= '<tr><td data-label="IP address"><button type="button" class="linklike vt-ip" data-ip="' . $esc($r['ip']) . '">' . $esc($r['ip']) . '</button></td><td data-label="Where">' . visits_country_html($r['country']) . '</td><td data-label="Browser">' . $esc($r['ua']) . '</td><td data-label="Came in at">' . $came . '</td><td data-label="First seen">' . link_time_html($r['first']) . '</td><td data-label="Last seen">' . link_time_html($r['last']) . '</td><td data-label="Opens">' . (int) $r['opens'] . '</td><td data-label="Viewed"><button type="button" class="linklike vt-viewed" data-ip="' . $esc($r['ip']) . '" data-go="media">' . (int) $r['views'] . ' views &rsaquo;</button></td></tr>';
         }
         $out .= '</tbody></table></div>';
-        if ((int) $log['folded'] > 0) $out .= '<p class="muted">+ ' . (int) $log['folded'] . ' earlier visitor' . ((int) $log['folded'] === 1 ? '' : 's') . ' (the log keeps the latest ' . number_format(LINK_LOG_VISITORS) . ' visitors; download the log to keep the rest, and trim it whenever you like).</p>';
-        if ($log['blocked']) {
-            uasort($log['blocked'], function ($a, $b) { return (int) $b['last'] <=> (int) $a['last']; });
-            $out .= '<div class="sl-sub2 warn">Blocked tries &middot; ' . count($log['blocked']) . ' address' . (count($log['blocked']) === 1 ? '' : 'es') . '</div><div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
-            foreach ($log['blocked'] as $b) {
-                $why = []; foreach ($b['why'] as $s => $n) $why[] = ['expired' => 'expired', 'used_up' => 'already used', 'paused' => 'paused', 'revoked' => 'revoked', 'scheduled' => 'not started', 'replaced' => 'old address'][$s] ?? $s;
-                $out .= '<tr class="rj"><td><span class="sl-ipt">' . $esc($b['ip']) . '</span></td><td>' . link_place_html($b['country'] ?? '') . '</td><td>' . $esc($b['ua']) . '</td><td>' . link_time_html($b['first']) . '</td><td>' . link_time_html($b['last']) . '</td><td class="sl-why">' . (int) $b['tries'] . ' &middot; ' . $esc(implode(', ', array_unique($why))) . '</td></tr>';
+        if ($total > count($rows)) $out .= '<p class="muted">Showing the latest ' . count($rows) . ' of ' . number_format($total) . '. Narrow it with the choices above, or export the rest.</p>';
+        $folded = 0;
+        if (!$f['cc'] && $f['q'] === '') foreach ($f['src'] ?: array_keys($labels) as $s) $folded += visitlog_folded($db, $s);
+        if ($folded > 0) $out .= '<p class="muted">+ ' . number_format($folded) . ' earlier visitor' . ($folded === 1 ? '' : 's') . ' (trimmed out of the list; their opens and views were counted before).</p>';
+        [$wb, $pb] = visits_where($f, 'b');
+        $wb = $wb === '' ? ' WHERE b.src <> ?' : $wb . ' AND b.src <> ?'; $pb[] = PUBLIC_LOG_ID;
+        $blocked = visits_query($db, 'SELECT b.* FROM blocked b' . $wb . ' ORDER BY b.last DESC LIMIT 100', $pb)->fetchAll();
+        if ($blocked) {
+            $out .= '<div class="sl-sub2 warn">Blocked tries &middot; ' . count($blocked) . ' address' . (count($blocked) === 1 ? '' : 'es') . '</div><div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Link</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
+            foreach ($blocked as $b) {
+                $why = []; foreach ((array) json_decode((string) $b['why'], true) as $s => $n) $why[] = ['expired' => 'expired', 'used_up' => 'already used', 'paused' => 'paused', 'revoked' => 'revoked', 'scheduled' => 'not started', 'replaced' => 'old address'][$s] ?? $s;
+                $out .= '<tr class="rj"><td><span class="sl-ipt">' . $esc($b['ip']) . '</span></td><td>' . visits_country_html($b['country']) . '</td><td>' . $esc($b['ua']) . '</td><td>' . $esc($labels[$b['src']] ?? 'A deleted link') . '</td><td>' . link_time_html($b['first']) . '</td><td>' . link_time_html($b['last']) . '</td><td class="sl-why">' . (int) $b['tries'] . ' &middot; ' . $esc(implode(', ', array_unique($why))) . '</td></tr>';
             }
             $out .= '</tbody></table></div>';
         }
-        return $out . '<details class="fold sl-howto"><summary>How to read this</summary><p class="note">An IP address is a device on a network, not a person: a phone moving from wifi to cellular looks like two. ' . (link_is_public_log($l) ? 'A visit is a visitor arriving, or coming back after half an hour; ' : 'Opens count the &ldquo;Open the gallery&rdquo; presses; ') . 'views count photos and folder pages looked at afterwards.</p></details></div>';
+        return $wrap($out . '<details class="fold sl-howto"><summary>How to read this</summary><p class="note">An IP address is a device on a network, not a person: a phone moving from wifi to cellular looks like two. On the public address a visit is a visitor arriving, or coming back after half an hour; on a link, opens count the &ldquo;Open the gallery&rdquo; presses. Views count photos and folder pages looked at afterwards. Someone who used the public address and a link is in the list once for each.</p></details>');
     }
 
+    $m = visits_load_media($db, $f); $opens = visits_load_folder_opens($db, $f);
+
     if ($tab === 'folders') {
-        if (!$folders) return $out . '<p class="muted sl-none">Nothing has been looked at yet.</p></div>';
-        $out .= '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>Folder</th><th>Opens</th><th>Media seen</th><th>Opened</th><th>Downloaded</th><th>First seen</th><th>Last activity</th></tr></thead><tbody>';
-        foreach ($folders as $rel => $x) {
+        $fo = []; $blank = ['opens' => 0, 'seen' => 0, 'opened' => 0, 'down' => 0, 'first' => 0, 'last' => 0];
+        foreach ($m as $rel => $a) {
+            $d = link_item_folder($rel); $x = &$fo[$d]; $x = $x ?? $blank;
+            if ($a['sf']) { $x['seen']++; $x['first'] = $x['first'] ? min($x['first'], $a['sf']) : $a['sf']; }
+            if ($a['on'] || $a['pn']) $x['opened']++;
+            if ($a['dn']) $x['down']++;
+            $x['last'] = max($x['last'], $a['last']); unset($x);
+        }
+        foreach ($opens as $d => $o) { $x = &$fo[$d]; $x = $x ?? $blank; $x['opens'] = $o['n']; $x['first'] = $x['first'] ? min($x['first'], $o['first']) : $o['first']; $x['last'] = max($x['last'], $o['last']); unset($x); }
+        uasort($fo, function ($a, $b) { return $b['last'] <=> $a['last']; });
+        if (!$fo) return $wrap('<p class="muted sl-none">Nothing has been looked at yet.</p>');
+        $out = '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>Folder</th><th>Opens</th><th>Media seen</th><th>Opened</th><th>Downloaded</th><th>First seen</th><th>Last activity</th></tr></thead><tbody>';
+        foreach ($fo as $rel => $x) {
             $rel = (string) $rel; $priv = $rel !== '' && folder_is_private($dir, $rel);
             $go = function ($n, $what, $text) use ($esc, $rel) { return $n > 0 ? '<button type="button" class="linklike sl-num" data-media="' . $what . '" data-folder="' . $esc($rel === '' ? '/' : $rel) . '">' . $esc($text) . '</button>' : '—'; };
             $out .= '<tr><td>' . ($priv ? '<span class="sl-lock" title="Private folder">' . ui_icon('lock') . '</span> ' : '') . $esc($rel === '' ? 'Front page' : link_folder_label($dir, $rel)) . '</td><td>' . ($x['opens'] ?: '—') . '</td><td>' . $go($x['seen'], 'viewed', $x['seen'] . ' of ' . link_folder_total($files, $rel)) . '</td><td>' . $go($x['opened'], 'opened', $x['opened']) . '</td><td>' . $go($x['down'], 'downloaded', $x['down']) . '</td><td>' . ($x['first'] ? link_time_html($x['first']) : '—') . '</td><td>' . ($x['last'] ? link_time_html($x['last']) : '—') . '</td></tr>';
         }
-        return $out . '</tbody></table></div><details class="fold sl-howto"><summary>How to read this</summary><p class="note">&ldquo;Opens&rdquo; is how many times the folder&rsquo;s page was opened. &ldquo;Media seen&rdquo; is photos and videos that were on their screen, even as a thumbnail; &ldquo;Opened&rdquo; is the ones shown large in the viewer or played; &ldquo;Downloaded&rdquo; is the ones whose original was downloaded. A lock marks a private folder. Press a number to see those photos and videos.</p></details></div>';
+        return $wrap($out . '</tbody></table></div><details class="fold sl-howto"><summary>How to read this</summary><p class="note">&ldquo;Opens&rdquo; is how many times the folder&rsquo;s page was opened. &ldquo;Media seen&rdquo; is photos and videos that were on their screen, even as a thumbnail; &ldquo;Opened&rdquo; is the ones shown large in the viewer or played; &ldquo;Downloaded&rdquo; is the ones whose original was downloaded. A lock marks a private folder. Press a number to see those photos and videos.</p></details>');
     }
 
     if ($tab === 'media') {
+        $dirs = []; foreach (array_keys($m) as $rel) $dirs[link_item_folder($rel)] = true; foreach (array_keys($opens) as $d) $dirs[(string) $d] = true;
+        $opts = [];
+        if (isset($dirs[''])) $opts['/'] = ['Front page', 'Front page', 0];   // (the front page first, then the folders as a tree in the gallery's own order)
+        $nested = false;
+        foreach (folder_tree_rows($dir, array_values(array_filter(array_map('strval', array_keys($dirs)), function ($d) { return $d !== ''; }))) as $r) { $opts[$r['p']] = [$r['n'], link_folder_label($dir, $r['p']), $r['d']]; if ($r['d'] > 0) $nested = true; }
+        $what = [];
+        foreach (['viewed' => 'Most viewed', 'recent' => 'Most recent', 'photos' => 'Photos', 'videos' => 'Videos', 'private' => 'Private', 'opened' => 'Opened', 'downloaded' => 'Downloaded'] as $k => $t) $what[$k] = [$t, $t, 0];
+        $bar = '<div class="sl-filterbar">' . link_pop_html('folders', true, 'All folders', 'folders', $opts, array_map(function ($x) { return $x === '' ? '/' : $x; }, $f['folders']), '', $nested ? 'A folder includes the folders inside it.' : '', $f['exact']) . link_pop_html('what', false, 'Most viewed', '', $what, [$f['what']], 'viewed') . '</div>';
         $kept = $m;
-        if ($flt['folders']) { $fs = array_flip($flt['folders']); $ex = $flt['exact']; $m = array_filter($m, function ($a, $rel) use ($fs, $ex) { return link_folder_selected(link_item_folder($rel), $fs, $ex); }, ARRAY_FILTER_USE_BOTH); }
-        $what = $flt['what'];
-        if ($what === 'photos') $m = array_filter($m, function ($a, $rel) { return !is_video_file($rel); }, ARRAY_FILTER_USE_BOTH);
-        elseif ($what === 'videos') $m = array_filter($m, function ($a, $rel) { return is_video_file($rel); }, ARRAY_FILTER_USE_BOTH);
-        elseif ($what === 'opened') $m = array_filter($m, function ($a) { return $a['on'] + $a['pn'] > 0; });
-        elseif ($what === 'downloaded') $m = array_filter($m, function ($a) { return $a['dn'] > 0; });
-        elseif ($what === 'private') { $all = items_get_all_for_files($dir, array_keys($m)); $m = array_filter($m, function ($a, $rel) use ($dir, $all) { return file_is_hidden($dir, $rel, $all); }, ARRAY_FILTER_USE_BOTH); }
-        if ($what === 'recent') uasort($m, function ($a, $b) { return $b['last'] <=> $a['last']; });
+        if ($f['folders']) { $fs = array_flip($f['folders']); $ex = $f['exact']; $m = array_filter($m, function ($a, $rel) use ($fs, $ex) { return link_folder_selected(link_item_folder($rel), $fs, $ex); }, ARRAY_FILTER_USE_BOTH); }
+        $wh = $f['what'];
+        if ($wh === 'photos') $m = array_filter($m, function ($a, $rel) { return !is_video_file($rel); }, ARRAY_FILTER_USE_BOTH);
+        elseif ($wh === 'videos') $m = array_filter($m, function ($a, $rel) { return is_video_file($rel); }, ARRAY_FILTER_USE_BOTH);
+        elseif ($wh === 'opened') $m = array_filter($m, function ($a) { return $a['on'] + $a['pn'] > 0; });
+        elseif ($wh === 'downloaded') $m = array_filter($m, function ($a) { return $a['dn'] > 0; });
+        elseif ($wh === 'private') { $allItems = items_get_all_for_files($dir, array_keys($m)); $m = array_filter($m, function ($a, $rel) use ($dir, $allItems) { return file_is_hidden($dir, $rel, $allItems); }, ARRAY_FILTER_USE_BOTH); }
+        if ($wh === 'recent') uasort($m, function ($a, $b) { return $b['last'] <=> $a['last']; });
         else uasort($m, function ($a, $b) { return ($b['on'] + $b['pn']) <=> ($a['on'] + $a['pn']) ?: $b['last'] <=> $a['last']; });
-        if (!$m) return $out . '<p class="muted sl-none">' . ($kept ? 'No photo or video matches that.' : 'Nothing has been looked at yet.') . '</p></div>';
-        $shown = $flt['all'] ? $m : array_slice($m, 0, 60, true);
+        if (!$m) return $wrap($bar . '<p class="muted sl-none">' . ($kept ? 'No photo or video matches that.' : 'Nothing has been looked at yet.') . '</p>');
+        $shown = $f['all'] ? $m : array_slice($m, 0, 60, true);
         $inAll = items_get_all_for_files($dir, array_keys($shown));
-        $out .= '<div class="sl-grid">';
+        $out = '<div class="sl-grid">';
         foreach ($shown as $rel => $a) {
             $priv = file_is_hidden($dir, $rel, $inAll);
             $badge = ($a['pn'] > 0 ? 'played ×' . $a['pn'] : ($a['on'] > 0 ? '×' . $a['on'] : 'seen')) . ($a['dn'] > 0 ? ' · downloaded' : '');
             $out .= '<a class="sl-th" href="' . admin_find_href($rel) . '" title="' . $esc($rel) . '"><img src="' . $esc(img_url($rel, 'thumb')) . '" alt="" loading="lazy" decoding="async"><span class="sl-badge">' . $esc($badge) . '</span>' . ($priv ? '<span class="sl-lk">' . ui_icon('lock') . '</span>' : '') . '</a>';
         }
         $out .= '</div>';
-        if (!$flt['all'] && count($m) > 60) $out .= '<button type="button" class="secondary sl-more" data-more>Show all ' . count($m) . '</button>';
-        return $out . '<p class="note">Showing ' . count($shown) . ' of ' . count($m) . ' photos and videos that were on their screen. A lock marks a private one; the badge is how many times it was opened (&ldquo;seen&rdquo;: only on screen). Press one to open it in the gallery.</p></div>';
+        if (!$f['all'] && count($m) > 60) $out .= '<button type="button" class="secondary sl-more" data-more>Show all ' . count($m) . '</button>';
+        return $wrap($bar . $out . '<p class="note">Showing ' . count($shown) . ' of ' . count($m) . ' photos and videos that were on their screen. A lock marks a private one; the badge is how many times it was opened (&ldquo;seen&rdquo;: only on screen). Press one to open it in the gallery.</p>');
     }
 
     // timeline
-    $events = $sc['events'];
-    usort($events, function ($a, $b) { return (int) ($b['t1'] ?? $b['t']) <=> (int) ($a['t1'] ?? $a['t']); });
-    if (!$events) return $out . '<p class="muted sl-none">Nothing to show yet.</p></div>';
-    $out .= '<div class="sl-timeline">';
-    foreach (array_slice($events, 0, 300) as $e) {
-        $k = $e['k'] ?? ''; $pic = '';
-        $when = isset($e['t1']) && (int) $e['t1'] !== (int) $e['t'] ? link_time_html($e['t']) . ' – ' . link_time_html($e['t1']) : link_time_html($e['t']);
+    [$events, $evTotal] = visits_load_events($db, $f, 300);
+    if (!$events) return $wrap('<p class="muted sl-none">Nothing to show yet.</p>');
+    $out = '<div class="sl-timeline">';
+    foreach ($events as $e) {
+        $k = $e['k']; $pic = '';
+        $when = (int) $e['t1'] !== (int) $e['t'] ? link_time_html($e['t']) . ' – ' . link_time_html($e['t1']) : link_time_html($e['t']);
         if ($k === 'scroll') {
             $text = 'Scrolled through <b>' . $esc(($e['d'] ?? '') === '' ? 'the front page' : link_folder_label($dir, $e['d'])) . '</b> &middot; saw ' . (int) $e['n'] . ' photo' . ((int) $e['n'] === 1 ? '' : 's');
-            $thumbs = ''; foreach (($e['s'] ?? []) as $s) $thumbs .= link_pic_html($s);
-            $more = (int) $e['n'] - count($e['s'] ?? []);
+            $thumbs = ''; foreach ($e['s'] as $s) $thumbs .= link_pic_html($s);
+            $more = (int) $e['n'] - count($e['s']);
             if ($thumbs !== '') $text .= '<div class="sl-strip">' . $thumbs . ($more > 0 ? '<span class="sl-more-n">+' . $more . ' more</span>' : '') . '</div>';
         }
         elseif ($k === 'opened' || $k === 'played' || $k === 'saved') {
             $verb = ['opened' => 'Opened', 'played' => 'Played', 'saved' => 'Downloaded the original of'][$k];
-            $text = $verb . ' <b>' . $esc(basename($e['f'])) . '</b>' . (file_is_unlisted($dir, $e['f']) ? ' <span class="sl-lock" title="Not listed">' . ui_icon('lock') . ' Not listed</span>' : '') . ($k === 'opened' ? '<div class="muted">' . $esc(link_folder_label($dir, link_item_folder($e['f']))) . '</div>' : '');
-            $pic = link_pic_html($e['f']);
+            $text = $verb . ' <b>' . $esc(basename((string) $e['f'])) . '</b>' . (file_is_unlisted($dir, (string) $e['f']) ? ' <span class="sl-lock" title="Not listed">' . ui_icon('lock') . ' Not listed</span>' : '') . ($k === 'opened' ? '<div class="muted">' . $esc(link_folder_label($dir, link_item_folder((string) $e['f']))) . '</div>' : '');
+            $pic = link_pic_html((string) $e['f']);
         }
-        elseif ($k === 'arrive') $text = 'Arrived at ' . link_entry_html($dir, $e) . '<div class="muted">' . $esc(['typed' => 'an address typed or pasted, or a bookmark or app', 'link' => 'a link on another site', 'other' => 'a way the browser did not say'][$e['h'] ?? ''] ?? '') . '</div>';
-        elseif ($k === 'folder') $text = 'Opened the folder <b>' . $esc(($e['f'] ?? '') === '' ? 'front page' : link_folder_label($dir, $e['f'])) . '</b>';
-        elseif ($k === 'zip') $text = 'Downloaded a ZIP of <b>' . $esc(($e['f'] ?? '') === '' ? 'the gallery' : link_folder_label($dir, $e['f'])) . '</b> (' . (int) ($e['n'] ?? 0) . ' files)';
-        elseif ($k === 'link') $text = !empty($e['_pub']) ? 'Visited the gallery' : 'Opened the link';
+        elseif ($k === 'arrive') $text = 'Arrived at ' . visits_entry_html($dir, ['f' => (string) $e['f'], 'h' => $e['h']] + ($e['u'] ? ['u' => 1] : [])) . '<div class="muted">' . $esc(['typed' => 'an address typed or pasted, or a bookmark or app', 'link' => 'a link on another site', 'other' => 'a way the browser did not say'][$e['h']] ?? '') . '</div>';
+        elseif ($k === 'folder') $text = 'Opened the folder <b>' . $esc(($e['f'] ?? '') === '' ? 'front page' : link_folder_label($dir, (string) $e['f'])) . '</b>';
+        elseif ($k === 'zip') $text = 'Downloaded a ZIP of <b>' . $esc(($e['f'] ?? '') === '' ? 'the gallery' : link_folder_label($dir, (string) $e['f'])) . '</b> (' . (int) ($e['n'] ?? 0) . ' files)';
+        elseif ($k === 'link') $text = $e['_src'] === PUBLIC_LOG_ID ? 'Visited the gallery' : 'Opened the link';
         else continue;
-        $who = $mode === 'ip' ? 'via ' . $esc($e['_link']) : '<span class="sl-ipt">' . $esc($e['_ip']) . '</span>';
+        $who = '<button type="button" class="linklike vt-ip" data-ip="' . $esc($e['_ip']) . '">' . $esc($e['_ip']) . '</button> &middot; ' . ($e['_src'] === PUBLIC_LOG_ID ? 'public address' : 'via ' . $esc($labels[$e['_src']] ?? 'a deleted link'));
         $out .= '<div class="sl-ev"><span class="sl-evt">' . $when . '</span><div class="' . ($pic !== '' ? 'sl-evpic' : 'sl-evbody') . '">' . $pic . '<div>' . $text . '<div class="muted sl-evl">' . $who . '</div></div></div></div>';
     }
-    return $out . '</div>' . ($sc['full'] ? '<p class="note">The timeline is full: it keeps the latest ' . number_format(LINK_LOG_EVENTS) . ' lines, so older ones were folded away. Download the log to keep them.</p>' : '') . '<details class="fold sl-howto"><summary>How to read this</summary><p class="note">Scrolling is one line per stretch. Opened, played and downloaded items get their own line. The Folders and Media tabs keep their own, exact tallies.</p></details></div>';
+    $out .= '</div>' . ($evTotal > count($events) ? '<p class="note">Showing the latest ' . count($events) . ' of ' . number_format($evTotal) . ' lines. Narrow it with the choices above, or export the whole timeline.</p>' : '');
+    return $wrap($out . '<details class="fold sl-howto"><summary>How to read this</summary><p class="note">Scrolling is one line per stretch. Opened, played and downloaded items get their own line. The Folders and Media views keep their own, exact tallies.</p></details>');
 }
 
-/** Where a visit came in, for the public address's log: a folder (or the front page), or a Not listed photo opened by its own address. */
-function link_entry_html($dir, $a) {
-    if (!is_array($a) || !is_string($a['f'] ?? null)) return '<span class="muted">—</span>';
+/** Is there anything for the Visitors tab to show? The log is usable here and share links or the public log are on, or something was logged before. */
+function visits_tab_wanted() {
+    static $w = null;
+    if ($w !== null) return $w;
+    if (!visitlog_driver_ok()) return $w = false;
+    if (!ENABLE_SHARE_LINKS && !LOG_PUBLIC_VISITS && (!is_file(visitlog_path()) || visitlog_visitor_count() === 0)) return $w = false;
+    return $w = visitlog_ready();
+}
+
+/** The Visitors tab: who opened the gallery without a link and who used each share link. The pills, search and views are the page's own; the table under them is a fragment (render_visits_fragment) fetched as they change. */
+function render_admin_visits_panel($csrfToken, $dir, $files) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    if (!empty($a['u'])) return '<span class="sl-lock" title="Not listed">' . ui_icon('lock') . '</span> Not listed photo <b>' . $esc(basename($a['f'])) . '</b>';
-    return '<b>' . $esc($a['f'] === '' ? 'Front page' : link_folder_label($dir, $a['f'])) . '</b>';
+    $ok = visitlog_usable();
+    if ($ok) visitlog_tx(function ($db) { visitlog_retention($db, time()); });
+    $db = $ok ? visitlog_db() : null;
+    $labels = visits_source_labels();
+    $links = [];
+    foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && isset($l['id'], $l['label']) && !link_is_public_log($l)) $links[] = $l;
+    $bySrc = []; $countries = []; $total = 0;
+    if ($db !== null) {
+        foreach (visits_query($db, 'SELECT src, COUNT(*) AS c FROM visitors GROUP BY src')->fetchAll() as $r) { $bySrc[$r['src']] = (int) $r['c']; $total += (int) $r['c']; }
+        foreach (visits_query($db, 'SELECT country, COUNT(*) AS c FROM visitors WHERE country <> \'\' GROUP BY country ORDER BY c DESC, country')->fetchAll() as $r) $countries[] = ['c' => $r['country'], 'name' => visit_country_name($r['country']), 'n' => (int) $r['c']];
+    }
+    $pubN = (int) ($bySrc[PUBLIC_LOG_ID] ?? 0); $linkN = $total - $pubN;
+    $info = ['total' => $total, 'pub' => $pubN, 'links' => array_map(function ($l) use ($bySrc) { return ['id' => $l['id'], 'name' => $l['label'], 'n' => (int) ($bySrc[$l['id']] ?? 0)]; }, $links), 'countries' => $countries];
+    $plural = function ($n, $one, $many) { return number_format($n) . ' ' . ($n === 1 ? $one : $many); };
+    $span = LOG_KEEP_DAYS > 0 ? 'in the last ' . ($plural(LOG_KEEP_DAYS, 'day', 'days')) : 'so far';
+    $summary = $plural($pubN, 'public visitor', 'public visitors') . ' and ' . $plural($linkN, 'visitor', 'visitors') . ' on share links ' . $span . ' &middot; ' . $plural(count($links), 'share', 'shares');
+    $csrf = $esc($csrfToken);
+?>
+    <section class="panel vt" id="vt-root" data-csrf="<?= $csrf ?>" data-info="<?= $esc(json_encode($info, JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
+      <h2 class="section-title">Visitors</h2>
+      <?php if (!$ok): ?>
+        <div class="sl-off">The visitor log isn't available here. <?= $esc(visitlog_check()[1]) ?></div>
+      <?php else: ?>
+      <?php if (($proxyHint = client_ip_proxy_hint()) !== ''): ?>
+        <div class="sl-warn"><?= ui_icon('warn') ?><div><strong>Visitors may all look like one address.</strong> <?= $esc($proxyHint) ?> It is the proxy setting in Settings (<em>Where visitors' IP addresses come from</em>).</div></div>
+      <?php endif; ?>
+      <?php if (!LOG_PUBLIC_VISITS): ?>
+        <p class="muted vt-off">Logging visitors to the public address is off<?= $pubN > 0 ? ' (what was logged stays here until you trim it)' : '' ?>. <a href="#site" onclick="return adminGoTo('site', 'setting-LOG_PUBLIC_VISITS');">Turn it on in Settings</a>.</p>
+      <?php endif; ?>
+      <p class="muted vt-sum"><?= $summary ?></p>
+      <div class="vt-top">
+        <div class="vt-pills">
+          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="cc" aria-haspopup="true" aria-expanded="false"><span class="vt-l">All</span> &#9662; <em></em></button></span>
+          <button type="button" class="vt-chip" data-pill="pub">Public <em></em></button>
+          <?php if ($links || $linkN > 0): ?><span class="vt-pw"><button type="button" class="vt-chip" data-pill="links" aria-haspopup="true" aria-expanded="false"><span class="vt-l">Share links</span> &#9662; <em></em></button></span><?php endif; ?>
+        </div>
+        <div class="vt-sw"><input type="search" class="vt-search" placeholder="Find a visitor" aria-label="Find a visitor" autocomplete="off" spellcheck="false" enterkeyhint="search"><button type="button" class="vt-sx" data-vt="clearq" aria-label="Clear the search" title="Clear the search" hidden>&times;</button></div>
+        <div class="vt-menuwrap">
+          <button type="button" class="vt-ic" data-vt="menu" title="Export or trim the log" aria-label="Export or trim the log" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg></button>
+          <div class="vt-menu" hidden>
+            <a href="#" data-export="visitors">Visitors<small>One line per IP: opens, first and last seen</small></a>
+            <a href="#" data-export="items">What they looked at<small>One line per item: seen, opened, played, downloaded</small></a>
+            <a href="#" data-export="events">Everything, in order<small>The timeline, one line per happening</small></a>
+            <button type="button" data-vt="trim">Trim the log&hellip;</button>
+            <span class="sl-menu-note">CSVs hold what the choices above show, with IP addresses, and open in your downloads.</span>
+          </div>
+        </div>
+      </div>
+      <div class="sl-segbar vt-views" role="group" aria-label="Part of the log"><button type="button" class="sl-segbtn on" data-view="visitors">Visitors</button><button type="button" class="sl-segbtn" data-view="folders">Folders</button><button type="button" class="sl-segbtn" data-view="media">Media</button><button type="button" class="sl-segbtn" data-view="timeline">Timeline</button></div>
+      <div class="vt-note" role="status"></div>
+      <div class="vt-body"><?= render_visits_fragment('visitors', visits_filters(), $dir, $files) ?></div>
+      <div class="admin-modal" id="vt-modal" role="dialog" aria-modal="true" aria-labelledby="vt-modal-title" hidden>
+        <div class="admin-modal-card">
+          <h3 id="vt-modal-title">Trim the log</h3>
+          <div class="sl-modal-body">
+            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><option value="all">All of them</option><option value="<?= $esc(PUBLIC_LOG_ID) ?>">The public address</option><?php foreach ($links as $l): ?><option value="<?= $esc($l['id']) ?>"><?= $esc($l['label']) ?></option><?php endforeach; ?></select></div>
+            <div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="vt-trim-age"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="vt-trim-date" hidden></div>
+            <p class="hint" id="vt-trim-out" role="status">Counting&hellip;</p>
+            <p class="hint">Opens, views and the number of visitors stay. To keep the lines themselves, download them first: <a id="vt-trim-dl-events" href="#">the timeline</a> &middot; <a id="vt-trim-dl-items" href="#">what they looked at</a> &middot; <a id="vt-trim-dl-visitors" href="#">visitors</a> (CSV, with IP addresses).</p>
+          </div>
+          <div class="pm-btns"><button type="button" class="secondary" data-vt-modal="cancel">Cancel</button><button type="button" class="sl-danger-btn" data-vt-modal="ok">Trim</button></div>
+        </div>
+      </div>
+      <div class="pv-toast" id="vt-toast" role="status" aria-live="polite" hidden></div>
+      <?php endif; ?>
+    </section>
+<?php
 }
 
-/** Every address that has opened or tried any link, with the links each used. */
-function render_link_ips_list() {
-    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $data = links_read(); $ips = [];
-    foreach ($data['links'] as $l) {
-        if (!is_array($l) || !isset($l['id'])) continue;
-        [$log, $items] = link_activity($l['id']);
-        $viewsBy = [];
-        foreach ($log['visitors'] as $vid => $v) { $a = &$ips[$v['ip']]; $a = $a ?? ['country' => '', 'ua' => [], 'links' => [], 'views' => 0, 'last' => 0, 'blocked' => 0]; $a['country'] = $v['country'] ?? $a['country']; $a['ua'][$v['ua']] = true; $a['links'][$l['id']] = [$l['label'], link_is_public_log($l)]; $a['views'] += (int) $v['views']; $a['last'] = max($a['last'], (int) $v['last']); unset($a); }
-        foreach ($log['blocked'] as $b) { $a = &$ips[$b['ip']]; $a = $a ?? ['country' => '', 'ua' => [], 'links' => [], 'views' => 0, 'last' => 0, 'blocked' => 0]; $a['ua'][$b['ua']] = true; $a['links'][$l['id']] = [$l['label'], link_is_public_log($l)]; $a['blocked'] += (int) $b['tries']; $a['last'] = max($a['last'], (int) $b['last']); unset($a); }
-    }
-    if (!$ips) return '<p class="muted sl-none">No address has opened a link' . (LOG_PUBLIC_VISITS ? ' or been logged' : '') . ' yet.</p>';
-    uasort($ips, function ($a, $b) { return $b['last'] <=> $a['last']; });
-    $out = '<div class="sl-scroll"><table class="sl-table sl-cards"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Links used</th><th>Views</th><th>Last seen</th></tr></thead><tbody>';
-    foreach ($ips as $ip => $a) {
-        $chips = ''; foreach ($a['links'] as $lid => [$name, $isPub]) $chips .= '<button type="button" class="sl-lchip sl-golink' . ($isPub ? ' pub' : '') . '" data-golink="' . $esc($lid) . '">' . $esc($name) . '</button>';
-        $out .= '<tr><td data-label="IP address"><button type="button" class="linklike sl-ipt" data-ip="' . $esc($ip) . '">' . $esc($ip) . '</button></td><td data-label="Where">' . link_place_html($a['country']) . '</td><td data-label="Browser">' . $esc(implode(', ', array_keys($a['ua']))) . '</td><td data-label="Links used"><span class="sl-lchips">' . $chips . ($a['blocked'] > 0 ? '<span class="sl-why">blocked ×' . (int) $a['blocked'] . '</span>' : '') . '</span></td><td data-label="Views">' . (int) $a['views'] . '</td><td data-label="Last seen">' . link_time_html($a['last']) . '</td></tr>';
-    }
-    return $out . '</tbody></table></div><p class="note">Every address that has opened or tried any link' . (LOG_PUBLIC_VISITS ? ', or been logged on the public address' : '') . '. An address on two links is worth a look. Press one to see everything it opened.</p>';
+/** The Trim the log dialog's request: what is older than a number of days or a date goes from one source's records or from all of them; apply=1 does it, otherwise it only counts. Answers JSON. */
+function visits_trim_action() {
+    $now = time();
+    $bad = function ($text) { admin_json_exit(['ok' => false, 'text' => $text]); };
+    if (!visitlog_usable()) $bad('The visitor log isn\'t available here: ' . visitlog_check()[1]);
+    $id = (string) ($_POST['id'] ?? 'all');
+    if ($id !== 'all' && !preg_match('/^[0-9a-f]{10}$/', $id)) $bad('Unknown source.');
+    $before = (int) ($_POST['before'] ?? 0); $days = (int) ($_POST['days'] ?? 0);
+    $cutoff = $before > 0 ? $before : $now - $days * 86400;
+    if (($before <= 0 && $days <= 0) || $cutoff > $now) $bad('Pick how old a line has to be to go: a number of days, or a date in the past.');
+    $apply = ($_POST['apply'] ?? '') === '1';
+    $tot = link_log_trim($id === 'all' ? null : $id, $cutoff, $apply);
+    $lines = $tot['events'] + $tot['items'] + $tot['folders'] + $tot['blocked'];
+    $what = number_format($tot['events']) . ' line' . ($tot['events'] === 1 ? '' : 's') . ' of the timeline, ' . number_format($tot['visitors']) . ' visitor' . ($tot['visitors'] === 1 ? '' : 's') . ' and ' . number_format($tot['items'] + $tot['folders']) . ' record' . ($tot['items'] + $tot['folders'] === 1 ? '' : 's') . ' of what was looked at' . ($tot['blocked'] ? ', and ' . number_format($tot['blocked']) . ' turned-away ' . ($tot['blocked'] === 1 ? 'try' : 'tries') : '');
+    $none = $lines + $tot['visitors'] === 0;
+    admin_json_exit(['ok' => true, 'applied' => $apply, 'counts' => $tot, 'nothing' => $none,
+        'text' => $none ? 'Nothing is that old: there is nothing to trim.' : ($apply ? 'Trimmed: ' : 'This would remove ') . $what . '.' . ($apply ? '' : ' Opens, views and the total number of visitors stay.')]);
 }
 
-/** The fragments and downloads the Shares tab asks for: ?admin&linkview=ID, &linkip=ADDRESS, &linkips=1, &linkexport=ID|all. */
+/** CSV of the visitor log: what=visitors | items | events, for the sources, countries and search the Visitors tab has chosen. */
+function visits_export($what, array $f, $dir) {
+    if (!visitlog_usable()) { http_response_code(503); header('Content-Type: text/plain; charset=UTF-8'); echo 'The visitor log isn\'t available here.'; return; }
+    $db = visitlog_db();
+    if (!in_array($what, ['visitors', 'items', 'events'], true)) $what = 'items';
+    $labels = visits_source_labels();
+    [$w, $p] = visits_where($f, 'v');
+    $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on', 'came_in_at'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count']][$what];
+    $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
+    header('Content-Type: text/csv; charset=UTF-8');
+    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
+    header('Content-Disposition: attachment; filename="visitors-' . $what . '.csv"');
+    header('X-Content-Type-Options: nosniff');
+    echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";
+    $line = function (array $r) { echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
+    if ($what === 'visitors') {
+        $links = (array) (links_read()['links'] ?? []); $via = [];
+        foreach (visits_query($db, 'SELECT src, vid, name FROM notes WHERE kind = \'via\'')->fetchAll() as $n) $via[$n['src']][$n['vid']][] = link_address_label($n['name'], link_address_is_custom($n['name']));
+        foreach (visits_query($db, 'SELECT v.* FROM visitors v' . $w . ' ORDER BY v.last DESC', $p) as $r)
+            $line([$src($r['src']), $r['ip'], $r['country'], $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
+                   $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Not listed photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
+    } elseif ($what === 'items') {
+        foreach (visits_query($db, 'SELECT i.*, v.ip, v.ua FROM items i JOIN visitors v ON v.src = i.src AND v.vid = i.vid' . $w . ' ORDER BY i.src, v.ip, i.item', $p) as $r)
+            $line([$src($r['src']), $r['ip'], $r['ua'], link_item_folder($r['item']), basename($r['item']), $iso($r['sf']), (int) $r['opn'], (int) $r['pln'], (int) $r['dwn'], $iso(max((int) $r['sl'], (int) $r['opl'], (int) $r['pll'], (int) $r['dwl']))]);
+    } else {
+        foreach (visits_query($db, 'SELECT e.*, v.ip FROM events e JOIN visitors v ON v.src = e.src AND v.vid = e.vid' . $w . ' ORDER BY e.t, e.id', $p) as $e) {
+            $k = $e['k']; $fl = (string) ($e['f'] ?? $e['d'] ?? '');
+            $isDir = $k === 'scroll' || $k === 'folder' || $k === 'zip' || ($k === 'arrive' && !$e['u']);
+            $line([$iso($e['t']), $src($e['src']), $e['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : ($k === 'arrive' ? 'arrived' : $k)), $isDir ? ($k === 'scroll' ? (string) $e['d'] : $fl) : link_item_folder($fl), $isDir ? '' : basename($fl), $e['n'] ?: 1]);
+        }
+    }
+}
+
+/** The fragments and downloads the Visitors tab and the Shares tab ask for: ?admin&visits=1 (the table under the choices), &visitsexport=visitors|items|events, and the link form's linkphotos and linkcover. */
 function run_links_view_route($dir, $files) {
     header('Cache-Control: no-store');
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
     $data = links_read();
-    if (isset($_GET['linkexport'])) { link_export($str('linkexport'), $str('what'), $str('ip'), $data, $dir); return; }
+    if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir); return; }
     header('Content-Type: text/html; charset=UTF-8');
-    if (isset($_GET['linkips'])) { echo render_link_ips_list(); return; }
+    if (isset($_GET['visits'])) {
+        $tab = in_array($str('tab'), ['visitors', 'folders', 'media', 'timeline'], true) ? $str('tab') : 'visitors';
+        echo render_visits_fragment($tab, visits_filters(), $dir, $files);
+        return;
+    }
     if (isset($_GET['linkphotos'])) { echo render_link_photo_picker($str('linkphotos'), $files, $dir, $str('cover') === '1', link_draft_scope_from_request()); return; }
     if ($str('linkcover') === 'folders') {   // the folders that have public photos directly in them (among those the link covers), as a tree, for the preview photo dialog: the first one is where it opens
         header('Content-Type: application/json; charset=UTF-8');
@@ -380,17 +546,7 @@ function run_links_view_route($dir, $files) {
         echo json_encode(['file' => $file, 'how' => $file === null ? 'none' : ($asked !== '' && $file === $asked ? 'chosen' : 'auto'), 'name' => $file === null ? '' : basename($file), 'img' => $file === null ? '' : img_url($file, 'thumb')]);
         return;
     }
-    if (isset($_GET['linkip'])) {
-        $tab = in_array($str('tab'), ['folders', 'media', 'timeline'], true) ? $str('tab') : 'folders';
-        echo render_link_scope('ip', null, $str('linkip'), $tab, link_scope_filters(), $dir, $files);
-        return;
-    }
-    $id = $str('linkview');
-    $l = preg_match('/^[0-9a-f]{10}$/', $id) ? ($data['links'][$id] ?? null) : null;
-    if (!is_array($l)) { http_response_code(404); echo '<p class="muted">That link no longer exists.</p>'; return; }
-    $tab = $str('tab') === 'photos' ? 'media' : $str('tab');   // (the Media tab was called Photos: old addresses keep working)
-    $tab = in_array($tab, ['visitors', 'folders', 'media', 'timeline'], true) ? $tab : 'visitors';
-    echo render_link_scope('link', $l, '', $tab, link_scope_filters(), $dir, $files);
+    http_response_code(400);
 }
 
 /** The photos of one folder (not the ones inside its subfolders), as check boxes with thumbnails: the "Add photos" picker of the link form. */
@@ -412,32 +568,28 @@ function render_link_photo_picker($folder, $files, $dir = '', $cover = false, $d
     return $out . (count($list) > 400 ? '<p class="muted">Showing the first 400 of ' . count($list) . '.</p>' : '');
 }
 
-/** CSV of a link's (or every link's) log: what=visitors | items | events; ip limits it to one address. */
-function link_export($which, $what, $ip, $data, $dir) {
-    $links = [];
-    foreach ($data['links'] as $l) if (is_array($l) && isset($l['id']) && ($which === 'all' || $l['id'] === $which)) $links[] = $l;
-    if (!$links) { http_response_code(404); header('Content-Type: text/plain; charset=UTF-8'); echo 'No such link.'; return; }
-    if (!in_array($what, ['visitors', 'items', 'events'], true)) $what = 'items';
-    $rows = [];
-    $head = ['visitors' => array_merge(['link', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on'], $which === PUBLIC_LOG_ID ? ['came_in_at'] : []), 'items' => ['link', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'link', 'ip', 'what', 'folder', 'file', 'count']][$what];
-    $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
-    foreach ($links as $l) {
-        [$log, $items] = link_activity($l['id']);
-        if ($what === 'visitors') foreach ($log['visitors'] as $vid => $v) {
-            if ($ip !== '' && $v['ip'] !== $ip) continue;
-            $row = [$l['label'], $v['ip'], $v['country'] ?? '', $v['ua'], $iso($v['first']), $iso($v['last']), $v['opens'], $v['views'], link_has_many_addresses($l, $log) ? link_visitor_via($l, $log, $vid, $v) : ''];
-            if ($which === PUBLIC_LOG_ID) { $en = $v['entry'] ?? []; $row[] = !empty($en['u']) ? 'Not listed photo ' . basename((string) ($en['f'] ?? '')) : (is_string($en['f'] ?? null) ? ($en['f'] === '' ? 'Front page' : $en['f']) : ''); }
-            $rows[] = $row;
-        }
-        elseif ($what === 'items') foreach (link_item_rows($items) as [$vid, $rel, $t]) { $v = $log['visitors'][$vid] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $rows[] = [$l['label'], $v['ip'], $v['ua'], link_item_folder($rel), basename($rel), $iso($t['sf'] ?? 0), (int) ($t['on'] ?? 0), (int) ($t['pn'] ?? 0), (int) ($t['dn'] ?? 0), $iso(max((int) ($t['sl'] ?? 0), (int) ($t['ol'] ?? 0), (int) ($t['pl'] ?? 0), (int) ($t['dl'] ?? 0)))]; }
-        else foreach ($log['events'] as $e) { $v = $log['visitors'][$e['v'] ?? ''] ?? null; if ($v === null || ($ip !== '' && $v['ip'] !== $ip)) continue; $k = $e['k'] ?? ''; $f = $e['f'] ?? ($e['d'] ?? ''); $rows[] = [$iso($e['t']), $l['label'], $v['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : ($k === 'arrive' ? 'arrived' : $k)), (($k === 'scroll' || $k === 'folder' || $k === 'zip') || ($k === 'arrive' && empty($e['u']))) ? $f : link_item_folder((string) $f), (($k === 'scroll' || $k === 'folder' || $k === 'zip') || ($k === 'arrive' && empty($e['u']))) ? '' : basename((string) $f), $e['n'] ?? 1]; }
+/** What an older version's visitor logs left beside index.php: [paths of the files, their size in bytes, whether the public address's stand-in record is still in the links file]. Only names owned_kind_of_name knows, regular files, no links. */
+function visitlog_old_leftovers() {
+    $files = []; $bytes = 0; $real = realpath(__DIR__) ?: __DIR__;
+    foreach ((array) @scandir($real) as $name) {
+        if (!is_string($name) || owned_kind_of_name($name, true) !== 'oldlogs') continue;
+        $path = $real . '/' . $name;
+        if (is_link($path) || !is_file($path)) continue;
+        $files[] = $path; $bytes += (int) @filesize($path);
     }
-    header('Content-Type: text/csv; charset=UTF-8');
-    shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
-    header('Content-Disposition: attachment; filename="share-links-' . $what . '.csv"');
-    header('X-Content-Type-Options: nosniff');
-    echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";
-    foreach ($rows as $r) echo implode(',', array_map('link_csv_cell', $r)) . "\r\n";
+    $rec = (array) (links_read()['links'] ?? []);
+    return [$files, $bytes, isset($rec[PUBLIC_LOG_ID])];
+}
+
+/** Takes those leftovers away: the files (each checked again as the gallery's own) and the stand-in record. Returns how many files went, or null when something did not check out. */
+function visitlog_old_leftovers_remove() {
+    [$files, , $rec] = visitlog_old_leftovers();
+    $real = realpath(__DIR__) ?: __DIR__;
+    foreach ($files as $path) if (!owned_verify($path, $real, 'oldlogs', true)) return null;   // (nothing is deleted unless every one checks out)
+    $n = 0;
+    foreach ($files as $path) if (@unlink($path)) $n++;
+    if ($rec) links_update(function (&$d) { if (isset($d['links'][PUBLIC_LOG_ID]) && link_is_public_log($d['links'][PUBLIC_LOG_ID])) unset($d['links'][PUBLIC_LOG_ID]); });
+    return $n;
 }
 
 /** Remembers which version of this script last ran against this install (a small guarded data file beside index.php), so
@@ -472,6 +624,18 @@ function health_checks($dir, $files) {
     $add('This install', function_exists('exif_read_data') ? 'ok' : 'warn', 'Photo details (EXIF): ' . (function_exists('exif_read_data') ? 'available' : 'missing'),
         function_exists('exif_read_data') ? '' : 'Without the exif extension, a photo\'s location and date can\'t be read from the file.');
 
+    // --- the visitor log
+    [$vlOk, $vlWhy] = visitlog_check_quiet();
+    if (!$vlOk) $add('This install', (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors tab stays hidden.');
+    elseif (is_file(visitlog_path())) {
+        $vlSize = visitlog_size(); $vlOld = visitlog_oldest();
+        $vlText = $vlSize >= 1048576 ? number_format($vlSize / 1048576, $vlSize >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($vlSize / 1024)) . ' KB';
+        if (LOG_WARN_MB > 0 && $vlSize > LOG_WARN_MB * 1048576)
+            $add('This install', 'warn', 'The visitor records take ' . $vlText, 'More than the ' . number_format(LOG_WARN_MB) . ' MB you asked to be warned at. The oldest record is from ' . ($vlOld > 0 ? gmdate('j M Y', $vlOld) : 'an unknown date') . '. Trim the log in the Visitors tab, or set how long records are kept in Settings.', ['visits', 'vt-root', 'Open the Visitors tab']);
+        else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. ' . visitlog_visitor_count() . ' visitor' . (visitlog_visitor_count() === 1 ? '' : 's') . ' logged, taking ' . $vlText . '.' . ($vlOld > 0 ? ' The oldest record is from ' . gmdate('j M Y', $vlOld) . '.' : ''));
+    }
+    else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. Nothing has been logged yet.');
+
     // --- settings and passwords
     $state = gallery_config_load();
     $cfgPath = gallery_config_path();
@@ -501,6 +665,7 @@ function health_checks($dir, $files) {
     }
     $folders = [rtrim($dir, '/') => true];
     foreach ($files as $f) { $folders[containing_folder_real_path($dir, $f)] = true; if (count($folders) >= 300) break; }
+    foreach (gallery_mounts() as $mountPath) if (is_string($mountPath) && is_dir($mountPath) && !is_link($mountPath)) $folders[rtrim($mountPath, '/')] = true;   // (a place from elsewhere that holds only folders is never reached by the line above, and its own title and settings are saved in it)
     $unwritable = []; $badData = []; $withData = 0; $entries = 0;
     foreach (array_keys($folders) as $folder) {
         if (!is_writable($folder)) $unwritable[] = $folder;
@@ -573,6 +738,48 @@ function health_checks($dir, $files) {
         if ($mr['left'] > 0) $add('Media', 'info', $n($mr['left'], 'file') . ' not prepared yet', 'Thumbnails, what the files say about themselves and video pictures are made the first time a photo is shown; Prepare media does the rest in one go.', $go);
         elseif (!$ma['attention']) $add('Media', 'ok', 'All prepared', number_format($mr['total']) . ' file' . ($mr['total'] === 1 ? '' : 's') . ': thumbnails made, video pictures made and read from the files.', $go);
         if ($mr['videos'] > 0 && !$mr['videoWanted']) $add('Videos', 'info', 'Video pictures are switched off', 'Video thumbnails and video previews are off in Settings, so videos show the browser\'s own first frame.');
+    }
+
+    [$olFiles, $olBytes, $olRec] = visitlog_old_leftovers();
+    if ($olFiles || $olRec) {
+        $olText = $olBytes >= 1048576 ? number_format($olBytes / 1048576, 1) . ' MB' : max(1, (int) ceil($olBytes / 1024)) . ' KB';
+        $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
+            '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
+    }
+    // --- what another gallery, a copy or a tidy-up left that nothing has acted on. Each can be set aside (it then sits among the quiet rows, and comes
+    // back by itself if there is more of it), except a copied folder, which stays until it is dealt with.
+    $aside = is_array(HEALTH_SET_ASIDE) ? HEALTH_SET_ASIDE : [];
+    $leftBehind = function ($key, $amount, $status, $label, $detail, $link) use (&$add, $aside) {
+        $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+        $isAside = isset($aside[$key]) && (int) $aside[$key] >= $amount;
+        $btn = $isAside ? '<div class="health-act"><button type="button" class="secondary" data-aside-back="' . $esc($key) . '">Bring back</button></div>'
+                        : '<div class="health-act"><button type="button" class="secondary" data-aside="' . $esc($key) . '">Set aside</button></div>';
+        $add('Left behind', $isAside ? 'aside' : $status, $label . ($isAside ? ' (set aside)' : ''), $detail, $link, $btn);
+    };
+    if (AUTO_GROUP_BY_FOLDER) {
+        $ev = moved_in_earlier_views($dir, $files);
+        if ($ev['views'] > 0) $leftBehind('earlier-views', $ev['views'], 'warn', number_format($ev['views']) . ' earlier view' . ($ev['views'] === 1 ? ' is' : 's are') . ' waiting to be added',
+            'Counted by another gallery, under the old addresses of ' . $ev['folders'] . ' folder' . ($ev['folders'] === 1 ? '' : 's') . '.' . (TRACK_VIEWS ? '' : ' Turn on Count views first.'), ['site', 'setting-TRACK_VIEWS', 'Open Count views']);
+        $lo = moved_in_leftovers($dir, $files);
+        if ($lo['count'] > 0) $leftBehind('leftover-thumbs', $lo['count'], 'opt', number_format($lo['count']) . ' leftover thumbnail' . ($lo['count'] === 1 ? '' : 's') . ' (' . ($lo['bytes'] >= 1048576 ? round($lo['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($lo['bytes'] / 1024)) . ' KB') . ') from another gallery',
+            'Pictures an older gallery made in folders elsewhere on the server. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', 'Open Prepare media']);
+        if (EXTRA_ROOTS && ($loose = count_loose_media_in_roots()) > 0) $leftBehind('loose-photos', $loose, 'warn', number_format($loose) . ' photo' . ($loose === 1 ? '' : 's') . ' lying directly in a place added without a name',
+            'Only the folders inside such a place are shown, so these photos are not. Move them into a folder to show them, or give the place a name.', ['site', 'setting-EXTRA_FOLDERS', 'Open Folders from elsewhere']);
+        $copied = [];
+        foreach (folder_id_map_folders($dir, $files) as $fid => $paths) {
+            if (count($paths) < 2) continue;
+            $unl = false; foreach ($paths as $pp) if (folder_is_unlisted($dir, $pp)) { $unl = true; break; }
+            $copied[] = [$paths, $unl];
+        }
+        if ($copied) {
+            $sample = implode('; ', array_map(function ($c) { return implode(' = ', array_slice($c[0], 0, 3)); }, array_slice($copied, 0, 3)));
+            $anyUnl = (bool) array_filter($copied, function ($c) { return $c[1]; });
+            $add('Left behind', 'warn', number_format(count($copied)) . ' hidden id' . (count($copied) === 1 ? ' is' : 's are') . ' carried by more than one folder (a copy)',
+                $sample . '. A link to such a folder, ' . ($anyUnl ? 'and the photo addresses of a Not listed one, ' : '') . 'open nothing until it is told apart: remove the copy, or delete the .gallery-items.php inside the copy so it gets an id of its own (its captions and settings go with that file).');
+        }
+        $bk = media_tidy_backups($dir, $files);
+        $bkN = is_array($bk) ? (isset($bk['count']) ? (int) $bk['count'] : count($bk)) : 0;
+        if ($bkN > 0) $add('Left behind', 'info', number_format($bkN) . ' backup' . ($bkN === 1 ? '' : 's') . ' from Tidy up saved locations', 'Copies of folder data from before a tidy-up. They stay until you delete them in Prepare media, once you are sure.', ['site', 'media-panel', 'Open Prepare media']);
     }
     return $rows;
 }

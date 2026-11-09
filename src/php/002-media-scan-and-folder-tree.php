@@ -488,8 +488,9 @@ function request_routes() {
 }
 
 /** The name of the route this request is for (see request_routes), or '' when it is the gallery page. */
-function request_route() {
+function request_route($reset = false) {
     static $route = null;
+    if ($reset) $route = null;
     if ($route !== null) return $route;
     $route = '';
     foreach (request_routes() as $name => $r) {
@@ -498,6 +499,26 @@ function request_route() {
     }
     return $route;
 }
+
+/** The words a bare query (?word, nothing else) means for the gallery itself. Any other single word is an address someone typed: a share link's or a
+ *  Not listed photo's (see bare_query_as_address). */
+function reserved_query_words() {
+    $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
+        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'pbcounts', 'privcounts', 'scope_type',
+        'shellcounts', 'shellmeta', 'shelltree'];
+    foreach (request_routes() as $r) foreach ($r['params'] as $p) $words[] = $p;
+    return $words;
+}
+
+/** A query that is one bare word and nothing else (the address typed as /photos/?Ab3x9Qz2 where the server's one-word rule isn't set up) is the same as
+ *  ?link=<word>: the one place that tells a share link's or a Not listed photo's address from a wrong guess, and counts the guess. */
+function bare_query_as_address() {
+    $qs = (string) ($_SERVER['QUERY_STRING'] ?? '');
+    if (preg_match('/^([A-Za-z0-9._~-]{1,60})(?:&.*)?$/Ds', $qs, $m) !== 1 || in_array($m[1], reserved_query_words(), true)) return;   // (the word first, nothing like word=value; other parameters a chat app added are ignored)
+    unset($_GET[str_replace(['.', ' '], '_', $m[1])]);
+    $_GET['link'] = $m[1];
+}
+bare_query_as_address();
 
 if (gallery_is_closed()) {
     $route = request_route();
@@ -509,6 +530,12 @@ if (gallery_is_closed()) {
         render_link_invalid_page();
         exit;
     }
+}
+
+// A code (k=...) that opens nothing is a wrong guess whether or not the path it came with exists, counted once per request when it ends: otherwise who
+// gets paused would tell a Not listed photo that is there from one that is not.
+if (isset($_GET['k']) && is_string($_GET['k']) && in_array(request_route(), ['', 'img', 'original', 'track', 'strip'], true)) {
+    register_shutdown_function(function () use ($dir) { if (empty($GLOBALS['__photo_pass_ok']) && !photo_code_is_right_for_request($dir)) link_guess_failed($dir, (string) $_GET['k']); });
 }
 
 // ?original=<file> hands a signed-in visitor (the owner, or someone with the private-view password) the original file

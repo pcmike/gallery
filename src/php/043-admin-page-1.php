@@ -24,6 +24,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $GLOBALS['__lock_probe']['anyPrivate'] = !empty($adminHidden['folders']) || !empty($adminHidden['items']);   // (the lock check only worries once something is private)
     $GLOBALS['__admin_files'] = $files;
     $itemsHere = items_read($adminFolderReal);
+    $adminCollection = $adminFolderPath !== null && AUTO_GROUP_BY_FOLDER ? collection_at($dir, $adminFolderPath, $files) : null;   // (a collection has a settings page of its own, and no folder on disk)
     // What the gallery already knows from this folder's files (nothing is read here: see the media records), for the warning beside the
     // location switch and the line under it.
     $adminSummary = media_folder_summary($dir, $adminFolderReal, $adminFiles);
@@ -56,7 +57,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   try { if (/[?&]classic=1/.test(location.search)) document.cookie = 'galleryClassic=1; path=/; max-age=31536000; SameSite=Lax'; if (document.cookie.indexOf('galleryClassic=1') >= 0) return; } catch (e) {}
   if (window.matchMedia && window.matchMedia('(min-width: 801px)').matches) {
     var h = (location.hash || '').slice(1);
-    location.replace(location.search.replace(/[?&]classic=1/, '') + '&shell=1' + (/^(settings|notes|features|hidden|links|site)$/.test(h) ? '&tab=' + h : ''));
+    location.replace(location.search.replace(/[?&]classic=1/, '') + '&shell=1' + (/^(settings|notes|features|hidden|links|collections|site)$/.test(h) ? '&tab=' + h : ''));
   }
 })();</script>
 <?php endif; ?>

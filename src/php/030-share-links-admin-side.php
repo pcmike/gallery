@@ -90,11 +90,14 @@ function link_input_from_post($now, $existing, $dir, $files) {
     // What it covers, and where it opens. Folders come as paths; each is checked against the folders that really exist, and
     // stamped with its hidden id (a folder that can't be written to can't be remembered, so it is refused).
     $validFolders = array_fill_keys(all_folder_paths($files), true);
+    $collectionIds = [];   // a collection can be picked like a folder: the link remembers it by the collection's own id
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) { $validFolders[$cPath] = true; $collectionIds[$cPath] = $cRec['id']; }
     $validFiles = array_fill_keys($files, true);
     $index = [];   // id => path, for the links file's list of where folders were last seen
     $list = function ($key) { $v = json_decode((string) ($_POST[$key] ?? '[]'), true); return is_array($v) ? array_slice(array_values(array_unique(array_filter($v, 'is_string'))), 0, 60) : []; };
-    $stamp = function ($rel) use ($dir, $validFolders, &$errors, &$index) {
+    $stamp = function ($rel) use ($dir, $validFolders, $collectionIds, &$errors, &$index) {
         if (!isset($validFolders[$rel])) { $errors[] = 'One of the folders you chose isn\'t in the gallery any more.'; return null; }
+        if (isset($collectionIds[$rel])) { $index[$collectionIds[$rel]] = $rel; return $collectionIds[$rel]; }
         $id = folder_id_stamp(resolve_real_path($dir, $rel));
         if ($id === '') { $errors[] = 'A link can\'t be limited to "' . link_clip($rel, 60) . '": the web server can\'t write in that folder, and a link remembers a folder by a small id kept in it.'; return null; }
         $index[$id] = $rel;
@@ -219,32 +222,11 @@ function links_admin_action($action, $dir, $files) {
     $bad = function ($text) { admin_json_exit(['ok' => false, 'text' => $text]); };
     if (!ENABLE_SHARE_LINKS) $bad('Share links are switched off in Settings.');
     $id = (string) ($_POST['id'] ?? '');
-    if ($action !== 'link_create' && $action !== 'link_seen' && !($action === 'link_trim' && $id === 'all') && !preg_match('/^[0-9a-f]{10}$/', $id)) $bad('Unknown link.');
+    if ($action !== 'link_create' && $action !== 'link_seen' && !preg_match('/^[0-9a-f]{10}$/', $id)) $bad('Unknown link.');
     $wrote = function () use ($bad) {
         if (!empty($GLOBALS['__data_write_failed'])) $bad(data_write_failure_text('the gallery\'s folder'));
     };
-    if ($id === PUBLIC_LOG_ID && !in_array($action, ['link_trim', 'link_delete'], true)) $bad('That is the log of the public address, not a link: it can only be trimmed or deleted. Turn the logging on or off in Settings.');
-    if ($action === 'link_trim') {   // Trim the log: what is older than a number of days or a date goes from one link's log or from all of them; apply=1 does it, otherwise it only counts
-        $before = (int) ($_POST['before'] ?? 0); $days = (int) ($_POST['days'] ?? 0);
-        $cutoff = $before > 0 ? $before : $now - $days * 86400;
-        if (($before <= 0 && $days <= 0) || $cutoff > $now) $bad('Pick how old a line has to be to go: a number of days, or a date in the past.');
-        $ids = $id === 'all' ? array_keys((array) links_read()['links']) : [$id];
-        if ($id !== 'all' && !isset(links_read()['links'][$id])) $bad('That link no longer exists.');
-        $apply = ($_POST['apply'] ?? '') === '1';
-        $tot = ['events' => 0, 'visitors' => 0, 'blocked' => 0, 'items' => 0, 'folders' => 0]; $linksHit = 0;
-        foreach ($ids as $lid) {
-            if (!preg_match('/^[0-9a-f]{10}$/', (string) $lid)) continue;
-            $c = link_log_trim($lid, $cutoff, $apply);
-            if (array_sum($c) > 0) $linksHit++;
-            foreach ($c as $k => $v) $tot[$k] += $v;
-        }
-        if ($apply) $wrote();
-        $lines = $tot['events'] + $tot['items'] + $tot['folders'] + $tot['blocked'];
-        $what = number_format($tot['events']) . ' line' . ($tot['events'] === 1 ? '' : 's') . ' of the timeline, ' . number_format($tot['visitors']) . ' visitor' . ($tot['visitors'] === 1 ? '' : 's') . ' and ' . number_format($tot['items'] + $tot['folders']) . ' record' . ($tot['items'] + $tot['folders'] === 1 ? '' : 's') . ' of what was looked at' . ($tot['blocked'] ? ', and ' . number_format($tot['blocked']) . ' turned-away ' . ($tot['blocked'] === 1 ? 'try' : 'tries') : '');
-        $none = $lines + $tot['visitors'] === 0;
-        admin_json_exit(['ok' => true, 'applied' => $apply, 'counts' => $tot, 'links' => $linksHit, 'nothing' => $none,
-            'text' => $none ? 'Nothing is that old: there is nothing to trim.' : ($apply ? 'Trimmed: ' : 'This would remove ') . $what . ', from ' . $linksHit . ' link' . ($linksHit === 1 ? '' : 's') . '.' . ($apply ? '' : ' Opens, views and the total number of visitors stay.')]);
-    }
+    if ($id === PUBLIC_LOG_ID) $bad('That is not a link.');
     if ($action === 'link_seen') {   // the owner has looked at the tab: what happened before now is no longer "new"
         links_update(function (&$d) use ($now) { $d['seenAt'] = $now; });
         admin_json_exit(['ok' => true, 'text' => '']);
@@ -417,11 +399,6 @@ function links_admin_action($action, $dir, $files) {
     $wrote();
     if ($action === 'link_delete') link_delete_log($id);
     admin_json_exit(['ok' => true, 'id' => $id, 'text' => $text]);
-}
-
-/** A link's log goes only when the link itself is deleted (revoking, pausing and expiring keep it). */
-function link_delete_log($id) {
-    foreach (glob(__DIR__ . '/.gallery-linklog-' . $id . '*') ?: [] as $f) @unlink($f);
 }
 
 /** The server rules that make https://example.com/<gallery>/<token> reach the script, written for this install's own address. */

@@ -122,6 +122,14 @@ function json_file_replace($path, $encoded, $fp) {
     return $wrote;
 }
 
+/** How a failed save names a folder: "this folder", or, for a place from elsewhere on the server, its real path (the owner may not know where
+ *  that is, and it is the folder that has to be made writable). */
+function data_write_failure_place($dir, $folderReal) {
+    $own = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
+    $real = rtrim((string) (realpath((string) $folderReal) ?: $folderReal), '/');
+    return ($real !== '' && strpos($real . '/', $own) !== 0) ? 'the folder ' . $real : 'this folder';
+}
+
 /** What to tell the owner when a save did not happen: the data file that could not be read (nothing was changed), or the folder not
  *  being writable. $folder is how the sentence says where ("this folder"). */
 function data_write_failure_text($folder = 'this folder') {

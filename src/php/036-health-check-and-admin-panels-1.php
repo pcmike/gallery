@@ -46,15 +46,15 @@ function render_admin_health_panel() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $rows = health_checks($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
     $notes = array_merge(update_headsups(), health_headsups($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []));
-    $loud = 0;
-    foreach ($rows as $r) if ($r[1] === 'bad' || $r[1] === 'warn') $loud++;
+    $loud = 0; $asideN = 0;
+    foreach ($rows as $r) { if ($r[1] === 'bad' || $r[1] === 'warn') $loud++; elseif ($r[1] === 'aside') $asideN++; }
     $mark = ['ok' => 'check', 'warn' => 'warn', 'bad' => 'warn'];
     $groups = [];
     foreach ($rows as $r) $groups[$r[0]][] = $r;
 ?>
     <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel" data-csrf="<?= $esc(admin_csrf_token()) ?>"<?= update_check_due() ? ' data-update-due="1"' : '' ?>>
       <h2 class="section-title">Health check</h2>
-      <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong>
+      <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?>
         <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary health-refresh" onclick="location.reload()" title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></p>
       <p class="muted health-intro" style="margin-top:0;">This only looks; it never changes your gallery (it just notes the running version and, once a day, looks for a new one).</p>
       <?php if ($notes): ?>
@@ -76,7 +76,7 @@ function render_admin_health_panel() {
       <?php endforeach; ?>
       <div class="health-group all-quiet" data-health-group="web">
         <h3 class="subhead">Web server (tested by your browser, just now)</h3>
-        <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : []) as [$key, $label]): ?>
+        <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
             <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">Open Settings &rarr; Server setup</a><?php endif; ?></div>
@@ -85,16 +85,6 @@ function render_admin_health_panel() {
       </div>
     </section>
 <?php
-}
-
-/** The public folders a visitor could be allowed to download from, for the Settings picker: [{path, label}], in the gallery's order. */
-function public_download_folder_options($dir, $files) {
-    $out = [];
-    foreach (all_folder_paths($files) as $rel) {
-        if ($rel === '' || folder_is_private($dir, $rel)) continue;
-        $out[] = ['path' => $rel, 'label' => link_folder_label($dir, $rel)];
-    }
-    return $out;
 }
 
 /** The Prepare media panel: makes every photo's tile pictures and records what each file says about itself (when taken, where), for the
@@ -120,6 +110,17 @@ function render_admin_thumbnails_panel($csrfToken) {
         <summary>What the gallery knows about each folder</summary>
         <div class="media-report" aria-live="polite"><p class="muted">Loading&hellip;</p></div>
       </details>
+      <div class="media-moved" hidden>
+        <h3 class="subhead">Moved in from another gallery</h3>
+        <details class="media-leftover-box" hidden>
+          <summary>Tidy leftover thumbnails <span class="muted media-leftover-sum"></span></summary>
+          <p class="hint">Thumbnails and video pictures an old gallery left in these folders. <strong>Photos, captions, links, private flags and the read-once file data are never touched</strong>: only files named exactly like a made thumbnail or poster go.</p>
+          <p class="hint media-leftover-list"></p>
+          <p><label class="check"><input type="checkbox" class="media-leftover-ok"> No other gallery still shows these folders (the old one is retired)</label></p>
+          <p><button type="button" class="secondary media-leftover-go" disabled>Remove the leftover thumbnails</button> <span class="media-leftover-out" aria-live="polite"></span></p>
+        </details>
+      </div>
+      <h3 class="subhead media-tidy-head"<?= $tidyAny || $backups ? '' : ' hidden' ?>>Tidy up</h3>
       <details class="media-tidy-box"<?= $tidyAny ? '' : ' hidden' ?>>
         <summary>Tidy up saved locations</summary>
         <p class="hint">Older versions copied each photo's location into the folder's data; now the files are read once into the cache, so the copies can go. <strong>Captions, links, private flags, covers and each photo's Location switch are never touched</strong>, and each folder that changes is copied first (<code>.gallery-items.before-tidy-&hellip;.php</code>). Run <em>Prepare the rest</em> first. The first button only shows what would change.</p>
@@ -314,7 +315,7 @@ function render_admin_features_panel($adminEdited, $adminHidden) {
     $root = gallery_root_href();
     $chip = function ($kind, $text) use ($e) { return '<span class="ft-chip ft-' . $kind . '">' . $e($text) . '</span>'; };
     $goSetting = function ($label, $id) use ($e) { return '<button type="button" class="secondary" onclick="return adminGoTo(\'site\', \'' . $e($id) . '\');">' . $e($label) . '</button>'; };
-    $row = function ($name, $chipHtml, $text, $btnHtml) use ($e) { return '<div class="ft-row"><div class="ft-main"><div class="ft-name">' . $e($name) . ' ' . $chipHtml . '</div><div class="ft-text">' . $e($text) . '</div></div><div class="ft-act">' . $btnHtml . '</div></div>'; };
+    $row = function ($name, $chipHtml, $text, $btnHtml, $attr = '') use ($e) { return '<div class="ft-row"' . $attr . '><div class="ft-main"><div class="ft-name">' . $e($name) . ' ' . $chipHtml . '</div><div class="ft-text">' . $e($text) . '</div></div><div class="ft-act">' . $btnHtml . '</div></div>'; };
     $onOff = function ($on) use ($chip) { return $on ? $chip('on', 'On') : $chip('off', 'Off'); };
     $private = count($adminHidden['folders'] ?? []) + count($adminHidden['items'] ?? []);
     $inactive = array_values(array_filter(scan_md_candidates($dir), function ($f) use ($dir) { return !in_array($f, scan_gallery_md_files($dir)['files'], true); }));
@@ -334,13 +335,13 @@ function render_admin_features_panel($adminEdited, $adminHidden) {
       <?php if (gallery_is_closed()): ?>
       <?= $row('Visitor downloads', $chip('opt', 'Per link'), 'The gallery is closed, so strangers see nothing to download. Each share link has its own choice of whether its visitors may download.', '<button type="button" class="secondary" onclick="return adminGoTo(\'links\');">Shares →</button>') ?>
       <?php else: ?>
-      <?= $row('Visitor downloads', PUBLIC_DOWNLOAD_MODE === 'off' ? $chip('off', 'Off') : $chip('on', 'On'), PUBLIC_DOWNLOAD_MODE === 'off' ? 'Visitors cannot download original photos.' : (PUBLIC_DOWNLOAD_MODE === 'all' ? 'Visitors can download every public photo (never a ZIP).' : 'Visitors can download from the folders you chose.'), $goSetting('Choose →', 'setting-PUBLIC_DOWNLOAD_MODE')) ?>
+      <?= $row('Visitor downloads', !ENABLE_PUBLIC_DOWNLOAD ? $chip('off', 'Off') : $chip('on', 'On'), !ENABLE_PUBLIC_DOWNLOAD ? 'Visitors cannot download original photos. Switch it on in a folder\'s settings.' : 'Visitors can download the photos in the folders you switched on (never a ZIP).', '<button type="button" class="secondary" onclick="return adminGoTo(\'settings\');">Folder settings →</button>') ?>
       <?php endif; ?>
       <?= $row('View counts and a visitor log', (TRACK_VIEWS || LOG_PUBLIC_VISITS) ? $chip('on', 'On') : $chip('off', 'Off'), (TRACK_VIEWS || LOG_PUBLIC_VISITS) ? 'Counting views' . (LOG_PUBLIC_VISITS ? ' and logging visitors to the public address.' : '.') : 'See how often photos are looked at, and by whom.', $goSetting((TRACK_VIEWS || LOG_PUBLIC_VISITS) ? 'Settings →' : 'Turn on →', 'setting-TRACK_VIEWS')) ?>
       <?= $row('Country lookup', $onOff(COUNTRY_LOOKUP), COUNTRY_LOOKUP ? (is_file(geo_db_path()) ? 'Saying which country each signed-in browser\'s addresses are in, from a file kept on this server.' : 'Switched on, but the country file is not here yet.') : 'Says which country a signed-in browser is used from, so a new country can be flagged. Downloads one small file.', $goSetting(COUNTRY_LOOKUP ? 'Settings →' : 'Turn on →', 'geo-row')) ?>
       <?= $row('Notes', $inactive ? $chip('need', 'Needs setup') : ($mdActive ? $chip('on', 'On') : $chip('off', 'Not used')), $inactive ? (count($inactive) === 1 ? $inactive[0] . ' is not active: it is missing {gallery}.' : count($inactive) . ' notes files are not active: they are missing {gallery}.') : ($mdActive ? 'A notes page is in use.' : 'A notes.md with {gallery} on its first line puts words around your photos.'), '<button type="button" class="secondary" onclick="return adminGoTo(\'notes\');">' . ($inactive ? 'Fix it →' : 'Notes →') . '</button>') ?>
       <?= $row('Thumbnails', $onOff(ENABLE_THUMBNAIL_CACHE), ENABLE_THUMBNAIL_CACHE ? 'Small copies make pages load fast; made as people look.' : 'Photos are sent at full size and iPhone (HEIC) photos cannot show.', $goSetting('Settings →', 'setting-ENABLE_THUMBNAIL_CACHE')) ?>
-      <?= $row('Short share addresses', $chip('opt', 'Optional'), 'Links look like …/?link=k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own.', $goSetting('Open the rule →', 'server-setup')) ?>
+      <?= $row('Short share addresses', $chip('opt', 'Optional'), 'Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own.', $goSetting('Open the rule →', 'server-setup'), ' data-ft-sharetidy data-ft-was="Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own."') ?>
       <h3 class="subhead">Things you do on the gallery itself</h3>
       <p class="muted ft-sub">These are not settings; they are buttons on the photos. "Show me" opens the gallery with that button pointed out.</p>
       <?php
@@ -433,6 +434,7 @@ function render_admin_site_settings($csrfToken) {
         <textarea readonly rows="12" style="width:100%; font-family:ui-monospace,monospace;" onfocus="this.select()"><?= $esc($GLOBALS['__site_settings_manual']) ?></textarea>
       <?php endif; ?>
       <p class="muted sitesync" hidden>Saved. Other tabs refresh when you leave this one.</p>
+      <div class="site-find" data-site-find-wrap hidden><input type="search" data-site-find placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false" enterkeyhint="search"><p class="muted site-find-count" data-site-find-count role="status" aria-live="polite" hidden></p></div>
       <form method="post" class="site-settings-form">
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_site_settings">
@@ -464,7 +466,17 @@ function render_admin_site_settings($csrfToken) {
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
                 <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Set "FFMPEG_PATH" in .gallery-config.php.' ?></div>
                 <?php endif; ?>
-                <?php if (($d['status'] ?? '') === 'closednote' && gallery_is_closed()): ?>
+                <?php if (($d['status'] ?? '') === 'earlierviews'): ?>
+                <div class="earlier-views" data-earlier data-csrf="<?= $esc($csrfToken) ?>" hidden>
+                  <p class="earlier-text"></p>
+                  <p class="earlier-act"><button type="button" class="secondary earlier-add">Add earlier views to the counts</button></p>
+                  <p class="hint earlier-hint">Adds each folder's once, in one press. The old numbers are not changed, and it can't be undone.</p>
+                </div>
+                <?php endif; ?>
+                <?php if (($d['status'] ?? '') === 'visitlog' && !visitlog_check_quiet()[0]): ?>
+                <div class="help warn-text"><strong>Needs SQLite.</strong> <?= $esc(visitlog_check_quiet()[1]) ?></div>
+                <?php endif; ?>
+                <?php if (($d['status'] ?? '') === 'visitlog' && $name === 'LOG_PUBLIC_VISITS' && gallery_is_closed()): ?>
                 <div class="help">The gallery is closed, so nobody opens it without a link: nothing more is logged here while it stays closed.</div>
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'clientip'): ?>
@@ -472,16 +484,6 @@ function render_admin_site_settings($csrfToken) {
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
                 <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
-                <?php endif; ?>
-                <?php if (($d['status'] ?? '') === 'dlfolders'): ?>
-                <div class="dl-folders" data-dlfolders data-options="<?= $esc(json_encode(public_download_folder_options($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []), JSON_HEX_TAG | JSON_HEX_AMP)) ?>" data-chosen="<?= $esc(json_encode(PUBLIC_DOWNLOAD_FOLDERS, JSON_HEX_TAG | JSON_HEX_AMP)) ?>"<?= PUBLIC_DOWNLOAD_MODE === 'some' ? '' : ' hidden' ?>>
-                  <div class="menu dl-menu" data-menu>
-                    <button type="button" class="menu-btn dl-btn" aria-haspopup="listbox" aria-expanded="false"><span class="menu-label">Choose folders&hellip;</span><svg class="menu-chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="#aab2ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-                    <div class="menu-pop dl-pop" role="listbox" aria-label="Folders visitors may download from" hidden></div>
-                  </div>
-                  <div class="help dl-none" hidden>No folders chosen yet, so for now nobody can download.</div>
-                  <div class="help">Each folder includes everything inside it. Only public folders are listed: a private folder is never visible to visitors, so it can't be downloaded from.</div>
-                </div>
                 <?php endif; ?>
                 <?php if (isset($effects[$name])): ?>
                 <?php foreach (['off', 'on'] as $st): if ($effects[$name][$st] === '') continue; ?>
@@ -495,7 +497,7 @@ function render_admin_site_settings($csrfToken) {
               <div class="ctl">
                 <?php if ($d['type'] === 'bool'): ?>
                   <input type="hidden" name="set_<?= $esc($name) ?>" value="0">
-                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
+                  <label class="switch"><input type="checkbox" name="set_<?= $esc($name) ?>" value="1" <?= $now ? 'checked' : '' ?><?= ($name === 'LOG_PUBLIC_VISITS' && !$now && !visitlog_check_quiet()[0]) ? ' disabled' : '' ?> data-initial="<?= $now ? '1' : '0' ?>" data-label="<?= $esc($d['label']) ?>"<?php if (!empty($d['offwarn'])): ?> data-offwarn="<?= $esc($d['offwarn']) ?>"<?php endif; ?>><span class="slider"></span></label>
                 <?php elseif ($d['type'] === 'sortfirst'): $sfNames = sort_priority_names(); $sfOrder = sort_priority_list(); $sfOn = []; foreach ($sfNames as $k => $nm) $sfOn[$k] = (bool) constant($nm[2]); $sfOrder = array_merge(array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return $sfOn[$k]; })), array_values(array_filter($sfOrder, function ($k) use ($sfOn) { return !$sfOn[$k]; }))); ?>
                   <div class="sortfirst" data-name="set_<?= $esc($name) ?>" data-order="<?= $esc(implode(',', $sfOrder)) ?>">
                     <ol class="sf-list">

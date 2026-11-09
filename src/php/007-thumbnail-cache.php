@@ -12,6 +12,28 @@ function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
     return $cacheDir . '/' . cache_name($filename, $variant, $mtime) . '.jpg';
 }
 
+/** What a folder's .gallery-cache holds for its files, by name: [the names this gallery would make or read now (including capture dates
+ *  and the file data), the names an unkeyed older version used => the keyed name they become]. $folderFiles are paths as the gallery
+ *  knows them (relative to $dir). Shared by the clean-up (anything else is removed) and by the list of leftovers (see moved_in_leftovers). */
+function image_cache_expected_names($dir, $folderFiles, $imagickAvailable) {
+    $valid = []; $renamed = [];
+    foreach ($folderFiles as $file) {
+        $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+        $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
+        $variants = $isHeic ? ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'tile', 'tilehd', 'share', 'cover', 'coverlg'];
+        if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
+        $mtime = @filemtime(resolve_real_path($dir, $file));
+        $valid['taken3.json'] = true;   // the capture dates found for sorting (see media_taken_times)
+        $valid[MEDIA_META_FILE] = true;   // what was read from the files: when taken, where (see media_meta_ensure)
+        if (is_video_file($file)) { $valid[cache_name($file, 'preview2', $mtime) . '.mp4'] = true; $renamed[md5($file . '|preview2|' . $mtime) . '.mp4'] = cache_name($file, 'preview2', $mtime) . '.mp4'; }   // and its short clip (see video_preview_path)
+        foreach ($variants as $variant) {
+            $valid[cache_name($file, $variant, $mtime) . '.jpg'] = true;
+            $renamed[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = cache_name($file, $variant, $mtime) . '.jpg';
+        }
+    }
+    return [$valid, $renamed];
+}
+
 /**
  * Deletes cached thumbnails that no longer correspond to any current
  * photo. A cache entry is keyed by filename+variant+mtime (see
@@ -42,21 +64,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
         // A place from elsewhere on the server may also be shown by another gallery (an older copy still running there): its
         // thumbnails are named with that gallery's own key, so to this one they look like leftovers. Nothing is swept there.
         if (strpos(rtrim((string) (realpath($folderPath) ?: $folderPath), '/') . '/', $ownRoot) !== 0) continue;
-        $valid = []; $renamed = [];
-        foreach ($folderFiles as $file) {
-            $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-            $isHeic = in_array($ext, ['heic', 'heif'], true) && $imagickAvailable;
-            $variants = $isHeic ? ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'tile', 'tilehd', 'share', 'cover', 'coverlg'];
-            if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
-            $mtime = @filemtime(resolve_real_path($dir, $file));
-            $valid['taken3.json'] = true;   // the capture dates found for sorting (see media_taken_times)
-            $valid[MEDIA_META_FILE] = true;   // what was read from the files: when taken, where (see media_meta_ensure)
-            if (is_video_file($file)) { $valid[cache_name($file, 'preview2', $mtime) . '.mp4'] = true; $renamed[md5($file . '|preview2|' . $mtime) . '.mp4'] = cache_name($file, 'preview2', $mtime) . '.mp4'; }   // and its short clip (see video_preview_path)
-            foreach ($variants as $variant) {
-                $valid[cache_name($file, $variant, $mtime) . '.jpg'] = true;
-                $renamed[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = cache_name($file, $variant, $mtime) . '.jpg';
-            }
-        }
+        [$valid, $renamed] = image_cache_expected_names($dir, $folderFiles, $imagickAvailable);
         foreach (scandir($cacheDir) as $entry) {
             if ($entry === '.' || $entry === '..') continue;
             // LEGACY (see docs/LEGACY-REMOVAL.md): before 2.4.0 the names were an unkeyed md5; a made file under the old name is moved to the new one, not made again.

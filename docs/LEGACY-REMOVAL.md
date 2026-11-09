@@ -50,3 +50,5 @@ By searching `index.php` for `gpsChecked`, `warm_thumbnails`, `login_password`, 
 
 ## Folder style words (2.5.0)
 - [ ] `FOLDER_DISPLAY_MODE` values `cards` and `inline` (now `overview` and `flat`, with `inline` meaning Flat with `FOLDER_FLAT_NAMES` on): the allowed list in `001-settings-and-config.php`, the `FOLDER_FLAT_NAMES` default that follows `inline`, `folder_style_flat()`, and the line in the settings page that shows an older value as today's two choices (`036`, search `older words show as today's two choices`).
+
+- **Older visitor logs (2.6.5).** `visitlog_old_leftovers()` and `visitlog_old_leftovers_remove()` (src/php/035), the Health row "Older visitor logs are still on disk" with its **Remove them** button (`data-oldlogs-remove`, `health_remove_old_logs` in 027) and the `oldlogs` kind in `owned_kind_of_name` (032) exist only for installs that ran a version before 2.6.5 (JSON logs in `.gallery-linklog-*.php` and the public address's stand-in record in `.gallery-links.php`). Delete them, and the `.gallery-linklog-*` names in the Files list, once no install still has those files.

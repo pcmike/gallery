@@ -8,12 +8,17 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
     $rootFid = folder_id_read($dir);
     $seenAt = (int) ($data['seenAt'] ?? 0);
     $folderOpts = [];
-    foreach (folder_tree_rows($dir, all_folder_paths($files)) as $r) $folderOpts[] = ['p' => $r['p'], 'l' => link_folder_label($dir, $r['p']), 'n' => $r['n'], 'd' => $r['d'], 'x' => folder_is_private($dir, $r['p'])];
+    $panelColls = AUTO_GROUP_BY_FOLDER && collections_any() ? collections_registry($dir, $files)['byParent'] : [];   // (a collection is offered like a folder, in italics, among the folders it lives beside)
+    $addColls = function ($parent, $depth) use (&$folderOpts, $panelColls, $dir) {
+        foreach ($panelColls[$parent] ?? [] as $cr) $folderOpts[] = ['p' => $cr['path'], 'l' => link_folder_label($dir, $cr['path']), 'n' => $cr['title'] !== '' ? $cr['title'] : $cr['name'], 'd' => $depth, 'x' => $cr['private'], 'u' => false, 'c' => true];
+    };
+    $addColls('', 0);
+    foreach (folder_tree_rows($dir, all_folder_paths($files)) as $r) { $folderOpts[] = ['p' => $r['p'], 'l' => link_folder_label($dir, $r['p']), 'n' => $r['n'], 'd' => $r['d'], 'x' => folder_is_private($dir, $r['p']), 'u' => folder_is_unlisted($dir, $r['p'])]; $addColls($r['p'], $r['d'] + 1); }
     $privNow = admin_hidden_data($dir, $files);   // (what is private right now: the form says "opens private photos" only when the link would)
-    $current = []; $ended = []; $problemLinks = 0; $pubRec = null;
+    $current = []; $ended = []; $problemLinks = 0;
     foreach ($data['links'] as $l) {
         if (!is_array($l) || !isset($l['id'], $l['token'])) continue;
-        if (link_is_public_log($l)) { $pubRec = $l; continue; }   // (shown by itself, above the links)
+        if (link_is_public_log($l)) continue;   // (an older version's stand-in record for the public address: Tidy up removes it)
         $s = link_state($l, $now);
         $report = link_scope_report($l, $map, $index, $dir, $rootFid);
         if ($report['problems'] > 0 && $s !== 'revoked') $problemLinks++;
@@ -84,13 +89,8 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
             </dl>
             </details>
             <?php endif; ?>
-            <div class="sl-act" data-act="link"><p class="muted sl-none">Loading…</p></div>
             <div class="sl-acts">
-              <details class="sl-export"><summary class="secondary">Export log ▾</summary><div class="sl-menu">
-                <a href="?admin&amp;linkexport=<?= $esc($l['id']) ?>&amp;what=visitors">Visitors<small>One line per IP: opens, first and last seen</small></a>
-                <a href="?admin&amp;linkexport=<?= $esc($l['id']) ?>&amp;what=items">What they looked at<small>One line per item: seen, opened, played, downloaded</small></a>
-                <a href="?admin&amp;linkexport=<?= $esc($l['id']) ?>&amp;what=events">Everything, in order<small>The timeline, one line per happening</small></a>
-                <span class="sl-menu-note">Includes IP addresses. Opens in your downloads. <button type="button" class="linklike" data-sl="trim" data-trim-link="<?= $esc($l['id']) ?>">Trim this link's log&hellip;</button></span></div></details>
+              <?php if (visits_tab_wanted()): ?><button type="button" class="linklike" data-sl="visitors">See visitors &rarr;</button><?php endif; ?>
               <?php if ($state !== 'revoked'): ?><button type="button" class="linklike" data-sl="preview" title="Opens a new tab that shows the gallery exactly as this link does">Preview as this link</button><?php endif; ?>
               <?php if (in_array($state, ['active', 'scheduled'], true) && ($l['status'] ?? '') === 'active'): ?><button type="button" class="linklike" data-sl="pause">Pause</button><?php endif; ?>
               <?php if ($state === 'paused'): ?><button type="button" class="linklike" data-sl="resume">Resume</button><?php endif; ?>
@@ -106,6 +106,9 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
 ?>
     <section class="panel sl" id="sl-root" data-csrf="<?= $esc($csrfToken) ?>" data-probe="<?= $esc($loc . LINK_PROBE_TOKEN) ?>" data-nofolders="<?= AUTO_GROUP_BY_FOLDER ? '' : '1' ?>" data-default-uses="<?= (int) DEFAULT_LINK_USES ?>">
       <h2 class="section-title">Shares</h2>
+      <?php if (($proxyHint = client_ip_proxy_hint()) !== ''): ?>
+        <div class="sl-warn"><?= ui_icon('warn') ?><div><strong>Visitors may all look like one address.</strong> <?= $esc($proxyHint) ?> Until then, a few wrong addresses tried by one person would pause everyone, because they are all counted together. It is the proxy setting in Settings (<em>Where visitors' IP addresses come from</em>).</div></div>
+      <?php endif; ?>
       <?php if (!ENABLE_SHARE_LINKS): ?>
         <div class="sl-off">Share links are switched off, so none of these work. Turn on <a href="#site" onclick="return adminGoTo('site', 'setting-ENABLE_SHARE_LINKS');"><em>Allow share links</em> in Settings</a>.</div>
       <?php endif; ?>
@@ -117,12 +120,9 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       <?php endif; ?>
       <div class="sl-head">
         <div class="sl-count muted"><?= count($current) ?> not ended &middot; <?= count($ended) ?> ended</div>
-        <div class="sl-segbar sl-viewswitch" role="group" aria-label="What to list"><button type="button" class="sl-segbtn on" data-view="links">Links</button><button type="button" class="sl-segbtn" data-view="ips">IP addresses</button></div>
         <button type="button" class="sl-sel-btn" data-sl="select" aria-pressed="false" title="Select links to act on several at once" aria-label="Select links to act on several at once"><?= ui_icon('select') ?></button>
         <button type="button" class="sl-new-btn" data-sl="new">+ New link</button>
       </div>
-      <div id="sl-ips-view" class="sl-ipsview" hidden><div class="sl-act" data-act="ips"><p class="muted sl-none">Loading…</p></div>
-        <p class="note"><a href="?admin&amp;linkexport=all&amp;what=items" class="linklike">Export everything as CSV</a> (what each address looked at, for every link) &middot; <button type="button" class="linklike" data-sl="trim">Trim the log&hellip;</button></p></div>
       <form class="sl-form" id="sl-form" hidden data-folders="<?= $esc(json_encode($folderOpts, JSON_HEX_TAG | JSON_HEX_AMP)) ?>" data-private="<?= $esc(json_encode(['f' => $privNow['folders'], 'i' => $privNow['items'], 's' => $privNow['shown']], JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
         <div class="sl-form-head"><h3 class="sl-form-title">New share link</h3><button type="button" class="linklike sl-resetall" data-sl="resetall" hidden></button></div>
         <input type="hidden" name="id" value="">
@@ -212,42 +212,8 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       <?php if (!$current && !$ended): ?>
         <p class="muted sl-none">No links yet. Press <strong>New link</strong> to make one.</p>
       <?php endif; ?>
-      <?php if (ENABLE_SHARE_LINKS && ($pubRec !== null || (LOG_PUBLIC_VISITS && !gallery_is_closed()))): ?>   <?php // (shown when there is a log to look at, or logging is on and the gallery is open: a closed gallery with nothing logged has nothing to say here) ?>
-      <div class="sl-grp">The public address <span class="sl-grp-note">&middot; everyone who opens the gallery without a link</span></div>
-      <?php if ($pubRec === null): ?>
-        <p class="muted sl-none"><?= gallery_is_closed() ? '<strong>Closed.</strong> Nobody can open the gallery without a link or a sign-in, so nothing is logged here.' : 'Logging is on. Nobody has been logged yet.' ?></p>
-      <?php else: [$logP] = link_activity(PUBLIC_LOG_ID); $pubNew = link_news_count($logP, $seenAt); $pubVisits = array_sum(array_column($logP['visitors'], 'opens')); $pubViews = array_sum(array_column($logP['visitors'], 'views')); $pubIps = count(array_unique(array_column($logP['visitors'], 'ip'))); ?>
-        <details class="sl-row sl-public" data-id="<?= $esc(PUBLIC_LOG_ID) ?>" data-state="<?= LOG_PUBLIC_VISITS ? 'active' : 'paused' ?>" data-link="<?= $esc(json_encode(['id' => PUBLIC_LOG_ID, 'label' => 'Public address'], JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
-          <summary>
-            <span class="sl-pill <?= LOG_PUBLIC_VISITS && !gallery_is_closed() ? 'active' : 'paused' ?>"><?= gallery_is_closed() ? 'Closed' : (LOG_PUBLIC_VISITS ? 'Logging' : 'Logging is off') ?></span>
-            <span class="sl-nm"><span class="sl-name">Public address</span> <?php if ($pubNew > 0): ?><span class="sl-newt"><?= (int) $pubNew ?> new since you last looked</span> <?php endif; ?>
-              <span class="sl-sub"><b><?= number_format($pubVisits) ?></b> visit<?= $pubVisits === 1 ? '' : 's' ?> <span class="sl-dot">&middot;</span> <b><?= number_format($pubIps) ?></b> IP<?= $pubIps === 1 ? '' : 's' ?> <span class="sl-dot">&middot;</span> <?= number_format($pubViews) ?> view<?= $pubViews === 1 ? '' : 's' ?></span></span>
-            <span class="sl-chev"><?= ui_icon('chev-down') ?></span>
-          </summary>
-          <div class="sl-xp">
-            <details class="sl-settings"><summary>Settings</summary>
-            <dl class="sl-facts">
-              <?php if (gallery_is_closed()): ?><dt>Right now</dt><dd><strong>The gallery is closed:</strong> nobody opens it without a link or a sign-in, so nothing new is logged. The log so far stays.</dd><?php endif; ?>
-              <dt>Who is logged</dt><dd>Everyone who opens the gallery's plain address in a browser. Not you, not people signed in with the private-view password, not people using a share link (their link has its own log), and not link-preview bots.</dd>
-              <dt>Kept for</dt><dd><?= LOG_PUBLIC_DAYS > 0 ? (int) LOG_PUBLIC_DAYS . ' days, then removed by itself' : 'Until you trim it' ?></dd>
-              <dt>Turn it on or off</dt><dd><a href="#site" onclick="return adminGoTo('site', 'setting-LOG_PUBLIC_VISITS');">Settings &rarr; Share links &rarr; Log visitors to the public address</a></dd>
-            </dl>
-            </details>
-            <div class="sl-act" data-act="link"><p class="muted sl-none">Loading…</p></div>
-            <div class="sl-acts">
-              <details class="sl-export"><summary class="secondary">Export log ▾</summary><div class="sl-menu">
-                <a href="?admin&amp;linkexport=<?= $esc(PUBLIC_LOG_ID) ?>&amp;what=visitors">Visitors<small>One line per IP: visits, first and last seen</small></a>
-                <a href="?admin&amp;linkexport=<?= $esc(PUBLIC_LOG_ID) ?>&amp;what=items">What they looked at<small>One line per item: seen, opened, played</small></a>
-                <a href="?admin&amp;linkexport=<?= $esc(PUBLIC_LOG_ID) ?>&amp;what=events">Everything, in order<small>The timeline, one line per happening</small></a>
-                <span class="sl-menu-note">Includes IP addresses. Opens in your downloads. <button type="button" class="linklike" data-sl="trim" data-trim-link="<?= $esc(PUBLIC_LOG_ID) ?>">Trim this log&hellip;</button></span></div></details>
-              <button type="button" class="linklike sl-danger" data-sl="delete">Delete the log…</button>
-            </div>
-          </div>
-        </details>
-      <?php endif; ?>
-      <?php endif; ?>
       <?php if ($current): ?><div class="sl-grp">Current</div><?php foreach ($current as [$l, $s, $r]) echo $row($l, $s, $r, false); ?><?php endif; ?>
-      <?php if ($ended): ?><div class="sl-grp">Ended <span class="sl-grp-note">&middot; the log is kept until you delete the link</span></div><?php foreach ($ended as [$l, $s, $r]) echo $row($l, $s, $r, true); ?><?php endif; ?>
+      <?php if ($ended): ?><div class="sl-grp">Ended <span class="sl-grp-note">&middot; its visitors stay in the log until you delete the link</span></div><?php foreach ($ended as [$l, $s, $r]) echo $row($l, $s, $r, true); ?><?php endif; ?>
       </div>
       <div class="admin-modal" id="sl-modal" role="dialog" aria-modal="true" aria-labelledby="sl-modal-title" hidden>
         <div class="admin-modal-card">

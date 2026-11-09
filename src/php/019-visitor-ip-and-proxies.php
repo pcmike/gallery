@@ -124,7 +124,7 @@ function links_default() { return ['links' => [], 'folderIndex' => [], 'seenAt' 
 function links_read() { return json_file_read(links_path(), links_default()); }
 function links_update($modifier) { return json_file_update(links_path(), links_default(), $modifier, true); }
 
-/** A random 16-character token of letters and digits (about 95 bits), with no modulo bias. */
+/** A random token of letters and digits, LINK_TOKEN_LENGTH long (8: about 48 bits; the lockout allows few guesses), with no modulo bias. */
 function link_new_token() {
     $alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
     $token = '';
@@ -216,34 +216,18 @@ function link_find_by_alias($data, $token) {
     return $found;
 }
 
-/** True for an address that looks like a name of the owner's own; a random code is 16 letters and digits with a capital among them. */
+/** True for an address that looks like a name of the owner's own; a random code is 8 letters and digits (16 before 2.6.5) with a capital among them. */
 function link_address_is_custom($name) {
     $name = (string) $name;
-    return !(preg_match('/^[A-Za-z0-9]{16}$/', $name) === 1 && preg_match('/[A-Z]/', $name) === 1);
+    return !(preg_match('/^(?:[A-Za-z0-9]{8}|[A-Za-z0-9]{16})$/', $name) === 1 && preg_match('/[A-Z]/', $name) === 1);
 }
 
-/** An address as it is shown in the log: a name of your own whole, a random code as its first four and last four characters. */
+/** An address as it is shown in the log: a name of your own whole, a random code as its first four and last four characters (the first two and last
+ *  two of an 8-character one, so the full address is never on the page). */
 function link_address_label($name, $custom) {
     $name = (string) $name;
-    return $custom || strlen($name) < 9 ? $name : substr($name, 0, 4) . '…' . substr($name, -4);
-}
-
-/** Does the Visitors list need to say which address each visitor came in on? Yes once a link has had a second one working. */
-function link_has_many_addresses($l, $log) {
-    return !link_is_public_log($l) && (!empty($l['aliases']) || !empty($log['via']));
-}
-
-/** How a visitor came in: the kept addresses they used; else, if they came after the link got a second address, the present one; else '' (before that, nobody noted it). */
-function link_visitor_via($l, $log, $vid, $v) {
-    $e = $log['via'][$vid] ?? null;
-    if (is_array($e) && !empty($e['n'])) {
-        $parts = [];
-        foreach (array_keys($e['n']) as $n) $parts[] = link_address_label($n, link_address_is_custom($n));
-        return implode(', ', $parts);
-    }
-    $since = (int) ($l['aliasSince'] ?? 0);
-    if ($since > 0 && (int) ($v['first'] ?? 0) > $since) return link_address_label($l['token'], !empty($l['custom']));
-    return '';
+    if ($custom || strlen($name) < 8) return $name;
+    return strlen($name) === 8 ? substr($name, 0, 2) . '…' . substr($name, -2) : substr($name, 0, 4) . '…' . substr($name, -4);
 }
 
 /** Counts one use of a kept address (how many times, and when last), so the owner can tell whether it can go. */
@@ -252,20 +236,6 @@ function link_alias_used($id, $name) {
         foreach ((array) ($d['links'][$id]['aliases'] ?? []) as $i => $a) {
             if (is_array($a) && ($a['name'] ?? '') === $name) { $d['links'][$id]['aliases'][$i]['hits'] = (int) ($a['hits'] ?? 0) + 1; $d['links'][$id]['aliases'][$i]['last'] = time(); }
         }
-    });
-}
-
-/** Notes in the link's log that this visitor used one of the link's old addresses: 'via' for a kept one (the visitor is sent on and opens the
- *  link on the present address, so this is the only place it shows), 'tried' for a paused one (they saw the "not valid" page). */
-function link_note_address($link, $kind, $name) {
-    [$vid, $ip] = link_visitor_identity();
-    $now = time();
-    link_log_update($link['id'], function (&$log) use ($kind, $vid, $ip, $name, $now) {
-        $all = (array) ($log[$kind] ?? []);
-        if (!isset($all[$vid]) && count($all) >= LINK_LOG_VISITORS) { uasort($all, function ($a, $b) { return (int) ($a['last'] ?? 0) <=> (int) ($b['last'] ?? 0); }); array_shift($all); }
-        $e = $all[$vid] ?? ['ip' => $ip, 'n' => [], 'last' => $now];
-        $e['n'][$name] = (int) ($e['n'][$name] ?? 0) + 1; $e['last'] = $now;
-        $all[$vid] = $e; $log[$kind] = $all;
     });
 }
 
@@ -308,9 +278,9 @@ function link_state($l, $now = null) {
 /** Someone already signed in through the link keeps access while it is active or only out of opens. */
 function link_is_live($l, $now = null) { return in_array(link_state($l, $now), ['active', 'used_up'], true); }
 
-/* The public address's log. It is kept as one more record in the links file (so the Shares tab's log pages, the list of IP addresses and the
- * CSV downloads need nothing special), with this fixed id, no address and the scope "just the public gallery". It is never a link
- * anyone can use: nothing looks it up by address or by cookie. */
+/* The public address's log. It is kept in the visitor log like a link's, under the fixed source id PUBLIC_LOG_ID. It is never a link
+ * anyone can use: nothing looks it up by address or by cookie. (Versions before 2.6.5 kept a stand-in record for it in the links file;
+ * Tidy up removes it.) */
 function link_is_public_log($l) { return is_array($l) && ($l['kind'] ?? '') === 'public'; }
 
 /** Is this visitor one the public address's log should record? Not the owner, nor the private-view password, nor someone using a share
@@ -318,7 +288,7 @@ function link_is_public_log($l) { return is_array($l) && ($l['kind'] ?? '') === 
 function public_log_wanted() {
     static $w = null;
     if ($w !== null) return $w;
-    return $w = ENABLE_SHARE_LINKS && LOG_PUBLIC_VISITS && link_viewer() === null && !is_revealed() && !is_admin_browser() && link_preview() === null && !is_bot_request();
+    return $w = LOG_PUBLIC_VISITS && visitlog_ready() && link_viewer() === null && !is_revealed() && !is_admin_browser() && link_preview() === null && !is_bot_request();
 }
 
 /** How this page was reached, for the public address's log: an arrival (an address typed or pasted, a bookmark, a link from another site or an app: the
@@ -335,18 +305,9 @@ function public_log_arrival() {
     return ['f' => $folder === null ? '' : $folder, 'h' => $how];
 }
 
-/** The log's record, made the first time something is logged. */
+/** The public address's records have no record of their own in the links file: this stands for them wherever a log is written (null while the public log is not wanted). */
 function public_log_link() {
-    $l = links_read()['links'][PUBLIC_LOG_ID] ?? null;
-    if (link_is_public_log($l)) return $l;
-    $made = null; $now = time();
-    links_update(function (&$d) use ($now, &$made) {
-        if (!isset($d['links'][PUBLIC_LOG_ID])) {
-            $d['links'][PUBLIC_LOG_ID] = array_replace(link_record_new($now), ['id' => PUBLIC_LOG_ID, 'label' => 'Public address', 'token' => '', 'kind' => 'public', 'scope' => ['type' => 'public', 'folders' => [], 'photos' => []]]);
-        }
-        $made = $d['links'][PUBLIC_LOG_ID];
-    });
-    return link_is_public_log($made) ? $made : null;
+    return ['id' => PUBLIC_LOG_ID, 'label' => 'Public', 'token' => '', 'kind' => 'public'];
 }
 
 function link_cookie_value($l) {

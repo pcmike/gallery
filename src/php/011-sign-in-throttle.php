@@ -63,18 +63,18 @@ function login_throttle_allows($rootDir, $realm, $ip) {
     return time() >= ($entry['lockUntil'] ?? 0);
 }
 
-/** Records one failed attempt; imposes a 60-second lockout once 5 have
+/** Records one failed attempt; imposes a 60-second lockout once $limit (5 for a password, more for a guessed address) have
  *  landed from the same IP within the last 15 minutes. */
-function login_throttle_record_failure($rootDir, $realm, $ip) {
+function login_throttle_record_failure($rootDir, $realm, $ip, $limit = 5) {
     $key = login_throttle_key($realm, $ip);
-    json_file_update(login_throttle_path($rootDir), [], function (&$data) use ($key) {
+    json_file_update(login_throttle_path($rootDir), [], function (&$data) use ($key, $limit) {
         $now = time();
         $entry = $data[$key] ?? ['attempts' => [], 'lockUntil' => 0];
         $entry['attempts'] = array_values(array_filter($entry['attempts'], function ($t) use ($now) {
             return $t > $now - 900; // keep only the last 15 minutes
         }));
         $entry['attempts'][] = $now;
-        if (count($entry['attempts']) >= 5) {
+        if (count($entry['attempts']) >= $limit) {
             $entry['lockUntil'] = $now + 60;
             $entry['attempts'] = [];
         }

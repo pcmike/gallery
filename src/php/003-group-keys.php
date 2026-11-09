@@ -51,11 +51,17 @@ function slugify($text) {
 // traversal attempt never matches anything the scan itself produced,
 // with or without that extra step. See serve_image() below for the same
 // reasoning applied to ?img=.
+// A Not listed photo's own address arrives as /photos/<8 letters and digits> or /photos/?<8 letters and digits>, which is ?link=<them> to the script: when it
+// is one, the request becomes that photo's page (?photo=<path>&k=<code>) here; when it is not, it goes on as a share link's address below.
+if (request_route() === 'link') photo_address_translate($dir, $files, $itemsData);
 $requestedPhoto = null;
 if (isset($_GET['photo'])) {
     $candidate = $_GET['photo'];
     if (in_array($candidate, $files, true) && viewer_may_see_item($dir, $candidate, $itemsData)) {
         $requestedPhoto = $candidate;
+    } elseif (request_route() === '') {
+        render_link_invalid_page();   // a photo that is not there (or not for this visitor) is not found, like any other wrong address; nothing says which
+        exit;
     }
 }
 // A Not listed photo opened by its own address (?photo=<path>&k=<code>): the page is that one photo and nothing else (see the filter in

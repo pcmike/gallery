@@ -2,6 +2,9 @@
     const loose = function () { return gal ? [].slice.call(gal.querySelectorAll(':scope > .card[data-file]')) : []; };
     const canArrange = !!arrRow && loose().length >= 2;   // photos shown one by one here, not only inside group boxes
     if (arrRow && !canArrange) arrRow.hidden = true;
+    // Collections: the page may be one (its Remove), and the owner may add the picked photos to one (a short list over the bar, with a way to make a new one).
+    const collBox = document.getElementById('select-coll'), collPage = collBox ? collBox.getAttribute('data-collection-page') : '';
+    let collList = []; try { collList = JSON.parse((collBox && collBox.getAttribute('data-list')) || '[]') || []; } catch (e) { collList = []; }
     const stackOf = {};
     stacks.forEach(function (list, i) { list.forEach(function (f) { stackOf[f] = i; }); });
     let on = false, press = null, drag = null, swallow = false, pointer = { x: 0, y: 0 }, scrollTimer = 0, busy = false;
@@ -34,13 +37,15 @@
       const canPrivate = !n || picked.some(function (f) { return ownOf(f) !== 'private'; });
       const canPublic = !n || picked.some(function (f) { return ownerState.inh[f] ? ownOf(f) !== 'public' : ownOf(f) === 'private'; });
       const canFolder = !n || picked.some(function (f) { return ownOf(f) !== ''; });
-      bar.querySelector('[data-select=private]').hidden = !canPrivate;
-      bar.querySelector('[data-select=public]').hidden = !canPublic;
+      bar.querySelector('[data-select=private]').hidden = !canPrivate || !!collPage;   // (on a collection's page the photos are from several folders, each with its own marks: only Share and Remove)
+      bar.querySelector('[data-select=public]').hidden = !canPublic || !!collPage;
+      const collBtn = bar.querySelector('[data-select=coll]'); if (collBtn) collBtn.disabled = !n || busy;
+      const collRm = bar.querySelector('[data-select=collrm]'); if (collRm) collRm.disabled = !n || busy;
       const shareBtn = bar.querySelector('[data-select=share]'); if (shareBtn) shareBtn.disabled = !n || busy;
       // In a private folder (the photos picked, or else the ones on the page) the bar offers the three states of the lock.
       const first = cards()[0], ctx = picked.length ? picked[0] : (first ? fileOf(first) : null), inPriv = !!(ctx && ownerState.inh[ctx]);
       bar.classList.toggle('in-private', inPriv);
-      bar.querySelector('[data-select=inherit]').hidden = !inPriv || !canFolder;
+      bar.querySelector('[data-select=inherit]').hidden = !inPriv || !canFolder || !!collPage;
       if (canArrange) {
         bar.querySelector('[data-select=release]').disabled = !picked.some(function (f) { return stackOf[f] !== undefined; });
         bar.querySelector('[data-select=reset]').disabled = !stacks.length;
@@ -109,7 +114,15 @@
       else if (what === 'public') bulk('public');
       else if (what === 'inherit') bulk('inherit');
       else if (what === 'share') { if (picked.length && window.GalleryShare) { const pf = picked.slice(); window.GalleryShare.quick({ kind: 'photos', files: pf, allPrivate: !!ownerState && pf.every(function (f) { return !!ownerState.priv[f]; }), anyPrivate: !ownerState || pf.some(function (f) { return !!ownerState.priv[f]; }) }); } }
-      else if (what === 'release') {
+      else if (what === 'coll') openCollPicker();
+      else if (what === 'collrm') {
+        if (!picked.length || busy) return;
+        const sel = picked.slice(); busy = true; paint();
+        request(pageFolder, { action: 'collection_member_remove_files', id: collPage, files: JSON.stringify(sel) }).then(function (j) {
+          say(j.text || 'Taken out of the collection.');
+          if (j.removed) { try { sessionStorage.setItem('gallery_select', JSON.stringify({ y: window.scrollY, keep: [] })); } catch (er) {} location.reload(); }
+        }).catch(fail).then(function () { busy = false; paint(); });
+      } else if (what === 'release') {
         const sel = picked.filter(function (f) { return stackOf[f] !== undefined; });
         send(folderOf(sel[0]), { mode: 'release', files: JSON.stringify(sel.map(bare)) }, picked.slice());
       } else if (what === 'reset') {
@@ -117,6 +130,35 @@
         if (confirm('Put every photo of this folder back in its sorted place?')) send(folder, { mode: 'reset' }, []);
       }
     });
+    function openCollPicker() {
+      if (!picked.length || busy) return;
+      const old = document.getElementById('coll-pop'); if (old) { old.remove(); return; }
+      const sel = picked.slice(), folder = folderOf(sel[0]), pop = document.createElement('div');
+      const esc = function (t) { return String(t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+      pop.id = 'coll-pop'; pop.className = 'coll-pop'; pop.setAttribute('role', 'dialog');
+      pop.innerHTML = '<h4>Add ' + sel.length + (sel.length === 1 ? ' photo' : ' photos') + ' to a collection</h4>'
+        + collList.map(function (c) { return '<button type="button" class="coll-opt" data-id="' + esc(c.id) + '"><span class="coll">' + esc(c.title) + '</span>' + (c.private ? ' <span class="cm-pill priv">Private</span>' : '') + '<small>' + esc(c.where) + '</small></button>'; }).join('')
+        + '<div class="coll-new"><button type="button" class="coll-opt coll-newbtn">New collection\u2026<small>Asks for a name, then adds these photos</small></button><form class="coll-newform" hidden><input type="text" maxlength="80" placeholder="Name of the new collection" aria-label="Name of the new collection"><button type="submit" class="primary">Make and add</button></form></div>'
+        + '<button type="button" class="coll-cancel">Cancel</button>';
+      document.body.appendChild(pop);
+      const done = function (text) { pop.remove(); say(text); };
+      const add = function (id) { busy = true; paint(); return request(folder, { action: 'collection_member_add_files', id: id, folder: folder, files: JSON.stringify(sel.map(bare)) }).then(function (j) { done(j.text || 'Added.'); }).catch(function (err) { pop.remove(); fail(err); }).then(function () { busy = false; paint(); }); };
+      pop.addEventListener('click', function (e) {
+        const b = e.target.closest('button'); if (!b) return;
+        if (b.classList.contains('coll-cancel')) { pop.remove(); return; }
+        if (b.classList.contains('coll-newbtn')) { pop.querySelector('.coll-newform').hidden = false; b.hidden = true; pop.querySelector('.coll-newform input').focus(); return; }
+        if (b.hasAttribute('data-id')) add(b.getAttribute('data-id'));
+      });
+      pop.querySelector('.coll-newform').addEventListener('submit', function (e) {
+        e.preventDefault();
+        const name = pop.querySelector('.coll-newform input').value.trim(); if (!name) return;
+        busy = true; paint();
+        request('', { action: 'collection_create', parent: '', title: name }).then(function (j) {
+          busy = false; if (!j.ok) { pop.remove(); say(j.text); return; }
+          return add(j.id);
+        }).catch(function (err) { busy = false; pop.remove(); fail(err); });
+      });
+    }
     // Tapping a tile picks it instead of opening it.
     document.addEventListener('click', function (e) {
       if (!on) return;

@@ -6,6 +6,7 @@ php/005-visitor-copies-and-archive.php
 php/006-video-posters-and-clips.php
 php/007-thumbnail-cache.php
 php/008-image-serving.php
+php/008a-moved-in-from-another-gallery.php
 php/009-notes-grouping-and-order.php
 php/010-json-data-files.php
 php/011-sign-in-throttle.php
@@ -22,6 +23,7 @@ php/018-private-view-and-reveal.php
 php/019-visitor-ip-and-proxies.php
 php/020-folder-ids.php
 php/021-folder-levels.php
+php/021a-collections.php
 php/022-map-points-1.php
 js/023-map-script-pins.js
 php/024-map-points-2.php
@@ -31,6 +33,7 @@ php/027-gps-and-admin-folder-helpers.php
 php/028-admin-export-and-hidden.php
 php/029-admin-map-form-and-ui-helpers.php
 php/030-share-links-admin-side.php
+php/030a-collections-admin.php
 php/031-share-link-paragraph.php
 php/032-files-this-gallery-has-made.php
 php/033-admin-links-panel.php

@@ -203,11 +203,16 @@ for lid in link_ids:
     for tab in ("visitors", "folders", "photos"): roots.append(f"/?admin&linkview={lid}&tab={tab}")
     roots += [f"/?admin&linkview={lid}&tab=photos&folder=" + urllib.parse.quote(BADF[0], safe=""), f"/?admin&linkexport={lid}&what=items"]
 for tab in ("folders", "media", "timeline"): roots.append(f"/?admin&linkip=127.0.0.1&tab={tab}")
+for tab in ("visitors", "folders", "media", "timeline"):   # the Visitors tab's fragments, whole and narrowed by a link, a country and a search
+    roots += [f"/?admin&visits=1&tab={tab}", f"/?admin&visits=1&tab={tab}&src=public", f"/?admin&visits=1&tab={tab}&q=127.0.0.1", f"/?admin&visits=1&tab={tab}&cc=US,GB"]
+    roots += [f"/?admin&visits=1&tab={tab}&src={lid}" for lid in link_ids]
+roots += ["/?admin&visits=1&tab=media&folders%5B%5D=" + urllib.parse.quote(BADF[0], safe=""), "/?admin&visitsexport=visitors", "/?admin&visitsexport=items&src=public", "/?admin&visitsexport=events&q=127"]
 roots += ["/?admin&linkphotos=" + urllib.parse.quote(BADF[0], safe=""), "/?admin&linkphotos=", "/?exitpreview"]
 roots += ["/?admin&linkips=1", "/?admin&linkip=" + urllib.parse.quote(P["tag"], safe="")]
 for k, v in P.items():
     q = urllib.parse.quote(v, safe="")
-    roots += [f"/?admin&linkview={q}", f"/?admin&linkip={q}", f"/?admin&linkexport={q}", f"/?photo={q}", f"/?folder={q}", f"/?img={q}", f"/?track={q}", f"/?video={q}", f"/?map&x={q}", f"/?about&x={q}", f"/?size={q}&img=loose1.jpg", f"/?admin&folder={q}"]
+    roots += [f"/?admin&visits=1&tab=visitors&src={q}", f"/?admin&visits=1&tab=media&q={q}", f"/?admin&visits=1&tab=timeline&cc={q}", f"/?admin&visitsexport=visitors&q={q}", f"/?admin&visitsexport={q}", f"/?admin&visits=1&tab={q}",
+              f"/?admin&linkview={q}", f"/?admin&linkip={q}", f"/?admin&linkexport={q}", f"/?photo={q}", f"/?folder={q}", f"/?img={q}", f"/?track={q}", f"/?video={q}", f"/?map&x={q}", f"/?about&x={q}", f"/?size={q}&img=loose1.jpg", f"/?admin&folder={q}"]
 for who, h in [("anon", {}), ("revealed", {"Cookie": viewer_c}), ("admin", AH)] + [(f"link{i}", {"Cookie": c}) for i, c in enumerate(link_cookies)] + [(f"preview{i}", {"Cookie": c}) for i, c in enumerate(preview_cookies)]:
     for p in sorted(set(roots)):
         if p.startswith("/?admin") and who != "admin": continue

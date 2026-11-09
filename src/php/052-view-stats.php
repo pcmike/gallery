@@ -186,7 +186,27 @@ function stats_get_pageviews($rootDir) {
     return is_array($data) ? (int) ($data['pageviews'] ?? 0) : 0;
 }
 
-/** Increments one photo's view count (in its own folder's store) and returns its new total. */
+/** The same photo under the other names its place has had ("eurotrip/paris/a.jpg" for "Eurotrip/paris/a.jpg", say), for a photo in a named place
+ *  from elsewhere on the server (EXTRA_FOLDERS); [] for any other. Its views were recorded under each of those names and are added up. */
+function stats_alias_paths($relativePath) {
+    static $byLabel = [];
+    $slash = strpos((string) $relativePath, '/');
+    if ($slash === false) return [];
+    $label = substr($relativePath, 0, $slash);
+    if (!array_key_exists($label, $byLabel)) {
+        $byLabel[$label] = [];
+        $named = is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [];
+        $names = is_array(EXTRA_FOLDER_NAMES) ? EXTRA_FOLDER_NAMES : [];
+        $place = $named[$label] ?? null;
+        if (is_string($place) && isset($names[$place]) && is_array($names[$place])) {
+            foreach ($names[$place] as $other) if (is_string($other) && $other !== '' && $other !== $label) $byLabel[$label][] = $other;
+        }
+    }
+    $rest = substr($relativePath, $slash);
+    return array_map(function ($other) use ($rest) { return $other . $rest; }, $byLabel[$label]);
+}
+
+/** Increments one photo's view count (in its own folder's store) and returns its new total (with what it was counted under its place's earlier names). */
 function stats_bump_photo($folderPath, $relativePath) {
     $conn = stats_connection($folderPath);
     if ($conn['mode'] === 'sqlite') {
@@ -199,12 +219,16 @@ function stats_bump_photo($folderPath, $relativePath) {
         $stmt->execute([':k' => $key]);
         $sel = $pdo->prepare('SELECT views FROM photo_views_h WHERE key = :k');
         $sel->execute([':k' => $key]);
-        return (int) $sel->fetchColumn();
+        $total = (int) $sel->fetchColumn();
+        foreach (stats_alias_paths($relativePath) as $alt) { $sel->execute([':k' => stats_key($alt)]); $total += (int) $sel->fetchColumn(); }
+        return $total;
     }
     $stats = stats_update_file($conn['file'], function (&$data) use ($relativePath) {
         $data['photos'][$relativePath] = ($data['photos'][$relativePath] ?? 0) + 1;
     });
-    return (int) ($stats['photos'][$relativePath] ?? 0);
+    $total = (int) ($stats['photos'][$relativePath] ?? 0);
+    foreach (stats_alias_paths($relativePath) as $alt) $total += (int) ($stats['photos'][$alt] ?? 0);
+    return $total;
 }
 
 /** View counts from one folder's own store, as relativePath => views.
@@ -220,14 +244,19 @@ function stats_get_photo_views($folderPath, $candidateFiles = []) {
         }
         $result = [];
         foreach ($candidateFiles as $file) {
-            $key = stats_key($file);
-            if (isset($byKey[$key])) $result[$file] = $byKey[$key];
+            $key = stats_key($file); $sum = $byKey[$key] ?? 0; $any = isset($byKey[$key]);
+            foreach (stats_alias_paths($file) as $alt) { $ak = stats_key($alt); if (isset($byKey[$ak])) { $sum += $byKey[$ak]; $any = true; } }
+            if ($any) $result[$file] = $sum;
         }
         return $result;
     }
     if (!file_exists($conn['file'])) return [];
     $data = json_decode(data_file_strip_guard(@file_get_contents($conn['file'])), true);
-    return (is_array($data) && isset($data['photos']) && is_array($data['photos'])) ? $data['photos'] : [];
+    $photos = (is_array($data) && isset($data['photos']) && is_array($data['photos'])) ? $data['photos'] : [];
+    foreach ($candidateFiles as $file) {   // (the counts under the place's earlier names are added to the one under its present name)
+        foreach (stats_alias_paths($file) as $alt) if (isset($photos[$alt])) $photos[$file] = (int) ($photos[$file] ?? 0) + (int) $photos[$alt];
+    }
+    return $photos;
 }
 
 /** Every tracked photo's view count across the whole tree, merged from
@@ -250,7 +279,6 @@ function stats_get_all_photo_views($dir, $files) {
 // browser, goes un-counted. Caps write amplification from a trivially
 // scriptable GET and makes the counts themselves more honest — flipping
 // back and forth on one photo in a single sitting shouldn't inflate it.
-define('VIEW_DEBOUNCE_SECONDS', 1800);
 
 /**
  * True if this filename was already "viewed" (per the gallery_viewed
@@ -443,6 +471,7 @@ $currentFolderPath = null;
 // Defined up front so no later template line can ever hit an undefined
 // variable, whatever order the folder code above/below is rearranged into.
 $currentFolderFiles = [];
+$currentCollectionPage = null;   // (set when the address is a collection: see collection_page)
 $currentFolderMeta = ['label' => '', 'cover' => null, 'description' => '', 'dates' => '', 'sortOrder' => null];
 $currentFolderName = '';
 $currentFolderFileCount = 0;
@@ -461,15 +490,21 @@ if (isset($_GET['folder'])) {
     // path-trick value (../, a trailing slash, a file) all simply have
     // nothing under them.
     $currentFolderFiles = AUTO_GROUP_BY_FOLDER ? folder_files_under($files, $requestedFolder) : [];
+    // No folder is at that address: it may be a collection (a folder that exists only in the gallery). A collection's page is made from the members this
+    // visitor may see; when there are none, or it is private to someone else, or there is no such collection, the answer is the same 404 as ever.
+    if (empty($currentFolderFiles) && AUTO_GROUP_BY_FOLDER && is_string($requestedFolder) && collections_any()) {
+        $currentCollectionPage = collection_page($dir, $requestedFolder, $allFiles, $files);
+        if ($currentCollectionPage !== null) $currentFolderFiles = $currentCollectionPage['files'];
+    }
     if (empty($currentFolderFiles)) {
         http_response_code(404);
         exit;
     }
     $currentFolderPath = $requestedFolder;
     // A folder can say how its own page shows the folders under it (its own choice, else the gallery's).
-    $folderStyleOwn = items_read(resolve_real_path($dir, $requestedFolder))['subfolderStyle'] ?? null;
+    $folderItemsOwn = $currentCollectionPage !== null ? $currentCollectionPage['rec'] : items_read(resolve_real_path($dir, $requestedFolder));   // (a collection keeps the same choices in its own record)
+    $folderStyleOwn = $folderItemsOwn['subfolderStyle'] ?? null;
     if ($folderStyleOwn === 'flat' || $folderStyleOwn === 'overview') $GLOBALS['__folder_style_flat'] = $folderStyleOwn === 'flat';
-    $folderItemsOwn = items_read(resolve_real_path($dir, $requestedFolder));
     if (is_bool($folderItemsOwn['flatNames'] ?? null)) $GLOBALS['__flat_names'] = $folderItemsOwn['flatNames'];
     if (is_bool($folderItemsOwn['flatNotes'] ?? null)) $GLOBALS['__flat_notes'] = $folderItemsOwn['flatNotes'];
     // Quick links to the folders beside this one (same level), in the order the parent's page shows them: up to ten, else a
@@ -522,17 +557,19 @@ if (isset($_GET['folder'])) {
         $folderCrumbs = array_values(array_filter($folderCrumbs, function ($c) use ($navTop) { return strncmp($c[2], $navTop . '/', strlen($navTop) + 1) === 0; }));
         if ($currentFolderPath !== $navTop) { $topMeta = folder_display_meta($dir, $navTop); $navBack = ['?folder=' . rawurlencode($navTop), $topMeta['label'] !== '' ? $topMeta['label'] : basename($navTop)]; }
         else { $folderPills = []; $folderPillsAll = null; }
+        if ($currentFolderPath !== $navTop && strncmp($currentFolderPath, $navTop . '/', strlen($navTop) + 1) !== 0) { $folderPills = []; $folderPillsAll = null; }   // (the top is a collection and this is a folder of its own elsewhere: the folders beside it on disk are not offered)
     }
 }
 
 // ?archive: the originals of the gallery or of this folder as one ZIP (signed-in visitors only).
 if (request_route() === 'archive') {
+    if ($currentCollectionPage !== null) { http_response_code(404); exit; }   // (a collection is not a folder on disk: there is nothing of it to zip)
     run_archive_route($dir, $currentFolderPath === null ? $files : $currentFolderFiles, $currentFolderPath, $rootPageTitle, $currentFolderName);
     exit;
 }
 // ...and the button for it, with what it would send, for a signed-in visitor.
 $archiveCount = 0; $archiveBytes = 0;
-if (($archiveButtonFiles = archive_files_for_viewer($dir, $currentFolderPath === null ? $files : $currentFolderFiles))) {
+if ($currentCollectionPage === null && ($archiveButtonFiles = archive_files_for_viewer($dir, $currentFolderPath === null ? $files : $currentFolderFiles))) {
     foreach (archive_entries($dir, $archiveButtonFiles) as $archiveEntry) { $archiveCount++; $archiveBytes += $archiveEntry['size']; }
 }
 

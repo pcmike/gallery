@@ -81,9 +81,11 @@
     // hash) — copy whichever one this button actually has.
     // A link made on a folder's page must keep pointing at that folder (and nothing else of the address, such as ?photo=).
     const folderQuery = () => { const f = new URLSearchParams(window.location.search).get('folder'); return f ? '?folder=' + encodeURIComponent(f) : ''; };
+    // (In the admin's frame the page's own script makes every link a full address with inframe=1 added, so the link is worked out from the address it is, and inframe is left out.)
+    const hrefUrl = () => { try { return new URL(link.getAttribute('href'), window.location.href); } catch (x) { return null; } };
     const cleanUrl = link.hash
       ? window.location.origin + window.location.pathname + folderQuery() + link.hash
-      : window.location.origin + window.location.pathname + link.getAttribute('href');
+      : (() => { const u = hrefUrl(); if (!u) return window.location.origin + window.location.pathname + link.getAttribute('href'); const q = u.search.slice(1).split('&').filter(p => p && p !== 'inframe=1'); return u.origin + u.pathname + (q.length ? '?' + q.join('&') : ''); })();
     copyToClipboard(cleanUrl).then(() => flashCopied(link));
   });
 

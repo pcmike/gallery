@@ -414,6 +414,8 @@
   /* The owner's mark on a folder card: the same two pills as a photo's lock. The count of what is private inside is its own link. */
   .folder-priv { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 0.72rem; line-height: 1; color: #fff; font-family: inherit; }
   .folder-priv .ico { width: 1em; height: 1em; }
+  .folder-priv.own.coll-pill { background: rgba(88,101,242,0.92); cursor: default; font-style: italic; }
+  .folder-priv.own.coll-pill.is-private { background: rgba(237,66,69,0.92); }
   .folder-priv.own { background: rgba(237,66,69,0.92); border: 1px solid rgba(255,255,255,0.35); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; -webkit-tap-highlight-color: transparent; }
   .folder-priv.own::after { content: ''; position: absolute; inset: -6px; }   /* a bigger target for a finger */
   .folder-priv.own:active { transform: scale(0.94); }
@@ -532,6 +534,7 @@
   .folder-priv-banner strong { display: block; }
   .folder-priv-banner span { color: #c9c9ce; }
   .select-bar .sb-p { display: none; }
+  @media (max-width: 640px) { .select-bar .sb-coll .sb-n { display: none; } .select-bar .sb-coll .sb-p { display: inline; } }   /* (a phone: "Collection…" and "Remove" instead of the long names) */
   .select-bar.in-private .sb-n { display: none; }
   .select-bar.in-private .sb-p { display: inline; }
   .select-bar.in-private .select-btns { flex-wrap: nowrap; }

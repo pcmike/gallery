@@ -26,12 +26,19 @@ function folder_id_cached($dir, $rel) {
 }
 
 /** Every id found among the folders that hold $files: id => the relative paths that carry it (more than one means a folder was copied). */
-function folder_id_map($dir, $files) {
+function folder_id_map_folders($dir, $files) {
     $map = [];
     foreach (all_folder_paths($files) as $rel) {
         $id = folder_id_cached($dir, $rel);
         if ($id !== '') $map[$id][] = $rel;
     }
+    return $map;
+}
+
+/** The same, with the collections too: a link names a collection the way it names a folder, by an id, and it is found where it lives. */
+function folder_id_map($dir, $files) {
+    $map = folder_id_map_folders($dir, $files);
+    if (collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) $map[$cRec['id']][] = $cPath;
     return $map;
 }
 
@@ -81,9 +88,14 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
     if (!$set) return '';
     $pub = array_fill_keys(array_filter((array) $publicOnly, 'is_string'), true);
     $amb = link_ambiguous_set();
+    $cover = '';
+    foreach (array_keys($set) as $cid) {   // a collection the link names covers the files it holds (as it holds them); the link's own "public items only" applies to it as to a folder
+        if ($cid[0] !== 'c' || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // (a Not listed folder's photos come through no collection, as through no folder above it: it has to be picked itself)
+        if (!isset($pub[$cid])) return 'all';
+        $cover = 'public';
+    }
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
-    $cover = '';
     $from = max(0, unlisted_root_depth($dir, $file) - 1);   // (a folder picked above a Not listed one does not bring it along; the Not listed folder, or one inside it, has to be picked)
     $n = 0;
     foreach ($parts as $seg) {
@@ -135,10 +147,26 @@ function unlisted_root_path($dir, $file) {
     return $depth > 0 ? implode('/', array_slice(explode('/', dirname($file)), 0, $depth)) : '';
 }
 
-/** The code in a photo's address (?photo=<path>&k=<code>) when the photo is in a Not listed folder: worked out from the folder's hidden id,
- *  the file name, a secret of this install and, once the owner has asked for a new address, a random string kept on the photo. Nothing
- *  else is stored, so there is no list of codes; the folder can be renamed or moved and its photos keep their addresses, while renaming the
- *  photo ends its address. '' when it can't be worked out (no secret yet, or the folder has no id): nothing then matches. */
+/** The eight characters (A-Z, a-z, 0-9, none left out) of a photo's address, from a secret raw string: bytes below 248 are used, each mapped to one of the
+ *  62 characters without favouring any (248 is four times 62). */
+function photo_code_chars($raw) {
+    $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    $out = ''; $round = 0;
+    while (strlen($out) < 8) {
+        for ($i = 0, $len = strlen($raw); $i < $len && strlen($out) < 8; $i++) {
+            $b = ord($raw[$i]);
+            if ($b < 248) $out .= $alphabet[$b % 62];
+        }
+        if (strlen($out) < 8) $raw = hash('sha256', $raw . $round++, true);   // (not reached with 32 bytes of hash in practice, but it can't loop for ever)
+    }
+    return $out;
+}
+
+/** A photo's address when the photo is in a Not listed folder: eight letters and digits (for example Ab3x9Qz2, used as /photos/Ab3x9Qz2 or
+ *  /photos/?Ab3x9Qz2) worked out from the folder's hidden id, the file name, a secret of this install and, once the owner has asked for a new address,
+ *  a random string kept on the photo. Nothing else is stored, so there is no list of codes and nothing to press: the folder can be renamed or moved
+ *  and its photos keep their addresses, while renaming the photo ends its address. '' when it can't be worked out (no secret yet, or the folder has
+ *  no id yet, which switching Not listed on gives it): nothing then matches. */
 function photo_address_code($dir, $file, $itemsData = null, $folderId = null) {
     $secret = install_secret();
     $slash = strrpos((string) $file, '/');
@@ -146,18 +174,119 @@ function photo_address_code($dir, $file, $itemsData = null, $folderId = null) {
     $fid = $folderId ?? folder_id_cached($dir, substr($file, 0, $slash));
     if ($fid === '') return '';
     $salt = is_array($itemsData) && is_string($itemsData[$file]['addr'] ?? null) ? $itemsData[$file]['addr'] : '';
-    $raw = hash_hmac('sha256', 'photo|' . $fid . '|' . basename($file) . '|' . $salt, $secret, true);
-    return substr(rtrim(strtr(base64_encode($raw), '+/', '-_'), '='), 0, 12);
+    return photo_code_chars(hash_hmac('sha256', 'photo|' . $fid . '|' . basename($file) . '|' . $salt, $secret, true));
+}
+
+/** The photo an address (eight letters and digits) belongs to, or null. Only photos in Not listed folders have one, so only those are worked out
+ *  (about a microsecond each), and a folder whose id is carried by a copy of it is left out until that is sorted. Nothing is read for an address of
+ *  the wrong shape. */
+function photo_address_resolve($dir, $files, $itemsData, $token) {
+    if (!is_string($token) || preg_match('/^[A-Za-z0-9]{8}$/D', $token) !== 1 || install_secret() === '') return null;
+    link_scan_ambiguity($dir, $files);   // (looking an address up keeps the list of copied ids current: the pictures of the page this opens are refused or served by it)
+    $amb = link_ambiguous_set();
+    $folderId = []; $carriers = [];   // folder => its id (only a Not listed folder with one), and id => how many such folders carry it
+    foreach ($files as $f) {
+        $folder = dirname($f);
+        if ($folder === '.' || $folder === '' || isset($folderId[$folder])) continue;
+        $fid = folder_is_unlisted($dir, $folder) ? folder_id_cached($dir, $folder) : '';   // (only a Not listed folder's id is read)
+        $folderId[$folder] = $fid;
+        if ($fid !== '') $carriers[$fid] = ($carriers[$fid] ?? 0) + 1;
+    }
+    foreach ($files as $f) {
+        $fid = $folderId[dirname($f)] ?? '';
+        if ($fid === '' || ($carriers[$fid] ?? 0) !== 1 || isset($amb[$fid])) continue;   // (a folder copied with its id points at nothing until that is sorted)
+        $want = photo_address_code($dir, $f, $itemsData, $fid);
+        if ($want !== '' && hash_equals($want, $token)) return $f;
+    }
+    return null;
+}
+
+/** A request for /photos/<something> (or /photos/?<something>) reaches the script as ?link=<something>. When that something is a Not listed photo's
+ *  address, the request becomes the photo's own page (?photo=<path>&k=<code>) and true is returned; otherwise nothing is changed and the request goes
+ *  on as a share link's (where a wrong one is counted). A closed gallery shows a stranger no photo, by an address or otherwise, and a visitor held
+ *  back for guessing gets no answer, a right one included. */
+function photo_address_translate($dir, $files, $itemsData) {
+    $token = $_GET['link'] ?? null;
+    if (!is_string($token) || preg_match('/^[A-Za-z0-9]{8}$/D', $token) !== 1) return false;
+    if (gallery_is_closed() && !is_revealed() && !is_admin_browser() && link_viewer() === null) return false;
+    if (!is_admin_browser() && !is_revealed() && !login_throttle_allows($dir, 'link', client_ip())) return false;
+    if (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token])) return false;   // (a real folder of that name is what the server would have shown)
+    $rel = photo_address_resolve($dir, $files, $itemsData, $token);
+    if ($rel === null) return false;
+    unset($_GET['link']);
+    // The folder says what its photos' addresses open: the photo in the viewer (the default), or the bare picture or video. A ?file or ?view added
+    // to one address overrides that for that address only.
+    $bare = !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $rel)))['addressFile']);
+    if (isset($_GET['view'])) $bare = false; elseif (isset($_GET['file'])) $bare = true;
+    unset($_GET['file'], $_GET['view']);
+    $_GET['k'] = $token;
+    if ($bare) {
+        $_GET[is_video_file($rel) ? 'video' : 'img'] = $rel; if (!is_video_file($rel)) $_GET['size'] = 'full';
+        request_route(true);
+        photo_address_bare($dir, $rel, $itemsData);
+        exit;
+    }
+    $_GET['photo'] = $rel;
+    request_route(true);
+    return true;
+}
+
+/** A Not listed photo's address answered with the file itself: what the viewer shows at full size (a picture is the file with its location removed for a
+ *  visitor, a HEIC photo its converted JPEG) or, for a video, the video, with no page around it. It is counted and logged as the page would be. */
+function photo_address_bare($dir, $rel, $itemsData) {
+    header('X-Robots-Tag: noindex, nofollow');
+    header('Referrer-Policy: no-referrer');
+    try {
+        if (!is_non_viewing_request()) {
+            if (TRACK_VIEWS && !is_bot_request() && !is_admin_browser() && link_viewer() === null && !view_debounce_recently_viewed($rel)) stats_bump_photo(containing_folder_real_path($dir, $rel), $rel);
+            if (public_log_wanted() && ($pl = public_log_link()) !== null) {
+                $site = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? ''));
+                $how = $site === 'none' ? 'typed' : (in_array($site, ['cross-site', 'same-site'], true) ? 'link' : 'other');
+                [$vid, $ip, $label, $country] = link_visitor_identity();
+                link_log_apply($pl, $vid, $ip, $label, $country, [['o', $rel]], null, ['f' => $rel, 'h' => $how, 'u' => 1]);
+            }
+        }
+    } catch (Throwable $e) { error_log('gallery: counting or logging a bare-file open failed: ' . $e->getMessage()); }   // (it must never stop the picture)
+    $claimed = [$rel]; $items = items_get_all_for_files($dir, $claimed);
+    if (isset($_GET['video'])) serve_video($dir, $rel, $claimed, $items); else serve_image($dir, $rel, 'full', $claimed, $items);
+}
+
+/** Is the k= of this request the right code for the photo the request names? Asked when a request ends without having been let in by its code, to tell
+ *  a wrong guess (counted) from a right code that was turned away for another reason (a download that is switched off, a video strip of a photo). The
+ *  name is only ever hashed and looked up inside the gallery's folders: anything with a dot-dot, a backslash or a NUL is not asked about. */
+function photo_code_is_right_for_request($dir) {
+    $k = $_GET['k'] ?? null;
+    if (!is_string($k) || $k === '') return false;
+    foreach (['photo', 'img', 'original', 'track', 'strip', 'video'] as $param) {
+        $f = $_GET[$param] ?? null;
+        if (!is_string($f) || $f === '' || $f[0] === '/' || strpbrk($f, "\0\\") !== false || preg_match('#(^|/)\.\.?(/|$)#', $f) === 1) continue;
+        $want = photo_address_code($dir, $f, items_get_all_for_files($dir, [$f]));
+        if ($want !== '' && hash_equals($want, $k)) return true;
+    }
+    return false;
 }
 
 /** Does this request carry the right code for this very photo, and is the photo one that has an address (in a Not listed folder, and not
  *  marked private on its own)? The code is for that one photo: it opens nothing else. */
 function photo_pass_valid($dir, $file, $itemsData) {
+    static $held = null;
     $k = $_GET['k'] ?? null;
     if (!is_string($k) || $k === '' || strlen($k) > 40 || !is_string($file) || !file_is_unlisted($dir, $file)) return false;
+    // The code is for the photo the request names (as ?photo=, ?img=, ?original=, ?track=, ?strip= or ?video=), not for that photo wherever it might turn up on another page.
+    $named = false;
+    foreach (['photo', 'img', 'original', 'track', 'strip', 'video'] as $param) if (($_GET[$param] ?? null) === $file) { $named = true; break; }
+    if (!$named) return false;
     if (item_restriction(is_array($itemsData) ? ($itemsData[$file] ?? null) : null) === 'private') return false;
+    $fid = folder_id_cached($dir, (string) dirname($file));
+    if ($fid !== '' && isset(link_ambiguous_set()[$fid])) return false;   // (a folder copied with its id: its photos' addresses open nothing until that is sorted, as at /photos/<code>)
+    // The code can be tried here as well as at /photos/<code> (any request that names a Not listed photo and carries one), so a visitor held back for
+    // guessing is not asked at all. (A wrong code is counted at the end of the request, see 003, whether or not the photo it came with exists.)
+    if ($held === null) $held = !is_admin_browser() && !is_revealed() && !login_throttle_allows($dir, 'link', client_ip());
+    if ($held) return false;
     $want = photo_address_code($dir, $file, $itemsData);
-    return $want !== '' && hash_equals($want, $k);
+    if ($want === '' || !hash_equals($want, $k)) return false;
+    $GLOBALS['__photo_pass_ok'] = true;
+    return true;
 }
 
 /** May this visitor see the item (a public one, or a private one they were given)? */
@@ -195,16 +324,16 @@ function viewer_may_download($dir, $file, $itemsData) {
     $l = link_viewer();
     // Someone using a share link: the link's own answer decides (the gallery-wide switch is for people who came in without one).
     if ($l !== null) return (!file_is_hidden($dir, $file, $itemsData) || link_allows_item($l, $dir, $file, $itemsData)) && link_capability_allows($l, 'downloads', $dir, $file, $itemsData);
-    if (PUBLIC_DOWNLOAD_MODE === 'off' || file_is_hidden($dir, $file, $itemsData)) return false;
-    return PUBLIC_DOWNLOAD_MODE === 'all' || public_download_folder_covers($file);
+    if (!ENABLE_PUBLIC_DOWNLOAD || file_is_hidden($dir, $file, $itemsData)) return false;
+    return public_download_folder_covers($file);
 }
 
-/** Is this file inside one of the folders the gallery lets strangers download from (Only some folders)? */
+/** Does the folder the file lies directly in allow strangers to download? Each folder stands on its own: a photo in a folder inside a folder that
+ *  allows it is not covered by that one. A photo on the gallery's main page is the main page's own switch. */
 function public_download_folder_covers($file) {
-    foreach (PUBLIC_DOWNLOAD_FOLDERS as $p) {
-        if ($p !== '' && strncmp($file, $p . '/', strlen($p) + 1) === 0) return true;
-    }
-    return false;
+    $slash = strrpos($file, '/');
+    if ($slash === false) return PUBLIC_DOWNLOAD_ROOT;
+    return in_array(substr($file, 0, $slash), PUBLIC_DOWNLOAD_FOLDERS, true);
 }
 
 /** Does this visitor see every saved location (the owner, the private-view password, or a link that says so)? */
@@ -252,7 +381,10 @@ function link_cover_in_scope($l, $dir, $f, $draft = null) {
     $type = $draft !== null ? (string) ($draft['type'] ?? 'all') : (string) ($l['scope']['type'] ?? 'all');
     if (!in_array($type, ['folders', 'photos', 'mixed'], true)) return true;
     if ($draft === null) return link_allows_item($l, $dir, $f);
-    if ($type !== 'photos') foreach ((array) ($draft['folders'] ?? []) as $d) if ($d !== '' && str_starts_with($f, $d . '/')) return true;
+    if ($type !== 'photos') foreach ((array) ($draft['folders'] ?? []) as $d) {
+        if ($d !== '' && str_starts_with($f, $d . '/')) return true;
+        if ($d !== '' && ($c = collection_at($dir, $d)) !== null && in_array($f, collection_member_files($dir, $c, $GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? [])), true)) return true;
+    }
     return $type !== 'folders' && in_array($f, (array) ($draft['photos'] ?? []), true);
 }
 
@@ -279,7 +411,7 @@ function link_preview_picture($l, $dir, $draft = null) {
     $level = split_folder_level($public, '');
     $pool = [];
     foreach ($level['folders'] as $top => $members) {
-        $cover = pick_folder_cover($members, folder_display_meta($dir, $top)['cover']);
+        $cover = pick_folder_cover($members, folder_display_meta($dir, $top)['cover'], $top);
         if ($cover !== null && $photo($cover)) $pool[] = $cover;
     }
     if (!$pool) $pool = array_values(array_filter($public, $photo));
@@ -350,7 +482,7 @@ function link_open_in_href($l) {
 /** A link's addresses: the tidy one (needs the server rule) and the one that always works. */
 function link_urls($l) {
     $base = current_base_url();
-    return ['short' => $base . '/' . $l['token'], 'long' => $base . '/?link=' . $l['token']];
+    return ['short' => $base . '/' . $l['token'], 'long' => $base . '/?' . $l['token']];   // (?link=<token> works too)
 }
 
 function link_standalone_head($title, $picture = '') {
@@ -364,7 +496,7 @@ function link_standalone_head($title, $picture = '') {
     return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="robots" content="noindex, nofollow"><meta name="referrer" content="no-referrer"><title>' . $t . '</title>'
         . '<meta property="og:title" content="' . $t . '"><meta property="og:type" content="website">' . $og
         . '<style>:root{color-scheme:dark}html,body{height:100%}body{margin:0;background:#0f0f10;color:#eaeaea;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.5}'
-        . '.wrap{box-sizing:border-box;min-height:100%;max-width:420px;margin:0 auto;padding:12vh 24px 24px;text-align:center}'
+        . '.wrap{box-sizing:border-box;min-height:100%;max-width:420px;margin:0 auto;padding:6vh 24px 24px;text-align:center}'
         . '.ico{width:64px;height:64px;border-radius:50%;background:#1a1a1c;display:inline-flex;align-items:center;justify-content:center;color:#aab2ff;margin-bottom:6px}.ico svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}'
         . 'h1{font-size:1.5rem;margin:14px 0 10px}p{color:#b9b9c0;font-size:1rem;margin:0 0 20px}'
         . '.note{margin:6px 0 22px;padding:12px 14px;border-left:3px solid #5865f2;background:#141416;border-radius:0 8px 8px 0;font-size:1rem;line-height:1.45;color:#e4e4e8;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere}'
@@ -400,6 +532,29 @@ function render_link_open_page($l, $dir) {
     echo '</div></body></html>';
 }
 
+/** The page for a visitor held back for guessing addresses: wait a minute and try again. A right address gets the same until the minute is over (or
+ *  nothing would slow a guesser down). */
+function render_link_locked_page() {
+    http_response_code(429);
+    header('Retry-After: 60');
+    echo link_standalone_head('Please wait a moment');
+    echo '<div class="ico" style="color:#8a8a8f">' . LINK_ICON_WARN . '</div><h1>Please wait a moment</h1><p>Too many addresses that did not work were tried from your connection. Wait a minute and try again.</p></div></body></html>';
+}
+
+/** Is this visitor held back for guessing? (You, and anyone with the private-view password, never are.) Says so with the page when they are. */
+function link_guess_locked($dir) {
+    if (is_admin_browser() || is_revealed() || login_throttle_allows($dir, 'link', client_ip())) return false;
+    render_link_locked_page();
+    return true;
+}
+
+/** A wrong address was tried. It counts against the visitor only when it is shaped like one (4 to 40 letters, digits and hyphens): that is what a
+ *  guess looks like; a stray word or a mistyped bit of a web address is not held against anyone. You and the private-view password never count. */
+function link_guess_failed($dir, $token) {
+    if (is_admin_browser() || is_revealed() || !link_token_format_ok($token)) return;
+    login_throttle_record_failure($dir, 'link', client_ip(), LINK_GUESS_LIMIT);
+}
+
 /** ?link=<token> (and the tidy address the server rule maps onto it). */
 function run_link_route($dir) {
     geo_maybe_refresh();
@@ -419,9 +574,9 @@ function run_link_route($dir) {
             return;
         }
     }
-    if (!ENABLE_SHARE_LINKS) { render_link_invalid_page(); return; }
+    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(200); return; }   // the check that the tidy address works (the admin's, and the owner's Copy address on a photo): not a guess, and not a 404, which a browser would log in its console. Before the switches below: a Not listed photo's short address needs the server rule whether or not share links are on
+    if (!ENABLE_SHARE_LINKS) { if (link_guess_locked($dir)) return; link_guess_failed($dir, $token); render_link_invalid_page(); return; }   // (still counted: a Not listed photo's address is guessed here too)
     if (!is_https_request() && !is_local_request()) { render_https_required_page(); return; }
-    if ($token === LINK_PROBE_TOKEN) { render_link_invalid_page(200); return; }   // the admin's check that the tidy address works: not a guess, and not a 404, which a browser would log in its console on every look at the Shares tab
     $ip = client_ip();
     $allLinks = links_read();
     $link = link_token_format_ok($token) ? link_find_by_token($allLinks, $token) : null;
@@ -434,26 +589,20 @@ function run_link_route($dir) {
         header('Location: ' . link_open_in_href($link), true, 303);
         return;
     }
-    if (!login_throttle_allows($dir, 'link', $ip)) {
-        http_response_code(429);
-        header('Content-Type: text/plain; charset=UTF-8');
-        header('Cache-Control: no-store');
-        echo 'Too many tries. Try again in a moment.';
-        return;
-    }
+    if (link_guess_locked($dir)) return;
     if ($link !== null && $viaAlias !== null && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET' && link_state($link) === 'active') {
         // (a temporary redirect, never a permanent one: it must stop the moment the owner removes the old address; and the same form the person used, short or long)
         link_alias_used($link['id'], $viaAlias);
         link_note_address($link, 'via', $viaAlias);
         header('Cache-Control: no-store');
-        header('Location: ' . link_urls($link)[preg_match('/[?&]link=/', $_SERVER['REQUEST_URI'] ?? '') === 1 ? 'long' : 'short'], true, 302);
+        header('Location: ' . link_urls($link)[strpos((string) ($_SERVER['REQUEST_URI'] ?? ''), '?') !== false ? 'long' : 'short'], true, 302);
         return;
     }
     if ($link === null) {
         // An address from before a link was given a new one: not a guess, so not held against the visitor, but noted in that link's log.
         $oldOwner = link_token_format_ok($token) ? link_find_by_old_token(links_read(), $token) : null;
         if ($oldOwner !== null) { link_note_blocked($oldOwner, 'replaced'); link_note_address($oldOwner, 'tried', link_old_name($oldOwner, $token)); render_link_invalid_page(); return; }
-        login_throttle_record_failure($dir, 'link', $ip);
+        link_guess_failed($dir, $token);
         render_link_invalid_page();
         return;
     }
