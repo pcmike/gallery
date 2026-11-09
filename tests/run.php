@@ -9561,6 +9561,9 @@ check('[live refresh] the Visitors panel\'s numbers can be asked for again as a 
 [, $lkPb] = http_get("$baseLk/?admin&pbcounts=1", $lkOwn);
 $lkPbJ = json_decode((string) $lkPb, true) ?: [];
 check('[live refresh] the phone Menu\'s numbers (and the page\'s sidebar, which asks the same way) include Visitors, red while a lockout is unseen', ($lkPbJ['visits'][0]['kind'] ?? '') === 'bad' && str_contains((string) ($lkPbJ['visits'][0]['title'] ?? ''), '1 lockout you have not seen'));
+[$lkSlS, $lkSl] = http_get("$baseLk/?admin&linkspanel=1", $lkOwn);
+[, $lkSlAn] = http_get("$baseLk/?admin&linkspanel=1");
+check('[live refresh] the Shares panel can be asked for on its own (when the window comes back): just the panel, not the rest of the page, and only by the signed-in admin', $lkSlS === 200 && str_contains($lkSl, 'id="sl-root"') && !str_contains($lkSl, 'id="health-panel"') && !str_contains($lkSl, 'id="vt-root"') && !str_contains($lkSlAn, 'id="sl-root"'));
 // a lockout started by someone else (sharing the address) does not hold back a session that is already signed in
 $fxLk3 = new_fixture_dir('lockouts3');
 mkdir("$fxLk3/Rome"); make_jpeg("$fxLk3/Rome/r1.jpg", 60, 50, 100, 60, 60);

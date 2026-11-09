@@ -537,6 +537,11 @@ function run_links_view_route($dir, $files) {
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
     $data = links_read();
     if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir); return; }
+    if (isset($_GET['linkspanel'])) {   // the Shares panel on its own (the window came back): what the page draws for it, without the rest of the page
+        header('Content-Type: text/html; charset=UTF-8');
+        render_admin_links_panel(htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8'), $dir, $files);
+        return;
+    }
     if (isset($_GET['visits']) && $str('tab') === 'info') {   // the panel's numbers again (the window came back): small, and not the whole page
         header('Content-Type: application/json; charset=UTF-8');
         $d = visits_panel_data();

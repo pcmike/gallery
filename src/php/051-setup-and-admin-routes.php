@@ -188,7 +188,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     if (isset($_GET['filesdownload'])) { files_download_route($dir, $files); return; }
-    if (isset($_GET['visits']) || isset($_GET['visitsexport']) || isset($_GET['linkphotos']) || isset($_GET['linkcover'])) {   // the Shares tab's fragments and CSV downloads
+    if (isset($_GET['visits']) || isset($_GET['visitsexport']) || isset($_GET['linkphotos']) || isset($_GET['linkcover']) || isset($_GET['linkspanel'])) {   // the Shares tab's fragments and CSV downloads
         run_links_view_route($dir, $files);
         return;
     }

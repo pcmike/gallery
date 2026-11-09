@@ -1050,10 +1050,10 @@
         [].forEach.call(box.querySelectorAll('.sl-url'), function (i) { i.value = pretty ? i.getAttribute('data-short') : i.getAttribute('data-long'); });
       });
     }
-    function refresh() {
+    function refresh(light) {   // light: the window came back; only this panel is asked for (not the whole page), and the sidebar's numbers are the page's other part's business
       var openIds = [].map.call(box.querySelectorAll('details.sl-row[open]'), function (d) { return d.getAttribute('data-id'); });
       var formOpen = !box.querySelector('#sl-form').hidden;
-      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+      return fetch(light ? '?admin&linkspanel=1' : location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html'), fresh = doc.getElementById('sl-root');
         if (!fresh) { location.reload(); return; }
         var keepForm = formOpen ? box.querySelector('#sl-form') : null;
@@ -1124,6 +1124,13 @@
     box.addEventListener('keydown', function (e) { if (e.key === 'Escape') popCloseAll(null); });
     function markSeen() { if (box.querySelector('.sl-newt')) post({ action: 'link_seen' }).catch(function () {}); }
     window.__slSeen = markSeen;
+    // The window came back: the list (states, opens, what is new) is drawn again, unless the person is in the middle of something here (the form, selecting several, a menu, a field).
+    if (window.__live) window.__live.register('shares', { tab: 'links', refresh: function () {
+      return refresh(true).then(function () { if (window.__slSeen) setTimeout(window.__slSeen, 1500); });
+    }, busy: function () {
+      var bar = document.getElementById('sl-bulk'), f = box.querySelector('#sl-form'), el = document.activeElement;
+      return (!!f && !f.hidden) || (!!bar && !bar.hidden) || !!box.querySelector('.sl-popmenu:not([hidden])') || (!!el && box.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+    } });
     function copy(text, done) {
       if (window.GalleryShare && window.GalleryShare.copyText) { window.GalleryShare.copyText(text, done); return; }   // (the share kit's copy: it never fails the first press)
       if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); return; }

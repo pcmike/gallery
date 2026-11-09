@@ -1057,7 +1057,7 @@ function request_route($reset = false) {
  *  Not listed photo's (see bare_query_as_address). */
 function reserved_query_words() {
     $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
-        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'pbcounts', 'privcounts', 'scope_type',
+        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'pbcounts', 'privcounts', 'scope_type',
         'shellcounts', 'shellmeta', 'shelltree'];
     foreach (request_routes() as $r) foreach ($r['params'] as $p) $words[] = $p;
     return $words;
@@ -14124,6 +14124,11 @@ function run_links_view_route($dir, $files) {
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
     $data = links_read();
     if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir); return; }
+    if (isset($_GET['linkspanel'])) {   // the Shares panel on its own (the window came back): what the page draws for it, without the rest of the page
+        header('Content-Type: text/html; charset=UTF-8');
+        render_admin_links_panel(htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8'), $dir, $files);
+        return;
+    }
     if (isset($_GET['visits']) && $str('tab') === 'info') {   // the panel's numbers again (the window came back): small, and not the whole page
         header('Content-Type: application/json; charset=UTF-8');
         $d = visits_panel_data();
@@ -18173,10 +18178,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         [].forEach.call(box.querySelectorAll('.sl-url'), function (i) { i.value = pretty ? i.getAttribute('data-short') : i.getAttribute('data-long'); });
       });
     }
-    function refresh() {
+    function refresh(light) {   // light: the window came back; only this panel is asked for (not the whole page), and the sidebar's numbers are the page's other part's business
       var openIds = [].map.call(box.querySelectorAll('details.sl-row[open]'), function (d) { return d.getAttribute('data-id'); });
       var formOpen = !box.querySelector('#sl-form').hidden;
-      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+      return fetch(light ? '?admin&linkspanel=1' : location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html'), fresh = doc.getElementById('sl-root');
         if (!fresh) { location.reload(); return; }
         var keepForm = formOpen ? box.querySelector('#sl-form') : null;
@@ -18247,6 +18252,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     box.addEventListener('keydown', function (e) { if (e.key === 'Escape') popCloseAll(null); });
     function markSeen() { if (box.querySelector('.sl-newt')) post({ action: 'link_seen' }).catch(function () {}); }
     window.__slSeen = markSeen;
+    // The window came back: the list (states, opens, what is new) is drawn again, unless the person is in the middle of something here (the form, selecting several, a menu, a field).
+    if (window.__live) window.__live.register('shares', { tab: 'links', refresh: function () {
+      return refresh(true).then(function () { if (window.__slSeen) setTimeout(window.__slSeen, 1500); });
+    }, busy: function () {
+      var bar = document.getElementById('sl-bulk'), f = box.querySelector('#sl-form'), el = document.activeElement;
+      return (!!f && !f.hidden) || (!!bar && !bar.hidden) || !!box.querySelector('.sl-popmenu:not([hidden])') || (!!el && box.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+    } });
     function copy(text, done) {
       if (window.GalleryShare && window.GalleryShare.copyText) { window.GalleryShare.copyText(text, done); return; }   // (the share kit's copy: it never fails the first press)
       if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); return; }
@@ -20362,7 +20374,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     if (isset($_GET['filesdownload'])) { files_download_route($dir, $files); return; }
-    if (isset($_GET['visits']) || isset($_GET['visitsexport']) || isset($_GET['linkphotos']) || isset($_GET['linkcover'])) {   // the Shares tab's fragments and CSV downloads
+    if (isset($_GET['visits']) || isset($_GET['visitsexport']) || isset($_GET['linkphotos']) || isset($_GET['linkcover']) || isset($_GET['linkspanel'])) {   // the Shares tab's fragments and CSV downloads
         run_links_view_route($dir, $files);
         return;
     }

@@ -3125,6 +3125,21 @@ try:
         ok(nb2.startswith("count bad|") and "not seen" in nb2, "[live refresh] on another tab (Settings) a lockout that happens meanwhile turns the sidebar's Visitors number red when the window comes back", nb2)
         b.js("document.querySelector('.side-link[data-tab=visits]').click()"); b.drain(3.5)
         ok(b.js("document.querySelector('.side-link[data-tab=visits] .count').className") == "count", "[live refresh] ...and opening the Visitors tab makes it grey again")
+        # ---- the Shares list is drawn again when the window comes back, unless the person is in the middle of something there
+        ljar = http.cookiejar.CookieJar(); lhttp(BL + "/?admin", {"access_code": LPW}, jar=ljar)
+        lcsrf = re.search(r'name="csrf_token" value="([0-9a-f]+)"', lhttp(BL + "/?admin", jar=ljar)[1]).group(1)
+        b.goto(BL + "/?admin&classic=1&sl2=1#links", 3.0); b.js("window.__live.min = 0")
+        lrow = lambda: b.js("(() => { const r = document.querySelector('details.sl-row'); return r ? r.querySelector('summary').innerText.replace(/\\s+/g, ' ') : null; })()")
+        lid0 = b.js("document.querySelector('details.sl-row').getAttribute('data-id')"); sl0 = lrow(); was_paused = "aused" in sl0
+        flip = lambda: lhttp(BL + "/?admin", {"action": "link_resume" if was_paused else "link_pause", "id": lid0, "csrf_token": lcsrf}, {"X-Requested-With": "gallery-fetch"}, ljar)
+        unflip = lambda: lhttp(BL + "/?admin", {"action": "link_pause" if was_paused else "link_resume", "id": lid0, "csrf_token": lcsrf}, {"X-Requested-With": "gallery-fetch"}, ljar)
+        flip(); comes_back(); sl1 = lrow()
+        ok(sl1 != sl0 and ("aused" in sl1) != was_paused, "[live refresh] with the Shares tab open, a link paused or resumed meanwhile (by another browser) shows its new state when the window comes back (no reload)", f"{sl0!r} -> {sl1!r}")
+        b.js("document.querySelector('[data-sl=new]').click()"); b.drain(0.4)
+        unflip(); comes_back(); sl2 = lrow()
+        ok(sl2 == sl1 and b.js("!document.querySelector('#sl-form').hidden"), "[live refresh] while the new-link form is open the list is not swapped under the person: the row is as it was and the form is still open", f"{sl1!r} / {sl2!r}")
+        b.js("document.querySelector('#sl-form [data-sl=cancel]').click()"); b.drain(3.0)
+        ok(lrow() == sl0, "[live refresh] ...and it catches up once the form is closed", f"{lrow()!r} vs {sl0!r}")
         for i in range(10):   # (another lockout, and the desktop shell's own sidebar: red, then grey after the tab is opened in its frame)
             try: urllib.request.urlopen(BL + "/?link=Again%d" % i)
             except urllib.error.HTTPError: pass
