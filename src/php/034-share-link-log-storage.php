@@ -268,6 +268,70 @@ function link_visitor_identity() {
     return [substr(md5($ip . '|' . $label), 0, 10), $ip, $label, client_country()];
 }
 
+/* ---- Lockouts: too many wrong access codes, setup codes or addresses pause a connection for a minute (see login_throttle_record_failure); that is written down ---- */
+
+/** What a lockout is about, by the throttle's realm: the admin box and the private-view box are one sign-in. '' for a realm that is not written down. */
+function lockout_kind_of($realm) { return ['admin' => 'signin', 'reveal' => 'signin', 'setup' => 'setup', 'link' => 'addr'][(string) $realm] ?? ''; }
+function lockout_kind_names() { return ['signin' => 'sign-in', 'setup' => 'setup code', 'addr' => 'addresses']; }
+function lockout_counts_path() { return __DIR__ . '/.gallery-lockouts.php'; }
+
+/** A lockout has just begun for $ip. Always: one more on today's count for its kind (a small file of counts per day, kept 30 days, never an address, so it
+ *  is there whether or not anything is logged). And when the Visitors tab is there: a line in the visitor log, with the address and country. A log that
+ *  fails must never turn a lockout into an error page, so nothing here throws. One sign-in is counted once even when it trips both of the allowances it counts against. */
+function lockout_noted($realm, $ip) {
+    static $done = [];
+    $kind = lockout_kind_of($realm);
+    if ($kind === '' || isset($done[$kind])) return;
+    $done[$kind] = true;
+    try {
+        $day = gmdate('Y-m-d');
+        json_file_update(lockout_counts_path(), [], function (&$d) use ($kind, $day) {
+            $d[$day][$kind] = (int) ($d[$day][$kind] ?? 0) + 1;
+            $old = gmdate('Y-m-d', time() - 30 * 86400);
+            foreach (array_keys($d) as $k) if ((string) $k < $old) unset($d[$k]);
+        });
+        if (visits_tab_wanted()) lockout_log_row($kind, $ip);
+    } catch (Throwable $e) {
+    }
+}
+
+/** The lockout as a line in the visitor log: a visitor under the lockouts source (one per address and kind, the number of times it happened in Opens), and a line in the timeline. */
+function lockout_log_row($kind, $ip) {
+    $label = ua_label($_SERVER['HTTP_USER_AGENT'] ?? ''); $country = client_country(); $now = time();
+    $vid = substr(hash('sha256', $ip . '|' . $kind), 0, 16);
+    visitlog_tx(function ($db) use ($kind, $ip, $label, $country, $now, $vid) {
+        visitlog_touch($db, LOCKOUT_LOG_ID, $vid, $ip, $label, $country, $now);
+        $db->prepare('UPDATE visitors SET opens = opens + 1, entry_h = ? WHERE src = ? AND vid = ?')->execute([$kind, LOCKOUT_LOG_ID, $vid]);
+        visitlog_event($db, LOCKOUT_LOG_ID, ['t' => $now, 'v' => $vid, 'k' => 'lockout', 'd' => $kind]);
+        visitlog_retention($db, $now);
+    });
+}
+
+/** Lockouts since the owner last opened the Visitors tab (each time one started counts): the sidebar's number is red while there are some. */
+function lockout_unseen_count() {
+    if (!is_file(visitlog_path()) || ($db = visitlog_db()) === null) return 0;
+    try {
+        $st = $db->prepare('SELECT COUNT(*) FROM events WHERE src = ? AND t1 > CAST(? AS INTEGER)');
+        $st->execute([LOCKOUT_LOG_ID, (int) visitlog_meta_get($db, 'lockseen')]);
+        return (int) $st->fetchColumn();
+    } catch (Throwable $e) { return 0; }
+}
+/** The Visitors tab was opened: what has happened up to now is seen. */
+function lockout_mark_seen() { visitlog_tx(function ($db) { visitlog_meta_set($db, 'lockseen', time()); }); }
+
+/** How many lockouts there were in the last $days days (today included), by kind, from the small file of counts: ['signin', 'setup', 'addr', 'total']. */
+function lockout_counts($days = 7) {
+    $d = json_file_read(lockout_counts_path(), []);
+    $from = gmdate('Y-m-d', time() - ($days - 1) * 86400);
+    $out = ['signin' => 0, 'setup' => 0, 'addr' => 0, 'total' => 0];
+    foreach ((array) $d as $day => $c) {
+        if ((string) $day < $from || !is_array($c)) continue;
+        foreach (['signin', 'setup', 'addr'] as $k) $out[$k] += (int) ($c[$k] ?? 0);
+    }
+    $out['total'] = $out['signin'] + $out['setup'] + $out['addr'];
+    return $out;
+}
+
 /** A counted opening of the link (someone pressed the button). */
 function link_log_opened($link) {
     if (link_preview() !== null) return;

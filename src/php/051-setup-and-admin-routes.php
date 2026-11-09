@@ -93,10 +93,6 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     $ip = client_ip();
-    if (!login_throttle_allows($dir, 'admin', $ip)) {
-        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', login_throttle_wait($dir, 'admin', $ip));
-        return;
-    }
     // Already logged in (the session carries it), or a Basic Authorization
     // header (scripts), or the password form. A visitor with no session
     // cookie never starts a session just by asking for ?admin.
@@ -110,6 +106,12 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         session_regenerate_id(true);
         $_SESSION['admin_auth'] = admin_session_marker();
         $sessionAuthed = true;
+    }
+    if (!$sessionAuthed && !login_throttle_allows($dir, 'admin', $ip)) {
+        // Only someone who is not signed in is held back: a session that is already signed in is not guessing anything, and whoever shares this address
+        // (a roommate, a proxy that hides the real one) must not be able to lock the owner out of the admin by guessing wrong.
+        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', login_throttle_wait($dir, 'admin', $ip));
+        return;
     }
     if (!$sessionAuthed) {
         $basicSupplied = isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']);

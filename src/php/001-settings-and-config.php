@@ -549,4 +549,5 @@ const LINK_ADDRESS_TAKEN = 'Another link has (or had) that address: pick another
 // Names a link may not take: addresses the gallery uses itself.
 const LINK_RESERVED_NAMES = ['admin', 'administrator', 'login', 'logout', 'signin', 'reveal', 'index', 'about', 'link', 'links', 'share', 'gallery', 'robots', 'sitemap', 'favicon', 'assets', 'static', 'public', 'private', 'photos', 'media', 'download', 'downloads', 'cache', 'config', 'null', 'none', 'test'];
 const LINK_REOPEN_GRACE_SECONDS = 900;   // the same address opening again this soon (an app's own browser, then Safari) is not a second use
+const LOCKOUT_LOG_ID = 'fffffffffe';   // the source of the lockouts in the visitor log (a lockout is a line there, like a visit)
 const PUBLIC_LOG_ID = 'ffffffffff';   // the source of the public address's records in the visitor log (an older version kept it as a record in the links file)

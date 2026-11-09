@@ -74,7 +74,8 @@ function login_throttle_wait($rootDir, $realm, $ip) {
  *  landed from the same IP within the last 15 minutes. */
 function login_throttle_record_failure($rootDir, $realm, $ip, $limit = 5) {
     $key = login_throttle_key($realm, $ip);
-    json_file_update(login_throttle_path($rootDir), [], function (&$data) use ($key, $limit) {
+    $tripped = false;
+    json_file_update(login_throttle_path($rootDir), [], function (&$data) use ($key, $limit, &$tripped) {
         $now = time();
         $entry = $data[$key] ?? ['attempts' => [], 'lockUntil' => 0];
         $entry['attempts'] = array_values(array_filter($entry['attempts'], function ($t) use ($now) {
@@ -84,6 +85,7 @@ function login_throttle_record_failure($rootDir, $realm, $ip, $limit = 5) {
         if (count($entry['attempts']) >= $limit) {
             $entry['lockUntil'] = $now + 60;
             $entry['attempts'] = [];
+            $tripped = true;
         }
         $data[$key] = $entry;
         // The file is read on every sign-in and share-link visit, so it must not grow: forget whoever has no lockout running and no
@@ -97,6 +99,7 @@ function login_throttle_record_failure($rootDir, $realm, $ip, $limit = 5) {
             $data = array_slice($data, 0, 2000, true);
         }
     });
+    if ($tripped) lockout_noted($realm, $ip);   // (a lockout has just begun: it is written down, see lockout_noted)
 }
 
 /** Clears a realm/IP's failure history after a successful login. */

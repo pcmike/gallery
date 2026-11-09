@@ -73,6 +73,7 @@ QJS=/path/to/qjs python3 tests/tools/js/run_js_checks.py
 - **Graceful degradation.** Every optional feature (Imagick/GD, pdo_sqlite, a writable folder) should fail silently into a working — if reduced — experience, never a broken page.
 - Keep the Markdown subset intentionally small. This isn't meant to become a full Markdown implementation.
 - Bump `GALLERY_VERSION` and add a `CHANGELOG.md` entry for any user-facing change.
+- A link or button that jumps to somewhere else in the admin reads `→ <where>`, with the name of the place as it is on the page (`→ Visitors`, `→ Prepare media`), never "Open …" or a trailing arrow. A link inside a sentence is just the words.
 
 ## License of contributions
 

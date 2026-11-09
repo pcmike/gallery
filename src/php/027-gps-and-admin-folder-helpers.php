@@ -493,6 +493,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'logout'];
     }
 
+    if ($action === 'visits_seen') { if (visitlog_usable() && lockout_unseen_count() > 0) lockout_mark_seen(); admin_json_exit(['ok' => true]); }   // (the Visitors tab was opened: the lockouts up to now are seen, and the sidebar number stops being red)
     if ($action === 'visits_trim') visits_trim_action();   // the Visitors tab's Trim the log (answers JSON and ends the request)
     if (strncmp($action, 'link_', 5) === 0) {   // the Shares tab (answers JSON and ends the request)
         links_admin_action($action, $dir, $files);

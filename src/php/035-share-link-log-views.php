@@ -75,7 +75,7 @@ function visit_country_codes_matching($word) {
 
 /** The visitor log's name for a source: the public address, or a link's name. */
 function visits_source_labels() {
-    $out = [PUBLIC_LOG_ID => 'Public'];
+    $out = [PUBLIC_LOG_ID => 'Public', LOCKOUT_LOG_ID => 'Lockouts'];
     foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && isset($l['id'], $l['label']) && !link_is_public_log($l)) $out[$l['id']] = (string) $l['label'];
     return $out;
 }
@@ -87,6 +87,7 @@ function visits_filters() {
         foreach (explode(',', isset($_GET[$k]) && is_string($_GET[$k]) ? substr($_GET[$k], 0, 1000) : '') as $v) {
             $v = trim($v);
             if ($k === 'src' && $v === 'public') $v = PUBLIC_LOG_ID;
+            if ($k === 'src' && $v === 'lockouts') $v = LOCKOUT_LOG_ID;
             if (preg_match($rx, $v)) $out[$v] = true;
         }
         return array_slice(array_keys($out), 0, 60);
@@ -245,27 +246,29 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
     $none = function ($text) { return '<div class="vt-frag" data-match="0" data-all="0"><p class="muted sl-none">' . $text . '</p></div>'; };
     if ($db === null) return $none('The visitor log isn\'t available: ' . $esc(visitlog_check()[1]));
     $all = (int) visits_query($db, 'SELECT COUNT(*) FROM visitors')->fetchColumn();
+    $wantLock = $f['src'] === [LOCKOUT_LOG_ID];
     [$w0, $p0] = visits_where($f, 'v');
     $match = (int) visits_query($db, 'SELECT COUNT(*) FROM visitors v' . $w0, $p0)->fetchColumn();
     $wrap = function ($html) use ($match, $all) { return '<div class="vt-frag" data-match="' . $match . '" data-all="' . $all . '">' . $html . '</div>'; };
-    if ($all === 0) return $wrap('<p class="muted sl-none">Nobody has been logged yet.</p>');
+    if ($all === 0) return $wrap('<p class="muted sl-none">' . ($wantLock ? 'No lockouts have been logged.' : 'Nobody has been logged yet.') . '</p>');
     if ($match === 0) return $wrap('<p class="muted sl-none">Nobody matches. <button type="button" class="linklike" data-vt="clear">Clear the choices</button></p>');
     $labels = visits_source_labels();
     $links = (array) (links_read()['links'] ?? []);
 
     if ($tab === 'visitors') {
         [$rows, $total] = visits_load_visitors($db, $f, 300);
-        $linkSrcs = []; foreach ($rows as $r) if ($r['src'] !== PUBLIC_LOG_ID) $linkSrcs[$r['src']] = true;
+        $linkSrcs = []; foreach ($rows as $r) if ($r['src'] !== PUBLIC_LOG_ID && $r['src'] !== LOCKOUT_LOG_ID) $linkSrcs[$r['src']] = true;
         $via = visits_via_map($db, array_keys($linkSrcs), $labels);
         $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Came in at</th><th>First seen</th><th>Last seen</th><th>Opens</th><th>Viewed</th></tr></thead><tbody>';
         foreach ($rows as $r) {
-            $pub = $r['src'] === PUBLIC_LOG_ID; $l = $links[$r['src']] ?? null;
-            if ($pub) $came = visits_entry_html($dir, $r['entry_f'] !== null ? ['f' => $r['entry_f'], 'h' => $r['entry_h']] + ($r['entry_u'] ? ['u' => 1] : []) : null);
+            $pub = $r['src'] === PUBLIC_LOG_ID; $lock = $r['src'] === LOCKOUT_LOG_ID; $l = $links[$r['src']] ?? null;
+            if ($lock) $came = '<button type="button" class="vt-src" data-src="lockouts" title="Show only the lockouts">Locked out: ' . $esc(lockout_kind_names()[(string) $r['entry_h']] ?? 'sign-in') . (((int) $r['opens']) > 1 ? ' &times;' . (int) $r['opens'] : '') . '</button>';
+            elseif ($pub) $came = visits_entry_html($dir, $r['entry_f'] !== null ? ['f' => $r['entry_f'], 'h' => $r['entry_h']] + ($r['entry_u'] ? ['u' => 1] : []) : null);
             else {
                 $viaText = visits_via_text($l, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']);
                 $came = '<button type="button" class="vt-src" data-src="' . $esc($r['src']) . '" title="Show only visitors who came in on this link">' . $esc($labels[$r['src']] ?? 'A deleted link') . '</button>' . ($viaText !== '' ? '<span class="sl-via">via: ' . $esc($viaText) . '</span>' : '');
             }
-            $out .= '<tr><td data-label="IP address"><button type="button" class="linklike vt-ip" data-ip="' . $esc($r['ip']) . '">' . $esc($r['ip']) . '</button></td><td data-label="Where">' . visits_country_html($r['country']) . '</td><td data-label="Browser">' . $esc($r['ua']) . '</td><td data-label="Came in at">' . $came . '</td><td data-label="First seen">' . link_time_html($r['first']) . '</td><td data-label="Last seen">' . link_time_html($r['last']) . '</td><td data-label="Opens">' . (int) $r['opens'] . '</td><td data-label="Viewed"><button type="button" class="linklike vt-viewed" data-ip="' . $esc($r['ip']) . '" data-go="media">' . (int) $r['views'] . ' views &rsaquo;</button></td></tr>';
+            $out .= '<tr><td data-label="IP address"><button type="button" class="linklike vt-ip" data-ip="' . $esc($r['ip']) . '">' . $esc($r['ip']) . '</button></td><td data-label="Where">' . visits_country_html($r['country']) . '</td><td data-label="Browser">' . $esc($r['ua']) . '</td><td data-label="Came in at">' . $came . '</td><td data-label="First seen">' . link_time_html($r['first']) . '</td><td data-label="Last seen">' . link_time_html($r['last']) . '</td><td data-label="Opens">' . ($lock ? '—' : (int) $r['opens']) . '</td><td data-label="Viewed">' . ($lock ? '—' : '<button type="button" class="linklike vt-viewed" data-ip="' . $esc($r['ip']) . '" data-go="media">' . (int) $r['views'] . ' views &rsaquo;</button>') . '</td></tr>';
         }
         $out .= '</tbody></table></div>';
         if ($total > count($rows)) $out .= '<p class="muted">Showing the latest ' . count($rows) . ' of ' . number_format($total) . '. Narrow it with the choices above, or export the rest.</p>';
@@ -364,8 +367,9 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         elseif ($k === 'folder') $text = 'Opened the folder <b>' . $esc(($e['f'] ?? '') === '' ? 'front page' : link_folder_label($dir, (string) $e['f'])) . '</b>';
         elseif ($k === 'zip') $text = 'Downloaded a ZIP of <b>' . $esc(($e['f'] ?? '') === '' ? 'the gallery' : link_folder_label($dir, (string) $e['f'])) . '</b> (' . (int) ($e['n'] ?? 0) . ' files)';
         elseif ($k === 'link') $text = $e['_src'] === PUBLIC_LOG_ID ? 'Visited the gallery' : 'Opened the link';
+        elseif ($k === 'lockout') $text = ['signin' => 'Locked out of signing in: too many wrong access codes', 'setup' => 'Locked out of setting up: too many wrong setup codes', 'addr' => 'Locked out: too many addresses that did not work'][(string) $e['d']] ?? 'Locked out';
         else continue;
-        $who = '<button type="button" class="linklike vt-ip" data-ip="' . $esc($e['_ip']) . '">' . $esc($e['_ip']) . '</button> &middot; ' . ($e['_src'] === PUBLIC_LOG_ID ? 'public address' : 'via ' . $esc($labels[$e['_src']] ?? 'a deleted link'));
+        $who = '<button type="button" class="linklike vt-ip" data-ip="' . $esc($e['_ip']) . '">' . $esc($e['_ip']) . '</button> &middot; ' . ($e['_src'] === LOCKOUT_LOG_ID ? 'paused for a minute' : ($e['_src'] === PUBLIC_LOG_ID ? 'public address' : 'via ' . $esc($labels[$e['_src']] ?? 'a deleted link')));
         $out .= '<div class="sl-ev"><span class="sl-evt">' . $when . '</span><div class="' . ($pic !== '' ? 'sl-evpic' : 'sl-evbody') . '">' . $pic . '<div>' . $text . '<div class="muted sl-evl">' . $who . '</div></div></div></div>';
     }
     $out .= '</div>' . ($evTotal > count($events) ? '<p class="note">Showing the latest ' . count($events) . ' of ' . number_format($evTotal) . ' lines. Narrow it with the choices above, or export the whole timeline.</p>' : '');
@@ -390,16 +394,19 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
     $labels = visits_source_labels();
     $links = [];
     foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && isset($l['id'], $l['label']) && !link_is_public_log($l)) $links[] = $l;
-    $bySrc = []; $countries = []; $total = 0;
+    $bySrc = []; $countries = []; $total = 0; $lockN = 0; $lockTrips = 0;
     if ($db !== null) {
-        foreach (visits_query($db, 'SELECT src, COUNT(*) AS c FROM visitors GROUP BY src')->fetchAll() as $r) { $bySrc[$r['src']] = (int) $r['c']; $total += (int) $r['c']; }
+        foreach (visits_query($db, 'SELECT src, COUNT(*) AS c, SUM(opens) AS o FROM visitors GROUP BY src')->fetchAll() as $r) {
+            if ($r['src'] === LOCKOUT_LOG_ID) { $lockN = (int) $r['c']; $lockTrips = (int) $r['o']; }
+            $bySrc[$r['src']] = (int) $r['c']; $total += (int) $r['c'];
+        }
         foreach (visits_query($db, 'SELECT country, COUNT(*) AS c FROM visitors WHERE country <> \'\' GROUP BY country ORDER BY c DESC, country')->fetchAll() as $r) $countries[] = ['c' => $r['country'], 'name' => visit_country_name($r['country']), 'n' => (int) $r['c']];
     }
-    $pubN = (int) ($bySrc[PUBLIC_LOG_ID] ?? 0); $linkN = $total - $pubN;
-    $info = ['total' => $total, 'pub' => $pubN, 'links' => array_map(function ($l) use ($bySrc) { return ['id' => $l['id'], 'name' => $l['label'], 'n' => (int) ($bySrc[$l['id']] ?? 0)]; }, $links), 'countries' => $countries];
+    $pubN = (int) ($bySrc[PUBLIC_LOG_ID] ?? 0); $linkN = $total - $pubN - $lockN;
+    $info = ['total' => $total, 'pub' => $pubN, 'lock' => $lockN, 'links' => array_map(function ($l) use ($bySrc) { return ['id' => $l['id'], 'name' => $l['label'], 'n' => (int) ($bySrc[$l['id']] ?? 0)]; }, $links), 'countries' => $countries];
     $plural = function ($n, $one, $many) { return number_format($n) . ' ' . ($n === 1 ? $one : $many); };
     $span = LOG_KEEP_DAYS > 0 ? 'in the last ' . ($plural(LOG_KEEP_DAYS, 'day', 'days')) : 'so far';
-    $summary = $plural($pubN, 'public visitor', 'public visitors') . ' and ' . $plural($linkN, 'visitor', 'visitors') . ' on share links ' . $span . ' &middot; ' . $plural(count($links), 'share', 'shares');
+    $summary = $plural($pubN, 'public visitor', 'public visitors') . ' and ' . $plural($linkN, 'visitor', 'visitors') . ' on share links ' . $span . ' &middot; ' . $plural(count($links), 'share', 'shares') . ($lockTrips > 0 ? ' &middot; ' . $plural($lockTrips, 'lockout', 'lockouts') : '');
     $csrf = $esc($csrfToken);
 ?>
     <section class="panel vt" id="vt-root" data-csrf="<?= $csrf ?>" data-info="<?= $esc(json_encode($info, JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
@@ -417,8 +424,7 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
       <div class="vt-top">
         <div class="vt-pills">
           <span class="vt-pw"><button type="button" class="vt-chip" data-pill="cc" aria-haspopup="true" aria-expanded="false"><span class="vt-l">All</span> &#9662; <em></em></button></span>
-          <button type="button" class="vt-chip" data-pill="pub">Public <em></em></button>
-          <?php if ($links || $linkN > 0): ?><span class="vt-pw"><button type="button" class="vt-chip" data-pill="links" aria-haspopup="true" aria-expanded="false"><span class="vt-l">Share links</span> &#9662; <em></em></button></span><?php endif; ?>
+          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="src" aria-haspopup="true" aria-expanded="false"><span class="vt-l">Sources</span> &#9662; <em></em></button></span>
         </div>
         <div class="vt-sw"><input type="search" class="vt-search" placeholder="Find a visitor" aria-label="Find a visitor" autocomplete="off" spellcheck="false" enterkeyhint="search"><button type="button" class="vt-sx" data-vt="clearq" aria-label="Clear the search" title="Clear the search" hidden>&times;</button></div>
         <div class="vt-menuwrap">
@@ -439,7 +445,7 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
         <div class="admin-modal-card">
           <h3 id="vt-modal-title">Trim the log</h3>
           <div class="sl-modal-body">
-            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><option value="all">All of them</option><option value="<?= $esc(PUBLIC_LOG_ID) ?>">The public address</option><?php foreach ($links as $l): ?><option value="<?= $esc($l['id']) ?>"><?= $esc($l['label']) ?></option><?php endforeach; ?></select></div>
+            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><option value="all">All of them</option><option value="<?= $esc(PUBLIC_LOG_ID) ?>">The public address</option><option value="<?= $esc(LOCKOUT_LOG_ID) ?>">The lockouts</option><?php foreach ($links as $l): ?><option value="<?= $esc($l['id']) ?>"><?= $esc($l['label']) ?></option><?php endforeach; ?></select></div>
             <div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="vt-trim-age"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="vt-trim-date" hidden></div>
             <p class="hint" id="vt-trim-out" role="status">Counting&hellip;</p>
             <p class="hint">Opens, views and the number of visitors stay. To keep the lines themselves, download them first: <a id="vt-trim-dl-events" href="#">the timeline</a> &middot; <a id="vt-trim-dl-items" href="#">what they looked at</a> &middot; <a id="vt-trim-dl-visitors" href="#">visitors</a> (CSV, with IP addresses).</p>
@@ -500,6 +506,7 @@ function visits_export($what, array $f, $dir) {
     } else {
         foreach (visits_query($db, 'SELECT e.*, v.ip FROM events e JOIN visitors v ON v.src = e.src AND v.vid = e.vid' . $w . ' ORDER BY e.t, e.id', $p) as $e) {
             $k = $e['k']; $fl = (string) ($e['f'] ?? $e['d'] ?? '');
+            if ($k === 'lockout') { $line([$iso($e['t']), $src($e['src']), $e['ip'], 'lockout: ' . (lockout_kind_names()[(string) $e['d']] ?? ''), '', '', 1]); continue; }
             $isDir = $k === 'scroll' || $k === 'folder' || $k === 'zip' || ($k === 'arrive' && !$e['u']);
             $line([$iso($e['t']), $src($e['src']), $e['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : ($k === 'arrive' ? 'arrived' : $k)), $isDir ? ($k === 'scroll' ? (string) $e['d'] : $fl) : link_item_folder($fl), $isDir ? '' : basename($fl), $e['n'] ?: 1]);
         }
@@ -631,7 +638,7 @@ function health_checks($dir, $files) {
         $vlSize = visitlog_size(); $vlOld = visitlog_oldest();
         $vlText = $vlSize >= 1048576 ? number_format($vlSize / 1048576, $vlSize >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($vlSize / 1024)) . ' KB';
         if (LOG_WARN_MB > 0 && $vlSize > LOG_WARN_MB * 1048576)
-            $add('This install', 'warn', 'The visitor records take ' . $vlText, 'More than the ' . number_format(LOG_WARN_MB) . ' MB you asked to be warned at. The oldest record is from ' . ($vlOld > 0 ? gmdate('j M Y', $vlOld) : 'an unknown date') . '. Trim the log in the Visitors tab, or set how long records are kept in Settings.', ['visits', 'vt-root', 'Open the Visitors tab']);
+            $add('This install', 'warn', 'The visitor records take ' . $vlText, 'More than the ' . number_format(LOG_WARN_MB) . ' MB you asked to be warned at. The oldest record is from ' . ($vlOld > 0 ? gmdate('j M Y', $vlOld) : 'an unknown date') . '. Trim the log in the Visitors tab, or set how long records are kept in Settings.', ['visits', 'vt-root', '→ Visitors']);
         else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. ' . visitlog_visitor_count() . ' visitor' . (visitlog_visitor_count() === 1 ? '' : 's') . ' logged, taking ' . $vlText . '.' . ($vlOld > 0 ? ' The oldest record is from ' . gmdate('j M Y', $vlOld) . '.' : ''));
     }
     else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. Nothing has been logged yet.');
@@ -651,6 +658,16 @@ function health_checks($dir, $files) {
     $pwRow('Admin password', ADMIN_PASSWORD, 'warn', 'Without one the admin is not available (open ?admin to set one: it asks for the code in gallery-setup-code.php).');
     $pwRow('Private-view password', PRIVATE_VIEW_PASSWORD, 'info', 'Fine if you have no private items to share.');
     $add('Settings and passwords', is_file(rtrim($dir, '/') . '/.gallery-secret.php') ? 'ok' : 'info', is_file(rtrim($dir, '/') . '/.gallery-secret.php') ? 'Sign-in key present' : 'Sign-in key not made yet', is_file(rtrim($dir, '/') . '/.gallery-secret.php') ? '' : 'It is made the first time someone signs in.');
+
+    // --- lockouts: how many times a connection was paused for too many wrong codes or addresses. A small count of times and kinds is kept whether or not anything is logged; with the Visitors tab there, the addresses are in it.
+    $lo = lockout_counts(7);
+    if ($lo['total'] > 0) {
+        $loParts = []; foreach (lockout_kind_names() as $k => $loName) if ($lo[$k] > 0) $loParts[] = $loName . ' ' . $lo[$k];
+        $loTab = visits_tab_wanted();
+        $add('Settings and passwords', 'opt', number_format($lo['total']) . ' lockout' . ($lo['total'] === 1 ? '' : 's') . ' in the last 7 days',
+            'A connection was paused for a minute after too many wrong codes or addresses (' . implode(', ', $loParts) . ').' . ($loTab ? '' : ' Who it was is not kept: the Visitors tab shows it once share links or the public log are on.'),
+            null, $loTab ? '<a class="health-more" href="#visits" data-vt-go="lockouts">&rarr; Visitors</a>' : '');
+    }
 
     // --- where the gallery's folders live
     $named = is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [];
@@ -691,7 +708,7 @@ function health_checks($dir, $files) {
     foreach (browser_rows() as $br) {
         foreach ($br['flags'] as $flagName => [$flagDetail, $flagAt, $flagLoud]) {
             $add('Signed-in browsers', $flagLoud, signin_flag_info($flagName)[0] . ': ' . ($br['kind'] === 'owner' ? 'you' : 'private view') . ' on ' . ($br['lab'] !== '' ? $br['lab'] : 'a device'),
-                $flagDetail . ' (' . date('M j, g:i a', $flagAt) . '). Looks fine clears it, Sign out ends that browser.', ['site', 'browsers-row', 'Open the list']);
+                $flagDetail . ' (' . date('M j, g:i a', $flagAt) . '). Looks fine clears it, Sign out ends that browser.', ['site', 'browsers-row', '→ Browsers signed in']);
         }
     }
     $sgFiles = (array) @glob(__DIR__ . '/.gallery-signin-*.php'); $sgTotal = 0; $sgBig = 0; $sgBigId = '';
@@ -701,14 +718,14 @@ function health_checks($dir, $files) {
         $sgAgo = function ($days) use ($sgSizes) { $want = date('Y-m-d', time() - $days * 86400); foreach ($sgSizes as $day => $v) if ($day <= $want) return signin_size_text((int) ($v[0] ?? 0)); return 'not noted yet'; };
         $sgWho = ''; foreach (browser_rows() as $sgR) if ($sgR['id'] === $sgBigId) $sgWho = ' (' . ($sgR['kind'] === 'owner' ? 'you' : 'private view') . ' on ' . $sgR['lab'] . ')';
         $add('Signed-in browsers', 'info', 'Address history: ' . signin_size_text($sgTotal) . ' in ' . count($sgFiles) . ' file' . (count($sgFiles) === 1 ? '' : 's'),
-            'The largest is ' . signin_size_text($sgBig) . $sgWho . '. A week ago the total was ' . $sgAgo(7) . ', a month ago ' . $sgAgo(30) . '. It is kept ' . BROWSER_HISTORY_DAYS . ' days and nothing else caps it; a history that grows fast is worth a look.', ['site', 'browsers-row', 'Open the list']);
+            'The largest is ' . signin_size_text($sgBig) . $sgWho . '. A week ago the total was ' . $sgAgo(7) . ', a month ago ' . $sgAgo(30) . '. It is kept ' . BROWSER_HISTORY_DAYS . ' days and nothing else caps it; a history that grows fast is worth a look.', ['site', 'browsers-row', '→ Browsers signed in']);
     }
 
     // --- the country file
     if (COUNTRY_LOOKUP) {
         $gs = geo_state(); $gHave = is_file(geo_db_path());
         $add('Signed-in browsers', 'info', $gHave ? 'Country file: the ' . ($gs['ym'] !== '' ? date('F Y', (int) strtotime($gs['ym'] . '-01')) : 'current') . ' edition, ' . signin_size_text((int) @filesize(geo_db_path())) : 'Country file: not fetched yet',
-            ($gHave ? 'IP geolocation by DB-IP (CC BY 4.0); fetched ' . date('M j', (int) ($gs['at'] ?: @filemtime(geo_db_path()))) . ', and it looks for a newer one every 7 days.' : 'It is fetched at the next visit, or press Refresh now in Settings.') . ($gs['error'] !== '' ? ' The last try (' . date('M j, g:i a', (int) $gs['triedAt']) . ') did not work: ' . $gs['error'] : ''), ['site', 'geo-row', 'Open the setting']);
+            ($gHave ? 'IP geolocation by DB-IP (CC BY 4.0); fetched ' . date('M j', (int) ($gs['at'] ?: @filemtime(geo_db_path()))) . ', and it looks for a newer one every 7 days.' : 'It is fetched at the next visit, or press Refresh now in Settings.') . ($gs['error'] !== '' ? ' The last try (' . date('M j, g:i a', (int) $gs['triedAt']) . ') did not work: ' . $gs['error'] : ''), ['site', 'geo-row', '→ Country lookup']);
     }
 
     // --- videos
@@ -720,7 +737,7 @@ function health_checks($dir, $files) {
     // checks") for what the Prepare button does by itself, or is only for information. Each lists its files, linked to their editors.
     if (ENABLE_THUMBNAIL_CACHE && $files) {
         $mr = media_readiness($dir, $files); $ma = media_attention($dir, $files);
-        $go = ['site', 'media-panel', 'Open Prepare media'];
+        $go = ['site', 'media-panel', '→ Prepare media'];
         $n = function ($x, $one, $many = null) { return number_format($x) . ' ' . ($x === 1 ? $one : ($many ?? $one . 's')); };
         $rowFor = [
             'unreadable' => ['warn', function ($c) use ($n) { return $n($c, 'file') . ' couldn\'t be read'; }, 'No capture date or location could be read from these (a damaged file, or a kind the gallery can\'t read). They still show.'],
@@ -759,12 +776,12 @@ function health_checks($dir, $files) {
     if (AUTO_GROUP_BY_FOLDER) {
         $ev = moved_in_earlier_views($dir, $files);
         if ($ev['views'] > 0) $leftBehind('earlier-views', $ev['views'], 'warn', number_format($ev['views']) . ' earlier view' . ($ev['views'] === 1 ? ' is' : 's are') . ' waiting to be added',
-            'Counted by another gallery, under the old addresses of ' . $ev['folders'] . ' folder' . ($ev['folders'] === 1 ? '' : 's') . '.' . (TRACK_VIEWS ? '' : ' Turn on Count views first.'), ['site', 'setting-TRACK_VIEWS', 'Open Count views']);
+            'Counted by another gallery, under the old addresses of ' . $ev['folders'] . ' folder' . ($ev['folders'] === 1 ? '' : 's') . '.' . (TRACK_VIEWS ? '' : ' Turn on Count views first.'), ['site', 'setting-TRACK_VIEWS', '→ Count views']);
         $lo = moved_in_leftovers($dir, $files);
         if ($lo['count'] > 0) $leftBehind('leftover-thumbs', $lo['count'], 'opt', number_format($lo['count']) . ' leftover thumbnail' . ($lo['count'] === 1 ? '' : 's') . ' (' . ($lo['bytes'] >= 1048576 ? round($lo['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($lo['bytes'] / 1024)) . ' KB') . ') from another gallery',
-            'Pictures an older gallery made in folders elsewhere on the server. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', 'Open Prepare media']);
+            'Pictures an older gallery made in folders elsewhere on the server. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', '→ Prepare media']);
         if (EXTRA_ROOTS && ($loose = count_loose_media_in_roots()) > 0) $leftBehind('loose-photos', $loose, 'warn', number_format($loose) . ' photo' . ($loose === 1 ? '' : 's') . ' lying directly in a place added without a name',
-            'Only the folders inside such a place are shown, so these photos are not. Move them into a folder to show them, or give the place a name.', ['site', 'setting-EXTRA_FOLDERS', 'Open Folders from elsewhere']);
+            'Only the folders inside such a place are shown, so these photos are not. Move them into a folder to show them, or give the place a name.', ['site', 'setting-EXTRA_FOLDERS', '→ Folders from elsewhere']);
         $copied = [];
         foreach (folder_id_map_folders($dir, $files) as $fid => $paths) {
             if (count($paths) < 2) continue;
@@ -779,7 +796,7 @@ function health_checks($dir, $files) {
         }
         $bk = media_tidy_backups($dir, $files);
         $bkN = is_array($bk) ? (isset($bk['count']) ? (int) $bk['count'] : count($bk)) : 0;
-        if ($bkN > 0) $add('Left behind', 'info', number_format($bkN) . ' backup' . ($bkN === 1 ? '' : 's') . ' from Tidy up saved locations', 'Copies of folder data from before a tidy-up. They stay until you delete them in Prepare media, once you are sure.', ['site', 'media-panel', 'Open Prepare media']);
+        if ($bkN > 0) $add('Left behind', 'info', number_format($bkN) . ' backup' . ($bkN === 1 ? '' : 's') . ' from Tidy up saved locations', 'Copies of folder data from before a tidy-up. They stay until you delete them in Prepare media, once you are sure.', ['site', 'media-panel', '→ Prepare media']);
     }
     return $rows;
 }

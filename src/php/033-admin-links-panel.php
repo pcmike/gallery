@@ -90,7 +90,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
             </details>
             <?php endif; ?>
             <div class="sl-acts">
-              <?php if (visits_tab_wanted()): ?><button type="button" class="linklike" data-sl="visitors">See visitors &rarr;</button><?php endif; ?>
+              <?php if (visits_tab_wanted()): ?><button type="button" class="linklike" data-sl="visitors">&rarr; Visitors</button><?php endif; ?>
               <?php if ($state !== 'revoked'): ?><button type="button" class="linklike" data-sl="preview" title="Opens a new tab that shows the gallery exactly as this link does">Preview as this link</button><?php endif; ?>
               <?php if (in_array($state, ['active', 'scheduled'], true) && ($l['status'] ?? '') === 'active'): ?><button type="button" class="linklike" data-sl="pause">Pause</button><?php endif; ?>
               <?php if ($state === 'paused'): ?><button type="button" class="linklike" data-sl="resume">Resume</button><?php endif; ?>

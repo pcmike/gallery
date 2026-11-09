@@ -110,7 +110,10 @@ function admin_nav_counts($dir, $files) {
         if ($live > 0) $out['links'][] = ['text' => (string) $live, 'kind' => '', 'title' => $live . ' link' . ($live === 1 ? '' : 's') . ' in use'];
         if ($news > 0) $out['links'][] = ['text' => $news . ' new', 'kind' => 'new', 'title' => $news . ' link' . ($news === 1 ? ' has' : 's have') . ' news since you last looked'];
     }
-    if (visits_tab_wanted() && ($vn = visitlog_visitor_count()) > 0) $out['visits'][] = ['text' => number_format($vn), 'kind' => '', 'title' => number_format($vn) . ' visitor' . ($vn === 1 ? '' : 's') . ' in the log'];
+    if (visits_tab_wanted() && ($vn = visitlog_visitor_count()) > 0) {
+        $ln = lockout_unseen_count();   // (red while a lockout has happened that the Visitors tab has not been opened for)
+        $out['visits'][] = ['text' => number_format($vn), 'kind' => $ln > 0 ? 'bad' : '', 'title' => number_format($vn) . ' visitor' . ($vn === 1 ? '' : 's') . ' in the log' . ($ln > 0 ? ', and ' . number_format($ln) . ' lockout' . ($ln === 1 ? '' : 's') . ' you have not seen' : '')];
+    }
     $loud = 0;
     foreach (health_checks($dir, $files) as $r) if ($r[1] === 'bad' || $r[1] === 'warn') $loud++;
     if ($loud > 0) $out['site'][] = ['text' => (string) $loud, 'kind' => 'bad', 'title' => $loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at in the Health check'];

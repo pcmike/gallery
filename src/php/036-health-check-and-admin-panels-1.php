@@ -26,7 +26,7 @@ function health_headsups($dir, $files) {
         $n = count($inactive);
         $out[] = ['label' => $n === 1 ? 'The notes file ' . $inactive[0] . ' isn\'t active' : $n . ' notes files aren\'t active (' . implode(', ', array_slice($inactive, 0, 3)) . ($n > 3 ? ' …' : '') . ')',
             'detail' => 'A notes file needs {gallery} as its very first line to be used by the gallery.',
-            'html' => $btn('Open Notes', 'onclick="return adminGoTo(\'notes\');"')];
+            'html' => $btn('→ Notes', 'onclick="return adminGoTo(\'notes\');"')];
     }
     return $out;
 }
@@ -79,7 +79,7 @@ function render_admin_health_panel() {
         <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
-            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">Open Settings &rarr; Server setup</a><?php endif; ?></div>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">&rarr; Server setup</a><?php endif; ?></div>
           </div>
         <?php endforeach; ?>
       </div>
@@ -333,7 +333,7 @@ function render_admin_features_panel($adminEdited, $adminHidden) {
       <?= $row('Photo locations and maps', $onOff(ENABLE_PHOTO_LOCATION), ENABLE_PHOTO_LOCATION ? 'Each folder and photo can show its location, and each folder its own map.' : $fx['ENABLE_PHOTO_LOCATION']['off'], $goSetting(ENABLE_PHOTO_LOCATION ? 'Settings →' : 'Turn on →', 'setting-ENABLE_PHOTO_LOCATION')) ?>
       <?= $row('Share links', $onOff(ENABLE_SHARE_LINKS), ENABLE_SHARE_LINKS ? ($links > 0 ? $links . ' link' . ($links === 1 ? '' : 's') . ' made.' : 'None made yet: press Share on a private folder, or press Select, tick photos and press Share….') : 'Temporary links that let someone see private photos, with a log of what they looked at.', $goSetting(ENABLE_SHARE_LINKS ? 'Settings →' : 'Turn on →', 'setting-ENABLE_SHARE_LINKS')) ?>
       <?php if (gallery_is_closed()): ?>
-      <?= $row('Visitor downloads', $chip('opt', 'Per link'), 'The gallery is closed, so strangers see nothing to download. Each share link has its own choice of whether its visitors may download.', '<button type="button" class="secondary" onclick="return adminGoTo(\'links\');">Shares →</button>') ?>
+      <?= $row('Visitor downloads', $chip('opt', 'Per link'), 'The gallery is closed, so strangers see nothing to download. Each share link has its own choice of whether its visitors may download.', '<button type="button" class="secondary" onclick="return adminGoTo(\'links\');">→ Shares</button>') ?>
       <?php else: ?>
       <?= $row('Visitor downloads', !ENABLE_PUBLIC_DOWNLOAD ? $chip('off', 'Off') : $chip('on', 'On'), !ENABLE_PUBLIC_DOWNLOAD ? 'Visitors cannot download original photos. Switch it on in a folder\'s settings.' : 'Visitors can download the photos in the folders you switched on (never a ZIP).', '<button type="button" class="secondary" onclick="return adminGoTo(\'settings\');">Folder settings →</button>') ?>
       <?php endif; ?>
