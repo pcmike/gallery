@@ -21,6 +21,46 @@
     api.shown = function (tab) { Object.keys(parts).forEach(function (n) { if (parts[n].tab === tab) run(n); }); };
     return api;
   })();
+  // Something changed somewhere else (another browser saved a setting, a folder's captions or marks were edited, photos were added by a sync): the page shows a quiet bar with
+  // Refresh instead of swapping what the person may be editing. The page is drawn with three short fingerprints (#live-fp); they are asked for again when the window comes back,
+  // and taken again after this page's own saves (a save made here is not "somewhere else").
+  (function () {
+    var holder = document.getElementById('live-fp'); if (!holder || !window.__live) return;
+    var base = {}, bar = null, rebaseT = null, folder = (new URLSearchParams(location.search)).get('folder');
+    try { base = JSON.parse(holder.getAttribute('data-fp')) || {}; } catch (e) {}
+    function url() { return '?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : ''); }
+    function ask() { return fetch(url(), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
+    function hide() { if (bar) { bar.remove(); bar = null; } }
+    function show(texts, now) {
+      hide();
+      bar = document.createElement('div'); bar.className = 'live-note'; bar.setAttribute('role', 'status');
+      var t = document.createElement('span'); t.textContent = texts.join(' ') + ' '; bar.appendChild(t);
+      var go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go);
+      var x = document.createElement('button'); x.type = 'button'; x.className = 'linklike'; x.textContent = 'Dismiss'; x.addEventListener('click', function () { base = now; hide(); }); bar.appendChild(x);
+      var main = document.querySelector('.admin-main'); if (main) main.insertBefore(bar, main.firstChild); else document.body.insertBefore(bar, document.body.firstChild);
+    }
+    window.__live.register('changed', { refresh: function () {
+      return ask().then(function (j) {
+        if (!j) return;
+        var said = [];
+        if (base.settings !== undefined && j.settings !== base.settings) said.push('The settings were changed somewhere else.');
+        if (base.record !== undefined && j.record !== base.record) said.push("This folder's names, captions or marks were changed somewhere else.");
+        if (base.media !== undefined && j.media !== base.media) said.push('Photos in this folder were added, removed or renamed.');
+        if (said.length) show(said, j); else hide();
+      });
+    } });
+    // a save made from this page: the fingerprints are taken again, so the page does not announce its own change
+    window.__live.rebase = function () {
+      clearTimeout(rebaseT);
+      rebaseT = setTimeout(function () { ask().then(function (j) { if (j) { base = j; hide(); } }); }, 900);
+    };
+    var plainFetch = window.fetch;
+    if (plainFetch) window.fetch = function (u, o) {
+      var p = plainFetch.apply(this, arguments);
+      try { if (o && String(o.method).toUpperCase() === 'POST' && typeof u === 'string' && u.indexOf('?admin') === 0) p.then(function () { window.__live.rebase(); }, function () {}); } catch (e) {}
+      return p;
+    };
+  })();
   // The numbers on the sidebar entries (and the phone Menu's) in the page itself. In the desktop shell the sidebar is the shell's own, which asks again by itself.
   if (window.parent === window) window.__live.register('counts', { refresh: function () {
     return fetch('?admin&pbcounts=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {

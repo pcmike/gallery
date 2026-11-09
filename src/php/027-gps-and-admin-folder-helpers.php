@@ -323,6 +323,30 @@ function admin_record_hash($record) {
     return md5(json_encode($record));
 }
 
+/** What is kept in a folder's own data file as the owner sees it, in a stable order and without what is only the gallery's own bookkeeping (edited_record_keys says which
+ *  keys those are): the base of the "changed elsewhere" notice, so a view count or an id written on its own never looks like an edit. */
+function live_record_fp($data) {
+    $keys = edited_record_keys();
+    $internal = function ($map) { return array_flip(array_keys(array_filter($map, function ($v) { return $v === 'internal'; }))); };
+    $folderInternal = $internal($keys['folder']); unset($folderInternal['items']);
+    $photoInternal = $internal($keys['photo']);
+    $d = array_diff_key((array) $data, $folderInternal);
+    if (isset($d['items']) && is_array($d['items'])) foreach ($d['items'] as $name => $entry) if (is_array($entry)) $d['items'][$name] = array_diff_key($entry, $photoInternal);
+    $norm = function (&$a) use (&$norm) { if (!is_array($a)) return; ksort($a); foreach ($a as &$v) $norm($v); };
+    $norm($d);
+    return md5(json_encode($d));
+}
+
+/** Three short fingerprints of what an admin page or the gallery page shows: the settings file, the data of one folder (captions, names, marks), and the list of photos and
+ *  videos under it. Asked for again when the window comes back; a different answer means something changed somewhere else. $folderPath null is the front page. */
+function live_fingerprints($dir, $files, $folderPath) {
+    $cfg = rtrim($dir, '/') . '/.gallery-config.php';
+    $real = $folderPath === null ? $dir : resolve_real_path($dir, $folderPath);
+    $under = $folderPath === null ? $files : folder_files_under($files, $folderPath);
+    sort($under);
+    return ['settings' => is_file($cfg) ? (string) md5_file($cfg) : '', 'record' => is_string($real) && $real !== '' ? live_record_fp(items_read($real)) : '', 'media' => md5(implode("\n", $under))];
+}
+
 /** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
  *  by themselves, so they are left out: flipping one must not make the photo's caption form look out of date. */
 function admin_item_record_hash($entry) {

@@ -9564,6 +9564,29 @@ check('[live refresh] the phone Menu\'s numbers (and the page\'s sidebar, which 
 [$lkSlS, $lkSl] = http_get("$baseLk/?admin&linkspanel=1", $lkOwn);
 [, $lkSlAn] = http_get("$baseLk/?admin&linkspanel=1");
 check('[live refresh] the Shares panel can be asked for on its own (when the window comes back): just the panel, not the rest of the page, and only by the signed-in admin', $lkSlS === 200 && str_contains($lkSl, 'id="sl-root"') && !str_contains($lkSl, 'id="health-panel"') && !str_contains($lkSl, 'id="vt-root"') && !str_contains($lkSlAn, 'id="sl-root"'));
+// "changed elsewhere": three fingerprints (settings file, a folder's data, the photos under it), the same on the page and from the endpoint, moving only when something real changes
+[$lkChS, $lkChB] = http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn);
+$lkCh = json_decode((string) $lkChB, true) ?: [];
+[, $lkChPage] = http_get("$baseLk/?admin&folder=Rome", $lkOwn);
+preg_match('/id="live-fp" hidden data-fp="([^"]*)"/', $lkChPage, $lkFpM);
+$lkFp = json_decode(html_entity_decode($lkFpM[1] ?? '{}'), true) ?: [];
+[, $lkChAn] = http_get("$baseLk/?admin&changed=1&folder=Rome");
+check('[changed elsewhere] the admin page carries three fingerprints (settings, the folder\'s data, its photos) and the endpoint gives exactly the same ones (a different answer would be a notice about nothing); only the signed-in admin can ask', $lkChS === 200 && ($lkCh['ok'] ?? false) === true && preg_match('/^[0-9a-f]{32}$/', (string) ($lkCh['settings'] ?? '')) === 1 && preg_match('/^[0-9a-f]{32}$/', (string) ($lkCh['record'] ?? '')) === 1 && preg_match('/^[0-9a-f]{32}$/', (string) ($lkCh['media'] ?? '')) === 1 && $lkFp === array_intersect_key($lkCh, ['settings' => 1, 'record' => 1, 'media' => 1]) && !is_array(json_decode((string) $lkChAn, true)));
+file_put_contents("$fxLk/Rome/r2.jpg", file_get_contents("$fxLk/Rome/r1.jpg"));
+file_put_contents("$fxLk/.gallery-config.php", preg_replace('/\}\s*$/', ', "SHARE_HEADS_UP": true}', rtrim((string) file_get_contents("$fxLk/.gallery-config.php"))) . "\n");
+$lkCh2 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn)[1], true) ?: [];
+check('[changed elsewhere] a photo added to the folder changes only its photos fingerprint, and the settings file edited changes only the settings one', $lkCh2['media'] !== $lkCh['media'] && $lkCh2['settings'] !== $lkCh['settings'] && $lkCh2['record'] === $lkCh['record']);
+$lkItems = "$fxLk/Rome/.gallery-items.php";
+file_put_contents($lkItems, $lkGuard . json_encode(['items' => (object) [], 'pageviews' => 41, 'folderId' => 'abcd1234ef']));
+$lkCh3 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn)[1], true) ?: [];
+file_put_contents($lkItems, $lkGuard . json_encode(['items' => (object) [], 'pageviews' => 99, 'folderId' => 'abcd1234ef']));
+$lkCh4 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn)[1], true) ?: [];
+file_put_contents($lkItems, $lkGuard . json_encode(['items' => (object) [], 'pageviews' => 99, 'folderId' => 'abcd1234ef', 'displayName' => 'Roma']));
+$lkCh5 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn)[1], true) ?: [];
+check('[changed elsewhere] a view count or an id written by the gallery itself does not move the folder-data fingerprint, but a name typed by the owner does', $lkCh3['record'] === $lkCh4['record'] && $lkCh5['record'] !== $lkCh4['record']);
+[, $lkGalOwn] = http_get("$baseLk/?folder=Rome", $lkOwn);
+[, $lkGalVis] = http_get("$baseLk/?folder=Rome");
+check('[changed elsewhere] only the signed-in owner\'s gallery page has the marker that makes it check for new photos; a visitor\'s page has no marker, so the (inert) script there does nothing', str_contains($lkGalOwn, 'id="live-folder"') && !str_contains($lkGalVis, 'id="live-folder"'));
 // a lockout started by someone else (sharing the address) does not hold back a session that is already signed in
 $fxLk3 = new_fixture_dir('lockouts3');
 mkdir("$fxLk3/Rome"); make_jpeg("$fxLk3/Rome/r1.jpg", 60, 50, 100, 60, 60);

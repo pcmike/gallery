@@ -205,6 +205,10 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     $adminFolderReal = $adminFolderPath === null ? $dir : resolve_real_path($dir, $adminFolderPath);
+    if (isset($_GET['changed'])) {   // the fingerprints again (the window came back): did the settings, this folder's data or its photos change somewhere else?
+        header('Cache-Control: no-store');
+        admin_json_exit(['ok' => true] + live_fingerprints($dir, $files, $adminFolderPath));
+    }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');
         header('Content-Type: application/json; charset=UTF-8');

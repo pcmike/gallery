@@ -1057,7 +1057,7 @@ function request_route($reset = false) {
  *  Not listed photo's (see bare_query_as_address). */
 function reserved_query_words() {
     $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
-        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'pbcounts', 'privcounts', 'scope_type',
+        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'changed', 'pbcounts', 'privcounts', 'scope_type',
         'shellcounts', 'shellmeta', 'shelltree'];
     foreach (request_routes() as $r) foreach ($r['params'] as $p) $words[] = $p;
     return $words;
@@ -9001,6 +9001,30 @@ function admin_record_hash($record) {
     return md5(json_encode($record));
 }
 
+/** What is kept in a folder's own data file as the owner sees it, in a stable order and without what is only the gallery's own bookkeeping (edited_record_keys says which
+ *  keys those are): the base of the "changed elsewhere" notice, so a view count or an id written on its own never looks like an edit. */
+function live_record_fp($data) {
+    $keys = edited_record_keys();
+    $internal = function ($map) { return array_flip(array_keys(array_filter($map, function ($v) { return $v === 'internal'; }))); };
+    $folderInternal = $internal($keys['folder']); unset($folderInternal['items']);
+    $photoInternal = $internal($keys['photo']);
+    $d = array_diff_key((array) $data, $folderInternal);
+    if (isset($d['items']) && is_array($d['items'])) foreach ($d['items'] as $name => $entry) if (is_array($entry)) $d['items'][$name] = array_diff_key($entry, $photoInternal);
+    $norm = function (&$a) use (&$norm) { if (!is_array($a)) return; ksort($a); foreach ($a as &$v) $norm($v); };
+    $norm($d);
+    return md5(json_encode($d));
+}
+
+/** Three short fingerprints of what an admin page or the gallery page shows: the settings file, the data of one folder (captions, names, marks), and the list of photos and
+ *  videos under it. Asked for again when the window comes back; a different answer means something changed somewhere else. $folderPath null is the front page. */
+function live_fingerprints($dir, $files, $folderPath) {
+    $cfg = rtrim($dir, '/') . '/.gallery-config.php';
+    $real = $folderPath === null ? $dir : resolve_real_path($dir, $folderPath);
+    $under = $folderPath === null ? $files : folder_files_under($files, $folderPath);
+    sort($under);
+    return ['settings' => is_file($cfg) ? (string) md5_file($cfg) : '', 'record' => is_string($real) && $real !== '' ? live_record_fp(items_read($real)) : '', 'media' => md5(implode("\n", $under))];
+}
+
 /** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
  *  by themselves, so they are left out: flipping one must not make the photo's caption form look out of date. */
 function admin_item_record_hash($entry) {
@@ -16900,6 +16924,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .vt-pop-find { min-height:42px; }
     .vt-sheetbg { display:block; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:80; }   /* (above the phone bar, which is 60) */
   }
+
+  /* "Changed somewhere else": a quiet bar at the top of the admin page, with Refresh */
+  .live-note { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin:0 0 12px; padding:9px 14px; background:#1c2150; border-left:3px solid var(--accent); border-radius:0 8px 8px 0; color:#dfe2ff; font-size:0.88rem; }
+  .live-note .secondary { padding:3px 12px; }
   <?= owner_phone_bar_css() ?>
   html:has(> body.inframe) { scrollbar-gutter:stable; }  /* (the scrollbar's room is always kept, blank when there is nothing to scroll, so a short page is not centred a few pixels differently from a long one) */
   body.inframe .admin-bar, body.inframe .admin-side, body.inframe .admin-folder-head { display:none !important; }
@@ -16961,6 +16989,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
+  <div id="live-fp" hidden data-fp="<?= htmlspecialchars(json_encode(live_fingerprints($dir, $files, $adminFolderPath)), ENT_QUOTES, 'UTF-8') ?>"></div>
   <div id="server-probe" hidden data-any-private="<?= !empty($GLOBALS['__lock_probe']['anyPrivate']) ? '1' : '0' ?>" data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>" data-visits="<?= htmlspecialchars(is_file(visitlog_path()) ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . basename(visitlog_path()) : '', ENT_QUOTES, 'UTF-8') ?>" data-share-probe="<?= htmlspecialchars(ENABLE_SHARE_LINKS ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . LINK_PROBE_TOKEN : '', ENT_QUOTES, 'UTF-8') ?>"></div>
   <div class="tab-panel" data-tab="features">
 <?= render_admin_features_panel($adminEdited, $adminHidden ?: []) ?>
@@ -17148,6 +17177,46 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     api.register = function (name, part) { parts[name] = part; last[name] = Date.now(); };   // (it has just been drawn: the first refresh is not before api.min)
     api.shown = function (tab) { Object.keys(parts).forEach(function (n) { if (parts[n].tab === tab) run(n); }); };
     return api;
+  })();
+  // Something changed somewhere else (another browser saved a setting, a folder's captions or marks were edited, photos were added by a sync): the page shows a quiet bar with
+  // Refresh instead of swapping what the person may be editing. The page is drawn with three short fingerprints (#live-fp); they are asked for again when the window comes back,
+  // and taken again after this page's own saves (a save made here is not "somewhere else").
+  (function () {
+    var holder = document.getElementById('live-fp'); if (!holder || !window.__live) return;
+    var base = {}, bar = null, rebaseT = null, folder = (new URLSearchParams(location.search)).get('folder');
+    try { base = JSON.parse(holder.getAttribute('data-fp')) || {}; } catch (e) {}
+    function url() { return '?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : ''); }
+    function ask() { return fetch(url(), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
+    function hide() { if (bar) { bar.remove(); bar = null; } }
+    function show(texts, now) {
+      hide();
+      bar = document.createElement('div'); bar.className = 'live-note'; bar.setAttribute('role', 'status');
+      var t = document.createElement('span'); t.textContent = texts.join(' ') + ' '; bar.appendChild(t);
+      var go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go);
+      var x = document.createElement('button'); x.type = 'button'; x.className = 'linklike'; x.textContent = 'Dismiss'; x.addEventListener('click', function () { base = now; hide(); }); bar.appendChild(x);
+      var main = document.querySelector('.admin-main'); if (main) main.insertBefore(bar, main.firstChild); else document.body.insertBefore(bar, document.body.firstChild);
+    }
+    window.__live.register('changed', { refresh: function () {
+      return ask().then(function (j) {
+        if (!j) return;
+        var said = [];
+        if (base.settings !== undefined && j.settings !== base.settings) said.push('The settings were changed somewhere else.');
+        if (base.record !== undefined && j.record !== base.record) said.push("This folder's names, captions or marks were changed somewhere else.");
+        if (base.media !== undefined && j.media !== base.media) said.push('Photos in this folder were added, removed or renamed.');
+        if (said.length) show(said, j); else hide();
+      });
+    } });
+    // a save made from this page: the fingerprints are taken again, so the page does not announce its own change
+    window.__live.rebase = function () {
+      clearTimeout(rebaseT);
+      rebaseT = setTimeout(function () { ask().then(function (j) { if (j) { base = j; hide(); } }); }, 900);
+    };
+    var plainFetch = window.fetch;
+    if (plainFetch) window.fetch = function (u, o) {
+      var p = plainFetch.apply(this, arguments);
+      try { if (o && String(o.method).toUpperCase() === 'POST' && typeof u === 'string' && u.indexOf('?admin') === 0) p.then(function () { window.__live.rebase(); }, function () {}); } catch (e) {}
+      return p;
+    };
   })();
   // The numbers on the sidebar entries (and the phone Menu's) in the page itself. In the desktop shell the sidebar is the shell's own, which asks again by itself.
   if (window.parent === window) window.__live.register('counts', { refresh: function () {
@@ -20391,6 +20460,10 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     $adminFolderReal = $adminFolderPath === null ? $dir : resolve_real_path($dir, $adminFolderPath);
+    if (isset($_GET['changed'])) {   // the fingerprints again (the window came back): did the settings, this folder's data or its photos change somewhere else?
+        header('Cache-Control: no-store');
+        admin_json_exit(['ok' => true] + live_fingerprints($dir, $files, $adminFolderPath));
+    }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');
         header('Content-Type: application/json; charset=UTF-8');
@@ -23985,6 +24058,12 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   }
   /* The owner's shell: the page without its own sticky bar (the shell's path and tree do that job). */
   html:has(> body.inframe) { scrollbar-gutter: stable; }
+
+  /* The owner's page: photos here changed (a sync, an upload) while it was open. A quiet pill at the bottom, with Refresh. */
+  .live-note-fixed { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:80; display:flex; align-items:center; gap:10px; max-width:calc(100vw - 24px); padding:8px 8px 8px 16px; background:#1c2150; color:#dfe2ff; border:1px solid #3a4190; border-radius:999px; box-shadow:0 6px 20px rgba(0,0,0,0.45); font-size:0.9rem; }
+  .live-note-fixed button { font:inherit; cursor:pointer; border:0; border-radius:999px; padding:5px 14px; background:#5865f2; color:#fff; }
+  .live-note-fixed .live-x { padding:5px 10px; background:transparent; color:#aab2ff; font-size:1.1rem; line-height:1; }
+  @media (max-width: 800px) { body.pb-on .live-note-fixed { bottom:calc(74px + env(safe-area-inset-bottom, 0px)); } }
   <?= owner_phone_bar_css() ?>
   body.inframe .crumb-bar { display: none; }
   body.inframe .crumb-bar.has-sec { display: flex; }   /* (inside the admin the tree and the title line are the way back and the folders beside this one; the pills for the page's own folders stay) */
@@ -23996,6 +24075,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 <?php $shellOwner = ADMIN_PASSWORD !== '' && is_admin_browser(); $shellInframe = $shellOwner && !empty($_GET['inframe']); ?>
 <body<?= $shellInframe ? ' class="inframe"' : ($shellOwner ? ' class="pb-on"' : '') ?>>
 <?= ui_icon_sprite() ?>
+<?php if ($shellOwner): ?><div id="live-folder" hidden data-folder="<?= htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') ?>"></div><?php endif; ?>
 <?php // Once the page has scrolled, two round buttons float at the bottom right of the screen: to the top, and to the bottom. The same on every page and device. ?>
 <div class="jump-fab" id="jump-fab" hidden>
   <button type="button" class="jump-btn" data-jump="top" title="Jump to the top" aria-label="Jump to the top of the page"><?= ui_icon('jump-up') ?></button>
@@ -26389,6 +26469,29 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     const viewerNew = document.getElementById('lightbox-newaddr');
     if (viewerNew) viewerNew.addEventListener('click', () => ask(files[current], viewerNew));
   })();
+// The owner's gallery page, left open while photos arrive (a sync, an upload): when the window comes back, a quiet bar says the photos here changed, with Refresh. Nothing is swapped on its own.
+(function () {
+  var box = document.getElementById('live-folder'); if (!box) return;   // (only the signed-in owner's page has this)
+  var folder = box.getAttribute('data-folder') || '', base = null, last = 0, busy = false, bar = null;
+  function ask() { return fetch('?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : ''), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
+  function show() {
+    if (bar) return;
+    bar = document.createElement('div'); bar.className = 'live-note live-note-fixed'; bar.setAttribute('role', 'status');
+    var t = document.createElement('span'); t.textContent = 'Photos in this folder changed. '; bar.appendChild(t);
+    var go = document.createElement('button'); go.type = 'button'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go);
+    var x = document.createElement('button'); x.type = 'button'; x.className = 'live-x'; x.setAttribute('aria-label', 'Dismiss'); x.textContent = '×'; x.addEventListener('click', function () { bar.remove(); bar = null; base = null; last = 0; }); bar.appendChild(x);
+    document.body.appendChild(bar);
+  }
+  function check() {
+    if (document.hidden || busy || Date.now() - last < (window.__liveMin === undefined ? 15000 : window.__liveMin)) return;
+    busy = true; last = Date.now();
+    ask().then(function (j) { if (!j) return; if (base === null) base = j.media; else if (j.media !== base) show(); }).catch(function () {}).then(function () { busy = false; });
+  }
+  check();   // (the first answer is the baseline)
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
+  window.addEventListener('pageshow', function (e) { if (e.persisted) check(); });
+})();
 <?php if (is_admin_browser() && ENABLE_SHARE_LINKS): ?>
   let linkPop = null;
   function closeLinkPopup() { if (linkPop) { linkPop.remove(); linkPop = null; document.removeEventListener('keydown', linkPopKey, true); document.removeEventListener('pointerdown', linkPopAway, true); } }

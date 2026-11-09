@@ -468,3 +468,9 @@
   }
   /* The owner's shell: the page without its own sticky bar (the shell's path and tree do that job). */
   html:has(> body.inframe) { scrollbar-gutter: stable; }
+
+  /* The owner's page: photos here changed (a sync, an upload) while it was open. A quiet pill at the bottom, with Refresh. */
+  .live-note-fixed { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:80; display:flex; align-items:center; gap:10px; max-width:calc(100vw - 24px); padding:8px 8px 8px 16px; background:#1c2150; color:#dfe2ff; border:1px solid #3a4190; border-radius:999px; box-shadow:0 6px 20px rgba(0,0,0,0.45); font-size:0.9rem; }
+  .live-note-fixed button { font:inherit; cursor:pointer; border:0; border-radius:999px; padding:5px 14px; background:#5865f2; color:#fff; }
+  .live-note-fixed .live-x { padding:5px 10px; background:transparent; color:#aab2ff; font-size:1.1rem; line-height:1; }
+  @media (max-width: 800px) { body.pb-on .live-note-fixed { bottom:calc(74px + env(safe-area-inset-bottom, 0px)); } }
