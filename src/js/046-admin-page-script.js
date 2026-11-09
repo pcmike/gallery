@@ -2106,6 +2106,23 @@
           var panel = slot.querySelector('#media-panel'); if (panel && window.__initMediaPanel) window.__initMediaPanel(panel);
         }).catch(function () {});
     }
+    // The window came back: Prepare media's numbers (how many files still need preparing, what the report says) are asked for again, in case another browser ran it or photos arrived. Not while a run is going here or one of its folds is open.
+    if (window.__live) window.__live.register('media', { tab: 'site', refresh: function () {
+      var slot = document.getElementById('media-slot'), panel = slot && slot.querySelector('#media-panel'); if (!panel) return;
+      var body = new URLSearchParams(); body.set('csrf_token', csrf); body.set('action', 'media_panel');
+      return fetch(siteUrl(), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j.ok || !j.html || !j.cache) return;
+          var fresh = new DOMParser().parseFromString(j.html, 'text/html').getElementById('media-panel');
+          if (!fresh || (fresh.getAttribute('data-left') === panel.getAttribute('data-left') && fresh.getAttribute('data-total') === panel.getAttribute('data-total'))) return;
+          slot.innerHTML = j.html;
+          var np = slot.querySelector('#media-panel'); if (np && window.__initMediaPanel) window.__initMediaPanel(np);
+        });
+    }, busy: function () {
+      var slot = document.getElementById('media-slot'), stop = slot && slot.querySelector('.media-stop');
+      return !slot || slot.offsetParent === null || (!!stop && !stop.hidden) || !!slot.querySelector('details[open]');
+    } });
     [].forEach.call(form.querySelectorAll('input[type=checkbox][data-label]'), function (cb) {
       cb.addEventListener('change', function () {
         var on = cb.checked, off = cb.getAttribute('data-offwarn');
@@ -2439,8 +2456,8 @@
   (function () {
     var row = document.getElementById('browsers-row');
     if (!row) return;
-    var csrf = row.getAttribute('data-csrf'), note = row.querySelector('.rowstate'), armed = null;
-    function say(t, cls) { if (note) { note.textContent = t; note.className = 'rowstate ' + (cls || ''); } }
+    var csrf = row.getAttribute('data-csrf'), armed = null;
+    function say(t, cls) { var n = row.querySelector('.rowstate'); if (n) { n.textContent = t; n.className = 'rowstate ' + (cls || ''); } }   // (looked up each time: the row can be drawn again)
     function send(fields, done) {
       var body = new URLSearchParams(Object.assign({ csrf_token: csrf }, fields));
       fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
@@ -2490,6 +2507,13 @@
         b.disabled = true; say(j.text, 'ok');
       });
     });
+    // The window came back: the list is drawn again (another browser signed in or out), unless a sign-out is waiting for its second press, a browser's history is open, or the row is folded away.
+    if (window.__live) window.__live.register('browsers', { tab: 'site', refresh: function () {
+      return fetch('?admin&browserspanel=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+        var fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('browsers-row');
+        if (fresh && fresh.innerHTML !== row.innerHTML) row.innerHTML = fresh.innerHTML;
+      });
+    }, busy: function () { return armed !== null || !!row.querySelector('.br-detailrow:not([hidden])') || row.offsetParent === null; } });
   })();
   // The country file (Settings, under Signing in): what it needs, turn it on (downloads it), refresh, turn off.
   (function () {

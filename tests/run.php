@@ -9587,6 +9587,9 @@ check('[changed elsewhere] a view count or an id written by the gallery itself d
 [, $lkGalOwn] = http_get("$baseLk/?folder=Rome", $lkOwn);
 [, $lkGalVis] = http_get("$baseLk/?folder=Rome");
 check('[changed elsewhere] only the signed-in owner\'s gallery page has the marker that makes it check for new photos; a visitor\'s page has no marker, so the (inert) script there does nothing', str_contains($lkGalOwn, 'id="live-folder"') && !str_contains($lkGalVis, 'id="live-folder"'));
+[$lkBrS, $lkBr] = http_get("$baseLk/?admin&browserspanel=1", $lkOwn);
+[, $lkBrAn] = http_get("$baseLk/?admin&browserspanel=1");
+check('[live refresh] the "Browsers signed in" row can be asked for on its own (when the window comes back): just that row, and only by the signed-in admin', $lkBrS === 200 && str_contains($lkBr, 'id="browsers-row"') && !str_contains($lkBr, 'id="health-panel"') && !str_contains($lkBrAn, 'id="browsers-row"'));
 // a lockout started by someone else (sharing the address) does not hold back a session that is already signed in
 $fxLk3 = new_fixture_dir('lockouts3');
 mkdir("$fxLk3/Rome"); make_jpeg("$fxLk3/Rome/r1.jpg", 60, 50, 100, 60, 60);

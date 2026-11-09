@@ -1057,7 +1057,7 @@ function request_route($reset = false) {
  *  Not listed photo's (see bare_query_as_address). */
 function reserved_query_words() {
     $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
-        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'changed', 'pbcounts', 'privcounts', 'scope_type',
+        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'browserspanel', 'changed', 'pbcounts', 'privcounts', 'scope_type',
         'shellcounts', 'shellmeta', 'shelltree'];
     foreach (request_routes() as $r) foreach ($r['params'] as $p) $words[] = $p;
     return $words;
@@ -14148,6 +14148,11 @@ function run_links_view_route($dir, $files) {
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
     $data = links_read();
     if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir); return; }
+    if (isset($_GET['browserspanel'])) {   // the "Browsers signed in" row on its own (the window came back)
+        header('Content-Type: text/html; charset=UTF-8');
+        render_admin_browsers_panel(htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8'));
+        return;
+    }
     if (isset($_GET['linkspanel'])) {   // the Shares panel on its own (the window came back): what the page draws for it, without the rest of the page
         header('Content-Type: text/html; charset=UTF-8');
         render_admin_links_panel(htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8'), $dir, $files);
@@ -19263,6 +19268,23 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           var panel = slot.querySelector('#media-panel'); if (panel && window.__initMediaPanel) window.__initMediaPanel(panel);
         }).catch(function () {});
     }
+    // The window came back: Prepare media's numbers (how many files still need preparing, what the report says) are asked for again, in case another browser ran it or photos arrived. Not while a run is going here or one of its folds is open.
+    if (window.__live) window.__live.register('media', { tab: 'site', refresh: function () {
+      var slot = document.getElementById('media-slot'), panel = slot && slot.querySelector('#media-panel'); if (!panel) return;
+      var body = new URLSearchParams(); body.set('csrf_token', csrf); body.set('action', 'media_panel');
+      return fetch(siteUrl(), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j.ok || !j.html || !j.cache) return;
+          var fresh = new DOMParser().parseFromString(j.html, 'text/html').getElementById('media-panel');
+          if (!fresh || (fresh.getAttribute('data-left') === panel.getAttribute('data-left') && fresh.getAttribute('data-total') === panel.getAttribute('data-total'))) return;
+          slot.innerHTML = j.html;
+          var np = slot.querySelector('#media-panel'); if (np && window.__initMediaPanel) window.__initMediaPanel(np);
+        });
+    }, busy: function () {
+      var slot = document.getElementById('media-slot'), stop = slot && slot.querySelector('.media-stop');
+      return !slot || slot.offsetParent === null || (!!stop && !stop.hidden) || !!slot.querySelector('details[open]');
+    } });
     [].forEach.call(form.querySelectorAll('input[type=checkbox][data-label]'), function (cb) {
       cb.addEventListener('change', function () {
         var on = cb.checked, off = cb.getAttribute('data-offwarn');
@@ -19596,8 +19618,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   (function () {
     var row = document.getElementById('browsers-row');
     if (!row) return;
-    var csrf = row.getAttribute('data-csrf'), note = row.querySelector('.rowstate'), armed = null;
-    function say(t, cls) { if (note) { note.textContent = t; note.className = 'rowstate ' + (cls || ''); } }
+    var csrf = row.getAttribute('data-csrf'), armed = null;
+    function say(t, cls) { var n = row.querySelector('.rowstate'); if (n) { n.textContent = t; n.className = 'rowstate ' + (cls || ''); } }   // (looked up each time: the row can be drawn again)
     function send(fields, done) {
       var body = new URLSearchParams(Object.assign({ csrf_token: csrf }, fields));
       fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
@@ -19647,6 +19669,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         b.disabled = true; say(j.text, 'ok');
       });
     });
+    // The window came back: the list is drawn again (another browser signed in or out), unless a sign-out is waiting for its second press, a browser's history is open, or the row is folded away.
+    if (window.__live) window.__live.register('browsers', { tab: 'site', refresh: function () {
+      return fetch('?admin&browserspanel=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+        var fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('browsers-row');
+        if (fresh && fresh.innerHTML !== row.innerHTML) row.innerHTML = fresh.innerHTML;
+      });
+    }, busy: function () { return armed !== null || !!row.querySelector('.br-detailrow:not([hidden])') || row.offsetParent === null; } });
   })();
   // The country file (Settings, under Signing in): what it needs, turn it on (downloads it), refresh, turn off.
   (function () {
@@ -20443,7 +20472,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     if (isset($_GET['filesdownload'])) { files_download_route($dir, $files); return; }
-    if (isset($_GET['visits']) || isset($_GET['visitsexport']) || isset($_GET['linkphotos']) || isset($_GET['linkcover']) || isset($_GET['linkspanel'])) {   // the Shares tab's fragments and CSV downloads
+    if (isset($_GET['visits']) || isset($_GET['visitsexport']) || isset($_GET['linkphotos']) || isset($_GET['linkcover']) || isset($_GET['linkspanel']) || isset($_GET['browserspanel'])) {   // the Shares tab's fragments and CSV downloads
         run_links_view_route($dir, $files);
         return;
     }
