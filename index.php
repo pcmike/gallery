@@ -10153,7 +10153,7 @@ function admin_edited_overview($dir, $files, $hidden) {
                 $cap = is_string($e['caption'] ?? null) ? trim($e['caption']) : '';
                 if ($cap !== '') { $kinds[] = 'caption'; $tags[] = ['cap', 'caption']; $text[] = ['caption', $cap]; }
                 $web = is_string($e['web'] ?? null) ? trim($e['web']) : '';
-                if ($web !== '') { $kinds[] = 'link'; $tags[] = ['cap', 'link']; $text[] = ['link', $web]; }
+                if ($web !== '') { $kinds[] = 'link'; $tags[] = ['cap', 'info link']; $text[] = ['link', $web]; }
                 $loc = [];
                 if (!empty($e['location']) && is_array($e['location'])) {
                     $lab = is_string($e['location']['label'] ?? null) ? trim($e['location']['label']) : '';
@@ -10187,7 +10187,7 @@ function render_admin_edited_html($ov, $csrfToken) {
     global $dir;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $c = $ov['counts']; $noun = ENABLE_VIDEO ? 'item' : 'photo';
-    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Links'], ['location', 'Locations'], ['address', 'New links'], ['folder', 'Folder settings']];
+    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Info links'], ['location', 'Locations'], ['address', 'New links'], ['folder', 'Folder settings']];
     $out = '<div class="ed" id="ed-root" data-csrf="' . $esc($csrfToken) . '" data-noun="' . $noun . '">';
     if ($ov['total'] === 0) return $out . '<p class="muted ed-empty">Nothing is set by hand yet. When you add a caption, a link or a private flag to a ' . $noun . ', or change a folder\'s own settings, it is listed here.</p></div>';
     $out .= '<p class="ed-sum"><span><b>' . number_format($c['all']) . '</b> edit' . ($c['all'] === 1 ? '' : 's') . ' in <b>' . number_format(count($ov['folders'])) . '</b> folder' . (count($ov['folders']) === 1 ? '' : 's') . '</span><span><b>' . number_format($c['private']) . '</b> private</span><span><b>' . number_format($c['caption']) . '</b> caption' . ($c['caption'] === 1 ? '' : 's') . '</span><span><b>' . number_format($c['link']) . '</b> link' . ($c['link'] === 1 ? '' : 's') . '</span></p>';
@@ -18212,7 +18212,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var sum = card.querySelector('.ed-fsum'); sum.textContent = '';
         if (counts.private) sum.appendChild(tag('ed-priv', counts.private + ' private'));
         if (counts.caption) sum.appendChild(tag('ed-cap', plural(counts.caption, 'caption', 'captions')));
-        if (counts.link) sum.appendChild(tag('ed-cap', plural(counts.link, 'link', 'links')));
+        if (counts.link) sum.appendChild(tag('ed-cap', plural(counts.link, 'info link', 'info links')));
         if (counts.location) sum.appendChild(tag('ed-loc', plural(counts.location, 'location', 'locations')));
         if (counts.address) sum.appendChild(tag('ed-cap', plural(counts.address, 'new link', 'new links')));
         if (fsOk) sum.appendChild(tag('', plural(+fs.getAttribute('data-n'), 'folder setting', 'folder settings')));
