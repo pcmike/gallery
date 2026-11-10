@@ -324,10 +324,10 @@ function render_admin_collections_section($dir, $files, $parentPath, $csrfToken)
     <p class="hint" style="margin:0 0 6px"><?= $parent === '' ? 'A collection is a hand-picked set that shows up on the front page as a card of its own.' : 'A collection is a hand-picked set that shows up in this folder as a card of its own.' ?> What is in it stays where it is on disk.</p>
     <?php if ($here): ?>
     <ul class="cm-list">
-      <?php foreach ($here as $r): $rows = collection_member_rows($dir, $r, $files); $nf = count(array_filter($rows, fn ($x) => $x['kind'] === 'folder')); $np = count($rows) - $nf; $href = '?admin&amp;folder=' . $esc(rawurlencode($r['path'])); ?>
+      <?php foreach ($here as $r): $rows = collection_member_rows($dir, $r, $files); $nf = count(array_filter($rows, fn ($x) => $x['kind'] === 'folder')); $np = count($rows) - $nf; $nested = array_sum(array_map(fn ($x) => (int) $x['count'], array_filter($rows, fn ($x) => $x['kind'] === 'folder'))); $href = '?admin&amp;folder=' . $esc(rawurlencode($r['path'])) . '#settings'; ?>
       <li class="cm-row" data-id="<?= $esc($r['id']) ?>">
         <div class="cm-main"><a class="coll" href="<?= $href ?>"><?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?></a><?= $r['private'] ? ' ' . collection_pill('private') : '' ?>
-          <div class="cm-sub"><?= $nf ?> folder<?= $nf === 1 ? '' : 's' ?>, <?= $np ?> photo<?= $np === 1 ? '' : 's' ?> &middot; <?= $esc(collection_address_text($r['path'])) ?></div></div>
+          <div class="cm-sub"><?= $nf ?> folder<?= $nf === 1 ? '' : 's' ?>, <?= number_format($nested) ?> nested photo<?= $nested === 1 ? '' : 's' ?><?= $np ? ' and ' . $np . ' picked on their own' : '' ?> &middot; <?= $esc(collection_address_text($r['path'])) ?></div></div>
         <div class="cm-acts"><a class="secondary btn-link" href="<?= $href ?>">Open settings</a><button type="button" class="secondary cm-del" data-id="<?= $esc($r['id']) ?>" data-title="<?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?>">Delete collection</button></div>
       </li>
       <?php endforeach; ?>
@@ -414,22 +414,31 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
 ?>
   <section class="panel" id="collections" data-csrf="<?= $csrfToken ?>">
     <h2 class="section-title">Collections</h2>
-    <p class="hint" style="margin:0 0 6px">Hand-picked sets that show up as cards. Everything here is a view of folders and photos that stay where they are. Make a new one from a folder&rsquo;s own settings.</p>
+    <p class="hint" style="margin:0 0 6px">Hand-picked sets that show up as cards. Everything here is a view of folders and photos that stay where they are.</p>
+    <div class="cm-section cm-tabnew" data-csrf="<?= $csrfToken ?>" data-parent="">
+      <form class="cm-new" method="post" onsubmit="return false;">
+        <input type="text" name="title" maxlength="80" placeholder="Name of the new collection" aria-label="Name of the new collection">
+        <button type="submit" class="primary">New collection</button>
+        <span class="rowstate" role="status" aria-live="polite"></span>
+      </form>
+      <p class="hint" style="margin:4px 0 12px">It starts on the front page; you choose only a name now, and everything else is on the next page. To keep one inside a folder, use <em>Collections</em> in that folder&rsquo;s own settings.</p>
+    </div>
     <?php foreach (array_merge(array_values($reg['byPath']), $reg['taken']) as $r):
         $rows = collection_member_rows($dir, $r, $files); $nf = count(array_filter($rows, fn ($x) => $x['kind'] === 'folder')); $np = count($rows) - $nf;
         $miss = count(array_filter($rows, fn ($x) => $x['state'] === 'missing')); $priv = count(array_filter($rows, fn ($x) => in_array($x['state'], ['private', 'unlisted'], true)));
+        $nested = array_sum(array_map(fn ($x) => (int) $x['count'], array_filter($rows, fn ($x) => $x['kind'] === 'folder'))); // (the photos in the folders it holds, each counted once under the folder that holds it)
         $taken = isset($reg['byPath'][$r['path']]) ? false : true;
-        $href = '?admin&amp;folder=' . $esc(rawurlencode($r['path']));
+        $href = '?admin&amp;folder=' . $esc(rawurlencode($r['path'])) . '#settings';
         $using = [];
         foreach ($links as $l) if (collection_link_covers($l, $r, $reg)) $using[] = $l;
     ?>
     <div class="cm-card">
-      <h4><a class="coll" href="<?= $href ?>"><?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?></a><?= $r['private'] ? ' ' . collection_pill('private') : '' ?><span class="cm-acts"><a class="secondary btn-link" href="<?= $href ?>">Open settings</a><?php if (!$taken): ?><a class="secondary btn-link" href="?folder=<?= $esc(rawurlencode($r['path'])) ?>">View</a><?php endif; ?></span></h4>
+      <h4><a class="coll" href="<?= $href ?>"><?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?></a><?= $r['private'] ? ' ' . collection_pill('private') : '' ?><span class="cm-acts"><a class="secondary btn-link" href="<?= $href ?>">Open settings</a><?php if (!$taken): ?><a class="secondary btn-link" href="?folder=<?= $esc(rawurlencode($r['path'])) ?>">View</a><?php endif; ?><button type="button" class="secondary cm-del cm-del-ic" data-id="<?= $esc($r['id']) ?>" data-title="<?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?>" title="Delete this collection (nothing in it is touched)" aria-label="Delete this collection"><?= ui_icon('trash') ?></button></span></h4>
       <dl class="cm-dl">
         <dt>Lives in</dt><dd><?= $r['parentPath'] === '' ? 'the front page' : $esc($r['parentPath']) ?></dd>
         <dt>Address</dt><dd><?= $esc(collection_address_text($r['path'])) ?><?= $taken ? ' <span class="cm-pill miss">Taken by a folder</span>' : '' ?></dd>
         <dt>On the front page</dt><dd><?= $r['parentPath'] === '' ? 'Yes (it lives there)' : ($r['front'] ? 'Yes' : 'No') ?></dd>
-        <dt>Holds</dt><dd><?= $nf ?> folder<?= $nf === 1 ? '' : 's' ?>, <?= $np ?> photo<?= $np === 1 ? '' : 's' ?></dd>
+        <dt>Holds</dt><dd><?= $nf ?> folder<?= $nf === 1 ? '' : 's' ?>, <?= number_format($nested) ?> nested photo<?= $nested === 1 ? '' : 's' ?><?= $np ? ' and ' . $np . ' photo' . ($np === 1 ? '' : 's') . ' picked on their own' : '' ?></dd>
         <dt>Problems</dt><dd><?php if ($miss || $priv): ?><?= $miss ? '<span class="cm-pill miss">' . $miss . ' not found</span> ' : '' ?><?= $priv ? '<span class="cm-pill priv">' . $priv . ' private</span>' : '' ?><?php else: ?>Nothing missing<?php endif; ?></dd>
         <dt>Share links</dt><dd><?php if ($using): foreach ($using as $i => $l): ?><?= $i ? ', ' : '' ?><a href="#links" data-tab="links"><?= $esc($l['label']) ?></a><?php endforeach; else: ?>None<?php endif; ?></dd>
         <dt>Gallery of its own</dt><dd><?= $r['ownGallery'] ? 'On' : 'Off' ?></dd>

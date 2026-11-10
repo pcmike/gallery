@@ -862,6 +862,9 @@
   .cm-card { border:1px solid #2e2e34; border-radius:12px; background:#111114; padding:14px 16px; margin:12px 0; }
   .cm-card h4 { margin:0 0 8px; font-size:1rem; display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
   .cm-card .cm-acts { margin-left:auto; }
+  .cm-acts button.cm-del-ic { width:36px; padding:0; justify-content:center; color:#ff8a8c; background:rgba(237,66,69,0.14); border:1px solid rgba(237,66,69,0.55); }   /* a line-drawn bin in a red box, last in the row */
+  .cm-acts button.cm-del-ic .ico { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  @media (hover: hover) { .cm-acts button.cm-del-ic:hover:not(:disabled) { background:rgba(237,66,69,0.3); color:#fff; } }
   .cm-dl { display:grid; grid-template-columns:max-content 1fr; gap:5px 16px; margin:0; font-size:.85rem; }
   .cm-dl dt { color:var(--muted); } .cm-dl dd { margin:0; overflow-wrap:anywhere; }
   .cm-pick { border:1px solid #3d4194; border-radius:12px; background:#0f0f14; padding:12px; margin:12px 0; }

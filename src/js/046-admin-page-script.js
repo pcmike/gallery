@@ -734,7 +734,7 @@
       });
       // On Settings or Private nothing in the folder list is selected: the folder you came from stays marked, quietly.
       var lay = document.querySelector('.admin-layout');
-      var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits';
+      var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits' || name === 'collections';
       if (lay) lay.classList.toggle('off-folder', whole);
       // The phone's Menu and bottom bar say the same thing as the sidebar: the page you are on is the one blue entry; the folder stays marked, quietly, on a whole-gallery page.
       [].forEach.call(document.querySelectorAll('.pb-w[data-pb-tab]'), function (a) { var on = a.getAttribute('data-pb-tab') === name; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -746,7 +746,7 @@
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
       if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);
       if (window.__live) window.__live.shown(name);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
-      if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }
+      if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits' && name !== 'collections') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }   // (a whole-gallery page is not the tab a folder opens on)
       return name;
     }
     function fromLocation() {
