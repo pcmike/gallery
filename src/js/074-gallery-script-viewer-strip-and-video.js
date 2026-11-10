@@ -13,7 +13,7 @@
     if (copyBtn) copyBtn.hidden = !!(copyLinkOk && !copyLinkOk[current]);
     const newAddrBtn = document.getElementById('lightbox-newaddr');
     if (newAddrBtn) newAddrBtn.hidden = !ownerIsUnlisted(file);   // (a Not listed photo has an address of its own, and the owner can replace it)
-    if (copyBtn) copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s address' : 'Copy link';
+    if (copyBtn) copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s link' : 'Copy link';
     applyZoom();
     updateLightboxExtras();
     toolsFade();

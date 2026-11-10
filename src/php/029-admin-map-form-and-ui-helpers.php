@@ -319,7 +319,7 @@ function gallery_setting_definitions() {
             ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any', 'requires' => 'ENABLE_PHOTO_LOCATION', 'in' => true,
              'help' => 'Photos closer than this always share one numbered pin; on top of that, pins that would overlap on screen merge until you zoom in. 1 suits a city trip, 0 turns grouping off (every photo keeps its own pin). Folders can override it.'],
             ['name' => 'SCRUB_LOCATION_DATA', 'type' => 'bool', 'label' => 'Scrub location data',
-             'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from a Not listed photo\'s address and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
+             'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from a Not listed photo\'s link and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
         ]],
         ['title' => 'Sharing and access', 'items' => [
             ['name' => 'ENABLE_SHARE_LINKS', 'type' => 'bool', 'label' => 'Allow share links',

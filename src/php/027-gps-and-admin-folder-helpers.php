@@ -769,7 +769,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             : $n . ' photos are now ' . $what . '.';
         if ($flag === 'private' && $names && file_is_unlisted($dir, $adminFolderPath === null ? $names[0] : $adminFolderPath . '/' . $names[0])) {   // (a Not listed folder: there is no public or private there, only whether a photo's address works)
             $addrOff = $state === 'private' || ($state === null && $on);
-            $text = $n === 1 ? 'The address of "' . $names[0] . '" is now ' . ($addrOff ? 'off' : 'on') . '.' : 'The addresses of ' . $n . ' photos are now ' . ($addrOff ? 'off' : 'on') . '.';
+            $text = $n === 1 ? 'The link of "' . $names[0] . '" is now ' . ($addrOff ? 'off' : 'on') . '.' : 'The links of ' . $n . ' photos are now ' . ($addrOff ? 'off' : 'on') . '.';
         } elseif ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
         return ['type' => 'ok', 'text' => $text];
     }
@@ -888,7 +888,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $name = basename((string) ($_POST['file'] ?? ''));
         $rel = $adminFolderPath . '/' . $name;
         if ($name === '' || !in_array($rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
-        if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo is marked private on its own, so it has no address. Make it public first (its lock).'];
+        if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo\'s link is switched off, so it has none. Switch it on first (its lock).'];
         if (install_secret(true) === '') return ['type' => 'error', 'text' => 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
         $fid = folder_id_stamp($adminFolderReal);
         if ($fid === '') return ['type' => 'error', 'text' => 'This folder is not writable, so it cannot be given the id its photos\' addresses need.'];
@@ -897,7 +897,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $code = photo_address_code($dir, $rel, items_get_all_for_files($dir, [$rel]), $fid);
         if ($code === '') return ['type' => 'error', 'text' => 'Could not make the address.'];
         return ['type' => 'ok', 'code' => $code, 'fresh' => $fresh,
-                'text' => $fresh ? 'New address copied. The old one no longer opens this photo.' : 'Address copied.'];
+                'text' => $fresh ? 'New link copied. The old one no longer opens this photo.' : 'Link copied.'];
     }
 
     // "Gallery of its own": visitors who arrive inside this folder are offered nothing above it (see nav_top). The gallery's own settings file
@@ -957,14 +957,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['addrfile']);
         items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['addressFile'] = true; else unset($data['addressFile']); });
-        return ['type' => 'ok', 'label' => $on ? 'Links send the bare file' : 'Links open in the gallery', 'text' => $on ? 'A photo\'s address now sends the bare picture (or video), with no page around it.' : 'A photo\'s address opens the photo in the gallery.'];
+        return ['type' => 'ok', 'label' => $on ? 'Links send the bare file' : 'Links open in the gallery', 'text' => $on ? 'A photo\'s link now sends the bare picture (or video), with no page around it.' : 'A photo\'s link opens the photo in the gallery.'];
     }
 
     if ($action === 'toggle_folder_originals') {
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['originals']);
         items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['allowOriginals'] = true; else unset($data['allowOriginals']); });
-        return ['type' => 'ok', 'text' => $on ? 'Someone opening a photo by its address can download the original.' : 'Photos opened by their address can\'t be downloaded.'];
+        return ['type' => 'ok', 'text' => $on ? 'Someone opening a photo by its link can download the original.' : 'Photos opened by their link can\'t be downloaded.'];
     }
 
     if ($action === 'arrange_items') {

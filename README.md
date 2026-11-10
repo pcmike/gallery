@@ -16,7 +16,7 @@
 - **One file.** Upload `index.php`, open the folder in a browser, done. Folders become albums, to any depth.
 - **Made for phones as much as computers.** A sharp, fast grid, a full-screen viewer with swipe, captions and a small map, and an admin that works with your thumb.
 - **Private photos you can still share.** Hide any photo or folder, then send a temporary link that shows only what you chose, can be limited to a number of browsers or a date, and can be paused or revoked at once. You see who opened it.
-- **Folders only you can open, and albums that stand alone.** Keep a Not listed folder for yourself and share its photos one at a time by their own addresses (replaceable in one press), and let someone who arrives on one album see just that album.
+- **Folders only you can open, and albums that stand alone.** Keep a Not listed folder for yourself and share its photos one at a time by their own links (replaceable in one press), and let someone who arrives on one album see just that album.
 - **Hand-picked collections.** Group folders and single photos from anywhere under a name of your own ("Best of Paris") as a card of its own, without moving anything on disk, and give a share link just that set; each member shows only to people who could already see it.
 - **Edit on the page.** A pencil on every photo for the caption, place and privacy; select many photos to change them together.
 - **Everything else is opt-in.** Folders show as albums from the start; maps, video, share links and passwords stay off until you switch them on, and the admin says what each one publishes. Nothing leaves your server unless you turn it on (a map loads its tiles from OpenStreetMap when someone opens one).

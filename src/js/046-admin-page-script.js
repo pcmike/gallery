@@ -1011,7 +1011,7 @@
         if (counts.caption) sum.appendChild(tag('ed-cap', plural(counts.caption, 'caption', 'captions')));
         if (counts.link) sum.appendChild(tag('ed-cap', plural(counts.link, 'link', 'links')));
         if (counts.location) sum.appendChild(tag('ed-loc', plural(counts.location, 'location', 'locations')));
-        if (counts.address) sum.appendChild(tag('ed-cap', plural(counts.address, 'new address', 'new addresses')));
+        if (counts.address) sum.appendChild(tag('ed-cap', plural(counts.address, 'new link', 'new links')));
         if (fsOk) sum.appendChild(tag('', plural(+fs.getAttribute('data-n'), 'folder setting', 'folder settings')));
         card.hidden = shown === 0 && !fsOk;
       });

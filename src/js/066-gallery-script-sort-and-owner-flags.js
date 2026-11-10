@@ -82,15 +82,15 @@
   }
   function lockTitle(f) {
     const k = lockKind(f);
-    if (k === 'aon') return 'Address on: anyone with this photo\u2019s address can open it. Press to switch it off';
-    if (k === 'aoff') return 'Address off: this photo can\u2019t be opened by its address. Press to switch it on';
+    if (k === 'aon') return 'Link on: anyone with this photo\u2019s link can open it. Press to switch it off';
+    if (k === 'aoff') return 'Link off: this photo can\u2019t be opened by its link. Press to switch it on';
     if (k === 'inh') return 'Private because its folder is: press to keep it private on its own';
     if (k === 'pub') return 'Public, though its folder is private: press to follow the folder again';
     if (k === 'own') return ownerState.inh[f] ? 'Kept private on its own: press to make it public' : 'Private: press to make it public';
     return 'Public: press to make it private';
   }
   function lockSaid(f, state) {
-    if (ownerState.unl && ownerState.unl[f]) return state === 'private' ? 'Address switched off' : 'Address switched on';
+    if (ownerState.unl && ownerState.unl[f]) return state === 'private' ? 'Link switched off' : 'Link switched on';
     if (state === 'private') return ownerState.inh[f] ? 'Kept private on its own' : 'Now private';
     if (state === 'public') return ownerState.inh[f] ? 'Public, though its folder is private' : 'Now public';
     return ownerState.inh[f] ? 'Follows its folder (private)' : 'Now public';

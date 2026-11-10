@@ -9447,7 +9447,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             : $n . ' photos are now ' . $what . '.';
         if ($flag === 'private' && $names && file_is_unlisted($dir, $adminFolderPath === null ? $names[0] : $adminFolderPath . '/' . $names[0])) {   // (a Not listed folder: there is no public or private there, only whether a photo's address works)
             $addrOff = $state === 'private' || ($state === null && $on);
-            $text = $n === 1 ? 'The address of "' . $names[0] . '" is now ' . ($addrOff ? 'off' : 'on') . '.' : 'The addresses of ' . $n . ' photos are now ' . ($addrOff ? 'off' : 'on') . '.';
+            $text = $n === 1 ? 'The link of "' . $names[0] . '" is now ' . ($addrOff ? 'off' : 'on') . '.' : 'The links of ' . $n . ' photos are now ' . ($addrOff ? 'off' : 'on') . '.';
         } elseif ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
         return ['type' => 'ok', 'text' => $text];
     }
@@ -9566,7 +9566,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $name = basename((string) ($_POST['file'] ?? ''));
         $rel = $adminFolderPath . '/' . $name;
         if ($name === '' || !in_array($rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
-        if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo is marked private on its own, so it has no address. Make it public first (its lock).'];
+        if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo\'s link is switched off, so it has none. Switch it on first (its lock).'];
         if (install_secret(true) === '') return ['type' => 'error', 'text' => 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
         $fid = folder_id_stamp($adminFolderReal);
         if ($fid === '') return ['type' => 'error', 'text' => 'This folder is not writable, so it cannot be given the id its photos\' addresses need.'];
@@ -9575,7 +9575,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $code = photo_address_code($dir, $rel, items_get_all_for_files($dir, [$rel]), $fid);
         if ($code === '') return ['type' => 'error', 'text' => 'Could not make the address.'];
         return ['type' => 'ok', 'code' => $code, 'fresh' => $fresh,
-                'text' => $fresh ? 'New address copied. The old one no longer opens this photo.' : 'Address copied.'];
+                'text' => $fresh ? 'New link copied. The old one no longer opens this photo.' : 'Link copied.'];
     }
 
     // "Gallery of its own": visitors who arrive inside this folder are offered nothing above it (see nav_top). The gallery's own settings file
@@ -9635,14 +9635,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['addrfile']);
         items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['addressFile'] = true; else unset($data['addressFile']); });
-        return ['type' => 'ok', 'label' => $on ? 'Links send the bare file' : 'Links open in the gallery', 'text' => $on ? 'A photo\'s address now sends the bare picture (or video), with no page around it.' : 'A photo\'s address opens the photo in the gallery.'];
+        return ['type' => 'ok', 'label' => $on ? 'Links send the bare file' : 'Links open in the gallery', 'text' => $on ? 'A photo\'s link now sends the bare picture (or video), with no page around it.' : 'A photo\'s link opens the photo in the gallery.'];
     }
 
     if ($action === 'toggle_folder_originals') {
         if ($adminFolderPath === null) return ['type' => 'error', 'text' => 'Not applicable at the root.'];
         $on = !empty($_POST['originals']);
         items_update($adminFolderReal, function (&$data) use ($on) { if ($on) $data['allowOriginals'] = true; else unset($data['allowOriginals']); });
-        return ['type' => 'ok', 'text' => $on ? 'Someone opening a photo by its address can download the original.' : 'Photos opened by their address can\'t be downloaded.'];
+        return ['type' => 'ok', 'text' => $on ? 'Someone opening a photo by its link can download the original.' : 'Photos opened by their link can\'t be downloaded.'];
     }
 
     if ($action === 'arrange_items') {
@@ -10120,9 +10120,9 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
         if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Not listed'];
         if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
-        if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s address'];
+        if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s link'];
         if (($d['keepLocation'] ?? null) === true) $set[] = ['loc', 'Visitors\' copies keep the location'];
-        if (!empty($d['addressFile']) && !empty($d['unlisted'])) $set[] = ['', 'Photo addresses send the bare file'];
+        if (!empty($d['addressFile']) && !empty($d['unlisted'])) $set[] = ['', 'Photo links send the bare file'];
         if (in_array($d['subfolderStyle'] ?? '', ['overview', 'flat'], true)) $set[] = ['', 'Folders under it: ' . ($d['subfolderStyle'] === 'flat' ? 'Flat' : 'Cards')];
         if (is_bool($d['flatNames'] ?? null)) $set[] = ['', 'Folder names ' . ($d['flatNames'] ? 'shown' : 'hidden') . ' (Flat)'];
         if (is_bool($d['flatNotes'] ?? null)) $set[] = ['', 'Folder notes ' . ($d['flatNotes'] ? 'shown' : 'hidden') . ' (Flat)'];
@@ -10163,7 +10163,7 @@ function admin_edited_overview($dir, $files, $hidden) {
                 if ($vis === 'show') $loc[] = 'Its location is shown to visitors (its own switch)';
                 elseif ($vis === 'hide') $loc[] = 'Its location is hidden from visitors (its own switch)';
                 if ($loc) { $kinds[] = 'location'; $tags[] = ['loc', 'location']; $text[] = ['loc', implode('. ', $loc)]; }
-                if (is_string($e['addr'] ?? null) && $e['addr'] !== '') { $kinds[] = 'address'; $tags[] = ['cap', 'new address']; $text[] = 'A new address was made for it: the one before stopped working.'; }
+                if (is_string($e['addr'] ?? null) && $e['addr'] !== '') { $kinds[] = 'address'; $tags[] = ['cap', 'new link']; $text[] = 'A new link was made for it: the one before stopped working.'; }
             }
             if (!$kinds) continue;
             $items[] = ['file' => $file, 'kinds' => $kinds, 'tags' => $tags, 'text' => $text, 'own' => $own];
@@ -10187,7 +10187,7 @@ function render_admin_edited_html($ov, $csrfToken) {
     global $dir;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $c = $ov['counts']; $noun = ENABLE_VIDEO ? 'item' : 'photo';
-    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Links'], ['location', 'Locations'], ['address', 'Addresses'], ['folder', 'Folder settings']];
+    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Links'], ['location', 'Locations'], ['address', 'New links'], ['folder', 'Folder settings']];
     $out = '<div class="ed" id="ed-root" data-csrf="' . $esc($csrfToken) . '" data-noun="' . $noun . '">';
     if ($ov['total'] === 0) return $out . '<p class="muted ed-empty">Nothing is set by hand yet. When you add a caption, a link or a private flag to a ' . $noun . ', or change a folder\'s own settings, it is listed here.</p></div>';
     $out .= '<p class="ed-sum"><span><b>' . number_format($c['all']) . '</b> edit' . ($c['all'] === 1 ? '' : 's') . ' in <b>' . number_format(count($ov['folders'])) . '</b> folder' . (count($ov['folders']) === 1 ? '' : 's') . '</span><span><b>' . number_format($c['private']) . '</b> private</span><span><b>' . number_format($c['caption']) . '</b> caption' . ($c['caption'] === 1 ? '' : 's') . '</span><span><b>' . number_format($c['link']) . '</b> link' . ($c['link'] === 1 ? '' : 's') . '</span></p>';
@@ -10482,9 +10482,9 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
     <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_unlisted', 'unlisted', $private && !empty($itemsHere['unlisted']), 'Not listed', '', ' <small class="muted">only you can open it</small>', 'unlisted-form'); ?>
     <div class="unlisted-sub"<?= $private && !empty($itemsHere['unlisted']) ? '' : ' hidden' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_address_file', 'addrfile', !empty($itemsHere['addressFile']), !empty($itemsHere['addressFile']) ? 'Links send the bare file' : 'Links open in the gallery', '', '', 'unlisted-form'); ?>
-      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s address</small>', 'unlisted-form'); ?>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s link</small>', 'unlisted-form'); ?>
     </div>
-    <p class="hint unlisted-note">Only you see what is in this folder. Visitors and people with the private-view password get nothing, and an "Everything" share link leaves it out. To share it, send a photo's own address, or make a share link that picks this folder.</p>
+    <p class="hint unlisted-note">Only you see what is in this folder. Visitors and people with the private-view password get nothing, and an "Everything" share link leaves it out. To share it, send a photo's own link, or make a share link that picks this folder.</p>
     </div>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">
@@ -10847,7 +10847,7 @@ function gallery_setting_definitions() {
             ['name' => 'MAP_CLUSTER_RADIUS_MILES', 'type' => 'number', 'label' => 'Map pin grouping (miles)', 'min' => 0, 'max' => 10000, 'step' => 'any', 'requires' => 'ENABLE_PHOTO_LOCATION', 'in' => true,
              'help' => 'Photos closer than this always share one numbered pin; on top of that, pins that would overlap on screen merge until you zoom in. 1 suits a city trip, 0 turns grouping off (every photo keeps its own pin). Folders can override it.'],
             ['name' => 'SCRUB_LOCATION_DATA', 'type' => 'bool', 'label' => 'Scrub location data',
-             'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from a Not listed photo\'s address and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
+             'help' => 'Photos and videos that visitors open at full size or download have their GPS location taken out first, including from a Not listed photo\'s link and on a share link. You, the private-view password and share links set to show all locations always get the file as it is. Off: only a location the gallery hides is taken out.'],
         ]],
         ['title' => 'Sharing and access', 'items' => [
             ['name' => 'ENABLE_SHARE_LINKS', 'type' => 'bool', 'label' => 'Allow share links',
@@ -14458,7 +14458,7 @@ function health_checks($dir, $files) {
             $sample = implode('; ', array_map(function ($c) { return implode(' = ', array_slice($c[0], 0, 3)); }, array_slice($copied, 0, 3)));
             $anyUnl = (bool) array_filter($copied, function ($c) { return $c[1]; });
             $add('Left behind', 'warn', number_format(count($copied)) . ' hidden id' . (count($copied) === 1 ? ' is' : 's are') . ' carried by more than one folder (a copy)',
-                $sample . '. A link to such a folder, ' . ($anyUnl ? 'and the photo addresses of a Not listed one, ' : '') . 'open nothing until it is told apart: remove the copy, or delete the .gallery-items.php inside the copy so it gets an id of its own (its captions and settings go with that file).');
+                $sample . '. A link to such a folder, ' . ($anyUnl ? 'and the photo links of a Not listed one, ' : '') . 'open nothing until it is told apart: remove the copy, or delete the .gallery-items.php inside the copy so it gets an id of its own (its captions and settings go with that file).');
         }
         $bk = media_tidy_backups($dir, $files);
         $bkN = is_array($bk) ? (isset($bk['count']) ? (int) $bk['count'] : count($bk)) : 0;
@@ -15198,6 +15198,9 @@ function shell_frame_script($kind) {
         . 'function where(){var q=new URLSearchParams(location.search);try{parent.postMessage({galleryShell:1,kind:kind,folder:q.get("folder")||"",tab:(location.hash||"").slice(1)},origin)}catch(e){}}'
         . 'where();window.addEventListener("hashchange",where);window.addEventListener("pageshow",function(e){if(e.persisted)where()});'
         . ($kind === 'admin' ? 'var tk;function tick(){clearTimeout(tk);tk=setTimeout(function(){try{parent.postMessage({galleryShell:1,tick:1},origin)}catch(e){}},1200)}document.addEventListener("change",tick,true);document.addEventListener("click",function(e){if(e.target&&e.target.closest&&e.target.closest("button"))tick()},true);' : '')   // (a setting or a link was changed: the shell's numbers may have moved)
+        . ($kind === 'gallery' ? 'var tk;function tick(){clearTimeout(tk);tk=setTimeout(function(){try{parent.postMessage({galleryShell:1,tick:1},origin)}catch(e){}},1500)}'
+            . 'document.addEventListener("click",function(e){var t=e.target&&e.target.closest?e.target.closest(".priv-toggle,.cover-toggle,.addr-toggle,.edit-toggle,.folder-priv.own,#folder-priv-banner,.select-bar button,.fp-modal button,#addr-modal button,#lightbox-private,#lightbox-cover,#lightbox .lbe-pill,#lightbox .lbe-btn"):null;if(t)tick()},true);'
+            . 'document.addEventListener("change",function(e){if(e.target&&e.target.closest&&e.target.closest("#lightbox"))tick()},true);' : '')   // (an owner action on the gallery page: the shell's numbers (Edited, Settings...) may have moved)
         . ($kind === 'admin' ? 'function top(){setTimeout(function(){scrollTo(0,0)},0)}window.addEventListener("load",top);window.addEventListener("hashchange",top);' : '')
         . 'document.addEventListener("click",function(e){var a=e.target&&e.target.closest?e.target.closest("a[href]"):null;if(!a||e.defaultPrevented||a.target==="_blank"||a.hasAttribute("download"))return;var u;try{u=new URL(a.href,location.href)}catch(x){return}'
         . 'if(u.origin!==origin||norm(u.pathname)!==norm(location.pathname)||u.searchParams.has("inframe")||u.search===location.search)return;'
@@ -18211,7 +18214,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         if (counts.caption) sum.appendChild(tag('ed-cap', plural(counts.caption, 'caption', 'captions')));
         if (counts.link) sum.appendChild(tag('ed-cap', plural(counts.link, 'link', 'links')));
         if (counts.location) sum.appendChild(tag('ed-loc', plural(counts.location, 'location', 'locations')));
-        if (counts.address) sum.appendChild(tag('ed-cap', plural(counts.address, 'new address', 'new addresses')));
+        if (counts.address) sum.appendChild(tag('ed-cap', plural(counts.address, 'new link', 'new links')));
         if (fsOk) sum.appendChild(tag('', plural(+fs.getAttribute('data-n'), 'folder setting', 'folder settings')));
         card.hidden = shown === 0 && !fsOk;
       });
@@ -22293,7 +22296,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         $addrLock = file_is_unlisted($GLOBALS['dir'], $file);   // (a photo in a Not listed folder: its lock is whether its address works, there is no public or private for it)
         if ($addrLock) {
             $isPriv = $ps['own'] === 'private'; $isFolder = false;
-            $lockTitle = $isPriv ? 'Address off: this photo can\'t be opened by its address. Press to switch it on' : 'Address on: anyone with this photo\'s address can open it. Press to switch it off';
+            $lockTitle = $isPriv ? 'Link off: this photo can\'t be opened by its link. Press to switch it on' : 'Link on: anyone with this photo\'s link can open it. Press to switch it off';
         }
         $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . ($isFolder ? ' is-folder' : '') . ($addrLock ? ' is-addr' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
             . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($addrLock ? '' : ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : ''))) . '</button>';
@@ -22310,8 +22313,8 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         // (the old stops working) and one that copies the present one.
         if (file_is_unlisted($GLOBALS['dir'], $file)) {
             $hasAddr = true;
-            $ownerLock .= '<button type="button" class="addr-toggle addr-new" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="New address: the old one stops working" aria-label="New address: the old one stops working">' . ui_icon('linkoff') . '</button>'
-                . '<button type="button" class="addr-toggle addr-cur" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy this photo\'s address" aria-label="Copy this photo\'s address">' . ui_icon('link') . '</button>';
+            $ownerLock .= '<button type="button" class="addr-toggle addr-new" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="New link: the old one stops working" aria-label="New link: the old one stops working">' . ui_icon('linkoff') . '</button>'
+                . '<button type="button" class="addr-toggle addr-cur" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy this photo\'s link" aria-label="Copy this photo\'s link">' . ui_icon('link') . '</button>';
         }
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
@@ -24651,9 +24654,9 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (is_admin_browser()): ?>
   <div class="fp-modal" id="addr-modal" role="dialog" aria-modal="true" aria-labelledby="addr-modal-title" hidden>
     <div class="fp-modal-card">
-      <h3 id="addr-modal-title">Make a new address?</h3>
-      <p class="fp-hint" style="margin:0 0 8px">Anyone who has this photo's present address will no longer be able to open it. The new address is copied for you.</p>
-      <div class="fp-btns"><button type="button" id="addr-cancel">Cancel</button><button type="button" class="primary" id="addr-ok">New address</button></div>
+      <h3 id="addr-modal-title">Make a new link?</h3>
+      <p class="fp-hint" style="margin:0 0 8px">Anyone who has this photo's present link will no longer be able to open it. The new link is copied for you.</p>
+      <div class="fp-btns"><button type="button" id="addr-cancel">Cancel</button><button type="button" class="primary" id="addr-ok">New link</button></div>
     </div>
   </div>
 <?php endif; ?>
@@ -24736,7 +24739,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
 <?php endif; ?>
 <?php if (is_admin_browser()): ?>
-    <button class="lightbox-copy owner-newaddr" id="lightbox-newaddr" type="button" title="New address: the old one stops working" aria-label="New address: the old one stops working" hidden><?= ui_icon('linkoff') ?></button>
+    <button class="lightbox-copy owner-newaddr" id="lightbox-newaddr" type="button" title="New link: the old one stops working" aria-label="New link: the old one stops working" hidden><?= ui_icon('linkoff') ?></button>
 <?php endif; ?>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link"><?= ui_icon('link') ?></button>
     <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
@@ -25100,15 +25103,15 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   }
   function lockTitle(f) {
     const k = lockKind(f);
-    if (k === 'aon') return 'Address on: anyone with this photo\u2019s address can open it. Press to switch it off';
-    if (k === 'aoff') return 'Address off: this photo can\u2019t be opened by its address. Press to switch it on';
+    if (k === 'aon') return 'Link on: anyone with this photo\u2019s link can open it. Press to switch it off';
+    if (k === 'aoff') return 'Link off: this photo can\u2019t be opened by its link. Press to switch it on';
     if (k === 'inh') return 'Private because its folder is: press to keep it private on its own';
     if (k === 'pub') return 'Public, though its folder is private: press to follow the folder again';
     if (k === 'own') return ownerState.inh[f] ? 'Kept private on its own: press to make it public' : 'Private: press to make it public';
     return 'Public: press to make it private';
   }
   function lockSaid(f, state) {
-    if (ownerState.unl && ownerState.unl[f]) return state === 'private' ? 'Address switched off' : 'Address switched on';
+    if (ownerState.unl && ownerState.unl[f]) return state === 'private' ? 'Link switched off' : 'Link switched on';
     if (state === 'private') return ownerState.inh[f] ? 'Kept private on its own' : 'Now private';
     if (state === 'public') return ownerState.inh[f] ? 'Public, though its folder is private' : 'Now public';
     return ownerState.inh[f] ? 'Follows its folder (private)' : 'Now public';
@@ -25236,11 +25239,11 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       const first = cards()[0], ctx = picked.length ? picked[0] : (first ? fileOf(first) : null), inPriv = !!(ctx && ownerState.inh[ctx]);
       bar.classList.toggle('in-private', inPriv);
       bar.querySelector('[data-select=inherit]').hidden = !inPriv || !canFolder || !!collPage;
-      // In a Not listed folder there is no public or private: the bar says Address off / Address on (on = back to following the folder).
+      // In a Not listed folder there is no public or private: the bar says Link off / Link on (on = back to following the folder).
       const inAddr = !!(ctx && ownerState.unl && ownerState.unl[ctx]);
       bar.classList.toggle('in-addr', inAddr);
       const sbn = bar.querySelector('.sb-private .sb-n'), sbp = bar.querySelector('.sb-private .sb-p'), sbf = bar.querySelector('.sb-folder .sb-lab');
-      if (sbn) sbn.textContent = inAddr ? 'Address off' : 'Make private'; if (sbp) sbp.textContent = inAddr ? 'Off' : 'Private'; if (sbf) sbf.textContent = inAddr ? 'Address on' : 'Folder';
+      if (sbn) sbn.textContent = inAddr ? 'Link off' : 'Make private'; if (sbp) sbp.textContent = inAddr ? 'Off' : 'Private'; if (sbf) sbf.textContent = inAddr ? 'Link on' : 'Folder';
       if (inAddr) bar.querySelector('[data-select=public]').hidden = true;
       if (canArrange) {
         bar.querySelector('[data-select=release]').disabled = !picked.some(function (f) { return stackOf[f] !== undefined; });
@@ -25501,15 +25504,15 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       const addr = k === 'aon' || k === 'aoff';
       set(pills.priv, k === 'own' || k === 'aoff'); set(pills.loc, st.cfg.locationShown); set(pills.cover, !!ownerState.cover[st.file]);
       pills.priv.classList.toggle('is-folder', k === 'inh');
-      pills.priv.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (k === 'own' || k === 'inh' || k === 'aoff' ? 'lock' : 'unlock') + '"></use></svg> ' + (addr ? (k === 'aoff' ? 'Address off' : 'Address on') : (k === 'inh' ? 'Folder' : (k === 'pub' ? 'Public' : 'Private')));
+      pills.priv.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (k === 'own' || k === 'inh' || k === 'aoff' ? 'lock' : 'unlock') + '"></use></svg> ' + (addr ? (k === 'aoff' ? 'Link off' : 'Link on') : (k === 'inh' ? 'Folder' : (k === 'pub' ? 'Public' : 'Private')));
       let note = '';
-      if (k === 'aon') note = 'Anyone with this photo\u2019s address can open it. Tap to switch the address off.';
-      else if (k === 'aoff') note = 'This photo\u2019s address is switched off. Tap to switch it on.';
+      if (k === 'aon') note = 'Anyone with this photo\u2019s link can open it. Tap to switch the link off.';
+      else if (k === 'aoff') note = 'This photo\u2019s link is switched off. Tap to switch it on.';
       else if (k === 'inh') note = 'Private because its folder is. Tap to keep it private on its own.';
       else if (k === 'own' && ownerState.inh[st.file]) note = 'Kept private on its own. Tap to make it public.';
       else if (k === 'pub') note = 'Public, though its folder is private. Tap to follow the folder again.';
       else if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Settings), so none show yet.';
-      pills.priv.title = addr ? (k === 'aoff' ? 'Switch this photo\u2019s address on' : 'Switch this photo\u2019s address off') : 'Hidden from visitors unless they have the private-view password';
+      pills.priv.title = addr ? (k === 'aoff' ? 'Switch this photo\u2019s link on' : 'Switch this photo\u2019s link off') : 'Hidden from visitors unless they have the private-view password';
       noteEl.textContent = note; noteEl.hidden = note === '';
     };
     const paintLoc = function () {
@@ -26037,7 +26040,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     if (copyBtn) copyBtn.hidden = !!(copyLinkOk && !copyLinkOk[current]);
     const newAddrBtn = document.getElementById('lightbox-newaddr');
     if (newAddrBtn) newAddrBtn.hidden = !ownerIsUnlisted(file);   // (a Not listed photo has an address of its own, and the owner can replace it)
-    if (copyBtn) copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s address' : 'Copy link';
+    if (copyBtn) copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s link' : 'Copy link';
     applyZoom();
     updateLightboxExtras();
     toolsFade();
@@ -26590,12 +26593,12 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'photo_address'); body.set('file', name); if (fresh) body.set('fresh', '1');
       return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers });
     }).then(json).then((j) => {
-      if (!j.ok) throw new Error(j.text || 'No address');
+      if (!j.ok) throw new Error(j.text || 'No link');
       ownerState.unl[file] = j.code;
       return copyAddress(j.code, btn);
     }).catch((err) => {
       btn.classList.remove('busy');
-      window.alert(err && err.message === 'signed out' ? 'Your admin session ended: sign in again.' : 'No address: ' + (err && err.message ? err.message : 'try again'));
+      window.alert(err && err.message === 'signed out' ? 'Your admin session ended: sign in again.' : 'No link: ' + (err && err.message ? err.message : 'try again'));
     });
   }
   (function () {

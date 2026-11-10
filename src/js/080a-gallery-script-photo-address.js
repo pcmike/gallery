@@ -24,12 +24,12 @@
       const body = new URLSearchParams(); body.set('csrf_token', j.token); body.set('action', 'photo_address'); body.set('file', name); if (fresh) body.set('fresh', '1');
       return fetch('?admin&folder=' + encodeURIComponent(folder), { method: 'POST', credentials: 'same-origin', body: body.toString(), headers });
     }).then(json).then((j) => {
-      if (!j.ok) throw new Error(j.text || 'No address');
+      if (!j.ok) throw new Error(j.text || 'No link');
       ownerState.unl[file] = j.code;
       return copyAddress(j.code, btn);
     }).catch((err) => {
       btn.classList.remove('busy');
-      window.alert(err && err.message === 'signed out' ? 'Your admin session ended: sign in again.' : 'No address: ' + (err && err.message ? err.message : 'try again'));
+      window.alert(err && err.message === 'signed out' ? 'Your admin session ended: sign in again.' : 'No link: ' + (err && err.message ? err.message : 'try again'));
     });
   }
   (function () {

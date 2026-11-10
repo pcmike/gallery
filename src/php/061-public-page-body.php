@@ -458,9 +458,9 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (is_admin_browser()): ?>
   <div class="fp-modal" id="addr-modal" role="dialog" aria-modal="true" aria-labelledby="addr-modal-title" hidden>
     <div class="fp-modal-card">
-      <h3 id="addr-modal-title">Make a new address?</h3>
-      <p class="fp-hint" style="margin:0 0 8px">Anyone who has this photo's present address will no longer be able to open it. The new address is copied for you.</p>
-      <div class="fp-btns"><button type="button" id="addr-cancel">Cancel</button><button type="button" class="primary" id="addr-ok">New address</button></div>
+      <h3 id="addr-modal-title">Make a new link?</h3>
+      <p class="fp-hint" style="margin:0 0 8px">Anyone who has this photo's present link will no longer be able to open it. The new link is copied for you.</p>
+      <div class="fp-btns"><button type="button" id="addr-cancel">Cancel</button><button type="button" class="primary" id="addr-ok">New link</button></div>
     </div>
   </div>
 <?php endif; ?>
@@ -543,7 +543,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     <a class="lightbox-copy lightbox-download" id="lightbox-download" href="#" download title="Download the original" aria-label="Download the original"><?= ui_icon('download') ?></a>
 <?php endif; ?>
 <?php if (is_admin_browser()): ?>
-    <button class="lightbox-copy owner-newaddr" id="lightbox-newaddr" type="button" title="New address: the old one stops working" aria-label="New address: the old one stops working" hidden><?= ui_icon('linkoff') ?></button>
+    <button class="lightbox-copy owner-newaddr" id="lightbox-newaddr" type="button" title="New link: the old one stops working" aria-label="New link: the old one stops working" hidden><?= ui_icon('linkoff') ?></button>
 <?php endif; ?>
     <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link"><?= ui_icon('link') ?></button>
     <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>

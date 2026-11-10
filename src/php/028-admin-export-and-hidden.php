@@ -268,9 +268,9 @@ function admin_edited_overview($dir, $files, $hidden) {
         if (is_int($d['sortOrder'] ?? null)) $set[] = ['', 'Position ' . $d['sortOrder']];
         if (!empty($d['unlisted']) && isset($privFolders[$path])) $set[] = ['hid', 'Not listed'];
         if (!empty($d['ownGallery'])) $set[] = ['', 'Gallery of its own'];
-        if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s address'];
+        if (!empty($d['allowOriginals'])) $set[] = ['', 'Originals can be downloaded from a photo\'s link'];
         if (($d['keepLocation'] ?? null) === true) $set[] = ['loc', 'Visitors\' copies keep the location'];
-        if (!empty($d['addressFile']) && !empty($d['unlisted'])) $set[] = ['', 'Photo addresses send the bare file'];
+        if (!empty($d['addressFile']) && !empty($d['unlisted'])) $set[] = ['', 'Photo links send the bare file'];
         if (in_array($d['subfolderStyle'] ?? '', ['overview', 'flat'], true)) $set[] = ['', 'Folders under it: ' . ($d['subfolderStyle'] === 'flat' ? 'Flat' : 'Cards')];
         if (is_bool($d['flatNames'] ?? null)) $set[] = ['', 'Folder names ' . ($d['flatNames'] ? 'shown' : 'hidden') . ' (Flat)'];
         if (is_bool($d['flatNotes'] ?? null)) $set[] = ['', 'Folder notes ' . ($d['flatNotes'] ? 'shown' : 'hidden') . ' (Flat)'];
@@ -311,7 +311,7 @@ function admin_edited_overview($dir, $files, $hidden) {
                 if ($vis === 'show') $loc[] = 'Its location is shown to visitors (its own switch)';
                 elseif ($vis === 'hide') $loc[] = 'Its location is hidden from visitors (its own switch)';
                 if ($loc) { $kinds[] = 'location'; $tags[] = ['loc', 'location']; $text[] = ['loc', implode('. ', $loc)]; }
-                if (is_string($e['addr'] ?? null) && $e['addr'] !== '') { $kinds[] = 'address'; $tags[] = ['cap', 'new address']; $text[] = 'A new address was made for it: the one before stopped working.'; }
+                if (is_string($e['addr'] ?? null) && $e['addr'] !== '') { $kinds[] = 'address'; $tags[] = ['cap', 'new link']; $text[] = 'A new link was made for it: the one before stopped working.'; }
             }
             if (!$kinds) continue;
             $items[] = ['file' => $file, 'kinds' => $kinds, 'tags' => $tags, 'text' => $text, 'own' => $own];
@@ -335,7 +335,7 @@ function render_admin_edited_html($ov, $csrfToken) {
     global $dir;
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $c = $ov['counts']; $noun = ENABLE_VIDEO ? 'item' : 'photo';
-    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Links'], ['location', 'Locations'], ['address', 'Addresses'], ['folder', 'Folder settings']];
+    $chips = [['all', 'All'], ['private', 'Private'], ['caption', 'Captions'], ['link', 'Links'], ['location', 'Locations'], ['address', 'New links'], ['folder', 'Folder settings']];
     $out = '<div class="ed" id="ed-root" data-csrf="' . $esc($csrfToken) . '" data-noun="' . $noun . '">';
     if ($ov['total'] === 0) return $out . '<p class="muted ed-empty">Nothing is set by hand yet. When you add a caption, a link or a private flag to a ' . $noun . ', or change a folder\'s own settings, it is listed here.</p></div>';
     $out .= '<p class="ed-sum"><span><b>' . number_format($c['all']) . '</b> edit' . ($c['all'] === 1 ? '' : 's') . ' in <b>' . number_format(count($ov['folders'])) . '</b> folder' . (count($ov['folders']) === 1 ? '' : 's') . '</span><span><b>' . number_format($c['private']) . '</b> private</span><span><b>' . number_format($c['caption']) . '</b> caption' . ($c['caption'] === 1 ? '' : 's') . '</span><span><b>' . number_format($c['link']) . '</b> link' . ($c['link'] === 1 ? '' : 's') . '</span></p>';
@@ -630,9 +630,9 @@ function render_admin_folder_switches($itemsHere, $csrfToken, $adminFolderPath, 
     <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_unlisted', 'unlisted', $private && !empty($itemsHere['unlisted']), 'Not listed', '', ' <small class="muted">only you can open it</small>', 'unlisted-form'); ?>
     <div class="unlisted-sub"<?= $private && !empty($itemsHere['unlisted']) ? '' : ' hidden' ?>>
       <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_address_file', 'addrfile', !empty($itemsHere['addressFile']), !empty($itemsHere['addressFile']) ? 'Links send the bare file' : 'Links open in the gallery', '', '', 'unlisted-form'); ?>
-      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s address</small>', 'unlisted-form'); ?>
+      <?php render_admin_instant_toggle($csrfToken, 'toggle_folder_originals', 'originals', !empty($itemsHere['allowOriginals']), 'Allow downloading originals', '', ' <small class="muted">from a photo\'s link</small>', 'unlisted-form'); ?>
     </div>
-    <p class="hint unlisted-note">Only you see what is in this folder. Visitors and people with the private-view password get nothing, and an "Everything" share link leaves it out. To share it, send a photo's own address, or make a share link that picks this folder.</p>
+    <p class="hint unlisted-note">Only you see what is in this folder. Visitors and people with the private-view password get nothing, and an "Everything" share link leaves it out. To share it, send a photo's own link, or make a share link that picks this folder.</p>
     </div>
     <div class="admin-modal" id="priv-modal" role="dialog" aria-modal="true" aria-labelledby="priv-modal-title" hidden>
       <div class="admin-modal-card">

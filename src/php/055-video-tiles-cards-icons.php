@@ -97,7 +97,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         $addrLock = file_is_unlisted($GLOBALS['dir'], $file);   // (a photo in a Not listed folder: its lock is whether its address works, there is no public or private for it)
         if ($addrLock) {
             $isPriv = $ps['own'] === 'private'; $isFolder = false;
-            $lockTitle = $isPriv ? 'Address off: this photo can\'t be opened by its address. Press to switch it on' : 'Address on: anyone with this photo\'s address can open it. Press to switch it off';
+            $lockTitle = $isPriv ? 'Link off: this photo can\'t be opened by its link. Press to switch it on' : 'Link on: anyone with this photo\'s link can open it. Press to switch it off';
         }
         $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . ($isFolder ? ' is-folder' : '') . ($addrLock ? ' is-addr' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
             . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($addrLock ? '' : ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : ''))) . '</button>';
@@ -114,8 +114,8 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         // (the old stops working) and one that copies the present one.
         if (file_is_unlisted($GLOBALS['dir'], $file)) {
             $hasAddr = true;
-            $ownerLock .= '<button type="button" class="addr-toggle addr-new" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="New address: the old one stops working" aria-label="New address: the old one stops working">' . ui_icon('linkoff') . '</button>'
-                . '<button type="button" class="addr-toggle addr-cur" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy this photo\'s address" aria-label="Copy this photo\'s address">' . ui_icon('link') . '</button>';
+            $ownerLock .= '<button type="button" class="addr-toggle addr-new" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="New link: the old one stops working" aria-label="New link: the old one stops working">' . ui_icon('linkoff') . '</button>'
+                . '<button type="button" class="addr-toggle addr-cur" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" title="Copy this photo\'s link" aria-label="Copy this photo\'s link">' . ui_icon('link') . '</button>';
         }
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';

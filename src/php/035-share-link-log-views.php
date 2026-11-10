@@ -826,7 +826,7 @@ function health_checks($dir, $files) {
             $sample = implode('; ', array_map(function ($c) { return implode(' = ', array_slice($c[0], 0, 3)); }, array_slice($copied, 0, 3)));
             $anyUnl = (bool) array_filter($copied, function ($c) { return $c[1]; });
             $add('Left behind', 'warn', number_format(count($copied)) . ' hidden id' . (count($copied) === 1 ? ' is' : 's are') . ' carried by more than one folder (a copy)',
-                $sample . '. A link to such a folder, ' . ($anyUnl ? 'and the photo addresses of a Not listed one, ' : '') . 'open nothing until it is told apart: remove the copy, or delete the .gallery-items.php inside the copy so it gets an id of its own (its captions and settings go with that file).');
+                $sample . '. A link to such a folder, ' . ($anyUnl ? 'and the photo links of a Not listed one, ' : '') . 'open nothing until it is told apart: remove the copy, or delete the .gallery-items.php inside the copy so it gets an id of its own (its captions and settings go with that file).');
         }
         $bk = media_tidy_backups($dir, $files);
         $bkN = is_array($bk) ? (isset($bk['count']) ? (int) $bk['count'] : count($bk)) : 0;

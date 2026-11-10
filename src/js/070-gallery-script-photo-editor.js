@@ -42,15 +42,15 @@
       const addr = k === 'aon' || k === 'aoff';
       set(pills.priv, k === 'own' || k === 'aoff'); set(pills.loc, st.cfg.locationShown); set(pills.cover, !!ownerState.cover[st.file]);
       pills.priv.classList.toggle('is-folder', k === 'inh');
-      pills.priv.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (k === 'own' || k === 'inh' || k === 'aoff' ? 'lock' : 'unlock') + '"></use></svg> ' + (addr ? (k === 'aoff' ? 'Address off' : 'Address on') : (k === 'inh' ? 'Folder' : (k === 'pub' ? 'Public' : 'Private')));
+      pills.priv.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (k === 'own' || k === 'inh' || k === 'aoff' ? 'lock' : 'unlock') + '"></use></svg> ' + (addr ? (k === 'aoff' ? 'Link off' : 'Link on') : (k === 'inh' ? 'Folder' : (k === 'pub' ? 'Public' : 'Private')));
       let note = '';
-      if (k === 'aon') note = 'Anyone with this photo\u2019s address can open it. Tap to switch the address off.';
-      else if (k === 'aoff') note = 'This photo\u2019s address is switched off. Tap to switch it on.';
+      if (k === 'aon') note = 'Anyone with this photo\u2019s link can open it. Tap to switch the link off.';
+      else if (k === 'aoff') note = 'This photo\u2019s link is switched off. Tap to switch it on.';
       else if (k === 'inh') note = 'Private because its folder is. Tap to keep it private on its own.';
       else if (k === 'own' && ownerState.inh[st.file]) note = 'Kept private on its own. Tap to make it public.';
       else if (k === 'pub') note = 'Public, though its folder is private. Tap to follow the folder again.';
       else if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Settings), so none show yet.';
-      pills.priv.title = addr ? (k === 'aoff' ? 'Switch this photo\u2019s address on' : 'Switch this photo\u2019s address off') : 'Hidden from visitors unless they have the private-view password';
+      pills.priv.title = addr ? (k === 'aoff' ? 'Switch this photo\u2019s link on' : 'Switch this photo\u2019s link off') : 'Hidden from visitors unless they have the private-view password';
       noteEl.textContent = note; noteEl.hidden = note === '';
     };
     const paintLoc = function () {
