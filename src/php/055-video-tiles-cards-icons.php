@@ -312,7 +312,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // Only the owner sees this: solid red when the folder is private on its own, dashed when only a folder above it is.
     $pill = '';
     if ($priv['state'] === 'own') $pill = folder_unlisted_cached($dir, $folderPath)
-        ? '<button type="button" class="folder-priv own unlisted" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Not listed: only you can open this folder. Press to make it public">' . ui_icon('lock') . 'Not listed</button>'
+        ? '<span class="folder-priv own unlisted" title="Not listed: only you can open this folder">' . ui_icon('lock') . 'Not listed</span>'   // (it says so; it is not a button: making a Not listed folder public is in its settings)
         : '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
     elseif ($priv['state'] === 'inh') $pill = '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
     elseif (is_admin_browser() && collections_any() && ($pillColl = collection_at($dir, $folderPath)) !== null) $pill = '<span class="folder-priv own coll-pill' . ($pillColl['private'] ? ' is-private' : '') . '" title="' . ($pillColl['private'] ? 'Private collection: visitors see nothing of it (its folders and photos stay as they are)' : 'A collection: a hand-picked set') . '">' . ($pillColl['private'] ? ui_icon('lock') . 'Private' : 'Collection') . '</span>';   // (the owner is told which cards are collections)

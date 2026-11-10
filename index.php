@@ -22507,7 +22507,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     // Only the owner sees this: solid red when the folder is private on its own, dashed when only a folder above it is.
     $pill = '';
     if ($priv['state'] === 'own') $pill = folder_unlisted_cached($dir, $folderPath)
-        ? '<button type="button" class="folder-priv own unlisted" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Not listed: only you can open this folder. Press to make it public">' . ui_icon('lock') . 'Not listed</button>'
+        ? '<span class="folder-priv own unlisted" title="Not listed: only you can open this folder">' . ui_icon('lock') . 'Not listed</span>'   // (it says so; it is not a button: making a Not listed folder public is in its settings)
         : '<button type="button" class="folder-priv own" data-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" title="Private folder: press to make it public">' . ui_icon('lock') . 'Private</button>';
     elseif ($priv['state'] === 'inh') $pill = '<span class="folder-priv inh" title="Hidden because a folder above it is private">' . ui_icon('lock') . 'Folder</span>';
     elseif (is_admin_browser() && collections_any() && ($pillColl = collection_at($dir, $folderPath)) !== null) $pill = '<span class="folder-priv own coll-pill' . ($pillColl['private'] ? ' is-private' : '') . '" title="' . ($pillColl['private'] ? 'Private collection: visitors see nothing of it (its folders and photos stay as they are)' : 'A collection: a hand-picked set') . '">' . ($pillColl['private'] ? ui_icon('lock') . 'Private' : 'Collection') . '</span>';   // (the owner is told which cards are collections)
@@ -23495,6 +23495,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* The owner's mark on a folder card: the same two pills as a photo's lock. The count of what is private inside is its own link. */
   .folder-priv { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 999px; font-size: 0.72rem; line-height: 1; color: #fff; font-family: inherit; }
   .folder-priv .ico { width: 1em; height: 1em; }
+  .folder-priv.own.unlisted { cursor: default; pointer-events: none; }   /* (a note, not a button: a press goes to the card's link, as on the dashed Folder pill) */
   .folder-priv.own.coll-pill { background: rgba(88,101,242,0.92); cursor: default; font-style: italic; }
   .folder-priv.own.coll-pill.is-private { background: rgba(237,66,69,0.92); }
   .folder-priv.own { background: rgba(237,66,69,0.92); border: 1px solid rgba(255,255,255,0.35); cursor: pointer; transition: background .15s, transform .12s, box-shadow .12s; -webkit-tap-highlight-color: transparent; }
