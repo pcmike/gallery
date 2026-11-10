@@ -18189,7 +18189,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function apply() {
       syncEdTools();
       cards().forEach(function (card) {
-        var path = card.getAttribute('data-path'), counts = { private: 0, caption: 0, link: 0, location: 0 }, shown = 0, thumbs = [];
+        var path = card.getAttribute('data-path'), counts = { private: 0, caption: 0, link: 0, location: 0, address: 0 }, shown = 0, thumbs = [];
         [].forEach.call(card.querySelectorAll('.ed-it'), function (el) {
           var ok = match(el);
           if (el.classList.contains('ed-sm')) { if (ok) thumbs.push(el); else el.hidden = true; }
@@ -18211,6 +18211,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         if (counts.caption) sum.appendChild(tag('ed-cap', plural(counts.caption, 'caption', 'captions')));
         if (counts.link) sum.appendChild(tag('ed-cap', plural(counts.link, 'link', 'links')));
         if (counts.location) sum.appendChild(tag('ed-loc', plural(counts.location, 'location', 'locations')));
+        if (counts.address) sum.appendChild(tag('ed-cap', plural(counts.address, 'new address', 'new addresses')));
         if (fsOk) sum.appendChild(tag('', plural(+fs.getAttribute('data-n'), 'folder setting', 'folder settings')));
         card.hidden = shown === 0 && !fsOk;
       });
