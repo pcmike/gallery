@@ -676,7 +676,8 @@
       // moving to another folder shouldn't land you back on it.
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
       if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);
-      if (name === 'changes') setTimeout(function () { if (window.__chSeen) window.__chSeen(); }, 1500);
+      if (name !== 'changes' && window.__chLeft) window.__chLeft();
+      if (name === 'changes') { if (window.__chRefresh) window.__chRefresh(); setTimeout(function () { if (window.__chSeen) window.__chSeen(); }, 1500); }   // (the list is asked for first, so what is new is drawn amber before it counts as seen)
       if (window.__live) window.__live.shown(name);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
       if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits' && name !== 'collections' && name !== 'changes') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }   // (a whole-gallery page is not the tab a folder opens on)
       return name;
@@ -2964,8 +2965,11 @@
       var same = function (a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); };
       return same(d, n) ? 'Today' : same(d, y) ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
     }
-    [].forEach.call(root.querySelectorAll('.ch-t'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'), t = +s.getAttribute('data-t'); s.textContent = a && b && b - a >= 60 ? clock(a).replace(/ [AP]M$/, '') + '–' + clock(b) : clock(b || t); });
-    [].forEach.call(root.querySelectorAll('.ch-when'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'); s.textContent = 'Arrived ' + (b - a >= 60 ? clock(a) + ' to ' + clock(b) : clock(a || b)); });
+    function paint(box) {   // (the times and the days are drawn here, in this viewer's own clock)
+      [].forEach.call(box.querySelectorAll('.ch-t'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'), t = +s.getAttribute('data-t'); s.textContent = a && b && b - a >= 60 ? clock(a).replace(/ [AP]M$/, '') + '–' + clock(b) : clock(b || t); });
+      [].forEach.call(box.querySelectorAll('.ch-when'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'); s.textContent = 'Arrived ' + (b - a >= 60 ? clock(a) + ' to ' + clock(b) : clock(a || b)); });
+    }
+    paint(root);
     function chosen() { return Object.keys(kinds).filter(function (k) { return kinds[k]; }); }
     function apply() {
       [].forEach.call(list.querySelectorAll('.ch-day'), function (d) { d.remove(); });
@@ -2984,6 +2988,30 @@
       [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { i.checked = !!kinds[i.getAttribute('data-g')]; });
       pop.querySelector('input[data-all]').checked = c.length === 0;
     }
+    // The entries are asked for again when the tab is opened and when the window comes back to it: what is in front of you is what the log holds now. What you were doing stays (the kinds chosen, the search,
+    // the entries you opened).
+    var lastHtml = list.innerHTML, empty = root.querySelector('.ch-empty-log'), refreshing = null;
+    function refreshList() {
+      if (refreshing) return refreshing;
+      refreshing = fetch('?admin&changes_list=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+        if (!j || !j.ok || j.html === lastHtml) return false;
+        var open = {}, fresh = {}; [].forEach.call(list.querySelectorAll('.ch-e'), function (e) { var x = e.querySelector('.ch-x'); if (x && !x.hidden) open[e.getAttribute('data-id')] = 1; if (e.classList.contains('ch-new')) fresh[e.getAttribute('data-id')] = 1; });
+        list.innerHTML = lastHtml = j.html;
+        [].forEach.call(list.querySelectorAll('.ch-e'), function (e) {
+          if (fresh[e.getAttribute('data-id')]) e.classList.add('ch-new');
+          if (!open[e.getAttribute('data-id')]) return;
+          e.querySelector('.ch-x').hidden = false; var b = e.querySelector('.ch-tg'); b.setAttribute('aria-expanded', 'true'); b.innerHTML = '<i class="tri up" aria-hidden="true"></i> Hide';
+        });
+        paint(list);
+        [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { var sm = i.parentNode.querySelector('small'); if (sm && j.counts) sm.textContent = (j.counts[i.getAttribute('data-g')] || 0).toLocaleString(); });
+        if (empty) empty.hidden = j.n > 0;
+        apply();
+        return true;
+      }).catch(function () { return false; }).then(function (changed) { refreshing = null; return changed; });
+      return refreshing;
+    }
+    window.__chRefresh = refreshList;
+    window.__chLeft = function () { [].forEach.call(list.querySelectorAll('.ch-new'), function (e) { e.classList.remove('ch-new'); }); };   // (the amber edges stay while you are on the tab, and go when you leave it)
     function closePop() { pop.hidden = true; pill.setAttribute('aria-expanded', 'false'); }
     pill.addEventListener('click', function (ev) { ev.stopPropagation(); pop.hidden = !pop.hidden; pill.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true'); });
     pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
@@ -3015,10 +3043,10 @@
     window.__chSeen = function () {
       post({ action: 'changes_seen' }).then(function () {
         [].forEach.call(document.querySelectorAll('.side-link[data-tab=changes] .count.warn, .pb-w[data-pb-tab=changes] .count.warn'), function (c) { c.classList.remove('warn'); c.title = c.title.replace(/ on disk you have not looked at$/, ' were new when you last opened the tab').replace(/^(\d+) changes? /, '$1 changes '); });
-        setTimeout(function () { [].forEach.call(list.querySelectorAll('.ch-new'), function (e) { e.classList.remove('ch-new'); }); }, 4000);
         if (window.parent !== window) { try { window.parent.postMessage({ galleryShell: 1, tick: 1 }, location.origin); } catch (e) {} }
       }).catch(function () {});
     };
+    if (window.__live) window.__live.register('changes', { tab: 'changes', refresh: function () { return refreshList().then(function (changed) { if (changed) setTimeout(window.__chSeen, 1500); }); } });   // (what comes in while you are looking at the tab is seen as it is drawn)
     apply();
   })();
   function admConfirmSaveAs(form) {

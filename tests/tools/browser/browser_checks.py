@@ -3171,6 +3171,32 @@ try:
         b.js("[...document.querySelectorAll('.live-note-fixed button')].find(x => x.textContent === 'Refresh').click()"); b.drain(2.5)
         ok(lnote(".live-note-fixed") is None, "[changed elsewhere] Refresh brings the page up to date and the pill is gone")
         open(lcfg, "w").write(lorig)   # (the settings are as the tests below expect them)
+        # ---- the Changes tab: what arrived while you were on another tab is in the list when you open it, the grey number stays, and the list follows while you look at it
+        time.sleep(1.2); b.goto(BL + "/?admin&classic=1&chtab=1#site", 3.0); b.js("window.__live.min = 0")
+        chbadge = lambda: b.js("(() => { const c = document.querySelector('.side-link[data-tab=changes] .count'); return c ? c.className + '|' + c.textContent.trim() : 'none'; })()")
+        chtab = lambda name: b.js("document.querySelector('.side-link[data-tab=%s]').click()" % name)
+        open(SITE_L + "/Rome/chtab1.jpg", "wb").write(open(glob.glob(SITE_L + "/Rome/*.jpg")[0], "rb").read())
+        comes_back()
+        ok(chbadge().startswith("count warn|"), "[changes tab] a photo added while you are on another tab makes the number on the tab amber", chbadge())
+        chtab("changes"); b.drain(2.8)
+        ok(b.js("document.querySelectorAll('.ch-e[data-text*=chtab1]').length") == 1, "[changes tab] opening the tab shows the change that arrived meanwhile (without a reload)")
+        ok(b.js("document.querySelector('.ch-e[data-text*=chtab1]').classList.contains('ch-new')") and chbadge().startswith("count|"), "[changes tab] ...the new entry has the amber edge and the number goes grey", chbadge())
+        grey1 = chbadge()
+        time.sleep(4.0); b.drain(0.4)
+        ok(b.js("document.querySelector('.ch-e[data-text*=chtab1]').classList.contains('ch-new')"), "[changes tab] the amber edge stays while you are still on the tab (it does not fade by itself)")
+        for _ in range(3):
+            chtab("site"); b.drain(0.8); chtab("changes"); b.drain(2.8)
+        ok(not b.js("document.querySelector('.ch-e[data-text*=chtab1]').classList.contains('ch-new')"), "[changes tab] ...and it is gone once you have been to another tab")
+        ok(chbadge() == grey1 and b.js("document.querySelectorAll('.ch-e[data-text*=chtab1]').length") == 1, "[changes tab] opening it again and again (nothing new) keeps the grey number and the entry", chbadge() + " vs " + grey1)
+        # while the tab is in front: a new arrival is drawn when the window comes back; what was open and typed stays
+        b.js("document.querySelector('.ch-e[data-text*=chtab1] .ch-tg').click()")
+        b.js("(function(){ var q = document.querySelector('.ch-search'); q.value = 'chtab'; q.dispatchEvent(new Event('input', {bubbles: true})); })()")
+        open(SITE_L + "/Rome/chtab2.jpg", "wb").write(open(glob.glob(SITE_L + "/Rome/*.jpg")[0], "rb").read())
+        comes_back()
+        chl = b.js("(() => ({n: document.querySelectorAll('.ch-e[data-text*=chtab]:not([hidden])').length, open: !document.querySelector('.ch-e[data-text*=chtab1] .ch-x').hidden, q: document.querySelector('.ch-search').value}))()")
+        ok(chl["n"] == 2 and chl["open"] and chl["q"] == "chtab", "[changes tab] a photo arriving while the tab is in front is drawn when the window comes back, and the entry you opened and the search stay", str(chl))
+        os.unlink(SITE_L + "/Rome/chtab1.jpg"); os.unlink(SITE_L + "/Rome/chtab2.jpg"); comes_back()
+        b.js("(function(){ var q = document.querySelector('.ch-search'); q.value = ''; q.dispatchEvent(new Event('input', {bubbles: true})); })()")
         # ---- Settings: the signed-in browsers and Prepare media's numbers are asked for again when the window comes back
         b.goto(BL + "/?admin&classic=1&p4=1#site", 3.0); b.js("window.__live.min = 0")
         b.js("adminReveal('browsers-row')"); b.drain(1.0)
@@ -4193,6 +4219,14 @@ try:
         open(SITE_S + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps(cfgS) + "\n")
         b.js("(() => { const i = " + FR + ".querySelector('input'); i.dispatchEvent(new Event('change', {bubbles: true})); })()")
         ok(swait("document.querySelector('#sh-whole a[data-tab=features] .count').textContent.trim() !== " + json.dumps(f0), 6.0), "[shell] the numbers beside Features, Shares and Settings are asked for again after something is changed in the frame (switching a feature on moved Features' count)", f"{f0} -> {feat()}")
+        # the window comes back while the gallery page is in the frame: a file that arrived on disk is noticed by the page (a pill) and the sidebar's Changes number follows, without anything being clicked
+        b.goto(BS + "/?admin&shell=1&folder=Pisa&chs=1", 3.0); swait(FR + " && " + FR + ".getElementById('live-folder')")
+        chn = lambda: b.js("(() => { const c = document.querySelector('#sh-whole a[data-tab=changes] .count'); return c ? c.textContent.trim() : ''; })()")
+        chn0 = chn(); time.sleep(1.2)
+        shutil.copy(glob.glob(SITE_S + "/Pisa/*.jpg")[0], SITE_S + "/Pisa/chshell1.jpg")
+        b.js("(() => { const w = document.getElementById('sh-frame').contentWindow; w.__liveMin = 0; w.dispatchEvent(new Event('focus')); })()")
+        ok(swait("(() => { const c = document.querySelector('#sh-whole a[data-tab=changes] .count'); return !!c && c.textContent.trim() !== " + json.dumps(chn0) + "; })()", 9.0), "[shell] when the window comes back to the page in the frame, the sidebar's Changes number follows what arrived on disk (without a click or a reload)", chn0 + " -> " + chn())
+        os.unlink(SITE_S + "/Pisa/chshell1.jpg")
         # another site can frame the public gallery (it is public anyway) but not the admin page, even with &inframe=1
         b.goto(f"http://127.0.0.1:{PE}/evil.html", 2.5)
         tree_ = b.call("Page.getFrameTree")["frameTree"]

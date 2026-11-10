@@ -1060,7 +1060,7 @@ function request_route($reset = false) {
  *  Not listed photo's (see bare_query_as_address). */
 function reserved_query_words() {
     $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
-        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'browserspanel', 'changed', 'since', 'after', 'pbcounts', 'privcounts', 'scope_type',
+        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'browserspanel', 'changed', 'changes_list', 'since', 'after', 'pbcounts', 'privcounts', 'scope_type',
         'shellcounts', 'shellmeta', 'shelltree'];
     foreach (request_routes() as $r) foreach ($r['params'] as $p) $words[] = $p;
     return $words;
@@ -13798,8 +13798,7 @@ function changes_mark_seen() {
         $new = (int) $db->query('SELECT COUNT(*) FROM changes WHERE id > ' . (int) visitlog_meta_get($db, 'chg_seen'))->fetchColumn();
         $top = (int) $db->query('SELECT COALESCE(MAX(id), 0) FROM changes')->fetchColumn();
         visitlog_meta_set($db, 'chg_seen', $top);
-        visitlog_meta_set($db, 'chg_opened', time());
-        visitlog_meta_set($db, 'chg_open_n', $new);
+        if ($new > 0) { visitlog_meta_set($db, 'chg_opened', time()); visitlog_meta_set($db, 'chg_open_n', $new); }   // (opening the tab again with nothing new must not wipe the grey number: it stays the day, from the last time there was news)
     });
 }
 
@@ -14775,10 +14774,7 @@ function render_admin_changes_panel($csrfToken) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $rows = changes_list(500);
     $seen = (int) changes_read(function ($db) { return visitlog_meta_get($db, 'chg_seen'); }, 0);
-    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
-    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0]];
-    foreach ($rows as $r) if (isset($groupOf[$r['kind']])) $groups[$groupOf[$r['kind']]][1]++;
-    $media = function ($n) { return number_format($n) . ' media'; };
+    $groups = changes_group_counts($rows);
 ?>
   <section class="panel" id="changes" data-csrf="<?= $esc($csrfToken) ?>">
     <h2 class="section-title">Changes</h2>
@@ -14806,8 +14802,28 @@ function render_admin_changes_panel($csrfToken) {
     <?php if (!$rows): ?>
     <p class="muted ch-empty-log">Nothing has changed on disk since the gallery started watching. When photos are added, removed or renamed (a sync, an upload), they are listed here.</p>
     <?php endif; ?>
-    <div class="ch-list" data-seen="<?= $seen ?>">
-    <?php foreach ($rows as $r):
+    <div class="ch-list" data-seen="<?= $seen ?>"><?= changes_entries_html($rows, $seen) ?></div>
+    <p class="muted ch-none" hidden>Nothing matches.</p>
+  </section>
+<?php
+}
+
+/** How many entries there are of each kind the pill offers (Added, Removed, Renamed, Folders): [key => [name, count]]. */
+function changes_group_counts($rows) {
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
+    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0]];
+    foreach ($rows as $r) if (isset($groupOf[$r['kind']])) $groups[$groupOf[$r['kind']]][1]++;
+    return $groups;
+}
+
+/** The entries themselves, newest first (the tab draws them when the page is made; the script asks for them again when the tab is opened or the window comes back). Entries newer than $seen are marked. */
+function changes_entries_html($rows, $seen) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
+    $media = function ($n) { return number_format($n) . ' media'; };
+    ob_start();
+?>
+<?php foreach ($rows as $r):
         $kind = (string) $r['kind']; $folder = (string) $r['folder']; $n = (int) $r['n'];
         $names = json_decode((string) $r['names'], true); $names = is_array($names) ? $names : [];
         $gone = json_decode((string) $r['gone'], true); $gone = is_array($gone) ? $gone : [];
@@ -14841,10 +14857,8 @@ function render_admin_changes_panel($csrfToken) {
         </div>
       </div>
     <?php endforeach; ?>
-    </div>
-    <p class="muted ch-none" hidden>Nothing matches.</p>
-  </section>
 <?php
+    return ob_get_clean();
 }
 /** What the page already tells the owner on the front page, brought into the admin (where there is room to name things and to act): rows
  *  of ['label', 'detail', 'html' => the button]. Not problems: they are never counted as something to fix. */
@@ -15580,6 +15594,7 @@ function shell_frame_script($kind) {
         . ($kind === 'gallery' ? 'var tk;function tick(){clearTimeout(tk);tk=setTimeout(function(){try{parent.postMessage({galleryShell:1,tick:1},origin)}catch(e){}},1500)}'
             . 'document.addEventListener("click",function(e){var t=e.target&&e.target.closest?e.target.closest(".priv-toggle,.cover-toggle,.addr-toggle,.edit-toggle,.folder-priv.own,#folder-priv-banner,.select-bar button,.fp-modal button,#addr-modal button,#lightbox-private,#lightbox-cover,#lightbox .lbe-pill,#lightbox .lbe-btn"):null;if(t)tick()},true);'
             . 'document.addEventListener("change",function(e){if(e.target&&e.target.closest&&e.target.closest("#lightbox"))tick()},true);' : '')   // (an owner action on the gallery page: the shell's numbers (Edited, Settings...) may have moved)
+        . 'window.addEventListener("focus",tick);document.addEventListener("visibilitychange",function(){if(!document.hidden)tick()});'   // (the window came back: what changed meanwhile (the log of disk activity, a visitor) may have moved the shell's numbers; the sidebar's own window does not always hear it when the focus is inside the frame)
         . ($kind === 'admin' ? 'function top(){setTimeout(function(){scrollTo(0,0)},0)}window.addEventListener("load",top);window.addEventListener("hashchange",top);' : '')
         . 'document.addEventListener("click",function(e){var a=e.target&&e.target.closest?e.target.closest("a[href]"):null;if(!a||e.defaultPrevented||a.target==="_blank"||a.hasAttribute("download"))return;var u;try{u=new URL(a.href,location.href)}catch(x){return}'
         . 'if(u.origin!==origin||norm(u.pathname)!==norm(location.pathname)||u.searchParams.has("inframe")||u.search===location.search)return;'
@@ -18309,7 +18324,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       // moving to another folder shouldn't land you back on it.
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
       if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);
-      if (name === 'changes') setTimeout(function () { if (window.__chSeen) window.__chSeen(); }, 1500);
+      if (name !== 'changes' && window.__chLeft) window.__chLeft();
+      if (name === 'changes') { if (window.__chRefresh) window.__chRefresh(); setTimeout(function () { if (window.__chSeen) window.__chSeen(); }, 1500); }   // (the list is asked for first, so what is new is drawn amber before it counts as seen)
       if (window.__live) window.__live.shown(name);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
       if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits' && name !== 'collections' && name !== 'changes') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }   // (a whole-gallery page is not the tab a folder opens on)
       return name;
@@ -20597,8 +20613,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var same = function (a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); };
       return same(d, n) ? 'Today' : same(d, y) ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
     }
-    [].forEach.call(root.querySelectorAll('.ch-t'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'), t = +s.getAttribute('data-t'); s.textContent = a && b && b - a >= 60 ? clock(a).replace(/ [AP]M$/, '') + '–' + clock(b) : clock(b || t); });
-    [].forEach.call(root.querySelectorAll('.ch-when'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'); s.textContent = 'Arrived ' + (b - a >= 60 ? clock(a) + ' to ' + clock(b) : clock(a || b)); });
+    function paint(box) {   // (the times and the days are drawn here, in this viewer's own clock)
+      [].forEach.call(box.querySelectorAll('.ch-t'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'), t = +s.getAttribute('data-t'); s.textContent = a && b && b - a >= 60 ? clock(a).replace(/ [AP]M$/, '') + '–' + clock(b) : clock(b || t); });
+      [].forEach.call(box.querySelectorAll('.ch-when'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'); s.textContent = 'Arrived ' + (b - a >= 60 ? clock(a) + ' to ' + clock(b) : clock(a || b)); });
+    }
+    paint(root);
     function chosen() { return Object.keys(kinds).filter(function (k) { return kinds[k]; }); }
     function apply() {
       [].forEach.call(list.querySelectorAll('.ch-day'), function (d) { d.remove(); });
@@ -20617,6 +20636,30 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { i.checked = !!kinds[i.getAttribute('data-g')]; });
       pop.querySelector('input[data-all]').checked = c.length === 0;
     }
+    // The entries are asked for again when the tab is opened and when the window comes back to it: what is in front of you is what the log holds now. What you were doing stays (the kinds chosen, the search,
+    // the entries you opened).
+    var lastHtml = list.innerHTML, empty = root.querySelector('.ch-empty-log'), refreshing = null;
+    function refreshList() {
+      if (refreshing) return refreshing;
+      refreshing = fetch('?admin&changes_list=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+        if (!j || !j.ok || j.html === lastHtml) return false;
+        var open = {}, fresh = {}; [].forEach.call(list.querySelectorAll('.ch-e'), function (e) { var x = e.querySelector('.ch-x'); if (x && !x.hidden) open[e.getAttribute('data-id')] = 1; if (e.classList.contains('ch-new')) fresh[e.getAttribute('data-id')] = 1; });
+        list.innerHTML = lastHtml = j.html;
+        [].forEach.call(list.querySelectorAll('.ch-e'), function (e) {
+          if (fresh[e.getAttribute('data-id')]) e.classList.add('ch-new');
+          if (!open[e.getAttribute('data-id')]) return;
+          e.querySelector('.ch-x').hidden = false; var b = e.querySelector('.ch-tg'); b.setAttribute('aria-expanded', 'true'); b.innerHTML = '<i class="tri up" aria-hidden="true"></i> Hide';
+        });
+        paint(list);
+        [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { var sm = i.parentNode.querySelector('small'); if (sm && j.counts) sm.textContent = (j.counts[i.getAttribute('data-g')] || 0).toLocaleString(); });
+        if (empty) empty.hidden = j.n > 0;
+        apply();
+        return true;
+      }).catch(function () { return false; }).then(function (changed) { refreshing = null; return changed; });
+      return refreshing;
+    }
+    window.__chRefresh = refreshList;
+    window.__chLeft = function () { [].forEach.call(list.querySelectorAll('.ch-new'), function (e) { e.classList.remove('ch-new'); }); };   // (the amber edges stay while you are on the tab, and go when you leave it)
     function closePop() { pop.hidden = true; pill.setAttribute('aria-expanded', 'false'); }
     pill.addEventListener('click', function (ev) { ev.stopPropagation(); pop.hidden = !pop.hidden; pill.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true'); });
     pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
@@ -20648,10 +20691,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     window.__chSeen = function () {
       post({ action: 'changes_seen' }).then(function () {
         [].forEach.call(document.querySelectorAll('.side-link[data-tab=changes] .count.warn, .pb-w[data-pb-tab=changes] .count.warn'), function (c) { c.classList.remove('warn'); c.title = c.title.replace(/ on disk you have not looked at$/, ' were new when you last opened the tab').replace(/^(\d+) changes? /, '$1 changes '); });
-        setTimeout(function () { [].forEach.call(list.querySelectorAll('.ch-new'), function (e) { e.classList.remove('ch-new'); }); }, 4000);
         if (window.parent !== window) { try { window.parent.postMessage({ galleryShell: 1, tick: 1 }, location.origin); } catch (e) {} }
       }).catch(function () {});
     };
+    if (window.__live) window.__live.register('changes', { tab: 'changes', refresh: function () { return refreshList().then(function (changed) { if (changed) setTimeout(window.__chSeen, 1500); }); } });   // (what comes in while you are looking at the tab is seen as it is drawn)
     apply();
   })();
   function admConfirmSaveAs(form) {
@@ -21010,6 +21053,12 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         }
         if (isset($_GET['since']) && (int) $_GET['since'] > 0) { $out['fresh'] = changes_fresh_files($dir, $files, $adminFolderPath, (int) $_GET['since']); $out['folders'] = changes_new_folders($adminFolderPath, (int) $_GET['since']); }
         admin_json_exit($out);
+    }
+    if (isset($_GET['changes_list'])) {   // the Changes tab asks again (it was opened, or the window came back): the entries as they are now, with how many of each kind
+        header('Cache-Control: no-store');
+        $chRows = changes_list(500);
+        $chSeen = (int) changes_read(function ($db) { return visitlog_meta_get($db, 'chg_seen'); }, 0);
+        admin_json_exit(['ok' => true, 'n' => count($chRows), 'html' => changes_entries_html($chRows, $chSeen), 'counts' => array_map(function ($g) { return $g[1]; }, changes_group_counts($chRows))]);
     }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');

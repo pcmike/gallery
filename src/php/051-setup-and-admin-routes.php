@@ -214,6 +214,12 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         if (isset($_GET['since']) && (int) $_GET['since'] > 0) { $out['fresh'] = changes_fresh_files($dir, $files, $adminFolderPath, (int) $_GET['since']); $out['folders'] = changes_new_folders($adminFolderPath, (int) $_GET['since']); }
         admin_json_exit($out);
     }
+    if (isset($_GET['changes_list'])) {   // the Changes tab asks again (it was opened, or the window came back): the entries as they are now, with how many of each kind
+        header('Cache-Control: no-store');
+        $chRows = changes_list(500);
+        $chSeen = (int) changes_read(function ($db) { return visitlog_meta_get($db, 'chg_seen'); }, 0);
+        admin_json_exit(['ok' => true, 'n' => count($chRows), 'html' => changes_entries_html($chRows, $chSeen), 'counts' => array_map(function ($g) { return $g[1]; }, changes_group_counts($chRows))]);
+    }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');
         header('Content-Type: application/json; charset=UTF-8');

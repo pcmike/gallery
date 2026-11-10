@@ -171,8 +171,7 @@ function changes_mark_seen() {
         $new = (int) $db->query('SELECT COUNT(*) FROM changes WHERE id > ' . (int) visitlog_meta_get($db, 'chg_seen'))->fetchColumn();
         $top = (int) $db->query('SELECT COALESCE(MAX(id), 0) FROM changes')->fetchColumn();
         visitlog_meta_set($db, 'chg_seen', $top);
-        visitlog_meta_set($db, 'chg_opened', time());
-        visitlog_meta_set($db, 'chg_open_n', $new);
+        if ($new > 0) { visitlog_meta_set($db, 'chg_opened', time()); visitlog_meta_set($db, 'chg_open_n', $new); }   // (opening the tab again with nothing new must not wipe the grey number: it stays the day, from the last time there was news)
     });
 }
 

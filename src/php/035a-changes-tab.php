@@ -6,10 +6,7 @@ function render_admin_changes_panel($csrfToken) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $rows = changes_list(500);
     $seen = (int) changes_read(function ($db) { return visitlog_meta_get($db, 'chg_seen'); }, 0);
-    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
-    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0]];
-    foreach ($rows as $r) if (isset($groupOf[$r['kind']])) $groups[$groupOf[$r['kind']]][1]++;
-    $media = function ($n) { return number_format($n) . ' media'; };
+    $groups = changes_group_counts($rows);
 ?>
   <section class="panel" id="changes" data-csrf="<?= $esc($csrfToken) ?>">
     <h2 class="section-title">Changes</h2>
@@ -37,8 +34,28 @@ function render_admin_changes_panel($csrfToken) {
     <?php if (!$rows): ?>
     <p class="muted ch-empty-log">Nothing has changed on disk since the gallery started watching. When photos are added, removed or renamed (a sync, an upload), they are listed here.</p>
     <?php endif; ?>
-    <div class="ch-list" data-seen="<?= $seen ?>">
-    <?php foreach ($rows as $r):
+    <div class="ch-list" data-seen="<?= $seen ?>"><?= changes_entries_html($rows, $seen) ?></div>
+    <p class="muted ch-none" hidden>Nothing matches.</p>
+  </section>
+<?php
+}
+
+/** How many entries there are of each kind the pill offers (Added, Removed, Renamed, Folders): [key => [name, count]]. */
+function changes_group_counts($rows) {
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
+    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0]];
+    foreach ($rows as $r) if (isset($groupOf[$r['kind']])) $groups[$groupOf[$r['kind']]][1]++;
+    return $groups;
+}
+
+/** The entries themselves, newest first (the tab draws them when the page is made; the script asks for them again when the tab is opened or the window comes back). Entries newer than $seen are marked. */
+function changes_entries_html($rows, $seen) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
+    $media = function ($n) { return number_format($n) . ' media'; };
+    ob_start();
+?>
+<?php foreach ($rows as $r):
         $kind = (string) $r['kind']; $folder = (string) $r['folder']; $n = (int) $r['n'];
         $names = json_decode((string) $r['names'], true); $names = is_array($names) ? $names : [];
         $gone = json_decode((string) $r['gone'], true); $gone = is_array($gone) ? $gone : [];
@@ -72,8 +89,6 @@ function render_admin_changes_panel($csrfToken) {
         </div>
       </div>
     <?php endforeach; ?>
-    </div>
-    <p class="muted ch-none" hidden>Nothing matches.</p>
-  </section>
 <?php
+    return ob_get_clean();
 }
