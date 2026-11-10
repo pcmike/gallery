@@ -4316,6 +4316,7 @@ try:
         rf = b.js("JSON.stringify({same: window.__same, open: document.getElementById('health-panel').classList.contains('show-all'), exp: document.querySelector('.health-toggle').getAttribute('aria-expanded'), pending: document.querySelectorAll('#health-panel .health-row.pending').length, rows: document.querySelectorAll('#health-panel .health-row').length})")
         rf = json.loads(rf)
         ok(rf["same"] == "yes" and rf["open"] and rf["exp"] == "true" and rf["pending"] == 0 and rf["rows"] > 5, "[health] Check again puts the Health check in place without reloading the page: the list stays open, and the rows this browser fills in are asked again", str(rf))
+        b.viewport(390, 844, True); b.goto(BH + "/?admin&classic=1&again=9#site", 1.2)   # (back to the phone, where the checks after these two are made)
         b.js("[...document.querySelectorAll('.health-row a')].find(a => a.textContent === '→ Browsers signed in').click()"); b.drain(1.2)
         ok(b.js("(() => { const r = document.getElementById('browsers-row').getBoundingClientRect(); return r.bottom > 0 && r.top < window.innerHeight; })()") and b.js("[...document.querySelectorAll('details.site-group')].find(d => d.textContent.includes('Signing in and passwords')).open"), "[health] Open the list opens the folded group and brings the browsers table into view")
         shot(b, "49b-browsers-phone")

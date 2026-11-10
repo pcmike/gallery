@@ -10686,7 +10686,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <input type="text" name="dates" aria-label="Dates" maxlength="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
           <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
             <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
-              <button type="button" class="secondary date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
+              <button type="button" class="linklike date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
           <?php endif; ?>
         </div>
         <?php if (!$isRoot): ?>
@@ -16487,6 +16487,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .warn-text, .help.warn-text, .site-row .help.warn-text { color:var(--err); }
   .linklike { background:none; border:0; padding:0; color:#aab2ff; font:inherit; text-decoration:none; border-radius:3px; cursor:pointer; transition:background .15s, box-shadow .15s; }
   .linklike:hover { background:rgba(255,255,255,0.14); box-shadow:0 0 0 3px rgba(255,255,255,0.14); }
+  .linklike.date-suggest { font-weight:600; padding:0 2px; }   /* ("Use these dates": a periwinkle link at the end of the sentence that offers them) */
   .lock-recheck { margin-top:8px; }
   [hidden] { display:none !important; }
   @media (max-width: 960px) {

@@ -158,7 +158,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
           <input type="text" name="dates" aria-label="Dates" maxlength="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
           <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
             <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
-              <button type="button" class="secondary date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
+              <button type="button" class="linklike date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
           <?php endif; ?>
         </div>
         <?php if (!$isRoot): ?>
