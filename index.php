@@ -12019,6 +12019,9 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
       </dl>
     </div>
     <?php endforeach; ?>
+    <?php if (!$reg['byPath'] && !$reg['taken'] && !$reg['lost']): ?>
+    <p class="hint" style="margin:6px 0 0">No collections yet. Give one a name above, then add folders and photos to it on the next page.</p>
+    <?php endif; ?>
     <?php foreach ($reg['lost'] as $r): ?>
     <div class="cm-card"><h4><span class="coll"><?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?></span> <span class="cm-pill miss">Its folder is missing</span></h4>
       <p class="hint">The folder this collection lived in is gone, so it is not shown. Put the folder back and it returns; or delete the collection.</p>
@@ -15322,7 +15325,7 @@ function shell_whole_nav($dir, $files, $folderGroupKeys) {
     $h = '<a href="?admin&amp;shell=1&amp;tab=features" data-tab="features">Features' . admin_nav_badges($counts['features']) . '</a>';
     if ($hidden || $edited['total'] > 0) $h .= '<a href="?admin&amp;shell=1&amp;tab=hidden" data-tab="hidden">Edited <span class="count">' . number_format($edited['total']) . '</span></a>';
     if (ENABLE_SHARE_LINKS) $h .= '<a href="?admin&amp;shell=1&amp;tab=links" data-tab="links">Shares' . admin_nav_badges($counts['links']) . '</a>';
-    if (collections_any()) $h .= '<a href="?admin&amp;shell=1&amp;tab=collections" data-tab="collections">Collections <span class="count">' . count(collections_list()) . '</span></a>';
+    if (AUTO_GROUP_BY_FOLDER) $h .= '<a href="?admin&amp;shell=1&amp;tab=collections" data-tab="collections">Collections' . (collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '') . '</a>';
     $h .= '<a href="?admin&amp;shell=1&amp;tab=site" data-tab="site">Settings' . admin_nav_badges($counts['site']) . '</a>';
     if (visits_tab_wanted()) $h .= '<a href="?admin&amp;shell=1&amp;tab=visits" data-tab="visits">Visitors' . admin_nav_badges($counts['visits']) . '</a>';
     return $h;
@@ -15341,7 +15344,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     $whole = ['features' => 'Features'];
     if ($showEdited) $whole['hidden'] = 'Edited';
     if (ENABLE_SHARE_LINKS) $whole['links'] = 'Shares';
-    if (collections_any()) $whole['collections'] = 'Collections';
+    if (AUTO_GROUP_BY_FOLDER) $whole['collections'] = 'Collections';
     $whole['site'] = 'Settings';
     if (visits_tab_wanted()) $whole['visits'] = 'Visitors';
     $children = [];
@@ -15378,7 +15381,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
        . '<button type="button" class="pb-i" id="pb-menu" data-pb="menu" aria-expanded="false" aria-controls="pb-sheet">' . ui_icon('menu') . '<span>Menu</span></button>'
        . '</nav><div class="pb-sheet" id="pb-sheet" hidden' . ($counts === null ? ' data-lazy' : '') . '><div class="pb-top"><div class="pb-grab" aria-hidden="true"></div><div class="pb-head"><span class="pb-title">' . $e((string) ($GLOBALS['pageTitle'] ?? 'Gallery')) . '</span>' . $logoutHtml . '</div></div><div class="pb-scroll"><div class="pb-lab">The whole gallery</div>';
     foreach ($whole as $t => $label) {
-        $badges = $t === 'hidden' ? ($editedTotal !== null ? ' <span class="count">' . number_format($editedTotal) . '</span>' : '') : ($t === 'collections' ? ' <span class="count">' . count(collections_list()) . '</span>' : admin_nav_badges($counts[$t === 'site' ? 'site' : $t] ?? []));
+        $badges = $t === 'hidden' ? ($editedTotal !== null ? ' <span class="count">' . number_format($editedTotal) . '</span>' : '') : ($t === 'collections' ? (collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '') : admin_nav_badges($counts[$t === 'site' ? 'site' : $t] ?? []));
         $h .= '<a class="pb-w" href="' . $e($tab($t)) . '" data-pb-tab="' . $t . '"><span>' . $e($label) . '</span><span class="pb-b" data-b="' . $t . '">' . $badges . '</span></a>';
     }
     $h .= '<div class="pb-lab">Folders</div>' . $node('', 'Root', 0) . '</div></div>';
@@ -17014,8 +17017,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <?php if (ENABLE_SHARE_LINKS): ?>
     <a href="#links" data-tab="links" class="side-link">Shares<?= admin_nav_badges($navCounts['links']) ?></a>
   <?php endif; ?>
-  <?php if (collections_any()): ?>
-    <a href="#collections" data-tab="collections" class="side-link">Collections <span class="count"><?= count(collections_list()) ?></span></a>
+  <?php if (AUTO_GROUP_BY_FOLDER): ?>
+    <a href="#collections" data-tab="collections" class="side-link">Collections<?= collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '' ?></a>
   <?php endif; ?>
   <a href="#site" data-tab="site" class="side-link">Settings<?= admin_nav_badges($navCounts['site']) ?></a>
   <?php if (visits_tab_wanted()): ?>
@@ -17202,7 +17205,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   </div>
   </div>
 <?php endif; ?>
-<?php if (collections_any()): ?>
+<?php if (AUTO_GROUP_BY_FOLDER): ?>
   <div class="tab-panel" data-tab="collections">
 <?php render_admin_collections_overview($dir, $files, $csrfToken); ?>
   </div>

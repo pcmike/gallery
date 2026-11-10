@@ -32,8 +32,8 @@
   <?php if (ENABLE_SHARE_LINKS): ?>
     <a href="#links" data-tab="links" class="side-link">Shares<?= admin_nav_badges($navCounts['links']) ?></a>
   <?php endif; ?>
-  <?php if (collections_any()): ?>
-    <a href="#collections" data-tab="collections" class="side-link">Collections <span class="count"><?= count(collections_list()) ?></span></a>
+  <?php if (AUTO_GROUP_BY_FOLDER): ?>
+    <a href="#collections" data-tab="collections" class="side-link">Collections<?= collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '' ?></a>
   <?php endif; ?>
   <a href="#site" data-tab="site" class="side-link">Settings<?= admin_nav_badges($navCounts['site']) ?></a>
   <?php if (visits_tab_wanted()): ?>
@@ -220,7 +220,7 @@
   </div>
   </div>
 <?php endif; ?>
-<?php if (collections_any()): ?>
+<?php if (AUTO_GROUP_BY_FOLDER): ?>
   <div class="tab-panel" data-tab="collections">
 <?php render_admin_collections_overview($dir, $files, $csrfToken); ?>
   </div>

@@ -445,6 +445,9 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
       </dl>
     </div>
     <?php endforeach; ?>
+    <?php if (!$reg['byPath'] && !$reg['taken'] && !$reg['lost']): ?>
+    <p class="hint" style="margin:6px 0 0">No collections yet. Give one a name above, then add folders and photos to it on the next page.</p>
+    <?php endif; ?>
     <?php foreach ($reg['lost'] as $r): ?>
     <div class="cm-card"><h4><span class="coll"><?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?></span> <span class="cm-pill miss">Its folder is missing</span></h4>
       <p class="hint">The folder this collection lived in is gone, so it is not shown. Put the folder back and it returns; or delete the collection.</p>
