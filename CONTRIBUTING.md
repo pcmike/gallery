@@ -74,6 +74,7 @@ QJS=/path/to/qjs python3 tests/tools/js/run_js_checks.py
 - Keep the Markdown subset intentionally small. This isn't meant to become a full Markdown implementation.
 - Bump `GALLERY_VERSION` and add a `CHANGELOG.md` entry for any user-facing change.
 - A link or button that jumps to somewhere else in the admin reads `→ <where>`, with the name of the place as it is on the page (`→ Visitors`, `→ Prepare media`), never "Open …" or a trailing arrow. A link inside a sentence is just the words.
+- A count the owner can press on a folder's card (the red `(3 private ›)`, the amber change count next to it) is the one other kind of link: small coloured text in the card's count line, with a chevron at its end (the chevron says it can be pressed on a phone, where there is no hover), and the same look and feel (`.fc-priv`: its padding, rounded corners, white text on a tinted background on hover, a deeper tint when pressed, a keyboard outline). A new count of this kind copies those rules and changes only the colour.
 
 ## License of contributions
 

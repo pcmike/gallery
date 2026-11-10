@@ -339,12 +339,21 @@ function live_record_fp($data) {
 
 /** Three short fingerprints of what an admin page or the gallery page shows: the settings file, the data of one folder (captions, names, marks), and the list of photos and
  *  videos under it. Asked for again when the window comes back; a different answer means something changed somewhere else. $folderPath null is the front page. */
-function live_fingerprints($dir, $files, $folderPath) {
+function live_fingerprints($dir, $files, $folderPath, $since = 0) {
     $cfg = rtrim($dir, '/') . '/.gallery-config.php';
     $real = $folderPath === null ? $dir : resolve_real_path($dir, $folderPath);
     $under = $folderPath === null ? $files : folder_files_under($files, $folderPath);
     sort($under);
-    return ['settings' => is_file($cfg) ? (string) md5_file($cfg) : '', 'record' => is_string($real) && $real !== '' ? live_record_fp(items_read($real)) : '', 'media' => md5(implode("\n", $under))];
+    $by = []; foreach ($under as $f) $by[link_item_folder($f)][] = basename($f);
+    $folders = [];   // (per folder: how many files are directly in it, a fingerprint of their names, and its name, so the notice can say where and what; left out when there are too many folders to send each time)
+    if (count($by) <= 300) foreach ($by as $d => $names) { sort($names); $folders[(string) $d] = [count($names), md5(implode("\n", $names)), (string) $d === '' ? '' : link_folder_label($dir, (string) $d)]; }
+    $out = ['settings' => is_file($cfg) ? (string) md5_file($cfg) : '', 'record' => is_string($real) && $real !== '' ? live_record_fp(items_read($real)) : '', 'media' => md5(implode("\n", $under)), 'folders' => (object) $folders, 'at' => time()];   // ('at': this server's time, what "since" is measured against, never the browser's)
+    if ($since > 0) {   // the files that arrived (their inode changed: copied, renamed, synced in) since then, for the page to mark as new
+        $fresh = [];
+        foreach ($under as $f) { $path = resolve_real_path($dir, $f); if (is_string($path) && @filectime($path) >= $since) { $fresh[] = $f; if (count($fresh) >= 200) break; } }
+        $out['fresh'] = $fresh;
+    }
+    return $out;
 }
 
 /** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
@@ -577,6 +586,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $GLOBALS['dir'] = $dir; $GLOBALS['__admin_files'] = $files;
         ob_start(); render_admin_thumbnails_panel(htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8')); $html = ob_get_clean();
         admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'html' => $html]);
+    }
+
+    // The Health check again, for Check again to put in place (no page reload): the same panel the page is drawn with.
+    if ($action === 'health_panel') {
+        $GLOBALS['dir'] = $dir; $GLOBALS['__admin_files'] = $files;
+        $hid = admin_any_hidden($dir, $files, []) ? admin_hidden_data($dir, $files) : null;
+        $GLOBALS['__lock_probe'] = ['anyPrivate' => !empty($hid['folders']) || !empty($hid['items'])];   // (as the page sets it: the lock row only worries once something is private)
+        ob_start(); render_admin_health_panel(); $html = ob_get_clean();
+        admin_json_exit(['ok' => true, 'text' => '', 'html' => $html]);
     }
 
     // What the gallery knows and doesn't know about each folder's files (Prepare media's list).

@@ -46,6 +46,13 @@
   </details>
 </aside>
 <main class="admin-main"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
+<script>(function () {   // Before the sections are drawn: hide them all, and let the one the address or the last visit names show as soon as it is drawn, so no other section flashes up while the page loads (the tab script below takes over, and without JavaScript every section stays visible).
+  var m = document.currentScript.parentNode, n = ['features', 'hidden', 'links', 'visits', 'settings', 'notes', 'collections', 'site'], h = '', s = '';
+  try { h = decodeURIComponent((location.hash || '').slice(1)); } catch (e) {}
+  try { s = sessionStorage.getItem('galleryAdminTab') || ''; } catch (e) {}
+  m.classList.add('js-tabs');
+  if (n.indexOf(h) >= 0) document.documentElement.setAttribute('data-early', h); else if (n.indexOf(s) >= 0) document.documentElement.setAttribute('data-early', s);
+})();</script>
   <div class="admin-folder-head" id="admin-folder-head">
     <div class="afh-title"><span class="muted"><?= $adminCollection !== null ? 'Collection' : 'Folder' ?></span> <strong<?= $adminCollection !== null ? ' class="coll"' : '' ?>><?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></strong></div>
     <nav class="admin-tabs" role="tablist" aria-label="<?= $adminCollection !== null ? 'This collection' : 'This folder' ?>">

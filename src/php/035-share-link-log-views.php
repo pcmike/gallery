@@ -446,7 +446,7 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
         </div>
         <div class="vt-sw"><input type="search" class="vt-search" placeholder="Find a visitor" aria-label="Find a visitor" autocomplete="off" spellcheck="false" enterkeyhint="search"><button type="button" class="vt-sx" data-vt="clearq" aria-label="Clear the search" title="Clear the search" hidden>&times;</button></div>
         <div class="vt-menuwrap">
-          <button type="button" class="vt-ic" data-vt="menu" title="Export or trim the log" aria-label="Export or trim the log" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg></button>
+          <button type="button" class="vt-ic" data-vt="menu" title="Export or trim the log" aria-label="Export or trim the log" aria-haspopup="true" aria-expanded="false"><?= ui_icon('download') ?></button>
           <div class="vt-menu" hidden>
             <a href="#" data-export="visitors">Visitors<small>One line per IP: opens, first and last seen</small></a>
             <a href="#" data-export="items">What they looked at<small>One line per item: seen, opened, played, downloaded</small></a>

@@ -9017,12 +9017,21 @@ function live_record_fp($data) {
 
 /** Three short fingerprints of what an admin page or the gallery page shows: the settings file, the data of one folder (captions, names, marks), and the list of photos and
  *  videos under it. Asked for again when the window comes back; a different answer means something changed somewhere else. $folderPath null is the front page. */
-function live_fingerprints($dir, $files, $folderPath) {
+function live_fingerprints($dir, $files, $folderPath, $since = 0) {
     $cfg = rtrim($dir, '/') . '/.gallery-config.php';
     $real = $folderPath === null ? $dir : resolve_real_path($dir, $folderPath);
     $under = $folderPath === null ? $files : folder_files_under($files, $folderPath);
     sort($under);
-    return ['settings' => is_file($cfg) ? (string) md5_file($cfg) : '', 'record' => is_string($real) && $real !== '' ? live_record_fp(items_read($real)) : '', 'media' => md5(implode("\n", $under))];
+    $by = []; foreach ($under as $f) $by[link_item_folder($f)][] = basename($f);
+    $folders = [];   // (per folder: how many files are directly in it, a fingerprint of their names, and its name, so the notice can say where and what; left out when there are too many folders to send each time)
+    if (count($by) <= 300) foreach ($by as $d => $names) { sort($names); $folders[(string) $d] = [count($names), md5(implode("\n", $names)), (string) $d === '' ? '' : link_folder_label($dir, (string) $d)]; }
+    $out = ['settings' => is_file($cfg) ? (string) md5_file($cfg) : '', 'record' => is_string($real) && $real !== '' ? live_record_fp(items_read($real)) : '', 'media' => md5(implode("\n", $under)), 'folders' => (object) $folders, 'at' => time()];   // ('at': this server's time, what "since" is measured against, never the browser's)
+    if ($since > 0) {   // the files that arrived (their inode changed: copied, renamed, synced in) since then, for the page to mark as new
+        $fresh = [];
+        foreach ($under as $f) { $path = resolve_real_path($dir, $f); if (is_string($path) && @filectime($path) >= $since) { $fresh[] = $f; if (count($fresh) >= 200) break; } }
+        $out['fresh'] = $fresh;
+    }
+    return $out;
 }
 
 /** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
@@ -9255,6 +9264,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $GLOBALS['dir'] = $dir; $GLOBALS['__admin_files'] = $files;
         ob_start(); render_admin_thumbnails_panel(htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8')); $html = ob_get_clean();
         admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'html' => $html]);
+    }
+
+    // The Health check again, for Check again to put in place (no page reload): the same panel the page is drawn with.
+    if ($action === 'health_panel') {
+        $GLOBALS['dir'] = $dir; $GLOBALS['__admin_files'] = $files;
+        $hid = admin_any_hidden($dir, $files, []) ? admin_hidden_data($dir, $files) : null;
+        $GLOBALS['__lock_probe'] = ['anyPrivate' => !empty($hid['folders']) || !empty($hid['items'])];   // (as the page sets it: the lock row only worries once something is private)
+        ob_start(); render_admin_health_panel(); $html = ob_get_clean();
+        admin_json_exit(['ok' => true, 'text' => '', 'html' => $html]);
     }
 
     // What the gallery knows and doesn't know about each folder's files (Prepare media's list).
@@ -14057,7 +14075,7 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
         </div>
         <div class="vt-sw"><input type="search" class="vt-search" placeholder="Find a visitor" aria-label="Find a visitor" autocomplete="off" spellcheck="false" enterkeyhint="search"><button type="button" class="vt-sx" data-vt="clearq" aria-label="Clear the search" title="Clear the search" hidden>&times;</button></div>
         <div class="vt-menuwrap">
-          <button type="button" class="vt-ic" data-vt="menu" title="Export or trim the log" aria-label="Export or trim the log" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg></button>
+          <button type="button" class="vt-ic" data-vt="menu" title="Export or trim the log" aria-label="Export or trim the log" aria-haspopup="true" aria-expanded="false"><?= ui_icon('download') ?></button>
           <div class="vt-menu" hidden>
             <a href="#" data-export="visitors">Visitors<small>One line per IP: opens, first and last seen</small></a>
             <a href="#" data-export="items">What they looked at<small>One line per item: seen, opened, played, downloaded</small></a>
@@ -14503,7 +14521,7 @@ function render_admin_health_panel() {
     <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel" data-csrf="<?= $esc(admin_csrf_token()) ?>"<?= update_check_due() ? ' data-update-due="1"' : '' ?>>
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?>
-        <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary health-refresh" onclick="location.reload()" title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></p>
+        <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></p>
       <p class="muted health-intro" style="margin-top:0;">This only looks; it never changes your gallery (it just notes the running version and, once a day, looks for a new one).</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
@@ -15860,6 +15878,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .side-hidden.active .count { background:rgba(237,66,69,0.7); color:#fff; }
   .js-tabs .tab-panel { display:none; }
   .js-tabs .tab-panel.active { display:block; }
+  /* (the script at the top of <main> sets data-early to the section the address or the last visit names: it shows while the page loads, until the tab script takes over and removes the attribute) */
+  html[data-early="features"] .js-tabs .tab-panel[data-tab="features"],
+  html[data-early="hidden"] .js-tabs .tab-panel[data-tab="hidden"],
+  html[data-early="links"] .js-tabs .tab-panel[data-tab="links"],
+  html[data-early="visits"] .js-tabs .tab-panel[data-tab="visits"],
+  html[data-early="settings"] .js-tabs .tab-panel[data-tab="settings"],
+  html[data-early="notes"] .js-tabs .tab-panel[data-tab="notes"],
+  html[data-early="collections"] .js-tabs .tab-panel[data-tab="collections"],
+  html[data-early="site"] .js-tabs .tab-panel[data-tab="site"] { display:block; }
   .tab-panel > .panel + .panel, .tab-panel > .flash + .panel { margin-top:0; }
   /* The Shares tab. */
   .sl-off { background:rgba(224,160,40,0.12); border:1px solid rgba(224,160,40,0.5); border-radius:10px; padding:10px 14px; font-size:0.9rem; margin-bottom:12px; }
@@ -16888,9 +16915,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .vt-search { min-width:0; min-height:40px; background:#101012; border:1px solid #2a2a2e; color:var(--text); border-radius:8px; padding:0 12px; font:inherit; }
   .vt-search:focus, .vt-pop-find:focus { outline:2px solid var(--accent); outline-offset:1px; border-color:transparent; }
   .vt-menuwrap { position:relative; }
-  .vt-ic { width:40px; height:40px; border-radius:8px; background:#26262a; border:0; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
+  .vt-ic { width:40px; height:40px; padding:0; border-radius:8px; background:#26262a; border:0; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
   .vt-ic:hover { background:#303036; }
-  .vt-ic svg { width:20px; height:20px; stroke:#eaeaea; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  .vt-ic .ico { flex:none; width:22px; height:22px; stroke:#eaeaea; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }   /* (padding 0 above: the button's own padding used to squeeze the icon to 12 px wide) */
   .vt-menu { position:absolute; right:0; top:46px; z-index:30; min-width:270px; background:#1c1d1f; border:1px solid #3a3b3f; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.55); padding:6px; }
   .vt-menu a, .vt-menu button { display:block; width:100%; text-align:left; background:none; border:0; padding:10px 12px; border-radius:7px; color:var(--text); font:inherit; text-decoration:none; cursor:pointer; }
   .vt-menu a small { display:block; color:var(--muted); font-size:0.78rem; }
@@ -16933,6 +16960,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   /* "Changed somewhere else": a quiet bar at the top of the admin page, with Refresh */
   .live-note { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin:0 0 12px; padding:9px 14px; background:#1c2150; border-left:3px solid var(--accent); border-radius:0 8px 8px 0; color:#dfe2ff; font-size:0.88rem; }
   .live-note .secondary { padding:3px 12px; }
+  .live-note a { color:#aab2ff; }
   <?= owner_phone_bar_css() ?>
   html:has(> body.inframe) { scrollbar-gutter:stable; }  /* (the scrollbar's room is always kept, blank when there is nothing to scroll, so a short page is not centred a few pixels differently from a long one) */
   body.inframe .admin-bar, body.inframe .admin-side, body.inframe .admin-folder-head { display:none !important; }
@@ -16981,6 +17009,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   </details>
 </aside>
 <main class="admin-main"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
+<script>(function () {   // Before the sections are drawn: hide them all, and let the one the address or the last visit names show as soon as it is drawn, so no other section flashes up while the page loads (the tab script below takes over, and without JavaScript every section stays visible).
+  var m = document.currentScript.parentNode, n = ['features', 'hidden', 'links', 'visits', 'settings', 'notes', 'collections', 'site'], h = '', s = '';
+  try { h = decodeURIComponent((location.hash || '').slice(1)); } catch (e) {}
+  try { s = sessionStorage.getItem('galleryAdminTab') || ''; } catch (e) {}
+  m.classList.add('js-tabs');
+  if (n.indexOf(h) >= 0) document.documentElement.setAttribute('data-early', h); else if (n.indexOf(s) >= 0) document.documentElement.setAttribute('data-early', s);
+})();</script>
   <div class="admin-folder-head" id="admin-folder-head">
     <div class="afh-title"><span class="muted"><?= $adminCollection !== null ? 'Collection' : 'Folder' ?></span> <strong<?= $adminCollection !== null ? ' class="coll"' : '' ?>><?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></strong></div>
     <nav class="admin-tabs" role="tablist" aria-label="<?= $adminCollection !== null ? 'This collection' : 'This folder' ?>">
@@ -17196,10 +17231,39 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function show(texts, now) {
       hide();
       bar = document.createElement('div'); bar.className = 'live-note'; bar.setAttribute('role', 'status');
-      var t = document.createElement('span'); t.textContent = texts.join(' ') + ' '; bar.appendChild(t);
+      var t = document.createElement('span');
+      texts.forEach(function (x) { if (typeof x === 'string') t.appendChild(document.createTextNode(x + ' ')); else sentence(x.parts, x.at, t); });
+      bar.appendChild(t);
       var go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go);
       var x = document.createElement('button'); x.type = 'button'; x.className = 'linklike'; x.textContent = 'Dismiss'; x.addEventListener('click', function () { base = now; hide(); }); bar.appendChild(x);
       var main = document.querySelector('.admin-main'); if (main) main.insertBefore(bar, main.firstChild); else document.body.insertBefore(bar, document.body.firstChild);
+    }
+    // What changed among the photos, per folder: parts of a sentence with the folder's name and path (for the link to it, which also marks what is new there).
+    function describe(before, now) {
+      var keys = {}, out = [], items = function (n) { return n + (n === 1 ? ' item' : ' items'); };
+      Object.keys(before || {}).concat(Object.keys(now || {})).forEach(function (k) { keys[k] = 1; });
+      Object.keys(keys).forEach(function (k) {
+        var a = (before || {})[k], b = (now || {})[k], name = (b || a)[2] || 'the front page';
+        if (!a) out.push({ pre: 'the new folder ', name: name, path: k, post: ' has ' + items(b[0]) });
+        else if (!b) out.push({ pre: 'the folder ', name: name, path: null, post: ' has no items now' });
+        else if (b[0] > a[0]) out.push({ pre: items(b[0] - a[0]) + ' added to ', name: name, path: k, post: '' });
+        else if (b[0] < a[0]) out.push({ pre: items(a[0] - b[0]) + ' removed from ', name: name, path: k, post: '' });
+        else if (b[1] !== a[1]) out.push({ pre: 'items in ', name: name, path: k, post: ' were renamed or replaced' });
+      });
+      return out;
+    }
+    function gallery(path, at) { return '?' + (path ? 'folder=' + encodeURIComponent(path) + '&' : '') + 'since=' + Math.max(0, (at || 0) - 2) + (/[?&]inframe=1/.test(location.search) ? '&inframe=1' : ''); }
+    function sentence(parts, at, into) {
+      if (!parts.length) { into.appendChild(document.createTextNode('Photos in this folder were added, removed or renamed. ')); return; }
+      parts.slice(0, 3).forEach(function (p, i) {
+        if (i) into.appendChild(document.createTextNode('; '));
+        into.appendChild(document.createTextNode(i === 0 ? p.pre.charAt(0).toUpperCase() + p.pre.slice(1) : p.pre));
+        if (p.path === null) into.appendChild(document.createTextNode(p.name));
+        else { var a = document.createElement('a'); a.href = gallery(p.path, at); a.textContent = p.name; into.appendChild(a); }
+        into.appendChild(document.createTextNode(p.post));
+      });
+      if (parts.length > 3) into.appendChild(document.createTextNode('; and ' + (parts.length - 3) + ' more places'));
+      into.appendChild(document.createTextNode('. '));
     }
     window.__live.register('changed', { refresh: function () {
       return ask().then(function (j) {
@@ -17207,7 +17271,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var said = [];
         if (base.settings !== undefined && j.settings !== base.settings) said.push('The settings were changed somewhere else.');
         if (base.record !== undefined && j.record !== base.record) said.push("This folder's names, captions or marks were changed somewhere else.");
-        if (base.media !== undefined && j.media !== base.media) said.push('Photos in this folder were added, removed or renamed.');
+        if (base.media !== undefined && j.media !== base.media) said.push({ parts: describe(base.folders, j.folders), at: base.at });
         if (said.length) show(said, j); else hide();
       });
     } });
@@ -17561,14 +17625,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     };
     window.__initMediaPanel(document.getElementById('media-panel'));
     // A heads-up's button that flips a Settings switch on the spot (the page then reloads to show what that changed)
-    [].forEach.call(document.querySelectorAll('[data-health-switch]'), function (b) {
-      b.addEventListener('click', function () {
-        var cb = document.querySelector('input[name="set_' + b.getAttribute('data-health-switch') + '"][type=checkbox]');
-        if (!cb || cb.checked) return;
-        b.disabled = true; b.textContent = 'Turning on…';
-        cb.click();
-        setTimeout(function () { location.reload(); }, 1400);
-      });
+    document.addEventListener('click', function (e) {   // (asked of the document, not of each button: the Health check is put in place again by Check again)
+      var b = e.target.closest ? e.target.closest('[data-health-switch]') : null; if (!b || b.disabled) return;
+      var cb = document.querySelector('input[name="set_' + b.getAttribute('data-health-switch') + '"][type=checkbox]');
+      if (!cb || cb.checked) return;
+      b.disabled = true; b.textContent = 'Turning on…';
+      cb.click();
+      setTimeout(function () { location.reload(); }, 1400);
     });
     // New versions: the daily look (asked after the page is up, so a slow or blocked GitHub never slows Settings), Check now, Update now and Go back.
     (function () {
@@ -17611,16 +17674,30 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         post({ action: 'update_check' }, function (j) { if (j && j.ok) { say(j.text); showRows(j.rows); } });
       }, 1500);
     })();
-    const toggle = document.querySelector('.health-toggle');
-    // The list starts closed. This button opens and closes it. The one time it starts open is straight after a button in the list reloaded the page
-    // (Set aside, Remove them), which set a one-shot note for it.
+    // The list starts closed. The button opens and closes it. The one time it starts open is straight after a button in the list reloaded the page
+    // (Set aside, Remove them), which set a one-shot note for it. Check again puts the panel in place again without a reload, and keeps it as it was.
     (function () {
       const panel = document.getElementById('health-panel');
-      if (!panel || !toggle) return;
-      const paint = function (on) { panel.classList.toggle('show-all', on); toggle.setAttribute('aria-expanded', on ? 'true' : 'false'); };
+      if (!panel) return;
+      const paint = function (on) { panel.classList.toggle('show-all', on); const t = panel.querySelector('.health-toggle'); if (t) t.setAttribute('aria-expanded', on ? 'true' : 'false'); };
       let reopen = false; try { reopen = sessionStorage.getItem('healthOpen') === '1'; sessionStorage.removeItem('healthOpen'); } catch (e) {}
       if (reopen) paint(true);
-      toggle.addEventListener('click', function () { paint(!panel.classList.contains('show-all')); });
+      panel.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('.health-toggle')) { paint(!panel.classList.contains('show-all')); return; }
+        const b = e.target.closest ? e.target.closest('[data-health-refresh]') : null; if (!b || b.disabled) return;
+        b.disabled = true;
+        const body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_panel');
+        fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            const holder = document.createElement('div'); holder.innerHTML = (j && j.ok && j.html) || '';
+            const fresh = holder.querySelector('#health-panel'); if (!fresh) throw new Error('no panel');
+            const open = panel.classList.contains('show-all');
+            panel.className = fresh.className; panel.innerHTML = fresh.innerHTML; paint(open);
+            if (window.__healthProbe) window.__healthProbe();   // (the rows this browser fills in are asked again)
+          })
+          .catch(function () { location.reload(); });
+      });
     })();
     const mirror = function (key, cls, text) {
       document.querySelectorAll('[data-health="' + key + '"]').forEach(function (el) { el.textContent = text; el.className = 'health-detail ' + cls; });
@@ -17778,12 +17855,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
     document.querySelectorAll('.show-rules-btn').forEach(function (btn) { btn.addEventListener('click', function () { hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', false); btn.remove(); }); });
-    mirrorLater();
-    runLock();
-    runVisitLog();
-    runTidy();
-    runShareTidy();
-    runAccel();
+    window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runTidy(); runShareTidy(); runAccel(); };
+    window.__healthProbe();
   })();
   // The directive reference starts expanded on a desktop and collapsed
   // on a phone-width screen; it's a plain <details class="fold">, so either can toggle.
@@ -17848,6 +17921,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     var KEY = 'galleryAdminTab';
     function show(name) {
       if (names.indexOf(name) < 0) name = names.indexOf('settings') >= 0 ? 'settings' : names[0];
+      document.documentElement.removeAttribute('data-early');   // (the loading-time rule in the stylesheet: from here the .active section is the one shown)
       panels.forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-tab') === name); });
       tabs.forEach(function (t) {
         var on = t.getAttribute('data-tab') === name;
@@ -20491,7 +20565,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     $adminFolderReal = $adminFolderPath === null ? $dir : resolve_real_path($dir, $adminFolderPath);
     if (isset($_GET['changed'])) {   // the fingerprints again (the window came back): did the settings, this folder's data or its photos change somewhere else?
         header('Cache-Control: no-store');
-        admin_json_exit(['ok' => true] + live_fingerprints($dir, $files, $adminFolderPath));
+        admin_json_exit(['ok' => true] + live_fingerprints($dir, $files, $adminFolderPath, isset($_GET['since']) ? (int) $_GET['since'] : 0));
     }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');
@@ -24093,6 +24167,13 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .live-note-fixed button { font:inherit; cursor:pointer; border:0; border-radius:999px; padding:5px 14px; background:#5865f2; color:#fff; }
   .live-note-fixed .live-x { padding:5px 10px; background:transparent; color:#aab2ff; font-size:1.1rem; line-height:1; }
   @media (max-width: 800px) { body.pb-on .live-note-fixed { bottom:calc(74px + env(safe-area-inset-bottom, 0px)); } }
+
+  /* What arrived since (the owner followed the link from the "changed" pill): a ring and a small New on each such photo */
+  .card.live-new { position:relative; outline:3px solid #f5c26b; outline-offset:2px; animation:live-new-pulse 1.6s ease-out 2; }
+  .card.live-new::after { content:"New"; position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:3; padding:2px 10px; border-radius:999px; background:#f5c26b; color:#1a1405; font-size:0.72rem; font-weight:700; letter-spacing:0.03em; pointer-events:none; }
+  @keyframes live-new-pulse { 0% { outline-color:#fff; } 100% { outline-color:#f5c26b; } }
+  @media (prefers-reduced-motion: reduce) { .card.live-new { animation:none; } }
+  .live-note-fixed a { color:#c7ccff; }
   <?= owner_phone_bar_css() ?>
   body.inframe .crumb-bar { display: none; }
   body.inframe .crumb-bar.has-sec { display: flex; }   /* (inside the admin the tree and the title line are the way back and the folders beside this one; the pills for the page's own folders stay) */
@@ -26498,24 +26579,71 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     const viewerNew = document.getElementById('lightbox-newaddr');
     if (viewerNew) viewerNew.addEventListener('click', () => ask(files[current], viewerNew));
   })();
-// The owner's gallery page, left open while photos arrive (a sync, an upload): when the window comes back, a quiet bar says the photos here changed, with Refresh. Nothing is swapped on its own.
+// The owner's gallery page, left open while photos arrive (a sync, an upload): when the window comes back, a quiet pill at the bottom says where and what changed, with a link to each
+// folder and a Refresh button. Nothing is swapped on its own. The link opens that folder with ?since=, and the page then marks what arrived since and scrolls to it.
 (function () {
   var box = document.getElementById('live-folder'); if (!box) return;   // (only the signed-in owner's page has this)
-  var folder = box.getAttribute('data-folder') || '', base = null, last = 0, busy = false, bar = null;
-  function ask() { return fetch('?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : ''), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
-  function show() {
-    if (bar) return;
-    bar = document.createElement('div'); bar.className = 'live-note live-note-fixed'; bar.setAttribute('role', 'status');
-    var t = document.createElement('span'); t.textContent = 'Photos in this folder changed. '; bar.appendChild(t);
-    var go = document.createElement('button'); go.type = 'button'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go);
-    var x = document.createElement('button'); x.type = 'button'; x.className = 'live-x'; x.setAttribute('aria-label', 'Dismiss'); x.textContent = '×'; x.addEventListener('click', function () { bar.remove(); bar = null; base = null; last = 0; }); bar.appendChild(x);
-    document.body.appendChild(bar);
+  var folder = box.getAttribute('data-folder') || '', base = null, last = 0, busy = false, bar = null, marked = [];
+  var framed = /[?&]inframe=1/.test(location.search);
+  function url(since) { return '?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : '') + (since ? '&since=' + since : ''); }
+  function ask(since) { return fetch(url(since), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
+  // What changed among the photos, per folder: parts of a sentence, with the folder's name and path for the link.
+  function describe(before, now) {
+    var keys = {}, out = [], items = function (n) { return n + (n === 1 ? ' item' : ' items'); };
+    Object.keys(before || {}).concat(Object.keys(now || {})).forEach(function (k) { keys[k] = 1; });
+    Object.keys(keys).forEach(function (k) {
+      var a = (before || {})[k], b = (now || {})[k], name = (b || a)[2] || 'the front page';
+      if (!a) out.push({ pre: 'the new folder ', name: name, path: k, post: ' has ' + items(b[0]) });
+      else if (!b) out.push({ pre: 'the folder ', name: name, path: null, post: ' has no items now' });
+      else if (b[0] > a[0]) out.push({ pre: items(b[0] - a[0]) + ' added to ', name: name, path: k, post: '' });
+      else if (b[0] < a[0]) out.push({ pre: items(a[0] - b[0]) + ' removed from ', name: name, path: k, post: '' });
+      else if (b[1] !== a[1]) out.push({ pre: 'items in ', name: name, path: k, post: ' were renamed or replaced' });
+    });
+    return out;
   }
+  function href(path, at) { return '?' + (path ? 'folder=' + encodeURIComponent(path) + '&' : '') + 'since=' + Math.max(0, (at || 0) - 2) + (framed ? '&inframe=1' : ''); }
+  function sentence(parts, at, into) {
+    if (!parts.length) { into.appendChild(document.createTextNode('Photos in this folder changed')); }
+    parts.slice(0, 3).forEach(function (p, i) {
+      if (i) into.appendChild(document.createTextNode('; '));
+      var pre = i === 0 ? p.pre.charAt(0).toUpperCase() + p.pre.slice(1) : p.pre;
+      into.appendChild(document.createTextNode(pre));
+      if (p.path === null) into.appendChild(document.createTextNode(p.name));
+      else { var a = document.createElement('a'); a.href = href(p.path, at); a.textContent = p.name; into.appendChild(a); }
+      into.appendChild(document.createTextNode(p.post));
+    });
+    if (parts.length > 3) into.appendChild(document.createTextNode('; and ' + (parts.length - 3) + ' more places'));
+    into.appendChild(document.createTextNode('. '));
+  }
+  function pill(build, refresh) {
+    if (bar) bar.remove();
+    bar = document.createElement('div'); bar.className = 'live-note live-note-fixed'; bar.setAttribute('role', 'status');
+    var t = document.createElement('span'); build(t); bar.appendChild(t);
+    if (refresh) { var go = document.createElement('button'); go.type = 'button'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go); }
+    var x = document.createElement('button'); x.type = 'button'; x.className = 'live-x'; x.setAttribute('aria-label', 'Dismiss'); x.textContent = '×';
+    x.addEventListener('click', function () { bar.remove(); bar = null; if (refresh) { base = null; last = 0; } else unmark(); });
+    bar.appendChild(x); document.body.appendChild(bar);
+  }
+  function unmark() { marked.forEach(function (c) { c.classList.remove('live-new'); }); marked = []; }
   function check() {
     if (document.hidden || busy || Date.now() - last < (window.__liveMin === undefined ? 15000 : window.__liveMin)) return;
     busy = true; last = Date.now();
-    ask().then(function (j) { if (!j) return; if (base === null) base = j.media; else if (j.media !== base) show(); }).catch(function () {}).then(function () { busy = false; });
+    ask().then(function (j) {
+      if (!j) return;
+      if (base === null) { base = j; return; }
+      if (j.media !== base.media) { var parts = describe(base.folders, j.folders), at = base.at; pill(function (t) { sentence(parts, at, t); }, true); }
+    }).catch(function () {}).then(function () { busy = false; });
   }
+  // Arrived by a link from the pill (or the admin's bar): what came in since is marked, and the page scrolls to the first.
+  var m = /[?&]since=(\d+)/.exec(location.search);
+  if (m) ask(m[1]).then(function (j) {
+    if (!j || !j.fresh || !j.fresh.length) return;
+    var want = {}; j.fresh.forEach(function (f) { want[f] = 1; });
+    [].forEach.call(document.querySelectorAll('.card[data-file]'), function (c) { if (want[c.getAttribute('data-file')]) { c.classList.add('live-new'); marked.push(c); } });
+    if (!marked.length) return;
+    marked[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    pill(function (t) { t.textContent = (marked.length === 1 ? '1 new item is' : marked.length + ' new items are') + ' marked. '; }, false);
+  }).catch(function () {});
   check();   // (the first answer is the baseline)
   document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
   window.addEventListener('focus', check);

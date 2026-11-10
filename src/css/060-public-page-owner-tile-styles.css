@@ -474,3 +474,10 @@
   .live-note-fixed button { font:inherit; cursor:pointer; border:0; border-radius:999px; padding:5px 14px; background:#5865f2; color:#fff; }
   .live-note-fixed .live-x { padding:5px 10px; background:transparent; color:#aab2ff; font-size:1.1rem; line-height:1; }
   @media (max-width: 800px) { body.pb-on .live-note-fixed { bottom:calc(74px + env(safe-area-inset-bottom, 0px)); } }
+
+  /* What arrived since (the owner followed the link from the "changed" pill): a ring and a small New on each such photo */
+  .card.live-new { position:relative; outline:3px solid #f5c26b; outline-offset:2px; animation:live-new-pulse 1.6s ease-out 2; }
+  .card.live-new::after { content:"New"; position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:3; padding:2px 10px; border-radius:999px; background:#f5c26b; color:#1a1405; font-size:0.72rem; font-weight:700; letter-spacing:0.03em; pointer-events:none; }
+  @keyframes live-new-pulse { 0% { outline-color:#fff; } 100% { outline-color:#f5c26b; } }
+  @media (prefers-reduced-motion: reduce) { .card.live-new { animation:none; } }
+  .live-note-fixed a { color:#c7ccff; }

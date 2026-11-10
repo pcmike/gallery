@@ -34,10 +34,39 @@
     function show(texts, now) {
       hide();
       bar = document.createElement('div'); bar.className = 'live-note'; bar.setAttribute('role', 'status');
-      var t = document.createElement('span'); t.textContent = texts.join(' ') + ' '; bar.appendChild(t);
+      var t = document.createElement('span');
+      texts.forEach(function (x) { if (typeof x === 'string') t.appendChild(document.createTextNode(x + ' ')); else sentence(x.parts, x.at, t); });
+      bar.appendChild(t);
       var go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go);
       var x = document.createElement('button'); x.type = 'button'; x.className = 'linklike'; x.textContent = 'Dismiss'; x.addEventListener('click', function () { base = now; hide(); }); bar.appendChild(x);
       var main = document.querySelector('.admin-main'); if (main) main.insertBefore(bar, main.firstChild); else document.body.insertBefore(bar, document.body.firstChild);
+    }
+    // What changed among the photos, per folder: parts of a sentence with the folder's name and path (for the link to it, which also marks what is new there).
+    function describe(before, now) {
+      var keys = {}, out = [], items = function (n) { return n + (n === 1 ? ' item' : ' items'); };
+      Object.keys(before || {}).concat(Object.keys(now || {})).forEach(function (k) { keys[k] = 1; });
+      Object.keys(keys).forEach(function (k) {
+        var a = (before || {})[k], b = (now || {})[k], name = (b || a)[2] || 'the front page';
+        if (!a) out.push({ pre: 'the new folder ', name: name, path: k, post: ' has ' + items(b[0]) });
+        else if (!b) out.push({ pre: 'the folder ', name: name, path: null, post: ' has no items now' });
+        else if (b[0] > a[0]) out.push({ pre: items(b[0] - a[0]) + ' added to ', name: name, path: k, post: '' });
+        else if (b[0] < a[0]) out.push({ pre: items(a[0] - b[0]) + ' removed from ', name: name, path: k, post: '' });
+        else if (b[1] !== a[1]) out.push({ pre: 'items in ', name: name, path: k, post: ' were renamed or replaced' });
+      });
+      return out;
+    }
+    function gallery(path, at) { return '?' + (path ? 'folder=' + encodeURIComponent(path) + '&' : '') + 'since=' + Math.max(0, (at || 0) - 2) + (/[?&]inframe=1/.test(location.search) ? '&inframe=1' : ''); }
+    function sentence(parts, at, into) {
+      if (!parts.length) { into.appendChild(document.createTextNode('Photos in this folder were added, removed or renamed. ')); return; }
+      parts.slice(0, 3).forEach(function (p, i) {
+        if (i) into.appendChild(document.createTextNode('; '));
+        into.appendChild(document.createTextNode(i === 0 ? p.pre.charAt(0).toUpperCase() + p.pre.slice(1) : p.pre));
+        if (p.path === null) into.appendChild(document.createTextNode(p.name));
+        else { var a = document.createElement('a'); a.href = gallery(p.path, at); a.textContent = p.name; into.appendChild(a); }
+        into.appendChild(document.createTextNode(p.post));
+      });
+      if (parts.length > 3) into.appendChild(document.createTextNode('; and ' + (parts.length - 3) + ' more places'));
+      into.appendChild(document.createTextNode('. '));
     }
     window.__live.register('changed', { refresh: function () {
       return ask().then(function (j) {
@@ -45,7 +74,7 @@
         var said = [];
         if (base.settings !== undefined && j.settings !== base.settings) said.push('The settings were changed somewhere else.');
         if (base.record !== undefined && j.record !== base.record) said.push("This folder's names, captions or marks were changed somewhere else.");
-        if (base.media !== undefined && j.media !== base.media) said.push('Photos in this folder were added, removed or renamed.');
+        if (base.media !== undefined && j.media !== base.media) said.push({ parts: describe(base.folders, j.folders), at: base.at });
         if (said.length) show(said, j); else hide();
       });
     } });
@@ -399,14 +428,13 @@
     };
     window.__initMediaPanel(document.getElementById('media-panel'));
     // A heads-up's button that flips a Settings switch on the spot (the page then reloads to show what that changed)
-    [].forEach.call(document.querySelectorAll('[data-health-switch]'), function (b) {
-      b.addEventListener('click', function () {
-        var cb = document.querySelector('input[name="set_' + b.getAttribute('data-health-switch') + '"][type=checkbox]');
-        if (!cb || cb.checked) return;
-        b.disabled = true; b.textContent = 'Turning on…';
-        cb.click();
-        setTimeout(function () { location.reload(); }, 1400);
-      });
+    document.addEventListener('click', function (e) {   // (asked of the document, not of each button: the Health check is put in place again by Check again)
+      var b = e.target.closest ? e.target.closest('[data-health-switch]') : null; if (!b || b.disabled) return;
+      var cb = document.querySelector('input[name="set_' + b.getAttribute('data-health-switch') + '"][type=checkbox]');
+      if (!cb || cb.checked) return;
+      b.disabled = true; b.textContent = 'Turning on…';
+      cb.click();
+      setTimeout(function () { location.reload(); }, 1400);
     });
     // New versions: the daily look (asked after the page is up, so a slow or blocked GitHub never slows Settings), Check now, Update now and Go back.
     (function () {
@@ -449,16 +477,30 @@
         post({ action: 'update_check' }, function (j) { if (j && j.ok) { say(j.text); showRows(j.rows); } });
       }, 1500);
     })();
-    const toggle = document.querySelector('.health-toggle');
-    // The list starts closed. This button opens and closes it. The one time it starts open is straight after a button in the list reloaded the page
-    // (Set aside, Remove them), which set a one-shot note for it.
+    // The list starts closed. The button opens and closes it. The one time it starts open is straight after a button in the list reloaded the page
+    // (Set aside, Remove them), which set a one-shot note for it. Check again puts the panel in place again without a reload, and keeps it as it was.
     (function () {
       const panel = document.getElementById('health-panel');
-      if (!panel || !toggle) return;
-      const paint = function (on) { panel.classList.toggle('show-all', on); toggle.setAttribute('aria-expanded', on ? 'true' : 'false'); };
+      if (!panel) return;
+      const paint = function (on) { panel.classList.toggle('show-all', on); const t = panel.querySelector('.health-toggle'); if (t) t.setAttribute('aria-expanded', on ? 'true' : 'false'); };
       let reopen = false; try { reopen = sessionStorage.getItem('healthOpen') === '1'; sessionStorage.removeItem('healthOpen'); } catch (e) {}
       if (reopen) paint(true);
-      toggle.addEventListener('click', function () { paint(!panel.classList.contains('show-all')); });
+      panel.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('.health-toggle')) { paint(!panel.classList.contains('show-all')); return; }
+        const b = e.target.closest ? e.target.closest('[data-health-refresh]') : null; if (!b || b.disabled) return;
+        b.disabled = true;
+        const body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_panel');
+        fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            const holder = document.createElement('div'); holder.innerHTML = (j && j.ok && j.html) || '';
+            const fresh = holder.querySelector('#health-panel'); if (!fresh) throw new Error('no panel');
+            const open = panel.classList.contains('show-all');
+            panel.className = fresh.className; panel.innerHTML = fresh.innerHTML; paint(open);
+            if (window.__healthProbe) window.__healthProbe();   // (the rows this browser fills in are asked again)
+          })
+          .catch(function () { location.reload(); });
+      });
     })();
     const mirror = function (key, cls, text) {
       document.querySelectorAll('[data-health="' + key + '"]').forEach(function (el) { el.textContent = text; el.className = 'health-detail ' + cls; });
@@ -616,12 +658,8 @@
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
     document.querySelectorAll('.show-rules-btn').forEach(function (btn) { btn.addEventListener('click', function () { hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', false); btn.remove(); }); });
-    mirrorLater();
-    runLock();
-    runVisitLog();
-    runTidy();
-    runShareTidy();
-    runAccel();
+    window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runTidy(); runShareTidy(); runAccel(); };
+    window.__healthProbe();
   })();
   // The directive reference starts expanded on a desktop and collapsed
   // on a phone-width screen; it's a plain <details class="fold">, so either can toggle.
@@ -686,6 +724,7 @@
     var KEY = 'galleryAdminTab';
     function show(name) {
       if (names.indexOf(name) < 0) name = names.indexOf('settings') >= 0 ? 'settings' : names[0];
+      document.documentElement.removeAttribute('data-early');   // (the loading-time rule in the stylesheet: from here the .active section is the one shown)
       panels.forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-tab') === name); });
       tabs.forEach(function (t) {
         var on = t.getAttribute('data-tab') === name;
