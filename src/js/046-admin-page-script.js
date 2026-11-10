@@ -21,81 +21,12 @@
     api.shown = function (tab) { Object.keys(parts).forEach(function (n) { if (parts[n].tab === tab) run(n); }); };
     return api;
   })();
-  // Something changed somewhere else (another browser saved a setting, a folder's captions or marks were edited, photos were added by a sync): the page shows a quiet bar with
-  // Refresh instead of swapping what the person may be editing. The page is drawn with three short fingerprints (#live-fp); they are asked for again when the window comes back,
-  // and taken again after this page's own saves (a save made here is not "somewhere else").
-  (function () {
-    var holder = document.getElementById('live-fp'); if (!holder || !window.__live) return;
-    var base = {}, bar = null, rebaseT = null, folder = (new URLSearchParams(location.search)).get('folder');
-    try { base = JSON.parse(holder.getAttribute('data-fp')) || {}; } catch (e) {}
-    function url() { return '?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : ''); }
-    function ask() { return fetch(url(), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
-    function hide() { if (bar) { bar.remove(); bar = null; } }
-    function show(texts, now) {
-      hide();
-      bar = document.createElement('div'); bar.className = 'live-note'; bar.setAttribute('role', 'status');
-      var t = document.createElement('span');
-      texts.forEach(function (x) { if (typeof x === 'string') t.appendChild(document.createTextNode(x + ' ')); else sentence(x.parts, x.at, t); });
-      bar.appendChild(t);
-      var go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go);
-      var x = document.createElement('button'); x.type = 'button'; x.className = 'linklike'; x.textContent = 'Dismiss'; x.addEventListener('click', function () { base = now; hide(); }); bar.appendChild(x);
-      var main = document.querySelector('.admin-main'); if (main) main.insertBefore(bar, main.firstChild); else document.body.insertBefore(bar, document.body.firstChild);
-    }
-    // What changed among the photos, per folder: parts of a sentence with the folder's name and path (for the link to it, which also marks what is new there).
-    function describe(before, now) {
-      var keys = {}, out = [], items = function (n) { return n + (n === 1 ? ' item' : ' items'); };
-      Object.keys(before || {}).concat(Object.keys(now || {})).forEach(function (k) { keys[k] = 1; });
-      Object.keys(keys).forEach(function (k) {
-        var a = (before || {})[k], b = (now || {})[k], name = (b || a)[2] || 'the front page';
-        if (!a) out.push({ pre: 'the new folder ', name: name, path: k, post: ' has ' + items(b[0]) });
-        else if (!b) out.push({ pre: 'the folder ', name: name, path: null, post: ' has no items now' });
-        else if (b[0] > a[0]) out.push({ pre: items(b[0] - a[0]) + ' added to ', name: name, path: k, post: '' });
-        else if (b[0] < a[0]) out.push({ pre: items(a[0] - b[0]) + ' removed from ', name: name, path: k, post: '' });
-        else if (b[1] !== a[1]) out.push({ pre: 'items in ', name: name, path: k, post: ' were renamed or replaced' });
-      });
-      return out;
-    }
-    function gallery(path, at) { return '?' + (path ? 'folder=' + encodeURIComponent(path) + '&' : '') + 'since=' + Math.max(0, (at || 0) - 2) + (/[?&]inframe=1/.test(location.search) ? '&inframe=1' : ''); }
-    function sentence(parts, at, into) {
-      if (!parts.length) { into.appendChild(document.createTextNode('Photos in this folder were added, removed or renamed. ')); return; }
-      parts.slice(0, 3).forEach(function (p, i) {
-        if (i) into.appendChild(document.createTextNode('; '));
-        into.appendChild(document.createTextNode(i === 0 ? p.pre.charAt(0).toUpperCase() + p.pre.slice(1) : p.pre));
-        if (p.path === null) into.appendChild(document.createTextNode(p.name));
-        else { var a = document.createElement('a'); a.href = gallery(p.path, at); a.textContent = p.name; into.appendChild(a); }
-        into.appendChild(document.createTextNode(p.post));
-      });
-      if (parts.length > 3) into.appendChild(document.createTextNode('; and ' + (parts.length - 3) + ' more places'));
-      into.appendChild(document.createTextNode('. '));
-    }
-    window.__live.register('changed', { refresh: function () {
-      return ask().then(function (j) {
-        if (!j) return;
-        var said = [];
-        if (base.settings !== undefined && j.settings !== base.settings) said.push('The settings were changed somewhere else.');
-        if (base.record !== undefined && j.record !== base.record) said.push("This folder's names, captions or marks were changed somewhere else.");
-        if (base.media !== undefined && j.media !== base.media) said.push({ parts: describe(base.folders, j.folders), at: base.at });
-        if (said.length) show(said, j); else hide();
-      });
-    } });
-    // a save made from this page: the fingerprints are taken again, so the page does not announce its own change
-    window.__live.rebase = function () {
-      clearTimeout(rebaseT);
-      rebaseT = setTimeout(function () { ask().then(function (j) { if (j) { base = j; hide(); } }); }, 900);
-    };
-    var plainFetch = window.fetch;
-    if (plainFetch) window.fetch = function (u, o) {
-      var p = plainFetch.apply(this, arguments);
-      try { if (o && String(o.method).toUpperCase() === 'POST' && typeof u === 'string' && u.indexOf('?admin') === 0) p.then(function () { window.__live.rebase(); }, function () {}); } catch (e) {}
-      return p;
-    };
-  })();
   // The numbers on the sidebar entries (and the phone Menu's) in the page itself. In the desktop shell the sidebar is the shell's own, which asks again by itself.
   if (window.parent === window) window.__live.register('counts', { refresh: function () {
     return fetch('?admin&pbcounts=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
       if (!d) return;
       var badge = function (o) { var s = document.createElement('span'); s.className = 'count' + (o.kind ? ' ' + o.kind : ''); s.title = o.title || ''; s.textContent = o.text; return s; };
-      ['features', 'links', 'site', 'visits'].forEach(function (k) {
+      ['features', 'links', 'site', 'visits', 'changes'].forEach(function (k) {
         var list = d[k] || [];
         [].forEach.call(document.querySelectorAll('.side-link[data-tab="' + k + '"]'), function (a) {
           [].forEach.call(a.querySelectorAll(':scope > .count'), function (c) { c.remove(); });
@@ -560,7 +491,7 @@
       if (!url) return;
       ask(url).then(function (state) {
         mirror('visitlog', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
-          : state === 'open' ? 'Anyone can download the visitor log, which holds IP addresses: the server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+          : state === 'open' ? 'Anyone can download the visitor log, which holds IP addresses (if visitors are logged) and the names of your folders and photos (the Changes tab): the server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
       });
     };
     // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
@@ -734,7 +665,7 @@
       });
       // On Settings or Private nothing in the folder list is selected: the folder you came from stays marked, quietly.
       var lay = document.querySelector('.admin-layout');
-      var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits' || name === 'collections';
+      var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits' || name === 'collections' || name === 'changes';
       if (lay) lay.classList.toggle('off-folder', whole);
       // The phone's Menu and bottom bar say the same thing as the sidebar: the page you are on is the one blue entry; the folder stays marked, quietly, on a whole-gallery page.
       [].forEach.call(document.querySelectorAll('.pb-w[data-pb-tab]'), function (a) { var on = a.getAttribute('data-pb-tab') === name; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -745,8 +676,9 @@
       // moving to another folder shouldn't land you back on it.
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
       if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);
+      if (name === 'changes') setTimeout(function () { if (window.__chSeen) window.__chSeen(); }, 1500);
       if (window.__live) window.__live.shown(name);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
-      if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits' && name !== 'collections') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }   // (a whole-gallery page is not the tab a folder opens on)
+      if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits' && name !== 'collections' && name !== 'changes') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }   // (a whole-gallery page is not the tab a folder opens on)
       return name;
     }
     function fromLocation() {
@@ -3018,6 +2950,76 @@
     };
     window.__vtShow = function (id) { S.cc = []; S.src = id ? [id] : []; S.q = ''; S.view = 'visitors'; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); };
     paintPills(); paintNote(); paintExport(); times();
+  })();
+  // The Changes tab: the kinds pill (any number of kinds), the search, the trim form, entries that open, times and days in the viewer's own clock. Opening the tab marks it seen.
+  (function () {
+    var root = document.getElementById('changes'); if (!root) return;
+    var list = root.querySelector('.ch-list'), pill = root.querySelector('.ch-pill'), pop = root.querySelector('.ch-pop'), search = root.querySelector('.ch-search'), none = root.querySelector('.ch-none');
+    var csrf = root.getAttribute('data-csrf'), kinds = {}, kindNames = { add: 'Added', rem: 'Removed', ren: 'Renamed', folder: 'Folders' };
+    function post(fields) { return fetch('?admin', { method: 'POST', body: new URLSearchParams(Object.assign({ csrf_token: csrf }, fields)), credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); }); }
+    var two = function (n) { return (n < 10 ? '0' : '') + n; };
+    function clock(t) { var d = new Date(t * 1000), h = d.getHours(); return (h % 12 || 12) + ':' + two(d.getMinutes()) + ' ' + (h < 12 ? 'AM' : 'PM'); }
+    function dayOf(t) {
+      var d = new Date(t * 1000), n = new Date(), y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
+      var same = function (a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); };
+      return same(d, n) ? 'Today' : same(d, y) ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    [].forEach.call(root.querySelectorAll('.ch-t'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'), t = +s.getAttribute('data-t'); s.textContent = a && b && b - a >= 60 ? clock(a).replace(/ [AP]M$/, '') + '–' + clock(b) : clock(b || t); });
+    [].forEach.call(root.querySelectorAll('.ch-when'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'); s.textContent = 'Arrived ' + (b - a >= 60 ? clock(a) + ' to ' + clock(b) : clock(a || b)); });
+    function chosen() { return Object.keys(kinds).filter(function (k) { return kinds[k]; }); }
+    function apply() {
+      [].forEach.call(list.querySelectorAll('.ch-day'), function (d) { d.remove(); });
+      var q = search.value.trim().toLowerCase(), c = chosen(), shown = 0, last = '';
+      [].forEach.call(list.querySelectorAll('.ch-e'), function (e) {
+        var ok = (!c.length || kinds[e.getAttribute('data-g')]) && (!q || e.getAttribute('data-text').indexOf(q) >= 0);
+        e.hidden = !ok; if (!ok) return;
+        shown++;
+        var d = dayOf(+e.getAttribute('data-t'));
+        if (d !== last) { var h = document.createElement('div'); h.className = 'ch-day'; h.textContent = d; list.insertBefore(h, e); last = d; }
+      });
+      none.hidden = shown > 0 || !list.querySelector('.ch-e');
+      pill.classList.toggle('on', c.length > 0);
+      pill.querySelector('.ch-pill-t').textContent = c.length ? c.map(function (k) { return kindNames[k]; }).join(', ') : 'All kinds';
+      pill.querySelector('.ch-pill-n').textContent = c.length ? String(shown) : '';
+      [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { i.checked = !!kinds[i.getAttribute('data-g')]; });
+      pop.querySelector('input[data-all]').checked = c.length === 0;
+    }
+    function closePop() { pop.hidden = true; pill.setAttribute('aria-expanded', 'false'); }
+    pill.addEventListener('click', function (ev) { ev.stopPropagation(); pop.hidden = !pop.hidden; pill.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true'); });
+    pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    pop.addEventListener('change', function (ev) {
+      var i = ev.target; if (!i || i.tagName !== 'INPUT') return;
+      if (i.hasAttribute('data-all')) kinds = {}; else kinds[i.getAttribute('data-g')] = i.checked;
+      apply();
+    });
+    root.querySelector('.ch-done').addEventListener('click', closePop);
+    document.addEventListener('click', function () { if (!pop.hidden) closePop(); });
+    document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !pop.hidden) { closePop(); pill.focus(); } });
+    search.addEventListener('input', apply);
+    list.addEventListener('click', function (ev) {
+      var b = ev.target.closest ? ev.target.closest('.ch-tg') : null; if (!b) return;
+      var x = b.closest('.ch-e').querySelector('.ch-x'), open = x.hidden;
+      x.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.textContent = (open ? '▴ Hide' : '▾ Show');
+    });
+    // Trim the log…
+    var trim = root.querySelector('.ch-trim'), sel = root.querySelector('.ch-trim-sel'), tn = root.querySelector('.ch-trim-n');
+    function preview() { tn.textContent = 'Counting…'; post({ action: 'changes_trim', days: sel.value }).then(function (j) { tn.textContent = j && j.ok ? (j.n === 0 ? 'Nothing to remove.' : j.n + (j.n === 1 ? ' entry' : ' entries') + ' would go.') : 'Could not count.'; }).catch(function () { tn.textContent = 'Could not count.'; }); }
+    root.querySelector('.ch-trim-open').addEventListener('click', function () { trim.hidden = !trim.hidden; if (!trim.hidden) preview(); });
+    root.querySelector('.ch-trim-cancel').addEventListener('click', function () { trim.hidden = true; });
+    sel.addEventListener('change', preview);
+    root.querySelector('.ch-trim-go').addEventListener('click', function () {
+      var b = this; b.disabled = true;
+      post({ action: 'changes_trim', days: sel.value, apply: '1' }).then(function (j) { if (j && j.ok) location.reload(); else { b.disabled = false; tn.textContent = 'Not trimmed.'; } }).catch(function () { b.disabled = false; tn.textContent = 'Not trimmed.'; });
+    });
+    // Opening the tab: what is in it counts as seen. The number goes from amber to grey (in this page's sidebar, the phone Menu and the desktop shell's own), and the amber edges fade a moment later.
+    window.__chSeen = function () {
+      post({ action: 'changes_seen' }).then(function () {
+        [].forEach.call(document.querySelectorAll('.side-link[data-tab=changes] .count.warn, .pb-w[data-pb-tab=changes] .count.warn'), function (c) { c.classList.remove('warn'); c.title = c.title.replace(/ on disk you have not looked at$/, ' were new when you last opened the tab').replace(/^(\d+) changes? /, '$1 changes '); });
+        setTimeout(function () { [].forEach.call(list.querySelectorAll('.ch-new'), function (e) { e.classList.remove('ch-new'); }); }, 4000);
+        if (window.parent !== window) { try { window.parent.postMessage({ galleryShell: 1, tick: 1 }, location.origin); } catch (e) {} }
+      }).catch(function () {});
+    };
+    apply();
   })();
   function admConfirmSaveAs(form) {
     const newNameField = form.querySelector('.adm-newname');

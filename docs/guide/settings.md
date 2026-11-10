@@ -41,6 +41,8 @@ Changed in **Settings** (no Save button: each change saves as you make it) or in
 | `LOG_PUBLIC_VISITS` | off | [Log who opens the public address](private-and-sharing.md#logging-the-public-address) in the [Visitors tab](private-and-sharing.md#the-visitors-tab-the-log) (needs SQLite; no longer needs share links) |
 | `LOG_KEEP_DAYS` | 0 | How many days [visitor records](private-and-sharing.md#the-visitors-tab-the-log) are kept, for the public address and every share link (0 = until you trim the log) |
 | `LOG_WARN_MB` | 100 | The Health check warns, with the size and the oldest record, when the visitor records take more than this many megabytes (0 = no warning) |
+| `CHANGES_KEEP_DAYS` | 0 | How many days the entries of the [Changes tab](admin.md) (the log of disk activity) are kept (0 = until you trim the log) |
+| `CHANGES_WARN_MB` | 20 | The Health check warns when the Changes tab's entries take more than this many megabytes (0 = no warning) |
 | `ADMIN_STAY_SIGNED_IN_DAYS` / `PRIVATE_VIEW_SIGNED_IN_DAYS` | 3 / 3 | [How long the owner, and a guest in private view, stay signed in](admin.md#staying-signed-in-and-which-browsers-are-signed-in) after the last visit (0: until the browser closes) |
 | `BROWSER_HISTORY_DAYS` / `BROWSER_ENDED_DAYS` | 90 / 30 | How long [a browser's address history](admin.md#address-history-and-alarms) is kept, and how long a signed-out browser stays under *Recently signed out* |
 | `BROWSER_NETWORKS_ALARM` | 20 | Flag a browser used from more than this many networks in 24 hours |

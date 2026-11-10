@@ -518,6 +518,9 @@ define('LOG_PUBLIC_VISITS', gallery_setting('LOG_PUBLIC_VISITS', false));
 define('LOG_KEEP_DAYS', max(0, (int) gallery_setting('LOG_KEEP_DAYS', 0)));
 // Health warns when the visitor records together take more than this many megabytes on disk (0: no warning).
 define('LOG_WARN_MB', max(0, (int) gallery_setting('LOG_WARN_MB', 100)));
+// The Changes tab's log of disk activity: how many days its entries are kept (0: until trimmed), and the size, in megabytes, at which the Health check warns (0: never).
+define('CHANGES_KEEP_DAYS', max(0, (int) gallery_setting('CHANGES_KEEP_DAYS', 0)));
+define('CHANGES_WARN_MB', max(0, (int) gallery_setting('CHANGES_WARN_MB', 20)));
 
 // Whether the public address is closed: only the owner, someone with the private-view password and someone who came in through a
 // share link see anything; a stranger gets the page of a link that isn't valid. Off by default. It only takes effect while share

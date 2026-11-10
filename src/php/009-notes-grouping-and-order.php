@@ -396,6 +396,7 @@ foreach ($groups as $key => $groupFiles) {
 // request has no business triggering. See run_admin_route()'s own
 // docblock, further down, for the full auth/CSRF flow.
 if (request_route() === 'admin') {
+    changes_check($dir, $files, !is_admin_browser());   // (the owner's own pages always look: what changed on disk since the last look is written down, see the Changes tab; anyone else's request at most once a minute)
     run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $galleryNotices);
     exit;
 }
@@ -409,6 +410,7 @@ if (request_route() === 'admin') {
 // flag (and its cached thumbnails) the next time an unrevealed visitor
 // just loads the page — the opposite of what hiding is supposed to do.
 $allFiles = $files;
+changes_check($dir, $allFiles, !is_admin_browser());   // (every page of the gallery looks at what changed on disk: the owner's every time, a visitor's at most once a minute)
 // Whether anything in the gallery is private: the lock in the icon strip only appears when there is something to unlock.
 $hasPrivateItems = false;
 foreach ($allFiles as $privateProbe) {

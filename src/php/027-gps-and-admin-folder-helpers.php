@@ -323,39 +323,6 @@ function admin_record_hash($record) {
     return md5(json_encode($record));
 }
 
-/** What is kept in a folder's own data file as the owner sees it, in a stable order and without what is only the gallery's own bookkeeping (edited_record_keys says which
- *  keys those are): the base of the "changed elsewhere" notice, so a view count or an id written on its own never looks like an edit. */
-function live_record_fp($data) {
-    $keys = edited_record_keys();
-    $internal = function ($map) { return array_flip(array_keys(array_filter($map, function ($v) { return $v === 'internal'; }))); };
-    $folderInternal = $internal($keys['folder']); unset($folderInternal['items']);
-    $photoInternal = $internal($keys['photo']);
-    $d = array_diff_key((array) $data, $folderInternal);
-    if (isset($d['items']) && is_array($d['items'])) foreach ($d['items'] as $name => $entry) if (is_array($entry)) $d['items'][$name] = array_diff_key($entry, $photoInternal);
-    $norm = function (&$a) use (&$norm) { if (!is_array($a)) return; ksort($a); foreach ($a as &$v) $norm($v); };
-    $norm($d);
-    return md5(json_encode($d));
-}
-
-/** Three short fingerprints of what an admin page or the gallery page shows: the settings file, the data of one folder (captions, names, marks), and the list of photos and
- *  videos under it. Asked for again when the window comes back; a different answer means something changed somewhere else. $folderPath null is the front page. */
-function live_fingerprints($dir, $files, $folderPath, $since = 0) {
-    $cfg = rtrim($dir, '/') . '/.gallery-config.php';
-    $real = $folderPath === null ? $dir : resolve_real_path($dir, $folderPath);
-    $under = $folderPath === null ? $files : folder_files_under($files, $folderPath);
-    sort($under);
-    $by = []; foreach ($under as $f) $by[link_item_folder($f)][] = basename($f);
-    $folders = [];   // (per folder: how many files are directly in it, a fingerprint of their names, and its name, so the notice can say where and what; left out when there are too many folders to send each time)
-    if (count($by) <= 300) foreach ($by as $d => $names) { sort($names); $folders[(string) $d] = [count($names), md5(implode("\n", $names)), (string) $d === '' ? '' : link_folder_label($dir, (string) $d)]; }
-    $out = ['settings' => is_file($cfg) ? (string) md5_file($cfg) : '', 'record' => is_string($real) && $real !== '' ? live_record_fp(items_read($real)) : '', 'media' => md5(implode("\n", $under)), 'folders' => (object) $folders, 'at' => time()];   // ('at': this server's time, what "since" is measured against, never the browser's)
-    if ($since > 0) {   // the files that arrived (their inode changed: copied, renamed, synced in) since then, for the page to mark as new
-        $fresh = [];
-        foreach ($under as $f) { $path = resolve_real_path($dir, $f); if (is_string($path) && @filectime($path) >= $since) { $fresh[] = $f; if (count($fresh) >= 200) break; } }
-        $out['fresh'] = $fresh;
-    }
-    return $out;
-}
-
 /** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
  *  by themselves, so they are left out: flipping one must not make the photo's caption form look out of date. */
 function admin_item_record_hash($entry) {
@@ -526,6 +493,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'logout'];
     }
 
+    if ($action === 'changes_seen') { if (changes_tab_wanted()) changes_mark_seen(); admin_json_exit(['ok' => true]); }   // (the Changes tab was opened: what is in it counts as seen)
+    if ($action === 'changes_trim') {   // Trim the log…: how many entries are older than that (apply off), or take them out (apply on)
+        $days = (string) ($_POST['days'] ?? ''); $cutoff = $days === 'all' ? PHP_INT_MAX : time() - max(1, (int) $days) * 86400;
+        admin_json_exit(['ok' => true, 'n' => changes_trim($cutoff, !empty($_POST['apply'])), 'cutoff' => $cutoff === PHP_INT_MAX ? 'all' : $cutoff, 'applied' => !empty($_POST['apply'])]);
+    }
     if ($action === 'visits_seen') { if (visitlog_usable() && lockout_unseen_count() > 0) lockout_mark_seen(); admin_json_exit(['ok' => true]); }   // (the Visitors tab was opened: the lockouts up to now are seen, and the sidebar number stops being red)
     if ($action === 'visits_trim') visits_trim_action();   // the Visitors tab's Trim the log (answers JSON and ends the request)
     if (strncmp($action, 'link_', 5) === 0) {   // the Shares tab (answers JSON and ends the request)

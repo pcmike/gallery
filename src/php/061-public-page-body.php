@@ -9,7 +9,7 @@
 <?php $shellOwner = ADMIN_PASSWORD !== '' && is_admin_browser(); $shellInframe = $shellOwner && !empty($_GET['inframe']); ?>
 <body<?= $shellInframe ? ' class="inframe"' : ($shellOwner ? ' class="pb-on"' : '') ?>>
 <?= ui_icon_sprite() ?>
-<?php if ($shellOwner): ?><div id="live-folder" hidden data-folder="<?= htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') ?>"></div><?php endif; ?>
+<?php if ($shellOwner): ?><div id="live-folder" hidden data-folder="<?= htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-last="<?= changes_last_id() ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>"></div><?php endif; ?>
 <?php // Once the page has scrolled, two round buttons float at the bottom right of the screen: to the top, and to the bottom. The same on every page and device. ?>
 <div class="jump-fab" id="jump-fab" hidden>
   <button type="button" class="jump-btn" data-jump="top" title="Jump to the top" aria-label="Jump to the top of the page"><?= ui_icon('jump-up') ?></button>

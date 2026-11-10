@@ -205,9 +205,14 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     $adminFolderReal = $adminFolderPath === null ? $dir : resolve_real_path($dir, $adminFolderPath);
-    if (isset($_GET['changed'])) {   // the fingerprints again (the window came back): did the settings, this folder's data or its photos change somewhere else?
+    if (isset($_GET['changed'])) {   // the gallery page asks again (the window came back): what did the log of disk activity take in since the entry it knew (after=), and, with since=, which files and folders are new since then (to mark)
         header('Cache-Control: no-store');
-        admin_json_exit(['ok' => true] + live_fingerprints($dir, $files, $adminFolderPath, isset($_GET['since']) ? (int) $_GET['since'] : 0));
+        $out = ['ok' => true, 'last' => changes_last_id()];
+        if (isset($_GET['after'])) {
+            $out['entries'] = array_map(function ($r) use ($dir) { return ['id' => (int) $r['id'], 'kind' => $r['kind'], 'folder' => $r['folder'], 'label' => $r['folder'] === '' ? '' : link_folder_label($dir, $r['folder']), 'n' => (int) $r['n'], 't0' => (int) $r['t0']]; }, changes_after((int) $_GET['after'], $adminFolderPath));
+        }
+        if (isset($_GET['since']) && (int) $_GET['since'] > 0) { $out['fresh'] = changes_fresh_files($dir, $files, $adminFolderPath, (int) $_GET['since']); $out['folders'] = changes_new_folders($adminFolderPath, (int) $_GET['since']); }
+        admin_json_exit($out);
     }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');

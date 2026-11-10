@@ -676,6 +676,13 @@ function health_checks($dir, $files) {
         else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. ' . visitlog_visitor_count() . ' visitor' . (visitlog_visitor_count() === 1 ? '' : 's') . ' logged, taking ' . $vlText . '.' . ($vlOld > 0 ? ' The oldest record is from ' . gmdate('j M Y', $vlOld) . '.' : ''));
     }
     else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. Nothing has been logged yet.');
+    if (changes_tab_wanted() && ($chN = changes_count()) > 0) {   // --- the Changes tab's log of disk activity
+        $chSize = changes_size(); $chOld = changes_oldest();
+        $chText = $chSize >= 1048576 ? number_format($chSize / 1048576, $chSize >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($chSize / 1024)) . ' KB';
+        if (CHANGES_WARN_MB > 0 && $chSize > CHANGES_WARN_MB * 1048576)
+            $add('This install', 'warn', 'The change records take ' . $chText, 'More than the ' . number_format(CHANGES_WARN_MB) . ' MB you asked to be warned at. The oldest entry is from ' . ($chOld > 0 ? gmdate('j M Y', $chOld) : 'an unknown date') . '. Trim the log in the Changes tab, or set how long entries are kept in Settings (Visitors and logs).');
+        else $add('This install', 'ok', 'Change log: ready', number_format($chN) . ' entr' . ($chN === 1 ? 'y' : 'ies') . ' in the Changes tab, taking ' . $chText . '.' . ($chOld > 0 ? ' The oldest is from ' . gmdate('j M Y', $chOld) . '.' : ''));
+    }
 
     // --- settings and passwords
     $state = gallery_config_load();

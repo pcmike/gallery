@@ -992,7 +992,7 @@ try:
                 ok(st is not None and st["open"] and not st["locked"] and "error" in st["cls"].split() and "handed out" in st["status"], "[lock check] with nothing in place (the photo is served as a plain file) the warning stays, and says which address was handed out", str(st))
                 ok(not st["lockRulesHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => !h.hidden)"), "[lock check] ...and the rules and the Settings text stay too", str(st))
                 b.js("document.querySelector('.side-hidden').click()"); b.drain(0.5)
-                op = b.js("""(() => { const p = document.getElementById('health-panel'); return {opt: [...p.querySelectorAll('[data-health-row][data-optional]')].filter(r => r.classList.contains('optional') && !r.classList.contains('loud')).length, optLoud: [...p.querySelectorAll('[data-health-row][data-optional].loud')].length, label: p.querySelector('.ht-label').textContent, fix: !!p.querySelector('.health-fix'), red: p.querySelectorAll('.health-row.loud.red, .health-row.health-bad').length}; })()""")
+                op = b.js("""(() => { const p = document.getElementById('health-panel'); return {opt: [...p.querySelectorAll('[data-health-row][data-optional]')].filter(r => r.classList.contains('optional') && !r.classList.contains('loud')).length, optLoud: [...p.querySelectorAll('[data-health-row][data-optional].loud')].filter(r => r.getAttribute('data-health-row') !== 'visitlog').length, label: p.querySelector('.ht-label').textContent, fix: !!p.querySelector('.health-fix'), red: p.querySelectorAll('.health-row.loud.red, .health-row.health-bad').length}; })()""")
                 ok(op["opt"] >= 1 and op["optLoud"] == 0 and "optional" in op["label"] and op["fix"] and op["red"] >= 1, "[health] what is only optional (tidy links, the nginx redirect) is a grey optional row that is not counted, the fold says how many are optional, and the one real problem (private not locked) gets a \"Fix this\" link", str(op))
                 bn = b.js("""(() => { const x = document.getElementById('lock-banner'); if (!x) return null; const t = x.querySelector('.lock-open-text').getBoundingClientRect(), k = x.querySelector('.lock-recheck').getBoundingClientRect(), r = x.getBoundingClientRect(); return {shown: !x.hidden && r.height > 0, oneLine: Math.abs((k.top + k.bottom) / 2 - (t.top + t.bottom) / 2) < t.height / 2 + 4, inside: k.right <= r.right + 1 && t.left >= r.left - 1}; })()""")
                 ok(bn is not None and bn["shown"] and bn["oneLine"] and bn["inside"], "[lock check] when private is not locked the Edited tab shows the warning as one tidy line, with Check again level with its text and inside the box", str(bn))
@@ -1032,7 +1032,7 @@ try:
             if expect:
                 b.goto(B11 + "/trip/?admin", 2.5); b.drain(2.5)   # (the nginx setting was saved above, the rules are in place, the password is a hash: nothing left to flag)
                 hh = b.js("""(() => { const p = document.getElementById('health-panel'); const rows = [...p.querySelectorAll('.health-row')];
-                    const web = [...p.querySelectorAll('[data-health-row] .health-mark')].map(m => ({ico: !!m.querySelector('svg use[href="#i-check"]'), cls: m.className}));
+                    const web = [...p.querySelectorAll('[data-health-row]:not([data-health-row=visitlog]) .health-mark')].map(m => ({ico: !!m.querySelector('svg use[href="#i-check"]'), cls: m.className}));
                     return {summary: p.querySelector('.health-summary-text').textContent, cls: p.querySelector('.health-summary-text').className, shown: rows.filter(r => getComputedStyle(r).display !== 'none').length, loud: p.querySelectorAll('.health-row.loud').length, web: web, loudText: [...p.querySelectorAll('.health-row.loud .health-label')].map(e => e.textContent)}; })()""")
                 ok(hh["loud"] == 0 and hh["shown"] == 0 and hh["summary"] == "\u2713 All good" and "ok-text" in hh["cls"], "[health] when everything checks out, the Health check folds down to one green line and shows no rows", str(hh))
                 ok(len(hh["web"]) == 3 and all(w["ico"] and "ok-text" in w["cls"] for w in hh["web"]), "[health] the web server checks get the same green check mark as the other rows", str(hh["web"]))
@@ -1069,8 +1069,8 @@ try:
     try:
         b.call("Network.setExtraHTTPHeaders", {"headers": {"Authorization": "Basic " + base64.b64encode(b"admin:out-admin-pw").decode()}})
         b.goto(f"http://127.0.0.1:{P12}/?admin", 2.5); b.drain(2.0)
-        ho = b.js("""(() => { const p = document.getElementById('health-panel'); const w = [...p.querySelectorAll('[data-health-row]')].map(r => ({t: r.querySelector('[data-health]').textContent.slice(0, 40), ico: !!r.querySelector('.health-mark svg use[href="#i-check"]') || !!r.querySelector('.health-mark svg'), cls: r.className}));
-            return {summary: p.querySelector('.health-summary-text').textContent, loud: p.querySelectorAll('.health-row.loud').length, web: w}; })()""")
+        ho = b.js("""(() => { const p = document.getElementById('health-panel'); const w = [...p.querySelectorAll('[data-health-row]:not([data-health-row=visitlog])')].map(r => ({t: r.querySelector('[data-health]').textContent.slice(0, 40), ico: !!r.querySelector('.health-mark svg use[href="#i-check"]') || !!r.querySelector('.health-mark svg'), cls: r.className}));
+            return {summary: p.querySelector('.health-summary-text').textContent, loud: [...p.querySelectorAll('.health-row.loud')].filter(r => r.getAttribute('data-health-row') !== 'visitlog').length, web: w}; })()""")
         byrow = {r["cls"].split("pending")[0]: r for r in ho["web"]}
         ok(ho["loud"] == 0 and len(ho["web"]) == 3 and ho["web"][0]["t"].startswith("Not needed") and ho["web"][2]["t"].startswith("Doesn't apply") and ho["web"][1]["t"].startswith("Not set up") and "optional" in ho["web"][1]["cls"].split(), "[health] a gallery whose photos all come from elsewhere on the server is not flagged for the lock or the nginx redirect (they do not apply); the tidy links (no rewrite rule on this plain server) are only an optional grey row, so nothing counts as a problem", str(ho))
         ok(ho["web"][0]["ico"] and ho["web"][2]["ico"], "[health] ...and those two rows say why, with the green check mark", str(ho["web"]))
@@ -3149,34 +3149,27 @@ try:
         ok(sl2 == sl1 and b.js("!document.querySelector('#sl-form').hidden"), "[live refresh] while the new-link form is open the list is not swapped under the person: the row is as it was and the form is still open", f"{sl1!r} / {sl2!r}")
         b.js("document.querySelector('#sl-form [data-sl=cancel]').click()"); b.drain(3.0)
         ok(lrow() == sl0, "[live refresh] ...and it catches up once the form is closed", f"{lrow()!r} vs {sl0!r}")
-        # ---- "changed somewhere else": a quiet bar with Refresh, never a swap under the person's hands
+        # ---- "changed somewhere else": on the gallery page, a quiet pill with Refresh (the admin pages have none: the Changes tab will log disk activity)
         lcfg = SITE_L + "/.gallery-config.php"; lorig = open(lcfg).read()
         lnote = lambda sel=".live-note": b.js("(() => { const n = document.querySelector('%s'); return n ? n.innerText.replace(/\\s+/g, ' ') : null; })()" % sel)
         b.goto(BL + "/?admin&classic=1&folder=Rome&ce=1#site", 3.0); b.js("window.__live.min = 0")
         comes_back()
-        ok(lnote() is None, "[changed elsewhere] with nothing changed, coming back to the window shows no bar")
         lc = json.loads(lorig.split("\n", 1)[1]); lc["SHARE_HEADS_UP"] = True; open(lcfg, "w").write(LGUARD + json.dumps(lc) + "\n")
         comes_back()
-        ok(lnote() is not None and "settings were changed somewhere else" in lnote(), "[changed elsewhere] the settings file edited meanwhile (another browser, or by hand) makes a quiet bar say so, with Refresh", str(lnote()))
-        b.js("document.querySelector('.live-note .linklike').click()"); comes_back()
-        ok(lnote() is None, "[changed elsewhere] Dismiss takes it away, and it does not come back for the same change")
         b.js("document.querySelector('input[name=set_TRACK_VIEWS][type=checkbox]').click()"); b.drain(2.5); comes_back()
-        ok(lnote() is None, "[changed elsewhere] a save made on this page is not 'somewhere else': no bar after it (the page takes its fingerprints again)")
         open(SITE_L + "/Rome/arrived.jpg", "wb").write(open(glob.glob(SITE_L + "/Rome/*.jpg")[0], "rb").read()); comes_back()
-        ok(lnote() is not None and "1 item added to" in lnote(), "[changed elsewhere] a photo that arrives in the folder meanwhile (a sync) makes the bar say which folder and what ('1 item added to Rome'), not only that something changed", str(lnote()))
-        ok(lnote() is not None and b.js("!!document.querySelector('.live-note a[href*=\"folder=Rome&since=\"]')"), "[changed elsewhere] the folder's name in the bar is a link to it (with since=, so the page can mark what arrived)")
         b.goto(BL + "/?folder=Rome&ce2=1", 2.5); b.js("window.__liveMin = 0"); b.drain(1.0)
         ok(lnote(".live-note-fixed") is None and b.js("!!document.getElementById('live-folder')"), "[changed elsewhere] on the owner's gallery page the first look only takes the baseline: no bar")
         open(SITE_L + "/Rome/arrived2.jpg", "wb").write(open(glob.glob(SITE_L + "/Rome/*.jpg")[0], "rb").read()); b.js("document.dispatchEvent(new Event('visibilitychange'))"); b.drain(2.5)
         pt = lnote(".live-note-fixed")
-        ok(pt is not None and "1 item added to" in pt and b.js("!!document.querySelector('.live-note-fixed a[href*=\"since=\"]')"), "[changed elsewhere] ...when photos arrive meanwhile, a quiet pill at the bottom says where and what ('1 item added to Rome', the folder a link) with Refresh; nothing is swapped", str(pt))
-        b.js("document.querySelector('.live-note-fixed a').click()"); b.drain(3.5)
+        ok(pt is not None and "1 new media here" in pt and b.js("!!([...document.querySelectorAll('.live-note-fixed button')].find(x => x.textContent === 'Refresh'))") and b.js("!document.querySelector('.live-note-fixed a')"), "[changed elsewhere] ...when a photo arrives meanwhile in the folder you are looking at, a quiet pill at the bottom says '1 new media here' with Refresh (no link: you are there); nothing is swapped", str(pt))
+        b.js("[...document.querySelectorAll('.live-note-fixed button')].find(x => x.textContent === 'Refresh').click()"); b.drain(3.5)
         mk = b.js("[...document.querySelectorAll('.card.live-new')].map(c => c.getAttribute('data-file'))")
-        ok(len(mk) == 1 and mk[0].endswith("arrived2.jpg") and "1 new item is marked" in (lnote(".live-note-fixed") or ""), "[changed elsewhere] following the link opens the folder with what arrived marked (only that photo, a ring and New) and says how many are marked", str(mk))
+        ok(len(mk) == 1 and mk[0].endswith("arrived2.jpg") and "1 new item is marked" in (lnote(".live-note-fixed") or "") and "since=" not in b.js("location.search"), "[changed elsewhere] Refresh opens the folder with what arrived marked (only that photo, a ring and New), says how many are marked, and cleans the address so a reload does not mark again", str(mk))
         os.unlink(SITE_L + "/Rome/arrived.jpg"); os.unlink(SITE_L + "/Rome/arrived2.jpg"); b.js("window.__liveMin = 0"); b.js("document.dispatchEvent(new Event('visibilitychange'))"); b.drain(2.5)
-        ok(lnote(".live-note-fixed") is not None and "removed from" in lnote(".live-note-fixed"), "[changed elsewhere] ...and photos removed meanwhile are said too ('2 items removed from Rome')", str(lnote(".live-note-fixed")))
-        b.js("document.querySelector('.live-note-fixed button').click()"); b.drain(2.5)
-        ok(lnote(".live-note-fixed") is None, "[changed elsewhere] Refresh reloads the page and the pill is gone")
+        ok(lnote(".live-note-fixed") is not None and "2 removed here" in lnote(".live-note-fixed"), "[changed elsewhere] ...and photos removed meanwhile are said too ('2 removed here')", str(lnote(".live-note-fixed")))
+        b.js("[...document.querySelectorAll('.live-note-fixed button')].find(x => x.textContent === 'Refresh').click()"); b.drain(2.5)
+        ok(lnote(".live-note-fixed") is None, "[changed elsewhere] Refresh brings the page up to date and the pill is gone")
         open(lcfg, "w").write(lorig)   # (the settings are as the tests below expect them)
         # ---- Settings: the signed-in browsers and Prepare media's numbers are asked for again when the window comes back
         b.goto(BL + "/?admin&classic=1&p4=1#site", 3.0); b.js("window.__live.min = 0")

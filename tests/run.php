@@ -1390,7 +1390,7 @@ check('[owner cover] pressing a star saves that photo as the folder\'s cover (th
 check('[select] the owner gets the Select button, its bar (with the Arrange part here) and a file name on every tile; a visitor gets none of it', str_contains($soOwnerPage2, 'id="select-btn"') && str_contains($soOwnerPage2, 'id="select-bar"') && str_contains($soOwnerPage2, 'data-select="release"') && str_contains($soOwnerPage2, 'class="card owner-card" data-file="a-early.jpg"') && !str_contains($soVisitorPage, 'id="select-btn"') && !str_contains($soVisitorPage, 'id="select-bar"') && !str_contains($soVisitorPage, 'data-file="a-early.jpg"'));
 check('[select] the Select button replaces Arrange on the strip: no Arrange button any more, and the bar offers Select all, Clear, Make private, Make public and Done', !str_contains($soOwnerPage2, 'id="arrange-btn"') && !str_contains($soOwnerPage2, 'id="arrange-bar"') && preg_match('#data-select="all".*data-select="clear".*data-select="done".*data-select="private".*data-select="public"#s', $soOwnerPage2) === 1);
 // The pencil and the editor in the viewer, for the owner only.
-check('[editor] the owner gets a pencil on every tile and in the viewer, and the editor sheet with its fields, three switches and Prev, Done, Next', preg_match_all('#<button type="button" class="edit-toggle" data-file="#', $soOwnerPage2) === 6 && str_contains($soOwnerPage2, 'id="lightbox-edit"') && str_contains($soOwnerPage2, 'id="lb-editor"') && preg_match('#id="lbe-caption".*id="lbe-web".*id="lbe-private".*id="lbe-loc".*id="lbe-cover".*id="lbe-prev".*id="lbe-done".*id="lbe-next"#s', $soOwnerPage2) === 1);
+check('[editor] the owner gets a pencil on every tile and in the viewer, and the editor sheet with its fields, three switches and Prev, Done, Next', preg_match_all('#<button type="button" class="edit-toggle" data-file="#', $soOwnerPage2) === 6 && str_contains($soOwnerPage2, 'id="lightbox-edit"') && str_contains($soOwnerPage2, 'id="lb-editor"') && (function ($page) { $at = -1; foreach (['lbe-caption', 'lbe-web', 'lbe-private', 'lbe-loc', 'lbe-cover', 'lbe-prev', 'lbe-done', 'lbe-next'] as $id) { $p = strpos($page, 'id="' . $id . '"', $at + 1); if ($p === false) return false; $at = $p; } return true; })($soOwnerPage2));   // (in this order; by position, not one long regex: the page has grown past what the regex engine will backtrack through)
 check('[editor] the photo keeps its shape whatever box it is given, and the phone\'s top row keeps its counter and close button with a strip of buttons that swipes between them', str_contains($soOwnerPage2, 'object-fit: contain;') && str_contains($soOwnerPage2, 'id="lightbox-tools"') && str_contains($soOwnerPage2, 'function mapEditStart()') === str_contains($soOwnerPage2, 'function mapEditEnd()') && str_contains($soOwnerPage2, 'id="lbe-grip"'));
 check('[editor] a visitor gets no pencil, no editor and no editor code', !str_contains($soVisitorPage, 'edit-toggle"') && !str_contains($soVisitorPage, 'id="lb-editor"') && !str_contains($soVisitorPage, 'id="lightbox-edit"') && str_contains($soVisitorPage, 'let lbEdit = null;') && !str_contains($soVisitorPage, 'lbe-caption'));
 $soItem = function ($file) use ($baseSo, $soAdminAuth, $soCookie) { return json_decode(http_get("$baseSo/?admin&item=" . rawurlencode($file), [$soAdminAuth, "Cookie: $soCookie"])[1] ?? '', true) ?: []; };
@@ -3581,7 +3581,7 @@ $siteSnap = function () use ($fxSite) {
     $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($fxSite, FilesystemIterator::SKIP_DOTS));
     foreach ($it as $f) {
         $rel = substr($f->getPathname(), strlen($fxSite) + 1);
-        if ($rel === '.gallery-config.php' || $rel === '.gallery-browsers.php' || $rel === 'index.php' || str_contains($rel, '.gallery-cache/') || str_contains($rel, '.tmp.')) continue;   // (who is signed in is not a data file)
+        if ($rel === '.gallery-config.php' || $rel === '.gallery-browsers.php' || $rel === 'index.php' || str_contains($rel, '.gallery-cache/') || str_contains($rel, '.tmp.') || str_starts_with(basename($rel), '.gallery-visits-')) continue;   // (who is signed in is not a data file; the log of visitors and disk activity is written by the gallery on its own)
         $snap[$rel] = md5_file($f->getPathname());
     }
     ksort($snap); return $snap;
@@ -4569,7 +4569,7 @@ $portPlain = find_free_port(); start_server($fxPlain, $portPlain); $basePlain = 
 foreach (['/', '/?photo=one.jpg', '/?about', '/?img=one.jpg&size=thumb', '/?track=one.jpg', '/?map', '/?folder=Subfolder', '/?reveal'] as $u) http_get("$basePlain$u");
 $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
 check('[plain] a copy of index.php with no settings changed shows the root photos and the subfolder as a cover card (subfolders are on by default)', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && str_contains($plain, 'Subfolder') && str_contains($plain, '?folder=Subfolder'));
-$newEntries = array_values(array_diff($after, $before));
+$newEntries = array_values(array_filter(array_diff($after, $before), fn ($f) => !preg_match('/^\.gallery-visits-[0-9a-f]{24}\.sqlite(-wal|-shm)?$/', $f)));   // (the log of disk activity is made by the first page, with the visitor log's name)
 $plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
 check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken3.json', 'meta1.php'], true)));
 http_get("$basePlain/?admin");
@@ -5632,7 +5632,7 @@ $pairPage = http_get("$baseN/?admin", ["Cookie: $nCookie2"])[1];
 check('[settings page] the two settings behind the order control are still saved separately, as they always were: one request with both lands both (the direction in the file, the order as the control\'s choice)', str_contains($pairCfg, '"PHOTO_SORT_DESC": true') && preg_match('~name="pair_PHOTO_ORDER" value="taken_desc" checked~', $pairPage) === 1, substr($pairCfg, 0, 300));
 file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n233-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
 check('[settings page] where visitors\' IP addresses come from lives in Server setup (advanced), no longer in Sharing and access', preg_match('~Server setup \(advanced\)</span>.*?set_TRUSTED_PROXY~s', $nTab) === 1 && preg_match('~Sharing and access</span>.*?set_TRUSTED_PROXY.*?Signing in and passwords~s', $nTab) !== 1);
-check('[settings page] Visitors and logs holds Count views, the visitor view counts, the public visitor log, how long visitor records are kept and when to warn about their size, in that order', preg_match('~Visitors and logs</span> <span class="muted">5 settings</span>.*?set_TRACK_VIEWS.*?set_SHOW_VIEW_COUNTS_PUBLICLY.*?set_LOG_PUBLIC_VISITS.*?set_LOG_KEEP_DAYS.*?set_LOG_WARN_MB.*?</details>~s', $nTab) === 1);
+check('[settings page] Visitors and logs holds Count views, the visitor view counts, the public visitor log, how long visitor records are kept and when to warn about their size, then the same two for the Changes tab\'s entries, in that order', preg_match('~Visitors and logs</span> <span class="muted">7 settings</span>.*?set_TRACK_VIEWS.*?set_SHOW_VIEW_COUNTS_PUBLICLY.*?set_LOG_PUBLIC_VISITS.*?set_LOG_KEEP_DAYS.*?set_LOG_WARN_MB.*?set_CHANGES_KEEP_DAYS.*?set_CHANGES_WARN_MB.*?</details>~s', $nTab) === 1);
 $nHelps = preg_match_all('~<div class="site-row[^"]*"[^>]*>.*?<div class="help">(.*?)</div>~s', $nTab, $hm) ? array_map(fn ($h) => strlen(html_entity_decode(strip_tags($h))), $hm[1]) : [];
 check('[settings page] no setting\'s explanation runs on: every help text is 340 characters or fewer (the longest used to be 551)', $nHelps !== [] && max($nHelps) <= 340, (string) max($nHelps ?: [0]));
 check('[settings page] every plain fold (Prepare media\'s, the server rules, "How to read this") has the one bold chevron style, and a row lights up under the pointer', !preg_match('~<details>~', $nTab) && str_contains($nTab, 'details:is(.fold, .media-more, .media-tidy-box, .media-leftover-box, .media-again-box, .media-attn, .md-file, .sort-details) > summary::before') && str_contains($nTab, '.site-settings .site-row:hover { background:rgba(255,255,255,0.035)'));
@@ -5673,7 +5673,7 @@ check('[path bar] a folder with no sibling has its own blue pill after the way u
 check('[link form] the small uppercase label style is for the headings above a list (div.sl-grp) only: the form\'s collapsible sections (details.sl-grp) share the class and must not inherit it', str_contains($srcF5, "  .sl-grp { margin:20px 0 4px; }\n  div.sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }") && !str_contains($srcF5, "  .sl-grp { font-size:0.72rem; letter-spacing:.06em; text-transform:uppercase;"));
 check('[mixed link] choosing some folders, some photos, or both ticks "Show only what they can see here" (a limited link shows just what it covers, not the public gallery too); everything and the public gallery have no box', str_contains((string) file_get_contents($indexSrc), "checked = e.target.value === 'folders' || e.target.value === 'photos' || e.target.value === 'mixed';"));
 check('[buttons] the one-size button rule has exceptions for the small controls with a size of their own (the x on a folder chip and on a photo thumbnail, and the notes reference\'s little tabs), after it so they win', preg_match('~button:not\(\[class\]\), \.admin-bar button\.secondary \{ min-height:40px;.*?\.admin-main \.sl-chip button \{ min-height:0;.*?\.admin-main \.sl-pth button \{ min-height:0;.*?\.admin-main \.ref-tabs button \{ min-height:0;~s', $srcF5) === 1);
-check('[features] a fresh install (nothing configured but the passwords) lands on Features, one that has settings does not, and the folder\'s tabs are not shown there', (str_contains($nTab, "if (!saved && !landed && !/[?&]folder=/.test(location.search) && main.getAttribute('data-land') === 'features' && names.indexOf('features') >= 0) {") && str_contains($nTab, "sessionStorage.setItem('galleryAdminLanded', '1');")) && str_contains($nTab, "var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits' || name === 'collections';") && !str_contains($nTab, 'data-land="features"') && str_contains($huAdmin, '<main class="admin-main" data-land="features">'));
+check('[features] a fresh install (nothing configured but the passwords) lands on Features, one that has settings does not, and the folder\'s tabs are not shown there', (str_contains($nTab, "if (!saved && !landed && !/[?&]folder=/.test(location.search) && main.getAttribute('data-land') === 'features' && names.indexOf('features') >= 0) {") && str_contains($nTab, "sessionStorage.setItem('galleryAdminLanded', '1');")) && str_contains($nTab, "var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits' || name === 'collections' || name === 'changes';") && !str_contains($nTab, 'data-land="features"') && str_contains($huAdmin, '<main class="admin-main" data-land="features">'));
 check('[features] "Show me" opens the gallery with a pointer on the button (?show=lock|pencil|star|select|share): a ring, a label, gone at the first press, a key or ten seconds, and the address is cleaned', str_contains((string) file_get_contents($indexSrc), "const m = /[?&]show=([a-z]+)/.exec(location.search); if (!m) return;") && str_contains((string) file_get_contents($indexSrc), "timer = setTimeout(done, 10000);") && str_contains((string) file_get_contents($indexSrc), '.show-me-ring { outline: 3px solid #aab2ff !important;'));
 check('[select mode] the Private pill (also the dashed one of a photo that follows a private folder) and the cover star stay on the tiles in Select mode but no longer answer a press; the picked tick moves to the bottom left', str_contains((string) file_get_contents($indexSrc), '.selecting .card .priv-toggle:not(.is-private):not(.is-folder), .selecting .card .cover-toggle:not(.is-cover), .selecting .card .edit-toggle { display: none; }') && str_contains((string) file_get_contents($indexSrc), '.selecting .card .priv-toggle, .selecting .card .cover-toggle { pointer-events: none; }') && str_contains((string) file_get_contents($indexSrc), '.card .sel-mark { position: absolute; bottom: 8px; left: 8px;'));
 check('[admin layout] the sidebar names its top group "The whole gallery" (Edited, Share, Settings) apart from the folder list; the folder\'s own tabs are hidden on those three pages by the page script', preg_match('~<aside class="admin-side">\s*<div class="side-group" role="group" aria-label="The whole gallery">\s*<div class="side-label">The whole gallery</div>.*?</div>\s*<details class="admin-folders"~s', $nTab) === 1 && str_contains($nTab, "var fh = document.getElementById('admin-folder-head'); if (fh) fh.hidden = whole;"));
@@ -7747,7 +7747,7 @@ check('[collections admin] a folder-only action aimed at a collection\'s page (n
 [, $caShellTree] = http_get("$baseCa/?admin&shelltree=1", $caOwn); [, $caShellNav] = http_get("$baseCa/?admin&shellcounts=1", $caOwn);
 check('[collections admin] the folder tree shows collections among the folders in italics (the classic tree, the shell\'s and the phone\'s Menu), and a Collections entry sits among the whole-gallery pages once there is one', str_contains($caShellTree, 'class="coll"') && str_contains($caShellTree, 'Highlights') && str_contains($caShellNav, 'data-tab="collections"') && str_contains($caFrance, 'data-tab="collections"') && str_contains($caFrance, '<a href="?admin&amp;folder=France%2Fhighlights" class="coll"') && str_contains($caFrance, 'data-pb-tab="collections"'));
 check('[collections admin] the Collections tab lists each collection with where it lives, its address, whether it is on the front page, what it holds, problems, the share links that include it and whether it has a gallery of its own', str_contains($caFrance, 'data-tab="collections"') && str_contains($caFrance, '<dt>Lives in</dt>') && str_contains($caFrance, '<dt>Address</dt>') && str_contains($caFrance, '<dt>On the front page</dt>') && str_contains($caFrance, '<dt>Holds</dt>') && str_contains($caFrance, '<dt>Problems</dt>') && str_contains($caFrance, '<dt>Share links</dt>') && str_contains($caFrance, '<dt>Gallery of its own</dt>'));
-check('[collections admin] a collection on the tab has a line-drawn delete button after View, "Holds" counts the photos in its folders as nested ones, Open settings lands on the settings tab, and Collections is a whole-gallery page like Shares (the folder tabs are hidden above it, and it is not the tab a folder opens on)', str_contains($caFrance, 'cm-del cm-del-ic') && str_contains($caFrance, 'aria-label="Delete this collection"') && str_contains($caFrance, 'nested photo') && preg_match('~#settings">Open settings</a>~', $caFrance) === 1 && str_contains($caFrance, "name === 'visits' || name === 'collections';") && str_contains($caFrance, "name !== 'visits' && name !== 'collections'"));
+check('[collections admin] a collection on the tab has a line-drawn delete button after View, "Holds" counts the photos in its folders as nested ones, Open settings lands on the settings tab, and Collections is a whole-gallery page like Shares (the folder tabs are hidden above it, and it is not the tab a folder opens on)', str_contains($caFrance, 'cm-del cm-del-ic') && str_contains($caFrance, 'aria-label="Delete this collection"') && str_contains($caFrance, 'nested photo') && preg_match('~#settings">Open settings</a>~', $caFrance) === 1 && str_contains($caFrance, "name === 'visits' || name === 'collections' || name === 'changes';") && str_contains($caFrance, "name !== 'visits' && name !== 'collections' && name !== 'changes'"));
 check('[collections admin] the Collections tab itself has a box to make a new collection from just a name (it starts on the front page), the same one a folder\'s settings have', str_contains($caFrance, 'class="cm-section cm-tabnew"') && str_contains($caFrance, 'data-parent=""') && substr_count($caFrance, 'Name of the new collection') >= 2);
 [, $caPublicOwner] = http_get("$baseCa/?folder=France%2Fparis", $caOwn);
 check('[collections admin] on a folder page the owner\'s Select bar offers Add to collection… once a collection exists', str_contains($caPublicOwner, 'data-select="coll"') && str_contains($caPublicOwner, 'id="select-coll"') && !str_contains($caPublicOwner, 'data-select="collrm"'));
@@ -9390,7 +9390,7 @@ vl_put_item($fxVt, PUBLIC_LOG_ID_FOR_TESTS, 'p2', 'Paris/p1.jpg', ['sf' => $vtNo
 vl_put_item($fxVt, $vtA, 'c1', 'Rome/r2.jpg', ['sf' => $vtNow - 299, 'sl' => $vtNow - 299]);
 $vtPage = http_get("$baseVt/?admin", $vtOwn)[1];
 preg_match('~id="vt-root"[^>]*data-info="([^"]*)"~', $vtPage, $vtM); $vtInfo = json_decode(html_entity_decode($vtM[1] ?? '{}', ENT_QUOTES), true) ?: [];
-check('[visitors tab] the sidebar has Visitors after Settings, with how many visitors the log holds', preg_match('~data-tab="site" class="side-link">Settings.*?data-tab="visits" class="side-link">Visitors\s*<span class="count"[^>]*>5</span>~s', $vtPage) === 1);
+check('[visitors tab] the sidebar has Visitors before Changes and Settings, with how many visitors the log holds', preg_match('~data-tab="visits" class="side-link">Visitors\s*<span class="count"[^>]*>5</span>.*?data-tab="site" class="side-link">Settings~s', $vtPage) === 1);
 check('[visitors tab] the panel has the pills (All for countries, Sources for Public, the lockouts and the links), the search, the export icon with its menu (three CSVs and Trim the log) and the four views, and no IP addresses view', str_contains($vtPage, 'data-pill="cc"') && str_contains($vtPage, 'data-pill="src"') && !str_contains($vtPage, 'data-pill="pub"') && !str_contains($vtPage, 'data-pill="links"') && str_contains($vtPage, 'class="vt-search"') && str_contains($vtPage, 'class="vt-ic"') && preg_match_all('~<a href="#" data-export="~', $vtPage) === 3 && str_contains($vtPage, 'data-vt="trim"') && preg_match('~class="sl-segbtn on" data-view="visitors">Visitors</button><button[^>]*data-view="folders">Folders</button><button[^>]*data-view="media">Media</button><button[^>]*data-view="timeline">Timeline</button>~', $vtPage) === 1 && !str_contains($vtPage, 'data-view="ips"'), json_encode([str_contains($vtPage, 'data-pill="cc"'), str_contains($vtPage, 'data-pill="pub"'), str_contains($vtPage, 'data-pill="links"'), str_contains($vtPage, 'class="vt-search"'), str_contains($vtPage, 'class="vt-ic"'), substr_count($vtPage, 'data-export="'), str_contains($vtPage, 'data-vt="trim"'), preg_match('~class="sl-segbtn on" data-view="visitors">Visitors</button><button[^>]*data-view="folders">Folders</button>~', $vtPage), str_contains($vtPage, 'data-view="ips"')]));
 check('[permalink] the link icon on a folder card copies the folder\'s address worked out from the link (not glued onto it), and leaves out the inframe=1 the admin\'s frame puts on every link (it once copied https://site/photos/https://site/photos/?folder=x&inframe=1)', str_contains(http_get("$baseVt/")[1], "const hrefUrl = () => { try { return new URL(link.getAttribute('href'), window.location.href); }") && str_contains(http_get("$baseVt/")[1], "filter(p => p && p !== 'inframe=1')"));
 check('[visitors tab] the search box has a clear button of its own (an x inside it, shown by the page script only while there is text), and the browser\'s own would-be second one is hidden', str_contains($vtPage, 'class="vt-sx" data-vt="clearq"') && str_contains($vtPage, '.vt-search::-webkit-search-cancel-button { display:none; }') && str_contains($vtPage, "if (t.closest('[data-vt=clearq]'))"));
@@ -9491,7 +9491,7 @@ $twPage = function (array $cfg) use ($fxTw, $baseTw) {
 };
 check('[visitors tab] it is offered when share links are on (and the log is made by asking for the page)', str_contains($twPage(['ENABLE_SHARE_LINKS' => true]), 'data-tab="visits"') && vl_exists($fxTw));
 @unlink(vl_path($fxTw) ?? ''); foreach (glob("$fxTw/.gallery-visits-*") ?: [] as $f) @unlink($f);
-check('[visitors tab] ...with both off and no log made it is not offered and makes no file', !str_contains($twPage(['ENABLE_SHARE_LINKS' => false]), 'href="#visits" data-tab="visits"') && !vl_exists($fxTw));
+check('[visitors tab] ...with both off and nothing logged it is not offered and logs no visitor (the file itself is there: it holds the Changes tab\'s log of disk activity)', !str_contains($twPage(['ENABLE_SHARE_LINKS' => false]), 'href="#visits" data-tab="visits"') && vl_rows($fxTw, 'visitors') === []);
 check('[visitors tab] ...with the public address logged it is offered without share links', str_contains($twPage(['ENABLE_SHARE_LINKS' => false, 'LOG_PUBLIC_VISITS' => true]), 'data-tab="visits"'));
 foreach (glob("$fxTw/.gallery-visits-*") ?: [] as $f) @unlink($f);
 vl_put($fxTw, PUBLIC_LOG_ID_FOR_TESTS, 'x1', ['ip' => '203.0.113.1', 'ua' => 'Safari on Mac']);
@@ -9544,7 +9544,7 @@ for ($i = 0; $i < 10; $i++) http_get("$baseLk2/?link=Wr0ngAddr$i", [], false);
 $lkOwn2 = ['Cookie: ' . extract_cookie_header($lkLoginH2)];
 [, $lkPage2] = http_get("$baseLk2/?admin", $lkOwn2);
 $lkRaw2 = (string) @file_get_contents("$fxLk2/.gallery-lockouts.php");
-check('[lockouts] with no share links and nothing logged (no Visitors tab) no log is made and no address is kept, but the counts are, and the Health check still says so, without a link to a tab that is not there', !vl_exists($fxLk2) && !str_contains($lkRaw2, '127.0.0.1') && str_contains($lkPage2, '2 lockouts in the last 7 days') && str_contains($lkPage2, 'Who it was is not kept') && !str_contains($lkPage2, 'data-vt-go="lockouts"'));
+check('[lockouts] with no share links and nothing logged (no Visitors tab) no visitor is logged and no address is kept, but the counts are, and the Health check still says so, without a link to a tab that is not there', vl_rows($fxLk2, 'visitors') === [] && vl_rows($fxLk2, 'blocked') === [] && !str_contains($lkRaw2, '127.0.0.1') && str_contains($lkPage2, '2 lockouts in the last 7 days') && str_contains($lkPage2, 'Who it was is not kept') && !str_contains($lkPage2, 'data-vt-go="lockouts"'));
 // the file is the gallery's own (Files this gallery has made), and old days drop out
 file_put_contents("$fxLk2/.gallery-lockouts.php", $lkGuard . json_encode(['2020-01-01' => ['signin' => 4], $lkToday => ['addr' => 1]]));
 [, $lkFiles] = http_post("$baseLk2/?admin", ['action' => 'files_list', 'csrf_token' => (string) extract_csrf_token(http_get("$baseLk2/?admin", $lkOwn2)[1])], array_merge($lkOwn2, ['X-Requested-With: gallery-fetch']));
@@ -9575,33 +9575,23 @@ check('[live refresh] the phone Menu\'s numbers (and the page\'s sidebar, which 
 [$lkSlS, $lkSl] = http_get("$baseLk/?admin&linkspanel=1", $lkOwn);
 [, $lkSlAn] = http_get("$baseLk/?admin&linkspanel=1");
 check('[live refresh] the Shares panel can be asked for on its own (when the window comes back): just the panel, not the rest of the page, and only by the signed-in admin', $lkSlS === 200 && str_contains($lkSl, 'id="sl-root"') && !str_contains($lkSl, 'id="health-panel"') && !str_contains($lkSl, 'id="vt-root"') && !str_contains($lkSlAn, 'id="sl-root"'));
-// "changed elsewhere": three fingerprints (settings file, a folder's data, the photos under it), the same on the page and from the endpoint, moving only when something real changes
+// "changed elsewhere" on the gallery page: the log of disk activity is asked what it took in since the entry the page knew
 [$lkChS, $lkChB] = http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn);
 $lkCh = json_decode((string) $lkChB, true) ?: [];
-[, $lkChPage] = http_get("$baseLk/?admin&folder=Rome", $lkOwn);
-preg_match('/id="live-fp" hidden data-fp="([^"]*)"/', $lkChPage, $lkFpM);
-$lkFp = json_decode(html_entity_decode($lkFpM[1] ?? '{}'), true) ?: [];
 [, $lkChAn] = http_get("$baseLk/?admin&changed=1&folder=Rome");
-check('[changed elsewhere] the admin page carries three fingerprints (settings, the folder\'s data, its photos) and the endpoint gives exactly the same ones (a different answer would be a notice about nothing); only the signed-in admin can ask', $lkChS === 200 && ($lkCh['ok'] ?? false) === true && preg_match('/^[0-9a-f]{32}$/', (string) ($lkCh['settings'] ?? '')) === 1 && preg_match('/^[0-9a-f]{32}$/', (string) ($lkCh['record'] ?? '')) === 1 && preg_match('/^[0-9a-f]{32}$/', (string) ($lkCh['media'] ?? '')) === 1 && array_diff_key($lkFp, ['at' => 1]) === array_diff_key($lkCh, ['ok' => 1, 'at' => 1]) && isset($lkCh['at']) && !isset($lkCh['fresh']) && !is_array(json_decode((string) $lkChAn, true)));
+check('[changed elsewhere] the endpoint gives the number of the newest entry in the log (and, with after=, what came after it); nothing about the settings file or a folder\'s data (the owner\'s own changes); only the signed-in admin can ask', $lkChS === 200 && ($lkCh['ok'] ?? false) === true && is_int($lkCh['last'] ?? null) && !isset($lkCh['entries']) && !isset($lkCh['settings']) && !isset($lkCh['record']) && !is_array(json_decode((string) $lkChAn, true)));
 sleep(1); $lkSince = time();   // (r1 is older than this; r2 arrives after it)
 file_put_contents("$fxLk/Rome/r2.jpg", file_get_contents("$fxLk/Rome/r1.jpg"));
-file_put_contents("$fxLk/.gallery-config.php", preg_replace('/\}\s*$/', ', "SHARE_HEADS_UP": true}', rtrim((string) file_get_contents("$fxLk/.gallery-config.php"))) . "\n");
-$lkCh2 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn)[1], true) ?: [];
-check('[changed elsewhere] the answer also says, folder by folder, how many items are in it, a fingerprint of their names and the folder\'s name (so the notice can say where and what, not only that something changed)', ($lkCh['folders']['Rome'][0] ?? 0) === 1 && ($lkCh['folders']['Rome'][2] ?? '') === 'Rome' && preg_match('/^[0-9a-f]{32}$/', (string) ($lkCh['folders']['Rome'][1] ?? '')) === 1 && ($lkCh2['folders']['Rome'][0] ?? 0) === 2 && ($lkCh2['folders']['Rome'][1] ?? '') !== ($lkCh['folders']['Rome'][1] ?? ''));
-check('[changed elsewhere] a photo added to the folder changes only its photos fingerprint, and the settings file edited changes only the settings one', $lkCh2['media'] !== $lkCh['media'] && $lkCh2['settings'] !== $lkCh['settings'] && $lkCh2['record'] === $lkCh['record']);
-$lkItems = "$fxLk/Rome/.gallery-items.php";
-file_put_contents($lkItems, $lkGuard . json_encode(['items' => (object) [], 'pageviews' => 41, 'folderId' => 'abcd1234ef']));
-$lkCh3 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn)[1], true) ?: [];
-file_put_contents($lkItems, $lkGuard . json_encode(['items' => (object) [], 'pageviews' => 99, 'folderId' => 'abcd1234ef']));
-$lkCh4 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn)[1], true) ?: [];
-file_put_contents($lkItems, $lkGuard . json_encode(['items' => (object) [], 'pageviews' => 99, 'folderId' => 'abcd1234ef', 'displayName' => 'Roma']));
-$lkCh5 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome", $lkOwn)[1], true) ?: [];
+mkdir("$fxLk/Pisa"); make_jpeg("$fxLk/Pisa/p1.jpg", 60, 50, 60, 100, 60);   // (a folder that comes at the same time, beside Rome)
+$lkCh2 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome&after=" . (int) $lkCh['last'], $lkOwn)[1], true) ?: [];
+check('[changed elsewhere] asked with after=, the answer lists what the log took in since, entry by entry: the kind, the folder, its name, how many and when (so the pill can say where and what)', count($lkCh2['entries'] ?? []) === 1 && ($lkCh2['entries'][0]['kind'] ?? '') === 'add' && ($lkCh2['entries'][0]['folder'] ?? '') === 'Rome' && ($lkCh2['entries'][0]['label'] ?? '') === 'Rome' && ($lkCh2['entries'][0]['n'] ?? 0) === 1 && ($lkCh2['last'] ?? 0) > $lkCh['last']);
+$lkCh3 = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Pisa&after=" . (int) $lkCh['last'], $lkOwn)[1], true) ?: [];
+check('[changed elsewhere] ...and only for the folder asked about and what is under it (a change in Rome is not news for Pisa, nor a new folder Pisa for Rome)', count($lkCh3['entries'] ?? []) === 1 && ($lkCh3['entries'][0]['kind'] ?? '') === 'new' && ($lkCh3['entries'][0]['folder'] ?? '') === 'Pisa');
 $lkFresh = json_decode((string) http_get("$baseLk/?admin&changed=1&folder=Rome&since=$lkSince", $lkOwn)[1], true) ?: [];
-check('[changed elsewhere] asked with since=, the answer lists the files that arrived after then (and only those: the older photo is not on it), so the page the notice links to can mark them', ($lkFresh['fresh'] ?? null) === ['Rome/r2.jpg'] && (int) ($lkFresh['at'] ?? 0) >= $lkSince);
-check('[changed elsewhere] a view count or an id written by the gallery itself does not move the folder-data fingerprint, but a name typed by the owner does', $lkCh3['record'] === $lkCh4['record'] && $lkCh5['record'] !== $lkCh4['record']);
+check('[changed elsewhere] asked with since=, the answer lists the files that arrived after then (and only those: the older photo is not on it), so the page the pill links to can mark them', ($lkFresh['fresh'] ?? null) === ['Rome/r2.jpg'] && ($lkFresh['folders'] ?? null) === []);
 [, $lkGalOwn] = http_get("$baseLk/?folder=Rome", $lkOwn);
 [, $lkGalVis] = http_get("$baseLk/?folder=Rome");
-check('[changed elsewhere] only the signed-in owner\'s gallery page has the marker that makes it check for new photos; a visitor\'s page has no marker, so the (inert) script there does nothing', str_contains($lkGalOwn, 'id="live-folder"') && !str_contains($lkGalVis, 'id="live-folder"'));
+check('[changed elsewhere] only the signed-in owner\'s gallery page has the marker that makes it ask what changed (it carries the newest entry\'s number); a visitor\'s page has no marker, so the (inert) script there does nothing', str_contains($lkGalOwn, 'id="live-folder"') && preg_match('/id="live-folder" hidden data-folder="Rome" data-last="\d+"/', $lkGalOwn) === 1 && !str_contains($lkGalVis, 'id="live-folder"'));
 [$lkBrS, $lkBr] = http_get("$baseLk/?admin&browserspanel=1", $lkOwn);
 [, $lkBrAn] = http_get("$baseLk/?admin&browserspanel=1");
 check('[live refresh] the "Browsers signed in" row can be asked for on its own (when the window comes back): just that row, and only by the signed-in admin', $lkBrS === 200 && str_contains($lkBr, 'id="browsers-row"') && !str_contains($lkBr, 'id="health-panel"') && !str_contains($lkBrAn, 'id="browsers-row"'));
@@ -9621,6 +9611,125 @@ $lkAct = json_decode(http_post("$baseLk3/?admin", ['action' => 'visits_seen', 'c
 [$lkGuessS, $lkGuessB] = http_post("$baseLk3/?admin", ['access_code' => 'lk-admin-pw-3'], [], false);
 check('[lockouts] a lockout started by someone else at the same address does not hold back a session that is already signed in: it still opens the admin and still saves, while the stranger gets the lockout page', $lkAnS === 429 && str_contains($lkAnB, 'Sign-in paused') && $lkOwnS === 200 && str_contains($lkOwnB, 'Gallery Admin') && !str_contains($lkOwnB, 'Sign-in paused') && ($lkAct['ok'] ?? false) === true);
 check('[lockouts] ...and the stranger is still held back from guessing: even the right code, typed while the lockout lasts, is turned away', $lkGuessS === 429 && str_contains($lkGuessB, 'Sign-in paused'));
+
+/* --------------------------------------------------------------------- */
+
+echo "== the log of disk activity (Changes): the check, what it writes and what it leaves alone ==\n";
+$fxCh = new_fixture_dir('changes');
+foreach (['Alpha', 'Beta'] as $chD) mkdir("$fxCh/$chD", 0777, true);
+foreach (['Alpha/a1.jpg', 'Alpha/a2.jpg', 'Alpha/a3.jpg', 'Beta/b1.jpg', 'Beta/b2.jpg'] as $chI => $chF) make_jpeg("$fxCh/$chF", 40, 30, 20 + $chI * 30, 90, 160);
+file_put_contents("$fxCh/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ch-admin-pw-1']));
+copy($indexSrc, "$fxCh/index.php");
+$portCh = find_free_port(); start_server($fxCh, $portCh); $baseCh = "http://127.0.0.1:$portCh";
+[, , $chH1] = http_post("$baseCh/?admin", ['access_code' => 'ch-admin-pw-1'], [], false);
+$chOwn = ['Cookie: ' . extract_cookie_header($chH1)];
+$chDb = function () use ($fxCh) { $f = glob("$fxCh/.gallery-visits-*.sqlite")[0] ?? null; if ($f === null) return null; $d = new PDO('sqlite:' . $f); $d->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); $d->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC); return $d; };
+$chRows = function () use ($chDb) { $d = $chDb(); return $d ? $d->query('SELECT id, t, t0, t1, kind, folder, n, names, more, gone FROM changes ORDER BY id')->fetchAll() : []; };
+$chSnap = function () use ($chDb) { $d = $chDb(); $o = []; if ($d) foreach ($d->query('SELECT folder, n FROM changes_snap ORDER BY folder') as $r) $o[$r['folder']] = (int) $r['n']; return $o; };
+[$chS0] = http_get("$baseCh/?admin&classic=1", $chOwn);
+check('[changes] the first look (an admin page) takes the picture and says nothing: a snapshot of each folder, no entries', $chS0 === 200 && $chSnap() === ['Alpha' => 3, 'Beta' => 2] && $chRows() === []);
+http_get("$baseCh/?admin&classic=1", $chOwn);
+check('[changes] looking again with nothing changed writes nothing', $chRows() === [] && $chSnap() === ['Alpha' => 3, 'Beta' => 2]);
+sleep(1); $chT = time();
+copy("$fxCh/Alpha/a1.jpg", "$fxCh/Alpha/a4.jpg");
+http_get("$baseCh/?admin&classic=1", $chOwn);
+$chR = $chRows();
+check('[changes] a photo added to a folder is one entry: added, the folder, how many, the names, and when it arrived (the file\'s own time)', count($chR) === 1 && $chR[0]['kind'] === 'add' && $chR[0]['folder'] === 'Alpha' && (int) $chR[0]['n'] === 1 && json_decode($chR[0]['names'], true) === ['a4.jpg'] && (int) $chR[0]['t0'] >= $chT - 2 && (int) $chR[0]['t1'] >= (int) $chR[0]['t0'] && $chSnap()['Alpha'] === 4);
+http_get("$baseCh/?admin&classic=1", $chOwn);
+check('[changes] ...and the next look does not write it again', count($chRows()) === 1);
+unlink("$fxCh/Beta/b2.jpg");
+http_get("$baseCh/?admin&classic=1", $chOwn);
+$chR = $chRows(); $chLast = end($chR);
+check('[changes] a photo taken away is one entry: removed, with its name', count($chR) === 2 && $chLast['kind'] === 'rem' && $chLast['folder'] === 'Beta' && json_decode($chLast['names'], true) === ['b2.jpg']);
+rename("$fxCh/Alpha/a2.jpg", "$fxCh/Alpha/a2-renamed.jpg");
+http_get("$baseCh/?admin&classic=1", $chOwn);
+$chR = $chRows(); $chLast = end($chR);
+check('[changes] a rename is one entry: renamed or replaced, with the name that went and the one that came (not an added and a removed)', count($chR) === 3 && $chLast['kind'] === 'ren' && json_decode($chLast['gone'], true) === ['a2.jpg'] && json_decode($chLast['names'], true) === ['a2-renamed.jpg']);
+mkdir("$fxCh/Gamma"); make_jpeg("$fxCh/Gamma/g1.jpg", 40, 30, 200, 90, 60); make_jpeg("$fxCh/Gamma/g2.jpg", 40, 30, 200, 120, 60);
+http_get("$baseCh/?admin&classic=1", $chOwn);
+$chR = $chRows(); $chLast = end($chR);
+check('[changes] a new folder is one entry (new folder, how many it holds), not one per photo', count($chR) === 4 && $chLast['kind'] === 'new' && $chLast['folder'] === 'Gamma' && (int) $chLast['n'] === 2);
+exec('rm -rf ' . escapeshellarg("$fxCh/Beta"));
+http_get("$baseCh/?admin&classic=1", $chOwn);
+$chR = $chRows(); $chLast = end($chR);
+check('[changes] a folder that is gone is one entry, and its row in the snapshot goes too', count($chR) === 5 && $chLast['kind'] === 'gone' && $chLast['folder'] === 'Beta' && !isset($chSnap()['Beta']));
+// a visitor's page looks at most once a minute; the owner's every time
+copy("$fxCh/Alpha/a1.jpg", "$fxCh/Alpha/a5.jpg");
+[$chVs] = http_get("$baseCh/");
+check('[changes] a visitor\'s page does not look again within a minute of the last look (the page is served as usual)', $chVs === 200 && count($chRows()) === 5);
+$chD = $chDb(); $chD->exec("UPDATE meta SET v = '0' WHERE k = 'chg_checked'");
+http_get("$baseCh/");
+$chR = $chRows(); $chLast = end($chR);
+check('[changes] ...and after the minute a visitor\'s page does look, and writes what it found', count($chR) === 6 && $chLast['folder'] === 'Alpha');
+// what is scanned changing (a switch) takes the picture again quietly
+copy("$fxCh/Alpha/a1.jpg", "$fxCh/Alpha/a6.jpg");
+file_put_contents("$fxCh/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ch-admin-pw-1', 'ENABLE_VIDEO' => true]));
+[, , $chH2] = http_post("$baseCh/?admin", ['access_code' => 'ch-admin-pw-1'], [], false);   // (the settings file was rewritten: signed in again)
+$chOwn = ['Cookie: ' . extract_cookie_header($chH2)];
+http_get("$baseCh/?admin&classic=1", $chOwn);
+check('[changes] when what is scanned changes (videos switched on here) the picture is taken again quietly: the photo that arrived with it is not announced', count($chRows()) === 6 && $chSnap()['Alpha'] === 6);
+// a drive that disappears for a moment is not "everything deleted"
+for ($chK = 0; $chK < 25; $chK++) { if (!is_dir("$fxCh/Delta")) mkdir("$fxCh/Delta"); make_jpeg("$fxCh/Delta/d$chK.jpg", 20, 20, 10 + $chK, 80, 80); }
+http_get("$baseCh/?admin&classic=1", $chOwn);
+$chBefore = count($chRows());
+$chSaved = "$fxCh.away"; mkdir($chSaved);
+foreach (['Alpha', 'Gamma', 'Delta'] as $chMv) rename("$fxCh/$chMv", "$chSaved/$chMv");
+http_get("$baseCh/?admin&classic=1", $chOwn);
+check('[changes] when nearly everything seems to have vanished at once (a drive that went away) the first look writes nothing', count($chRows()) === $chBefore);
+foreach (['Alpha', 'Gamma', 'Delta'] as $chMv) rename("$chSaved/$chMv", "$fxCh/$chMv");
+http_get("$baseCh/?admin&classic=1", $chOwn);
+check('[changes] ...and when it comes back the same as it was there is nothing to say about it either', count($chRows()) === $chBefore);
+
+// ---- the Changes tab: the entry in the sidebar, the number on it, the list, Trim, the Health row
+$chPage = http_get("$baseCh/?admin&classic=1", $chOwn)[1];
+$chPos = function ($page, $tab) { $m = []; return preg_match('~<a href="#' . $tab . '" (?:role="tab" )?data-tab="' . $tab . '" class="side-[a-z]+[^"]*"~', $page, $m, PREG_OFFSET_CAPTURE) ? $m[0][1] : -1; };
+check('[changes tab] the sidebar has Changes, between the others and Settings (this install has no Visitors, Shares or Edited yet: Features, Collections, Changes, Settings)', $chPos($chPage, 'features') >= 0 && $chPos($chPage, 'features') < $chPos($chPage, 'collections') && $chPos($chPage, 'collections') < $chPos($chPage, 'changes') && $chPos($chPage, 'changes') < $chPos($chPage, 'site') && $chPos($chPage, 'visits') === -1);
+check('[changes tab] the list names what happened with a label, a folder link that marks what is new (since=), a place to open each entry, and the controls: the kinds pill, Trim the log…, a search box', str_contains($chPage, 'id="changes"') && str_contains($chPage, 'added to <a href="?folder=Alpha&amp;since=') && str_contains($chPage, 'renamed or replaced') && str_contains($chPage, 'ch-k ren">RENAMED') && str_contains($chPage, 'ch-pill-t">All kinds') && str_contains($chPage, 'Trim the log') && str_contains($chPage, 'Search file or folder names'));
+check('[changes tab] the number on the entry is amber while there are entries not looked at (6 here), and each new entry has an amber edge', preg_match('~data-tab="changes" class="side-link">Changes <span class="count warn" title="[^"]*">(\d+)</span>~', $chPage, $chBadge) === 1 && (int) $chBadge[1] >= 6 && str_contains($chPage, 'ch-e ch-new'));
+$chFront = http_get("$baseCh/", $chOwn)[1]; $chFrontVis = http_get("$baseCh/")[1];
+check('[changes tab] on the front page the owner\'s folder card carries an amber note of what is new in it (a link to the folder that marks it), a visitor\'s card carries none, and the page knows the newest entry\'s number for the pill', preg_match('~<a class="fc-chg" href="\?folder=Alpha&amp;since=\d+"~', $chFront) === 1 && !str_contains($chFrontVis, '<a class="fc-chg"') && preg_match('/id="live-folder" hidden data-folder="" data-last="[1-9]\d*" data-noun="(item|photo)"/', $chFront) === 1);
+$chCsrf = (string) extract_csrf_token($chPage);
+$chAct = fn (array $f) => json_decode(http_post("$baseCh/?admin", $f + ['csrf_token' => $chCsrf], array_merge($chOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$chSeenR = $chAct(['action' => 'changes_seen']);
+$chPage2 = http_get("$baseCh/?admin&classic=1", $chOwn)[1];
+check('[changes tab] opening the tab marks everything seen: the number turns grey (same count), and no entry has the amber edge', ($chSeenR['ok'] ?? false) === true && preg_match('~data-tab="changes" class="side-link">Changes <span class="count" title="[^"]*">(\d+)</span>~', $chPage2, $chBadge2) === 1 && (int) $chBadge2[1] === (int) $chBadge[1] && !str_contains($chPage2, 'ch-e ch-new'));
+check('[changes tab] ...and once the tab has been opened the amber notes on the cards are gone', !str_contains(http_get("$baseCh/", $chOwn)[1], '<a class="fc-chg"'));
+$chD = $chDb(); $chD->exec("UPDATE meta SET v = '" . (time() - 90000) . "' WHERE k = 'chg_opened'");
+$chPage3 = http_get("$baseCh/?admin&classic=1", $chOwn)[1];
+check('[changes tab] a day after the tab was opened the number is gone altogether', preg_match('~data-tab="changes" class="side-link">Changes</a>~', $chPage3) === 1);
+copy("$fxCh/Alpha/a1.jpg", "$fxCh/Alpha/a7.jpg");
+$chPage4 = http_get("$baseCh/?admin&classic=1", $chOwn)[1];
+check('[changes tab] a new entry after that brings the number back, amber, counting only the new one', preg_match('~data-tab="changes" class="side-link">Changes <span class="count warn" title="[^"]*">1</span>~', $chPage4) === 1);
+$chPb = json_decode(http_get("$baseCh/?admin&pbcounts=1", $chOwn)[1], true) ?: [];
+check('[changes tab] the numbers the sidebar and the phone Menu ask for again carry it too', ($chPb['changes'][0]['kind'] ?? '') === 'warn' && ($chPb['changes'][0]['text'] ?? '') === '1');
+// Trim
+$chCount = fn () => (int) $chDb()->query('SELECT COUNT(*) FROM changes')->fetchColumn();
+$chAll = $chAct(['action' => 'changes_trim', 'days' => 'all']);
+check('[changes tab] Trim the log… first says how many entries would go (and removes none)', ($chAll['ok'] ?? false) === true && (int) ($chAll['n'] ?? -1) === $chCount() && $chCount() >= 7);
+$chDb()->exec('UPDATE changes SET t = t - 400 * 86400 WHERE id <= 3');
+$chOld = $chAct(['action' => 'changes_trim', 'days' => '365']);
+check('[changes tab] ...older than a year counts just the old ones', (int) ($chOld['n'] ?? -1) === 3);
+$chBefore = $chCount(); $chDone = $chAct(['action' => 'changes_trim', 'days' => '365', 'apply' => '1']);
+check('[changes tab] ...and with apply they go, and the rest stay', (int) ($chDone['n'] ?? -1) === 3 && $chCount() === $chBefore - 3);
+check('[changes tab] only the signed-in admin can ask: a stranger gets no answer', !str_contains(http_post("$baseCh/?admin", ['action' => 'changes_trim', 'days' => 'all', 'csrf_token' => $chCsrf], ['X-Requested-With: gallery-fetch'])[1], '"n"'));
+// the daily clean-up (Keep change records for (days))
+file_put_contents("$fxCh/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ch-admin-pw-1', 'ENABLE_VIDEO' => true, 'CHANGES_KEEP_DAYS' => 30, 'CHANGES_WARN_MB' => 1, 'ENABLE_SHARE_LINKS' => true]));
+file_put_contents("$fxCh/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => ['a1.jpg' => ['restriction' => 'private']]]));
+[, , $chH3] = http_post("$baseCh/?admin", ['access_code' => 'ch-admin-pw-1'], [], false);
+$chOwn = ['Cookie: ' . extract_cookie_header($chH3)];
+$chFull = http_get("$baseCh/?admin&classic=1", $chOwn)[1];
+$chOrder = array_map(fn ($tb) => $chPos($chFull, $tb), ['features', 'collections', 'hidden', 'links', 'visits', 'changes', 'site']);
+check('[changes tab] with everything present the sidebar order is Features, Collections, Edited, Shares, Visitors, Changes, Settings', !in_array(-1, $chOrder, true) && $chOrder === (function ($o) { sort($o); return $o; })($chOrder), json_encode($chOrder));
+$chDb()->exec('UPDATE changes SET t = t - 40 * 86400 WHERE id = (SELECT MIN(id) FROM changes)');
+$chDb()->exec("DELETE FROM meta WHERE k = 'chg_trimmed'");
+$chBefore = $chCount();
+http_get("$baseCh/?admin&classic=1", $chOwn);
+check('[changes tab] with a number of days set, entries older than that go by themselves (once a day)', $chCount() === $chBefore - 1);
+// the Health check
+$chDb()->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([time(), time(), time(), 'add', 'Alpha', 1, str_repeat('x', 2000000), 0, '[]']);
+$chHealth = http_get("$baseCh/?admin&classic=1", $chOwn)[1];
+check('[changes tab] Health warns when the entries take more than the size set (1 MB here), with the size and a way to trim', str_contains($chHealth, 'The change records take') && str_contains($chHealth, 'Trim the log in the Changes tab'));
+check('[changes tab] Settings has the two rows: how long entries are kept, and the size Health warns at', str_contains($chHealth, 'name="set_CHANGES_KEEP_DAYS"') && str_contains($chHealth, 'name="set_CHANGES_WARN_MB"') && str_contains($chHealth, 'Keep change records for (days)'));
 
 /* --------------------------------------------------------------------- */
 

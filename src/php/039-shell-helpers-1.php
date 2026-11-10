@@ -95,7 +95,7 @@ function shell_folder_tree($files, $current) {
  *  looked. Settings: nothing unless the Health check has something to fix (the rows the server can see: the web server rules are
  *  tested by the browser inside Settings itself). */
 function admin_nav_counts($dir, $files) {
-    $out = ['features' => [], 'links' => [], 'site' => [], 'visits' => []];
+    $out = ['features' => [], 'links' => [], 'site' => [], 'visits' => [], 'changes' => []];
     $inactive = count(array_filter(scan_md_candidates($dir), function ($f) use ($dir) { return !in_array($f, scan_gallery_md_files($dir)['files'], true); }));
     $notesOn = scan_gallery_md_files($dir)['files'] !== [];
     $closed = gallery_is_closed(); $of = $closed ? 8 : 9;   // (a closed gallery's downloads are each share link's own choice: not one of the switches)
@@ -117,6 +117,7 @@ function admin_nav_counts($dir, $files) {
         $ln = lockout_unseen_count();   // (red while a lockout has happened that the Visitors tab has not been opened for)
         $out['visits'][] = ['text' => number_format($vn), 'kind' => $ln > 0 ? 'bad' : '', 'title' => number_format($vn) . ' visitor' . ($vn === 1 ? '' : 's') . ' in the log' . ($ln > 0 ? ', and ' . number_format($ln) . ' lockout' . ($ln === 1 ? '' : 's') . ' you have not seen' : '')];
     }
+    $out['changes'] = changes_badges();   // (amber while the Changes tab has something you have not looked at; grey for a day after you did)
     $loud = 0;
     foreach (health_checks($dir, $files) as $r) if ($r[1] === 'bad' || $r[1] === 'warn') $loud++;
     if ($loud > 0) $out['site'][] = ['text' => (string) $loud, 'kind' => 'bad', 'title' => $loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at in the Health check'];
@@ -134,11 +135,12 @@ function shell_whole_nav($dir, $files, $folderGroupKeys) {
     $edited = admin_edited_overview($dir, $files, $hidden);
     $counts = admin_nav_counts($dir, $files);
     $h = '<a href="?admin&amp;shell=1&amp;tab=features" data-tab="features">Features' . admin_nav_badges($counts['features']) . '</a>';
+    if (AUTO_GROUP_BY_FOLDER) $h .= '<a href="?admin&amp;shell=1&amp;tab=collections" data-tab="collections">Collections' . (collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '') . '</a>';
     if ($hidden || $edited['total'] > 0) $h .= '<a href="?admin&amp;shell=1&amp;tab=hidden" data-tab="hidden">Edited <span class="count">' . number_format($edited['total']) . '</span></a>';
     if (ENABLE_SHARE_LINKS) $h .= '<a href="?admin&amp;shell=1&amp;tab=links" data-tab="links">Shares' . admin_nav_badges($counts['links']) . '</a>';
-    if (AUTO_GROUP_BY_FOLDER) $h .= '<a href="?admin&amp;shell=1&amp;tab=collections" data-tab="collections">Collections' . (collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '') . '</a>';
-    $h .= '<a href="?admin&amp;shell=1&amp;tab=site" data-tab="site">Settings' . admin_nav_badges($counts['site']) . '</a>';
     if (visits_tab_wanted()) $h .= '<a href="?admin&amp;shell=1&amp;tab=visits" data-tab="visits">Visitors' . admin_nav_badges($counts['visits']) . '</a>';
+    if (changes_tab_wanted()) $h .= '<a href="?admin&amp;shell=1&amp;tab=changes" data-tab="changes">Changes' . admin_nav_badges($counts['changes']) . '</a>';
+    $h .= '<a href="?admin&amp;shell=1&amp;tab=site" data-tab="site">Settings' . admin_nav_badges($counts['site']) . '</a>';
     return $h;
 }
 
@@ -153,11 +155,12 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     $admBase = '?admin' . ($folder !== null ? '&folder=' . rawurlencode($folder) : '');
     $tab = function ($t) use ($inAdmin, $admBase) { return $inAdmin ? '#' . $t : $admBase . '#' . $t; };
     $whole = ['features' => 'Features'];
+    if (AUTO_GROUP_BY_FOLDER) $whole['collections'] = 'Collections';
     if ($showEdited) $whole['hidden'] = 'Edited';
     if (ENABLE_SHARE_LINKS) $whole['links'] = 'Shares';
-    if (AUTO_GROUP_BY_FOLDER) $whole['collections'] = 'Collections';
-    $whole['site'] = 'Settings';
     if (visits_tab_wanted()) $whole['visits'] = 'Visitors';
+    if (changes_tab_wanted()) $whole['changes'] = 'Changes';
+    $whole['site'] = 'Settings';
     $children = [];
     foreach (all_folder_paths($files) as $path) $children[strpos($path, '/') === false ? '' : substr($path, 0, strrpos($path, '/'))][] = $path;
     [$own] = admin_folder_counts($files);
@@ -310,7 +313,7 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
     $hidden = admin_any_hidden($dir, $files, $folderGroupKeys) ? admin_hidden_data($dir, $files) : null;
     $edited = admin_edited_overview($dir, $files, $hidden);
     $showEdited = (bool) $hidden || $edited['total'] > 0;
-    $whole = ['features' => 'Features', 'hidden' => 'Edited', 'links' => 'Shares', 'site' => 'Settings', 'visits' => 'Visitors', 'collections' => 'Collections'];
+    $whole = ['features' => 'Features', 'hidden' => 'Edited', 'links' => 'Shares', 'site' => 'Settings', 'visits' => 'Visitors', 'collections' => 'Collections', 'changes' => 'Changes'];
     $tab = (string) ($_GET['tab'] ?? '');
     if ($tab !== '' && $tab !== 'settings' && $tab !== 'notes' && !isset($whole[$tab])) $tab = '';
     if (($tab === 'hidden' && !$showEdited) || ($tab === 'links' && !ENABLE_SHARE_LINKS) || ($tab === 'visits' && !visits_tab_wanted())) $tab = '';

@@ -518,6 +518,9 @@ define('LOG_PUBLIC_VISITS', gallery_setting('LOG_PUBLIC_VISITS', false));
 define('LOG_KEEP_DAYS', max(0, (int) gallery_setting('LOG_KEEP_DAYS', 0)));
 // Health warns when the visitor records together take more than this many megabytes on disk (0: no warning).
 define('LOG_WARN_MB', max(0, (int) gallery_setting('LOG_WARN_MB', 100)));
+// The Changes tab's log of disk activity: how many days its entries are kept (0: until trimmed), and the size, in megabytes, at which the Health check warns (0: never).
+define('CHANGES_KEEP_DAYS', max(0, (int) gallery_setting('CHANGES_KEEP_DAYS', 0)));
+define('CHANGES_WARN_MB', max(0, (int) gallery_setting('CHANGES_WARN_MB', 20)));
 
 // Whether the public address is closed: only the owner, someone with the private-view password and someone who came in through a
 // share link see anything; a stranger gets the page of a link that isn't valid. Off by default. It only takes effect while share
@@ -1057,7 +1060,7 @@ function request_route($reset = false) {
  *  Not listed photo's (see bare_query_as_address). */
 function reserved_query_words() {
     $words = ['index.php', 'map', 'archive', 'all', 'csv', 'file', 'folder', 'hidden', 'name', 'photo', 'size', 'sort', 'tab', 'what', 'warm', 'shell', 'item', 'exact', 'prefix', 'inframe', 'csrf', 'k',
-        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'browserspanel', 'changed', 'since', 'pbcounts', 'privcounts', 'scope_type',
+        'view', 'accelcheck', 'browserhist', 'filesdownload', 'linkcover', 'linkphotos', 'linkpreview', 'q', 'visits', 'visitsexport', 'linkspanel', 'browserspanel', 'changed', 'since', 'after', 'pbcounts', 'privcounts', 'scope_type',
         'shellcounts', 'shellmeta', 'shelltree'];
     foreach (request_routes() as $r) foreach ($r['params'] as $p) $words[] = $p;
     return $words;
@@ -3857,6 +3860,7 @@ foreach ($groups as $key => $groupFiles) {
 // request has no business triggering. See run_admin_route()'s own
 // docblock, further down, for the full auth/CSRF flow.
 if (request_route() === 'admin') {
+    changes_check($dir, $files, !is_admin_browser());   // (the owner's own pages always look: what changed on disk since the last look is written down, see the Changes tab; anyone else's request at most once a minute)
     run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $galleryNotices);
     exit;
 }
@@ -3870,6 +3874,7 @@ if (request_route() === 'admin') {
 // flag (and its cached thumbnails) the next time an unrevealed visitor
 // just loads the page — the opposite of what hiding is supposed to do.
 $allFiles = $files;
+changes_check($dir, $allFiles, !is_admin_browser());   // (every page of the gallery looks at what changed on disk: the owner's every time, a visitor's at most once a minute)
 // Whether anything in the gallery is private: the lock in the icon strip only appears when there is something to unlock.
 $hasPrivateItems = false;
 foreach ($allFiles as $privateProbe) {
@@ -9001,39 +9006,6 @@ function admin_record_hash($record) {
     return md5(json_encode($record));
 }
 
-/** What is kept in a folder's own data file as the owner sees it, in a stable order and without what is only the gallery's own bookkeeping (edited_record_keys says which
- *  keys those are): the base of the "changed elsewhere" notice, so a view count or an id written on its own never looks like an edit. */
-function live_record_fp($data) {
-    $keys = edited_record_keys();
-    $internal = function ($map) { return array_flip(array_keys(array_filter($map, function ($v) { return $v === 'internal'; }))); };
-    $folderInternal = $internal($keys['folder']); unset($folderInternal['items']);
-    $photoInternal = $internal($keys['photo']);
-    $d = array_diff_key((array) $data, $folderInternal);
-    if (isset($d['items']) && is_array($d['items'])) foreach ($d['items'] as $name => $entry) if (is_array($entry)) $d['items'][$name] = array_diff_key($entry, $photoInternal);
-    $norm = function (&$a) use (&$norm) { if (!is_array($a)) return; ksort($a); foreach ($a as &$v) $norm($v); };
-    $norm($d);
-    return md5(json_encode($d));
-}
-
-/** Three short fingerprints of what an admin page or the gallery page shows: the settings file, the data of one folder (captions, names, marks), and the list of photos and
- *  videos under it. Asked for again when the window comes back; a different answer means something changed somewhere else. $folderPath null is the front page. */
-function live_fingerprints($dir, $files, $folderPath, $since = 0) {
-    $cfg = rtrim($dir, '/') . '/.gallery-config.php';
-    $real = $folderPath === null ? $dir : resolve_real_path($dir, $folderPath);
-    $under = $folderPath === null ? $files : folder_files_under($files, $folderPath);
-    sort($under);
-    $by = []; foreach ($under as $f) $by[link_item_folder($f)][] = basename($f);
-    $folders = [];   // (per folder: how many files are directly in it, a fingerprint of their names, and its name, so the notice can say where and what; left out when there are too many folders to send each time)
-    if (count($by) <= 300) foreach ($by as $d => $names) { sort($names); $folders[(string) $d] = [count($names), md5(implode("\n", $names)), (string) $d === '' ? '' : link_folder_label($dir, (string) $d)]; }
-    $out = ['settings' => is_file($cfg) ? (string) md5_file($cfg) : '', 'record' => is_string($real) && $real !== '' ? live_record_fp(items_read($real)) : '', 'media' => md5(implode("\n", $under)), 'folders' => (object) $folders, 'at' => time()];   // ('at': this server's time, what "since" is measured against, never the browser's)
-    if ($since > 0) {   // the files that arrived (their inode changed: copied, renamed, synced in) since then, for the page to mark as new
-        $fresh = [];
-        foreach ($under as $f) { $path = resolve_real_path($dir, $f); if (is_string($path) && @filectime($path) >= $since) { $fresh[] = $f; if (count($fresh) >= 200) break; } }
-        $out['fresh'] = $fresh;
-    }
-    return $out;
-}
-
 /** The fingerprint of a photo's own record for the stale-edit check. Its privacy and location-visibility switches save
  *  by themselves, so they are left out: flipping one must not make the photo's caption form look out of date. */
 function admin_item_record_hash($entry) {
@@ -9204,6 +9176,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         return ['type' => 'logout'];
     }
 
+    if ($action === 'changes_seen') { if (changes_tab_wanted()) changes_mark_seen(); admin_json_exit(['ok' => true]); }   // (the Changes tab was opened: what is in it counts as seen)
+    if ($action === 'changes_trim') {   // Trim the log…: how many entries are older than that (apply off), or take them out (apply on)
+        $days = (string) ($_POST['days'] ?? ''); $cutoff = $days === 'all' ? PHP_INT_MAX : time() - max(1, (int) $days) * 86400;
+        admin_json_exit(['ok' => true, 'n' => changes_trim($cutoff, !empty($_POST['apply'])), 'cutoff' => $cutoff === PHP_INT_MAX ? 'all' : $cutoff, 'applied' => !empty($_POST['apply'])]);
+    }
     if ($action === 'visits_seen') { if (visitlog_usable() && lockout_unseen_count() > 0) lockout_mark_seen(); admin_json_exit(['ok' => true]); }   // (the Visitors tab was opened: the lockouts up to now are seen, and the sidebar number stops being red)
     if ($action === 'visits_trim') visits_trim_action();   // the Visitors tab's Trim the log (answers JSON and ends the request)
     if (strncmp($action, 'link_', 5) === 0) {   // the Shares tab (answers JSON and ends the request)
@@ -10838,6 +10815,10 @@ function gallery_setting_definitions() {
              'help' => 'Covers visits to the public address and to every share link. Older records are removed by themselves, once a day. 0 keeps them until you trim the log yourself.'],
             ['name' => 'LOG_WARN_MB', 'type' => 'number', 'label' => 'Warn when visitor records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
              'help' => 'Health shows a warning, with the size and the oldest record, when the visitor records take more room than this on disk. 0 turns the warning off.'],
+            ['name' => 'CHANGES_KEEP_DAYS', 'type' => 'number', 'label' => 'Keep change records for (days)', 'min' => 0, 'max' => 3650, 'step' => 1, 'status' => 'visitlog',
+             'help' => 'The Changes tab\'s log of what happened on disk (photos added, removed or renamed by a sync or by hand). Older entries are removed by themselves, once a day. 0 keeps them until you trim the log yourself.'],
+            ['name' => 'CHANGES_WARN_MB', 'type' => 'number', 'label' => 'Warn when change records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
+             'help' => 'Health shows a warning when the Changes tab\'s entries take more room than this. 0 turns the warning off.'],
         ]],
         ['title' => 'Location data', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',
@@ -13205,9 +13186,11 @@ function visitlog_open($file, $new) {
     if ($new) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
     $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA synchronous = NORMAL');
-    if ((int) $pdo->query('PRAGMA user_version')->fetchColumn() < 1) {   // (the tables are made once, not on every connection)
-        visitlog_schema($pdo);
-        $pdo->exec('PRAGMA user_version = 1');
+    $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
+    if ($ver < 2) {   // (the tables are made once, not on every connection; version 2 added the log of disk activity)
+        if ($ver < 1) visitlog_schema($pdo);
+        changes_schema($pdo);
+        $pdo->exec('PRAGMA user_version = 2');
     }
     return $pdo;
 }
@@ -13642,6 +13625,299 @@ function link_folder_reachable($l, $dir, $folderRel) {
     return false;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+// The log of disk activity (the Changes tab): what the gallery noticed change in its folders on its own (a sync, an upload, a rename by hand). It lives in the visitor log's
+// SQLite file (two more tables), is written by a cheap check that every admin page and (at most once a minute) every visitor's page makes, and keeps no process of its own:
+// there is nothing running in the background, the check is the only thing that looks.
+//
+// How the check works: the page already has the list of every media file. It is grouped by folder, each folder's names are sorted and fingerprinted (an md5 of the names), and
+// that is compared with the fingerprints kept from the last time. Everywhere equal: nothing is written. A folder that differs is looked at closely (which names are new, which are
+// gone, when the new files arrived by their inode change time) and one entry is written for it; its snapshot is replaced. The first ever check only takes the snapshot (no flood of
+// "added"), and so does the first one after something that changes what is scanned (the places from elsewhere, the subfolders and videos switches) was altered.
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+/** The names an entry keeps (the rest is only counted). (A function, not a constant: this part is read after the code that calls the check.) */
+function changes_names_per_entry() { return 200; }
+/** Seconds between two checks made by a visitor's request (the owner's own pages check every time). */
+function changes_visitor_every() { return 60; }
+
+/** The tables (made with the rest of the log's, and on a log made before them). */
+function changes_schema($pdo) {
+    $pdo->exec('CREATE TABLE IF NOT EXISTS changes (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, t0 INTEGER NOT NULL, t1 INTEGER NOT NULL, kind TEXT NOT NULL, folder TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, names TEXT NOT NULL DEFAULT \'[]\', more INTEGER NOT NULL DEFAULT 0, gone TEXT NOT NULL DEFAULT \'[]\')');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS changes_t ON changes (t)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS changes_snap (folder TEXT PRIMARY KEY, n INTEGER NOT NULL, fp TEXT NOT NULL, names TEXT NOT NULL) WITHOUT ROWID');
+}
+
+/** What decides which files are scanned at all: when it changes the snapshot is taken again quietly (files appearing because a place was added are not "added"). */
+function changes_scan_signature() {
+    return md5(json_encode([ENABLE_VIDEO, AUTO_GROUP_BY_FOLDER, EXTRA_FOLDERS, EXTRA_ROOTS]));
+}
+
+/** The media files grouped by the folder they are directly in ('' is the front page): folder => sorted bare names. */
+function changes_by_folder($files) {
+    $by = [];
+    foreach ($files as $f) $by[link_item_folder($f)][] = basename($f);
+    foreach ($by as $d => $names) { sort($names, SORT_STRING); $by[$d] = $names; }
+    return $by;
+}
+
+/** The names that are in $new and not in $old (in $new's order), in linear time. */
+function changes_names_not_in($new, $old) {
+    $have = array_flip($old);
+    $out = [];
+    foreach ($new as $n) if (!isset($have[$n])) $out[] = $n;
+    return $out;
+}
+
+/** One entry's names: the first changes_names_per_entry() as JSON, and how many more there were. */
+function changes_pack($names) {
+    return [json_encode(array_slice($names, 0, changes_names_per_entry()), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), max(0, count($names) - changes_names_per_entry())];
+}
+
+/** The earliest and latest time (their inode change time: copied in, renamed, synced) of the files named in a folder, looking at no more than 500 of them. */
+function changes_arrival($dir, $folder, $names, $fallback) {
+    $lo = 0; $hi = 0;
+    foreach (array_slice($names, 0, 500) as $n) {
+        $real = resolve_real_path($dir, $folder === '' ? $n : $folder . '/' . $n);
+        $c = is_string($real) ? (int) @filectime($real) : 0;
+        if ($c <= 0) continue;
+        $lo = $lo === 0 ? $c : min($lo, $c); $hi = max($hi, $c);
+    }
+    return $lo === 0 ? [$fallback, $fallback] : [$lo, $hi];
+}
+
+/** Looks at the list of files against what was seen last time and writes what differs. $files is the COMPLETE list (never the one a visitor's page filters), $throttle makes it
+ *  skip when it looked less than changes_visitor_every() seconds ago (a visitor's page). Quiet and safe: no log, no write access or any trouble means it does nothing. Once per request. */
+function changes_check($dir, $files, $throttle) {
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+    if (!visitlog_driver_ok() || !visitlog_ready()) return;
+    try {
+        $db = visitlog_db();
+        if ($db === null) return;
+        $now = time();
+        if ($throttle && $now - (int) visitlog_meta_get($db, 'chg_checked') < changes_visitor_every()) return;
+        $by = changes_by_folder($files);
+        $cur = [];
+        foreach ($by as $d => $names) $cur[(string) $d] = md5(implode("\n", $names));
+        $sig = changes_scan_signature();
+        // the first look, and the first after what is scanned changed: the picture is taken, nothing is said
+        if (visitlog_meta_get($db, 'chg_base') !== '1' || visitlog_meta_get($db, 'chg_sig') !== $sig) {
+            visitlog_tx(function ($db) use ($by, $cur, $sig, $now) {
+                $db->exec('DELETE FROM changes_snap');
+                $ins = $db->prepare('INSERT INTO changes_snap (folder, n, fp, names) VALUES (?, ?, ?, ?)');
+                foreach ($by as $d => $names) $ins->execute([(string) $d, count($names), $cur[(string) $d], json_encode($names, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
+                visitlog_meta_set($db, 'chg_base', '1'); visitlog_meta_set($db, 'chg_sig', $sig); visitlog_meta_set($db, 'chg_checked', $now); visitlog_meta_set($db, 'chg_wait', '');
+            });
+            return;
+        }
+        $snap = [];
+        foreach ($db->query('SELECT folder, n, fp FROM changes_snap') as $r) $snap[(string) $r['folder']] = [(int) $r['n'], (string) $r['fp']];
+        // a drive that went away for a moment must not look like everything was deleted (and then added again): when nearly everything is gone it takes a second look to believe it
+        $was = array_sum(array_column($snap, 0)); $isNow = count($files);
+        if ($was >= 20 && $isNow < $was * 0.1) {
+            $key = md5(json_encode($cur));
+            if (visitlog_meta_get($db, 'chg_wait') !== $key) { visitlog_tx(function ($db) use ($key) { visitlog_meta_set($db, 'chg_wait', $key); }); return; }
+        }
+        $changed = [];
+        foreach ($cur as $d => $fp) if (!isset($snap[$d]) || $snap[$d][1] !== $fp) $changed[] = $d;
+        $goneFolders = array_keys(array_diff_key($snap, $cur));
+        if (!$changed && !$goneFolders) {
+            if ($throttle) visitlog_tx(function ($db) use ($now) { visitlog_meta_set($db, 'chg_checked', $now); });
+            changes_retention($now);
+            return;
+        }
+        $oldNames = function ($d) use ($db) { $st = $db->prepare('SELECT names FROM changes_snap WHERE folder = ?'); $st->execute([$d]); $j = $st->fetchColumn(); $a = is_string($j) ? json_decode($j, true) : null; return is_array($a) ? $a : []; };
+        $entries = [];
+        foreach ($changed as $d) {
+            $new = $by[$d];
+            if (!isset($snap[$d])) {
+                [$j, $more] = changes_pack($new);
+                [$t0, $t1] = changes_arrival($dir, $d, $new, $now);
+                $entries[] = [$now, $t0, $t1, 'new', $d, count($new), $j, $more, '[]'];
+                continue;
+            }
+            $old = $oldNames($d);
+            $added = changes_names_not_in($new, $old); $removed = changes_names_not_in($old, $new);
+            if ($added && $removed && count($added) === count($removed)) {
+                [$j, $more] = changes_pack($added); [$g] = changes_pack($removed);
+                [$t0, $t1] = changes_arrival($dir, $d, $added, $now);
+                $entries[] = [$now, $t0, $t1, 'ren', $d, count($added), $j, $more, $g];
+                continue;
+            }
+            if ($added) { [$j, $more] = changes_pack($added); [$t0, $t1] = changes_arrival($dir, $d, $added, $now); $entries[] = [$now, $t0, $t1, 'add', $d, count($added), $j, $more, '[]']; }
+            if ($removed) { [$j, $more] = changes_pack($removed); $entries[] = [$now, $now, $now, 'rem', $d, count($removed), $j, $more, '[]']; }
+        }
+        foreach ($goneFolders as $d) {
+            $old = $oldNames($d); [$j, $more] = changes_pack($old);
+            $entries[] = [$now, $now, $now, 'gone', $d, count($old), $j, $more, '[]'];
+        }
+        visitlog_tx(function ($db) use ($entries, $changed, $goneFolders, $by, $cur, $now) {
+            $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            foreach ($entries as $e) $ins->execute($e);
+            $up = $db->prepare('INSERT OR REPLACE INTO changes_snap (folder, n, fp, names) VALUES (?, ?, ?, ?)');
+            foreach ($changed as $d) $up->execute([$d, count($by[$d]), $cur[$d], json_encode($by[$d], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
+            $del = $db->prepare('DELETE FROM changes_snap WHERE folder = ?');
+            foreach ($goneFolders as $d) $del->execute([$d]);
+            visitlog_meta_set($db, 'chg_checked', $now); visitlog_meta_set($db, 'chg_wait', '');
+        });
+        changes_retention($now);
+    } catch (Throwable $e) {
+        error_log('gallery: the disk-activity check did not run: ' . $e->getMessage());
+    }
+}
+
+/** Does this server keep the log of disk activity (and so show the Changes tab)? It lives in the visitor log's SQLite file. */
+function changes_tab_wanted() {
+    return visitlog_driver_ok() && visitlog_ready();
+}
+
+/** Runs $fn($db) against the log, or returns $none when there is none (no SQLite, nothing written yet, any trouble): the readers below never make the file. */
+function changes_read(callable $fn, $none = null) {
+    if (!visitlog_driver_ok() || !is_file(visitlog_path()) || ($db = visitlog_db()) === null) return $none;
+    try { return $fn($db); } catch (Throwable $e) { return $none; }
+}
+
+/** How many entries the owner has not seen: those newer than the newest one there was when the Changes tab was last opened. */
+function changes_unseen_count() {
+    return (int) changes_read(function ($db) {
+        $st = $db->prepare('SELECT COUNT(*) FROM changes WHERE id > ?'); $st->execute([(int) visitlog_meta_get($db, 'chg_seen')]);
+        return $st->fetchColumn();
+    }, 0);
+}
+
+/** The Changes tab was opened: everything in the log counts as seen, and when and how many were new then is kept (the number goes grey, and is gone a day later). */
+function changes_mark_seen() {
+    visitlog_tx(function ($db) {
+        $new = (int) $db->query('SELECT COUNT(*) FROM changes WHERE id > ' . (int) visitlog_meta_get($db, 'chg_seen'))->fetchColumn();
+        $top = (int) $db->query('SELECT COALESCE(MAX(id), 0) FROM changes')->fetchColumn();
+        visitlog_meta_set($db, 'chg_seen', $top);
+        visitlog_meta_set($db, 'chg_opened', time());
+        visitlog_meta_set($db, 'chg_open_n', $new);
+    });
+}
+
+/** The number on the Changes entry of the sidebar and the phone Menu: amber while there is something new; grey with how many were new when the tab was opened, for a day after;
+ *  then nothing. In the shape admin_nav_badges() draws. */
+function changes_badges() {
+    if (!changes_tab_wanted()) return [];
+    $un = changes_unseen_count();
+    if ($un > 0) return [['text' => (string) $un, 'kind' => 'warn', 'title' => number_format($un) . ' change' . ($un === 1 ? '' : 's') . ' on disk you have not looked at']];
+    [$at, $n] = changes_read(function ($db) { return [(int) visitlog_meta_get($db, 'chg_opened'), (int) visitlog_meta_get($db, 'chg_open_n')]; }, [0, 0]);
+    if ($n > 0 && $at > 0 && time() - $at < 86400) return [['text' => (string) $n, 'kind' => '', 'title' => number_format($n) . ' change' . ($n === 1 ? '' : 's') . ' were new when you last opened the tab']];
+    return [];
+}
+
+/** The newest entries first, as rows. */
+function changes_list($limit = 500) {
+    return changes_read(function ($db) use ($limit) { return $db->query('SELECT id, t, t0, t1, kind, folder, n, names, more, gone FROM changes ORDER BY id DESC LIMIT ' . (int) $limit)->fetchAll(); }, []);
+}
+
+/** Entries older than $cutoff: how many there are, or (apply) removed. */
+function changes_trim($cutoff, $apply) {
+    $r = visitlog_tx(function ($db) use ($cutoff, $apply) {
+        $st = $db->prepare('SELECT COUNT(*) FROM changes WHERE t < ?'); $st->execute([(int) $cutoff]); $n = (int) $st->fetchColumn();
+        if ($apply && $n > 0) { $d = $db->prepare('DELETE FROM changes WHERE t < ?'); $d->execute([(int) $cutoff]); }
+        return $n;
+    });
+    return is_int($r) ? $r : 0;
+}
+
+/** Once a day, entries older than the days Settings says go (0 keeps them until they are trimmed by hand). Assumes the caller holds no transaction. */
+function changes_retention($now) {
+    if (CHANGES_KEEP_DAYS <= 0) return;
+    $last = changes_read(function ($db) { return (int) visitlog_meta_get($db, 'chg_trimmed'); }, $now);
+    if ($now - $last <= 86400) return;
+    changes_trim($now - CHANGES_KEEP_DAYS * 86400, true);
+    visitlog_tx(function ($db) use ($now) { visitlog_meta_set($db, 'chg_trimmed', $now); });
+}
+
+/** What the entries take in the log, in bytes (an estimate from what is stored: the names, the folders and a little for each row; not the whole file). */
+function changes_size() {
+    return (int) changes_read(function ($db) { return $db->query('SELECT COALESCE(SUM(LENGTH(names) + LENGTH(gone) + LENGTH(folder) + 48), 0) FROM changes')->fetchColumn(); }, 0);
+}
+function changes_oldest() { return (int) changes_read(function ($db) { return $db->query('SELECT COALESCE(MIN(t), 0) FROM changes')->fetchColumn(); }, 0); }
+function changes_count() { return (int) changes_read(function ($db) { return $db->query('SELECT COUNT(*) FROM changes')->fetchColumn(); }, 0); }
+
+/** The newest entry's number (0 when there is none): what a page remembers, to ask later for what came after. */
+function changes_last_id() { return (int) changes_read(function ($db) { return $db->query('SELECT COALESCE(MAX(id), 0) FROM changes')->fetchColumn(); }, 0); }
+
+/** Entries newer than $after, in or under $folder (null: anywhere), oldest first, no more than 200. */
+function changes_after($after, $folder) {
+    return changes_read(function ($db) use ($after, $folder) {
+        if ($folder === null || $folder === '') { $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? ORDER BY id LIMIT 200'); $st->execute([(int) $after]); }
+        else {
+            $st = $db->prepare('SELECT id, t, t0, kind, folder, n FROM changes WHERE id > ? AND (folder = ? OR folder LIKE ? ESCAPE \'\\\') ORDER BY id LIMIT 200');
+            $st->execute([(int) $after, $folder, addcslashes($folder, '%_\\') . '/%']);
+        }
+        return $st->fetchAll();
+    }, []);
+}
+
+/** What the owner has not seen, for each folder and every folder above it: path => counts of media added (add, ren), removed (rem), folders that came (new) and went (gone),
+ *  and the earliest arrival (t0), for the amber text on a folder's card. Worked out once per request. */
+function changes_unseen_map() {
+    static $map = null;
+    if ($map !== null) return $map;
+    $map = [];
+    $rows = changes_read(function ($db) { $st = $db->prepare('SELECT kind, folder, n, t0 FROM changes WHERE id > ?'); $st->execute([(int) visitlog_meta_get($db, 'chg_seen')]); return $st->fetchAll(); }, []);
+    foreach ($rows as $r) {
+        $path = (string) $r['folder'];
+        while ($path !== '') {
+            $m = &$map[$path];
+            if ($m === null) $m = ['add' => 0, 'rem' => 0, 'new' => 0, 'gone' => 0, 'ren' => 0, 't0' => (int) $r['t0']];
+            // a folder that came adds its media to the folder itself and, with itself counted as one folder, to every folder above it; one that went takes its media and itself from those above
+            $own = $path === (string) $r['folder'];
+            if ($r['kind'] === 'new') { $m['add'] += (int) $r['n']; if (!$own) $m['new']++; }
+            elseif ($r['kind'] === 'gone') { if (!$own) { $m['rem'] += (int) $r['n']; $m['gone']++; } }
+            else $m[$r['kind']] += (int) $r['n'];
+            $m['t0'] = min($m['t0'], (int) $r['t0']);
+            unset($m);
+            $path = link_item_folder($path);
+        }
+    }
+    return $map;
+}
+
+/** The files under $folder (null: the front page) that arrived since $since (their inode changed: copied, renamed, synced in), no more than 200, for a page to mark as new. */
+function changes_fresh_files($dir, $files, $folder, $since) {
+    $under = $folder === null || $folder === '' ? $files : folder_files_under($files, $folder);
+    sort($under);
+    $fresh = [];
+    foreach ($under as $f) {
+        $path = resolve_real_path($dir, $f);
+        if (is_string($path) && @filectime($path) >= $since) { $fresh[] = $f; if (count($fresh) >= 200) break; }
+    }
+    return $fresh;
+}
+
+/** The folders that came since $since, in or under $folder: their paths, for a page to mark their cards. */
+function changes_new_folders($folder, $since) {
+    return changes_read(function ($db) use ($folder, $since) {
+        $st = $db->prepare('SELECT folder FROM changes WHERE kind = \'new\' AND t0 >= ?'); $st->execute([(int) $since]);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $p) if ($folder === null || $folder === '' || $p === $folder || strncmp($p, $folder . '/', strlen($folder) + 1) === 0) $out[] = $p;
+        return array_slice($out, 0, 200);
+    }, []);
+}
+
+/** The amber text on a folder's card for the owner: what in it (and below it) the Changes tab has not been opened for, "(+1 photo ›)", "(+2 photos, −1 ›)", "(+1 folder ›)",
+ *  "(changed ›)" when it would take more than two kinds. A link to the folder that marks what is new. Empty when there is nothing (a rename changes no count: the pill and the tab say it). */
+function changes_card_text($folderPath) {
+    if (!is_admin_browser() || !changes_tab_wanted()) return '';
+    $m = changes_unseen_map()[(string) $folderPath] ?? null;
+    if ($m === null) return '';
+    $parts = [];
+    if ($m['add'] > 0) $parts[] = '+' . count_noun((int) $m['add']);
+    if ($m['rem'] > 0) $parts[] = "\xE2\x88\x92" . number_format((int) $m['rem']);
+    if ($m['new'] > 0) $parts[] = '+' . number_format((int) $m['new']) . ' folder' . ($m['new'] === 1 ? '' : 's');
+    if ($m['gone'] > 0) $parts[] = "\xE2\x88\x92" . number_format((int) $m['gone']) . ' folder' . ($m['gone'] === 1 ? '' : 's');
+    if (!$parts) return '';
+    $text = count($parts) > 2 ? 'changed' : implode(', ', $parts);
+    $href = '?folder=' . rawurlencode((string) $folderPath) . '&since=' . max(0, (int) $m['t0'] - 2);
+    return '<a class="fc-chg" href="' . htmlspecialchars($href, ENT_QUOTES, 'UTF-8') . '" data-chg="' . htmlspecialchars(json_encode(['add' => (int) $m['add'], 'rem' => (int) $m['rem'], 'new' => (int) $m['new'], 'gone' => (int) $m['gone']]), ENT_QUOTES, 'UTF-8') . '" title="Open the folder with what is new marked">(' . htmlspecialchars($text, ENT_QUOTES, 'UTF-8') . ui_icon('chev-right') . ')</a>';
+}
 /* -----------------------------------------------------------------------
  * What the visitor log shows the owner (the Visitors tab; all server-rendered
  * fragments fetched into it): the visitors of the public address and of every
@@ -14320,6 +14596,13 @@ function health_checks($dir, $files) {
         else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. ' . visitlog_visitor_count() . ' visitor' . (visitlog_visitor_count() === 1 ? '' : 's') . ' logged, taking ' . $vlText . '.' . ($vlOld > 0 ? ' The oldest record is from ' . gmdate('j M Y', $vlOld) . '.' : ''));
     }
     else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. Nothing has been logged yet.');
+    if (changes_tab_wanted() && ($chN = changes_count()) > 0) {   // --- the Changes tab's log of disk activity
+        $chSize = changes_size(); $chOld = changes_oldest();
+        $chText = $chSize >= 1048576 ? number_format($chSize / 1048576, $chSize >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($chSize / 1024)) . ' KB';
+        if (CHANGES_WARN_MB > 0 && $chSize > CHANGES_WARN_MB * 1048576)
+            $add('This install', 'warn', 'The change records take ' . $chText, 'More than the ' . number_format(CHANGES_WARN_MB) . ' MB you asked to be warned at. The oldest entry is from ' . ($chOld > 0 ? gmdate('j M Y', $chOld) : 'an unknown date') . '. Trim the log in the Changes tab, or set how long entries are kept in Settings (Visitors and logs).');
+        else $add('This install', 'ok', 'Change log: ready', number_format($chN) . ' entr' . ($chN === 1 ? 'y' : 'ies') . ' in the Changes tab, taking ' . $chText . '.' . ($chOld > 0 ? ' The oldest is from ' . gmdate('j M Y', $chOld) . '.' : ''));
+    }
 
     // --- settings and passwords
     $state = gallery_config_load();
@@ -14479,6 +14762,85 @@ function health_checks($dir, $files) {
     return $rows;
 }
 
+
+/** The Changes tab: the log of disk activity (see 034a). Newest first. A line says what happened and where, with a link that opens the folder (marking what is new there);
+ *  a line opens to show the names (and, for a rename, what went beside what came). A pill picks the kinds shown (any number), a search box narrows to a folder's or a file's
+ *  name, "Trim the log…" takes the old ones out. The days and the times are drawn by the script in the viewer's own clock; without it the list is the same in the server's. */
+function render_admin_changes_panel($csrfToken) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $rows = changes_list(500);
+    $seen = (int) changes_read(function ($db) { return visitlog_meta_get($db, 'chg_seen'); }, 0);
+    $groupOf = ['add' => 'add', 'rem' => 'rem', 'ren' => 'ren', 'new' => 'folder', 'gone' => 'folder'];
+    $groups = ['add' => ['Added', 0], 'rem' => ['Removed', 0], 'ren' => ['Renamed', 0], 'folder' => ['Folders', 0]];
+    foreach ($rows as $r) if (isset($groupOf[$r['kind']])) $groups[$groupOf[$r['kind']]][1]++;
+    $media = function ($n) { return number_format($n) . ' media'; };
+?>
+  <section class="panel" id="changes" data-csrf="<?= $esc($csrfToken) ?>">
+    <h2 class="section-title">Changes</h2>
+    <p class="hint" style="margin:0 0 12px">The log of disk activity: what the gallery noticed change in your folders (a sync, an upload, a rename), whoever made it.</p>
+    <div class="ch-head">
+      <div class="ch-pillbox">
+        <button type="button" class="ch-pill" aria-haspopup="true" aria-expanded="false"><span class="ch-pill-t">All kinds</span><em class="ch-pill-n"></em> <span aria-hidden="true">&#9662;</span></button>
+        <div class="ch-pop" role="group" aria-label="Show only" hidden>
+          <label class="ch-row"><input type="checkbox" data-all="1" checked> <span>All kinds</span></label>
+          <?php foreach ($groups as $k => [$name, $n]): ?>
+          <label class="ch-row"><input type="checkbox" data-g="<?= $k ?>"> <span><?= $esc($name) ?></span><small><?= number_format($n) ?></small></label>
+          <?php endforeach; ?>
+          <button type="button" class="secondary ch-done">Done</button>
+        </div>
+      </div>
+      <button type="button" class="linklike ch-trim-open">Trim the log&hellip;</button>
+    </div>
+    <div class="ch-trim" hidden>
+      <label>Remove entries older than
+        <select class="ch-trim-sel"><option value="30">30 days</option><option value="90">90 days</option><option value="180">180 days</option><option value="365">a year</option><option value="all">all of them (everything)</option></select></label>
+      <span class="ch-trim-n muted" role="status" aria-live="polite"></span>
+      <button type="button" class="secondary ch-trim-go">Trim</button> <button type="button" class="linklike ch-trim-cancel">Cancel</button>
+    </div>
+    <input type="search" class="ch-search" placeholder="Search file or folder names" aria-label="Search file or folder names" autocomplete="off">
+    <?php if (!$rows): ?>
+    <p class="muted ch-empty-log">Nothing has changed on disk since the gallery started watching. When photos are added, removed or renamed (a sync, an upload), they are listed here.</p>
+    <?php endif; ?>
+    <div class="ch-list" data-seen="<?= $seen ?>">
+    <?php foreach ($rows as $r):
+        $kind = (string) $r['kind']; $folder = (string) $r['folder']; $n = (int) $r['n'];
+        $names = json_decode((string) $r['names'], true); $names = is_array($names) ? $names : [];
+        $gone = json_decode((string) $r['gone'], true); $gone = is_array($gone) ? $gone : [];
+        $more = (int) $r['more'];
+        $label = [ 'add' => ['ADDED', 'add'], 'rem' => ['REMOVED', 'rem'], 'ren' => ['RENAMED', 'ren'], 'new' => ['FOLDER', 'fol'], 'gone' => ['FOLDER', 'fol'] ][$kind] ?? ['', ''];
+        $where = $folder === '' ? 'the front page' : $folder;
+        $open = '?' . ($folder !== '' ? 'folder=' . rawurlencode($folder) : '') . (in_array($kind, ['add', 'ren', 'new'], true) ? ($folder !== '' ? '&' : '') . 'since=' . max(0, (int) $r['t0'] - 2) : '');
+        $link = $kind === 'gone' ? '<b>' . $esc($where) . '</b>' : '<a href="' . $esc($open) . '">' . $esc($where) . '</a>';
+        if ($kind === 'add') $text = $media($n) . ' added to ' . $link;
+        elseif ($kind === 'rem') $text = $media($n) . ' removed from ' . $link;
+        elseif ($kind === 'ren') $text = $media($n) . ' in ' . $link . ' renamed or replaced';
+        elseif ($kind === 'new') $text = 'New folder ' . $link . ' (' . $media($n) . ')';
+        else $text = 'Folder ' . $link . ' has no media now (' . $media($n) . ' before)';
+        $hay = strtolower($where . ' ' . implode(' ', $names) . ' ' . implode(' ', $gone));
+        $list = function ($ns, $extra) use ($esc) { $o = ''; foreach ($ns as $x) $o .= '<code>' . $esc($x) . '</code>'; if ($extra > 0) $o .= '<em class="muted">and ' . number_format($extra) . ' more</em>'; return $o; };
+    ?>
+      <div class="ch-e<?= (int) $r['id'] > $seen ? ' ch-new' : '' ?>" data-id="<?= (int) $r['id'] ?>" data-g="<?= $esc($groupOf[$kind] ?? '') ?>" data-t="<?= (int) $r['t'] ?>" data-text="<?= $esc($hay) ?>">
+        <div class="ch-h">
+          <span class="ch-t" data-t0="<?= (int) $r['t0'] ?>" data-t1="<?= (int) $r['t1'] ?>" data-t="<?= (int) $r['t'] ?>"><?= $esc(gmdate('j M H:i', (int) $r['t'])) ?></span>
+          <div class="ch-b"><span class="ch-k <?= $label[1] ?>"><?= $label[0] ?></span><?= $text ?></div>
+          <button type="button" class="linklike ch-tg" aria-expanded="false">&#9662; Show</button>
+        </div>
+        <div class="ch-x" hidden>
+          <?php if ($kind === 'ren'): ?>
+            <div class="ch-cols"><div class="ch-col ch-gone"><h4>Gone (<?= number_format($n) ?>)</h4><?= $list($gone, max(0, $n - count($gone))) ?></div><div class="ch-col ch-came"><h4>New (<?= number_format($n) ?>)</h4><?= $list($names, $more) ?></div></div>
+          <?php else: ?>
+            <div class="ch-names"><?= $list($names, $more) ?></div>
+          <?php endif; ?>
+          <?php if (in_array($kind, ['add', 'ren', 'new'], true) && (int) $r['t1'] > 0): ?><div class="ch-when muted" data-t0="<?= (int) $r['t0'] ?>" data-t1="<?= (int) $r['t1'] ?>"></div><?php endif; ?>
+          <?php if ($kind !== 'gone'): ?><div class="ch-go"><a href="<?= $esc($open) ?>">Open <?= $esc($where) ?><?= in_array($kind, ['add', 'ren', 'new'], true) ? ' (the new ones are marked)' : '' ?></a></div><?php endif; ?>
+        </div>
+      </div>
+    <?php endforeach; ?>
+    </div>
+    <p class="muted ch-none" hidden>Nothing matches.</p>
+  </section>
+<?php
+}
 /** What the page already tells the owner on the front page, brought into the admin (where there is room to name things and to act): rows
  *  of ['label', 'detail', 'html' => the button]. Not problems: they are never counted as something to fix. */
 function health_headsups($dir, $files) {
@@ -15284,7 +15646,7 @@ function shell_folder_tree($files, $current) {
  *  looked. Settings: nothing unless the Health check has something to fix (the rows the server can see: the web server rules are
  *  tested by the browser inside Settings itself). */
 function admin_nav_counts($dir, $files) {
-    $out = ['features' => [], 'links' => [], 'site' => [], 'visits' => []];
+    $out = ['features' => [], 'links' => [], 'site' => [], 'visits' => [], 'changes' => []];
     $inactive = count(array_filter(scan_md_candidates($dir), function ($f) use ($dir) { return !in_array($f, scan_gallery_md_files($dir)['files'], true); }));
     $notesOn = scan_gallery_md_files($dir)['files'] !== [];
     $closed = gallery_is_closed(); $of = $closed ? 8 : 9;   // (a closed gallery's downloads are each share link's own choice: not one of the switches)
@@ -15306,6 +15668,7 @@ function admin_nav_counts($dir, $files) {
         $ln = lockout_unseen_count();   // (red while a lockout has happened that the Visitors tab has not been opened for)
         $out['visits'][] = ['text' => number_format($vn), 'kind' => $ln > 0 ? 'bad' : '', 'title' => number_format($vn) . ' visitor' . ($vn === 1 ? '' : 's') . ' in the log' . ($ln > 0 ? ', and ' . number_format($ln) . ' lockout' . ($ln === 1 ? '' : 's') . ' you have not seen' : '')];
     }
+    $out['changes'] = changes_badges();   // (amber while the Changes tab has something you have not looked at; grey for a day after you did)
     $loud = 0;
     foreach (health_checks($dir, $files) as $r) if ($r[1] === 'bad' || $r[1] === 'warn') $loud++;
     if ($loud > 0) $out['site'][] = ['text' => (string) $loud, 'kind' => 'bad', 'title' => $loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at in the Health check'];
@@ -15323,11 +15686,12 @@ function shell_whole_nav($dir, $files, $folderGroupKeys) {
     $edited = admin_edited_overview($dir, $files, $hidden);
     $counts = admin_nav_counts($dir, $files);
     $h = '<a href="?admin&amp;shell=1&amp;tab=features" data-tab="features">Features' . admin_nav_badges($counts['features']) . '</a>';
+    if (AUTO_GROUP_BY_FOLDER) $h .= '<a href="?admin&amp;shell=1&amp;tab=collections" data-tab="collections">Collections' . (collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '') . '</a>';
     if ($hidden || $edited['total'] > 0) $h .= '<a href="?admin&amp;shell=1&amp;tab=hidden" data-tab="hidden">Edited <span class="count">' . number_format($edited['total']) . '</span></a>';
     if (ENABLE_SHARE_LINKS) $h .= '<a href="?admin&amp;shell=1&amp;tab=links" data-tab="links">Shares' . admin_nav_badges($counts['links']) . '</a>';
-    if (AUTO_GROUP_BY_FOLDER) $h .= '<a href="?admin&amp;shell=1&amp;tab=collections" data-tab="collections">Collections' . (collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '') . '</a>';
-    $h .= '<a href="?admin&amp;shell=1&amp;tab=site" data-tab="site">Settings' . admin_nav_badges($counts['site']) . '</a>';
     if (visits_tab_wanted()) $h .= '<a href="?admin&amp;shell=1&amp;tab=visits" data-tab="visits">Visitors' . admin_nav_badges($counts['visits']) . '</a>';
+    if (changes_tab_wanted()) $h .= '<a href="?admin&amp;shell=1&amp;tab=changes" data-tab="changes">Changes' . admin_nav_badges($counts['changes']) . '</a>';
+    $h .= '<a href="?admin&amp;shell=1&amp;tab=site" data-tab="site">Settings' . admin_nav_badges($counts['site']) . '</a>';
     return $h;
 }
 
@@ -15342,11 +15706,12 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     $admBase = '?admin' . ($folder !== null ? '&folder=' . rawurlencode($folder) : '');
     $tab = function ($t) use ($inAdmin, $admBase) { return $inAdmin ? '#' . $t : $admBase . '#' . $t; };
     $whole = ['features' => 'Features'];
+    if (AUTO_GROUP_BY_FOLDER) $whole['collections'] = 'Collections';
     if ($showEdited) $whole['hidden'] = 'Edited';
     if (ENABLE_SHARE_LINKS) $whole['links'] = 'Shares';
-    if (AUTO_GROUP_BY_FOLDER) $whole['collections'] = 'Collections';
-    $whole['site'] = 'Settings';
     if (visits_tab_wanted()) $whole['visits'] = 'Visitors';
+    if (changes_tab_wanted()) $whole['changes'] = 'Changes';
+    $whole['site'] = 'Settings';
     $children = [];
     foreach (all_folder_paths($files) as $path) $children[strpos($path, '/') === false ? '' : substr($path, 0, strrpos($path, '/'))][] = $path;
     [$own] = admin_folder_counts($files);
@@ -15499,7 +15864,7 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
     $hidden = admin_any_hidden($dir, $files, $folderGroupKeys) ? admin_hidden_data($dir, $files) : null;
     $edited = admin_edited_overview($dir, $files, $hidden);
     $showEdited = (bool) $hidden || $edited['total'] > 0;
-    $whole = ['features' => 'Features', 'hidden' => 'Edited', 'links' => 'Shares', 'site' => 'Settings', 'visits' => 'Visitors', 'collections' => 'Collections'];
+    $whole = ['features' => 'Features', 'hidden' => 'Edited', 'links' => 'Shares', 'site' => 'Settings', 'visits' => 'Visitors', 'collections' => 'Collections', 'changes' => 'Changes'];
     $tab = (string) ($_GET['tab'] ?? '');
     if ($tab !== '' && $tab !== 'settings' && $tab !== 'notes' && !isset($whole[$tab])) $tab = '';
     if (($tab === 'hidden' && !$showEdited) || ($tab === 'links' && !ENABLE_SHARE_LINKS) || ($tab === 'visits' && !visits_tab_wanted())) $tab = '';
@@ -15901,6 +16266,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   html[data-early="hidden"] .js-tabs .tab-panel[data-tab="hidden"],
   html[data-early="links"] .js-tabs .tab-panel[data-tab="links"],
   html[data-early="visits"] .js-tabs .tab-panel[data-tab="visits"],
+  html[data-early="changes"] .js-tabs .tab-panel[data-tab="changes"],
   html[data-early="settings"] .js-tabs .tab-panel[data-tab="settings"],
   html[data-early="notes"] .js-tabs .tab-panel[data-tab="notes"],
   html[data-early="collections"] .js-tabs .tab-panel[data-tab="collections"],
@@ -16979,10 +17345,43 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     .vt-sheetbg { display:block; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:80; }   /* (above the phone bar, which is 60) */
   }
 
-  /* "Changed somewhere else": a quiet bar at the top of the admin page, with Refresh */
-  .live-note { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin:0 0 12px; padding:9px 14px; background:#1c2150; border-left:3px solid var(--accent); border-radius:0 8px 8px 0; color:#dfe2ff; font-size:0.88rem; }
-  .live-note .secondary { padding:3px 12px; }
-  .live-note a { color:#aab2ff; }
+  /* The Changes tab */
+  .ch-head { display:flex; align-items:center; gap:12px; margin:0 0 10px; flex-wrap:wrap; }
+  .ch-pillbox { position:relative; }
+  .ch-pill { display:inline-flex; align-items:center; gap:7px; border:1px solid #3a3a42; border-radius:999px; padding:6px 14px; font-size:0.88rem; background:#17171b; color:var(--text); cursor:pointer; }
+  .ch-pill.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .ch-pill em { font-style:normal; opacity:0.75; }
+  .ch-pop { position:absolute; top:calc(100% + 6px); left:0; z-index:30; width:240px; background:#1b1b1f; border:1px solid #3a3a42; border-radius:12px; box-shadow:0 10px 28px rgba(0,0,0,0.55); padding:6px; }
+  .ch-pop[hidden] { display:none; }
+  .ch-row { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; font-size:0.88rem; color:var(--text); cursor:pointer; }
+  .ch-row:hover { background:#232346; }
+  .ch-row small { margin-left:auto; color:#80808a; }
+  .ch-done { width:100%; margin-top:4px; }
+  .ch-trim { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 10px; padding:10px 12px; background:#14141a; border:1px solid #2c2c31; border-radius:10px; font-size:0.88rem; }
+  .ch-trim[hidden] { display:none; }
+  .ch-search { display:block; width:100%; box-sizing:border-box; margin:0 0 4px; padding:9px 12px; background:#101012; color:var(--text); border:1px solid #34343a; border-radius:8px; font:inherit; font-size:0.88rem; }
+  .ch-search::placeholder { color:#7d7d86; }
+  .ch-day { font-size:0.72rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); margin:14px 0 6px; }
+  .ch-e { background:#121215; border:1px solid #2c2c31; border-radius:8px; margin-bottom:8px; padding:10px 12px; }
+  .ch-e[hidden] { display:none; }
+  .ch-e.ch-new { border-left:3px solid #f5c26b; }
+  .ch-h { display:flex; gap:12px; align-items:flex-start; }
+  .ch-t { color:var(--muted); font-size:0.8rem; min-width:84px; padding-top:2px; }
+  .ch-b { flex:1; min-width:0; }
+  .ch-tg { white-space:nowrap; font-size:0.8rem; }
+  .ch-k { display:inline-block; font-size:0.66rem; font-weight:700; letter-spacing:0.06em; border-radius:999px; padding:2px 8px; margin-right:8px; }
+  .ch-k.add { background:#173a26; color:#6fd08c; } .ch-k.rem { background:#40191b; color:#ff8d90; } .ch-k.ren { background:#3f3217; color:#f5c26b; } .ch-k.fol { background:#232346; color:#aab2ff; }
+  .ch-x { margin:10px 0 2px 96px; font-size:0.84rem; color:#cfcfd6; }
+  .ch-x[hidden] { display:none; }
+  .ch-x code { display:inline-block; font:12.5px ui-monospace, monospace; padding:1px 10px 1px 0; color:#d6d6dc; }
+  .ch-x em { font-style:normal; }
+  .ch-cols { display:flex; gap:18px; flex-wrap:wrap; }
+  .ch-col { flex:1; min-width:200px; }
+  .ch-col h4 { margin:0 0 4px; font-size:0.72rem; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); }
+  .ch-col code { display:block; }
+  .ch-gone code { color:#ff9a9d; } .ch-came code { color:#8fe0a8; }
+  .ch-when, .ch-go { margin-top:8px; }
+  @media (max-width: 800px) { .ch-x { margin-left:0; } .ch-h { flex-wrap:wrap; } .ch-t { min-width:0; } }
   <?= owner_phone_bar_css() ?>
   html:has(> body.inframe) { scrollbar-gutter:stable; }  /* (the scrollbar's room is always kept, blank when there is nothing to scroll, so a short page is not centred a few pixels differently from a long one) */
   body.inframe .admin-bar, body.inframe .admin-side, body.inframe .admin-folder-head { display:none !important; }
@@ -17011,19 +17410,22 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   <div class="side-label">The whole gallery</div>
   <?php $navCounts = admin_nav_counts($dir, $files); ?>
   <a href="#features" data-tab="features" class="side-link">Features<?= admin_nav_badges($navCounts['features']) ?></a>
+  <?php if (AUTO_GROUP_BY_FOLDER): ?>
+    <a href="#collections" data-tab="collections" class="side-link">Collections<?= collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '' ?></a>
+  <?php endif; ?>
   <?php if ($adminHidden || $adminEdited['total'] > 0): ?>
     <a href="#hidden" data-tab="hidden" class="side-hidden edited">Edited <span class="count"><?= number_format($adminEdited['total']) ?></span></a>
   <?php endif; ?>
   <?php if (ENABLE_SHARE_LINKS): ?>
     <a href="#links" data-tab="links" class="side-link">Shares<?= admin_nav_badges($navCounts['links']) ?></a>
   <?php endif; ?>
-  <?php if (AUTO_GROUP_BY_FOLDER): ?>
-    <a href="#collections" data-tab="collections" class="side-link">Collections<?= collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '' ?></a>
-  <?php endif; ?>
-  <a href="#site" data-tab="site" class="side-link">Settings<?= admin_nav_badges($navCounts['site']) ?></a>
   <?php if (visits_tab_wanted()): ?>
     <a href="#visits" data-tab="visits" class="side-link">Visitors<?= admin_nav_badges($navCounts['visits']) ?></a>
   <?php endif; ?>
+  <?php if (changes_tab_wanted()): ?>
+    <a href="#changes" data-tab="changes" class="side-link">Changes<?= admin_nav_badges($navCounts['changes']) ?></a>
+  <?php endif; ?>
+  <a href="#site" data-tab="site" class="side-link">Settings<?= admin_nav_badges($navCounts['site']) ?></a>
   </div>
   <details class="admin-folders" open>
     <summary>Folders <span class="here">&middot; <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span></summary>
@@ -17032,7 +17434,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </aside>
 <main class="admin-main"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
 <script>(function () {   // Before the sections are drawn: hide them all, and let the one the address or the last visit names show as soon as it is drawn, so no other section flashes up while the page loads (the tab script below takes over, and without JavaScript every section stays visible).
-  var m = document.currentScript.parentNode, n = ['features', 'hidden', 'links', 'visits', 'settings', 'notes', 'collections', 'site'], h = '', s = '';
+  var m = document.currentScript.parentNode, n = ['features', 'hidden', 'links', 'visits', 'changes', 'settings', 'notes', 'collections', 'site'], h = '', s = '';
   try { h = decodeURIComponent((location.hash || '').slice(1)); } catch (e) {}
   try { s = sessionStorage.getItem('galleryAdminTab') || ''; } catch (e) {}
   m.classList.add('js-tabs');
@@ -17051,7 +17453,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div id="live-fp" hidden data-fp="<?= htmlspecialchars(json_encode(live_fingerprints($dir, $files, $adminFolderPath)), ENT_QUOTES, 'UTF-8') ?>"></div>
   <div id="server-probe" hidden data-any-private="<?= !empty($GLOBALS['__lock_probe']['anyPrivate']) ? '1' : '0' ?>" data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>" data-visits="<?= htmlspecialchars(is_file(visitlog_path()) ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . basename(visitlog_path()) : '', ENT_QUOTES, 'UTF-8') ?>" data-share-probe="<?= htmlspecialchars(ENABLE_SHARE_LINKS ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . LINK_PROBE_TOKEN : '', ENT_QUOTES, 'UTF-8') ?>"></div>
   <div class="tab-panel" data-tab="features">
 <?= render_admin_features_panel($adminEdited, $adminHidden ?: []) ?>
@@ -17069,6 +17470,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <?php if (visits_tab_wanted()): ?>
   <div class="tab-panel" data-tab="visits">
 <?php render_admin_visits_panel($csrfToken, $dir, $files); ?>
+  </div>
+<?php endif; ?>
+<?php if (changes_tab_wanted()): ?>
+  <div class="tab-panel" data-tab="changes">
+<?php render_admin_changes_panel($csrfToken); ?>
   </div>
 <?php endif; ?>
   <div class="tab-panel" data-tab="settings">
@@ -17240,81 +17646,12 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     api.shown = function (tab) { Object.keys(parts).forEach(function (n) { if (parts[n].tab === tab) run(n); }); };
     return api;
   })();
-  // Something changed somewhere else (another browser saved a setting, a folder's captions or marks were edited, photos were added by a sync): the page shows a quiet bar with
-  // Refresh instead of swapping what the person may be editing. The page is drawn with three short fingerprints (#live-fp); they are asked for again when the window comes back,
-  // and taken again after this page's own saves (a save made here is not "somewhere else").
-  (function () {
-    var holder = document.getElementById('live-fp'); if (!holder || !window.__live) return;
-    var base = {}, bar = null, rebaseT = null, folder = (new URLSearchParams(location.search)).get('folder');
-    try { base = JSON.parse(holder.getAttribute('data-fp')) || {}; } catch (e) {}
-    function url() { return '?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : ''); }
-    function ask() { return fetch(url(), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
-    function hide() { if (bar) { bar.remove(); bar = null; } }
-    function show(texts, now) {
-      hide();
-      bar = document.createElement('div'); bar.className = 'live-note'; bar.setAttribute('role', 'status');
-      var t = document.createElement('span');
-      texts.forEach(function (x) { if (typeof x === 'string') t.appendChild(document.createTextNode(x + ' ')); else sentence(x.parts, x.at, t); });
-      bar.appendChild(t);
-      var go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go);
-      var x = document.createElement('button'); x.type = 'button'; x.className = 'linklike'; x.textContent = 'Dismiss'; x.addEventListener('click', function () { base = now; hide(); }); bar.appendChild(x);
-      var main = document.querySelector('.admin-main'); if (main) main.insertBefore(bar, main.firstChild); else document.body.insertBefore(bar, document.body.firstChild);
-    }
-    // What changed among the photos, per folder: parts of a sentence with the folder's name and path (for the link to it, which also marks what is new there).
-    function describe(before, now) {
-      var keys = {}, out = [], items = function (n) { return n + (n === 1 ? ' item' : ' items'); };
-      Object.keys(before || {}).concat(Object.keys(now || {})).forEach(function (k) { keys[k] = 1; });
-      Object.keys(keys).forEach(function (k) {
-        var a = (before || {})[k], b = (now || {})[k], name = (b || a)[2] || 'the front page';
-        if (!a) out.push({ pre: 'the new folder ', name: name, path: k, post: ' has ' + items(b[0]) });
-        else if (!b) out.push({ pre: 'the folder ', name: name, path: null, post: ' has no items now' });
-        else if (b[0] > a[0]) out.push({ pre: items(b[0] - a[0]) + ' added to ', name: name, path: k, post: '' });
-        else if (b[0] < a[0]) out.push({ pre: items(a[0] - b[0]) + ' removed from ', name: name, path: k, post: '' });
-        else if (b[1] !== a[1]) out.push({ pre: 'items in ', name: name, path: k, post: ' were renamed or replaced' });
-      });
-      return out;
-    }
-    function gallery(path, at) { return '?' + (path ? 'folder=' + encodeURIComponent(path) + '&' : '') + 'since=' + Math.max(0, (at || 0) - 2) + (/[?&]inframe=1/.test(location.search) ? '&inframe=1' : ''); }
-    function sentence(parts, at, into) {
-      if (!parts.length) { into.appendChild(document.createTextNode('Photos in this folder were added, removed or renamed. ')); return; }
-      parts.slice(0, 3).forEach(function (p, i) {
-        if (i) into.appendChild(document.createTextNode('; '));
-        into.appendChild(document.createTextNode(i === 0 ? p.pre.charAt(0).toUpperCase() + p.pre.slice(1) : p.pre));
-        if (p.path === null) into.appendChild(document.createTextNode(p.name));
-        else { var a = document.createElement('a'); a.href = gallery(p.path, at); a.textContent = p.name; into.appendChild(a); }
-        into.appendChild(document.createTextNode(p.post));
-      });
-      if (parts.length > 3) into.appendChild(document.createTextNode('; and ' + (parts.length - 3) + ' more places'));
-      into.appendChild(document.createTextNode('. '));
-    }
-    window.__live.register('changed', { refresh: function () {
-      return ask().then(function (j) {
-        if (!j) return;
-        var said = [];
-        if (base.settings !== undefined && j.settings !== base.settings) said.push('The settings were changed somewhere else.');
-        if (base.record !== undefined && j.record !== base.record) said.push("This folder's names, captions or marks were changed somewhere else.");
-        if (base.media !== undefined && j.media !== base.media) said.push({ parts: describe(base.folders, j.folders), at: base.at });
-        if (said.length) show(said, j); else hide();
-      });
-    } });
-    // a save made from this page: the fingerprints are taken again, so the page does not announce its own change
-    window.__live.rebase = function () {
-      clearTimeout(rebaseT);
-      rebaseT = setTimeout(function () { ask().then(function (j) { if (j) { base = j; hide(); } }); }, 900);
-    };
-    var plainFetch = window.fetch;
-    if (plainFetch) window.fetch = function (u, o) {
-      var p = plainFetch.apply(this, arguments);
-      try { if (o && String(o.method).toUpperCase() === 'POST' && typeof u === 'string' && u.indexOf('?admin') === 0) p.then(function () { window.__live.rebase(); }, function () {}); } catch (e) {}
-      return p;
-    };
-  })();
   // The numbers on the sidebar entries (and the phone Menu's) in the page itself. In the desktop shell the sidebar is the shell's own, which asks again by itself.
   if (window.parent === window) window.__live.register('counts', { refresh: function () {
     return fetch('?admin&pbcounts=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
       if (!d) return;
       var badge = function (o) { var s = document.createElement('span'); s.className = 'count' + (o.kind ? ' ' + o.kind : ''); s.title = o.title || ''; s.textContent = o.text; return s; };
-      ['features', 'links', 'site', 'visits'].forEach(function (k) {
+      ['features', 'links', 'site', 'visits', 'changes'].forEach(function (k) {
         var list = d[k] || [];
         [].forEach.call(document.querySelectorAll('.side-link[data-tab="' + k + '"]'), function (a) {
           [].forEach.call(a.querySelectorAll(':scope > .count'), function (c) { c.remove(); });
@@ -17779,7 +18116,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (!url) return;
       ask(url).then(function (state) {
         mirror('visitlog', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
-          : state === 'open' ? 'Anyone can download the visitor log, which holds IP addresses: the server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+          : state === 'open' ? 'Anyone can download the visitor log, which holds IP addresses (if visitors are logged) and the names of your folders and photos (the Changes tab): the server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
       });
     };
     // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
@@ -17953,7 +18290,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       });
       // On Settings or Private nothing in the folder list is selected: the folder you came from stays marked, quietly.
       var lay = document.querySelector('.admin-layout');
-      var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits' || name === 'collections';
+      var whole = name === 'site' || name === 'hidden' || name === 'links' || name === 'features' || name === 'visits' || name === 'collections' || name === 'changes';
       if (lay) lay.classList.toggle('off-folder', whole);
       // The phone's Menu and bottom bar say the same thing as the sidebar: the page you are on is the one blue entry; the folder stays marked, quietly, on a whole-gallery page.
       [].forEach.call(document.querySelectorAll('.pb-w[data-pb-tab]'), function (a) { var on = a.getAttribute('data-pb-tab') === name; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -17964,8 +18301,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       // moving to another folder shouldn't land you back on it.
       if (name === 'links' && window.__slSeen) setTimeout(window.__slSeen, 1500);
       if (name === 'visits') setTimeout(function () { if (window.__vtSeen) window.__vtSeen(); }, 1500);
+      if (name === 'changes') setTimeout(function () { if (window.__chSeen) window.__chSeen(); }, 1500);
       if (window.__live) window.__live.shown(name);   // (looked up when the time is up: on a page that opens on this tab the Visitors script has not run yet at this moment)
-      if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits' && name !== 'collections') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }   // (a whole-gallery page is not the tab a folder opens on)
+      if (name !== 'hidden' && name !== 'site' && name !== 'links' && name !== 'features' && name !== 'visits' && name !== 'collections' && name !== 'changes') { try { sessionStorage.setItem(KEY, name); } catch (e) {} }   // (a whole-gallery page is not the tab a folder opens on)
       return name;
     }
     function fromLocation() {
@@ -20238,6 +20576,76 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     window.__vtShow = function (id) { S.cc = []; S.src = id ? [id] : []; S.q = ''; S.view = 'visitors'; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); };
     paintPills(); paintNote(); paintExport(); times();
   })();
+  // The Changes tab: the kinds pill (any number of kinds), the search, the trim form, entries that open, times and days in the viewer's own clock. Opening the tab marks it seen.
+  (function () {
+    var root = document.getElementById('changes'); if (!root) return;
+    var list = root.querySelector('.ch-list'), pill = root.querySelector('.ch-pill'), pop = root.querySelector('.ch-pop'), search = root.querySelector('.ch-search'), none = root.querySelector('.ch-none');
+    var csrf = root.getAttribute('data-csrf'), kinds = {}, kindNames = { add: 'Added', rem: 'Removed', ren: 'Renamed', folder: 'Folders' };
+    function post(fields) { return fetch('?admin', { method: 'POST', body: new URLSearchParams(Object.assign({ csrf_token: csrf }, fields)), credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); }); }
+    var two = function (n) { return (n < 10 ? '0' : '') + n; };
+    function clock(t) { var d = new Date(t * 1000), h = d.getHours(); return (h % 12 || 12) + ':' + two(d.getMinutes()) + ' ' + (h < 12 ? 'AM' : 'PM'); }
+    function dayOf(t) {
+      var d = new Date(t * 1000), n = new Date(), y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
+      var same = function (a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); };
+      return same(d, n) ? 'Today' : same(d, y) ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    [].forEach.call(root.querySelectorAll('.ch-t'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'), t = +s.getAttribute('data-t'); s.textContent = a && b && b - a >= 60 ? clock(a).replace(/ [AP]M$/, '') + '–' + clock(b) : clock(b || t); });
+    [].forEach.call(root.querySelectorAll('.ch-when'), function (s) { var a = +s.getAttribute('data-t0'), b = +s.getAttribute('data-t1'); s.textContent = 'Arrived ' + (b - a >= 60 ? clock(a) + ' to ' + clock(b) : clock(a || b)); });
+    function chosen() { return Object.keys(kinds).filter(function (k) { return kinds[k]; }); }
+    function apply() {
+      [].forEach.call(list.querySelectorAll('.ch-day'), function (d) { d.remove(); });
+      var q = search.value.trim().toLowerCase(), c = chosen(), shown = 0, last = '';
+      [].forEach.call(list.querySelectorAll('.ch-e'), function (e) {
+        var ok = (!c.length || kinds[e.getAttribute('data-g')]) && (!q || e.getAttribute('data-text').indexOf(q) >= 0);
+        e.hidden = !ok; if (!ok) return;
+        shown++;
+        var d = dayOf(+e.getAttribute('data-t'));
+        if (d !== last) { var h = document.createElement('div'); h.className = 'ch-day'; h.textContent = d; list.insertBefore(h, e); last = d; }
+      });
+      none.hidden = shown > 0 || !list.querySelector('.ch-e');
+      pill.classList.toggle('on', c.length > 0);
+      pill.querySelector('.ch-pill-t').textContent = c.length ? c.map(function (k) { return kindNames[k]; }).join(', ') : 'All kinds';
+      pill.querySelector('.ch-pill-n').textContent = c.length ? String(shown) : '';
+      [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { i.checked = !!kinds[i.getAttribute('data-g')]; });
+      pop.querySelector('input[data-all]').checked = c.length === 0;
+    }
+    function closePop() { pop.hidden = true; pill.setAttribute('aria-expanded', 'false'); }
+    pill.addEventListener('click', function (ev) { ev.stopPropagation(); pop.hidden = !pop.hidden; pill.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true'); });
+    pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    pop.addEventListener('change', function (ev) {
+      var i = ev.target; if (!i || i.tagName !== 'INPUT') return;
+      if (i.hasAttribute('data-all')) kinds = {}; else kinds[i.getAttribute('data-g')] = i.checked;
+      apply();
+    });
+    root.querySelector('.ch-done').addEventListener('click', closePop);
+    document.addEventListener('click', function () { if (!pop.hidden) closePop(); });
+    document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !pop.hidden) { closePop(); pill.focus(); } });
+    search.addEventListener('input', apply);
+    list.addEventListener('click', function (ev) {
+      var b = ev.target.closest ? ev.target.closest('.ch-tg') : null; if (!b) return;
+      var x = b.closest('.ch-e').querySelector('.ch-x'), open = x.hidden;
+      x.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.textContent = (open ? '▴ Hide' : '▾ Show');
+    });
+    // Trim the log…
+    var trim = root.querySelector('.ch-trim'), sel = root.querySelector('.ch-trim-sel'), tn = root.querySelector('.ch-trim-n');
+    function preview() { tn.textContent = 'Counting…'; post({ action: 'changes_trim', days: sel.value }).then(function (j) { tn.textContent = j && j.ok ? (j.n === 0 ? 'Nothing to remove.' : j.n + (j.n === 1 ? ' entry' : ' entries') + ' would go.') : 'Could not count.'; }).catch(function () { tn.textContent = 'Could not count.'; }); }
+    root.querySelector('.ch-trim-open').addEventListener('click', function () { trim.hidden = !trim.hidden; if (!trim.hidden) preview(); });
+    root.querySelector('.ch-trim-cancel').addEventListener('click', function () { trim.hidden = true; });
+    sel.addEventListener('change', preview);
+    root.querySelector('.ch-trim-go').addEventListener('click', function () {
+      var b = this; b.disabled = true;
+      post({ action: 'changes_trim', days: sel.value, apply: '1' }).then(function (j) { if (j && j.ok) location.reload(); else { b.disabled = false; tn.textContent = 'Not trimmed.'; } }).catch(function () { b.disabled = false; tn.textContent = 'Not trimmed.'; });
+    });
+    // Opening the tab: what is in it counts as seen. The number goes from amber to grey (in this page's sidebar, the phone Menu and the desktop shell's own), and the amber edges fade a moment later.
+    window.__chSeen = function () {
+      post({ action: 'changes_seen' }).then(function () {
+        [].forEach.call(document.querySelectorAll('.side-link[data-tab=changes] .count.warn, .pb-w[data-pb-tab=changes] .count.warn'), function (c) { c.classList.remove('warn'); c.title = c.title.replace(/ on disk you have not looked at$/, ' were new when you last opened the tab').replace(/^(\d+) changes? /, '$1 changes '); });
+        setTimeout(function () { [].forEach.call(list.querySelectorAll('.ch-new'), function (e) { e.classList.remove('ch-new'); }); }, 4000);
+        if (window.parent !== window) { try { window.parent.postMessage({ galleryShell: 1, tick: 1 }, location.origin); } catch (e) {} }
+      }).catch(function () {});
+    };
+    apply();
+  })();
   function admConfirmSaveAs(form) {
     const newNameField = form.querySelector('.adm-newname');
     if (newNameField && newNameField.value.trim() !== '') {
@@ -20586,9 +20994,14 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         return;
     }
     $adminFolderReal = $adminFolderPath === null ? $dir : resolve_real_path($dir, $adminFolderPath);
-    if (isset($_GET['changed'])) {   // the fingerprints again (the window came back): did the settings, this folder's data or its photos change somewhere else?
+    if (isset($_GET['changed'])) {   // the gallery page asks again (the window came back): what did the log of disk activity take in since the entry it knew (after=), and, with since=, which files and folders are new since then (to mark)
         header('Cache-Control: no-store');
-        admin_json_exit(['ok' => true] + live_fingerprints($dir, $files, $adminFolderPath, isset($_GET['since']) ? (int) $_GET['since'] : 0));
+        $out = ['ok' => true, 'last' => changes_last_id()];
+        if (isset($_GET['after'])) {
+            $out['entries'] = array_map(function ($r) use ($dir) { return ['id' => (int) $r['id'], 'kind' => $r['kind'], 'folder' => $r['folder'], 'label' => $r['folder'] === '' ? '' : link_folder_label($dir, $r['folder']), 'n' => (int) $r['n'], 't0' => (int) $r['t0']]; }, changes_after((int) $_GET['after'], $adminFolderPath));
+        }
+        if (isset($_GET['since']) && (int) $_GET['since'] > 0) { $out['fresh'] = changes_fresh_files($dir, $files, $adminFolderPath, (int) $_GET['since']); $out['folders'] = changes_new_folders($adminFolderPath, (int) $_GET['since']); }
+        admin_json_exit($out);
     }
     if (isset($_GET['pbcounts'])) {   // the phone bar's Menu asks for its numbers when it is opened (the gallery page does not work them out on every view)
         header('Cache-Control: no-store');
@@ -22544,13 +22957,16 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if (!empty($meta['dates'])) {
         $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
+    $chgText = changes_card_text($folderPath);   // (the owner's amber note of what is new in it, see the Changes tab: '' for everyone else and when there is nothing)
     if ($priv['stay'] > 0) {
         // The count of what is private inside is a link of its own (so the card's link ends first): to the folder with those first.
         $privHref = htmlspecialchars(folder_private_first_href($dir, $folderPath), ENT_QUOTES, 'UTF-8');
         $n = (int) $priv['stay'];
         $privText = number_format($n) . ($priv['state'] === 'own' ? ($n === 1 ? ' stays private' : ' stay private') : ' private');
         $html .= '</a><span class="folder-cover-count has-priv-count"><a class="fc-main" href="' . $folderUrl . '">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8')
-               . '</a> <a class="fc-priv" href="' . $privHref . '" title="Open the folder with those first">(' . $privText . ui_icon('chev-right') . ')</a></span>';
+               . '</a> <a class="fc-priv" href="' . $privHref . '" title="Open the folder with those first">(' . $privText . ui_icon('chev-right') . ')</a>' . ($chgText !== '' ? ' ' . $chgText : '') . '</span>';
+    } elseif ($chgText !== '') {
+        $html .= '</a><span class="folder-cover-count has-priv-count"><a class="fc-main" href="' . $folderUrl . '">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</a> ' . $chgText . '</span>';
     } else {
         $html .= '<span class="folder-cover-count">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</span>';
         $html .= '</a>';
@@ -23533,6 +23949,12 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   @media (hover: hover) { .folder-cover-count .fc-priv:hover { color: #fff; background: rgba(237,66,69,0.38); } }
   .folder-cover-count .fc-priv:active { background: rgba(237,66,69,0.55); }
   .folder-cover-count .fc-priv:focus-visible { outline: 2px solid #ff8a8c; outline-offset: 2px; }
+  /* The owner's amber note of what is new in a folder (the Changes tab): the private count's rules with the colour swapped. */
+  .folder-cover-count .fc-chg { position: relative; z-index: 1; white-space: nowrap; color: #f5c26b; text-decoration: none; padding: 2px 4px; margin: 0 -1px 0 -1px; border-radius: 6px; transition: color .15s, background .15s; }
+  .folder-cover-count .fc-chg .ico { width: 0.95em; height: 0.95em; margin: 0 -1px 0 0; vertical-align: -2.5px; stroke-width: 2.2; }
+  @media (hover: hover) { .folder-cover-count .fc-chg:hover { color: #fff; background: rgba(245,194,107,0.34); } }
+  .folder-cover-count .fc-chg:active { background: rgba(245,194,107,0.52); }
+  .folder-cover-count .fc-chg:focus-visible { outline: 2px solid #f5c26b; outline-offset: 2px; }
   .folder-permalink-copy {
     position: absolute;
     top: 8px;
@@ -24207,8 +24629,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   /* What arrived since (the owner followed the link from the "changed" pill): a ring and a small New on each such photo */
   .card.live-new { position:relative; outline:3px solid #f5c26b; outline-offset:2px; animation:live-new-pulse 1.6s ease-out 2; }
   .card.live-new::after { content:"New"; position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:3; padding:2px 10px; border-radius:999px; background:#f5c26b; color:#1a1405; font-size:0.72rem; font-weight:700; letter-spacing:0.03em; pointer-events:none; }
+  .folder-cover.live-new { position:relative; outline:3px solid #f5c26b; outline-offset:2px; animation:live-new-pulse 1.6s ease-out 2; }
+  .folder-cover.live-new::after { content:"New"; position:absolute; top:8px; right:8px; z-index:3; padding:2px 10px; border-radius:999px; background:#f5c26b; color:#1a1405; font-size:0.72rem; font-weight:700; letter-spacing:0.03em; pointer-events:none; }
   @keyframes live-new-pulse { 0% { outline-color:#fff; } 100% { outline-color:#f5c26b; } }
-  @media (prefers-reduced-motion: reduce) { .card.live-new { animation:none; } }
+  @media (prefers-reduced-motion: reduce) { .card.live-new, .folder-cover.live-new { animation:none; } }
   .live-note-fixed a { color:#c7ccff; }
   <?= owner_phone_bar_css() ?>
   body.inframe .crumb-bar { display: none; }
@@ -24221,7 +24645,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 <?php $shellOwner = ADMIN_PASSWORD !== '' && is_admin_browser(); $shellInframe = $shellOwner && !empty($_GET['inframe']); ?>
 <body<?= $shellInframe ? ' class="inframe"' : ($shellOwner ? ' class="pb-on"' : '') ?>>
 <?= ui_icon_sprite() ?>
-<?php if ($shellOwner): ?><div id="live-folder" hidden data-folder="<?= htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') ?>"></div><?php endif; ?>
+<?php if ($shellOwner): ?><div id="live-folder" hidden data-folder="<?= htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-last="<?= changes_last_id() ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>"></div><?php endif; ?>
 <?php // Once the page has scrolled, two round buttons float at the bottom right of the screen: to the top, and to the bottom. The same on every page and device. ?>
 <div class="jump-fab" id="jump-fab" hidden>
   <button type="button" class="jump-btn" data-jump="top" title="Jump to the top" aria-label="Jump to the top of the page"><?= ui_icon('jump-up') ?></button>
@@ -26637,72 +27061,142 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     const viewerNew = document.getElementById('lightbox-newaddr');
     if (viewerNew) viewerNew.addEventListener('click', () => ask(files[current], viewerNew));
   })();
-// The owner's gallery page, left open while photos arrive (a sync, an upload): when the window comes back, a quiet pill at the bottom says where and what changed, with a link to each
-// folder and a Refresh button. Nothing is swapped on its own. The link opens that folder with ?since=, and the page then marks what arrived since and scrolls to it.
+// The owner's gallery page, left open while things happen on disk (a sync, an upload, a rename by hand). Three things, all drawn from the log of disk activity (the Changes tab):
+//  - when the window comes back, the log is asked what it took in since this page was drawn; if something changed in this folder or below it, a quiet pill at the bottom says where and what,
+//    each folder a link (Refresh only where the view in front of you would change). Nothing is swapped on its own.
+//  - a link with ?since= (from the pill, the card text or the Changes tab) opens a folder with what arrived since marked: a ring and a small New, scrolled to the first. The marks stay until the
+//    page is left or reloaded; the address is cleaned afterwards so a reload does not mark again.
+//  - the owner's amber note on a folder's card ("(+1 photo ›)") is brought up to date, without a reload.
 (function () {
   var box = document.getElementById('live-folder'); if (!box) return;   // (only the signed-in owner's page has this)
-  var folder = box.getAttribute('data-folder') || '', base = null, last = 0, busy = false, bar = null, marked = [];
-  var framed = /[?&]inframe=1/.test(location.search);
-  function url(since) { return '?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : '') + (since ? '&since=' + since : ''); }
-  function ask(since) { return fetch(url(since), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
-  // What changed among the photos, per folder: parts of a sentence, with the folder's name and path for the link.
-  function describe(before, now) {
-    var keys = {}, out = [], items = function (n) { return n + (n === 1 ? ' item' : ' items'); };
-    Object.keys(before || {}).concat(Object.keys(now || {})).forEach(function (k) { keys[k] = 1; });
-    Object.keys(keys).forEach(function (k) {
-      var a = (before || {})[k], b = (now || {})[k], name = (b || a)[2] || 'the front page';
-      if (!a) out.push({ pre: 'the new folder ', name: name, path: k, post: ' has ' + items(b[0]) });
-      else if (!b) out.push({ pre: 'the folder ', name: name, path: null, post: ' has no items now' });
-      else if (b[0] > a[0]) out.push({ pre: items(b[0] - a[0]) + ' added to ', name: name, path: k, post: '' });
-      else if (b[0] < a[0]) out.push({ pre: items(a[0] - b[0]) + ' removed from ', name: name, path: k, post: '' });
-      else if (b[1] !== a[1]) out.push({ pre: 'items in ', name: name, path: k, post: ' were renamed or replaced' });
+  var folder = box.getAttribute('data-folder') || '', last = +box.getAttribute('data-last') || 0, noun = box.getAttribute('data-noun') || 'photo';
+  var framed = /[?&]inframe=1/.test(location.search), tickAt = 0, busy = false, bar = null, marked = 0;
+  function url(extra) { return '?admin&changed=1' + (folder ? '&folder=' + encodeURIComponent(folder) : '') + extra; }
+  function ask(extra) { return fetch(url(extra), { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { return j && j.ok ? j : null; }); }
+  function parentOf(p) { var i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); }
+  function open(path, since) { var q = []; if (path) q.push('folder=' + encodeURIComponent(path)); if (since) q.push('since=' + Math.max(0, since - 2)); if (framed) q.push('inframe=1'); return '?' + q.join('&'); }
+  function many(n, one, more) { return n + ' ' + (n === 1 ? one : more); }
+  // Entries gathered per folder: counts of media added (add), removed (rem), renamed (ren), folders that came (nw) and went (gone), and the earliest arrival.
+  function gather(entries) {
+    var by = {}, order = [];
+    (entries || []).forEach(function (e) {
+      var c = by[e.folder]; if (!c) { c = by[e.folder] = { path: e.folder, label: e.label, add: 0, rem: 0, ren: 0, nw: 0, gone: 0, t0: e.t0 }; order.push(e.folder); }
+      if (e.kind === 'add') c.add += e.n; else if (e.kind === 'rem') c.rem += e.n; else if (e.kind === 'ren') c.ren += e.n; else if (e.kind === 'new') c.nw++; else if (e.kind === 'gone') c.gone++;
+      c.t0 = Math.min(c.t0, e.t0);
     });
-    return out;
+    return order.map(function (k) { return by[k]; });
   }
-  function href(path, at) { return '?' + (path ? 'folder=' + encodeURIComponent(path) + '&' : '') + 'since=' + Math.max(0, (at || 0) - 2) + (framed ? '&inframe=1' : ''); }
-  function sentence(parts, at, into) {
-    if (!parts.length) { into.appendChild(document.createTextNode('Photos in this folder changed')); }
-    parts.slice(0, 3).forEach(function (p, i) {
-      if (i) into.appendChild(document.createTextNode('; '));
-      var pre = i === 0 ? p.pre.charAt(0).toUpperCase() + p.pre.slice(1) : p.pre;
-      into.appendChild(document.createTextNode(pre));
-      if (p.path === null) into.appendChild(document.createTextNode(p.name));
-      else { var a = document.createElement('a'); a.href = href(p.path, at); a.textContent = p.name; into.appendChild(a); }
-      into.appendChild(document.createTextNode(p.post));
-    });
-    if (parts.length > 3) into.appendChild(document.createTextNode('; and ' + (parts.length - 3) + ' more places'));
-    into.appendChild(document.createTextNode('. '));
+  function says(c, here) {
+    var p = [];
+    if (c.add) p.push(c.add + ' new media');
+    if (c.rem) p.push(c.rem + ' removed');
+    if (c.ren) p.push(here && !c.add && !c.rem ? many(c.ren, 'item', 'items') + ' renamed' : c.ren + ' renamed');
+    if (c.nw) p.push(many(c.nw, 'new folder', 'new folders'));
+    if (c.gone) p.push(many(c.gone, 'folder', 'folders') + ' gone');
+    return p.join(', ');
   }
-  function pill(build, refresh) {
+  // refresh: null (no button), or the address Refresh goes to (the same page, with what is new marked)
+  function pill(build, refresh, onClose) {
     if (bar) bar.remove();
     bar = document.createElement('div'); bar.className = 'live-note live-note-fixed'; bar.setAttribute('role', 'status');
     var t = document.createElement('span'); build(t); bar.appendChild(t);
-    if (refresh) { var go = document.createElement('button'); go.type = 'button'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.reload(); }); bar.appendChild(go); }
+    if (refresh) { var go = document.createElement('button'); go.type = 'button'; go.textContent = 'Refresh'; go.addEventListener('click', function () { location.href = refresh; }); bar.appendChild(go); }
     var x = document.createElement('button'); x.type = 'button'; x.className = 'live-x'; x.setAttribute('aria-label', 'Dismiss'); x.textContent = '×';
-    x.addEventListener('click', function () { bar.remove(); bar = null; if (refresh) { base = null; last = 0; } else unmark(); });
+    x.addEventListener('click', function () { bar.remove(); bar = null; if (onClose) onClose(); });
     bar.appendChild(x); document.body.appendChild(bar);
   }
-  function unmark() { marked.forEach(function (c) { c.classList.remove('live-new'); }); marked = []; }
+  // What is in front of the owner changes only for a change in this folder itself, or a folder coming or going at this level.
+  // Returns the address Refresh should go to (this page with what is new marked, or just this page when only things went), or null when nothing in front of the owner changes.
+  function viewChanges(entries) {
+    var mine = (entries || []).filter(function (e) { return e.folder === folder || ((e.kind === 'new' || e.kind === 'gone') && parentOf(e.folder) === folder); });
+    if (!mine.length) return null;
+    var fresh = mine.filter(function (e) { return e.kind === 'add' || e.kind === 'ren' || e.kind === 'new'; });
+    return open(folder, fresh.length ? Math.min.apply(null, fresh.map(function (e) { return e.t0; })) : 0);
+  }
+  function sentence(groups, into) {
+    groups.forEach(function (c, i) {
+      if (i) into.appendChild(document.createTextNode('; '));
+      var here = c.path === folder;
+      if (here) { into.appendChild(document.createTextNode(says(c, true) + ' here')); return; }
+      var name = c.label || c.path || 'the front page';
+      if (c.gone && !c.add && !c.rem && !c.ren && !c.nw) { into.appendChild(document.createTextNode(name + ': ' + says(c))); return; }
+      var a = document.createElement('a'); a.href = open(c.path, c.t0); a.textContent = name; into.appendChild(a); into.appendChild(document.createTextNode(': ' + says(c)));
+    });
+    into.appendChild(document.createTextNode('.'));
+  }
+  // The amber text on a folder's card, the way the page draws it: what is new in it and below it (a rename changes no count, so it adds nothing here).
+  function cardText(c) {
+    var p = [], n = function (v, o, m) { return v + ' ' + (v === 1 ? o : m); };
+    if (c.add > 0) p.push('+' + n(c.add, noun, noun + 's'));
+    if (c.rem > 0) p.push('−' + c.rem);
+    if (c.nw > 0) p.push('+' + n(c.nw, 'folder', 'folders'));
+    if (c.gone > 0) p.push('−' + n(c.gone, 'folder', 'folders'));
+    return !p.length ? '' : p.length > 2 ? 'changed' : p.join(', ');
+  }
+  function cardPath(card) { var a = card.querySelector('a[href*="folder="]'); if (!a) return null; var m = /[?&]folder=([^&#]*)/.exec(a.getAttribute('href')); return m ? decodeURIComponent(m[1]) : null; }
+  function updateCards(entries) {
+    var sum = {};   // path => counts from this page's lifetime, for the folder and every folder above it
+    (entries || []).forEach(function (e) {
+      for (var p = e.folder; p; p = parentOf(p)) {
+        var c = sum[p] || (sum[p] = { add: 0, rem: 0, nw: 0, gone: 0, t0: e.t0 });
+        var own = p === e.folder;   // (a folder that came adds its media to itself and, as one folder, to every folder above; one that went takes its media and itself from those above)
+        if (e.kind === 'add') c.add += e.n; else if (e.kind === 'rem') c.rem += e.n;
+        else if (e.kind === 'new') { c.add += e.n; if (!own) c.nw++; } else if (e.kind === 'gone' && !own) { c.rem += e.n; c.gone++; }
+        c.t0 = Math.min(c.t0, e.t0);
+      }
+    });
+    [].forEach.call(document.querySelectorAll('.folder-cover'), function (card) {
+      var p = cardPath(card), c = p !== null && sum[p]; if (!c) return;
+      var line = card.querySelector('.folder-cover-count'); if (!line) return;
+      var link = line.querySelector('.fc-chg'), old = { add: 0, rem: 0, nw: 0, gone: 0 };
+      if (link) { try { var d = JSON.parse(link.getAttribute('data-chg-base') || link.getAttribute('data-chg') || '{}'); old = { add: d.add || 0, rem: d.rem || 0, nw: d['new'] || 0, gone: d.gone || 0 }; if (!link.hasAttribute('data-chg-base')) link.setAttribute('data-chg-base', link.getAttribute('data-chg') || '{}'); } catch (e) {} }   // (what the page was drawn with: each check adds all that came since to it, not to the last total)
+      var now = { add: old.add + c.add, rem: old.rem + c.rem, nw: old.nw + c.nw, gone: old.gone + c.gone };
+      var text = cardText(now); if (!text) return;
+      if (!link) {
+        if (!line.classList.contains('has-priv-count')) {   // a plain count line sits inside the card's link; the amber note is a link of its own, so the line steps out of it first
+          var outer = line.closest('a.folder-cover-link'); if (!outer) return;
+          var main = document.createElement('a'); main.className = 'fc-main'; main.href = outer.getAttribute('href'); main.textContent = line.textContent.trim();
+          line.textContent = ''; line.appendChild(main); line.classList.add('has-priv-count'); outer.parentNode.insertBefore(line, outer.nextSibling);
+        }
+        link = document.createElement('a'); link.className = 'fc-chg'; link.title = 'Open the folder with what is new marked';
+        line.appendChild(document.createTextNode(' ')); line.appendChild(link);
+      }
+      var since = /[?&]since=(\d+)/.exec(link.getAttribute('href') || ''), t0 = since ? Math.min(+since[1] + 2, c.t0) : c.t0;
+      link.setAttribute('href', open(p, t0));
+      link.setAttribute('data-chg', JSON.stringify({ add: now.add, rem: now.rem, 'new': now.nw, gone: now.gone }));
+      link.textContent = '(' + text; var chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); chev.setAttribute('class', 'ico'); chev.setAttribute('aria-hidden', 'true');
+      var use = document.createElementNS('http://www.w3.org/2000/svg', 'use'); use.setAttribute('href', '#i-chev-right'); chev.appendChild(use); link.appendChild(chev); link.appendChild(document.createTextNode(')'));
+    });
+  }
   function check() {
-    if (document.hidden || busy || Date.now() - last < (window.__liveMin === undefined ? 15000 : window.__liveMin)) return;
-    busy = true; last = Date.now();
-    ask().then(function (j) {
-      if (!j) return;
-      if (base === null) { base = j; return; }
-      if (j.media !== base.media) { var parts = describe(base.folders, j.folders), at = base.at; pill(function (t) { sentence(parts, at, t); }, true); }
+    if (document.hidden || busy || Date.now() - tickAt < (window.__liveMin === undefined ? 15000 : window.__liveMin)) return;
+    busy = true; tickAt = Date.now();
+    ask('&after=' + last).then(function (j) {
+      if (!j || !j.entries || !j.entries.length) return;
+      var groups = gather(j.entries), refresh = viewChanges(j.entries);
+      updateCards(j.entries);
+      pill(function (t) { sentence(groups, t); }, refresh, function () { last = j.last; });
     }).catch(function () {}).then(function () { busy = false; });
   }
-  // Arrived by a link from the pill (or the admin's bar): what came in since is marked, and the page scrolls to the first.
+  // Arrived by a link with ?since= : what came in since is marked, the page scrolls to the first, and the address is cleaned so a reload does not mark again.
   var m = /[?&]since=(\d+)/.exec(location.search);
-  if (m) ask(m[1]).then(function (j) {
-    if (!j || !j.fresh || !j.fresh.length) return;
-    var want = {}; j.fresh.forEach(function (f) { want[f] = 1; });
-    [].forEach.call(document.querySelectorAll('.card[data-file]'), function (c) { if (want[c.getAttribute('data-file')]) { c.classList.add('live-new'); marked.push(c); } });
-    if (!marked.length) return;
-    marked[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
-    pill(function (t) { t.textContent = (marked.length === 1 ? '1 new item is' : marked.length + ' new items are') + ' marked. '; }, false);
-  }).catch(function () {});
-  check();   // (the first answer is the baseline)
+  if (m) {
+    ask('&since=' + m[1]).then(function (j) {
+      if (!j) return;
+      var wantFile = {}, wantFolder = {}; (j.fresh || []).forEach(function (f) { wantFile[f] = 1; }); (j.folders || []).forEach(function (f) { wantFolder[f] = 1; });
+      var els = [];
+      [].forEach.call(document.querySelectorAll('.card[data-file]'), function (c) { if (wantFile[c.getAttribute('data-file')]) els.push(c); });
+      [].forEach.call(document.querySelectorAll('.folder-cover'), function (c) { var p = cardPath(c); if (p !== null && wantFolder[p]) els.push(c); });
+      els.forEach(function (c) { c.classList.add('live-new'); });
+      marked = els.length;
+      if (marked) {
+        els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        pill(function (t) { t.textContent = (marked === 1 ? '1 new item is' : marked + ' new items are') + ' marked.'; }, false);
+      }
+    }).catch(function () {}).then(function () {
+      try { var u = new URL(location.href); u.searchParams.delete('since'); history.replaceState(history.state, '', u.pathname + u.search + u.hash); } catch (e) {}
+    });
+  }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
   window.addEventListener('focus', check);
   window.addEventListener('pageshow', function (e) { if (e.persisted) check(); });

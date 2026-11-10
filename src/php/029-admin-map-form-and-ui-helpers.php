@@ -310,6 +310,10 @@ function gallery_setting_definitions() {
              'help' => 'Covers visits to the public address and to every share link. Older records are removed by themselves, once a day. 0 keeps them until you trim the log yourself.'],
             ['name' => 'LOG_WARN_MB', 'type' => 'number', 'label' => 'Warn when visitor records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
              'help' => 'Health shows a warning, with the size and the oldest record, when the visitor records take more room than this on disk. 0 turns the warning off.'],
+            ['name' => 'CHANGES_KEEP_DAYS', 'type' => 'number', 'label' => 'Keep change records for (days)', 'min' => 0, 'max' => 3650, 'step' => 1, 'status' => 'visitlog',
+             'help' => 'The Changes tab\'s log of what happened on disk (photos added, removed or renamed by a sync or by hand). Older entries are removed by themselves, once a day. 0 keeps them until you trim the log yourself.'],
+            ['name' => 'CHANGES_WARN_MB', 'type' => 'number', 'label' => 'Warn when change records pass (MB)', 'min' => 0, 'max' => 100000, 'step' => 1,
+             'help' => 'Health shows a warning when the Changes tab\'s entries take more room than this. 0 turns the warning off.'],
         ]],
         ['title' => 'Location data', 'items' => [
             ['name' => 'ENABLE_PHOTO_LOCATION', 'type' => 'bool', 'label' => 'Allow photo locations',

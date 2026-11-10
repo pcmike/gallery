@@ -329,13 +329,16 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if (!empty($meta['dates'])) {
         $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
+    $chgText = changes_card_text($folderPath);   // (the owner's amber note of what is new in it, see the Changes tab: '' for everyone else and when there is nothing)
     if ($priv['stay'] > 0) {
         // The count of what is private inside is a link of its own (so the card's link ends first): to the folder with those first.
         $privHref = htmlspecialchars(folder_private_first_href($dir, $folderPath), ENT_QUOTES, 'UTF-8');
         $n = (int) $priv['stay'];
         $privText = number_format($n) . ($priv['state'] === 'own' ? ($n === 1 ? ' stays private' : ' stay private') : ' private');
         $html .= '</a><span class="folder-cover-count has-priv-count"><a class="fc-main" href="' . $folderUrl . '">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8')
-               . '</a> <a class="fc-priv" href="' . $privHref . '" title="Open the folder with those first">(' . $privText . ui_icon('chev-right') . ')</a></span>';
+               . '</a> <a class="fc-priv" href="' . $privHref . '" title="Open the folder with those first">(' . $privText . ui_icon('chev-right') . ')</a>' . ($chgText !== '' ? ' ' . $chgText : '') . '</span>';
+    } elseif ($chgText !== '') {
+        $html .= '</a><span class="folder-cover-count has-priv-count"><a class="fc-main" href="' . $folderUrl . '">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</a> ' . $chgText . '</span>';
     } else {
         $html .= '<span class="folder-cover-count">' . htmlspecialchars(media_count_label($recursiveFiles), ENT_QUOTES, 'UTF-8') . '</span>';
         $html .= '</a>';

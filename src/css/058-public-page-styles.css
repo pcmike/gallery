@@ -432,6 +432,12 @@
   @media (hover: hover) { .folder-cover-count .fc-priv:hover { color: #fff; background: rgba(237,66,69,0.38); } }
   .folder-cover-count .fc-priv:active { background: rgba(237,66,69,0.55); }
   .folder-cover-count .fc-priv:focus-visible { outline: 2px solid #ff8a8c; outline-offset: 2px; }
+  /* The owner's amber note of what is new in a folder (the Changes tab): the private count's rules with the colour swapped. */
+  .folder-cover-count .fc-chg { position: relative; z-index: 1; white-space: nowrap; color: #f5c26b; text-decoration: none; padding: 2px 4px; margin: 0 -1px 0 -1px; border-radius: 6px; transition: color .15s, background .15s; }
+  .folder-cover-count .fc-chg .ico { width: 0.95em; height: 0.95em; margin: 0 -1px 0 0; vertical-align: -2.5px; stroke-width: 2.2; }
+  @media (hover: hover) { .folder-cover-count .fc-chg:hover { color: #fff; background: rgba(245,194,107,0.34); } }
+  .folder-cover-count .fc-chg:active { background: rgba(245,194,107,0.52); }
+  .folder-cover-count .fc-chg:focus-visible { outline: 2px solid #f5c26b; outline-offset: 2px; }
   .folder-permalink-copy {
     position: absolute;
     top: 8px;

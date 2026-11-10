@@ -57,9 +57,11 @@ function visitlog_open($file, $new) {
     if ($new) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
     $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA synchronous = NORMAL');
-    if ((int) $pdo->query('PRAGMA user_version')->fetchColumn() < 1) {   // (the tables are made once, not on every connection)
-        visitlog_schema($pdo);
-        $pdo->exec('PRAGMA user_version = 1');
+    $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
+    if ($ver < 2) {   // (the tables are made once, not on every connection; version 2 added the log of disk activity)
+        if ($ver < 1) visitlog_schema($pdo);
+        changes_schema($pdo);
+        $pdo->exec('PRAGMA user_version = 2');
     }
     return $pdo;
 }

@@ -26,19 +26,22 @@
   <div class="side-label">The whole gallery</div>
   <?php $navCounts = admin_nav_counts($dir, $files); ?>
   <a href="#features" data-tab="features" class="side-link">Features<?= admin_nav_badges($navCounts['features']) ?></a>
+  <?php if (AUTO_GROUP_BY_FOLDER): ?>
+    <a href="#collections" data-tab="collections" class="side-link">Collections<?= collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '' ?></a>
+  <?php endif; ?>
   <?php if ($adminHidden || $adminEdited['total'] > 0): ?>
     <a href="#hidden" data-tab="hidden" class="side-hidden edited">Edited <span class="count"><?= number_format($adminEdited['total']) ?></span></a>
   <?php endif; ?>
   <?php if (ENABLE_SHARE_LINKS): ?>
     <a href="#links" data-tab="links" class="side-link">Shares<?= admin_nav_badges($navCounts['links']) ?></a>
   <?php endif; ?>
-  <?php if (AUTO_GROUP_BY_FOLDER): ?>
-    <a href="#collections" data-tab="collections" class="side-link">Collections<?= collections_list() ? ' <span class="count">' . count(collections_list()) . '</span>' : '' ?></a>
-  <?php endif; ?>
-  <a href="#site" data-tab="site" class="side-link">Settings<?= admin_nav_badges($navCounts['site']) ?></a>
   <?php if (visits_tab_wanted()): ?>
     <a href="#visits" data-tab="visits" class="side-link">Visitors<?= admin_nav_badges($navCounts['visits']) ?></a>
   <?php endif; ?>
+  <?php if (changes_tab_wanted()): ?>
+    <a href="#changes" data-tab="changes" class="side-link">Changes<?= admin_nav_badges($navCounts['changes']) ?></a>
+  <?php endif; ?>
+  <a href="#site" data-tab="site" class="side-link">Settings<?= admin_nav_badges($navCounts['site']) ?></a>
   </div>
   <details class="admin-folders" open>
     <summary>Folders <span class="here">&middot; <?= htmlspecialchars($folderLabel, ENT_QUOTES, 'UTF-8') ?></span></summary>
@@ -47,7 +50,7 @@
 </aside>
 <main class="admin-main"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
 <script>(function () {   // Before the sections are drawn: hide them all, and let the one the address or the last visit names show as soon as it is drawn, so no other section flashes up while the page loads (the tab script below takes over, and without JavaScript every section stays visible).
-  var m = document.currentScript.parentNode, n = ['features', 'hidden', 'links', 'visits', 'settings', 'notes', 'collections', 'site'], h = '', s = '';
+  var m = document.currentScript.parentNode, n = ['features', 'hidden', 'links', 'visits', 'changes', 'settings', 'notes', 'collections', 'site'], h = '', s = '';
   try { h = decodeURIComponent((location.hash || '').slice(1)); } catch (e) {}
   try { s = sessionStorage.getItem('galleryAdminTab') || ''; } catch (e) {}
   m.classList.add('js-tabs');
@@ -66,7 +69,6 @@
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div id="live-fp" hidden data-fp="<?= htmlspecialchars(json_encode(live_fingerprints($dir, $files, $adminFolderPath)), ENT_QUOTES, 'UTF-8') ?>"></div>
   <div id="server-probe" hidden data-any-private="<?= !empty($GLOBALS['__lock_probe']['anyPrivate']) ? '1' : '0' ?>" data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>" data-visits="<?= htmlspecialchars(is_file(visitlog_path()) ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . basename(visitlog_path()) : '', ENT_QUOTES, 'UTF-8') ?>" data-share-probe="<?= htmlspecialchars(ENABLE_SHARE_LINKS ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . LINK_PROBE_TOKEN : '', ENT_QUOTES, 'UTF-8') ?>"></div>
   <div class="tab-panel" data-tab="features">
 <?= render_admin_features_panel($adminEdited, $adminHidden ?: []) ?>
@@ -84,6 +86,11 @@
 <?php if (visits_tab_wanted()): ?>
   <div class="tab-panel" data-tab="visits">
 <?php render_admin_visits_panel($csrfToken, $dir, $files); ?>
+  </div>
+<?php endif; ?>
+<?php if (changes_tab_wanted()): ?>
+  <div class="tab-panel" data-tab="changes">
+<?php render_admin_changes_panel($csrfToken); ?>
   </div>
 <?php endif; ?>
   <div class="tab-panel" data-tab="settings">
