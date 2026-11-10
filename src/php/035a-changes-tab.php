@@ -16,7 +16,7 @@ function render_admin_changes_panel($csrfToken) {
     <p class="hint" style="margin:0 0 12px">The log of disk activity: what the gallery noticed change in your folders (a sync, an upload, a rename), whoever made it.</p>
     <div class="ch-head">
       <div class="ch-pillbox">
-        <button type="button" class="ch-pill" aria-haspopup="true" aria-expanded="false"><span class="ch-pill-t">All kinds</span><em class="ch-pill-n"></em> <span aria-hidden="true">&#9662;</span></button>
+        <button type="button" class="ch-pill" aria-haspopup="true" aria-expanded="false"><span class="ch-pill-t">All kinds</span><em class="ch-pill-n"></em> <i class="tri" aria-hidden="true"></i></button>
         <div class="ch-pop" role="group" aria-label="Show only" hidden>
           <label class="ch-row"><input type="checkbox" data-all="1" checked> <span>All kinds</span></label>
           <?php foreach ($groups as $k => [$name, $n]): ?>
@@ -59,7 +59,7 @@ function render_admin_changes_panel($csrfToken) {
         <div class="ch-h">
           <span class="ch-t" data-t0="<?= (int) $r['t0'] ?>" data-t1="<?= (int) $r['t1'] ?>" data-t="<?= (int) $r['t'] ?>"><?= $esc(gmdate('j M H:i', (int) $r['t'])) ?></span>
           <div class="ch-b"><span class="ch-k <?= $label[1] ?>"><?= $label[0] ?></span><?= $text ?></div>
-          <button type="button" class="linklike ch-tg" aria-expanded="false">&#9662; Show</button>
+          <button type="button" class="linklike ch-tg" aria-expanded="false"><i class="tri" aria-hidden="true"></i> Show</button>
         </div>
         <div class="ch-x" hidden>
           <?php if ($kind === 'ren'): ?>

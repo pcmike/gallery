@@ -9731,6 +9731,37 @@ $chHealth = http_get("$baseCh/?admin&classic=1", $chOwn)[1];
 check('[changes tab] Health warns when the entries take more than the size set (1 MB here), with the size and a way to trim', str_contains($chHealth, 'The change records take') && str_contains($chHealth, 'Trim the log in the Changes tab'));
 check('[changes tab] Settings has the two rows: how long entries are kept, and the size Health warns at', str_contains($chHealth, 'name="set_CHANGES_KEEP_DAYS"') && str_contains($chHealth, 'name="set_CHANGES_WARN_MB"') && str_contains($chHealth, 'Keep change records for (days)'));
 
+// several requests looking at once (an admin page opens a few together) must not each write the same change
+echo "== the log of disk activity (Changes): requests that arrive together write a change once ==\n";
+$fxChR = new_fixture_dir('changesrace');
+mkdir("$fxChR/Alpha", 0777, true);
+foreach (['a1.jpg', 'a2.jpg', 'a3.jpg'] as $chI => $chF) make_jpeg("$fxChR/Alpha/$chF", 40, 30, 20 + $chI * 30, 90, 160);
+file_put_contents("$fxChR/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ch-admin-pw-2']));
+copy($indexSrc, "$fxChR/index.php");
+putenv('PHP_CLI_SERVER_WORKERS=8');   // (the built-in server answers one request at a time unless told to use several workers)
+$portChR = find_free_port(); start_server($fxChR, $portChR); $baseChR = "http://127.0.0.1:$portChR";
+putenv('PHP_CLI_SERVER_WORKERS');
+[, , $chRH] = http_post("$baseChR/?admin", ['access_code' => 'ch-admin-pw-2'], [], false);
+$chROwn = extract_cookie_header($chRH);
+http_get("$baseChR/?admin&classic=1", ['Cookie: ' . $chROwn]);   // (the first look: the picture is taken)
+$chRCount = function () use ($fxChR) { $f = glob("$fxChR/.gallery-visits-*.sqlite")[0] ?? null; if ($f === null) return -1; $d = new PDO('sqlite:' . $f); return (int) $d->query('SELECT COUNT(*) FROM changes')->fetchColumn(); };
+$chRBad = []; $chRAll = 0;
+for ($chRi = 0; $chRi < 8; $chRi++) {
+    usleep(1100000);
+    $chRBefore = $chRCount();
+    make_jpeg("$fxChR/Alpha/new$chRi.jpg", 40, 30, 200, 20 * $chRi, 60);
+    $chRSocks = [];
+    for ($chRj = 0; $chRj < 8; $chRj++) {   // eight requests sent before any is read
+        $sk = stream_socket_client("tcp://127.0.0.1:$portChR", $en, $es, 10);
+        fwrite($sk, "GET /?admin&" . ($chRj % 2 ? 'shell=1' : 'classic=1') . " HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: $chROwn\r\nConnection: close\r\n\r\n");
+        $chRSocks[] = $sk;
+    }
+    foreach ($chRSocks as $sk) { stream_get_contents($sk); fclose($sk); }
+    $chRN = $chRCount() - $chRBefore; $chRAll += $chRN;
+    if ($chRN !== 1) $chRBad[] = "round $chRi: $chRN";
+}
+check('[changes] eight requests at once after one photo is added write that change once (eight rounds)', $chRBad === [] && $chRAll === 8, implode('; ', $chRBad));
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";

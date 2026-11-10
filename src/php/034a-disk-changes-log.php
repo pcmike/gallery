@@ -126,7 +126,12 @@ function changes_check($dir, $files, $throttle) {
             $old = $oldNames($d); [$j, $more] = changes_pack($old);
             $entries[] = [$now, $now, $now, 'gone', $d, count($old), $j, $more, '[]'];
         }
-        visitlog_tx(function ($db) use ($entries, $changed, $goneFolders, $by, $cur, $now) {
+        visitlog_tx(function ($db) use ($entries, $changed, $goneFolders, $by, $cur, $now, $snap) {
+            // Several requests can look at the same moment (an admin page opens a few at once). Whoever writes first says it; the others, finding the picture already changed under them, say nothing
+            // (anything left over is seen by the next look).
+            $latest = [];
+            foreach ($db->query('SELECT folder, fp FROM changes_snap') as $r) $latest[(string) $r['folder']] = (string) $r['fp'];
+            foreach (array_merge($changed, $goneFolders) as $d) if (($latest[(string) $d] ?? null) !== ($snap[(string) $d][1] ?? null)) return false;
             $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
             foreach ($entries as $e) $ins->execute($e);
             $up = $db->prepare('INSERT OR REPLACE INTO changes_snap (folder, n, fp, names) VALUES (?, ?, ?, ?)');

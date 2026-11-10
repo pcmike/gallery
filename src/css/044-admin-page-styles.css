@@ -307,6 +307,9 @@
   .sl-popbtn[aria-expanded=true] { border-color:var(--accent); }
   .sl-poplab { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:16rem; }
   .sl-caret { font-size:0.7rem; opacity:.7; }
+  /* A small triangle drawn with borders (in the colour of the text beside it), used where a character like ▾ would show an empty box in a browser with no font for it. */
+  .tri { display:inline-block; flex:none; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; vertical-align:middle; }
+  .tri.up { border-top:0; border-bottom:.43em solid currentColor; }
   .sl-popmenu { position:absolute; z-index:20; top:38px; left:0; min-width:210px; max-width:min(340px, 86vw); max-height:300px; overflow:auto; background:#1f1f22; border:1px solid #34343a; border-radius:10px; padding:6px; box-shadow:0 10px 30px rgba(0,0,0,0.5); }
   .sl-popopt { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:7px; font-size:0.86rem; cursor:pointer; }
   .sl-popopt:hover { background:#2c2c31; }
@@ -455,7 +458,7 @@
   .admin-layout.off-folder .admin-folder-nav a.current .fcount { color:#6f6f78; }
   /* The fold chevron sits in the gutter left of the name, so names stay in one column. */
   .admin-folder-nav .ftoggle { position:absolute; left:-1px; top:5px; width:14px; height:22px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; border-radius:4px; }
-  .admin-folder-nav .ftoggle::before { content:"\25BE"; font-size:0.7rem; display:block; line-height:22px; text-align:center; transition:transform .12s; }
+  .admin-folder-nav .ftoggle::before { content:""; font-size:0.7rem; display:block; margin:calc((22px - .43em) / 2) auto 0; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; transition:transform .12s; }
   .admin-folder-nav li.collapsed > .ftoggle::before { transform:rotate(-90deg); }
   .admin-folder-nav .ftoggle:hover { color:var(--text); background:rgba(255,255,255,0.08); }
   .admin-folder-nav li.collapsed > ul { display:none; }
@@ -464,7 +467,7 @@
   .admin-main h2.section-title { font-size:1.05rem; margin:0 0 12px; }
   .admin-main details.panel > summary { cursor:pointer; font-weight:600; font-size:1.05rem; list-style:none; display:flex; align-items:center; gap:10px; }
   .admin-main details.panel > summary::-webkit-details-marker { display:none; }
-  .admin-main details.panel > summary::before { content:"\25B8"; color:var(--muted); transition:transform .15s; }
+  .admin-main details.panel > summary::before { content:""; flex:none; width:0; height:0; font-size:.9em; border-top:.3em solid transparent; border-bottom:.3em solid transparent; border-left:.43em solid var(--muted); transition:transform .15s; }
   .admin-main details.panel[open] > summary::before { transform:rotate(90deg); }
   .admin-main details.panel > summary .count { font-weight:400; font-size:0.8rem; color:var(--muted); }
   .admin-main details.panel[open] > summary { margin-bottom:12px; }

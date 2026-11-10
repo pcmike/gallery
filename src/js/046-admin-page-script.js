@@ -1202,7 +1202,7 @@
     // A one-choice menu for the form and its dialogs (the same look and behaviour as the filter menus): rows are { v: value, t: text, s: short text for the button, d: depth in the tree }; the choice is kept in a hidden field.
     function popHtml(key, name, rows, chosen, aria, disabled) {
       var cur = rows.filter(function (r) { return r.v === chosen; })[0] || rows[0];
-      return '<div class="sl-pop sl-popform" data-pop="' + key + '" data-multi="0"><button type="button" class="sl-popbtn" aria-haspopup="true" aria-expanded="false" aria-label="' + esc(aria) + '"' + (disabled ? ' disabled' : '') + '><span class="sl-poplab">' + esc(cur.s || cur.t) + '</span><span class="sl-caret" aria-hidden="true">&#9662;</span></button><div class="sl-popmenu" hidden>'
+      return '<div class="sl-pop sl-popform" data-pop="' + key + '" data-multi="0"><button type="button" class="sl-popbtn" aria-haspopup="true" aria-expanded="false" aria-label="' + esc(aria) + '"' + (disabled ? ' disabled' : '') + '><span class="sl-poplab">' + esc(cur.s || cur.t) + '</span><span class="sl-caret" aria-hidden="true"><i class="tri"></i></span></button><div class="sl-popmenu" hidden>'
         + rows.map(function (r) { return '<label class="sl-popopt' + (r.d ? ' sl-d' + Math.min(r.d, 6) : '') + '"><input type="radio" name="pop-' + key + '" value="' + esc(r.v) + '" data-short="' + esc(r.s || r.t) + '"' + (r === cur ? ' checked' : '') + '><span>' + esc(r.t) + '</span></label>'; }).join('')
         + '</div><input type="hidden" name="' + name + '" value="' + esc(cur.v) + '"></div>';
     }
@@ -2999,7 +2999,7 @@
     list.addEventListener('click', function (ev) {
       var b = ev.target.closest ? ev.target.closest('.ch-tg') : null; if (!b) return;
       var x = b.closest('.ch-e').querySelector('.ch-x'), open = x.hidden;
-      x.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.textContent = (open ? '▴ Hide' : '▾ Show');
+      x.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.innerHTML = open ? '<i class="tri up" aria-hidden="true"></i> Hide' : '<i class="tri" aria-hidden="true"></i> Show';
     });
     // Trim the log…
     var trim = root.querySelector('.ch-trim'), sel = root.querySelector('.ch-trim-sel'), tn = root.querySelector('.ch-trim-n');

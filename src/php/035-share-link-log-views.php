@@ -174,7 +174,7 @@ function link_pop_html($key, $multi, $allLabel, $noun, $options, $chosen, $defau
     if ($multi) $label = $n === 0 ? $allLabel : ($n === 1 ? $options[$chosen[0]][1] . ($exact ? ' only' : '') : $n . ' ' . $noun);
     else $label = $options[$chosen[0] ?? $default][1] ?? $allLabel;
     $active = $multi ? $n > 0 : ($chosen && $chosen[0] !== $default);
-    $out = '<div class="sl-pop" data-pop="' . $esc($key) . '" data-multi="' . ($multi ? '1' : '0') . '"><button type="button" class="sl-popbtn' . ($active ? ' on' : '') . '" aria-haspopup="true" aria-expanded="false"><span class="sl-poplab">' . $esc($label) . '</span><span class="sl-caret" aria-hidden="true">&#9662;</span></button><div class="sl-popmenu" hidden>';
+    $out = '<div class="sl-pop" data-pop="' . $esc($key) . '" data-multi="' . ($multi ? '1' : '0') . '"><button type="button" class="sl-popbtn' . ($active ? ' on' : '') . '" aria-haspopup="true" aria-expanded="false"><span class="sl-poplab">' . $esc($label) . '</span><span class="sl-caret" aria-hidden="true"><i class="tri"></i></span></button><div class="sl-popmenu" hidden>';
     if ($multi) $out .= '<label class="sl-popopt sl-popall"><input type="checkbox" data-all value=""' . ($n === 0 ? ' checked' : '') . '><span>' . $esc($allLabel) . '</span></label>';
     foreach ($options as $v => $o) {
         $on = $multi ? in_array((string) $v, $chosen, true) : ((string) ($chosen[0] ?? $default) === (string) $v);
@@ -441,8 +441,8 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
       <p class="muted vt-sum"><?= $summary ?></p>
       <div class="vt-top">
         <div class="vt-pills">
-          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="cc" aria-haspopup="true" aria-expanded="false"><span class="vt-l">All</span> &#9662; <em></em></button></span>
-          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="src" aria-haspopup="true" aria-expanded="false"><span class="vt-l">Sources</span> &#9662; <em></em></button></span>
+          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="cc" aria-haspopup="true" aria-expanded="false"><span class="vt-l">All</span> <i class="tri" aria-hidden="true"></i> <em></em></button></span>
+          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="src" aria-haspopup="true" aria-expanded="false"><span class="vt-l">Sources</span> <i class="tri" aria-hidden="true"></i> <em></em></button></span>
         </div>
         <div class="vt-sw"><input type="search" class="vt-search" placeholder="Find a visitor" aria-label="Find a visitor" autocomplete="off" spellcheck="false" enterkeyhint="search"><button type="button" class="vt-sx" data-vt="clearq" aria-label="Clear the search" title="Clear the search" hidden>&times;</button></div>
         <div class="vt-menuwrap">

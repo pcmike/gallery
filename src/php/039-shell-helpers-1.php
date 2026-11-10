@@ -278,7 +278,7 @@ function owner_phone_bar_css() {
     .pb-kids > .pb-g > .pb-fr::before { content:""; position:absolute; left:calc(var(--d, 1) * 14px + 1px); top:23px; width:12px; border-top:1px solid #34343a; }
     .pb-fr .pb-f { flex:1; min-width:0; border-top:0; }
     .pb-t { flex:none; width:30px; min-height:44px; padding:0; border:0; background:none; color:#8a8a8f; display:flex; align-items:center; justify-content:center; cursor:pointer; }
-    button.pb-t::before { content:"\\25BE"; font-size:1.25rem; line-height:1; transition:transform .12s; }
+    button.pb-t::before { content:""; font-size:1.25rem; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; transition:transform .12s; }
     .pb-g.collapsed > .pb-fr > button.pb-t::before { transform:rotate(-90deg); }
     .pb-g.collapsed > .pb-kids { display:none; }
     .pb-f { font-size:0.9rem; color:#c9c9cd; }

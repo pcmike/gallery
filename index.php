@@ -13753,7 +13753,12 @@ function changes_check($dir, $files, $throttle) {
             $old = $oldNames($d); [$j, $more] = changes_pack($old);
             $entries[] = [$now, $now, $now, 'gone', $d, count($old), $j, $more, '[]'];
         }
-        visitlog_tx(function ($db) use ($entries, $changed, $goneFolders, $by, $cur, $now) {
+        visitlog_tx(function ($db) use ($entries, $changed, $goneFolders, $by, $cur, $now, $snap) {
+            // Several requests can look at the same moment (an admin page opens a few at once). Whoever writes first says it; the others, finding the picture already changed under them, say nothing
+            // (anything left over is seen by the next look).
+            $latest = [];
+            foreach ($db->query('SELECT folder, fp FROM changes_snap') as $r) $latest[(string) $r['folder']] = (string) $r['fp'];
+            foreach (array_merge($changed, $goneFolders) as $d) if (($latest[(string) $d] ?? null) !== ($snap[(string) $d][1] ?? null)) return false;
             $ins = $db->prepare('INSERT INTO changes (t, t0, t1, kind, folder, n, names, more, gone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
             foreach ($entries as $e) $ins->execute($e);
             $up = $db->prepare('INSERT OR REPLACE INTO changes_snap (folder, n, fp, names) VALUES (?, ?, ?, ?)');
@@ -14094,7 +14099,7 @@ function link_pop_html($key, $multi, $allLabel, $noun, $options, $chosen, $defau
     if ($multi) $label = $n === 0 ? $allLabel : ($n === 1 ? $options[$chosen[0]][1] . ($exact ? ' only' : '') : $n . ' ' . $noun);
     else $label = $options[$chosen[0] ?? $default][1] ?? $allLabel;
     $active = $multi ? $n > 0 : ($chosen && $chosen[0] !== $default);
-    $out = '<div class="sl-pop" data-pop="' . $esc($key) . '" data-multi="' . ($multi ? '1' : '0') . '"><button type="button" class="sl-popbtn' . ($active ? ' on' : '') . '" aria-haspopup="true" aria-expanded="false"><span class="sl-poplab">' . $esc($label) . '</span><span class="sl-caret" aria-hidden="true">&#9662;</span></button><div class="sl-popmenu" hidden>';
+    $out = '<div class="sl-pop" data-pop="' . $esc($key) . '" data-multi="' . ($multi ? '1' : '0') . '"><button type="button" class="sl-popbtn' . ($active ? ' on' : '') . '" aria-haspopup="true" aria-expanded="false"><span class="sl-poplab">' . $esc($label) . '</span><span class="sl-caret" aria-hidden="true"><i class="tri"></i></span></button><div class="sl-popmenu" hidden>';
     if ($multi) $out .= '<label class="sl-popopt sl-popall"><input type="checkbox" data-all value=""' . ($n === 0 ? ' checked' : '') . '><span>' . $esc($allLabel) . '</span></label>';
     foreach ($options as $v => $o) {
         $on = $multi ? in_array((string) $v, $chosen, true) : ((string) ($chosen[0] ?? $default) === (string) $v);
@@ -14361,8 +14366,8 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
       <p class="muted vt-sum"><?= $summary ?></p>
       <div class="vt-top">
         <div class="vt-pills">
-          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="cc" aria-haspopup="true" aria-expanded="false"><span class="vt-l">All</span> &#9662; <em></em></button></span>
-          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="src" aria-haspopup="true" aria-expanded="false"><span class="vt-l">Sources</span> &#9662; <em></em></button></span>
+          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="cc" aria-haspopup="true" aria-expanded="false"><span class="vt-l">All</span> <i class="tri" aria-hidden="true"></i> <em></em></button></span>
+          <span class="vt-pw"><button type="button" class="vt-chip" data-pill="src" aria-haspopup="true" aria-expanded="false"><span class="vt-l">Sources</span> <i class="tri" aria-hidden="true"></i> <em></em></button></span>
         </div>
         <div class="vt-sw"><input type="search" class="vt-search" placeholder="Find a visitor" aria-label="Find a visitor" autocomplete="off" spellcheck="false" enterkeyhint="search"><button type="button" class="vt-sx" data-vt="clearq" aria-label="Clear the search" title="Clear the search" hidden>&times;</button></div>
         <div class="vt-menuwrap">
@@ -14780,7 +14785,7 @@ function render_admin_changes_panel($csrfToken) {
     <p class="hint" style="margin:0 0 12px">The log of disk activity: what the gallery noticed change in your folders (a sync, an upload, a rename), whoever made it.</p>
     <div class="ch-head">
       <div class="ch-pillbox">
-        <button type="button" class="ch-pill" aria-haspopup="true" aria-expanded="false"><span class="ch-pill-t">All kinds</span><em class="ch-pill-n"></em> <span aria-hidden="true">&#9662;</span></button>
+        <button type="button" class="ch-pill" aria-haspopup="true" aria-expanded="false"><span class="ch-pill-t">All kinds</span><em class="ch-pill-n"></em> <i class="tri" aria-hidden="true"></i></button>
         <div class="ch-pop" role="group" aria-label="Show only" hidden>
           <label class="ch-row"><input type="checkbox" data-all="1" checked> <span>All kinds</span></label>
           <?php foreach ($groups as $k => [$name, $n]): ?>
@@ -14823,7 +14828,7 @@ function render_admin_changes_panel($csrfToken) {
         <div class="ch-h">
           <span class="ch-t" data-t0="<?= (int) $r['t0'] ?>" data-t1="<?= (int) $r['t1'] ?>" data-t="<?= (int) $r['t'] ?>"><?= $esc(gmdate('j M H:i', (int) $r['t'])) ?></span>
           <div class="ch-b"><span class="ch-k <?= $label[1] ?>"><?= $label[0] ?></span><?= $text ?></div>
-          <button type="button" class="linklike ch-tg" aria-expanded="false">&#9662; Show</button>
+          <button type="button" class="linklike ch-tg" aria-expanded="false"><i class="tri" aria-hidden="true"></i> Show</button>
         </div>
         <div class="ch-x" hidden>
           <?php if ($kind === 'ren'): ?>
@@ -15829,7 +15834,7 @@ function owner_phone_bar_css() {
     .pb-kids > .pb-g > .pb-fr::before { content:""; position:absolute; left:calc(var(--d, 1) * 14px + 1px); top:23px; width:12px; border-top:1px solid #34343a; }
     .pb-fr .pb-f { flex:1; min-width:0; border-top:0; }
     .pb-t { flex:none; width:30px; min-height:44px; padding:0; border:0; background:none; color:#8a8a8f; display:flex; align-items:center; justify-content:center; cursor:pointer; }
-    button.pb-t::before { content:"\\25BE"; font-size:1.25rem; line-height:1; transition:transform .12s; }
+    button.pb-t::before { content:""; font-size:1.25rem; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; transition:transform .12s; }
     .pb-g.collapsed > .pb-fr > button.pb-t::before { transform:rotate(-90deg); }
     .pb-g.collapsed > .pb-kids { display:none; }
     .pb-f { font-size:0.9rem; color:#c9c9cd; }
@@ -15950,7 +15955,7 @@ function render_shell_page($dir, $files, $adminFolderPath, $folderGroupKeys) {
   .sh-tree.quiet a.current .fcount { color:#6f6f78; }
   .sh-tree .ftoggle { position:absolute; left:-4px; top:4px; width:26px; height:26px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; }
   .sh-tree li > ul > li > .ftoggle { left:4px; }
-  .sh-tree .ftoggle::before { content:"\25BE"; font-size:1.3rem; display:block; line-height:26px; text-align:center; transition:transform .12s; }
+  .sh-tree .ftoggle::before { content:""; font-size:1.3rem; display:block; margin:calc((26px - .43em) / 2) auto 0; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; transition:transform .12s; }   /* (a drawn triangle, not a character: a browser with no font for the character shows an empty box) */
   .sh-tree li.collapsed > .ftoggle::before { transform:rotate(-90deg); }
   .sh-tree .ftoggle:hover { color:var(--text); }
   .sh-tree a.current + .ftoggle { color:#fff; }
@@ -16540,6 +16545,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-popbtn[aria-expanded=true] { border-color:var(--accent); }
   .sl-poplab { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:16rem; }
   .sl-caret { font-size:0.7rem; opacity:.7; }
+  /* A small triangle drawn with borders (in the colour of the text beside it), used where a character like ▾ would show an empty box in a browser with no font for it. */
+  .tri { display:inline-block; flex:none; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; vertical-align:middle; }
+  .tri.up { border-top:0; border-bottom:.43em solid currentColor; }
   .sl-popmenu { position:absolute; z-index:20; top:38px; left:0; min-width:210px; max-width:min(340px, 86vw); max-height:300px; overflow:auto; background:#1f1f22; border:1px solid #34343a; border-radius:10px; padding:6px; box-shadow:0 10px 30px rgba(0,0,0,0.5); }
   .sl-popopt { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:7px; font-size:0.86rem; cursor:pointer; }
   .sl-popopt:hover { background:#2c2c31; }
@@ -16688,7 +16696,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-layout.off-folder .admin-folder-nav a.current .fcount { color:#6f6f78; }
   /* The fold chevron sits in the gutter left of the name, so names stay in one column. */
   .admin-folder-nav .ftoggle { position:absolute; left:-1px; top:5px; width:14px; height:22px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; border-radius:4px; }
-  .admin-folder-nav .ftoggle::before { content:"\25BE"; font-size:0.7rem; display:block; line-height:22px; text-align:center; transition:transform .12s; }
+  .admin-folder-nav .ftoggle::before { content:""; font-size:0.7rem; display:block; margin:calc((22px - .43em) / 2) auto 0; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; transition:transform .12s; }
   .admin-folder-nav li.collapsed > .ftoggle::before { transform:rotate(-90deg); }
   .admin-folder-nav .ftoggle:hover { color:var(--text); background:rgba(255,255,255,0.08); }
   .admin-folder-nav li.collapsed > ul { display:none; }
@@ -16697,7 +16705,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-main h2.section-title { font-size:1.05rem; margin:0 0 12px; }
   .admin-main details.panel > summary { cursor:pointer; font-weight:600; font-size:1.05rem; list-style:none; display:flex; align-items:center; gap:10px; }
   .admin-main details.panel > summary::-webkit-details-marker { display:none; }
-  .admin-main details.panel > summary::before { content:"\25B8"; color:var(--muted); transition:transform .15s; }
+  .admin-main details.panel > summary::before { content:""; flex:none; width:0; height:0; font-size:.9em; border-top:.3em solid transparent; border-bottom:.3em solid transparent; border-left:.43em solid var(--muted); transition:transform .15s; }
   .admin-main details.panel[open] > summary::before { transform:rotate(90deg); }
   .admin-main details.panel > summary .count { font-weight:400; font-size:0.8rem; color:var(--muted); }
   .admin-main details.panel[open] > summary { margin-bottom:12px; }
@@ -18827,7 +18835,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     // A one-choice menu for the form and its dialogs (the same look and behaviour as the filter menus): rows are { v: value, t: text, s: short text for the button, d: depth in the tree }; the choice is kept in a hidden field.
     function popHtml(key, name, rows, chosen, aria, disabled) {
       var cur = rows.filter(function (r) { return r.v === chosen; })[0] || rows[0];
-      return '<div class="sl-pop sl-popform" data-pop="' + key + '" data-multi="0"><button type="button" class="sl-popbtn" aria-haspopup="true" aria-expanded="false" aria-label="' + esc(aria) + '"' + (disabled ? ' disabled' : '') + '><span class="sl-poplab">' + esc(cur.s || cur.t) + '</span><span class="sl-caret" aria-hidden="true">&#9662;</span></button><div class="sl-popmenu" hidden>'
+      return '<div class="sl-pop sl-popform" data-pop="' + key + '" data-multi="0"><button type="button" class="sl-popbtn" aria-haspopup="true" aria-expanded="false" aria-label="' + esc(aria) + '"' + (disabled ? ' disabled' : '') + '><span class="sl-poplab">' + esc(cur.s || cur.t) + '</span><span class="sl-caret" aria-hidden="true"><i class="tri"></i></span></button><div class="sl-popmenu" hidden>'
         + rows.map(function (r) { return '<label class="sl-popopt' + (r.d ? ' sl-d' + Math.min(r.d, 6) : '') + '"><input type="radio" name="pop-' + key + '" value="' + esc(r.v) + '" data-short="' + esc(r.s || r.t) + '"' + (r === cur ? ' checked' : '') + '><span>' + esc(r.t) + '</span></label>'; }).join('')
         + '</div><input type="hidden" name="' + name + '" value="' + esc(cur.v) + '"></div>';
     }
@@ -20624,7 +20632,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     list.addEventListener('click', function (ev) {
       var b = ev.target.closest ? ev.target.closest('.ch-tg') : null; if (!b) return;
       var x = b.closest('.ch-e').querySelector('.ch-x'), open = x.hidden;
-      x.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.textContent = (open ? '▴ Hide' : '▾ Show');
+      x.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false'); b.innerHTML = open ? '<i class="tri up" aria-hidden="true"></i> Hide' : '<i class="tri" aria-hidden="true"></i> Show';
     });
     // Trim the log…
     var trim = root.querySelector('.ch-trim'), sel = root.querySelector('.ch-trim-sel'), tn = root.querySelector('.ch-trim-n');
