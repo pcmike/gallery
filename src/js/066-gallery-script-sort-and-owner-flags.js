@@ -48,12 +48,14 @@
   // private folder) or none (an ordinary public photo).
   function lockKind(f) {
     const o = ownerState.own[f] || '';
+    if (ownerState.unl && ownerState.unl[f]) return o === 'private' ? 'aoff' : 'aon';   // a photo in a Not listed folder: there is no public or private, only whether its address works
     if (o === 'private') return 'own';
     if (o === 'public' && ownerState.inh[f]) return 'pub';
     return o === '' && ownerState.inh[f] ? 'inh' : 'none';
   }
   function nextOwn(f) {
     const o = ownerState.own[f] || '';
+    if (ownerState.unl && ownerState.unl[f]) return o === 'private' ? 'inherit' : 'private';   // (address on <-> off)
     if (ownerState.inh[f]) return o === '' ? 'private' : (o === 'private' ? 'public' : 'inherit');
     return o === 'private' ? 'inherit' : 'private';
   }
@@ -80,12 +82,15 @@
   }
   function lockTitle(f) {
     const k = lockKind(f);
+    if (k === 'aon') return 'Address on: anyone with this photo\u2019s address can open it. Press to switch it off';
+    if (k === 'aoff') return 'Address off: this photo can\u2019t be opened by its address. Press to switch it on';
     if (k === 'inh') return 'Private because its folder is: press to keep it private on its own';
     if (k === 'pub') return 'Public, though its folder is private: press to follow the folder again';
     if (k === 'own') return ownerState.inh[f] ? 'Kept private on its own: press to make it public' : 'Private: press to make it public';
     return 'Public: press to make it private';
   }
   function lockSaid(f, state) {
+    if (ownerState.unl && ownerState.unl[f]) return state === 'private' ? 'Address switched off' : 'Address switched on';
     if (state === 'private') return ownerState.inh[f] ? 'Kept private on its own' : 'Now private';
     if (state === 'public') return ownerState.inh[f] ? 'Public, though its folder is private' : 'Now public';
     return ownerState.inh[f] ? 'Follows its folder (private)' : 'Now public';
@@ -93,10 +98,10 @@
   function ownerPaint() {
     if (!ownerState) return;
     document.querySelectorAll('.priv-toggle').forEach(function (b) {
-      const f = b.getAttribute('data-file'), k = lockKind(f), on = !!ownerState.priv[f];
-      b.classList.toggle('is-private', on); b.classList.toggle('is-folder', k === 'inh'); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      const f = b.getAttribute('data-file'), k = lockKind(f), addr = k === 'aon' || k === 'aoff', on = addr ? k === 'aoff' : !!ownerState.priv[f];
+      b.classList.toggle('is-private', on); b.classList.toggle('is-folder', k === 'inh'); b.classList.toggle('is-addr', addr); b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.title = lockTitle(f);
-      b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (k === 'inh' ? '<span>Folder</span>' : (on ? '<span>Private</span>' : ''));
+      b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (addr ? '' : (k === 'inh' ? '<span>Folder</span>' : (on ? '<span>Private</span>' : '')));
     });
     document.querySelectorAll('.cover-toggle').forEach(function (b) {
       const on = !!ownerState.cover[b.getAttribute('data-file')];
@@ -109,7 +114,7 @@
       lc.classList.toggle('on', on); lc.title = on ? 'This is the folder’s cover photo' : 'Make this the folder’s cover photo'; lc.setAttribute('aria-label', lc.title);
     }
     if (lp && file !== undefined) {
-      const on = !!ownerState.priv[file];
+      const on = lockKind(file) === 'aoff' || (lockKind(file) !== 'aon' && !!ownerState.priv[file]);
       lp.classList.toggle('on', on); lp.classList.toggle('folder', lockKind(file) === 'inh'); lp.title = lockTitle(file); lp.setAttribute('aria-label', lp.title);
       lp.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>';
     }

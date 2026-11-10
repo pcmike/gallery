@@ -63,6 +63,10 @@
   .addr-toggle { position: absolute; bottom: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.75; }
   .addr-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
   .addr-new { left: 40px; } .addr-cur { left: 74px; }
+  /* The tile's round buttons (the lock when it has no word in it, the star, the pencil and the two address buttons) are exact circles of one size with one icon size.
+     The lock with a word ("Folder", "Private") stays a pill. */
+  .cover-toggle, .edit-toggle, .addr-toggle, .priv-toggle:not(.is-folder):not(.is-private), .priv-toggle.is-addr { box-sizing: border-box; width: 27px; height: 27px; padding: 0; justify-content: center; }
+  .priv-toggle:not(.is-folder):not(.is-private) .ico, .priv-toggle.is-addr .ico { font-size: 0.82rem; }   /* (the lock's icon is 1em of its own smaller text: the same 13 px as the others) */
   .addr-toggle.busy { opacity: 0.35; pointer-events: none; }
   @media (hover: hover) { .addr-toggle { opacity: 0; } .card:hover .addr-toggle, .addr-toggle:focus-visible { opacity: 0.9; } }
   .selecting .card .addr-toggle { display: none; }

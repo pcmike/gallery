@@ -2379,7 +2379,16 @@ try:
         open(SITE18 + "/Churches/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps(dict(priv_items, unlisted=True)))
         b.goto(B18 + "/?folder=Churches", 1.5)
         b.js("window.__copied = null; navigator.clipboard.writeText = t => { window.__copied = t; return Promise.resolve(); };")
-        ok(b.js("document.getElementById('folder-priv-banner').textContent.indexOf('Not listed') >= 0"), "[not listed] the folder's own page says Not listed (not just Private) to the owner")
+        ok(b.js("document.getElementById('folder-unlisted-note').textContent.indexOf('Not listed') >= 0") and b.js("!document.getElementById('folder-priv-banner') && !document.querySelector('.fpb-counts') && !document.querySelector('.fpb-hint') && document.getElementById('folder-unlisted-note').getBoundingClientRect().height < 60"), "[not listed] the folder's own page says Not listed to the owner in one quiet line: no counts, nothing to press (the Make it public question belongs to a Private folder)")
+        lk = lambda: b.js("JSON.stringify([...document.querySelectorAll('.priv-toggle')].map(e => e.title.split(':')[0] + '|' + e.getAttribute('aria-pressed')))")
+        ok(all(x.startswith("Address on|false") for x in json.loads(lk())), "[not listed] each photo's lock in the drawer says (in its tooltip) Address on, and carries no words on the picture (no Folder, Private or Public: they mean nothing there)", lk())
+        b.js("document.querySelector('.priv-toggle').click()"); b.drain(1.2)
+        off1 = json.loads(lk())[0]
+        b.js("document.querySelector('.priv-toggle').click()"); b.drain(1.2)
+        cs = b.js("JSON.stringify(['.priv-toggle', '.cover-toggle', '.edit-toggle', '.addr-new', '.addr-cur'].map(s => { const e = document.querySelector('.card.owner-card ' + s), r = e.getBoundingClientRect(), i = e.querySelector('.ico').getBoundingClientRect(); return [Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10, Math.round(i.width * 10) / 10]; }))")
+        cs = json.loads(cs)
+        ok(all(w == h and w >= 27 and ic == cs[0][2] and ic >= 13 for w, h, ic in cs), "[not listed] the five round buttons on a tile (lock, star, pencil, new address, copy address) are exact circles, no smaller than 27 px, with one icon size", str(cs))
+        ok(off1 == "Address off|true" and json.loads(lk())[0] == "Address on|false", "[not listed] pressing a photo's lock in the drawer switches its address off and on again (two states, the third never comes round)", off1 + " / " + lk())
         pos = b.js("""(() => { const out = []; document.querySelectorAll('.card.owner-card').forEach(c => { const r = s => { const e = c.querySelector(s); if (!e) return null; const q = e.getBoundingClientRect(), k = c.getBoundingClientRect(); return [Math.round(q.left - k.left), Math.round(q.right - k.left), Math.round(q.bottom - k.top)]; };
             out.push({edit: r('.edit-toggle'), neu: r('.addr-new'), cur: r('.addr-cur'), w: Math.round(c.getBoundingClientRect().width)}); }); return out; })()""")
         ok(len(pos) == 4 and all(p["edit"] and p["neu"] and p["cur"] and p["edit"][1] <= p["neu"][0] and p["neu"][1] <= p["cur"][0] and p["cur"][1] < p["w"] and p["edit"][2] == p["neu"][2] == p["cur"][2] for p in pos), "[not listed] every photo has, along its bottom edge, the pencil, then the new-address button, then the copy-address button, in a row without overlapping and inside the tile", str(pos[:1]))

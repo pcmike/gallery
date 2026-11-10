@@ -9445,7 +9445,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $text = $n === 1
             ? ($flag === 'private' ? '"' . $names[0] . '" is now ' . $what . '.' : '"' . $names[0] . '" is now ' . $what . '.')
             : $n . ' photos are now ' . $what . '.';
-        if ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
+        if ($flag === 'private' && $names && file_is_unlisted($dir, $adminFolderPath === null ? $names[0] : $adminFolderPath . '/' . $names[0])) {   // (a Not listed folder: there is no public or private there, only whether a photo's address works)
+            $addrOff = $state === 'private' || ($state === null && $on);
+            $text = $n === 1 ? 'The address of "' . $names[0] . '" is now ' . ($addrOff ? 'off' : 'on') . '.' : 'The addresses of ' . $n . ' photos are now ' . ($addrOff ? 'off' : 'on') . '.';
+        } elseif ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
         return ['type' => 'ok', 'text' => $text];
     }
 
@@ -22286,8 +22289,13 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         $ps = owner_privacy_state($GLOBALS['dir'], $file, $GLOBALS['itemsData'] ?? []);
         $isPriv = $ps['priv']; $isFolder = $ps['own'] === '' && $ps['inh'];
         $lockTitle = owner_lock_title($ps);
-        $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . ($isFolder ? ' is-folder' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
-            . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : '')) . '</button>';
+        $addrLock = file_is_unlisted($GLOBALS['dir'], $file);   // (a photo in a Not listed folder: its lock is whether its address works, there is no public or private for it)
+        if ($addrLock) {
+            $isPriv = $ps['own'] === 'private'; $isFolder = false;
+            $lockTitle = $isPriv ? 'Address off: this photo can\'t be opened by its address. Press to switch it on' : 'Address on: anyone with this photo\'s address can open it. Press to switch it off';
+        }
+        $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . ($isFolder ? ' is-folder' : '') . ($addrLock ? ' is-addr' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
+            . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($addrLock ? '' : ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : ''))) . '</button>';
     }
     // And a star beside it: press to make this photo its folder's cover (a gold star when it already is).
     if ($ownerLock !== '') {
@@ -23591,6 +23599,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .folder-priv-banner:hover { background: rgba(237,66,69,0.2); border-color: rgba(237,66,69,0.75); }
   .folder-priv-banner:active { transform: scale(0.995); background: rgba(237,66,69,0.26); }
   .folder-priv-banner:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .folder-priv-banner.fpb-note { cursor: default; align-items: center; }   /* (a Not listed folder's one line: nothing to press) */
+  .folder-priv-banner.fpb-note:hover { background: rgba(237,66,69,0.12); border-color: rgba(237,66,69,0.45); }
+  .folder-priv-banner.fpb-note:active { transform: none; background: rgba(237,66,69,0.12); }
   .folder-priv-banner .fpb-hint { display: block; margin-top: 2px; font-style: normal; font-weight: 600; color: #aab2ff; }
   .fp-modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.62); }
   .fp-modal[hidden] { display: none; }
@@ -23756,6 +23767,10 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .addr-toggle { position: absolute; bottom: 6px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.55); color: #fff; font: inherit; line-height: 1; cursor: pointer; opacity: 0.75; }
   .addr-toggle .ico { width: 1em; height: 1em; font-size: 0.82rem; }
   .addr-new { left: 40px; } .addr-cur { left: 74px; }
+  /* The tile's round buttons (the lock when it has no word in it, the star, the pencil and the two address buttons) are exact circles of one size with one icon size.
+     The lock with a word ("Folder", "Private") stays a pill. */
+  .cover-toggle, .edit-toggle, .addr-toggle, .priv-toggle:not(.is-folder):not(.is-private), .priv-toggle.is-addr { box-sizing: border-box; width: 27px; height: 27px; padding: 0; justify-content: center; }
+  .priv-toggle:not(.is-folder):not(.is-private) .ico, .priv-toggle.is-addr .ico { font-size: 0.82rem; }   /* (the lock's icon is 1em of its own smaller text: the same 13 px as the others) */
   .addr-toggle.busy { opacity: 0.35; pointer-events: none; }
   @media (hover: hover) { .addr-toggle { opacity: 0; } .card:hover .addr-toggle, .addr-toggle:focus-visible { opacity: 0.9; } }
   .selecting .card .addr-toggle { display: none; }
@@ -24603,14 +24618,21 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </section>
   <?php endif; ?>
 <?= $lockForm ?>
-<?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): $privCounts = folder_privacy_counts($dir, $files, $currentFolderPath); ?>
+<?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): ?>
+  <?php if (folder_unlisted_cached($dir, $currentFolderPath)): // A Not listed folder is not something to review before opening it up: one quiet line saying so, nothing to press. ?>
+  <div class="folder-priv-banner fpb-note" id="folder-unlisted-note" role="note">
+    <?= ui_icon('lock') ?>
+    <div><strong>Not listed: only you can open this folder</strong></div>
+  </div>
+  <?php else: $privCounts = folder_privacy_counts($dir, $files, $currentFolderPath); ?>
   <?php // For the owner, on a private folder's own page: what making the folder public would do (the lock on each tile shows which is which). ?>
   <div class="folder-priv-banner" id="folder-priv-banner" role="button" tabindex="0" title="Make this folder public" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('lock') ?>
-    <div><strong><?= folder_unlisted_cached($dir, $currentFolderPath) ? 'Not listed: only you can open this folder' : 'Private folder: visitors can\'t see it' ?></strong>
+    <div><strong>Private folder: visitors can't see it</strong>
       <span class="fpb-counts" aria-live="polite"><?= count_noun($privCounts['stay']) ?> will stay private &middot; <?= count_noun($privCounts['open']) ?> <?= (int) $privCounts['open'] === 1 ? 'becomes' : 'become' ?> public when you open it</span>
       <em class="fpb-hint">Make it public&hellip;</em></div>
   </div>
+  <?php endif; ?>
 <?php endif; ?>
 <?php if (is_admin_browser() && AUTO_GROUP_BY_FOLDER): ?>
   <div class="fp-modal" id="fp-modal" role="dialog" aria-modal="true" aria-labelledby="fp-modal-title" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" hidden>
@@ -24666,7 +24688,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   <div class="select-btns">
     <button type="button" data-select="private" class="sb-private"><?= ui_icon('lock') ?> <span class="sb-n">Make private</span><span class="sb-p">Private</span></button>
     <button type="button" data-select="public" class="sb-public"><?= ui_icon('unlock') ?> <span class="sb-n">Make public</span><span class="sb-p">Public</span></button>
-    <button type="button" data-select="inherit" class="sb-folder" title="Back to whatever the folder is: they follow it again" hidden><?= ui_icon('lock') ?> Folder</button>
+    <button type="button" data-select="inherit" class="sb-folder" title="Back to whatever the folder is: they follow it again" hidden><?= ui_icon('lock') ?> <span class="sb-lab">Folder</span></button>
 <?php if (ENABLE_SHARE_LINKS): ?>
     <button type="button" data-select="share" class="sb-share" title="Make a share link for just these photos"><?= ui_icon('share') ?> Share&hellip;</button>
 <?php endif; ?>
@@ -25042,12 +25064,14 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // private folder) or none (an ordinary public photo).
   function lockKind(f) {
     const o = ownerState.own[f] || '';
+    if (ownerState.unl && ownerState.unl[f]) return o === 'private' ? 'aoff' : 'aon';   // a photo in a Not listed folder: there is no public or private, only whether its address works
     if (o === 'private') return 'own';
     if (o === 'public' && ownerState.inh[f]) return 'pub';
     return o === '' && ownerState.inh[f] ? 'inh' : 'none';
   }
   function nextOwn(f) {
     const o = ownerState.own[f] || '';
+    if (ownerState.unl && ownerState.unl[f]) return o === 'private' ? 'inherit' : 'private';   // (address on <-> off)
     if (ownerState.inh[f]) return o === '' ? 'private' : (o === 'private' ? 'public' : 'inherit');
     return o === 'private' ? 'inherit' : 'private';
   }
@@ -25074,12 +25098,15 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   }
   function lockTitle(f) {
     const k = lockKind(f);
+    if (k === 'aon') return 'Address on: anyone with this photo\u2019s address can open it. Press to switch it off';
+    if (k === 'aoff') return 'Address off: this photo can\u2019t be opened by its address. Press to switch it on';
     if (k === 'inh') return 'Private because its folder is: press to keep it private on its own';
     if (k === 'pub') return 'Public, though its folder is private: press to follow the folder again';
     if (k === 'own') return ownerState.inh[f] ? 'Kept private on its own: press to make it public' : 'Private: press to make it public';
     return 'Public: press to make it private';
   }
   function lockSaid(f, state) {
+    if (ownerState.unl && ownerState.unl[f]) return state === 'private' ? 'Address switched off' : 'Address switched on';
     if (state === 'private') return ownerState.inh[f] ? 'Kept private on its own' : 'Now private';
     if (state === 'public') return ownerState.inh[f] ? 'Public, though its folder is private' : 'Now public';
     return ownerState.inh[f] ? 'Follows its folder (private)' : 'Now public';
@@ -25087,10 +25114,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   function ownerPaint() {
     if (!ownerState) return;
     document.querySelectorAll('.priv-toggle').forEach(function (b) {
-      const f = b.getAttribute('data-file'), k = lockKind(f), on = !!ownerState.priv[f];
-      b.classList.toggle('is-private', on); b.classList.toggle('is-folder', k === 'inh'); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      const f = b.getAttribute('data-file'), k = lockKind(f), addr = k === 'aon' || k === 'aoff', on = addr ? k === 'aoff' : !!ownerState.priv[f];
+      b.classList.toggle('is-private', on); b.classList.toggle('is-folder', k === 'inh'); b.classList.toggle('is-addr', addr); b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.title = lockTitle(f);
-      b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (k === 'inh' ? '<span>Folder</span>' : (on ? '<span>Private</span>' : ''));
+      b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (addr ? '' : (k === 'inh' ? '<span>Folder</span>' : (on ? '<span>Private</span>' : '')));
     });
     document.querySelectorAll('.cover-toggle').forEach(function (b) {
       const on = !!ownerState.cover[b.getAttribute('data-file')];
@@ -25103,7 +25130,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       lc.classList.toggle('on', on); lc.title = on ? 'This is the folder’s cover photo' : 'Make this the folder’s cover photo'; lc.setAttribute('aria-label', lc.title);
     }
     if (lp && file !== undefined) {
-      const on = !!ownerState.priv[file];
+      const on = lockKind(file) === 'aoff' || (lockKind(file) !== 'aon' && !!ownerState.priv[file]);
       lp.classList.toggle('on', on); lp.classList.toggle('folder', lockKind(file) === 'inh'); lp.title = lockTitle(file); lp.setAttribute('aria-label', lp.title);
       lp.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>';
     }
@@ -25207,6 +25234,12 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       const first = cards()[0], ctx = picked.length ? picked[0] : (first ? fileOf(first) : null), inPriv = !!(ctx && ownerState.inh[ctx]);
       bar.classList.toggle('in-private', inPriv);
       bar.querySelector('[data-select=inherit]').hidden = !inPriv || !canFolder || !!collPage;
+      // In a Not listed folder there is no public or private: the bar says Address off / Address on (on = back to following the folder).
+      const inAddr = !!(ctx && ownerState.unl && ownerState.unl[ctx]);
+      bar.classList.toggle('in-addr', inAddr);
+      const sbn = bar.querySelector('.sb-private .sb-n'), sbp = bar.querySelector('.sb-private .sb-p'), sbf = bar.querySelector('.sb-folder .sb-lab');
+      if (sbn) sbn.textContent = inAddr ? 'Address off' : 'Make private'; if (sbp) sbp.textContent = inAddr ? 'Off' : 'Private'; if (sbf) sbf.textContent = inAddr ? 'Address on' : 'Folder';
+      if (inAddr) bar.querySelector('[data-select=public]').hidden = true;
       if (canArrange) {
         bar.querySelector('[data-select=release]').disabled = !picked.some(function (f) { return stackOf[f] !== undefined; });
         bar.querySelector('[data-select=reset]').disabled = !stacks.length;
@@ -25463,14 +25496,18 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       if (!st) return;
       const set = function (el, on) { el.setAttribute('aria-pressed', on ? 'true' : 'false'); };
       const k = lockKind(st.file);
-      set(pills.priv, k === 'own'); set(pills.loc, st.cfg.locationShown); set(pills.cover, !!ownerState.cover[st.file]);
+      const addr = k === 'aon' || k === 'aoff';
+      set(pills.priv, k === 'own' || k === 'aoff'); set(pills.loc, st.cfg.locationShown); set(pills.cover, !!ownerState.cover[st.file]);
       pills.priv.classList.toggle('is-folder', k === 'inh');
-      pills.priv.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (k === 'own' || k === 'inh' ? 'lock' : 'unlock') + '"></use></svg> ' + (k === 'inh' ? 'Folder' : (k === 'pub' ? 'Public' : 'Private'));
+      pills.priv.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (k === 'own' || k === 'inh' || k === 'aoff' ? 'lock' : 'unlock') + '"></use></svg> ' + (addr ? (k === 'aoff' ? 'Address off' : 'Address on') : (k === 'inh' ? 'Folder' : (k === 'pub' ? 'Public' : 'Private')));
       let note = '';
-      if (k === 'inh') note = 'Private because its folder is. Tap to keep it private on its own.';
+      if (k === 'aon') note = 'Anyone with this photo\u2019s address can open it. Tap to switch the address off.';
+      else if (k === 'aoff') note = 'This photo\u2019s address is switched off. Tap to switch it on.';
+      else if (k === 'inh') note = 'Private because its folder is. Tap to keep it private on its own.';
       else if (k === 'own' && ownerState.inh[st.file]) note = 'Kept private on its own. Tap to make it public.';
       else if (k === 'pub') note = 'Public, though its folder is private. Tap to follow the folder again.';
       else if (st.cfg.locationsOff) note = 'Locations are switched off for the whole gallery (Settings), so none show yet.';
+      pills.priv.title = addr ? (k === 'aoff' ? 'Switch this photo\u2019s address on' : 'Switch this photo\u2019s address off') : 'Hidden from visitors unless they have the private-view password';
       noteEl.textContent = note; noteEl.hidden = note === '';
     };
     const paintLoc = function () {

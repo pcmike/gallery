@@ -427,14 +427,21 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   </section>
   <?php endif; ?>
 <?= $lockForm ?>
-<?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): $privCounts = folder_privacy_counts($dir, $files, $currentFolderPath); ?>
+<?php if (is_admin_browser() && $currentFolderPath !== null && AUTO_GROUP_BY_FOLDER && folder_restriction_cached($dir, $currentFolderPath) === 'private'): ?>
+  <?php if (folder_unlisted_cached($dir, $currentFolderPath)): // A Not listed folder is not something to review before opening it up: one quiet line saying so, nothing to press. ?>
+  <div class="folder-priv-banner fpb-note" id="folder-unlisted-note" role="note">
+    <?= ui_icon('lock') ?>
+    <div><strong>Not listed: only you can open this folder</strong></div>
+  </div>
+  <?php else: $privCounts = folder_privacy_counts($dir, $files, $currentFolderPath); ?>
   <?php // For the owner, on a private folder's own page: what making the folder public would do (the lock on each tile shows which is which). ?>
   <div class="folder-priv-banner" id="folder-priv-banner" role="button" tabindex="0" title="Make this folder public" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" data-folder="<?= htmlspecialchars($currentFolderPath, ENT_QUOTES, 'UTF-8') ?>">
     <?= ui_icon('lock') ?>
-    <div><strong><?= folder_unlisted_cached($dir, $currentFolderPath) ? 'Not listed: only you can open this folder' : 'Private folder: visitors can\'t see it' ?></strong>
+    <div><strong>Private folder: visitors can't see it</strong>
       <span class="fpb-counts" aria-live="polite"><?= count_noun($privCounts['stay']) ?> will stay private &middot; <?= count_noun($privCounts['open']) ?> <?= (int) $privCounts['open'] === 1 ? 'becomes' : 'become' ?> public when you open it</span>
       <em class="fpb-hint">Make it public&hellip;</em></div>
   </div>
+  <?php endif; ?>
 <?php endif; ?>
 <?php if (is_admin_browser() && AUTO_GROUP_BY_FOLDER): ?>
   <div class="fp-modal" id="fp-modal" role="dialog" aria-modal="true" aria-labelledby="fp-modal-title" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>" hidden>
@@ -490,7 +497,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   <div class="select-btns">
     <button type="button" data-select="private" class="sb-private"><?= ui_icon('lock') ?> <span class="sb-n">Make private</span><span class="sb-p">Private</span></button>
     <button type="button" data-select="public" class="sb-public"><?= ui_icon('unlock') ?> <span class="sb-n">Make public</span><span class="sb-p">Public</span></button>
-    <button type="button" data-select="inherit" class="sb-folder" title="Back to whatever the folder is: they follow it again" hidden><?= ui_icon('lock') ?> Folder</button>
+    <button type="button" data-select="inherit" class="sb-folder" title="Back to whatever the folder is: they follow it again" hidden><?= ui_icon('lock') ?> <span class="sb-lab">Folder</span></button>
 <?php if (ENABLE_SHARE_LINKS): ?>
     <button type="button" data-select="share" class="sb-share" title="Make a share link for just these photos"><?= ui_icon('share') ?> Share&hellip;</button>
 <?php endif; ?>

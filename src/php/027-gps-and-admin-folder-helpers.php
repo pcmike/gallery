@@ -767,7 +767,10 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $text = $n === 1
             ? ($flag === 'private' ? '"' . $names[0] . '" is now ' . $what . '.' : '"' . $names[0] . '" is now ' . $what . '.')
             : $n . ' photos are now ' . $what . '.';
-        if ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
+        if ($flag === 'private' && $names && file_is_unlisted($dir, $adminFolderPath === null ? $names[0] : $adminFolderPath . '/' . $names[0])) {   // (a Not listed folder: there is no public or private there, only whether a photo's address works)
+            $addrOff = $state === 'private' || ($state === null && $on);
+            $text = $n === 1 ? 'The address of "' . $names[0] . '" is now ' . ($addrOff ? 'off' : 'on') . '.' : 'The addresses of ' . $n . ' photos are now ' . ($addrOff ? 'off' : 'on') . '.';
+        } elseif ($flag === 'private' && $on) $text .= ' Visitors can\'t see ' . ($n === 1 ? 'it' : 'them') . ' unless they have the private-view password.';
         return ['type' => 'ok', 'text' => $text];
     }
 

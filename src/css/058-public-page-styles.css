@@ -518,6 +518,9 @@
   .folder-priv-banner:hover { background: rgba(237,66,69,0.2); border-color: rgba(237,66,69,0.75); }
   .folder-priv-banner:active { transform: scale(0.995); background: rgba(237,66,69,0.26); }
   .folder-priv-banner:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .folder-priv-banner.fpb-note { cursor: default; align-items: center; }   /* (a Not listed folder's one line: nothing to press) */
+  .folder-priv-banner.fpb-note:hover { background: rgba(237,66,69,0.12); border-color: rgba(237,66,69,0.45); }
+  .folder-priv-banner.fpb-note:active { transform: none; background: rgba(237,66,69,0.12); }
   .folder-priv-banner .fpb-hint { display: block; margin-top: 2px; font-style: normal; font-weight: 600; color: #aab2ff; }
   .fp-modal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.62); }
   .fp-modal[hidden] { display: none; }

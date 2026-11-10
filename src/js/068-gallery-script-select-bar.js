@@ -46,6 +46,12 @@
       const first = cards()[0], ctx = picked.length ? picked[0] : (first ? fileOf(first) : null), inPriv = !!(ctx && ownerState.inh[ctx]);
       bar.classList.toggle('in-private', inPriv);
       bar.querySelector('[data-select=inherit]').hidden = !inPriv || !canFolder || !!collPage;
+      // In a Not listed folder there is no public or private: the bar says Address off / Address on (on = back to following the folder).
+      const inAddr = !!(ctx && ownerState.unl && ownerState.unl[ctx]);
+      bar.classList.toggle('in-addr', inAddr);
+      const sbn = bar.querySelector('.sb-private .sb-n'), sbp = bar.querySelector('.sb-private .sb-p'), sbf = bar.querySelector('.sb-folder .sb-lab');
+      if (sbn) sbn.textContent = inAddr ? 'Address off' : 'Make private'; if (sbp) sbp.textContent = inAddr ? 'Off' : 'Private'; if (sbf) sbf.textContent = inAddr ? 'Address on' : 'Folder';
+      if (inAddr) bar.querySelector('[data-select=public]').hidden = true;
       if (canArrange) {
         bar.querySelector('[data-select=release]').disabled = !picked.some(function (f) { return stackOf[f] !== undefined; });
         bar.querySelector('[data-select=reset]').disabled = !stacks.length;
