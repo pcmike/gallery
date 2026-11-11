@@ -96,33 +96,32 @@ function archive_total_size($sizes, $names, $zip64) {
 
 /** Sends the ZIP of $entries ([{name, path, size, mtime}]) to the visitor. Returns false (having sent nothing) if the
  *  total size is beyond what a ZIP can describe. */
-function archive_stream($entries, $zip64) {
+function archive_stream($entries, $zip64, $sink = null) {   // ($sink: a function that takes the bytes, to write the ZIP somewhere other than to the visitor; then true is returned when the whole ZIP was written, false when not)
     $offset = 0;
     $central = '';
-    $emit = function ($bytes) use (&$offset) {
-        echo $bytes;
+    $emit = function ($bytes) use (&$offset, $sink) {
+        if ($sink !== null) $sink($bytes); else echo $bytes;
         $offset += strlen($bytes);
     };
     foreach ($entries as $e) {
-        if (connection_aborted()) return;
+        if ($sink === null && connection_aborted()) return false;
         $name = $e['name']; $size = $e['size'];
         [$time, $date] = archive_dos_time($e['mtime']);
         $at = $offset;
         $emit(pack('VvvvvvVVVvv', 0x04034b50, $zip64 ? 45 : 20, 0x0808, 0, $time, $date, 0, $zip64 ? 0xFFFFFFFF : 0, $zip64 ? 0xFFFFFFFF : 0, strlen($name), $zip64 ? 20 : 0)
             . $name . ($zip64 ? pack('vvPP', 1, 16, 0, 0) : ''));
         if (isset($e['data'])) { $fh = fopen('php://memory', 'r+b'); fwrite($fh, $e['data']); rewind($fh); } else $fh = @fopen($e['path'], 'rb');
-        if (!$fh) return;   // the connection ends short of its length, so the download shows as failed, never as a good file
+        if (!$fh) return false;   // the connection ends short of its length, so the download shows as failed, never as a good file
         $ctx = hash_init('crc32b');
         for ($left = $size, $at0 = 0; $left > 0;) {
             $chunk = fread($fh, min(1048576, $left));
-            if ($chunk === false || $chunk === '') { fclose($fh); return; }
+            if ($chunk === false || $chunk === '') { fclose($fh); return false; }
             if (!empty($e['patches'])) $chunk = apply_patches_to_chunk($chunk, $at0, $e['patches']);   // same length: the size worked out in advance stays right
             $at0 += strlen($chunk);
             hash_update($ctx, $chunk);
             $emit($chunk);
             $left -= strlen($chunk);
-            if (connection_aborted()) { fclose($fh); return; }
-            flush();
+            if ($sink === null) { if (connection_aborted()) { fclose($fh); return false; } flush(); }
         }
         fclose($fh);
         $crc = hexdec(hash_final($ctx));
@@ -141,7 +140,8 @@ function archive_stream($entries, $zip64) {
     } else {
         $emit(pack('VvvvvVVv', 0x06054b50, 0, 0, $n, $n, strlen($central), $cdAt, 0));
     }
-    flush();
+    if ($sink === null) flush();
+    return true;
 }
 
 /** One of a couple of places to make an archive at once, or null if they are all taken. The lock goes when the request ends. */

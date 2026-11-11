@@ -992,8 +992,8 @@ try:
                 ok(st is not None and st["open"] and not st["locked"] and "error" in st["cls"].split() and "handed out" in st["status"], "[lock check] with nothing in place (the photo is served as a plain file) the warning stays, and says which address was handed out", str(st))
                 ok(not st["lockRulesHidden"] and b.js("[...document.querySelectorAll('.lock-help')].every(h => !h.hidden)"), "[lock check] ...and the rules and the Settings text stay too", str(st))
                 b.js("document.querySelector('.side-hidden').click()"); b.drain(0.5)
-                op = b.js("""(() => { const p = document.getElementById('health-panel'); return {opt: [...p.querySelectorAll('[data-health-row][data-optional]')].filter(r => r.classList.contains('optional') && !r.classList.contains('loud')).length, optLoud: [...p.querySelectorAll('[data-health-row][data-optional].loud')].filter(r => r.getAttribute('data-health-row') !== 'visitlog').length, label: p.querySelector('.ht-label').textContent, fix: !!p.querySelector('.health-fix'), red: p.querySelectorAll('.health-row.loud.red, .health-row.health-bad').length}; })()""")
-                ok(op["opt"] >= 1 and op["optLoud"] == 0 and "optional" in op["label"] and op["fix"] and op["red"] >= 1, "[health] what is only optional (tidy links, the nginx redirect) is a grey optional row that is not counted, the fold says how many are optional, and the one real problem (private not locked) gets a \"Fix this\" link", str(op))
+                op = b.js("""(() => { const p = document.getElementById('health-panel'); return {opt: [...p.querySelectorAll('[data-health-row][data-optional]')].filter(r => r.classList.contains('optional') && !r.classList.contains('loud')).length, optLoud: [...p.querySelectorAll('[data-health-row][data-optional].loud')].filter(r => !['visitlog', 'backupfile'].includes(r.getAttribute('data-health-row'))).length, label: p.querySelector('.health-sugg-n').textContent, fix: !!p.querySelector('.health-fix'), red: p.querySelectorAll('.health-row.loud.red, .health-row.health-bad').length}; })()""")
+                ok(op["opt"] >= 1 and op["optLoud"] == 0 and "suggestion" in op["label"] and op["fix"] and op["red"] >= 1, "[health] what is only optional (tidy links, the nginx redirect) is a grey optional row that is not counted, the headline says how many suggestions there are, and the one real problem (private not locked) gets a \"Fix this\" link", str(op))
                 bn = b.js("""(() => { const x = document.getElementById('lock-banner'); if (!x) return null; const t = x.querySelector('.lock-open-text').getBoundingClientRect(), k = x.querySelector('.lock-recheck').getBoundingClientRect(), r = x.getBoundingClientRect(); return {shown: !x.hidden && r.height > 0, oneLine: Math.abs((k.top + k.bottom) / 2 - (t.top + t.bottom) / 2) < t.height / 2 + 4, inside: k.right <= r.right + 1 && t.left >= r.left - 1}; })()""")
                 ok(bn is not None and bn["shown"] and bn["oneLine"] and bn["inside"], "[lock check] when private is not locked the Edited tab shows the warning as one tidy line, with Check again level with its text and inside the box", str(bn))
                 fx0 = b.js("(() => { const f = document.querySelector('#lock-banner .lock-fix'); return f ? {open: f.open, shown: f.getBoundingClientRect().height > 0, text: f.querySelector('summary').textContent} : null; })()")
@@ -1032,7 +1032,7 @@ try:
             if expect:
                 b.goto(B11 + "/trip/?admin", 2.5); b.drain(2.5)   # (the nginx setting was saved above, the rules are in place, the password is a hash: nothing left to flag)
                 hh = b.js("""(() => { const p = document.getElementById('health-panel'); const rows = [...p.querySelectorAll('.health-row')];
-                    const web = [...p.querySelectorAll('[data-health-row]:not([data-health-row=visitlog]) .health-mark')].map(m => ({ico: !!m.querySelector('svg use[href="#i-check"]'), cls: m.className}));
+                    const web = [...p.querySelectorAll('[data-health-row]:not([data-health-row=visitlog]):not([data-health-row=backupfile]) .health-mark')].map(m => ({ico: !!m.querySelector('svg use[href="#i-check"]'), cls: m.className}));
                     return {summary: p.querySelector('.health-summary-text').textContent, cls: p.querySelector('.health-summary-text').className, shown: rows.filter(r => getComputedStyle(r).display !== 'none').length, loud: p.querySelectorAll('.health-row.loud').length, web: web, loudText: [...p.querySelectorAll('.health-row.loud .health-label')].map(e => e.textContent)}; })()""")
                 ok(hh["loud"] == 0 and hh["shown"] == 0 and hh["summary"] == "\u2713 All good" and "ok-text" in hh["cls"], "[health] when everything checks out, the Health check folds down to one green line and shows no rows", str(hh))
                 ok(len(hh["web"]) == 3 and all(w["ico"] and "ok-text" in w["cls"] for w in hh["web"]), "[health] the web server checks get the same green check mark as the other rows", str(hh["web"]))
@@ -1069,8 +1069,8 @@ try:
     try:
         b.call("Network.setExtraHTTPHeaders", {"headers": {"Authorization": "Basic " + base64.b64encode(b"admin:out-admin-pw").decode()}})
         b.goto(f"http://127.0.0.1:{P12}/?admin", 2.5); b.drain(2.0)
-        ho = b.js("""(() => { const p = document.getElementById('health-panel'); const w = [...p.querySelectorAll('[data-health-row]:not([data-health-row=visitlog])')].map(r => ({t: r.querySelector('[data-health]').textContent.slice(0, 40), ico: !!r.querySelector('.health-mark svg use[href="#i-check"]') || !!r.querySelector('.health-mark svg'), cls: r.className}));
-            return {summary: p.querySelector('.health-summary-text').textContent, loud: [...p.querySelectorAll('.health-row.loud')].filter(r => r.getAttribute('data-health-row') !== 'visitlog').length, web: w}; })()""")
+        ho = b.js("""(() => { const p = document.getElementById('health-panel'); const w = [...p.querySelectorAll('[data-health-row]:not([data-health-row=visitlog]):not([data-health-row=backupfile])')].map(r => ({t: r.querySelector('[data-health]').textContent.slice(0, 40), ico: !!r.querySelector('.health-mark svg use[href="#i-check"]') || !!r.querySelector('.health-mark svg'), cls: r.className}));
+            return {summary: p.querySelector('.health-summary-text').textContent, loud: [...p.querySelectorAll('.health-row.loud')].filter(r => !['visitlog', 'backupfile'].includes(r.getAttribute('data-health-row'))).length, web: w}; })()""")
         byrow = {r["cls"].split("pending")[0]: r for r in ho["web"]}
         ok(ho["loud"] == 0 and len(ho["web"]) == 3 and ho["web"][0]["t"].startswith("Not needed") and ho["web"][2]["t"].startswith("Doesn't apply") and ho["web"][1]["t"].startswith("Not set up") and "optional" in ho["web"][1]["cls"].split(), "[health] a gallery whose photos all come from elsewhere on the server is not flagged for the lock or the nginx redirect (they do not apply); the tidy links (no rewrite rule on this plain server) are only an optional grey row, so nothing counts as a problem", str(ho))
         ok(ho["web"][0]["ico"] and ho["web"][2]["ico"], "[health] ...and those two rows say why, with the green check mark", str(ho["web"]))
@@ -3101,8 +3101,8 @@ try:
         b.js("document.querySelector('#vt-root .vt-done').click()"); b.drain(0.2)
         b.js("document.querySelector('#vt-root .vt-chip[data-pill=src]').click()"); b.drain(0.2); b.js("document.querySelector('#vt-root .vt-done').click()"); vt_clear()
         b.js("document.querySelector('.side-link[data-tab=site]').click()"); b.drain(0.8)
-        hrow = b.js("(() => { const r = [...document.querySelectorAll('#health-panel .health-row')].find(x => /lockout/.test(x.textContent)); const a = r && r.querySelector('[data-vt-go]'); return r ? {text: r.innerText.replace(/\\s+/g, ' '), link: a ? a.textContent : null, optional: r.classList.contains('optional')} : null; })()")
-        ok(hrow is not None and "1 lockout in the last 7 days" in hrow["text"] and hrow["link"] == "→ Visitors" and hrow["optional"], "[lockouts] the Health check has an optional row for them with a \"→ Visitors\" link", str(hrow))
+        hrow = b.js("(() => { const r = [...document.querySelectorAll('#health-panel .health-row')].find(x => /lockout/.test(x.textContent)); const a = r && r.querySelector('[data-vt-go]'); return r ? {text: r.innerText.replace(/\\s+/g, ' '), link: a ? a.textContent : null, optional: r.classList.contains('heads'), counted: r.classList.contains('loud'), shown: r.getBoundingClientRect().height > 0} : null; })()")
+        ok(hrow is not None and "1 lockout in the last 7 days" in hrow["text"] and hrow["link"] == "→ Visitors" and hrow["optional"] and not hrow["counted"] and hrow["shown"], "[lockouts] the Health check has a heads-up row for them (an amber !, not counted, shown without opening Details) with a \"→ Visitors\" link", str(hrow))
         b.js("document.querySelector('#health-panel [data-vt-go]').click()"); b.drain(1.0)
         ok(lwait("document.querySelector('.tab-panel[data-tab=visits]').classList.contains('active') && document.querySelectorAll('#vt-root .vt-body tbody tr').length === 1 && document.querySelector('#vt-root [data-pill=src]').innerText.replace(/\\s+/g, ' ').trim() === 'Lockouts 1'"), "[lockouts] the link opens the Visitors tab already showing only the lockouts")
         vt_clear()
@@ -4454,6 +4454,87 @@ try:
         ok(ph2["fits"] and ph2["stacked"], "[folder settings] on a phone the choices stack one under another and the page does not scroll sideways", str(ph2))
     finally:
         srvF.terminate(); srvF.wait()
+        b.viewport(1280, 900)
+    # ---------------- the Health dashboard: the backup buttons, a damaged log, the tiers ----------------
+    print("== the Health dashboard: the backup buttons, a damaged log, the tiers")
+    import sqlite3 as _sq3, urllib.request as _ur
+    SITE_K = WORK + "/healthsite"; os.makedirs(SITE_K + "/Alpha")
+    shutil.copy(HERE + "/../../../index.php", SITE_K + "/index.php")
+    for i, rel in enumerate(("Alpha/a1.jpg", "Alpha/a2.jpg")):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(120,90); imagefill($i,0,0,imagecolorallocate($i,40+$argv[2]*40,90,200-$argv[2]*30)); imagejpeg($i,$argv[1]);", SITE_K + "/" + rel, str(i)], check=True)
+    KPW = "health-admin-pw"
+    khash = subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", KPW], capture_output=True, text=True).stdout
+    def kcfg(extra=None):
+        c = {"ADMIN_PASSWORD": khash, "ENABLE_SHARE_LINKS": True, "LOG_PUBLIC_VISITS": True}; c.update(extra or {})
+        open(SITE_K + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps(c) + "\n")
+    kcfg()
+    sk_ = socket.socket(); sk_.bind(("127.0.0.1", 0)); PK = sk_.getsockname()[1]; sk_.close(); BK = f"http://127.0.0.1:{PK}"
+    srvK = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PK}", "-t", SITE_K], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    def kwait(expr, limit=8.0):
+        end = time.time() + limit
+        while time.time() < end:
+            try:
+                if b.js(expr): return True
+            except Exception: pass
+            b.drain(0.15)
+        return False
+    HP = "document.getElementById('health-panel')"
+    def krow(text):   # the Health row whose label starts with text
+        return "[...document.querySelectorAll('#health-panel .health-row')].find(r => r.querySelector('.health-label') && r.querySelector('.health-label').textContent.trim().startsWith(%s))" % json.dumps(text)
+    try:
+        b.viewport(1280, 900)
+        b.goto(BK + "/?admin&classic=1", 1.0)
+        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": KPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
+        for _ in range(8): _ur.urlopen(BK + "/?folder=Alpha").read()   # (visits by a stranger: the log has something in it)
+        b.goto(BK + "/?admin&classic=1", 2.0); b.js("adminGoTo('site')"); b.drain(0.5)
+        ok(kwait("!!(" + krow("Backup: made") + ") && !!(" + krow("Visitor log: sound") + ")"), "[dashboard] the Health check shows the log as sound and the backup as made (the first visit made it by itself)", b.js("(() => { const p = " + HP + "; return p ? p.textContent.replace(/\\s+/g, ' ').slice(0, 600) : 'no panel'; })()"))
+        d0 = b.js("(() => { const p = " + HP + "; return {label: p.querySelector('.ht-label').textContent, strip: [...p.querySelectorAll('.health-strip .hs-t small')].map(x => x.textContent), acts: [...p.querySelectorAll('[data-backup-act]')].map(x => x.dataset.backupAct), sugg: !!p.querySelector('.health-sugg-n')}; })()")
+        ok(d0["label"] == "Details" and "Backup" in d0["strip"] and "Photos" in d0["strip"] and d0["acts"] == ["run", "download"] and d0["sugg"], "[dashboard] the fold button says Details, the numbers strip is there (photos, backup...), and the backup row has Back up now and Download", str(d0))
+        shot(b, "60-health-dashboard")
+        # the backup holds password hashes and the install secret: the browser asks for its address the way a stranger would. This test server has no rule refusing .gallery- files, so it must say so.
+        ok(kwait(krow("The backup can't be fetched") + " && " + krow("The backup can't be fetched") + ".textContent.includes(\"Anyone who finds the backup's address can download it\")", 10) and b.js(krow("The backup can't be fetched") + ".classList.contains('loud')"), "[dashboard] the backup's address is tested from the browser: with no server rule refusing .gallery- files the row is loud and says anyone who finds the address can download it", b.js("(() => { const r = " + krow("The backup can't be fetched") + "; return r ? r.textContent.replace(/\\s+/g, ' ').slice(0, 300) : 'no row'; })()"))
+        # Back up now: one request, the page is read again and the row says it was asked for
+        b.js("document.querySelector('#health-panel [data-backup-act=run]').click()")
+        ok(kwait(krow("Backup: made") + " && " + krow("Backup: made") + ".textContent.includes('asked for')", 12), "[backup] pressing Back up now makes a backup and the row, drawn again, says it was asked for", b.js(krow("Backup") + " ? " + krow("Backup") + ".textContent.slice(0, 300) : 'no row'"))
+        # Download: a password box first, a wrong one is refused in the row, the right one gives a link
+        b.js("adminGoTo('site')"); b.drain(0.4)
+        b.js("document.querySelector('#health-panel [data-backup-act=download]').click()"); b.drain(0.4)
+        ok(b.js("!!document.querySelector('#health-panel .health-pw')"), "[backup] Download first asks for the admin password, right in the row")
+        b.js("document.querySelector('#health-panel .health-pw').focus()"); b.call("Input.insertText", {"text": "not-the-password"}); b.js("document.querySelector('#health-panel .health-pw').nextElementSibling.click()"); b.drain(1.2)
+        ok("not the admin password" in b.js("document.querySelector('#health-panel .health-act-out').textContent"), "[backup] a wrong password is refused in the row, and nothing is offered", b.js("document.querySelector('#health-panel .health-act-out').textContent"))
+        b.js("(() => { const i = document.querySelector('#health-panel .health-pw'); i.value = ''; i.focus(); })()"); b.call("Input.insertText", {"text": KPW}); b.js("document.querySelector('#health-panel .health-pw').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}))"); b.drain(1.5)
+        ok("backupdownload=" in (b.js("(() => { const a = document.querySelector('#health-panel .health-act-out a'); return a ? a.getAttribute('href') : ''; })()") or ""), "[backup] the right password gives a download link (one use, two minutes)")
+        # a damaged log: Check again finds it; the buttons ask in the row first (no dialog), Cancel puts everything back
+        kdb = [f for f in glob.glob(SITE_K + "/.gallery-visits-*.sqlite")][0]
+        c = _sq3.connect(kdb); c.execute("PRAGMA journal_mode=WAL"); c.execute("CREATE TABLE junk (id INTEGER PRIMARY KEY, v TEXT)"); c.execute("CREATE INDEX junk_v ON junk(v)")
+        c.executemany("INSERT INTO junk (v) VALUES (?)", [(os.urandom(14).hex(),) for _ in range(20000)]); c.commit(); c.execute("PRAGMA wal_checkpoint(TRUNCATE)"); c.close()
+        b.js("document.querySelector('#health-panel [data-backup-act=run]').click()"); kwait("false", 2.0); b.drain(2.5)   # (a backup of the bigger log, so there is a sound copy)
+        szk = os.path.getsize(kdb); fh = open(kdb, "r+b"); fh.seek(4096 * (szk // 8192)); fh.write(os.urandom(4096 * 3)); fh.close()
+        b.goto(BK + "/?admin&classic=1", 2.0); b.js("adminGoTo('site')"); b.drain(0.4)
+        b.js("document.querySelector('#health-panel [data-health-refresh]').click()")
+        ok(kwait("!!(" + krow("The visitor log is damaged") + ")", 10), "[dashboard] Check again finds the damaged log: a red row that offers Restore from the backup and Set it aside", b.js(HP + ".textContent.replace(/\\s+/g, ' ').slice(0, 500)"))
+        dm = b.js("(() => { const r = " + krow("The visitor log is damaged") + "; return {cls: r.className, acts: [...r.querySelectorAll('[data-backup-act]')].map(x => x.dataset.backupAct), summary: " + HP + ".querySelector('.health-summary-text').textContent}; })()")
+        ok("health-bad" in dm["cls"] and dm["acts"] == ["restore", "newlog"] and "thing" in dm["summary"], "[dashboard] it is red, counted in the headline, and the two buttons are Restore and Set it aside", str(dm))
+        b.js("document.querySelector('#health-panel [data-backup-act=newlog]').click()"); b.drain(0.3)
+        ar = b.js("(() => { const r = " + krow("The visitor log is damaged") + "; const x = r.querySelector('[data-backup-act=newlog]'); return {armed: x.hasAttribute('data-armed'), label: x.textContent, out: r.querySelector('.health-act-out').textContent, cancel: !!([...r.querySelectorAll('button')].find(y => y.textContent === 'Cancel'))}; })()")
+        ok(ar["armed"] and ar["label"] == "Yes, go ahead" and ar["cancel"] and "renamed with .damaged-" in ar["out"] and not glob.glob(SITE_K + "/.gallery-visits-*.damaged-*"), "[backup] the first press only asks, in the row: the question, Yes go ahead, Cancel (nothing is changed yet, and no dialog)", str(ar))
+        b.js("[...document.querySelectorAll('#health-panel .health-row button')].find(y => y.textContent === 'Cancel').click()"); b.drain(0.3)
+        ok(b.js("document.querySelector('#health-panel [data-backup-act=newlog]').textContent") == "Set it aside and start a new log" and not glob.glob(SITE_K + "/.gallery-visits-*.damaged-*"), "[backup] Cancel puts the button back as it was")
+        b.js("document.querySelector('#health-panel [data-backup-act=restore]').click()"); b.drain(0.3); b.js("document.querySelector('#health-panel [data-backup-act=restore]').click()")
+        ok(kwait("!document.querySelector('#health-panel [data-backup-act=restore]') && !!document.querySelector('#health-panel')", 12) and len(glob.glob(SITE_K + "/.gallery-visits-*.damaged-*.sqlite")) == 1, "[backup] Yes go ahead restores the log from the backup: the page is read again, the damaged row is gone, and the damaged file is kept", str(glob.glob(SITE_K + "/.gallery-visits-*")))
+        kdb2 = [f for f in glob.glob(SITE_K + "/.gallery-visits-*.sqlite") if ".damaged-" not in f][0]
+        ok(_sq3.connect(kdb2).execute("PRAGMA quick_check").fetchone()[0] == "ok" and _sq3.connect(kdb2).execute("SELECT COUNT(*) FROM junk").fetchone()[0] == 20000, "[backup] the log that came back is sound and whole")
+        # the tiers: a closed gallery is an amber ring "!" (not counted), a suggestion is a grey circle
+        kcfg({"CLOSE_PUBLIC_GALLERY": True}); b.goto(BK + "/?admin&classic=1", 2.0); b.js("adminGoTo('site')"); b.drain(0.5)
+        hd = b.js("(() => { const r = " + krow("The public gallery is closed") + "; if (!r) return null; const m = r.querySelector('.health-mark'), cs = getComputedStyle(m); return {cls: r.className, text: m.textContent.trim(), radius: cs.borderTopLeftRadius, border: cs.borderTopColor, w: m.getBoundingClientRect().width, loud: r.classList.contains('loud')}; })()")
+        ok(hd is not None and "heads" in hd["cls"] and hd["text"] == "!" and not hd["loud"] and hd["border"] == "rgb(245, 194, 107)" and hd["w"] > 8, "[dashboard] a heads-up row (the public gallery is closed) is an amber ring with a ! and is not counted as something to fix", str(hd))
+        shot(b, "61-health-heads-up")
+        b.viewport(390, 844, True); b.goto(BK + "/?admin&classic=1", 2.0); b.js("adminGoTo('site')"); b.drain(0.5)
+        ok(b.js("document.documentElement.scrollWidth <= window.innerWidth"), "[dashboard] on a phone the Health check (the numbers strip, the rows, the buttons) does not scroll sideways")
+        shot(b, "62-health-phone")
+    finally:
+        srvK.terminate(); srvK.wait()
         b.viewport(1280, 900)
 except Exception as e:
     fails += 1; print("  FAIL  the browser run crashed:", type(e).__name__, e)

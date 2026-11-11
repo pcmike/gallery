@@ -1,5 +1,6 @@
 function cache_name($file, $variant, $mtime) {
     $secret = install_secret();   // (made at the first sign-in; a gallery nobody has signed in to has nothing private to protect, and a visitor never makes a file but a thumbnail)
+    if (in_array($variant, ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'], true)) $variant .= '|icc1';   // (pictures made before 2.6.5 had their colour profile stripped and look flat on a wide-gamut photo: they are made again, once)
     $text = $file . '|' . $variant . '|' . $mtime;
     return $secret === '' ? md5($text) : substr(hash_hmac('sha256', $text, $secret), 0, 32);
 }
@@ -28,7 +29,7 @@ function image_cache_expected_names($dir, $folderFiles, $imagickAvailable) {
         if (is_video_file($file)) { $valid[cache_name($file, 'preview2', $mtime) . '.mp4'] = true; $renamed[md5($file . '|preview2|' . $mtime) . '.mp4'] = cache_name($file, 'preview2', $mtime) . '.mp4'; }   // and its short clip (see video_preview_path)
         foreach ($variants as $variant) {
             $valid[cache_name($file, $variant, $mtime) . '.jpg'] = true;
-            $renamed[md5($file . '|' . $variant . '|' . $mtime) . '.jpg'] = cache_name($file, $variant, $mtime) . '.jpg';
+            // (a picture an unkeyed pre-2.4.0 version made is no longer moved to its new name: it has no colour profile, so it is made again; see cache_name)
         }
     }
     return [$valid, $renamed];
@@ -82,6 +83,50 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
     }
 }
 
+/** The colour profile a photo carries (a phone's Display P3, a camera's Adobe RGB), or '' when it has none. Read right after the photo is opened: a resize can drop it. */
+function image_icc_profile($img) {
+    try { $p = $img->getImageProfiles('icc', true); return is_array($p) && isset($p['icc']) && is_string($p['icc']) ? $p['icc'] : ''; } catch (Throwable $e) { return ''; }
+}
+
+/** A plain sRGB profile (matrix and curve, about 2 KB), made here so no file has to be shipped: the target when a photo's own profile is too big to keep. */
+function image_srgb_profile() {
+    static $p = null;
+    if ($p !== null) return $p;
+    $s15 = function ($v) { return pack('N', $v < 0 ? (int) round($v * 65536) + 4294967296 : (int) round($v * 65536)); };
+    $xyz = function ($x, $y, $z) use ($s15) { return 'XYZ ' . pack('N', 0) . $s15($x) . $s15($y) . $s15($z); };
+    $curve = 'curv' . pack('N', 0) . pack('N', 1024);
+    for ($i = 0; $i < 1024; $i++) { $c = $i / 1023; $l = $c <= 0.04045 ? $c / 12.92 : pow(($c + 0.055) / 1.055, 2.4); $curve .= pack('n', (int) round($l * 65535)); }
+    $text = 'sRGB' . "\0"; $desc = 'desc' . pack('N', 0) . pack('N', strlen($text)) . $text . pack('N', 0) . pack('N', 0) . pack('n', 0) . chr(0) . str_repeat("\0", 67);
+    $cprt = 'text' . pack('N', 0) . "Public domain\0";
+    $pad = function ($d) { return $d . str_repeat("\0", (4 - strlen($d) % 4) % 4); };
+    $tags = ['desc' => $pad($desc), 'cprt' => $pad($cprt), 'wtpt' => $xyz(0.9642, 1.0, 0.82491), 'rXYZ' => $xyz(0.43607, 0.22249, 0.01392), 'gXYZ' => $xyz(0.38515, 0.71687, 0.09708), 'bXYZ' => $xyz(0.14307, 0.06061, 0.71410), 'rTRC' => $curve];
+    $table = pack('N', 9); $data = ''; $base = 128 + 4 + 9 * 12; $at = [];
+    foreach ($tags as $sig => $d) { $at[$sig] = [$base + strlen($data), strlen($d)]; $data .= $d; }
+    foreach (['desc', 'cprt', 'wtpt', 'rXYZ', 'gXYZ', 'bXYZ', 'rTRC'] as $sig) $table .= $sig . pack('NN', $at[$sig][0], $at[$sig][1]);
+    $table .= 'gTRC' . pack('NN', $at['rTRC'][0], $at['rTRC'][1]) . 'bTRC' . pack('NN', $at['rTRC'][0], $at['rTRC'][1]);
+    $size = 128 + strlen($table) + strlen($data);
+    $head = pack('N', $size) . "\0\0\0\0" . pack('N', 0x02100000) . 'mntr' . 'RGB ' . 'XYZ ' . pack('nnnnnn', 2024, 1, 1, 0, 0, 0) . 'acsp' . str_repeat("\0", 4 + 4 + 4 + 4 + 8) . pack('N', 0) . $s15(0.9642) . $s15(1.0) . $s15(0.82491) . "\0\0\0\0" . str_repeat("\0", 16 + 28);
+    return $p = $head . $table . $data;
+}
+
+/** Removes everything a photo says about itself (where it was taken, the camera, a thumbnail inside it) from the copy being made, but keeps what its colours mean.
+ *  Without its profile a browser reads a wide-gamut photo's numbers as sRGB, and the colours come out flat: a phone's Display P3 photo loses a tenth of its
+ *  saturation. A small profile (a phone's, a camera's: about half a kilobyte) is put back as it was, so a wide screen shows what the photo holds; a big one
+ *  (some cameras' run to megabytes) is converted to sRGB and dropped. $icc is what image_icc_profile() read before the picture was resized. */
+function image_strip_keep_color($img, $icc) {
+    $img->stripImage();
+    if ($icc === '') return;
+    try {
+        $img->profileImage('icc', $icc);   // (the picture has no profile now, so this only attaches it)
+        if (strlen($icc) > 8192) {
+            $img->profileImage('icc', image_srgb_profile());   // (it has one, so this converts the colours to sRGB ...)
+            $img->removeImageProfile('icc');   // (... and sRGB is what a browser assumes, so none is kept)
+        }
+    } catch (Throwable $e) {
+        try { $img->stripImage(); } catch (Throwable $x) {}   // (a profile that doesn't fit the picture, a CMYK one on an RGB picture: left as it was, without)
+    }
+}
+
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
  *  available, otherwise GD. Returns true on success. The long side ends up at most $maxDim (a picture is never enlarged).
  *  The JPEG is progressive: it paints coarse-to-fine while it loads. */
@@ -90,6 +135,7 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
         try {
             $img = new Imagick();
             $img->readImage($srcPath);
+            $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) {
                 $img->autoOrient();
             }
@@ -102,7 +148,7 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
                 if (max($w, $h) > $maxDim * 2 && method_exists($img, 'unsharpMaskImage')) $img->unsharpMaskImage(0, 0.5, 0.5, 0.02);   // a picture shrunk a lot comes out a touch soft
             }
             if (defined('Imagick::INTERLACE_PLANE')) $img->setInterlaceScheme(Imagick::INTERLACE_PLANE);
-            $img->stripImage();
+            image_strip_keep_color($img, $icc);
             $ok = $img->writeImage($destPath);
             $img->clear();
             $img->destroy();
@@ -155,6 +201,7 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
         try {
             $img = new Imagick();
             $img->readImage($srcPath);
+            $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) $img->autoOrient();
             $img->setImageFormat('jpeg');
             $img->setImageCompressionQuality(84);
@@ -164,7 +211,7 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
             $img->cropImage($side, $side, (int) round(($w - $side) / 2), (int) round(($h - $side) * 0.38));
             $img->setImagePage(0, 0, 0, 0);
             if ($side > $dim) $img->thumbnailImage($dim, $dim);
-            $img->stripImage();
+            image_strip_keep_color($img, $icc);
             $ok = $img->writeImage($destPath);
             $img->clear();
             $img->destroy();
@@ -204,7 +251,7 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
 /** The longest side, in pixels, a size of picture is cut to. */
 function image_variant_dim($variant) {
     if (isset(TILE_SIZES[$variant])) return TILE_SIZES[$variant][0];
-    return ['thumb' => 480, 'share' => 1200, 'full' => 2400, 'cover' => 640, 'coverlg' => 1200][$variant] ?? 480;
+    return ['thumb' => 480, 'share' => 1200, 'full' => 4096, 'cover' => 640, 'coverlg' => 1200][$variant] ?? 480;
 }
 
 /** Makes the cached picture of one size ($variant) of a photo, whatever way that size is cut. True when it was written. */
@@ -225,6 +272,7 @@ function generate_tile_jpegs($srcPath, $targets) {
         try {
             $img = new Imagick();
             $img->readImage($srcPath);
+            $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) $img->autoOrient();
             $img->setImageFormat('jpeg');
             $w = $img->getImageWidth();
@@ -232,7 +280,7 @@ function generate_tile_jpegs($srcPath, $targets) {
             $side = min($w, $h);
             $img->cropImage($side, $side, (int) round(($w - $side) / 2), (int) round(($h - $side) / 2));
             $img->setImagePage(0, 0, 0, 0);
-            $img->stripImage();
+            image_strip_keep_color($img, $icc);
             foreach ($targets as $variant => $dest) {
                 [$dim, $quality] = TILE_SIZES[$variant];
                 $one = clone $img;

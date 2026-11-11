@@ -46,29 +46,31 @@ function render_admin_health_panel() {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $rows = health_checks($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
     $notes = array_merge(update_headsups(), health_headsups($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []));
-    $loud = 0; $asideN = 0;
-    foreach ($rows as $r) { if ($r[1] === 'bad' || $r[1] === 'warn') $loud++; elseif ($r[1] === 'aside') $asideN++; }
+    $loud = 0; $asideN = 0; $suggN = 0;
+    foreach ($rows as $r) { if ($r[1] === 'bad' || $r[1] === 'warn') $loud++; elseif ($r[1] === 'aside') $asideN++; elseif ($r[1] === 'opt') $suggN++; }
+    $strip = health_strip($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
     $mark = ['ok' => 'check', 'warn' => 'warn', 'bad' => 'warn'];
     $groups = [];
     foreach ($rows as $r) $groups[$r[0]][] = $r;
 ?>
     <section class="panel health-panel<?= $loud ? '' : ' is-checking' ?>" id="health-panel" data-csrf="<?= $esc(admin_csrf_token()) ?>"<?= update_check_due() ? ' data-update-due="1"' : '' ?>>
       <h2 class="section-title">Health check</h2>
-      <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?>
-        <button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button> <button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></p>
-      <p class="muted health-intro" style="margin-top:0;">This only looks; it never changes your gallery (it just notes the running version and, once a day, looks for a new one).</p>
+      <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?> <span class="muted health-sugg-n"><?= $suggN ? $esc('· ' . $suggN . ' suggestion' . ($suggN === 1 ? '' : 's')) : '' ?></span>
+        <span class="health-btns"><button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button><button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></span></p>
+      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as [$sl, $sv]): ?><span class="hs-t"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endforeach; ?></div>
+      <p class="muted health-intro" style="margin-top:0;">This looks and tells you what it found. It changes nothing by itself, except that once a day it looks for a new version and once a week the first visit makes a backup. Only a button in a row does anything. A red or amber row is something to fix; a grey circle is a suggestion; an amber ! is worth a look; the rest is information.</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
           <h3 class="subhead">Heads-up</h3>
           <?php foreach ($notes as $n) echo health_headsup_row_html($n), "\n"; ?>
         </div>
       <?php endif; ?>
-      <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn') $allQuiet = false; ?>
+      <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn' || $it[1] === 'heads') $allQuiet = false; ?>
         <div class="health-group<?= $allQuiet ? ' all-quiet' : '' ?>">
           <h3 class="subhead"><?= $esc($g) ?></h3>
           <?php foreach ($items as [, $status, $label, $detail, $rowLink, $rowHtml]): $isLoud = $status === 'bad' || $status === 'warn'; ?>
-            <div class="health-row health-<?= $esc($status) ?> <?= $isLoud ? 'loud' : 'quiet' ?><?= $status === 'opt' ? ' optional' : '' ?>">
-              <span class="health-mark <?= $status === 'ok' ? 'ok-text' : ($status === 'bad' ? 'warn-text' : ($status === 'warn' ? 'note-text' : 'muted')) ?>"><?= isset($mark[$status]) ? ui_icon($mark[$status]) : ($status === 'opt' ? '&#9675;' : '&bull;') ?></span>
+            <div class="health-row health-<?= $esc($status) ?> <?= $isLoud ? 'loud' : 'quiet' ?><?= $status === 'opt' ? ' optional' : ($status === 'heads' ? ' heads' : '') ?>">
+              <span class="health-mark <?= $status === 'ok' ? 'ok-text' : ($status === 'bad' ? 'warn-text' : ($status === 'warn' ? 'note-text' : ($status === 'heads' ? 'heads-mark' : 'muted'))) ?>"><?= isset($mark[$status]) ? ui_icon($mark[$status]) : ($status === 'opt' ? '&#9675;' : ($status === 'heads' ? '!' : '&bull;')) ?></span>
               <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?><?php if ($rowLink): ?> <a href="#<?= $esc($rowLink[0]) ?>" onclick="return adminGoTo('<?= $esc($rowLink[0]) ?>', '<?= $esc($rowLink[1]) ?>');"><?= $esc($rowLink[2]) ?></a><?php endif; ?></div><?php endif; ?><?= (string) $rowHtml ?></div>
             </div>
           <?php endforeach; ?>
@@ -76,7 +78,7 @@ function render_admin_health_panel() {
       <?php endforeach; ?>
       <div class="health-group all-quiet" data-health-group="web">
         <h3 class="subhead">Web server (tested by your browser, just now)</h3>
-        <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : []) as [$key, $label]): ?>
+        <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
             <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">&rarr; Server setup</a><?php endif; ?></div>

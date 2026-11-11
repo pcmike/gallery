@@ -39,8 +39,10 @@ php/032-files-this-gallery-has-made.php
 php/033-admin-links-panel.php
 php/034-share-link-log-storage.php
 php/034a-disk-changes-log.php
+php/034b-backup.php
 php/035-share-link-log-views.php
 php/035a-changes-tab.php
+php/035b-health-dashboard.php
 php/036-health-check-and-admin-panels-1.php
 js/037-files-made-script-zip-and-delete.js
 php/038-health-check-and-admin-panels-2.php

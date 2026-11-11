@@ -397,6 +397,7 @@ foreach ($groups as $key => $groupFiles) {
 // docblock, further down, for the full auth/CSRF flow.
 if (request_route() === 'admin') {
     changes_check($dir, $files, !is_admin_browser());   // (the owner's own pages always look: what changed on disk since the last look is written down, see the Changes tab; anyone else's request at most once a minute)
+    backup_after_response($dir, $files);   // (once a week the backup is made, after the page has been sent)
     run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroups, $explicitGroupKeys, $videoDurations, $galleryNotices);
     exit;
 }
@@ -411,6 +412,7 @@ if (request_route() === 'admin') {
 // just loads the page — the opposite of what hiding is supposed to do.
 $allFiles = $files;
 changes_check($dir, $allFiles, !is_admin_browser());   // (every page of the gallery looks at what changed on disk: the owner's every time, a visitor's at most once a minute)
+backup_after_response($dir, $allFiles);   // (the same, for the public pages)
 // Whether anything in the gallery is private: the lock in the icon strip only appears when there is something to unlock.
 $hasPrivateItems = false;
 foreach ($allFiles as $privateProbe) {

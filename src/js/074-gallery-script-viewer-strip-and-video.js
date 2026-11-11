@@ -5,7 +5,10 @@
       lightboxVideo.style.display = 'none';
       lightboxVideo.src = '';
       lightboxImg.style.display = '';
-      lightboxImg.src = '?img=' + encodeURIComponent(file) + '&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ;
+      const fullQ = '?img=' + encodeURIComponent(file), verQ = (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ;
+      const asOriginal = heicOk && /\.hei[cf]$/i.test(file);   // (a browser that shows HEIC is sent the photo itself; if it can't after all, the converted copy)
+      lightboxImg.onerror = asOriginal ? function () { lightboxImg.onerror = null; lightboxImg.src = fullQ + '&size=full' + verQ; } : null;
+      lightboxImg.src = fullQ + '&size=' + (asOriginal ? 'orig' : 'full') + verQ;
     }
     paintCaption();
     if (downloadLink) { downloadLink.href = '?original=' + encodeURIComponent(file) + passQ; downloadLink.classList.remove('ready'); downloadLink.hidden = !!(downloadOk && !downloadOk[current]); }

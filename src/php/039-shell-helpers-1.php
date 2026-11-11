@@ -28,7 +28,7 @@ function shell_frame_script($kind) {
         . ($kind === 'admin' ? 'function top(){setTimeout(function(){scrollTo(0,0)},0)}window.addEventListener("load",top);window.addEventListener("hashchange",top);' : '')
         . 'document.addEventListener("click",function(e){var a=e.target&&e.target.closest?e.target.closest("a[href]"):null;if(!a||e.defaultPrevented||a.target==="_blank"||a.hasAttribute("download"))return;var u;try{u=new URL(a.href,location.href)}catch(x){return}'
         . 'if(u.origin!==origin||norm(u.pathname)!==norm(location.pathname)||u.searchParams.has("inframe")||u.search===location.search)return;'
-        . 'if(/^\?(img|video|archive|map|about|track|visitsexport|filesdownload|reveal)/.test(u.search))return;u.searchParams.set("inframe","1");a.href=u.href},true);})();</script>';
+        . 'if(/^\?(img|video|archive|map|about|track|visitsexport|filesdownload|backupdownload|reveal)/.test(u.search))return;u.searchParams.set("inframe","1");a.href=u.href},true);})();</script>';
 }
 
 /** Does the admin offer a lock beside each folder (a one-press private/visible)? Only while the gallery is shown Flat: there are no folder

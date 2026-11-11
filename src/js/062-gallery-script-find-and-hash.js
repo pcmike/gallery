@@ -3,6 +3,10 @@
   const lightbox = document.getElementById('lightbox');
   const lightboxImg = document.getElementById('lightbox-img');
   const lightboxVideo = document.getElementById('lightbox-video');
+  // Can this browser show a HEIC photo itself? Safari can, Chrome and Firefox can't. Asked once, with a two-pixel HEIC; until it answers, and wherever the answer is no, a HEIC photo
+  // is shown as the converted copy the gallery makes. Where it is yes, the viewer asks for the photo itself (full size, its own colours): size=orig.
+  let heicOk = false;
+  try { const t = new Image(); t.onload = function () { heicOk = t.naturalWidth > 0; }; t.src = 'data:image/heic;base64,AAAAHGZ0eXBoZWljAAAAAG1pZjFoZWljbWlhZgAAAWhtZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAACJpbG9jAAAAAERAAAEAAQAAAAABjAABAAAAAAAAADMAAAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABodmMxAAAAAA5waXRtAAAAAAABAAAA6GlwcnAAAADJaXBjbwAAAHVodmNDAQNwAAAAkAAAAAAAHvAA/P34+AAADwNgAAEAGEABDAH//wNwAAADAJAAAAMAAAMAHroCQGEAAQApQgEBA3AAAAMAkAAAAwAAAwAeoCCBBZbqrprm4CGgwIAAAAyAAAADAIRiAAEABkQBwXPBiQAAABRpc3BlAAAAAAAAAEAAAABAAAAAKGNsYXAAAAACAAAAAQAAAAIAAAAB////wgAAAAL////CAAAAAgAAABBwaXhpAAAAAAMICAgAAAAXaXBtYQAAAAAAAAABAAEEgQIEgwAAADttZGF0AAAALygBrxMhZGNA9Sci//9o8og9urZ/ivZYWdyugMFb8vrA9mSbwPOqkZ6Ah2mnMBV4'; } catch (e) {}
   const caption = document.getElementById('lightbox-caption');
 
   function isVideoFile(name) {

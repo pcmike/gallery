@@ -85,3 +85,7 @@ A place that an older gallery (another copy of this one) already shows can be ad
 
 ### iPhone photos
 Keep `ENABLE_THUMBNAIL_CACHE` on and have Imagick with HEIC. With the cache off, `.heic` files are left out; with it on they get JPEG thumbnails and are converted for the viewer.
+
+**Colours.** An iPhone photo carries a wide-gamut colour profile (Display P3). Every picture the gallery makes from a photo (thumbnails, tiles, covers, the converted copy for the viewer) keeps a small profile like that, so a photo is as vivid on a wide screen as it is on the phone; the rest of what the photo says about itself (where it was taken, the camera) is still removed. A profile too big to keep (some cameras' run to megabytes) is converted to sRGB and dropped. Pictures made before 2.6.5 had their profile removed and look a little flat on a wide-gamut photo; they are made again, once, as they are asked for.
+
+**Safari shows HEIC itself.** In the viewer, a browser that can show HEIC (Safari on iPhone, iPad and Mac) is sent the photo itself, at its own size and with its own colours, under the same rules as any original (a visitor who may not see where it was taken gets it with the location blanked out). Every other browser (Chrome, Firefox, Edge) gets the converted JPEG, now up to 4096 pixels on the long side (it was 2400). The grid always uses the converted thumbnails.

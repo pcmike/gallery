@@ -13,7 +13,7 @@
 /** The files the gallery makes beside index.php, by exact name: name => kind. */
 function owned_top_names() {
     return ['.gallery-config.php' => 'settings', '.gallery-links.php' => 'links', '.gallery-collections.php' => 'collections', '.gallery-secret.php' => 'secret', '.gallery-stay.php' => 'signin', '.gallery-browsers.php' => 'signin', '.gallery-browsers-log.php' => 'signin',
-            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo'];
+            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo'];
 }
 
 /** The kind of a file name, or '' when the gallery makes no file with that name. $isTop: the folder is the gallery's own (the one index.php is in). */
@@ -22,7 +22,8 @@ function owned_kind_of_name($name, $isTop) {
         $top = owned_top_names();
         if (isset($top[$name])) return $top[$name];
         if (preg_match('/^\.gallery-linklog-[0-9a-f]{10}(?:-items|-q)?\.php$/D', $name)) return 'oldlogs';   // (what versions before 2.6.5 kept the visitor logs in)
-        if (preg_match('/^\.gallery-visits-[0-9a-f]{24}\.sqlite(?:-wal|-shm)?$/D', $name)) return 'visits';   // (the visitor log and the side files SQLite keeps beside it)
+        if (preg_match('/^\.gallery-visits-[0-9a-f]{24}(?:\.damaged-\d{8}-\d{6}(?:-\d+)?)?\.sqlite(?:-wal|-shm)?$/D', $name)) return 'visits';   // (a log set aside because it was damaged keeps its name and gets .damaged-<date>)
+        if (preg_match('/^\.gallery-backup-[0-9a-f]{24}\.zip(?:\.tmp)?$/D', $name)) return 'backup';   // (the backup, and the one being made)   // (the visitor log and the side files SQLite keeps beside it)
         if (preg_match('/^\.gallery-geo\.[0-9a-f]{8}\.php$/D', $name)) return 'geo';   // (a download that was cut off)
         if (preg_match('/^\.gallery-signin-[0-9a-f]{12}\.php$/D', $name)) return 'signin';   // (one signed-in browser's address history)
     }
@@ -41,6 +42,7 @@ function owned_kind_info() {
         'settings' => ['Settings', 'beside index.php', 'The choices made in Settings (and any set by hand in this file).', 'Back to the defaults; the admin password is gone.'],
         'links' => ['Share links', 'beside index.php', 'Every share link: what it covers, how long it lasts, its name.', 'Every share link stops working.'],
         'visits' => ['Visitor log', 'beside index.php', 'Who opened the gallery and each share link, what they looked at and when (a SQLite file).', 'The log is gone; it starts again from nothing.'],
+        'backup' => ['Backup', 'beside index.php', 'The one backup copy (a ZIP of your settings, share links, collections, captions, view counts, the visitor log and the rest that can\'t be made again) and the note of how the last one went. It holds password hashes, the install secret and visitor IP addresses.', 'The backup is gone; the next one is made within a week (or press Back up now in the Health check).'],
         'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.5 kept in these files. Nothing reads them any more.', 'They are gone; nothing else changes.'],
         'collections' => ['Collections', 'beside index.php', 'The collections you made: where each one lives and which folders and photos it holds.', 'Every collection is gone; the folders and photos in them are untouched.'],
         'secret' => ['Install secret', 'beside index.php', 'Keeps sign-ins and private-view cookies from being forged.', 'Everyone signed in is signed out.'],
@@ -176,7 +178,7 @@ function owned_snapshot($path) {
 /** Removes the temporary copies owned_zip_entries() made (only entries it marked 'temp', and only files named gallery-files-…). */
 function owned_zip_forget($entries) {
     foreach ($entries as $e) {
-        if (empty($e['temp']) || strncmp(basename($e['path']), 'gallery-files-', 14) !== 0) continue;
+        if (empty($e['temp']) || (strncmp(basename($e['path']), 'gallery-files-', 14) !== 0 && strncmp(basename($e['path']), 'gallery-backup-', 15) !== 0)) continue;
         if (is_file($e['path']) && !is_link($e['path'])) @unlink($e['path']);
     }
 }
@@ -188,6 +190,13 @@ function owned_zip_entries($plan, $withThumbs) {
     $readme = owned_readme($plan, $withThumbs);
     $out = [['name' => 'README.txt', 'data' => $readme, 'size' => strlen($readme), 'mtime' => time()]];
     foreach ($plan['entries'] as $e) {
+        if ($e['kind'] === 'backup') continue;   // (the backup is a ZIP of these same files: it is not packed into another)
+        if ($e['kind'] === 'visits' && preg_match('/\.sqlite(?:-wal|-shm)$/', $e['rel'])) continue;   // (the log goes in as one consistent copy, below; its side files are inside that copy)
+        $tmp = null;
+        if ($e['kind'] === 'visits' && substr($e['rel'], -7) === '.sqlite' && strpos($e['rel'], '.damaged-') === false) {   // (a log being written to can't be copied whole by copying its file)
+            [$tmp] = backup_copy_part(['path' => $e['path'], 'sqlite' => true, 'kind' => 'visits'], sys_get_temp_dir());
+            if ($tmp !== null) { $out[] = ['name' => $e['rel'], 'path' => $tmp, 'size' => (int) @filesize($tmp), 'mtime' => $e['mtime'], 'temp' => true]; continue; }
+        }
         $tmp = owned_snapshot($e['path']);
         if ($tmp === null) { owned_zip_forget($out); return null; }
         $out[] = ['name' => $e['rel'], 'path' => $tmp, 'size' => (int) @filesize($tmp), 'mtime' => $e['mtime'], 'temp' => true];
@@ -209,7 +218,7 @@ function owned_delete($plan) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
     // order: everything in the folders and the thumbnails first, then the gallery's own data, the settings file last
-    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
+    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
     $deleted = 0; $thumbs = 0; $left = [];
     $byKind = [];
     foreach ($plan['entries'] as $e) $byKind[$e['kind']][] = $e;

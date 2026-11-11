@@ -665,24 +665,7 @@ function health_checks($dir, $files) {
     $add('This install', function_exists('exif_read_data') ? 'ok' : 'warn', 'Photo details (EXIF): ' . (function_exists('exif_read_data') ? 'available' : 'missing'),
         function_exists('exif_read_data') ? '' : 'Without the exif extension, a photo\'s location and date can\'t be read from the file.');
 
-    // --- the visitor log
-    [$vlOk, $vlWhy] = visitlog_check_quiet();
-    if (!$vlOk) $add('This install', (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors tab stays hidden.');
-    elseif (is_file(visitlog_path())) {
-        $vlSize = visitlog_size(); $vlOld = visitlog_oldest();
-        $vlText = $vlSize >= 1048576 ? number_format($vlSize / 1048576, $vlSize >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($vlSize / 1024)) . ' KB';
-        if (LOG_WARN_MB > 0 && $vlSize > LOG_WARN_MB * 1048576)
-            $add('This install', 'warn', 'The visitor records take ' . $vlText, 'More than the ' . number_format(LOG_WARN_MB) . ' MB you asked to be warned at. The oldest record is from ' . ($vlOld > 0 ? gmdate('j M Y', $vlOld) : 'an unknown date') . '. Trim the log in the Visitors tab, or set how long records are kept in Settings.', ['visits', 'vt-root', '→ Visitors']);
-        else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. ' . visitlog_visitor_count() . ' visitor' . (visitlog_visitor_count() === 1 ? '' : 's') . ' logged, taking ' . $vlText . '.' . ($vlOld > 0 ? ' The oldest record is from ' . gmdate('j M Y', $vlOld) . '.' : ''));
-    }
-    else $add('This install', 'ok', 'Visitor log: ready', 'SQLite works here. Nothing has been logged yet.');
-    if (changes_tab_wanted() && ($chN = changes_count()) > 0) {   // --- the Changes tab's log of disk activity
-        $chSize = changes_size(); $chOld = changes_oldest();
-        $chText = $chSize >= 1048576 ? number_format($chSize / 1048576, $chSize >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($chSize / 1024)) . ' KB';
-        if (CHANGES_WARN_MB > 0 && $chSize > CHANGES_WARN_MB * 1048576)
-            $add('This install', 'warn', 'The change records take ' . $chText, 'More than the ' . number_format(CHANGES_WARN_MB) . ' MB you asked to be warned at. The oldest entry is from ' . ($chOld > 0 ? gmdate('j M Y', $chOld) : 'an unknown date') . '. Trim the log in the Changes tab, or set how long entries are kept in Settings (Visitors and logs).');
-        else $add('This install', 'ok', 'Change log: ready', number_format($chN) . ' entr' . ($chN === 1 ? 'y' : 'ies') . ' in the Changes tab, taking ' . $chText . '.' . ($chOld > 0 ? ' The oldest is from ' . gmdate('j M Y', $chOld) . '.' : ''));
-    }
+    health_database_rows($add, $dir, $files);   // (the visitor log, the change log, the view counts' databases and the backup: 035b)
 
     // --- settings and passwords
     $state = gallery_config_load();
@@ -694,7 +677,7 @@ function health_checks($dir, $files) {
     $pwRow = function ($label, $value, $emptyStatus, $emptyDetail) use ($add) {
         if ($value === '') $add('Settings and passwords', $emptyStatus, $label . ': not set', $emptyDetail);
         elseif (password_is_hashed($value)) $add('Settings and passwords', 'ok', $label . ': stored as a hash', '');
-        else $add('Settings and passwords', 'opt', $label . ': stored as plain text', 'It is changed to a hash by the next successful sign-in with it; nothing to do.');
+        else $add('Settings and passwords', 'info', $label . ': stored as plain text', 'It is changed to a hash by the next successful sign-in with it; nothing to do.');
     };
     $pwRow('Admin password', ADMIN_PASSWORD, 'warn', 'Without one the admin is not available (open ?admin to set one: it asks for the code in gallery-setup-code.php).');
     $pwRow('Private-view password', PRIVATE_VIEW_PASSWORD, 'info', 'Fine if you have no private items to share.');
@@ -705,10 +688,12 @@ function health_checks($dir, $files) {
     if ($lo['total'] > 0) {
         $loParts = []; foreach (lockout_kind_names() as $k => $loName) if ($lo[$k] > 0) $loParts[] = $loName . ' ' . $lo[$k];
         $loTab = visits_tab_wanted();
-        $add('Settings and passwords', 'opt', number_format($lo['total']) . ' lockout' . ($lo['total'] === 1 ? '' : 's') . ' in the last 7 days',
+        $add('Settings and passwords', 'heads', number_format($lo['total']) . ' lockout' . ($lo['total'] === 1 ? '' : 's') . ' in the last 7 days',
             'A connection was paused for a minute after too many wrong codes or addresses (' . implode(', ', $loParts) . ').' . ($loTab ? '' : ' Who it was is not kept: the Visitors tab shows it once share links or the public log are on.'),
             null, $loTab ? '<a class="health-more" href="#visits" data-vt-go="lockouts">&rarr; Visitors</a>' : '');
     }
+
+    health_sharing_rows($add);   // (the share links and collections files, links ending soon, a closed gallery: 035b)
 
     // --- where the gallery's folders live
     $named = is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [];
@@ -782,7 +767,7 @@ function health_checks($dir, $files) {
         $n = function ($x, $one, $many = null) { return number_format($x) . ' ' . ($x === 1 ? $one : ($many ?? $one . 's')); };
         $rowFor = [
             'unreadable' => ['warn', function ($c) use ($n) { return $n($c, 'file') . ' couldn\'t be read'; }, 'No capture date or location could be read from these (a damaged file, or a kind the gallery can\'t read). They still show.'],
-            'legacy' => ['opt', function ($c) use ($n) { return $n($c, 'old "nothing found" mark'); }, 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.'],
+            'legacy' => ['info', function ($c) use ($n) { return $n($c, 'old "nothing found" mark'); }, 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.'],
             'videoFailed' => ['warn', function ($c) use ($n) { return $n($c, 'video') . ' ffmpeg couldn\'t make pictures for'; }, 'Not tried again for six hours.'],
             'unread' => ['info', function ($c) use ($n) { return $n($c, 'file') . ' not read yet'; }, 'Prepare media reads them (it happens by itself the first time a photo is shown).'],
             'videoMissing' => ['info', function ($c) use ($n) { return $n($c, 'video') . ' without pictures yet'; }, 'Prepare media makes them.'],
@@ -804,6 +789,8 @@ function health_checks($dir, $files) {
         $add('Left behind', 'info', 'Older visitor logs are still on disk', ($olFiles ? count($olFiles) . ' file' . (count($olFiles) === 1 ? '' : 's') . ' (' . $olText . ')' : 'The public address\'s stand-in record in the links file') . ' from before 2.6.5. Nothing reads them now: the log lives in the new SQLite file. Remove them once you have seen the new log work.', null,
             '<div class="health-act"><button type="button" class="secondary" data-oldlogs-remove>Remove them</button></div>');
     }
+    health_server_rows($add);   // (disk room, HTTPS, the visitor address, what PHP allows: 035b)
+
     // --- what another gallery, a copy or a tidy-up left that nothing has acted on. Each can be set aside (it then sits among the quiet rows, and comes
     // back by itself if there is more of it), except a copied folder, which stays until it is dealt with.
     $aside = is_array(HEALTH_SET_ASIDE) ? HEALTH_SET_ASIDE : [];

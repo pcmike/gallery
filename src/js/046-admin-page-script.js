@@ -116,13 +116,13 @@
       if (!panel) return;
       const pending = panel.querySelectorAll('.health-row.pending').length, loud = panel.querySelectorAll('.health-row.loud').length, red = panel.querySelectorAll('.health-row.loud.red').length + panel.querySelectorAll('.health-row.health-bad').length;
       panel.classList.toggle('is-checking', pending > 0 && loud === 0);
-      panel.querySelectorAll('.health-group').forEach(function (g) { g.classList.toggle('all-quiet', !g.querySelector('.health-row.loud, .health-row.note')); });
+      panel.querySelectorAll('.health-group').forEach(function (g) { g.classList.toggle('all-quiet', !g.querySelector('.health-row.loud, .health-row.note, .health-row.heads')); });
       const text = panel.querySelector('.health-summary-text');
       if (!text) return;
       text.textContent = loud ? loud + ' thing' + (loud === 1 ? '' : 's') + ' to fix.' : pending ? 'Checking\u2026' : '\u2713 All good';
       text.className = 'health-summary-text ' + (loud ? (red ? 'warn-text' : 'note-text') : pending ? 'muted' : 'ok-text');
-      const opt = panel.querySelectorAll('.health-row.optional').length, lab = panel.querySelector('.ht-label');
-      if (lab) lab.textContent = opt ? opt + ' optional' : 'Details';   // (the fold also holds everything that passed)
+      const opt = panel.querySelectorAll('.health-row.optional').length, sg = panel.querySelector('.health-sugg-n');
+      if (sg) sg.textContent = opt ? '\u00b7 ' + opt + ' suggestion' + (opt === 1 ? '' : 's') : '';   // (the button itself says Details: it opens everything, the passed checks too)
     };
     window.__initMediaPanel = function (panel) {   // (called now for the panel the page came with, and again for one put in place when Thumbnails is switched on)
       if (!panel || !panel.dataset.csrf) return;
@@ -420,7 +420,7 @@
         if (e.target.closest && e.target.closest('.health-toggle')) { paint(!panel.classList.contains('show-all')); return; }
         const b = e.target.closest ? e.target.closest('[data-health-refresh]') : null; if (!b || b.disabled) return;
         b.disabled = true;
-        const body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_panel');
+        const body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_panel'); body.set('recheck', '1');
         fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
           .then(function (r) { return r.json(); })
           .then(function (j) {
@@ -492,6 +492,15 @@
       ask(url).then(function (state) {
         mirror('visitlog', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
           : state === 'open' ? 'Anyone can download the visitor log, which holds IP addresses (if visitors are logged) and the names of your folders and photos (the Changes tab): the server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+      });
+    };
+    // The same question for the backup (a ZIP with password hashes, the install secret and IP addresses in it).
+    const runBackupFile = function () {
+      const url = probe.getAttribute('data-backup-file');
+      if (!url) return;
+      ask(url).then(function (state) {
+        mirror('backupfile', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
+          : state === 'open' ? 'Anyone who finds the backup\'s address can download it: it holds password hashes, the install secret, share-link addresses and visitor IP addresses. The server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
       });
     };
     // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
@@ -589,7 +598,7 @@
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
     document.querySelectorAll('.show-rules-btn').forEach(function (btn) { btn.addEventListener('click', function () { hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', false); btn.remove(); }); });
-    window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runTidy(); runShareTidy(); runAccel(); };
+    window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runBackupFile(); runTidy(); runShareTidy(); runAccel(); };
     window.__healthProbe();
   })();
   // The directive reference starts expanded on a desktop and collapsed
@@ -2192,6 +2201,50 @@
         .then(function (r) { return r.json(); })
         .then(function (j) { if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (e) {} location.reload(); } else { b.disabled = false; b.parentNode.appendChild(document.createTextNode(' ' + (j.text || 'Not removed.'))); } })
         .catch(function () { b.disabled = false; });
+    });
+    // The backup buttons in the Health check: Back up now, Download (asks for the admin password, then gives a link: a browser may refuse a download a page starts by itself),
+    // Restore the log, Set it aside. One request each; after a change the page is read again so the rows say how it is now.
+    document.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-backup-act]') : null; if (!b) return;
+      var panel = b.closest('#health-panel'); if (!panel) return;
+      var act = b.getAttribute('data-backup-act'), row = b.parentNode, out = row.querySelector('.health-act-out');
+      var say = function (t, bad) { if (out) { out.textContent = t; out.className = 'health-act-out ' + (bad ? 'warn-text' : 'muted'); } };
+      var post = function (action, extra) {
+        var body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', action);
+        Object.keys(extra || {}).forEach(function (k) { body.set(k, extra[k]); });
+        return fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); });
+      };
+      var ask = b.getAttribute('data-backup-ask');   // a button that changes something asks first, in the row (no dialog): the question, then "Yes, go ahead" or Cancel
+      if (ask && !b.hasAttribute('data-armed')) {
+        var label = b.textContent; b.setAttribute('data-armed', '1'); b.textContent = 'Yes, go ahead'; say(ask);
+        var no = document.createElement('button'); no.type = 'button'; no.className = 'secondary'; no.textContent = 'Cancel';
+        no.addEventListener('click', function () { b.removeAttribute('data-armed'); b.textContent = label; no.remove(); say(''); });
+        b.after(' ', no); return;
+      }
+      if (act === 'download') {   // first press: the password box; second press (the Get link button): the request
+        if (row.querySelector('.health-pw')) return;
+        var pw = document.createElement('input'); pw.type = 'password'; pw.className = 'health-pw'; pw.placeholder = 'Admin password'; pw.autocomplete = 'current-password'; pw.setAttribute('aria-label', 'Admin password');
+        var go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = 'Get the download link';
+        var run = function () {
+          if (!pw.value) { say('Type your admin password.', true); return; }
+          go.disabled = true;
+          post('backup_download_prepare', { password: pw.value }).then(function (j) {
+            if (!j.ok) { go.disabled = false; say(j.text || 'Not allowed.', true); return; }
+            var a = document.createElement('a'); a.href = j.url; a.textContent = 'Download the backup (a ZIP: keep it private)'; a.className = 'health-more';
+            pw.remove(); go.remove(); if (out) { out.className = 'health-act-out'; out.textContent = ''; out.appendChild(a); }
+          }).catch(function () { go.disabled = false; say('Could not reach the gallery.', true); });
+        };
+        go.addEventListener('click', run); pw.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); run(); } });
+        b.after(pw, ' ', go); pw.focus(); return;
+      }
+      var name = { run: 'backup_run', restore: 'backup_restore_log', newlog: 'backup_new_log' }[act]; if (!name) return;
+      [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = true; });
+      say(act === 'run' ? 'Backing up\u2026' : 'Working\u2026');
+      post(name).then(function (j) {
+        if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (er) {} location.reload(); return; }
+        [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = false; });
+        say(j.text || 'It did not work.', true);
+      }).catch(function () { [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = false; }); say('Could not reach the gallery.', true); });
     });
     // Count views: the views another gallery counted for the photos now shown here (found in each folder's own stats file under an older path)
     // are offered under the setting they belong to, once something is found. Looked for when the group is opened (it reads each folder's file).

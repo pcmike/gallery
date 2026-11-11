@@ -289,6 +289,7 @@ function cfg_read($path) { $raw = (string) file_get_contents($path); $raw = subs
 /** The name the gallery keeps a made file under (see cache_name in index.php): a keyed hash, with the install's secret read from its folder. */
 function cache_name_for_tests($root, $file, $variant, $mtime) {
     $secret = preg_match('/^[0-9a-f]{64}$/m', (string) @file_get_contents("$root/.gallery-secret.php"), $m) ? $m[0] : '';
+    if (in_array($variant, ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'], true)) $variant .= '|icc1';   // (pictures made since the colour profile is kept are named apart from the older, profile-less ones)
     $text = $file . '|' . $variant . '|' . $mtime;
     return $secret === '' ? md5($text) : substr(hash_hmac('sha256', $text, $secret), 0, 32);
 }
@@ -4536,7 +4537,7 @@ check('[cache-bust] ...the same file gets the same tag on every request (so cach
 preg_match('/const files = (\[.*?\]);\s*\/\/.*?const fileVersions = (\[.*?\]);/s', $bust1, $fvm);
 $fvFiles = json_decode($fvm[1] ?? '[]', true); $fvVers = json_decode($fvm[2] ?? '[]', true);
 check('[cache-bust] the lightbox script is given the same tags (so full-size images and videos are busted too)', count($fvFiles) === count($fvVers) && count($fvFiles) === 3 && $fvVers[array_search('swap.jpg', $fvFiles)] === $vSwap1);
-check('[cache-bust] the lightbox builds its full-size and video addresses with the tag', str_contains($bust1, "'&size=full' + (fileVersions[current] ? '&v=' + fileVersions[current] : '')") && str_contains($bust1, "'?video=' + encodeURIComponent(file) + (fileVersions[current]"));
+check('[cache-bust] the lightbox builds its full-size and video addresses with the tag', str_contains($bust1, "fullQ + '&size=' + (asOriginal ? 'orig' : 'full') + verQ") && str_contains($bust1, "verQ = (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ") && str_contains($bust1, "'?video=' + encodeURIComponent(file) + (fileVersions[current]"));
 $rawMtime = (string) filemtime("$fxBust/swap.jpg"); $rawSize = (string) filesize("$fxBust/swap.jpg");
 check('[cache-bust] the tag is a hash, never the raw modification time or size (a visitor can\'t read when a file changed)', $vSwap1 !== $rawMtime && !str_contains($bust1, "v=$rawMtime") && !str_contains($bust1, "v=$rawSize") && !str_contains($bust1, "v=" . dechex((int) $rawMtime)) && (bool) preg_match('/^[0-9a-f]{10}$/', $vSwap1));
 // Now replace the photo, under the same name.
@@ -5487,7 +5488,7 @@ if ($haveUnzip) {
     $fListZ = $fAct(['action' => 'files_list']);
     [$fSt, $fZ, $fR] = $fZipFetch(false);
     $fNames = $fSt === 200 ? $zipNames($fZ) : [];
-    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count($fListZ['paths']) + 1, json_encode($fNames));
+    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name; the backup is not packed into it, and the log goes in as one consistent copy), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count(array_filter($fListZ['paths'], fn ($pp) => !preg_match('~\.gallery-backup(?:-[0-9a-f]{24}\.zip(?:\.tmp)?|\.php)$|\.sqlite-(?:wal|shm)$~', $pp))) + 1, json_encode($fNames));
     $fReadme = (string) $zipEntry($fZ, 'README.txt');
     check('[files made] the README says what the files are, how to put them back and where the mapped folder is from, and warns that it is private', str_contains($fReadme, 'unzip this file over the same folder') && str_contains($fReadme, 'Mapped/') && str_contains($fReadme, $fxFMap) && str_contains($fReadme, 'private'));
     $fToken = basename((string) ($fR['url'] ?? ''));
@@ -5524,7 +5525,7 @@ check('[files made] the delete reports what it did and removes only the gallery\
 $fNotOurs = ['/one.jpg', '/Pics/a.jpg', '/Pics/b.jpg', '/Notes/n.jpg', '/Notes/gallery.md', '/Linked/l.jpg', '/NoGuard/g.jpg', '/index.php', '/.gallery-items.php.bak', '/.gallery-config.php.old', '/.gallery-linklog-zz.php', '/.gallery-signin-0123456789ab.php.bak', '/.gallery-signin-notahexid1234.php', '/.gallery-signin-0123456789cd.php', '/Pics/my.gallery-items.php', '/NoGuard/.gallery-items.php', '/deep/.gallery-items.php', '/.gallery-setup', '/Pics/.gallery-cache/notes.txt'];
 $fSame = true; foreach ($fNotOurs as $k) if (($fBefore[$k] ?? null) !== ($fAfter[$k] ?? 'gone')) { $fSame = false; echo "    changed or gone: $k\n"; }
 check('[files made] every photo, note, decoy, lookalike and index.php is exactly as it was (checksums before and after), the symlink still points where it did, and the file outside is untouched', $fSame && ($fAfter['/Linked/.gallery-items.php'] ?? '') === 'link:' . "$fxFOut/important.txt" && file_get_contents("$fxFOut/important.txt") === 'a file outside the gallery that a link points at' && ($fMapAfter['/m.jpg'] ?? '') === ($fMapBefore['/m.jpg'] ?? 'x'));
-check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !glob("$fxF/.gallery-visits-*.sqlite") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-(?:signin-[0-9a-f]{12}\.php|visits-[0-9a-f]{24}\.sqlite)$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
+check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !glob("$fxF/.gallery-visits-*.sqlite") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-(?:signin-[0-9a-f]{12}\.php|visits-[0-9a-f]{24}\.sqlite|backup-[0-9a-f]{24}\.zip|backup\.php|health-cache\.php)$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
 @unlink("$fxF/.gallery-setup");   // (the owner's own marker file is left by the delete; here it is removed by hand to see the plain state)
 check('[files made] afterwards the gallery has no admin (only the set-up page, which asks for a code), the old sign-in cookie opens nothing, and the gallery itself is plain and public', !str_contains(http_get("$baseF/?admin", [])[1], 'Gallery Admin') && str_contains(http_get("$baseF/?admin", [])[1], 'Set up your gallery') && !str_contains(http_get("$baseF/?admin", ["Cookie: $fCookie"])[1], 'Gallery Admin') && http_get("$baseF/")[0] === 200);
 @unlink("$fxF/gallery-setup-code.php");
@@ -5636,7 +5637,7 @@ check('[settings page] Visitors and logs holds Count views, the visitor view cou
 $nHelps = preg_match_all('~<div class="site-row[^"]*"[^>]*>.*?<div class="help">(.*?)</div>~s', $nTab, $hm) ? array_map(fn ($h) => strlen(html_entity_decode(strip_tags($h))), $hm[1]) : [];
 check('[settings page] no setting\'s explanation runs on: every help text is 340 characters or fewer (the longest used to be 551)', $nHelps !== [] && max($nHelps) <= 340, (string) max($nHelps ?: [0]));
 check('[settings page] every plain fold (Prepare media\'s, the server rules, "How to read this") has the one bold chevron style, and a row lights up under the pointer', !preg_match('~<details>~', $nTab) && str_contains($nTab, 'details:is(.fold, .media-more, .media-tidy-box, .media-leftover-box, .media-again-box, .media-attn, .md-file, .sort-details) > summary::before') && str_contains($nTab, '.site-settings .site-row:hover { background:rgba(255,255,255,0.035)'));
-check('[health] the Health check counts only what needs fixing: optional things (passwords still stored as plain text, ffmpeg missing, old marks) are grey "optional" rows; the fold is a chevron button, and a failing lock check gets a "Fix this" link', str_contains($nTab, 'class="secondary health-toggle" aria-expanded="false"') && str_contains($nTab, '<span class="ht-label">Details</span>') && str_contains((string) file_get_contents($indexSrc), '\'opt\', $label . \': stored as plain text\'') && str_contains((string) file_get_contents($indexSrc), '$add(\'Videos\', $ff !== \'\' ? \'ok\' : \'opt\'') && str_contains($nTab, "a.className = 'secondary health-fix'") && str_contains($nTab, "const optional = row.getAttribute('data-optional') === '1' && cls === 'note-text';") && substr_count($nTab, 'data-optional="1"') === 4, json_encode([str_contains($nTab, 'class="secondary health-toggle" aria-expanded="false"'), str_contains($nTab, '<span class="ht-label">Details</span>'), preg_match('~<div class="health-row health-opt quiet optional">.{0,400}stored as plain text~s', $nTab), substr_count($nTab, 'data-optional="1"'), substr_count($nTab, 'health-row health-')]));
+check('[health] the Health check counts only what needs fixing: suggestions (ffmpeg missing, a leftover tidy-up) are grey "optional" rows counted apart as "N suggestions", plain information (a password still stored as plain text, old marks) is a dot, and the button says Details; the fold is a chevron button, and a failing lock check gets a "Fix this" link', str_contains($nTab, 'class="secondary health-toggle" aria-expanded="false"') && str_contains($nTab, '<span class="ht-label">Details</span>') && str_contains((string) file_get_contents($indexSrc), '\'info\', $label . \': stored as plain text\'') && str_contains((string) file_get_contents($indexSrc), '$add(\'Videos\', $ff !== \'\' ? \'ok\' : \'opt\'') && str_contains($nTab, "a.className = 'secondary health-fix'") && str_contains($nTab, "const optional = row.getAttribute('data-optional') === '1' && cls === 'note-text';") && substr_count($nTab, 'data-optional="1"') === 5, json_encode([str_contains($nTab, 'class="secondary health-toggle" aria-expanded="false"'), str_contains($nTab, '<span class="ht-label">Details</span>'), preg_match('~<div class="health-row health-opt quiet optional">.{0,400}stored as plain text~s', $nTab), substr_count($nTab, 'data-optional="1"'), substr_count($nTab, 'health-row health-')]));
 check('[heads-up] with something private the lock check is the real one (not optional)', str_contains($nTab, 'data-any-private="1"') && preg_match('~data-health-row="lock">~', $nTab) === 1);
 // the fourth pass: menus, chips, no Map switch, effects with counts, Export moved, the Features page
 check('[menu] Photo order and where visitors\' IP addresses come from are menu buttons (a button that opens a dark list with a tick), not pills and never a browser dropdown; two short choices (Folder style) stay pills', substr_count($nTab, '<div class="menu" data-menu>') === 2 && preg_match('~name="pair_PHOTO_ORDER"~', $nTab) === 1 && preg_match('~<div class="menu" data-menu>.{0,900}name="set_TRUSTED_PROXY"~s', $nTab) === 1 && preg_match('~<div class="seg"[^>]*aria-label="Folder style"~', $nTab) === 1 && !preg_match('~<select~', (string) preg_replace('~<script.*?</script>~s', '', substr($nTab, strpos($nTab, 'class="panel site-settings"')))));
@@ -7330,7 +7331,7 @@ first_look($baseT4, ['Rome/imp.jpg', 'Rome/dif.jpg', 'Rome/lab.jpg', 'Rome/hid.j
 $tgPage0 = http_get("$baseT4/?admin", $cookieT4)[1];
 check('[tidy] the Tidy up box is there when saved copies and old marks exist', str_contains($tgPage0, '<details class="media-tidy-box">') && !str_contains($tgPage0, '<details class="media-tidy-box" hidden>') && !str_contains($tgPage0, 'class="hint media-backups-line"'), json_encode(array_map(fn ($x) => substr($x, 0, 60), array_slice(explode('media-tidy-box', $tgPage0), 1, 2))));
 $tgPage0d = html_entity_decode($tgPage0, ENT_QUOTES);
-check('[health] the old marks are an optional (grey, not counted) Media row ("2 old "nothing found" marks"), listing the photos with a link to each editor', str_contains($tgPage0d, '2 old "nothing found" marks') && (bool) preg_match('/<div class="health-row health-opt quiet optional">.{0,300}old "nothing found" marks/s', $tgPage0d) && str_contains($tgPage0, 'href="?folder=Rome&amp;find=Rome%2Fchk.jpg"'), (string) $vmHealthRow($tgPage0));
+check('[health] the old marks are an information (dot, not counted) Media row ("2 old "nothing found" marks"), listing the photos with a link to each editor', str_contains($tgPage0d, '2 old "nothing found" marks') && (bool) preg_match('/<div class="health-row health-info quiet">.{0,300}old "nothing found" marks/s', $tgPage0d) && str_contains($tgPage0, 'href="?folder=Rome&amp;find=Rome%2Fchk.jpg"'), (string) $vmHealthRow($tgPage0));
 check('[health] "saved locations that differ from their file" is a quiet row (for information), with a link to the photo', (bool) preg_match('/<div class="health-row health-info quiet">.{0,300}saved location that differ from their file/s', $tgPage0d) && str_contains($tgPage0, 'href="?folder=Rome&amp;find=Rome%2Fdif.jpg"'));
 $tgApply = $tidyCall($baseT4, $hdrT4, ['mode' => 'refresh', 'apply' => '1']);
 $tgPage1 = http_get("$baseT4/?admin", $cookieT4)[1];
@@ -7540,17 +7541,17 @@ $fxCn = new_fixture_dir('cachenames'); make_jpeg("$fxCn/a.jpg", 600, 400, 10, 10
 write_patched_index("$fxCn/index.php", $indexContents, ['ENABLE_THUMBNAIL_CACHE' => 'true']);
 $portCn = find_free_port(); start_server($fxCn, $portCn); $baseCn = "http://127.0.0.1:$portCn";
 http_get("$baseCn/?img=c.jpg&size=thumb");
-check('[cache names] a visitor to a gallery nobody has signed in to makes no key file (a plain install still writes only thumbnails), and the thumbnail is named as before', !file_exists("$fxCn/.gallery-secret.php") && is_file("$fxCn/.gallery-cache/" . md5('c.jpg|thumb|' . filemtime("$fxCn/c.jpg")) . '.jpg'));
+check('[cache names] a visitor to a gallery nobody has signed in to makes no key file (a plain install still writes only thumbnails), and the thumbnail is named as before', !file_exists("$fxCn/.gallery-secret.php") && is_file("$fxCn/.gallery-cache/" . md5('c.jpg|thumb|icc1|' . filemtime("$fxCn/c.jpg")) . '.jpg'));
 $cnMt = filemtime("$fxCn/a.jpg");
 // the install's key exists once someone has signed in; a thumbnail made the way 2.3.2 named it is then moved, not made again
 file_put_contents("$fxCn/.gallery-secret.php", "<?php http_response_code(404); exit; ?>\n" . bin2hex(random_bytes(32)) . "\n");
 $cnLegacy = md5("a.jpg|thumb|$cnMt") . '.jpg'; file_put_contents("$fxCn/.gallery-cache/$cnLegacy", 'made by 2.3.2');
 http_get("$baseCn/");   // a page view sweeps the cache folder
 $cnNew = cache_name_for_tests($fxCn, 'a.jpg', 'thumb', $cnMt) . '.jpg';
-check('[cache names] once the install has its key, an earlier version\'s thumbnail is moved to its keyed name by a page view, not made again', !file_exists("$fxCn/.gallery-cache/$cnLegacy") && is_file("$fxCn/.gallery-cache/$cnNew") && file_get_contents("$fxCn/.gallery-cache/$cnNew") === 'made by 2.3.2' && !is_file("$fxCn/.gallery-cache/" . md5('c.jpg|thumb|' . filemtime("$fxCn/c.jpg")) . '.jpg'));
+check('[cache names] once the install has its key, an earlier version\'s thumbnail is swept away by a page view and NOT moved to a keyed name (it was made without the photo\'s colour profile, so it is made again when asked for)', !file_exists("$fxCn/.gallery-cache/$cnLegacy") && !is_file("$fxCn/.gallery-cache/$cnNew") && !is_file("$fxCn/.gallery-cache/" . md5('c.jpg|thumb|icc1|' . filemtime("$fxCn/c.jpg")) . '.jpg'));
 http_get("$baseCn/?img=b.jpg&size=thumb");
 $cnB = cache_name_for_tests($fxCn, 'b.jpg', 'thumb', filemtime("$fxCn/b.jpg")) . '.jpg';
-check('[cache names] a new thumbnail is kept under the keyed name, and the plain md5 of its path and date names nothing', is_file("$fxCn/.gallery-cache/$cnB") && !file_exists("$fxCn/.gallery-cache/" . md5('b.jpg|thumb|' . filemtime("$fxCn/b.jpg")) . '.jpg') && preg_match('/^[0-9a-f]{32}\.jpg$/', $cnB) === 1 && $cnB !== md5('b.jpg|thumb|' . filemtime("$fxCn/b.jpg")) . '.jpg');
+check('[cache names] a new thumbnail is kept under the keyed name, and the plain md5 of its path and date names nothing', is_file("$fxCn/.gallery-cache/$cnB") && !file_exists("$fxCn/.gallery-cache/" . md5('b.jpg|thumb|' . filemtime("$fxCn/b.jpg")) . '.jpg') && preg_match('/^[0-9a-f]{32}\.jpg$/', $cnB) === 1 && $cnB !== md5('b.jpg|thumb|icc1|' . filemtime("$fxCn/b.jpg")) . '.jpg');
 
 echo "== downloads and the admin frame ==\n";
 // A download must be able to sit in this site's own admin frame (the desktop admin is one): a browser that holds a download to the frame
@@ -9448,7 +9449,7 @@ $vtBeacon([['s', 'Rome/r1.jpg']], ['User-Agent: Mozilla/5.0 (X11; Linux x86_64; 
 check('[visitor log] the default for how long records are kept is 0: a 900-day-old visitor is still there after a new visitor arrives, and nothing is folded into a count', isset(vl_log($fxVt, PUBLIC_LOG_ID_FOR_TESTS)['visitors']['old1']) && vl_log($fxVt, PUBLIC_LOG_ID_FOR_TESTS)['folded'] === 0 && !vl_rows($fxVt, 'meta', 'k = ?', ['trimmed_at']));
 // the size warning in Health, with the size and the oldest record
 $vtHealth = function () use ($baseVt, &$vtOwn) { return http_get("$baseVt/?admin", $vtOwn)[1]; };
-check('[health] by default the log is "ready" and says how many visitors it holds and when the oldest record is from; no size warning', str_contains($vtHealth(), 'Visitor log: ready') && str_contains($vtHealth(), 'SQLite works here') && str_contains($vtHealth(), 'The oldest record is from ' . gmdate('j M Y', $vtNow - 900 * 86400)) && !str_contains($vtHealth(), 'The visitor records take'));
+check('[health] by default the log is "sound" (looked through) and says how many visitors it holds and when the oldest record is from; no size warning', str_contains($vtHealth(), 'Visitor log: sound') && str_contains($vtHealth(), 'SQLite works here') && str_contains($vtHealth(), 'The oldest record is from ' . gmdate('j M Y', $vtNow - 900 * 86400)) && !str_contains($vtHealth(), 'The visitor records take'));
 file_put_contents("$fxVt/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'vt-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'LOG_PUBLIC_VISITS' => true, 'LOG_WARN_MB' => 1]));
 $vtBig = vl_db($fxVt); $vtBig->exec('BEGIN'); $vtI = $vtBig->prepare('INSERT INTO items (src, vid, item, sf, sl) VALUES (?, ?, ?, ?, ?)'); for ($i = 0; $i < 12000; $i++) $vtI->execute([$vtA, 'c1', 'Rome/pad-' . str_repeat('x', 60) . "-$i.jpg", $vtNow, $vtNow]); $vtBig->exec('COMMIT'); unset($vtI, $vtBig);
 clearstatcache();
@@ -9490,7 +9491,7 @@ check('[no sqlite] the Visitors tab is not offered (no sidebar entry, no panel),
 check('[no sqlite] the logging switch is greyed with the reason, and the settings page says plainly that the log needs pdo_sqlite', preg_match('~id="setting-LOG_PUBLIC_VISITS".*?<input type="checkbox" name="set_LOG_PUBLIC_VISITS" value="1"\s*disabled~s', $nsPage) === 1 && str_contains($nsPage, 'Needs SQLite.') && str_contains($nsPage, 'pdo_sqlite'));
 $nsSave = json_decode(http_post("$baseNs/?admin", ['action' => 'save_site_settings', 'csrf_token' => $nsCsrf, 'config_hash' => md5((string) file_get_contents("$fxNs/.gallery-config.php")), 'set_LOG_PUBLIC_VISITS' => '1'], array_merge($nsOwn, ['X-Requested-With: gallery-fetch']))[1] ?? '', true) ?: [];
 check('[no sqlite] a request made by hand to switch it on is refused with the same reason, and nothing is saved', (($nsSave['type'] ?? '') === 'error' || ($nsSave['ok'] ?? true) === false) && str_contains(json_encode($nsSave), 'pdo_sqlite') && !str_contains((string) file_get_contents("$fxNs/.gallery-config.php"), 'LOG_PUBLIC_VISITS'), json_encode($nsSave));
-check('[no sqlite] Health says the log needs SQLite and that nothing is logged until then', str_contains($nsPage, 'Visitor log: needs SQLite') && str_contains($nsPage, 'Until then nothing is logged and the Visitors tab stays hidden'));
+check('[no sqlite] Health says the log needs SQLite and that nothing is logged until then', str_contains($nsPage, 'Visitor log: needs SQLite') && str_contains($nsPage, 'Until then nothing is logged and the Visitors and Changes tabs stay hidden'));
 $nsMade = json_decode(http_post("$baseNs/?admin", ['action' => 'link_create', 'label' => 'No sqlite', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'off', 'scope_type' => 'public', 'downloads' => 'off', 'zip' => 'off', 'csrf_token' => $nsCsrf], array_merge($nsOwn, ['X-Requested-With: gallery-fetch']))[1] ?? '', true) ?: [];
 $nsTok = read_data_file("$fxNs/.gallery-links.php")['links'][$nsMade['id'] ?? '']['token'] ?? '';
 [$nsGoSt, , $nsGoH] = http_post("$baseNs/?link=$nsTok", ['go' => '1'], ['User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'], false);
@@ -9787,6 +9788,212 @@ for ($chRi = 0; $chRi < 8; $chRi++) {
     if ($chRN !== 1) $chRBad[] = "round $chRi: $chRN";
 }
 check('[changes] eight requests at once after one photo is added write that change once (eight rounds)', $chRBad === [] && $chRAll === 8, implode('; ', $chRBad));
+
+// the backup: weekly by itself, one copy, nothing trusted before it is looked at; and the dashboard rows that report on it
+echo "== the backup and the Health dashboard ==\n";
+$fxBk = new_fixture_dir('backup');
+mkdir("$fxBk/Alpha", 0777, true);
+make_jpeg("$fxBk/Alpha/a1.jpg", 40, 30, 20, 90, 160); make_jpeg("$fxBk/Alpha/a2.jpg", 40, 30, 120, 90, 60);
+file_put_contents("$fxBk/Alpha/note.md", "{gallery}\nA note about Alpha\n");
+file_put_contents("$fxBk/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'bk-admin-pw-1', 'ENABLE_SHARE_LINKS' => true, 'LOG_PUBLIC_VISITS' => true, 'TRACK_VIEWS' => true]));
+copy($indexSrc, "$fxBk/index.php");
+putenv('PHP_CLI_SERVER_WORKERS=4');
+$portBk = find_free_port(); start_server($fxBk, $portBk); $baseBk = "http://127.0.0.1:$portBk";
+putenv('PHP_CLI_SERVER_WORKERS');
+[, , $bkH] = http_post("$baseBk/?admin", ['access_code' => 'bk-admin-pw-1'], [], false);
+$bkOwn = ['Cookie: ' . extract_cookie_header($bkH)];
+$bkCsrf = (string) extract_csrf_token(http_get("$baseBk/?admin&classic=1", $bkOwn)[1]);
+$bkAdmin = fn (array $f) => json_decode(http_post("$baseBk/?admin", $f + ['csrf_token' => $bkCsrf], array_merge($bkOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$bkZips = fn () => array_values(array_filter(glob("$fxBk/.gallery-backup-*") ?: [], fn ($f) => preg_match('~\.gallery-backup-[0-9a-f]{24}\.zip$~', $f)));
+$bkState = fn () => is_file("$fxBk/.gallery-backup.php") ? (json_decode(substr((string) file_get_contents("$fxBk/.gallery-backup.php"), (int) strpos((string) file_get_contents("$fxBk/.gallery-backup.php"), "\n") + 1), true) ?: []) : [];
+$bkStateSet = function (array $kv) use ($fxBk, $bkState) { file_put_contents("$fxBk/.gallery-backup.php", "<?php http_response_code(404); exit; ?>\n" . json_encode(array_merge($bkState(), $kv))); };
+// a reader for the ZIP the gallery writes (stored entries): [name => [crc, size, offset]]
+$bkIndex = function ($path) {
+    $raw = (string) @file_get_contents($path); $n = strlen($raw);
+    if ($n < 22) return null;
+    $e = unpack('Vsig/vdisk/vcd/vn/vtotal/Vlen/Voff/vcomment', substr($raw, $n - 22));
+    if ($e['sig'] !== 0x06054b50) return null;
+    $out = []; $at = $e['off'];
+    for ($i = 0; $i < $e['n']; $i++) {
+        $h = unpack('Vsig/vmade/vneed/vflags/vmethod/vtime/vdate/Vcrc/Vcsize/Vusize/vnlen/velen/vclen/vdisk/vint/Vext/Voff', substr($raw, $at, 46));
+        $out[substr($raw, $at + 46, $h['nlen'])] = ['crc' => $h['crc'], 'size' => $h['usize'], 'offset' => $h['off']];
+        $at += 46 + $h['nlen'] + $h['elen'] + $h['clen'];
+    }
+    return $out;
+};
+$bkRead = function ($path, $name) use ($bkIndex) {
+    $ix = $bkIndex($path); if (!isset($ix[$name])) return null;
+    $raw = (string) file_get_contents($path); $o = $ix[$name]['offset'];
+    $lh = unpack('Vsig/vver/vflags/vmethod/vtime/vdate/Vcrc/Vcsize/Vusize/vnlen/velen', substr($raw, $o, 30));
+    $d = substr($raw, $o + 30 + $lh['nlen'] + $lh['elen'], $ix[$name]['size']);
+    return hexdec(hash('crc32b', $d)) === $ix[$name]['crc'] ? $d : false;
+};
+$bkLogFile = fn () => array_values(array_filter(glob("$fxBk/.gallery-visits-*.sqlite") ?: [], fn ($f) => preg_match('~/\.gallery-visits-[0-9a-f]{24}\.sqlite$~', $f)))[0] ?? null;
+$bkPage = fn () => http_get("$baseBk/?admin&classic=1", $bkOwn)[1];
+$bkSound = function ($f) { try { $d = new PDO('sqlite:' . $f); $q = $d->query('PRAGMA quick_check')->fetchAll(PDO::FETCH_COLUMN); return $q === ['ok']; } catch (Throwable $e) { return false; } };
+
+for ($bkI = 0; $bkI < 12; $bkI++) http_get("$baseBk/?folder=Alpha");   // (some visits for the log and the view counts)
+http_get("$baseBk/?img=" . rawurlencode('Alpha/a1.jpg') . '&size=thumb', $bkOwn);
+// 1. weekly, by itself: the first request after a week (here: none yet) makes it after the page is sent
+for ($bkW = 0; $bkW < 30 && !$bkZips(); $bkW++) { usleep(200000); http_get("$baseBk/"); }
+check('[backup] with none yet, a visit makes the backup by itself (one ZIP beside index.php, readable only by the web server user)', count($bkZips()) === 1 && (fileperms($bkZips()[0]) & 0777) === 0600 && ($bkState()['by'] ?? '') === 'auto');
+$bkR1 = $bkAdmin(['action' => 'backup_run']);
+$bkNames = array_keys($bkIndex($bkZips()[0]) ?? []);
+check('[backup] "Back up now" replaces it: still ONE ZIP (and no half-made file left); it holds the settings, the secret, the view counts, the log, the note, a README and a manifest', ($bkR1['ok'] ?? null) === true && count($bkZips()) === 1 && !glob("$fxBk/.gallery-backup-*.tmp") && in_array('.gallery-config.php', $bkNames, true) && in_array('.gallery-secret.php', $bkNames, true) && in_array('.gallery-stats.sqlite', $bkNames, true) && in_array('Alpha/.gallery-stats.sqlite', $bkNames, true) && in_array('Alpha/note.md', $bkNames, true) && in_array('README.txt', $bkNames, true) && in_array('MANIFEST.json', $bkNames, true) && count(array_filter($bkNames, fn ($n) => preg_match('~^\.gallery-visits-[0-9a-f]{24}\.sqlite$~', $n))) === 1, json_encode([$bkR1, $bkNames]));
+check('[backup] not in it: the photos, thumbnails and the signed-in browsers', !array_filter($bkNames, fn ($n) => preg_match('~\.jpg$|\.gallery-cache|\.gallery-stay|\.gallery-browsers|\.gallery-signin-|\.gallery-login-attempts~', $n)), json_encode($bkNames));
+$bkMan = json_decode((string) $bkRead($bkZips()[0], 'MANIFEST.json'), true) ?: [];
+$bkShaOk = true; foreach (($bkMan['parts'] ?? []) as $bkP) if (hash('sha256', (string) $bkRead($bkZips()[0], $bkP['name'])) !== $bkP['sha256']) $bkShaOk = false;
+check('[backup] the manifest\'s checksums match every file in the ZIP, and the ZIP\'s own checksums read back whole', $bkShaOk && count($bkMan['parts'] ?? []) >= 5 && $bkRead($bkZips()[0], 'README.txt') !== false);
+check('[backup] the file\'s name carries 24 random letters and digits (so its address can\'t be guessed where no server rule refuses .gallery- files), and the Health check tests, from the browser, that it can\'t be fetched', preg_match('~^\.gallery-backup-[0-9a-f]{24}\.zip$~', basename($bkZips()[0])) === 1 && str_contains($bkPage(), 'The backup can&#039;t be fetched by its address') && preg_match('~data-backup-file="[^"]*/\.gallery-backup-[0-9a-f]{24}\.zip"~', $bkPage()) === 1);
+$bkLogRead = $bkRead($bkZips()[0], basename((string) $bkLogFile()));
+file_put_contents("$fxBk/.bk-tmp-log.sqlite", (string) $bkLogRead);
+check('[backup] the log in it is a whole, sound SQLite file with the visits in it (made with VACUUM INTO, not a file copy)', $bkLogRead !== null && $bkLogRead !== false && $bkSound("$fxBk/.bk-tmp-log.sqlite"));
+unlink("$fxBk/.bk-tmp-log.sqlite");
+// 2. the dashboard: the rows, the tiers, the strip
+$bkHp = $bkPage();
+check('[dashboard] the Health check has the Database and backup group with the log "sound" and the backup made, the numbers strip, and the button says Details (no "optional" count on it)', str_contains($bkHp, 'Database and backup') && str_contains($bkHp, 'Visitor log: sound') && str_contains($bkHp, 'Backup: made') && str_contains($bkHp, 'class="health-strip"') && str_contains($bkHp, 'data-backup-act="run"') && str_contains($bkHp, 'data-backup-act="download"') && str_contains($bkHp, '<span class="ht-label">Details</span>') && !str_contains($bkHp, ' optional</span>'));
+// 3. damage the log (middle pages), with a bigger log so there are pages to damage
+$bkDb = new PDO('sqlite:' . $bkLogFile()); $bkDb->exec('PRAGMA journal_mode=WAL'); $bkDb->exec('CREATE TABLE junk (id INTEGER PRIMARY KEY, v TEXT)'); $bkDb->exec('CREATE INDEX junk_v ON junk(v)');
+$bkDb->beginTransaction(); for ($bkJ = 0; $bkJ < 20000; $bkJ++) $bkDb->exec("INSERT INTO junk (v) VALUES ('" . md5((string) $bkJ) . str_repeat('x', 20) . "')"); $bkDb->commit(); $bkDb->exec('PRAGMA wal_checkpoint(TRUNCATE)'); $bkDb = null;
+$bkR2 = $bkAdmin(['action' => 'backup_run']);
+$bkGoodSize = filesize($bkZips()[0]); $bkGoodLog = (string) $bkRead($bkZips()[0], basename($bkLogFile()));
+check('[backup] a backup of the bigger, still sound log carries it', ($bkR2['ok'] ?? null) === true && ($bkR2['problems'] ?? 1) === 0 && strlen($bkGoodLog) > 1000000);
+$bkSz = filesize($bkLogFile()); $bkFh = fopen($bkLogFile(), 'r+b'); fseek($bkFh, 4096 * intdiv($bkSz, 8192)); fwrite($bkFh, random_bytes(4096 * 3)); fclose($bkFh);
+check('[dashboard] a damaged log is not noticed by every page load (the look through is kept for an hour) ...', str_contains($bkPage(), 'Visitor log: sound'));
+$bkRe = json_decode(http_post("$baseBk/?admin", ['csrf_token' => $bkCsrf, 'action' => 'health_panel', 'recheck' => '1'], array_merge($bkOwn, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '';
+check('[dashboard] ... but Check again finds it: a red row "The visitor log is damaged" that says what is at risk and offers Restore from the backup and Set it aside, and it is counted in "things to fix"', str_contains($bkRe, 'The visitor log is damaged') && str_contains($bkRe, 'data-backup-act="restore"') && str_contains($bkRe, 'data-backup-act="newlog"') && str_contains($bkRe, 'health-bad') && str_contains($bkRe, '1 thing to look at') && str_contains($bkRe, 'your photos, share links, settings and captions are in other files'));
+$bkR3 = $bkAdmin(['action' => 'backup_run']);
+$bkManNow = json_decode((string) $bkRead($bkZips()[0], 'MANIFEST.json'), true) ?: [];
+$bkCarried = array_values(array_filter($bkManNow['parts'] ?? [], fn ($p) => ($p['state'] ?? '') === 'carried'));
+file_put_contents("$fxBk/.bk-tmp-log.sqlite", (string) $bkRead($bkZips()[0], basename($bkLogFile())));
+check('[backup] backing up with the log damaged does NOT put the damaged file in: the sound copy from the backup before is carried over, the rest is made new, and the answer says so', ($bkR3['ok'] ?? null) === true && ($bkR3['problems'] ?? 0) === 1 && count($bkCarried) === 1 && $bkSound("$fxBk/.bk-tmp-log.sqlite") && ($bkState()['result'] ?? '') === 'partial', json_encode([$bkR3, $bkCarried]));
+unlink("$fxBk/.bk-tmp-log.sqlite");
+$bkHp2 = http_get("$baseBk/?admin&classic=1", $bkOwn)[1];
+check('[dashboard] the backup row then says a part could not be read soundly and that the copy from before is kept (amber, counted)', str_contains($bkHp2, 'could not be read soundly') && str_contains($bkHp2, 'the copy from the backup before is kept'));
+// 4. a destroyed header is "not a database", not a permissions problem
+$bkFh = fopen($bkLogFile(), 'r+b'); fwrite($bkFh, str_repeat("\0", 100)); fclose($bkFh);
+$bkRe2 = json_decode(http_post("$baseBk/?admin", ['csrf_token' => $bkCsrf, 'action' => 'health_panel', 'recheck' => '1'], array_merge($bkOwn, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '';
+check('[dashboard] a log whose first bytes are destroyed is called damaged ("not a database"), not blamed on write permissions', str_contains($bkRe2, 'The visitor log is damaged') && str_contains($bkRe2, 'not a database') && !str_contains($bkRe2, 'has to be allowed to write'));
+// 5. restore, and a second set-aside in the same second never writes over the first
+$bkRes = $bkAdmin(['action' => 'backup_restore_log']);
+$bkDamaged = glob("$fxBk/.gallery-visits-*.damaged-*.sqlite");
+check('[backup] Restore puts the backup\'s log in place (sound, with the junk table), and the damaged one is kept, renamed with .damaged- and the date', ($bkRes['ok'] ?? null) === true && $bkSound($bkLogFile()) && (new PDO('sqlite:' . $bkLogFile()))->query('SELECT COUNT(*) FROM junk')->fetchColumn() == 20000 && count($bkDamaged) === 1);
+$bkNew = $bkAdmin(['action' => 'backup_new_log']); $bkDamaged2 = glob("$fxBk/.gallery-visits-*.damaged-*.sqlite");
+check('[backup] "Set it aside and start a new log" keeps the file too: both set-asides are still there, none written over the other, and no live log is left', ($bkNew['ok'] ?? null) === true && count($bkDamaged2) === 2 && $bkLogFile() === null);
+http_get("$baseBk/?folder=Alpha"); http_get("$baseBk/?folder=Alpha");
+check('[backup] the next visit starts a new, empty log', $bkLogFile() !== null && $bkSound($bkLogFile()) && (new PDO('sqlite:' . $bkLogFile()))->query("SELECT COUNT(*) FROM sqlite_master WHERE name='junk'")->fetchColumn() == 0);
+// 6. no earlier copy to carry: the part is left out, and the backup is still made
+$bkFh = fopen($bkLogFile(), 'r+b'); fwrite($bkFh, str_repeat("\0", 100)); fclose($bkFh);
+foreach ($bkZips() as $bkZ) unlink($bkZ); @unlink("$fxBk/.gallery-backup.php");
+$bkR4 = $bkAdmin(['action' => 'backup_run']); $bkMan4 = json_decode((string) $bkRead($bkZips()[0] ?? '', 'MANIFEST.json'), true) ?: [];
+check('[backup] a damaged log with no earlier copy is left out (and named as left out), the other files are backed up, and the ZIP is whole', ($bkR4['ok'] ?? null) === true && ($bkR4['problems'] ?? 0) === 1 && count($bkMan4['left_out'] ?? []) === 1 && !array_filter(array_keys($bkIndex($bkZips()[0]) ?? []), fn ($n) => str_contains($n, '.gallery-visits-')) && in_array('.gallery-config.php', array_keys($bkIndex($bkZips()[0])), true));
+$bkHp4 = http_get("$baseBk/?admin&classic=1", $bkOwn)[1];
+check('[dashboard] ... and the backup row says it is not in the backup', str_contains($bkHp4, 'no earlier copy: it is not in the backup'));
+unlink($bkLogFile()); foreach (glob("$fxBk/.gallery-visits-*") as $bkF) if (!str_contains($bkF, '.damaged-')) unlink($bkF);
+// 7. the weekly timing
+$bkStateSet(['ok_at' => time() - 8 * 86400, 'try_at' => time() - 7 * 86400, 'result' => 'ok']); touch($bkZips()[0], time() - 8 * 86400);
+for ($bkW = 0; $bkW < 25 && ($bkState()['ok_at'] ?? 0) < time() - 3600; $bkW++) { usleep(200000); http_get("$baseBk/"); }
+check('[backup] a backup older than a week is replaced by the next visit', ($bkState()['ok_at'] ?? 0) >= time() - 60 && count($bkZips()) === 1);
+$bkStateSet(['ok_at' => time() - 8 * 86400, 'try_at' => time() - 3600, 'result' => 'ok']); touch($bkZips()[0], time() - 8 * 86400);
+http_get("$baseBk/"); http_get("$baseBk/"); usleep(500000);
+check('[backup] ... but not again within six hours of a try (a try that keeps failing does not run on every visit)', ($bkState()['ok_at'] ?? 0) < time() - 7 * 86400);
+$bkStateSet(['ok_at' => time() - 3 * 86400, 'try_at' => time() - 3 * 86400, 'result' => 'ok']);
+http_get("$baseBk/"); usleep(500000);
+check('[backup] ... and a backup three days old is left alone', ($bkState()['ok_at'] ?? 0) < time() - 2 * 86400);
+// 8. requests together: one ZIP, none half made
+$bkSocks = [];
+for ($bkQ = 0; $bkQ < 4; $bkQ++) { $sk = stream_socket_client("tcp://127.0.0.1:$portBk", $en, $es, 10); $bd = http_build_query(['csrf_token' => $bkCsrf, 'action' => 'backup_run']); fwrite($sk, "POST /?admin HTTP/1.1\r\nHost: 127.0.0.1\r\n" . implode("\r\n", $bkOwn) . "\r\nX-Requested-With: gallery-fetch\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: " . strlen($bd) . "\r\nConnection: close\r\n\r\n$bd"); $bkSocks[] = $sk; }
+$bkAnswers = []; foreach ($bkSocks as $sk) { $bkAnswers[] = stream_get_contents($sk); fclose($sk); }
+check('[backup] four "Back up now" at once: one ZIP, nothing half made left, at least one succeeded and the rest said one was being made or also succeeded', count($bkZips()) === 1 && !glob("$fxBk/.gallery-backup-*.tmp") && count(array_filter($bkAnswers, fn ($a) => str_contains($a, '"ok":true'))) >= 1 && $bkIndex($bkZips()[0]) !== null);
+// 9. download: password, one use, checked first
+$bkBad = $bkAdmin(['action' => 'backup_download_prepare', 'password' => 'wrong']);
+$bkPrep = $bkAdmin(['action' => 'backup_download_prepare', 'password' => 'bk-admin-pw-1']);
+check('[backup] downloading needs the admin password: a wrong one is refused, the right one gives a one-time address', ($bkBad['ok'] ?? null) === false && ($bkPrep['ok'] ?? null) === true && str_contains((string) ($bkPrep['url'] ?? ''), 'backupdownload='));
+$bkDl = http_get("$baseBk/" . ($bkPrep['url'] ?? '?x'), $bkOwn);
+check('[backup] the address gives the very file (a ZIP, not stored by caches), once', $bkDl[0] === 200 && $bkDl[1] === file_get_contents($bkZips()[0]) && str_contains(implode("\n", $bkDl[2]), 'application/zip') && str_contains(strtolower(implode("\n", $bkDl[2])), 'no-store') && http_get("$baseBk/" . $bkPrep['url'], $bkOwn)[0] === 404 && strncmp(http_get("$baseBk/" . $bkPrep['url'])[1], 'PK', 2) !== 0);
+$bkRaw = (string) file_get_contents($bkZips()[0]); $bkIx = $bkIndex($bkZips()[0]); $bkPos = $bkIx['README.txt']['offset'] + 30 + strlen('README.txt') + 20; $bkRaw[$bkPos] = $bkRaw[$bkPos] === 'x' ? 'y' : 'x'; file_put_contents($bkZips()[0], $bkRaw);
+$bkPrep2 = $bkAdmin(['action' => 'backup_download_prepare', 'password' => 'bk-admin-pw-1']); $bkDl2 = http_get("$baseBk/" . ($bkPrep2['url'] ?? '?x'), $bkOwn);
+check('[backup] a backup that no longer checks out (one byte changed on disk) is not sent', $bkDl2[0] === 500 && strncmp($bkDl2[1], 'PK', 2) !== 0 && str_contains($bkDl2[1], 'did not check out'));
+$bkR5 = $bkAdmin(['action' => 'backup_run']);
+check('[backup] ... and the next backup does not carry anything from it, and is whole again', ($bkR5['ok'] ?? null) === true && $bkRead($bkZips()[0], 'README.txt') !== false && ($bkR5['problems'] ?? 1) === 0);
+// 10. Files this gallery has made: the backup is listed (so it can be deleted) but is not packed into that ZIP again
+$bkFiles = $bkAdmin(['action' => 'files_list']);
+check('[backup] the Files-this-gallery-made list has the Backup (and the damaged logs set aside, as visitor logs)', in_array('backup', array_column($bkFiles['rows'] ?? [], 'kind'), true));
+// 11. the other dashboard rows
+file_put_contents("$fxBk/.gallery-links.php", "<?php http_response_code(404); exit; ?>\n{not json");
+$bkHp5 = http_get("$baseBk/?admin&classic=1", $bkOwn)[1];
+check('[dashboard] a share links file that can\'t be read is a red row that says every link stops working and the file was left as it is', str_contains($bkHp5, 'The share links file can&#039;t be read') && str_contains($bkHp5, 'Every share link stops working') && file_get_contents("$fxBk/.gallery-links.php") === "<?php http_response_code(404); exit; ?>\n{not json");
+unlink("$fxBk/.gallery-links.php");
+$bkCfg = cfg_read("$fxBk/.gallery-config.php"); $bkCfg['CLOSE_PUBLIC_GALLERY'] = true; file_put_contents("$fxBk/.gallery-config.php", cfg_text($bkCfg));
+$bkHp6 = http_get("$baseBk/?admin&classic=1", $bkOwn)[1];
+check('[dashboard] a closed gallery is an amber "!" heads-up (not counted as something to fix)', preg_match('~health-row health-heads[^"]* heads[^"]*">.{0,400}The public gallery is closed~s', $bkHp6) === 1 || (str_contains($bkHp6, 'The public gallery is closed') && str_contains($bkHp6, 'heads')));
+unset($bkCfg['CLOSE_PUBLIC_GALLERY']); file_put_contents("$fxBk/.gallery-config.php", cfg_text($bkCfg));
+file_put_contents("$fxBk/Alpha/.gallery-stats.sqlite", 'this is not a database, it was cut short');
+$bkRe3 = json_decode(http_post("$baseBk/?admin", ['csrf_token' => $bkCsrf, 'action' => 'health_panel', 'recheck' => '1'], array_merge($bkOwn, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '';
+check('[dashboard] a damaged folder view-count database is a red row naming the folder, and says the backup holds a copy', str_contains($bkRe3, 'View counts are damaged in 1 folder') && str_contains($bkRe3, 'Alpha/.gallery-stats.sqlite'));
+
+// colour: a wide-gamut photo keeps what its colours mean in every picture the gallery makes from it, and a HEIC is sent as itself to a browser that shows HEIC
+echo "== colour profiles and HEIC originals ==\n";
+if (!class_exists('Imagick')) {
+    echo "  skip  colour profile and HEIC original checks (this PHP has no Imagick; the Imagick runs cover them)\n";
+} else {
+$fxCol = new_fixture_dir('colour');
+// a matrix/curve ICC profile built here (not by the gallery's code): $prim = the red, green and blue colorants as D50 XYZ; $extra pads it past 8 KB
+$colProfile = function (array $prim, int $extra = 0) {
+    $s15 = fn ($v) => pack('N', (int) round($v * 65536) & 0xFFFFFFFF);
+    $xyz = fn ($c) => 'XYZ ' . pack('N', 0) . $s15($c[0]) . $s15($c[1]) . $s15($c[2]);
+    $curve = 'curv' . pack('N', 0) . pack('N', 1024);
+    for ($i = 0; $i < 1024; $i++) { $c = $i / 1023; $curve .= pack('n', (int) round(($c <= 0.04045 ? $c / 12.92 : pow(($c + 0.055) / 1.055, 2.4)) * 65535)); }
+    $text = "T\0"; $desc = 'desc' . pack('N', 0) . pack('N', strlen($text)) . $text . str_repeat("\0", 4 + 4 + 2 + 1 + 67);
+    $tags = ['desc' => $desc . str_repeat("\0", (4 - strlen($desc) % 4) % 4), 'wtpt' => $xyz([0.9642, 1.0, 0.82491]), 'rXYZ' => $xyz($prim[0]), 'gXYZ' => $xyz($prim[1]), 'bXYZ' => $xyz($prim[2]), 'rTRC' => $curve];
+    $order = ['desc', 'wtpt', 'rXYZ', 'gXYZ', 'bXYZ', 'rTRC', 'gTRC', 'bTRC'];
+    $base = 128 + 4 + count($order) * 12; $data = ''; $at = [];
+    foreach ($tags as $sig => $d) { $at[$sig] = [$base + strlen($data), strlen($d)]; $data .= $d; }
+    $table = pack('N', count($order));
+    foreach ($order as $sig) { $src = $at[$sig] ?? $at['rTRC']; $table .= $sig . pack('NN', $src[0], $src[1]); }
+    $body = $table . $data . str_repeat("\0", $extra);
+    $head = pack('N', 128 + strlen($body)) . "\0\0\0\0" . pack('N', 0x02100000) . 'mntrRGB XYZ ' . pack('nnnnnn', 2024, 1, 1, 0, 0, 0) . 'acsp' . str_repeat("\0", 24) . pack('N', 0) . $s15(0.9642) . $s15(1.0) . $s15(0.82491) . str_repeat("\0", 4 + 16 + 28);
+    return $head . $body;
+};
+$colP3 = $colProfile([[0.51512, 0.24120, -0.00105], [0.29198, 0.69225, 0.04189], [0.15710, 0.06657, 0.78407]]);   // (Display P3's colorants)
+$colSrgb = $colProfile([[0.43607, 0.22249, 0.01392], [0.38515, 0.71687, 0.09708], [0.14307, 0.06061, 0.71410]]);
+$colMake = function ($path, $profile) {
+    $i = new Imagick(); $i->newImage(480, 320, new ImagickPixel('rgb(20,200,40)')); $i->setImageColorspace(Imagick::COLORSPACE_SRGB);
+    if ($profile !== null) $i->profileImage('icc', $profile);
+    $i->setImageFormat($path !== '' && str_ends_with($path, '.heic') ? 'heic' : 'jpeg'); $i->writeImage($path);
+};
+$colMake("$fxCol/wide.jpg", $colP3); $colMake("$fxCol/big.jpg", $colProfile([[0.51512, 0.24120, -0.00105], [0.29198, 0.69225, 0.04189], [0.15710, 0.06657, 0.78407]], 9000)); $colMake("$fxCol/plain.jpg", null);
+$colHeic = class_exists('Imagick') && count(Imagick::queryFormats('HEIC')) > 0;
+if ($colHeic) { try { $colMake("$fxCol/phone.heic", $colP3); } catch (Throwable $e) { $colHeic = false; } }
+file_put_contents("$fxCol/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'col-admin-pw-1']));
+copy($indexSrc, "$fxCol/index.php");
+$portCol = find_free_port(); start_server($fxCol, $portCol); $baseCol = "http://127.0.0.1:$portCol";
+$colGet = fn ($file, $size) => http_get("$baseCol/?img=" . rawurlencode($file) . "&size=$size");
+$colInfo = function ($blob) { $i = new Imagick(); $i->readImageBlob($blob); $p = $i->getImagePixelColor(10, 10)->getColor(); return ['profiles' => $i->getImageProfiles('*', false), 'icc' => strlen((string) ($i->getImageProfiles('icc', true)['icc'] ?? '')), 'px' => [$p['r'], $p['g'], $p['b']], 'w' => $i->getImageWidth()]; };
+$colNear = fn ($a, $b, $t = 3) => abs($a[0] - $b[0]) <= $t && abs($a[1] - $b[1]) <= $t && abs($a[2] - $b[2]) <= $t;
+foreach (['thumb', 'cover', 'tile', 'share'] as $colV) {
+    $r = $colGet('wide.jpg', $colV); $i = $colInfo($r[1]);
+    check("[colour] a photo with a small wide-gamut profile (Display P3) keeps it in the $colV picture: the profile is there, its colours untouched, and nothing else (no location, no camera) is", $r[0] === 200 && $i['profiles'] === ['icc'] && $i['icc'] === strlen($colP3) && $colNear($i['px'], [20, 200, 40], 2), json_encode($i));
+}
+$colB = $colInfo($colGet('big.jpg', 'thumb')[1]);
+$colExpect = new Imagick(); $colExpect->newImage(4, 4, new ImagickPixel('rgb(20,200,40)')); $colExpect->setImageColorspace(Imagick::COLORSPACE_SRGB); $colExpect->profileImage('icc', $colP3); $colExpect->profileImage('icc', $colSrgb); $colE = $colExpect->getImagePixelColor(1, 1)->getColor();
+check('[colour] a profile too big to keep (over 8 KB) is converted to sRGB and dropped: no profile, and the colours are what a colour-managed conversion gives (the vivid green moves from 20,200,40 to about ' . $colE['r'] . ',' . $colE['g'] . ',' . $colE['b'] . ')', $colB['profiles'] === [] && $colNear($colB['px'], [$colE['r'], $colE['g'], $colE['b']], 3) && !$colNear($colB['px'], [20, 200, 40], 5), json_encode([$colB, $colE]));
+$colPl = $colInfo($colGet('plain.jpg', 'thumb')[1]);
+check('[colour] a photo with no profile comes out with none, its colours untouched', $colPl['profiles'] === [] && $colNear($colPl['px'], [20, 200, 40], 2), json_encode($colPl));
+$colFull = $colGet('wide.jpg', 'full'); $colOrig = $colGet('wide.jpg', 'orig');
+check('[colour] a JPEG at full size is still the original file, byte for byte, and "orig" for it is the same thing', $colFull[0] === 200 && $colFull[1] === file_get_contents("$fxCol/wide.jpg") && $colOrig[1] === file_get_contents("$fxCol/wide.jpg"));
+check('[colour] "orig" for a file that is not in the gallery is a plain 404', $colGet('nothing.heic', 'orig')[0] === 404);
+if ($colHeic) {
+    $hf = $colGet('phone.heic', 'full'); $hi = $colInfo($hf[1]);
+    check('[heic] a HEIC at "full" is the converted JPEG with the colour profile kept (not stripped: a Display P3 photo looks flat without it)', $hf[0] === 200 && str_contains(implode("\n", $hf[2]), 'image/jpeg') && $hi['profiles'] === ['icc'] && $colNear($hi['px'], [20, 200, 40], 3), json_encode($hi));
+    $ho = $colGet('phone.heic', 'orig');
+    check('[heic] "orig" is the HEIC itself, byte for byte, as image/heic (for a browser that shows HEIC: Safari)', $ho[0] === 200 && $ho[1] === file_get_contents("$fxCol/phone.heic") && str_contains(implode("\n", $ho[2]), 'image/heic'), strlen($ho[1]) . ' bytes, ' . implode(' | ', array_slice($ho[2], 0, 6)));
+    $hg = http_get("$baseCol/", []);
+    check('[heic] the viewer asks for size=orig only when the browser can show a HEIC (a two-pixel HEIC is decoded once to find out), and falls back to the converted copy if the original fails', str_contains($hg[1], "data:image/heic;base64,") && str_contains($hg[1], "'&size=' + (asOriginal ? 'orig' : 'full')") && str_contains($hg[1], "lightboxImg.onerror = asOriginal"));
+} else {
+    echo "  skip  HEIC colour and original checks (this PHP's Imagick can't write HEIC to build a fixture)\n";
+}
+}
 
 /* --------------------------------------------------------------------- */
 

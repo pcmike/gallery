@@ -67,6 +67,8 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     // ?size[]=x arrives as an array; anything that isn't a plain string
     // is just the default size.
     if (!is_string($variant)) $variant = 'thumb';
+    $wantOriginal = $variant === 'orig';   // (what the viewer asks for a HEIC photo when this browser can show one: the file itself, not a converted copy)
+    if ($wantOriginal) $variant = 'full';
     if (!in_array($filename, $validFiles, true)) {
         http_response_code(404);
         return;
@@ -107,6 +109,10 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     }
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
     $isHeic = in_array($ext, ['heic', 'heif'], true);
+
+    // A HEIC photo to a browser that shows HEIC (Safari): the original, at its own size and with its own colours; the same rules as any original
+    // (a visitor who may not see where it was taken gets it with the location blanked out). Anything that can't be done that way is the converted copy below.
+    if ($wantOriginal && $isHeic && $variant === 'full' && send_original_for_visitor($srcPath, $filename, $itemsData, $cacheControl)) return;
 
     // Non-HEIC files at full size are served untouched — no need to
     // resize or re-encode the original the lightbox already opens fine.
