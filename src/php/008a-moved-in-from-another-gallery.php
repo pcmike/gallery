@@ -46,6 +46,19 @@ function moved_in_leftovers($dir, $files) {
     return ['count' => $count, 'bytes' => $bytes, 'folders' => $folders];
 }
 
+/** What a Left behind row of the Health check is about, as [how many, a fingerprint of exactly those things] (null for a row that is not one of these). "Set aside" keeps the fingerprint:
+ *  the row stays quiet only while it is about the very same things, so anything new (or anything gone) brings it back, and a count that happens to match does not hide different things. */
+function health_aside_state($key, $dir, $files) {
+    if ($key === 'earlier-views') { $ev = moved_in_earlier_views($dir, $files); return [(int) $ev['views'], md5(json_encode($ev['rows']))]; }
+    if ($key === 'leftover-thumbs') {
+        $lo = moved_in_leftovers($dir, $files); $all = [];
+        foreach ($lo['folders'] as $f) foreach ($f['names'] as $nm) $all[] = $f['real'] . '/' . $nm;
+        sort($all); return [(int) $lo['count'], md5(implode("\n", $all))];
+    }
+    if ($key === 'loose-photos') { $l = EXTRA_ROOTS ? loose_media_in_roots() : []; sort($l); return [count($l), md5(implode("\n", $l))]; }
+    return null;
+}
+
 /** Removes those leftovers (the list is worked out again here, never taken from the request). Returns how many files and bytes went. */
 function moved_in_remove_leftovers($dir, $files) {
     $n = 0; $bytes = 0;

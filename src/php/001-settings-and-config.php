@@ -249,17 +249,18 @@ function gallery_mounts() {
 }
 
 /** How many photos and videos lie directly in the EXTRA_ROOTS paths: those are not shown (only their folders are). */
-function count_loose_media_in_roots() {
+function loose_media_in_roots() {
     global $mediaExtensions;
-    $n = 0;
+    $found = [];
     foreach (EXTRA_ROOTS as $root) {
         if (!is_string($root) || !is_dir($root) || is_link($root)) continue;
         foreach ((@scandir($root) ?: []) as $entry) {
-            if ($entry[0] !== '.' && is_file($root . '/' . $entry) && in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), $mediaExtensions, true)) $n++;
+            if ($entry[0] !== '.' && is_file($root . '/' . $entry) && in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), $mediaExtensions, true)) $found[] = $root . '/' . $entry;
         }
     }
-    return $n;
+    return $found;
 }
+function count_loose_media_in_roots() { return count(loose_media_in_roots()); }
 
 // Turn photo/group/page view tracking on or off. Off by default — this
 // script writes nothing to the folder's disk unless you turn something

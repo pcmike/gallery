@@ -196,8 +196,8 @@
           })
           .catch(function () { reportBox.textContent = ''; reportBox.appendChild(text('p', 'warn-text', 'The list could not be loaded.')); });
       };
-      // Moved in from another gallery: the views an older gallery counted for these photos (added to this one's, once), and the thumbnails it
-      // left behind in a place from elsewhere on the server (removed once the owner says no other gallery still shows the folders).
+      // Left behind in folders from elsewhere: the views an older gallery counted for these photos (added to this one's, once), and the thumbnails nothing uses any more
+      // in a place from elsewhere on the server (removed once the owner says no other gallery still shows the folders).
       const moved = panel.querySelector('.media-moved'), outer = panel.querySelector('details.media-outer');
       const leftBox = panel.querySelector('.media-leftover-box'), leftOk = panel.querySelector('.media-leftover-ok'), leftGo = panel.querySelector('.media-leftover-go'), leftOut = panel.querySelector('.media-leftover-out');
       const mb = function (b) { return b >= 1048576 ? (b / 1048576).toFixed(b >= 10485760 ? 0 : 1).replace(/\.0$/, '') + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; };

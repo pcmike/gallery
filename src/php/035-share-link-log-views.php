@@ -807,21 +807,21 @@ function health_checks($dir, $files) {
     // --- what another gallery, a copy or a tidy-up left that nothing has acted on. Each can be set aside (it then sits among the quiet rows, and comes
     // back by itself if there is more of it), except a copied folder, which stays until it is dealt with.
     $aside = is_array(HEALTH_SET_ASIDE) ? HEALTH_SET_ASIDE : [];
-    $leftBehind = function ($key, $amount, $status, $label, $detail, $link) use (&$add, $aside) {
+    $leftBehind = function ($key, $status, $label, $detail, $link) use (&$add, $aside, $dir, $files) {
         $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-        $isAside = isset($aside[$key]) && (int) $aside[$key] >= $amount;
+        $isAside = is_array($aside[$key] ?? null) && ($aside[$key]['h'] ?? null) === (health_aside_state($key, $dir, $files)[1] ?? '');   // (set aside only while it is about exactly the same things)
         $btn = $isAside ? '<div class="health-act"><button type="button" class="secondary" data-aside-back="' . $esc($key) . '">Bring back</button></div>'
                         : '<div class="health-act"><button type="button" class="secondary" data-aside="' . $esc($key) . '">Set aside</button></div>';
         $add('Left behind', $isAside ? 'aside' : $status, $label . ($isAside ? ' (set aside)' : ''), $detail, $link, $btn);
     };
     if (AUTO_GROUP_BY_FOLDER) {
         $ev = moved_in_earlier_views($dir, $files);
-        if ($ev['views'] > 0) $leftBehind('earlier-views', $ev['views'], 'warn', number_format($ev['views']) . ' earlier view' . ($ev['views'] === 1 ? ' is' : 's are') . ' waiting to be added',
+        if ($ev['views'] > 0) $leftBehind('earlier-views', 'warn', number_format($ev['views']) . ' earlier view' . ($ev['views'] === 1 ? ' is' : 's are') . ' waiting to be added',
             'Counted by another gallery, under the old addresses of ' . $ev['folders'] . ' folder' . ($ev['folders'] === 1 ? '' : 's') . '.' . (TRACK_VIEWS ? '' : ' Turn on Count views first.'), ['site', 'setting-TRACK_VIEWS', '→ Count views']);
         $lo = moved_in_leftovers($dir, $files);
-        if ($lo['count'] > 0) $leftBehind('leftover-thumbs', $lo['count'], 'opt', number_format($lo['count']) . ' leftover thumbnail' . ($lo['count'] === 1 ? '' : 's') . ' (' . ($lo['bytes'] >= 1048576 ? round($lo['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($lo['bytes'] / 1024)) . ' KB') . ') from another gallery',
-            'Pictures an older gallery made in folders elsewhere on the server. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', '→ Prepare media']);
-        if (EXTRA_ROOTS && ($loose = count_loose_media_in_roots()) > 0) $leftBehind('loose-photos', $loose, 'warn', number_format($loose) . ' photo' . ($loose === 1 ? '' : 's') . ' lying directly in a place added without a name',
+        if ($lo['count'] > 0) $leftBehind('leftover-thumbs', 'opt', number_format($lo['count']) . ' leftover thumbnail' . ($lo['count'] === 1 ? '' : 's') . ' (' . ($lo['bytes'] >= 1048576 ? round($lo['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($lo['bytes'] / 1024)) . ' KB') . ') in folders from elsewhere on the server',
+            'Pictures made for photos that are gone now (deleted, renamed or replaced), or by another gallery that showed the same folders. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', '→ Prepare media']);
+        if (EXTRA_ROOTS && ($loose = count_loose_media_in_roots()) > 0) $leftBehind('loose-photos', 'warn', number_format($loose) . ' photo' . ($loose === 1 ? '' : 's') . ' lying directly in a place added without a name',
             'Only the folders inside such a place are shown, so these photos are not. Move them into a folder to show them, or give the place a name.', ['site', 'setting-EXTRA_FOLDERS', '→ Folders from elsewhere']);
         $copied = [];
         foreach (folder_id_map_folders($dir, $files) as $fid => $paths) {

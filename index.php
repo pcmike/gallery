@@ -249,17 +249,18 @@ function gallery_mounts() {
 }
 
 /** How many photos and videos lie directly in the EXTRA_ROOTS paths: those are not shown (only their folders are). */
-function count_loose_media_in_roots() {
+function loose_media_in_roots() {
     global $mediaExtensions;
-    $n = 0;
+    $found = [];
     foreach (EXTRA_ROOTS as $root) {
         if (!is_string($root) || !is_dir($root) || is_link($root)) continue;
         foreach ((@scandir($root) ?: []) as $entry) {
-            if ($entry[0] !== '.' && is_file($root . '/' . $entry) && in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), $mediaExtensions, true)) $n++;
+            if ($entry[0] !== '.' && is_file($root . '/' . $entry) && in_array(strtolower(pathinfo($entry, PATHINFO_EXTENSION)), $mediaExtensions, true)) $found[] = $root . '/' . $entry;
         }
     }
-    return $n;
+    return $found;
 }
+function count_loose_media_in_roots() { return count(loose_media_in_roots()); }
 
 // Turn photo/group/page view tracking on or off. Off by default — this
 // script writes nothing to the folder's disk unless you turn something
@@ -3383,6 +3384,19 @@ function moved_in_leftovers($dir, $files) {
         $count += count($names); $bytes += $b;
     }
     return ['count' => $count, 'bytes' => $bytes, 'folders' => $folders];
+}
+
+/** What a Left behind row of the Health check is about, as [how many, a fingerprint of exactly those things] (null for a row that is not one of these). "Set aside" keeps the fingerprint:
+ *  the row stays quiet only while it is about the very same things, so anything new (or anything gone) brings it back, and a count that happens to match does not hide different things. */
+function health_aside_state($key, $dir, $files) {
+    if ($key === 'earlier-views') { $ev = moved_in_earlier_views($dir, $files); return [(int) $ev['views'], md5(json_encode($ev['rows']))]; }
+    if ($key === 'leftover-thumbs') {
+        $lo = moved_in_leftovers($dir, $files); $all = [];
+        foreach ($lo['folders'] as $f) foreach ($f['names'] as $nm) $all[] = $f['real'] . '/' . $nm;
+        sort($all); return [(int) $lo['count'], md5(implode("\n", $all))];
+    }
+    if ($key === 'loose-photos') { $l = EXTRA_ROOTS ? loose_media_in_roots() : []; sort($l); return [count($l), md5(implode("\n", $l))]; }
+    return null;
 }
 
 /** Removes those leftovers (the list is worked out again here, never taken from the request). Returns how many files and bytes went. */
@@ -9280,18 +9294,17 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (empty($_POST['others_gone'])) admin_json_exit(['ok' => false, 'text' => 'Tick the box that says no other gallery still shows these folders first.']);
         @set_time_limit(120);
         $r = moved_in_remove_leftovers($dir, $files);
+        if (is_array(HEALTH_SET_ASIDE) && isset(HEALTH_SET_ASIDE['leftover-thumbs'])) { $kept = HEALTH_SET_ASIDE; unset($kept['leftover-thumbs']); gallery_config_merge(['HEALTH_SET_ASIDE' => $kept ?: null]); }   // (they are gone: what was set aside is too)
         admin_json_exit(['ok' => true, 'text' => '', 'count' => $r['count'], 'bytes' => $r['bytes']]);
     }
-    // Set aside / Bring back a Health check row about something left behind. The amount noted is worked out here, now, never taken from the request:
-    // the row comes back by itself if there is more of it later.
+    // Set aside / Bring back a Health check row about something left behind. What is noted (how many, and a fingerprint of exactly those things) is worked out here, now, never taken from
+    // the request: the row comes back by itself when anything about it changes.
     if ($action === 'health_set_aside') {
         $key = (string) ($_POST['key'] ?? '');
-        $amounts = ['earlier-views' => function () use ($dir, $files) { return moved_in_earlier_views($dir, $files)['views']; },
-                    'leftover-thumbs' => function () use ($dir, $files) { return moved_in_leftovers($dir, $files)['count']; },
-                    'loose-photos' => function () { return EXTRA_ROOTS ? count_loose_media_in_roots() : 0; }];
-        if (!isset($amounts[$key])) admin_json_exit(['ok' => false, 'text' => 'That row can\'t be set aside.']);
+        $state = health_aside_state($key, $dir, $files);
+        if ($state === null) admin_json_exit(['ok' => false, 'text' => 'That row can\'t be set aside.']);
         $now = is_array(HEALTH_SET_ASIDE) ? HEALTH_SET_ASIDE : [];
-        if (!empty($_POST['back'])) unset($now[$key]); else $now[$key] = (int) $amounts[$key]();
+        if (!empty($_POST['back'])) unset($now[$key]); else $now[$key] = ['n' => $state[0], 'h' => $state[1]];
         $why = gallery_config_merge(['HEALTH_SET_ASIDE' => $now ?: null]);
         admin_json_exit($why === '' ? ['ok' => true, 'text' => !empty($_POST['back']) ? 'Brought back.' : 'Set aside.'] : ['ok' => false, 'text' => $why]);
     }
@@ -14731,21 +14744,21 @@ function health_checks($dir, $files) {
     // --- what another gallery, a copy or a tidy-up left that nothing has acted on. Each can be set aside (it then sits among the quiet rows, and comes
     // back by itself if there is more of it), except a copied folder, which stays until it is dealt with.
     $aside = is_array(HEALTH_SET_ASIDE) ? HEALTH_SET_ASIDE : [];
-    $leftBehind = function ($key, $amount, $status, $label, $detail, $link) use (&$add, $aside) {
+    $leftBehind = function ($key, $status, $label, $detail, $link) use (&$add, $aside, $dir, $files) {
         $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-        $isAside = isset($aside[$key]) && (int) $aside[$key] >= $amount;
+        $isAside = is_array($aside[$key] ?? null) && ($aside[$key]['h'] ?? null) === (health_aside_state($key, $dir, $files)[1] ?? '');   // (set aside only while it is about exactly the same things)
         $btn = $isAside ? '<div class="health-act"><button type="button" class="secondary" data-aside-back="' . $esc($key) . '">Bring back</button></div>'
                         : '<div class="health-act"><button type="button" class="secondary" data-aside="' . $esc($key) . '">Set aside</button></div>';
         $add('Left behind', $isAside ? 'aside' : $status, $label . ($isAside ? ' (set aside)' : ''), $detail, $link, $btn);
     };
     if (AUTO_GROUP_BY_FOLDER) {
         $ev = moved_in_earlier_views($dir, $files);
-        if ($ev['views'] > 0) $leftBehind('earlier-views', $ev['views'], 'warn', number_format($ev['views']) . ' earlier view' . ($ev['views'] === 1 ? ' is' : 's are') . ' waiting to be added',
+        if ($ev['views'] > 0) $leftBehind('earlier-views', 'warn', number_format($ev['views']) . ' earlier view' . ($ev['views'] === 1 ? ' is' : 's are') . ' waiting to be added',
             'Counted by another gallery, under the old addresses of ' . $ev['folders'] . ' folder' . ($ev['folders'] === 1 ? '' : 's') . '.' . (TRACK_VIEWS ? '' : ' Turn on Count views first.'), ['site', 'setting-TRACK_VIEWS', '→ Count views']);
         $lo = moved_in_leftovers($dir, $files);
-        if ($lo['count'] > 0) $leftBehind('leftover-thumbs', $lo['count'], 'opt', number_format($lo['count']) . ' leftover thumbnail' . ($lo['count'] === 1 ? '' : 's') . ' (' . ($lo['bytes'] >= 1048576 ? round($lo['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($lo['bytes'] / 1024)) . ' KB') . ') from another gallery',
-            'Pictures an older gallery made in folders elsewhere on the server. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', '→ Prepare media']);
-        if (EXTRA_ROOTS && ($loose = count_loose_media_in_roots()) > 0) $leftBehind('loose-photos', $loose, 'warn', number_format($loose) . ' photo' . ($loose === 1 ? '' : 's') . ' lying directly in a place added without a name',
+        if ($lo['count'] > 0) $leftBehind('leftover-thumbs', 'opt', number_format($lo['count']) . ' leftover thumbnail' . ($lo['count'] === 1 ? '' : 's') . ' (' . ($lo['bytes'] >= 1048576 ? round($lo['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($lo['bytes'] / 1024)) . ' KB') . ') in folders from elsewhere on the server',
+            'Pictures made for photos that are gone now (deleted, renamed or replaced), or by another gallery that showed the same folders. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', '→ Prepare media']);
+        if (EXTRA_ROOTS && ($loose = count_loose_media_in_roots()) > 0) $leftBehind('loose-photos', 'warn', number_format($loose) . ' photo' . ($loose === 1 ? '' : 's') . ' lying directly in a place added without a name',
             'Only the folders inside such a place are shown, so these photos are not. Move them into a folder to show them, or give the place a name.', ['site', 'setting-EXTRA_FOLDERS', '→ Folders from elsewhere']);
         $copied = [];
         foreach (folder_id_map_folders($dir, $files) as $fid => $paths) {
@@ -14973,10 +14986,10 @@ function render_admin_thumbnails_panel($csrfToken) {
         <div class="media-report" aria-live="polite"><p class="muted">Loading&hellip;</p></div>
       </details>
       <div class="media-moved" hidden>
-        <h3 class="subhead">Moved in from another gallery</h3>
+        <h3 class="subhead">Left behind in folders from elsewhere</h3>
         <details class="media-leftover-box" hidden>
           <summary>Tidy leftover thumbnails <span class="muted media-leftover-sum"></span></summary>
-          <p class="hint">Thumbnails and video pictures an old gallery left in these folders. <strong>Photos, captions, links, private flags and the read-once file data are never touched</strong>: only files named exactly like a made thumbnail or poster go.</p>
+          <p class="hint">Thumbnails and video pictures in these folders that no photo here uses any more (photos deleted, renamed or replaced, or pictures made by another gallery that showed the same folders). <strong>Photos, captions, links, private flags and the read-once file data are never touched</strong>: only files named exactly like a made thumbnail or poster go.</p>
           <p class="hint media-leftover-list"></p>
           <p><label class="check"><input type="checkbox" class="media-leftover-ok"> No other gallery still shows these folders (the old one is retired)</label></p>
           <p><button type="button" class="secondary media-leftover-go" disabled>Remove the leftover thumbnails</button> <span class="media-leftover-out" aria-live="polite"></span></p>
@@ -17844,8 +17857,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           })
           .catch(function () { reportBox.textContent = ''; reportBox.appendChild(text('p', 'warn-text', 'The list could not be loaded.')); });
       };
-      // Moved in from another gallery: the views an older gallery counted for these photos (added to this one's, once), and the thumbnails it
-      // left behind in a place from elsewhere on the server (removed once the owner says no other gallery still shows the folders).
+      // Left behind in folders from elsewhere: the views an older gallery counted for these photos (added to this one's, once), and the thumbnails nothing uses any more
+      // in a place from elsewhere on the server (removed once the owner says no other gallery still shows the folders).
       const moved = panel.querySelector('.media-moved'), outer = panel.querySelector('details.media-outer');
       const leftBox = panel.querySelector('.media-leftover-box'), leftOk = panel.querySelector('.media-leftover-ok'), leftGo = panel.querySelector('.media-leftover-go'), leftOut = panel.querySelector('.media-leftover-out');
       const mb = function (b) { return b >= 1048576 ? (b / 1048576).toFixed(b >= 10485760 ? 0 : 1).replace(/\.0$/, '') + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; };

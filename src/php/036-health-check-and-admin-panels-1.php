@@ -111,10 +111,10 @@ function render_admin_thumbnails_panel($csrfToken) {
         <div class="media-report" aria-live="polite"><p class="muted">Loading&hellip;</p></div>
       </details>
       <div class="media-moved" hidden>
-        <h3 class="subhead">Moved in from another gallery</h3>
+        <h3 class="subhead">Left behind in folders from elsewhere</h3>
         <details class="media-leftover-box" hidden>
           <summary>Tidy leftover thumbnails <span class="muted media-leftover-sum"></span></summary>
-          <p class="hint">Thumbnails and video pictures an old gallery left in these folders. <strong>Photos, captions, links, private flags and the read-once file data are never touched</strong>: only files named exactly like a made thumbnail or poster go.</p>
+          <p class="hint">Thumbnails and video pictures in these folders that no photo here uses any more (photos deleted, renamed or replaced, or pictures made by another gallery that showed the same folders). <strong>Photos, captions, links, private flags and the read-once file data are never touched</strong>: only files named exactly like a made thumbnail or poster go.</p>
           <p class="hint media-leftover-list"></p>
           <p><label class="check"><input type="checkbox" class="media-leftover-ok"> No other gallery still shows these folders (the old one is retired)</label></p>
           <p><button type="button" class="secondary media-leftover-go" disabled>Remove the leftover thumbnails</button> <span class="media-leftover-out" aria-live="polite"></span></p>

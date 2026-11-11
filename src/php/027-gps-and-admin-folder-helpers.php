@@ -597,18 +597,17 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (empty($_POST['others_gone'])) admin_json_exit(['ok' => false, 'text' => 'Tick the box that says no other gallery still shows these folders first.']);
         @set_time_limit(120);
         $r = moved_in_remove_leftovers($dir, $files);
+        if (is_array(HEALTH_SET_ASIDE) && isset(HEALTH_SET_ASIDE['leftover-thumbs'])) { $kept = HEALTH_SET_ASIDE; unset($kept['leftover-thumbs']); gallery_config_merge(['HEALTH_SET_ASIDE' => $kept ?: null]); }   // (they are gone: what was set aside is too)
         admin_json_exit(['ok' => true, 'text' => '', 'count' => $r['count'], 'bytes' => $r['bytes']]);
     }
-    // Set aside / Bring back a Health check row about something left behind. The amount noted is worked out here, now, never taken from the request:
-    // the row comes back by itself if there is more of it later.
+    // Set aside / Bring back a Health check row about something left behind. What is noted (how many, and a fingerprint of exactly those things) is worked out here, now, never taken from
+    // the request: the row comes back by itself when anything about it changes.
     if ($action === 'health_set_aside') {
         $key = (string) ($_POST['key'] ?? '');
-        $amounts = ['earlier-views' => function () use ($dir, $files) { return moved_in_earlier_views($dir, $files)['views']; },
-                    'leftover-thumbs' => function () use ($dir, $files) { return moved_in_leftovers($dir, $files)['count']; },
-                    'loose-photos' => function () { return EXTRA_ROOTS ? count_loose_media_in_roots() : 0; }];
-        if (!isset($amounts[$key])) admin_json_exit(['ok' => false, 'text' => 'That row can\'t be set aside.']);
+        $state = health_aside_state($key, $dir, $files);
+        if ($state === null) admin_json_exit(['ok' => false, 'text' => 'That row can\'t be set aside.']);
         $now = is_array(HEALTH_SET_ASIDE) ? HEALTH_SET_ASIDE : [];
-        if (!empty($_POST['back'])) unset($now[$key]); else $now[$key] = (int) $amounts[$key]();
+        if (!empty($_POST['back'])) unset($now[$key]); else $now[$key] = ['n' => $state[0], 'h' => $state[1]];
         $why = gallery_config_merge(['HEALTH_SET_ASIDE' => $now ?: null]);
         admin_json_exit($why === '' ? ['ok' => true, 'text' => !empty($_POST['back']) ? 'Brought back.' : 'Set aside.'] : ['ok' => false, 'text' => $why]);
     }
