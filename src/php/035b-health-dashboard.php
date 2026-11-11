@@ -136,15 +136,65 @@ function health_sharing_rows($add) {
     if (LOG_PUBLIC_VISITS) $add($G, 'info', 'The public address is logged', 'Who opens the gallery without a link (their address and browser) is kept in the visitor log.', ['visits', 'vt-root', '→ Visitors']);
 }
 
+/** The disks the gallery's photos and files live on, least free space first: [{name, free, total, pct, writable}]. The gallery's own folder, every folder from elsewhere
+ *  (mapped by name or as a root) and the folders its media sit in are grouped by the disk they are on (the device a folder is on); a disk that will not say how much is
+ *  free (some network shares) is left out. Read-only ones are in too: the room left matters for the photos kept there whether or not the gallery writes to it. */
+function health_volumes($dir, $files) {
+    static $cache = [];
+    $ck = rtrim((string) $dir, '/') . '|' . count((array) $files);
+    if (isset($cache[$ck])) return $cache[$ck];
+    $dir = rtrim((string) (realpath($dir) ?: $dir), '/');
+    $named = is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [];
+    $paths = [$dir => 'the gallery folder'];
+    foreach ($named as $nm => $pth) if (is_string($pth) && is_dir($pth)) $paths[rtrim((string) (realpath($pth) ?: $pth), '/')] = is_string($nm) && $nm !== '' ? $nm : $pth;
+    foreach ((is_array(EXTRA_ROOTS) ? EXTRA_ROOTS : []) as $pth) if (is_string($pth) && is_dir($pth)) { $r = rtrim((string) (realpath($pth) ?: $pth), '/'); if (!isset($paths[$r])) $paths[$r] = $r; }
+    $seen = 0;
+    foreach ((array) $files as $f) { $c = rtrim((string) containing_folder_real_path($dir, $f), '/'); if ($c !== '' && !isset($paths[$c])) { $paths[$c] = null; if (++$seen >= 300) break; } }
+    $by = [];
+    foreach ($paths as $p => $label) {
+        $st = @stat($p); if (!$st) continue;
+        $key = (string) $st['dev'];
+        if ($label === null) {   // a folder only the scan found: named by the place it belongs to
+            $label = strncmp($p . '/', $dir . '/', strlen($dir) + 1) === 0 ? 'the gallery folder' : $p;
+            foreach ($named as $nm => $pth) { $np = rtrim((string) (realpath((string) $pth) ?: $pth), '/'); if ($np !== '' && strncmp($p . '/', $np . '/', strlen($np) + 1) === 0) { $label = (string) $nm; break; } }
+        }
+        if (!isset($by[$key])) {
+            $free = @disk_free_space($p); $tot = @disk_total_space($p);
+            if ($free === false || $tot === false || $tot <= 0) { $by[$key] = false; continue; }
+            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false];
+        }
+        if ($by[$key] === false) continue;
+        if (!in_array($label, $by[$key]['names'], true)) $by[$key]['names'][] = $label;
+        if (is_writable($p)) $by[$key]['writable'] = true;
+    }
+    $out = [];
+    foreach ($by as $v) {
+        if (!$v) continue;
+        $isHome = in_array('the gallery folder', $v['names'], true);
+        $n = $v['names']; $name = implode(', ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : '');
+        $out[] = ['name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable']];
+    }
+    // two entries with the very same size and free space are one disk seen twice (sub-volumes of one pool)
+    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; } else $uniq[$k] = $v; }
+    $out = array_values($uniq);
+    usort($out, function ($a, $b) { return $a['free'] <=> $b['free']; });
+    return $cache[$ck] = $out;
+}
+
 /** The server: disk room, the connection, the visitor address, what PHP allows. */
 function health_server_rows($add) {
     $G = 'Server';
-    $free = @disk_free_space(__DIR__); $tot = @disk_total_space(__DIR__);
-    if ($free !== false && $tot !== false && $tot > 0) {
-        $pct = (int) round($free / $tot * 100);
-        if ($free < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone: ' . health_bytes($free) . ' free', 'Thumbnails, logs and the backup are written here; when the disk is full they stop being kept and settings can fail to save.');
-        elseif ($free < 1073741824) $add($G, 'opt', 'Disk space is getting low: ' . health_bytes($free) . ' free', 'Thumbnails, logs and the backup grow over time. The Delete list in Settings shows what the gallery\'s own files take.');
-        else $add($G, 'info', 'Disk space: ' . health_bytes($free) . ' free (' . $pct . '%)');
+    $vols = health_volumes($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
+    $many = count($vols) > 1;
+    foreach ($vols as $v) {
+        $where = $many ? ' on ' . $v['name'] : '';
+        if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'Thumbnails, logs and captions are written there; when the disk is full they stop being kept and settings can fail to save. New photos can\'t be added either.' : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
+        elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'Photos, thumbnails, logs and the backup grow over time. The Delete list in Settings shows what the gallery\'s own files take.' : 'Little room is left to add photos there. (The gallery only reads it.)');
+    }
+    if ($vols && !$many && $vols[0]['free'] >= 1073741824) $add($G, 'info', 'Disk space: ' . health_bytes($vols[0]['free']) . ' free (' . $vols[0]['pct'] . '%)');
+    if ($many) {
+        $lines = []; foreach ($vols as $v) $lines[] = $v['name'] . ': ' . health_bytes($v['free']) . ' free of ' . health_bytes($v['total']) . ' (' . $v['pct'] . '%)' . ($v['writable'] ? '' : ', read only');
+        $add($G, 'info', 'Disk space on ' . count($vols) . ' disks', implode('. ', $lines) . '.');
     }
     if (is_https_request()) $add($G, 'ok', 'Connection: HTTPS', 'This page was reached over an encrypted connection.');
     elseif (!is_local_request()) $add($G, 'opt', 'You are using the admin over plain HTTP', 'Your sign-in code and the sign-in cookie cross the network unencrypted. Use the https:// address of this gallery (set it up on the web server if there is none).');
@@ -166,6 +216,11 @@ function health_strip($dir, $files) {
     if (is_file(links_path())) { $act = 0; foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l) && link_is_live($l)) $act++; $out[] = ['Active links', number_format($act)]; }
     if (visitlog_find() !== null && visitlog_driver_ok()) { $out[] = ['Visitors', number_format(visitlog_visitor_count())]; $out[] = ['Log', health_bytes(visitlog_size())]; }
     $bk = backup_status(); $out[] = ['Backup', $bk['have'] ? health_ago($bk['at']) : 'none'];
-    $free = @disk_free_space(__DIR__); if ($free !== false) $out[] = ['Disk free', health_bytes($free)];
+    $vols = health_volumes($dir, $files);
+    if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
+    elseif ($vols) {
+        $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total'])];
+        $out[] = ['Disk free', health_bytes($vols[0]['free']), $lines];   // (the lowest of them; the chip opens the list)
+    }
     return $out;
 }

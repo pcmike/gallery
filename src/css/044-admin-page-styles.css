@@ -600,6 +600,24 @@
   .health-strip .hs-t { display:flex; flex-direction:column; gap:1px; padding:6px 11px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; min-width:4.2em; }
   .health-strip .hs-t b { font-weight:600; font-size:1.02em; }
   .health-strip .hs-t small { color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.04em; }
+  .health-strip button.hs-t { font:inherit; color:inherit; background:none; text-align:left; cursor:pointer; }
+  .health-strip button.hs-t:hover, .health-strip button.hs-t[aria-expanded="true"] { border-color:var(--accent, #aab2ff); }
+  .health-strip button.hs-t .tri { margin-left:.2em; transition:transform .15s; }
+  .health-strip button.hs-t[aria-expanded="true"] .tri { transform:rotate(180deg); }
+  .hs-vols { margin:-2px 0 12px; padding:10px 12px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; font-size:.92em; }
+  .hs-vols[hidden] { display:none; }
+  .hs-vols .hs-vols-h { margin:0 0 6px; color:var(--muted); font-size:.82em; text-transform:uppercase; letter-spacing:.04em; }
+  .hs-vols div { display:flex; flex-direction:column; gap:1px; padding:7px 0; border-top:1px solid var(--line, rgba(255,255,255,.08)); }
+  .hs-vols span { min-width:0; overflow-wrap:anywhere; }
+  .hs-vols em { font-style:normal; color:var(--muted); font-size:.92em; }
+  .hs-vols em b { color:inherit; font-weight:600; }
+  @media (min-width:600px) { .hs-vols div { flex-direction:row; justify-content:space-between; align-items:baseline; gap:12px; } }
+  @media (max-width:599px) {
+    .health-strip { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
+    .health-strip .hs-t { min-width:0; padding:7px 10px; }
+    .health-strip .hs-t b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .health-strip .hs-t small { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  }
   .health-act-out { margin-left:6px; }
   @media (max-width:640px) { .health-row .health-act { flex-wrap:wrap; justify-content:flex-start; } .health-row .health-act .secondary { flex:0 1 auto; } }
   .media-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 8px; }

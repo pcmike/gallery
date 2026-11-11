@@ -686,10 +686,10 @@ function health_checks($dir, $files) {
     // --- lockouts: how many times a connection was paused for too many wrong codes or addresses. A small count of times and kinds is kept whether or not anything is logged; with the Visitors tab there, the addresses are in it.
     $lo = lockout_counts(7);
     if ($lo['total'] > 0) {
-        $loParts = []; foreach (lockout_kind_names() as $k => $loName) if ($lo[$k] > 0) $loParts[] = $loName . ' ' . $lo[$k];
+        $loParts = []; foreach (['signin' => ['sign-in', 'sign-in'], 'setup' => ['setup', 'setup'], 'addr' => ['address', 'addresses']] as $k => $loName) if ($lo[$k] > 0) $loParts[] = $lo[$k] . ' ' . $loName[$lo[$k] === 1 ? 0 : 1];
         $loTab = visits_tab_wanted();
-        $add('Settings and passwords', 'heads', number_format($lo['total']) . ' lockout' . ($lo['total'] === 1 ? '' : 's') . ' in the last 7 days',
-            'A connection was paused for a minute after too many wrong codes or addresses (' . implode(', ', $loParts) . ').' . ($loTab ? '' : ' Who it was is not kept: the Visitors tab shows it once share links or the public log are on.'),
+        $add('Settings and passwords', 'heads', number_format($lo['total']) . ' lockout' . ($lo['total'] === 1 ? '' : 's') . ' in the last 7 days' . (count($loParts) > 1 ? ' (' . implode(', ', $loParts) . ')' : ''),
+            $loTab ? '' : 'Who it was is not kept. Turn on share links or the public log and the Visitors tab shows it.',
             null, $loTab ? '<a class="health-more" href="#visits" data-vt-go="lockouts">&rarr; Visitors</a>' : '');
     }
 

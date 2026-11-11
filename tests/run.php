@@ -9547,7 +9547,7 @@ check('[lockouts] the timeline says what each was ("too many wrong access codes"
 [$lkCsvS, $lkCsv] = http_get("$baseLk/?admin&visitsexport=events&src=lockouts", $lkOwn);
 check('[lockouts] the timeline CSV has them too, as "lockout: sign-in" and "lockout: addresses"', $lkCsvS === 200 && str_contains($lkCsv, 'lockout: sign-in') && str_contains($lkCsv, 'lockout: addresses'));
 [, $lkPage] = http_get("$baseLk/?admin", $lkOwn);
-check('[lockouts] the Health check says how many in the last seven days, by kind, as an optional row with a "→ Visitors" link that opens the tab showing them', str_contains($lkPage, '2 lockouts in the last 7 days') && str_contains($lkPage, 'sign-in 1, addresses 1') && str_contains($lkPage, 'data-vt-go="lockouts">&rarr; Visitors</a>'));
+check('[lockouts] the Health check says how many in the last seven days, by kind, as an optional row with a "→ Visitors" link that opens the tab showing them', str_contains($lkPage, '2 lockouts in the last 7 days (1 sign-in, 1 address)') && !str_contains($lkPage, 'A connection was paused for a minute') && str_contains($lkPage, 'data-vt-go="lockouts">&rarr; Visitors</a>'));
 check('[lockouts] the Visitors panel has one Sources pill (Public and the links are inside it, no pills of their own) and the lockouts in its summary and counts', str_contains($lkPage, 'data-pill="src"') && !str_contains($lkPage, 'data-pill="pub"') && !str_contains($lkPage, 'data-pill="links"') && str_contains($lkPage, '2 lockouts') && preg_match('/"lock":2/', html_entity_decode($lkPage)) === 1);
 check('[lockouts] more wrong addresses while paused write nothing more: a lockout is one line when it starts', ($lkSame[0] ?? 0) === 429 && count(vl_log($fxLk, 'fffffffffe')['events']) === 2, json_encode([$lkSame[0] ?? null, count(vl_log($fxLk, 'fffffffffe')['events'])]));
 // the sign-in box: a wrong code counts against its own allowance and the admin's; both trip together, and that is one lockout
@@ -9931,6 +9931,47 @@ unset($bkCfg['CLOSE_PUBLIC_GALLERY']); file_put_contents("$fxBk/.gallery-config.
 file_put_contents("$fxBk/Alpha/.gallery-stats.sqlite", 'this is not a database, it was cut short');
 $bkRe3 = json_decode(http_post("$baseBk/?admin", ['csrf_token' => $bkCsrf, 'action' => 'health_panel', 'recheck' => '1'], array_merge($bkOwn, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '';
 check('[dashboard] a damaged folder view-count database is a red row naming the folder, and says the backup holds a copy', str_contains($bkRe3, 'View counts are damaged in 1 folder') && str_contains($bkRe3, 'Alpha/.gallery-stats.sqlite'));
+
+// --- the disks: the chip and the row count the disks the mapped folders are on, not only the one index.php is on
+echo "== disk space across mapped folders ==\n";
+$dkOther = null;   // a place on another disk than the temp folder (a second tmpfs, or the root disk), if this machine has one we may write to
+foreach (['/dev/shm', '/var/tmp', getenv('HOME') ?: ''] as $dkTry) {
+    if ($dkTry !== '' && is_dir($dkTry) && is_writable($dkTry) && @stat($dkTry)['dev'] !== @stat(sys_get_temp_dir())['dev']) { $dkOther = $dkTry; break; }
+}
+if ($dkOther === null) { echo "  skip  [disks] no second disk to map here\n"; }
+else {
+    $dkFx = new_fixture_dir('disks');
+    $dkMap = $dkOther . '/gallery-tests-disks-' . bin2hex(random_bytes(4)); $cleanupDirs[] = $dkMap;
+    $dkRo = $dkOther . '/gallery-tests-disks-ro-' . bin2hex(random_bytes(4)); $cleanupDirs[] = $dkRo;
+    mkdir($dkMap, 0775, true); mkdir($dkRo, 0775, true);
+    make_jpeg("$dkFx/p.jpg", 40, 30, 20, 90, 160); make_jpeg("$dkMap/m.jpg", 40, 30, 120, 90, 60); make_jpeg("$dkRo/r.jpg", 40, 30, 60, 60, 60);
+    copy($indexSrc, "$dkFx/index.php");
+    $dkCfg = fn (array $extra) => file_put_contents("$dkFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'dk-admin-pw-1'] + $extra));
+    $dkCfg([]);
+    $dkPort = find_free_port(); start_server($dkFx, $dkPort); $dkBase = "http://127.0.0.1:$dkPort";
+    $dkPage = function () use ($dkBase) {   // (signs in each time: the first sign-in turns the plain password into a hash, and a settings file written again by the test has the plain one back)
+        [, , $h] = http_post("$dkBase/?admin", ['access_code' => 'dk-admin-pw-1'], [], false);
+        return http_get("$dkBase/?admin&classic=1", ['Cookie: ' . extract_cookie_header($h)])[1];
+    };
+    $dkP1 = $dkPage();
+    check('[disks] with everything on one disk the chip is plain "Disk free" (no list to open) and the row is one line', str_contains($dkP1, '<small>Disk free</small>') && !str_contains($dkP1, 'class="hs-t hs-more"') && str_contains($dkP1, 'Disk space: ') && !str_contains($dkP1, 'Disk space on '));
+    $dkCfg(['EXTRA_FOLDERS' => ['Trips' => $dkMap]]);
+    $dkP2 = $dkPage();
+    check('[disks] a folder from elsewhere on another disk makes the chip (the lowest figure) a button that opens the list (a tap, not a hover)', str_contains($dkP2, 'class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols"') && str_contains($dkP2, '<small>Disk free<i class="tri"') && str_contains($dkP2, 'id="hs-vols" hidden'));
+    check('[disks] the list names each disk by what is on it (the gallery folder; the mapped folder by its name) with free and total space', (bool) preg_match('~id="hs-vols" hidden>.*<span>The gallery folder</span><em><b>[^<]+</b> free of [^<]+</em>.*<span>Trips</span><em><b>[^<]+</b> free of~s', $dkP2) || (bool) preg_match('~id="hs-vols" hidden>.*<span>Trips</span><em><b>[^<]+</b> free of [^<]+</em>.*<span>The gallery folder</span>~s', $dkP2));
+    check('[disks] the Health row says "Disk space on 2 disks" and lists the same', str_contains($dkP2, 'Disk space on 2 disks') && preg_match('~Disk space on 2 disks.*?Trips: [^<]*free of~s', $dkP2) === 1);
+    preg_match('~<b>([^<]+)</b><small>Disk free<i class="tri"~', $dkP2, $dkChip); preg_match('~id="hs-vols" hidden><p[^>]*>[^<]*</p><div><span>[^<]*</span><em><b>([^<]+)</b> free of~', $dkP2, $dkFirst);
+    check('[disks] the chip shows the lower of the two figures (the list is lowest first and its first line has the same figure)', ($dkChip[1] ?? '') !== '' && ($dkChip[1] ?? '') === ($dkFirst[1] ?? 'x'), ($dkChip[1] ?? '?') . ' vs ' . ($dkFirst[1] ?? '?'));
+    $dkCfg(['EXTRA_FOLDERS' => ['Trips' => $dkMap, 'Nowhere-x' => $dkOther . '/gallery-tests-nothere-' . bin2hex(random_bytes(3))]]);
+    $dkP3 = $dkPage(); preg_match('~id="hs-vols" hidden>(.*?)</div>\s*(?:<div class="health-|<p )~s', $dkP3, $dkList);
+    check('[disks] a folder from elsewhere that does not exist is left out of the list without any error, and the others are still listed', str_contains($dkP3, 'class="hs-t hs-more"') && !str_contains($dkList[1] ?? '', 'Nowhere-x') && str_contains($dkList[1] ?? '', 'Trips'));
+    @chmod($dkRo, 0555);
+    $dkCfg(['EXTRA_FOLDERS' => ['Old camera' => $dkRo]]);
+    $dkP4 = $dkPage();
+    if (!is_writable($dkRo)) check('[disks] a read-only folder on its own disk is still counted (the room left matters for the photos kept there) and the row says it is read only', str_contains($dkP4, 'Disk space on 2 disks') && str_contains($dkP4, 'Old camera: ') && str_contains($dkP4, ', read only') && str_contains($dkP4, '<span>Old camera</span>'));
+    check('[disks] the Health page no longer has the lockouts explanation sentence ("A connection was paused...")', !str_contains($dkP4, 'A connection was paused for a minute'));
+    @chmod($dkRo, 0775);
+}
 
 // colour: a wide-gamut photo keeps what its colours mean in every picture the gallery makes from it, and a HEIC is sent as itself to a browser that shows HEIC
 echo "== colour profiles and HEIC originals ==\n";

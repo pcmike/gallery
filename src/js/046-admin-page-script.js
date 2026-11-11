@@ -2204,6 +2204,11 @@
     });
     // The backup buttons in the Health check: Back up now, Download (asks for the admin password, then gives a link: a browser may refuse a download a page starts by itself),
     // Restore the log, Set it aside. One request each; after a change the page is read again so the rows say how it is now.
+    document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
+      var m = e.target.closest ? e.target.closest('.hs-more') : null; if (!m) return;
+      var list = document.getElementById(m.getAttribute('aria-controls')); if (!list) return;
+      var on = m.getAttribute('aria-expanded') !== 'true'; m.setAttribute('aria-expanded', on ? 'true' : 'false'); list.hidden = !on;
+    });
     document.addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('[data-backup-act]') : null; if (!b) return;
       var panel = b.closest('#health-panel'); if (!panel) return;

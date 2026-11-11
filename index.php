@@ -15064,10 +15064,10 @@ function health_checks($dir, $files) {
     // --- lockouts: how many times a connection was paused for too many wrong codes or addresses. A small count of times and kinds is kept whether or not anything is logged; with the Visitors tab there, the addresses are in it.
     $lo = lockout_counts(7);
     if ($lo['total'] > 0) {
-        $loParts = []; foreach (lockout_kind_names() as $k => $loName) if ($lo[$k] > 0) $loParts[] = $loName . ' ' . $lo[$k];
+        $loParts = []; foreach (['signin' => ['sign-in', 'sign-in'], 'setup' => ['setup', 'setup'], 'addr' => ['address', 'addresses']] as $k => $loName) if ($lo[$k] > 0) $loParts[] = $lo[$k] . ' ' . $loName[$lo[$k] === 1 ? 0 : 1];
         $loTab = visits_tab_wanted();
-        $add('Settings and passwords', 'heads', number_format($lo['total']) . ' lockout' . ($lo['total'] === 1 ? '' : 's') . ' in the last 7 days',
-            'A connection was paused for a minute after too many wrong codes or addresses (' . implode(', ', $loParts) . ').' . ($loTab ? '' : ' Who it was is not kept: the Visitors tab shows it once share links or the public log are on.'),
+        $add('Settings and passwords', 'heads', number_format($lo['total']) . ' lockout' . ($lo['total'] === 1 ? '' : 's') . ' in the last 7 days' . (count($loParts) > 1 ? ' (' . implode(', ', $loParts) . ')' : ''),
+            $loTab ? '' : 'Who it was is not kept. Turn on share links or the public log and the Visitors tab shows it.',
             null, $loTab ? '<a class="health-more" href="#visits" data-vt-go="lockouts">&rarr; Visitors</a>' : '');
     }
 
@@ -15439,15 +15439,65 @@ function health_sharing_rows($add) {
     if (LOG_PUBLIC_VISITS) $add($G, 'info', 'The public address is logged', 'Who opens the gallery without a link (their address and browser) is kept in the visitor log.', ['visits', 'vt-root', '→ Visitors']);
 }
 
+/** The disks the gallery's photos and files live on, least free space first: [{name, free, total, pct, writable}]. The gallery's own folder, every folder from elsewhere
+ *  (mapped by name or as a root) and the folders its media sit in are grouped by the disk they are on (the device a folder is on); a disk that will not say how much is
+ *  free (some network shares) is left out. Read-only ones are in too: the room left matters for the photos kept there whether or not the gallery writes to it. */
+function health_volumes($dir, $files) {
+    static $cache = [];
+    $ck = rtrim((string) $dir, '/') . '|' . count((array) $files);
+    if (isset($cache[$ck])) return $cache[$ck];
+    $dir = rtrim((string) (realpath($dir) ?: $dir), '/');
+    $named = is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [];
+    $paths = [$dir => 'the gallery folder'];
+    foreach ($named as $nm => $pth) if (is_string($pth) && is_dir($pth)) $paths[rtrim((string) (realpath($pth) ?: $pth), '/')] = is_string($nm) && $nm !== '' ? $nm : $pth;
+    foreach ((is_array(EXTRA_ROOTS) ? EXTRA_ROOTS : []) as $pth) if (is_string($pth) && is_dir($pth)) { $r = rtrim((string) (realpath($pth) ?: $pth), '/'); if (!isset($paths[$r])) $paths[$r] = $r; }
+    $seen = 0;
+    foreach ((array) $files as $f) { $c = rtrim((string) containing_folder_real_path($dir, $f), '/'); if ($c !== '' && !isset($paths[$c])) { $paths[$c] = null; if (++$seen >= 300) break; } }
+    $by = [];
+    foreach ($paths as $p => $label) {
+        $st = @stat($p); if (!$st) continue;
+        $key = (string) $st['dev'];
+        if ($label === null) {   // a folder only the scan found: named by the place it belongs to
+            $label = strncmp($p . '/', $dir . '/', strlen($dir) + 1) === 0 ? 'the gallery folder' : $p;
+            foreach ($named as $nm => $pth) { $np = rtrim((string) (realpath((string) $pth) ?: $pth), '/'); if ($np !== '' && strncmp($p . '/', $np . '/', strlen($np) + 1) === 0) { $label = (string) $nm; break; } }
+        }
+        if (!isset($by[$key])) {
+            $free = @disk_free_space($p); $tot = @disk_total_space($p);
+            if ($free === false || $tot === false || $tot <= 0) { $by[$key] = false; continue; }
+            $by[$key] = ['names' => [], 'free' => (float) $free, 'total' => (float) $tot, 'writable' => false];
+        }
+        if ($by[$key] === false) continue;
+        if (!in_array($label, $by[$key]['names'], true)) $by[$key]['names'][] = $label;
+        if (is_writable($p)) $by[$key]['writable'] = true;
+    }
+    $out = [];
+    foreach ($by as $v) {
+        if (!$v) continue;
+        $isHome = in_array('the gallery folder', $v['names'], true);
+        $n = $v['names']; $name = implode(', ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : '');
+        $out[] = ['name' => $isHome ? ucfirst($name) : $name, 'free' => $v['free'], 'total' => $v['total'], 'pct' => (int) round($v['free'] / $v['total'] * 100), 'writable' => $v['writable']];
+    }
+    // two entries with the very same size and free space are one disk seen twice (sub-volumes of one pool)
+    $uniq = []; foreach ($out as $v) { $k = $v['total'] . '/' . $v['free']; if (isset($uniq[$k])) { $uniq[$k]['name'] .= ', ' . $v['name']; $uniq[$k]['writable'] = $uniq[$k]['writable'] || $v['writable']; } else $uniq[$k] = $v; }
+    $out = array_values($uniq);
+    usort($out, function ($a, $b) { return $a['free'] <=> $b['free']; });
+    return $cache[$ck] = $out;
+}
+
 /** The server: disk room, the connection, the visitor address, what PHP allows. */
 function health_server_rows($add) {
     $G = 'Server';
-    $free = @disk_free_space(__DIR__); $tot = @disk_total_space(__DIR__);
-    if ($free !== false && $tot !== false && $tot > 0) {
-        $pct = (int) round($free / $tot * 100);
-        if ($free < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone: ' . health_bytes($free) . ' free', 'Thumbnails, logs and the backup are written here; when the disk is full they stop being kept and settings can fail to save.');
-        elseif ($free < 1073741824) $add($G, 'opt', 'Disk space is getting low: ' . health_bytes($free) . ' free', 'Thumbnails, logs and the backup grow over time. The Delete list in Settings shows what the gallery\'s own files take.');
-        else $add($G, 'info', 'Disk space: ' . health_bytes($free) . ' free (' . $pct . '%)');
+    $vols = health_volumes($GLOBALS['dir'], $GLOBALS['__admin_files'] ?? []);
+    $many = count($vols) > 1;
+    foreach ($vols as $v) {
+        $where = $many ? ' on ' . $v['name'] : '';
+        if ($v['free'] < 100 * 1048576) $add($G, 'warn', 'Disk space is almost gone' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'Thumbnails, logs and captions are written there; when the disk is full they stop being kept and settings can fail to save. New photos can\'t be added either.' : 'No room is left to add photos there. (The gallery only reads it, so nothing of its own is affected.)');
+        elseif ($v['free'] < 1073741824) $add($G, 'opt', 'Disk space is getting low' . $where . ': ' . health_bytes($v['free']) . ' free', $v['writable'] ? 'Photos, thumbnails, logs and the backup grow over time. The Delete list in Settings shows what the gallery\'s own files take.' : 'Little room is left to add photos there. (The gallery only reads it.)');
+    }
+    if ($vols && !$many && $vols[0]['free'] >= 1073741824) $add($G, 'info', 'Disk space: ' . health_bytes($vols[0]['free']) . ' free (' . $vols[0]['pct'] . '%)');
+    if ($many) {
+        $lines = []; foreach ($vols as $v) $lines[] = $v['name'] . ': ' . health_bytes($v['free']) . ' free of ' . health_bytes($v['total']) . ' (' . $v['pct'] . '%)' . ($v['writable'] ? '' : ', read only');
+        $add($G, 'info', 'Disk space on ' . count($vols) . ' disks', implode('. ', $lines) . '.');
     }
     if (is_https_request()) $add($G, 'ok', 'Connection: HTTPS', 'This page was reached over an encrypted connection.');
     elseif (!is_local_request()) $add($G, 'opt', 'You are using the admin over plain HTTP', 'Your sign-in code and the sign-in cookie cross the network unencrypted. Use the https:// address of this gallery (set it up on the web server if there is none).');
@@ -15469,7 +15519,12 @@ function health_strip($dir, $files) {
     if (is_file(links_path())) { $act = 0; foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l) && link_is_live($l)) $act++; $out[] = ['Active links', number_format($act)]; }
     if (visitlog_find() !== null && visitlog_driver_ok()) { $out[] = ['Visitors', number_format(visitlog_visitor_count())]; $out[] = ['Log', health_bytes(visitlog_size())]; }
     $bk = backup_status(); $out[] = ['Backup', $bk['have'] ? health_ago($bk['at']) : 'none'];
-    $free = @disk_free_space(__DIR__); if ($free !== false) $out[] = ['Disk free', health_bytes($free)];
+    $vols = health_volumes($dir, $files);
+    if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
+    elseif ($vols) {
+        $lines = []; foreach ($vols as $v) $lines[] = [$v['name'], health_bytes($v['free']), health_bytes($v['total'])];
+        $out[] = ['Disk free', health_bytes($vols[0]['free']), $lines];   // (the lowest of them; the chip opens the list)
+    }
     return $out;
 }
 /** What the page already tells the owner on the front page, brought into the admin (where there is room to name things and to act): rows
@@ -15531,7 +15586,8 @@ function render_admin_health_panel() {
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?> <span class="muted health-sugg-n"><?= $suggN ? $esc('· ' . $suggN . ' suggestion' . ($suggN === 1 ? '' : 's')) : '' ?></span>
         <span class="health-btns"><button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button><button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></span></p>
-      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as [$sl, $sv]): ?><span class="hs-t"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endforeach; ?></div>
+      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; ?><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?><i class="tri" aria-hidden="true"></i></small></button><?php else: ?><span class="hs-t"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
+      <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><p class="hs-vols-h">Free space on <?= count($si[2]) ?> disks, the lowest first</p><?php foreach ($si[2] as $l): ?><div><span><?= $esc($l[0]) ?></span><em><b><?= $esc($l[1]) ?></b> free of <?= $esc($l[2]) ?></em></div><?php endforeach; ?></div><?php endif; endforeach; ?>
       <p class="muted health-intro" style="margin-top:0;">This looks and tells you what it found. It changes nothing by itself, except that once a day it looks for a new version and once a week the first visit makes a backup. Only a button in a row does anything. A red or amber row is something to fix; a grey circle is a suggestion; an amber ! is worth a look; the rest is information.</p>
       <?php if ($notes): ?>
         <div class="health-group health-notes">
@@ -17467,6 +17523,24 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-strip .hs-t { display:flex; flex-direction:column; gap:1px; padding:6px 11px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; min-width:4.2em; }
   .health-strip .hs-t b { font-weight:600; font-size:1.02em; }
   .health-strip .hs-t small { color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.04em; }
+  .health-strip button.hs-t { font:inherit; color:inherit; background:none; text-align:left; cursor:pointer; }
+  .health-strip button.hs-t:hover, .health-strip button.hs-t[aria-expanded="true"] { border-color:var(--accent, #aab2ff); }
+  .health-strip button.hs-t .tri { margin-left:.2em; transition:transform .15s; }
+  .health-strip button.hs-t[aria-expanded="true"] .tri { transform:rotate(180deg); }
+  .hs-vols { margin:-2px 0 12px; padding:10px 12px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; font-size:.92em; }
+  .hs-vols[hidden] { display:none; }
+  .hs-vols .hs-vols-h { margin:0 0 6px; color:var(--muted); font-size:.82em; text-transform:uppercase; letter-spacing:.04em; }
+  .hs-vols div { display:flex; flex-direction:column; gap:1px; padding:7px 0; border-top:1px solid var(--line, rgba(255,255,255,.08)); }
+  .hs-vols span { min-width:0; overflow-wrap:anywhere; }
+  .hs-vols em { font-style:normal; color:var(--muted); font-size:.92em; }
+  .hs-vols em b { color:inherit; font-weight:600; }
+  @media (min-width:600px) { .hs-vols div { flex-direction:row; justify-content:space-between; align-items:baseline; gap:12px; } }
+  @media (max-width:599px) {
+    .health-strip { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
+    .health-strip .hs-t { min-width:0; padding:7px 10px; }
+    .health-strip .hs-t b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .health-strip .hs-t small { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  }
   .health-act-out { margin-left:6px; }
   @media (max-width:640px) { .health-row .health-act { flex-wrap:wrap; justify-content:flex-start; } .health-row .health-act .secondary { flex:0 1 auto; } }
   .media-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 8px; }
@@ -20478,6 +20552,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     });
     // The backup buttons in the Health check: Back up now, Download (asks for the admin password, then gives a link: a browser may refuse a download a page starts by itself),
     // Restore the log, Set it aside. One request each; after a change the page is read again so the rows say how it is now.
+    document.addEventListener('click', function (e) {   // (the disks chip opens the list of disks under the numbers; a tap works where a hover does not)
+      var m = e.target.closest ? e.target.closest('.hs-more') : null; if (!m) return;
+      var list = document.getElementById(m.getAttribute('aria-controls')); if (!list) return;
+      var on = m.getAttribute('aria-expanded') !== 'true'; m.setAttribute('aria-expanded', on ? 'true' : 'false'); list.hidden = !on;
+    });
     document.addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('[data-backup-act]') : null; if (!b) return;
       var panel = b.closest('#health-panel'); if (!panel) return;
