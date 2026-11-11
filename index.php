@@ -2663,6 +2663,26 @@ function image_strip_keep_color($img, $icc) {
     }
 }
 
+/** PHP's memory limit in bytes (-1: none). Understands 64M, 1G, 512K and a plain number. */
+function memory_limit_bytes($text = null) {
+    $t = strtolower(trim((string) ($text ?? ini_get('memory_limit'))));
+    if ($t === '-1') return -1;
+    $n = (float) $t; $u = substr($t, -1);
+    return (int) ($u === 'g' ? $n * 1073741824 : ($u === 'm' ? $n * 1048576 : ($u === 'k' ? $n * 1024 : $n)));
+}
+
+/** GD holds a whole picture in PHP's memory (4 bytes a pixel, and a second copy while it is resized: a 12-megapixel photo needs about 100 MB), so before it is used
+ *  this request's limit is raised to 256M when it is lower. A server that doesn't allow it keeps its own limit, and a photo too big for it gets no thumbnail (the Health
+ *  check says so). Imagick keeps pictures outside PHP's memory and needs none of this. Returns whether there is room now: the limit is 256M or more. */
+function image_memory_raise() {
+    static $tried = false;
+    $now = memory_limit_bytes();
+    if ($now === -1 || $now >= 268435456) return true;
+    if (!$tried) { $tried = true; @ini_set('memory_limit', '256M'); }
+    $now = memory_limit_bytes();
+    return $now === -1 || $now >= 268435456;
+}
+
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
  *  available, otherwise GD. Returns true on success. The long side ends up at most $maxDim (a picture is never enlarged).
  *  The JPEG is progressive: it paints coarse-to-fine while it loads. */
@@ -2695,6 +2715,7 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
         }
     }
     if (extension_loaded('gd')) {
+        image_memory_raise();
         $data = @file_get_contents($srcPath);
         if ($data === false) return false;
         $src = @imagecreatefromstring($data);
@@ -2757,6 +2778,7 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
         }
     }
     if (extension_loaded('gd')) {
+        image_memory_raise();
         $data = @file_get_contents($srcPath);
         if ($data === false) return false;
         $src = @imagecreatefromstring($data);
@@ -2839,6 +2861,7 @@ function generate_tile_jpegs($srcPath, $targets) {
         if (!$targets) return true;
     }
     if (extension_loaded('gd')) {
+        image_memory_raise();
         $data = @file_get_contents($srcPath);
         if ($data === false) return false;
         $src = @imagecreatefromstring($data);
@@ -15505,8 +15528,10 @@ function health_server_rows($add) {
     if ($hint !== '') $add($G, 'opt', 'Visitor addresses may be the proxy\'s, not the visitor\'s', $hint . ' Until then the visitor log and the sign-in pause see the proxy\'s address.', ['site', 'setting-TRUSTED_PROXY', '→ Visitor address']);
     if ((CHECK_FOR_UPDATES || COUNTRY_LOOKUP) && !function_exists('curl_init') && !filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN))
         $add($G, 'opt', 'This server lets PHP fetch no web addresses', 'Looking for a new version' . (COUNTRY_LOOKUP ? ' and downloading the country file' : '') . ' need either the curl extension or allow_url_fopen. Neither is on, so they can\'t run.');
-    $ml = trim((string) ini_get('memory_limit')); $bytes = $ml === '-1' ? -1 : (int) $ml * (stripos($ml, 'g') !== false ? 1073741824 : (stripos($ml, 'k') !== false ? 1024 : 1048576));
-    if ($bytes !== -1 && $bytes > 0 && $bytes < 128 * 1048576) $add($G, 'opt', 'PHP\'s memory limit is low (' . $ml . ')', 'Resizing a large photo can need more than that, so some may fail to get a thumbnail. 128M or more is comfortable.');
+    // PHP's own picture library (GD) needs a photo in memory (about 100 MB for 12 megapixels). The gallery asks for 256M itself; this row is only for a server that refuses, and only
+    // where GD is what makes the thumbnails (Imagick keeps pictures outside PHP's memory).
+    if (!class_exists('Imagick') && extension_loaded('gd') && !image_memory_raise())
+        $add($G, 'opt', 'PHP\'s memory limit is too low for big photos (' . trim((string) ini_get('memory_limit')) . ')', 'This server makes thumbnails with PHP\'s own picture library, which needs about 100 MB for a 12-megapixel photo. The gallery asked for more and the server said no, so large photos may get no thumbnail. Set memory_limit to 256M in the server\'s PHP settings (php.ini, or the host\'s PHP settings page).');
 }
 
 /** The numbers across the top: [[label, value]]. Only what is cheap to know. */

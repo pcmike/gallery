@@ -202,8 +202,10 @@ function health_server_rows($add) {
     if ($hint !== '') $add($G, 'opt', 'Visitor addresses may be the proxy\'s, not the visitor\'s', $hint . ' Until then the visitor log and the sign-in pause see the proxy\'s address.', ['site', 'setting-TRUSTED_PROXY', '→ Visitor address']);
     if ((CHECK_FOR_UPDATES || COUNTRY_LOOKUP) && !function_exists('curl_init') && !filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN))
         $add($G, 'opt', 'This server lets PHP fetch no web addresses', 'Looking for a new version' . (COUNTRY_LOOKUP ? ' and downloading the country file' : '') . ' need either the curl extension or allow_url_fopen. Neither is on, so they can\'t run.');
-    $ml = trim((string) ini_get('memory_limit')); $bytes = $ml === '-1' ? -1 : (int) $ml * (stripos($ml, 'g') !== false ? 1073741824 : (stripos($ml, 'k') !== false ? 1024 : 1048576));
-    if ($bytes !== -1 && $bytes > 0 && $bytes < 128 * 1048576) $add($G, 'opt', 'PHP\'s memory limit is low (' . $ml . ')', 'Resizing a large photo can need more than that, so some may fail to get a thumbnail. 128M or more is comfortable.');
+    // PHP's own picture library (GD) needs a photo in memory (about 100 MB for 12 megapixels). The gallery asks for 256M itself; this row is only for a server that refuses, and only
+    // where GD is what makes the thumbnails (Imagick keeps pictures outside PHP's memory).
+    if (!class_exists('Imagick') && extension_loaded('gd') && !image_memory_raise())
+        $add($G, 'opt', 'PHP\'s memory limit is too low for big photos (' . trim((string) ini_get('memory_limit')) . ')', 'This server makes thumbnails with PHP\'s own picture library, which needs about 100 MB for a 12-megapixel photo. The gallery asked for more and the server said no, so large photos may get no thumbnail. Set memory_limit to 256M in the server\'s PHP settings (php.ini, or the host\'s PHP settings page).');
 }
 
 /** The numbers across the top: [[label, value]]. Only what is cheap to know. */

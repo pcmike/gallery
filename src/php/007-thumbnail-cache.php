@@ -127,6 +127,26 @@ function image_strip_keep_color($img, $icc) {
     }
 }
 
+/** PHP's memory limit in bytes (-1: none). Understands 64M, 1G, 512K and a plain number. */
+function memory_limit_bytes($text = null) {
+    $t = strtolower(trim((string) ($text ?? ini_get('memory_limit'))));
+    if ($t === '-1') return -1;
+    $n = (float) $t; $u = substr($t, -1);
+    return (int) ($u === 'g' ? $n * 1073741824 : ($u === 'm' ? $n * 1048576 : ($u === 'k' ? $n * 1024 : $n)));
+}
+
+/** GD holds a whole picture in PHP's memory (4 bytes a pixel, and a second copy while it is resized: a 12-megapixel photo needs about 100 MB), so before it is used
+ *  this request's limit is raised to 256M when it is lower. A server that doesn't allow it keeps its own limit, and a photo too big for it gets no thumbnail (the Health
+ *  check says so). Imagick keeps pictures outside PHP's memory and needs none of this. Returns whether there is room now: the limit is 256M or more. */
+function image_memory_raise() {
+    static $tried = false;
+    $now = memory_limit_bytes();
+    if ($now === -1 || $now >= 268435456) return true;
+    if (!$tried) { $tried = true; @ini_set('memory_limit', '256M'); }
+    $now = memory_limit_bytes();
+    return $now === -1 || $now >= 268435456;
+}
+
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
  *  available, otherwise GD. Returns true on success. The long side ends up at most $maxDim (a picture is never enlarged).
  *  The JPEG is progressive: it paints coarse-to-fine while it loads. */
@@ -159,6 +179,7 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
         }
     }
     if (extension_loaded('gd')) {
+        image_memory_raise();
         $data = @file_get_contents($srcPath);
         if ($data === false) return false;
         $src = @imagecreatefromstring($data);
@@ -221,6 +242,7 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
         }
     }
     if (extension_loaded('gd')) {
+        image_memory_raise();
         $data = @file_get_contents($srcPath);
         if ($data === false) return false;
         $src = @imagecreatefromstring($data);
@@ -303,6 +325,7 @@ function generate_tile_jpegs($srcPath, $targets) {
         if (!$targets) return true;
     }
     if (extension_loaded('gd')) {
+        image_memory_raise();
         $data = @file_get_contents($srcPath);
         if ($data === false) return false;
         $src = @imagecreatefromstring($data);

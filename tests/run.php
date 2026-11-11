@@ -6932,7 +6932,7 @@ $kHold = http_post("$baseC/?link=keep-me-now", ['go' => '1'], [$qPhone], false);
 check('[kept address] the opened link works through the new address (the kept one changes nothing about the link itself)', http_get("$baseC/", $kCookie, false)[0] === 200);
 $kOwnTry = http_get("$baseC/?link=$kTok0", $cOwn, false);
 check('[kept address] the signed-in owner is taken where the link goes, as with any address (nothing counted)', $kOwnTry[0] === 303 && (($cLinkFile()['links'][$kId]['aliases'][0]['hits'] ?? 0) === 1));
-[$kSt2, , $kHd2] = http_get("$baseC/?link=" . strtoupper($kTok0), [], false);
+[$kSt2, , $kHd2] = http_get("$baseC/?link=" . (strtolower($kTok0) === $kTok0 ? strtoupper($kTok0) : strtolower($kTok0)), [], false);   // (the other letter case: an all-capitals address, about one in eighty, is lower-cased instead, so the address always changes)
 check('[kept address] a random address is exact: the wrong letter case is not an address', $kSt2 === 404 && $kLoc($kHd2) === '');
 $kRefuse = $cMake(['label' => 'Takes the kept one', 'address' => strtolower($kTok0)]);
 check('[kept address] no other link can take a kept address as its own', ($kRefuse['ok'] ?? true) === false && str_contains((string) ($kRefuse['text'] ?? ''), 'Another link has'));
@@ -9972,6 +9972,43 @@ else {
     check('[disks] the Health page no longer has the lockouts explanation sentence ("A connection was paused...")', !str_contains($dkP4, 'A connection was paused for a minute'));
     @chmod($dkRo, 0775);
 }
+
+// --- memory: PHP's own picture library needs the whole photo in memory; the gallery asks for 256M itself, and the Health row is only for a server that refuses
+echo "== PHP memory and thumbnails ==\n";
+$mmFx = new_fixture_dir('memory');
+make_jpeg("$mmFx/big.jpg", 6000, 4000, 90, 120, 160);   // (about 96 MB as a GD image: more than a 64M limit holds)
+copy($indexSrc, "$mmFx/index.php"); @touch("$mmFx/index.php", time() - 3600);
+file_put_contents("$mmFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mm-admin-pw-1', 'ENABLE_THUMBNAIL_CACHE' => true]));
+$mmServer = function (array $ini) use ($mmFx) {
+    global $cleanupProcs;
+    $port = find_free_port(); $cmd = [PHP_BINARY];
+    if (extension_loaded('imagick')) {   // a PHP without Imagick, as a server with only GD is: the same one with no ini files and every other shared extension loaded by hand
+        $cmd[] = '-n'; $extDir = (string) ini_get('extension_dir');
+        foreach (get_loaded_extensions() as $ex) if (strtolower($ex) !== 'imagick' && is_file("$extDir/" . strtolower($ex) . '.so')) { $cmd[] = '-d'; $cmd[] = 'extension=' . strtolower($ex); }
+    }
+    array_push($cmd, '-d', 'opcache.enable=0', '-d', 'memory_limit=64M');
+    foreach ($ini as $i) { $cmd[] = '-d'; $cmd[] = $i; }
+    array_push($cmd, '-S', "127.0.0.1:$port", '-t', $mmFx);
+    $proc = proc_open($cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes); $cleanupProcs[] = $proc;
+    $t = microtime(true) + 5; while (microtime(true) < $t) { $c = @fsockopen('127.0.0.1', $port, $e, $m, 0.1); if ($c) { fclose($c); break; } usleep(50000); }
+    return [$proc, "http://127.0.0.1:$port"];
+};
+$mmPage = function ($base) { [, , $h] = http_post("$base/?admin", ['access_code' => 'mm-admin-pw-1'], [], false); return http_get("$base/?admin&classic=1", ['Cookie: ' . extract_cookie_header($h)])[1]; };
+// (On some PHP builds GD takes its memory from the system, outside PHP's limit, and a limit changes nothing there: this Debian PHP is one. Look first, so the check below means something.)
+$mmProbe = tempnam(sys_get_temp_dir(), 'gdp'); file_put_contents($mmProbe, '<?php $d = file_get_contents($argv[1]); echo @imagecreatefromstring($d) ? "fits" : "fails";');
+$mmLimited = trim((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n ' . (extension_loaded('gd') && is_file(ini_get('extension_dir') . '/gd.so') ? '-d extension=gd ' : '') . '-d memory_limit=64M -d display_errors=0 ' . escapeshellarg($mmProbe) . ' ' . escapeshellarg("$mmFx/big.jpg") . ' 2>/dev/null')) !== 'fits';
+@unlink($mmProbe);
+if (!$mmLimited) echo "  skip  [memory] this PHP's GD takes its memory outside PHP's limit, so a low limit can't be made to matter here (the check runs on the static PHP builds)\n";
+[$mmP1, $mmB1] = $mmServer([]);
+[$mmSt, $mmBody, $mmHd] = http_get("$mmB1/?img=" . rawurlencode('big.jpg') . '&size=thumb');
+if ($mmLimited) check('[memory] with PHP limited to 64M and only GD to resize with, a 24-megapixel photo still gets its thumbnail (the gallery raised the limit itself)', $mmSt === 200 && str_starts_with((string) $mmBody, "\xFF\xD8"), "status $mmSt");
+$mmPg1 = $mmPage($mmB1);
+check('[memory] ...and the Health check has no memory row, because nothing is wrong', !str_contains($mmPg1, 'memory limit is too low'));
+proc_terminate($mmP1);
+// (A server that refuses the raise can't be made from here: a command-line PHP can't lock its limit the way a pool's php_admin_value does. So the row is checked in the source: it is
+// only added when there is no Imagick, GD is there and the raise did not give room, and it says what to set.)
+$mmSrc = (string) file_get_contents($indexSrc);
+check('[memory] the Health row exists only where GD makes the thumbnails and the raise gave no room, and tells what to set (source check: a refusing server can\'t be made here)', str_contains($mmSrc, "!class_exists('Imagick') && extension_loaded('gd') && !image_memory_raise())") && str_contains($mmSrc, 'is too low for big photos') && str_contains($mmSrc, 'Set memory_limit to 256M in the server'));
 
 // colour: a wide-gamut photo keeps what its colours mean in every picture the gallery makes from it, and a HEIC is sent as itself to a browser that shows HEIC
 echo "== colour profiles and HEIC originals ==\n";
