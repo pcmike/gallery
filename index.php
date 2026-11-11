@@ -15248,16 +15248,19 @@ function render_admin_changes_panel($csrfToken) {
     <h2 class="section-title">Changes</h2>
     <p class="hint" style="margin:0 0 12px">The log of disk activity: what the gallery noticed change in your folders (a sync, an upload, a rename), whoever made it.</p>
     <div class="ch-head">
-      <div class="ch-pillbox">
-        <button type="button" class="ch-pill" aria-haspopup="true" aria-expanded="false"><span class="ch-pill-t">All kinds</span><em class="ch-pill-n"></em> <i class="tri" aria-hidden="true"></i></button>
-        <div class="ch-pop" role="group" aria-label="Show only" hidden>
-          <label class="ch-row"><input type="checkbox" data-all="1" checked> <span>All kinds</span></label>
-          <?php foreach ($groups as $k => [$name, $n]): ?>
-          <label class="ch-row"><input type="checkbox" data-g="<?= $k ?>"> <span><?= $esc($name) ?></span><small><?= number_format($n) ?></small></label>
-          <?php endforeach; ?>
-          <button type="button" class="secondary ch-done">Done</button>
+      <span class="vt-pw ch-pillbox">
+        <button type="button" class="vt-chip ch-pill" aria-haspopup="true" aria-expanded="false"><span class="vt-l ch-pill-t">All kinds</span> <i class="tri" aria-hidden="true"></i> <em class="ch-pill-n"></em></button>
+        <div class="vt-pop ch-pop" role="group" aria-label="Show only" hidden>
+          <div class="vt-pop-h">Kind</div>
+          <div class="vt-opts">
+            <div class="vt-opt on" data-all="1" role="checkbox" aria-checked="true" tabindex="0">All kinds<span class="tk">&#10003;</span></div>
+            <?php foreach ($groups as $k => [$name, $n]): ?>
+            <div class="vt-opt" data-g="<?= $k ?>" role="checkbox" aria-checked="false" tabindex="0"><?= $esc($name) ?> <span class="muted vt-n"><?= number_format($n) ?></span><span class="tk">&#10003;</span></div>
+            <?php endforeach; ?>
+          </div>
+          <button type="button" class="vt-done ch-done">Done</button>
         </div>
-      </div>
+      </span>
       <button type="button" class="linklike ch-trim-open">Trim the log&hellip;</button>
     </div>
     <div class="ch-trim" hidden>
@@ -15345,6 +15348,14 @@ function health_ago($t) {
     if ($d < 86400) { $h = (int) round($d / 3600); return $h . ' hour' . ($h === 1 ? '' : 's') . ' ago'; }
     $n = (int) floor($d / 86400);
     return $n . ' day' . ($n === 1 ? '' : 's') . ' ago';
+}
+/** The same, short enough for a small box: "just now", "12m ago", "17h ago", "3d ago". */
+function health_ago_short($t) {
+    $d = max(0, time() - (int) $t);
+    if ($d < 90) return 'just now';
+    if ($d < 3600) return (int) round($d / 60) . 'm ago';
+    if ($d < 86400) return (int) round($d / 3600) . 'h ago';
+    return (int) floor($d / 86400) . 'd ago';
 }
 function health_bytes($b) { return $b >= 1073741824 ? round($b / 1073741824, 1) . ' GB' : ($b >= 1048576 ? round($b / 1048576, $b >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($b / 1024)) . ' KB'); }
 
@@ -15584,10 +15595,18 @@ function health_strip($dir, $files) {
     foreach ($files as $f) { $n++; if (is_video_file($f)) $videos++; }
     $out = [['Photos', number_format($n - $videos)]];
     if ($videos) $out[] = ['Videos', number_format($videos)];
-    $out[] = ['Folders', number_format(count(all_folder_paths($files)) + 1)];
-    if (is_file(links_path())) { $act = 0; foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l) && link_is_live($l)) $act++; $out[] = ['Active links', number_format($act)]; }
+    $folders = count(all_folder_paths($files)) + 1;   // (and the front page)
+    if (collections_any()) $folders += count(collections_registry($dir, $files)['byPath']);   // (a collection is a card in the gallery like a folder; it is not a folder on disk, so the list above does not hold it)
+    $out[] = ['Folders', number_format($folders)];
+    if (is_file(links_path())) {
+        $act = 0; $other = 0;
+        foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l)) { if (link_is_live($l)) $act++; else $other++; }
+        // (the value is two numbers: the ones in use in green, the others, paused or ended, in red; the box says what each is when it is touched)
+        $html = '<span class="hs-two">' . '<span class="hs-ok">' . number_format($act) . '</span>' . ($other ? '<span class="hs-bad">' . number_format($other) . '</span>' : '') . '</span>';   // (the two numbers sit at the left and the right of the box, not side by side)
+        $out[] = ['Links', number_format($act) . ($other ? ' / ' . number_format($other) : ''), null, $html, number_format($act) . ' in use' . ($other ? ', ' . number_format($other) . ' paused, ended or not started yet' : '')];
+    }
     if (visitlog_find() !== null && visitlog_driver_ok()) { $out[] = ['Visitors', number_format(visitlog_visitor_count())]; $out[] = ['Log', health_bytes(visitlog_size())]; }
-    $bk = backup_status(); $out[] = ['Backup', $bk['have'] ? health_ago($bk['at']) : 'none'];
+    $bk = backup_status(); $out[] = ['Backup', $bk['have'] ? health_ago_short($bk['at']) : 'none', null, null, $bk['have'] ? 'The backup was made ' . health_ago($bk['at']) : 'No backup has been made yet'];
     $vols = health_volumes($dir, $files);
     if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
     elseif ($vols) {
@@ -15655,7 +15674,7 @@ function render_admin_health_panel() {
       <h2 class="section-title">Health check</h2>
       <p class="health-summary"><strong class="health-summary-text <?= $loud ? 'note-text' : 'muted' ?>"><?= $loud ? $esc($loud . ' thing' . ($loud === 1 ? '' : 's') . ' to look at.') : 'Checking…' ?></strong><?php if ($asideN): ?> <span class="muted health-aside-n"><?= $esc($asideN . ' set aside') ?></span><?php endif; ?> <span class="muted health-sugg-n"><?= $suggN ? $esc('· ' . $suggN . ' suggestion' . ($suggN === 1 ? '' : 's')) : '' ?></span>
         <span class="health-btns"><button type="button" class="secondary health-toggle" aria-expanded="false"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#aab2ff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="ht-label">Details</span></button><button type="button" class="secondary health-refresh" data-health-refresh title="Check again" aria-label="Check again"><?= ui_icon('refresh') ?></button></span></p>
-      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; ?><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?><i class="tri" aria-hidden="true"></i></small></button><?php else: ?><span class="hs-t"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
+      <div class="health-strip" aria-label="The gallery in numbers"><?php foreach ($strip as $si): $sl = $si[0]; $sv = $si[1]; $sx = $si[2] ?? null; $sh = $si[3] ?? null; $st = $si[4] ?? ''; ?><?php if ($sx): ?><button type="button" class="hs-t hs-more" aria-expanded="false" aria-controls="hs-vols" title="<?= $esc(implode("\n", array_map(function ($l) { return $l[0] . ': ' . $l[1] . ' free of ' . $l[2]; }, $sx))) ?>"><b><?= $esc($sv) ?></b><small><?= $esc($sl) ?><i class="tri" aria-hidden="true"></i></small></button><?php else: ?><span class="hs-t"<?= $st !== '' ? ' title="' . $esc($st) . '"' : '' ?>><b><?= $sh !== null ? $sh : $esc($sv) ?></b><small><?= $esc($sl) ?></small></span><?php endif; ?><?php endforeach; ?></div>
       <?php foreach ($strip as $si): if (!empty($si[2])): ?><div class="hs-vols" id="hs-vols" hidden><p class="hs-vols-h">Free space on <?= count($si[2]) ?> disks, the lowest first</p><?php foreach ($si[2] as $l): ?><div><span><?= $esc($l[0]) ?></span><em><b><?= $esc($l[1]) ?></b> free of <?= $esc($l[2]) ?></em></div><?php endforeach; ?></div><?php endif; endforeach; ?>
       <p class="muted health-intro" style="margin-top:0;">This looks and tells you what it found. It changes nothing by itself, except that once a day it looks for a new version and once a week the first visit makes a backup. Only a button in a row does anything. A red or amber row is something to fix; a grey circle is a suggestion; an amber ! is worth a look; the rest is information.</p>
       <?php if ($notes): ?>
@@ -16151,7 +16170,7 @@ function render_admin_site_settings($csrfToken) {
 
 
         <details class="site-group" id="files-made">
-          <summary><span class="site-group-title">Files this gallery has made</span> <span class="muted">see them, copy them, remove them</span></summary>
+          <summary><span class="site-group-title">Files this gallery has made</span></summary>
           <div class="site-row"><div>
             <div class="name">The files</div>
             <div class="help">Everything the gallery has written, apart from your photos and videos. See what and where it is, take a copy, or remove it all.</div>
@@ -17603,7 +17622,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-strip { display:flex; flex-wrap:wrap; gap:8px; margin:2px 0 10px; }
   .health-strip .hs-t { display:flex; flex-direction:column; gap:1px; padding:6px 11px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; min-width:4.2em; }
   .health-strip .hs-t b { font-weight:600; font-size:1.02em; }
-  .health-strip .hs-t small { color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.04em; }
+  .health-strip .hs-t b .hs-two { display:flex; justify-content:center; gap:1.1em; }
+  .health-strip .hs-t b .hs-ok { color:var(--ok); }
+  .health-strip .hs-t b .hs-bad { color:var(--err); }
+  .health-strip .hs-t small { text-align:center; color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.04em; }
   .health-strip button.hs-t { font:inherit; color:inherit; background:none; text-align:left; cursor:pointer; }
   .health-strip button.hs-t:hover, .health-strip button.hs-t[aria-expanded="true"] { border-color:var(--accent, #aab2ff); }
   .health-strip button.hs-t .tri { margin-left:.2em; transition:transform .15s; }
@@ -18151,16 +18173,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 
   /* The Changes tab */
   .ch-head { display:flex; align-items:center; gap:12px; margin:0 0 10px; flex-wrap:wrap; }
-  .ch-pillbox { position:relative; }
-  .ch-pill { display:inline-flex; align-items:center; gap:7px; border:1px solid #3a3a42; border-radius:999px; padding:6px 14px; font-size:0.88rem; background:#17171b; color:var(--text); cursor:pointer; }
-  .ch-pill.on { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .ch-pill em { font-style:normal; opacity:0.75; }
-  .ch-pop { position:absolute; top:calc(100% + 6px); left:0; z-index:30; width:240px; background:#1b1b1f; border:1px solid #3a3a42; border-radius:12px; box-shadow:0 10px 28px rgba(0,0,0,0.55); padding:6px; }
-  .ch-pop[hidden] { display:none; }
-  .ch-row { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; font-size:0.88rem; color:var(--text); cursor:pointer; }
-  .ch-row:hover { background:#232346; }
-  .ch-row small { margin-left:auto; color:#80808a; }
-  .ch-done { width:100%; margin-top:4px; }
+  .ch-pillbox .vt-pop .vt-opt:not(.on) .tk { visibility:hidden; }
   .ch-trim { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 10px; padding:10px 12px; background:#14141a; border:1px solid #2c2c31; border-radius:10px; font-size:0.88rem; }
   .ch-trim[hidden] { display:none; }
   .ch-search { display:block; width:100%; box-sizing:border-box; margin:0 0 4px; padding:9px 12px; background:#101012; color:var(--text); border:1px solid #34343a; border-radius:8px; font:inherit; font-size:0.88rem; }
@@ -21476,8 +21489,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       pill.classList.toggle('on', c.length > 0);
       pill.querySelector('.ch-pill-t').textContent = c.length ? c.map(function (k) { return kindNames[k]; }).join(', ') : 'All kinds';
       pill.querySelector('.ch-pill-n').textContent = c.length ? String(shown) : '';
-      [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { i.checked = !!kinds[i.getAttribute('data-g')]; });
-      pop.querySelector('input[data-all]').checked = c.length === 0;
+      [].forEach.call(pop.querySelectorAll('.vt-opt'), function (o) { var on = o.hasAttribute('data-all') ? c.length === 0 : !!kinds[o.getAttribute('data-g')]; o.classList.toggle('on', on); o.setAttribute('aria-checked', on ? 'true' : 'false'); });
     }
     // The entries are asked for again when the tab is opened and when the window comes back to it: what is in front of you is what the log holds now. What you were doing stays (the kinds chosen, the search,
     // the entries you opened).
@@ -21494,7 +21506,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           e.querySelector('.ch-x').hidden = false; var b = e.querySelector('.ch-tg'); b.setAttribute('aria-expanded', 'true'); b.innerHTML = '<i class="tri up" aria-hidden="true"></i> Hide';
         });
         paint(list);
-        [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { var sm = i.parentNode.querySelector('small'); if (sm && j.counts) sm.textContent = (j.counts[i.getAttribute('data-g')] || 0).toLocaleString(); });
+        [].forEach.call(pop.querySelectorAll('.vt-opt[data-g]'), function (o) { var sm = o.querySelector('.vt-n'); if (sm && j.counts) sm.textContent = (j.counts[o.getAttribute('data-g')] || 0).toLocaleString(); });
         if (empty) empty.hidden = j.n > 0;
         apply();
         return true;
@@ -21503,14 +21515,17 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     window.__chRefresh = refreshList;
     window.__chLeft = function () { [].forEach.call(list.querySelectorAll('.ch-new'), function (e) { e.classList.remove('ch-new'); }); };   // (the amber edges stay while you are on the tab, and go when you leave it)
-    function closePop() { pop.hidden = true; pill.setAttribute('aria-expanded', 'false'); }
-    pill.addEventListener('click', function (ev) { ev.stopPropagation(); pop.hidden = !pop.hidden; pill.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true'); });
-    pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
-    pop.addEventListener('change', function (ev) {
-      var i = ev.target; if (!i || i.tagName !== 'INPUT') return;
-      if (i.hasAttribute('data-all')) kinds = {}; else kinds[i.getAttribute('data-g')] = i.checked;
+    // (the list is the Visitors tab's: under its pill, and a sheet at the bottom on a phone, with the dimmed ground behind it; it stays open while you tick several)
+    function closePop() { pop.hidden = true; pill.setAttribute('aria-expanded', 'false'); var bg = root.querySelector('.vt-sheetbg'); if (bg) bg.remove(); }
+    function openPop() { pop.hidden = false; pill.setAttribute('aria-expanded', 'true'); if (!root.querySelector('.vt-sheetbg')) { var bg = document.createElement('div'); bg.className = 'vt-sheetbg'; root.appendChild(bg); } }
+    pill.addEventListener('click', function (ev) { ev.stopPropagation(); if (pop.hidden) openPop(); else closePop(); });
+    pop.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var o = ev.target.closest ? ev.target.closest('.vt-opt') : null; if (!o) return;
+      if (o.hasAttribute('data-all')) kinds = {}; else kinds[o.getAttribute('data-g')] = !kinds[o.getAttribute('data-g')];
       apply();
     });
+    pop.addEventListener('keydown', function (ev) { if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList && ev.target.classList.contains('vt-opt')) { ev.preventDefault(); ev.target.click(); } });
     root.querySelector('.ch-done').addEventListener('click', closePop);
     document.addEventListener('click', function () { if (!pop.hidden) closePop(); });
     document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !pop.hidden) { closePop(); pill.focus(); } });

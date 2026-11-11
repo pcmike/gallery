@@ -5604,7 +5604,7 @@ check('[quick popup] only "Type my own instead…" (or More options…) opens th
 // the QR code
 check('[qr] the QR code button opens the large code at once, with Copy, Save and Done; the small code and its side panel are gone', str_contains($nTab, "else if (what === 'qr') showLarge(url, opts.name, b);") && str_contains($nTab, 'data-gs="saveimg">Save</button><button type="button" class="gs-btn gs-dark" data-gs="done">Done') && !str_contains($nTab, 'gs-qrbox') && !str_contains($nTab, 'Show large') && !str_contains($nTab, 'Scan to open') && str_contains($nTab, "d.id = 'gs-addrbox'") && str_contains($nTab, "select it and copy by hand."));
 // the Settings page
-$nGroups = (preg_match_all('~<details class="site-group"[^>]*>\s*<summary><span class="site-group-title">(.*?)</span> <span class="muted">(.*?)</span>~s', $nTab, $gm) ? $gm : [[], [], []]);
+$nGroups = (preg_match_all('~<details class="site-group"[^>]*>\s*<summary><span class="site-group-title">(.*?)</span>(?: <span class="muted">(.*?)</span>)?~s', $nTab, $gm) ? $gm : [[], [], []]);
 check('[settings page] the groups are, in this order: Folders and photos, Videos and thumbnails, Visitors and logs, Location data, Sharing and access, Signing in and passwords, Server setup (advanced), then Files this gallery has made; "What is shown", "Share links" and "Passwords" are gone as groups', $nGroups[1] === ['Folders and photos', 'Videos and thumbnails', 'Visitors and logs', 'Location data', 'Sharing and access', 'Signing in and passwords', 'Server setup (advanced)', 'Files this gallery has made'] && !str_contains($nTab, '>What is shown<') && !str_contains($nTab, '>Passwords<'), json_encode($nGroups[1]));
 check('[settings page] every group starts closed (the first one no longer opens by itself)', !preg_match('/<details class="site-group"[^>]*\sopen/', $nTab));
 check('[settings page] the sign-in group holds both passwords, both signed-in lengths and the list of signed-in browsers, and says "11 settings"', preg_match('~Signing in and passwords</span> <span class="muted">11 settings</span>.*?name="pw_admin".*?name="pw_private".*?name="set_ADMIN_STAY_SIGNED_IN_DAYS".*?name="set_PRIVATE_VIEW_SIGNED_IN_DAYS".*?id="browsers-row".*?</details>~s', $nTab) === 1);
@@ -9706,6 +9706,7 @@ $chPage = http_get("$baseCh/?admin&classic=1", $chOwn)[1];
 $chPos = function ($page, $tab) { $m = []; return preg_match('~<a href="#' . $tab . '" (?:role="tab" )?data-tab="' . $tab . '" class="side-[a-z]+[^"]*"~', $page, $m, PREG_OFFSET_CAPTURE) ? $m[0][1] : -1; };
 check('[changes tab] the sidebar has Changes, between the others and Settings (this install has no Visitors, Shares or Edited yet: Features, Collections, Changes, Settings)', $chPos($chPage, 'features') >= 0 && $chPos($chPage, 'features') < $chPos($chPage, 'collections') && $chPos($chPage, 'collections') < $chPos($chPage, 'changes') && $chPos($chPage, 'changes') < $chPos($chPage, 'site') && $chPos($chPage, 'visits') === -1);
 check('[changes tab] the list names what happened with a label, a folder link that marks what is new (since=), a place to open each entry, and the controls: the kinds pill, Trim the log…, a search box', str_contains($chPage, 'id="changes"') && str_contains($chPage, 'added to <a href="?folder=Alpha&amp;since=') && str_contains($chPage, 'renamed or replaced') && str_contains($chPage, 'ch-k ren">RENAMED') && str_contains($chPage, 'ch-pill-t">All kinds') && str_contains($chPage, 'Trim the log') && str_contains($chPage, 'Search file or folder names'));
+check('[changes tab] the kinds list is the Visitors tab\'s own (the same chip, list, rows with a tick and Done), not a style of its own: one chip, "All kinds" ticked, a row for each kind with its count', str_contains($chPage, 'class="vt-chip ch-pill"') && str_contains($chPage, 'class="vt-pop ch-pop"') && str_contains($chPage, 'class="vt-opt on" data-all="1"') && preg_match_all('~class="vt-opt" data-g="(add|rem|ren|folder)"~', $chPage) === 4 && str_contains($chPage, 'class="vt-done ch-done"') && !str_contains($chPage, 'class="ch-row"'));
 check('[changes tab] the number on the entry is amber while there are entries not looked at (6 here), and each new entry has an amber edge', preg_match('~data-tab="changes" class="side-link">Changes <span class="count warn" title="[^"]*">(\d+)</span>~', $chPage, $chBadge) === 1 && (int) $chBadge[1] >= 6 && str_contains($chPage, 'ch-e ch-new'));
 $chFront = http_get("$baseCh/", $chOwn)[1]; $chFrontVis = http_get("$baseCh/")[1];
 check('[changes tab] on the front page the owner\'s folder card carries an amber note of what is new in it (a link to the folder that marks it), a visitor\'s card carries none, and the page knows the newest entry\'s number for the pill', preg_match('~<a class="fc-chg" href="\?folder=Alpha&amp;since=\d+"~', $chFront) === 1 && !str_contains($chFrontVis, '<a class="fc-chg"') && preg_match('/id="live-folder" hidden data-folder="" data-last="[1-9]\d*" data-noun="(item|photo)"/', $chFront) === 1);
@@ -9931,6 +9932,33 @@ unset($bkCfg['CLOSE_PUBLIC_GALLERY']); file_put_contents("$fxBk/.gallery-config.
 file_put_contents("$fxBk/Alpha/.gallery-stats.sqlite", 'this is not a database, it was cut short');
 $bkRe3 = json_decode(http_post("$baseBk/?admin", ['csrf_token' => $bkCsrf, 'action' => 'health_panel', 'recheck' => '1'], array_merge($bkOwn, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '';
 check('[dashboard] a damaged folder view-count database is a red row naming the folder, and says the backup holds a copy', str_contains($bkRe3, 'View counts are damaged in 1 folder') && str_contains($bkRe3, 'Alpha/.gallery-stats.sqlite'));
+
+// --- the numbers strip: Links in two colours, Folders counting collections, the backup's age in short
+echo "== health strip: links, folders, backup age ==\n";
+$stFx = new_fixture_dir('strip');
+make_jpeg("$stFx/p.jpg", 40, 30, 20, 90, 160); mkdir("$stFx/Rome"); make_jpeg("$stFx/Rome/r.jpg", 40, 30, 120, 90, 60);
+copy($indexSrc, "$stFx/index.php");
+file_put_contents("$stFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'st-admin-pw-1', 'ENABLE_SHARE_LINKS' => true]));
+$stGuard = "<?php http_response_code(404); exit; ?>\n"; $stNow = time();
+file_put_contents("$stFx/.gallery-links.php", $stGuard . json_encode(['links' => [
+    ['id' => 'l1', 'token' => 'AAAAAAAA', 'status' => 'active', 'createdAt' => $stNow], ['id' => 'l2', 'token' => 'BBBBBBBB', 'status' => 'active', 'createdAt' => $stNow],
+    ['id' => 'l3', 'token' => 'CCCCCCCC', 'status' => 'paused', 'createdAt' => $stNow], ['id' => 'l4', 'token' => 'DDDDDDDD', 'status' => 'active', 'endsAt' => $stNow - 100, 'createdAt' => $stNow - 999]]]) . "\n");
+$stPort = find_free_port(); start_server($stFx, $stPort); $stBase = "http://127.0.0.1:$stPort";
+$stPage = function () use ($stBase) {
+    [, , $h] = http_post("$stBase/?admin", ['access_code' => 'st-admin-pw-1'], [], false);
+    return http_get("$stBase/?admin&classic=1", ['Cookie: ' . extract_cookie_header($h)])[1];
+};
+$stP1 = $stPage();
+check('[strip] the Links box is labelled Links and shows the ones in use in green and the others (paused, ended) in red, with what each is in its title', str_contains($stP1, '<span class="hs-two"><span class="hs-ok">2</span><span class="hs-bad">2</span></span></b><small>Links</small>') && str_contains($stP1, 'title="2 in use, 2 paused, ended or not started yet"') && !str_contains($stP1, '>Active links<'));
+preg_match('~<b>([^<]+)</b><small>Folders</small>~', $stP1, $stF1);
+check('[strip] Folders counts the folders and the front page (Rome + the front page = 2) and no collections while there are none', ($stF1[1] ?? '') === '2');
+file_put_contents("$stFx/.gallery-collections.php", $stGuard . json_encode(['collections' => [['id' => 'c' . str_repeat('0', 12), 'name' => 'Favourites', 'parent' => ''], ['id' => 'c' . str_repeat('1', 12), 'name' => 'best-of', 'parent' => '']]]) . "\n");
+preg_match('~<b>([^<]+)</b><small>Folders</small>~', $stPage(), $stF2);
+check('[strip] ...and a collection counts as a folder (a card in the gallery like one): two collections make it 4', ($stF2[1] ?? '') === '4', 'got ' . ($stF2[1] ?? 'nothing'));
+check('[strip] the Backup box gives its age in short (m, h, d) with the full words in its title, not "17 hours ago"', preg_match('~title="The backup was made [^"]+"><b>(just now|\d+[mhd] ago)</b><small>Backup</small>~', $stP1) === 1);
+$stSrc = file_get_contents(__DIR__ . '/../src/php/035b-health-dashboard.php');
+check('[strip] the short ages are minutes, hours and days', str_contains($stSrc, "'m ago'") && str_contains($stSrc, "'h ago'") && str_contains($stSrc, "'d ago'"));
+check('[strip] the Files this gallery has made group is just its name (no "see them, copy them, remove them")', str_contains($stP1, '<span class="site-group-title">Files this gallery has made</span></summary>') && !str_contains($stP1, 'see them, copy them'));
 
 // --- the disks: the chip and the row count the disks the mapped folders are on, not only the one index.php is on
 echo "== disk space across mapped folders ==\n";

@@ -16,6 +16,14 @@ function health_ago($t) {
     $n = (int) floor($d / 86400);
     return $n . ' day' . ($n === 1 ? '' : 's') . ' ago';
 }
+/** The same, short enough for a small box: "just now", "12m ago", "17h ago", "3d ago". */
+function health_ago_short($t) {
+    $d = max(0, time() - (int) $t);
+    if ($d < 90) return 'just now';
+    if ($d < 3600) return (int) round($d / 60) . 'm ago';
+    if ($d < 86400) return (int) round($d / 3600) . 'h ago';
+    return (int) floor($d / 86400) . 'd ago';
+}
 function health_bytes($b) { return $b >= 1073741824 ? round($b / 1073741824, 1) . ' GB' : ($b >= 1048576 ? round($b / 1048576, $b >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($b / 1024)) . ' KB'); }
 
 /** The checks that take a moment (each database looked through, every folder's data files listed), kept for an hour and looked at again by "Check again". */
@@ -254,10 +262,18 @@ function health_strip($dir, $files) {
     foreach ($files as $f) { $n++; if (is_video_file($f)) $videos++; }
     $out = [['Photos', number_format($n - $videos)]];
     if ($videos) $out[] = ['Videos', number_format($videos)];
-    $out[] = ['Folders', number_format(count(all_folder_paths($files)) + 1)];
-    if (is_file(links_path())) { $act = 0; foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l) && link_is_live($l)) $act++; $out[] = ['Active links', number_format($act)]; }
+    $folders = count(all_folder_paths($files)) + 1;   // (and the front page)
+    if (collections_any()) $folders += count(collections_registry($dir, $files)['byPath']);   // (a collection is a card in the gallery like a folder; it is not a folder on disk, so the list above does not hold it)
+    $out[] = ['Folders', number_format($folders)];
+    if (is_file(links_path())) {
+        $act = 0; $other = 0;
+        foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && !link_is_public_log($l)) { if (link_is_live($l)) $act++; else $other++; }
+        // (the value is two numbers: the ones in use in green, the others, paused or ended, in red; the box says what each is when it is touched)
+        $html = '<span class="hs-two">' . '<span class="hs-ok">' . number_format($act) . '</span>' . ($other ? '<span class="hs-bad">' . number_format($other) . '</span>' : '') . '</span>';   // (the two numbers sit at the left and the right of the box, not side by side)
+        $out[] = ['Links', number_format($act) . ($other ? ' / ' . number_format($other) : ''), null, $html, number_format($act) . ' in use' . ($other ? ', ' . number_format($other) . ' paused, ended or not started yet' : '')];
+    }
     if (visitlog_find() !== null && visitlog_driver_ok()) { $out[] = ['Visitors', number_format(visitlog_visitor_count())]; $out[] = ['Log', health_bytes(visitlog_size())]; }
-    $bk = backup_status(); $out[] = ['Backup', $bk['have'] ? health_ago($bk['at']) : 'none'];
+    $bk = backup_status(); $out[] = ['Backup', $bk['have'] ? health_ago_short($bk['at']) : 'none', null, null, $bk['have'] ? 'The backup was made ' . health_ago($bk['at']) : 'No backup has been made yet'];
     $vols = health_volumes($dir, $files);
     if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
     elseif ($vols) {

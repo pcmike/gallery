@@ -3047,8 +3047,7 @@
       pill.classList.toggle('on', c.length > 0);
       pill.querySelector('.ch-pill-t').textContent = c.length ? c.map(function (k) { return kindNames[k]; }).join(', ') : 'All kinds';
       pill.querySelector('.ch-pill-n').textContent = c.length ? String(shown) : '';
-      [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { i.checked = !!kinds[i.getAttribute('data-g')]; });
-      pop.querySelector('input[data-all]').checked = c.length === 0;
+      [].forEach.call(pop.querySelectorAll('.vt-opt'), function (o) { var on = o.hasAttribute('data-all') ? c.length === 0 : !!kinds[o.getAttribute('data-g')]; o.classList.toggle('on', on); o.setAttribute('aria-checked', on ? 'true' : 'false'); });
     }
     // The entries are asked for again when the tab is opened and when the window comes back to it: what is in front of you is what the log holds now. What you were doing stays (the kinds chosen, the search,
     // the entries you opened).
@@ -3065,7 +3064,7 @@
           e.querySelector('.ch-x').hidden = false; var b = e.querySelector('.ch-tg'); b.setAttribute('aria-expanded', 'true'); b.innerHTML = '<i class="tri up" aria-hidden="true"></i> Hide';
         });
         paint(list);
-        [].forEach.call(pop.querySelectorAll('input[data-g]'), function (i) { var sm = i.parentNode.querySelector('small'); if (sm && j.counts) sm.textContent = (j.counts[i.getAttribute('data-g')] || 0).toLocaleString(); });
+        [].forEach.call(pop.querySelectorAll('.vt-opt[data-g]'), function (o) { var sm = o.querySelector('.vt-n'); if (sm && j.counts) sm.textContent = (j.counts[o.getAttribute('data-g')] || 0).toLocaleString(); });
         if (empty) empty.hidden = j.n > 0;
         apply();
         return true;
@@ -3074,14 +3073,17 @@
     }
     window.__chRefresh = refreshList;
     window.__chLeft = function () { [].forEach.call(list.querySelectorAll('.ch-new'), function (e) { e.classList.remove('ch-new'); }); };   // (the amber edges stay while you are on the tab, and go when you leave it)
-    function closePop() { pop.hidden = true; pill.setAttribute('aria-expanded', 'false'); }
-    pill.addEventListener('click', function (ev) { ev.stopPropagation(); pop.hidden = !pop.hidden; pill.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true'); });
-    pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
-    pop.addEventListener('change', function (ev) {
-      var i = ev.target; if (!i || i.tagName !== 'INPUT') return;
-      if (i.hasAttribute('data-all')) kinds = {}; else kinds[i.getAttribute('data-g')] = i.checked;
+    // (the list is the Visitors tab's: under its pill, and a sheet at the bottom on a phone, with the dimmed ground behind it; it stays open while you tick several)
+    function closePop() { pop.hidden = true; pill.setAttribute('aria-expanded', 'false'); var bg = root.querySelector('.vt-sheetbg'); if (bg) bg.remove(); }
+    function openPop() { pop.hidden = false; pill.setAttribute('aria-expanded', 'true'); if (!root.querySelector('.vt-sheetbg')) { var bg = document.createElement('div'); bg.className = 'vt-sheetbg'; root.appendChild(bg); } }
+    pill.addEventListener('click', function (ev) { ev.stopPropagation(); if (pop.hidden) openPop(); else closePop(); });
+    pop.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var o = ev.target.closest ? ev.target.closest('.vt-opt') : null; if (!o) return;
+      if (o.hasAttribute('data-all')) kinds = {}; else kinds[o.getAttribute('data-g')] = !kinds[o.getAttribute('data-g')];
       apply();
     });
+    pop.addEventListener('keydown', function (ev) { if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList && ev.target.classList.contains('vt-opt')) { ev.preventDefault(); ev.target.click(); } });
     root.querySelector('.ch-done').addEventListener('click', closePop);
     document.addEventListener('click', function () { if (!pop.hidden) closePop(); });
     document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !pop.hidden) { closePop(); pill.focus(); } });

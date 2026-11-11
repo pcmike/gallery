@@ -12,16 +12,19 @@ function render_admin_changes_panel($csrfToken) {
     <h2 class="section-title">Changes</h2>
     <p class="hint" style="margin:0 0 12px">The log of disk activity: what the gallery noticed change in your folders (a sync, an upload, a rename), whoever made it.</p>
     <div class="ch-head">
-      <div class="ch-pillbox">
-        <button type="button" class="ch-pill" aria-haspopup="true" aria-expanded="false"><span class="ch-pill-t">All kinds</span><em class="ch-pill-n"></em> <i class="tri" aria-hidden="true"></i></button>
-        <div class="ch-pop" role="group" aria-label="Show only" hidden>
-          <label class="ch-row"><input type="checkbox" data-all="1" checked> <span>All kinds</span></label>
-          <?php foreach ($groups as $k => [$name, $n]): ?>
-          <label class="ch-row"><input type="checkbox" data-g="<?= $k ?>"> <span><?= $esc($name) ?></span><small><?= number_format($n) ?></small></label>
-          <?php endforeach; ?>
-          <button type="button" class="secondary ch-done">Done</button>
+      <span class="vt-pw ch-pillbox">
+        <button type="button" class="vt-chip ch-pill" aria-haspopup="true" aria-expanded="false"><span class="vt-l ch-pill-t">All kinds</span> <i class="tri" aria-hidden="true"></i> <em class="ch-pill-n"></em></button>
+        <div class="vt-pop ch-pop" role="group" aria-label="Show only" hidden>
+          <div class="vt-pop-h">Kind</div>
+          <div class="vt-opts">
+            <div class="vt-opt on" data-all="1" role="checkbox" aria-checked="true" tabindex="0">All kinds<span class="tk">&#10003;</span></div>
+            <?php foreach ($groups as $k => [$name, $n]): ?>
+            <div class="vt-opt" data-g="<?= $k ?>" role="checkbox" aria-checked="false" tabindex="0"><?= $esc($name) ?> <span class="muted vt-n"><?= number_format($n) ?></span><span class="tk">&#10003;</span></div>
+            <?php endforeach; ?>
+          </div>
+          <button type="button" class="vt-done ch-done">Done</button>
         </div>
-      </div>
+      </span>
       <button type="button" class="linklike ch-trim-open">Trim the log&hellip;</button>
     </div>
     <div class="ch-trim" hidden>

@@ -3195,6 +3195,17 @@ try:
         comes_back()
         chl = b.js("(() => ({n: document.querySelectorAll('.ch-e[data-text*=chtab]:not([hidden])').length, open: !document.querySelector('.ch-e[data-text*=chtab1] .ch-x').hidden, q: document.querySelector('.ch-search').value}))()")
         ok(chl["n"] == 2 and chl["open"] and chl["q"] == "chtab", "[changes tab] a photo arriving while the tab is in front is drawn when the window comes back, and the entry you opened and the search stay", str(chl))
+        # the kinds list is the Visitors tab's own (a list under the chip: rows with a tick, Done), stays open while ticking, Esc and Done close it
+        b.js("document.querySelector('#changes .ch-pill').click()"); b.drain(0.3)
+        pl = b.js("(() => { const p = document.querySelector('#changes .ch-pop'), c = document.querySelector('#changes .ch-pill'), o = p.querySelector('.vt-opt[data-g=add]'); return {open: !p.hidden, exp: c.getAttribute('aria-expanded'), radius: getComputedStyle(p).borderRadius, minw: getComputedStyle(p).minWidth, chip: getComputedStyle(c).borderRadius, tick: getComputedStyle(o.querySelector('.tk')).visibility, all: p.querySelector('[data-all]').classList.contains('on')}; })()")
+        ok(pl["open"] and pl["exp"] == "true" and pl["radius"] == "10px" and pl["minw"] == "290px" and pl["chip"] == "20px" and pl["tick"] == "hidden" and pl["all"], "[changes tab] the kinds chip opens the same list the Visitors tab has (same chip, same list, All kinds ticked)", str(pl))
+        b.js("document.querySelector('#changes .vt-opt[data-g=add]').click()"); b.drain(0.3)
+        pl = b.js("(() => { const p = document.querySelector('#changes .ch-pop'), o = p.querySelector('.vt-opt[data-g=add]'); return {open: !p.hidden, on: o.classList.contains('on'), tick: getComputedStyle(o.querySelector('.tk')).visibility, all: p.querySelector('[data-all]').classList.contains('on'), chip: document.querySelector('#changes .ch-pill').classList.contains('on'), label: document.querySelector('#changes .ch-pill-t').textContent, shown: document.querySelectorAll('.ch-e:not([hidden])').length, other: document.querySelectorAll('.ch-e:not([hidden]):not([data-g=add])').length}; })()")
+        ok(pl["open"] and pl["on"] and pl["tick"] == "visible" and not pl["all"] and pl["chip"] and pl["label"] == "Added" and pl["other"] == 0, "[changes tab] ticking Added keeps the list open, ticks it, un-ticks All kinds, and only Added entries remain", str(pl))
+        b.js("document.querySelector('#changes .vt-opt[data-all]').click()"); b.drain(0.3)
+        ok(b.js("document.querySelector('#changes .ch-pill-t').textContent") == "All kinds" and not b.js("document.querySelector('#changes .ch-pill').classList.contains('on')"), "[changes tab] picking All kinds clears the choice")
+        b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))"); b.drain(0.2)
+        ok(b.js("document.querySelector('#changes .ch-pop').hidden") and b.js("document.querySelector('#changes .ch-pill').getAttribute('aria-expanded')") == "false", "[changes tab] Esc closes the list")
         os.unlink(SITE_L + "/Rome/chtab1.jpg"); os.unlink(SITE_L + "/Rome/chtab2.jpg"); comes_back()
         b.js("(function(){ var q = document.querySelector('.ch-search'); q.value = ''; q.dispatchEvent(new Event('input', {bubbles: true})); })()")
         # ---- Settings: the signed-in browsers and Prepare media's numbers are asked for again when the window comes back

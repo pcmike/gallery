@@ -611,7 +611,10 @@
   .health-strip { display:flex; flex-wrap:wrap; gap:8px; margin:2px 0 10px; }
   .health-strip .hs-t { display:flex; flex-direction:column; gap:1px; padding:6px 11px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; min-width:4.2em; }
   .health-strip .hs-t b { font-weight:600; font-size:1.02em; }
-  .health-strip .hs-t small { color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.04em; }
+  .health-strip .hs-t b .hs-two { display:flex; justify-content:center; gap:1.1em; }
+  .health-strip .hs-t b .hs-ok { color:var(--ok); }
+  .health-strip .hs-t b .hs-bad { color:var(--err); }
+  .health-strip .hs-t small { text-align:center; color:var(--muted); font-size:.74em; text-transform:uppercase; letter-spacing:.04em; }
   .health-strip button.hs-t { font:inherit; color:inherit; background:none; text-align:left; cursor:pointer; }
   .health-strip button.hs-t:hover, .health-strip button.hs-t[aria-expanded="true"] { border-color:var(--accent, #aab2ff); }
   .health-strip button.hs-t .tri { margin-left:.2em; transition:transform .15s; }
@@ -1159,16 +1162,7 @@
 
   /* The Changes tab */
   .ch-head { display:flex; align-items:center; gap:12px; margin:0 0 10px; flex-wrap:wrap; }
-  .ch-pillbox { position:relative; }
-  .ch-pill { display:inline-flex; align-items:center; gap:7px; border:1px solid #3a3a42; border-radius:999px; padding:6px 14px; font-size:0.88rem; background:#17171b; color:var(--text); cursor:pointer; }
-  .ch-pill.on { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .ch-pill em { font-style:normal; opacity:0.75; }
-  .ch-pop { position:absolute; top:calc(100% + 6px); left:0; z-index:30; width:240px; background:#1b1b1f; border:1px solid #3a3a42; border-radius:12px; box-shadow:0 10px 28px rgba(0,0,0,0.55); padding:6px; }
-  .ch-pop[hidden] { display:none; }
-  .ch-row { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; font-size:0.88rem; color:var(--text); cursor:pointer; }
-  .ch-row:hover { background:#232346; }
-  .ch-row small { margin-left:auto; color:#80808a; }
-  .ch-done { width:100%; margin-top:4px; }
+  .ch-pillbox .vt-pop .vt-opt:not(.on) .tk { visibility:hidden; }
   .ch-trim { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 10px; padding:10px 12px; background:#14141a; border:1px solid #2c2c31; border-radius:10px; font-size:0.88rem; }
   .ch-trim[hidden] { display:none; }
   .ch-search { display:block; width:100%; box-sizing:border-box; margin:0 0 4px; padding:9px 12px; background:#101012; color:var(--text); border:1px solid #34343a; border-radius:8px; font:inherit; font-size:0.88rem; }
