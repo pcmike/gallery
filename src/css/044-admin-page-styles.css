@@ -544,6 +544,18 @@
   .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
   .health-detail .linklike { color:#aab2ff; font-size:inherit; margin-left:6px; }   /* (Check now: a periwinkle link, like the other links in these rows) */
   @media (hover: hover) { .health-detail .linklike:hover { text-decoration:underline; } }
+  .health-row > div:not(.health-act) { min-width:0; }   /* (a long line of code in a fold scrolls in its own box instead of widening the row) */
+  .health-how { margin-top:6px; font-size:0.82rem; min-width:0; max-width:100%; }
+  .health-how[hidden] { display:none; }
+  .health-how > summary { cursor:pointer; color:#aab2ff; list-style:none; display:inline-flex; align-items:center; gap:6px; padding:2px 0; }
+  .health-how > summary::-webkit-details-marker { display:none; }
+  .health-how > summary::before { content:""; width:0; height:0; border-top:.3em solid transparent; border-bottom:.3em solid transparent; border-left:.43em solid currentColor; transition:transform .15s; }
+  .health-how[open] > summary::before { transform:rotate(90deg); }
+  .health-how-body { min-width:0; margin:4px 0 2px; padding:2px 0 2px 12px; border-left:2px solid var(--line, rgba(255,255,255,.12)); color:var(--muted); }
+  .health-how-body p { margin:6px 0; }
+  .health-how-body .rules-box { min-width:0; margin:6px 0; display:flex; flex-direction:column; align-items:stretch; }
+  .health-how-body .rules-box .copy-rules { position:static; align-self:flex-end; margin:0 0 4px; }   /* (above the code, not over it: one line of code is shorter than the button) */
+  .health-how-body .rules-box pre { margin:0; overflow-x:auto; white-space:pre; max-width:100%; }
   .health-more { display:inline-block; margin-top:2px; font-size:0.8rem; color:#aab2ff; }
   .health-summary { margin:0 0 6px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .site-group { scroll-margin-top:70px; margin:0 0 10px; border:1px solid #26262a; border-radius:9px; padding:0 12px; }

@@ -69,10 +69,10 @@ function render_admin_health_panel() {
       <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn' || $it[1] === 'heads') $allQuiet = false; ?>
         <div class="health-group<?= $allQuiet ? ' all-quiet' : '' ?>">
           <h3 class="subhead"><?= $esc($g) ?></h3>
-          <?php foreach ($items as [, $status, $label, $detail, $rowLink, $rowHtml]): $isLoud = $status === 'bad' || $status === 'warn'; ?>
+          <?php foreach ($items as [, $status, $label, $detail, $rowLink, $rowHtml, $rowHow]): $isLoud = $status === 'bad' || $status === 'warn'; ?>
             <div class="health-row health-<?= $esc($status) ?> <?= $isLoud ? 'loud' : 'quiet' ?><?= $status === 'opt' ? ' optional' : ($status === 'heads' ? ' heads' : '') ?>">
               <span class="health-mark <?= $status === 'ok' ? 'ok-text' : ($status === 'bad' ? 'warn-text' : ($status === 'warn' ? 'note-text' : ($status === 'heads' ? 'heads-mark' : 'muted'))) ?>"><?= isset($mark[$status]) ? ui_icon($mark[$status]) : ($status === 'opt' ? '&#9675;' : ($status === 'heads' ? '!' : '&bull;')) ?></span>
-              <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?><?php if ($rowLink): ?> <a href="#<?= $esc($rowLink[0]) ?>" onclick="return adminGoTo('<?= $esc($rowLink[0]) ?>', '<?= $esc($rowLink[1]) ?>');"><?= $esc($rowLink[2]) ?></a><?php endif; ?></div><?php endif; ?><?= (string) $rowHtml ?></div>
+              <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?><?php if ($rowLink): ?> <a href="#<?= $esc($rowLink[0]) ?>" onclick="return adminGoTo('<?= $esc($rowLink[0]) ?>', '<?= $esc($rowLink[1]) ?>');"><?= $esc($rowLink[2]) ?></a><?php endif; ?></div><?php endif; ?><?= (string) $rowHtml ?><?= $rowHow ? health_how_html($rowHow) : '' ?></div>
             </div>
           <?php endforeach; ?>
         </div>
@@ -82,7 +82,7 @@ function render_admin_health_panel() {
         <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
-            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">&rarr; Server setup</a><?php endif; ?></div>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">&rarr; Server setup</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
           </div>
         <?php endforeach; ?>
       </div>

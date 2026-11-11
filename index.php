@@ -14176,7 +14176,7 @@ function backup_zip_extract($path, $index, $name, $dest) {
     $m = $index[$name];
     fseek($in, $m['offset']); $lh = unpack('Vsig/vver/vflags/vmethod/vtime/vdate/Vcrc/Vcsize/Vusize/vnlen/velen', (string) fread($in, 30));
     if (!$lh || $lh['sig'] !== 0x04034b50) { fclose($in); fclose($out); @unlink($dest); return false; }
-    fseek($in, $m['offset'] + 30 + $lh['nlen'] + $lh['velen']);
+    fseek($in, $m['offset'] + 30 + $lh['nlen'] + $lh['elen']);
     $ctx = hash_init('crc32b'); $ok = true;
     for ($left = $m['size']; $left > 0;) {
         $chunk = fread($in, min(1048576, $left));
@@ -15049,7 +15049,7 @@ function health_version_record($dir) {
  *  changed by looking. Folders are sampled (the first 300 that hold media) so a huge gallery stays quick. */
 function health_checks($dir, $files) {
     $rows = [];
-    $add = function ($group, $status, $label, $detail = '', $link = null, $html = '') use (&$rows) { $rows[] = [$group, $status, $label, $detail, $link, $html]; };
+    $add = function ($group, $status, $label, $detail = '', $link = null, $html = '', $how = null) use (&$rows) { $rows[] = [$group, $status, $label, $detail, $link, $html, $how]; };
 
     // --- this install
     $rec = health_version_record($dir);
@@ -15123,7 +15123,11 @@ function health_checks($dir, $files) {
     $sampled = count($folders) >= 300 ? ' (the first 300 folders with media)' : '';
     $rel = function ($p) use ($dir) { $d = rtrim($dir, '/'); return $p === $d ? '(top folder)' : (strncmp($p, $d . '/', strlen($d) + 1) === 0 ? substr($p, strlen($d) + 1) : $p); };
     $add('Folders and files', $unwritable ? 'warn' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
-        $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '');
+        $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '', null, '', $unwritable ? [
+        'The web server\'s user needs to be able to write in those folders. On Debian or Ubuntu that user is usually `www-data`; on other systems it may be `nginx`, `apache` or `http` (the command `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
+        ['Give it the folder, for example:', 'sudo chown -R www-data: /path/to/the/folder'],
+        'Or, if the files must stay with their owner, let the group write: `sudo chmod -R g+w /path/to/the/folder` and make the web server\'s user a member of that group. A folder on a network share (NAS) may need the share\'s own permissions changed instead.',
+        'Then press Check again at the top of this page.'] : null);
     $add('Folders and files', $badData ? 'bad' : 'ok', $badData ? count($badData) . ' folder data file' . (count($badData) === 1 ? '' : 's') . ' can\'t be read' : 'Folder data files all read fine (' . $withData . ' folder' . ($withData === 1 ? '' : 's') . ', ' . $entries . ' photo' . ($entries === 1 ? '' : 's') . ' with saved details)',
         $badData ? 'Everything in them is hidden from visitors until the file is restored from a backup or deleted, and nothing is saved over them meanwhile: ' . implode(', ', array_map($rel, array_slice($badData, 0, 5))) : 'Wiping a folder wipes its captions, locations and private flags.');
     $videos = 0; foreach ($files as $f) if (is_video_file($f)) $videos++;
@@ -15392,7 +15396,9 @@ function health_database_rows($add, $dir, $files) {
         $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $heavy['log']['why'] . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
     } elseif (!$vlOk) {
-        $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses);
+        $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
+            'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',
+            'Then press Check again at the top of this page.']);
     } elseif ($logFile !== null) {
         $vlSize = visitlog_size(); $vlOld = visitlog_oldest(); $vlText = health_bytes($vlSize);
         if (LOG_WARN_MB > 0 && $vlSize > LOG_WARN_MB * 1048576)
@@ -15507,6 +15513,30 @@ function health_volumes($dir, $files) {
     return $cache[$ck] = $out;
 }
 
+/** A "How to fix" fold for a row that needs a change on the server (something the gallery can't do from its own folder). $steps: a list of lines, each a text (`like this` is
+ *  shown as code) or [text, code], where the code gets a box with a Copy button. $key + $hidden: for a row the browser tests, the fold starts hidden and the script shows it
+ *  when the test fails. */
+function health_how_html($steps, $key = '', $hidden = false) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $fmt = function ($t) use ($esc) { return preg_replace('/`([^`]+)`/', '<code>$1</code>', $esc($t)); };
+    $h = '<details class="health-how"' . ($key !== '' ? ' data-how-for="' . $esc($key) . '"' : '') . ($hidden ? ' hidden' : '') . '><summary>How to fix</summary><div class="health-how-body">';
+    foreach ($steps as $st) {
+        $text = is_array($st) ? $st[0] : $st; $code = is_array($st) ? ($st[1] ?? '') : '';
+        if ($text !== '') $h .= '<p>' . $fmt($text) . '</p>';
+        if ($code !== '') $h .= '<div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code>' . $esc($code) . '</code></pre></div>';
+    }
+    return $h . '</div></details>';
+}
+
+/** The steps for a file the server must refuse (anything starting with .gallery-): the visitor log's and the backup's rows use them. */
+function health_how_gallery_files() {
+    return [
+        ['nginx (a server of your own): add this inside the site\'s `server { }` block, then run `sudo nginx -t && sudo systemctl reload nginx`.', "location ~ /\\.gallery- {\n    return 404;\n}"],
+        ['Apache, or any host that reads `.htaccess` (FTP-only hosting too): save this as a file named `.htaccess` in the gallery\'s folder. If one is there already, add it at the end.', "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>"],
+        'Then press the circular arrow at the top of this page (Check again): this row turns green when the server refuses the address.',
+    ];
+}
+
 /** The server: disk room, the connection, the visitor address, what PHP allows. */
 function health_server_rows($add) {
     $G = 'Server';
@@ -15523,15 +15553,29 @@ function health_server_rows($add) {
         $add($G, 'info', 'Disk space on ' . count($vols) . ' disks', implode('. ', $lines) . '.');
     }
     if (is_https_request()) $add($G, 'ok', 'Connection: HTTPS', 'This page was reached over an encrypted connection.');
-    elseif (!is_local_request()) $add($G, 'opt', 'You are using the admin over plain HTTP', 'Your sign-in code and the sign-in cookie cross the network unencrypted. Use the https:// address of this gallery (set it up on the web server if there is none).');
+    elseif (!is_local_request()) $add($G, 'opt', 'You are using the admin over plain HTTP', 'Your sign-in code and the sign-in cookie cross the network unencrypted. Use the https:// address of this gallery (set it up on the web server if there is none).', null, '', [
+            'A server of your own: get a free certificate from Let\'s Encrypt (`sudo certbot --nginx`, or `sudo certbot --apache`), then open the gallery by its `https://` address.',
+            'Behind a proxy or tunnel that already does HTTPS (Cloudflare, Caddy, nginx in front, a tunnel): the gallery only sees plain HTTP, so have the proxy tell it. In nginx, in the proxy\'s location:', 
+            ['', 'proxy_set_header X-Forwarded-Proto $scheme;'],
+            'Shared hosting: switch on the free certificate in the host\'s control panel (often called SSL, or Let\'s Encrypt), then use the `https://` address.']);
     $hint = client_ip_proxy_hint();
-    if ($hint !== '') $add($G, 'opt', 'Visitor addresses may be the proxy\'s, not the visitor\'s', $hint . ' Until then the visitor log and the sign-in pause see the proxy\'s address.', ['site', 'setting-TRUSTED_PROXY', '→ Visitor address']);
+    if ($hint !== '') $add($G, 'opt', 'Visitor addresses may be the proxy\'s, not the visitor\'s', $hint . ' Until then the visitor log and the sign-in pause see the proxy\'s address.', ['site', 'setting-TRUSTED_PROXY', '→ Visitor address'], '', [
+            'Open Settings → Visitor address and choose what sits in front of the gallery: Cloudflare, or another proxy.',
+            'For another proxy, also list the proxy\'s own address under the proxy addresses, so only it is believed (a tunnel or proxy on this same machine is `127.0.0.1/32`). Anyone else\'s claim about a visitor\'s address is ignored.',
+            'To tell it worked: the Visitors tab then shows each visitor\'s own address, not the same one every time.']);
     if ((CHECK_FOR_UPDATES || COUNTRY_LOOKUP) && !function_exists('curl_init') && !filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN))
-        $add($G, 'opt', 'This server lets PHP fetch no web addresses', 'Looking for a new version' . (COUNTRY_LOOKUP ? ' and downloading the country file' : '') . ' need either the curl extension or allow_url_fopen. Neither is on, so they can\'t run.');
+        $add($G, 'opt', 'This server lets PHP fetch no web addresses', 'Looking for a new version' . (COUNTRY_LOOKUP ? ' and downloading the country file' : '') . ' need either the curl extension or allow_url_fopen. Neither is on, so they can\'t run.', null, '', [
+            'Install the curl extension. Debian or Ubuntu: `sudo apt install php-curl`, then reload PHP-FPM (or Apache). Shared hosting: switch curl on in the host\'s PHP extensions page.',
+            'Or, in the php.ini that PHP-FPM reads, set `allow_url_fopen = On` and reload PHP-FPM.',
+            'Then press Check again at the top of this page.']);
     // PHP's own picture library (GD) needs a photo in memory (about 100 MB for 12 megapixels). The gallery asks for 256M itself; this row is only for a server that refuses, and only
     // where GD is what makes the thumbnails (Imagick keeps pictures outside PHP's memory).
     if (!class_exists('Imagick') && extension_loaded('gd') && !image_memory_raise())
-        $add($G, 'opt', 'PHP\'s memory limit is too low for big photos (' . trim((string) ini_get('memory_limit')) . ')', 'This server makes thumbnails with PHP\'s own picture library, which needs about 100 MB for a 12-megapixel photo. The gallery asked for more and the server said no, so large photos may get no thumbnail. Set memory_limit to 256M in the server\'s PHP settings (php.ini, or the host\'s PHP settings page).');
+        $add($G, 'opt', 'PHP\'s memory limit is too low for big photos (' . trim((string) ini_get('memory_limit')) . ')', 'This server makes thumbnails with PHP\'s own picture library, which needs about 100 MB for a 12-megapixel photo. The gallery asked for more and the server said no, so large photos may get no thumbnail. Set memory_limit to 256M in the server\'s PHP settings (php.ini, or the host\'s PHP settings page).', null, '', [
+            'A server of your own (nginx or Apache with PHP-FPM): edit the php.ini that PHP-FPM reads, for example `/etc/php/8.4/fpm/php.ini` (the command `php --ini` shows the command-line one; FPM keeps its own copy). Set `memory_limit = 256M`, then reload PHP-FPM, for example `sudo systemctl reload php8.4-fpm`.',
+            'If the site\'s PHP-FPM pool file (under `/etc/php/8.4/fpm/pool.d/`) already has a line starting `php_admin_value[memory_limit]`, change that one instead: it overrides php.ini and is the usual reason the gallery was refused.',
+            'Shared hosting: the host\'s PHP settings page, or a file named `.user.ini` next to `index.php` containing `memory_limit = 256M` (it can take a few minutes to be noticed).',
+            'Then press Check again at the top of this page.']);
 }
 
 /** The numbers across the top: [[label, value]]. Only what is cheap to know. */
@@ -15623,10 +15667,10 @@ function render_admin_health_panel() {
       <?php foreach ($groups as $g => $items): $allQuiet = true; foreach ($items as $it) if ($it[1] === 'bad' || $it[1] === 'warn' || $it[1] === 'heads') $allQuiet = false; ?>
         <div class="health-group<?= $allQuiet ? ' all-quiet' : '' ?>">
           <h3 class="subhead"><?= $esc($g) ?></h3>
-          <?php foreach ($items as [, $status, $label, $detail, $rowLink, $rowHtml]): $isLoud = $status === 'bad' || $status === 'warn'; ?>
+          <?php foreach ($items as [, $status, $label, $detail, $rowLink, $rowHtml, $rowHow]): $isLoud = $status === 'bad' || $status === 'warn'; ?>
             <div class="health-row health-<?= $esc($status) ?> <?= $isLoud ? 'loud' : 'quiet' ?><?= $status === 'opt' ? ' optional' : ($status === 'heads' ? ' heads' : '') ?>">
               <span class="health-mark <?= $status === 'ok' ? 'ok-text' : ($status === 'bad' ? 'warn-text' : ($status === 'warn' ? 'note-text' : ($status === 'heads' ? 'heads-mark' : 'muted'))) ?>"><?= isset($mark[$status]) ? ui_icon($mark[$status]) : ($status === 'opt' ? '&#9675;' : ($status === 'heads' ? '!' : '&bull;')) ?></span>
-              <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?><?php if ($rowLink): ?> <a href="#<?= $esc($rowLink[0]) ?>" onclick="return adminGoTo('<?= $esc($rowLink[0]) ?>', '<?= $esc($rowLink[1]) ?>');"><?= $esc($rowLink[2]) ?></a><?php endif; ?></div><?php endif; ?><?= (string) $rowHtml ?></div>
+              <div><div class="health-label"><?= $esc($label) ?></div><?php if ($detail !== ''): ?><div class="health-detail"><?= $esc($detail) ?><?php if ($rowLink): ?> <a href="#<?= $esc($rowLink[0]) ?>" onclick="return adminGoTo('<?= $esc($rowLink[0]) ?>', '<?= $esc($rowLink[1]) ?>');"><?= $esc($rowLink[2]) ?></a><?php endif; ?></div><?php endif; ?><?= (string) $rowHtml ?><?= $rowHow ? health_how_html($rowHow) : '' ?></div>
             </div>
           <?php endforeach; ?>
         </div>
@@ -15636,7 +15680,7 @@ function render_admin_health_panel() {
         <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
-            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">&rarr; Server setup</a><?php endif; ?></div>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">&rarr; Server setup</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
           </div>
         <?php endforeach; ?>
       </div>
@@ -17492,6 +17536,18 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-detail { color:var(--muted); font-size:0.82rem; overflow-wrap:anywhere; }
   .health-detail .linklike { color:#aab2ff; font-size:inherit; margin-left:6px; }   /* (Check now: a periwinkle link, like the other links in these rows) */
   @media (hover: hover) { .health-detail .linklike:hover { text-decoration:underline; } }
+  .health-row > div:not(.health-act) { min-width:0; }   /* (a long line of code in a fold scrolls in its own box instead of widening the row) */
+  .health-how { margin-top:6px; font-size:0.82rem; min-width:0; max-width:100%; }
+  .health-how[hidden] { display:none; }
+  .health-how > summary { cursor:pointer; color:#aab2ff; list-style:none; display:inline-flex; align-items:center; gap:6px; padding:2px 0; }
+  .health-how > summary::-webkit-details-marker { display:none; }
+  .health-how > summary::before { content:""; width:0; height:0; border-top:.3em solid transparent; border-bottom:.3em solid transparent; border-left:.43em solid currentColor; transition:transform .15s; }
+  .health-how[open] > summary::before { transform:rotate(90deg); }
+  .health-how-body { min-width:0; margin:4px 0 2px; padding:2px 0 2px 12px; border-left:2px solid var(--line, rgba(255,255,255,.12)); color:var(--muted); }
+  .health-how-body p { margin:6px 0; }
+  .health-how-body .rules-box { min-width:0; margin:6px 0; display:flex; flex-direction:column; align-items:stretch; }
+  .health-how-body .rules-box .copy-rules { position:static; align-self:flex-end; margin:0 0 4px; }   /* (above the code, not over it: one line of code is shorter than the button) */
+  .health-how-body .rules-box pre { margin:0; overflow-x:auto; white-space:pre; max-width:100%; }
   .health-more { display:inline-block; margin-top:2px; font-size:0.8rem; color:#aab2ff; }
   .health-summary { margin:0 0 6px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .site-group { scroll-margin-top:70px; margin:0 0 10px; border:1px solid #26262a; border-radius:9px; padding:0 12px; }
@@ -18858,6 +18914,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         lockShow('unknown');
       });
     };
+    const howFold = function (key, on) { document.querySelectorAll('[data-how-for="' + key + '"]').forEach(function (d) { d.hidden = !on; if (!on) d.open = false; }); };   // (the fix is shown only when the test failed)
     // Can the visitor log (a SQLite file with IP addresses in it) be downloaded by its plain address? The rule that refuses files starting with .gallery- keeps it private.
     const runVisitLog = function () {
       const url = probe.getAttribute('data-visits');
@@ -18865,6 +18922,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       ask(url).then(function (state) {
         mirror('visitlog', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
           : state === 'open' ? 'Anyone can download the visitor log, which holds IP addresses (if visitors are logged) and the names of your folders and photos (the Changes tab): the server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+        howFold('visitlog', state === 'open');
       });
     };
     // The same question for the backup (a ZIP with password hashes, the install secret and IP addresses in it).
@@ -18874,6 +18932,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       ask(url).then(function (state) {
         mirror('backupfile', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
           : state === 'open' ? 'Anyone who finds the backup\'s address can download it: it holds password hashes, the install secret, share-link addresses and visitor IP addresses. The server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+        howFold('backupfile', state === 'open');
       });
     };
     // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
@@ -19113,15 +19172,16 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   }
   initFolderTree();
   // The "Copy" buttons on the web-server rules.
-  [].forEach.call(document.querySelectorAll('.copy-rules'), function (btn) {
-    btn.addEventListener('click', function () {
+  document.addEventListener('click', function (e) {   // (asked once for the whole page: the Health check is drawn again when it is checked again, and its Copy buttons come with it)
+    var btn = e.target.closest ? e.target.closest('.copy-rules') : null; if (!btn) return;
+    (function () {
       var text = btn.parentNode.querySelector('pre').textContent;
       function done() { var old = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = old; }, 1400); }
       if (window.GalleryShare && window.GalleryShare.copyText) { window.GalleryShare.copyText(text, done); return; }
       if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); return; }
       var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
       try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
-    });
+    })();
   });
   // "Use these dates": copies the suggestion into the Dates box; nothing is saved until the form is.
   [].forEach.call(document.querySelectorAll('.date-suggest'), function (btn) {

@@ -485,6 +485,7 @@
         lockShow('unknown');
       });
     };
+    const howFold = function (key, on) { document.querySelectorAll('[data-how-for="' + key + '"]').forEach(function (d) { d.hidden = !on; if (!on) d.open = false; }); };   // (the fix is shown only when the test failed)
     // Can the visitor log (a SQLite file with IP addresses in it) be downloaded by its plain address? The rule that refuses files starting with .gallery- keeps it private.
     const runVisitLog = function () {
       const url = probe.getAttribute('data-visits');
@@ -492,6 +493,7 @@
       ask(url).then(function (state) {
         mirror('visitlog', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
           : state === 'open' ? 'Anyone can download the visitor log, which holds IP addresses (if visitors are logged) and the names of your folders and photos (the Changes tab): the server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+        howFold('visitlog', state === 'open');
       });
     };
     // The same question for the backup (a ZIP with password hashes, the install secret and IP addresses in it).
@@ -501,6 +503,7 @@
       ask(url).then(function (state) {
         mirror('backupfile', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
           : state === 'open' ? 'Anyone who finds the backup\'s address can download it: it holds password hashes, the install secret, share-link addresses and visitor IP addresses. The server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+        howFold('backupfile', state === 'open');
       });
     };
     // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
@@ -740,15 +743,16 @@
   }
   initFolderTree();
   // The "Copy" buttons on the web-server rules.
-  [].forEach.call(document.querySelectorAll('.copy-rules'), function (btn) {
-    btn.addEventListener('click', function () {
+  document.addEventListener('click', function (e) {   // (asked once for the whole page: the Health check is drawn again when it is checked again, and its Copy buttons come with it)
+    var btn = e.target.closest ? e.target.closest('.copy-rules') : null; if (!btn) return;
+    (function () {
       var text = btn.parentNode.querySelector('pre').textContent;
       function done() { var old = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = old; }, 1400); }
       if (window.GalleryShare && window.GalleryShare.copyText) { window.GalleryShare.copyText(text, done); return; }
       if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); return; }
       var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
       try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
-    });
+    })();
   });
   // "Use these dates": copies the suggestion into the Dates box; nothing is saved until the form is.
   [].forEach.call(document.querySelectorAll('.date-suggest'), function (btn) {

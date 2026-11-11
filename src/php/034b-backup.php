@@ -150,7 +150,7 @@ function backup_zip_extract($path, $index, $name, $dest) {
     $m = $index[$name];
     fseek($in, $m['offset']); $lh = unpack('Vsig/vver/vflags/vmethod/vtime/vdate/Vcrc/Vcsize/Vusize/vnlen/velen', (string) fread($in, 30));
     if (!$lh || $lh['sig'] !== 0x04034b50) { fclose($in); fclose($out); @unlink($dest); return false; }
-    fseek($in, $m['offset'] + 30 + $lh['nlen'] + $lh['velen']);
+    fseek($in, $m['offset'] + 30 + $lh['nlen'] + $lh['elen']);
     $ctx = hash_init('crc32b'); $ok = true;
     for ($left = $m['size']; $left > 0;) {
         $chunk = fread($in, min(1048576, $left));

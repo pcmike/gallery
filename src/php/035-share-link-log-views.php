@@ -648,7 +648,7 @@ function health_version_record($dir) {
  *  changed by looking. Folders are sampled (the first 300 that hold media) so a huge gallery stays quick. */
 function health_checks($dir, $files) {
     $rows = [];
-    $add = function ($group, $status, $label, $detail = '', $link = null, $html = '') use (&$rows) { $rows[] = [$group, $status, $label, $detail, $link, $html]; };
+    $add = function ($group, $status, $label, $detail = '', $link = null, $html = '', $how = null) use (&$rows) { $rows[] = [$group, $status, $label, $detail, $link, $html, $how]; };
 
     // --- this install
     $rec = health_version_record($dir);
@@ -722,7 +722,11 @@ function health_checks($dir, $files) {
     $sampled = count($folders) >= 300 ? ' (the first 300 folders with media)' : '';
     $rel = function ($p) use ($dir) { $d = rtrim($dir, '/'); return $p === $d ? '(top folder)' : (strncmp($p, $d . '/', strlen($d) + 1) === 0 ? substr($p, strlen($d) + 1) : $p); };
     $add('Folders and files', $unwritable ? 'warn' : 'ok', $unwritable ? count($unwritable) . ' of ' . count($folders) . ' folders are not writable by the web server' . $sampled : 'All ' . count($folders) . ' folders are writable' . $sampled,
-        $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '');
+        $unwritable ? 'Captions, locations, privacy flags and cached thumbnails can\'t be saved in: ' . implode(', ', array_map($rel, array_slice($unwritable, 0, 5))) . (count($unwritable) > 5 ? ' and ' . (count($unwritable) - 5) . ' more' : '') . '. Photos still show.' : '', null, '', $unwritable ? [
+        'The web server\'s user needs to be able to write in those folders. On Debian or Ubuntu that user is usually `www-data`; on other systems it may be `nginx`, `apache` or `http` (the command `ps aux | grep -E "php-fpm|apache|nginx"` shows it).',
+        ['Give it the folder, for example:', 'sudo chown -R www-data: /path/to/the/folder'],
+        'Or, if the files must stay with their owner, let the group write: `sudo chmod -R g+w /path/to/the/folder` and make the web server\'s user a member of that group. A folder on a network share (NAS) may need the share\'s own permissions changed instead.',
+        'Then press Check again at the top of this page.'] : null);
     $add('Folders and files', $badData ? 'bad' : 'ok', $badData ? count($badData) . ' folder data file' . (count($badData) === 1 ? '' : 's') . ' can\'t be read' : 'Folder data files all read fine (' . $withData . ' folder' . ($withData === 1 ? '' : 's') . ', ' . $entries . ' photo' . ($entries === 1 ? '' : 's') . ' with saved details)',
         $badData ? 'Everything in them is hidden from visitors until the file is restored from a backup or deleted, and nothing is saved over them meanwhile: ' . implode(', ', array_map($rel, array_slice($badData, 0, 5))) : 'Wiping a folder wipes its captions, locations and private flags.');
     $videos = 0; foreach ($files as $f) if (is_video_file($f)) $videos++;

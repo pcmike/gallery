@@ -10008,7 +10008,51 @@ proc_terminate($mmP1);
 // (A server that refuses the raise can't be made from here: a command-line PHP can't lock its limit the way a pool's php_admin_value does. So the row is checked in the source: it is
 // only added when there is no Imagick, GD is there and the raise did not give room, and it says what to set.)
 $mmSrc = (string) file_get_contents($indexSrc);
+check('[backup] the ZIP reader skips a local header\'s extra field by the right key (unpack names a field after the letters following its code: "vnlen/velen" is elen; the wrong key logged a warning on every backup)', !str_contains($mmSrc, "\$lh['velen']") && str_contains($mmSrc, "\$lh['nlen'] + \$lh['elen']"));
 check('[memory] the Health row exists only where GD makes the thumbnails and the raise gave no room, and tells what to set (source check: a refusing server can\'t be made here)', str_contains($mmSrc, "!class_exists('Imagick') && extension_loaded('gd') && !image_memory_raise())") && str_contains($mmSrc, 'is too low for big photos') && str_contains($mmSrc, 'Set memory_limit to 256M in the server'));
+
+// --- "How to fix": a fold in each row that needs a change on the server
+echo "== How to fix folds ==\n";
+$hwFx = new_fixture_dir('howfix');
+mkdir("$hwFx/Locked", 0775, true); make_jpeg("$hwFx/p.jpg", 40, 30, 20, 90, 160); make_jpeg("$hwFx/Locked/l.jpg", 40, 30, 120, 90, 60);
+copy($indexSrc, "$hwFx/index.php"); @touch("$hwFx/index.php", time() - 3600);
+file_put_contents("$hwFx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'hw-admin-pw-1', 'ENABLE_SHARE_LINKS' => true, 'CHECK_FOR_UPDATES' => true]));
+@chmod("$hwFx/Locked", 0555);
+$hwServe = function ($dropExt) use ($hwFx) {   // a PHP started without some extensions (it can only be done where they are shared ones; a static build keeps them in)
+    global $cleanupProcs;
+    $port = find_free_port(); $cmd = [PHP_BINARY]; $dropped = [];
+    $extDir = (string) ini_get('extension_dir');
+    foreach ($dropExt as $x) if (extension_loaded($x) && is_file("$extDir/$x.so")) $dropped[] = $x;
+    if ($dropped) {
+        $cmd[] = '-n';
+        foreach (get_loaded_extensions() as $ex) { $l = strtolower($ex); if (!in_array($l, $dropped, true) && $l !== 'zend opcache' && is_file("$extDir/$l.so")) { $cmd[] = '-d'; $cmd[] = 'extension=' . $l; } }
+    }
+    array_push($cmd, '-d', 'opcache.enable=0', '-d', 'allow_url_fopen=' . (in_array('curl', $dropExt, true) ? '0' : '1'), '-S', "127.0.0.1:$port", '-t', $hwFx);
+    $proc = proc_open($cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes); $cleanupProcs[] = $proc;
+    $t = microtime(true) + 5; while (microtime(true) < $t) { $c = @fsockopen('127.0.0.1', $port, $e, $m, 0.1); if ($c) { fclose($c); break; } usleep(50000); }
+    return [$proc, "http://127.0.0.1:$port", $dropped];
+};
+$hwPage = function ($base) { [, , $h] = http_post("$base/?admin", ['access_code' => 'hw-admin-pw-1'], [], false); return http_get("$base/?admin&classic=1", ['Cookie: ' . extract_cookie_header($h)])[1]; };
+[$hwP1, $hwB1] = $hwServe([]);
+$hwPg1 = $hwPage($hwB1);
+$hwRowHow = function ($html, $title) { $i = strpos($html, $title); if ($i === false) return null; $j = strpos($html, 'How to fix', $i); $k = strpos($html, 'class="health-row', $i + 10); return ($j !== false && ($k === false || $j < $k)) ? substr($html, $j, 1500) : ''; };
+if (!is_writable("$hwFx/Locked")) check('[how to fix] a folder the web server can\'t write in has a How to fix fold in its row (who the web server is, chown, and the group way)', str_contains((string) $hwRowHow($hwPg1, 'folders are not writable by the web server'), 'sudo chown -R www-data') && str_contains((string) $hwRowHow($hwPg1, 'folders are not writable by the web server'), 'chmod -R g+w'));
+check('[how to fix] a row with nothing for the owner to do on the server has no fold (the passed ones, the plain information)', $hwRowHow($hwPg1, 'Folder data files all read fine') === '' && $hwRowHow($hwPg1, 'Sign-in key') === '');
+proc_terminate($hwP1);
+[$hwP2, $hwB2, $hwDropped] = $hwServe(['pdo_sqlite', 'sqlite3', 'curl']);
+if (!$hwDropped && extension_loaded('pdo_sqlite')) echo "  skip  [how to fix] this PHP keeps SQLite and curl built in, so a server without them can't be made here\n";
+else {
+    $hwPg2 = $hwPage($hwB2);
+    if (in_array('pdo_sqlite', $hwDropped, true)) check('[how to fix] without SQLite the visitor log row has a fold with the package to install and what to switch on at a host', str_contains((string) $hwRowHow($hwPg2, 'Visitor log: needs SQLite'), 'php-sqlite3') && str_contains((string) $hwRowHow($hwPg2, 'Visitor log: needs SQLite'), 'pdo_sqlite'));
+    if (!str_contains($hwPg2, 'lets PHP fetch no web addresses')) echo "  skip  [how to fix] this PHP has curl built in, so the row about fetching web addresses can't be made to show here\n";
+    else check('[how to fix] with neither curl nor allow_url_fopen the row has a fold (php-curl, or allow_url_fopen)', str_contains((string) $hwRowHow($hwPg2, 'lets PHP fetch no web addresses'), 'php-curl') && str_contains((string) $hwRowHow($hwPg2, 'lets PHP fetch no web addresses'), 'allow_url_fopen'));
+}
+proc_terminate($hwP2);
+@chmod("$hwFx/Locked", 0775);
+check('[how to fix] the folds for the two address tests are in the page, hidden until the browser says the test failed (so a passing row never shows one)', str_contains((string) $mmSrc, 'data-how-for="') && str_contains((string) $mmSrc, "howFold('visitlog', state === 'open')") && str_contains((string) $mmSrc, "howFold('backupfile', state === 'open')"));
+$bkPg = $bkPage();
+$bkVl = (string) substr($bkPg, (int) strpos($bkPg, 'data-how-for="visitlog"'), 1800); $bkBf = (string) substr($bkPg, (int) strpos($bkPg, 'data-how-for="backupfile"'), 1800);
+check('[how to fix] ...and with a visitor log and a backup there, both rows carry their hidden fold with the nginx and Apache rules', str_contains($bkVl, 'data-how-for="visitlog" hidden>') && str_contains($bkVl, 'location ~ /\\.gallery-') && str_contains($bkVl, 'FilesMatch') && str_contains($bkBf, 'data-how-for="backupfile" hidden>') && str_contains($bkBf, 'location ~ /\\.gallery-'));
 
 // colour: a wide-gamut photo keeps what its colours mean in every picture the gallery makes from it, and a HEIC is sent as itself to a browser that shows HEIC
 echo "== colour profiles and HEIC originals ==\n";

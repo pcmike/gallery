@@ -66,7 +66,9 @@ function health_database_rows($add, $dir, $files) {
         $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $heavy['log']['why'] . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
     } elseif (!$vlOk) {
-        $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses);
+        $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
+            'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',
+            'Then press Check again at the top of this page.']);
     } elseif ($logFile !== null) {
         $vlSize = visitlog_size(); $vlOld = visitlog_oldest(); $vlText = health_bytes($vlSize);
         if (LOG_WARN_MB > 0 && $vlSize > LOG_WARN_MB * 1048576)
@@ -181,6 +183,30 @@ function health_volumes($dir, $files) {
     return $cache[$ck] = $out;
 }
 
+/** A "How to fix" fold for a row that needs a change on the server (something the gallery can't do from its own folder). $steps: a list of lines, each a text (`like this` is
+ *  shown as code) or [text, code], where the code gets a box with a Copy button. $key + $hidden: for a row the browser tests, the fold starts hidden and the script shows it
+ *  when the test fails. */
+function health_how_html($steps, $key = '', $hidden = false) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $fmt = function ($t) use ($esc) { return preg_replace('/`([^`]+)`/', '<code>$1</code>', $esc($t)); };
+    $h = '<details class="health-how"' . ($key !== '' ? ' data-how-for="' . $esc($key) . '"' : '') . ($hidden ? ' hidden' : '') . '><summary>How to fix</summary><div class="health-how-body">';
+    foreach ($steps as $st) {
+        $text = is_array($st) ? $st[0] : $st; $code = is_array($st) ? ($st[1] ?? '') : '';
+        if ($text !== '') $h .= '<p>' . $fmt($text) . '</p>';
+        if ($code !== '') $h .= '<div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code>' . $esc($code) . '</code></pre></div>';
+    }
+    return $h . '</div></details>';
+}
+
+/** The steps for a file the server must refuse (anything starting with .gallery-): the visitor log's and the backup's rows use them. */
+function health_how_gallery_files() {
+    return [
+        ['nginx (a server of your own): add this inside the site\'s `server { }` block, then run `sudo nginx -t && sudo systemctl reload nginx`.', "location ~ /\\.gallery- {\n    return 404;\n}"],
+        ['Apache, or any host that reads `.htaccess` (FTP-only hosting too): save this as a file named `.htaccess` in the gallery\'s folder. If one is there already, add it at the end.', "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>"],
+        'Then press the circular arrow at the top of this page (Check again): this row turns green when the server refuses the address.',
+    ];
+}
+
 /** The server: disk room, the connection, the visitor address, what PHP allows. */
 function health_server_rows($add) {
     $G = 'Server';
@@ -197,15 +223,29 @@ function health_server_rows($add) {
         $add($G, 'info', 'Disk space on ' . count($vols) . ' disks', implode('. ', $lines) . '.');
     }
     if (is_https_request()) $add($G, 'ok', 'Connection: HTTPS', 'This page was reached over an encrypted connection.');
-    elseif (!is_local_request()) $add($G, 'opt', 'You are using the admin over plain HTTP', 'Your sign-in code and the sign-in cookie cross the network unencrypted. Use the https:// address of this gallery (set it up on the web server if there is none).');
+    elseif (!is_local_request()) $add($G, 'opt', 'You are using the admin over plain HTTP', 'Your sign-in code and the sign-in cookie cross the network unencrypted. Use the https:// address of this gallery (set it up on the web server if there is none).', null, '', [
+            'A server of your own: get a free certificate from Let\'s Encrypt (`sudo certbot --nginx`, or `sudo certbot --apache`), then open the gallery by its `https://` address.',
+            'Behind a proxy or tunnel that already does HTTPS (Cloudflare, Caddy, nginx in front, a tunnel): the gallery only sees plain HTTP, so have the proxy tell it. In nginx, in the proxy\'s location:', 
+            ['', 'proxy_set_header X-Forwarded-Proto $scheme;'],
+            'Shared hosting: switch on the free certificate in the host\'s control panel (often called SSL, or Let\'s Encrypt), then use the `https://` address.']);
     $hint = client_ip_proxy_hint();
-    if ($hint !== '') $add($G, 'opt', 'Visitor addresses may be the proxy\'s, not the visitor\'s', $hint . ' Until then the visitor log and the sign-in pause see the proxy\'s address.', ['site', 'setting-TRUSTED_PROXY', '→ Visitor address']);
+    if ($hint !== '') $add($G, 'opt', 'Visitor addresses may be the proxy\'s, not the visitor\'s', $hint . ' Until then the visitor log and the sign-in pause see the proxy\'s address.', ['site', 'setting-TRUSTED_PROXY', '→ Visitor address'], '', [
+            'Open Settings → Visitor address and choose what sits in front of the gallery: Cloudflare, or another proxy.',
+            'For another proxy, also list the proxy\'s own address under the proxy addresses, so only it is believed (a tunnel or proxy on this same machine is `127.0.0.1/32`). Anyone else\'s claim about a visitor\'s address is ignored.',
+            'To tell it worked: the Visitors tab then shows each visitor\'s own address, not the same one every time.']);
     if ((CHECK_FOR_UPDATES || COUNTRY_LOOKUP) && !function_exists('curl_init') && !filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN))
-        $add($G, 'opt', 'This server lets PHP fetch no web addresses', 'Looking for a new version' . (COUNTRY_LOOKUP ? ' and downloading the country file' : '') . ' need either the curl extension or allow_url_fopen. Neither is on, so they can\'t run.');
+        $add($G, 'opt', 'This server lets PHP fetch no web addresses', 'Looking for a new version' . (COUNTRY_LOOKUP ? ' and downloading the country file' : '') . ' need either the curl extension or allow_url_fopen. Neither is on, so they can\'t run.', null, '', [
+            'Install the curl extension. Debian or Ubuntu: `sudo apt install php-curl`, then reload PHP-FPM (or Apache). Shared hosting: switch curl on in the host\'s PHP extensions page.',
+            'Or, in the php.ini that PHP-FPM reads, set `allow_url_fopen = On` and reload PHP-FPM.',
+            'Then press Check again at the top of this page.']);
     // PHP's own picture library (GD) needs a photo in memory (about 100 MB for 12 megapixels). The gallery asks for 256M itself; this row is only for a server that refuses, and only
     // where GD is what makes the thumbnails (Imagick keeps pictures outside PHP's memory).
     if (!class_exists('Imagick') && extension_loaded('gd') && !image_memory_raise())
-        $add($G, 'opt', 'PHP\'s memory limit is too low for big photos (' . trim((string) ini_get('memory_limit')) . ')', 'This server makes thumbnails with PHP\'s own picture library, which needs about 100 MB for a 12-megapixel photo. The gallery asked for more and the server said no, so large photos may get no thumbnail. Set memory_limit to 256M in the server\'s PHP settings (php.ini, or the host\'s PHP settings page).');
+        $add($G, 'opt', 'PHP\'s memory limit is too low for big photos (' . trim((string) ini_get('memory_limit')) . ')', 'This server makes thumbnails with PHP\'s own picture library, which needs about 100 MB for a 12-megapixel photo. The gallery asked for more and the server said no, so large photos may get no thumbnail. Set memory_limit to 256M in the server\'s PHP settings (php.ini, or the host\'s PHP settings page).', null, '', [
+            'A server of your own (nginx or Apache with PHP-FPM): edit the php.ini that PHP-FPM reads, for example `/etc/php/8.4/fpm/php.ini` (the command `php --ini` shows the command-line one; FPM keeps its own copy). Set `memory_limit = 256M`, then reload PHP-FPM, for example `sudo systemctl reload php8.4-fpm`.',
+            'If the site\'s PHP-FPM pool file (under `/etc/php/8.4/fpm/pool.d/`) already has a line starting `php_admin_value[memory_limit]`, change that one instead: it overrides php.ini and is the usual reason the gallery was refused.',
+            'Shared hosting: the host\'s PHP settings page, or a file named `.user.ini` next to `index.php` containing `memory_limit = 256M` (it can take a few minutes to be noticed).',
+            'Then press Check again at the top of this page.']);
 }
 
 /** The numbers across the top: [[label, value]]. Only what is cheap to know. */
