@@ -6,43 +6,80 @@ Server rules for nginx and Apache, what to check when something is wrong, and th
 
 ## Locking down the files
 
-Everything above governs requests that go through `index.php`. **A photo is still an ordinary static file** that the web server serves to anyone who knows its address (`yoursite.com/kb/IMG_0412.jpg`), and sequential filenames show where something is missing. Only a server rule stops that. The admin's Edited tab (at the top, while private is not locked) has these rules written for your gallery's address, with Copy buttons.
+Everything above governs requests that go through `index.php`. **A photo is still an ordinary static file** that the web server serves to anyone who knows its address (`yoursite.com/kb/IMG_0412.jpg`), and sequential filenames show where something is missing. Only a server rule stops that.
 
-**nginx** (strongest; needs shell access). Add inside the `server { }` block, first location above the second, for a gallery at `/kb/`:
+**Settings → Server setup → Web server rules** has everything the gallery can use, written for your gallery's address: one block for nginx and one for Apache, each in a fold with a single Copy button (the one that looks like your server is first and tagged). Above them one line says which rules this browser found working. Each block has the same parts between a begin and an end line, marked in comments: **needed** (the photo and video files can't be fetched by address; the gallery's `.gallery-` data files never public) and **optional** (tidy folder links such as `/kb/Europe/France/`, and, while share links are on, tidy share addresses such as `/kb/k7QpR2mX`, a name of your own, and `/kb/admin`). For a gallery at `/kb/`:
+
+**nginx** (strongest; needs shell access). Add inside the `server { }` block, then `sudo nginx -t && sudo systemctl reload nginx`:
 
 ```nginx
-# Generated data files: never public (a second layer; the .php ones also answer 404).
+# ===== gallery rules: begin (for /kb/) =====
+
+# needed: the gallery's data files (everything starting .gallery-) are never public
+# (a second layer: the .php ones already answer 404 on their own)
 location ~ /\.gallery- {
     return 404;
 }
 
-# The photo and video files themselves: reachable only through index.php.
+# needed: the photo and video files themselves are reachable only through index.php
+# (the "nginx internal redirect" setting uses this same location)
 location ~* ^/kb/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$ {
     internal;
 }
+
+# optional: tidy folder links, /kb/Europe/France/
+location ~ ^/kb/.+/$ {
+    rewrite ^/kb/(.+)/$ /kb/index.php?folder=$1 last;
+}
+
+# optional: tidy share addresses, /kb/k7QpR2mX, a name of your own, and /kb/admin
+location ~ "^/kb/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$" {
+    rewrite "^/kb/([A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9])$" /kb/index.php?link=$1 last;
+}
+
+# ===== gallery rules: end =====
 ```
 
-Then `sudo nginx -t && sudo systemctl reload nginx` and check: `curl -I https://yoursite.com/kb/IMG_0412.jpg` should answer 404. The rules assume the usual `index index.php;` and a `location ~ \.php$` for php-fpm. Finally set **`NGINX_ACCEL_REDIRECT_PREFIX`** to `/kb`, matching the location: the gallery then answers with `X-Accel-Redirect` and nginx sends the file itself, which is faster and gives videos nginx's own Range handling. Leave it empty and PHP sends files (correct everywhere, just slower). The setting's row in Settings → Server setup says whether it works (a test photo is asked for through it), shows the same location under **Show the rule** with Copy, and says *Doesn't apply here* when every photo comes from folders elsewhere on the server.
+Check: `curl -I https://yoursite.com/kb/IMG_0412.jpg` should answer 404. The rules assume the usual `index index.php;` and a `location ~ \.php$` for php-fpm; the folder rule needs php-fpm to pass the original `REQUEST_URI` (the standard `fastcgi_param` does). Behind `proxy_pass` instead of php-fpm, pass the real client address and protocol on. Then set **`NGINX_ACCEL_REDIRECT_PREFIX`** to `/kb`, matching the location: the gallery then answers with `X-Accel-Redirect` and nginx sends the file itself, which is faster and gives videos nginx's own Range handling. Leave it empty and PHP sends files (correct everywhere, just slower). The setting's row says whether it works (a test photo is asked for through it) and points at the block; the status line has a chip for it on nginx. It says *Doesn't apply here* when every photo comes from folders elsewhere on the server.
 
 nginx can only send files under the gallery's own folder, so photos from [Archive elsewhere](getting-started.md#archive-elsewhere) are always sent by the gallery, with the setting on or off (they have no address of their own on the web server, so there is nothing to lock for them).
 
-**Apache** (blunter; works on FTP-only hosting). Save as `.htaccess` in the gallery's folder:
+**Apache** (blunter; works on FTP-only hosting). Save as `.htaccess` in the gallery's folder (add to the end if there is one):
 
 ```apache
-# The photo and video files themselves. (?i): camera files are often IMG_0412.JPG.
+# ===== gallery rules: begin (for /kb/) =====
+
+# needed: the photo and video files themselves are reachable only through index.php
+# ((?i) matters: camera files are often IMG_0412.JPG)
 <FilesMatch "(?i)\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$">
     Require all denied
 </FilesMatch>
 
-# Generated data files (a second layer).
+# needed: the gallery's data files (everything starting .gallery-) are never public (a second layer)
 <FilesMatch "^\.gallery-">
     Require all denied
 </FilesMatch>
+
+# optional: the tidy addresses below need mod_rewrite (without it they are skipped)
+<IfModule mod_rewrite.c>
+RewriteEngine On
+
+# optional: tidy folder links, /kb/Europe/France/
+RewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]
+
+# optional: tidy share addresses, /kb/k7QpR2mX, a name of your own, and /kb/admin
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^([A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9])$ index.php?link=$1 [L,QSA]
+</IfModule>
+
+# ===== gallery rules: end =====
 ```
 
-A bare photo address then answers 403 while the gallery works as before. **It depends on `AllowOverride`**: if the server doesn't read `.htaccess` there, the rules are silently ignored, so check with `curl -I` (expect 403). The data files stay safe regardless (their own guard; the visitor log, a SQLite file, and the backup, a ZIP, have a random name in place of a guard, and the Health check asks from your browser whether each can be fetched, so a server without the second rule says so: the backup holds password hashes, the install secret and IP addresses). A script that logs in with an `Authorization` header on PHP-FPM or CGI also needs `CGIPassAuth On` (Apache 2.4.13+); the sign-in form needs nothing.
+A bare photo address then answers 403 while the gallery works as before. **It depends on `AllowOverride`**: if the server doesn't read `.htaccess` there (`All`; the tidy addresses need `FileInfo`), the rules are silently ignored, so check with `curl -I` (expect 403). Keep the `B` flag on the folder rule: it escapes spaces, `&`, `+` and `#`. The data files stay safe regardless (their own guard; the visitor log, a SQLite file, and the backup, a ZIP, have a random name in place of a guard, and the Health check asks from your browser whether each can be fetched, so a server without the second rule says so: the backup holds password hashes, the install secret and IP addresses). A script that logs in with an `Authorization` header on PHP-FPM or CGI also needs `CGIPassAuth On` (Apache 2.4.13+); the sign-in form needs nothing.
 
-**The admin checks for you.** Each time it opens, your browser (not the server) asks, without signing in, for one photo and one cached thumbnail by their plain addresses (HEAD requests, nothing downloaded) and for a folder by its tidy address. If both pictures are refused (403, 404, 410), the red "Private isn't locked" warning turns into a green note and the rules are tucked away (*Show the rules* brings them back); if one is handed out, the warning stays and names it. If the tidy address opens the folder, Settings says tidy links work; otherwise it says they're not set up (optional). If `internal` is in place but the redirect setting is empty it says so, with a button to set it; if it's set but doesn't work it says that in red. Nothing is hidden when a check can't be made. Photos from elsewhere on the server can't be tested this way, and the checks say "not needed". Each check covers only the address your browser uses. Nothing renames your files.
+**What the share-address rule matches.** One word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash. A photo (it has a dot) and a folder's own address (it ends in a slash) are never touched. It **replaces** the older rule that matched exactly 16 letters and digits (a link made before still works): remove the old one. The nginx pattern is quoted because nginx reads an unquoted `{` as the start of a block and refuses the file. At the top of a site, the photo rule would block every image and the optional ones would catch other addresses: narrow their paths first.
+
+**The admin checks for you.** Each time it opens, your browser (not the server) asks, without signing in, for one photo and one cached thumbnail by their plain addresses (HEAD requests, nothing downloaded), for a folder by its tidy address and for a share address. The line above the blocks has a chip for each: green when it works, red when private photos should be locked and aren't, grey when an optional rule is not set up or the check couldn't be made. If one of the two pictures is handed out, a sentence under the line names it, and the Edited tab's red "Private isn't locked" warning stays, with a button that goes to the blocks; if both are refused (403, 404, 410) the warning is gone. When a rule is missing, the block that looks like your server's opens by itself (once; never again after you have opened or closed one yourself). The nginx redirect has a chip too, shown on nginx or once the setting is on: it says if it is working, or not set although nginx is ready for it (the row of the setting has a button to set it), or set but not working (in red). Nothing is hidden when a check can't be made. Photos from elsewhere on the server can't be tested this way, and the checks say "not needed". Each check covers only the address your browser uses. Nothing renames your files.
 
 ## Troubleshooting
 

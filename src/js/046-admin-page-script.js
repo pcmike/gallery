@@ -59,7 +59,14 @@
     if (id) setTimeout(function () { adminReveal(id); }, 60);
     return false;
   }
-  // Are the web server rules in place (the ones on the Hidden tab and in Settings)? This browser asks, without any
+  // Goes to the Web server rules in Settings → Server setup and opens the block that looks like this server's own (nothing opens when the server doesn't say what it is).
+  // Every place in the admin that sends you to the rules (the Health check, the Features list, the Edited tab's warning) comes here.
+  function adminGoToRules() {
+    var r = adminGoTo('site', 'server-rules');
+    setTimeout(function () { var l = document.querySelector('.wr-fold[data-likely="1"]'); if (l) l.open = true; }, 150);
+    return r;
+  }
+  // Are the web server rules in place (the ones in Settings → Server setup → Web server rules)? This browser asks, without any
   // sign-in: for a photo and a cached thumbnail by their plain addresses (a refusal means locked, a picture coming back
   // means not; HEAD, so nothing is downloaded), and for a folder by its tidy address (the gallery's own page for that folder
   // means the tidy links work). A warning only goes away on a clear answer; any doubt leaves it, and the rules, standing.
@@ -77,27 +84,33 @@
       if (warn) warn.hidden = !risk;
     };
     const mirrorLater = function () {
-      if (photo) { if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); return; }
+      if (photo) { if (!folderUrl) { mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); wrChip('tidy', 'grey', 'Tidy folder links: no folder to test with', '', 'Turn on "Show subfolders" and add a folder with photos.'); } return; }
+      wrHide('accel');
       if (hasFiles) {
         mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
         mirror('accel', 'ok-text', 'Doesn\'t apply here: files from outside the gallery\'s own address are always sent by the gallery itself, whatever this is set to.');
         accelSay('ok-text', 'Doesn\'t apply here: every photo and video comes from folders outside the gallery\'s own address, and those are always sent by the gallery itself, whatever this is set to.', false);
-        if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).');
-      } else { ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); }); accelSay('muted', 'Nothing to test with yet (no photos).', false); }
+        if (!folderUrl) { mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); wrChip('tidy', 'grey', 'Tidy folder links: no folder to test with', '', 'Turn on "Show subfolders" and add a folder with photos.'); }
+      } else { ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); }); accelSay('muted', 'Nothing to test with yet (no photos).', false); wrChip('lock', 'grey', 'Private photos: nothing to test with yet', '', 'There are no photos yet.'); wrChip('tidy', 'grey', 'Tidy folder links: nothing to test with yet', '', 'There are no photos yet.'); }
     };
     const hideAll = function (sel, on) { document.querySelectorAll(sel).forEach(function (el) { el.hidden = on; }); };
-    const report = function (selector, ok, text, rulesSel) {
-      document.querySelectorAll(selector).forEach(function (el) {
-        el.className = 'lock-result ' + (ok ? 'ok-text' : 'warn-text');
-        el.textContent = text;
-        if (ok) {
-          const more = document.createElement('button');
-          more.type = 'button'; more.className = 'linklike'; more.textContent = 'Show the rules';
-          more.addEventListener('click', function () { hideAll(rulesSel, false); more.remove(); });
-          el.appendChild(document.createTextNode(' ')); el.appendChild(more);
-        }
+    // One line in the Web server rules says which rules this browser found working: a chip each, green when it works, red when it should and doesn't, grey when it isn't
+    // set up or couldn't be told. A sentence under the line says what is wrong, only for the ones that need something. The block that looks like this server's own opens
+    // by itself, once, when a rule is missing (never after you have opened or closed one yourself).
+    const wr = { opened: false, touched: false };
+    const wrServer = (document.querySelector('[data-wr]') || { getAttribute: function () { return ''; } }).getAttribute('data-wr-server');
+    document.querySelectorAll('.wr-fold > summary').forEach(function (sm) { sm.addEventListener('click', function () { wr.touched = true; }); });
+    const wrChip = function (key, state, label, msg, title, missing) {
+      if (msg && state !== 'bad') { title = msg + (title ? ' ' + title : ''); msg = ''; }   // (a sentence under the line only for what is wrong; the rest says it in the chip's hover text)
+      document.querySelectorAll('[data-wr-chip="' + key + '"]').forEach(function (c) {
+        c.hidden = false; c.className = 'wr-chip ' + state; c.title = title || ''; c.textContent = '';
+        const i = document.createElement('i'); i.setAttribute('aria-hidden', 'true'); i.textContent = state === 'ok' ? '\u2713' : state === 'bad' ? '\u2717' : '\u25CB';
+        c.appendChild(i); c.appendChild(document.createTextNode(' ' + label));
       });
+      document.querySelectorAll('[data-wr-msg="' + key + '"]').forEach(function (m) { m.textContent = msg || ''; m.hidden = !msg; m.className = 'lock-result ' + (state === 'bad' ? 'warn-text' : 'muted'); });
+      if (missing && !wr.opened && !wr.touched) { const l = document.querySelector('.wr-fold[data-likely="1"]'); if (l) { l.open = true; wr.opened = true; } }
     };
+    const wrHide = function (key) { document.querySelectorAll('[data-wr-chip="' + key + '"], [data-wr-msg="' + key + '"]').forEach(function (e) { e.hidden = true; }); };
     const ask = function (url) {
       const target = url + (url.indexOf('?') < 0 ? '?' : '&') + 'lockcheck=' + Date.now();   // (a server that won't answer HEAD gets a one-byte GET)
       return fetch(target, { method: 'HEAD', cache: 'no-store', credentials: 'omit', redirect: 'manual' })
@@ -459,23 +472,26 @@
         banner.querySelector('.lock-outside-text').hidden = !outside;
         banner.querySelector('.lock-recheck').hidden = false;
       }
-      hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', locked);
+      hideAll('[data-lock-rules-panel]', locked);
       if (outside) mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
       else mirror('lock', locked ? 'ok-text' : state === 'open' ? (anyPrivate ? 'warn-text' : 'note-text') : '', locked ? 'Yes: a photo and a cached thumbnail asked for by their plain addresses were refused, so private items can only be reached through the gallery.'
-        : state === 'open' ? (anyPrivate ? 'Private photos aren\'t locked. Hiding a photo only hides it from the gallery\'s pages; anyone who knows its file address can still open it (' + detail + ' was handed out to a plain request).' : 'Not locked yet. Nothing is private, so nothing is exposed; add the rule in Settings → Server setup before you make something private (' + detail + ' was handed out to a plain request).') : 'Couldn\'t tell (the request failed or was redirected).');
+        : state === 'open' ? (anyPrivate ? 'Private photos aren\'t locked. Hiding a photo only hides it from the gallery\'s pages; anyone who knows its file address can still open it (' + detail + ' was handed out to a plain request).' : 'Not locked yet. Nothing is private, so nothing is exposed; add the rule (Settings → Server setup → Web server rules) before you make something private (' + detail + ' was handed out to a plain request).') : 'Couldn\'t tell (the request failed or was redirected).');
       if (state === 'open') document.querySelectorAll('[data-health="lock"]').forEach(function (d) {
         if (d.querySelector('.health-fix')) return;
         const a = document.createElement('button'); a.type = 'button'; a.className = 'secondary health-fix'; a.textContent = '\u2192 The rules';
-        a.addEventListener('click', function (ev) { ev.preventDefault(); adminGoTo('site', 'lock-rules-row'); setTimeout(function () { const f = document.querySelector('#lock-rules-row details'); if (f) f.open = true; }, 120); });   // (Settings always has the rules; the Edited tab may not exist yet)
+        a.addEventListener('click', function (ev) { ev.preventDefault(); adminGoToRules(); });   // (Settings always has the rules; the Edited tab may not exist yet)
         d.appendChild(document.createTextNode(' ')); d.appendChild(a);
       });
       document.querySelectorAll('[data-lock-detail]').forEach(function (el) {
         el.className = 'lock-result warn-text';
         el.textContent = locked ? '' : state === 'open' ? 'The server handed out ' + detail + ' to a plain request.' : 'Couldn\'t check from this browser just now.';
       });
-      report('[data-lock-status]', locked, outside ? 'Nothing to ask the server for: no photo or video has an address of its own here.' : locked ? 'Checked just now from this browser: direct requests for photos are refused.'
-        : state === 'open' ? 'Checked just now from this browser: the server handed out ' + detail + ' to a plain request, so a private photo could be fetched by its address. Use the rules below.'
-        : 'Couldn\'t check from this browser just now (the request failed or was redirected).', '.lock-help, [data-lock-rules], [data-lock-rules-panel]');
+      if (outside) wrChip('lock', 'ok', 'Private photos: not needed here', '', 'No photo or video has an address of its own here (they come from folders outside the gallery\'s own address), so there is nothing to ask the server for.');
+      else if (locked) wrChip('lock', 'ok', 'Private photos locked', '', 'Checked just now from this browser: direct requests for photos are refused.');
+      else if (state === 'open') wrChip('lock', anyPrivate ? 'bad' : 'grey', anyPrivate ? 'Private photos not locked' : 'Private photos: not locked yet',
+        anyPrivate ? 'Checked just now from this browser: the server handed out ' + detail + ' to a plain request, so a private photo could be fetched by its address. Use the block below.'
+          : 'Nothing is private yet, so nothing is exposed; add the rules before you make something private (the server handed out ' + detail + ' to a plain request).', '', true);
+      else wrChip('lock', 'grey', 'Private photos: couldn\'t check', 'Couldn\'t check from this browser just now (the request failed or was redirected).', '');
     };
     const runLock = function () {
       if (!photo) { if (hasFiles) lockShow('outside'); return; }
@@ -522,13 +538,9 @@
             var chip = row.querySelector('.ft-chip'), text = row.querySelector('.ft-text'), btn = row.querySelector('.ft-act button');
             if (state === 'works') { chip.className = 'ft-chip ft-on'; chip.textContent = 'On'; text.textContent = 'The server rule is in place: a link looks like ' + shown + '.'; if (btn) btn.hidden = true; }
           });
-          if (state === 'works') {
-            hideAll('[data-sharetidy-rules]', true);
-            report('[data-sharetidy-status]', true, 'Tidy share addresses work: a link looks like ' + shown + ' (checked just now from this browser).', '[data-sharetidy-rules]');
-          } else {
-            hideAll('[data-sharetidy-rules]', false);
-            report('[data-sharetidy-status]', false, state === 'no' ? 'Tidy share addresses are not set up (optional): links use the long form (…/?k7QpR2mX), which works as it is. Rules to add are below.' : 'Couldn\'t check tidy share addresses from this browser just now.', '[data-sharetidy-rules]');
-          }
+          if (state === 'works') wrChip('sharetidy', 'ok', 'Tidy share addresses', '', 'A link looks like ' + shown + ' (checked just now from this browser).');
+          else if (state === 'no') wrChip('sharetidy', 'grey', 'Tidy share addresses: not set up', 'Optional: links use the long form (…/?k7QpR2mX), which works as it is. The rule is in the block below.', '', true);
+          else wrChip('sharetidy', 'grey', 'Tidy share addresses: couldn\'t check', 'Couldn\'t check tidy share addresses from this browser just now.', '');
         });
     };
     const runTidy = function () {
@@ -546,20 +558,14 @@
         .then(function (state) {
           if (state === 'closed') {
             mirror('tidy', 'ok-text', folderUrl + ' reaches the gallery. It is closed, so this check (which sends no sign-in) is shown the invalid-link page.');
-            hideAll('[data-tidy-rules]', true);
-            report('[data-tidy-status]', true, 'Tidy folder links work: ' + folderUrl + ' reaches the gallery (checked just now from this browser). The gallery is closed, so this check, which sends no sign-in, is shown the invalid-link page.', '[data-tidy-rules]');
+            wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' reaches the gallery (checked just now from this browser). The gallery is closed, so this check, which sends no sign-in, is shown the invalid-link page.');
             return;
           }
           mirror('tidy', state === 'works' ? 'ok-text' : state === 'no' ? 'note-text' : '', state === 'works' ? folderUrl + ' opens that folder.'
             : state === 'no' ? 'Not set up (optional): ' + folderUrl + ' doesn\'t open that folder; the ?folder= links work regardless.' : 'Couldn\'t tell (the request failed or was redirected).');
-          if (state === 'works') {
-            hideAll('[data-tidy-rules]', true);
-            report('[data-tidy-status]', true, 'Tidy folder links work: ' + folderUrl + ' opens that folder (checked just now from this browser).', '[data-tidy-rules]');
-          } else {
-            hideAll('[data-tidy-rules]', false);
-            report('[data-tidy-status]', false, state === 'no' ? 'Tidy folder links are not set up (optional): ' + folderUrl + ' does not open that folder yet. The gallery works without them, with ?folder= links. Rules to add are below.'
-              : 'Couldn\'t check tidy folder links from this browser just now.', '[data-tidy-rules]');
-          }
+          if (state === 'works') wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' opens that folder (checked just now from this browser).');
+          else if (state === 'no') wrChip('tidy', 'grey', 'Tidy folder links: not set up', 'Optional: ' + folderUrl + ' does not open that folder yet. The gallery works without them, with ?folder= links. The rule is in the block below.', '', true);
+          else wrChip('tidy', 'grey', 'Tidy folder links: couldn\'t check', 'Couldn\'t check tidy folder links from this browser just now.', '');
         });
     };
     // "nginx internal redirect": asks the gallery to answer a request the way it would with that setting, and sees whether
@@ -570,21 +576,27 @@
       const current = accel.getAttribute('data-accel-current'), candidate = accel.getAttribute('data-accel-candidate');
       const prefix = current || candidate;
       if (!photo) return;   // (mirrorLater has said why)
-      if (!prefix) { mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); accelSay('muted', 'Not applicable: a gallery at the very top of a site has no folder to set it to.', false); return; }
+      if (!prefix) { wrHide('accel'); mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); accelSay('muted', 'Not applicable: a gallery at the very top of a site has no folder to set it to.', false); return; }
       fetch('?admin&accelcheck=1&prefix=' + encodeURIComponent(prefix), { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { return r.ok && /^(image|video)\//.test(r.headers.get('content-type') || '') ? r.blob().then(function (b) { return b.size > 0; }) : false; })
         .catch(function () { return null; })
         .then(function (works) {
           const warn = document.querySelector('[data-accel-risk]'); if (warn) warn.hidden = !(current && works !== true);   // (the warning under the setting: only while it is on and not known to work)
+          // (the chip in the Web server rules: shown where it can matter, on nginx or once the setting is on or found working)
+          if (!current && works !== true && wrServer !== 'nginx') wrHide('accel');
+          else if (works === null) wrChip('accel', 'grey', 'nginx redirect: couldn\'t tell', '', '');
+          else if (current) works ? wrChip('accel', 'ok', 'nginx redirect working', '', 'Set to ' + current + ': nginx sends the photos and videos itself.')
+            : wrChip('accel', 'bad', 'nginx redirect not working', 'Set to ' + current + ' but nginx did not serve a test photo through it; photos and videos may fail to load. The internal location is in the nginx block below; or clear the setting.', '');
+          else wrChip('accel', 'grey', works ? 'nginx redirect: not set (nginx is ready for it)' : 'nginx redirect: not set', '', works ? 'nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : '');
           if (works === null) { accelSay('muted', 'Couldn\'t tell (the request failed).', !!current); return mirror('accel', '', 'Couldn\'t tell (the request failed).'); }
           mirror('accel', current ? (works ? 'ok-text' : 'warn-text') : (works ? 'note-text' : ''), current
             ? (works ? 'Set to ' + current + ' and working: nginx sends the photos and videos itself.' : 'Set to ' + current + ' but nginx did not serve a test photo through it; photos may fail to load.')
-            : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (see the Edited tab).'));
+            : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (it is in Settings → Server setup → Web server rules).'));
           accel.textContent = '';
           const say = function (cls, text) { accel.className = 'help accel-status ' + cls; accel.appendChild(document.createTextNode(text)); };
           if (current) {
             if (works) say('ok-text', 'Working: nginx just served a test photo through ' + current + ', so photos and videos are sent by nginx itself (checked from this browser).');
-            else say('warn-text', 'Not working: with this set, nginx did not serve ' + photo + ' (a photo in the gallery\'s own folder) through ' + current + ', so photos and videos may fail to load. The internal location must match that address: for the rules on the Private tab, a location starting ' + current + '/ whose photo extensions are marked internal, in the same server block that serves this page. Try: curl -I ' + location.origin + photo + ' (it should say 404 or 403), and look in nginx\'s error log for the line about the internal redirect. Or clear this setting.');
+            else say('warn-text', 'Not working: with this set, nginx did not serve ' + photo + ' (a photo in the gallery\'s own folder) through ' + current + ', so photos and videos may fail to load. The internal location must match that address: the one in the nginx block under Web server rules (just below these settings) is a location starting ' + current + '/ whose photo extensions are marked internal, in the same server block that serves this page. Try: curl -I ' + location.origin + photo + ' (it should say 404 or 403), and look in nginx\'s error log for the line about the internal redirect. Or clear this setting.');
           } else if (works) {
             say('note-text', 'Not using it yet: nginx has the internal location for ' + candidate + ' in place (just tested), but this is empty, so the gallery reads every photo and video itself. Setting it to ' + candidate + ' lets nginx send them, which is faster and handles seeking in videos better. ');
             const use = document.createElement('button');
@@ -601,7 +613,6 @@
         });
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
-    document.querySelectorAll('.show-rules-btn').forEach(function (btn) { btn.addEventListener('click', function () { hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', false); btn.remove(); }); });
     window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runBackupFile(); runTidy(); runShareTidy(); runAccel(); };
     window.__healthProbe();
   })();

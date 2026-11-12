@@ -377,7 +377,7 @@ function gallery_setting_definitions() {
              'help' => 'Show a place elsewhere on the server (an archive on another disk). Without a name, the folders inside it appear at the top of the gallery (/space/trip holding Paris and StTropez gives you Paris and StTropez); with a name, the whole place shows as that one folder. Needs "Show subfolders".',
              'risk' => 'Every photo and video there becomes visible.'],
             ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect', 'status' => 'accel',
-             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (the rule is under this row) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
+             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (it is in the Web server rules, just below these settings) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
              'risk' => 'Without the matching nginx location, photos and videos stop loading.'],
         ]],
     ];

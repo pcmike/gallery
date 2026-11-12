@@ -209,8 +209,9 @@ function health_how_html($steps, $key = '', $hidden = false) {
 /** The steps for a file the server must refuse (anything starting with .gallery-): the visitor log's and the backup's rows use them. */
 function health_how_gallery_files() {
     return [
-        ['nginx (a server of your own): add this inside the site\'s `server { }` block, then run `sudo nginx -t && sudo systemctl reload nginx`.', "location ~ /\\.gallery- {\n    return 404;\n}"],
-        ['Apache, or any host that reads `.htaccess` (FTP-only hosting too): save this as a file named `.htaccess` in the gallery\'s folder. If one is there already, add it at the end.', "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>"],
+        ['nginx (a server of your own): add this inside the site\'s `server { }` block, then run `sudo nginx -t && sudo systemctl reload nginx`.', rtrim(gallery_files_rule_nginx())],
+        ['Apache, or any host that reads `.htaccess` (FTP-only hosting too): save this as a file named `.htaccess` in the gallery\'s folder. If one is there already, add it at the end.', rtrim(gallery_files_rule_apache())],
+        'This rule is also part of the block under Settings → Server setup → Web server rules, with the others the gallery can use.',
         'Then press the circular arrow at the top of this page (Check again): this row turns green when the server refuses the address.',
     ];
 }

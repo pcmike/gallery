@@ -601,8 +601,6 @@
   .health-row > .health-act { padding-left:calc(1.3em + 10px); }   /* (buttons that sit straight in the row, as in the notes, are lined up with the words; inside the words' own block they already are) */
   .health-row:has(> .health-act) { flex-wrap:wrap; }
   .health-row:has(> .health-act) > div:not(.health-act) { flex:1 1 0; }
-  .lock-fix { margin-top:10px; padding:2px 12px 8px; background:var(--card); color:var(--text); border-radius:10px; font-weight:400; }
-  .lock-fix > summary { color:var(--text); }
   .health-row.optional .health-label { color:var(--muted); font-weight:500; }
   .health-mark.heads-mark { color:#f5c26b; font-weight:700; font-size:.78em; line-height:1.3; }
   .health-mark.heads-mark::before { content:""; }
@@ -783,12 +781,25 @@
   .rules-help details { border:1px solid #2c2c30; border-radius:8px; padding:8px 12px; margin:8px 0; background:#18181b; }
   .rules-help summary { cursor:pointer; }
   .rules-help p { font-size:0.82rem; color:#cfcfd4; margin:8px 0; }
-  .rules-help p.rules-sub { margin:16px 0 4px; color:var(--muted); }
   .rules-box { position:relative; }
   .rules-box pre { background:#101012; border-radius:6px; padding:10px 12px; margin:6px 0; overflow:auto; font-size:0.78rem; line-height:1.45; }
   .rules-box .copy-rules { position:absolute; top:12px; right:10px; padding:3px 10px; font-size:0.75rem; }
-  .accel-rule > p { color:var(--muted); font-size:0.8rem; margin:2px 0 6px; }
-  .accel-rule .rules-box pre { white-space:pre-wrap; word-break:break-all; padding-right:84px; }   /* (the column is narrow: the rule wraps instead of going under the Copy button) */
+  /* Web server rules: one line of chips (what this browser found working), then a fold for nginx and one for Apache */
+  .wr-line { display:flex; flex-wrap:wrap; gap:6px 8px; margin:12px 0 6px; }
+  .wr-chip { display:inline-flex; gap:6px; align-items:center; font-size:0.82rem; padding:3px 10px; border-radius:999px; border:1px solid var(--line); background:#141416; color:var(--muted); }
+  .wr-chip[hidden] { display:none; }
+  .wr-chip i { font-style:normal; font-weight:700; }
+  .wr-chip.ok { color:var(--ok); border-color:#2b5a3a; }
+  .wr-chip.bad { color:var(--err); border-color:#6b2a2c; }
+  .wr-fold > summary { flex-wrap:wrap; }
+  .wr-fold .wr-name { flex:1 1 12em; min-width:0; }
+  .wr-tag { flex:none; white-space:nowrap; font-size:0.72rem; padding:1px 8px; border-radius:999px; background:#262a52; color:#aab0ff; font-weight:600; }
+  .wr-fold .rules-box { display:flex; flex-direction:column; align-items:stretch; min-width:0; }
+  .wr-fold .rules-box .copy-rules { position:static; align-self:flex-end; margin:0 0 4px; }   /* (above the code, not over it: the first lines are long) */
+  .wr-fold .rules-box pre { margin:0; overflow-x:auto; white-space:pre; max-width:100%; }
+  .wr-notes { margin:6px 0 2px; padding-left:20px; font-size:0.82rem; color:#cfcfd4; }
+  .wr-notes li { margin:3px 0; }
+  .lock-fix-go { margin:10px 0 0; display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
   .site-rules { padding:12px 0; border-top:1px solid #26262a; }
   .site-rules .name { font-weight:600; font-size:0.92rem; }
   .site-rules .help { color:var(--muted); font-size:0.8rem; margin-top:3px; }

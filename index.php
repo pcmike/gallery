@@ -10033,7 +10033,7 @@ function admin_find_href($file, $as = '') {
     return '?' . ($folder !== '' ? 'folder=' . htmlspecialchars(rawurlencode($folder), ENT_QUOTES, 'UTF-8') . '&amp;' : '') . 'find=' . htmlspecialchars(rawurlencode($file), ENT_QUOTES, 'UTF-8') . ($as === 'cover' ? '&amp;as=cover' : '');
 }
 
-/** Addresses for the owner's browser to try, to see whether the web server rules in render_server_rules_help are in place:
+/** Addresses for the owner's browser to try, to see whether the web server rules in render_web_server_rules are in place:
  *  one photo and one thumbnail from the cache folder (which the server should refuse), and one folder's tidy link. Only
  *  paths, in the same folder as this script; the browser makes the requests, so nothing is fetched from the server side. */
 function lock_probe_targets($dir, $files) {
@@ -10061,78 +10061,112 @@ function nginx_internal_location_rule($loc) {
     return "location ~* ^" . $loc . ".*\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$ {\n    internal;\n}\n";
 }
 
-/** The one nginx location the "nginx internal redirect" setting needs, written for this gallery's address and folded under that setting. It is the same
- *  rule as the one in "Keep private photos from being fetched by address", which also has the Apache version. Nothing at the top of a site: there the rule
- *  would block every image, and the setting has no folder to be set to (render_server_rules_help says so). */
-function render_accel_rule_help() {
-    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-    if ($base === '') return '';
-    $loc = $base . '/';
-    ob_start();
-?>
-                <details class="fold accel-rule">
-                  <summary>Show the rule</summary>
-                  <p>Add inside the site's <code>server { }</code> block, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>. It is the same rule as the one under <em>Keep private photos from being fetched by address</em>, below.</p>
-                  <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc(nginx_internal_location_rule($loc)) ?></code></pre></div>
-                </details>
-<?php
-    return ob_get_clean();
+/** The nginx rule that keeps the gallery's generated data files (anything starting .gallery-) from being fetched: the Health check's "How to fix" folds use it too. */
+function gallery_files_rule_nginx() {
+    return "location ~ /\\.gallery- {\n    return 404;\n}\n";
 }
 
-/** Ready-to-use web server rules that keep the photo files themselves from being fetched by address (private items are
- *  only private through this script otherwise), written out for this gallery's own address, in two collapsed blocks:
- *  nginx and Apache. Shown on the Private page and in Settings so nobody has to leave the admin to set it up. */
-function render_server_rules_help($withTidyLinks = false) {
-    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+/** The same for Apache (a .htaccess). */
+function gallery_files_rule_apache() {
+    return "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>\n";
+}
+
+/** What the web server says it is: 'nginx', 'apache' (LiteSpeed reads .htaccess too) or '' when it says something else. Only a hint (behind a proxy it is the server
+ *  in the back that answers): it picks which block is offered first and tagged "looks like yours", and nothing is ever hidden because of it. */
+function web_server_kind() {
+    $s = strtolower((string) ($_SERVER['SERVER_SOFTWARE'] ?? ''));
+    if (strpos($s, 'nginx') === 0 || strpos($s, 'openresty') === 0) return 'nginx';
+    if (strpos($s, 'apache') === 0 || strpos($s, 'litespeed') !== false) return 'apache';
+    return '';
+}
+
+/** Every web server rule the gallery can use, written for this gallery's address, as one block for nginx and one for Apache: [$nginx, $apache, $base, $loc].
+ *  Each block has the same parts, marked "needed" (the photo files and the data files can't be fetched by address) and "optional" (tidy folder links, tidy share
+ *  addresses when share links are on), between a begin and an end line. The one place this text is made: Settings shows it, and everything else points there. */
+function web_server_rule_texts() {
     $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
     $loc = $base === '' ? '/' : $base . '/';
-    $nginx = "# The gallery's generated data files (captions, GPS, privacy flags, stats, login throttle, thumbnail cache):\n"
-        . "# never public. (A second layer: the .php ones already answer 404 on their own.)\n"
-        . "location ~ /\\.gallery- {\n    return 404;\n}\n\n"
-        . "# The photo and video files themselves: reachable only through index.php.\n"
-        . nginx_internal_location_rule($loc);
-    $apache = "# The photo and video files themselves: reachable only through index.php.\n"
-        . "# ((?i) matters: camera files are often IMG_0412.JPG.)\n"
+    $shape = '[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]';   // a random share address or a custom name: 4 to 40 letters, digits and hyphens, none at either end
+    $begin = '# ===== gallery rules: begin (for ' . $loc . ') =====';
+    $end = '# ===== gallery rules: end =====';
+    $nginx = $begin . "\n\n"
+        . "# needed: the gallery's data files (everything starting .gallery-) are never public\n"
+        . "# (a second layer: the .php ones already answer 404 on their own)\n"
+        . gallery_files_rule_nginx() . "\n"
+        . "# needed: the photo and video files themselves are reachable only through index.php\n"
+        . "# (the \"nginx internal redirect\" setting uses this same location)\n"
+        . nginx_internal_location_rule($loc) . "\n"
+        . "# optional: tidy folder links, " . $loc . "Europe/France/\n"
+        . "location ~ ^" . $loc . ".+/\$ {\n    rewrite ^" . $loc . "(.+)/\$ " . $loc . "index.php?folder=\$1 last;\n}\n\n";
+    if (ENABLE_SHARE_LINKS)   // (nginx reads a { in an unquoted pattern as the start of a block, so both patterns are quoted)
+        $nginx .= "# optional: tidy share addresses, " . $loc . "k7QpR2mX, a name of your own, and " . $loc . "admin\n"
+            . "location ~ \"^" . $loc . $shape . "\$\" {\n    rewrite \"^" . $loc . "(" . $shape . ")\$\" " . $loc . "index.php?link=\$1 last;\n}\n\n";
+    $nginx .= $end . "\n";
+    $apache = $begin . "\n\n"
+        . "# needed: the photo and video files themselves are reachable only through index.php\n"
+        . "# ((?i) matters: camera files are often IMG_0412.JPG)\n"
         . "<FilesMatch \"(?i)\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$\">\n    Require all denied\n</FilesMatch>\n\n"
-        . "# The gallery's generated data files (a second layer).\n"
-        . "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>\n";
-    $prettyNginx = "location ~ ^" . $loc . ".+/\$ {\n    rewrite ^" . $loc . "(.+)/\$ " . $loc . "index.php?folder=\$1 last;\n}\n";
-    $prettyApache = "RewriteEngine On\nRewriteRule ^(.+)/\$ index.php?folder=\$1 [B,L,QSA]\n";
+        . "# needed: the gallery's data files (everything starting .gallery-) are never public (a second layer)\n"
+        . gallery_files_rule_apache() . "\n"
+        . "# optional: the tidy addresses below need mod_rewrite (without it they are skipped)\n"
+        . "<IfModule mod_rewrite.c>\nRewriteEngine On\n\n"
+        . "# optional: tidy folder links, " . $loc . "Europe/France/\n"
+        . "RewriteRule ^(.+)/\$ index.php?folder=\$1 [B,L,QSA]\n";
+    if (ENABLE_SHARE_LINKS)
+        $apache .= "\n# optional: tidy share addresses, " . $loc . "k7QpR2mX, a name of your own, and " . $loc . "admin\n"
+            . "RewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule ^(" . $shape . ")\$ index.php?link=\$1 [L,QSA]\n";
+    $apache .= "</IfModule>\n\n" . $end . "\n";
+    return [$nginx, $apache, $base, $loc];
+}
+
+/** Web server rules, the one section of Settings (under Server setup) that holds them all: a line that says which of the rules this browser found working
+ *  (the page's script fills it in: see data-wr-chip), and under it a fold for nginx and a fold for Apache, each one block with one Copy button. The fold that
+ *  looks like this server's own is first and tagged; the script opens it when something is missing. Everywhere else in the admin points here. */
+function render_web_server_rules() {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    [$nginx, $apache, $base, $loc] = web_server_rule_texts();
+    $kind = web_server_kind();
+    $chips = [['lock', 'Private photos'], ['tidy', 'Tidy folder links']];
+    if (ENABLE_SHARE_LINKS) $chips[] = ['sharetidy', 'Tidy share addresses'];
+    $chips[] = ['accel', 'nginx redirect'];
+    $folds = [
+        'nginx' => ['nginx', '(needs shell access to the server)',
+            '<p>Add inside the site\'s <code>server { }</code> block, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery\'s address, <code>' . $esc($loc) . '</code>.'
+                . ($base === '' ? ' <strong>At the top of the site the photo rule would block every image on it, and the optional ones would catch other addresses: narrow their paths first.</strong>' : '') . '</p>',
+            $nginx,
+            ['Then set <em>nginx internal redirect</em> (above) to <code>' . $esc($base === '' ? '/' : $base) . '</code>.',
+             'Test: <code>curl -I https://yoursite.com' . $esc($loc) . 'some-photo.jpg</code> should answer 404.',
+             'The folder rule matches only paths ending in <code>/</code> and needs php-fpm to pass the original <code>REQUEST_URI</code> (the standard <code>fastcgi_param</code> does). Behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol on.']
+            + (ENABLE_SHARE_LINKS ? [3 => 'The share-address rule matches one word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash: a photo (it has a dot) and a folder\'s own address (it ends in a slash) are never touched, and a folder typed without its slash is sent on to the folder by the gallery. If you added the older rule for exactly ' . (int) LINK_TOKEN_LENGTH . ' letters and digits, remove it: this one replaces it.'] : [])],
+        'apache' => ['Apache', '(works on FTP-only hosting)',
+            '<p>Save as <code>.htaccess</code> in the gallery\'s folder. If one is there already, add this at the end.</p>',
+            $apache,
+            ['It only works if the server reads <code>.htaccess</code> here (<code>AllowOverride All</code>; the tidy addresses need <code>AllowOverride FileInfo</code>). Check with <code>curl -I</code>: a bare photo address should then answer 403, and the gallery works as before.',
+             'Keep the <code>B</code> flag on the folder rule: it escapes spaces, <code>&amp;</code>, <code>+</code> and <code>#</code>.',
+             'Scripts that log in with an <code>Authorization</code> header on PHP-FPM also need <code>CGIPassAuth On</code>.']
+            + (ENABLE_SHARE_LINKS ? [3 => 'The share-address rule matches one word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash. A real folder with the same name as a link doesn\'t hide it: the folder\'s own address (with the closing slash) still opens the folder. If you added the older rule for exactly ' . (int) LINK_TOKEN_LENGTH . ' letters and digits, remove it: this one replaces it.'] : [])],
+    ];
+    $order = $kind === 'apache' ? ['apache', 'nginx'] : ['nginx', 'apache'];
     ob_start();
 ?>
-    <div class="rules-help">
-      <div data-lock-rules>
-      <details class="fold">
-        <summary><strong>nginx</strong> (strongest; needs shell access to the server)</summary>
-        <p>Add inside the site's <code>server { }</code> block, first location above the second, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>.<?= $base === '' ? ' <strong>At the top of the site the second rule would block every image on it: narrow its path first.</strong>' : '' ?></p>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
-        <p>Then set <em>nginx internal redirect</em> (Settings → Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>. Test: <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code> should answer 404. Behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol on.</p>
-      </details>
-      <details class="fold">
-        <summary><strong>Apache</strong> (blunter, but works on FTP-only hosting)</summary>
-        <p>Save as <code>.htaccess</code> in the gallery's folder.</p>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
-        <p>A bare photo address then answers 403. It only works if the server reads <code>.htaccess</code> here (<code>AllowOverride All</code>), so check with <code>curl -I</code>. Scripts that log in with an <code>Authorization</code> header on PHP-FPM also need <code>CGIPassAuth On</code>.</p>
-      </details>
-      </div>
-      <?php if ($withTidyLinks): ?>
-      <div class="lock-result" data-tidy-status></div>
-      <div data-tidy-rules>
-      <p class="rules-sub">Optional tidy folder links: <code><?= $esc($loc) ?>?folder=Europe/France</code> always works; with these, <code><?= $esc($loc) ?>Europe/France/</code> does too.</p>
-      <details class="fold">
-        <summary><strong>nginx</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
-        <p>Add inside <code>server { }</code>, next to the rules above. It matches only paths ending in <code>/</code> and needs php-fpm to pass the original <code>REQUEST_URI</code> (the standard <code>fastcgi_param</code> does).<?= $base === '' ? ' <strong>At the top of the site it would catch every folder address: narrow its path first.</strong>' : '' ?></p>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyNginx) ?></code></pre></div>
-      </details>
-      <details class="fold">
-        <summary><strong>Apache</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
-        <p>Add to <code>.htaccess</code> (needs <code>mod_rewrite</code> and <code>AllowOverride FileInfo</code>). Keep the <code>B</code> flag: it escapes spaces, <code>&amp;</code>, <code>+</code> and <code>#</code>.</p>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyApache) ?></code></pre></div>
-      </details>
-      </div>
-      <?php endif; ?>
-    </div>
+            <div class="site-rules" id="server-rules" data-wr data-wr-server="<?= $esc($kind) ?>">
+              <div class="name">Web server rules</div>
+              <div class="help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Everything the gallery can use is in one block per server: copy the block for yours.</div>
+              <div class="wr-line" data-wr-line>
+                <?php foreach ($chips as [$ck, $cl]): ?><span class="wr-chip" data-wr-chip="<?= $ck ?>"<?= $ck === 'accel' ? ' hidden' : '' ?>><i aria-hidden="true">&hellip;</i> <?= $esc($cl) ?></span><?php endforeach; ?>
+              </div>
+              <?php foreach ($chips as [$ck, $cl]): ?><p class="lock-result" data-wr-msg="<?= $ck ?>" hidden></p><?php endforeach; ?>
+              <div class="rules-help">
+                <?php foreach ($order as $fk): [$fname, $fwhen, $fintro, $ftext, $fnotes] = $folds[$fk]; ?>
+                <details class="fold wr-fold" data-wr-fold="<?= $fk ?>"<?= $kind === $fk ? ' data-likely="1"' : '' ?>>
+                  <summary><span class="wr-name"><strong><?= $esc($fname) ?></strong> <?= $esc($fwhen) ?></span><?= $kind === $fk ? ' <span class="wr-tag">looks like yours</span>' : '' ?></summary>
+                  <?= $fintro ?>
+                  <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($ftext) ?></code></pre></div>
+                  <ul class="wr-notes"><?php foreach ($fnotes as $note): ?><li><?= $note ?></li><?php endforeach; ?></ul>
+                </details>
+                <?php endforeach; ?>
+              </div>
+            </div>
 <?php
     return ob_get_clean();
 }
@@ -10341,12 +10375,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
       <div class="lock-outside-text" hidden><strong>Private is locked.</strong> These photos live outside the gallery's own address, so only the gallery can send them.</div>
       <div class="lock-result" data-lock-detail></div>
       <button type="button" class="secondary lock-recheck" hidden>Check again</button>
-      <details class="fold lock-fix" data-lock-rules-panel hidden>
-        <summary>Fix this: the rules to add</summary>
-        <p class="muted" style="margin-top:0;">Copy the rules for your server. They stop photo files being fetched by their direct address.</p>
-        <?= render_server_rules_help() ?>
-        <p class="muted" data-tidy-rules>Optional tidy folder links and the nginx redirect setting are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Settings → Server setup</a>.</p>
-      </details>
+      <p class="lock-fix-go" data-lock-rules-panel hidden><button type="button" class="secondary lock-go" onclick="return adminGoToRules();">Fix this: the web server rules &rarr;</button> <span class="muted">One block for nginx and one for Apache, in Settings &rarr; Server setup.</span></p>
     </div>
 <?php endif; ?>
     <section class="panel ed-panel" id="ed-panel">
@@ -10975,7 +11004,7 @@ function gallery_setting_definitions() {
              'help' => 'Show a place elsewhere on the server (an archive on another disk). Without a name, the folders inside it appear at the top of the gallery (/space/trip holding Paris and StTropez gives you Paris and StTropez); with a name, the whole place shows as that one folder. Needs "Show subfolders".',
              'risk' => 'Every photo and video there becomes visible.'],
             ['name' => 'NGINX_ACCEL_REDIRECT_PREFIX', 'type' => 'text', 'label' => 'nginx internal redirect', 'status' => 'accel',
-             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (the rule is under this row) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
+             'help' => 'Lets nginx send photos and videos instead of PHP: faster, and videos seek better. Needs the matching internal location (it is in the Web server rules, just below these settings) and the gallery\'s own address, such as /kb. Files from elsewhere are always sent by the gallery.',
              'risk' => 'Without the matching nginx location, photos and videos stop loading.'],
         ]],
     ];
@@ -11609,35 +11638,6 @@ function links_admin_action($action, $dir, $files) {
     $wrote();
     if ($action === 'link_delete') link_delete_log($id);
     admin_json_exit(['ok' => true, 'id' => $id, 'text' => $text]);
-}
-
-/** The server rules that make https://example.com/<gallery>/<token> reach the script, written for this install's own address. */
-function render_link_rules_help() {
-    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-    $loc = $base === '' ? '/' : $base . '/';
-    // (nginx reads a { in an unquoted pattern as the start of a block, so both patterns are quoted)
-    $shape = '[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]';   // a random address or a custom name: 4 to 40 letters, digits and hyphens, none at either end
-    $nginx = "location ~ \"^" . $loc . $shape . "\$\" {\n    rewrite \"^" . $loc . "(" . $shape . ")\$\" " . $loc . "index.php?link=\$1 last;\n}\n";
-    $apache = "RewriteEngine On\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule ^(" . $shape . ")\$ index.php?link=\$1 [L,QSA]\n";
-    ob_start();
-?>
-    <div class="rules-help">
-      <details class="fold">
-        <summary><strong>nginx</strong> (needs shell access to the server)</summary>
-        <p>Add inside the site's <code>server { }</code> block, next to the other rules, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>. <strong>It replaces the older rule that matched exactly <?= (int) LINK_TOKEN_LENGTH ?> letters and digits: remove that one.</strong><?= $base === '' ? ' <strong>At the top of the site it would also catch any other one-word address: narrow its path first.</strong>' : '' ?></p>
-        <details class="fold rule-details"><summary>What it matches</summary><p>One word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash: a photo (it has a dot) and a folder's own address (it ends in a slash) are never touched, and a folder typed without its slash is sent on to the folder by the gallery.</p></details>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
-      </details>
-      <details class="fold">
-        <summary><strong>Apache</strong> (works on FTP-only hosting)</summary>
-        <p>Add to <code>.htaccess</code> in the gallery's folder (needs <code>mod_rewrite</code> and <code>AllowOverride FileInfo</code>). <strong>It replaces the older rule for exactly <?= (int) LINK_TOKEN_LENGTH ?> letters and digits: remove that one.</strong></p>
-        <details class="fold rule-details"><summary>What it matches</summary><p>One word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash. A real folder with the same name as a link doesn't hide it: the folder's own address (with the closing slash) still opens the folder.</p></details>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
-      </details>
-    </div>
-<?php
-    return ob_get_clean();
 }
 
 /** One date for the tab: the page's script turns it into the visitor's own time zone; without it, UTC. */
@@ -15542,8 +15542,9 @@ function health_how_html($steps, $key = '', $hidden = false) {
 /** The steps for a file the server must refuse (anything starting with .gallery-): the visitor log's and the backup's rows use them. */
 function health_how_gallery_files() {
     return [
-        ['nginx (a server of your own): add this inside the site\'s `server { }` block, then run `sudo nginx -t && sudo systemctl reload nginx`.', "location ~ /\\.gallery- {\n    return 404;\n}"],
-        ['Apache, or any host that reads `.htaccess` (FTP-only hosting too): save this as a file named `.htaccess` in the gallery\'s folder. If one is there already, add it at the end.', "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>"],
+        ['nginx (a server of your own): add this inside the site\'s `server { }` block, then run `sudo nginx -t && sudo systemctl reload nginx`.', rtrim(gallery_files_rule_nginx())],
+        ['Apache, or any host that reads `.htaccess` (FTP-only hosting too): save this as a file named `.htaccess` in the gallery\'s folder. If one is there already, add it at the end.', rtrim(gallery_files_rule_apache())],
+        'This rule is also part of the block under Settings → Server setup → Web server rules, with the others the gallery can use.',
         'Then press the circular arrow at the top of this page (Check again): this row turns green when the server refuses the address.',
     ];
 }
@@ -15699,7 +15700,7 @@ function render_admin_health_panel() {
         <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
-            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">&rarr; Server setup</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if (in_array($key, ['tidy', 'sharetidy', 'accel'], true)): ?><a class="health-more" href="#site" onclick="return adminGoToRules();">&rarr; Web server rules</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
           </div>
         <?php endforeach; ?>
       </div>
@@ -15961,7 +15962,7 @@ function render_admin_features_panel($adminEdited, $adminHidden) {
       <?= $row('Country lookup', $onOff(COUNTRY_LOOKUP), COUNTRY_LOOKUP ? (is_file(geo_db_path()) ? 'Saying which country each signed-in browser\'s addresses are in, from a file kept on this server.' : 'Switched on, but the country file is not here yet.') : 'Says which country a signed-in browser is used from, so a new country can be flagged. Downloads one small file.', $goSetting(COUNTRY_LOOKUP ? 'Settings →' : 'Turn on →', 'geo-row')) ?>
       <?= $row('Notes', $inactive ? $chip('need', 'Needs setup') : ($mdActive ? $chip('on', 'On') : $chip('off', 'Not used')), $inactive ? (count($inactive) === 1 ? $inactive[0] . ' is not active: it is missing {gallery}.' : count($inactive) . ' notes files are not active: they are missing {gallery}.') : ($mdActive ? 'A notes page is in use.' : 'A notes.md with {gallery} on its first line puts words around your photos.'), '<button type="button" class="secondary" onclick="return adminGoTo(\'notes\');">' . ($inactive ? 'Fix it →' : 'Notes →') . '</button>') ?>
       <?= $row('Thumbnails', $onOff(ENABLE_THUMBNAIL_CACHE), ENABLE_THUMBNAIL_CACHE ? 'Small copies make pages load fast; made as people look.' : 'Photos are sent at full size and iPhone (HEIC) photos cannot show.', $goSetting('Settings →', 'setting-ENABLE_THUMBNAIL_CACHE')) ?>
-      <?= $row('Short share addresses', $chip('opt', 'Optional'), 'Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own.', $goSetting('Open the rule →', 'server-setup'), ' data-ft-sharetidy data-ft-was="Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own."') ?>
+      <?= $row('Short share addresses', $chip('opt', 'Optional'), 'Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own.', '<button type="button" class="secondary" onclick="return adminGoToRules();">Open the rules →</button>', ' data-ft-sharetidy data-ft-was="Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own."') ?>
       <h3 class="subhead">Things you do on the gallery itself</h3>
       <p class="muted ft-sub">These are not settings; they are buttons on the photos. "Show me" opens the gallery with that button pointed out.</p>
       <?php
@@ -16104,7 +16105,6 @@ function render_admin_site_settings($csrfToken) {
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
                 <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
-                <?= render_accel_rule_help() ?>
                 <?php endif; ?>
                 <?php if (isset($effects[$name])): ?>
                 <?php foreach (['off', 'on'] as $st): if ($effects[$name][$st] === '') continue; ?>
@@ -16159,10 +16159,7 @@ function render_admin_site_settings($csrfToken) {
             <?php if ($name === 'ENABLE_THUMBNAIL_CACHE'): ?><div id="media-slot"><?php render_admin_thumbnails_panel($csrfToken); ?></div><?php endif; ?>
           <?php endforeach; ?>
           <?php if ($group['title'] === 'Server setup (advanced)'): ?>
-            <div class="site-rules" id="lock-rules-row"><div class="name">Keep private photos from being fetched by address</div><div class="lock-result" data-lock-status></div><div class="help lock-help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help(true) ?></div>
-            <?php if (ENABLE_SHARE_LINKS): ?>
-            <div class="site-rules"><div class="name">Tidy share addresses</div><div class="lock-result" data-sharetidy-status></div><div data-sharetidy-rules><div class="help">Optional. A share link always works as <code>.../?link=&hellip;</code>; with this rule it is the short <code>.../k7QpR2mXv9LwTb4e</code>, a link can have a name of your own (<code>.../carol-and-sam</code>), and <code>.../admin</code> goes to the sign-in. If you added the older rule, replace it. Rules to copy:</div><?= render_link_rules_help() ?></div></div>
-            <?php endif; ?>
+            <?= render_web_server_rules() ?>
           <?php endif; ?>
           <?php if ($group['title'] === 'Signing in and passwords') { render_admin_browsers_panel($csrfToken); render_admin_geo_row($csrfToken); } ?>
           </details>
@@ -17612,8 +17609,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .health-row > .health-act { padding-left:calc(1.3em + 10px); }   /* (buttons that sit straight in the row, as in the notes, are lined up with the words; inside the words' own block they already are) */
   .health-row:has(> .health-act) { flex-wrap:wrap; }
   .health-row:has(> .health-act) > div:not(.health-act) { flex:1 1 0; }
-  .lock-fix { margin-top:10px; padding:2px 12px 8px; background:var(--card); color:var(--text); border-radius:10px; font-weight:400; }
-  .lock-fix > summary { color:var(--text); }
   .health-row.optional .health-label { color:var(--muted); font-weight:500; }
   .health-mark.heads-mark { color:#f5c26b; font-weight:700; font-size:.78em; line-height:1.3; }
   .health-mark.heads-mark::before { content:""; }
@@ -17794,12 +17789,25 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .rules-help details { border:1px solid #2c2c30; border-radius:8px; padding:8px 12px; margin:8px 0; background:#18181b; }
   .rules-help summary { cursor:pointer; }
   .rules-help p { font-size:0.82rem; color:#cfcfd4; margin:8px 0; }
-  .rules-help p.rules-sub { margin:16px 0 4px; color:var(--muted); }
   .rules-box { position:relative; }
   .rules-box pre { background:#101012; border-radius:6px; padding:10px 12px; margin:6px 0; overflow:auto; font-size:0.78rem; line-height:1.45; }
   .rules-box .copy-rules { position:absolute; top:12px; right:10px; padding:3px 10px; font-size:0.75rem; }
-  .accel-rule > p { color:var(--muted); font-size:0.8rem; margin:2px 0 6px; }
-  .accel-rule .rules-box pre { white-space:pre-wrap; word-break:break-all; padding-right:84px; }   /* (the column is narrow: the rule wraps instead of going under the Copy button) */
+  /* Web server rules: one line of chips (what this browser found working), then a fold for nginx and one for Apache */
+  .wr-line { display:flex; flex-wrap:wrap; gap:6px 8px; margin:12px 0 6px; }
+  .wr-chip { display:inline-flex; gap:6px; align-items:center; font-size:0.82rem; padding:3px 10px; border-radius:999px; border:1px solid var(--line); background:#141416; color:var(--muted); }
+  .wr-chip[hidden] { display:none; }
+  .wr-chip i { font-style:normal; font-weight:700; }
+  .wr-chip.ok { color:var(--ok); border-color:#2b5a3a; }
+  .wr-chip.bad { color:var(--err); border-color:#6b2a2c; }
+  .wr-fold > summary { flex-wrap:wrap; }
+  .wr-fold .wr-name { flex:1 1 12em; min-width:0; }
+  .wr-tag { flex:none; white-space:nowrap; font-size:0.72rem; padding:1px 8px; border-radius:999px; background:#262a52; color:#aab0ff; font-weight:600; }
+  .wr-fold .rules-box { display:flex; flex-direction:column; align-items:stretch; min-width:0; }
+  .wr-fold .rules-box .copy-rules { position:static; align-self:flex-end; margin:0 0 4px; }   /* (above the code, not over it: the first lines are long) */
+  .wr-fold .rules-box pre { margin:0; overflow-x:auto; white-space:pre; max-width:100%; }
+  .wr-notes { margin:6px 0 2px; padding-left:20px; font-size:0.82rem; color:#cfcfd4; }
+  .wr-notes li { margin:3px 0; }
+  .lock-fix-go { margin:10px 0 0; display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
   .site-rules { padding:12px 0; border-top:1px solid #26262a; }
   .site-rules .name { font-weight:600; font-size:0.92rem; }
   .site-rules .help { color:var(--muted); font-size:0.8rem; margin-top:3px; }
@@ -18504,7 +18512,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     if (id) setTimeout(function () { adminReveal(id); }, 60);
     return false;
   }
-  // Are the web server rules in place (the ones on the Hidden tab and in Settings)? This browser asks, without any
+  // Goes to the Web server rules in Settings → Server setup and opens the block that looks like this server's own (nothing opens when the server doesn't say what it is).
+  // Every place in the admin that sends you to the rules (the Health check, the Features list, the Edited tab's warning) comes here.
+  function adminGoToRules() {
+    var r = adminGoTo('site', 'server-rules');
+    setTimeout(function () { var l = document.querySelector('.wr-fold[data-likely="1"]'); if (l) l.open = true; }, 150);
+    return r;
+  }
+  // Are the web server rules in place (the ones in Settings → Server setup → Web server rules)? This browser asks, without any
   // sign-in: for a photo and a cached thumbnail by their plain addresses (a refusal means locked, a picture coming back
   // means not; HEAD, so nothing is downloaded), and for a folder by its tidy address (the gallery's own page for that folder
   // means the tidy links work). A warning only goes away on a clear answer; any doubt leaves it, and the rules, standing.
@@ -18522,27 +18537,33 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (warn) warn.hidden = !risk;
     };
     const mirrorLater = function () {
-      if (photo) { if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); return; }
+      if (photo) { if (!folderUrl) { mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); wrChip('tidy', 'grey', 'Tidy folder links: no folder to test with', '', 'Turn on "Show subfolders" and add a folder with photos.'); } return; }
+      wrHide('accel');
       if (hasFiles) {
         mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
         mirror('accel', 'ok-text', 'Doesn\'t apply here: files from outside the gallery\'s own address are always sent by the gallery itself, whatever this is set to.');
         accelSay('ok-text', 'Doesn\'t apply here: every photo and video comes from folders outside the gallery\'s own address, and those are always sent by the gallery itself, whatever this is set to.', false);
-        if (!folderUrl) mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).');
-      } else { ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); }); accelSay('muted', 'Nothing to test with yet (no photos).', false); }
+        if (!folderUrl) { mirror('tidy', '', 'No folder to test with (turn on "Show subfolders" and add a folder with photos).'); wrChip('tidy', 'grey', 'Tidy folder links: no folder to test with', '', 'Turn on "Show subfolders" and add a folder with photos.'); }
+      } else { ['lock', 'tidy', 'accel'].forEach(function (k) { mirror(k, '', 'Nothing to test with yet (no photos).'); }); accelSay('muted', 'Nothing to test with yet (no photos).', false); wrChip('lock', 'grey', 'Private photos: nothing to test with yet', '', 'There are no photos yet.'); wrChip('tidy', 'grey', 'Tidy folder links: nothing to test with yet', '', 'There are no photos yet.'); }
     };
     const hideAll = function (sel, on) { document.querySelectorAll(sel).forEach(function (el) { el.hidden = on; }); };
-    const report = function (selector, ok, text, rulesSel) {
-      document.querySelectorAll(selector).forEach(function (el) {
-        el.className = 'lock-result ' + (ok ? 'ok-text' : 'warn-text');
-        el.textContent = text;
-        if (ok) {
-          const more = document.createElement('button');
-          more.type = 'button'; more.className = 'linklike'; more.textContent = 'Show the rules';
-          more.addEventListener('click', function () { hideAll(rulesSel, false); more.remove(); });
-          el.appendChild(document.createTextNode(' ')); el.appendChild(more);
-        }
+    // One line in the Web server rules says which rules this browser found working: a chip each, green when it works, red when it should and doesn't, grey when it isn't
+    // set up or couldn't be told. A sentence under the line says what is wrong, only for the ones that need something. The block that looks like this server's own opens
+    // by itself, once, when a rule is missing (never after you have opened or closed one yourself).
+    const wr = { opened: false, touched: false };
+    const wrServer = (document.querySelector('[data-wr]') || { getAttribute: function () { return ''; } }).getAttribute('data-wr-server');
+    document.querySelectorAll('.wr-fold > summary').forEach(function (sm) { sm.addEventListener('click', function () { wr.touched = true; }); });
+    const wrChip = function (key, state, label, msg, title, missing) {
+      if (msg && state !== 'bad') { title = msg + (title ? ' ' + title : ''); msg = ''; }   // (a sentence under the line only for what is wrong; the rest says it in the chip's hover text)
+      document.querySelectorAll('[data-wr-chip="' + key + '"]').forEach(function (c) {
+        c.hidden = false; c.className = 'wr-chip ' + state; c.title = title || ''; c.textContent = '';
+        const i = document.createElement('i'); i.setAttribute('aria-hidden', 'true'); i.textContent = state === 'ok' ? '\u2713' : state === 'bad' ? '\u2717' : '\u25CB';
+        c.appendChild(i); c.appendChild(document.createTextNode(' ' + label));
       });
+      document.querySelectorAll('[data-wr-msg="' + key + '"]').forEach(function (m) { m.textContent = msg || ''; m.hidden = !msg; m.className = 'lock-result ' + (state === 'bad' ? 'warn-text' : 'muted'); });
+      if (missing && !wr.opened && !wr.touched) { const l = document.querySelector('.wr-fold[data-likely="1"]'); if (l) { l.open = true; wr.opened = true; } }
     };
+    const wrHide = function (key) { document.querySelectorAll('[data-wr-chip="' + key + '"], [data-wr-msg="' + key + '"]').forEach(function (e) { e.hidden = true; }); };
     const ask = function (url) {
       const target = url + (url.indexOf('?') < 0 ? '?' : '&') + 'lockcheck=' + Date.now();   // (a server that won't answer HEAD gets a one-byte GET)
       return fetch(target, { method: 'HEAD', cache: 'no-store', credentials: 'omit', redirect: 'manual' })
@@ -18904,23 +18925,26 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         banner.querySelector('.lock-outside-text').hidden = !outside;
         banner.querySelector('.lock-recheck').hidden = false;
       }
-      hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', locked);
+      hideAll('[data-lock-rules-panel]', locked);
       if (outside) mirror('lock', 'ok-text', 'Not needed: every photo and video here comes from folders outside the gallery\'s own address, so none can be fetched by its address.');
       else mirror('lock', locked ? 'ok-text' : state === 'open' ? (anyPrivate ? 'warn-text' : 'note-text') : '', locked ? 'Yes: a photo and a cached thumbnail asked for by their plain addresses were refused, so private items can only be reached through the gallery.'
-        : state === 'open' ? (anyPrivate ? 'Private photos aren\'t locked. Hiding a photo only hides it from the gallery\'s pages; anyone who knows its file address can still open it (' + detail + ' was handed out to a plain request).' : 'Not locked yet. Nothing is private, so nothing is exposed; add the rule in Settings → Server setup before you make something private (' + detail + ' was handed out to a plain request).') : 'Couldn\'t tell (the request failed or was redirected).');
+        : state === 'open' ? (anyPrivate ? 'Private photos aren\'t locked. Hiding a photo only hides it from the gallery\'s pages; anyone who knows its file address can still open it (' + detail + ' was handed out to a plain request).' : 'Not locked yet. Nothing is private, so nothing is exposed; add the rule (Settings → Server setup → Web server rules) before you make something private (' + detail + ' was handed out to a plain request).') : 'Couldn\'t tell (the request failed or was redirected).');
       if (state === 'open') document.querySelectorAll('[data-health="lock"]').forEach(function (d) {
         if (d.querySelector('.health-fix')) return;
         const a = document.createElement('button'); a.type = 'button'; a.className = 'secondary health-fix'; a.textContent = '\u2192 The rules';
-        a.addEventListener('click', function (ev) { ev.preventDefault(); adminGoTo('site', 'lock-rules-row'); setTimeout(function () { const f = document.querySelector('#lock-rules-row details'); if (f) f.open = true; }, 120); });   // (Settings always has the rules; the Edited tab may not exist yet)
+        a.addEventListener('click', function (ev) { ev.preventDefault(); adminGoToRules(); });   // (Settings always has the rules; the Edited tab may not exist yet)
         d.appendChild(document.createTextNode(' ')); d.appendChild(a);
       });
       document.querySelectorAll('[data-lock-detail]').forEach(function (el) {
         el.className = 'lock-result warn-text';
         el.textContent = locked ? '' : state === 'open' ? 'The server handed out ' + detail + ' to a plain request.' : 'Couldn\'t check from this browser just now.';
       });
-      report('[data-lock-status]', locked, outside ? 'Nothing to ask the server for: no photo or video has an address of its own here.' : locked ? 'Checked just now from this browser: direct requests for photos are refused.'
-        : state === 'open' ? 'Checked just now from this browser: the server handed out ' + detail + ' to a plain request, so a private photo could be fetched by its address. Use the rules below.'
-        : 'Couldn\'t check from this browser just now (the request failed or was redirected).', '.lock-help, [data-lock-rules], [data-lock-rules-panel]');
+      if (outside) wrChip('lock', 'ok', 'Private photos: not needed here', '', 'No photo or video has an address of its own here (they come from folders outside the gallery\'s own address), so there is nothing to ask the server for.');
+      else if (locked) wrChip('lock', 'ok', 'Private photos locked', '', 'Checked just now from this browser: direct requests for photos are refused.');
+      else if (state === 'open') wrChip('lock', anyPrivate ? 'bad' : 'grey', anyPrivate ? 'Private photos not locked' : 'Private photos: not locked yet',
+        anyPrivate ? 'Checked just now from this browser: the server handed out ' + detail + ' to a plain request, so a private photo could be fetched by its address. Use the block below.'
+          : 'Nothing is private yet, so nothing is exposed; add the rules before you make something private (the server handed out ' + detail + ' to a plain request).', '', true);
+      else wrChip('lock', 'grey', 'Private photos: couldn\'t check', 'Couldn\'t check from this browser just now (the request failed or was redirected).', '');
     };
     const runLock = function () {
       if (!photo) { if (hasFiles) lockShow('outside'); return; }
@@ -18967,13 +18991,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             var chip = row.querySelector('.ft-chip'), text = row.querySelector('.ft-text'), btn = row.querySelector('.ft-act button');
             if (state === 'works') { chip.className = 'ft-chip ft-on'; chip.textContent = 'On'; text.textContent = 'The server rule is in place: a link looks like ' + shown + '.'; if (btn) btn.hidden = true; }
           });
-          if (state === 'works') {
-            hideAll('[data-sharetidy-rules]', true);
-            report('[data-sharetidy-status]', true, 'Tidy share addresses work: a link looks like ' + shown + ' (checked just now from this browser).', '[data-sharetidy-rules]');
-          } else {
-            hideAll('[data-sharetidy-rules]', false);
-            report('[data-sharetidy-status]', false, state === 'no' ? 'Tidy share addresses are not set up (optional): links use the long form (…/?k7QpR2mX), which works as it is. Rules to add are below.' : 'Couldn\'t check tidy share addresses from this browser just now.', '[data-sharetidy-rules]');
-          }
+          if (state === 'works') wrChip('sharetidy', 'ok', 'Tidy share addresses', '', 'A link looks like ' + shown + ' (checked just now from this browser).');
+          else if (state === 'no') wrChip('sharetidy', 'grey', 'Tidy share addresses: not set up', 'Optional: links use the long form (…/?k7QpR2mX), which works as it is. The rule is in the block below.', '', true);
+          else wrChip('sharetidy', 'grey', 'Tidy share addresses: couldn\'t check', 'Couldn\'t check tidy share addresses from this browser just now.', '');
         });
     };
     const runTidy = function () {
@@ -18991,20 +19011,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         .then(function (state) {
           if (state === 'closed') {
             mirror('tidy', 'ok-text', folderUrl + ' reaches the gallery. It is closed, so this check (which sends no sign-in) is shown the invalid-link page.');
-            hideAll('[data-tidy-rules]', true);
-            report('[data-tidy-status]', true, 'Tidy folder links work: ' + folderUrl + ' reaches the gallery (checked just now from this browser). The gallery is closed, so this check, which sends no sign-in, is shown the invalid-link page.', '[data-tidy-rules]');
+            wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' reaches the gallery (checked just now from this browser). The gallery is closed, so this check, which sends no sign-in, is shown the invalid-link page.');
             return;
           }
           mirror('tidy', state === 'works' ? 'ok-text' : state === 'no' ? 'note-text' : '', state === 'works' ? folderUrl + ' opens that folder.'
             : state === 'no' ? 'Not set up (optional): ' + folderUrl + ' doesn\'t open that folder; the ?folder= links work regardless.' : 'Couldn\'t tell (the request failed or was redirected).');
-          if (state === 'works') {
-            hideAll('[data-tidy-rules]', true);
-            report('[data-tidy-status]', true, 'Tidy folder links work: ' + folderUrl + ' opens that folder (checked just now from this browser).', '[data-tidy-rules]');
-          } else {
-            hideAll('[data-tidy-rules]', false);
-            report('[data-tidy-status]', false, state === 'no' ? 'Tidy folder links are not set up (optional): ' + folderUrl + ' does not open that folder yet. The gallery works without them, with ?folder= links. Rules to add are below.'
-              : 'Couldn\'t check tidy folder links from this browser just now.', '[data-tidy-rules]');
-          }
+          if (state === 'works') wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' opens that folder (checked just now from this browser).');
+          else if (state === 'no') wrChip('tidy', 'grey', 'Tidy folder links: not set up', 'Optional: ' + folderUrl + ' does not open that folder yet. The gallery works without them, with ?folder= links. The rule is in the block below.', '', true);
+          else wrChip('tidy', 'grey', 'Tidy folder links: couldn\'t check', 'Couldn\'t check tidy folder links from this browser just now.', '');
         });
     };
     // "nginx internal redirect": asks the gallery to answer a request the way it would with that setting, and sees whether
@@ -19015,21 +19029,27 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       const current = accel.getAttribute('data-accel-current'), candidate = accel.getAttribute('data-accel-candidate');
       const prefix = current || candidate;
       if (!photo) return;   // (mirrorLater has said why)
-      if (!prefix) { mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); accelSay('muted', 'Not applicable: a gallery at the very top of a site has no folder to set it to.', false); return; }
+      if (!prefix) { wrHide('accel'); mirror('accel', '', 'Not applicable: a gallery at the very top of a site has no folder to set it to.'); accelSay('muted', 'Not applicable: a gallery at the very top of a site has no folder to set it to.', false); return; }
       fetch('?admin&accelcheck=1&prefix=' + encodeURIComponent(prefix), { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { return r.ok && /^(image|video)\//.test(r.headers.get('content-type') || '') ? r.blob().then(function (b) { return b.size > 0; }) : false; })
         .catch(function () { return null; })
         .then(function (works) {
           const warn = document.querySelector('[data-accel-risk]'); if (warn) warn.hidden = !(current && works !== true);   // (the warning under the setting: only while it is on and not known to work)
+          // (the chip in the Web server rules: shown where it can matter, on nginx or once the setting is on or found working)
+          if (!current && works !== true && wrServer !== 'nginx') wrHide('accel');
+          else if (works === null) wrChip('accel', 'grey', 'nginx redirect: couldn\'t tell', '', '');
+          else if (current) works ? wrChip('accel', 'ok', 'nginx redirect working', '', 'Set to ' + current + ': nginx sends the photos and videos itself.')
+            : wrChip('accel', 'bad', 'nginx redirect not working', 'Set to ' + current + ' but nginx did not serve a test photo through it; photos and videos may fail to load. The internal location is in the nginx block below; or clear the setting.', '');
+          else wrChip('accel', 'grey', works ? 'nginx redirect: not set (nginx is ready for it)' : 'nginx redirect: not set', '', works ? 'nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : '');
           if (works === null) { accelSay('muted', 'Couldn\'t tell (the request failed).', !!current); return mirror('accel', '', 'Couldn\'t tell (the request failed).'); }
           mirror('accel', current ? (works ? 'ok-text' : 'warn-text') : (works ? 'note-text' : ''), current
             ? (works ? 'Set to ' + current + ' and working: nginx sends the photos and videos itself.' : 'Set to ' + current + ' but nginx did not serve a test photo through it; photos may fail to load.')
-            : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (see the Edited tab).'));
+            : (works ? 'Not set, though nginx has the internal location for ' + candidate + ' in place: setting it makes photos and videos faster.' : 'Not set, and not needed unless you run nginx with the internal location (it is in Settings → Server setup → Web server rules).'));
           accel.textContent = '';
           const say = function (cls, text) { accel.className = 'help accel-status ' + cls; accel.appendChild(document.createTextNode(text)); };
           if (current) {
             if (works) say('ok-text', 'Working: nginx just served a test photo through ' + current + ', so photos and videos are sent by nginx itself (checked from this browser).');
-            else say('warn-text', 'Not working: with this set, nginx did not serve ' + photo + ' (a photo in the gallery\'s own folder) through ' + current + ', so photos and videos may fail to load. The internal location must match that address: for the rules on the Private tab, a location starting ' + current + '/ whose photo extensions are marked internal, in the same server block that serves this page. Try: curl -I ' + location.origin + photo + ' (it should say 404 or 403), and look in nginx\'s error log for the line about the internal redirect. Or clear this setting.');
+            else say('warn-text', 'Not working: with this set, nginx did not serve ' + photo + ' (a photo in the gallery\'s own folder) through ' + current + ', so photos and videos may fail to load. The internal location must match that address: the one in the nginx block under Web server rules (just below these settings) is a location starting ' + current + '/ whose photo extensions are marked internal, in the same server block that serves this page. Try: curl -I ' + location.origin + photo + ' (it should say 404 or 403), and look in nginx\'s error log for the line about the internal redirect. Or clear this setting.');
           } else if (works) {
             say('note-text', 'Not using it yet: nginx has the internal location for ' + candidate + ' in place (just tested), but this is empty, so the gallery reads every photo and video itself. Setting it to ' + candidate + ' lets nginx send them, which is faster and handles seeking in videos better. ');
             const use = document.createElement('button');
@@ -19046,7 +19066,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         });
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
-    document.querySelectorAll('.show-rules-btn').forEach(function (btn) { btn.addEventListener('click', function () { hideAll('.lock-help, [data-lock-rules], [data-lock-rules-panel]', false); btn.remove(); }); });
     window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runBackupFile(); runTidy(); runShareTidy(); runAccel(); };
     window.__healthProbe();
   })();

@@ -94,23 +94,7 @@ The address opens a page with one button, **Open the gallery**. **Pressing the b
 Once in, they see the gallery as the link allows: no owner tools, no lock for signing in, no view counts for what they look at, and no link button on private things (a plain link would be useless to them).
 
 ### The address, and the server rule
-A link looks like `https://example.com/trip/k7QpR2mX`: the gallery's own address and 8 letters and digits (links made before 2.6.5 have 16, and keep working), or **a name of your own** (see *An address of your own*, below). For that tidy form the server must hand the path to the script; **Settings → Server setup** writes the rule for your gallery's address and checks it (the Health check says when it is missing; it is optional). Until it is in, the long form works as it is: `https://example.com/trip/?k7QpR2mX` (`?link=k7QpR2mX` works too). For a gallery at `/kb/`:
-
-```nginx
-location ~ "^/kb/[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]$" {
-    rewrite "^/kb/([A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9])$" /kb/index.php?link=$1 last;
-}
-```
-
-(The quotes matter: nginx reads an unquoted `{` as the start of a block and refuses the file.)
-
-and in `.htaccess` for Apache (`mod_rewrite` and `AllowOverride FileInfo`):
-
-```apache
-RewriteEngine On
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteRule ^([A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9])$ index.php?link=$1 [L,QSA]
-```
+A link looks like `https://example.com/trip/k7QpR2mX`: the gallery's own address and 8 letters and digits (links made before 2.6.5 have 16, and keep working), or **a name of your own** (see *An address of your own*, below). For that tidy form the server must hand the path to the script. **Settings → Server setup → Web server rules** has the rule for your gallery's address (it is one of the optional parts of the nginx and Apache blocks, written out in [The server](server.md#locking-down-the-files)) and a chip that says whether it works (the Health check says too; it is optional). Until it is in, the long form works as it is: `https://example.com/trip/?k7QpR2mX` (`?link=k7QpR2mX` works too).
 
 The rule matches one word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash. A photo (it has a dot) and a folder's own address (it ends in a slash) are never touched. It **replaces** the older rule that matched exactly 16 letters and digits (a link made before still works): remove the old one. The rule also has no "is it a real folder?" check, on purpose: a link and a folder can then share a name (`/trip/carol` is the link, `/trip/carol/` the folder), and a folder typed without its closing slash is sent on to the folder (by the gallery itself on nginx; on Apache it first takes Apache's own slash redirect, one extra step with the same result, and a link of that name still wins).
 
@@ -202,19 +186,4 @@ The same rule covers the full-size picture in the viewer, a video as it plays (i
 
 Every link you'd paste gets a correct Open Graph preview: `?photo=`, `?folder=` (display name, description or notes, and cover photo) and `?map`. The gallery's own link shows the front page's own cover photo if it has one, else the cover of one of its folders (the cover you chose for that folder, else its first photo; never a video or a private folder, and the same all day); a gallery without folders uses one of its photos. Private items are nonexistent to a crawler, so pasting one never previews it. A shared video previews as picture and title, not a playable embed.
 
-`?folder=Europe/France/Paris` needs no server setup and is what the gallery itself shares. To also type `/kb/Europe/France/Paris/`, map it onto the script. The admin's Settings checks whether this works.
-
-```nginx
-location ~ ^/kb/.+/$ {
-    rewrite ^/kb/(.+)/$ /kb/index.php?folder=$1 last;
-}
-```
-
-It matches only paths ending in `/` (so it can't catch `index.php` or a photo), captures the name inside the `rewrite` (which makes nginx escape spaces), and needs php-fpm to pass the original `REQUEST_URI` (the standard `fastcgi_param` does). On Apache, in `.htaccess` (needs `mod_rewrite` and `AllowOverride FileInfo`):
-
-```apache
-RewriteEngine On
-RewriteRule ^(.+)/$ index.php?folder=$1 [B,L,QSA]
-```
-
-Keep the `B` flag: it escapes spaces, `&`, `+` and `#`.
+`?folder=Europe/France/Paris` needs no server setup and is what the gallery itself shares. To also type `/kb/Europe/France/Paris/`, map it onto the script: it is one of the optional parts of the nginx and Apache blocks in **Settings → Server setup → Web server rules** (written out in [The server](server.md#locking-down-the-files)), and a chip there says whether it works. The rule matches only paths ending in `/` (so it can't catch `index.php` or a photo), captures the name inside the `rewrite` (which makes nginx escape spaces), and needs php-fpm to pass the original `REQUEST_URI` (the standard `fastcgi_param` does). On Apache it needs `mod_rewrite` and `AllowOverride FileInfo`, and the `B` flag stays: it escapes spaces, `&`, `+` and `#`.

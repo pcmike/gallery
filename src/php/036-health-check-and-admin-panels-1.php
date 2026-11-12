@@ -82,7 +82,7 @@ function render_admin_health_panel() {
         <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
-            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if ($key === 'sharetidy'): ?><a class="health-more" href="#site" onclick="return adminGoTo('site', 'server-setup');">&rarr; Server setup</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if (in_array($key, ['tidy', 'sharetidy', 'accel'], true)): ?><a class="health-more" href="#site" onclick="return adminGoToRules();">&rarr; Web server rules</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
           </div>
         <?php endforeach; ?>
       </div>
@@ -344,7 +344,7 @@ function render_admin_features_panel($adminEdited, $adminHidden) {
       <?= $row('Country lookup', $onOff(COUNTRY_LOOKUP), COUNTRY_LOOKUP ? (is_file(geo_db_path()) ? 'Saying which country each signed-in browser\'s addresses are in, from a file kept on this server.' : 'Switched on, but the country file is not here yet.') : 'Says which country a signed-in browser is used from, so a new country can be flagged. Downloads one small file.', $goSetting(COUNTRY_LOOKUP ? 'Settings →' : 'Turn on →', 'geo-row')) ?>
       <?= $row('Notes', $inactive ? $chip('need', 'Needs setup') : ($mdActive ? $chip('on', 'On') : $chip('off', 'Not used')), $inactive ? (count($inactive) === 1 ? $inactive[0] . ' is not active: it is missing {gallery}.' : count($inactive) . ' notes files are not active: they are missing {gallery}.') : ($mdActive ? 'A notes page is in use.' : 'A notes.md with {gallery} on its first line puts words around your photos.'), '<button type="button" class="secondary" onclick="return adminGoTo(\'notes\');">' . ($inactive ? 'Fix it →' : 'Notes →') . '</button>') ?>
       <?= $row('Thumbnails', $onOff(ENABLE_THUMBNAIL_CACHE), ENABLE_THUMBNAIL_CACHE ? 'Small copies make pages load fast; made as people look.' : 'Photos are sent at full size and iPhone (HEIC) photos cannot show.', $goSetting('Settings →', 'setting-ENABLE_THUMBNAIL_CACHE')) ?>
-      <?= $row('Short share addresses', $chip('opt', 'Optional'), 'Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own.', $goSetting('Open the rule →', 'server-setup'), ' data-ft-sharetidy data-ft-was="Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own."') ?>
+      <?= $row('Short share addresses', $chip('opt', 'Optional'), 'Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own.', '<button type="button" class="secondary" onclick="return adminGoToRules();">Open the rules →</button>', ' data-ft-sharetidy data-ft-was="Links look like …/?k7Q… until the server has one rule; then …/trip/k7Q… or a name of your own."') ?>
       <h3 class="subhead">Things you do on the gallery itself</h3>
       <p class="muted ft-sub">These are not settings; they are buttons on the photos. "Show me" opens the gallery with that button pointed out.</p>
       <?php
@@ -487,7 +487,6 @@ function render_admin_site_settings($csrfToken) {
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'accel'): $accelBase = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/'); ?>
                 <div class="help accel-status" data-accel-status data-accel-current="<?= $esc(NGINX_ACCEL_REDIRECT_PREFIX) ?>" data-accel-candidate="<?= $esc($accelBase) ?>"></div>
-                <?= render_accel_rule_help() ?>
                 <?php endif; ?>
                 <?php if (isset($effects[$name])): ?>
                 <?php foreach (['off', 'on'] as $st): if ($effects[$name][$st] === '') continue; ?>
@@ -542,10 +541,7 @@ function render_admin_site_settings($csrfToken) {
             <?php if ($name === 'ENABLE_THUMBNAIL_CACHE'): ?><div id="media-slot"><?php render_admin_thumbnails_panel($csrfToken); ?></div><?php endif; ?>
           <?php endforeach; ?>
           <?php if ($group['title'] === 'Server setup (advanced)'): ?>
-            <div class="site-rules" id="lock-rules-row"><div class="name">Keep private photos from being fetched by address</div><div class="lock-result" data-lock-status></div><div class="help lock-help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Rules to copy:</div><?= render_server_rules_help(true) ?></div>
-            <?php if (ENABLE_SHARE_LINKS): ?>
-            <div class="site-rules"><div class="name">Tidy share addresses</div><div class="lock-result" data-sharetidy-status></div><div data-sharetidy-rules><div class="help">Optional. A share link always works as <code>.../?link=&hellip;</code>; with this rule it is the short <code>.../k7QpR2mXv9LwTb4e</code>, a link can have a name of your own (<code>.../carol-and-sam</code>), and <code>.../admin</code> goes to the sign-in. If you added the older rule, replace it. Rules to copy:</div><?= render_link_rules_help() ?></div></div>
-            <?php endif; ?>
+            <?= render_web_server_rules() ?>
           <?php endif; ?>
           <?php if ($group['title'] === 'Signing in and passwords') { render_admin_browsers_panel($csrfToken); render_admin_geo_row($csrfToken); } ?>
           </details>

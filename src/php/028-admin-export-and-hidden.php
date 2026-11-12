@@ -111,7 +111,7 @@ function admin_find_href($file, $as = '') {
     return '?' . ($folder !== '' ? 'folder=' . htmlspecialchars(rawurlencode($folder), ENT_QUOTES, 'UTF-8') . '&amp;' : '') . 'find=' . htmlspecialchars(rawurlencode($file), ENT_QUOTES, 'UTF-8') . ($as === 'cover' ? '&amp;as=cover' : '');
 }
 
-/** Addresses for the owner's browser to try, to see whether the web server rules in render_server_rules_help are in place:
+/** Addresses for the owner's browser to try, to see whether the web server rules in render_web_server_rules are in place:
  *  one photo and one thumbnail from the cache folder (which the server should refuse), and one folder's tidy link. Only
  *  paths, in the same folder as this script; the browser makes the requests, so nothing is fetched from the server side. */
 function lock_probe_targets($dir, $files) {
@@ -139,78 +139,112 @@ function nginx_internal_location_rule($loc) {
     return "location ~* ^" . $loc . ".*\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$ {\n    internal;\n}\n";
 }
 
-/** The one nginx location the "nginx internal redirect" setting needs, written for this gallery's address and folded under that setting. It is the same
- *  rule as the one in "Keep private photos from being fetched by address", which also has the Apache version. Nothing at the top of a site: there the rule
- *  would block every image, and the setting has no folder to be set to (render_server_rules_help says so). */
-function render_accel_rule_help() {
-    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-    if ($base === '') return '';
-    $loc = $base . '/';
-    ob_start();
-?>
-                <details class="fold accel-rule">
-                  <summary>Show the rule</summary>
-                  <p>Add inside the site's <code>server { }</code> block, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>. It is the same rule as the one under <em>Keep private photos from being fetched by address</em>, below.</p>
-                  <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc(nginx_internal_location_rule($loc)) ?></code></pre></div>
-                </details>
-<?php
-    return ob_get_clean();
+/** The nginx rule that keeps the gallery's generated data files (anything starting .gallery-) from being fetched: the Health check's "How to fix" folds use it too. */
+function gallery_files_rule_nginx() {
+    return "location ~ /\\.gallery- {\n    return 404;\n}\n";
 }
 
-/** Ready-to-use web server rules that keep the photo files themselves from being fetched by address (private items are
- *  only private through this script otherwise), written out for this gallery's own address, in two collapsed blocks:
- *  nginx and Apache. Shown on the Private page and in Settings so nobody has to leave the admin to set it up. */
-function render_server_rules_help($withTidyLinks = false) {
-    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+/** The same for Apache (a .htaccess). */
+function gallery_files_rule_apache() {
+    return "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>\n";
+}
+
+/** What the web server says it is: 'nginx', 'apache' (LiteSpeed reads .htaccess too) or '' when it says something else. Only a hint (behind a proxy it is the server
+ *  in the back that answers): it picks which block is offered first and tagged "looks like yours", and nothing is ever hidden because of it. */
+function web_server_kind() {
+    $s = strtolower((string) ($_SERVER['SERVER_SOFTWARE'] ?? ''));
+    if (strpos($s, 'nginx') === 0 || strpos($s, 'openresty') === 0) return 'nginx';
+    if (strpos($s, 'apache') === 0 || strpos($s, 'litespeed') !== false) return 'apache';
+    return '';
+}
+
+/** Every web server rule the gallery can use, written for this gallery's address, as one block for nginx and one for Apache: [$nginx, $apache, $base, $loc].
+ *  Each block has the same parts, marked "needed" (the photo files and the data files can't be fetched by address) and "optional" (tidy folder links, tidy share
+ *  addresses when share links are on), between a begin and an end line. The one place this text is made: Settings shows it, and everything else points there. */
+function web_server_rule_texts() {
     $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
     $loc = $base === '' ? '/' : $base . '/';
-    $nginx = "# The gallery's generated data files (captions, GPS, privacy flags, stats, login throttle, thumbnail cache):\n"
-        . "# never public. (A second layer: the .php ones already answer 404 on their own.)\n"
-        . "location ~ /\\.gallery- {\n    return 404;\n}\n\n"
-        . "# The photo and video files themselves: reachable only through index.php.\n"
-        . nginx_internal_location_rule($loc);
-    $apache = "# The photo and video files themselves: reachable only through index.php.\n"
-        . "# ((?i) matters: camera files are often IMG_0412.JPG.)\n"
+    $shape = '[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]';   // a random share address or a custom name: 4 to 40 letters, digits and hyphens, none at either end
+    $begin = '# ===== gallery rules: begin (for ' . $loc . ') =====';
+    $end = '# ===== gallery rules: end =====';
+    $nginx = $begin . "\n\n"
+        . "# needed: the gallery's data files (everything starting .gallery-) are never public\n"
+        . "# (a second layer: the .php ones already answer 404 on their own)\n"
+        . gallery_files_rule_nginx() . "\n"
+        . "# needed: the photo and video files themselves are reachable only through index.php\n"
+        . "# (the \"nginx internal redirect\" setting uses this same location)\n"
+        . nginx_internal_location_rule($loc) . "\n"
+        . "# optional: tidy folder links, " . $loc . "Europe/France/\n"
+        . "location ~ ^" . $loc . ".+/\$ {\n    rewrite ^" . $loc . "(.+)/\$ " . $loc . "index.php?folder=\$1 last;\n}\n\n";
+    if (ENABLE_SHARE_LINKS)   // (nginx reads a { in an unquoted pattern as the start of a block, so both patterns are quoted)
+        $nginx .= "# optional: tidy share addresses, " . $loc . "k7QpR2mX, a name of your own, and " . $loc . "admin\n"
+            . "location ~ \"^" . $loc . $shape . "\$\" {\n    rewrite \"^" . $loc . "(" . $shape . ")\$\" " . $loc . "index.php?link=\$1 last;\n}\n\n";
+    $nginx .= $end . "\n";
+    $apache = $begin . "\n\n"
+        . "# needed: the photo and video files themselves are reachable only through index.php\n"
+        . "# ((?i) matters: camera files are often IMG_0412.JPG)\n"
         . "<FilesMatch \"(?i)\\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)\$\">\n    Require all denied\n</FilesMatch>\n\n"
-        . "# The gallery's generated data files (a second layer).\n"
-        . "<FilesMatch \"^\\.gallery-\">\n    Require all denied\n</FilesMatch>\n";
-    $prettyNginx = "location ~ ^" . $loc . ".+/\$ {\n    rewrite ^" . $loc . "(.+)/\$ " . $loc . "index.php?folder=\$1 last;\n}\n";
-    $prettyApache = "RewriteEngine On\nRewriteRule ^(.+)/\$ index.php?folder=\$1 [B,L,QSA]\n";
+        . "# needed: the gallery's data files (everything starting .gallery-) are never public (a second layer)\n"
+        . gallery_files_rule_apache() . "\n"
+        . "# optional: the tidy addresses below need mod_rewrite (without it they are skipped)\n"
+        . "<IfModule mod_rewrite.c>\nRewriteEngine On\n\n"
+        . "# optional: tidy folder links, " . $loc . "Europe/France/\n"
+        . "RewriteRule ^(.+)/\$ index.php?folder=\$1 [B,L,QSA]\n";
+    if (ENABLE_SHARE_LINKS)
+        $apache .= "\n# optional: tidy share addresses, " . $loc . "k7QpR2mX, a name of your own, and " . $loc . "admin\n"
+            . "RewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule ^(" . $shape . ")\$ index.php?link=\$1 [L,QSA]\n";
+    $apache .= "</IfModule>\n\n" . $end . "\n";
+    return [$nginx, $apache, $base, $loc];
+}
+
+/** Web server rules, the one section of Settings (under Server setup) that holds them all: a line that says which of the rules this browser found working
+ *  (the page's script fills it in: see data-wr-chip), and under it a fold for nginx and a fold for Apache, each one block with one Copy button. The fold that
+ *  looks like this server's own is first and tagged; the script opens it when something is missing. Everywhere else in the admin points here. */
+function render_web_server_rules() {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    [$nginx, $apache, $base, $loc] = web_server_rule_texts();
+    $kind = web_server_kind();
+    $chips = [['lock', 'Private photos'], ['tidy', 'Tidy folder links']];
+    if (ENABLE_SHARE_LINKS) $chips[] = ['sharetidy', 'Tidy share addresses'];
+    $chips[] = ['accel', 'nginx redirect'];
+    $folds = [
+        'nginx' => ['nginx', '(needs shell access to the server)',
+            '<p>Add inside the site\'s <code>server { }</code> block, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery\'s address, <code>' . $esc($loc) . '</code>.'
+                . ($base === '' ? ' <strong>At the top of the site the photo rule would block every image on it, and the optional ones would catch other addresses: narrow their paths first.</strong>' : '') . '</p>',
+            $nginx,
+            ['Then set <em>nginx internal redirect</em> (above) to <code>' . $esc($base === '' ? '/' : $base) . '</code>.',
+             'Test: <code>curl -I https://yoursite.com' . $esc($loc) . 'some-photo.jpg</code> should answer 404.',
+             'The folder rule matches only paths ending in <code>/</code> and needs php-fpm to pass the original <code>REQUEST_URI</code> (the standard <code>fastcgi_param</code> does). Behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol on.']
+            + (ENABLE_SHARE_LINKS ? [3 => 'The share-address rule matches one word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash: a photo (it has a dot) and a folder\'s own address (it ends in a slash) are never touched, and a folder typed without its slash is sent on to the folder by the gallery. If you added the older rule for exactly ' . (int) LINK_TOKEN_LENGTH . ' letters and digits, remove it: this one replaces it.'] : [])],
+        'apache' => ['Apache', '(works on FTP-only hosting)',
+            '<p>Save as <code>.htaccess</code> in the gallery\'s folder. If one is there already, add this at the end.</p>',
+            $apache,
+            ['It only works if the server reads <code>.htaccess</code> here (<code>AllowOverride All</code>; the tidy addresses need <code>AllowOverride FileInfo</code>). Check with <code>curl -I</code>: a bare photo address should then answer 403, and the gallery works as before.',
+             'Keep the <code>B</code> flag on the folder rule: it escapes spaces, <code>&amp;</code>, <code>+</code> and <code>#</code>.',
+             'Scripts that log in with an <code>Authorization</code> header on PHP-FPM also need <code>CGIPassAuth On</code>.']
+            + (ENABLE_SHARE_LINKS ? [3 => 'The share-address rule matches one word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash. A real folder with the same name as a link doesn\'t hide it: the folder\'s own address (with the closing slash) still opens the folder. If you added the older rule for exactly ' . (int) LINK_TOKEN_LENGTH . ' letters and digits, remove it: this one replaces it.'] : [])],
+    ];
+    $order = $kind === 'apache' ? ['apache', 'nginx'] : ['nginx', 'apache'];
     ob_start();
 ?>
-    <div class="rules-help">
-      <div data-lock-rules>
-      <details class="fold">
-        <summary><strong>nginx</strong> (strongest; needs shell access to the server)</summary>
-        <p>Add inside the site's <code>server { }</code> block, first location above the second, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>.<?= $base === '' ? ' <strong>At the top of the site the second rule would block every image on it: narrow its path first.</strong>' : '' ?></p>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
-        <p>Then set <em>nginx internal redirect</em> (Settings → Server setup) to <code><?= $esc($base === '' ? '/' : $base) ?></code>. Test: <code>curl -I https://yoursite.com<?= $esc($loc) ?>some-photo.jpg</code> should answer 404. Behind <code>proxy_pass</code> instead of php-fpm, pass the real client address and protocol on.</p>
-      </details>
-      <details class="fold">
-        <summary><strong>Apache</strong> (blunter, but works on FTP-only hosting)</summary>
-        <p>Save as <code>.htaccess</code> in the gallery's folder.</p>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
-        <p>A bare photo address then answers 403. It only works if the server reads <code>.htaccess</code> here (<code>AllowOverride All</code>), so check with <code>curl -I</code>. Scripts that log in with an <code>Authorization</code> header on PHP-FPM also need <code>CGIPassAuth On</code>.</p>
-      </details>
-      </div>
-      <?php if ($withTidyLinks): ?>
-      <div class="lock-result" data-tidy-status></div>
-      <div data-tidy-rules>
-      <p class="rules-sub">Optional tidy folder links: <code><?= $esc($loc) ?>?folder=Europe/France</code> always works; with these, <code><?= $esc($loc) ?>Europe/France/</code> does too.</p>
-      <details class="fold">
-        <summary><strong>nginx</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
-        <p>Add inside <code>server { }</code>, next to the rules above. It matches only paths ending in <code>/</code> and needs php-fpm to pass the original <code>REQUEST_URI</code> (the standard <code>fastcgi_param</code> does).<?= $base === '' ? ' <strong>At the top of the site it would catch every folder address: narrow its path first.</strong>' : '' ?></p>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyNginx) ?></code></pre></div>
-      </details>
-      <details class="fold">
-        <summary><strong>Apache</strong> folder links like <?= $esc($loc) ?>Europe/France/</summary>
-        <p>Add to <code>.htaccess</code> (needs <code>mod_rewrite</code> and <code>AllowOverride FileInfo</code>). Keep the <code>B</code> flag: it escapes spaces, <code>&amp;</code>, <code>+</code> and <code>#</code>.</p>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($prettyApache) ?></code></pre></div>
-      </details>
-      </div>
-      <?php endif; ?>
-    </div>
+            <div class="site-rules" id="server-rules" data-wr data-wr-server="<?= $esc($kind) ?>">
+              <div class="name">Web server rules</div>
+              <div class="help">Making something private only stops the gallery from showing it; the file can still be fetched by its direct address unless your web server is told not to. Everything the gallery can use is in one block per server: copy the block for yours.</div>
+              <div class="wr-line" data-wr-line>
+                <?php foreach ($chips as [$ck, $cl]): ?><span class="wr-chip" data-wr-chip="<?= $ck ?>"<?= $ck === 'accel' ? ' hidden' : '' ?>><i aria-hidden="true">&hellip;</i> <?= $esc($cl) ?></span><?php endforeach; ?>
+              </div>
+              <?php foreach ($chips as [$ck, $cl]): ?><p class="lock-result" data-wr-msg="<?= $ck ?>" hidden></p><?php endforeach; ?>
+              <div class="rules-help">
+                <?php foreach ($order as $fk): [$fname, $fwhen, $fintro, $ftext, $fnotes] = $folds[$fk]; ?>
+                <details class="fold wr-fold" data-wr-fold="<?= $fk ?>"<?= $kind === $fk ? ' data-likely="1"' : '' ?>>
+                  <summary><span class="wr-name"><strong><?= $esc($fname) ?></strong> <?= $esc($fwhen) ?></span><?= $kind === $fk ? ' <span class="wr-tag">looks like yours</span>' : '' ?></summary>
+                  <?= $fintro ?>
+                  <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($ftext) ?></code></pre></div>
+                  <ul class="wr-notes"><?php foreach ($fnotes as $note): ?><li><?= $note ?></li><?php endforeach; ?></ul>
+                </details>
+                <?php endforeach; ?>
+              </div>
+            </div>
 <?php
     return ob_get_clean();
 }
@@ -419,12 +453,7 @@ function render_admin_hidden_panel($data, $csrfToken = '') {
       <div class="lock-outside-text" hidden><strong>Private is locked.</strong> These photos live outside the gallery's own address, so only the gallery can send them.</div>
       <div class="lock-result" data-lock-detail></div>
       <button type="button" class="secondary lock-recheck" hidden>Check again</button>
-      <details class="fold lock-fix" data-lock-rules-panel hidden>
-        <summary>Fix this: the rules to add</summary>
-        <p class="muted" style="margin-top:0;">Copy the rules for your server. They stop photo files being fetched by their direct address.</p>
-        <?= render_server_rules_help() ?>
-        <p class="muted" data-tidy-rules>Optional tidy folder links and the nginx redirect setting are in <a href="#site" onclick="return adminGoTo('site', 'server-setup');">Settings → Server setup</a>.</p>
-      </details>
+      <p class="lock-fix-go" data-lock-rules-panel hidden><button type="button" class="secondary lock-go" onclick="return adminGoToRules();">Fix this: the web server rules &rarr;</button> <span class="muted">One block for nginx and one for Apache, in Settings &rarr; Server setup.</span></p>
     </div>
 <?php endif; ?>
     <section class="panel ed-panel" id="ed-panel">

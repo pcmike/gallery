@@ -401,35 +401,6 @@ function links_admin_action($action, $dir, $files) {
     admin_json_exit(['ok' => true, 'id' => $id, 'text' => $text]);
 }
 
-/** The server rules that make https://example.com/<gallery>/<token> reach the script, written for this install's own address. */
-function render_link_rules_help() {
-    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
-    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-    $loc = $base === '' ? '/' : $base . '/';
-    // (nginx reads a { in an unquoted pattern as the start of a block, so both patterns are quoted)
-    $shape = '[A-Za-z0-9][A-Za-z0-9-]{2,38}[A-Za-z0-9]';   // a random address or a custom name: 4 to 40 letters, digits and hyphens, none at either end
-    $nginx = "location ~ \"^" . $loc . $shape . "\$\" {\n    rewrite \"^" . $loc . "(" . $shape . ")\$\" " . $loc . "index.php?link=\$1 last;\n}\n";
-    $apache = "RewriteEngine On\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule ^(" . $shape . ")\$ index.php?link=\$1 [L,QSA]\n";
-    ob_start();
-?>
-    <div class="rules-help">
-      <details class="fold">
-        <summary><strong>nginx</strong> (needs shell access to the server)</summary>
-        <p>Add inside the site's <code>server { }</code> block, next to the other rules, then run <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>. Written for this gallery's address, <code><?= $esc($loc) ?></code>. <strong>It replaces the older rule that matched exactly <?= (int) LINK_TOKEN_LENGTH ?> letters and digits: remove that one.</strong><?= $base === '' ? ' <strong>At the top of the site it would also catch any other one-word address: narrow its path first.</strong>' : '' ?></p>
-        <details class="fold rule-details"><summary>What it matches</summary><p>One word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash: a photo (it has a dot) and a folder's own address (it ends in a slash) are never touched, and a folder typed without its slash is sent on to the folder by the gallery.</p></details>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($nginx) ?></code></pre></div>
-      </details>
-      <details class="fold">
-        <summary><strong>Apache</strong> (works on FTP-only hosting)</summary>
-        <p>Add to <code>.htaccess</code> in the gallery's folder (needs <code>mod_rewrite</code> and <code>AllowOverride FileInfo</code>). <strong>It replaces the older rule for exactly <?= (int) LINK_TOKEN_LENGTH ?> letters and digits: remove that one.</strong></p>
-        <details class="fold rule-details"><summary>What it matches</summary><p>One word of 4 to 40 letters, digits and hyphens, with no dot and no closing slash. A real folder with the same name as a link doesn't hide it: the folder's own address (with the closing slash) still opens the folder.</p></details>
-        <div class="rules-box"><button type="button" class="secondary copy-rules">Copy</button><pre><code><?= $esc($apache) ?></code></pre></div>
-      </details>
-    </div>
-<?php
-    return ob_get_clean();
-}
-
 /** One date for the tab: the page's script turns it into the visitor's own time zone; without it, UTC. */
 function link_time_html($ts) {
     $ts = (int) $ts;
