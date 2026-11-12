@@ -14925,6 +14925,7 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
           <div class="vt-menu" hidden>
             <a href="#" data-export="visitors">Visitors<small>One line per IP: opens, first and last seen</small></a>
             <a href="#" data-export="items">What they looked at<small>One line per item: seen, opened, played, downloaded</small></a>
+            <a href="#" data-export="blocked">Blocked tries<small>One line per address turned away: link, why, how many times</small></a>
             <a href="#" data-export="events">Everything, in order<small>The timeline, one line per happening</small></a>
             <button type="button" data-vt="trim">Trim the log&hellip;</button>
             <span class="sl-menu-note">CSVs hold what the choices above show, with IP addresses, and open in your downloads.</span>
@@ -14975,10 +14976,10 @@ function visits_trim_action() {
 function visits_export($what, array $f, $dir) {
     if (!visitlog_usable()) { http_response_code(503); header('Content-Type: text/plain; charset=UTF-8'); echo 'The visitor log isn\'t available here.'; return; }
     $db = visitlog_db();
-    if (!in_array($what, ['visitors', 'items', 'events'], true)) $what = 'items';
+    if (!in_array($what, ['visitors', 'items', 'events', 'blocked'], true)) $what = 'items';
     $labels = visits_source_labels();
     [$w, $p] = visits_where($f, 'v');
-    $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on', 'came_in_at'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count']][$what];
+    $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on', 'came_in_at'], 'blocked' => ['source', 'ip', 'where', 'browser', 'first_tried', 'last_tried', 'tries', 'why'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count']][$what];
     $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
@@ -14987,7 +14988,14 @@ function visits_export($what, array $f, $dir) {
     echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";
     $line = function (array $r) { echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
     $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
-    if ($what === 'visitors') {
+    if ($what === 'blocked') {
+        $reasons = ['expired' => 'expired', 'used_up' => 'already used', 'paused' => 'paused', 'revoked' => 'revoked', 'scheduled' => 'not started', 'replaced' => 'old address'];
+        [$brows] = visits_load_blocked($db, $f, 1000000);
+        foreach ($brows as $r) {
+            $why = []; foreach (array_keys((array) json_decode((string) $r['why'], true)) as $k) $why[] = $reasons[$k] ?? $k;
+            $line([$src($r['src']), $r['ip'], $r['country'], $r['ua'], $iso($r['first']), $iso($r['last']), $r['tries'], implode('; ', $why)]);
+        }
+    } elseif ($what === 'visitors') {
         $links = (array) (links_read()['links'] ?? []); $via = [];
         foreach (visits_query($db, 'SELECT src, vid, name FROM notes WHERE kind = \'via\'')->fetchAll() as $n) $via[$n['src']][$n['vid']][] = link_address_label($n['name'], link_address_is_custom($n['name']));
         foreach (visits_query($db, 'SELECT v.* FROM visitors v' . $w . ' ORDER BY v.last DESC', $p) as $r)

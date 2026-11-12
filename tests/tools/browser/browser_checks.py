@@ -3339,7 +3339,7 @@ try:
         b.js("document.querySelector('#vt-root [data-pill=cc]').click()"); b.drain(0.2); b.js("document.querySelector('#vt-root .vt-opt[data-c=GB]').click()"); b.drain(0.5); b.js("document.querySelector('#vt-root .vt-done').click()"); b.drain(0.2)
         b.js("document.querySelector('#vt-root [data-vt=menu]').click()"); b.drain(0.3)
         em = b.js("(() => { const m = document.querySelector('#vt-root .vt-menu'); return {open: !m.hidden, hrefs: [...m.querySelectorAll('a[data-export]')].map(a => a.getAttribute('href')), trim: !!m.querySelector('[data-vt=trim]'), inside: m.getBoundingClientRect().right <= innerWidth}; })()")
-        ok(em["open"] and em["inside"] and em["trim"] and len(em["hrefs"]) == 3 and all("visitsexport=" in h and "cc=GB" in h for h in em["hrefs"]), "[visitors tab] the export icon opens a menu of three CSVs (that follow the choices made: here the country) and Trim the log", str(em))
+        ok(em["open"] and em["inside"] and em["trim"] and len(em["hrefs"]) == 4 and any("visitsexport=blocked" in h for h in em["hrefs"]) and all("visitsexport=" in h and "cc=GB" in h for h in em["hrefs"]), "[visitors tab] the export icon opens a menu of four CSVs (visitors, what they looked at, blocked tries, everything in order) (that follow the choices made: here the country) and Trim the log", str(em))
         shot(b, "23d-visitors-export-menu")
         b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))"); b.drain(0.2)
         ok(b.js("document.querySelector('#vt-root .vt-menu').hidden"), "[visitors tab] Escape closes the export menu")
