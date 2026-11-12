@@ -82,9 +82,10 @@ function visits_source_labels() {
 
 /** What the Visitors tab takes from the address bar: sources ("public" and link ids, comma separated), countries (codes), a search, and for the Media view the folders, the choice and "show all". */
 function visits_filters() {
-    $csv = function ($k, $rx) {
+    $raw = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? substr($_GET[$k], 0, 1000) : ''; };
+    $csv = function ($k, $rx) use ($raw) {
         $out = [];
-        foreach (explode(',', isset($_GET[$k]) && is_string($_GET[$k]) ? substr($_GET[$k], 0, 1000) : '') as $v) {
+        foreach (explode(',', $raw($k)) as $v) {
             $v = trim($v);
             if ($k === 'src' && $v === 'public') $v = PUBLIC_LOG_ID;
             if ($k === 'src' && $v === 'lockouts') $v = LOCKOUT_LOG_ID;
@@ -98,8 +99,10 @@ function visits_filters() {
         return array_keys($out);
     };
     $what = isset($_GET['what']) && is_string($_GET['what']) ? $_GET['what'] : '';
+    $blocked = in_array('blocked', array_map('trim', explode(',', $raw('src'))), true);   // ("Blocked" in the Sources pill: the turned-away tries, not a source of visitors)
     return [
         'src' => $csv('src', '/^[0-9a-f]{10}$/'),
+        'blocked' => $blocked,
         'cc' => $csv('cc', '/^[A-Z]{2}$/'),
         'q' => substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', isset($_GET['q']) && is_string($_GET['q']) ? $_GET['q'] : '')), 0, 80),
         'folders' => array_map(function ($f) { return $f === '/' ? '' : (string) $f; }, $list('folders')),
@@ -163,6 +166,34 @@ function visits_load_events($db, array $f, $limit) {
         $out[] = $e;
     }
     return [$out, $total];
+}
+
+/** The turned-away tries the choices leave, newest first: [rows, how many there are]. Only links have them (the public address and the lockouts are never turned away). */
+function visits_load_blocked($db, array $f, $limit) {
+    [$w, $p] = visits_where($f, 'b');
+    $w = ($w === '' ? ' WHERE ' : $w . ' AND ') . 'b.src NOT IN (?, ?)'; array_push($p, PUBLIC_LOG_ID, LOCKOUT_LOG_ID);
+    $total = (int) visits_query($db, 'SELECT COUNT(*) FROM blocked b' . $w, $p)->fetchColumn();
+    return [visits_query($db, 'SELECT b.* FROM blocked b' . $w . ' ORDER BY b.last DESC LIMIT ' . (int) $limit, $p)->fetchAll(), $total];
+}
+
+/** A link's name as a button that goes to that link on the Shares tab ($bare: just the arrow, for a place that already shows the name). A deleted link has nothing to go to. */
+function visits_link_go($id, array $labels, $bare = false) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    if (!isset($labels[$id]) || $id === PUBLIC_LOG_ID || $id === LOCKOUT_LOG_ID) return $bare ? '' : $esc('A deleted link');
+    return '<button type="button" class="vt-gl' . ($bare ? ' vt-gla' : '') . '" data-link-go="' . $esc($id) . '" title="Show this link on the Shares tab" aria-label="Show ' . $esc($labels[$id]) . ' on the Shares tab">' . ($bare ? '' : $esc($labels[$id]) . ' ') . '&rarr;</button>';
+}
+
+/** The Blocked tries table: who was turned away, from which link, why and what to do about it. */
+function visits_blocked_html(array $rows, array $labels) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $reasons = ['expired' => ['expired', 'extend it'], 'used_up' => ['already used', 'raise its browser limit, or extend it'], 'paused' => ['paused', 'resume it'], 'revoked' => ['revoked', 'it was ended on purpose'], 'scheduled' => ['not started', 'it opens on its start date'], 'replaced' => ['old address', 'the link has a new address']];
+    $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Link</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
+    foreach ($rows as $b) {
+        $why = []; $hint = [];
+        foreach (array_keys((array) json_decode((string) $b['why'], true)) as $s) { $r = $reasons[$s] ?? [$s, '']; $why[$r[0]] = true; if ($r[1] !== '') $hint[$r[1]] = true; }
+        $out .= '<tr class="rj"><td data-label="IP address"><span class="sl-ipt">' . $esc($b['ip']) . '</span></td><td data-label="Where">' . visits_country_html($b['country']) . '</td><td data-label="Browser">' . $esc($b['ua']) . '</td><td data-label="Link">' . visits_link_go($b['src'], $labels) . '</td><td data-label="First tried">' . link_time_html($b['first']) . '</td><td data-label="Last tried">' . link_time_html($b['last']) . '</td><td data-label="Tries" class="sl-why">' . (int) $b['tries'] . ' &middot; ' . $esc(implode(', ', array_keys($why))) . ($hint ? '<span class="sl-via">To let them in: ' . $esc(implode('; ', array_keys($hint))) . '</span>' : '') . '</td></tr>';
+    }
+    return $out . '</tbody></table></div>';
 }
 
 /** One menu of the filter line: a button that opens a list of tick boxes (any number; the first row, "All", is ticked while none of the others is) or of round buttons (one). Both apply as soon as they are touched.
@@ -245,6 +276,16 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
     $db = is_file(visitlog_path()) && visitlog_ready() ? visitlog_db() : null;
     $none = function ($text) { return '<div class="vt-frag" data-match="0" data-all="0"><p class="muted sl-none">' . $text . '</p></div>'; };
     if ($db === null) return $none('The visitor log isn\'t available: ' . $esc(visitlog_check()[1]));
+    if ($f['blocked']) {   // "Blocked" is ticked under Sources: the turned-away tries (of the links ticked beside it, else of every link), in place of the visitors
+        if ($tab !== 'visitors') return $none('Blocked tries are listed on the Visitors view. <button type="button" class="linklike" data-vt="blockedview">Show them</button> &middot; <button type="button" class="linklike" data-vt="unblock">Untick Blocked</button>');
+        $labelsB = visits_source_labels();
+        [$brows, $bmatch] = visits_load_blocked($db, $f, 300);
+        [$none0, $ball] = visits_load_blocked($db, ['src' => [], 'cc' => [], 'q' => '', 'blocked' => true], 0);
+        $wrapB = function ($html) use ($bmatch, $ball) { return '<div class="vt-frag" data-match="' . $bmatch . '" data-all="' . $ball . '">' . $html . '</div>'; };
+        if ($ball === 0) return $wrapB('<p class="muted sl-none">Nobody has been turned away yet. When someone tries a link that has ended, been used up, paused or replaced, they are listed here.</p>');
+        if ($bmatch === 0) return $wrapB('<p class="muted sl-none">No blocked tries match. <button type="button" class="linklike" data-vt="clear">Clear the choices</button></p>');
+        return $wrapB('<div class="sl-sub2 warn">Blocked tries &middot; ' . $bmatch . ' address' . ($bmatch === 1 ? '' : 'es') . '</div>' . visits_blocked_html($brows, $labelsB) . ($bmatch > count($brows) ? '<p class="muted">Showing the latest ' . count($brows) . ' of ' . number_format($bmatch) . '. Narrow it with the choices above.</p>' : '') . '<p class="note">A try is someone using a link that wasn\'t open for them. Press a link\'s name to go to it on the Shares tab, where you can extend, resume or replace it.</p>');
+    }
     $all = (int) visits_query($db, 'SELECT COUNT(*) FROM visitors')->fetchColumn();
     $wantLock = $f['src'] === [LOCKOUT_LOG_ID];
     [$w0, $p0] = visits_where($f, 'v');
@@ -266,7 +307,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
             elseif ($pub) $came = visits_entry_html($dir, $r['entry_f'] !== null ? ['f' => $r['entry_f'], 'h' => $r['entry_h']] + ($r['entry_u'] ? ['u' => 1] : []) : null);
             else {
                 $viaText = visits_via_text($l, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']);
-                $came = '<button type="button" class="vt-src" data-src="' . $esc($r['src']) . '" title="Show only visitors who came in on this link">' . $esc($labels[$r['src']] ?? 'A deleted link') . '</button>' . ($viaText !== '' ? '<span class="sl-via">via: ' . $esc($viaText) . '</span>' : '');
+                $came = '<button type="button" class="vt-src" data-src="' . $esc($r['src']) . '" title="Show only visitors who came in on this link">' . $esc($labels[$r['src']] ?? 'A deleted link') . '</button>' . visits_link_go($r['src'], $labels, true) . ($viaText !== '' ? '<span class="sl-via">via: ' . $esc($viaText) . '</span>' : '');
             }
             $out .= '<tr><td data-label="IP address"><button type="button" class="linklike vt-ip" data-ip="' . $esc($r['ip']) . '">' . $esc($r['ip']) . '</button></td><td data-label="Where">' . visits_country_html($r['country']) . '</td><td data-label="Browser">' . $esc($r['ua']) . '</td><td data-label="Came in at">' . $came . '</td><td data-label="First seen">' . link_time_html($r['first']) . '</td><td data-label="Last seen">' . link_time_html($r['last']) . '</td><td data-label="Opens">' . ($lock ? '—' : (int) $r['opens']) . '</td><td data-label="Viewed">' . ($lock ? '—' : '<button type="button" class="linklike vt-viewed" data-ip="' . $esc($r['ip']) . '" data-go="media">' . (int) $r['views'] . ' views &rsaquo;</button>') . '</td></tr>';
         }
@@ -275,17 +316,8 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         $folded = 0;
         if (!$f['cc'] && $f['q'] === '') foreach ($f['src'] ?: array_keys($labels) as $s) $folded += visitlog_folded($db, $s);
         if ($folded > 0) $out .= '<p class="muted">+ ' . number_format($folded) . ' earlier visitor' . ($folded === 1 ? '' : 's') . ' (trimmed out of the list; their opens and views were counted before).</p>';
-        [$wb, $pb] = visits_where($f, 'b');
-        $wb = $wb === '' ? ' WHERE b.src <> ?' : $wb . ' AND b.src <> ?'; $pb[] = PUBLIC_LOG_ID;
-        $blocked = visits_query($db, 'SELECT b.* FROM blocked b' . $wb . ' ORDER BY b.last DESC LIMIT 100', $pb)->fetchAll();
-        if ($blocked) {
-            $out .= '<div class="sl-sub2 warn">Blocked tries &middot; ' . count($blocked) . ' address' . (count($blocked) === 1 ? '' : 'es') . '</div><div class="sl-scroll"><table class="sl-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Link</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
-            foreach ($blocked as $b) {
-                $why = []; foreach ((array) json_decode((string) $b['why'], true) as $s => $n) $why[] = ['expired' => 'expired', 'used_up' => 'already used', 'paused' => 'paused', 'revoked' => 'revoked', 'scheduled' => 'not started', 'replaced' => 'old address'][$s] ?? $s;
-                $out .= '<tr class="rj"><td><span class="sl-ipt">' . $esc($b['ip']) . '</span></td><td>' . visits_country_html($b['country']) . '</td><td>' . $esc($b['ua']) . '</td><td>' . $esc($labels[$b['src']] ?? 'A deleted link') . '</td><td>' . link_time_html($b['first']) . '</td><td>' . link_time_html($b['last']) . '</td><td class="sl-why">' . (int) $b['tries'] . ' &middot; ' . $esc(implode(', ', array_unique($why))) . '</td></tr>';
-            }
-            $out .= '</tbody></table></div>';
-        }
+        [$brows, $bmatch] = visits_load_blocked($db, $f, 100);
+        if ($brows) $out .= '<div class="sl-sub2 warn">Blocked tries &middot; ' . count($brows) . ' address' . (count($brows) === 1 ? '' : 'es') . '</div>' . visits_blocked_html($brows, $labels);
         return $wrap($out . '<details class="fold sl-howto"><summary>How to read this</summary><p class="note">An IP address is a device on a network, not a person: a phone moving from wifi to cellular looks like two. On the public address a visit is a visitor arriving, or coming back after half an hour; on a link, opens count the &ldquo;Open the gallery&rdquo; presses. Views count photos and folder pages looked at afterwards. Someone who used the public address and a link is in the list once for each.</p></details>');
     }
 
@@ -369,7 +401,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         elseif ($k === 'link') $text = $e['_src'] === PUBLIC_LOG_ID ? 'Visited the gallery' : 'Opened the link';
         elseif ($k === 'lockout') $text = ['signin' => 'Locked out of signing in: too many wrong access codes', 'setup' => 'Locked out of setting up: too many wrong setup codes', 'addr' => 'Locked out: too many addresses that did not work'][(string) $e['d']] ?? 'Locked out';
         else continue;
-        $who = '<button type="button" class="linklike vt-ip" data-ip="' . $esc($e['_ip']) . '">' . $esc($e['_ip']) . '</button> &middot; ' . ($e['_src'] === LOCKOUT_LOG_ID ? 'paused for a minute' : ($e['_src'] === PUBLIC_LOG_ID ? 'public address' : 'via ' . $esc($labels[$e['_src']] ?? 'a deleted link')));
+        $who = '<button type="button" class="linklike vt-ip" data-ip="' . $esc($e['_ip']) . '">' . $esc($e['_ip']) . '</button> &middot; ' . ($e['_src'] === LOCKOUT_LOG_ID ? 'paused for a minute' : ($e['_src'] === PUBLIC_LOG_ID ? 'public address' : 'via ' . (isset($labels[$e['_src']]) ? visits_link_go($e['_src'], $labels) : 'a deleted link')));
         $out .= '<div class="sl-ev"><span class="sl-evt">' . $when . '</span><div class="' . ($pic !== '' ? 'sl-evpic' : 'sl-evbody') . '">' . $pic . '<div>' . $text . '<div class="muted sl-evl">' . $who . '</div></div></div></div>';
     }
     $out .= '</div>' . ($evTotal > count($events) ? '<p class="note">Showing the latest ' . count($events) . ' of ' . number_format($evTotal) . ' lines. Narrow it with the choices above, or export the whole timeline.</p>' : '');
@@ -396,8 +428,9 @@ function visits_panel_data() {
     $labels = visits_source_labels();
     $links = [];
     foreach ((array) (links_read()['links'] ?? []) as $l) if (is_array($l) && isset($l['id'], $l['label']) && !link_is_public_log($l)) $links[] = $l;
-    $bySrc = []; $countries = []; $total = 0; $lockN = 0; $lockTrips = 0;
+    $bySrc = []; $countries = []; $total = 0; $lockN = 0; $lockTrips = 0; $blockedBy = [];
     if ($db !== null) {
+        foreach (visits_query($db, 'SELECT src, COUNT(*) AS c FROM blocked WHERE src NOT IN (?, ?) GROUP BY src', [PUBLIC_LOG_ID, LOCKOUT_LOG_ID])->fetchAll() as $r) $blockedBy[$r['src']] = (int) $r['c'];
         foreach (visits_query($db, 'SELECT src, COUNT(*) AS c, SUM(opens) AS o FROM visitors GROUP BY src')->fetchAll() as $r) {
             if ($r['src'] === LOCKOUT_LOG_ID) { $lockN = (int) $r['c']; $lockTrips = (int) $r['o']; }
             $bySrc[$r['src']] = (int) $r['c']; $total += (int) $r['c'];
@@ -405,7 +438,7 @@ function visits_panel_data() {
         foreach (visits_query($db, 'SELECT country, COUNT(*) AS c FROM visitors WHERE country <> \'\' GROUP BY country ORDER BY c DESC, country')->fetchAll() as $r) $countries[] = ['c' => $r['country'], 'name' => visit_country_name($r['country']), 'n' => (int) $r['c']];
     }
     $pubN = (int) ($bySrc[PUBLIC_LOG_ID] ?? 0); $linkN = $total - $pubN - $lockN;
-    $info = ['total' => $total, 'pub' => $pubN, 'lock' => $lockN, 'links' => array_map(function ($l) use ($bySrc) { return ['id' => $l['id'], 'name' => $l['label'], 'n' => (int) ($bySrc[$l['id']] ?? 0)]; }, $links), 'countries' => $countries];
+    $info = ['total' => $total, 'pub' => $pubN, 'lock' => $lockN, 'blocked' => array_sum($blockedBy), 'links' => array_map(function ($l) use ($bySrc, $blockedBy) { return ['id' => $l['id'], 'name' => $l['label'], 'n' => (int) ($bySrc[$l['id']] ?? 0), 'b' => (int) ($blockedBy[$l['id']] ?? 0)]; }, $links), 'countries' => $countries];
     $plural = function ($n, $one, $many) { return number_format($n) . ' ' . ($n === 1 ? $one : $many); };
     $span = LOG_KEEP_DAYS > 0 ? 'in the last ' . ($plural(LOG_KEEP_DAYS, 'day', 'days')) : 'so far';
     $summary = $plural($pubN, 'public visitor', 'public visitors') . ' and ' . $plural($linkN, 'visitor', 'visitors') . ' on share links ' . $span . ' &middot; ' . $plural(count($links), 'share', 'shares') . ($lockTrips > 0 ? ' &middot; ' . $plural($lockTrips, 'lockout', 'lockouts') : '');

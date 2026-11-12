@@ -41,8 +41,9 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
             'scopeType' => $l['scope']['type'] ?? 'all', 'only' => !empty($l['only']), 'scopeFolders' => $report['paths']['scope'], 'scopePublicOnly' => $report['paths']['publicOnly'], 'scopeExcept' => $report['paths']['except'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
             'downloads' => $l['downloads']['mode'] ?? 'off', 'downloadsFolders' => $report['paths']['downloads'], 'zip' => $l['zip']['mode'] ?? 'off', 'zipFolders' => $report['paths']['zip']], JSON_HEX_TAG | JSON_HEX_AMP));
         $missing = array_merge(array_filter($report['folders'], function ($x) { return $x['state'] !== 'ok'; }), array_filter($report['photos'], function ($x) { return $x['state'] !== 'ok'; }));
+        $blockedN = visits_tab_wanted() ? count((array) ($report['log']['blocked'] ?? [])) : 0;   // (addresses turned away from this link)
         ob_start(); ?>
-        <details class="sl-row" data-id="<?= $esc($l['id']) ?>" data-state="<?= $esc($state) ?>" data-link="<?= $json ?>">
+        <details class="sl-row" data-id="<?= $esc($l['id']) ?>" id="sl-<?= $esc($l['id']) ?>" data-state="<?= $esc($state) ?>" data-link="<?= $json ?>">
           <summary>
             <span class="sl-pill <?= $esc($state) ?>"><?= $esc(link_state_label($state)) ?></span>
             <span class="sl-nm"><span class="sl-name"><?= $esc($l['label']) ?></span> <?php if ($report['problems'] > 0 && $state !== 'revoked'): ?><span class="sl-pill paused" title="Part of what this link covers can't be found">Folder missing</span> <?php endif; ?><?php if ($report['new'] > 0): ?><span class="sl-newt"><?= (int) $report['new'] ?> new since you last looked</span> <?php endif; ?><span class="sl-tail"><?= $esc($tail) ?></span>
@@ -90,7 +91,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
             </details>
             <?php endif; ?>
             <div class="sl-acts">
-              <?php if (visits_tab_wanted()): ?><button type="button" class="linklike" data-sl="visitors">&rarr; Visitors</button><?php endif; ?>
+              <?php if (visits_tab_wanted()): ?><button type="button" class="linklike" data-sl="visitors">&rarr; Visitors</button><?php if ($blockedN > 0): ?><button type="button" class="linklike" data-sl="blocked" title="Who was turned away from this link, on the Visitors tab">&rarr; Blocked tries</button><?php endif; ?><?php endif; ?>
               <?php if ($state !== 'revoked'): ?><button type="button" class="linklike" data-sl="preview" title="Opens a new tab that shows the gallery exactly as this link does">Preview as this link</button><?php endif; ?>
               <?php if (in_array($state, ['active', 'scheduled'], true) && ($l['status'] ?? '') === 'active'): ?><button type="button" class="linklike" data-sl="pause">Pause</button><?php endif; ?>
               <?php if ($state === 'paused'): ?><button type="button" class="linklike" data-sl="resume">Resume</button><?php endif; ?>

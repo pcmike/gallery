@@ -1636,7 +1636,7 @@
       if (row) { try { link = JSON.parse(row.getAttribute('data-link')); } catch (x2) {} }
       if (b.closest('summary')) e.preventDefault();   // a button in a row's title line doesn't also fold the row
       if (what === 'new') { openForm(null); return; }
-      if (what === 'visitors') { var vrow = rowOf(b), vid = vrow ? vrow.getAttribute('data-id') : ''; if (window.__vtShow) window.__vtShow(vid); adminGoTo('visits'); return; }
+      if (what === 'visitors' || what === 'blocked') { var vrow = rowOf(b), vid = vrow ? vrow.getAttribute('data-id') : ''; if (window.__vtShow) window.__vtShow(vid, what === 'blocked'); adminGoTo('visits'); return; }
       if (what === 'addrrandom') { setAddrMode(box.querySelector('#sl-form'), 'random', false); return; }
       if (what === 'addrcustom') { setAddrMode(box.querySelector('#sl-form'), 'custom', true); return; }
       if (what === 'grpreset') { var gd = b.closest('details.sl-grp'); resetGroup(box.querySelector('#sl-form'), gd.getAttribute('data-grp')); return; }
@@ -2921,7 +2921,7 @@
       });
     }
     function sources() { return S.src.slice(); }   // ('public', 'lockouts' and share link ids: the choices under Sources)
-    function sourceList() { var d = info(); return [{ id: 'public', name: 'Public', n: d.pub }, { id: 'lockouts', name: 'Lockouts', n: d.lock }].concat(d.links); }
+    function sourceList() { var d = info(); return [{ id: 'public', name: 'Public', n: d.pub }, { id: 'lockouts', name: 'Lockouts', n: d.lock }, { id: 'blocked', name: 'Blocked', n: d.blocked || 0 }].concat(d.links); }
     function params(extra) {
       var q = '', add = function (k, v) { q += '&' + k + '=' + encodeURIComponent(v); };
       if (sources().length) add('src', sources().join(','));
@@ -2963,7 +2963,10 @@
       if (sp) {
         var picked = sourceList().filter(function (s) { return S.src.indexOf(s.id) >= 0; });
         sp.querySelector('.vt-l').textContent = picked.length === 0 ? 'Sources' : (picked.length === 1 ? picked[0].name : picked.length + ' sources');
-        sp.querySelector('em').textContent = (picked.length ? picked.reduce(function (n, s) { return n + s.n; }, 0) : d.total).toLocaleString(); sp.classList.toggle('on', picked.length > 0);
+        var hasB = S.src.indexOf('blocked') >= 0, count;
+        if (hasB) { var others = picked.filter(function (s) { return s.id !== 'blocked'; }); count = others.length ? others.reduce(function (n, s) { return n + (s.b || 0); }, 0) : (d.blocked || 0); }   // (Blocked shows the turned-away tries: of the links ticked beside it, else of all of them)
+        else count = picked.length ? picked.reduce(function (n, s) { return n + s.n; }, 0) : d.total;
+        sp.querySelector('em').textContent = count.toLocaleString(); sp.classList.toggle('on', picked.length > 0);
       }
       paintSearch();
       [].forEach.call(root.querySelectorAll('.vt-views [data-view]'), function (b) { b.classList.toggle('on', b.getAttribute('data-view') === S.view); });
@@ -3057,7 +3060,10 @@
       }
       if (t.closest('[data-call]')) { S.cc = []; closePop(); paintPills(); load(); return; }
       if ((el = t.closest('.vt-opt[data-c]'))) { toggle(S.cc, el.getAttribute('data-c')); repaintOptions(); paintPills(); load(); return; }
-      if ((el = t.closest('.vt-opt[data-l]'))) { toggle(S.src, el.getAttribute('data-l')); repaintOptions(); paintPills(); load(); return; }
+      if ((el = t.closest('.vt-opt[data-l]'))) { var lid = el.getAttribute('data-l'), wasOn = S.src.indexOf(lid) >= 0; toggle(S.src, lid); if (lid === 'blocked' && !wasOn) S.view = 'visitors'; repaintOptions(); paintPills(); load(); return; }
+      if ((el = t.closest('.vt-gl'))) { adminGoTo('links', 'sl-' + el.getAttribute('data-link-go')); return; }   // (a link's name, or the arrow beside it: that link on the Shares tab)
+      if (t.closest('[data-vt=blockedview]')) { setView('visitors'); return; }
+      if (t.closest('[data-vt=unblock]')) { var bi = S.src.indexOf('blocked'); if (bi >= 0) S.src.splice(bi, 1); S.all = false; paintPills(); load(); return; }
       if (t.closest('[data-vt=done]') || t.classList.contains('vt-sheetbg')) { closePop(); return; }
       if ((el = t.closest('.vt-views [data-view]'))) { closeMenu(); closePop(); setView(el.getAttribute('data-view')); return; }
       if ((el = t.closest('.vt-cc'))) { var c = el.getAttribute('data-cc'); S.cc = S.cc.length === 1 && S.cc[0] === c ? [] : [c]; closePop(); paintPills(); load(); return; }
@@ -3123,7 +3129,7 @@
         if (window.parent !== window) { try { window.parent.postMessage({ galleryShell: 1, tick: 1 }, location.origin); } catch (e) {} }
       }).catch(function () {});
     };
-    window.__vtShow = function (id) { S.cc = []; S.src = id ? [id] : []; S.q = ''; S.view = 'visitors'; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); };
+    window.__vtShow = function (id, blocked) { S.cc = []; S.src = (id ? [id] : []).concat(blocked ? ['blocked'] : []); S.q = ''; S.view = 'visitors'; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); };
     paintPills(); paintNote(); paintExport(); times();
   })();
   // The Changes tab: the kinds pill (any number of kinds), the search, the trim form, entries that open, times and days in the viewer's own clock. Opening the tab marks it seen.

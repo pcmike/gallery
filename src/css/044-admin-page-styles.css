@@ -1160,6 +1160,11 @@
   .vt-cc:hover { border-color:#5a62e6; }
   .vt-src { border:0; background:#23244a; color:#aab2ff; border-radius:12px; padding:1px 9px; font:inherit; font-size:0.8rem; font-weight:600; cursor:pointer; }
   .vt-src:hover { box-shadow:0 0 0 1px #5a62e6; }
+  .vt-gl { border:0; background:none; color:#aab2ff; font:inherit; font-size:0.8rem; font-weight:600; cursor:pointer; padding:1px 4px; border-radius:6px; text-align:left; }
+  .vt-gl:hover { text-decoration:underline; }
+  .vt-gl:not(.vt-gla) { padding-left:0; }
+  .vt-gla { margin-left:2px; }
+  .sl-row.flash-target { outline:2px solid var(--accent); outline-offset:2px; border-radius:8px; }
   .vt-ci { color:#aab2ff; text-decoration:none; }
   .vt-ci:hover { text-decoration:underline; }
   .vt.loading .vt-body { opacity:.55; }
