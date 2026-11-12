@@ -597,8 +597,10 @@
   .admin-folder-nav .hidden-note { padding:2px 12px 6px; font-size:0.78rem; color:var(--muted); }
   .health-note .health-mark { color:#8fa0ff; }
   .health-row .health-main { flex:1; min-width:0; }
-  .health-row .health-act { flex:none; margin-left:auto; align-self:center; display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
-  @media (max-width:640px) { .health-note { flex-wrap:wrap; } .health-note .health-act { flex-basis:100%; margin-left:0; justify-content:flex-start; padding-left:calc(1.3em + 10px); } }   /* (on a phone the buttons go under the words, not squeezing them) */
+  .health-row .health-act { flex:0 0 100%; box-sizing:border-box; display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-start; }   /* (a row's buttons sit under its words, at the left, lined up with them) */
+  .health-row > .health-act { padding-left:calc(1.3em + 10px); }   /* (buttons that sit straight in the row, as in the notes, are lined up with the words; inside the words' own block they already are) */
+  .health-row:has(> .health-act) { flex-wrap:wrap; }
+  .health-row:has(> .health-act) > div:not(.health-act) { flex:1 1 0; }
   .lock-fix { margin-top:10px; padding:2px 12px 8px; background:var(--card); color:var(--text); border-radius:10px; font-weight:400; }
   .lock-fix > summary { color:var(--text); }
   .health-row.optional .health-label { color:var(--muted); font-weight:500; }
@@ -634,7 +636,8 @@
     .health-strip .hs-t small { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   }
   .health-act-out { margin-left:6px; }
-  @media (max-width:640px) { .health-row .health-act { flex-wrap:wrap; justify-content:flex-start; } .health-row .health-act .secondary { flex:0 1 auto; } }
+  .health-row .health-act .health-act-out:not(:empty) { flex:0 0 100%; margin:0; font-size:.9em; }   /* (what the button did is a line of its own under the buttons: the buttons do not move when it appears) */
+  @media (max-width:640px) { .health-row .health-act .secondary { flex:0 1 auto; } }
   .media-line { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 8px; }
   .media-bar { height:8px; border-radius:4px; background:#26262a; overflow:hidden; }
   .media-bar span { display:block; height:100%; width:0; background:#5865f2; transition:width .4s ease-out; }

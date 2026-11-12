@@ -124,6 +124,7 @@
       const opt = panel.querySelectorAll('.health-row.optional').length, sg = panel.querySelector('.health-sugg-n');
       if (sg) sg.textContent = opt ? '\u00b7 ' + opt + ' suggestion' + (opt === 1 ? '' : 's') : '';   // (the button itself says Details: it opens everything, the passed checks too)
     };
+    window.__healthRecount = refreshHealth;   // (the summary line is worked out again from the rows on screen: used when one row is drawn again on its own)
     window.__initMediaPanel = function (panel) {   // (called now for the panel the page came with, and again for one put in place when Thumbnails is switched on)
       if (!panel || !panel.dataset.csrf) return;
       const go = panel.querySelector('.media-go'), stop = panel.querySelector('.media-stop'), count = panel.querySelector('.media-count'), bar = panel.querySelector('.media-bar'), fill = bar.firstElementChild;
@@ -2213,6 +2214,24 @@
       var list = document.getElementById(m.getAttribute('aria-controls')); if (!list) return;
       var on = m.getAttribute('aria-expanded') !== 'true'; m.setAttribute('aria-expanded', on ? 'true' : 'false'); list.hidden = !on;
     });
+    // The Health check asked for again, and only the Backup row and the Backup box (in the numbers) taken from it and put in place of the ones on screen; everything else, the folds
+    // that are open, the rows this browser has tested, where you are on the page, stays. Resolves false when it could not be done (the caller reloads then).
+    function redrawBackupPart(panel) {
+      var body = new URLSearchParams(); body.set('csrf_token', panel.getAttribute('data-csrf')); body.set('action', 'health_panel');
+      return fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          var holder = document.createElement('div'); holder.innerHTML = (j && j.ok && j.html) || '';
+          var fresh = holder.querySelector('#health-panel'); if (!fresh) return false;
+          var ob = panel.querySelector('[data-backup-act="run"]'), nb = fresh.querySelector('[data-backup-act="run"]');
+          var oldRow = ob && ob.closest('.health-row'), newRow = nb && nb.closest('.health-row'); if (!oldRow || !newRow) return false;
+          oldRow.replaceWith(newRow);
+          var chip = function (root) { return [].filter.call(root.querySelectorAll('.health-strip .hs-t'), function (t) { var l = t.querySelector('small'); return l && l.textContent.trim() === 'Backup'; })[0]; };
+          var oc = chip(panel), nc = chip(fresh); if (oc && nc) oc.replaceWith(nc);
+          if (window.__healthRecount) window.__healthRecount();
+          return true;
+        }).catch(function () { return false; });
+    }
     document.addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('[data-backup-act]') : null; if (!b) return;
       var panel = b.closest('#health-panel'); if (!panel) return;
@@ -2250,6 +2269,14 @@
       [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = true; });
       say(act === 'run' ? 'Backing up\u2026' : 'Working\u2026');
       post(name).then(function (j) {
+        if (j.ok && act === 'run') {   // Back up now: only the Backup row and the Backup box are drawn again, in place (no reload), and the row says what was done
+          window.__siteDirty = true;
+          return redrawBackupPart(panel).then(function (done) {
+            if (!done) { try { sessionStorage.setItem('healthOpen', '1'); } catch (er) {} location.reload(); return; }
+            var nb = panel.querySelector('[data-backup-act="run"]'), o = nb && nb.parentNode.querySelector('.health-act-out');
+            if (o) { o.textContent = j.text || 'Backed up.'; o.className = 'health-act-out ' + (j.problems > 0 ? 'warn-text' : 'ok-text'); }
+          });
+        }
         if (j.ok) { window.__siteDirty = true; try { sessionStorage.setItem('healthOpen', '1'); } catch (er) {} location.reload(); return; }
         [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = false; });
         say(j.text || 'It did not work.', true);
