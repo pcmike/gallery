@@ -75,13 +75,18 @@ function link_fid_state($fid, $map, $index, $rootFid) {
 /** What a link covers, for the tab: lists of [label, state] for its folders and photos, how many are not found, and the paths
  *  the edit form starts from. */
 function link_scope_report($l, $map, $index, $dir, $rootFid) {
-    $out = ['folders' => [], 'photos' => [], 'problems' => 0, 'paths' => ['scope' => [], 'publicOnly' => [], 'downloads' => [], 'zip' => [], 'photos' => [], 'openIn' => '']];
+    $out = ['folders' => [], 'photos' => [], 'except' => [], 'problems' => 0, 'paths' => ['scope' => [], 'publicOnly' => [], 'except' => [], 'downloads' => [], 'zip' => [], 'photos' => [], 'openIn' => '']];
     $one = function ($fid) use ($map, $index, $dir, $rootFid, &$out) {
         [$state, $rel] = link_fid_state($fid, $map, $index, $rootFid);
         if ($state !== 'ok') $out['problems']++;
         return [$state, $rel, $rel === '' ? 'the gallery\'s own folder' : link_folder_label($dir, $rel)];
     };
-    foreach ((array) ($l['scope']['folders'] ?? []) as $fid) { [$s, $rel, $label] = $one($fid); $pub = in_array($fid, (array) ($l['scope']['publicOnly'] ?? []), true); $out['folders'][] = ['fid' => $fid, 'state' => $s, 'pub' => $pub, 'counts' => $s === 'ok' ? link_folder_item_counts($dir, $rel) : null, 'label' => $s === 'missing' && $rel === '' ? 'a folder that is gone' : $label]; if ($s === 'ok') { $out['paths']['scope'][] = $rel; if ($pub) $out['paths']['publicOnly'][] = $rel; } }
+    foreach ((array) ($l['scope']['except'] ?? []) as $fid) {   // (folders the link leaves out of a folder it covers; one that is gone is nothing to leave out, so it is no problem)
+        [$s, $rel] = link_fid_state($fid, $map, $index, $rootFid);
+        if ($s !== 'ok' || $rel === '') continue;
+        $out['except'][] = ['fid' => $fid, 'rel' => $rel, 'label' => link_folder_label($dir, $rel)]; $out['paths']['except'][] = $rel;
+    }
+    foreach ((array) ($l['scope']['folders'] ?? []) as $fid) { [$s, $rel, $label] = $one($fid); $pub = in_array($fid, (array) ($l['scope']['publicOnly'] ?? []), true); $out['folders'][] = ['fid' => $fid, 'state' => $s, 'rel' => $s === 'ok' ? $rel : null, 'pub' => $pub, 'counts' => $s === 'ok' ? link_folder_item_counts($dir, $rel, $out['paths']['except']) : null, 'label' => $s === 'missing' && $rel === '' ? 'a folder that is gone' : $label]; if ($s === 'ok') { $out['paths']['scope'][] = $rel; if ($pub) $out['paths']['publicOnly'][] = $rel; } }
     foreach ((array) ($l['scope']['photos'] ?? []) as $p) {
         if (!is_array($p)) continue;
         [$s, $rel] = link_fid_state((string) ($p['fid'] ?? ''), $map, $index, $rootFid);
@@ -95,25 +100,26 @@ function link_scope_report($l, $map, $index, $dir, $rootFid) {
 }
 
 /** How many photos and videos are inside a folder (at any depth), and how many of those are public: [all, public]. */
-function link_folder_item_counts($dir, $rel) {
+function link_folder_item_counts($dir, $rel, $except = []) {
     [$all, $public] = link_public_media($dir);
-    if ($rel === '') return [count($all), count($public)];
-    $pre = $rel . '/'; $n = strlen($pre); $a = 0; $p = 0;
-    foreach ($all as $f) if (strncmp($f, $pre, $n) === 0) $a++;
-    foreach ($public as $f) if (strncmp($f, $pre, $n) === 0) $p++;
-    return [$a, $p];
+    $pre = $rel === '' ? '' : $rel . '/'; $n = strlen($pre);
+    $left = []; foreach ((array) $except as $e) if ($pre === '' || strncmp($e . '/', $pre, $n) === 0) $left[] = $e . '/';   // (what is left out is not counted)
+    $count = function ($list) use ($pre, $n, $left) { $c = 0; foreach ($list as $f) { if (strncmp($f, $pre, $n) !== 0) continue; foreach ($left as $e) if (strncmp($f, $e, strlen($e)) === 0) continue 2; $c++; } return $c; };
+    return [$count($all), $count($public)];
 }
 
 /** The folders a link covers, as a phrase that says for each what the link takes from it and how many items that is: everything inside (and
  *  how many of those are private), or only the public ones (and how many private ones are left out). */
 function link_folder_list_html($report, $item) {
-    return implode(', ', array_map(function ($x) use ($item) {
+    return implode(', ', array_map(function ($x) use ($item, $report) {
         $say = '';
         if ($x['state'] === 'ok' && is_array($x['counts'] ?? null)) {
             [$all, $pub] = $x['counts']; $priv = $all - $pub;
             if (!empty($x['pub'])) $say = ' (public items only: ' . ($priv > 0 ? $pub . ' of ' . $all . '; ' . $priv . ' private left out' : $all) . ')';
             else $say = ' (everything inside: ' . $all . ($priv > 0 ? ', ' . $priv . ' private' : '') . ')';
         } elseif (!empty($x['pub'])) $say = ' (public items only)';
+        $out = array_map(function ($e) { return $e['label']; }, array_values(array_filter((array) ($report['except'] ?? []), function ($e) use ($x) { return $x['state'] === 'ok' && ($x['rel'] === '' || str_starts_with($e['rel'], $x['rel'] . '/')); })));
+        if ($out) { $w = 'without ' . htmlspecialchars(implode(', ', $out), ENT_QUOTES, 'UTF-8'); $say = $say !== '' && substr($say, -1) === ')' ? substr($say, 0, -1) . '; ' . $w . ')' : $say . ' (' . $w . ')'; }
         return $item($x) . $say;
     }, $report['folders']));
 }

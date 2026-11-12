@@ -59,19 +59,25 @@ function link_scan_ambiguity($dir, $allFiles) {
     link_ambiguous_set($dups);
 }
 
-/** True if the item is inside one of the folders with these ids (the folder it is in, or any folder above it). */
-function link_item_under_folder_ids($dir, $file, $fids) {
+/** True if the item is inside one of the folders with these ids (the folder it is in, or any folder above it). $except: ids of folders the link leaves out
+ *  of what a folder above it takes in (the folder and everything inside it); the nearest one listed above the item decides, so a folder inside an
+ *  excepted one can be listed again. */
+function link_item_under_folder_ids($dir, $file, $fids, $except = []) {
     $set = array_fill_keys(array_filter((array) $fids, 'is_string'), true);
     if (!$set) return false;
+    $ex = array_fill_keys(array_filter((array) $except, 'is_string'), true);
     $amb = link_ambiguous_set();
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
+    $in = false;
     foreach ($parts as $seg) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
         $id = folder_id_cached($dir, $prefix);
-        if ($id !== '' && isset($set[$id]) && !isset($amb[$id])) return true;
+        if ($id === '' || isset($amb[$id])) continue;
+        if (isset($ex[$id])) $in = false;
+        elseif (isset($set[$id])) $in = true;
     }
-    return false;
+    return $in;
 }
 
 /** Is the item public (not private)? Without the gallery's item settings to ask, it is not: a link never shows what it can't be sure of. */
@@ -83,16 +89,17 @@ function link_item_is_public($dir, $file, $itemsData = null) {
 /** How a link's folders cover an item: 'all' (it is under a folder the link shares with everything inside), 'public' (it is under folders
  *  the link shares as "public items only", and under no other), or '' (under none of them). A private folder's items are all private,
  *  so a public-only folder that is itself private covers nothing. */
-function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
+function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = []) {
     $set = array_fill_keys(array_filter((array) $fids, 'is_string'), true);
     if (!$set) return '';
     $pub = array_fill_keys(array_filter((array) $publicOnly, 'is_string'), true);
+    $ex = array_fill_keys(array_filter((array) $except, 'is_string'), true);   // (folders the link leaves out of what a folder above takes in: the nearest one listed above the item decides)
     $amb = link_ambiguous_set();
-    $cover = '';
+    $cover = ''; $viaCollection = '';
     foreach (array_keys($set) as $cid) {   // a collection the link names covers the files it holds (as it holds them); the link's own "public items only" applies to it as to a folder
         if ($cid[0] !== 'c' || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // (a Not listed folder's photos come through no collection, as through no folder above it: it has to be picked itself)
         if (!isset($pub[$cid])) return 'all';
-        $cover = 'public';
+        $viaCollection = 'public';
     }
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
@@ -102,11 +109,13 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
         if ($n++ < $from) continue;
         $id = folder_id_cached($dir, $prefix);
-        if ($id === '' || !isset($set[$id]) || isset($amb[$id])) continue;
-        if (!isset($pub[$id])) return 'all';
-        $cover = 'public';
+        if ($id === '' || isset($amb[$id])) continue;
+        if (isset($ex[$id])) { $cover = ''; continue; }
+        if (!isset($set[$id])) continue;
+        if (!isset($pub[$id])) $cover = 'all';
+        elseif ($cover !== 'all') $cover = 'public';
     }
-    return $cover;
+    return $cover === 'all' ? 'all' : ($cover === 'public' || $viaCollection === 'public' ? 'public' : '');
 }
 
 /** May the link $l show this item? */
@@ -114,7 +123,7 @@ function link_allows_item($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
     if ($type === 'all') return !file_is_unlisted($dir, $file);   // ("Everything" leaves out a Not listed folder: that one is shared only by picking it)
     if ($type === 'folders' || $type === 'mixed') {
-        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? []);
+        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? [], $l['scope']['except'] ?? []);
         if ($cover === 'all') return true;
         if ($cover === 'public' && link_item_is_public($dir, $file, $itemsData)) return true;   // ("public items only": the private ones are left out, unless one is named below)
         if ($type === 'folders') return false;
@@ -135,7 +144,7 @@ function link_item_is_picked_photo($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
     if ($type !== 'photos' && $type !== 'mixed') return false;
     if ($type === 'mixed') {   // (inside a folder the link shares, it is part of that folder; named as well as private inside a "public items only" folder, it is a tile of its own)
-        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? []);
+        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? [], $l['scope']['except'] ?? []);
         if ($cover === 'all' || ($cover === 'public' && link_item_is_public($dir, $file, $itemsData))) return false;
     }
     return link_allows_item($l, $dir, $file, $itemsData);
@@ -381,18 +390,32 @@ function link_cover_in_scope($l, $dir, $f, $draft = null) {
     $type = $draft !== null ? (string) ($draft['type'] ?? 'all') : (string) ($l['scope']['type'] ?? 'all');
     if (!in_array($type, ['folders', 'photos', 'mixed'], true)) return true;
     if ($draft === null) return link_allows_item($l, $dir, $f);
-    if ($type !== 'photos') foreach ((array) ($draft['folders'] ?? []) as $d) {
-        if ($d !== '' && str_starts_with($f, $d . '/')) return true;
-        if ($d !== '' && ($c = collection_at($dir, $d)) !== null && in_array($f, collection_member_files($dir, $c, $GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? [])), true)) return true;
+    if ($type !== 'photos') {
+        foreach ((array) ($draft['folders'] ?? []) as $d) {
+            if ($d !== '' && ($c = collection_at($dir, $d)) !== null && in_array($f, collection_member_files($dir, $c, $GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? [])), true)) return true;
+        }
+        if (link_path_in_folders($f, (array) ($draft['folders'] ?? []), (array) ($draft['except'] ?? []))) return true;
     }
     return $type !== 'folders' && in_array($f, (array) ($draft['photos'] ?? []), true);
+}
+
+/** Is this path (a folder's, or a file's) inside one of these folders (paths), as far as a link goes: the nearest folder listed above it, in $folders or in $except
+ *  (folders left out of what a folder above takes in), decides. */
+function link_path_in_folders($path, $folders, $except = []) {
+    $in = false; $prefix = '';
+    foreach (explode('/', $path) as $seg) {
+        $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
+        if (in_array($prefix, (array) $except, true)) $in = false;
+        elseif (in_array($prefix, (array) $folders, true)) $in = true;
+    }
+    return $in;
 }
 
 /** The form's unsaved choice of what a link covers, from a request's scope_type / scope_folders / scope_photos (null when they are not sent). */
 function link_draft_scope_from_request() {
     if (!isset($_GET['scope_type']) || !is_string($_GET['scope_type'])) return null;
     $list = function ($k) { $v = json_decode(is_string($_GET[$k] ?? null) ? $_GET[$k] : '[]', true); return is_array($v) ? array_values(array_filter($v, 'is_string')) : []; };
-    return ['type' => $_GET['scope_type'], 'folders' => $list('scope_folders'), 'photos' => $list('scope_photos')];
+    return ['type' => $_GET['scope_type'], 'folders' => $list('scope_folders'), 'except' => $list('scope_except'), 'photos' => $list('scope_photos')];
 }
 
 function link_preview_picture($l, $dir, $draft = null) {

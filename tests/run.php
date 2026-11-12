@@ -6118,6 +6118,98 @@ check('[share links] the public and the owner never see the heads-up line', !str
 check('[share links] the owner\'s own view of the gallery still shows everything, including folders the links no longer reach', str_contains(http_get("$baseS2/", ["Cookie: $s2AdminCookie"])[1], 'Other'));
 
 
+echo "== share links: folders left out of a picked folder (exceptions) ==\n";
+
+$fxEx = new_fixture_dir('slexcept');
+foreach (['Trip/Paris', 'Trip/Rome/Old', 'Trip/Nice', 'Trip/Hidden', 'Other', 'Pics/A', 'Pics/B'] as $d) mkdir("$fxEx/$d", 0775, true);
+$exAll = ['pub.jpg', 'Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Rome/r1.jpg', 'Trip/Rome/Old/o1.jpg', 'Trip/Nice/n1.jpg', 'Trip/Hidden/h1.jpg', 'Other/x1.jpg', 'Pics/A/a1.jpg', 'Pics/B/b1.jpg'];
+foreach ($exAll as $i => $f) make_jpeg("$fxEx/$f", 60 + $i, 50, 25 * $i % 255, 90, 40 * $i % 255);
+foreach (['Trip', 'Other'] as $d) write_data_file("$fxEx/$d/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+write_data_file("$fxEx/Trip/Hidden/.gallery-items.php", ['restriction' => 'private', 'unlisted' => true, 'items' => [], 'groups' => []]);
+file_put_contents("$fxEx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ex-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxEx/index.php");
+$portEx = find_free_port(); start_server($fxEx, $portEx); $baseEx = "http://127.0.0.1:$portEx";
+[, , $exLogin] = http_post("$baseEx/?admin", ['access_code' => 'ex-admin-pw-1'], [], false);
+$exAdminCookie = extract_cookie_header($exLogin);
+$exCsrf = extract_csrf_token(http_get("$baseEx/?admin", ["Cookie: $exAdminCookie"])[1]);
+$exAdmin = function (array $fields) use ($baseEx, $exAdminCookie, $exCsrf) {
+    [, $body] = http_post("$baseEx/?admin", $fields + ['csrf_token' => $exCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $exAdminCookie"]);
+    return json_decode($body, true) ?? ['ok' => false, 'text' => 'not JSON: ' . substr($body, 0, 80)];
+};
+$exLinks = fn () => read_data_file("$fxEx/.gallery-links.php");
+$exMake = function (string $label, array $f) use ($exAdmin, $exLinks, $baseEx, $fxEx) {
+    $made = $exAdmin($f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
+    if (!($made['ok'] ?? false)) return [null, null, $made];
+    $token = $exLinks()['links'][$made['id']]['token'];
+    @unlink("$fxEx/.gallery-login-attempts.php");
+    [, , $h] = http_post("$baseEx/?link=$token", ['go' => '1'], [], false);
+    return [$made['id'], extract_cookie_header($h), $made];
+};
+$J = fn ($a) => json_encode($a);
+[$idX1, $ckX1] = $exMake('X1 Trip', ['scope_type' => 'folders', 'scope_folders' => $J(['Trip'])]);
+[$idX2, $ckX2] = $exMake('X2 Trip except Rome', ['scope_type' => 'folders', 'scope_folders' => $J(['Trip']), 'scope_except' => $J(['Trip/Rome'])]);
+[$idX3, $ckX3] = $exMake('X3 Trip except Rome, Old again', ['scope_type' => 'folders', 'scope_folders' => $J(['Trip', 'Trip/Rome/Old']), 'scope_except' => $J(['Trip/Rome'])]);
+[$idX4, $ckX4] = $exMake('X4 Trip except Rome and Nice', ['scope_type' => 'folders', 'scope_folders' => $J(['Trip']), 'scope_except' => $J(['Trip/Rome', 'Trip/Nice'])]);
+[$idX5, $ckX5] = $exMake('X5 Trip and Hidden, except Rome', ['scope_type' => 'folders', 'scope_folders' => $J(['Trip', 'Trip/Hidden']), 'scope_except' => $J(['Trip/Rome'])]);
+[$idX6, $ckX6] = $exMake('X6 Trip except Rome, only that', ['scope_type' => 'folders', 'scope_folders' => $J(['Trip']), 'scope_except' => $J(['Trip/Rome']), 'only' => '1']);
+[$idX7, $ckX7] = $exMake('X7 Trip except Rome, with a photo from Rome (mixed)', ['scope_type' => 'mixed', 'scope_folders' => $J(['Trip']), 'scope_except' => $J(['Trip/Rome']), 'scope_photos' => $J(['Trip/Rome/r1.jpg'])]);
+check('[exceptions] links that leave a folder out of a picked folder can be made', $idX1 && $idX2 && $idX3 && $idX4 && $idX5 && $idX6 && $idX7);
+$exStored = fn ($id) => $exLinks()['links'][$id]['scope'] ?? [];
+check('[exceptions] a link remembers the folders it leaves out by their ids, next to the folders it takes in; a link that leaves none out has no such list (it is stored exactly as before)', count($exStored($idX2)['except'] ?? []) === 1 && count($exStored($idX4)['except'] ?? []) === 2 && !array_key_exists('except', $exStored($idX1)) && count($exStored($idX3)['folders'] ?? []) === 2);
+$ltSrc = preg_match('/function link_new_token\(\) \{.*?\n\}\n/s', (string) file_get_contents($indexSrc), $ltm) ? $ltm[0] : '';
+$ltBad = trim((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('const LINK_TOKEN_LENGTH = 8; ' . $ltSrc . ' $bad = 0; for ($i = 0; $i < 4000; $i++) { $t = link_new_token(); if (strlen($t) !== 8 || !preg_match("/^[A-Za-z0-9]{8}$/", $t) || !preg_match("/[A-Z]/", $t)) $bad++; } echo $bad;')));
+check('[link address] a random address always has a capital among its 8 characters (without one it is taken for a name of the owner\'s own and shown whole in the log: about one in 75 did), over 4000 made', $ltSrc !== '' && $ltBad === '0', $ltBad);
+$exPublic = ['pub.jpg', 'Pics/A/a1.jpg', 'Pics/B/b1.jpg'];
+$exTrip = ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Rome/r1.jpg', 'Trip/Rome/Old/o1.jpg', 'Trip/Nice/n1.jpg'];
+$exViewers = [
+    'a link to Trip' => [$ckX1, array_merge($exPublic, $exTrip)],
+    'a link to Trip, leaving Rome out' => [$ckX2, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg'])],
+    'a link to Trip, leaving Rome out but taking Rome/Old in again' => [$ckX3, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg', 'Trip/Rome/Old/o1.jpg'])],
+    'a link to Trip, leaving Rome and Nice out' => [$ckX4, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg'])],
+    'a link to Trip and the Not listed Hidden, leaving Rome out' => [$ckX5, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg', 'Trip/Hidden/h1.jpg'])],
+    'a link to Trip, leaving Rome out, only that' => [$ckX6, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg']],
+    'a link to Trip, leaving Rome out, and one photo from Rome by name (mixed)' => [$ckX7, array_merge($exPublic, ['Trip/t0.jpg', 'Trip/Paris/p1.jpg', 'Trip/Nice/n1.jpg', 'Trip/Rome/r1.jpg'])],
+];
+$exHdr = fn ($c) => $c ? ["Cookie: $c"] : [];
+foreach ($exViewers as $name => [$ck, $expect]) {
+    $problems = [];
+    $seen = $s2Visible(http_get("$baseEx/", $exHdr($ck))[1]);
+    if ($seen === null || !$s2Same($seen, $expect)) $problems[] = 'the page lists ' . json_encode($seen);
+    foreach ($exAll as $f) {
+        $want = in_array($f, $expect, true);
+        foreach (['thumb', 'full'] as $size) { $st = http_get("$baseEx/?img=" . rawurlencode($f) . "&size=$size", $exHdr($ck))[0]; if (($want && $st !== 200) || (!$want && $st !== 404)) $problems[] = "$f $size answered $st"; }
+        [$photoSt, $photoBody] = http_get("$baseEx/?photo=" . rawurlencode($f), $exHdr($ck));
+        $initial = $photoSt === 404 ? null : (preg_match('/const initialPhoto = ([^\n]*);/', $photoBody, $pm) ? json_decode($pm[1], true) : 'none');
+        if (($want && $initial !== $f) || (!$want && $initial !== null)) $problems[] = "?photo=$f opened " . json_encode($initial);
+    }
+    foreach (['Trip', 'Trip/Paris', 'Trip/Rome', 'Trip/Rome/Old', 'Trip/Nice', 'Trip/Hidden', 'Other'] as $folder) {
+        $has = (bool) array_filter($expect, fn ($x) => str_starts_with($x, $folder . '/'));
+        $st = http_get("$baseEx/?folder=" . rawurlencode($folder), $exHdr($ck))[0];
+        if (($has && $st !== 200) || (!$has && $st !== 404)) $problems[] = "?folder=$folder answered $st";
+    }
+    check("[exceptions] leak matrix, $name: the page, the pictures, ?photo= and each folder page show exactly what that viewer may reach" . ($problems ? ' -- ' . implode('; ', array_slice($problems, 0, 5)) : ''), !$problems);
+}
+// What cannot be saved: a folder left out that no picked folder above covers, one that is itself picked, a folder at the top, and a place to open in that is left out
+$exBad = $exMake('X8 odd exceptions', ['scope_type' => 'folders', 'scope_folders' => $J(['Trip']), 'scope_except' => $J(['Other', 'Trip', 'Trip/Rome/Old', 'NoSuchFolder'])]);
+$exBad2 = $exMake('X8b nested exceptions', ['scope_type' => 'folders', 'scope_folders' => $J(['Trip']), 'scope_except' => $J(['Trip/Rome', 'Trip/Rome/Old'])]);
+check('[exceptions] a folder left out is kept only where a picked folder above it is what covers it: one elsewhere, the picked folder itself and one that is not there are dropped (here only Rome/Old is kept)', $exBad[0] !== null && count($exStored($exBad[0])['except'] ?? []) === 1);
+check('[exceptions] ...and one inside another left-out folder with nothing picked between them is dropped too (leaving Rome out already leaves Old out)', $exBad2[0] !== null && count($exStored($exBad2[0])['except'] ?? []) === 1);
+$exOpen = $exAdmin(['action' => 'link_create', 'label' => 'X9 opens in a folder it leaves out', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'folders', 'scope_folders' => $J(['Trip']), 'scope_except' => $J(['Trip/Rome']), 'open_in' => 'Trip/Rome/Old', 'downloads' => 'off', 'zip' => 'off']);
+check('[exceptions] a link can\'t be set to open inside a folder it leaves out, nor have downloads limited to one', empty($exOpen['ok']) && str_contains(json_encode($exOpen), 'only open in a folder it covers'));
+$exDl = $exAdmin(['action' => 'link_create', 'label' => 'X10 downloads in a folder it leaves out', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'folders', 'scope_folders' => $J(['Trip']), 'scope_except' => $J(['Trip/Rome']), 'downloads' => 'some', 'downloads_folders' => $J(['Trip/Rome']), 'zip' => 'off']);
+check('[exceptions] ...and downloads for "some folders" must be among the folders the link covers (not a left-out one)', empty($exDl['ok']) && str_contains(json_encode($exDl), 'have to be among the folders the link covers'));
+// The Shares tab says it, and hands the edit form the list
+$exTab = http_get("$baseEx/?admin", ["Cookie: $exAdminCookie"])[1];
+check('[exceptions] the Shares tab says in words what a link leaves out, with counts that leave it out too (Trip holds 5 items, 3 without Rome), and hands the edit form the list', str_contains($exTab, 'Trip (everything inside: 3, 3 private; without ') && str_contains($exTab, 'scopeExcept') && str_contains($exTab, 'Trip\\/Rome'));
+// Saving again keeps or changes the list; taking the folder out of the link keeps nothing dangling
+$exSave = $exAdmin(['action' => 'link_save', 'id' => $idX2, 'label' => 'X2 Trip except Rome', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'folders', 'scope_folders' => $J(['Trip']), 'scope_except' => '[]', 'downloads' => 'off', 'zip' => 'off']);
+check('[exceptions] editing the link and leaving nothing out brings Rome back (and drops the list), with the same sign-in', ($exSave['ok'] ?? false) && !array_key_exists('except', $exStored($idX2)) && $s2Same($s2Visible(http_get("$baseEx/", $exHdr($ckX2))[1]) ?? [], array_merge($exPublic, $exTrip)), json_encode($exSave));
+// The preview picture follows it (public photos in two sibling folders: leaving one out leaves the other)
+$exCoverQ = fn ($q) => json_decode(http_get("$baseEx/?admin&linkcover=1&seed=0a1b2c3d&" . $q, ["Cookie: $exAdminCookie"])[1], true);
+$cvA = $exCoverQ('scope_type=folders&scope_folders=' . rawurlencode($J(['Pics'])) . '&scope_except=' . rawurlencode($J(['Pics/A'])) . '&scope_photos=%5B%5D');
+$cvB = $exCoverQ('scope_type=folders&scope_folders=' . rawurlencode($J(['Pics'])) . '&scope_except=' . rawurlencode($J(['Pics/B'])) . '&scope_photos=%5B%5D');
+check('[exceptions] the form\'s preview photo comes only from what the link covers: with Pics/A left out it is Pics/B\'s photo, with Pics/B left out Pics/A\'s', ($cvA['file'] ?? '') === 'Pics/B/b1.jpg' && ($cvB['file'] ?? '') === 'Pics/A/a1.jpg', json_encode([$cvA['file'] ?? null, $cvB['file'] ?? null]));
+
 echo "== share links: the log (opens, what was seen, opened, played and saved, blocked tries), kept until the link is deleted ==\n";
 
 $fxL = new_fixture_dir('sllog');

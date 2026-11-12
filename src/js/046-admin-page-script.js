@@ -1059,7 +1059,7 @@
     var box = document.getElementById('sl-root'); if (!box) return;
     var csrf = box.getAttribute('data-csrf') || '';
     var toastTimer = null, pretty = null;
-    var st = { scope: [], pub: [], downloads: [], zip: [], photos: [] };   // the folders and photos the form is holding, as paths (pub: the chosen folders that show only their public items)
+    var st = { scope: [], except: [], pub: [], downloads: [], zip: [], photos: [] };   // the folders and photos the form is holding, as paths (pub: the chosen folders that show only their public items; except: folders left out of a chosen one, each with everything inside it)
     function modalEl() { return document.getElementById('sl-modal'); }   // (looked up each time: the tab's own markup is replaced when it refreshes)
     function say(text, bad) {
       var toast = document.getElementById('sl-toast');
@@ -1202,7 +1202,7 @@
     function usesOf(f) { return f.opens === 'n' ? (+f.opensN || 0) : +f.opens; }
     function usesClause(n) { return n === 0 ? 'in as many browsers as they like' : n === 1 ? 'in just one browser' : 'in up to ' + n + ' browsers'; }
     var DEFAULTS = { label: '', address: '', note: '', titleMode: 'gallery', titleText: '', picture: true, pictureSeed: '', pictureFile: '', maxOpens: DEFAULT_USES, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default',
-      scopeType: 'public', only: false, scopeFolders: [], scopePublicOnly: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
+      scopeType: 'public', only: false, scopeFolders: [], scopeExcept: [], scopePublicOnly: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
     function localValue(ts) {
       var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
       return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
@@ -1212,7 +1212,31 @@
     function radioValue(form, name) { var r = form.querySelector('input[name="' + name + '"]:checked'); return r ? r.value : ''; }
     function folderList(form) { try { return JSON.parse(form.getAttribute('data-folders') || '[]'); } catch (x) { return []; } }
     function labelOf(form, path) { var f = folderList(form).filter(function (o) { return o.p === path; })[0]; return f ? f.l : path; }
-    function under(path, roots) { return roots.some(function (r) { return path === r || path.indexOf(r + '/') === 0; }); }
+    function parentOf(p) { var i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); }
+    // The Not listed folders that sit in no other Not listed folder: a folder picked above one does not bring it along (it has to be picked itself), as the server reads it.
+    function topUnlisted(form) {
+      var all = {}, top = {};
+      folderList(form).forEach(function (o) { if (o.u && !o.c) all[o.p] = true; });
+      Object.keys(all).forEach(function (u) { var q = parentOf(u), isTop = true; while (q !== '') { if (all[q]) { isTop = false; break; } q = parentOf(q); } if (isTop) top[u] = true; });
+      return top;
+    }
+    // Is this folder (a path) covered by what the link holds now? The nearest folder listed above it, itself included, decides: one that is picked takes it in with everything inside it,
+    // one that is left out (an exception) puts it out, and a Not listed folder is not taken in by a folder above it.
+    function covered(form, p) {
+      var un = topUnlisted(form), parts = p.split('/'), pre = '', on = false;
+      for (var i = 0; i < parts.length; i++) {
+        pre = pre === '' ? parts[i] : pre + '/' + parts[i];
+        if (st.except.indexOf(pre) >= 0) on = false;
+        else if (st.scope.indexOf(pre) >= 0) on = true;
+        else if (un[pre]) on = false;
+      }
+      return on;
+    }
+    // Folders left out are kept only while a picked folder above them is what covers them.
+    function tidyExcept(form) {
+      var again = true;
+      while (again) { again = false; st.except = st.except.filter(function (e) { var par = parentOf(e), keep = par !== '' && covered(form, par); if (!keep) again = true; return keep; }); }
+    }
     function chipsHtml(form, kind) {
       var list = st[kind] || [];
       return list.map(function (p) {
@@ -1221,7 +1245,13 @@
           var on = st.pub.indexOf(p) >= 0, priv = folderList(form).some(function (o) { return o.p === p && o.x; });
           mode = '<button type="button" class="sl-chipmode' + (on ? ' on' : '') + '" data-chip-mode data-p="' + esc(p) + '"' + (priv ? ' disabled title="This folder is private as a whole, so nothing in it is public"' : ' title="' + (on ? 'Only the public photos and videos in it are shown. Press for everything inside it.' : 'Everything inside it is shown, private photos and videos too. Press for only the public ones.') + '"') + ' aria-pressed="' + (on ? 'true' : 'false') + '">' + (on ? 'Public items only' : 'Everything') + '</button>';
         }
-        return '<span class="sl-chip">' + esc(labelOf(form, p)) + mode + ' <button type="button" data-chip-x="' + kind + '" data-p="' + esc(p) + '" aria-label="Take it out">×</button></span>';
+        var left = '';
+        if (kind === 'scope') {   // (what is left out of it: the folders it takes in everything of, except these)
+          var gone = st.except.filter(function (e) { var q = parentOf(e); while (q !== '' && st.scope.indexOf(q) < 0 && st.except.indexOf(q) < 0) q = parentOf(q); return q === p; });
+          var rootL = labelOf(form, p) + ' / ';
+          if (gone.length) left = '<span class="sl-without">without ' + esc(gone.map(function (e) { var l = labelOf(form, e); return l.indexOf(rootL) === 0 ? l.slice(rootL.length) : l; }).join(', ')) + '</span>';   // (on a line of its own under the chip: it can be long)
+        }
+        return '<span class="sl-chip">' + esc(labelOf(form, p)) + mode + ' <button type="button" data-chip-x="' + kind + '" data-p="' + esc(p) + '" aria-label="Take it out">×</button></span>' + left;
       }).join('')
         + '<button type="button" class="linklike sl-add" data-chip-add="' + kind + '">+ Add folder</button>';
     }
@@ -1240,7 +1270,7 @@
     // What the link covers, as the form holds it now, for the requests that choose or show the preview photo (it may only come from what the link covers).
     function scopeQuery(form) {
       var sc = radioValue(form, 'scope_type');
-      return '&scope_type=' + encodeURIComponent(sc) + '&scope_folders=' + encodeURIComponent(JSON.stringify(sc === 'folders' || sc === 'mixed' ? st.scope : [])) + '&scope_photos=' + encodeURIComponent(JSON.stringify(sc === 'photos' || sc === 'mixed' ? st.photos : []));
+      return '&scope_type=' + encodeURIComponent(sc) + '&scope_folders=' + encodeURIComponent(JSON.stringify(sc === 'folders' || sc === 'mixed' ? st.scope : [])) + '&scope_except=' + encodeURIComponent(JSON.stringify(sc === 'folders' || sc === 'mixed' ? st.except : [])) + '&scope_photos=' + encodeURIComponent(JSON.stringify(sc === 'photos' || sc === 'mixed' ? st.photos : []));
     }
     function coverRefresh(form) {
       var row = form.querySelector('[data-coverrow]'), on = form.querySelector('[name=picture]').checked;
@@ -1285,7 +1315,7 @@
       holder.innerHTML = popHtml('openin', 'open_in', rows, list.some(function (r) { return r.v === keep; }) ? keep : '', 'Opens in', scope === 'photos');
       form.querySelector('[data-openin] .sl-h').textContent = scope === 'photos' ? 'Straight into the viewer, on the first photo.' : 'The first page they see.';
       var crow = form.querySelector('[data-coverrow]'); crow.hidden = !form.querySelector('[name=picture]').checked;
-      var coverKey = scope + '|' + st.scope.join(',') + '|' + st.photos.join(',');
+      var coverKey = scope + '|' + st.scope.join(',') + '|' + st.except.join(',') + '|' + st.photos.join(',');
       if (crow._key !== coverKey) { crow._key = coverKey; crow._loaded = false; }   // (what the link covers decides which photos the automatic picture may come from)
       if (!crow.hidden && !crow._loaded) coverRefresh(form);
       summarize(form);
@@ -1349,7 +1379,7 @@
     function summarize(form) {
       var addrNote = form.querySelector('[data-addrnote]'); if (addrNote) addrNote.hidden = !((form._addrMode || 'name') === 'name' && opensPrivate(form));
       var f = formState(form), form_ = form, names = function (list) { return list.map(function (p) { return labelOf(form_, p); }).join(', '); };
-      var scopeNames = function () { return st.scope.map(function (p) { return labelOf(form_, p) + (st.pub.indexOf(p) >= 0 ? ' (public items only)' : ''); }).join(', '); };
+      var scopeNames = function () { return st.scope.map(function (p) { return labelOf(form_, p) + (st.pub.indexOf(p) >= 0 ? ' (public items only)' : ''); }).join(', ') + (st.except.length ? ', without ' + names(st.except) : ''); };
       var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'the whole gallery, public and private' : f.scope === 'folders' ? (st.scope.length ? scopeNames() : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? scopeNames() : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
       var usesNow = usesOf(f), usesIsDefault = usesNow === DEFAULT_USES && (f.opens !== 'n' || f.opensN !== '');
       var endsSay = f.ends === '0' ? 'never stops working' : f.ends === 'pick' ? 'stops working on ' + fdate(f.endsAt) : 'stops working after ' + ({ '86400': '1 day', '604800': '1 week', '2592000': '30 days' }[f.ends] || '');
@@ -1379,7 +1409,7 @@
       var ra = form.querySelector('[data-sl=resetall]'); ra.hidden = changed === 0; ra.textContent = changed + (changed === 1 ? ' setting' : ' settings') + ' changed · Reset all';
     }
     function resetGroup(form, g) {
-      if (g === 'scope') { radio(form, 'scope_type', 'public'); st.scope = []; st.pub = []; st.photos = []; form.querySelector('[name=only]').checked = false; form.querySelector('[data-openin-menu]').setAttribute('data-want', ''); }
+      if (g === 'scope') { radio(form, 'scope_type', 'public'); st.scope = []; st.except = []; st.pub = []; st.photos = []; form.querySelector('[name=only]').checked = false; form.querySelector('[data-openin-menu]').setAttribute('data-want', ''); }
       if (g === 'limits') { setUses(form, DEFAULT_USES); radio(form, 'ends_pick', '0'); radio(form, 'starts_pick', 'now'); }
       if (g === 'privacy') { radio(form, 'downloads', 'off'); radio(form, 'zip', 'off'); radio(form, 'locations', 'public'); st.downloads = []; st.zip = []; }
       if (g === 'page') { radio(form, 'title_mode', 'gallery'); form.querySelector('[name=title_text]').value = ''; form.querySelector('[name=picture]').checked = true; form.querySelector('[name=picture_file]').value = ''; form.querySelector('[name=note]').value = ''; radio(form, 'heads_up', 'default'); form.querySelector('[data-coverrow]')._loaded = false; }
@@ -1388,7 +1418,7 @@
     function openForm(link, focusField) {
       var form = box.querySelector('#sl-form'), v = Object.assign({}, DEFAULTS, link || {});
       form.reset();
-      st = { scope: (v.scopeFolders || []).slice(), pub: (v.scopePublicOnly || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
+      st = { scope: (v.scopeFolders || []).slice(), except: (v.scopeExcept || []).slice(), pub: (v.scopePublicOnly || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
       var editing = !!(link && link.id);
       form.querySelector('[name=id]').value = editing ? link.id : '';
       form.querySelector('.sl-form-title').textContent = editing ? 'Edit link' : 'New share link';
@@ -1416,7 +1446,7 @@
         action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
         label: form.querySelector('[name=label]').value, address: form.querySelector('[name=address]').value, address_auto: form._addrMode === 'name' ? '1' : '0', keep_old: form.querySelector('[name=keep_old]').checked && !form.querySelector('[data-keeprow]').hidden ? '1' : '0', note: form.querySelector('[name=note]').value,
         title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value, picture: form.querySelector('[name=picture]').checked ? '1' : '0', picture_seed: form.querySelector('[name=picture_seed]').value, picture_file: form.querySelector('[name=picture_file]').value,
-        scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.scope : []), scope_public_only: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }) : []), scope_photos: JSON.stringify(scope === 'photos' || scope === 'mixed' ? st.photos : []),
+        scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.scope : []), scope_except: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.except : []), scope_public_only: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }) : []), scope_photos: JSON.stringify(scope === 'photos' || scope === 'mixed' ? st.photos : []),
         only: (scope === 'folders' || scope === 'photos' || scope === 'mixed') && form.querySelector('[name=only]').checked ? '1' : '0',
         open_in: form.querySelector('[name=open_in]').value,
         downloads: radioValue(form, 'downloads'), downloads_folders: JSON.stringify(st.downloads), zip: radioValue(form, 'zip'), zip_folders: JSON.stringify(st.zip),
@@ -1445,26 +1475,70 @@
       if (e.target.name === 'scope_type') addrSync(form);
       if (e.target.name === 'scope_type' && (e.target.value === 'folders' || e.target.value === 'mixed')) {
         // folders already chosen for downloads and ZIPs that the new scope doesn't cover are dropped
-        ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope) || !st.scope.length; }); });
+        ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return covered(form, p) || !st.scope.length; }); });
       }
       syncForm(form);
     });
-    // The folder picker: a list of check boxes.
+    // The folder picker: a list of check boxes, as a tree. Ticking a folder ticks everything inside it (a Not listed folder is not brought along: it has to be ticked itself), and any
+    // of those can then be unticked. What is kept is the folders that are the top of a ticked part, and the folders left out of a ticked one (the link remembers those as exceptions).
+    // The pickers for downloads and ZIPs are the same list with the folders inside a ticked one shown ticked and fixed: they take in everything inside, as they always did.
     function pickFolders(form, kind) {
-      var all = folderList(form), roots = st.scope, scope = radioValue(form, 'scope_type');
-      var list = (kind !== 'scope' && (scope === 'folders' || scope === 'mixed')) ? all.filter(function (o) { return under(o.p, roots); }) : all;
-      if (kind !== 'scope' && (scope === 'folders' || scope === 'mixed') && !roots.length) { say('Choose the folders it covers first.', true); return Promise.resolve(false); }
-      var rows = list.map(function (o, i) {
-        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"' + (st[kind].indexOf(o.p) >= 0 ? ' checked' : '') + '> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Not listed</small>' : '') + '</span></label>';
+      var all = folderList(form), scope = radioValue(form, 'scope_type');
+      var limited = kind !== 'scope' && (scope === 'folders' || scope === 'mixed');
+      if (limited && !st.scope.length) { say('Choose the folders it covers first.', true); return Promise.resolve(false); }
+      var list = limited ? all.filter(function (o) { return covered(form, o.p); }) : all;
+      var byP = {}; list.forEach(function (o) { byP[o.p] = o; });
+      var un = topUnlisted(form);
+      var below = function (p) { return list.filter(function (o) { return !o.c && o.p.indexOf(p + '/') === 0; }); };   // everything under a folder, in this list
+      var viaUn = function (p, q) { return Object.keys(un).some(function (u) { return u.indexOf(p + '/') === 0 && (q === u || q.indexOf(u + '/') === 0); }); };   // (q sits in a Not listed folder that is itself under p)
+      var tick = {};
+      if (kind === 'scope') list.forEach(function (o) { if (o.c ? st.scope.indexOf(o.p) >= 0 : covered(form, o.p)) tick[o.p] = true; });
+      else st[kind].forEach(function (p) { tick[p] = true; });
+      var rows = list.map(function (o) {
+        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Not listed</small>' : '') + '</span></label>';
       }).join('') || '<p class="muted">There are no folders to choose from.</p>';
-      return ask(kind === 'scope' ? 'Choose the folders it covers' : 'Choose the folders', '<div class="sl-picklist">' + rows + '</div><p class="hint">A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.</p>', 'Done', false).then(function (yes) {
+      var hint = kind === 'scope' ? 'Ticking a folder takes in everything inside it; untick any you don\'t want. Once it is chosen you can limit it to its public items. A lock marks a private folder.'
+        : 'A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.';
+      var done = ask(kind === 'scope' ? 'Choose the folders it covers' : 'Choose the folders', '<div class="sl-picklist">' + rows + '</div><p class="hint">' + hint + '</p>', 'Done', false);
+      var listEl = modalEl().querySelector('.sl-picklist');
+      var above = function (p) { var q = parentOf(p); while (q !== '') { if (tick[q]) return true; q = parentOf(q); } return false; };
+      var paint = function () {
+        [].forEach.call(listEl.querySelectorAll('input[type=checkbox]'), function (c) {
+          var p = c.value, o = byP[p];
+          if (kind === 'scope') { c.disabled = false; c.checked = !!tick[p]; c.indeterminate = !!tick[p] && !o.c && below(p).some(function (d) { return !tick[d.p] && !viaUn(p, d.p); }); }
+          else { var fixed = !o.c && above(p); c.disabled = fixed; c.checked = !!tick[p] || fixed; c.indeterminate = false; }
+        });
+      };
+      paint();
+      listEl.addEventListener('change', function (e) {
+        var c = e.target; if (!c || c.type !== 'checkbox' || !byP[c.value]) return;
+        var p = c.value, o = byP[p];
+        if (kind === 'scope') {
+          var partial = !o.c && below(p).some(function (d) { return !tick[d.p] && !viaUn(p, d.p); });   // (ticked with something inside left out: pressing it ticks everything again)
+          if (tick[p] && !partial) { delete tick[p]; if (!o.c) below(p).forEach(function (d) { delete tick[d.p]; }); }
+          else { tick[p] = true; if (!o.c) below(p).forEach(function (d) { if (!viaUn(p, d.p)) tick[d.p] = true; }); }
+        } else if (tick[p]) delete tick[p];
+        else { tick[p] = true; below(p).forEach(function (d) { delete tick[d.p]; }); }
+        paint();
+      });
+      return done.then(function (yes) {
         if (!yes) return false;
         var before = st[kind].slice();
-        st[kind] = [].map.call(modalEl().querySelectorAll('.sl-picklist input:checked'), function (c) { return c.value; });
+        if (kind === 'scope') {
+          var tops = [], left = [];
+          list.forEach(function (o) {
+            var t = !!tick[o.p];
+            if (o.c) { if (t) tops.push(o.p); return; }
+            var par = parentOf(o.p), pt = par !== '' && !!byP[par] && !!tick[par];
+            if (t && (!pt || o.u)) tops.push(o.p);   // (the top of a ticked part; a Not listed folder is always its own top)
+            else if (!t && pt && !o.u) left.push(o.p);   // (left out of a ticked folder above it)
+          });
+          st.scope = tops; st.except = left;
+        } else st[kind] = list.filter(function (o) { return tick[o.p]; }).map(function (o) { return o.p; });
         // A Not listed folder is the owner's private drawer: picking one into a link is allowed, but asked about, because everyone with the link then sees all of it.
         var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
         var finish = function () {
-          if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope); }); }); }
+          if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); tidyExcept(form); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return covered(form, p); }); }); }
           syncForm(form);
           return true;
         };
@@ -1552,7 +1626,7 @@
       var cm = e.target.closest ? e.target.closest('[data-chip-mode]') : null;
       if (cm) { if (cm.disabled) return; var cp = cm.getAttribute('data-p'), at = st.pub.indexOf(cp); if (at >= 0) st.pub.splice(at, 1); else st.pub.push(cp); syncForm(box.querySelector('#sl-form')); return; }
       var x = e.target.closest ? e.target.closest('[data-chip-x]') : null;
-      if (x) { var k = x.getAttribute('data-chip-x'), p = x.getAttribute('data-p'); st[k] = st[k].filter(function (q) { return q !== p; }); if (k === 'scope') st.pub = st.pub.filter(function (q) { return q !== p; }); if (k === 'scope') ['downloads', 'zip'].forEach(function (kk) { st[kk] = st[kk].filter(function (q) { return under(q, st.scope); }); }); syncForm(box.querySelector('#sl-form')); return; }
+      if (x) { var k = x.getAttribute('data-chip-x'), p = x.getAttribute('data-p'); st[k] = st[k].filter(function (q) { return q !== p; }); if (k === 'scope') st.pub = st.pub.filter(function (q) { return q !== p; }); var xf = box.querySelector('#sl-form'); if (k === 'scope') { tidyExcept(xf); ['downloads', 'zip'].forEach(function (kk) { st[kk] = st[kk].filter(function (q) { return covered(xf, q); }); }); } syncForm(xf); return; }
       if (e.target.closest && e.target.closest('[data-cover-choose]')) { pickCover(box.querySelector('#sl-form')); return; }
       if (e.target.closest && e.target.closest('[data-cover-auto]')) { var cf = box.querySelector('#sl-form'); cf.querySelector('[name=picture_file]').value = ''; coverRefresh(cf); return; }
       var add = e.target.closest ? e.target.closest('[data-chip-add]') : null;

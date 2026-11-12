@@ -6088,11 +6088,13 @@ function links_update($modifier) { return json_file_update(links_path(), links_d
 /** A random token of letters and digits, LINK_TOKEN_LENGTH long (8: about 48 bits; the lockout allows few guesses), with no modulo bias. */
 function link_new_token() {
     $alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-    $token = '';
-    while (strlen($token) < LINK_TOKEN_LENGTH) {
-        $v = ord(random_bytes(1));
-        if ($v < 248) $token .= $alphabet[$v % 62];   // 248 = 4 x 62
-    }
+    do {   // (with a capital among them, always: an address without one is taken for a name of the owner's own - see link_address_is_custom - and shown whole in the log; one try in 75 has none)
+        $token = '';
+        while (strlen($token) < LINK_TOKEN_LENGTH) {
+            $v = ord(random_bytes(1));
+            if ($v < 248) $token .= $alphabet[$v % 62];   // 248 = 4 x 62
+        }
+    } while (preg_match('/[A-Z]/', $token) !== 1);
     return $token;
 }
 function link_new_id() { return bin2hex(random_bytes(5)); }
@@ -6359,7 +6361,7 @@ function render_link_preview_banner($l, $dir, $files) {
     $yes = function ($html) { return '<li class="yes">' . ui_icon('check') . '<span>' . $html . '</span></li>'; };
     $no = function ($html) { return '<li class="no">' . ui_icon('close') . '<span>' . $html . '</span></li>'; };
     $items = [];
-    if ($type !== 'public') $items[] = $yes(($type === 'all' ? 'The whole gallery, public and private, including what you add later' : ($type === 'folders' && !array_filter(array_column($report['folders'], 'pub')) ? $esc(implode(', ', array_map(function ($x) { return $x['label']; }, $report['folders']))) . ' and everything inside ' . (count($report['folders']) === 1 ? 'it' : 'them') : link_scope_text_html($l, $report))));
+    if ($type !== 'public') $items[] = $yes(($type === 'all' ? 'The whole gallery, public and private, including what you add later' : ($type === 'folders' && !array_filter(array_column($report['folders'], 'pub')) && !$report['except'] ? $esc(implode(', ', array_map(function ($x) { return $x['label']; }, $report['folders']))) . ' and everything inside ' . (count($report['folders']) === 1 ? 'it' : 'them') : link_scope_text_html($l, $report))));
     $items[] = $yes('All public folders and photos, as any visitor sees them');
     if ($type === 'public') $items[] = $no('<strong>Nothing private</strong> is shown or hinted at');
     elseif ($type !== 'all') $items[] = $no('Your other private folders and photos are <strong>not shown and not hinted at</strong>');
@@ -6457,19 +6459,25 @@ function link_scan_ambiguity($dir, $allFiles) {
     link_ambiguous_set($dups);
 }
 
-/** True if the item is inside one of the folders with these ids (the folder it is in, or any folder above it). */
-function link_item_under_folder_ids($dir, $file, $fids) {
+/** True if the item is inside one of the folders with these ids (the folder it is in, or any folder above it). $except: ids of folders the link leaves out
+ *  of what a folder above it takes in (the folder and everything inside it); the nearest one listed above the item decides, so a folder inside an
+ *  excepted one can be listed again. */
+function link_item_under_folder_ids($dir, $file, $fids, $except = []) {
     $set = array_fill_keys(array_filter((array) $fids, 'is_string'), true);
     if (!$set) return false;
+    $ex = array_fill_keys(array_filter((array) $except, 'is_string'), true);
     $amb = link_ambiguous_set();
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
+    $in = false;
     foreach ($parts as $seg) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
         $id = folder_id_cached($dir, $prefix);
-        if ($id !== '' && isset($set[$id]) && !isset($amb[$id])) return true;
+        if ($id === '' || isset($amb[$id])) continue;
+        if (isset($ex[$id])) $in = false;
+        elseif (isset($set[$id])) $in = true;
     }
-    return false;
+    return $in;
 }
 
 /** Is the item public (not private)? Without the gallery's item settings to ask, it is not: a link never shows what it can't be sure of. */
@@ -6481,16 +6489,17 @@ function link_item_is_public($dir, $file, $itemsData = null) {
 /** How a link's folders cover an item: 'all' (it is under a folder the link shares with everything inside), 'public' (it is under folders
  *  the link shares as "public items only", and under no other), or '' (under none of them). A private folder's items are all private,
  *  so a public-only folder that is itself private covers nothing. */
-function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
+function link_folder_cover($dir, $file, $fids, $publicOnly = [], $except = []) {
     $set = array_fill_keys(array_filter((array) $fids, 'is_string'), true);
     if (!$set) return '';
     $pub = array_fill_keys(array_filter((array) $publicOnly, 'is_string'), true);
+    $ex = array_fill_keys(array_filter((array) $except, 'is_string'), true);   // (folders the link leaves out of what a folder above takes in: the nearest one listed above the item decides)
     $amb = link_ambiguous_set();
-    $cover = '';
+    $cover = ''; $viaCollection = '';
     foreach (array_keys($set) as $cid) {   // a collection the link names covers the files it holds (as it holds them); the link's own "public items only" applies to it as to a folder
         if ($cid[0] !== 'c' || file_is_unlisted($dir, $file) || !collection_holds_file($dir, $cid, $file)) continue;   // (a Not listed folder's photos come through no collection, as through no folder above it: it has to be picked itself)
         if (!isset($pub[$cid])) return 'all';
-        $cover = 'public';
+        $viaCollection = 'public';
     }
     $parts = explode('/', $file); array_pop($parts);
     $prefix = '';
@@ -6500,11 +6509,13 @@ function link_folder_cover($dir, $file, $fids, $publicOnly = []) {
         $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
         if ($n++ < $from) continue;
         $id = folder_id_cached($dir, $prefix);
-        if ($id === '' || !isset($set[$id]) || isset($amb[$id])) continue;
-        if (!isset($pub[$id])) return 'all';
-        $cover = 'public';
+        if ($id === '' || isset($amb[$id])) continue;
+        if (isset($ex[$id])) { $cover = ''; continue; }
+        if (!isset($set[$id])) continue;
+        if (!isset($pub[$id])) $cover = 'all';
+        elseif ($cover !== 'all') $cover = 'public';
     }
-    return $cover;
+    return $cover === 'all' ? 'all' : ($cover === 'public' || $viaCollection === 'public' ? 'public' : '');
 }
 
 /** May the link $l show this item? */
@@ -6512,7 +6523,7 @@ function link_allows_item($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
     if ($type === 'all') return !file_is_unlisted($dir, $file);   // ("Everything" leaves out a Not listed folder: that one is shared only by picking it)
     if ($type === 'folders' || $type === 'mixed') {
-        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? []);
+        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? [], $l['scope']['except'] ?? []);
         if ($cover === 'all') return true;
         if ($cover === 'public' && link_item_is_public($dir, $file, $itemsData)) return true;   // ("public items only": the private ones are left out, unless one is named below)
         if ($type === 'folders') return false;
@@ -6533,7 +6544,7 @@ function link_item_is_picked_photo($l, $dir, $file, $itemsData = null) {
     $type = $l['scope']['type'] ?? '';
     if ($type !== 'photos' && $type !== 'mixed') return false;
     if ($type === 'mixed') {   // (inside a folder the link shares, it is part of that folder; named as well as private inside a "public items only" folder, it is a tile of its own)
-        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? []);
+        $cover = link_folder_cover($dir, $file, $l['scope']['folders'] ?? [], $l['scope']['publicOnly'] ?? [], $l['scope']['except'] ?? []);
         if ($cover === 'all' || ($cover === 'public' && link_item_is_public($dir, $file, $itemsData))) return false;
     }
     return link_allows_item($l, $dir, $file, $itemsData);
@@ -6779,18 +6790,32 @@ function link_cover_in_scope($l, $dir, $f, $draft = null) {
     $type = $draft !== null ? (string) ($draft['type'] ?? 'all') : (string) ($l['scope']['type'] ?? 'all');
     if (!in_array($type, ['folders', 'photos', 'mixed'], true)) return true;
     if ($draft === null) return link_allows_item($l, $dir, $f);
-    if ($type !== 'photos') foreach ((array) ($draft['folders'] ?? []) as $d) {
-        if ($d !== '' && str_starts_with($f, $d . '/')) return true;
-        if ($d !== '' && ($c = collection_at($dir, $d)) !== null && in_array($f, collection_member_files($dir, $c, $GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? [])), true)) return true;
+    if ($type !== 'photos') {
+        foreach ((array) ($draft['folders'] ?? []) as $d) {
+            if ($d !== '' && ($c = collection_at($dir, $d)) !== null && in_array($f, collection_member_files($dir, $c, $GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? [])), true)) return true;
+        }
+        if (link_path_in_folders($f, (array) ($draft['folders'] ?? []), (array) ($draft['except'] ?? []))) return true;
     }
     return $type !== 'folders' && in_array($f, (array) ($draft['photos'] ?? []), true);
+}
+
+/** Is this path (a folder's, or a file's) inside one of these folders (paths), as far as a link goes: the nearest folder listed above it, in $folders or in $except
+ *  (folders left out of what a folder above takes in), decides. */
+function link_path_in_folders($path, $folders, $except = []) {
+    $in = false; $prefix = '';
+    foreach (explode('/', $path) as $seg) {
+        $prefix = $prefix === '' ? $seg : $prefix . '/' . $seg;
+        if (in_array($prefix, (array) $except, true)) $in = false;
+        elseif (in_array($prefix, (array) $folders, true)) $in = true;
+    }
+    return $in;
 }
 
 /** The form's unsaved choice of what a link covers, from a request's scope_type / scope_folders / scope_photos (null when they are not sent). */
 function link_draft_scope_from_request() {
     if (!isset($_GET['scope_type']) || !is_string($_GET['scope_type'])) return null;
     $list = function ($k) { $v = json_decode(is_string($_GET[$k] ?? null) ? $_GET[$k] : '[]', true); return is_array($v) ? array_values(array_filter($v, 'is_string')) : []; };
-    return ['type' => $_GET['scope_type'], 'folders' => $list('scope_folders'), 'photos' => $list('scope_photos')];
+    return ['type' => $_GET['scope_type'], 'folders' => $list('scope_folders'), 'except' => $list('scope_except'), 'photos' => $list('scope_photos')];
 }
 
 function link_preview_picture($l, $dir, $draft = null) {
@@ -11344,7 +11369,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
     };
     $scopeType = (string) ($_POST['scope_type'] ?? 'all');
     if (!in_array($scopeType, ['all', 'folders', 'photos', 'mixed', 'public'], true)) $scopeType = 'all';
-    $scopeFolderPaths = [];
+    $scopeFolderPaths = []; $scopeExceptPaths = [];
     $scope = ['type' => 'all', 'folders' => [], 'photos' => []];
     // The picked photos, each remembered by the id of its folder and its name (shared by "only some photos" and "some folders and some photos").
     $stampPhotos = function ($rels) use ($validFiles, $dir, $stamp, &$errors, &$index) {
@@ -11374,6 +11399,15 @@ function link_input_from_post($now, $existing, $dir, $files) {
             $id = $stamp($rel); if ($id !== null) $pubIds[] = $id;
         }
         $scope = ['type' => $scopeType, 'folders' => $ids, 'photos' => $photos, 'publicOnly' => $pubIds];
+        // Folders left out of a folder that is picked (the folder and everything inside it), each remembered by its id: kept only where a picked folder is what covers it from above.
+        $exIds = []; $exList = array_values(array_diff($list('scope_except'), $scopeFolderPaths));   // (a folder that is itself picked is not left out)
+        foreach ($exList as $rel) {
+            if (!isset($validFolders[$rel]) || isset($collectionIds[$rel]) || !link_path_in_folders($rel, $scopeFolderPaths, array_diff($exList, [$rel]))) continue;
+            $id = folder_id_stamp(resolve_real_path($dir, $rel));
+            if ($id === '') { $errors[] = 'A link can\'t leave out "' . link_clip($rel, 60) . '": the web server can\'t write in that folder, and a link remembers a folder by a small id kept in it.'; continue; }
+            $index[$id] = $rel; $exIds[] = $id; $scopeExceptPaths[] = $rel;
+        }
+        if ($exIds) $scope['except'] = $exIds;
     } elseif ($scopeType === 'photos') {
         $photos = $stampPhotos($list('scope_photos'));
         if (!$photos) $errors[] = 'Choose at least one photo.';
@@ -11381,10 +11415,9 @@ function link_input_from_post($now, $existing, $dir, $files) {
     } elseif ($scopeType === 'public') {
         $scope = ['type' => 'public', 'folders' => [], 'photos' => []];   // nothing private: the person sees what any visitor sees, and the log records it
     }
-    $underScope = function ($rel) use ($scopeType, $scopeFolderPaths) {
+    $underScope = function ($rel) use ($scopeType, $scopeFolderPaths, &$scopeExceptPaths) {
         if ($scopeType !== 'folders' && $scopeType !== 'mixed') return true;
-        foreach ($scopeFolderPaths as $s) if ($rel === $s || str_starts_with($rel, $s . '/')) return true;
-        return false;
+        return link_path_in_folders($rel, $scopeFolderPaths, $scopeExceptPaths);
     };
     $openIn = '';
     $inRel = trim((string) ($_POST['open_in'] ?? ''));
@@ -11409,7 +11442,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
         return ['mode' => $mode, 'folders' => $ids];
     };
     if ($pictureFile !== '' && in_array($scopeType, ['folders', 'photos', 'mixed'], true)
-        && !link_cover_in_scope(null, $dir, $pictureFile, ['type' => $scopeType, 'folders' => $scopeFolderPaths, 'photos' => $scopeType === 'folders' ? [] : $list('scope_photos')])) $pictureFile = '';   // (a chosen preview photo the link does not cover: the automatic pick takes over)
+        && !link_cover_in_scope(null, $dir, $pictureFile, ['type' => $scopeType, 'folders' => $scopeFolderPaths, 'except' => $scopeExceptPaths, 'photos' => $scopeType === 'folders' ? [] : $list('scope_photos')])) $pictureFile = '';   // (a chosen preview photo the link does not cover: the automatic pick takes over)
     $downloads = $cap('downloads', 'downloads_folders', 'downloads');
     $zip = $cap('zip', 'zip_folders', 'ZIP downloads');
     $only = ($scopeType === 'folders' || $scopeType === 'photos' || $scopeType === 'mixed') && ($_POST['only'] ?? '') === '1';   // "show only these": the person's pages list nothing but what the link covers, the rest of the public gallery too
@@ -11523,6 +11556,7 @@ function links_admin_action($action, $dir, $files) {
             $keep = function ($ids) use ($fid) { return array_values(array_filter((array) $ids, function ($x) use ($fid) { return $x !== $fid; })); };
             $d['links'][$id]['scope']['folders'] = $keep($d['links'][$id]['scope']['folders'] ?? []);
             $d['links'][$id]['scope']['publicOnly'] = $keep($d['links'][$id]['scope']['publicOnly'] ?? []);
+            if (isset($d['links'][$id]['scope']['except'])) $d['links'][$id]['scope']['except'] = $keep($d['links'][$id]['scope']['except']);
             $d['links'][$id]['scope']['photos'] = array_values(array_filter((array) ($d['links'][$id]['scope']['photos'] ?? []), function ($p) use ($fid) { return ($p['fid'] ?? '') !== $fid; }));
             foreach (['downloads', 'zip'] as $c) $d['links'][$id][$c]['folders'] = $keep($d['links'][$id][$c]['folders'] ?? []);
             if (($d['links'][$id]['openIn'] ?? '') === $fid) $d['links'][$id]['openIn'] = '';
@@ -12186,13 +12220,18 @@ function link_fid_state($fid, $map, $index, $rootFid) {
 /** What a link covers, for the tab: lists of [label, state] for its folders and photos, how many are not found, and the paths
  *  the edit form starts from. */
 function link_scope_report($l, $map, $index, $dir, $rootFid) {
-    $out = ['folders' => [], 'photos' => [], 'problems' => 0, 'paths' => ['scope' => [], 'publicOnly' => [], 'downloads' => [], 'zip' => [], 'photos' => [], 'openIn' => '']];
+    $out = ['folders' => [], 'photos' => [], 'except' => [], 'problems' => 0, 'paths' => ['scope' => [], 'publicOnly' => [], 'except' => [], 'downloads' => [], 'zip' => [], 'photos' => [], 'openIn' => '']];
     $one = function ($fid) use ($map, $index, $dir, $rootFid, &$out) {
         [$state, $rel] = link_fid_state($fid, $map, $index, $rootFid);
         if ($state !== 'ok') $out['problems']++;
         return [$state, $rel, $rel === '' ? 'the gallery\'s own folder' : link_folder_label($dir, $rel)];
     };
-    foreach ((array) ($l['scope']['folders'] ?? []) as $fid) { [$s, $rel, $label] = $one($fid); $pub = in_array($fid, (array) ($l['scope']['publicOnly'] ?? []), true); $out['folders'][] = ['fid' => $fid, 'state' => $s, 'pub' => $pub, 'counts' => $s === 'ok' ? link_folder_item_counts($dir, $rel) : null, 'label' => $s === 'missing' && $rel === '' ? 'a folder that is gone' : $label]; if ($s === 'ok') { $out['paths']['scope'][] = $rel; if ($pub) $out['paths']['publicOnly'][] = $rel; } }
+    foreach ((array) ($l['scope']['except'] ?? []) as $fid) {   // (folders the link leaves out of a folder it covers; one that is gone is nothing to leave out, so it is no problem)
+        [$s, $rel] = link_fid_state($fid, $map, $index, $rootFid);
+        if ($s !== 'ok' || $rel === '') continue;
+        $out['except'][] = ['fid' => $fid, 'rel' => $rel, 'label' => link_folder_label($dir, $rel)]; $out['paths']['except'][] = $rel;
+    }
+    foreach ((array) ($l['scope']['folders'] ?? []) as $fid) { [$s, $rel, $label] = $one($fid); $pub = in_array($fid, (array) ($l['scope']['publicOnly'] ?? []), true); $out['folders'][] = ['fid' => $fid, 'state' => $s, 'rel' => $s === 'ok' ? $rel : null, 'pub' => $pub, 'counts' => $s === 'ok' ? link_folder_item_counts($dir, $rel, $out['paths']['except']) : null, 'label' => $s === 'missing' && $rel === '' ? 'a folder that is gone' : $label]; if ($s === 'ok') { $out['paths']['scope'][] = $rel; if ($pub) $out['paths']['publicOnly'][] = $rel; } }
     foreach ((array) ($l['scope']['photos'] ?? []) as $p) {
         if (!is_array($p)) continue;
         [$s, $rel] = link_fid_state((string) ($p['fid'] ?? ''), $map, $index, $rootFid);
@@ -12206,25 +12245,26 @@ function link_scope_report($l, $map, $index, $dir, $rootFid) {
 }
 
 /** How many photos and videos are inside a folder (at any depth), and how many of those are public: [all, public]. */
-function link_folder_item_counts($dir, $rel) {
+function link_folder_item_counts($dir, $rel, $except = []) {
     [$all, $public] = link_public_media($dir);
-    if ($rel === '') return [count($all), count($public)];
-    $pre = $rel . '/'; $n = strlen($pre); $a = 0; $p = 0;
-    foreach ($all as $f) if (strncmp($f, $pre, $n) === 0) $a++;
-    foreach ($public as $f) if (strncmp($f, $pre, $n) === 0) $p++;
-    return [$a, $p];
+    $pre = $rel === '' ? '' : $rel . '/'; $n = strlen($pre);
+    $left = []; foreach ((array) $except as $e) if ($pre === '' || strncmp($e . '/', $pre, $n) === 0) $left[] = $e . '/';   // (what is left out is not counted)
+    $count = function ($list) use ($pre, $n, $left) { $c = 0; foreach ($list as $f) { if (strncmp($f, $pre, $n) !== 0) continue; foreach ($left as $e) if (strncmp($f, $e, strlen($e)) === 0) continue 2; $c++; } return $c; };
+    return [$count($all), $count($public)];
 }
 
 /** The folders a link covers, as a phrase that says for each what the link takes from it and how many items that is: everything inside (and
  *  how many of those are private), or only the public ones (and how many private ones are left out). */
 function link_folder_list_html($report, $item) {
-    return implode(', ', array_map(function ($x) use ($item) {
+    return implode(', ', array_map(function ($x) use ($item, $report) {
         $say = '';
         if ($x['state'] === 'ok' && is_array($x['counts'] ?? null)) {
             [$all, $pub] = $x['counts']; $priv = $all - $pub;
             if (!empty($x['pub'])) $say = ' (public items only: ' . ($priv > 0 ? $pub . ' of ' . $all . '; ' . $priv . ' private left out' : $all) . ')';
             else $say = ' (everything inside: ' . $all . ($priv > 0 ? ', ' . $priv . ' private' : '') . ')';
         } elseif (!empty($x['pub'])) $say = ' (public items only)';
+        $out = array_map(function ($e) { return $e['label']; }, array_values(array_filter((array) ($report['except'] ?? []), function ($e) use ($x) { return $x['state'] === 'ok' && ($x['rel'] === '' || str_starts_with($e['rel'], $x['rel'] . '/')); })));
+        if ($out) { $w = 'without ' . htmlspecialchars(implode(', ', $out), ENT_QUOTES, 'UTF-8'); $say = $say !== '' && substr($say, -1) === ')' ? substr($say, 0, -1) . '; ' . $w . ')' : $say . ' (' . $w . ')'; }
         return $item($x) . $say;
     }, $report['folders']));
 }
@@ -13039,7 +13079,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         $heads = ['default' => 'The site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'][$l['headsUp'] ?? 'default'];
         $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'address' => !empty($l['custom']) ? $l['token'] : '', 'aliases' => count((array) ($l['aliases'] ?? [])), 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'picture' => !empty($l['picture']), 'pictureSeed' => (string) ($l['pictureSeed'] ?? ''), 'pictureFile' => (string) ($l['pictureFile'] ?? ''), 'maxOpens' => (int) $l['maxOpens'], 'opens' => (int) ($l['opens'] ?? 0), 'killedCount' => count(array_filter((array) ($l['killed'] ?? []), 'is_array')),
             'startsAt' => (int) $l['startsAt'], 'endsAt' => (int) $l['endsAt'], 'locations' => $l['locations'], 'headsUp' => $l['headsUp'], 'state' => $state,
-            'scopeType' => $l['scope']['type'] ?? 'all', 'only' => !empty($l['only']), 'scopeFolders' => $report['paths']['scope'], 'scopePublicOnly' => $report['paths']['publicOnly'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
+            'scopeType' => $l['scope']['type'] ?? 'all', 'only' => !empty($l['only']), 'scopeFolders' => $report['paths']['scope'], 'scopePublicOnly' => $report['paths']['publicOnly'], 'scopeExcept' => $report['paths']['except'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
             'downloads' => $l['downloads']['mode'] ?? 'off', 'downloadsFolders' => $report['paths']['downloads'], 'zip' => $l['zip']['mode'] ?? 'off', 'zipFolders' => $report['paths']['zip']], JSON_HEX_TAG | JSON_HEX_AMP));
         $missing = array_merge(array_filter($report['folders'], function ($x) { return $x['state'] !== 'ok'; }), array_filter($report['photos'], function ($x) { return $x['state'] !== 'ok'; }));
         ob_start(); ?>
@@ -13723,7 +13763,7 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
 function link_folder_reachable($l, $dir, $folderRel) {
     $type = $l['scope']['type'] ?? '';
     if ($type === 'all') return true;
-    if ($type === 'folders' || $type === 'mixed') return link_item_under_folder_ids($dir, $folderRel . '/x', $l['scope']['folders'] ?? []);
+    if ($type === 'folders' || $type === 'mixed') return link_item_under_folder_ids($dir, $folderRel . '/x', $l['scope']['folders'] ?? [], $l['scope']['except'] ?? []);
     return false;
 }
 
@@ -17236,6 +17276,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-chip .sl-chipmode, .admin-main .sl-chip .sl-chipmode { height:20px; padding:0 8px; border:1px solid #3d3d44; border-radius:999px; font-size:0.72rem; line-height:1; color:var(--muted); white-space:nowrap; }   /* (what the link takes from this folder: everything, or only the public items) */
   .sl-chip .sl-chipmode.on, .admin-main .sl-chip .sl-chipmode.on { color:#aab2ff; border-color:#5865f2; background:#1e2140; }
   .sl-chip .sl-chipmode:disabled { opacity:.45; cursor:default; }
+  .sl-chips .sl-without, .sl-mixc .sl-without { flex:0 0 100%; margin:-2px 0 2px 11px; font-size:0.78rem; color:var(--muted); }
   .sl-chips .sl-add { color:var(--accent); font-size:0.85rem; font-weight:600; padding:2px 4px; }
   .sl-keep { display:block; margin-top:8px; font-size:0.9rem; }
   .sl-keep input { margin-right:6px; }
@@ -19512,7 +19553,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     var box = document.getElementById('sl-root'); if (!box) return;
     var csrf = box.getAttribute('data-csrf') || '';
     var toastTimer = null, pretty = null;
-    var st = { scope: [], pub: [], downloads: [], zip: [], photos: [] };   // the folders and photos the form is holding, as paths (pub: the chosen folders that show only their public items)
+    var st = { scope: [], except: [], pub: [], downloads: [], zip: [], photos: [] };   // the folders and photos the form is holding, as paths (pub: the chosen folders that show only their public items; except: folders left out of a chosen one, each with everything inside it)
     function modalEl() { return document.getElementById('sl-modal'); }   // (looked up each time: the tab's own markup is replaced when it refreshes)
     function say(text, bad) {
       var toast = document.getElementById('sl-toast');
@@ -19655,7 +19696,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function usesOf(f) { return f.opens === 'n' ? (+f.opensN || 0) : +f.opens; }
     function usesClause(n) { return n === 0 ? 'in as many browsers as they like' : n === 1 ? 'in just one browser' : 'in up to ' + n + ' browsers'; }
     var DEFAULTS = { label: '', address: '', note: '', titleMode: 'gallery', titleText: '', picture: true, pictureSeed: '', pictureFile: '', maxOpens: DEFAULT_USES, startsAt: 0, endsAt: 0, locations: 'public', headsUp: 'default',
-      scopeType: 'public', only: false, scopeFolders: [], scopePublicOnly: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
+      scopeType: 'public', only: false, scopeFolders: [], scopeExcept: [], scopePublicOnly: [], scopePhotos: [], openIn: '', downloads: 'off', downloadsFolders: [], zip: 'off', zipFolders: [] };
     function localValue(ts) {
       var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? '0' : '') + n; };
       return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
@@ -19665,7 +19706,31 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function radioValue(form, name) { var r = form.querySelector('input[name="' + name + '"]:checked'); return r ? r.value : ''; }
     function folderList(form) { try { return JSON.parse(form.getAttribute('data-folders') || '[]'); } catch (x) { return []; } }
     function labelOf(form, path) { var f = folderList(form).filter(function (o) { return o.p === path; })[0]; return f ? f.l : path; }
-    function under(path, roots) { return roots.some(function (r) { return path === r || path.indexOf(r + '/') === 0; }); }
+    function parentOf(p) { var i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); }
+    // The Not listed folders that sit in no other Not listed folder: a folder picked above one does not bring it along (it has to be picked itself), as the server reads it.
+    function topUnlisted(form) {
+      var all = {}, top = {};
+      folderList(form).forEach(function (o) { if (o.u && !o.c) all[o.p] = true; });
+      Object.keys(all).forEach(function (u) { var q = parentOf(u), isTop = true; while (q !== '') { if (all[q]) { isTop = false; break; } q = parentOf(q); } if (isTop) top[u] = true; });
+      return top;
+    }
+    // Is this folder (a path) covered by what the link holds now? The nearest folder listed above it, itself included, decides: one that is picked takes it in with everything inside it,
+    // one that is left out (an exception) puts it out, and a Not listed folder is not taken in by a folder above it.
+    function covered(form, p) {
+      var un = topUnlisted(form), parts = p.split('/'), pre = '', on = false;
+      for (var i = 0; i < parts.length; i++) {
+        pre = pre === '' ? parts[i] : pre + '/' + parts[i];
+        if (st.except.indexOf(pre) >= 0) on = false;
+        else if (st.scope.indexOf(pre) >= 0) on = true;
+        else if (un[pre]) on = false;
+      }
+      return on;
+    }
+    // Folders left out are kept only while a picked folder above them is what covers them.
+    function tidyExcept(form) {
+      var again = true;
+      while (again) { again = false; st.except = st.except.filter(function (e) { var par = parentOf(e), keep = par !== '' && covered(form, par); if (!keep) again = true; return keep; }); }
+    }
     function chipsHtml(form, kind) {
       var list = st[kind] || [];
       return list.map(function (p) {
@@ -19674,7 +19739,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           var on = st.pub.indexOf(p) >= 0, priv = folderList(form).some(function (o) { return o.p === p && o.x; });
           mode = '<button type="button" class="sl-chipmode' + (on ? ' on' : '') + '" data-chip-mode data-p="' + esc(p) + '"' + (priv ? ' disabled title="This folder is private as a whole, so nothing in it is public"' : ' title="' + (on ? 'Only the public photos and videos in it are shown. Press for everything inside it.' : 'Everything inside it is shown, private photos and videos too. Press for only the public ones.') + '"') + ' aria-pressed="' + (on ? 'true' : 'false') + '">' + (on ? 'Public items only' : 'Everything') + '</button>';
         }
-        return '<span class="sl-chip">' + esc(labelOf(form, p)) + mode + ' <button type="button" data-chip-x="' + kind + '" data-p="' + esc(p) + '" aria-label="Take it out">×</button></span>';
+        var left = '';
+        if (kind === 'scope') {   // (what is left out of it: the folders it takes in everything of, except these)
+          var gone = st.except.filter(function (e) { var q = parentOf(e); while (q !== '' && st.scope.indexOf(q) < 0 && st.except.indexOf(q) < 0) q = parentOf(q); return q === p; });
+          var rootL = labelOf(form, p) + ' / ';
+          if (gone.length) left = '<span class="sl-without">without ' + esc(gone.map(function (e) { var l = labelOf(form, e); return l.indexOf(rootL) === 0 ? l.slice(rootL.length) : l; }).join(', ')) + '</span>';   // (on a line of its own under the chip: it can be long)
+        }
+        return '<span class="sl-chip">' + esc(labelOf(form, p)) + mode + ' <button type="button" data-chip-x="' + kind + '" data-p="' + esc(p) + '" aria-label="Take it out">×</button></span>' + left;
       }).join('')
         + '<button type="button" class="linklike sl-add" data-chip-add="' + kind + '">+ Add folder</button>';
     }
@@ -19693,7 +19764,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     // What the link covers, as the form holds it now, for the requests that choose or show the preview photo (it may only come from what the link covers).
     function scopeQuery(form) {
       var sc = radioValue(form, 'scope_type');
-      return '&scope_type=' + encodeURIComponent(sc) + '&scope_folders=' + encodeURIComponent(JSON.stringify(sc === 'folders' || sc === 'mixed' ? st.scope : [])) + '&scope_photos=' + encodeURIComponent(JSON.stringify(sc === 'photos' || sc === 'mixed' ? st.photos : []));
+      return '&scope_type=' + encodeURIComponent(sc) + '&scope_folders=' + encodeURIComponent(JSON.stringify(sc === 'folders' || sc === 'mixed' ? st.scope : [])) + '&scope_except=' + encodeURIComponent(JSON.stringify(sc === 'folders' || sc === 'mixed' ? st.except : [])) + '&scope_photos=' + encodeURIComponent(JSON.stringify(sc === 'photos' || sc === 'mixed' ? st.photos : []));
     }
     function coverRefresh(form) {
       var row = form.querySelector('[data-coverrow]'), on = form.querySelector('[name=picture]').checked;
@@ -19738,7 +19809,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       holder.innerHTML = popHtml('openin', 'open_in', rows, list.some(function (r) { return r.v === keep; }) ? keep : '', 'Opens in', scope === 'photos');
       form.querySelector('[data-openin] .sl-h').textContent = scope === 'photos' ? 'Straight into the viewer, on the first photo.' : 'The first page they see.';
       var crow = form.querySelector('[data-coverrow]'); crow.hidden = !form.querySelector('[name=picture]').checked;
-      var coverKey = scope + '|' + st.scope.join(',') + '|' + st.photos.join(',');
+      var coverKey = scope + '|' + st.scope.join(',') + '|' + st.except.join(',') + '|' + st.photos.join(',');
       if (crow._key !== coverKey) { crow._key = coverKey; crow._loaded = false; }   // (what the link covers decides which photos the automatic picture may come from)
       if (!crow.hidden && !crow._loaded) coverRefresh(form);
       summarize(form);
@@ -19802,7 +19873,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function summarize(form) {
       var addrNote = form.querySelector('[data-addrnote]'); if (addrNote) addrNote.hidden = !((form._addrMode || 'name') === 'name' && opensPrivate(form));
       var f = formState(form), form_ = form, names = function (list) { return list.map(function (p) { return labelOf(form_, p); }).join(', '); };
-      var scopeNames = function () { return st.scope.map(function (p) { return labelOf(form_, p) + (st.pub.indexOf(p) >= 0 ? ' (public items only)' : ''); }).join(', '); };
+      var scopeNames = function () { return st.scope.map(function (p) { return labelOf(form_, p) + (st.pub.indexOf(p) >= 0 ? ' (public items only)' : ''); }).join(', ') + (st.except.length ? ', without ' + names(st.except) : ''); };
       var scopeSay = f.scope === 'public' ? 'the public gallery' : f.scope === 'all' ? 'the whole gallery, public and private' : f.scope === 'folders' ? (st.scope.length ? scopeNames() : 'the folders you pick') : f.scope === 'mixed' ? ((st.scope.length ? scopeNames() : 'no folders yet') + ' and ' + (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') : 'no photos yet')) : (st.photos.length ? st.photos.length + ' photo' + (st.photos.length === 1 ? '' : 's') + ' you picked' : 'the photos you pick');
       var usesNow = usesOf(f), usesIsDefault = usesNow === DEFAULT_USES && (f.opens !== 'n' || f.opensN !== '');
       var endsSay = f.ends === '0' ? 'never stops working' : f.ends === 'pick' ? 'stops working on ' + fdate(f.endsAt) : 'stops working after ' + ({ '86400': '1 day', '604800': '1 week', '2592000': '30 days' }[f.ends] || '');
@@ -19832,7 +19903,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var ra = form.querySelector('[data-sl=resetall]'); ra.hidden = changed === 0; ra.textContent = changed + (changed === 1 ? ' setting' : ' settings') + ' changed · Reset all';
     }
     function resetGroup(form, g) {
-      if (g === 'scope') { radio(form, 'scope_type', 'public'); st.scope = []; st.pub = []; st.photos = []; form.querySelector('[name=only]').checked = false; form.querySelector('[data-openin-menu]').setAttribute('data-want', ''); }
+      if (g === 'scope') { radio(form, 'scope_type', 'public'); st.scope = []; st.except = []; st.pub = []; st.photos = []; form.querySelector('[name=only]').checked = false; form.querySelector('[data-openin-menu]').setAttribute('data-want', ''); }
       if (g === 'limits') { setUses(form, DEFAULT_USES); radio(form, 'ends_pick', '0'); radio(form, 'starts_pick', 'now'); }
       if (g === 'privacy') { radio(form, 'downloads', 'off'); radio(form, 'zip', 'off'); radio(form, 'locations', 'public'); st.downloads = []; st.zip = []; }
       if (g === 'page') { radio(form, 'title_mode', 'gallery'); form.querySelector('[name=title_text]').value = ''; form.querySelector('[name=picture]').checked = true; form.querySelector('[name=picture_file]').value = ''; form.querySelector('[name=note]').value = ''; radio(form, 'heads_up', 'default'); form.querySelector('[data-coverrow]')._loaded = false; }
@@ -19841,7 +19912,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function openForm(link, focusField) {
       var form = box.querySelector('#sl-form'), v = Object.assign({}, DEFAULTS, link || {});
       form.reset();
-      st = { scope: (v.scopeFolders || []).slice(), pub: (v.scopePublicOnly || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
+      st = { scope: (v.scopeFolders || []).slice(), except: (v.scopeExcept || []).slice(), pub: (v.scopePublicOnly || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
       var editing = !!(link && link.id);
       form.querySelector('[name=id]').value = editing ? link.id : '';
       form.querySelector('.sl-form-title').textContent = editing ? 'Edit link' : 'New share link';
@@ -19869,7 +19940,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
         label: form.querySelector('[name=label]').value, address: form.querySelector('[name=address]').value, address_auto: form._addrMode === 'name' ? '1' : '0', keep_old: form.querySelector('[name=keep_old]').checked && !form.querySelector('[data-keeprow]').hidden ? '1' : '0', note: form.querySelector('[name=note]').value,
         title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value, picture: form.querySelector('[name=picture]').checked ? '1' : '0', picture_seed: form.querySelector('[name=picture_seed]').value, picture_file: form.querySelector('[name=picture_file]').value,
-        scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.scope : []), scope_public_only: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }) : []), scope_photos: JSON.stringify(scope === 'photos' || scope === 'mixed' ? st.photos : []),
+        scope_type: scope, scope_folders: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.scope : []), scope_except: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.except : []), scope_public_only: JSON.stringify(scope === 'folders' || scope === 'mixed' ? st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }) : []), scope_photos: JSON.stringify(scope === 'photos' || scope === 'mixed' ? st.photos : []),
         only: (scope === 'folders' || scope === 'photos' || scope === 'mixed') && form.querySelector('[name=only]').checked ? '1' : '0',
         open_in: form.querySelector('[name=open_in]').value,
         downloads: radioValue(form, 'downloads'), downloads_folders: JSON.stringify(st.downloads), zip: radioValue(form, 'zip'), zip_folders: JSON.stringify(st.zip),
@@ -19898,26 +19969,70 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       if (e.target.name === 'scope_type') addrSync(form);
       if (e.target.name === 'scope_type' && (e.target.value === 'folders' || e.target.value === 'mixed')) {
         // folders already chosen for downloads and ZIPs that the new scope doesn't cover are dropped
-        ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope) || !st.scope.length; }); });
+        ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return covered(form, p) || !st.scope.length; }); });
       }
       syncForm(form);
     });
-    // The folder picker: a list of check boxes.
+    // The folder picker: a list of check boxes, as a tree. Ticking a folder ticks everything inside it (a Not listed folder is not brought along: it has to be ticked itself), and any
+    // of those can then be unticked. What is kept is the folders that are the top of a ticked part, and the folders left out of a ticked one (the link remembers those as exceptions).
+    // The pickers for downloads and ZIPs are the same list with the folders inside a ticked one shown ticked and fixed: they take in everything inside, as they always did.
     function pickFolders(form, kind) {
-      var all = folderList(form), roots = st.scope, scope = radioValue(form, 'scope_type');
-      var list = (kind !== 'scope' && (scope === 'folders' || scope === 'mixed')) ? all.filter(function (o) { return under(o.p, roots); }) : all;
-      if (kind !== 'scope' && (scope === 'folders' || scope === 'mixed') && !roots.length) { say('Choose the folders it covers first.', true); return Promise.resolve(false); }
-      var rows = list.map(function (o, i) {
-        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"' + (st[kind].indexOf(o.p) >= 0 ? ' checked' : '') + '> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Not listed</small>' : '') + '</span></label>';
+      var all = folderList(form), scope = radioValue(form, 'scope_type');
+      var limited = kind !== 'scope' && (scope === 'folders' || scope === 'mixed');
+      if (limited && !st.scope.length) { say('Choose the folders it covers first.', true); return Promise.resolve(false); }
+      var list = limited ? all.filter(function (o) { return covered(form, o.p); }) : all;
+      var byP = {}; list.forEach(function (o) { byP[o.p] = o; });
+      var un = topUnlisted(form);
+      var below = function (p) { return list.filter(function (o) { return !o.c && o.p.indexOf(p + '/') === 0; }); };   // everything under a folder, in this list
+      var viaUn = function (p, q) { return Object.keys(un).some(function (u) { return u.indexOf(p + '/') === 0 && (q === u || q.indexOf(u + '/') === 0); }); };   // (q sits in a Not listed folder that is itself under p)
+      var tick = {};
+      if (kind === 'scope') list.forEach(function (o) { if (o.c ? st.scope.indexOf(o.p) >= 0 : covered(form, o.p)) tick[o.p] = true; });
+      else st[kind].forEach(function (p) { tick[p] = true; });
+      var rows = list.map(function (o) {
+        return '<label class="sl-pick' + (o.d ? ' sl-d' + Math.min(o.d, 6) : '') + '"><input type="checkbox" value="' + esc(o.p) + '"> <span>' + (o.x ? '🔒 ' : '') + (o.c ? '<em class="coll">' + esc(o.n || o.l) + '</em>' : esc(o.n || o.l)) + (o.u ? ' <small class="muted">Not listed</small>' : '') + '</span></label>';
       }).join('') || '<p class="muted">There are no folders to choose from.</p>';
-      return ask(kind === 'scope' ? 'Choose the folders it covers' : 'Choose the folders', '<div class="sl-picklist">' + rows + '</div><p class="hint">A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.</p>', 'Done', false).then(function (yes) {
+      var hint = kind === 'scope' ? 'Ticking a folder takes in everything inside it; untick any you don\'t want. Once it is chosen you can limit it to its public items. A lock marks a private folder.'
+        : 'A folder includes everything inside it; once it is chosen you can limit it to its public items. A lock marks a private folder.';
+      var done = ask(kind === 'scope' ? 'Choose the folders it covers' : 'Choose the folders', '<div class="sl-picklist">' + rows + '</div><p class="hint">' + hint + '</p>', 'Done', false);
+      var listEl = modalEl().querySelector('.sl-picklist');
+      var above = function (p) { var q = parentOf(p); while (q !== '') { if (tick[q]) return true; q = parentOf(q); } return false; };
+      var paint = function () {
+        [].forEach.call(listEl.querySelectorAll('input[type=checkbox]'), function (c) {
+          var p = c.value, o = byP[p];
+          if (kind === 'scope') { c.disabled = false; c.checked = !!tick[p]; c.indeterminate = !!tick[p] && !o.c && below(p).some(function (d) { return !tick[d.p] && !viaUn(p, d.p); }); }
+          else { var fixed = !o.c && above(p); c.disabled = fixed; c.checked = !!tick[p] || fixed; c.indeterminate = false; }
+        });
+      };
+      paint();
+      listEl.addEventListener('change', function (e) {
+        var c = e.target; if (!c || c.type !== 'checkbox' || !byP[c.value]) return;
+        var p = c.value, o = byP[p];
+        if (kind === 'scope') {
+          var partial = !o.c && below(p).some(function (d) { return !tick[d.p] && !viaUn(p, d.p); });   // (ticked with something inside left out: pressing it ticks everything again)
+          if (tick[p] && !partial) { delete tick[p]; if (!o.c) below(p).forEach(function (d) { delete tick[d.p]; }); }
+          else { tick[p] = true; if (!o.c) below(p).forEach(function (d) { if (!viaUn(p, d.p)) tick[d.p] = true; }); }
+        } else if (tick[p]) delete tick[p];
+        else { tick[p] = true; below(p).forEach(function (d) { delete tick[d.p]; }); }
+        paint();
+      });
+      return done.then(function (yes) {
         if (!yes) return false;
         var before = st[kind].slice();
-        st[kind] = [].map.call(modalEl().querySelectorAll('.sl-picklist input:checked'), function (c) { return c.value; });
+        if (kind === 'scope') {
+          var tops = [], left = [];
+          list.forEach(function (o) {
+            var t = !!tick[o.p];
+            if (o.c) { if (t) tops.push(o.p); return; }
+            var par = parentOf(o.p), pt = par !== '' && !!byP[par] && !!tick[par];
+            if (t && (!pt || o.u)) tops.push(o.p);   // (the top of a ticked part; a Not listed folder is always its own top)
+            else if (!t && pt && !o.u) left.push(o.p);   // (left out of a ticked folder above it)
+          });
+          st.scope = tops; st.except = left;
+        } else st[kind] = list.filter(function (o) { return tick[o.p]; }).map(function (o) { return o.p; });
         // A Not listed folder is the owner's private drawer: picking one into a link is allowed, but asked about, because everyone with the link then sees all of it.
         var newlyUnlisted = kind === 'scope' ? all.filter(function (o) { return o.u && st[kind].indexOf(o.p) >= 0 && before.indexOf(o.p) < 0; }) : [];
         var finish = function () {
-          if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return under(p, st.scope); }); }); }
+          if (kind === 'scope') { st.pub = st.pub.filter(function (p) { return st.scope.indexOf(p) >= 0; }); tidyExcept(form); ['downloads', 'zip'].forEach(function (k) { st[k] = st[k].filter(function (p) { return covered(form, p); }); }); }
           syncForm(form);
           return true;
         };
@@ -20005,7 +20120,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var cm = e.target.closest ? e.target.closest('[data-chip-mode]') : null;
       if (cm) { if (cm.disabled) return; var cp = cm.getAttribute('data-p'), at = st.pub.indexOf(cp); if (at >= 0) st.pub.splice(at, 1); else st.pub.push(cp); syncForm(box.querySelector('#sl-form')); return; }
       var x = e.target.closest ? e.target.closest('[data-chip-x]') : null;
-      if (x) { var k = x.getAttribute('data-chip-x'), p = x.getAttribute('data-p'); st[k] = st[k].filter(function (q) { return q !== p; }); if (k === 'scope') st.pub = st.pub.filter(function (q) { return q !== p; }); if (k === 'scope') ['downloads', 'zip'].forEach(function (kk) { st[kk] = st[kk].filter(function (q) { return under(q, st.scope); }); }); syncForm(box.querySelector('#sl-form')); return; }
+      if (x) { var k = x.getAttribute('data-chip-x'), p = x.getAttribute('data-p'); st[k] = st[k].filter(function (q) { return q !== p; }); if (k === 'scope') st.pub = st.pub.filter(function (q) { return q !== p; }); var xf = box.querySelector('#sl-form'); if (k === 'scope') { tidyExcept(xf); ['downloads', 'zip'].forEach(function (kk) { st[kk] = st[kk].filter(function (q) { return covered(xf, q); }); }); } syncForm(xf); return; }
       if (e.target.closest && e.target.closest('[data-cover-choose]')) { pickCover(box.querySelector('#sl-form')); return; }
       if (e.target.closest && e.target.closest('[data-cover-auto]')) { var cf = box.querySelector('#sl-form'); cf.querySelector('[name=picture_file]').value = ''; coverRefresh(cf); return; }
       var add = e.target.closest ? e.target.closest('[data-chip-add]') : null;

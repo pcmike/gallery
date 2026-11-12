@@ -105,7 +105,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
     };
     $scopeType = (string) ($_POST['scope_type'] ?? 'all');
     if (!in_array($scopeType, ['all', 'folders', 'photos', 'mixed', 'public'], true)) $scopeType = 'all';
-    $scopeFolderPaths = [];
+    $scopeFolderPaths = []; $scopeExceptPaths = [];
     $scope = ['type' => 'all', 'folders' => [], 'photos' => []];
     // The picked photos, each remembered by the id of its folder and its name (shared by "only some photos" and "some folders and some photos").
     $stampPhotos = function ($rels) use ($validFiles, $dir, $stamp, &$errors, &$index) {
@@ -135,6 +135,15 @@ function link_input_from_post($now, $existing, $dir, $files) {
             $id = $stamp($rel); if ($id !== null) $pubIds[] = $id;
         }
         $scope = ['type' => $scopeType, 'folders' => $ids, 'photos' => $photos, 'publicOnly' => $pubIds];
+        // Folders left out of a folder that is picked (the folder and everything inside it), each remembered by its id: kept only where a picked folder is what covers it from above.
+        $exIds = []; $exList = array_values(array_diff($list('scope_except'), $scopeFolderPaths));   // (a folder that is itself picked is not left out)
+        foreach ($exList as $rel) {
+            if (!isset($validFolders[$rel]) || isset($collectionIds[$rel]) || !link_path_in_folders($rel, $scopeFolderPaths, array_diff($exList, [$rel]))) continue;
+            $id = folder_id_stamp(resolve_real_path($dir, $rel));
+            if ($id === '') { $errors[] = 'A link can\'t leave out "' . link_clip($rel, 60) . '": the web server can\'t write in that folder, and a link remembers a folder by a small id kept in it.'; continue; }
+            $index[$id] = $rel; $exIds[] = $id; $scopeExceptPaths[] = $rel;
+        }
+        if ($exIds) $scope['except'] = $exIds;
     } elseif ($scopeType === 'photos') {
         $photos = $stampPhotos($list('scope_photos'));
         if (!$photos) $errors[] = 'Choose at least one photo.';
@@ -142,10 +151,9 @@ function link_input_from_post($now, $existing, $dir, $files) {
     } elseif ($scopeType === 'public') {
         $scope = ['type' => 'public', 'folders' => [], 'photos' => []];   // nothing private: the person sees what any visitor sees, and the log records it
     }
-    $underScope = function ($rel) use ($scopeType, $scopeFolderPaths) {
+    $underScope = function ($rel) use ($scopeType, $scopeFolderPaths, &$scopeExceptPaths) {
         if ($scopeType !== 'folders' && $scopeType !== 'mixed') return true;
-        foreach ($scopeFolderPaths as $s) if ($rel === $s || str_starts_with($rel, $s . '/')) return true;
-        return false;
+        return link_path_in_folders($rel, $scopeFolderPaths, $scopeExceptPaths);
     };
     $openIn = '';
     $inRel = trim((string) ($_POST['open_in'] ?? ''));
@@ -170,7 +178,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
         return ['mode' => $mode, 'folders' => $ids];
     };
     if ($pictureFile !== '' && in_array($scopeType, ['folders', 'photos', 'mixed'], true)
-        && !link_cover_in_scope(null, $dir, $pictureFile, ['type' => $scopeType, 'folders' => $scopeFolderPaths, 'photos' => $scopeType === 'folders' ? [] : $list('scope_photos')])) $pictureFile = '';   // (a chosen preview photo the link does not cover: the automatic pick takes over)
+        && !link_cover_in_scope(null, $dir, $pictureFile, ['type' => $scopeType, 'folders' => $scopeFolderPaths, 'except' => $scopeExceptPaths, 'photos' => $scopeType === 'folders' ? [] : $list('scope_photos')])) $pictureFile = '';   // (a chosen preview photo the link does not cover: the automatic pick takes over)
     $downloads = $cap('downloads', 'downloads_folders', 'downloads');
     $zip = $cap('zip', 'zip_folders', 'ZIP downloads');
     $only = ($scopeType === 'folders' || $scopeType === 'photos' || $scopeType === 'mixed') && ($_POST['only'] ?? '') === '1';   // "show only these": the person's pages list nothing but what the link covers, the rest of the public gallery too
@@ -284,6 +292,7 @@ function links_admin_action($action, $dir, $files) {
             $keep = function ($ids) use ($fid) { return array_values(array_filter((array) $ids, function ($x) use ($fid) { return $x !== $fid; })); };
             $d['links'][$id]['scope']['folders'] = $keep($d['links'][$id]['scope']['folders'] ?? []);
             $d['links'][$id]['scope']['publicOnly'] = $keep($d['links'][$id]['scope']['publicOnly'] ?? []);
+            if (isset($d['links'][$id]['scope']['except'])) $d['links'][$id]['scope']['except'] = $keep($d['links'][$id]['scope']['except']);
             $d['links'][$id]['scope']['photos'] = array_values(array_filter((array) ($d['links'][$id]['scope']['photos'] ?? []), function ($p) use ($fid) { return ($p['fid'] ?? '') !== $fid; }));
             foreach (['downloads', 'zip'] as $c) $d['links'][$id][$c]['folders'] = $keep($d['links'][$id][$c]['folders'] ?? []);
             if (($d['links'][$id]['openIn'] ?? '') === $fid) $d['links'][$id]['openIn'] = '';

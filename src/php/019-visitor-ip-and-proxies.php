@@ -127,11 +127,13 @@ function links_update($modifier) { return json_file_update(links_path(), links_d
 /** A random token of letters and digits, LINK_TOKEN_LENGTH long (8: about 48 bits; the lockout allows few guesses), with no modulo bias. */
 function link_new_token() {
     $alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-    $token = '';
-    while (strlen($token) < LINK_TOKEN_LENGTH) {
-        $v = ord(random_bytes(1));
-        if ($v < 248) $token .= $alphabet[$v % 62];   // 248 = 4 x 62
-    }
+    do {   // (with a capital among them, always: an address without one is taken for a name of the owner's own - see link_address_is_custom - and shown whole in the log; one try in 75 has none)
+        $token = '';
+        while (strlen($token) < LINK_TOKEN_LENGTH) {
+            $v = ord(random_bytes(1));
+            if ($v < 248) $token .= $alphabet[$v % 62];   // 248 = 4 x 62
+        }
+    } while (preg_match('/[A-Z]/', $token) !== 1);
     return $token;
 }
 function link_new_id() { return bin2hex(random_bytes(5)); }
@@ -398,7 +400,7 @@ function render_link_preview_banner($l, $dir, $files) {
     $yes = function ($html) { return '<li class="yes">' . ui_icon('check') . '<span>' . $html . '</span></li>'; };
     $no = function ($html) { return '<li class="no">' . ui_icon('close') . '<span>' . $html . '</span></li>'; };
     $items = [];
-    if ($type !== 'public') $items[] = $yes(($type === 'all' ? 'The whole gallery, public and private, including what you add later' : ($type === 'folders' && !array_filter(array_column($report['folders'], 'pub')) ? $esc(implode(', ', array_map(function ($x) { return $x['label']; }, $report['folders']))) . ' and everything inside ' . (count($report['folders']) === 1 ? 'it' : 'them') : link_scope_text_html($l, $report))));
+    if ($type !== 'public') $items[] = $yes(($type === 'all' ? 'The whole gallery, public and private, including what you add later' : ($type === 'folders' && !array_filter(array_column($report['folders'], 'pub')) && !$report['except'] ? $esc(implode(', ', array_map(function ($x) { return $x['label']; }, $report['folders']))) . ' and everything inside ' . (count($report['folders']) === 1 ? 'it' : 'them') : link_scope_text_html($l, $report))));
     $items[] = $yes('All public folders and photos, as any visitor sees them');
     if ($type === 'public') $items[] = $no('<strong>Nothing private</strong> is shown or hinted at');
     elseif ($type !== 'all') $items[] = $no('Your other private folders and photos are <strong>not shown and not hinted at</strong>');

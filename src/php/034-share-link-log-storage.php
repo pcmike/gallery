@@ -492,7 +492,7 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
 function link_folder_reachable($l, $dir, $folderRel) {
     $type = $l['scope']['type'] ?? '';
     if ($type === 'all') return true;
-    if ($type === 'folders' || $type === 'mixed') return link_item_under_folder_ids($dir, $folderRel . '/x', $l['scope']['folders'] ?? []);
+    if ($type === 'folders' || $type === 'mixed') return link_item_under_folder_ids($dir, $folderRel . '/x', $l['scope']['folders'] ?? [], $l['scope']['except'] ?? []);
     return false;
 }
 

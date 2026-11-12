@@ -228,6 +228,7 @@
   .sl-chip .sl-chipmode, .admin-main .sl-chip .sl-chipmode { height:20px; padding:0 8px; border:1px solid #3d3d44; border-radius:999px; font-size:0.72rem; line-height:1; color:var(--muted); white-space:nowrap; }   /* (what the link takes from this folder: everything, or only the public items) */
   .sl-chip .sl-chipmode.on, .admin-main .sl-chip .sl-chipmode.on { color:#aab2ff; border-color:#5865f2; background:#1e2140; }
   .sl-chip .sl-chipmode:disabled { opacity:.45; cursor:default; }
+  .sl-chips .sl-without, .sl-mixc .sl-without { flex:0 0 100%; margin:-2px 0 2px 11px; font-size:0.78rem; color:var(--muted); }
   .sl-chips .sl-add { color:var(--accent); font-size:0.85rem; font-weight:600; padding:2px 4px; }
   .sl-keep { display:block; margin-top:8px; font-size:0.9rem; }
   .sl-keep input { margin-right:6px; }
