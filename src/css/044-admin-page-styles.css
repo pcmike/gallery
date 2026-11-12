@@ -610,7 +610,7 @@
   .health-btns { display:inline-flex; gap:6px; white-space:nowrap; vertical-align:middle; }
   .health-strip { display:flex; flex-wrap:wrap; gap:8px; margin:2px 0 10px; }
   .health-strip .hs-t { display:flex; flex-direction:column; gap:1px; padding:6px 11px; border:1px solid var(--line, rgba(255,255,255,.12)); border-radius:8px; min-width:4.2em; }
-  .health-strip .hs-t b { font-weight:600; font-size:1.02em; }
+  .health-strip .hs-t b { text-align:center; font-weight:600; font-size:1.02em; }
   .health-strip .hs-t b .hs-two { display:flex; justify-content:center; gap:1.1em; }
   .health-strip .hs-t b .hs-ok { color:var(--ok); }
   .health-strip .hs-t b .hs-bad { color:var(--err); }
