@@ -1148,6 +1148,10 @@
   .vt-menu { position:absolute; right:0; top:46px; z-index:30; min-width:270px; background:#1c1d1f; border:1px solid #3a3b3f; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.55); padding:6px; }
   .vt-menu a, .vt-menu button { display:block; width:100%; text-align:left; background:none; border:0; padding:10px 12px; border-radius:7px; color:var(--text); font:inherit; text-decoration:none; cursor:pointer; }
   .vt-menu a small { display:block; color:var(--muted); font-size:0.78rem; }
+  .vt-menu a[hidden] { display:none; }
+  .vt-table .vt-viewed { white-space:nowrap; }
+  .vt-table .vt-rep { display:block; font-size:0.8rem; color:#aab2ff; text-decoration:none; margin-top:2px; }   /* ("report ↓" under a visitor's Opened: that address's whole story as one CSV) */
+  @media (hover: hover) { .vt-table .vt-rep:hover { text-decoration:underline; } }
   .vt-menu a:hover, .vt-menu button:hover { background:#26262a; }
   .vt-menu a[hidden], .vt-menu .vt-menu-sep[hidden] { display:none; }
   .vt-menu .vt-menu-sep { display:block; margin:4px 8px; border-top:1px solid #34343a; }

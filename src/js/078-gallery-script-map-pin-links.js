@@ -205,5 +205,12 @@
     });
     lightboxImg.addEventListener('load', placeMiniMap);
     lightboxVideo.addEventListener('loadedmetadata', placeMiniMap);
+    lightboxVideo.addEventListener('resize', placeMiniMap);   // (the video's own picture changed size)
     window.addEventListener('resize', placeMiniMap);
+    // What is shown can change size after it was placed against (a video that grows when it starts playing, a photo that
+    // settles to its size): the map follows the corner of whichever one is on screen, whenever its size changes.
+    if (typeof ResizeObserver === 'function') {
+      const sizeWatch = new ResizeObserver(function () { placeMiniMap(); });
+      sizeWatch.observe(lightboxImg); sizeWatch.observe(lightboxVideo);
+    }
   }

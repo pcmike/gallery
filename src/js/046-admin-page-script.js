@@ -2984,9 +2984,16 @@
       var m = +f.getAttribute('data-match'), a = +f.getAttribute('data-all');
       n.innerHTML = filtered() && a > 0 ? 'Showing ' + m.toLocaleString() + ' of ' + a.toLocaleString() + ' <button type="button" class="linklike" data-vt="clear">Clear</button>' : '';
     }
+    function isIp(v) { return /^(\d{1,3}\.){3}\d{1,3}$/.test(v) || (v.indexOf(':') >= 0 && /^[0-9a-fA-F:.]+$/.test(v)); }   // (the search holds just an address: the server checks it properly)
     function paintExport() {
       [].forEach.call(root.querySelectorAll('[data-export]'), function (a) {
         var k = a.getAttribute('data-export');
+        if (k === 'report') {   // (one address's report: the address on the row's link, or the one the search holds; it ignores the other choices)
+          var ip = a.getAttribute('data-ip') || (isIp(S.q) ? S.q : '');
+          if (!a.hasAttribute('data-ip')) a.hidden = ip === '';
+          a.href = ip === '' ? '#' : '?admin&visitsexport=report&ip=' + encodeURIComponent(ip);
+          return;
+        }
         a.href = '?admin&visitsexport=' + k + (k === 'view' ? '&tab=' + S.view : '') + params();
         if (k === 'view') {   // (This view: named for the tab; with Blocked ticked on a tab that has nothing to show for it, there is nothing on the screen to save)
           var gone = S.src.indexOf('blocked') >= 0 && S.view !== 'visitors';

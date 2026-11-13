@@ -133,11 +133,14 @@ function visits_where(array $f, $a = 'v') {
 
 function visits_query($db, $sql, array $p = []) { $st = $db->prepare($sql); $st->execute($p); return $st; }
 
+/** SQL for how many times a visitor's photos and videos came on screen (the sum of their per-item tallies; 0 for anything logged before the log counted them). $a is the visitors table's alias. */
+function visits_seen_sql($a) { return '(SELECT COALESCE(SUM(i.sn), 0) FROM items i WHERE i.src = ' . $a . '.src AND i.vid = ' . $a . '.vid)'; }
+
 /** The visitors the choices leave, newest first: [rows, how many there are in all]. */
 function visits_load_visitors($db, array $f, $limit) {
     [$w, $p] = visits_where($f, 'v');
     $total = (int) visits_query($db, 'SELECT COUNT(*) FROM visitors v' . $w, $p)->fetchColumn();
-    $rows = visits_query($db, 'SELECT v.* FROM visitors v' . $w . ' ORDER BY v.last DESC LIMIT ' . (int) $limit, $p)->fetchAll();
+    $rows = visits_query($db, 'SELECT v.*, ' . visits_seen_sql('v') . ' AS seen FROM visitors v' . $w . ' ORDER BY v.last DESC LIMIT ' . (int) $limit, $p)->fetchAll();
     return [$rows, $total];
 }
 /** Per file, across the visitors the choices leave: when first seen, times seen / opened / played / downloaded, last activity (file => ['sf', 'sn' (times on screen, counted since the log began to count them), 'on', 'pn', 'dn', 'last']). */
@@ -363,7 +366,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         [$rows, $total] = visits_load_visitors($db, $f, 300);
         $linkSrcs = []; foreach ($rows as $r) if ($r['src'] !== PUBLIC_LOG_ID && $r['src'] !== PRIVATE_LOG_ID && $r['src'] !== LOCKOUT_LOG_ID) $linkSrcs[$r['src']] = true;
         $via = visits_via_map($db, array_keys($linkSrcs), $labels);
-        $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Came in at</th><th>First seen</th><th>Last seen</th><th>Visits</th><th>Opened</th></tr></thead><tbody>';
+        $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Came in at</th><th>First seen</th><th>Last seen</th><th>Visits</th><th>Seen</th><th>Opened</th></tr></thead><tbody>';
         foreach ($rows as $r) {
             $pub = $r['src'] === PUBLIC_LOG_ID; $priv = $r['src'] === PRIVATE_LOG_ID; $lock = $r['src'] === LOCKOUT_LOG_ID; $l = $links[$r['src']] ?? null;
             if ($lock) $came = '<button type="button" class="vt-src" data-src="lockouts" title="Show only the lockouts">Locked out: ' . $esc(lockout_kind_names()[(string) $r['entry_h']] ?? 'sign-in') . (((int) $r['opens']) > 1 ? ' &times;' . (int) $r['opens'] : '') . '</button>';
@@ -374,7 +377,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
                 $srcBtn = '<button type="button" class="vt-src" data-src="' . $esc($r['src']) . '" title="Show only visitors who came in on this link">' . $esc($labels[$r['src']] ?? 'A deleted link') . '</button>'; $srcGo = visits_link_go($r['src'], $labels, true);
                 $came = ($srcGo !== '' ? '<span class="vt-pillgo">' . $srcBtn . $srcGo . '</span>' : $srcBtn) . ($viaText !== '' ? '<span class="sl-via">via: ' . $esc($viaText) . '</span>' : '');
             }
-            $out .= '<tr><td data-label="IP address">' . visits_ip_button($r['ip']) . '</td><td data-label="Where">' . visits_country_html($r['country']) . '</td><td data-label="Browser">' . $esc($r['ua']) . '</td><td data-label="Came in at">' . $came . '</td><td data-label="First seen">' . link_time_html($r['first']) . '</td><td data-label="Last seen">' . link_time_html($r['last']) . '</td><td data-label="Visits">' . ($lock ? '—' : (int) $r['opens']) . '</td><td data-label="Opened">' . ($lock ? '—' : '<button type="button" class="linklike vt-viewed" data-ip="' . $esc($r['ip']) . '" data-go="media" title="Photos, videos and folders they opened: press to see what">' . (int) $r['views'] . ' opened &rsaquo;</button>') . '</td></tr>';
+            $out .= '<tr><td data-label="IP address">' . visits_ip_button($r['ip']) . '</td><td data-label="Where">' . visits_country_html($r['country']) . '</td><td data-label="Browser">' . $esc($r['ua']) . '</td><td data-label="Came in at">' . $came . '</td><td data-label="First seen">' . link_time_html($r['first']) . '</td><td data-label="Last seen">' . link_time_html($r['last']) . '</td><td data-label="Visits">' . ($lock ? '—' : (int) $r['opens']) . '</td><td data-label="Seen">' . ($lock ? '—' : ((int) $r['seen'] > 0 ? (int) $r['seen'] : '<span class="muted" title="Nothing counted: the log counts what came on screen from the update on">–</span>')) . '</td><td data-label="Opened">' . ($lock ? '—' : '<button type="button" class="linklike vt-viewed" data-ip="' . $esc($r['ip']) . '" data-go="media" title="Photos, videos and folders they opened: press to see what">' . (int) $r['views'] . ' opened &rsaquo;</button><a href="#" class="vt-rep" data-export="report" data-ip="' . $esc($r['ip']) . '" title="Everything this address did, in one CSV: who, what they looked at, and the timeline">report &darr;</a>') . '</td></tr>';
         }
         $out .= '</tbody></table></div>';
         if ($total > count($rows)) $out .= '<p class="muted">Showing the latest ' . count($rows) . ' of ' . number_format($total) . '. Narrow it with the choices above, or export the rest.</p>';
@@ -536,8 +539,9 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
             <a href="#" data-export="items">What they looked at<small>One line per item: seen, opened, played, downloaded</small></a>
             <a href="#" data-export="blocked">Blocked tries<small>One line per address turned away: link, why, how many times</small></a>
             <a href="#" data-export="events">Everything, in order<small>The timeline, one line per happening</small></a>
+            <a href="#" data-export="report" class="vt-repmenu" hidden>This visitor's report<small>Everything this address did, all links together: who, what they looked at, the timeline</small></a>
             <button type="button" data-vt="trim">Trim the log&hellip;</button>
-            <span class="sl-menu-note">Every CSV follows the choices above (countries, sources, search), holds IP addresses, and goes to your downloads.</span>
+            <span class="sl-menu-note">Every CSV but the report follows the choices above (countries, sources, search); all of them hold IP addresses and go to your downloads.</span>
           </div>
         </div>
       </div>
@@ -581,6 +585,71 @@ function visits_trim_action() {
         'text' => $none ? 'Nothing is that old: there is nothing to trim.' : ($apply ? 'Trimmed: ' : 'This would remove ') . $what . '.' . ($apply ? '' : ' Opens, views and the total number of visitors stay.')]);
 }
 
+/** One line of the timeline CSV: [time, source, ip, what, folder, file, count] for an event row (joined to its visitor's ip). $src names a source, $iso writes a time. */
+function visits_event_cells(array $e, callable $src, callable $iso) {
+    $k = $e['k']; $fl = (string) ($e['f'] ?? $e['d'] ?? '');
+    if ($k === 'lockout') return [$iso($e['t']), $src($e['src']), $e['ip'], 'lockout: ' . (lockout_kind_names()[(string) $e['d']] ?? ''), '', '', 1];
+    $isDir = $k === 'scroll' || $k === 'folder' || $k === 'zip' || ($k === 'arrive' && !$e['u']);
+    return [$iso($e['t']), $src($e['src']), $e['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : ($k === 'arrive' ? 'arrived' : $k)), $isDir ? ($k === 'scroll' ? (string) $e['d'] : $fl) : link_item_folder($fl), $isDir ? '' : basename($fl), $e['n'] ?: 1];
+}
+
+/** Is this an IP address the Visitors tab could be showing (an IPv4 or IPv6 address, as written in the log)? */
+function visits_is_ip($v) { return is_string($v) && $v !== '' && strlen($v) <= 45 && filter_var($v, FILTER_VALIDATE_IP) !== false; }
+
+/** The report for one IP address, as one CSV: who they are (a line per source and browser), what they looked at (a line per file), the folders they opened, and the timeline, oldest first, all sources together. The choices on the tab (sources, countries, search) are not applied: the address is the one choice. Sections are separated by an empty line, each starting with its name. */
+function visits_report($ip, $dir) {
+    if (!visitlog_usable()) { http_response_code(503); header('Content-Type: text/plain; charset=UTF-8'); echo 'The visitor log isn\'t available here.'; return; }
+    $db = visitlog_db();
+    $who = visits_is_ip($ip) ? visits_query($db, 'SELECT v.*, ' . visits_seen_sql('v') . ' AS seen FROM visitors v WHERE v.ip = ? ORDER BY v.first', [$ip])->fetchAll() : [];
+    if (!$who) { http_response_code(404); header('Content-Type: text/plain; charset=UTF-8'); echo 'Nothing is logged for that address.'; return; }
+    $labels = visits_source_labels();
+    $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
+    $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
+    $slug = trim(substr((string) preg_replace('/[^A-Za-z0-9.]+/', '-', $ip), 0, 45), '-.');
+    header('Content-Type: text/csv; charset=UTF-8');
+    shell_frame_headers();
+    header('Content-Disposition: attachment; filename="visitors-report-' . $slug . '.csv"');
+    header('X-Content-Type-Options: nosniff');
+    echo "\xEF\xBB\xBF";
+    $line = function (array $r) { echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $first = $last = 0; $visits = $seen = $opened = 0;
+    foreach ($who as $r) { $first = $first ? min($first, (int) $r['first']) : (int) $r['first']; $last = max($last, (int) $r['last']); if ($r['src'] !== LOCKOUT_LOG_ID) { $visits += (int) $r['opens']; $seen += (int) $r['seen']; $opened += (int) $r['views']; } }
+    $line(['Visitor report']);
+    $line(['IP address', $ip]);
+    $line(['Where', ($who[0]['country'] ?? '') === '' ? '' : visit_country_name($who[0]['country']) . ' (' . $who[0]['country'] . ')']);
+    $line(['Made', $iso(time()) . ' (every time in this file is UTC)']);
+    $line(['First seen', $iso($first)]);
+    $line(['Last seen', $iso($last)]);
+    $line(['Visits', $visits]);
+    $line(['Seen', $seen ?: '']);
+    $line(['Opened', $opened]);
+    $line([]);
+    $line(['Who: one line per source and browser']);
+    $line(['source', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at']);
+    $links = (array) (links_read()['links'] ?? []); $via = [];
+    foreach (visits_query($db, 'SELECT n.src, n.vid, n.name FROM notes n JOIN visitors v ON v.src = n.src AND v.vid = n.vid WHERE n.kind = \'via\' AND v.ip = ?', [$ip])->fetchAll() as $n) $via[$n['src']][$n['vid']][] = link_address_label($n['name'], link_address_is_custom($n['name']));
+    foreach ($who as $r)
+        $line([$src($r['src']), $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], (int) $r['seen'] ?: '', $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
+               $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Not listed photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
+    $line([]);
+    $line(['What they looked at: one line per photo or video']);
+    $line(['source', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity']);
+    foreach (visits_query($db, 'SELECT i.* FROM items i JOIN visitors v ON v.src = i.src AND v.vid = i.vid WHERE v.ip = ? ORDER BY i.src, i.item', [$ip]) as $r)
+        $line([$src($r['src']), link_item_folder($r['item']), basename($r['item']), $iso($r['sf']), (int) $r['sn'] ?: '', (int) $r['opn'], (int) $r['pln'], (int) $r['dwn'], $iso(max((int) $r['sl'], (int) $r['opl'], (int) $r['pll'], (int) $r['dwl']))]);
+    $line([]);
+    $line(['Folders they opened']);
+    $line(['source', 'folder', 'opens', 'first_opened', 'last_opened']);
+    foreach (visits_query($db, 'SELECT o.* FROM folders o JOIN visitors v ON v.src = o.src AND v.vid = o.vid WHERE v.ip = ? ORDER BY o.src, o.folder', [$ip]) as $r)
+        $line([$src($r['src']), $r['folder'] === '' ? 'Front page' : $r['folder'], $r['n'], $iso($r['first']), $iso($r['last'])]);
+    $line([]);
+    $line(['Timeline: everything in order']);
+    $line(['time', 'source', 'what', 'folder', 'file', 'count']);
+    foreach (visits_query($db, 'SELECT e.*, v.ip FROM events e JOIN visitors v ON v.src = e.src AND v.vid = e.vid WHERE v.ip = ? ORDER BY e.t, e.id', [$ip]) as $e) {
+        $c = visits_event_cells($e, $src, $iso); unset($c[2]);   // (the address is at the top of the file)
+        $line(array_values($c));
+    }
+}
+
 /** CSV of the visitor log: what=visitors | items | events, for the sources, countries and search the Visitors tab has chosen. */
 function visits_export($what, array $f, $dir, $tab = '') {
     if (!visitlog_usable()) { http_response_code(503); header('Content-Type: text/plain; charset=UTF-8'); echo 'The visitor log isn\'t available here.'; return; }
@@ -597,7 +666,7 @@ function visits_export($what, array $f, $dir, $tab = '') {
     [$w, $p] = visits_where($f, 'v');
     // (a CSV of the Folders or Media view starts with what it was narrowed to, so the file says what it is once it is renamed or put beside others: every column is the same on each line)
     $ctxHead = ['link', 'country', 'search']; $isCtx = $what === 'folders' || $what === 'media';
-    $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'visits', 'opened', 'came_in_on', 'came_in_at'], 'blocked' => ['source', 'ip', 'where', 'browser', 'first_tried', 'last_tried', 'tries', 'why'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count'], 'folders' => array_merge($ctxHead, ['folder', 'opens', 'media_seen', 'opened', 'downloaded', 'first_seen', 'last_activity']), 'media' => array_merge($ctxHead, ['folders', 'show', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'])][$what];
+    $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at'], 'blocked' => ['source', 'ip', 'where', 'browser', 'first_tried', 'last_tried', 'tries', 'why'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count'], 'folders' => array_merge($ctxHead, ['folder', 'opens', 'media_seen', 'opened', 'downloaded', 'first_seen', 'last_activity']), 'media' => array_merge($ctxHead, ['folders', 'show', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'])][$what];
     $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
@@ -628,19 +697,14 @@ function visits_export($what, array $f, $dir, $tab = '') {
     } elseif ($what === 'visitors') {
         $links = (array) (links_read()['links'] ?? []); $via = [];
         foreach (visits_query($db, 'SELECT src, vid, name FROM notes WHERE kind = \'via\'')->fetchAll() as $n) $via[$n['src']][$n['vid']][] = link_address_label($n['name'], link_address_is_custom($n['name']));
-        foreach (visits_query($db, 'SELECT v.* FROM visitors v' . $w . ' ORDER BY v.last DESC', $p) as $r)
-            $line([$src($r['src']), $r['ip'], $r['country'], $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
+        foreach (visits_query($db, 'SELECT v.*, ' . visits_seen_sql('v') . ' AS seen FROM visitors v' . $w . ' ORDER BY v.last DESC', $p) as $r)
+            $line([$src($r['src']), $r['ip'], $r['country'], $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], (int) $r['seen'] ?: '', $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
                    $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Not listed photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
     } elseif ($what === 'items') {
         foreach (visits_query($db, 'SELECT i.*, v.ip, v.ua FROM items i JOIN visitors v ON v.src = i.src AND v.vid = i.vid' . $w . ' ORDER BY i.src, v.ip, i.item', $p) as $r)
             $line([$src($r['src']), $r['ip'], $r['ua'], link_item_folder($r['item']), basename($r['item']), $iso($r['sf']), (int) $r['sn'] ?: '', (int) $r['opn'], (int) $r['pln'], (int) $r['dwn'], $iso(max((int) $r['sl'], (int) $r['opl'], (int) $r['pll'], (int) $r['dwl']))]);
     } else {
-        foreach (visits_query($db, 'SELECT e.*, v.ip FROM events e JOIN visitors v ON v.src = e.src AND v.vid = e.vid' . $w . ' ORDER BY e.t, e.id', $p) as $e) {
-            $k = $e['k']; $fl = (string) ($e['f'] ?? $e['d'] ?? '');
-            if ($k === 'lockout') { $line([$iso($e['t']), $src($e['src']), $e['ip'], 'lockout: ' . (lockout_kind_names()[(string) $e['d']] ?? ''), '', '', 1]); continue; }
-            $isDir = $k === 'scroll' || $k === 'folder' || $k === 'zip' || ($k === 'arrive' && !$e['u']);
-            $line([$iso($e['t']), $src($e['src']), $e['ip'], $k === 'scroll' ? 'seen' : ($k === 'saved' ? 'downloaded' : ($k === 'arrive' ? 'arrived' : $k)), $isDir ? ($k === 'scroll' ? (string) $e['d'] : $fl) : link_item_folder($fl), $isDir ? '' : basename($fl), $e['n'] ?: 1]);
-        }
+        foreach (visits_query($db, 'SELECT e.*, v.ip FROM events e JOIN visitors v ON v.src = e.src AND v.vid = e.vid' . $w . ' ORDER BY e.t, e.id', $p) as $e) $line(visits_event_cells($e, $src, $iso));
     }
 }
 
@@ -649,6 +713,7 @@ function run_links_view_route($dir, $files) {
     header('Cache-Control: no-store');
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
     $data = links_read();
+    if (isset($_GET['visitsexport']) && $str('visitsexport') === 'report') { visits_report($str('ip'), $dir); return; }
     if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir, $str('tab')); return; }
     if (isset($_GET['browserspanel'])) {   // the "Browsers signed in" row on its own (the window came back)
         header('Content-Type: text/html; charset=UTF-8');
