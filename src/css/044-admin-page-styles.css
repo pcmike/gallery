@@ -1140,6 +1140,9 @@
   .vt-menu a, .vt-menu button { display:block; width:100%; text-align:left; background:none; border:0; padding:10px 12px; border-radius:7px; color:var(--text); font:inherit; text-decoration:none; cursor:pointer; }
   .vt-menu a small { display:block; color:var(--muted); font-size:0.78rem; }
   .vt-menu a:hover, .vt-menu button:hover { background:#26262a; }
+  .vt-menu a[hidden], .vt-menu .vt-menu-sep[hidden] { display:none; }
+  .vt-menu .vt-menu-sep { display:block; margin:4px 8px; border-top:1px solid #34343a; }
+  .vt-menu .vt-thisview .vt-vn { font-weight:600; }
   .vt-menu .sl-menu-note { display:block; padding:6px 12px 4px; margin-top:4px; border-top:1px solid #34343a; font-size:0.78rem; color:var(--muted); }
   .vt-pop { position:absolute; top:calc(100% + 6px); left:0; z-index:30; min-width:290px; background:#1c1d1f; border:1px solid #3a3b3f; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.55); padding:8px; }
   .vt-pop-h { display:none; font-weight:700; margin:0 0 8px; }
@@ -1164,6 +1167,24 @@
   .vt-gl:hover { text-decoration:underline; }
   .vt-gl:not(.vt-gla) { padding-left:0; }
   .vt-gla { margin-left:2px; }
+  /* The link's name and the arrow to its Shares row: one pill, two buttons (the name narrows the list to the link; the arrow goes to the link). */
+  .vt-pillgo { display:inline-flex; align-items:stretch; max-width:100%; background:#23244a; border-radius:12px; overflow:hidden; vertical-align:middle; }
+  .vt-pillgo .vt-src { background:none; border-radius:0; padding:1px 7px 1px 10px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vt-pillgo .vt-gla { margin:0; padding:1px 9px 1px 8px; border-radius:0; border-left:1px solid #3b3e80; flex:0 0 auto; text-decoration:none; line-height:1.3; position:relative; top:-1px; }
+  .vt-pillgo .vt-src:hover, .vt-pillgo .vt-gla:hover { background:#31337a; box-shadow:none; text-decoration:none; }
+  .vt-ip { white-space:nowrap; }
+  /* On a wide screen the Visitors and Blocked tables keep their columns where they are whatever the choices leave (an address takes the room of 255.255.255.255), and the spare room goes to the link. */
+  @media (min-width: 641px) {
+    .vt-table { table-layout:fixed; min-width:46rem; }
+    .vt-table th:nth-child(1) { width:8.6rem; }
+    .vt-table th:nth-child(2) { width:3.6rem; }
+    .vt-table th:nth-child(3) { width:7rem; }
+    .vt-table th:nth-child(5), .vt-table th:nth-child(6) { width:6.6rem; }
+    .vt-table:not(.vt-blk) th:nth-child(7) { width:3.6rem; }
+    .vt-table:not(.vt-blk) th:nth-child(8) { width:4.6rem; }
+    .vt-blk th:nth-child(4) { width:9rem; }
+    .vt-table td { min-width:0; overflow-wrap:anywhere; }
+  }
   .sl-row.flash-target { outline:2px solid var(--accent); outline-offset:2px; border-radius:8px; }
   .vt-ci { color:#aab2ff; text-decoration:none; }
   .vt-ci:hover { text-decoration:underline; }

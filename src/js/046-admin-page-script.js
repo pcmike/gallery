@@ -2914,6 +2914,39 @@
       clearTimeout(toastTimer); t.className = 'pv-toast' + (bad ? ' err' : ''); t.textContent = text; t.hidden = false;
       toastTimer = setTimeout(function () { t.hidden = true; }, bad ? 6000 : 3500);
     }
+    // Saving a CSV from a Home Screen app on a phone: such an app has no browser bar, so a link that downloads a file leaves the app on the file's
+    // preview with no way back. There the file is fetched here and handed to the share sheet (Save to Files, Numbers, AirDrop...) and the app stays where it
+    // is. Anywhere else (a computer, a browser tab, a phone without file sharing) the link does what a link does. Safari only opens the share sheet right
+    // after a tap: if the fetch took too long, the file is kept and the next tap opens it.
+    var savedFiles = {};
+    function saveInApp(a, e) {
+      var standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+      if (!standalone || !navigator.share || !navigator.canShare || window.parent !== window) return false;
+      e.preventDefault();
+      var href = a.href, offer = function (file) {
+        return navigator.share({ files: [file] }).then(function () { delete savedFiles[href]; }).catch(function (err) {
+          if (err && err.name === 'AbortError') return;
+          if (err && err.name === 'NotAllowedError') { savedFiles[href] = file; say('Ready: tap again to save'); return; }
+          say('Couldn\'t open the share sheet for the file.', true);
+        });
+      };
+      if (savedFiles[href]) { offer(savedFiles[href]); return true; }
+      say('Getting the file\u2026');
+      fetch(href, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
+        if (!r.ok) throw new Error('status');
+        var m = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '');
+        return r.blob().then(function (b) { return new File([b], m ? m[1] : 'visitors.csv', { type: 'text/csv' }); });
+      }).then(function (file) {
+        if (!navigator.canShare({ files: [file] })) throw new Error('unsupported');
+        var t = document.getElementById('vt-toast'); if (t) t.hidden = true;
+        return offer(file);
+      }).catch(function () { say('Couldn\'t get the file: check your connection and try again.', true); });
+      return true;
+    }
+    document.addEventListener('click', function (e) {
+      var a = e.target.closest ? e.target.closest('a[data-export], a[id^=vt-trim-dl-]') : null;
+      if (a && root.contains(a) && a.href && a.getAttribute('href') !== '#') saveInApp(a, e);
+    });
     function times() {
       [].forEach.call(root.querySelectorAll('time.sl-time[data-ts]'), function (t) {
         var d = new Date(+t.getAttribute('data-ts') * 1000); if (isNaN(d)) return;
@@ -2952,7 +2985,15 @@
       n.innerHTML = filtered() && a > 0 ? 'Showing ' + m.toLocaleString() + ' of ' + a.toLocaleString() + ' <button type="button" class="linklike" data-vt="clear">Clear</button>' : '';
     }
     function paintExport() {
-      [].forEach.call(root.querySelectorAll('[data-export]'), function (a) { a.href = '?admin&visitsexport=' + a.getAttribute('data-export') + params(); });
+      [].forEach.call(root.querySelectorAll('[data-export]'), function (a) {
+        var k = a.getAttribute('data-export');
+        a.href = '?admin&visitsexport=' + k + (k === 'view' ? '&tab=' + S.view : '') + params();
+        if (k === 'view') {   // (This view: named for the tab; with Blocked ticked on a tab that has nothing to show for it, there is nothing on the screen to save)
+          var gone = S.src.indexOf('blocked') >= 0 && S.view !== 'visitors';
+          a.hidden = gone; var sep = root.querySelector('.vt-menu-sep'); if (sep) sep.hidden = gone;
+          var vn = a.querySelector('.vt-vn'); if (vn) vn.textContent = S.src.indexOf('blocked') >= 0 ? 'This view (blocked tries)' : 'This view (' + { visitors: 'Visitors', folders: 'Folders', media: 'Media', timeline: 'Timeline' }[S.view] + ')';
+        }
+      });
     }
     function paintSearch() { var x = $('.vt-sx'), i = $('.vt-search'); if (x && i) x.hidden = i.value === ''; }
     function paintPills() {

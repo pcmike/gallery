@@ -3339,15 +3339,52 @@ try:
         b.js("document.querySelector('#vt-root [data-pill=cc]').click()"); b.drain(0.2); b.js("document.querySelector('#vt-root .vt-opt[data-c=GB]').click()"); b.drain(0.5); b.js("document.querySelector('#vt-root .vt-done').click()"); b.drain(0.2)
         b.js("document.querySelector('#vt-root [data-vt=menu]').click()"); b.drain(0.3)
         em = b.js("(() => { const m = document.querySelector('#vt-root .vt-menu'); return {open: !m.hidden, hrefs: [...m.querySelectorAll('a[data-export]')].map(a => a.getAttribute('href')), trim: !!m.querySelector('[data-vt=trim]'), inside: m.getBoundingClientRect().right <= innerWidth}; })()")
-        ok(em["open"] and em["inside"] and em["trim"] and len(em["hrefs"]) == 4 and any("visitsexport=blocked" in h for h in em["hrefs"]) and all("visitsexport=" in h and "cc=GB" in h for h in em["hrefs"]), "[visitors tab] the export icon opens a menu of four CSVs (visitors, what they looked at, blocked tries, everything in order) (that follow the choices made: here the country) and Trim the log", str(em))
+        ok(em["open"] and em["inside"] and em["trim"] and len(em["hrefs"]) == 5 and any("visitsexport=blocked" in h for h in em["hrefs"]) and any("visitsexport=view&tab=visitors" in h for h in em["hrefs"]) and all("visitsexport=" in h and "cc=GB" in h for h in em["hrefs"]), "[visitors tab] the export icon opens a menu of This view and four CSVs (visitors, what they looked at, blocked tries, everything in order) (that follow the choices made: here the country) and Trim the log", str(em))
         shot(b, "23d-visitors-export-menu")
         b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))"); b.drain(0.2)
         ok(b.js("document.querySelector('#vt-root .vt-menu').hidden"), "[visitors tab] Escape closes the export menu")
+        # "This view": named for the tab, follows it, and (on a phone's Home Screen app) goes to the share sheet instead of leaving the app
+        vt_clear()
+        def view_item():
+            b.js("(() => { const m = document.querySelector('#vt-root .vt-menu'); if (m.hidden) document.querySelector('#vt-root [data-vt=menu]').click(); })()"); b.drain(0.2)
+            r = b.js("(() => { const a = document.querySelector('#vt-root .vt-menu a[data-export=view]'); return a ? {shown: !a.hidden && a.getBoundingClientRect().height > 0, text: a.querySelector('.vt-vn').textContent, href: a.getAttribute('href')} : null; })()")
+            b.js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))"); b.drain(0.2)
+            return r
+        tv = {}
+        for v, name in (("folders", "Folders"), ("media", "Media"), ("timeline", "Timeline"), ("visitors", "Visitors")):
+            b.js("document.querySelector('#vt-root .vt-views [data-view=%s]').click()" % v); b.drain(0.3); lwait("!document.querySelector('#vt-root').classList.contains('loading')")
+            tv[v] = view_item()
+        ok(all(tv[v] and tv[v]["shown"] and tv[v]["text"] == "This view (%s)" % n and ("tab=" + v) in tv[v]["href"] for v, n in (("folders", "Folders"), ("media", "Media"), ("timeline", "Timeline"), ("visitors", "Visitors"))), "[this view] the first item in the export menu is named for the tab being looked at, and its address names the tab", str(tv))
+        b.js("document.querySelector('#vt-root [data-pill=src]').click()"); b.drain(0.2); b.js("document.querySelector('#vt-root .vt-opt[data-l=blocked]').click()"); b.drain(0.4); b.js("document.querySelector('#vt-root .vt-done').click()"); b.drain(0.2)
+        tvb = view_item()
+        b.js("document.querySelector('#vt-root .vt-views [data-view=timeline]').click()"); b.drain(0.3)
+        tvb2 = view_item()
+        ok(tvb and tvb["shown"] and tvb["text"] == "This view (blocked tries)" and tvb2 and not tvb2["shown"], "[this view] with Blocked ticked it says it is the blocked tries, and on a tab that has nothing for Blocked it is not offered (there is nothing on the screen to save)", str([tvb, tvb2]))
+        lwait("!!document.querySelector('#vt-root [data-vt=unblock]')"); b.js("document.querySelector('#vt-root [data-vt=unblock]').click()"); b.drain(0.3)
+        b.js("document.querySelector('#vt-root .vt-views [data-view=visitors]').click()"); b.drain(0.3); lwait("!document.querySelector('#vt-root').classList.contains('loading')")
+        b.js("""(() => { window.__shared = []; window.__navs = 0; const std = q => ({matches: /standalone/.test(q), addEventListener() {}, removeEventListener() {}}); window.matchMedia = std;
+          Object.defineProperty(navigator, 'share', {value: async d => { window.__shared.push(d.files[0].name + ':' + d.files[0].size); }, configurable: true});
+          Object.defineProperty(navigator, 'canShare', {value: () => true, configurable: true}); })()""")
+        b.js("document.querySelector('#vt-root [data-vt=menu]').click()"); b.drain(0.2)
+        b.js("document.querySelector('#vt-root .vt-menu a[data-export=view]').click()")
+        ok(lwait("window.__shared.length === 1 && /^visitors-visitors\\.csv:[1-9]/.test(window.__shared[0])") and b.js("location.search.indexOf('visitsexport') < 0"), "[this view] in a Home Screen app on a phone a CSV is handed to the share sheet (named for the view) and the app stays where it is, instead of the link taking the whole screen", b.js("JSON.stringify(window.__shared)"))
+        b.js("delete navigator.share; delete navigator.canShare")
+        # the Visitors list: the link's name and the arrow are one pill; an address takes the same room whatever the choices leave
+        pg = b.js("""(() => { const g = document.querySelector('#vt-root .vt-body .vt-pillgo'); if (!g) return null; const r = g.getBoundingClientRect(), n = g.querySelector('.vt-src').getBoundingClientRect(), a = g.querySelector('.vt-gla').getBoundingClientRect();
+          return {inside: a.left >= r.left - 1 && a.right <= r.right + 1 && a.top >= r.top - 1 && a.bottom <= r.bottom + 1 && n.left >= r.left - 1, side: a.left >= n.right - 1, oneLine: Math.abs(n.height - a.height) < 4}; })()""")
+        ok(pg and pg["inside"] and pg["side"] and pg["oneLine"], "[pill arrow] the arrow sits inside the link's pill, beside the name, on the same line", str(pg))
+        def ipcol():
+            lwait("!!document.querySelector('#vt-root .vt-body table.vt-table')")
+            return b.js("(() => { const t = document.querySelector('#vt-root .vt-body table.vt-table'); const th = [...t.querySelectorAll('th')].slice(0, 3).map(x => Math.round(x.getBoundingClientRect().width)); const td = t.querySelector('td .vt-ip'); return {th, fs: getComputedStyle(td).fontSize, lay: getComputedStyle(t).tableLayout, h: Math.round(td.getBoundingClientRect().height)}; })()")
+        c0 = ipcol()
+        b.js("document.querySelector('#vt-root .vt-body .vt-src').click()"); b.drain(0.3); lwait("!!document.querySelector('#vt-root .vt-note [data-vt=clear]')")
+        c1 = ipcol()
+        vt_clear()
+        ok(c0["lay"] == "fixed" and c0["th"] == c1["th"] and c0["fs"] == c1["fs"], "[ip column] the first columns keep their width and the text its size when the choices narrow the list (a fixed layout, the room of a whole IPv4 address)", str([c0, c1]))
         b.js("document.querySelector('#vt-root [data-vt=menu]').click()"); b.drain(0.2); b.js("document.querySelector('#vt-root [data-vt=trim]').click()"); b.drain(0.4)
         ok(lwait("!document.getElementById('vt-modal').hidden && /nothing to trim|This would remove/.test(document.getElementById('vt-trim-out').textContent)"), "[visitors tab] Trim the log opens a dialog that counts what would go before it does anything", b.js("document.getElementById('vt-trim-out').textContent"))
         b.js("document.querySelector('#vt-modal [data-vt-modal=cancel]').click()"); b.drain(0.2)
         ok(b.js("document.getElementById('vt-modal').hidden"), "[visitors tab] Cancel closes it")
-        vt_clear()
         # the Shares tab leads here
         b.js("location.hash = '#links'"); b.drain(0.6)
         b.js("[...document.querySelectorAll('details.sl-row')].find(d => d.querySelector('.sl-name').textContent.trim() === 'Mark & Jen').open = true"); b.drain(0.4)

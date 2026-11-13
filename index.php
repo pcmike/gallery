@@ -14618,6 +14618,50 @@ function visits_load_blocked($db, array $f, $limit) {
     return [visits_query($db, 'SELECT b.* FROM blocked b' . $w . ' ORDER BY b.last DESC LIMIT ' . (int) $limit, $p)->fetchAll(), $total];
 }
 
+/** Per folder, from the per-file tallies and the folder opens: ['opens', 'seen' (files on their screen), 'opened', 'down', 'first', 'last'], the latest activity first. What the Folders view lists and its CSV holds. */
+function visits_folder_stats(array $m, array $opens) {
+    $fo = []; $blank = ['opens' => 0, 'seen' => 0, 'opened' => 0, 'down' => 0, 'first' => 0, 'last' => 0];
+    foreach ($m as $rel => $a) {
+        $d = link_item_folder($rel); $x = &$fo[$d]; $x = $x ?? $blank;
+        if ($a['sf']) { $x['seen']++; $x['first'] = $x['first'] ? min($x['first'], $a['sf']) : $a['sf']; }
+        if ($a['on'] || $a['pn']) $x['opened']++;
+        if ($a['dn']) $x['down']++;
+        $x['last'] = max($x['last'], $a['last']); unset($x);
+    }
+    foreach ($opens as $d => $o) { $x = &$fo[$d]; $x = $x ?? $blank; $x['opens'] = $o['n']; $x['first'] = $x['first'] ? min($x['first'], $o['first']) : $o['first']; $x['last'] = max($x['last'], $o['last']); unset($x); }
+    uasort($fo, function ($a, $b) { return $b['last'] <=> $a['last']; });
+    return $fo;
+}
+
+/** The files the Media view shows for the choices (the folders ticked, "only their own files", and the Photos / Videos / Opened / Downloaded / Private / Most viewed / Most recent choice), in its order. What its grid lists and its CSV holds. */
+function visits_media_pick($dir, array $m, array $f) {
+    if ($f['folders']) { $fs = array_flip($f['folders']); $ex = $f['exact']; $m = array_filter($m, function ($a, $rel) use ($fs, $ex) { return link_folder_selected(link_item_folder($rel), $fs, $ex); }, ARRAY_FILTER_USE_BOTH); }
+    $wh = $f['what'];
+    if ($wh === 'photos') $m = array_filter($m, function ($a, $rel) { return !is_video_file($rel); }, ARRAY_FILTER_USE_BOTH);
+    elseif ($wh === 'videos') $m = array_filter($m, function ($a, $rel) { return is_video_file($rel); }, ARRAY_FILTER_USE_BOTH);
+    elseif ($wh === 'opened') $m = array_filter($m, function ($a) { return $a['on'] + $a['pn'] > 0; });
+    elseif ($wh === 'downloaded') $m = array_filter($m, function ($a) { return $a['dn'] > 0; });
+    elseif ($wh === 'private') { $allItems = items_get_all_for_files($dir, array_keys($m)); $m = array_filter($m, function ($a, $rel) use ($dir, $allItems) { return file_is_hidden($dir, $rel, $allItems); }, ARRAY_FILTER_USE_BOTH); }
+    if ($wh === 'recent') uasort($m, function ($a, $b) { return $b['last'] <=> $a['last']; });
+    else uasort($m, function ($a, $b) { return ($b['on'] + $b['pn']) <=> ($a['on'] + $a['pn']) ?: $b['last'] <=> $a['last']; });
+    return $m;
+}
+
+/** An address for a narrow column: an IPv4 address whole, a long IPv6 one as its first two groups, an ellipsis and its last group (2600:1700:…:b21e), so both fit the room of 255.255.255.255. The whole address stays in the tooltip and in the button's data (a press puts it in the search box). */
+function visits_ip_short($ip) {
+    $ip = (string) $ip;
+    if (strlen($ip) <= 15 || strpos($ip, ':') === false) return $ip;
+    $g = explode(':', $ip);
+    if (count($g) >= 4 && $g[0] !== '' && $g[1] !== '' && end($g) !== '') return $g[0] . ':' . $g[1] . ':…:' . end($g);
+    return substr($ip, 0, 9) . '…' . substr($ip, -4);   // (an odd shape, such as ::ffff:1.2.3.4 written long)
+}
+/** The address as a button that narrows the views to it. */
+function visits_ip_button($ip) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $short = visits_ip_short($ip);
+    return '<button type="button" class="linklike vt-ip" data-ip="' . $esc($ip) . '"' . ($short !== (string) $ip ? ' title="' . $esc($ip) . '"' : '') . '>' . $esc($short) . '</button>';
+}
+
 /** A link's name as a button that goes to that link on the Shares tab ($bare: just the arrow, for a place that already shows the name). A deleted link has nothing to go to. */
 function visits_link_go($id, array $labels, $bare = false) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
@@ -14629,11 +14673,11 @@ function visits_link_go($id, array $labels, $bare = false) {
 function visits_blocked_html(array $rows, array $labels) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $reasons = ['expired' => ['expired', 'extend it'], 'used_up' => ['already used', 'raise its browser limit, or extend it'], 'paused' => ['paused', 'resume it'], 'revoked' => ['revoked', 'it was ended on purpose'], 'scheduled' => ['not started', 'it opens on its start date'], 'replaced' => ['old address', 'the link has a new address']];
-    $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Link</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
+    $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table vt-blk"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Link</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
     foreach ($rows as $b) {
         $why = []; $hint = [];
         foreach (array_keys((array) json_decode((string) $b['why'], true)) as $s) { $r = $reasons[$s] ?? [$s, '']; $why[$r[0]] = true; if ($r[1] !== '') $hint[$r[1]] = true; }
-        $out .= '<tr class="rj"><td data-label="IP address"><span class="sl-ipt">' . $esc($b['ip']) . '</span></td><td data-label="Where">' . visits_country_html($b['country']) . '</td><td data-label="Browser">' . $esc($b['ua']) . '</td><td data-label="Link">' . visits_link_go($b['src'], $labels) . '</td><td data-label="First tried">' . link_time_html($b['first']) . '</td><td data-label="Last tried">' . link_time_html($b['last']) . '</td><td data-label="Tries" class="sl-why">' . (int) $b['tries'] . ' &middot; ' . $esc(implode(', ', array_keys($why))) . ($hint ? '<span class="sl-via">To let them in: ' . $esc(implode('; ', array_keys($hint))) . '</span>' : '') . '</td></tr>';
+        $out .= '<tr class="rj"><td data-label="IP address"><span class="sl-ipt"' . (visits_ip_short($b['ip']) !== (string) $b['ip'] ? ' title="' . $esc($b['ip']) . '"' : '') . '>' . $esc(visits_ip_short($b['ip'])) . '</span></td><td data-label="Where">' . visits_country_html($b['country']) . '</td><td data-label="Browser">' . $esc($b['ua']) . '</td><td data-label="Link">' . visits_link_go($b['src'], $labels) . '</td><td data-label="First tried">' . link_time_html($b['first']) . '</td><td data-label="Last tried">' . link_time_html($b['last']) . '</td><td data-label="Tries" class="sl-why">' . (int) $b['tries'] . ' &middot; ' . $esc(implode(', ', array_keys($why))) . ($hint ? '<span class="sl-via">To let them in: ' . $esc(implode('; ', array_keys($hint))) . '</span>' : '') . '</td></tr>';
     }
     return $out . '</tbody></table></div>';
 }
@@ -14749,9 +14793,10 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
             elseif ($pub) $came = visits_entry_html($dir, $r['entry_f'] !== null ? ['f' => $r['entry_f'], 'h' => $r['entry_h']] + ($r['entry_u'] ? ['u' => 1] : []) : null);
             else {
                 $viaText = visits_via_text($l, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']);
-                $came = '<button type="button" class="vt-src" data-src="' . $esc($r['src']) . '" title="Show only visitors who came in on this link">' . $esc($labels[$r['src']] ?? 'A deleted link') . '</button>' . visits_link_go($r['src'], $labels, true) . ($viaText !== '' ? '<span class="sl-via">via: ' . $esc($viaText) . '</span>' : '');
+                $srcBtn = '<button type="button" class="vt-src" data-src="' . $esc($r['src']) . '" title="Show only visitors who came in on this link">' . $esc($labels[$r['src']] ?? 'A deleted link') . '</button>'; $srcGo = visits_link_go($r['src'], $labels, true);
+                $came = ($srcGo !== '' ? '<span class="vt-pillgo">' . $srcBtn . $srcGo . '</span>' : $srcBtn) . ($viaText !== '' ? '<span class="sl-via">via: ' . $esc($viaText) . '</span>' : '');
             }
-            $out .= '<tr><td data-label="IP address"><button type="button" class="linklike vt-ip" data-ip="' . $esc($r['ip']) . '">' . $esc($r['ip']) . '</button></td><td data-label="Where">' . visits_country_html($r['country']) . '</td><td data-label="Browser">' . $esc($r['ua']) . '</td><td data-label="Came in at">' . $came . '</td><td data-label="First seen">' . link_time_html($r['first']) . '</td><td data-label="Last seen">' . link_time_html($r['last']) . '</td><td data-label="Opens">' . ($lock ? '—' : (int) $r['opens']) . '</td><td data-label="Viewed">' . ($lock ? '—' : '<button type="button" class="linklike vt-viewed" data-ip="' . $esc($r['ip']) . '" data-go="media">' . (int) $r['views'] . ' views &rsaquo;</button>') . '</td></tr>';
+            $out .= '<tr><td data-label="IP address">' . visits_ip_button($r['ip']) . '</td><td data-label="Where">' . visits_country_html($r['country']) . '</td><td data-label="Browser">' . $esc($r['ua']) . '</td><td data-label="Came in at">' . $came . '</td><td data-label="First seen">' . link_time_html($r['first']) . '</td><td data-label="Last seen">' . link_time_html($r['last']) . '</td><td data-label="Opens">' . ($lock ? '—' : (int) $r['opens']) . '</td><td data-label="Viewed">' . ($lock ? '—' : '<button type="button" class="linklike vt-viewed" data-ip="' . $esc($r['ip']) . '" data-go="media">' . (int) $r['views'] . ' views &rsaquo;</button>') . '</td></tr>';
         }
         $out .= '</tbody></table></div>';
         if ($total > count($rows)) $out .= '<p class="muted">Showing the latest ' . count($rows) . ' of ' . number_format($total) . '. Narrow it with the choices above, or export the rest.</p>';
@@ -14766,16 +14811,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
     $m = visits_load_media($db, $f); $opens = visits_load_folder_opens($db, $f);
 
     if ($tab === 'folders') {
-        $fo = []; $blank = ['opens' => 0, 'seen' => 0, 'opened' => 0, 'down' => 0, 'first' => 0, 'last' => 0];
-        foreach ($m as $rel => $a) {
-            $d = link_item_folder($rel); $x = &$fo[$d]; $x = $x ?? $blank;
-            if ($a['sf']) { $x['seen']++; $x['first'] = $x['first'] ? min($x['first'], $a['sf']) : $a['sf']; }
-            if ($a['on'] || $a['pn']) $x['opened']++;
-            if ($a['dn']) $x['down']++;
-            $x['last'] = max($x['last'], $a['last']); unset($x);
-        }
-        foreach ($opens as $d => $o) { $x = &$fo[$d]; $x = $x ?? $blank; $x['opens'] = $o['n']; $x['first'] = $x['first'] ? min($x['first'], $o['first']) : $o['first']; $x['last'] = max($x['last'], $o['last']); unset($x); }
-        uasort($fo, function ($a, $b) { return $b['last'] <=> $a['last']; });
+        $fo = visits_folder_stats($m, $opens);
         if (!$fo) return $wrap('<p class="muted sl-none">Nothing has been looked at yet.</p>');
         $out = '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>Folder</th><th>Opens</th><th>Media seen</th><th>Opened</th><th>Downloaded</th><th>First seen</th><th>Last activity</th></tr></thead><tbody>';
         foreach ($fo as $rel => $x) {
@@ -14796,15 +14832,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         foreach (['viewed' => 'Most viewed', 'recent' => 'Most recent', 'photos' => 'Photos', 'videos' => 'Videos', 'private' => 'Private', 'opened' => 'Opened', 'downloaded' => 'Downloaded'] as $k => $t) $what[$k] = [$t, $t, 0];
         $bar = '<div class="sl-filterbar">' . link_pop_html('folders', true, 'All folders', 'folders', $opts, array_map(function ($x) { return $x === '' ? '/' : $x; }, $f['folders']), '', $nested ? 'A folder includes the folders inside it.' : '', $f['exact']) . link_pop_html('what', false, 'Most viewed', '', $what, [$f['what']], 'viewed') . '</div>';
         $kept = $m;
-        if ($f['folders']) { $fs = array_flip($f['folders']); $ex = $f['exact']; $m = array_filter($m, function ($a, $rel) use ($fs, $ex) { return link_folder_selected(link_item_folder($rel), $fs, $ex); }, ARRAY_FILTER_USE_BOTH); }
-        $wh = $f['what'];
-        if ($wh === 'photos') $m = array_filter($m, function ($a, $rel) { return !is_video_file($rel); }, ARRAY_FILTER_USE_BOTH);
-        elseif ($wh === 'videos') $m = array_filter($m, function ($a, $rel) { return is_video_file($rel); }, ARRAY_FILTER_USE_BOTH);
-        elseif ($wh === 'opened') $m = array_filter($m, function ($a) { return $a['on'] + $a['pn'] > 0; });
-        elseif ($wh === 'downloaded') $m = array_filter($m, function ($a) { return $a['dn'] > 0; });
-        elseif ($wh === 'private') { $allItems = items_get_all_for_files($dir, array_keys($m)); $m = array_filter($m, function ($a, $rel) use ($dir, $allItems) { return file_is_hidden($dir, $rel, $allItems); }, ARRAY_FILTER_USE_BOTH); }
-        if ($wh === 'recent') uasort($m, function ($a, $b) { return $b['last'] <=> $a['last']; });
-        else uasort($m, function ($a, $b) { return ($b['on'] + $b['pn']) <=> ($a['on'] + $a['pn']) ?: $b['last'] <=> $a['last']; });
+        $m = visits_media_pick($dir, $m, $f);
         if (!$m) return $wrap($bar . '<p class="muted sl-none">' . ($kept ? 'No photo or video matches that.' : 'Nothing has been looked at yet.') . '</p>');
         $shown = $f['all'] ? $m : array_slice($m, 0, 60, true);
         $inAll = items_get_all_for_files($dir, array_keys($shown));
@@ -14843,7 +14871,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         elseif ($k === 'link') $text = $e['_src'] === PUBLIC_LOG_ID ? 'Visited the gallery' : 'Opened the link';
         elseif ($k === 'lockout') $text = ['signin' => 'Locked out of signing in: too many wrong access codes', 'setup' => 'Locked out of setting up: too many wrong setup codes', 'addr' => 'Locked out: too many addresses that did not work'][(string) $e['d']] ?? 'Locked out';
         else continue;
-        $who = '<button type="button" class="linklike vt-ip" data-ip="' . $esc($e['_ip']) . '">' . $esc($e['_ip']) . '</button> &middot; ' . ($e['_src'] === LOCKOUT_LOG_ID ? 'paused for a minute' : ($e['_src'] === PUBLIC_LOG_ID ? 'public address' : 'via ' . (isset($labels[$e['_src']]) ? visits_link_go($e['_src'], $labels) : 'a deleted link')));
+        $who = visits_ip_button($e['_ip']) . ' &middot; ' . ($e['_src'] === LOCKOUT_LOG_ID ? 'paused for a minute' : ($e['_src'] === PUBLIC_LOG_ID ? 'public address' : 'via ' . (isset($labels[$e['_src']]) ? visits_link_go($e['_src'], $labels) : 'a deleted link')));
         $out .= '<div class="sl-ev"><span class="sl-evt">' . $when . '</span><div class="' . ($pic !== '' ? 'sl-evpic' : 'sl-evbody') . '">' . $pic . '<div>' . $text . '<div class="muted sl-evl">' . $who . '</div></div></div></div>';
     }
     $out .= '</div>' . ($evTotal > count($events) ? '<p class="note">Showing the latest ' . count($events) . ' of ' . number_format($evTotal) . ' lines. Narrow it with the choices above, or export the whole timeline.</p>' : '');
@@ -14923,12 +14951,14 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
         <div class="vt-menuwrap">
           <button type="button" class="vt-ic" data-vt="menu" title="Export or trim the log" aria-label="Export or trim the log" aria-haspopup="true" aria-expanded="false"><?= ui_icon('download') ?></button>
           <div class="vt-menu" hidden>
+            <a href="#" data-export="view" class="vt-thisview"><span class="vt-vn">This view</span><small>What this tab shows now, with all your choices applied</small></a>
+            <span class="vt-menu-sep" role="separator"></span>
             <a href="#" data-export="visitors">Visitors<small>One line per IP: opens, first and last seen</small></a>
             <a href="#" data-export="items">What they looked at<small>One line per item: seen, opened, played, downloaded</small></a>
             <a href="#" data-export="blocked">Blocked tries<small>One line per address turned away: link, why, how many times</small></a>
             <a href="#" data-export="events">Everything, in order<small>The timeline, one line per happening</small></a>
             <button type="button" data-vt="trim">Trim the log&hellip;</button>
-            <span class="sl-menu-note">CSVs hold what the choices above show, with IP addresses, and open in your downloads.</span>
+            <span class="sl-menu-note">Every CSV follows the choices above (countries, sources, search), holds IP addresses, and goes to your downloads.</span>
           </div>
         </div>
       </div>
@@ -14973,22 +15003,38 @@ function visits_trim_action() {
 }
 
 /** CSV of the visitor log: what=visitors | items | events, for the sources, countries and search the Visitors tab has chosen. */
-function visits_export($what, array $f, $dir) {
+function visits_export($what, array $f, $dir, $tab = '') {
     if (!visitlog_usable()) { http_response_code(503); header('Content-Type: text/plain; charset=UTF-8'); echo 'The visitor log isn\'t available here.'; return; }
     $db = visitlog_db();
-    if (!in_array($what, ['visitors', 'items', 'events', 'blocked'], true)) $what = 'items';
+    $name = '';
+    if ($what === 'view') {   // "This view": what the tab being looked at shows, with every choice on it (the pills, the search, and the Media view's folders and kind)
+        $tab = in_array($tab, ['visitors', 'folders', 'media', 'timeline'], true) ? $tab : 'visitors';
+        $what = ['visitors' => $f['blocked'] ? 'blocked' : 'visitors', 'folders' => 'folders', 'media' => 'media', 'timeline' => 'events'][$tab];
+        $name = $what === 'blocked' ? 'blocked' : $tab . ($tab === 'media' && $f['what'] !== 'viewed' ? '-' . $f['what'] : '');
+    }
+    if (!in_array($what, ['visitors', 'items', 'events', 'blocked', 'folders', 'media'], true)) $what = 'items';
+    if ($name === '') $name = $what;
     $labels = visits_source_labels();
     [$w, $p] = visits_where($f, 'v');
-    $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on', 'came_in_at'], 'blocked' => ['source', 'ip', 'where', 'browser', 'first_tried', 'last_tried', 'tries', 'why'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count']][$what];
+    $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'opens', 'views', 'came_in_on', 'came_in_at'], 'blocked' => ['source', 'ip', 'where', 'browser', 'first_tried', 'last_tried', 'tries', 'why'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count'], 'folders' => ['folder', 'opens', 'media_seen', 'opened', 'downloaded', 'first_seen', 'last_activity'], 'media' => ['folder', 'file', 'first_seen', 'opened', 'played', 'downloaded', 'last_activity']][$what];
     $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
-    header('Content-Disposition: attachment; filename="visitors-' . $what . '.csv"');
+    header('Content-Disposition: attachment; filename="visitors-' . $name . '.csv"');
     header('X-Content-Type-Options: nosniff');
     echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";
     $line = function (array $r) { echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
     $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
-    if ($what === 'blocked') {
+    if ($what === 'folders') {
+        $m = visits_load_media($db, $f);
+        foreach (visits_folder_stats($m, visits_load_folder_opens($db, $f)) as $rel => $x) {
+            $rel = (string) $rel;
+            $line([$rel === '' ? 'Front page' : link_folder_label($dir, $rel), $x['opens'], $x['seen'], $x['opened'], $x['down'], $iso($x['first']), $iso($x['last'])]);
+        }
+    } elseif ($what === 'media') {   // (one line per photo or video, as the Media view lists them: all of them, not only the first screenful)
+        foreach (visits_media_pick($dir, visits_load_media($db, $f), $f) as $rel => $a)
+            $line([link_item_folder($rel) === '' ? 'Front page' : link_item_folder($rel), basename($rel), $iso($a['sf']), (int) $a['on'], (int) $a['pn'], (int) $a['dn'], $iso($a['last'])]);
+    } elseif ($what === 'blocked') {
         $reasons = ['expired' => 'expired', 'used_up' => 'already used', 'paused' => 'paused', 'revoked' => 'revoked', 'scheduled' => 'not started', 'replaced' => 'old address'];
         [$brows] = visits_load_blocked($db, $f, 1000000);
         foreach ($brows as $r) {
@@ -15019,7 +15065,7 @@ function run_links_view_route($dir, $files) {
     header('Cache-Control: no-store');
     $str = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? str_replace("\0", '', $_GET[$k]) : ''; };
     $data = links_read();
-    if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir); return; }
+    if (isset($_GET['visitsexport'])) { visits_export($str('visitsexport'), visits_filters(), $dir, $str('tab')); return; }
     if (isset($_GET['browserspanel'])) {   // the "Browsers signed in" row on its own (the window came back)
         header('Content-Type: text/html; charset=UTF-8');
         render_admin_browsers_panel(htmlspecialchars(admin_csrf_token(), ENT_QUOTES, 'UTF-8'));
@@ -18230,6 +18276,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .vt-menu a, .vt-menu button { display:block; width:100%; text-align:left; background:none; border:0; padding:10px 12px; border-radius:7px; color:var(--text); font:inherit; text-decoration:none; cursor:pointer; }
   .vt-menu a small { display:block; color:var(--muted); font-size:0.78rem; }
   .vt-menu a:hover, .vt-menu button:hover { background:#26262a; }
+  .vt-menu a[hidden], .vt-menu .vt-menu-sep[hidden] { display:none; }
+  .vt-menu .vt-menu-sep { display:block; margin:4px 8px; border-top:1px solid #34343a; }
+  .vt-menu .vt-thisview .vt-vn { font-weight:600; }
   .vt-menu .sl-menu-note { display:block; padding:6px 12px 4px; margin-top:4px; border-top:1px solid #34343a; font-size:0.78rem; color:var(--muted); }
   .vt-pop { position:absolute; top:calc(100% + 6px); left:0; z-index:30; min-width:290px; background:#1c1d1f; border:1px solid #3a3b3f; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.55); padding:8px; }
   .vt-pop-h { display:none; font-weight:700; margin:0 0 8px; }
@@ -18254,6 +18303,24 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .vt-gl:hover { text-decoration:underline; }
   .vt-gl:not(.vt-gla) { padding-left:0; }
   .vt-gla { margin-left:2px; }
+  /* The link's name and the arrow to its Shares row: one pill, two buttons (the name narrows the list to the link; the arrow goes to the link). */
+  .vt-pillgo { display:inline-flex; align-items:stretch; max-width:100%; background:#23244a; border-radius:12px; overflow:hidden; vertical-align:middle; }
+  .vt-pillgo .vt-src { background:none; border-radius:0; padding:1px 7px 1px 10px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vt-pillgo .vt-gla { margin:0; padding:1px 9px 1px 8px; border-radius:0; border-left:1px solid #3b3e80; flex:0 0 auto; text-decoration:none; line-height:1.3; position:relative; top:-1px; }
+  .vt-pillgo .vt-src:hover, .vt-pillgo .vt-gla:hover { background:#31337a; box-shadow:none; text-decoration:none; }
+  .vt-ip { white-space:nowrap; }
+  /* On a wide screen the Visitors and Blocked tables keep their columns where they are whatever the choices leave (an address takes the room of 255.255.255.255), and the spare room goes to the link. */
+  @media (min-width: 641px) {
+    .vt-table { table-layout:fixed; min-width:46rem; }
+    .vt-table th:nth-child(1) { width:8.6rem; }
+    .vt-table th:nth-child(2) { width:3.6rem; }
+    .vt-table th:nth-child(3) { width:7rem; }
+    .vt-table th:nth-child(5), .vt-table th:nth-child(6) { width:6.6rem; }
+    .vt-table:not(.vt-blk) th:nth-child(7) { width:3.6rem; }
+    .vt-table:not(.vt-blk) th:nth-child(8) { width:4.6rem; }
+    .vt-blk th:nth-child(4) { width:9rem; }
+    .vt-table td { min-width:0; overflow-wrap:anywhere; }
+  }
   .sl-row.flash-target { outline:2px solid var(--accent); outline-offset:2px; border-radius:8px; }
   .vt-ci { color:#aab2ff; text-decoration:none; }
   .vt-ci:hover { text-decoration:underline; }
@@ -21455,6 +21522,39 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       clearTimeout(toastTimer); t.className = 'pv-toast' + (bad ? ' err' : ''); t.textContent = text; t.hidden = false;
       toastTimer = setTimeout(function () { t.hidden = true; }, bad ? 6000 : 3500);
     }
+    // Saving a CSV from a Home Screen app on a phone: such an app has no browser bar, so a link that downloads a file leaves the app on the file's
+    // preview with no way back. There the file is fetched here and handed to the share sheet (Save to Files, Numbers, AirDrop...) and the app stays where it
+    // is. Anywhere else (a computer, a browser tab, a phone without file sharing) the link does what a link does. Safari only opens the share sheet right
+    // after a tap: if the fetch took too long, the file is kept and the next tap opens it.
+    var savedFiles = {};
+    function saveInApp(a, e) {
+      var standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+      if (!standalone || !navigator.share || !navigator.canShare || window.parent !== window) return false;
+      e.preventDefault();
+      var href = a.href, offer = function (file) {
+        return navigator.share({ files: [file] }).then(function () { delete savedFiles[href]; }).catch(function (err) {
+          if (err && err.name === 'AbortError') return;
+          if (err && err.name === 'NotAllowedError') { savedFiles[href] = file; say('Ready: tap again to save'); return; }
+          say('Couldn\'t open the share sheet for the file.', true);
+        });
+      };
+      if (savedFiles[href]) { offer(savedFiles[href]); return true; }
+      say('Getting the file\u2026');
+      fetch(href, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
+        if (!r.ok) throw new Error('status');
+        var m = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '');
+        return r.blob().then(function (b) { return new File([b], m ? m[1] : 'visitors.csv', { type: 'text/csv' }); });
+      }).then(function (file) {
+        if (!navigator.canShare({ files: [file] })) throw new Error('unsupported');
+        var t = document.getElementById('vt-toast'); if (t) t.hidden = true;
+        return offer(file);
+      }).catch(function () { say('Couldn\'t get the file: check your connection and try again.', true); });
+      return true;
+    }
+    document.addEventListener('click', function (e) {
+      var a = e.target.closest ? e.target.closest('a[data-export], a[id^=vt-trim-dl-]') : null;
+      if (a && root.contains(a) && a.href && a.getAttribute('href') !== '#') saveInApp(a, e);
+    });
     function times() {
       [].forEach.call(root.querySelectorAll('time.sl-time[data-ts]'), function (t) {
         var d = new Date(+t.getAttribute('data-ts') * 1000); if (isNaN(d)) return;
@@ -21493,7 +21593,15 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       n.innerHTML = filtered() && a > 0 ? 'Showing ' + m.toLocaleString() + ' of ' + a.toLocaleString() + ' <button type="button" class="linklike" data-vt="clear">Clear</button>' : '';
     }
     function paintExport() {
-      [].forEach.call(root.querySelectorAll('[data-export]'), function (a) { a.href = '?admin&visitsexport=' + a.getAttribute('data-export') + params(); });
+      [].forEach.call(root.querySelectorAll('[data-export]'), function (a) {
+        var k = a.getAttribute('data-export');
+        a.href = '?admin&visitsexport=' + k + (k === 'view' ? '&tab=' + S.view : '') + params();
+        if (k === 'view') {   // (This view: named for the tab; with Blocked ticked on a tab that has nothing to show for it, there is nothing on the screen to save)
+          var gone = S.src.indexOf('blocked') >= 0 && S.view !== 'visitors';
+          a.hidden = gone; var sep = root.querySelector('.vt-menu-sep'); if (sep) sep.hidden = gone;
+          var vn = a.querySelector('.vt-vn'); if (vn) vn.textContent = S.src.indexOf('blocked') >= 0 ? 'This view (blocked tries)' : 'This view (' + { visitors: 'Visitors', folders: 'Folders', media: 'Media', timeline: 'Timeline' }[S.view] + ')';
+        }
+      });
     }
     function paintSearch() { var x = $('.vt-sx'), i = $('.vt-search'); if (x && i) x.hidden = i.value === ''; }
     function paintPills() {
