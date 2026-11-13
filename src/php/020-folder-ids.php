@@ -247,7 +247,7 @@ function photo_address_bare($dir, $rel, $itemsData) {
     header('Referrer-Policy: no-referrer');
     try {
         if (!is_non_viewing_request()) {
-            if (TRACK_VIEWS && !is_bot_request() && !is_admin_browser() && link_viewer() === null && !view_debounce_recently_viewed($rel)) stats_bump_photo(containing_folder_real_path($dir, $rel), $rel);
+            if (TRACK_VIEWS && view_is_counted()) stats_bump_photo(containing_folder_real_path($dir, $rel), $rel);
             if (public_log_wanted() && ($pl = public_log_link()) !== null) {
                 $site = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? ''));
                 $how = $site === 'none' ? 'typed' : (in_array($site, ['cross-site', 'same-site'], true) ? 'link' : 'other');

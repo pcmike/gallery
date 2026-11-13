@@ -275,40 +275,6 @@ function stats_get_all_photo_views($dir, $files) {
     return $result;
 }
 
-// How long a repeat ?track= ping for the same photo, from the same
-// browser, goes un-counted. Caps write amplification from a trivially
-// scriptable GET and makes the counts themselves more honest — flipping
-// back and forth on one photo in a single sitting shouldn't inflate it.
-
-/**
- * True if this filename was already "viewed" (per the gallery_viewed
- * cookie) within the debounce window — and either way, updates that
- * cookie with the current timestamp for this filename. Stale entries
- * (older than the window) are pruned on every call so the cookie stays
- * small regardless of how many different photos get viewed in a
- * session.
- */
-function view_debounce_recently_viewed($filename) {
-    $decoded = json_decode((string) ($_COOKIE['gallery_viewed'] ?? ''), true);
-    if (!is_array($decoded)) {
-        $decoded = [];
-    }
-    $now = time();
-    foreach ($decoded as $f => $ts) {
-        if (!is_int($ts) || ($now - $ts) > VIEW_DEBOUNCE_SECONDS) {
-            unset($decoded[$f]);
-        }
-    }
-    $recentlyViewed = isset($decoded[$filename]) && ($now - $decoded[$filename]) < VIEW_DEBOUNCE_SECONDS;
-    $decoded[$filename] = $now;
-    setcookie('gallery_viewed', json_encode($decoded), [
-        'expires' => $now + VIEW_DEBOUNCE_SECONDS,
-        'path' => gallery_cookie_path(),
-        'samesite' => 'Lax',
-    ]);
-    return $recentlyViewed;
-}
-
 /** True if the request's User-Agent matches a known link-preview bot/crawler. */
 function is_bot_request() {
     $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
@@ -338,6 +304,12 @@ function is_non_viewing_request() {
     return false;
 }
 
+/** Whether this browser is one the view counts count: anyone but the owner (their own browser, or while previewing a link as its guest) and the known
+ *  bots and link-preview fetchers. A share link's guest and a private-view visitor are counted like anyone else: they looked. */
+function view_is_counted() {
+    return !is_bot_request() && !is_admin_browser() && link_preview() === null;
+}
+
 /**
  * Whether this page load begins a new VISIT, and so adds one to the site total.
  * A visit is one visitor for as long as they keep coming back within
@@ -345,11 +317,12 @@ function is_non_viewing_request() {
  * link, reload and back button are all one visit. (Counting every page load,
  * as this once did, made the total several times the number of people.) It
  * does not count the admin's own browser, link-preview bots, prefetches or
- * HEAD requests. A small first-party cookie holds the time of the visitor's
+ * HEAD requests; everyone else is counted, someone on a share link or with the
+ * private-view password included. A small first-party cookie holds the time of the visitor's
  * last page; every counted page load slides it forward.
  */
 function visit_is_new() {
-    if (is_bot_request() || is_non_viewing_request() || is_admin_browser() || link_viewer() !== null) return false;   // (someone using a share link is an invited guest, not the audience)
+    if (!view_is_counted() || is_non_viewing_request()) return false;
     $now = time();
     $last = (int) ($_COOKIE['gallery_visit'] ?? 0);
     $isNew = $last <= 0 || $last > $now + 60 || ($now - $last) > VISIT_WINDOW_SECONDS;
@@ -365,14 +338,14 @@ function visit_is_new() {
 
 // ?track=<filename> is a tiny background ping fired by the lightbox each
 // time a photo is displayed. Only counts filenames that are actually in
-// this folder's photo list, skips known bots, and debounces a repeat
-// ping for the same photo from the same browser (see
-// view_debounce_recently_viewed() above). Responds with the fresh photo +
+// this folder's photo list and skips known bots, previews and the owner's
+// own browser; everyone else counts (a share link's guest and a private-view
+// visitor too), every time, with no waiting period. Responds with the fresh photo +
 // group totals as JSON so the page can update the visible numbers
 // immediately, with no reload — and never renders the gallery itself.
 if (request_route() === 'track') {
     $response = ['ok' => false];
-    if (TRACK_VIEWS && !is_bot_request() && !is_admin_browser() && link_viewer() === null && !is_non_viewing_request()) {
+    if (TRACK_VIEWS && view_is_counted() && !is_non_viewing_request()) {
         $requested = $_GET['track'];
         if (in_array($requested, $files, true)) {
             // A group's members always live in the same folder (folder
@@ -383,14 +356,7 @@ if (request_route() === 'track') {
             $groupKey = $fileToGroupKey[$requested] ?? group_key($requested);
             $groupFiles = $groups[$groupKey] ?? [$requested];
             $currentPhotoViews = stats_get_photo_views($requestedFolder, $groupFiles);
-            if (view_debounce_recently_viewed($requested)) {
-                // Debounced: still report the current total, unincremented,
-                // so the live-updating badge reflects reality instead of
-                // looking stuck or broken.
-                $newCount = (int) ($currentPhotoViews[$requested] ?? 0);
-            } else {
-                $newCount = stats_bump_photo($requestedFolder, $requested);
-            }
+            $newCount = stats_bump_photo($requestedFolder, $requested);   // (every time the viewer shows the photo: the same moment the visitor log counts as "opened")
             $groupTotal = 0;
             foreach ($groupFiles as $gf) {
                 $groupTotal += ($gf === $requested) ? $newCount : (int) ($currentPhotoViews[$gf] ?? 0);

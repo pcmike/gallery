@@ -305,6 +305,10 @@
   .sl-popbtn:hover { background:#2a2a2e; border-color:#46464e; }
   .sl-popbtn:active { transform:translateY(1px); }
   .sl-popbtn.on { background:rgba(88,101,242,0.18); border-color:rgba(88,101,242,0.6); color:#dfe2ff; }
+  .sl-pop.has-x { display:inline-flex; align-items:stretch; }
+  .sl-pop.has-x .sl-popbtn { border-top-right-radius:0; border-bottom-right-radius:0; border-right-width:0; }
+  .sl-popx { height:32px; width:30px; padding:0; border:1px solid rgba(88,101,242,0.6); border-left:1px solid rgba(88,101,242,0.35); border-radius:0 999px 999px 0; background:rgba(88,101,242,0.18); color:#dfe2ff; font:inherit; font-size:1.1rem; line-height:1; cursor:pointer; }
+  .sl-popx:hover { background:rgba(88,101,242,0.34); }
   .sl-popbtn[aria-expanded=true] { border-color:var(--accent); }
   .sl-poplab { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:16rem; }
   .sl-caret { font-size:0.7rem; opacity:.7; }
@@ -1124,6 +1128,11 @@
   .vt-chip:hover { border-color:#5a62e6; }
   .vt-chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .vt-chip.on em { color:#dfe2ff; }
+  .vt-pw.vt-hasx { display:inline-flex; align-items:stretch; }
+  .vt-pw.vt-hasx .vt-chip { border-top-right-radius:0; border-bottom-right-radius:0; border-right-width:0; }
+  .vt-pillx { min-height:36px; width:32px; padding:0; border:1px solid var(--accent); border-left:1px solid rgba(255,255,255,0.35); border-radius:0 20px 20px 0; background:var(--accent); color:#fff; font:inherit; font-size:1.15rem; line-height:1; cursor:pointer; }
+  .vt-pillx:hover { background:#4752d9; }
+  .vt-pillx[hidden] { display:none; }
   .vt-sw { position:relative; flex:1 1 260px; min-width:0; }
   .vt-sw .vt-search { width:100%; padding-right:40px; }
   .vt-search::-webkit-search-cancel-button { display:none; }   /* (one clear button of our own, the same everywhere: Safari draws none) */

@@ -1065,27 +1065,23 @@ check('?track reports ok:true with a view count when TRACK_VIEWS is on', is_arra
 $json2 = json_decode($body, true);
 check('?track from a known preview bot is excluded (ok:false)', is_array($json2) && $json2['ok'] === false);
 
-// Debounce: a second ?track for the same photo, same browser (cookie
-// forwarded), within the window should not increment the count again —
-// but should still report ok:true with the current total, not an error.
+// No waiting period: a second ?track for the same photo from the same browser counts again (every time the viewer shows it), and no cookie is kept for it.
 $trackCookie = '';
 foreach ($trackHeaders as $h) {
     if (stripos($h, 'Set-Cookie:') === 0 && str_contains($h, 'gallery_viewed=')) {
         $trackCookie = trim(explode(';', substr($h, strlen('Set-Cookie:')))[0]);
     }
 }
-check('?track response sets the gallery_viewed debounce cookie', $trackCookie !== '');
+check('[views] ?track sets no debounce cookie any more (every open counts, nothing to wait for)', $trackCookie === '');
 $firstViews = $json['photoViews'];
-[, $debouncedBody] = http_get("$base2/?track=dp104_01.jpg", ["Cookie: $trackCookie"]);
-$debouncedJson = json_decode($debouncedBody, true);
-check('debounced ?track still reports ok:true', is_array($debouncedJson) && $debouncedJson['ok'] === true);
-check('debounced ?track does not increment the count', $debouncedJson['photoViews'] === $firstViews);
+[, $againBody] = http_get("$base2/?track=dp104_01.jpg", ['Cookie: gallery_viewed=%7B%22dp104_01.jpg%22%3A' . time() . '%7D']);
+$againJson = json_decode($againBody, true);
+check('[views] a second ?track for the same photo counts again, whatever an old debounce cookie says', is_array($againJson) && $againJson['ok'] === true && $againJson['photoViews'] === $firstViews + 1);
 
-// Debounce is per-photo, not a blanket "this browser already viewed
-// something" — a different photo, same cookie, should still count.
-[, $otherBody] = http_get("$base2/?track=dp104_02.jpg", ["Cookie: $trackCookie"]);
+// A different photo counts on its own.
+[, $otherBody] = http_get("$base2/?track=dp104_02.jpg");
 $otherJson = json_decode($otherBody, true);
-check('debounce is per-photo: a different photo with the same cookie still counts', is_array($otherJson) && $otherJson['ok'] === true && $otherJson['photoViews'] >= 1);
+check('[views] a different photo counts on its own', is_array($otherJson) && $otherJson['ok'] === true && $otherJson['photoViews'] >= 1);
 
 [$status, , $headers] = http_get("$base2/?img=dp104_01.jpg&size=thumb");
 check('?img=<valid file> returns 200 (optedin)', $status === 200);
@@ -3985,7 +3981,7 @@ echo "== visits: the site total counts one per visitor per half hour, not every 
 
 $fxVis = new_fixture_dir('visits');
 mkdir("$fxVis/Paris"); make_jpeg("$fxVis/top.jpg", 60, 60, 10, 10, 10); make_jpeg("$fxVis/Paris/a.jpg", 60, 60, 20, 20, 20);
-file_put_contents("$fxVis/.gallery-config.php", cfg_text(['TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'ADMIN_PASSWORD' => 'visit-admin-pw-123']));
+file_put_contents("$fxVis/.gallery-config.php", cfg_text(['TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true, 'AUTO_GROUP_BY_FOLDER' => true, 'ADMIN_PASSWORD' => 'visit-admin-pw-123', 'PRIVATE_VIEW_PASSWORD' => 'visit-view-pw-123']));
 copy(__DIR__ . '/../index.php', "$fxVis/index.php");
 $portVis = find_free_port(); start_server($fxVis, $portVis); $baseVis = "http://127.0.0.1:$portVis";
 // A browser: keeps the cookies it is given and sends them back.
@@ -4027,11 +4023,16 @@ check('[visits] ...nor are the admin\'s photo views', ($pingOwner['ok'] ?? null)
 $carol = [];
 $pingCarol = json_decode($vGet('/?track=top.jpg', $carol)[1], true);
 $pingCarol2 = json_decode($vGet('/?track=top.jpg', $carol)[1], true);
-check('[visits] a visitor\'s photo views still count, once per photo per half hour as before', ($pingCarol['ok'] ?? null) === true && ($pingCarol['photoViews'] ?? 0) === 1 && ($pingCarol2['photoViews'] ?? 0) === 1);
+check('[visits] a visitor\'s photo views count every time the photo is opened (no waiting period): two pings, 1 then 2', ($pingCarol['ok'] ?? null) === true && ($pingCarol['photoViews'] ?? 0) === 1 && ($pingCarol2['photoViews'] ?? 0) === 2);
 $adminVisits = http_get("$baseVis/?admin", array_merge(['Authorization: Basic ' . base64_encode('x:visit-admin-pw-123')]))[1];
 check('[visits] the admin still says what is counted (visits: one per visitor per half hour), now in Settings, and carries no photo list', str_contains($adminVisits, 'one per visitor per half hour') && !str_contains($adminVisits, 'class="thumb-grid"'));
 $dave = []; $vGet('/', $dave);
 check('[visits] in the end the total is exactly the number of real visits: Alice, Bob, one returning after a long gap, and Dave, which is four, with everything else (bots, prefetches, the admin, reloads) left out', $vCount($vGet('/', $dave)[1]) === 4);
+// Someone with the private-view password is a visitor like any other: their visit and their photo views count.
+$pvJar = []; foreach (explode('; ', (string) extract_cookie_header(http_get("$baseVis/?reveal", ['Authorization: Basic ' . base64_encode('x:visit-view-pw-123')], false)[2])) as $pair) if (str_contains($pair, '=')) { [$k, $v] = explode('=', $pair, 2); $pvJar[$k] = $v; }
+$pvVisits = $vCount($vGet('/', $pvJar)[1]);
+$pvPing1 = json_decode($vGet('/?track=' . rawurlencode('Paris/a.jpg'), $pvJar)[1], true); $pvPing2 = json_decode($vGet('/?track=' . rawurlencode('Paris/a.jpg'), $pvJar)[1], true);
+check('[visits] someone with the private-view password counts like any visitor: a visit in the total (4, then 5) and every photo view (1, then 2)', $pvJar !== [] && $pvVisits === 5 && ($pvPing1['ok'] ?? null) === true && ($pvPing1['photoViews'] ?? 0) === 1 && ($pvPing2['photoViews'] ?? 0) === 2, json_encode([$pvVisits, $pvPing1, $pvPing2, array_keys($pvJar)]));
 
 echo "== admin folder tree: nesting, counts, the chosen folder ==\n";
 [, $treePage] = http_get("$baseDepth/?admin$parisAdminQuery", [$depthAuth, "Cookie: $depthCookie"]);
@@ -6114,7 +6115,7 @@ check('[share links] the heads-up line says "The link being used to access this 
 check('[share links] ...never when the link says off (even with the site setting on), and never for a link with no end date', !str_contains($huOffSite, 'id="link-headsup"') && !str_contains($huNoEnd, 'id="link-headsup"'));
 check('[share links] the public and the owner never see the heads-up line', !str_contains(http_get("$baseS2/")[1], 'id="link-headsup"') && !str_contains(http_get("$baseS2/", ["Cookie: $s2AdminCookie"])[1], 'id="link-headsup"'));
 
-// Someone using a link is not counted in the gallery's view counts, and the owner's pages show the private tab unchanged.
+// The owner's pages show everything, including folders the links no longer reach.
 check('[share links] the owner\'s own view of the gallery still shows everything, including folders the links no longer reach', str_contains(http_get("$baseS2/", ["Cookie: $s2AdminCookie"])[1], 'Other'));
 
 
@@ -6278,7 +6279,22 @@ check('[share log] the Media tab\'s thumbnails show the photo in its folder (?fo
 check('[share log] the Media view is called Media, not Photos, in the tab buttons the page draws, and the grid is the same for the one address a search names', str_contains($lgFrag('visits=1&tab=media')[1], 'class="sl-th"') && str_contains(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1], 'data-view="media">Media</button>') && !str_contains(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1], 'data-view="photos"'));
 check('[share log] searching one address and choosing one folder shows only that folder\'s items, and the folders menu says what is chosen (there is no addresses menu: the search does that)', substr_count($lgPhotosOne, 'class="sl-th"') === 3 && !str_contains($lgPhotosOne, rawurlencode('pub.jpg')) && !str_contains($lgPhotosOne, 'data-pop="ips"') && preg_match('~data-pop="folders".*?sl-popbtn on".*?sl-poplab">Rome<~s', $lgPhotosOne) === 1);
 $lgIpMedia = $lgFrag('visits=1&tab=media&q=127.0.0.1')[1]; $lgIpTime = $lgFrag('visits=1&tab=timeline&q=127.0.0.1')[1];
-check('[share log] its Media tab is the same grid (the photo in its folder, ×2 for the one opened twice, "downloaded" on the one whose original was), and its Timeline lists the happenings in order (newest first), scrolling as one line', str_contains($lgIpMedia, 'title="Rome/r1.jpg"') && str_contains($lgIpMedia, '×2') && str_contains($lgIpMedia, ' · downloaded') && !str_contains($lgIpMedia, '✓ saved') && str_contains($lgIpTime, 'Scrolled through') && str_contains($lgIpTime, 'Downloaded a ZIP of') && !str_contains($lgIpTime, 'Saved a ZIP') && str_contains($lgIpTime, 'Played'));
+check('[share log] its Media tab is the same grid (the photo in its folder, ×2 for the one opened twice, "downloaded" on the one whose original was), and its Timeline lists the happenings in order (newest first), scrolling as one line', str_contains($lgIpMedia, "title=\"Rome/r1.jpg\n") && str_contains($lgIpMedia, '×2') && str_contains($lgIpMedia, ' · downloaded') && !str_contains($lgIpMedia, '✓ saved') && str_contains($lgIpTime, 'Scrolled through') && str_contains($lgIpTime, 'Downloaded a ZIP of') && !str_contains($lgIpTime, 'Saved a ZIP') && str_contains($lgIpTime, 'Played'));
+// The seen tally: each report of a picture on a visitor's screen (the page sends one per page load) adds one to its seen count; the Media CSV and the tooltip carry it.
+$lgSnOf = fn () => (int) (vl_rows($fxL, 'items', 'src = ? AND item = ?', [$lgId, 'Rome/r1.jpg'])[0]['sn'] ?? -1);
+$lgSn0 = $lgSnOf(); $lgBeacon([['s', 'Rome/r1.jpg']]); $lgBeacon([['s', 'Rome/r1.jpg']]); $lgSn1 = $lgSnOf();
+check('[seen] each report of a picture on the screen adds one to its seen count, and a picture opened as well keeps its opened count apart', $lgSn0 >= 0 && $lgSn1 === $lgSn0 + 2 && (int) (vl_rows($fxL, 'items', 'src = ? AND item = ?', [$lgId, 'Rome/r1.jpg'])[0]['opn'] ?? 0) >= 2, json_encode([$lgSn0, $lgSn1, vl_rows($fxL, 'items', 'src = ? AND item = ?', [$lgId, 'Rome/r1.jpg'])]));
+$lgSeenRow = function ($csv) { foreach (explode("\r\n", $csv) as $ln) if (str_contains($ln, 'r1.jpg')) return str_getcsv(ltrim($ln, "\xEF\xBB\xBF"), ',', '"', ''); return []; };
+$lgSeenCol = $lgSeenRow($lgFrag("visitsexport=view&tab=media&src=$lgId")[1]);
+check('[seen] the Media CSV has the seen count (a seen column beside opened) and so does the "What they looked at" CSV; the Media tab\'s tooltip says it in words', ($lgSeenCol[8] ?? null) === (string) $lgSn1 && (int) ($lgSeenCol[9] ?? 0) >= 2 && str_contains($lgFrag("visitsexport=items&src=$lgId")[1], '"first_seen","seen","opened"') && str_contains($lgFrag("visits=1&tab=media&src=$lgId")[1], 'on screen ' . $lgSn1 . ' times'), json_encode($lgSeenCol));
+$lgSeenDb = vl_db($fxL); $lgSeenDb->exec("UPDATE items SET sn = 0 WHERE item = 'Rome/r1.jpg'"); unset($lgSeenDb);
+check('[seen] a picture logged before the count existed (a seen count of nothing) has the cell blank in the CSV, not a made-up zero', ($lgSeenRow($lgFrag("visitsexport=view&tab=media&src=$lgId")[1])[8] ?? 'x') === '');
+$lgMigDb = vl_db($fxL); $lgMigOk = true; try { $lgMigDb->exec('ALTER TABLE items DROP COLUMN sn'); $lgMigDb->exec('PRAGMA user_version = 2'); } catch (Throwable $e) { $lgMigOk = false; } unset($lgMigDb);
+if ($lgMigOk) {
+    $lgBeacon([['s', 'Rome/r1.jpg']]);
+    $lgMigDb = vl_db($fxL); $lgCols = array_column($lgMigDb->query('PRAGMA table_info(items)')->fetchAll(), 'name'); $lgVer = (int) $lgMigDb->query('PRAGMA user_version')->fetchColumn(); unset($lgMigDb);
+    check('[seen] a log made before the count (no sn column, version 2) is brought up on its next write: the column is added, the old rows kept, and counting starts at one', in_array('sn', $lgCols, true) && $lgVer === 3 && $lgSnOf() === 1 && count(vl_rows($fxL, 'items', 'src = ?', [$lgId])) > 0, json_encode([$lgCols, $lgVer, $lgSnOf()]));
+}
 $lgLinkTime = $lgFrag("visits=1&tab=timeline&src=$lgId")[1];
 check('[share log] the Timeline has the same lines for a link, each naming the address that did it (a button that searches it) and the link it came in on', str_contains($lgLinkTime, 'Scrolled through') && str_contains($lgLinkTime, 'Played') && str_contains($lgLinkTime, 'class="linklike vt-ip" data-ip="127.0.0.1"') && str_contains($lgLinkTime, 'via ') && str_contains($lgLinkTime, 'public address') === false);
 check('[share log] in the Timeline the opened, played and downloaded lines carry a small picture that opens the folder at that photo (as the Media tab\'s do), and the scroll line\'s pictures do too', preg_match('~class="sl-tth" href="\?folder=Rome&amp;find=Rome%2Fr1\.jpg"~', $lgIpTime) === 1 && preg_match('~class="sl-evpic"><a class="sl-tth"[^>]*>.*?Opened <b>r1\.jpg</b>~s', $lgIpTime) === 1 && preg_match('~Played <b>clip\.mp4</b>~', $lgIpTime) === 1 && preg_match('~class="sl-strip"><a class="sl-tth"~', $lgIpTime) === 1 && !str_contains($lgIpTime, 'sl-mini2'));
@@ -6289,7 +6305,7 @@ check('[share log] a scroll line with more pictures than were kept says "+111 mo
 vl_db($fxL)->exec('DELETE FROM events WHERE n = 117');
 check('[share log] searching narrows the Visitors view: an address that is there finds it, part of an address too, one that is not says nobody matches (and offers to clear the choices)', str_contains($lgFrag('visits=1&tab=visitors&q=127.0.0')[1], 'data-ip="127.0.0.1"') && !str_contains($lgFrag('visits=1&tab=visitors&q=9.9.9.9')[1], 'data-ip=') && str_contains($lgFrag('visits=1&tab=visitors&q=9.9.9.9')[1], 'Nobody matches') && str_contains($lgFrag('visits=1&tab=visitors&q=9.9.9.9')[1], 'data-vt="clear"') && str_contains($lgFrag('visits=1&tab=visitors&q=safari')[1], 'data-ip="127.0.0.1"'));
 $lgVisHtml2 = $lgFrag("visits=1&tab=visitors&src=$lgId")[1]; preg_match('~<tr><td([^>]*)>.*?</tr>~s', $lgVisHtml2, $lgVisRow);
-check('[visitors phone] the Visitors table can stack into cards on a phone: it carries sl-cards and every cell of a row is labelled (IP address, Where, Browser, Came in at, First seen, Last seen, Opens, Viewed)', str_contains($lgVisHtml2, '<table class="sl-table sl-cards vt-table">') && preg_match_all('~<td data-label="([^"]+)"~', $lgVisRow[0] ?? '', $lgVisLabels) && $lgVisLabels[1] === ['IP address', 'Where', 'Browser', 'Came in at', 'First seen', 'Last seen', 'Opens', 'Viewed']);
+check('[visitors phone] the Visitors table can stack into cards on a phone: it carries sl-cards and every cell of a row is labelled (IP address, Where, Browser, Came in at, First seen, Last seen, Visits, Opened)', str_contains($lgVisHtml2, '<table class="sl-table sl-cards vt-table">') && preg_match_all('~<td data-label="([^"]+)"~', $lgVisRow[0] ?? '', $lgVisLabels) && $lgVisLabels[1] === ['IP address', 'Where', 'Browser', 'Came in at', 'First seen', 'Last seen', 'Visits', 'Opened']);
 [$lgCsvSt, $lgCsv, $lgCsvH] = $lgFrag("visitsexport=items&src=$lgId");
 check('[share log] the CSV export is a download with a header row and one line per item, and a name starting with = can\'t run as a spreadsheet formula', $lgCsvSt === 200 && (bool) array_filter($lgCsvH, fn ($h) => stripos($h, 'Content-Disposition: attachment') === 0 && str_contains($h, '.csv')) && str_contains($lgCsv, '"source","ip","browser","folder","file"') && str_contains($lgCsv, '"\'=cmd|calc"') && substr_count($lgCsv, "\r\n") >= 6);
 [, $lgCsvEv] = $lgFrag("visitsexport=events&src=$lgId");
@@ -6325,10 +6341,10 @@ check('[blocked pill] the Blocked tries CSV has one line per address turned away
 // "This view": one CSV of exactly what the tab being looked at shows, with every choice on it; and a Folders CSV.
 [$lgVwSt, $lgVwMedia, $lgVwMediaH] = $lgFrag("visitsexport=view&tab=media&src=$lgId");
 $lgVwHdr = fn (array $h) => implode(' ', array_filter($h, fn ($x) => stripos($x, 'Content-Disposition:') === 0));
-check('[this view] on the Media tab it is one line per photo or video (folder, file, first seen, opened, played, downloaded, last activity), named for the tab, and a name starting with = still can\'t run as a formula', $lgVwSt === 200 && str_contains($lgVwMedia, '"folder","file","first_seen","opened","played","downloaded","last_activity"') && str_contains($lgVwMedia, 'r1.jpg') && str_contains($lgVwHdr($lgVwMediaH), 'visitors-media.csv'));
-check('[this view] ...it follows the Media tab\'s own choices as well as the pills and the search: the folder ticked, Photos or Videos, and an address that is not there', str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&folders%5B%5D=Rome")[1], 'r1.jpg') && !str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&folders%5B%5D=Nowhere")[1], 'r1.jpg') && str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&what=photos")[1], 'r1.jpg') && !str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&what=videos")[1], 'r1.jpg') && !str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&q=9.9.9.9")[1], 'r1.jpg') && str_contains($lgVwHdr($lgFrag("visitsexport=view&tab=media&src=$lgId&what=videos")[2]), 'visitors-media-videos.csv'));
+check('[this view] on the Media tab it is one line per photo or video (link, country, search, folders, show, then folder, file, first seen, seen, opened, played, downloaded, last activity), named for the tab and what it follows, and a name starting with = still can\'t run as a formula', $lgVwSt === 200 && str_contains($lgVwMedia, '"link","country","search","folders","show","folder","file","first_seen","seen","opened","played","downloaded","last_activity"') && str_contains($lgVwMedia, 'r1.jpg') && str_contains($lgVwMedia, '"\'=cmd|calc","all countries","","all folders","Most viewed"') && str_contains($lgVwHdr($lgVwMediaH), 'visitors-media-cmd-calc.csv'));
+check('[this view] ...it follows the Media tab\'s own choices as well as the pills and the search: the folder ticked, Photos or Videos, and an address that is not there', str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&folders%5B%5D=Rome")[1], 'r1.jpg') && !str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&folders%5B%5D=Nowhere")[1], 'r1.jpg') && str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&what=photos")[1], 'r1.jpg') && !str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&what=videos")[1], 'r1.jpg') && !str_contains($lgFrag("visitsexport=view&tab=media&src=$lgId&q=9.9.9.9")[1], 'r1.jpg') && str_contains($lgVwHdr($lgFrag("visitsexport=view&tab=media&src=$lgId&what=videos")[2]), 'visitors-media-videos-cmd-calc.csv'));
 [, $lgVwFolders, $lgVwFoldersH] = $lgFrag("visitsexport=view&tab=folders&src=$lgId"); [, $lgFoldersCsv] = $lgFrag("visitsexport=folders");
-check('[this view] on the Folders tab it is one line per folder (the same as the Folders CSV in the menu\'s other items), following the pills', str_contains($lgVwFolders, '"folder","opens","media_seen","opened","downloaded","first_seen","last_activity"') && str_contains($lgVwFolders, 'Rome') && str_contains($lgVwHdr($lgVwFoldersH), 'visitors-folders.csv') && str_contains($lgFoldersCsv, '"folder","opens","media_seen"') && !str_contains($lgFrag("visitsexport=view&tab=folders&src=$lgId&cc=ZZ")[1], 'Rome'));
+check('[this view] on the Folders tab it is one line per folder (the same as the Folders CSV in the menu\'s other items), following the pills', str_contains($lgVwFolders, '"link","country","search","folder","opens","media_seen","opened","downloaded","first_seen","last_activity"') && str_contains($lgVwFolders, 'Rome') && str_contains($lgVwHdr($lgVwFoldersH), 'visitors-folders-cmd-calc.csv') && str_contains($lgFoldersCsv, '"link","country","search","folder","opens","media_seen"') && str_contains($lgFoldersCsv, '"all links","all countries"') && !str_contains($lgFrag("visitsexport=view&tab=folders&src=$lgId&cc=ZZ")[1], 'Rome'));
 check('[this view] on the Timeline tab it is the whole timeline; on Visitors it is the visitors; with Blocked ticked on Visitors it is the blocked tries; with no tab given it is the visitors', str_contains($lgFrag("visitsexport=view&tab=timeline&src=$lgId")[1], '"time","source","ip","what"') && str_contains($lgFrag("visitsexport=view&tab=visitors&src=$lgId")[1], '"source","ip","where","browser","first_seen"') && str_contains($lgFrag("visitsexport=view&tab=visitors&src=blocked")[1], '"first_tried"') && str_contains($lgVwHdr($lgFrag("visitsexport=view&tab=visitors&src=blocked")[2]), 'visitors-blocked.csv') && str_contains($lgFrag("visitsexport=view&src=$lgId")[1], '"first_seen"'));
 check('[this view] the menu offers it first (and says it names the tab), above the other CSVs; it is for the owner only', preg_match('~<div class="vt-menu" hidden>\s*<a href="\#" data-export="view"~', $lgTabMenu = http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1]) === 1 && !str_contains(http_get("$baseL/?admin&visitsexport=view&tab=media", [$lgUa])[1], 'r1.jpg'));
 // A long IPv6 address takes the room of an IPv4 one: its first two groups, an ellipsis and its last group, with the whole address kept for the tooltip and the search.
@@ -6358,12 +6374,17 @@ check('[share log] revoking or letting a link expire keeps its log (still readab
 $lgDelRes = $lgAdmin(['action' => 'link_delete', 'id' => $lgId]);
 check('[share log] deleting the link deletes its records from the log (its visitors, timeline, per-item and per-folder lines, blocked tries), and leaves other sources alone', !vl_rows($fxL, 'visitors', 'src = ?', [$lgId]) && !vl_rows($fxL, 'events', 'src = ?', [$lgId]) && !vl_rows($fxL, 'items', 'src = ?', [$lgId]) && !vl_rows($fxL, 'folders', 'src = ?', [$lgId]) && !vl_rows($fxL, 'blocked', 'src = ?', [$lgId]) && !isset($lgLinks()['links'][$lgId]));
 
-// Someone using a link is not counted in the gallery's own view counts.
+// Someone using a link is counted in the gallery's own view counts and visits, like any visitor (the owner and bots are not).
 $lgMade2 = $lgAdmin(['action' => 'link_create', 'label' => 'second', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 600, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'all', 'downloads' => 'off', 'zip' => 'off']);
 $lgTok2 = $lgLinks()['links'][$lgMade2['id']]['token'] ?? '';
 [, , $lgGo2] = http_post("$baseL/?link=$lgTok2", ['go' => '1'], [], false); $lgCk2 = extract_cookie_header($lgGo2);
 http_get("$baseL/?track=" . rawurlencode('Rome/r1.jpg'), ["Cookie: $lgCk2"]); http_get("$baseL/", ["Cookie: $lgCk2"]);
-check('[share log] a link holder\'s views stay out of the gallery\'s view counts: the same ?track ping that counts for a visitor is refused (ok:false) for someone using a link', str_contains(http_get("$baseL/?track=" . rawurlencode('pub.jpg'))[1], '"ok":true') && str_contains(http_get("$baseL/?track=" . rawurlencode('pub.jpg'), ["Cookie: $lgCk2"])[1], '"ok":false'));
+$lgVisitsNow = function () use ($baseL, $lgAdminCookie) { return preg_match('#page-visits">([0-9,]+) visit#', http_get("$baseL/", ["Cookie: $lgAdminCookie"])[1], $m) ? (int) str_replace(',', '', $m[1]) : 0; };
+$lgPing = function ($cookie = null) use ($baseL) { return json_decode(http_get("$baseL/?track=" . rawurlencode('pub.jpg'), $cookie === null ? [] : ["Cookie: $cookie"])[1], true) ?: []; };
+$lgP0 = $lgPing(); $lgP1 = $lgPing($lgCk2); $lgP2 = $lgPing($lgCk2);
+check('[share log] a link holder\'s views count in the gallery\'s view counts like anyone\'s: the same ?track ping answers ok:true for someone using a link, and adds one each time', ($lgP0['ok'] ?? null) === true && ($lgP1['ok'] ?? null) === true && ($lgP1['photoViews'] ?? 0) === ($lgP0['photoViews'] ?? -9) + 1 && ($lgP2['photoViews'] ?? 0) === ($lgP1['photoViews'] ?? -9) + 1);
+$lgVBefore = $lgVisitsNow(); http_get("$baseL/", ["Cookie: $lgCk2"]);
+check('[share log] ...and a link holder opening the gallery is a visit in the site total, like anyone else (the owner\'s own looking, above, is not)', $lgVisitsNow() === $lgVBefore + 1);
 $lgCapId = $lgMade2['id'] ?? '';
 // Nothing is capped: 2,100 visitors and 5,100 timeline lines all stay, a 2,101st visitor folds nobody into a count, and the list says how many there are in all.
 $lgSeed = vl_db($fxL); $lgSeed->exec('BEGIN'); foreach (['visitors', 'events'] as $lgT0) $lgSeed->exec("DELETE FROM $lgT0 WHERE src = '$lgCapId'");
@@ -6762,7 +6783,7 @@ check('[public log] nothing is logged before anyone is: no visitors under the pu
 [, $qOwnerPage] = http_get("$baseQ/", ["Cookie: $qCookie", $qMac]);
 $qRevealCookie = extract_cookie_header(http_get("$baseQ/?reveal", ['Authorization: Basic ' . base64_encode('x:pub-view-pw-1')], false)[2]);
 [, $qRevealPage] = http_get("$baseQ/", ["Cookie: $qRevealCookie", $qFox]);
-check('[public log] an ordinary visitor\'s page carries the logging script; a link-preview bot\'s, the owner\'s and a private-view visitor\'s do not', str_contains($qPlain, 'window.__linkLog = log') && !str_contains($qBotPage, 'window.__linkLog = log') && !str_contains($qOwnerPage, 'window.__linkLog = log') && $qRevealCookie !== null && !str_contains($qRevealPage, 'window.__linkLog = log'), json_encode([str_contains($qPlain, 'window.__linkLog = log'), str_contains($qBotPage, 'window.__linkLog = log'), str_contains($qOwnerPage, 'window.__linkLog = log'), $qRevealCookie, str_contains($qRevealPage, 'window.__linkLog = log')]));
+check('[public log] an ordinary visitor\'s page carries the logging script; a link-preview bot\'s and the owner\'s do not, and a private-view visitor\'s does (they are logged as Private view)', str_contains($qPlain, 'window.__linkLog = log') && !str_contains($qBotPage, 'window.__linkLog = log') && !str_contains($qOwnerPage, 'window.__linkLog = log') && $qRevealCookie !== null && str_contains($qRevealPage, 'window.__linkLog = log'), json_encode([str_contains($qPlain, 'window.__linkLog = log'), str_contains($qBotPage, 'window.__linkLog = log'), str_contains($qOwnerPage, 'window.__linkLog = log'), $qRevealCookie, str_contains($qRevealPage, 'window.__linkLog = log')]));
 $qS1 = $qBeacon([['f', ''], ['s', 'pub.jpg'], ['s', 'sec.jpg'], ['o', 'Pisa/p1.jpg'], ['f', 'Rome']], [$qPhone]);
 $qRecPub = $qLinks()[$qPub] ?? [];
 $qV = array_values($qLog()['visitors'] ?? [])[0] ?? [];
@@ -6784,8 +6805,19 @@ $qTab1 = http_get("$baseQ/?admin", ["Cookie: $qCookie"])[1];
 $qFrag = http_get("$baseQ/?admin&visits=1&tab=visitors&src=public", ["Cookie: $qCookie"])[1];
 $qCsv = http_get("$baseQ/?admin&visitsexport=visitors&src=public", ["Cookie: $qCookie"])[1];
 check('[public log] the Visitors tab lists the public address\'s visitors (the address, its browser), counts them apart from the link\'s visitors in the summary, and the Shares tab has no block for it and does not count it among the links',
-    str_contains($qFrag, 'data-ip="127.0.0.1"') && str_contains($qFrag, 'Safari on iPhone') && str_contains($qTab1, '1 public visitor and 2 visitors on share links in the last 1 day') && !str_contains($qTab1, '<div class="sl-grp">The public address') && !str_contains($qTab1, 'class="sl-row sl-public"') && str_contains($qTab1, '1 not ended'));
+    str_contains($qFrag, 'data-ip="127.0.0.1"') && str_contains($qFrag, 'Safari on iPhone') && str_contains($qTab1, '1 public visitor, 1 visitor with the private-view password and 2 visitors on share links in the last 1 day') && !str_contains($qTab1, '<div class="sl-grp">The public address') && !str_contains($qTab1, 'class="sl-row sl-public"') && str_contains($qTab1, '1 not ended'), preg_match('~<p class="muted vt-sum">(.*?)</p>~s', $qTab1, $qSumM) ? $qSumM[1] : 'no summary');
 check('[public log] the CSV export has the address and names the source Public', str_contains($qCsv, '127.0.0.1') && str_contains($qCsv, '"Public"'));
+// The private-view password: people who came in with it are logged too, as their own source (Private view), the way someone on a link is.
+$qPvId = 'fffffffffd';
+$qPvCode = $qBeacon([['s', 'pub.jpg'], ['o', 'pub.jpg']], ["Cookie: $qRevealCookie", $qFox]);
+$qOwnerCode = $qBeacon([['o', 'pub.jpg']], ["Cookie: $qCookie", $qMac]);
+$qPvLog = vl_log($fxQ, $qPvId); $qPvV = array_values($qPvLog['visitors'])[0] ?? [];
+check('[private view] someone with the private-view password is logged under their own source: one visitor, a visit, what they opened; the public address\'s log and the owner\'s are untouched', $qPvCode === 204 && $qOwnerCode === 204 && count($qPvLog['visitors']) === 1 && ($qPvV['opens'] ?? 0) === 1 && ($qPvV['views'] ?? 0) === 1 && count($qLog()['visitors']) === $qBeforeN, json_encode([$qPvCode, $qOwnerCode, $qPvLog['visitors'], count($qLog()['visitors']), $qBeforeN]));
+$qPvFrag = http_get("$baseQ/?admin&visits=1&tab=visitors&src=private", ["Cookie: $qCookie"])[1]; $qPubFrag2 = http_get("$baseQ/?admin&visits=1&tab=visitors&src=public", ["Cookie: $qCookie"])[1];
+$qPvTab = http_get("$baseQ/?admin", ["Cookie: $qCookie"])[1]; $qPvCsv = http_get("$baseQ/?admin&visitsexport=visitors&src=private", ["Cookie: $qCookie"])[1];
+check('[private view] the Visitors tab lists them as "Private view" (the Sources pill choice "private" shows only them), the public list does not hold them, the summary counts them apart, and the CSV names the source', str_contains($qPvFrag, 'data-src="private"') && str_contains($qPvFrag, 'data-ip="127.0.0.1"') && !str_contains($qPubFrag2, 'data-src="private"') && str_contains($qPvTab, '1 visitor with the private-view password') && str_contains($qPvCsv, '"Private view"') && substr_count($qPvCsv, "\r\n") === 2);
+$qPvTl = http_get("$baseQ/?admin&visits=1&tab=timeline&src=private", ["Cookie: $qCookie"])[1];
+check('[private view] their timeline line says they visited the gallery, from the private view', str_contains($qPvTl, 'Visited the gallery') && str_contains($qPvTl, 'private view'));
 // (the public address no longer has a card with Settings of its own: the Visitors tab and Settings say it all)
 preg_match('~<p class="sl-para">(.*?)</p>~s', $qTab1, $qParaM); $qLinkSet = $qParaM[1] ?? '';
 preg_match('~<details class="sl-row" data-id="[0-9a-f]{10}".*?<div class="sl-acts">(.*?)</div>\s*</div>\s*</details>~s', $qTab1, $qActs);
@@ -6799,7 +6831,7 @@ $qNow = time(); $qVid2 = array_key_first($qLog()['visitors']);
 vl_put_item($fxQ, $qPub, $qVid2, 'seenonly.jpg', ['sf' => $qNow, 'sl' => $qNow + 100]); vl_put_item($fxQ, $qPub, $qVid2, 'played.mp4', ['sf' => $qNow, 'sl' => $qNow, 'pln' => 2, 'pll' => $qNow]); vl_put_item($fxQ, $qPub, $qVid2, 'saved.jpg', ['sf' => $qNow, 'sl' => $qNow, 'dwn' => 1, 'dwl' => $qNow]); vl_put_item($fxQ, $qPub, $qVid2, 'sec.jpg', ['sf' => $qNow, 'sl' => $qNow]);
 // (those four items are taken out again below)
 $qMedia = fn ($qs = '') => http_get("$baseQ/?admin&visits=1&tab=media&src=public$qs", ["Cookie: $qCookie"])[1];
-$qHas = fn ($html, $name) => str_contains($html, 'title="' . $name . '"');
+$qHas = fn ($html, $name) => str_contains($html, 'title="' . $name . '"') || str_contains($html, 'title="' . $name . "\n");
 $qOrder = fn ($html) => array_map('rawurldecode', array_map(fn ($u) => preg_replace('~^.*find=~', '', $u), (function ($h) { preg_match_all('~class="sl-th" href="([^"]+)"~', $h, $m); return $m[1]; })($html)));
 $qAllHtml = $qMedia(); $qRecent = $qMedia('&what=recent'); $qPhotos = $qMedia('&what=photos'); $qVideos = $qMedia('&what=videos'); $qPrivate = $qMedia('&what=private'); $qOpenedHtml = $qMedia('&what=opened'); $qDown = $qMedia('&what=downloaded');
 check('[media filter] the Media view has one line of two menus in this order: the folders (several can be ticked) and one choice: Most viewed, Most recent, Photos, Videos, Private, Opened, Downloaded; no old dropdowns and no addresses menu (the search narrows to an address)', preg_match('~data-pop="folders" data-multi="1".*?data-pop="what" data-multi="0"~s', $qAllHtml) === 1 && !str_contains($qAllHtml, 'data-pop="ips"') && preg_match('~data-pop="what".*?<span>Most viewed</span>.*?<span>Most recent</span>.*?<span>Photos</span>.*?<span>Videos</span>.*?<span>Private</span>.*?<span>Opened</span>.*?<span>Downloaded</span>~s', $qAllHtml) === 1 && !str_contains($qAllHtml, '<select') && !str_contains($qAllHtml, 'Seen only') && !str_contains($qAllHtml, '>Played<') && !str_contains($qAllHtml, 'data-filter='));
@@ -9590,7 +9622,7 @@ check('[visitors tab] when nothing matches the view says so and offers to clear 
 check('[visitors tab] "Came in at" on the public address is a link to the folder (a new tab) or the front page; on a link it is a button that narrows to that link, named by the link', str_contains($vtF('tab=visitors&src=public'), 'class="vt-ci" href="?folder=Rome" target="_blank" rel="noopener"') && str_contains($vtF('tab=visitors&src=public'), 'class="vt-ci" href="?"') && str_contains($vtF("tab=visitors&src=$vtA"), 'class="vt-src" data-src="' . $vtA . '"') && str_contains($vtF("tab=visitors&src=$vtA"), '>Aunt Carol</button>'));
 check('[visitors tab] a link named with markup is only ever shown as text: in the page, the data the pills read and the table', !str_contains($vtPage, '<img src=x onerror=alert(7)>') && !str_contains($vtF('tab=visitors'), '<img src=x onerror=alert(7)>') && str_contains($vtF('tab=visitors'), '&lt;img src=x onerror=alert(7)&gt;'));
 $vtMedia = $vtF('tab=media&cc=DE');
-check('[visitors tab] the other views follow the same choices: Media for Germany shows only what that visitor looked at, Folders and Timeline likewise', str_contains($vtMedia, 'title="Paris/p1.jpg"') && !str_contains($vtMedia, 'title="Rome/r1.jpg"') && str_contains($vtF('tab=folders&cc=DE'), 'Paris') && !str_contains($vtF('tab=folders&cc=DE'), '>Rome<') && str_contains($vtF('tab=timeline&cc=DE'), '192.0.2.44') && !str_contains($vtF('tab=timeline&cc=DE'), '203.0.113.5'));
+check('[visitors tab] the other views follow the same choices: Media for Germany shows only what that visitor looked at, Folders and Timeline likewise', str_contains($vtMedia, 'title="Paris/p1.jpg') && !str_contains($vtMedia, 'title="Rome/r1.jpg') && str_contains($vtF('tab=folders&cc=DE'), 'Paris') && !str_contains($vtF('tab=folders&cc=DE'), '>Rome<') && str_contains($vtF('tab=timeline&cc=DE'), '192.0.2.44') && !str_contains($vtF('tab=timeline&cc=DE'), '203.0.113.5'));
 check('[visitors tab] the Folders view says how many of a folder\'s pictures were seen against all of them', str_contains($vtF('tab=folders'), 'data-media="viewed" data-folder="Rome">1 of 2<') || str_contains($vtF('tab=folders'), 'data-media="viewed" data-folder="Rome">2 of 2<'));
 $vtCsv = http_get("$baseVt/?admin&visitsexport=visitors&cc=US", $vtOwn)[1];
 check('[visitors tab] the CSVs hold what the choices show (here the visitors from the United States, from both sources), named by source', str_contains($vtCsv, '203.0.113.5') && str_contains($vtCsv, '203.0.113.88') && !str_contains($vtCsv, '192.0.2.44') && str_contains($vtCsv, '"Public"') && str_contains($vtCsv, '"Aunt Carol"'));

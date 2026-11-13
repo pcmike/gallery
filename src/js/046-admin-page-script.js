@@ -2954,7 +2954,7 @@
       });
     }
     function sources() { return S.src.slice(); }   // ('public', 'lockouts' and share link ids: the choices under Sources)
-    function sourceList() { var d = info(); return [{ id: 'public', name: 'Public', n: d.pub }, { id: 'lockouts', name: 'Lockouts', n: d.lock }, { id: 'blocked', name: 'Blocked', n: d.blocked || 0 }].concat(d.links); }
+    function sourceList() { var d = info(); return [{ id: 'public', name: 'Public', n: d.pub }].concat(d.priv > 0 || S.src.indexOf('private') >= 0 ? [{ id: 'private', name: 'Private view', n: d.priv || 0 }] : [], [{ id: 'lockouts', name: 'Lockouts', n: d.lock }, { id: 'blocked', name: 'Blocked', n: d.blocked || 0 }], d.links); }
     function params(extra) {
       var q = '', add = function (k, v) { q += '&' + k + '=' + encodeURIComponent(v); };
       if (sources().length) add('src', sources().join(','));
@@ -2996,18 +2996,19 @@
       });
     }
     function paintSearch() { var x = $('.vt-sx'), i = $('.vt-search'); if (x && i) x.hidden = i.value === ''; }
+    function pillX(chip, on) { var w = chip.parentNode, x = w && w.querySelector('.vt-pillx'); if (x) x.hidden = !on; if (w) w.classList.toggle('vt-hasx', !!on); }   // (a pill that is narrowing the view has an x that clears just that pill)
     function paintPills() {
       var d = info(), cc = $('[data-pill=cc]'), sp = $('[data-pill=src]');
       var ccN = d.countries.filter(function (c) { return S.cc.indexOf(c.c) >= 0; }).reduce(function (n, c) { return n + c.n; }, 0);
       cc.querySelector('.vt-l').textContent = S.cc.length === 0 ? 'All' : (S.cc.length <= 3 ? S.cc.join(', ') : S.cc.length + ' countries');
-      cc.querySelector('em').textContent = (S.cc.length ? ccN : d.total).toLocaleString(); cc.classList.toggle('on', S.cc.length > 0);
+      cc.querySelector('em').textContent = (S.cc.length ? ccN : d.total).toLocaleString(); cc.classList.toggle('on', S.cc.length > 0); pillX(cc, S.cc.length > 0);
       if (sp) {
         var picked = sourceList().filter(function (s) { return S.src.indexOf(s.id) >= 0; });
         sp.querySelector('.vt-l').textContent = picked.length === 0 ? 'Sources' : (picked.length === 1 ? picked[0].name : picked.length + ' sources');
         var hasB = S.src.indexOf('blocked') >= 0, count;
         if (hasB) { var others = picked.filter(function (s) { return s.id !== 'blocked'; }); count = others.length ? others.reduce(function (n, s) { return n + (s.b || 0); }, 0) : (d.blocked || 0); }   // (Blocked shows the turned-away tries: of the links ticked beside it, else of all of them)
         else count = picked.length ? picked.reduce(function (n, s) { return n + s.n; }, 0) : d.total;
-        sp.querySelector('em').textContent = count.toLocaleString(); sp.classList.toggle('on', picked.length > 0);
+        sp.querySelector('em').textContent = count.toLocaleString(); sp.classList.toggle('on', picked.length > 0); pillX(sp, picked.length > 0);
       }
       paintSearch();
       [].forEach.call(root.querySelectorAll('.vt-views [data-view]'), function (b) { b.classList.toggle('on', b.getAttribute('data-view') === S.view); });
@@ -3094,6 +3095,11 @@
     function resetAll() { S.cc = []; S.src = []; S.q = ''; S.all = false; var s = $('.vt-search'); if (s) s.value = ''; closePop(); paintPills(); load(); }
     root.addEventListener('click', function (e) {
       var t = e.target, el;
+      if ((el = t.closest('[data-vt=clearpill]'))) { if (el.getAttribute('data-for') === 'cc') S.cc = []; else S.src = []; closePop(); paintPills(); load(); return; }
+      if ((el = t.closest('[data-popclear]'))) {   // (the x on the Media view's own pills: folders back to all, the kind back to Most viewed)
+        if (el.getAttribute('data-popclear') === 'what') S.what = 'viewed'; else { S.folders = []; S.exact = false; }
+        S.all = false; mpopCloseAll(null); load(); return;
+      }
       if ((el = t.closest('[data-pill]'))) {
         var p = el.getAttribute('data-pill'); closeMenu();
         if (S.pop === p) closePop(); else openPop(p);

@@ -224,7 +224,7 @@ function run_archive_route($dir, $files, $folder, $rootTitle, $folderName) {
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-store');
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;
-    if (($linkNote = link_viewer()) !== null && !is_revealed()) {   // noted in the link's log: one line for the ZIP, each file as saved
+    if (($linkNote = visitor_logged_link()) !== null) {   // noted in the link's (or the private view's) log: one line for the ZIP, each file as saved
         $pairs = [['z', ($folder ?? '') . "\0" . count($entries)]];
         foreach ($entries as $e) $pairs[] = ['d', $e['rel']];
         link_queue_deliveries($linkNote, $pairs);
@@ -259,7 +259,7 @@ function serve_original_download($dir, $filename, $validFiles, $itemsData = []) 
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
     header('X-Content-Type-Options: nosniff');
-    if (($linkNote = link_viewer()) !== null && !is_revealed()) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's log
+    if (($linkNote = visitor_logged_link()) !== null) link_queue_delivery($linkNote, 'd', $filename);   // saved: noted in the link's (or the private view's) log
     if (!send_original_for_visitor($srcPath, $filename, $itemsData)) http_response_code(404);
 }
 

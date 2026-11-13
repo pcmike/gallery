@@ -412,9 +412,6 @@ define('EXTRA_FOLDERS', gallery_setting('EXTRA_FOLDERS', []));
 // saved, never typed by hand. A photo's views are recorded under the path as shown (so under the name), and its count is the sum over every name
 // the place has had, so renaming a place (and renaming it back) loses nothing.
 define('EXTRA_FOLDER_NAMES', gallery_setting('EXTRA_FOLDER_NAMES', []));
-// How long a repeat view of the same photo, from the same browser, goes uncounted (see view_debounce_recently_viewed). Here, not beside the view
-// counting, because a Not listed photo's address sent as a bare file counts its view before that code is reached.
-define('VIEW_DEBOUNCE_SECONDS', 1800);
 
 // Health check rows the owner has set aside: row key => how much there was at the time. A row comes back by itself if there is more than that.
 define('HEALTH_SET_ASIDE', gallery_setting('HEALTH_SET_ASIDE', []));
@@ -554,4 +551,5 @@ const LINK_ADDRESS_TAKEN = 'Another link has (or had) that address: pick another
 const LINK_RESERVED_NAMES = ['admin', 'administrator', 'login', 'logout', 'signin', 'reveal', 'index', 'about', 'link', 'links', 'share', 'gallery', 'robots', 'sitemap', 'favicon', 'assets', 'static', 'public', 'private', 'photos', 'media', 'download', 'downloads', 'cache', 'config', 'null', 'none', 'test'];
 const LINK_REOPEN_GRACE_SECONDS = 900;   // the same address opening again this soon (an app's own browser, then Safari) is not a second use
 const LOCKOUT_LOG_ID = 'fffffffffe';   // the source of the lockouts in the visitor log (a lockout is a line there, like a visit)
+const PRIVATE_LOG_ID = 'fffffffffd';   // the source of the private-view visitors' records in the visitor log (people who came in with the private-view password; not a link, never stored in the links file)
 const PUBLIC_LOG_ID = 'ffffffffff';   // the source of the public address's records in the visitor log (an older version kept it as a record in the links file)

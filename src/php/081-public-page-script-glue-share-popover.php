@@ -33,5 +33,5 @@
     el.querySelector('.lh-x').addEventListener('click', function () { el.hidden = true; try { localStorage.setItem(key, '1'); } catch (e) {} });
   })();
 
-<?php if ((link_viewer() !== null && !is_revealed()) || public_log_wanted()): ?>
+<?php if (visitor_log_link() !== null): ?>
   const galleryEntry = <?= json_encode(public_log_arrival()) ?>;   // (how this page was reached, for the public address's log: null unless it was an arrival)

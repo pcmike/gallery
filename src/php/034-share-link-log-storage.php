@@ -44,7 +44,7 @@ function visitlog_schema($pdo) {
     $pdo->exec('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, src TEXT NOT NULL, t INTEGER NOT NULL, t1 INTEGER NOT NULL, vid TEXT NOT NULL, k TEXT NOT NULL, f TEXT, d TEXT, n INTEGER NOT NULL DEFAULT 0, s TEXT, h TEXT, u INTEGER NOT NULL DEFAULT 0)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS events_t ON events (t1)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS events_src ON events (src, t1)');
-    $pdo->exec('CREATE TABLE IF NOT EXISTS items (src TEXT NOT NULL, vid TEXT NOT NULL, item TEXT NOT NULL, sf INTEGER NOT NULL DEFAULT 0, sl INTEGER NOT NULL DEFAULT 0, opn INTEGER NOT NULL DEFAULT 0, opf INTEGER NOT NULL DEFAULT 0, opl INTEGER NOT NULL DEFAULT 0, pln INTEGER NOT NULL DEFAULT 0, pll INTEGER NOT NULL DEFAULT 0, dwn INTEGER NOT NULL DEFAULT 0, dwl INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (src, vid, item)) WITHOUT ROWID');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS items (src TEXT NOT NULL, vid TEXT NOT NULL, item TEXT NOT NULL, sf INTEGER NOT NULL DEFAULT 0, sl INTEGER NOT NULL DEFAULT 0, sn INTEGER NOT NULL DEFAULT 0, opn INTEGER NOT NULL DEFAULT 0, opf INTEGER NOT NULL DEFAULT 0, opl INTEGER NOT NULL DEFAULT 0, pln INTEGER NOT NULL DEFAULT 0, pll INTEGER NOT NULL DEFAULT 0, dwn INTEGER NOT NULL DEFAULT 0, dwl INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (src, vid, item)) WITHOUT ROWID');
     $pdo->exec('CREATE TABLE IF NOT EXISTS folders (src TEXT NOT NULL, vid TEXT NOT NULL, folder TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, first INTEGER NOT NULL, last INTEGER NOT NULL, PRIMARY KEY (src, vid, folder)) WITHOUT ROWID');
     $pdo->exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
 }
@@ -58,10 +58,12 @@ function visitlog_open($file, $new) {
     $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA synchronous = NORMAL');
     $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
-    if ($ver < 2) {   // (the tables are made once, not on every connection; version 2 added the log of disk activity)
+    if ($ver < 3) {   // (the tables are made once, not on every connection; version 2 added the log of disk activity, version 3 the count of times a photo was on a visitor's screen)
         if ($ver < 1) visitlog_schema($pdo);
-        changes_schema($pdo);
-        $pdo->exec('PRAGMA user_version = 2');
+        if ($ver < 2) changes_schema($pdo);
+        $hasSn = false; foreach ($pdo->query('PRAGMA table_info(items)') as $col) if ($col['name'] === 'sn') $hasSn = true;
+        if (!$hasSn) $pdo->exec('ALTER TABLE items ADD COLUMN sn INTEGER NOT NULL DEFAULT 0');   // (rows kept from before count nothing: blank in the views, not a made-up number)
+        $pdo->exec('PRAGMA user_version = 3');
     }
     return $pdo;
 }
@@ -379,24 +381,24 @@ function link_log_apply($link, $vid, $ip, $label, $country, $batch, $now = null,
     if (link_preview() !== null) return;
     $now = $now ?? time();
     $src = $link['id'];
-    $isPublic = link_is_public_log($link);
+    $isPublic = link_is_public_log($link) || link_is_private_log($link);   // (neither has a button to press: a visit is a visitor back after half an hour)
     visitlog_tx(function ($db) use ($src, $vid, $ip, $label, $country, $batch, $now, $arrive, $isPublic) {
         $newSeen = [];   // folder => the items seen for the first time in this batch
         $getItem = $db->prepare('SELECT * FROM items WHERE src = ? AND vid = ? AND item = ?');
-        $putItem = $db->prepare('INSERT OR REPLACE INTO items (src, vid, item, sf, sl, opn, opf, opl, pln, pll, dwn, dwl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $putItem = $db->prepare('INSERT OR REPLACE INTO items (src, vid, item, sf, sl, sn, opn, opf, opl, pln, pll, dwn, dwl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $putFolder = $db->prepare('INSERT INTO folders (src, vid, folder, n, first, last) VALUES (?, ?, ?, 1, ?, ?) ON CONFLICT (src, vid, folder) DO UPDATE SET n = n + 1, last = excluded.last');
         foreach ($batch as [$k, $item]) {
             if ($k === 'z') continue;   // a ZIP is one line in the timeline; its files arrive as saves of their own
             if ($k === 'f') { $putFolder->execute([$src, $vid, $item, $now, $now]); continue; }
             $getItem->execute([$src, $vid, $item]);
-            $t = $getItem->fetch() ?: ['sf' => 0, 'sl' => 0, 'opn' => 0, 'opf' => 0, 'opl' => 0, 'pln' => 0, 'pll' => 0, 'dwn' => 0, 'dwl' => 0];
+            $t = $getItem->fetch() ?: ['sf' => 0, 'sl' => 0, 'sn' => 0, 'opn' => 0, 'opf' => 0, 'opl' => 0, 'pln' => 0, 'pll' => 0, 'dwn' => 0, 'dwl' => 0];
             if ($k === 's') {
                 if (!(int) $t['sf']) { $t['sf'] = $now; $slash = strrpos($item, '/'); $newSeen[$slash === false ? '' : substr($item, 0, $slash)][] = $item; }
-                $t['sl'] = $now;
+                $t['sl'] = $now; $t['sn']++;   // (once per page load: the page reports a picture only the first time it is on screen)
             } elseif ($k === 'o') { $t['opn']++; if (!(int) $t['opf']) $t['opf'] = $now; $t['opl'] = $now; if (!(int) $t['sf']) $t['sf'] = $now; $t['sl'] = $now; }
             elseif ($k === 'p') { $t['pln']++; $t['pll'] = $now; }
             elseif ($k === 'd') { $t['dwn']++; $t['dwl'] = $now; if (!(int) $t['sf']) $t['sf'] = $now; }
-            $putItem->execute([$src, $vid, $item, (int) $t['sf'], (int) $t['sl'], (int) $t['opn'], (int) $t['opf'], (int) $t['opl'], (int) $t['pln'], (int) $t['pll'], (int) $t['dwn'], (int) $t['dwl']]);
+            $putItem->execute([$src, $vid, $item, (int) $t['sf'], (int) $t['sl'], (int) $t['sn'], (int) $t['opn'], (int) $t['opf'], (int) $t['opl'], (int) $t['pln'], (int) $t['pll'], (int) $t['dwn'], (int) $t['dwl']]);
         }
         $st = $db->prepare('SELECT last FROM visitors WHERE src = ? AND vid = ?'); $st->execute([$src, $vid]);
         $prev = (int) $st->fetchColumn();
@@ -450,9 +452,8 @@ function link_queue_deliveries($link, array $pairs) {
  *  showed, what played, which folder page. Answers nothing (204). Anything the person couldn't see is ignored. */
 function run_linklog_route($dir, $mediaExtensions, $self) {
     header('Cache-Control: no-store');
-    $link = link_viewer();
-    if ($link === null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && public_log_wanted()) $link = public_log_link();   // an ordinary visitor, when the public address's log is on
-    if ($link === null || is_revealed() || ($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') { http_response_code(204); return; }
+    $link = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' ? visitor_log_link() : null;   // (someone on a link, someone with the private-view password, or an ordinary visitor when the public address's log is on)
+    if ($link === null) { http_response_code(204); return; }
     $raw = (string) file_get_contents('php://input', false, null, 0, 20000);
     $in = json_decode($raw, true);
     $batch = [];

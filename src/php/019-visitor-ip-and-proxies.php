@@ -285,6 +285,28 @@ function link_is_live($l, $now = null) { return in_array(link_state($l, $now), [
  * Tidy up removes it.) */
 function link_is_public_log($l) { return is_array($l) && ($l['kind'] ?? '') === 'public'; }
 
+/** The private-view visitors' log: people who came in with the private-view password are logged like someone on a link, under the fixed source PRIVATE_LOG_ID
+ *  (shown as "Private view"). Like the public address's, it is never a link anyone can use. */
+function link_is_private_log($l) { return is_array($l) && ($l['kind'] ?? '') === 'private'; }
+function private_log_link() { return ['id' => PRIVATE_LOG_ID, 'label' => 'Private view', 'token' => '', 'kind' => 'private']; }
+
+/** Who the server notes deliveries for, and whose page reports to the log: someone on a share link (under that link, even when they also hold the private-view password), or
+ *  someone who came in with the private-view password (under "Private view"). Never the owner, a link being previewed, or when the log can't be kept here. */
+function visitor_logged_link() {
+    static $l = false;
+    if ($l !== false) return $l;
+    $l = null;
+    if (link_preview() !== null || is_admin_browser() || !visitlog_ready()) return $l;
+    if (($lv = link_viewer()) !== null) return $l = $lv;
+    return $l = is_revealed() ? private_log_link() : null;
+}
+/** Everyone the log records: the above, and an ordinary visitor when the public address's log is on. */
+function visitor_log_link() {
+    $l = visitor_logged_link();
+    if ($l !== null) return $l;
+    return public_log_wanted() ? public_log_link() : null;
+}
+
 /** Is this visitor one the public address's log should record? Not the owner, nor the private-view password, nor someone using a share
  *  link (they have their own log), nor a link-preview bot. */
 function public_log_wanted() {
