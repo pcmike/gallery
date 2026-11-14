@@ -585,6 +585,18 @@ function visits_trim_action() {
         'text' => $none ? 'Nothing is that old: there is nothing to trim.' : ($apply ? 'Trimmed: ' : 'This would remove ') . $what . '.' . ($apply ? '' : ' Opens, views and the total number of visitors stay.')]);
 }
 
+/** The zone a CSV is written in: the one the browser sent (?tz=America/New_York, its own name for it, so each line gets the right daylight-saving hour), else UTC. Returns the DateTimeZone. */
+function visits_tz() {
+    $n = isset($_GET['tz']) && is_string($_GET['tz']) ? $_GET['tz'] : '';
+    if ($n !== '' && strlen($n) <= 64 && preg_match('~^[A-Za-z0-9_+/-]+$~', $n)) { try { return new DateTimeZone($n); } catch (Exception $e) { /* an unknown name: UTC */ } }
+    return new DateTimeZone('UTC');
+}
+
+/** A writer of times for a CSV: 2026-11-12 21:04:05 in the given zone, or nothing for 0. */
+function visits_time_writer(DateTimeZone $tz) {
+    return function ($t) use ($tz) { return $t ? (new DateTime('@' . (int) $t))->setTimezone($tz)->format('Y-m-d H:i:s') : ''; };
+}
+
 /** One line of the timeline CSV: [time, source, ip, what, folder, file, count] for an event row (joined to its visitor's ip). $src names a source, $iso writes a time. */
 function visits_event_cells(array $e, callable $src, callable $iso) {
     $k = $e['k']; $fl = (string) ($e['f'] ?? $e['d'] ?? '');
@@ -604,7 +616,7 @@ function visits_report($ip, $dir) {
     if (!$who) { http_response_code(404); header('Content-Type: text/plain; charset=UTF-8'); echo 'Nothing is logged for that address.'; return; }
     $labels = visits_source_labels();
     $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
-    $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
+    $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);
     $slug = trim(substr((string) preg_replace('/[^A-Za-z0-9.]+/', '-', $ip), 0, 45), '-.');
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();
@@ -617,7 +629,7 @@ function visits_report($ip, $dir) {
     $line(['Visitor report']);
     $line(['IP address', $ip]);
     $line(['Where', ($who[0]['country'] ?? '') === '' ? '' : visit_country_name($who[0]['country']) . ' (' . $who[0]['country'] . ')']);
-    $line(['Made', $iso(time()) . ' (every time in this file is UTC)']);
+    $line(['Made', $iso(time()) . ' (every time in this file is ' . ($tzName === 'UTC' ? 'UTC' : $tzName . ', UTC' . (new DateTime('now', $tz))->format('P') . ' now') . ')']);
     $line(['First seen', $iso($first)]);
     $line(['Last seen', $iso($last)]);
     $line(['Visits', $visits]);
@@ -667,13 +679,14 @@ function visits_export($what, array $f, $dir, $tab = '') {
     // (a CSV of the Folders or Media view starts with what it was narrowed to, so the file says what it is once it is renamed or put beside others: every column is the same on each line)
     $ctxHead = ['link', 'country', 'search']; $isCtx = $what === 'folders' || $what === 'media';
     $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at'], 'blocked' => ['source', 'ip', 'where', 'browser', 'first_tried', 'last_tried', 'tries', 'why'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count'], 'folders' => array_merge($ctxHead, ['folder', 'opens', 'media_seen', 'opened', 'downloaded', 'first_seen', 'last_activity']), 'media' => array_merge($ctxHead, ['folders', 'show', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'])][$what];
-    $iso = function ($t) { return $t ? gmdate('Y-m-d H:i:s', (int) $t) : ''; };
+    $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);
+    $head[] = 'time_zone';   // (the zone every time on the line is in: a file says so on each line, as the Folders and Media ones say what they were narrowed to)
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="visitors-' . $name . visits_scope_slug($f, $labels) . '.csv"');
     header('X-Content-Type-Options: nosniff');
     echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";
-    $line = function (array $r) { echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $line = function (array $r) use ($tzName) { $r[] = $tzName; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
     $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
     $ctx = $isCtx ? [$f['src'] ? implode('; ', array_map($src, $f['src'])) : 'all links', $f['cc'] ? implode('; ', $f['cc']) : 'all countries', $f['q']] : [];
     if ($what === 'folders') {

@@ -68,6 +68,11 @@ def check(label, body, headers=None):
     if headers is not None and (headers.get("Content-Type", "") or "").lower().startswith("text/csv") and "attachment" in (headers.get("Content-Disposition", "") or ""):
         # a CSV download is not a page: its cells hold the exact text (a spreadsheet gets it as data, and a leading = + - @ is already defused); only its headers are checked
         for k, v in headers.items():
+            if k.lower() == "content-disposition":
+                # (the quotes around filename="..." are the header's own; what the quotes hold is the thing that must carry no markup character, quote or line break: the search text a file is named for is cut down to letters, digits, dots and dashes)
+                fm = re.search(r'filename="([^"]*)"\s*$', v)
+                if not fm or re.search(r"[<>\"'\\;\s]", fm.group(1)) or "\n" in v or "\r" in v: findings.append((label, f"payload or odd characters reflected in the file name of header {k}: {v[:140]}"))
+                continue
             if re.search(r"[<>\"']", v) and "XSSTOK" in v or "\n" in v or "\r" in v: findings.append((label, f"payload reflected in header {k}"))
         return
     if "&lt;/script&gt;&lt;script&gt;alert(XSSTOK3)" in body: reached["script-payload (caption/description/notes)"] += 1

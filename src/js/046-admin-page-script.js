@@ -2985,16 +2985,18 @@
       n.innerHTML = filtered() && a > 0 ? 'Showing ' + m.toLocaleString() + ' of ' + a.toLocaleString() + ' <button type="button" class="linklike" data-vt="clear">Clear</button>' : '';
     }
     function isIp(v) { return /^(\d{1,3}\.){3}\d{1,3}$/.test(v) || (v.indexOf(':') >= 0 && /^[0-9a-fA-F:.]+$/.test(v)); }   // (the search holds just an address: the server checks it properly)
+    // (the zone this browser is in, by its name: a CSV is written in it, so a time reads as it did on your own clock; none known = the file is in UTC)
+    function tzq() { var z = ''; try { z = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {} return /^[A-Za-z0-9_+\/-]{1,64}$/.test(z) ? '&tz=' + encodeURIComponent(z) : ''; }
     function paintExport() {
       [].forEach.call(root.querySelectorAll('[data-export]'), function (a) {
         var k = a.getAttribute('data-export');
         if (k === 'report') {   // (one address's report: the address on the row's link, or the one the search holds; it ignores the other choices)
           var ip = a.getAttribute('data-ip') || (isIp(S.q) ? S.q : '');
           if (!a.hasAttribute('data-ip')) a.hidden = ip === '';
-          a.href = ip === '' ? '#' : '?admin&visitsexport=report&ip=' + encodeURIComponent(ip);
+          a.href = ip === '' ? '#' : '?admin&visitsexport=report&ip=' + encodeURIComponent(ip) + tzq();
           return;
         }
-        a.href = '?admin&visitsexport=' + k + (k === 'view' ? '&tab=' + S.view : '') + params();
+        a.href = '?admin&visitsexport=' + k + (k === 'view' ? '&tab=' + S.view : '') + params() + tzq();
         if (k === 'view') {   // (This view: named for the tab; with Blocked ticked on a tab that has nothing to show for it, there is nothing on the screen to save)
           var gone = S.src.indexOf('blocked') >= 0 && S.view !== 'visitors';
           a.hidden = gone; var sep = root.querySelector('.vt-menu-sep'); if (sep) sep.hidden = gone;
@@ -3072,7 +3074,7 @@
     }
     function trimCheck() {
       var m = modal(), mine = ++trimStamp, out = m.querySelector('#vt-trim-out'), ok = m.querySelector('[data-vt-modal=ok]'), age = m.querySelector('#vt-trim-age'), date = m.querySelector('#vt-trim-date'), src = m.querySelector('#vt-trim-src').value;
-      ['events', 'items', 'visitors'].forEach(function (k) { m.querySelector('#vt-trim-dl-' + k).href = '?admin&visitsexport=' + k + (src !== 'all' ? '&src=' + src : ''); });
+      ['events', 'items', 'visitors'].forEach(function (k) { m.querySelector('#vt-trim-dl-' + k).href = '?admin&visitsexport=' + k + (src !== 'all' ? '&src=' + src : '') + tzq(); });
       date.hidden = age.value !== 'pick'; ok.disabled = true;
       if (age.value === 'pick' && !date.value) { out.textContent = 'Pick a date: what is older than it goes.'; return; }
       out.textContent = 'Counting…';
