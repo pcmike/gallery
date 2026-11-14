@@ -218,7 +218,7 @@ if ($currentFolderPath !== null) {
     // pulls a photo or subfolder up to its paragraph. The photos it may claim are judged before the hiding
     // filter, so a hidden photo is dropped without a word instead of being reported.
     $folderRealPath = resolve_real_path($dir, $currentFolderPath);
-    $folderMdScan = scan_gallery_md_files($folderRealPath);
+    $folderMdScan = folder_words_visible($dir, $currentFolderPath) ? scan_gallery_md_files($folderRealPath) : ['files' => [], 'contents' => [], 'rejectedCount' => 0];   // (the notes are words about the whole folder: not for someone who may see only part of it)
     $folderMdFiles = $folderMdScan['files'];
     $folderMdContents = $folderMdScan['contents'];
     if ($folderMdScan['rejectedCount'] > 0) {

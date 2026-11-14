@@ -499,6 +499,7 @@ if (isset($_GET['folder'])) {
         }
     }
     $currentFolderMeta = folder_display_meta($dir, $currentFolderPath);
+    if (!folder_words_visible($dir, $currentFolderPath)) { $currentFolderMeta['description'] = ''; $currentFolderMeta['dates'] = ''; }   // (the name stays; what was written about the whole folder goes only to someone who may see all of it)
     $currentFolderName = $currentFolderMeta['label'] !== '' ? $currentFolderMeta['label'] : basename($currentFolderPath);
     $pageTitle = $currentFolderName . ' — ' . $pageTitle;
     // Same early-computation reasoning as $pageTitle above: the header's

@@ -294,6 +294,24 @@ function folder_is_private($dir, $folderPath) {
     return folder_restriction_cached($dir, $folderPath) === 'private' || folder_above_is_private($dir, $folderPath);
 }
 
+/** May this visitor read what was written about a folder (its description, its dates, its notes file)? Only when they may see the whole folder:
+ *  the folder is not private (nor is one above it), or they have the private-view password, or their link covers the folder itself (an Everything
+ *  link covers every folder but a Not listed one), or they are the owner. Someone who reaches only something inside it (a subfolder, a photo,
+ *  a photo switched to public inside a private folder) is shown the folder's name and the pictures they may see, not what was written about all of it.
+ *  Judged for the viewer the page is for (the owner previewing a link is the link's guest). */
+function folder_words_visible($dir, $folderRel) {
+    static $memo = [];
+    if ($folderRel === null || $folderRel === '') return true;   // (the gallery's own front page)
+    if (isset($memo[$folderRel])) return $memo[$folderRel];
+    if (!folder_is_private($dir, $folderRel)) return $memo[$folderRel] = true;
+    $link = link_viewer();
+    if ($link !== null && !is_revealed()) {
+        $covered = link_folder_reachable($link, $dir, $folderRel) && !(($link['scope']['type'] ?? '') === 'all' && folder_is_unlisted($dir, $folderRel));
+        return $memo[$folderRel] = $covered;
+    }
+    return $memo[$folderRel] = is_admin_browser() || is_revealed();
+}
+
 /** One folder's own restriction, read once per request — file_is_hidden()
  *  asks about every ancestor of every file, so without this a deep tree
  *  would re-read the same small JSON files thousands of times.

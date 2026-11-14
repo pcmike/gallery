@@ -326,7 +326,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
                 . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">' . $coverParts['inner'];
     }
     $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
-    if (!empty($meta['dates'])) {
+    if (!empty($meta['dates']) && folder_words_visible($dir, $folderPath)) {
         $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
     $chgText = changes_card_text($folderPath);   // (the owner's amber note of what is new in it, see the Changes tab: '' for everyone else and when there is nothing)

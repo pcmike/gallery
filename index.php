@@ -5939,6 +5939,24 @@ function folder_is_private($dir, $folderPath) {
     return folder_restriction_cached($dir, $folderPath) === 'private' || folder_above_is_private($dir, $folderPath);
 }
 
+/** May this visitor read what was written about a folder (its description, its dates, its notes file)? Only when they may see the whole folder:
+ *  the folder is not private (nor is one above it), or they have the private-view password, or their link covers the folder itself (an Everything
+ *  link covers every folder but a Not listed one), or they are the owner. Someone who reaches only something inside it (a subfolder, a photo,
+ *  a photo switched to public inside a private folder) is shown the folder's name and the pictures they may see, not what was written about all of it.
+ *  Judged for the viewer the page is for (the owner previewing a link is the link's guest). */
+function folder_words_visible($dir, $folderRel) {
+    static $memo = [];
+    if ($folderRel === null || $folderRel === '') return true;   // (the gallery's own front page)
+    if (isset($memo[$folderRel])) return $memo[$folderRel];
+    if (!folder_is_private($dir, $folderRel)) return $memo[$folderRel] = true;
+    $link = link_viewer();
+    if ($link !== null && !is_revealed()) {
+        $covered = link_folder_reachable($link, $dir, $folderRel) && !(($link['scope']['type'] ?? '') === 'all' && folder_is_unlisted($dir, $folderRel));
+        return $memo[$folderRel] = $covered;
+    }
+    return $memo[$folderRel] = is_admin_browser() || is_revealed();
+}
+
 /** One folder's own restriction, read once per request — file_is_hidden()
  *  asks about every ancestor of every file, so without this a deep tree
  *  would re-read the same small JSON files thousands of times.
@@ -22982,6 +23000,7 @@ if (isset($_GET['folder'])) {
         }
     }
     $currentFolderMeta = folder_display_meta($dir, $currentFolderPath);
+    if (!folder_words_visible($dir, $currentFolderPath)) { $currentFolderMeta['description'] = ''; $currentFolderMeta['dates'] = ''; }   // (the name stays; what was written about the whole folder goes only to someone who may see all of it)
     $currentFolderName = $currentFolderMeta['label'] !== '' ? $currentFolderMeta['label'] : basename($currentFolderPath);
     $pageTitle = $currentFolderName . ' — ' . $pageTitle;
     // Same early-computation reasoning as $pageTitle above: the header's
@@ -24314,7 +24333,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
                 . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">' . $coverParts['inner'];
     }
     $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
-    if (!empty($meta['dates'])) {
+    if (!empty($meta['dates']) && folder_words_visible($dir, $folderPath)) {
         $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
     $chgText = changes_card_text($folderPath);   // (the owner's amber note of what is new in it, see the Changes tab: '' for everyone else and when there is nothing)
@@ -24816,7 +24835,7 @@ if ($currentFolderPath !== null) {
     // description here too — just the plaintext summary, which doesn't
     // need the heavier mention/directive-aware pass that scan to feed
     // the visible note box does.
-    $earlyFolderMdScan = scan_gallery_md_files(resolve_real_path($dir, $currentFolderPath));
+    $earlyFolderMdScan = folder_words_visible($dir, $currentFolderPath) ? scan_gallery_md_files(resolve_real_path($dir, $currentFolderPath)) : ['files' => []];
     if (!empty($earlyFolderMdScan['files'])) {
         $ogDescription = markdown_to_plaintext($earlyFolderMdScan['contents'][$earlyFolderMdScan['files'][0]]);
     }
@@ -26214,7 +26233,7 @@ if ($currentFolderPath !== null) {
     // pulls a photo or subfolder up to its paragraph. The photos it may claim are judged before the hiding
     // filter, so a hidden photo is dropped without a word instead of being reported.
     $folderRealPath = resolve_real_path($dir, $currentFolderPath);
-    $folderMdScan = scan_gallery_md_files($folderRealPath);
+    $folderMdScan = folder_words_visible($dir, $currentFolderPath) ? scan_gallery_md_files($folderRealPath) : ['files' => [], 'contents' => [], 'rejectedCount' => 0];   // (the notes are words about the whole folder: not for someone who may see only part of it)
     $folderMdFiles = $folderMdScan['files'];
     $folderMdContents = $folderMdScan['contents'];
     if ($folderMdScan['rejectedCount'] > 0) {

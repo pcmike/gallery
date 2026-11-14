@@ -6211,6 +6211,77 @@ $cvA = $exCoverQ('scope_type=folders&scope_folders=' . rawurlencode($J(['Pics'])
 $cvB = $exCoverQ('scope_type=folders&scope_folders=' . rawurlencode($J(['Pics'])) . '&scope_except=' . rawurlencode($J(['Pics/B'])) . '&scope_photos=%5B%5D');
 check('[exceptions] the form\'s preview photo comes only from what the link covers: with Pics/A left out it is Pics/B\'s photo, with Pics/B left out Pics/A\'s', ($cvA['file'] ?? '') === 'Pics/B/b1.jpg' && ($cvB['file'] ?? '') === 'Pics/A/a1.jpg', json_encode([$cvA['file'] ?? null, $cvB['file'] ?? null]));
 
+echo "== folder words: a folder's description, dates and notes go only to someone who may see the whole folder ==\n";
+
+$fxFw = new_fixture_dir('folderwords');
+foreach (['Vault/Inner', 'Topsecret', 'Open', 'Hid'] as $d) mkdir("$fxFw/$d", 0775, true);
+$fwAll = ['Vault/v1.jpg', 'Vault/Inner/i1.jpg', 'Topsecret/t1.jpg', 'Topsecret/t2.jpg', 'Open/o1.jpg', 'Hid/h1.jpg', 'loose.jpg'];
+foreach ($fwAll as $i => $f) make_jpeg("$fxFw/$f", 60 + $i, 50, 25 * $i % 255, 90, 40 * $i % 255);
+$fwWords = function (string $path, string $tag, array $own) use ($fxFw) {
+    write_data_file("$fxFw/$path/.gallery-items.php", array_merge(['displayName' => "$tag-LABEL", 'description' => "$tag-DESC", 'dates' => "$tag-DATES", 'items' => [], 'groups' => []], $own));
+    file_put_contents("$fxFw/$path/notes.md", "{gallery}\n$tag-NOTES, written about everything in this folder.\n");
+};
+$fwWords('Vault', 'VT', ['restriction' => 'private']);                                      // (a private folder; Inner is private because Vault is)
+$fwWords('Vault/Inner', 'IN', []);
+$fwWords('Topsecret', 'TS', ['restriction' => 'private', 'items' => ['t1.jpg' => ['restriction' => 'public']]]);   // (one photo switched to public inside a private folder)
+$fwWords('Open', 'OP', []);                                                                  // (an ordinary public folder)
+$fwWords('Hid', 'HD', ['restriction' => 'private', 'unlisted' => true]);                    // (Not listed)
+file_put_contents("$fxFw/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'fw-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'fw-reveal-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxFw/index.php");
+$portFw = find_free_port(); start_server($fxFw, $portFw); $baseFw = "http://127.0.0.1:$portFw";
+[, , $fwLogin] = http_post("$baseFw/?admin", ['access_code' => 'fw-admin-pw-1'], [], false);
+$fwAdminCookie = extract_cookie_header($fwLogin);
+$fwCsrf = extract_csrf_token(http_get("$baseFw/?admin", ["Cookie: $fwAdminCookie"])[1]);
+$fwMake = function (string $label, array $f) use ($baseFw, $fxFw, $fwAdminCookie, $fwCsrf) {
+    [, $body] = http_post("$baseFw/?admin", $f + ['action' => 'link_create', 'label' => $label, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => time() + 86400, 'locations' => 'public', 'heads_up' => 'default', 'downloads' => 'off', 'zip' => 'off', 'picture' => '0', 'csrf_token' => $fwCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $fwAdminCookie"]);
+    $made = json_decode($body, true) ?? [];
+    if (!($made['ok'] ?? false)) return null;
+    $token = read_data_file("$fxFw/.gallery-links.php")['links'][$made['id']]['token'];
+    @unlink("$fxFw/.gallery-login-attempts.php");
+    [, , $h] = http_post("$baseFw/?link=$token", ['go' => '1'], [], false);
+    return extract_cookie_header($h);
+};
+$fwJ = fn ($a) => json_encode($a);
+$fwL1 = $fwMake('FW one subfolder', ['scope_type' => 'folders', 'scope_folders' => $fwJ(['Vault/Inner'])]);
+$fwL2 = $fwMake('FW one photo', ['scope_type' => 'photos', 'scope_photos' => $fwJ(['Vault/v1.jpg'])]);
+$fwL3 = $fwMake('FW the whole Vault', ['scope_type' => 'folders', 'scope_folders' => $fwJ(['Vault'])]);
+$fwL4 = $fwMake('FW everything', ['scope_type' => 'all']);
+$fwL5 = $fwMake('FW one photo of the Not listed folder', ['scope_type' => 'photos', 'scope_photos' => $fwJ(['Hid/h1.jpg'])]);
+$fwReveal = extract_cookie_header(http_get("$baseFw/?reveal", ['Authorization: Basic ' . base64_encode('x:fw-reveal-pw-1')], false)[2]);
+check('[folder words] the links and the private-view sign-in for the test can be made', $fwL1 && $fwL2 && $fwL3 && $fwL4 && $fwL5 && $fwReveal);
+// For each viewer: the status of each folder's page (200 or 404) and whether it may read that folder's words (description, dates, notes). A folder
+// that answers 404 shows nothing at all. The folder's display name (LABEL) is shown whenever its page is (it is the folder's name, not words about it).
+$fwViewers = [
+    'a stranger'                              => [null,           ['Vault' => 404, 'Vault/Inner' => 404, 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => 404]],
+    'a link to one subfolder (Vault/Inner)'   => [$fwL1,          ['Vault' => [200, false], 'Vault/Inner' => [200, true], 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => 404]],
+    'a link to one photo of Vault'            => [$fwL2,          ['Vault' => [200, false], 'Vault/Inner' => 404, 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => 404]],
+    'a link to the whole of Vault'            => [$fwL3,          ['Vault' => [200, true], 'Vault/Inner' => [200, true], 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => 404]],
+    'an Everything link'                      => [$fwL4,          ['Vault' => [200, true], 'Vault/Inner' => [200, true], 'Topsecret' => [200, true], 'Open' => [200, true], 'Hid' => 404]],
+    'a link to one photo of a Not listed folder' => [$fwL5,       ['Vault' => 404, 'Vault/Inner' => 404, 'Topsecret' => [200, false], 'Open' => [200, true], 'Hid' => [200, false]]],
+    'someone with the private-view password'  => [$fwReveal,      ['Vault' => [200, true], 'Vault/Inner' => [200, true], 'Topsecret' => [200, true], 'Open' => [200, true], 'Hid' => 404]],
+    'the owner'                               => [$fwAdminCookie, ['Vault' => [200, true], 'Vault/Inner' => [200, true], 'Topsecret' => [200, true], 'Open' => [200, true], 'Hid' => [200, true]]],
+];
+$fwTags = ['Vault' => 'VT', 'Vault/Inner' => 'IN', 'Topsecret' => 'TS', 'Open' => 'OP', 'Hid' => 'HD'];
+foreach ($fwViewers as $name => [$ck, $expect]) {
+    $hdr = $ck ? ["Cookie: $ck"] : [];
+    $problems = [];
+    $front = http_get("$baseFw/", $hdr)[1];
+    foreach ($expect as $folder => $want) {
+        $tag = $fwTags[$folder]; $status = is_array($want) ? $want[0] : $want; $words = is_array($want) ? $want[1] : false;
+        [$st, $page] = http_get("$baseFw/?folder=" . rawurlencode($folder), $hdr);
+        if ($st !== $status) { $problems[] = "?folder=$folder answered $st"; continue; }
+        if ($st === 404) { foreach (['LABEL', 'DESC', 'DATES', 'NOTES'] as $w) if (str_contains($page, "$tag-$w")) $problems[] = "the 404 for $folder holds $tag-$w"; continue; }
+        if (!str_contains($page, "$tag-LABEL")) $problems[] = "$folder's page lost its display name";
+        foreach (['DESC', 'DATES', 'NOTES'] as $w) if (str_contains($page, "$tag-$w") !== $words) $problems[] = "$folder's page " . ($words ? 'lacks' : 'shows') . " its $w";
+        if (!$words && str_contains($front, "$tag-DATES")) $problems[] = "the front page shows $folder's dates";
+        if ($words && $folder === 'Open' && !str_contains($front, 'OP-DATES')) $problems[] = 'the front page lost the dates of the public folder';
+    }
+    check("[folder words] $name: each folder's page shows its description, dates and notes only when they may see the whole folder (and its display name always)" . ($problems ? ' -- ' . implode('; ', array_slice($problems, 0, 6)) : ''), !$problems);
+}
+check('[folder words] the one public photo in a private folder still opens for a stranger, and the others in it stay closed', http_get("$baseFw/?img=Topsecret/t1.jpg&size=thumb")[0] === 200 && http_get("$baseFw/?img=Topsecret/t2.jpg&size=thumb")[0] === 404);
+check('[folder words] a link preview (the page description) holds the public folder\'s notes but nothing of a private folder a stranger can only partly see', str_contains(http_get("$baseFw/?folder=Open")[1], 'content="OP-NOTES') && !preg_match('/(?:name="description"|property="og:description") content="[^"]*(TS-|VT-)/', http_get("$baseFw/?folder=Topsecret")[1]));
+
+
 echo "== share links: the log (opens, what was seen, opened, played and saved, blocked tries), kept until the link is deleted ==\n";
 
 $fxL = new_fixture_dir('sllog');

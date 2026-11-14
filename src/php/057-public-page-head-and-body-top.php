@@ -192,7 +192,7 @@ if ($currentFolderPath !== null) {
     // description here too — just the plaintext summary, which doesn't
     // need the heavier mention/directive-aware pass that scan to feed
     // the visible note box does.
-    $earlyFolderMdScan = scan_gallery_md_files(resolve_real_path($dir, $currentFolderPath));
+    $earlyFolderMdScan = folder_words_visible($dir, $currentFolderPath) ? scan_gallery_md_files(resolve_real_path($dir, $currentFolderPath)) : ['files' => []];
     if (!empty($earlyFolderMdScan['files'])) {
         $ogDescription = markdown_to_plaintext($earlyFolderMdScan['contents'][$earlyFolderMdScan['files'][0]]);
     }
