@@ -87,7 +87,7 @@ function collections_registry($dir, $files = null) {
     $key = count($files) . '|' . (string) ($files[0] ?? '') . '|' . (string) ($files[count($files) - 1] ?? '');
     $cached = $GLOBALS['__collections_registry'] ?? null;
     if (is_array($cached) && $cached['key'] === $key && $files !== []) return $cached['reg'];
-    $reg = ['byPath' => [], 'byParent' => [], 'idPaths' => [], 'taken' => [], 'lost' => []];
+    $reg = ['byPath' => [], 'byParent' => [], 'idPaths' => [], 'taken' => [], 'lost' => [], 'alias' => [], 'aliasLost' => []];
     $list = collections_list();
     if ($list) {
         foreach (folder_id_map_folders($dir, $files) as $id => $paths) if (count($paths) === 1) $reg['idPaths'][$id] = $paths[0];   // (an id that more than one folder carries points at nothing until it is sorted out)
@@ -102,6 +102,18 @@ function collections_registry($dir, $files = null) {
             if (isset($reg['byPath'][$path])) continue;   // (the first one stored keeps an address two share)
             $reg['byPath'][$path] = $r; $reg['byParent'][$parentPath][] = $r;
         }
+        // A collection kept in a folder and shown on its own (on the front page, or as a Gallery of its own) is also at the top, by its own address
+        // (/gallery/bestof), for visitors who may not see the folder it is kept in. Anything else that is at that address wins: a folder or mapped
+        // folder at the top, a collection made at the top, or an earlier one; the collection is then at its own path only.
+        $topTaken = [];
+        foreach (array_keys($real) as $rp) if (strpos((string) $rp, '/') === false) $topTaken[strtolower((string) $rp)] = true;
+        foreach ($reg['byPath'] as $p => $r) if ($r['parentPath'] === '') $topTaken[strtolower($r['name'])] = true;
+        foreach ($reg['byPath'] as $p => $r) {
+            if ($r['parentPath'] === '' || (!$r['front'] && !$r['ownGallery'])) continue;
+            $k = strtolower($r['name']);
+            if (isset($topTaken[$k])) { $reg['aliasLost'][] = $r; continue; }
+            $topTaken[$k] = true; $reg['alias'][$k] = $r;
+        }
     }
     if ($files !== []) $GLOBALS['__collections_registry'] = ['key' => $key, 'reg' => $reg];
     return $reg;
@@ -110,7 +122,13 @@ function collections_registry($dir, $files = null) {
 /** The collection at this full path, or null. */
 function collection_at($dir, $path, $files = null) {
     if (!is_string($path) || $path === '' || !collections_any()) return null;
-    return collections_registry($dir, $files)['byPath'][$path] ?? null;
+    $reg = collections_registry($dir, $files);
+    return $reg['byPath'][$path] ?? (strpos($path, '/') === false ? ($reg['alias'][strtolower($path)] ?? null) : null);   // (a collection shown on its own is also at its own address at the top)
+}
+
+/** Is this the address a collection is at on its own (/gallery/bestof) and not its path (/gallery/Hideout/bestof)? */
+function collection_is_own_address($rec, $path) {
+    return is_array($rec) && ($rec['parentPath'] ?? '') !== '' && $path !== ($rec['path'] ?? '');
 }
 
 /** May this visitor see this collection at all (its own card and page)? A private one is for the owner, the people who have the private-view
@@ -188,7 +206,15 @@ function collection_cards($dir, $parentPath, $all, $visible) {
     foreach ($fromElsewhere as $path => $r) {
         if (!collection_viewer_sees($r)) continue;
         $files = array_values(array_filter(collection_member_files($dir, $r, $all), function ($f) use ($vis) { return isset($vis[$f]); }));
-        if ($files) $out[] = [$path, $r, $files];
+        if (!$files) continue;
+        // The folder it is kept in shows this visitor nothing: the card is at the collection's own address, which has no word of that folder in it
+        // (and not at all when something else has that address).
+        $parentSeen = false; $pre = $r['parentPath'] . '/'; foreach ($visible as $vf) if (strncmp($vf, $pre, strlen($pre)) === 0) { $parentSeen = true; break; }
+        if (!$parentSeen) {
+            if (($reg['alias'][strtolower($r['name'])]['id'] ?? '') !== $r['id']) continue;
+            $path = $r['name'];
+        }
+        $out[] = [$path, $r, $files];
     }
     return $out;
 }
@@ -201,7 +227,7 @@ function collection_page($dir, $path, $all, $visible) {
     if ($rec === null || !collection_viewer_sees($rec)) return null;
     $vis = array_flip($visible);
     $reg = collections_registry($dir, $all);
-    if ($rec['parentPath'] !== '' && !array_filter($visible, function ($f) use ($rec) { return strncmp($f, $rec['parentPath'] . '/', strlen($rec['parentPath']) + 1) === 0; })) return null;   // (the folder it is in shows this visitor nothing: nor does it)
+    if ($rec['parentPath'] !== '' && !collection_is_own_address($rec, $path) && !array_filter($visible, function ($f) use ($rec) { return strncmp($f, $rec['parentPath'] . '/', strlen($rec['parentPath']) + 1) === 0; })) return null;   // (the folder it is in shows this visitor nothing: nor does it, at its path; at its own address it does)
     $folders = []; $loose = []; $files = [];
     foreach ($rec['items'] as $it) {
         $p = $reg['idPaths'][$it['fid']] ?? null;

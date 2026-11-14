@@ -645,7 +645,14 @@ function run_link_route($dir) {
         if (!$isLink && in_array(strtolower($token), ['admin', 'reveal'], true) && !is_dir($dir . '/' . $token)) sign_in_redirect();
         $mayLook = !gallery_is_closed() || is_revealed() || is_admin_browser() || link_viewer() !== null;   // (a closed gallery doesn't tell a stranger which folders exist)
         if ($mayLook && !is_admin_browser() && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token])) && folder_is_unlisted($dir, $token)) $mayLook = false;   // (nor does it say a Not listed folder is there: it answers as for a name that isn't)
-        if (!$isLink && $mayLook && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]))) {
+        $isFolder = is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]);
+        if ($isFolder && $mayLook && !is_admin_browser()) {
+            // Sent on only to a folder this visitor could open (it holds something they may see): a private folder, an empty one and a directory that is not
+            // a gallery folder are answered as a name that is not there, or the redirect would say which names exist. The owner is sent on to any.
+            $mayLook = false;
+            foreach (folder_files_under($GLOBALS['files'] ?? [], $token) as $folderFile) if (viewer_may_see_item($dir, $folderFile, $GLOBALS['itemsData'] ?? [])) { $mayLook = true; break; }
+        }
+        if (!$isLink && $mayLook && $isFolder) {
             header('Cache-Control: no-store');
             header('Location: ' . gallery_root_href() . rawurlencode($token) . '/', true, 302);
             return;
@@ -678,7 +685,7 @@ function run_link_route($dir) {
     if ($link === null) {
         // An address from before a link was given a new one: not a guess, so not held against the visitor, but noted in that link's log.
         $oldOwner = link_token_format_ok($token) ? link_find_by_old_token(links_read(), $token) : null;
-        if ($oldOwner !== null) { link_note_blocked($oldOwner, 'replaced'); link_note_address($oldOwner, 'tried', link_old_name($oldOwner, $token)); render_link_invalid_page(); return; }
+        if ($oldOwner !== null) { link_note_blocked($oldOwner, 'replaced'); link_note_address($oldOwner, 'tried', link_old_name($oldOwner, $token)); link_guess_failed($dir, $token); render_link_invalid_page(); return; }   // (still noted in that link's log, and counted like any wrong address: the throttle must not tell it from one that never existed)
         link_guess_failed($dir, $token);
         render_link_invalid_page();
         return;
@@ -691,6 +698,7 @@ function run_link_route($dir) {
         if ($hasCookie) { header('Cache-Control: no-store'); header('Location: ' . link_open_in_href($link), true, 303); return; }
         if (link_state($link) === 'active') { render_link_open_page($link, $dir); return; }
         link_note_blocked($link, link_state($link));
+        link_guess_failed($dir, $token);   // (a paused, revoked, expired or used-up link's address counts as a wrong address, like one that never existed)
         render_link_invalid_page();
         return;
     }
@@ -714,6 +722,7 @@ function run_link_route($dir) {
     });
     if ($outcome !== 'ok') {
         link_note_blocked($link, $stateNow);
+        link_guess_failed($dir, $token);
         render_link_invalid_page();
         return;
     }

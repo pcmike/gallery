@@ -164,6 +164,9 @@ function link_custom_name_problem($name, $dir, $exceptId = '') {
     foreach (array_keys(gallery_mounts()) as $mountName) {
         if (strtolower((string) $mountName) === $n) return 'A folder called "' . $mountName . '" is in the gallery, and it would hide this address: pick another.';
     }
+    foreach (collections_list() as $c) {   // (a collection at the top, or one shown on its own, is at /gallery/<its address>)
+        if (strtolower((string) ($c['name'] ?? '')) === $n && (($c['parent'] ?? '') === '' || !empty($c['front']) || !empty($c['ownGallery']))) return 'A collection is at that address (a collection shown on its own is at the top of the gallery): pick another.';
+    }
     foreach ((array) (links_read()['links'] ?? []) as $l) {
         if (!is_array($l) || ($l['id'] ?? '') === $exceptId) continue;
         foreach (link_all_addresses($l) as $t) {

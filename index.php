@@ -3691,7 +3691,11 @@ if (AUTO_GROUP_BY_FOLDER && $folderTree !== null) {
 // Collections shown on the front page (those in it, and those marked to show there) are cards among the folders. They claim no photo: every
 // member stays where it really is, and a card shows only the members this visitor may see (the filter below drops one with none).
 if (AUTO_GROUP_BY_FOLDER && !folder_style_flat() && collections_any()) {
-    foreach (collection_cards($dir, '', $files, $files) as [$collectionKey, $collectionRec, $collectionFiles]) {
+    // (what this visitor may see is worked out here for the cards: a card's address depends on whether the folder its collection is kept in shows them anything)
+    $cardVisible = is_admin_browser() ? $files : array_values(array_filter($files, function ($f) use ($dir, $itemsData, $photoPass) {
+        return $photoPass !== null ? $f === $photoPass : viewer_may_see_item($dir, $f, $itemsData);
+    }));
+    foreach (collection_cards($dir, '', $files, $cardVisible) as [$collectionKey, $collectionRec, $collectionFiles]) {
         if (!isset($folderGroups[$collectionKey])) $folderGroups[$collectionKey] = $collectionFiles;
     }
 }
@@ -6152,6 +6156,9 @@ function link_custom_name_problem($name, $dir, $exceptId = '') {
     foreach (array_keys(gallery_mounts()) as $mountName) {
         if (strtolower((string) $mountName) === $n) return 'A folder called "' . $mountName . '" is in the gallery, and it would hide this address: pick another.';
     }
+    foreach (collections_list() as $c) {   // (a collection at the top, or one shown on its own, is at /gallery/<its address>)
+        if (strtolower((string) ($c['name'] ?? '')) === $n && (($c['parent'] ?? '') === '' || !empty($c['front']) || !empty($c['ownGallery']))) return 'A collection is at that address (a collection shown on its own is at the top of the gallery): pick another.';
+    }
     foreach ((array) (links_read()['links'] ?? []) as $l) {
         if (!is_array($l) || ($l['id'] ?? '') === $exceptId) continue;
         foreach (link_all_addresses($l) as $t) {
@@ -7094,7 +7101,14 @@ function run_link_route($dir) {
         if (!$isLink && in_array(strtolower($token), ['admin', 'reveal'], true) && !is_dir($dir . '/' . $token)) sign_in_redirect();
         $mayLook = !gallery_is_closed() || is_revealed() || is_admin_browser() || link_viewer() !== null;   // (a closed gallery doesn't tell a stranger which folders exist)
         if ($mayLook && !is_admin_browser() && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token])) && folder_is_unlisted($dir, $token)) $mayLook = false;   // (nor does it say a Not listed folder is there: it answers as for a name that isn't)
-        if (!$isLink && $mayLook && (is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]))) {
+        $isFolder = is_dir($dir . '/' . $token) || isset(gallery_mounts()[$token]);
+        if ($isFolder && $mayLook && !is_admin_browser()) {
+            // Sent on only to a folder this visitor could open (it holds something they may see): a private folder, an empty one and a directory that is not
+            // a gallery folder are answered as a name that is not there, or the redirect would say which names exist. The owner is sent on to any.
+            $mayLook = false;
+            foreach (folder_files_under($GLOBALS['files'] ?? [], $token) as $folderFile) if (viewer_may_see_item($dir, $folderFile, $GLOBALS['itemsData'] ?? [])) { $mayLook = true; break; }
+        }
+        if (!$isLink && $mayLook && $isFolder) {
             header('Cache-Control: no-store');
             header('Location: ' . gallery_root_href() . rawurlencode($token) . '/', true, 302);
             return;
@@ -7127,7 +7141,7 @@ function run_link_route($dir) {
     if ($link === null) {
         // An address from before a link was given a new one: not a guess, so not held against the visitor, but noted in that link's log.
         $oldOwner = link_token_format_ok($token) ? link_find_by_old_token(links_read(), $token) : null;
-        if ($oldOwner !== null) { link_note_blocked($oldOwner, 'replaced'); link_note_address($oldOwner, 'tried', link_old_name($oldOwner, $token)); render_link_invalid_page(); return; }
+        if ($oldOwner !== null) { link_note_blocked($oldOwner, 'replaced'); link_note_address($oldOwner, 'tried', link_old_name($oldOwner, $token)); link_guess_failed($dir, $token); render_link_invalid_page(); return; }   // (still noted in that link's log, and counted like any wrong address: the throttle must not tell it from one that never existed)
         link_guess_failed($dir, $token);
         render_link_invalid_page();
         return;
@@ -7140,6 +7154,7 @@ function run_link_route($dir) {
         if ($hasCookie) { header('Cache-Control: no-store'); header('Location: ' . link_open_in_href($link), true, 303); return; }
         if (link_state($link) === 'active') { render_link_open_page($link, $dir); return; }
         link_note_blocked($link, link_state($link));
+        link_guess_failed($dir, $token);   // (a paused, revoked, expired or used-up link's address counts as a wrong address, like one that never existed)
         render_link_invalid_page();
         return;
     }
@@ -7163,6 +7178,7 @@ function run_link_route($dir) {
     });
     if ($outcome !== 'ok') {
         link_note_blocked($link, $stateNow);
+        link_guess_failed($dir, $token);
         render_link_invalid_page();
         return;
     }
@@ -7484,7 +7500,7 @@ function collections_registry($dir, $files = null) {
     $key = count($files) . '|' . (string) ($files[0] ?? '') . '|' . (string) ($files[count($files) - 1] ?? '');
     $cached = $GLOBALS['__collections_registry'] ?? null;
     if (is_array($cached) && $cached['key'] === $key && $files !== []) return $cached['reg'];
-    $reg = ['byPath' => [], 'byParent' => [], 'idPaths' => [], 'taken' => [], 'lost' => []];
+    $reg = ['byPath' => [], 'byParent' => [], 'idPaths' => [], 'taken' => [], 'lost' => [], 'alias' => [], 'aliasLost' => []];
     $list = collections_list();
     if ($list) {
         foreach (folder_id_map_folders($dir, $files) as $id => $paths) if (count($paths) === 1) $reg['idPaths'][$id] = $paths[0];   // (an id that more than one folder carries points at nothing until it is sorted out)
@@ -7499,6 +7515,18 @@ function collections_registry($dir, $files = null) {
             if (isset($reg['byPath'][$path])) continue;   // (the first one stored keeps an address two share)
             $reg['byPath'][$path] = $r; $reg['byParent'][$parentPath][] = $r;
         }
+        // A collection kept in a folder and shown on its own (on the front page, or as a Gallery of its own) is also at the top, by its own address
+        // (/gallery/bestof), for visitors who may not see the folder it is kept in. Anything else that is at that address wins: a folder or mapped
+        // folder at the top, a collection made at the top, or an earlier one; the collection is then at its own path only.
+        $topTaken = [];
+        foreach (array_keys($real) as $rp) if (strpos((string) $rp, '/') === false) $topTaken[strtolower((string) $rp)] = true;
+        foreach ($reg['byPath'] as $p => $r) if ($r['parentPath'] === '') $topTaken[strtolower($r['name'])] = true;
+        foreach ($reg['byPath'] as $p => $r) {
+            if ($r['parentPath'] === '' || (!$r['front'] && !$r['ownGallery'])) continue;
+            $k = strtolower($r['name']);
+            if (isset($topTaken[$k])) { $reg['aliasLost'][] = $r; continue; }
+            $topTaken[$k] = true; $reg['alias'][$k] = $r;
+        }
     }
     if ($files !== []) $GLOBALS['__collections_registry'] = ['key' => $key, 'reg' => $reg];
     return $reg;
@@ -7507,7 +7535,13 @@ function collections_registry($dir, $files = null) {
 /** The collection at this full path, or null. */
 function collection_at($dir, $path, $files = null) {
     if (!is_string($path) || $path === '' || !collections_any()) return null;
-    return collections_registry($dir, $files)['byPath'][$path] ?? null;
+    $reg = collections_registry($dir, $files);
+    return $reg['byPath'][$path] ?? (strpos($path, '/') === false ? ($reg['alias'][strtolower($path)] ?? null) : null);   // (a collection shown on its own is also at its own address at the top)
+}
+
+/** Is this the address a collection is at on its own (/gallery/bestof) and not its path (/gallery/Hideout/bestof)? */
+function collection_is_own_address($rec, $path) {
+    return is_array($rec) && ($rec['parentPath'] ?? '') !== '' && $path !== ($rec['path'] ?? '');
 }
 
 /** May this visitor see this collection at all (its own card and page)? A private one is for the owner, the people who have the private-view
@@ -7585,7 +7619,15 @@ function collection_cards($dir, $parentPath, $all, $visible) {
     foreach ($fromElsewhere as $path => $r) {
         if (!collection_viewer_sees($r)) continue;
         $files = array_values(array_filter(collection_member_files($dir, $r, $all), function ($f) use ($vis) { return isset($vis[$f]); }));
-        if ($files) $out[] = [$path, $r, $files];
+        if (!$files) continue;
+        // The folder it is kept in shows this visitor nothing: the card is at the collection's own address, which has no word of that folder in it
+        // (and not at all when something else has that address).
+        $parentSeen = false; $pre = $r['parentPath'] . '/'; foreach ($visible as $vf) if (strncmp($vf, $pre, strlen($pre)) === 0) { $parentSeen = true; break; }
+        if (!$parentSeen) {
+            if (($reg['alias'][strtolower($r['name'])]['id'] ?? '') !== $r['id']) continue;
+            $path = $r['name'];
+        }
+        $out[] = [$path, $r, $files];
     }
     return $out;
 }
@@ -7598,7 +7640,7 @@ function collection_page($dir, $path, $all, $visible) {
     if ($rec === null || !collection_viewer_sees($rec)) return null;
     $vis = array_flip($visible);
     $reg = collections_registry($dir, $all);
-    if ($rec['parentPath'] !== '' && !array_filter($visible, function ($f) use ($rec) { return strncmp($f, $rec['parentPath'] . '/', strlen($rec['parentPath']) + 1) === 0; })) return null;   // (the folder it is in shows this visitor nothing: nor does it)
+    if ($rec['parentPath'] !== '' && !collection_is_own_address($rec, $path) && !array_filter($visible, function ($f) use ($rec) { return strncmp($f, $rec['parentPath'] . '/', strlen($rec['parentPath']) + 1) === 0; })) return null;   // (the folder it is in shows this visitor nothing: nor does it, at its path; at its own address it does)
     $folders = []; $loose = []; $files = [];
     foreach ($rec['items'] as $it) {
         $p = $reg['idPaths'][$it['fid']] ?? null;
@@ -10889,7 +10931,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <div class="field">
           <label>Address <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="text" name="coll_address" aria-label="Address" maxlength="60" value="<?= $esc($collection['name']) ?>">
-          <p class="hint"><?= $esc(collection_address_text($collection['path'])) ?></p>
+          <p class="hint"><?= $esc(collection_address_text($collection['path'])) ?><?php if (($ownAt = collection_own_address_text($GLOBALS['dir'], $GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? []), $collection)) !== ''): ?> and, for visitors who can't see its folder, <?= $esc($ownAt) ?><?php endif; ?></p>
         </div>
         </div>
         <?php endif; ?>
@@ -11791,6 +11833,31 @@ function collection_address_problem($dir, $files, $parentPath, $name, $exceptId 
     return '';
 }
 
+/** '' when the collection $rec (kept in a folder) may be shown on its own (on the front page, or as a Gallery of its own) at /gallery/<name>: nothing else is
+ *  at that address, as nothing else may be at a folder's. What else could be: a folder or mapped folder at the top, a collection made at the top or one
+ *  shown on its own, a share link's address (its own, an old one or a kept one). A collection made at the top has no such question. */
+function collection_standalone_problem($dir, $files, $rec, $name) {
+    if (($rec['parentPath'] ?? '') === '') return '';
+    $n = strtolower($name);
+    foreach (all_folder_paths($files) as $p) if (strpos($p, '/') === false && strtolower($p) === $n) return 'A folder at the top of the gallery is already at that address, and a collection shown on its own is at the top too: change its Address first.';
+    foreach (array_keys(gallery_mounts()) as $m) if (strtolower((string) $m) === $n) return 'A folder at the top of the gallery is already at that address, and a collection shown on its own is at the top too: change its Address first.';
+    foreach (collections_registry($dir, $files)['byPath'] as $r) {
+        if (($r['id'] ?? '') === ($rec['id'] ?? '') || strtolower($r['name']) !== $n) continue;
+        if ($r['parentPath'] === '' || $r['front'] || $r['ownGallery']) return 'Another collection is already at that address at the top of the gallery: change its Address first.';
+    }
+    foreach ((array) (links_read()['links'] ?? []) as $l) {
+        if (!is_array($l)) continue;
+        foreach (link_all_addresses($l) as $t) if (strtolower((string) $t) === $n) return 'A share link has (or had) that address, and a collection shown on its own is at the top of the gallery under it: change its Address first.';
+    }
+    return '';
+}
+
+/** Where a collection shown on its own is at the top (/gallery/bestof), or '' when it is not (it is kept at the top, is not shown on its own, or something else has that address). */
+function collection_own_address_text($dir, $files, $rec) {
+    $reg = collections_registry($dir, $files);
+    return ($reg['alias'][strtolower((string) ($rec['name'] ?? ''))]['id'] ?? '') === ($rec['id'] ?? null) ? collection_address_text($rec['name']) : '';
+}
+
 /** An address name that is free in $parentPath, made from $base (a dash and a number added when it is taken). */
 function collection_free_name($dir, $files, $parentPath, $base) {
     $base = collection_slug($base);
@@ -11902,6 +11969,9 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         $field = isset($_POST['front']) ? 'front' : (isset($_POST['owngallery']) ? 'ownGallery' : (isset($_POST['private']) ? 'private' : ''));
         if ($field === '') collection_fail('Nothing to change.');
         $on = (string) ($_POST[$field === 'ownGallery' ? 'owngallery' : $field]) === '1';
+        if ($on && ($field === 'front' || $field === 'ownGallery')) {   // (shown on its own, it is at the top as well: nothing else may be at that address)
+            foreach (collections_registry($dir, $files)['byPath'] as $regRec) if ($regRec['id'] === $id) { $why = collection_standalone_problem($dir, $files, $regRec, $regRec['name']); if ($why !== '') collection_fail($why); }
+        }
         collections_update(function (&$d) use ($id, $field, $on) { foreach ($d['collections'] as &$r) if (is_array($r) && ($r['id'] ?? '') === $id) $r[$field] = $on; });
         collection_saved_or_fail();
         if ($field === 'ownGallery') own_galleries_recompute($dir, $files);
@@ -11927,6 +11997,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
             if ($name !== $rec['name']) {
                 $why = collection_address_problem($dir, $files, $rec['parentPath'] ?? ($adminFolderPath !== null && strpos($adminFolderPath, '/') !== false ? dirname($adminFolderPath) : ''), $name, $id);
                 if ($why !== '') collection_fail($why);
+                if (!empty($rec['front']) || !empty($rec['ownGallery'])) { $why = collection_standalone_problem($dir, $files, $rec + ['parentPath' => ($rec['parentPath'] ?? '')], $name); if ($why !== '') collection_fail($why); }
                 $changes['name'] = $name;
             }
         }
@@ -12206,7 +12277,7 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
       <h4><a class="coll" href="<?= $href ?>"><?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?></a><?= $r['private'] ? ' ' . collection_pill('private') : '' ?><span class="cm-acts"><a class="secondary btn-link" href="<?= $href ?>">Open settings</a><?php if (!$taken): ?><a class="secondary btn-link" href="?folder=<?= $esc(rawurlencode($r['path'])) ?>">View</a><?php endif; ?><button type="button" class="secondary cm-del cm-del-ic" data-id="<?= $esc($r['id']) ?>" data-title="<?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?>" title="Delete this collection (nothing in it is touched)" aria-label="Delete this collection"><?= ui_icon('trash') ?></button></span></h4>
       <dl class="cm-dl">
         <dt>Lives in</dt><dd><?= $r['parentPath'] === '' ? 'the front page' : $esc($r['parentPath']) ?></dd>
-        <dt>Address</dt><dd><?= $esc(collection_address_text($r['path'])) ?><?= $taken ? ' <span class="cm-pill miss">Taken by a folder</span>' : '' ?></dd>
+        <dt>Address</dt><dd><?= $esc(collection_address_text($r['path'])) ?><?= $taken ? ' <span class="cm-pill miss">Taken by a folder</span>' : '' ?><?php if (($ownAt = collection_own_address_text($dir, $files, $r)) !== ''): ?><br>and, for visitors who can't see its folder, <?= $esc($ownAt) ?><?php elseif (in_array($r['id'], array_column($reg['aliasLost'], 'id'), true)): ?> <span class="cm-pill miss">Its own address is taken at the top: it is at its path only</span><?php endif; ?></dd>
         <dt>On the front page</dt><dd><?= $r['parentPath'] === '' ? 'Yes (it lives there)' : ($r['front'] ? 'Yes' : 'No') ?></dd>
         <dt>Holds</dt><dd><?= $nf ?> folder<?= $nf === 1 ? '' : 's' ?>, <?= number_format($nested) ?> nested photo<?= $nested === 1 ? '' : 's' ?><?= $np ? ' and ' . $np . ' photo' . ($np === 1 ? '' : 's') . ' picked on their own' : '' ?></dd>
         <dt>Problems</dt><dd><?php if ($miss || $priv): ?><?= $miss ? '<span class="cm-pill miss">' . $miss . ' not found</span> ' : '' ?><?= $priv ? '<span class="cm-pill priv">' . $priv . ' private</span>' : '' ?><?php else: ?>Nothing missing<?php endif; ?></dd>

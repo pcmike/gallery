@@ -149,7 +149,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <div class="field">
           <label>Address <span class="rowstate" role="status" aria-live="polite"></span></label>
           <input type="text" name="coll_address" aria-label="Address" maxlength="60" value="<?= $esc($collection['name']) ?>">
-          <p class="hint"><?= $esc(collection_address_text($collection['path'])) ?></p>
+          <p class="hint"><?= $esc(collection_address_text($collection['path'])) ?><?php if (($ownAt = collection_own_address_text($GLOBALS['dir'], $GLOBALS['allFiles'] ?? ($GLOBALS['files'] ?? []), $collection)) !== ''): ?> and, for visitors who can't see its folder, <?= $esc($ownAt) ?><?php endif; ?></p>
         </div>
         </div>
         <?php endif; ?>

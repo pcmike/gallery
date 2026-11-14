@@ -6444,7 +6444,7 @@ $lgOldTok = $lgTok; $lgAdmin(['action' => 'link_replace', 'id' => $lgId]); $lgTo
 @unlink("$fxL/.gallery-login-attempts.php");
 $lgOldBody = http_get("$baseL/?link=$lgOldTok", [$lgUa]);
 $lgBlocked = array_values($lgLog()['blocked'] ?? [])[0] ?? [];
-check('[share log] tries turned away are logged with the address and why (paused; the old address after a replace), the invalid page is the same as ever, and an old address isn\'t counted as a guess', ($lgBlocked['tries'] ?? 0) === 3 && ($lgBlocked['why']['paused'] ?? 0) === 2 && ($lgBlocked['why']['replaced'] ?? 0) === 1 && $lgOldBody[0] === 404 && str_contains($lgOldBody[1], 'This link is not valid') && !str_contains(json_encode(is_file("$fxL/.gallery-login-attempts.php") ? read_data_file("$fxL/.gallery-login-attempts.php") : []), 'link|'));
+check('[share log] tries turned away are logged with the address and why (paused; the old address after a replace), the invalid page is the same as ever, and an old address is counted as a guess like any other (the throttle must not tell it from one that never existed)', ($lgBlocked['tries'] ?? 0) === 3 && ($lgBlocked['why']['paused'] ?? 0) === 2 && ($lgBlocked['why']['replaced'] ?? 0) === 1 && $lgOldBody[0] === 404 && str_contains($lgOldBody[1], 'This link is not valid') && str_contains(json_encode(is_file("$fxL/.gallery-login-attempts.php") ? read_data_file("$fxL/.gallery-login-attempts.php") : []), 'link|'));
 check('[share log] the Visitors view lists them as blocked tries (with the reason and the link), and the summary line says so', str_contains($lgFrag("visits=1&tab=visitors&src=$lgId")[1], 'Blocked tries') && str_contains($lgFrag("visits=1&tab=visitors&src=$lgId")[1], 'old address') && str_contains(http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1], '3 blocked tries'));
 
 // "Blocked" in the Visitors tab's Sources pill, and the way between a link's row on the Shares tab and the Visitors tab.
@@ -10581,6 +10581,106 @@ if ($colHeic) {
     echo "  skip  HEIC colour and original checks (this PHP's Imagick can't write HEIC to build a fixture)\n";
 }
 }
+
+/* --------------------------------------------------------------------- */
+
+echo "== audit batch: a front-page collection from a hidden folder, the short address's folder guess, and the dead-link throttle ==\n";
+$fxCh = new_fixture_dir('collhidden');
+foreach (['Hideout', 'Vault', 'Asia', 'Mixed', 'Europe', 'Topsecret', 'emptydir', 'uploads'] as $chD) mkdir("$fxCh/$chD", 0777, true);
+foreach (['Hideout/h1.jpg' => 1, 'Vault/v1.jpg' => 2, 'Asia/a.jpg' => 3, 'Mixed/pub.jpg' => 4, 'Mixed/priv.jpg' => 5, 'Europe/eu1.jpg' => 6, 'Topsecret/t1.jpg' => 7, 'front.jpg' => 8] as $chF => $chC) make_jpeg("$fxCh/$chF", 60, 60, $chC * 25, 70, 110);
+file_put_contents("$fxCh/uploads/readme.txt", 'not a photo');
+$chIds = ['Hideout' => 'ccccccccccc1', 'Vault' => 'ccccccccccc2', 'Asia' => 'ccccccccccc3', 'Mixed' => 'ccccccccccc4', 'Europe' => 'ccccccccccc5', 'Topsecret' => 'ccccccccccc6'];
+$chItems = fn (string $f, array $x = []) => file_put_contents("$fxCh/$f/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['folderId' => $chIds[$f]] + $x + ['items' => []]));
+$chItems('Hideout', ['restriction' => 'private', 'unlisted' => true]); $chItems('Vault', ['restriction' => 'private']); $chItems('Asia'); $chItems('Europe'); $chItems('Topsecret', ['restriction' => 'private']);
+$chItems('Mixed', ['items' => ['priv.jpg' => ['restriction' => 'private']]]);
+$chRec = fn (string $id, string $parent, string $name, string $title, array $items, array $more = []) => ['id' => 'c' . $id, 'parent' => $chIds[$parent], 'name' => $name, 'title' => $title, 'items' => $items, 'at' => 1] + $more;
+$chAll = [['fid' => $chIds['Asia'], 'mode' => 'all'], ['fid' => $chIds['Mixed'], 'mode' => 'all']];
+file_put_contents("$fxCh/.gallery-collections.php", data_file_guard_line_for_tests() . json_encode(['collections' => [
+    $chRec('0000000000a1', 'Hideout', 'bestof', 'Best Of', $chAll, ['front' => true]),
+    $chRec('0000000000a2', 'Vault', 'backroom', 'In The Back', $chAll, ['front' => true]),
+    $chRec('0000000000a3', 'Vault', 'quiet', 'Quiet One', $chAll),
+    $chRec('0000000000a4', 'Europe', 'eubest', 'Europe Best', $chAll, ['front' => true]),
+    $chRec('0000000000a5', 'Hideout', 'standalone', 'Stand Alone', $chAll, ['ownGallery' => true]),
+]]));
+file_put_contents("$fxCh/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ch-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'ch-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true]));
+copy($indexSrc, "$fxCh/index.php");
+$portCh = find_free_port(); start_server($fxCh, $portCh); $baseCh = "http://127.0.0.1:$portCh";
+[, , $chH1] = http_post("$baseCh/?admin", ['access_code' => 'ch-admin-pw-1'], [], false); $chOwn = ['Cookie: ' . extract_cookie_header($chH1)];
+[, , $chH2] = http_post("$baseCh/?reveal", ['access_code' => 'ch-view-pw-1'], [], false); $chView = ['Cookie: ' . extract_cookie_header($chH2)];
+$chCsrf = (string) extract_csrf_token(http_get("$baseCh/?admin", $chOwn)[1]);
+$chAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseCh/?admin$q", $f + ['csrf_token' => $chCsrf], array_merge($chOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$chUnlock = fn () => @unlink("$fxCh/.gallery-login-attempts.php");
+$chGet = function (string $q, array $who = []) use ($baseCh, $chUnlock) { $chUnlock(); return http_get("$baseCh/$q", $who, false); };
+$chLeaks = function (array $r, array $words) { $all = $r[1] . "\n" . implode("\n", $r[2]); return array_values(array_filter($words, fn ($w) => stripos($all, $w) !== false)); };
+
+// AB2: a collection on the front page, kept in a hidden folder: a card that leads somewhere, with no word of the hidden folder in it
+$chFront = $chGet('', []);
+check('[hidden parent] a stranger\'s front page has the card of a front-page collection kept in a Not listed folder and in a private one, addressed by the collection\'s own address, and not a word of either folder', str_contains($chFront[1], 'href="?folder=bestof"') && str_contains($chFront[1], 'href="?folder=backroom"') && !$chLeaks($chFront, ['hideout', 'vault']), json_encode([$chLeaks($chFront, ['hideout', 'vault']), preg_match_all('~href="\?folder=[^"]*"~', $chFront[1], $m) ? $m[0] : []]));
+check('[hidden parent] ...and the card of one kept in a public folder keeps its address with the folder in it, as before', str_contains($chFront[1], 'href="?folder=Europe%2Feubest"'));
+$chPage = $chGet('?folder=bestof', []);
+check('[hidden parent] the card opens: the collection\'s page, with the members this visitor may see (the public photo of one folder and of the other, not the private one), no word of the hidden folder anywhere, and the way back is the gallery\'s front page', $chPage[0] === 200 && str_contains($chPage[1], 'Asia\/a.jpg') && str_contains($chPage[1], 'Mixed\/pub.jpg') && !str_contains($chPage[1], 'priv.jpg') && !$chLeaks($chPage, ['hideout', 'vault']) && str_contains($chPage[1], 'Best Of'), json_encode([$chPage[0], $chLeaks($chPage, ['hideout', 'vault'])]));
+$chPage2 = $chGet('?folder=backroom', []);
+check('[hidden parent] the same for the one kept in a private folder', $chPage2[0] === 200 && str_contains($chPage2[1], 'Asia\/a.jpg') && !str_contains($chPage2[1], 'priv.jpg') && !$chLeaks($chPage2, ['hideout', 'vault']), json_encode([$chPage2[0], $chLeaks($chPage2, ['hideout', 'vault'])]));
+check('[hidden parent] the long address (the hidden folder\'s path) still shows a stranger nothing, and a collection not on the front page and not a Gallery of its own stays out of reach at either address', $chGet('?folder=Hideout%2Fbestof', [])[0] === 404 && $chGet('?folder=Vault%2Fbackroom', [])[0] === 404 && $chGet('?folder=Vault%2Fquiet', [])[0] === 404 && $chGet('?folder=quiet', [])[0] === 404);
+$chOwnGal = $chGet('?folder=standalone', []);
+check('[hidden parent] a collection that is a Gallery of its own is reachable at its own address too (no card on the front page), with no word of the hidden folder', $chOwnGal[0] === 200 && str_contains($chOwnGal[1], 'Asia\/a.jpg') && !$chLeaks($chOwnGal, ['hideout', 'vault']) && !str_contains($chFront[1], 'standalone'), json_encode([$chOwnGal[0], $chLeaks($chOwnGal, ['hideout', 'vault'])]));
+$chZip = $chGet('?archive&folder=bestof', []); $chMap = $chGet('?map&folder=bestof', []);
+check('[hidden parent] its ZIP and its map page leak nothing either', !$chLeaks($chZip, ['hideout', 'vault']) && !$chLeaks($chMap, ['hideout', 'vault']), json_encode([$chZip[0], $chMap[0]]));
+$chViewFront = $chGet('', $chView); $chViewPage = $chGet('?folder=bestof', $chView);
+check('[hidden parent] someone with the private-view password: the Not listed folder stays hidden from them too (no word of it, the card by its own address), and the private one is theirs (its collection\'s card by the long address); the collection\'s page shows them the private photo as well', !$chLeaks($chViewFront, ['hideout']) && str_contains($chViewFront[1], 'href="?folder=bestof"') && str_contains($chViewFront[1], 'href="?folder=Vault%2Fbackroom"') && $chViewPage[0] === 200 && str_contains($chViewPage[1], 'priv.jpg') && !$chLeaks($chViewPage, ['hideout']), json_encode([$chLeaks($chViewFront, ['hideout']), $chViewPage[0]]));
+$chOwnFront = $chGet('', $chOwn);
+check('[hidden parent] the owner, who may see the folder, gets the card with the long address, as before', str_contains($chOwnFront[1], 'href="?folder=Hideout%2Fbestof"') || str_contains($chOwnFront[1], 'href="?folder=Hideout/bestof"'));
+// the address must be free at the top when the collection is shown on its own
+$chMk = $chAdmin(['action' => 'collection_create', 'parent' => 'Vault', 'title' => 'Mixed']); $chMkId = (string) ($chMk['id'] ?? '');
+$chOn = $chAdmin(['action' => 'toggle_collection_flag', 'id' => $chMkId, 'front' => '1']);
+check('[hidden parent] switching "Show on front page" on for a collection whose address a folder at the top already has is refused, with the reason, and the switch stays off', ($chOn['ok'] ?? true) === false && stripos((string) ($chOn['text'] ?? ''), 'top') !== false && empty(array_filter(read_data_file("$fxCh/.gallery-collections.php")['collections'], fn ($r) => ($r['id'] ?? '') === $chMkId && !empty($r['front']))), json_encode($chOn));
+$chLk = $chAdmin(['action' => 'link_create', 'label' => 'Dupe', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'public', 'downloads' => 'off', 'zip' => 'off', 'address' => 'dupe-name']);
+$chMk2 = $chAdmin(['action' => 'collection_create', 'parent' => 'Vault', 'title' => 'Dupe name']); $chMk2Id = (string) ($chMk2['id'] ?? '');
+$chOn2 = $chAdmin(['action' => 'toggle_collection_flag', 'id' => $chMk2Id, 'front' => '1']); $chOn2b = $chAdmin(['action' => 'toggle_collection_flag', 'id' => $chMk2Id, 'owngallery' => '1']);
+check('[hidden parent] ...and so is one a share link has as its address (for either switch)', ($chLk['ok'] ?? false) && ($chOn2['ok'] ?? true) === false && ($chOn2b['ok'] ?? true) === false, json_encode([$chOn2, $chOn2b]));
+$chFreeAddr = $chAdmin(['action' => 'collection_create', 'parent' => 'Vault', 'title' => 'Fresh Pick']); $chFreeOn = $chAdmin(['action' => 'toggle_collection_flag', 'id' => (string) ($chFreeAddr['id'] ?? ''), 'front' => '1']);
+check('[hidden parent] an address nothing else has switches on', ($chFreeOn['ok'] ?? false) === true);
+$chLinkTry = function (string $addr) use ($chAdmin) { return $chAdmin(['action' => 'link_create', 'label' => 'Name try ' . $addr, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'public', 'downloads' => 'off', 'zip' => 'off', 'address' => $addr]); };
+$chNameA = $chLinkTry('bestof'); $chNameB = $chLinkTry('standalone'); $chNameC = $chLinkTry('fresh-pick');
+check('[hidden parent] a share link can\'t be given the address of a collection shown on its own (front page or Gallery of its own), and a free name still works', ($chNameA['ok'] ?? true) === false && ($chNameB['ok'] ?? true) === false && ($chNameC['ok'] ?? true) === false && ($chLinkTry('free-name-ok')['ok'] ?? false) === true, json_encode([$chNameA['text'] ?? '', $chNameB['text'] ?? '', $chNameC['text'] ?? '']));
+// a clash that comes later: the folder wins, the collection's card is left off, the owner is told
+mkdir("$fxCh/bestof", 0777, true); make_jpeg("$fxCh/bestof/real.jpg", 60, 60, 50, 50, 50);
+$chClash = $chGet('?folder=bestof', []); $chClashFront = $chGet('', []);
+$chAdminList = http_get("$baseCh/?admin", $chOwn)[1];
+check('[hidden parent] a folder that appears later at the collection\'s address wins: its page is the folder\'s own (its photo, none of the collection\'s), and the front page shows the folder\'s card only (the collection\'s is left off)', $chClash[0] === 200 && str_contains($chClash[1], 'real.jpg') && !str_contains($chClash[1], 'pub.jpg') && substr_count($chClashFront[1], 'href="?folder=bestof"') === substr_count($chClashFront[1], 'href="?folder=Asia"') && substr_count($chClashFront[1], 'href="?folder=bestof"') > 0, json_encode([$chClash[0], substr_count($chClashFront[1], 'href="?folder=bestof"'), substr_count($chClashFront[1], 'href="?folder=Asia"')]));
+check('[hidden parent] ...and the owner is told in the collection\'s list that its address is taken at the top', str_contains($chAdminList, 'taken at the top'));
+
+// A1: the short address asked for a folder's name
+$chBogus = $chGet('?link=Nosuchdir', []); $chPriv = $chGet('?link=Topsecret', []); $chBare = $chGet('?Topsecret', []); $chEmpty = $chGet('?link=emptydir', []); $chUp = $chGet('?link=uploads', []); $chHid = $chGet('?link=Hideout', []);
+$chSame = fn (array $r) => $r[0] === $chBogus[0] && $r[1] === $chBogus[1] && !preg_grep('~^Location:~i', $r[2]);
+check('[folder guess] a stranger asking for the name of a private folder, an empty folder or a folder with no photos in it is answered exactly as for a name that is not there (no redirect), by ?link= and by the bare word', $chSame($chPriv) && $chSame($chBare) && $chSame($chEmpty) && $chSame($chUp) && $chSame($chHid), json_encode([$chBogus[0], $chPriv[0], $chEmpty[0], $chUp[0]]));
+$chPub = $chGet('?link=Asia', []);
+check('[folder guess] ...while a public folder is still sent on to its page', $chPub[0] === 302 && preg_grep('~^Location: .*Asia/~i', $chPub[2]) !== []);
+$chPrivView = $chGet('?link=Topsecret', $chView); $chPrivOwn = $chGet('?link=Topsecret', $chOwn);
+check('[folder guess] someone with the private-view password, and the owner, are still sent on to a private folder', $chPrivView[0] === 302 && $chPrivOwn[0] === 302);
+$chLkFolder = $chAdmin(['action' => 'link_create', 'label' => 'For Topsecret', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'folders', 'scope_folders' => json_encode(['Topsecret']), 'downloads' => 'off', 'zip' => 'off']);
+$chLkTok = read_data_file("$fxCh/.gallery-links.php")['links'][$chLkFolder['id'] ?? '']['token'] ?? '';
+$chUnlock(); [, , $chLkH] = http_post("$baseCh/?link=$chLkTok", ['go' => '1'], [], false); $chGuest = ['Cookie: ' . extract_cookie_header($chLkH)];
+$chGuestTop = $chGet('?link=Topsecret', $chGuest); $chGuestVault = $chGet('?link=Vault', $chGuest);
+check('[folder guess] a link guest is sent on to the folder their link covers, and told nothing of a private one it does not', $chGuestTop[0] === 302 && $chSame($chGuestVault), json_encode([$chGuestTop[0], $chGuestVault[0]]));
+
+// B2: a dead link's address counts as a wrong guess, like one that never existed
+$chDead = function (string $addr, array $extra = []) use ($chAdmin) { $r = $chAdmin($extra + ['action' => 'link_create', 'label' => 'Dead ' . $addr, 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'public', 'downloads' => 'off', 'zip' => 'off', 'address' => $addr]); return (string) ($r['id'] ?? ''); };
+$chPause = $chDead('carol-rome'); $chAdmin(['action' => 'link_pause', 'id' => $chPause]);
+$chRevoke = $chDead('dave-paris'); $chAdmin(['action' => 'link_revoke', 'id' => $chRevoke]);
+$chRepl = $chDead('erin-oslo'); $chAdmin(['action' => 'link_replace', 'id' => $chRepl, 'keep_old' => '0']);
+$chOnce = $chDead('fred-lima', ['max_opens' => 1]); $chUnlock(); http_post("$baseCh/?link=fred-lima", ['go' => '1'], [], false);
+$chTries = function (string $addr) use ($baseCh, $chUnlock) { $chUnlock(); $codes = []; for ($i = 0; $i < 12; $i++) $codes[] = http_get("$baseCh/?link=$addr", [], false)[0]; return $codes; };
+$chNever = $chTries('never-was-here');
+check('[dead link] (the control) a made-up address is held on the 11th try', $chNever[9] === 404 && $chNever[10] === 429, json_encode($chNever));
+$chTP = $chTries('carol-rome'); $chTR = $chTries('dave-paris'); $chTO = $chTries('erin-oslo'); $chTU = $chTries('fred-lima');
+check('[dead link] a paused, a revoked, a replaced and a used-up link\'s address are each held on the 11th try too, so the throttle no longer tells them from an address that never existed', $chTP[10] === 429 && $chTR[10] === 429 && $chTO[10] === 429 && $chTU[10] === 429, json_encode([$chTP[10], $chTR[10], $chTO[10], $chTU[10]]));
+$chAct = $chDead('gina-nice'); $chTok = read_data_file("$fxCh/.gallery-links.php")['links'][$chAct]['token'] ?? '';
+$chUnlock(); [, , $chAH] = http_post("$baseCh/?link=$chTok", ['go' => '1'], [], false); $chActCk = ['Cookie: ' . extract_cookie_header($chAH)];
+$chUnlock(); $chIn = []; for ($i = 0; $i < 14; $i++) $chIn[] = http_get("$baseCh/?link=$chTok", $chActCk, false)[0];
+check('[dead link] someone already in on a link who opens its address again and again is never held (their sign-in counts, nothing is guessed)', !in_array(429, $chIn, true) && !in_array(404, $chIn, true), json_encode(array_unique($chIn)));
+$chUnlock(); $chOpen = []; for ($i = 0; $i < 14; $i++) $chOpen[] = http_get("$baseCh/?link=$chTok", [], false)[0];
+check('[dead link] ...and a live link\'s own address, asked for without signing in, is no guess either', !in_array(429, $chOpen, true), json_encode(array_unique($chOpen)));
 
 /* --------------------------------------------------------------------- */
 

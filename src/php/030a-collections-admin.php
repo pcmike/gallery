@@ -21,6 +21,31 @@ function collection_address_problem($dir, $files, $parentPath, $name, $exceptId 
     return '';
 }
 
+/** '' when the collection $rec (kept in a folder) may be shown on its own (on the front page, or as a Gallery of its own) at /gallery/<name>: nothing else is
+ *  at that address, as nothing else may be at a folder's. What else could be: a folder or mapped folder at the top, a collection made at the top or one
+ *  shown on its own, a share link's address (its own, an old one or a kept one). A collection made at the top has no such question. */
+function collection_standalone_problem($dir, $files, $rec, $name) {
+    if (($rec['parentPath'] ?? '') === '') return '';
+    $n = strtolower($name);
+    foreach (all_folder_paths($files) as $p) if (strpos($p, '/') === false && strtolower($p) === $n) return 'A folder at the top of the gallery is already at that address, and a collection shown on its own is at the top too: change its Address first.';
+    foreach (array_keys(gallery_mounts()) as $m) if (strtolower((string) $m) === $n) return 'A folder at the top of the gallery is already at that address, and a collection shown on its own is at the top too: change its Address first.';
+    foreach (collections_registry($dir, $files)['byPath'] as $r) {
+        if (($r['id'] ?? '') === ($rec['id'] ?? '') || strtolower($r['name']) !== $n) continue;
+        if ($r['parentPath'] === '' || $r['front'] || $r['ownGallery']) return 'Another collection is already at that address at the top of the gallery: change its Address first.';
+    }
+    foreach ((array) (links_read()['links'] ?? []) as $l) {
+        if (!is_array($l)) continue;
+        foreach (link_all_addresses($l) as $t) if (strtolower((string) $t) === $n) return 'A share link has (or had) that address, and a collection shown on its own is at the top of the gallery under it: change its Address first.';
+    }
+    return '';
+}
+
+/** Where a collection shown on its own is at the top (/gallery/bestof), or '' when it is not (it is kept at the top, is not shown on its own, or something else has that address). */
+function collection_own_address_text($dir, $files, $rec) {
+    $reg = collections_registry($dir, $files);
+    return ($reg['alias'][strtolower((string) ($rec['name'] ?? ''))]['id'] ?? '') === ($rec['id'] ?? null) ? collection_address_text($rec['name']) : '';
+}
+
 /** An address name that is free in $parentPath, made from $base (a dash and a number added when it is taken). */
 function collection_free_name($dir, $files, $parentPath, $base) {
     $base = collection_slug($base);
@@ -132,6 +157,9 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         $field = isset($_POST['front']) ? 'front' : (isset($_POST['owngallery']) ? 'ownGallery' : (isset($_POST['private']) ? 'private' : ''));
         if ($field === '') collection_fail('Nothing to change.');
         $on = (string) ($_POST[$field === 'ownGallery' ? 'owngallery' : $field]) === '1';
+        if ($on && ($field === 'front' || $field === 'ownGallery')) {   // (shown on its own, it is at the top as well: nothing else may be at that address)
+            foreach (collections_registry($dir, $files)['byPath'] as $regRec) if ($regRec['id'] === $id) { $why = collection_standalone_problem($dir, $files, $regRec, $regRec['name']); if ($why !== '') collection_fail($why); }
+        }
         collections_update(function (&$d) use ($id, $field, $on) { foreach ($d['collections'] as &$r) if (is_array($r) && ($r['id'] ?? '') === $id) $r[$field] = $on; });
         collection_saved_or_fail();
         if ($field === 'ownGallery') own_galleries_recompute($dir, $files);
@@ -157,6 +185,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
             if ($name !== $rec['name']) {
                 $why = collection_address_problem($dir, $files, $rec['parentPath'] ?? ($adminFolderPath !== null && strpos($adminFolderPath, '/') !== false ? dirname($adminFolderPath) : ''), $name, $id);
                 if ($why !== '') collection_fail($why);
+                if (!empty($rec['front']) || !empty($rec['ownGallery'])) { $why = collection_standalone_problem($dir, $files, $rec + ['parentPath' => ($rec['parentPath'] ?? '')], $name); if ($why !== '') collection_fail($why); }
                 $changes['name'] = $name;
             }
         }
@@ -436,7 +465,7 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
       <h4><a class="coll" href="<?= $href ?>"><?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?></a><?= $r['private'] ? ' ' . collection_pill('private') : '' ?><span class="cm-acts"><a class="secondary btn-link" href="<?= $href ?>">Open settings</a><?php if (!$taken): ?><a class="secondary btn-link" href="?folder=<?= $esc(rawurlencode($r['path'])) ?>">View</a><?php endif; ?><button type="button" class="secondary cm-del cm-del-ic" data-id="<?= $esc($r['id']) ?>" data-title="<?= $esc($r['title'] !== '' ? $r['title'] : $r['name']) ?>" title="Delete this collection (nothing in it is touched)" aria-label="Delete this collection"><?= ui_icon('trash') ?></button></span></h4>
       <dl class="cm-dl">
         <dt>Lives in</dt><dd><?= $r['parentPath'] === '' ? 'the front page' : $esc($r['parentPath']) ?></dd>
-        <dt>Address</dt><dd><?= $esc(collection_address_text($r['path'])) ?><?= $taken ? ' <span class="cm-pill miss">Taken by a folder</span>' : '' ?></dd>
+        <dt>Address</dt><dd><?= $esc(collection_address_text($r['path'])) ?><?= $taken ? ' <span class="cm-pill miss">Taken by a folder</span>' : '' ?><?php if (($ownAt = collection_own_address_text($dir, $files, $r)) !== ''): ?><br>and, for visitors who can't see its folder, <?= $esc($ownAt) ?><?php elseif (in_array($r['id'], array_column($reg['aliasLost'], 'id'), true)): ?> <span class="cm-pill miss">Its own address is taken at the top: it is at its path only</span><?php endif; ?></dd>
         <dt>On the front page</dt><dd><?= $r['parentPath'] === '' ? 'Yes (it lives there)' : ($r['front'] ? 'Yes' : 'No') ?></dd>
         <dt>Holds</dt><dd><?= $nf ?> folder<?= $nf === 1 ? '' : 's' ?>, <?= number_format($nested) ?> nested photo<?= $nested === 1 ? '' : 's' ?><?= $np ? ' and ' . $np . ' photo' . ($np === 1 ? '' : 's') . ' picked on their own' : '' ?></dd>
         <dt>Problems</dt><dd><?php if ($miss || $priv): ?><?= $miss ? '<span class="cm-pill miss">' . $miss . ' not found</span> ' : '' ?><?= $priv ? '<span class="cm-pill priv">' . $priv . ' private</span>' : '' ?><?php else: ?>Nothing missing<?php endif; ?></dd>
