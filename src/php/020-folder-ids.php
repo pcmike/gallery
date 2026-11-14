@@ -223,6 +223,14 @@ function photo_address_translate($dir, $files, $itemsData) {
     $rel = photo_address_resolve($dir, $files, $itemsData, $token);
     if ($rel === null) return false;
     unset($_GET['link']);
+    // The owner clicking a folder (a bare ?folder= link on the page follows the address bar, which still holds the photo's code) is going to that folder, at the
+    // gallery's own address; the code stays in the bar only until then. Anyone else is not sent anywhere.
+    if (is_admin_browser() && isset($_GET['folder']) && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
+        $rest = http_build_query($_GET, '', '&', PHP_QUERY_RFC3986);
+        header('Cache-Control: no-store');
+        header('Location: ' . gallery_root_href() . ($rest !== '' ? '?' . $rest : ''), true, 302);
+        exit;
+    }
     // The folder says what its photos' addresses open: the photo in the viewer (the default), or the bare picture or video. A ?file or ?view added
     // to one address overrides that for that address only.
     $bare = !empty(items_read(resolve_real_path($dir, unlisted_root_path($dir, $rel)))['addressFile']);

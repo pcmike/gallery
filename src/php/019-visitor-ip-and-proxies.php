@@ -154,7 +154,7 @@ function link_name_shadowed_by($name, $dir) {
 function link_custom_name_problem($name, $dir, $exceptId = '') {
     $n = strtolower($name);
     if (strlen($n) < 4 || strlen($n) > 40 || preg_match('/^[a-z0-9][a-z0-9-]*[a-z0-9]$/', $n) !== 1) return 'An address needs 4 to 40 letters, digits or hyphens, and cannot start or end with a hyphen.';
-    if (in_array($n, LINK_RESERVED_NAMES, true)) return '"' . $n . '" is an address the gallery uses itself: pick another.';
+    if (in_array($n, LINK_RESERVED_NAMES, true) || in_array($n, array_map('strtolower', reserved_query_words()), true)) return '"' . $n . '" is an address the gallery uses itself: pick another.';   // (the second list is the one the gallery answers ?word from, so it cannot fall behind)
     foreach ([$dir, __DIR__] as $d) {
         foreach ((array) @scandir($d) as $entry) {
             if ($entry === '.' || $entry === '..') continue;

@@ -7176,7 +7176,31 @@ foreach ([
     [$cRefused, $cText, $cNone] = $cRefuse($cAddr);
     check("[custom address] \"$cAddr\" is refused ($cWhy), says why, and no link is made", $cRefused && str_contains($cText, $cMsg) && $cNone, $cText);
 }
-check('[custom address] 4 and 40 characters are the edges that work, with hyphens inside', ($cMake(['label' => 'Edge four', 'address' => 'abcd'])['ok'] ?? false) && ($cMake(['label' => 'Edge forty', 'address' => 'a' . str_repeat('b-', 19) . 'c'])['ok'] ?? false));
+// Every word the gallery answers as ?word is refused as a link's name. The words are read from the source itself, so a new query word that nobody added to the
+// list fails here (and not months later in someone's copied link): every $_GET['word'] the gallery reads, every route's parameter, the bare-word list, and the
+// hand-written list of names. The guide lists the same words, and a word missing from it fails too.
+$rwSrc = ''; foreach (glob("$repoRoot/src/php/*.php") as $rwFile) $rwSrc .= file_get_contents($rwFile) . "\n";
+$rwWords = [];
+preg_match_all('/\$_GET\[[\'"]([A-Za-z0-9_-]+)[\'"]\]/', $rwSrc, $rwM); foreach ($rwM[1] as $w) $rwWords[$w] = 1;
+preg_match_all("/'params' => \\[([^\\]]*)\\]/", $rwSrc, $rwM); foreach ($rwM[1] as $list) { preg_match_all("/'([A-Za-z0-9_-]+)'/", $list, $rwP); foreach ($rwP[1] as $w) $rwWords[$w] = 1; }
+foreach (['function reserved_query_words\(\) \{\s*\$words = \[(.*?)\];', 'const LINK_RESERVED_NAMES = \[(.*?)\];'] as $rwPat) {
+    if (preg_match('/' . $rwPat . '/s', $rwSrc, $rwM)) { preg_match_all("/'([A-Za-z0-9_.-]+)'/", $rwM[1], $rwP); foreach ($rwP[1] as $w) $rwWords[$w] = 1; }
+}
+$rwWords = array_values(array_filter(array_keys($rwWords), fn ($w) => preg_match('/^[a-z0-9][a-z0-9-]*[a-z0-9]$/', $w) === 1 && strlen($w) >= 4 && strlen($w) <= 40));
+sort($rwWords);
+check('[custom address] the source names a good number of query words to check (the scan is not empty)', count($rwWords) >= 50 && in_array('archive', $rwWords, true) && in_array('exitpreview', $rwWords, true) && in_array('photo', $rwWords, true), (string) count($rwWords));
+$rwMade = []; $rwNotUsed = [];
+foreach ($rwWords as $rwWord) {
+    [$rwRefused, $rwText, $rwNone] = $cRefuse($rwWord, 'Query word');
+    if (!$rwRefused || !$rwNone) $rwMade[] = $rwWord;
+    elseif (!str_contains($rwText, 'an address the gallery uses itself') && !str_contains($rwText, 'A folder or file called')) $rwNotUsed[] = $rwWord . ': ' . $rwText;
+}
+check('[custom address] every word the gallery answers as ?word (' . count($rwWords) . ' of them, read from the source) is refused as a link\'s name, and says it is an address the gallery uses itself; none makes a link', !$rwMade && !$rwNotUsed, 'accepted: ' . implode(', ', $rwMade) . ' | other message: ' . implode('; ', $rwNotUsed));
+$rwGuide = (string) file_get_contents("$repoRoot/docs/guide/private-and-sharing.md");
+$rwDocWords = [];
+if (preg_match('/<!-- link-name-words -->(.*?)<!-- \/link-name-words -->/s', $rwGuide, $rwM)) { preg_match_all('/`([a-z0-9-]+)`/', $rwM[1], $rwP); $rwDocWords = $rwP[1]; }
+check('[custom address] the guide lists every word a link can\'t be named (the list between its markers has all of them, so the list can\'t go stale)', $rwDocWords && !array_diff($rwWords, $rwDocWords), 'missing from the guide: ' . implode(', ', array_diff($rwWords, $rwDocWords)));
+check('[custom address] 4 and 40 characters are the edges that work, with hyphens inside',($cMake(['label' => 'Edge four', 'address' => 'abcd'])['ok'] ?? false) && ($cMake(['label' => 'Edge forty', 'address' => 'a' . str_repeat('b-', 19) . 'c'])['ok'] ?? false));
 
 // An address made from the link's name (the "Use the name as the address" box): a number goes on the end when it is taken or is one the gallery uses.
 $aaA = $cMake(['label' => 'John Doe', 'address' => 'johndoe', 'address_auto' => '1']);
@@ -9573,6 +9597,17 @@ check('[photo page] the page is not stored (Cache-Control: private, no-store) al
 // the owner: the page is the gallery's own, with the photo opened over its folder's grid
 $nnUnlock(); $nnOwnPage = http_get("$baseNn/?$nnKp&view", $nnOwn, false);
 check('[photo page] the owner opening the address with ?view gets the viewer over the photo\'s folder (the folder\'s own grid behind it, not the gallery\'s front page); the address bar is not changed (no redirect)', $nnOwnPage[0] === 200 && str_contains($nnOwnPage[1], 'const initialPhoto = "SecretDrawer\/NOTLISTED-SENTINEL.jpg"') && str_contains($nnOwnPage[1], 'NOTLISTED-TWO.jpg') && !str_contains($nnOwnPage[1], '"front.jpg"') && !preg_grep('~^Location:~i', $nnOwnPage[2]), json_encode([$nnOwnPage[0], str_contains($nnOwnPage[1], '"front.jpg"')]));
+// the owner clicking a folder (a pill, a crumb, a card: a bare ?folder= link, which follows the address bar) on a page that sits at a photo's address: goes to that
+// folder at the gallery's own address (the address bar kept the code until then); everyone else still gets the photo alone, and no folder
+$nnUnlock(); $nnClick = http_get("$baseNn/?$nnKp&folder=SecretDrawer", $nnOwn, false);
+$nnClickLoc = implode(' ', preg_grep('~^Location:~i', $nnClick[2]));
+check('[photo page] the owner clicking a folder from a photo\'s address is sent to that folder at the gallery\'s own address (no code in it), not shown the photo again', in_array($nnClick[0], [301, 302, 303], true) && preg_match('~^Location: (\./|/)\?folder=SecretDrawer\s*$~i', $nnClickLoc) === 1 && !str_contains($nnClickLoc, $nnKp), json_encode([$nnClick[0], $nnClickLoc]));
+$nnUnlock(); $nnClickMore = http_get("$baseNn/?link=$nnKp&folder=SecretDrawer&show=map", $nnOwn, false);
+check('[photo page] ...and what else the click carried goes along (&show=map), the code does not', in_array($nnClickMore[0], [301, 302, 303], true) && preg_match('~^Location: (\./|/)\?folder=SecretDrawer&show=map\s*$~i', implode(' ', preg_grep('~^Location:~i', $nnClickMore[2]))) === 1, json_encode(preg_grep('~^Location:~i', $nnClickMore[2])));
+$nnUnlock(); $nnClickPlain = http_get("$baseNn/?$nnKp&view", $nnOwn, false);
+check('[photo page] ...but the owner opening the address itself (no folder in it) is not sent anywhere: the code stays in the address bar', $nnClickPlain[0] === 200 && !preg_grep('~^Location:~i', $nnClickPlain[2]));
+$nnUnlock(); $nnClickStranger = http_get("$baseNn/?$nnKp&folder=SecretDrawer", [], false);
+check('[photo page] a stranger with a folder added to the address is not sent anywhere and is shown no folder (the same answer as before)', !preg_grep('~^Location:~i', $nnClickStranger[2]) && !str_contains($nnClickStranger[1], 'NOTLISTED-TWO') && !str_contains($nnClickStranger[1], 'SecretDrawer'), json_encode([$nnClickStranger[0], $nnClickStranger[2][0] ?? '']));
 // a code tried on the routes that did not count it
 $nnUnlock();
 foreach (['about', 'manifest', 'appicon', 'mapicon', 'download', 'archive'] as $nnRoute) { $nnUnlock(); $nnRight[$nnRoute] = http_get("$baseNn/?$nnRoute&photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nnKp", [], false)[2]; }

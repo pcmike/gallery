@@ -2443,6 +2443,13 @@ try:
         b.js("closeLightbox()"); b.drain(0.3)
         ok(not b.problems(IGN), "[photo page] ...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
         b.call("Network.setCookies", {"cookies": [{k: v for k, v in c.items() if k in ("name", "value", "domain", "path", "secure", "httpOnly", "sameSite") or (k == "expires" and not c.get("session"))} for c in saved18]})
+        # the owner at the photo's address: the code stays in the address bar (to copy), and a click on a folder link on the page goes to that folder, at the gallery's own address
+        b.goto(new18 + "&view", 2.5)
+        ok(b.js("document.getElementById('lightbox').classList.contains('open')") and re.search(r"/\?[A-Za-z0-9]{8}&view$", b.js("location.href")) is not None, "[photo page] the owner opening the photo's address sees the viewer, and the address bar keeps the code", str(b.js("location.href")))
+        b.js("closeLightbox()"); b.drain(0.4)
+        b.js("document.querySelector('.folder-pills a').click()"); b.drain(2.5)
+        loc18 = b.js("location.href")
+        ok("folder=Churches" in loc18 and re.search(r"\?[A-Za-z0-9]{8}", loc18.split("?", 1)[1]) is None and b.js("typeof initialPhoto === 'undefined' || initialPhoto === null || initialPhoto === ''") and b.js("!!document.querySelector('.card')"), "[photo page] ...and a click on the folder's pill there goes to the folder at the gallery's own address (the code is gone from the bar and the photo is not opened again)", str(loc18))
         open(SITE18 + "/Churches/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps(priv_items))
         # the gallery: locks in three states
         b.goto(B18 + "/?folder=Churches", 1.5)
