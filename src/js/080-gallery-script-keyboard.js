@@ -105,10 +105,14 @@
     try { history.replaceState(null, '', '#' + id); } catch (x) {}
   });
 
-  // Copies a "?photo=" deep link to the photo currently open in the lightbox.
+  // Copies a deep link to the photo currently open in the lightbox: the gallery's own address, the photo's own folder (so whoever opens it lands on that
+  // folder's page, with the navigation the folder allows, e.g. only the album for a Gallery of its own) and the photo. It is built from where the photo
+  // is, not from the address this visitor arrived by (a link copied after clicking in from the front page, or after typing a folder's address, used to differ).
   const lightboxCopyBtn = document.getElementById('lightbox-copy-btn');
   const copyPhotoLink = () => {
-    const url = window.location.origin + window.location.pathname + '?photo=' + encodeURIComponent(files[current]);
+    const file = files[current], slash = file.lastIndexOf('/');
+    const root = new URL(galleryRootHref, window.location.href);
+    const url = root.origin + root.pathname + (slash > 0 ? '?folder=' + encodeURIComponent(file.slice(0, slash)) + '&photo=' : '?photo=') + encodeURIComponent(file);
     copyToClipboard(url).then(() => flashCopied(lightboxCopyBtn));
   };
   lightboxCopyBtn.addEventListener('click', () => {
