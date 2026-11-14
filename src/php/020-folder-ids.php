@@ -703,8 +703,7 @@ function run_link_route($dir) {
         if (!link_is_live($l, $now)) return;
         if ($hasCookie) { $outcome = 'ok'; return; }
         if (($l['lastOpen']['ip'] ?? '') === $ip && $now - (int) ($l['lastOpen']['at'] ?? 0) < LINK_REOPEN_GRACE_SECONDS) {
-            $d['links'][$link['id']]['lastOpen']['at'] = $now;
-            $outcome = 'ok';
+            $outcome = 'ok';   // (the time kept is the counted opening's: letting this one in does not start the 15 minutes again)
             return;
         }
         if ($stateNow !== 'active') return;   // no opens left

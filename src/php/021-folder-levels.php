@@ -149,7 +149,8 @@ function run_reveal_route($dir) {
     // The lock in the icon strip, when it is open, locks the private items again: whoever is signed in (a viewer with the
     // private-view password, or the owner signed in to the admin) is signed out of this browser.
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
-        if (is_admin_browser()) {
+        $ownerToken = browser_lookup();   // (asked directly: with a preview open is_admin_browser() says no, and the owner's session must end all the same)
+        if ($ownerToken !== null && $ownerToken['kind'] === 'owner') {
             admin_start_session();
             $_SESSION = [];
             if (ini_get('session.use_cookies')) {
@@ -158,6 +159,7 @@ function run_reveal_route($dir) {
             session_destroy();
         }
         browser_revoke_current();
+        preview_clear_cookie();   // (a preview open in this browser ends with the sign-out)
         header('Location: ./' . $backPage, true, 303);
         return;
     }

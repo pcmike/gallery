@@ -279,6 +279,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             }
             session_destroy();
             browser_revoke_current();
+            preview_clear_cookie();   // (a preview open in this browser ends with the sign-out: its cookie would keep showing the link's private view)
             // Back on the gallery page of the folder being edited, now signed out.
             header('Location: ' . ($adminFolderPath !== null ? '?folder=' . rawurlencode($adminFolderPath) : gallery_root_href()), true, 303);
             return;

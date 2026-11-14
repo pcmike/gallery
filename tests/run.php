@@ -5328,6 +5328,19 @@ $f = $slLinks(); $f['links'][$slOnceId]['lastOpen']['at'] = time() - 4000; write
 [$slOnce2Status, $slOnce2Body] = http_post("$baseSl/?link=$slOnceToken", ['go' => '1'], [], false);
 check('[share links] a link for one opening lets the first person in and turns the next away (same page as any dead link), without disturbing the first', $slOnceCookie !== null && ($slLinks()['links'][$slOnceId]['opens'] ?? -1) === 1 && $slInvalid($slOnce2Body, $slOnce2Status) && str_contains($slPage('', $slOnceCookie)[1], 'sec.jpg') && $slInvalid(http_get("$baseSl/?link=$slOnceToken")[1], http_get("$baseSl/?link=$slOnceToken")[0]));
 
+// The re-open allowance (the same address pressing again within 15 minutes is not a second use: an app's own browser, then Safari) runs from the opening that was
+// counted and does not slide: someone pressing every few minutes does not keep a used-up link open for good.
+$slWin = $slAdmin($slForm(['label' => 'Window', 'max_opens' => 1])); $slWinId = $slWin['id'] ?? ''; $slWinToken = $slLinks()['links'][$slWinId]['token'] ?? '';
+http_post("$baseSl/?link=$slWinToken", ['go' => '1'], [], false);
+$slWinAt = time() - 840; $f = $slLinks(); $f['links'][$slWinId]['lastOpen']['at'] = $slWinAt; write_data_file("$fxSl/.gallery-links.php", $f);   // (14 minutes after the counted opening)
+[, , $slWinH2] = http_post("$baseSl/?link=$slWinToken", ['go' => '1'], [], false);
+$slWinAfter = $slLinks()['links'][$slWinId] ?? [];
+check('[share links] the same address pressing again 14 minutes after a one-use link was used is let in, and not counted as a use', extract_cookie_header($slWinH2) !== null && ($slWinAfter['opens'] ?? -1) === 1);
+check('[share links] ...and that does not restart the 15 minutes: the time kept is still the counted opening\'s', abs((int) ($slWinAfter['lastOpen']['at'] ?? 0) - $slWinAt) <= 2, json_encode($slWinAfter['lastOpen'] ?? null));
+$f = $slLinks(); $f['links'][$slWinId]['lastOpen']['at'] = time() - 960; write_data_file("$fxSl/.gallery-links.php", $f);   // (16 minutes)
+[$slWinS3, $slWinB3] = http_post("$baseSl/?link=$slWinToken", ['go' => '1'], [], false);
+check('[share links] ...and 16 minutes after, the same address is turned away like any other', $slInvalid($slWinB3, $slWinS3));
+
 // Pause / resume / extend / replace / revoke / delete from the tab.
 check('[share links] pausing a link in the tab, then resuming it', ($slAdmin(['action' => 'link_pause', 'id' => $slId])['ok'] ?? false) && ($slLinks()['links'][$slId]['status'] ?? '') === 'paused' && ($slAdmin(['action' => 'link_pause', 'id' => $slId])['ok'] ?? true) === false && ($slAdmin(['action' => 'link_resume', 'id' => $slId])['ok'] ?? false) && ($slLinks()['links'][$slId]['status'] ?? '') === 'active');
 $slThrottleReset();
@@ -6619,6 +6632,37 @@ $shAdmin(['action' => 'link_pause', 'id' => $pvId]);
 check('[preview] a paused link can still be previewed, and the strip says that the people who have it see nothing for now', $pc3 === 303 && str_contains($pvPaused, 'Previewing as Mark') && str_contains($pvPaused, 'paused right now'));
 $shAdmin(['action' => 'link_revoke', 'id' => $pvId]);
 check('[preview] a revoked link can\'t be previewed, and its old preview shows nothing of it', $shStart($shCsrf)[0] === 400 && !str_contains(http_get("$baseS/", ["Cookie: $shAdminCookie; " . extract_cookie_header($pvH3)])[1], 'Previewing as'));
+// Signing out while a preview is open: both sign-outs leave nothing behind (the admin session, and the link's view in the preview cookie). What a browser keeps is
+// worked out here from the Set-Cookie lines (a deleting one drops the cookie), as the browser would.
+$pvJarAfter = function (string $jar, array $hdrs) {
+    $c = []; foreach (explode('; ', $jar) as $p) if (str_contains($p, '=')) { [$n, $v] = explode('=', $p, 2); $c[$n] = $v; }
+    foreach ($hdrs as $h) {
+        if (stripos($h, 'Set-Cookie:') !== 0) continue;
+        $v = trim(substr($h, 11)); [$pair] = explode(';', $v, 2); [$n, $val] = array_pad(explode('=', $pair, 2), 2, '');
+        if (stripos($v, 'Max-Age=0') !== false || stripos($v, '1970') !== false || $val === 'deleted' || $val === '') unset($c[$n]); else $c[$n] = $val;
+    }
+    $o = []; foreach ($c as $n => $v) $o[] = "$n=$v"; return implode('; ', $o);
+};
+$pvSignedIn = function () use ($baseS) {   // a fresh sign-in with a preview of a new link open: [the cookies the browser holds, the form's csrf token]
+    [, , $h] = http_post("$baseS/?admin", ['access_code' => 'slshare-admin-1'], [], false); $jar = extract_cookie_header($h);
+    $csrf = extract_csrf_token(http_get("$baseS/?admin", ["Cookie: $jar"])[1]);
+    return [$jar, $csrf];
+};
+$pvOpenPreview = function () use ($pvSignedIn, $shNew, $baseS) {
+    [$jar, $csrf] = $pvSignedIn(); $id = $shNew([])['id'] ?? '';
+    [, , $h] = http_post("$baseS/?admin", ['linkpreview' => $id, 'csrf_token' => $csrf], ["Cookie: $jar"], false);
+    return [$jar . '; ' . extract_cookie_header($h), $csrf];
+};
+$pvAdminOpen = fn (string $jar) => str_contains(http_get("$baseS/?admin", ["Cookie: $jar"])[1], '<h1>Gallery Admin</h1>');
+$pvStranger = http_get("$baseS/?img=Rome%2Fr1.jpg&size=thumb", [])[0];
+[$pvJarA] = $pvOpenPreview();
+check('[sign-out] (the test is set up right) with a preview open the admin pages are the owner\'s, and the browser has a preview cookie as well as the admin one', $pvAdminOpen($pvJarA) && str_contains($pvJarA, 'gallery_preview_') && $pvStranger === 404, $pvJarA);
+[, , $pvOutA] = http_post("$baseS/?reveal", ['logout' => '1'], ["Cookie: $pvJarA"], false); $pvLeftA = $pvJarAfter($pvJarA, $pvOutA);
+check('[sign-out] the lock\'s sign-out with a preview open ends the admin session too (?admin asks for the password again), and the preview with it', !$pvAdminOpen($pvLeftA) && !str_contains($pvLeftA, 'gallery_preview_') && http_get("$baseS/?img=Rome%2Fr1.jpg&size=thumb", ["Cookie: $pvLeftA"])[0] === $pvStranger, $pvLeftA);
+[$pvJarB] = $pvOpenPreview();
+$pvLogoutForm = []; foreach (html_post_forms(http_get("$baseS/?admin", ["Cookie: $pvJarB"])[1]) as $pvF) if (str_contains($pvF['html'], 'value="logout"')) $pvLogoutForm = form_default_fields($pvF['html']);
+[, , $pvOutB] = http_post("$baseS/?admin", $pvLogoutForm, ["Cookie: $pvJarB"], false); $pvLeftB = $pvJarAfter($pvJarB, $pvOutB);
+check('[sign-out] the admin\'s Log out with a preview open ends the preview too: no preview cookie is left, and the link\'s private view is gone (the picture is refused as for a stranger)', $pvLogoutForm !== [] && !str_contains($pvLeftB, 'gallery_preview_') && !$pvAdminOpen($pvLeftB) && http_get("$baseS/?img=Rome%2Fr1.jpg&size=thumb", ["Cookie: $pvLeftB"])[0] === $pvStranger, $pvLeftB);
 // with share links switched off none of the pieces appear
 file_put_contents("$fxS/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'slshare-admin-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => false, 'TRACK_VIEWS' => true]));
 $shOffPage = http_get("$baseS/?folder=Rome", $shOwner)[1];
