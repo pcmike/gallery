@@ -363,9 +363,9 @@ if (request_route() === 'track') {
             }
             $response = [
                 'ok' => true,
-                'photo' => $requested,
+                'photo' => ($GLOBALS['__photo_coded'] ?? null) === $requested ? (string) $_GET['k'] : $requested,   // (asked for by its code: answered by its code)
                 'photoViews' => $newCount,
-                'groupSlug' => slugify($groupKey),
+                'groupSlug' => ($GLOBALS['__photo_coded'] ?? null) === $requested ? '' : slugify($groupKey),   // (a Not listed photo's page has no group name: it would be the file's)
                 'groupViews' => $groupTotal,
             ];
         }

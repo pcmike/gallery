@@ -1089,9 +1089,13 @@ if (gallery_is_closed()) {
 
 // A code (k=...) that opens nothing is a wrong guess whether or not the path it came with exists, counted once per request when it ends: otherwise who
 // gets paused would tell a Not listed photo that is there from one that is not.
-if (isset($_GET['k']) && is_string($_GET['k']) && in_array(request_route(), ['', 'img', 'original', 'track', 'strip'], true)) {
+if (isset($_GET['k']) && is_string($_GET['k'])) {   // (on every route: a code tried through about, manifest, download... was never counted, so the pause did not apply)
     register_shutdown_function(function () use ($dir) { if (empty($GLOBALS['__photo_pass_ok']) && !photo_code_is_right_for_request($dir)) link_guess_failed($dir, (string) $_GET['k']); });
 }
+
+// A Not listed photo's own page asks for its picture, video, strip, original and view count by the photo's code (?img=<code>&k=<code>), so the page never
+// says what the photo is called or where it lives: here the request becomes the photo's own, and everything after reads it as it always has.
+photo_code_params_translate($dir, $mediaExtensions, $self);
 
 // ?original=<file> hands a signed-in visitor (the owner, or someone with the private-view password) the original file
 // itself, as a download. Everyone else gets 404, as for any other thing that isn't there.
@@ -1288,7 +1292,7 @@ if (isset($_GET['photo'])) {
 // A Not listed photo opened by its own address (?photo=<path>&k=<code>): the page is that one photo and nothing else (see the filter in
 // "GROUPING" below), kept out of search engines and not passed on in a Referer.
 $photoPass = null;
-if ($requestedPhoto !== null && !is_admin_browser() && isset($_GET['k']) && photo_pass_valid($dir, $requestedPhoto, $itemsData)) {
+if ($requestedPhoto !== null && request_route() === '' && !is_admin_browser() && isset($_GET['k']) && photo_pass_valid($dir, $requestedPhoto, $itemsData)) {   // (the photo's page only: a right code does not show on the other routes either)
     $photoPass = $requestedPhoto;
     header('Referrer-Policy: no-referrer');
     header('X-Robots-Tag: noindex, nofollow');
@@ -3283,9 +3287,16 @@ function file_version($file) {
     return $seen[$file] = $stat ? substr(hash('sha256', $stat['mtime'] . '|' . $stat['size']), 0, 10) : '';
 }
 
+/** What a page calls a photo in the addresses and attributes it prints: its path, except on a Not listed photo's own page, where it is the photo's code
+ *  (k=). That page, its pictures and its previews never carry the folder's name or the file's name: a request for ?img=<code>&k=<code> (or ?video, ?original,
+ *  ?strip, ?track) is turned back into the photo's own at the top of the request (see photo_code_params_translate). */
+function photo_ref($file) {
+    return ($GLOBALS['photoPass'] ?? null) === $file ? (string) ($_GET['k'] ?? '') : $file;
+}
+
 function img_url($file, $size) {
     $v = file_version($file);
-    return '?img=' . rawurlencode($file) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '') . (($GLOBALS['photoPass'] ?? null) === $file ? '&k=' . rawurlencode((string) ($_GET['k'] ?? '')) : '');   // (on a photo's own address its pictures ask with the same code)
+    return '?img=' . rawurlencode(photo_ref($file)) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '') . (($GLOBALS['photoPass'] ?? null) === $file ? '&k=' . rawurlencode((string) ($_GET['k'] ?? '')) : '');   // (on a photo's own address its pictures ask with the same code)
 }
 
 /** The extra attributes that let the browser choose a tile's picture by how big the tile really is and how dense the screen
@@ -4300,7 +4311,7 @@ function send_sensitive_page_headers() {
  *  for a trusted viewer — it would list hidden items to the next
  *  anonymous request for the same URL. */
 function send_viewer_aware_cache_headers() {
-    header('Vary: Cookie');
+    header('Vary: Cookie', false);   // (added, not replacing: nav_top may have said the page varies on Sec-Fetch-Site too)
     if (is_revealed() || link_viewer() !== null) {
         header('Cache-Control: private, no-store');
     }
@@ -5849,7 +5860,7 @@ function nav_top($dir, $folderPath) {
     if (($fresh || $cookieTop === null) && !headers_sent()) {
         setcookie('gallery_top', '/' . $mine, ['path' => gallery_cookie_path(), 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
     }
-    if (!headers_sent()) { header('Cache-Control: private'); header('Vary: Cookie, Sec-Fetch-Site', false); }
+    if (!headers_sent()) { if (($GLOBALS['photoPass'] ?? null) === null) header('Cache-Control: private'); header('Vary: Cookie, Sec-Fetch-Site', false); }   // (a Not listed photo's own page keeps its no-store)
     return $top;
 }
 
@@ -6674,8 +6685,37 @@ function photo_address_translate($dir, $files, $itemsData) {
         exit;
     }
     $_GET['photo'] = $rel;
+    if (is_admin_browser()) $_GET['folder'] = dirname($rel);   // (the owner's view of an address: the viewer opens over the photo's own folder, not the gallery's front page. Everyone else gets the photo alone)
     request_route(true);
     return true;
+}
+
+/** A Not listed photo's own page asks for the photo by its code (see photo_ref): ?img=<code>&k=<code>, and likewise ?video, ?original, ?strip and ?track. Here the
+ *  request is turned back into the photo's own (?img=<path>&k=<code>) so everything after this reads it as it always has. The code has to be the one in k=, and
+ *  to belong to a photo in a Not listed folder; anything else is left as it is (and is counted as a wrong guess like any other). A visitor held back for guessing
+ *  gets no answer, a right code included, and a closed gallery shows a stranger no photo. */
+function photo_code_params_translate($dir, $mediaExtensions, $self) {
+    $k = $_GET['k'] ?? null;
+    if (!is_string($k) || preg_match('/^[A-Za-z0-9]{8}$/D', $k) !== 1 || !AUTO_GROUP_BY_FOLDER || install_secret() === '') return;
+    $params = [];
+    foreach (['img', 'original', 'track', 'strip', 'video'] as $p) if (($_GET[$p] ?? null) === $k) $params[] = $p;
+    if (!$params) return;   // (an ordinary request names a path, never its own code: nothing is scanned for it)
+    if (gallery_is_closed() && !is_revealed() && !is_admin_browser() && link_viewer() === null) return;
+    if (!is_admin_browser() && !is_revealed() && !login_throttle_allows($dir, 'link', client_ip())) return;
+    // These routes answer before the tree is scanned, so it is scanned here, for this request only (a Not listed photo's page has a few: one for each picture it asks for)
+    $files = flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self));
+    $inUnlisted = []; $unlisted = [];
+    foreach ($files as $f) {
+        $folder = dirname($f);
+        if ($folder === '.' || $folder === '') continue;
+        if (!isset($unlisted[$folder])) $unlisted[$folder] = folder_is_unlisted($dir, $folder);
+        if ($unlisted[$folder]) $inUnlisted[] = $f;
+    }
+    if (!$inUnlisted) return;
+    $rel = photo_address_resolve($dir, $files, items_get_all_for_files($dir, $inUnlisted), $k);
+    if ($rel === null) return;
+    foreach ($params as $p) $_GET[$p] = $rel;
+    $GLOBALS['__photo_coded'] = $rel;   // (the reply to a view count then answers by the code too)
 }
 
 /** A Not listed photo's address answered with the file itself: what the viewer shows at full size (a picture is the file with its location removed for a
@@ -7716,15 +7756,16 @@ function collect_map_points($dir, $files, $itemsData, $fileToGroupKey, $folderGr
             $groupColorIndex[$colorKey] = $nextColorIndex++;
         }
         $label = $groupKey !== null ? ($groupLabels[$groupKey] ?? $groupKey) : pathinfo(basename($file), PATHINFO_FILENAME);
+        $nameless = photo_ref($file) !== $file;   // (a Not listed photo's own page: the pin is the photo's code, "Photo", and goes nowhere: its name and its folder are not on the page)
         $points[] = [
             'lat' => (float) $loc['lat'],
             'lng' => (float) $loc['lng'],
-            'file' => $file,
+            'file' => photo_ref($file),
             'caption' => $entry['caption'] ?? '',
-            'label' => $label,
+            'label' => $nameless ? 'Photo' : $label,
             'color' => map_group_color($groupColorIndex[$colorKey]),
             'thumbUrl' => img_url($file, 'thumb'),
-            'link' => map_point_link($file, $groupKey, $folderGroupKeys),
+            'link' => $nameless ? '#' : map_point_link($file, $groupKey, $folderGroupKeys),
         ];
     }
     return $points;
@@ -22864,9 +22905,9 @@ if (request_route() === 'track') {
             }
             $response = [
                 'ok' => true,
-                'photo' => $requested,
+                'photo' => ($GLOBALS['__photo_coded'] ?? null) === $requested ? (string) $_GET['k'] : $requested,   // (asked for by its code: answered by its code)
                 'photoViews' => $newCount,
-                'groupSlug' => slugify($groupKey),
+                'groupSlug' => ($GLOBALS['__photo_coded'] ?? null) === $requested ? '' : slugify($groupKey),   // (a Not listed photo's page has no group name: it would be the file's)
                 'groupViews' => $groupTotal,
             ];
         }
@@ -24017,7 +24058,7 @@ function video_tile_parts($file, $duration = null) {
     // Where the server can't take a frame from a video, the browser's own first frame is laid over the placeholder (it
     // appears only if the browser can play the video; otherwise the placeholder stays).
     if (!video_pictures_expected() || video_poster_failed($file)) {
-        $inner .= '<video class="tile-video" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="?video=' . rawurlencode($file) . '&amp;v=' . $version . '#t=0.1"></video>';
+        $inner .= '<video class="tile-video" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="?video=' . rawurlencode(photo_ref($file)) . '&amp;v=' . $version . (photo_ref($file) !== $file ? '&amp;k=' . rawurlencode((string) $_GET['k']) : '') . '#t=0.1"></video>';
     }
     $inner .= '<span class="video-mark" aria-hidden="true">' . ui_icon('play') . '</span>';
     $attrs = '';
@@ -24052,8 +24093,10 @@ function video_tile_parts($file, $duration = null) {
  *  spoken for, when $videoDuration is known. */
 function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null, $videoDuration = null, $itemEntry = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
+    $nameless = photo_ref($file) !== $file;   // (a Not listed photo's own page: the photo is its code, and nothing on the page says what it is called or where it lives)
+    if ($nameless) $anchorId = null;
     $hidden = (view_counts_shown() && ($views > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';   // the owner sees every count, a zero too
-    $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('eye') . ' '
+    $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars(photo_ref($file), ENT_QUOTES, 'UTF-8') . '">' . ui_icon('eye') . ' '
            . number_format($views) . '</span>';
     $statusBadge = '';
     if ($status === 'sold') {
@@ -24129,7 +24172,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
     return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
+         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($nameless ? 'Photo' : $file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . '</div>';
 }
@@ -24848,7 +24891,7 @@ if ($requestedPhoto) {
     $ogImageUrl = $baseUrl . '/' . img_url($requestedPhoto, 'share');
     $ogUrl = $photoPass !== null ? $baseUrl . '/?' . rawurlencode((string) $_GET['k']) : $baseUrl . '/?photo=' . rawurlencode($requestedPhoto);
     $photoGroupKey = group_key($requestedPhoto);
-    if (isset($groups[$photoGroupKey])) {
+    if (isset($groups[$photoGroupKey]) && $photoPass === null) {   // (a Not listed photo's own page is previewed by the gallery's title: the photo's name says where it lives)
         $ogTitle = $photoGroupKey . ' — ' . $pageTitle;
     }
 }
@@ -26044,7 +26087,7 @@ $lockHtml = ''; $lockForm = '';
 if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)) && !viewer_is_link()) {
     $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
     // The open photo and the open map are part of "the page you are on" too: signing in or out brings you back to them.
-    $lockPhoto = isset($_GET['photo']) && is_string($_GET['photo']) && $_GET['photo'] !== '' && strlen($_GET['photo']) < 1024 ? $_GET['photo'] : '';
+    $lockPhoto = isset($_GET['photo']) && is_string($_GET['photo']) && $_GET['photo'] !== '' && strlen($_GET['photo']) < 1024 && $photoPass === null ? $_GET['photo'] : '';   // (not on a Not listed photo's own page: the way back would name the photo)
     $lockHere = $lockFolderQuery . ($lockPhoto !== '' ? '&amp;photo=' . htmlspecialchars(rawurlencode($lockPhoto), ENT_QUOTES, 'UTF-8') : '') . (isset($_GET['map']) ? '&amp;map' : '');
     $lockHidden = '<input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '">'
         . ($lockPhoto !== '' ? '<input type="hidden" name="photo" value="' . htmlspecialchars($lockPhoto, ENT_QUOTES, 'UTF-8') . '">' : '')
@@ -26614,7 +26657,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (is_admin_browser()) echo render_share_kit(); ?>
 
 <script>
-  const files = <?= json_encode($files) ?>;
+  const files = <?= json_encode(array_map('photo_ref', $files)) ?>;
   // A short tag per file that changes when the file is replaced — appended to
   // the full-size image / video address so a browser that cached the old
   // picture (they're cached for a year) fetches the new one.
@@ -26656,7 +26699,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       if (!is_admin_browser()) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return !file_is_hidden($dir, $f, $itemsData); }, $files));
       else echo 'null';
   ?>;
-  const initialPhoto = <?= json_encode($requestedPhoto) ?>;
+  const initialPhoto = <?= json_encode($requestedPhoto === null ? null : photo_ref($requestedPhoto)) ?>;
   const galleryRootHref = <?= json_encode(gallery_root_href()) ?>;
   const passQ = <?= json_encode($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '') ?>;   // (on a photo's own address, the viewer's own requests for it carry the code too)
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;

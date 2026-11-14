@@ -28,7 +28,7 @@ $lockHtml = ''; $lockForm = '';
 if ((ADMIN_PASSWORD !== '' || (PRIVATE_VIEW_PASSWORD !== '' && $hasPrivateItems)) && !viewer_is_link()) {
     $lockFolderQuery = $currentFolderPath !== null ? '&amp;folder=' . htmlspecialchars(rawurlencode($currentFolderPath), ENT_QUOTES, 'UTF-8') : '';
     // The open photo and the open map are part of "the page you are on" too: signing in or out brings you back to them.
-    $lockPhoto = isset($_GET['photo']) && is_string($_GET['photo']) && $_GET['photo'] !== '' && strlen($_GET['photo']) < 1024 ? $_GET['photo'] : '';
+    $lockPhoto = isset($_GET['photo']) && is_string($_GET['photo']) && $_GET['photo'] !== '' && strlen($_GET['photo']) < 1024 && $photoPass === null ? $_GET['photo'] : '';   // (not on a Not listed photo's own page: the way back would name the photo)
     $lockHere = $lockFolderQuery . ($lockPhoto !== '' ? '&amp;photo=' . htmlspecialchars(rawurlencode($lockPhoto), ENT_QUOTES, 'UTF-8') : '') . (isset($_GET['map']) ? '&amp;map' : '');
     $lockHidden = '<input type="hidden" name="folder" value="' . htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') . '">'
         . ($lockPhoto !== '' ? '<input type="hidden" name="photo" value="' . htmlspecialchars($lockPhoto, ENT_QUOTES, 'UTF-8') . '">' : '')
@@ -598,7 +598,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (is_admin_browser()) echo render_share_kit(); ?>
 
 <script>
-  const files = <?= json_encode($files) ?>;
+  const files = <?= json_encode(array_map('photo_ref', $files)) ?>;
   // A short tag per file that changes when the file is replaced — appended to
   // the full-size image / video address so a browser that cached the old
   // picture (they're cached for a year) fetches the new one.
@@ -640,7 +640,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       if (!is_admin_browser()) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return !file_is_hidden($dir, $f, $itemsData); }, $files));
       else echo 'null';
   ?>;
-  const initialPhoto = <?= json_encode($requestedPhoto) ?>;
+  const initialPhoto = <?= json_encode($requestedPhoto === null ? null : photo_ref($requestedPhoto)) ?>;
   const galleryRootHref = <?= json_encode(gallery_root_href()) ?>;
   const passQ = <?= json_encode($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '') ?>;   // (on a photo's own address, the viewer's own requests for it carry the code too)
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;

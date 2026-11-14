@@ -2432,6 +2432,17 @@ try:
         b.js("document.getElementById('lightbox-newaddr').click()"); b.drain(0.4)
         ok(b.js("!document.getElementById('addr-modal').hidden"), "[not listed] ...and the viewer's new-address button asks first too")
         b.js("document.getElementById('addr-cancel').click()"); b.drain(0.2); b.js("closeLightbox()"); b.drain(0.3)
+        # a stranger with the photo's address (the owner's cookies set aside for a moment): the page names neither the folder nor the file, and the picture still shows and opens in the viewer
+        saved18 = b.call("Network.getAllCookies")["cookies"]
+        b.call("Network.clearBrowserCookies")
+        b.goto(new18, 2.0)
+        names18 = b.js("(() => { const h = document.documentElement.innerHTML.toLowerCase(); return ['churches', 'a.jpg'].filter(n => h.indexOf(n) >= 0); })()")
+        ok(names18 == [] and b.js("(() => { const i = document.querySelector('.card img'); return !!i && i.complete && i.naturalWidth > 0; })()"), "[photo page] a stranger with a Not listed photo's address sees the photo, and the page holds neither the folder's name nor the file's name", str(names18))
+        b.js("openLightbox(0)"); b.drain(1.5)
+        ok(b.js("document.getElementById('lightbox').classList.contains('open')") and b.js("(() => { const i = document.getElementById('lightbox-img'); return i.complete && i.naturalWidth > 0; })()"), "[photo page] ...and it opens in the viewer with its full picture, asked for by the photo's code")
+        b.js("closeLightbox()"); b.drain(0.3)
+        ok(not b.problems(IGN), "[photo page] ...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
+        b.call("Network.setCookies", {"cookies": [{k: v for k, v in c.items() if k in ("name", "value", "domain", "path", "secure", "httpOnly", "sameSite") or (k == "expires" and not c.get("session"))} for c in saved18]})
         open(SITE18 + "/Churches/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps(priv_items))
         # the gallery: locks in three states
         b.goto(B18 + "/?folder=Churches", 1.5)

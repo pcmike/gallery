@@ -534,9 +534,13 @@ if (gallery_is_closed()) {
 
 // A code (k=...) that opens nothing is a wrong guess whether or not the path it came with exists, counted once per request when it ends: otherwise who
 // gets paused would tell a Not listed photo that is there from one that is not.
-if (isset($_GET['k']) && is_string($_GET['k']) && in_array(request_route(), ['', 'img', 'original', 'track', 'strip'], true)) {
+if (isset($_GET['k']) && is_string($_GET['k'])) {   // (on every route: a code tried through about, manifest, download... was never counted, so the pause did not apply)
     register_shutdown_function(function () use ($dir) { if (empty($GLOBALS['__photo_pass_ok']) && !photo_code_is_right_for_request($dir)) link_guess_failed($dir, (string) $_GET['k']); });
 }
+
+// A Not listed photo's own page asks for its picture, video, strip, original and view count by the photo's code (?img=<code>&k=<code>), so the page never
+// says what the photo is called or where it lives: here the request becomes the photo's own, and everything after reads it as it always has.
+photo_code_params_translate($dir, $mediaExtensions, $self);
 
 // ?original=<file> hands a signed-in visitor (the owner, or someone with the private-view password) the original file
 // itself, as a download. Everyone else gets 404, as for any other thing that isn't there.

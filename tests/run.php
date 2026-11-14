@@ -8874,9 +8874,9 @@ check('[photo address] a wrong code is answered exactly like no code (the ordina
 $nlUnlock();
 check('[photo address] it is not a way into the folder: the folder\'s page with the code is not found', http_get("$baseNl/?folder=SecretDrawer&photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nlK", [], false)[0] === 404);
 $nlUnlock();
-check('[photo address] someone with the private-view password opens it the same way', str_contains(http_get("$baseNl/$nlAQ", $nlView)[1], 'NOTLISTED-SENTINEL.jpg') && !str_contains(http_get("$baseNl/$nlAQ", $nlView)[1], 'front.jpg'));
+check('[photo address] someone with the private-view password opens it the same way', str_contains(http_get("$baseNl/$nlAQ", $nlView)[1], 'const files = ["' . substr($nlAQ, -8) . '"]') && !str_contains(http_get("$baseNl/$nlAQ", $nlView)[1], 'front.jpg'));
 $nlUnlock();
-check('[photo address] a photo marked private on its own has no address, and one that was opened stops', (function () use ($nlAddr, $nlWrite, $baseNl, $nlAQ, $fxNl) { $fid = read_data_file("$fxNl/SecretDrawer/.gallery-items.php")['folderId'] ?? ''; $nlWrite('SecretDrawer', ['restriction' => 'private', 'unlisted' => true, 'folderId' => $fid, 'items' => ['NOTLISTED-SENTINEL.jpg' => ['restriction' => 'private']]]); $stopped = http_get("$baseNl/$nlAQ", [], false)[1]; $refused = $nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg'); $nlWrite('SecretDrawer', ['restriction' => 'private', 'unlisted' => true, 'folderId' => $fid]); return ($refused['ok'] ?? null) === false && !str_contains($stopped, 'NOTLISTED-SENTINEL'); })());
+check('[photo address] a photo marked private on its own has no address, and one that was opened stops', (function () use ($nlAddr, $nlWrite, $baseNl, $nlAQ, $fxNl) { $fid = read_data_file("$fxNl/SecretDrawer/.gallery-items.php")['folderId'] ?? ''; $nlWrite('SecretDrawer', ['restriction' => 'private', 'unlisted' => true, 'folderId' => $fid, 'items' => ['NOTLISTED-SENTINEL.jpg' => ['restriction' => 'private']]]); $stopped = http_get("$baseNl/$nlAQ", [], false)[1]; $refused = $nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg'); $nlWrite('SecretDrawer', ['restriction' => 'private', 'unlisted' => true, 'folderId' => $fid]); return ($refused['ok'] ?? null) === false && !str_contains($stopped, 'const files = ["' . substr($nlAQ, -8) . '"]'); })());
 $nlUnlock();
 $nlFresh = $nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg', true); $nlFreshK = (string) ($nlFresh['code'] ?? '');
 $nlUnlock();
@@ -8906,9 +8906,9 @@ $nlCodeB = (string) ($nlB['code'] ?? '');
 $nlUnlock();
 $nlShortPage = http_get("$baseNl/?$nlCode", [], false); $nlLinkPage = http_get("$baseNl/?link=$nlCode", [], false);
 $nlUnlock();
-check('[short address] /photos/?<code> opens that photo\'s page for a stranger: that photo, its pictures carrying the code, nothing else of the folder, no search engines, no Referer', $nlShortPage[0] === 200 && str_contains($nlShortPage[1], 'NOTLISTED-SENTINEL.jpg') && !str_contains($nlShortPage[1], 'NOTLISTED-TWO') && !str_contains($nlShortPage[1], 'front.jpg') && (str_contains($nlShortPage[1], '&amp;k=' . $nlCode) || str_contains($nlShortPage[1], '&k=' . $nlCode)) && (bool) preg_grep('~^X-Robots-Tag: noindex~i', $nlShortPage[2]) && (bool) preg_grep('~^Referrer-Policy: no-referrer~i', $nlShortPage[2]) && (bool) preg_grep('~^Cache-Control: .*no-store~i', $nlShortPage[2]));
+check('[short address] /photos/?<code> opens that photo\'s page for a stranger: that photo, its pictures carrying the code, nothing else of the folder, no search engines, no Referer', $nlShortPage[0] === 200 && str_contains($nlShortPage[1], 'const files = ["' . $nlCode . '"]') && !str_contains($nlShortPage[1], 'NOTLISTED-TWO') && !str_contains($nlShortPage[1], 'front.jpg') && (str_contains($nlShortPage[1], '&amp;k=' . $nlCode) || str_contains($nlShortPage[1], '&k=' . $nlCode)) && (bool) preg_grep('~^X-Robots-Tag: noindex~i', $nlShortPage[2]) && (bool) preg_grep('~^Referrer-Policy: no-referrer~i', $nlShortPage[2]) && (bool) preg_grep('~^Cache-Control: .*no-store~i', $nlShortPage[2]));
 $nlUnlock();
-check('[short address] ?link=<code> (what the server\'s one-word rule makes of /photos/<code>) opens the same page', $nlLinkPage[0] === 200 && str_contains($nlLinkPage[1], 'NOTLISTED-SENTINEL.jpg') && !str_contains($nlLinkPage[1], 'NOTLISTED-TWO'));
+check('[short address] ?link=<code> (what the server\'s one-word rule makes of /photos/<code>) opens the same page', $nlLinkPage[0] === 200 && str_contains($nlLinkPage[1], 'const files = ["' . $nlCode . '"]') && !str_contains($nlLinkPage[1], 'NOTLISTED-TWO'));
 $nlUnlock();
 check('[short address] the page\'s own address (for a chat preview) is the short one, and it carries no path', preg_match('~<meta property="og:url" content="[^"]*/\?' . $nlCode . '"~', $nlShortPage[1]) === 1);
 $nlUnlock();
@@ -8919,25 +8919,25 @@ $nlUnlock();
 check('[short address] a wrong code, a wrong bare word, an unknown photo and a Not listed photo without its code all answer 404 with the same page, saying nothing of the photo', count(array_unique(array_map(fn ($r) => $r[0], $nlWrong))) === 1 && $nlWrong[0][0] === 404 && count(array_unique(array_map(fn ($r) => $r[1], $nlWrong))) === 1 && !str_contains($nlWrong[0][1], 'NOTLISTED'));
 $nlUnlock();
 check('[short address] a code is for the photo the request names: added to another page it opens nothing there (no Not listed folder card on the front page, no photo in the folder above, nothing from the drawer)', !str_contains(http_get("$baseNl/?k=$nlCode", [], false)[1], 'SecretDrawer') && !str_contains(http_get("$baseNl/?k=$nlCode", [], false)[1], 'NOTLISTED') && !str_contains(http_get("$baseNl/?folder=Open&k=$nlCode", [], false)[1], 'NOTLISTED') && http_get("$baseNl/?folder=SecretDrawer&k=$nlCode", [], false)[0] === 404);
-check('[short address] extra parameters a chat app adds to a shared address (?<code>&fbclid=…, ?link=<code>&utm_source=…) are ignored: the photo still opens; and on any other page they change nothing', str_contains(http_get("$baseNl/?$nlCode&fbclid=abc", [], false)[1], 'NOTLISTED-SENTINEL.jpg') && str_contains(http_get("$baseNl/?link=$nlCode&utm_source=x", [], false)[1], 'NOTLISTED-SENTINEL.jpg') && http_get("$baseNl/?utm_source=x&fbclid=abc", [], false)[0] === 200);
+check('[short address] extra parameters a chat app adds to a shared address (?<code>&fbclid=…, ?link=<code>&utm_source=…) are ignored: the photo still opens; and on any other page they change nothing', str_contains(http_get("$baseNl/?$nlCode&fbclid=abc", [], false)[1], 'const files = ["' . $nlCode . '"]') && str_contains(http_get("$baseNl/?link=$nlCode&utm_source=x", [], false)[1], 'const files = ["' . $nlCode . '"]') && http_get("$baseNl/?utm_source=x&fbclid=abc", [], false)[0] === 200);
 $nlUnlock();
 check('[short address] the gallery\'s own bare words still mean what they did (?map, ?about)', http_get("$baseNl/?about", [], false)[0] === 200);
 $nlUnlock();
 check('[short address] the tidy-address check answers 200 with the marker header whether or not share links are on (the owner\'s Copy uses it)', ($nlProbe = http_get("$baseNl/?link=0000-probe-0000", [], false))[0] === 200 && (bool) preg_grep('~^X-Gallery-Link: invalid~i', $nlProbe[2]));
 $nlUnlock();
-check('[short address] someone with the private-view password opens it the same way', str_contains(http_get("$baseNl/?$nlCode", $nlView, false)[1], 'NOTLISTED-SENTINEL.jpg'));
+check('[short address] someone with the private-view password opens it the same way', str_contains(http_get("$baseNl/?$nlCode", $nlView, false)[1], 'const files = ["' . $nlCode . '"]'));
 // the folder renamed or moved: the address is the folder's hidden id, not its name
 rename("$fxNl/SecretDrawer", "$fxNl/SecretDrawerMoved");
 $nlUnlock();
-check('[short address] renaming the folder does not change the address of a photo in it', str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg') && str_contains(http_get("$baseNl/?$nlCodeB", [], false)[1], 'NOTLISTED-TWO.jpg'));
+check('[short address] renaming the folder does not change the address of a photo in it', str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]') && str_contains(http_get("$baseNl/?$nlCodeB", [], false)[1], 'const files = ["' . $nlCodeB . '"]'));
 rename("$fxNl/SecretDrawerMoved", "$fxNl/SecretDrawer");
 // renaming the photo ends its address
 rename("$fxNl/SecretDrawer/NOTLISTED-TWO.jpg", "$fxNl/SecretDrawer/NOTLISTED-TWO-renamed.jpg");
 $nlUnlock();
-check('[short address] renaming a photo ends its address (the old stops, nothing else moves)', !str_contains(http_get("$baseNl/?$nlCodeB", [], false)[1], 'NOTLISTED-TWO') && str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg'));
+check('[short address] renaming a photo ends its address (the old stops, nothing else moves)', !str_contains(http_get("$baseNl/?$nlCodeB", [], false)[1], 'NOTLISTED-TWO') && str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'));
 rename("$fxNl/SecretDrawer/NOTLISTED-TWO-renamed.jpg", "$fxNl/SecretDrawer/NOTLISTED-TWO.jpg");
 $nlUnlock();
-check('[short address] ...and the old address works again when the name does', str_contains(http_get("$baseNl/?$nlCodeB", [], false)[1], 'NOTLISTED-TWO.jpg'));
+check('[short address] ...and the old address works again when the name does', str_contains(http_get("$baseNl/?$nlCodeB", [], false)[1], 'const files = ["' . $nlCodeB . '"]'));
 // a copy of the folder carries the same id: its addresses point at nothing until that is sorted
 $nlCopyDir = "$fxNl/SecretDrawerCopy"; mkdir($nlCopyDir);
 $nlLongImg = fn () => http_get("$baseNl/?img=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&size=thumb&k=$nlCode", [], false)[0];
@@ -8945,37 +8945,37 @@ foreach (dir_files("$fxNl/SecretDrawer") as $nlCf) copy($nlCf, $nlCopyDir . '/' 
 $nlUnlock();
 http_get("$baseNl/", $nlOwn);   // (the owner looking at the gallery keeps the list of copied ids current)
 check('[short address] the long form (?img=…&k=…) is refused too while a copy of the folder carries the same id, and serves again when the copy is gone', $nlLongImg() !== 200 && (function () use ($nlCopyDir, $baseNl, $nlOwn, $nlLongImg) { rrmdir($nlCopyDir); http_get("$baseNl/", $nlOwn); $ok = $nlLongImg() === 200; mkdir($nlCopyDir); foreach (dir_files("$GLOBALS[fxNl]/SecretDrawer") as $f) copy($f, $nlCopyDir . '/' . basename($f)); http_get("$baseNl/", $nlOwn); return $ok; })());
-check('[short address] a copy of the folder (it has the same hidden id) makes its photos\' addresses open nothing until the copy is gone, and they open again after', !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg') && (function () use ($nlCopyDir, $baseNl, $nlCode) { rrmdir($nlCopyDir); return str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg'); })());
+check('[short address] a copy of the folder (it has the same hidden id) makes its photos\' addresses open nothing until the copy is gone, and they open again after', !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]') && (function () use ($nlCopyDir, $baseNl, $nlCode) { rrmdir($nlCopyDir); return str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'); })());
 // the folder is not Not listed any more: nothing opens
 $nlSavedDrawer = read_data_file("$fxNl/SecretDrawer/.gallery-items.php");   // (the folder's own file, with the random string "New address" kept on a photo)
 $nlWrite('SecretDrawer', array_diff_key($nlSavedDrawer, ['unlisted' => 1]));
 $nlUnlock();
-check('[short address] when the folder stops being Not listed its photos\' addresses open nothing', !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg'));
+check('[short address] when the folder stops being Not listed its photos\' addresses open nothing', !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'));
 $nlWrite('SecretDrawer', $nlSavedDrawer);
 $nlUnlock();
-check('[short address] ...and when it is Not listed again they open again, with the same address', str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg'));
+check('[short address] ...and when it is Not listed again they open again, with the same address', str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]'));
 // "New address": a different one, the old stops
 $nlUnlock();
 $nlNewCode = (string) (($nlAddr('SecretDrawer', 'NOTLISTED-SENTINEL.jpg', true))['code'] ?? '');
 $nlUnlock();
-check('[short address] "New address" gives a different one: the old stops at once, the new one opens, the neighbour\'s is untouched', preg_match('/^[A-Za-z0-9]{8}$/', $nlNewCode) === 1 && $nlNewCode !== $nlCode && !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg') && str_contains(http_get("$baseNl/?$nlNewCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg') && str_contains(http_get("$baseNl/?$nlCodeB", [], false)[1], 'NOTLISTED-TWO.jpg'));
+check('[short address] "New address" gives a different one: the old stops at once, the new one opens, the neighbour\'s is untouched', preg_match('/^[A-Za-z0-9]{8}$/', $nlNewCode) === 1 && $nlNewCode !== $nlCode && !str_contains(http_get("$baseNl/?$nlCode", [], false)[1], 'const files = ["' . $nlCode . '"]') && str_contains(http_get("$baseNl/?$nlNewCode", [], false)[1], 'const files = ["' . $nlNewCode . '"]') && str_contains(http_get("$baseNl/?$nlCodeB", [], false)[1], 'const files = ["' . $nlCodeB . '"]'));
 // wrong things that are not guesses at an address are never held against anyone
 $nlLockPath = "$fxNl/.gallery-login-attempts.php";
 $nlCountFor = fn () => count((is_file($nlLockPath) ? (read_data_file($nlLockPath)['link|127.0.0.1']['attempts'] ?? []) : []));
 file_put_contents($nlLockPath, data_file_guard_line_for_tests() . '{}');
 for ($i = 0; $i < 15; $i++) { http_get("$baseNl/?folder=Nope$i", [], false); http_get("$baseNl/?photo=nope$i.jpg", [], false); http_get("$baseNl/?x$i", [], false); http_get("$baseNl/?utm_source=a$i&fbclid=b", [], false); }
-check('[lockout] wrong folders, unknown photos, stray words and tracking parameters are answered but never counted, however many: a right address still opens', str_contains(http_get("$baseNl/?$nlNewCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg') && $nlCountFor() === 0);
+check('[lockout] wrong folders, unknown photos, stray words and tracking parameters are answered but never counted, however many: a right address still opens', str_contains(http_get("$baseNl/?$nlNewCode", [], false)[1], 'const files = ["' . $nlNewCode . '"]') && $nlCountFor() === 0);
 // the owner and a private-view visitor are never counted or held back
 for ($i = 0; $i < 12; $i++) { http_get("$baseNl/?Own0Wrng$i", $nlOwn, false); http_get("$baseNl/?Vw0Wrng$i", $nlView, false); }
 check('[lockout] you and someone with the private-view password can try wrong addresses without being counted (and are not held back)', http_get("$baseNl/?Own0Wrng99", $nlOwn, false)[0] === 404 && http_get("$baseNl/?Vw0Wrng99", $nlView, false)[0] === 404 && $nlCountFor() === 0);
 // a visitor: nine wrong addresses do nothing, a right one still opens (and is not counted), the tenth wrong one pauses them
 for ($i = 0; $i < 9; $i++) http_get("$baseNl/?Gu3ss0$i" . 'ZZ', [], false);
-check('[lockout] nine wrong addresses are counted but pause no one: a right address still opens, and a wrong one is still just not found', $nlCountFor() === 9 && str_contains(http_get("$baseNl/?$nlNewCode", [], false)[1], 'NOTLISTED-SENTINEL.jpg'));
+check('[lockout] nine wrong addresses are counted but pause no one: a right address still opens, and a wrong one is still just not found', $nlCountFor() === 9 && str_contains(http_get("$baseNl/?$nlNewCode", [], false)[1], 'const files = ["' . $nlNewCode . '"]'));
 http_get("$baseNl/?Gu3ss10Z", [], false);
 $nlPaused = http_get("$baseNl/?$nlNewCode", [], false);
 check('[lockout] ten wrong ones pause that visitor for a minute: even a right address gets a friendly "Please wait" page (429, Retry-After) that says nothing of the photo', $nlPaused[0] === 429 && str_contains($nlPaused[1], 'Please wait a moment') && !str_contains($nlPaused[1], 'NOTLISTED') && (bool) preg_grep('~^Retry-After: 60~i', $nlPaused[2]), 'status ' . $nlPaused[0] . '; headers ' . implode(' | ', array_map('trim', array_slice((array) $nlPaused[2], 0, 6))) . '; attempts on file ' . $nlCountFor() . '; body starts ' . substr(preg_replace('/\\s+/', ' ', strip_tags((string) $nlPaused[1])), 0, 120));
 check('[lockout page] ...and that page counts the seconds left down (about a minute at the start), in the words of addresses', preg_match('~id="lock-secs"[^>]*>(\\d):(\\d\\d)<~', $nlPaused[1], $nlM) === 1 && ((int) $nlM[1] * 60 + (int) $nlM[2]) >= 55 && ((int) $nlM[1] * 60 + (int) $nlM[2]) <= 60 && str_contains($nlPaused[1], 'addresses that did not work'));
-check('[lockout] the pause is only for addresses: the gallery itself and the owner are not affected', http_get("$baseNl/", [], false)[0] === 200 && str_contains(http_get("$baseNl/?$nlNewCode", $nlOwn, false)[1], 'NOTLISTED-SENTINEL.jpg'));
+check('[lockout] the pause is only for addresses: the gallery itself and the owner are not affected', http_get("$baseNl/", [], false)[0] === 200 && str_contains(http_get("$baseNl/?$nlNewCode", $nlOwn, false)[1], 'NOTLISTED-SENTINEL.jpg'));   // (the owner gets the gallery's own page, with the photo opened over its folder)
 // a right code that is turned away for another reason (the folder's downloads are switched off) is not a guess
 file_put_contents($nlLockPath, data_file_guard_line_for_tests() . '{}');
 http_get("$baseNl/?original=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nlNewCode", [], false);
@@ -9259,7 +9259,7 @@ check('[mapped] ...its original needs the folder\'s own downloads switch (off to
 $mpUnlock();
 $mpFresh2 = $mpAdmin(['action' => 'photo_address', 'file' => 'MAPSENTINEL-ONE.jpg', 'fresh' => '1'], $mpFolder('Eurotrip/MapDrawer'));
 $mpUnlock();
-check('[mapped] New address on a photo in the mapped place stops the old address at once and the new one opens it', '?' . ($mpFresh2['code'] ?? '') !== $mpQ1 && !str_contains(http_get("$baseMp/$mpQ1")[1], 'MAPSENTINEL-ONE') && str_contains(http_get("$baseMp/?" . ($mpFresh2['code'] ?? '-'))[1], 'MAPSENTINEL-ONE')
+check('[mapped] New address on a photo in the mapped place stops the old address at once and the new one opens it', '?' . ($mpFresh2['code'] ?? '') !== $mpQ1 && !str_contains(http_get("$baseMp/$mpQ1")[1], 'const files = ["' . substr($mpQ1, -8) . '"]') && str_contains(http_get("$baseMp/?" . ($mpFresh2['code'] ?? '-'))[1], 'const files = ["' . ($mpFresh2['code'] ?? '-') . '"]')
     && (read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php")['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') !== '');
 
 // 6. the public log: where a visitor came in, with a Not listed photo of the mapped place
@@ -9299,7 +9299,7 @@ if (str_starts_with($mpOldIndex, '<?php')) {
     $mpUnlock();
     check('[mapped] a caption saved in the other gallery keeps this gallery\'s Not listed mark, the photo\'s own address and the downloads switch (they are not dropped)', ($mpMapDrawer['unlisted'] ?? null) === true && ($mpMapDrawer['restriction'] ?? null) === 'private' && ($mpMapDrawer['allowOriginals'] ?? null) === true && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') === ($mpFresh2['code'] ?? false ? read_data_file("$fxMpSrc/MapDrawer/.gallery-items.php")['items']['MAPSENTINEL-ONE.jpg']['addr'] : '') && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['addr'] ?? '') !== '' && ($mpMapDrawer['items']['MAPSENTINEL-ONE.jpg']['caption'] ?? '') === 'a caption typed in the other gallery');
     $mpUnlock();
-    check('[mapped] ...and the photo\'s address still opens it here after that save', str_contains(http_get("$baseMp/?" . ($mpFresh2['code'] ?? '-'))[1], 'MAPSENTINEL-ONE'));
+    check('[mapped] ...and the photo\'s address still opens it here after that save', str_contains(http_get("$baseMp/?" . ($mpFresh2['code'] ?? '-'))[1], 'const files = ["' . ($mpFresh2['code'] ?? '-') . '"]'));
     $mpOldAdmin(['action' => 'toggle_folder_restriction', 'hidden' => '0'], '&folder=MapDrawer');
     $mpSeen = http_get("$baseMp/?folder=Eurotrip%2FMapDrawer", $mpView)[0];
     $mpUnlock();
@@ -9520,6 +9520,68 @@ check('[edited] every key said to be shown is named in the function that builds 
 proc_terminate($cvProc);
 
 /* --------------------------------------------------------------------- */
+
+echo "== A Not listed photo's own page: no folder name and no file name anywhere, and everything on it still works ==\n";
+$fxNn = new_fixture_dir('nolnames');
+mkdir("$fxNn/SecretDrawer", 0777, true);
+make_jpeg("$fxNn/front.jpg", 60, 60, 20, 40, 90); make_jpeg("$fxNn/SecretDrawer/NOTLISTED-SENTINEL.jpg", 60, 60, 80, 40, 90); make_jpeg("$fxNn/SecretDrawer/NOTLISTED-TWO.jpg", 60, 60, 100, 40, 90);
+make_minimal_mp4("$fxNn/SecretDrawer/NOTLISTED-VIDEO.mp4", 3);
+file_put_contents("$fxNn/SecretDrawer/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['restriction' => 'private', 'unlisted' => true, 'allowOriginals' => true, 'items' => ['NOTLISTED-SENTINEL.jpg' => ['caption' => 'A CAPTION OF THE PHOTO', 'web' => 'https://example.com/?x=1', 'location' => ['lat' => 48.85, 'lng' => 2.29, 'label' => 'A PLACE'], 'locationVisibility' => 'show']]]));
+file_put_contents("$fxNn/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['ownGalleries' => true, 'items' => [], 'groups' => []]));   // (a Gallery of its own somewhere: the page is built with the navigation that goes with it)
+file_put_contents("$fxNn/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nn-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'nn-view-pw-1', 'ENABLE_SHARE_LINKS' => true, 'ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true, 'TRACK_VIEWS' => true, 'PUBLIC_DOWNLOAD_MODE' => 'some', 'PUBLIC_DOWNLOAD_ROOT' => true, 'PUBLIC_DOWNLOAD_FOLDERS' => ['SecretDrawer']]));
+copy($indexSrc, "$fxNn/index.php");
+$portNn = find_free_port(); start_server($fxNn, $portNn); $baseNn = "http://127.0.0.1:$portNn";
+[, , $nnH1] = http_post("$baseNn/?admin", ['access_code' => 'nn-admin-pw-1'], [], false);
+$nnOwn = ['Cookie: ' . extract_cookie_header($nnH1)];
+[, , $nnH2] = http_post("$baseNn/?reveal", ['access_code' => 'nn-view-pw-1'], [], false);
+$nnView = ['Cookie: ' . extract_cookie_header($nnH2)];
+$nnCsrf = (string) extract_csrf_token(http_get("$baseNn/?admin", $nnOwn)[1]);
+$nnAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseNn/?admin$q", $f + ['csrf_token' => $nnCsrf], array_merge($nnOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$nnUnlock = fn () => @unlink("$fxNn/.gallery-login-attempts.php");
+$nnKp = $nnAdmin(['action' => 'photo_address', 'file' => 'NOTLISTED-SENTINEL.jpg'], '&folder=SecretDrawer')['code'] ?? '';
+$nnKv = $nnAdmin(['action' => 'photo_address', 'file' => 'NOTLISTED-VIDEO.mp4'], '&folder=SecretDrawer')['code'] ?? '';
+$nnKt = $nnAdmin(['action' => 'photo_address', 'file' => 'NOTLISTED-TWO.jpg'], '&folder=SecretDrawer')['code'] ?? '';
+$nnUnlock();
+check('[photo page] the test gallery has a photo, a video and a neighbour with addresses', strlen($nnKp) === 8 && strlen($nnKv) === 8 && strlen($nnKt) === 8);
+$nnNames = fn (string $text) => array_values(array_filter(['secretdrawer', 'notlisted-sentinel', 'notlisted-two', 'notlisted-video', 'sentinel'], fn ($n) => stripos($text, $n) !== false));
+$nnPage = http_get("$baseNn/?$nnKp", [], false); $nnUnlock();
+check('[photo page] a stranger with the address gets the photo, and the page holds neither the folder\'s name nor the file\'s name (not in the pictures\' addresses, the alt text, the title, the preview tags, the page\'s data, an id): the photo is its code', $nnPage[0] === 200 && !$nnNames($nnPage[1]) && str_contains($nnPage[1], 'const files = ["' . $nnKp . '"]') && str_contains($nnPage[1], 'const initialPhoto = "' . $nnKp . '"') && str_contains($nnPage[1], '?img=' . $nnKp . '&amp;size=thumb') && str_contains($nnPage[1], '&amp;k=' . $nnKp), json_encode([$nnPage[0], $nnNames($nnPage[1])]));
+$nnVideoPage = http_get("$baseNn/?$nnKv", [], false); $nnUnlock();
+check('[photo page] ...and so does a video\'s page (the same, with the video as the photo)', $nnVideoPage[0] === 200 && !$nnNames($nnVideoPage[1]) && str_contains($nnVideoPage[1], 'const files = ["' . $nnKv . '"]'), json_encode($nnNames($nnVideoPage[1])));
+check('[photo page] ...and nothing is lost on it: its caption, its web link and its place are in the page, kept out of search engines, with no Referer passed on', str_contains($nnPage[1], 'A CAPTION OF THE PHOTO') && str_contains($nnPage[1], 'https://example.com/?x=1') && str_contains($nnPage[1], '48.85') && (bool) preg_grep('~^X-Robots-Tag: noindex~i', $nnPage[2]) && (bool) preg_grep('~^Referrer-Policy: no-referrer~i', $nnPage[2]));
+$nnImg = fn (string $ref, string $size, string $k, array $h = []) => http_get("$baseNn/?img=" . rawurlencode($ref) . "&size=$size&k=" . rawurlencode($k), $h, false);
+$nnSizes = [];
+foreach (['thumb', 'tile', 'tilehd', 'share', 'full'] as $sz) { $nnUnlock(); $nnSizes[$sz] = $nnImg($nnKp, $sz, $nnKp)[0]; }
+$nnUnlock(); $nnOld = $nnImg('SecretDrawer/NOTLISTED-SENTINEL.jpg', 'thumb', $nnKp)[0];
+$nnUnlock(); $nnOtherK = $nnImg($nnKp, 'thumb', $nnKt)[0];
+$nnUnlock(); $nnWrong = $nnImg($nnKp, 'thumb', 'AAAAAAAA')[0];
+$nnUnlock(); $nnNoK = http_get("$baseNn/?img=" . $nnKp . '&size=thumb', [], false)[0];
+check('[photo page] the picture is asked for by the code in every size the page uses (and still by the old address with the path, so an address made before keeps working), and a code opens only its own photo: not with another photo\'s code, a wrong one or none', array_keys(array_filter($nnSizes, fn ($s) => $s !== 200)) === [] && $nnOld === 200 && $nnOtherK !== 200 && $nnWrong !== 200 && $nnNoK !== 200, json_encode([$nnSizes, $nnOld, $nnOtherK, $nnWrong, $nnNoK]));
+$nnUnlock(); $nnV = http_get("$baseNn/?video=" . $nnKv . '&k=' . $nnKv, ['Range: bytes=0-9'], false);
+$nnUnlock(); $nnVs = http_get("$baseNn/?strip=" . $nnKv . '&k=' . $nnKv, [], false);
+check('[photo page] a video is played by its code (a range answers 206 with just those bytes), and its names are in no header', $nnV[0] === 206 && strlen($nnV[1]) === 10 && !$nnNames(implode("\n", $nnV[2])), json_encode([$nnV[0], strlen($nnV[1])]));
+$nnUnlock(); $nnTrk = http_get("$baseNn/?track=" . $nnKp . '&k=' . $nnKp, [], false); $nnTj = json_decode($nnTrk[1], true) ?: [];
+check('[photo page] the view is counted by the code and the reply names neither the folder nor the file (the photo is the code, there is no group name)', ($nnTj['ok'] ?? null) === true && ($nnTj['photo'] ?? '') === $nnKp && ($nnTj['groupSlug'] ?? '') === '' && !$nnNames($nnTrk[1]), $nnTrk[1]);
+$nnUnlock(); $nnOrig = http_get("$baseNn/?original=" . $nnKp . '&k=' . $nnKp, [], false);
+check('[photo page] when the folder allows it the original downloads by the code, and keeps its own name (the owner chose to allow it)', $nnOrig[0] === 200 && strlen($nnOrig[1]) === filesize("$fxNn/SecretDrawer/NOTLISTED-SENTINEL.jpg") && (bool) preg_grep('~^Content-Disposition: .*NOTLISTED-SENTINEL\.jpg~i', $nnOrig[2]), json_encode(preg_grep('~^Content-Disposition~i', $nnOrig[2])));
+$nnUnlock(); $nnOrig2 = http_get("$baseNn/?original=" . $nnKp . '&k=' . $nnKt, [], false);
+check('[photo page] ...and a code downloads only its own photo', $nnOrig2[0] !== 200);
+$nnUnlock(); $nnRevealed = http_get("$baseNn/?$nnKp", $nnView, false);
+check('[photo page] someone with the private-view password is shown the same page: the photo alone, and no names', $nnRevealed[0] === 200 && !$nnNames($nnRevealed[1]) && !str_contains($nnRevealed[1], 'front.jpg'), json_encode($nnNames($nnRevealed[1])));
+// the page keeps its "do not store" header even with a Gallery of its own in the gallery, and its Vary says what it varies on
+check('[photo page] the page is not stored (Cache-Control: private, no-store) although a folder somewhere is a Gallery of its own, and Vary still names Sec-Fetch-Site', (bool) preg_grep('~^Cache-Control: private, no-store~i', $nnPage[2]) && preg_grep('~^Vary:.*Sec-Fetch-Site~i', $nnPage[2]), json_encode(preg_grep('~^(Cache-Control|Vary):~i', $nnPage[2])));
+// the owner: the page is the gallery's own, with the photo opened over its folder's grid
+$nnUnlock(); $nnOwnPage = http_get("$baseNn/?$nnKp&view", $nnOwn, false);
+check('[photo page] the owner opening the address with ?view gets the viewer over the photo\'s folder (the folder\'s own grid behind it, not the gallery\'s front page); the address bar is not changed (no redirect)', $nnOwnPage[0] === 200 && str_contains($nnOwnPage[1], 'const initialPhoto = "SecretDrawer\/NOTLISTED-SENTINEL.jpg"') && str_contains($nnOwnPage[1], 'NOTLISTED-TWO.jpg') && !str_contains($nnOwnPage[1], '"front.jpg"') && !preg_grep('~^Location:~i', $nnOwnPage[2]), json_encode([$nnOwnPage[0], str_contains($nnOwnPage[1], '"front.jpg"')]));
+// a code tried on the routes that did not count it
+$nnUnlock();
+foreach (['about', 'manifest', 'appicon', 'mapicon', 'download', 'archive'] as $nnRoute) { $nnUnlock(); $nnRight[$nnRoute] = http_get("$baseNn/?$nnRoute&photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=$nnKp", [], false)[2]; }
+check('[photo page] a right code tried on a route that is not the photo\'s page (about, manifest, appicon, mapicon, download, archive) is not told apart from a wrong one by any header', !array_filter($nnRight, fn ($h) => preg_grep('~^(X-Robots-Tag|Referrer-Policy): ~i', $h)), json_encode(array_map(fn ($h) => array_values(preg_grep('~^(X-Robots-Tag|Referrer-Policy):~i', $h)), $nnRight)));
+$nnUnlock();
+foreach (['about', 'manifest', 'appicon', 'mapicon', 'download', 'archive'] as $nnRoute) for ($i = 0; $i < 3; $i++) http_get("$baseNn/?$nnRoute&photo=SecretDrawer%2FNOTLISTED-SENTINEL.jpg&k=AAAAA" . $i . 'AA', [], false);
+$nnHeld = http_get("$baseNn/?$nnKp", [], false);
+check('[photo page] wrong codes tried on those routes are counted like any other: after eighteen the address is held back, and even the right code gets no answer for a while', in_array($nnHeld[0], [404, 429], true) && !str_contains($nnHeld[1], 'const files'), json_encode([$nnHeld[0]]));
+$nnUnlock();
 
 echo "== A Not listed photo's address: the bare file ==\n";
 $fxBf = new_fixture_dir('barefile');

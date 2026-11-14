@@ -179,9 +179,16 @@ function file_version($file) {
     return $seen[$file] = $stat ? substr(hash('sha256', $stat['mtime'] . '|' . $stat['size']), 0, 10) : '';
 }
 
+/** What a page calls a photo in the addresses and attributes it prints: its path, except on a Not listed photo's own page, where it is the photo's code
+ *  (k=). That page, its pictures and its previews never carry the folder's name or the file's name: a request for ?img=<code>&k=<code> (or ?video, ?original,
+ *  ?strip, ?track) is turned back into the photo's own at the top of the request (see photo_code_params_translate). */
+function photo_ref($file) {
+    return ($GLOBALS['photoPass'] ?? null) === $file ? (string) ($_GET['k'] ?? '') : $file;
+}
+
 function img_url($file, $size) {
     $v = file_version($file);
-    return '?img=' . rawurlencode($file) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '') . (($GLOBALS['photoPass'] ?? null) === $file ? '&k=' . rawurlencode((string) ($_GET['k'] ?? '')) : '');   // (on a photo's own address its pictures ask with the same code)
+    return '?img=' . rawurlencode(photo_ref($file)) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '') . (($GLOBALS['photoPass'] ?? null) === $file ? '&k=' . rawurlencode((string) ($_GET['k'] ?? '')) : '');   // (on a photo's own address its pictures ask with the same code)
 }
 
 /** The extra attributes that let the browser choose a tile's picture by how big the tile really is and how dense the screen

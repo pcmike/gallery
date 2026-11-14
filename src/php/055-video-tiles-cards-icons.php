@@ -10,7 +10,7 @@ function video_tile_parts($file, $duration = null) {
     // Where the server can't take a frame from a video, the browser's own first frame is laid over the placeholder (it
     // appears only if the browser can play the video; otherwise the placeholder stays).
     if (!video_pictures_expected() || video_poster_failed($file)) {
-        $inner .= '<video class="tile-video" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="?video=' . rawurlencode($file) . '&amp;v=' . $version . '#t=0.1"></video>';
+        $inner .= '<video class="tile-video" muted playsinline preload="metadata" tabindex="-1" aria-hidden="true" src="?video=' . rawurlencode(photo_ref($file)) . '&amp;v=' . $version . (photo_ref($file) !== $file ? '&amp;k=' . rawurlencode((string) $_GET['k']) : '') . '#t=0.1"></video>';
     }
     $inner .= '<span class="video-mark" aria-hidden="true">' . ui_icon('play') . '</span>';
     $attrs = '';
@@ -45,8 +45,10 @@ function video_tile_parts($file, $duration = null) {
  *  spoken for, when $videoDuration is known. */
 function render_card($file, $index, $photoViews, $status = '', $color = null, $anchorId = null, $videoDuration = null, $itemEntry = null) {
     $views = isset($photoViews[$file]) ? (int) $photoViews[$file] : 0;
+    $nameless = photo_ref($file) !== $file;   // (a Not listed photo's own page: the photo is its code, and nothing on the page says what it is called or where it lives)
+    if ($nameless) $anchorId = null;
     $hidden = (view_counts_shown() && ($views > 0 || (TRACK_VIEWS && is_admin_browser()))) ? '' : ' hidden';   // the owner sees every count, a zero too
-    $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . ui_icon('eye') . ' '
+    $badge = '<span class="view-badge' . $hidden . '" data-photo="' . htmlspecialchars(photo_ref($file), ENT_QUOTES, 'UTF-8') . '">' . ui_icon('eye') . ' '
            . number_format($views) . '</span>';
     $statusBadge = '';
     if ($status === 'sold') {
@@ -122,7 +124,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
     return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
+         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($nameless ? 'Photo' : $file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . '</div>';
 }

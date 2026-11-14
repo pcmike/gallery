@@ -67,7 +67,7 @@ if (isset($_GET['photo'])) {
 // A Not listed photo opened by its own address (?photo=<path>&k=<code>): the page is that one photo and nothing else (see the filter in
 // "GROUPING" below), kept out of search engines and not passed on in a Referer.
 $photoPass = null;
-if ($requestedPhoto !== null && !is_admin_browser() && isset($_GET['k']) && photo_pass_valid($dir, $requestedPhoto, $itemsData)) {
+if ($requestedPhoto !== null && request_route() === '' && !is_admin_browser() && isset($_GET['k']) && photo_pass_valid($dir, $requestedPhoto, $itemsData)) {   // (the photo's page only: a right code does not show on the other routes either)
     $photoPass = $requestedPhoto;
     header('Referrer-Policy: no-referrer');
     header('X-Robots-Tag: noindex, nofollow');

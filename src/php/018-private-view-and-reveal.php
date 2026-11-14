@@ -204,7 +204,7 @@ function nav_top($dir, $folderPath) {
     if (($fresh || $cookieTop === null) && !headers_sent()) {
         setcookie('gallery_top', '/' . $mine, ['path' => gallery_cookie_path(), 'secure' => is_https_request(), 'httponly' => true, 'samesite' => 'Lax']);
     }
-    if (!headers_sent()) { header('Cache-Control: private'); header('Vary: Cookie, Sec-Fetch-Site', false); }
+    if (!headers_sent()) { if (($GLOBALS['photoPass'] ?? null) === null) header('Cache-Control: private'); header('Vary: Cookie, Sec-Fetch-Site', false); }   // (a Not listed photo's own page keeps its no-store)
     return $top;
 }
 

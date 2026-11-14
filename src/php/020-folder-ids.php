@@ -236,8 +236,37 @@ function photo_address_translate($dir, $files, $itemsData) {
         exit;
     }
     $_GET['photo'] = $rel;
+    if (is_admin_browser()) $_GET['folder'] = dirname($rel);   // (the owner's view of an address: the viewer opens over the photo's own folder, not the gallery's front page. Everyone else gets the photo alone)
     request_route(true);
     return true;
+}
+
+/** A Not listed photo's own page asks for the photo by its code (see photo_ref): ?img=<code>&k=<code>, and likewise ?video, ?original, ?strip and ?track. Here the
+ *  request is turned back into the photo's own (?img=<path>&k=<code>) so everything after this reads it as it always has. The code has to be the one in k=, and
+ *  to belong to a photo in a Not listed folder; anything else is left as it is (and is counted as a wrong guess like any other). A visitor held back for guessing
+ *  gets no answer, a right code included, and a closed gallery shows a stranger no photo. */
+function photo_code_params_translate($dir, $mediaExtensions, $self) {
+    $k = $_GET['k'] ?? null;
+    if (!is_string($k) || preg_match('/^[A-Za-z0-9]{8}$/D', $k) !== 1 || !AUTO_GROUP_BY_FOLDER || install_secret() === '') return;
+    $params = [];
+    foreach (['img', 'original', 'track', 'strip', 'video'] as $p) if (($_GET[$p] ?? null) === $k) $params[] = $p;
+    if (!$params) return;   // (an ordinary request names a path, never its own code: nothing is scanned for it)
+    if (gallery_is_closed() && !is_revealed() && !is_admin_browser() && link_viewer() === null) return;
+    if (!is_admin_browser() && !is_revealed() && !login_throttle_allows($dir, 'link', client_ip())) return;
+    // These routes answer before the tree is scanned, so it is scanned here, for this request only (a Not listed photo's page has a few: one for each picture it asks for)
+    $files = flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self));
+    $inUnlisted = []; $unlisted = [];
+    foreach ($files as $f) {
+        $folder = dirname($f);
+        if ($folder === '.' || $folder === '') continue;
+        if (!isset($unlisted[$folder])) $unlisted[$folder] = folder_is_unlisted($dir, $folder);
+        if ($unlisted[$folder]) $inUnlisted[] = $f;
+    }
+    if (!$inUnlisted) return;
+    $rel = photo_address_resolve($dir, $files, items_get_all_for_files($dir, $inUnlisted), $k);
+    if ($rel === null) return;
+    foreach ($params as $p) $_GET[$p] = $rel;
+    $GLOBALS['__photo_coded'] = $rel;   // (the reply to a view count then answers by the code too)
 }
 
 /** A Not listed photo's address answered with the file itself: what the viewer shows at full size (a picture is the file with its location removed for a
