@@ -2450,6 +2450,24 @@ try:
         b.js("document.querySelector('.folder-pills a').click()"); b.drain(2.5)
         loc18 = b.js("location.href")
         ok("folder=Churches" in loc18 and re.search(r"\?[A-Za-z0-9]{8}", loc18.split("?", 1)[1]) is None and b.js("typeof initialPhoto === 'undefined' || initialPhoto === null || initialPhoto === ''") and b.js("!!document.querySelector('.card')"), "[photo page] ...and a click on the folder's pill there goes to the folder at the gallery's own address (the code is gone from the bar and the photo is not opened again)", str(loc18))
+        # the sign-in list and a browser's history are written in the zone the browser is in (the server wrote them in its own): checked in a zone 14 hours from UTC, against what the browser itself says for it
+        b.call("Emulation.setTimezoneOverride", {"timezoneId": "Pacific/Kiritimati"})
+        b.goto(new18.split("?", 1)[0] + "?admin", 2.5)
+        tz_expect = """(() => {
+          const z = 'Pacific/Kiritimati', ts = [...document.querySelectorAll('#browsers-row time[data-ts]')];
+          const want = t => { const d = new Date(+t.dataset.ts * 1000), f = t.dataset.fmt;
+            if (f === 'md') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: z });
+            if (f === 'mdhm') return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: z }).replace(/\\s*(AM|PM)$/, (m, a) => ' ' + a.toLowerCase());
+            const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: z, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).map(x => [x.type, x.value]));
+            return p.year + '-' + p.month + '-' + p.day + ' ' + p.hour + ':' + p.minute + ':' + p.second; };
+          return { n: ts.length, painted: ts.every(t => t.dataset.local === '1'), right: ts.every(t => t.textContent === want(t)), sample: ts.slice(0, 2).map(t => t.dataset.fmt + ':' + t.textContent) };
+        })()"""
+        r18 = b.js(tz_expect)
+        ok(r18["n"] >= 2 and r18["painted"] and r18["right"], "[sign-in times] the Browsers signed in list is written in the browser's own zone (a zone 14 hours from UTC here), not the server's", json.dumps(r18))
+        b.js("document.querySelector('#browsers-row [data-br=details]').click()"); b.drain(1.5)
+        h18 = b.js(tz_expect.replace("#browsers-row time[data-ts]", "#browsers-row .br-log time[data-ts]"))
+        ok(h18["n"] >= 1 and h18["painted"] and h18["right"], "[sign-in times] ...and so is a browser's history once it is opened", json.dumps(h18))
+        b.call("Emulation.setTimezoneOverride", {"timezoneId": ""})
         open(SITE18 + "/Churches/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps(priv_items))
         # the gallery: locks in three states
         b.goto(B18 + "/?folder=Churches", 1.5)

@@ -231,15 +231,15 @@ function render_admin_browsers_panel($csrfToken) {
             <tbody class="br-item <?= trim(($r['current'] ? 'br-me ' : '') . ($r['flags'] ? 'br-flagged' : '')) ?>" data-id="<?= $e($r['id']) ?>">
               <tr class="br-main">
                 <td data-label="Browser"><strong class="br-who <?= $e($r['kind']) ?>"><?= $r['kind'] === 'owner' ? 'You (admin)' : 'Private view' ?></strong><?= $r['current'] ? ' <span class="br-this">this browser</span>' : '' ?><span class="br-dev"><?= $e($r['lab'] !== '' ? $r['lab'] : 'A device') ?></span></td>
-                <td data-label="Signed in"><span class="br-v"><?= $e(date('M j', $r['made'])) ?></span></td>
-                <td data-label="Last here"><span class="br-v"><?= $e(signin_ago($r['seen'], $now)) ?><span class="br-sub">stays until <?= $e(date('M j', $r['exp'])) ?></span></span></td>
+                <td data-label="Signed in"><span class="br-v"><?= signin_time_html($r['made'], 'md') ?></span></td>
+                <td data-label="Last here"><span class="br-v"><?= $e(signin_ago($r['seen'], $now)) ?><span class="br-sub">stays until <?= signin_time_html($r['exp'], 'md') ?></span></span></td>
                 <td data-label="Last address"><span class="br-v"><?= $r['ip'] !== '' ? '<code>' . $e($r['ip']) . '</code>' . ($r['ccs'] ? ' <span class="br-cc">' . $e(end($r['ccs'])) . '</span>' : '') : '<span class="muted">none yet</span>' ?></span></td>
-                <td data-label="Addresses"><span class="br-v"><button type="button" class="linklike br-num" data-br="details"><?= number_format($hs['ips']) ?></button><?= $r['peak'] > 0 ? '<span class="br-sub">most networks in 24 hours: <b>' . (int) $r['peak'] . '</b>' . ($r['peakAt'] > 0 ? ' (' . $e(date('M j', $r['peakAt'])) . ')' : '') . '</span>' : '' ?></span></td>
+                <td data-label="Addresses"><span class="br-v"><button type="button" class="linklike br-num" data-br="details"><?= number_format($hs['ips']) ?></button><?= $r['peak'] > 0 ? '<span class="br-sub">most networks in 24 hours: <b>' . (int) $r['peak'] . '</b>' . ($r['peakAt'] > 0 ? ' (' . signin_time_html($r['peakAt'], 'md') . ')' : '') . '</span>' : '' ?></span></td>
                 <td data-label="Device changes"><span class="br-v"><button type="button" class="linklike br-num" data-br="details"><?= number_format($hs['dev']) ?></button><?= $hs['sys'] > 0 ? '<span class="br-sub">' . ($hs['sys'] === $hs['dev'] ? ($hs['dev'] === 1 ? 'it was' : 'all') : number_format($hs['sys']) . ' of them') . ' Apple system networking, not flagged</span>' : '' ?></span></td>
                 <td class="br-acts"><button type="button" class="linklike br-more" data-br="details" aria-expanded="false">History</button><?php if (!$r['current']): ?><button type="button" class="secondary" data-br="cancel">Sign out</button><?php endif; ?></td>
               </tr>
               <?php foreach ($r['flags'] as $fname => [$fdetail, $fat, $floud]): ?>
-              <tr class="br-flagrow"><td colspan="7"><div class="br-flag <?= $e($floud) ?>" data-flag="<?= $e($fname) ?>"><span><strong><?= $e(signin_flag_info($fname)[0]) ?></strong> · <?= $e($fdetail) ?> (<?= $e(date('M j, g:i a', $fat)) ?>)</span><button type="button" class="secondary" data-br="ack">Looks fine</button></div></td></tr>
+              <tr class="br-flagrow"><td colspan="7"><div class="br-flag <?= $e($floud) ?>" data-flag="<?= $e($fname) ?>"><span><strong><?= $e(signin_flag_info($fname)[0]) ?></strong> · <?= $e($fdetail) ?> (<?= signin_time_html($fat, 'mdhm') ?>)</span><button type="button" class="secondary" data-br="ack">Looks fine</button></div></td></tr>
               <?php endforeach; ?>
               <tr class="br-detailrow" hidden><td colspan="7"><div class="br-detail"></div></td></tr>
             </tbody>
@@ -258,8 +258,8 @@ function render_admin_browsers_panel($csrfToken) {
               <tbody class="br-item" data-id="<?= $e($r['id']) ?>">
                 <tr class="br-main">
                   <td data-label="Browser"><strong class="br-who <?= $e($r['kind']) ?>"><?= $r['kind'] === 'owner' ? 'You (admin)' : 'Private view' ?></strong><span class="br-dev"><?= $e($r['label'] !== '' ? $r['label'] : 'A device') ?></span></td>
-                  <td data-label="Signed in"><span class="br-v"><?= $e(date('M j', (int) $r['made'])) ?></span></td>
-                  <td data-label="Signed out"><span class="br-v"><?= $e(date('M j, g:i a', (int) $r['ended'])) ?></span></td>
+                  <td data-label="Signed in"><span class="br-v"><?= signin_time_html((int) $r['made'], 'md') ?></span></td>
+                  <td data-label="Signed out"><span class="br-v"><?= signin_time_html((int) $r['ended'], 'mdhm') ?></span></td>
                   <td data-label="Why"><span class="br-v"><b><?= $e(signin_reason_text($r['reason'])) ?></b><?= !empty($r['detail']) ? ' <span class="muted">· ' . $e($r['detail']) . '</span>' : '' ?></span></td>
                   <td data-label="Addresses"><span class="br-v"><?= $hs ? '<button type="button" class="linklike br-num" data-br="details">' . number_format($hs['ips']) . '</button>' : '<span class="muted">none</span>' ?></span></td>
                   <td data-label="Device changes"><span class="br-v"><?= $hs ? '<button type="button" class="linklike br-num" data-br="details">' . number_format($hs['dev']) . '</button>' . ($hs['sys'] > 0 ? '<span class="br-sub">' . ($hs['sys'] === $hs['dev'] ? ($hs['dev'] === 1 ? 'it was' : 'all') : number_format($hs['sys']) . ' of them') . ' Apple system networking, not flagged</span>' : '') : '<span class="muted">none</span>' ?></span></td>
@@ -287,9 +287,17 @@ function render_browser_history_html($id) {
     $h .= '<p class="br-dl"><a href="?admin&amp;browserhist=' . $e($id) . '&amp;csv=1">Download all ' . number_format($total) . ' line' . ($total === 1 ? '' : 's') . ' (CSV)</a>' . ($total > count($shown) ? ' · showing the newest ' . number_format(count($shown)) : '') . '</p>';
     $h .= '<div class="br-log">';
     foreach (array_reverse($shown) as $l) {
-        $h .= '<div class="br-ln"><span class="br-lt">' . $e(date('Y-m-d H:i:s', (int) $l['t'])) . '</span> <span class="br-le">' . $e($l['e'] ?? '') . '</span> <b class="br-lip">' . $e($l['ip']) . '</b> <span class="br-lc">' . $e(($l['cc'] ?? '') !== '' ? $l['cc'] : '--') . '</span> <span class="br-lu">' . $e((string) ($l['ua'] ?? '') !== '' ? $l['ua'] : '(nothing)') . '</span></div>';
+        $h .= '<div class="br-ln"><span class="br-lt">' . signin_time_html((int) $l['t'], 'full') . '</span> <span class="br-le">' . $e($l['e'] ?? '') . '</span> <b class="br-lip">' . $e($l['ip']) . '</b> <span class="br-lc">' . $e(($l['cc'] ?? '') !== '' ? $l['cc'] : '--') . '</span> <span class="br-lu">' . $e((string) ($l['ua'] ?? '') !== '' ? $l['ua'] : '(nothing)') . '</span></div>';
     }
     return $h . '</div>';
+}
+
+/** A time in the sign-in list or history: the server's own writing of it (what shows without the page's script), carrying the timestamp and the shape it is
+ *  written in (md: Nov 14, mdhm: Nov 14, 8:44 pm, full: 2026-11-14 20:44:03) so the page's script can write it in the zone the browser is in. */
+function signin_time_html($t, $fmt) {
+    $t = (int) $t;
+    $text = $fmt === 'md' ? date('M j', $t) : ($fmt === 'mdhm' ? date('M j, g:i a', $t) : date('Y-m-d H:i:s', $t));
+    return '<time data-ts="' . $t . '" data-fmt="' . ($fmt === 'md' || $fmt === 'mdhm' ? $fmt : 'full') . '">' . htmlspecialchars($text, ENT_QUOTES, 'UTF-8') . '</time>';
 }
 
 /** ?admin&browserhist=<id>: that browser's history as HTML (what the list opens), or with &csv=1 all of it as a spreadsheet file. */
@@ -301,8 +309,9 @@ function admin_browser_history_route() {
         header('Content-Type: text/csv; charset=UTF-8');
         shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
         header('Content-Disposition: attachment; filename="signin-' . $id . '.csv"');
-        echo "time,address,country,event,what it said it was\n";
-        foreach (signin_history_read($id) as $l) echo implode(',', [link_csv_cell(date('Y-m-d H:i:s', (int) $l['t'])), link_csv_cell($l['ip']), link_csv_cell($l['cc'] ?? ''), link_csv_cell($l['e'] ?? ''), link_csv_cell($l['ua'] ?? '')]) . "\n";
+        $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);   // (the zone the browser named, as the visitor CSVs do; none sent is UTC, and each line says which)
+        echo "time,address,country,event,what it said it was,time_zone\n";
+        foreach (signin_history_read($id) as $l) echo implode(',', [link_csv_cell($iso((int) $l['t'])), link_csv_cell($l['ip']), link_csv_cell($l['cc'] ?? ''), link_csv_cell($l['e'] ?? ''), link_csv_cell($l['ua'] ?? ''), link_csv_cell($tzName)]) . "\n";
         return;
     }
     admin_json_exit(['ok' => true, 'html' => render_browser_history_html($id)]);

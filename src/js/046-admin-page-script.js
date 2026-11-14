@@ -2604,6 +2604,25 @@
     var row = document.getElementById('browsers-row');
     if (!row) return;
     var csrf = row.getAttribute('data-csrf'), armed = null;
+    // Every <time data-ts> in the list and the history is written in the zone this browser is in (the server wrote it in its own, which is what shows without this):
+    // md is "Nov 14", mdhm is "Nov 14, 8:44 pm", full is "2026-11-14 20:44:03".
+    function localTimes(root) {
+      var md, mdhm, full;
+      try {
+        md = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+        mdhm = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        full = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+      } catch (e) { return; }
+      [].forEach.call(root.querySelectorAll('time[data-ts]'), function (t) {
+        var ms = (+t.getAttribute('data-ts')) * 1000, f = t.getAttribute('data-fmt'), d = new Date(ms), out;
+        if (!ms || isNaN(d.getTime())) return;
+        if (f === 'md') out = md.format(d);
+        else if (f === 'mdhm') out = mdhm.format(d).replace(/\s*(AM|PM)$/, function (m, ap) { return ' ' + ap.toLowerCase(); });
+        else { var p = {}; full.formatToParts(d).forEach(function (x) { p[x.type] = x.value; }); out = p.year + '-' + p.month + '-' + p.day + ' ' + p.hour + ':' + p.minute + ':' + p.second; }
+        t.textContent = out; t.setAttribute('data-local', '1');
+      });
+    }
+    localTimes(row);
     function say(t, cls) { var n = row.querySelector('.rowstate'); if (n) { n.textContent = t; n.className = 'rowstate ' + (cls || ''); } }   // (looked up each time: the row can be drawn again)
     function send(fields, done) {
       var body = new URLSearchParams(Object.assign({ csrf_token: csrf }, fields));
@@ -2624,7 +2643,7 @@
           box.innerHTML = '<p class="muted">Loading…</p>';
           fetch('?admin&browserhist=' + encodeURIComponent(item.getAttribute('data-id')), { credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
             .then(function (r) { return r.json(); })
-            .then(function (j) { box.innerHTML = j && j.ok ? j.html : '<p class="muted">Could not load it.</p>'; box.setAttribute('data-loaded', '1'); })
+            .then(function (j) { box.innerHTML = j && j.ok ? j.html : '<p class="muted">Could not load it.</p>'; box.setAttribute('data-loaded', '1'); localTimes(box); })
             .catch(function () { box.innerHTML = '<p class="muted">Could not load it.</p>'; });
         }
         return;
@@ -2658,7 +2677,7 @@
     if (window.__live) window.__live.register('browsers', { tab: 'site', refresh: function () {
       return fetch('?admin&browserspanel=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         var fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('browsers-row');
-        if (fresh && fresh.innerHTML !== row.innerHTML) row.innerHTML = fresh.innerHTML;
+        if (fresh) { localTimes(fresh); if (fresh.innerHTML !== row.innerHTML) row.innerHTML = fresh.innerHTML; }   // (the new copy is written in this browser's zone before it is compared: the times in the list would otherwise always differ and it would be drawn again each time)
       });
     }, busy: function () { return armed !== null || !!row.querySelector('.br-detailrow:not([hidden])') || row.offsetParent === null; } });
   })();
