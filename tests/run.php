@@ -6282,6 +6282,19 @@ check('[folder words] the one public photo in a private folder still opens for a
 check('[folder words] a link preview (the page description) holds the public folder\'s notes but nothing of a private folder a stranger can only partly see', str_contains(http_get("$baseFw/?folder=Open")[1], 'content="OP-NOTES') && !preg_match('/(?:name="description"|property="og:description") content="[^"]*(TS-|VT-)/', http_get("$baseFw/?folder=Topsecret")[1]));
 
 
+// The Flat folder style (names and notes on) prints each folder's description, dates and notes in its section: the same rule.
+file_put_contents("$fxFw/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'fw-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'fw-reveal-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'FOLDER_DISPLAY_MODE' => 'flat', 'FOLDER_FLAT_NAMES' => true, 'FOLDER_FLAT_NOTES' => true]));
+$fwFlatNot = ['a stranger' => ['TS', 'VT', 'IN', 'HD'], 'a link to one subfolder (Vault/Inner)' => ['VT', 'TS', 'HD'], 'a link to one photo of Vault' => ['VT', 'IN', 'TS', 'HD'], 'a link to the whole of Vault' => ['TS', 'HD'],
+    'an Everything link' => ['HD'], 'a link to one photo of a Not listed folder' => ['VT', 'IN', 'TS', 'HD'], 'someone with the private-view password' => ['HD'], 'the owner' => []];
+foreach ($fwFlatNot as $name => $not) {
+    $hdr = ($ck = $fwViewers[$name][0]) ? ["Cookie: $ck"] : [];
+    $page = http_get("$baseFw/", $hdr)[1]; $problems = [];
+    foreach ($not as $tag) foreach (['DESC', 'DATES', 'NOTES'] as $w) if (str_contains($page, "$tag-$w")) $problems[] = "$tag-$w is printed";
+    if (!str_contains($page, 'OP-DESC') || !str_contains($page, 'OP-NOTES')) $problems[] = 'the public folder\'s words are missing (is the Flat view on?)';
+    if ($name === 'an Everything link' && (!str_contains($page, 'VT-DESC') || !str_contains($page, 'TS-NOTES'))) $problems[] = 'a link that covers them lost their words';
+    check("[folder words] the Flat style's front page, for $name: a folder's description, dates and notes are printed only for a folder they may see whole" . ($problems ? ' -- ' . implode('; ', array_slice($problems, 0, 6)) : ''), !$problems);
+}
+
 echo "== share links: the log (opens, what was seen, opened, played and saved, blocked tries), kept until the link is deleted ==\n";
 
 $fxL = new_fixture_dir('sllog');

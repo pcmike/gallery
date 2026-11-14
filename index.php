@@ -24368,8 +24368,9 @@ function flat_folder_own($folderRel) {
     if (isset($memo[$folderRel])) return $memo[$folderRel];
     $dir = $GLOBALS['dir'];
     $meta = folder_display_meta($dir, $folderRel);
-    $out = ['desc' => trim($meta['description']), 'dates' => trim($meta['dates']), 'notes' => '', 'color' => null, 'status' => ''];
-    $md = scan_gallery_md_files(resolve_real_path($dir, $folderRel));
+    $words = folder_words_visible($dir, $folderRel);   // (what was written about a folder goes only to someone who may see all of it: for anyone else the section keeps its name and its pictures, nothing more)
+    $out = ['desc' => $words ? trim($meta['description']) : '', 'dates' => $words ? trim($meta['dates']) : '', 'notes' => '', 'color' => null, 'status' => ''];
+    $md = $words ? scan_gallery_md_files(resolve_real_path($dir, $folderRel)) : ['contents' => []];
     $raw = implode("\n\n", $md['contents']);
     if ($raw !== '') {
         if (preg_match('/\{color:\s*([^}]+)\}/i', $raw, $m) && preg_match('/^(#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20}|rgba?\([0-9 ,.%]+\))$/', trim($m[1]))) $out['color'] = trim($m[1]);
