@@ -10136,6 +10136,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         $targetPath = $adminFolderReal . '/' . $target;
+        if ($target !== $existing && file_exists($targetPath)) {   // a different name that something already has (a README, another note): saving would replace it
+            return ['type' => 'error', 'text' => 'A file named "' . $target . '" is already in this folder, so nothing was saved (it would have been overwritten). Choose another name, or open that file to change it.'];
+        }
         if (!file_write_whole($targetPath, $content)) {
             return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
         }
@@ -11724,7 +11727,25 @@ function link_apply_address(&$rec, $address, $d = null, $keep = false) {
 }
 
 function link_apply_fields(&$rec, $f) {
-    foreach (['label', 'note', 'titleMode', 'titleText', 'picture', 'pictureSeed', 'pictureFile', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'only', 'openIn', 'downloads', 'zip'] as $k) $rec[$k] = $f[$k];
+    foreach (link_form_fields() as $k) $rec[$k] = $f[$k];
+}
+
+/** The parts of a link the Edit form shows and a save writes back whole. */
+function link_form_fields() {
+    return ['label', 'note', 'titleMode', 'titleText', 'picture', 'pictureSeed', 'pictureFile', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'only', 'openIn', 'downloads', 'zip'];
+}
+
+/** A fingerprint of what the Edit form shows for a link (and its own address), given to the form when it is opened and posted back as
+ *  loaded_hash. A save whose fingerprint is no longer the link's own was made from a page that is out of date: another tab or device
+ *  changed the link since, and saving the whole form would put the old values back, with "Saved." on screen. What changes on its own
+ *  (the openings counted, the state, the log) is not in it, and neither is what Pause, Resume, Revoke and a new address change (the
+ *  state and the token): the form does not show them. Extend changes the end time and the limit, which the form does show, so a form
+ *  opened before it is out of date, as it should be. */
+function link_form_hash($l) {
+    $r = [];
+    foreach (link_form_fields() as $k) $r[$k] = $l[$k] ?? null;
+    $r['address'] = !empty($l['custom']) ? (string) ($l['token'] ?? '') : '';
+    return admin_record_hash($r);
 }
 
 /** The Shares tab's POST actions (link_create, link_save, link_pause, link_resume, link_revoke, link_extend, link_replace,
@@ -11774,13 +11795,15 @@ function links_admin_action($action, $dir, $files) {
         $killLog = link_log_read($id);
         $killUse = link_address_log_stats($killLog, 'via', $killName); $killTried = link_address_log_stats($killLog, 'tried', $killName);
     }
-    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text, $saveFields, $saveErrors, $restoreName, $restoreWhy, $killName, $killUse, $killTried) {
+    $loadedHash = isset($_POST['loaded_hash']) && is_string($_POST['loaded_hash']) ? $_POST['loaded_hash'] : null;
+    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text, $saveFields, $saveErrors, $loadedHash, $restoreName, $restoreWhy, $killName, $killUse, $killTried) {
         $l = $d['links'][$id] ?? null;
         if (!is_array($l)) { $problem = 'That link no longer exists.'; return; }
         $state = link_state($l, $now);
         if ($action === 'link_delete') { unset($d['links'][$id]); $text = 'Link and its log deleted.'; return; }
         if ($action === 'link_save') {
             if ($state === 'revoked') { $problem = 'A revoked link can\'t be changed.'; return; }
+            if ($loadedHash !== null && !hash_equals(link_form_hash($l), $loadedHash)) { $problem = 'This link' . admin_stale_message(); return; }   // (checked under the lock, against the link as it is now)
             if ($saveErrors) { $problem = implode(' ', array_unique($saveErrors)); return; }
             if (($why = link_apply_address($d['links'][$id], $saveFields['_address'], $d, !empty($saveFields['_keep']))) !== '') { $problem = $why; return; }
             link_apply_fields($d['links'][$id], $saveFields);
@@ -13346,7 +13369,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         $tail = !empty($l['custom']) ? $l['token'] : substr($l['token'], 0, 4) . '…' . substr($l['token'], -4);
         $title = ($l['titleMode'] ?? 'gallery') === 'neutral' ? 'A neutral title' : (($l['titleMode'] ?? '') === 'custom' ? '“' . $esc($l['titleText']) . '”' : 'The gallery\'s title');
         $heads = ['default' => 'The site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'][$l['headsUp'] ?? 'default'];
-        $json = $esc(json_encode(['id' => $l['id'], 'label' => $l['label'], 'address' => !empty($l['custom']) ? $l['token'] : '', 'aliases' => count((array) ($l['aliases'] ?? [])), 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'picture' => !empty($l['picture']), 'pictureSeed' => (string) ($l['pictureSeed'] ?? ''), 'pictureFile' => (string) ($l['pictureFile'] ?? ''), 'maxOpens' => (int) $l['maxOpens'], 'opens' => (int) ($l['opens'] ?? 0), 'killedCount' => count(array_filter((array) ($l['killed'] ?? []), 'is_array')),
+        $json = $esc(json_encode(['id' => $l['id'], 'hash' => link_form_hash($l), 'label' => $l['label'], 'address' => !empty($l['custom']) ? $l['token'] : '', 'aliases' => count((array) ($l['aliases'] ?? [])), 'note' => $l['note'], 'titleMode' => $l['titleMode'], 'titleText' => $l['titleText'], 'picture' => !empty($l['picture']), 'pictureSeed' => (string) ($l['pictureSeed'] ?? ''), 'pictureFile' => (string) ($l['pictureFile'] ?? ''), 'maxOpens' => (int) $l['maxOpens'], 'opens' => (int) ($l['opens'] ?? 0), 'killedCount' => count(array_filter((array) ($l['killed'] ?? []), 'is_array')),
             'startsAt' => (int) $l['startsAt'], 'endsAt' => (int) $l['endsAt'], 'locations' => $l['locations'], 'headsUp' => $l['headsUp'], 'state' => $state,
             'scopeType' => $l['scope']['type'] ?? 'all', 'only' => !empty($l['only']), 'scopeFolders' => $report['paths']['scope'], 'scopePublicOnly' => $report['paths']['publicOnly'], 'scopeExcept' => $report['paths']['except'], 'scopePhotos' => $report['paths']['photos'], 'openIn' => $report['paths']['openIn'],
             'downloads' => $l['downloads']['mode'] ?? 'off', 'downloadsFolders' => $report['paths']['downloads'], 'zip' => $l['zip']['mode'] ?? 'off', 'zipFolders' => $report['paths']['zip']], JSON_HEX_TAG | JSON_HEX_AMP));
@@ -20426,6 +20449,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       st = { scope: (v.scopeFolders || []).slice(), except: (v.scopeExcept || []).slice(), pub: (v.scopePublicOnly || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
       var editing = !!(link && link.id);
       form.querySelector('[name=id]').value = editing ? link.id : '';
+      form._loadedHash = editing ? (link.hash || '') : '';   // (what the link was when this form was opened: a save from a form that has gone stale is refused, not applied over the newer values)
       form.querySelector('.sl-form-title').textContent = editing ? 'Edit link' : 'New share link';
       form.querySelector('.sl-save').textContent = editing ? 'Save' : 'Create link';
       form.querySelector('[name=label]').value = v.label; form.querySelector('[name=note]').value = v.note; form.querySelector('[name=title_text]').value = v.titleText;
@@ -20447,7 +20471,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function formFields(form) {
       var now = Math.floor(Date.now() / 1000), ends = radioValue(form, 'ends_pick'), opens = radioValue(form, 'opens_pick'), scope = radioValue(form, 'scope_type');
-      return {
+      var fields = {
         action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
         label: form.querySelector('[name=label]').value, address: form.querySelector('[name=address]').value, address_auto: form._addrMode === 'name' ? '1' : '0', keep_old: form.querySelector('[name=keep_old]').checked && !form.querySelector('[data-keeprow]').hidden ? '1' : '0', note: form.querySelector('[name=note]').value,
         title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value, picture: form.querySelector('[name=picture]').checked ? '1' : '0', picture_seed: form.querySelector('[name=picture_seed]').value, picture_file: form.querySelector('[name=picture_file]').value,
@@ -20460,6 +20484,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         max_opens: opens === 'n' ? (+form.querySelector('[name=opens_other]').value || 0) : +opens,
         ends_at: ends === 'pick' ? epoch(form.querySelector('[name=ends_at_local]').value) : (ends === '0' ? 0 : now + (+ends))
       };
+      if (form._loadedHash) fields.loaded_hash = form._loadedHash;
+      return fields;
     }
     box.addEventListener('input', function (e) {
       var fm = e.target.closest ? e.target.closest('#sl-form') : null;

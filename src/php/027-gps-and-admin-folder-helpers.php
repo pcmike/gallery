@@ -1128,6 +1128,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         $targetPath = $adminFolderReal . '/' . $target;
+        if ($target !== $existing && file_exists($targetPath)) {   // a different name that something already has (a README, another note): saving would replace it
+            return ['type' => 'error', 'text' => 'A file named "' . $target . '" is already in this folder, so nothing was saved (it would have been overwritten). Choose another name, or open that file to change it.'];
+        }
         if (!file_write_whole($targetPath, $content)) {
             return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
         }

@@ -220,7 +220,25 @@ function link_apply_address(&$rec, $address, $d = null, $keep = false) {
 }
 
 function link_apply_fields(&$rec, $f) {
-    foreach (['label', 'note', 'titleMode', 'titleText', 'picture', 'pictureSeed', 'pictureFile', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'only', 'openIn', 'downloads', 'zip'] as $k) $rec[$k] = $f[$k];
+    foreach (link_form_fields() as $k) $rec[$k] = $f[$k];
+}
+
+/** The parts of a link the Edit form shows and a save writes back whole. */
+function link_form_fields() {
+    return ['label', 'note', 'titleMode', 'titleText', 'picture', 'pictureSeed', 'pictureFile', 'maxOpens', 'startsAt', 'endsAt', 'locations', 'headsUp', 'scope', 'only', 'openIn', 'downloads', 'zip'];
+}
+
+/** A fingerprint of what the Edit form shows for a link (and its own address), given to the form when it is opened and posted back as
+ *  loaded_hash. A save whose fingerprint is no longer the link's own was made from a page that is out of date: another tab or device
+ *  changed the link since, and saving the whole form would put the old values back, with "Saved." on screen. What changes on its own
+ *  (the openings counted, the state, the log) is not in it, and neither is what Pause, Resume, Revoke and a new address change (the
+ *  state and the token): the form does not show them. Extend changes the end time and the limit, which the form does show, so a form
+ *  opened before it is out of date, as it should be. */
+function link_form_hash($l) {
+    $r = [];
+    foreach (link_form_fields() as $k) $r[$k] = $l[$k] ?? null;
+    $r['address'] = !empty($l['custom']) ? (string) ($l['token'] ?? '') : '';
+    return admin_record_hash($r);
 }
 
 /** The Shares tab's POST actions (link_create, link_save, link_pause, link_resume, link_revoke, link_extend, link_replace,
@@ -270,13 +288,15 @@ function links_admin_action($action, $dir, $files) {
         $killLog = link_log_read($id);
         $killUse = link_address_log_stats($killLog, 'via', $killName); $killTried = link_address_log_stats($killLog, 'tried', $killName);
     }
-    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text, $saveFields, $saveErrors, $restoreName, $restoreWhy, $killName, $killUse, $killTried) {
+    $loadedHash = isset($_POST['loaded_hash']) && is_string($_POST['loaded_hash']) ? $_POST['loaded_hash'] : null;
+    links_update(function (&$d) use ($action, $id, $now, &$problem, &$text, $saveFields, $saveErrors, $loadedHash, $restoreName, $restoreWhy, $killName, $killUse, $killTried) {
         $l = $d['links'][$id] ?? null;
         if (!is_array($l)) { $problem = 'That link no longer exists.'; return; }
         $state = link_state($l, $now);
         if ($action === 'link_delete') { unset($d['links'][$id]); $text = 'Link and its log deleted.'; return; }
         if ($action === 'link_save') {
             if ($state === 'revoked') { $problem = 'A revoked link can\'t be changed.'; return; }
+            if ($loadedHash !== null && !hash_equals(link_form_hash($l), $loadedHash)) { $problem = 'This link' . admin_stale_message(); return; }   // (checked under the lock, against the link as it is now)
             if ($saveErrors) { $problem = implode(' ', array_unique($saveErrors)); return; }
             if (($why = link_apply_address($d['links'][$id], $saveFields['_address'], $d, !empty($saveFields['_keep']))) !== '') { $problem = $why; return; }
             link_apply_fields($d['links'][$id], $saveFields);

@@ -1421,6 +1421,7 @@
       st = { scope: (v.scopeFolders || []).slice(), except: (v.scopeExcept || []).slice(), pub: (v.scopePublicOnly || []).slice(), downloads: (v.downloadsFolders || []).slice(), zip: (v.zipFolders || []).slice(), photos: (v.scopePhotos || []).slice() };
       var editing = !!(link && link.id);
       form.querySelector('[name=id]').value = editing ? link.id : '';
+      form._loadedHash = editing ? (link.hash || '') : '';   // (what the link was when this form was opened: a save from a form that has gone stale is refused, not applied over the newer values)
       form.querySelector('.sl-form-title').textContent = editing ? 'Edit link' : 'New share link';
       form.querySelector('.sl-save').textContent = editing ? 'Save' : 'Create link';
       form.querySelector('[name=label]').value = v.label; form.querySelector('[name=note]').value = v.note; form.querySelector('[name=title_text]').value = v.titleText;
@@ -1442,7 +1443,7 @@
     }
     function formFields(form) {
       var now = Math.floor(Date.now() / 1000), ends = radioValue(form, 'ends_pick'), opens = radioValue(form, 'opens_pick'), scope = radioValue(form, 'scope_type');
-      return {
+      var fields = {
         action: form.querySelector('[name=id]').value ? 'link_save' : 'link_create', id: form.querySelector('[name=id]').value,
         label: form.querySelector('[name=label]').value, address: form.querySelector('[name=address]').value, address_auto: form._addrMode === 'name' ? '1' : '0', keep_old: form.querySelector('[name=keep_old]').checked && !form.querySelector('[data-keeprow]').hidden ? '1' : '0', note: form.querySelector('[name=note]').value,
         title_mode: radioValue(form, 'title_mode'), title_text: form.querySelector('[name=title_text]').value, picture: form.querySelector('[name=picture]').checked ? '1' : '0', picture_seed: form.querySelector('[name=picture_seed]').value, picture_file: form.querySelector('[name=picture_file]').value,
@@ -1455,6 +1456,8 @@
         max_opens: opens === 'n' ? (+form.querySelector('[name=opens_other]').value || 0) : +opens,
         ends_at: ends === 'pick' ? epoch(form.querySelector('[name=ends_at_local]').value) : (ends === '0' ? 0 : now + (+ends))
       };
+      if (form._loadedHash) fields.loaded_hash = form._loadedHash;
+      return fields;
     }
     box.addEventListener('input', function (e) {
       var fm = e.target.closest ? e.target.closest('#sl-form') : null;

@@ -10857,6 +10857,61 @@ $nnCsrf = admin_token($baseN, $nnOwn); $nnBefore = file_get_contents("$fxN/Alpha
 $nnR = json_decode(http_post("$baseN/?admin&folder=Alpha", ['csrf_token' => $nnCsrf, 'action' => 'save_notes', 'md_file' => 'forsale.md', 'new_name' => '', 'content' => "{gallery}\n" . str_repeat('A long note. ', 900)], array_merge($nnOwn, ['X-Requested-With: gallery-fetch']))[1], true);
 check('[data writer] a notes save that does not fit on the disk leaves the note as it was (the audit saw a 259-byte note become 0 bytes), and does not say it was saved', file_get_contents("$fxN/Alpha/forsale.md") === $nnBefore && !str_contains((string) json_encode($nnR), 'Notes saved') && glob("$fxN/Alpha/forsale.md.*") === [], json_encode($nnR) . ' / ' . filesize("$fxN/Alpha/forsale.md"));
 
+// F14: a share link saved from a page opened earlier puts nothing back
+echo "== audit group 1: a share link saved from a page opened earlier ==\n";
+$fxL = new_fixture_dir('linkstale'); mkdir("$fxL/Asia", 0777, true); make_jpeg("$fxL/Asia/a.jpg", 60, 60, 30, 70, 110);
+file_put_contents("$fxL/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'lk-admin-pw-1', 'ENABLE_SHARE_LINKS' => true, 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxL/index.php");
+$portL = find_free_port(); start_server($fxL, $portL); $baseL = "http://127.0.0.1:$portL";
+[, , $lH] = http_post("$baseL/?admin", ['access_code' => 'lk-admin-pw-1'], [], false); $lOwn = ['Cookie: ' . extract_cookie_header($lH)];
+$lCsrf = (string) extract_csrf_token(http_get("$baseL/?admin", $lOwn)[1]);
+$lAdmin = fn (array $f) => json_decode(http_post("$baseL/?admin", $f + ['csrf_token' => $lCsrf], array_merge($lOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$lNow = time();
+$lMade = $lAdmin(['action' => 'link_create', 'label' => 'Public ends', 'note' => '', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => $lNow + 30 * 86400, 'locations' => 'public', 'heads_up' => 'default', 'scope_type' => 'public', 'downloads' => 'off', 'zip' => 'off', 'address' => '']); $lId = (string) ($lMade['id'] ?? '');
+$lRow = function () use ($baseL, $lOwn, $lId) { preg_match_all('/data-link="([^"]*)"/', http_get("$baseL/?admin", $lOwn)[1], $m); foreach ($m[1] as $j) { $v = json_decode(html_entity_decode($j, ENT_QUOTES, 'UTF-8'), true); if (($v['id'] ?? '') === $lId) return $v; } return []; };
+$lStored = fn () => read_data_file("$fxL/.gallery-links.php")['links'][$lId] ?? [];
+// what the form sends for this link, with $over on top (the label, the end and the limit are what the two tabs fight over)
+$lSave = fn (array $over, ?string $hash) => $lAdmin($over + ['action' => 'link_save', 'id' => $lId, 'label' => 'Public ends', 'address' => '', 'address_auto' => '0', 'title_mode' => 'gallery', 'title_text' => '', 'picture' => '1', 'picture_seed' => (string) ($lStored()['pictureSeed'] ?? ''), 'picture_file' => '', 'scope_type' => 'public', 'downloads' => 'off', 'zip' => 'off', 'locations' => 'public', 'heads_up' => 'default', 'starts_at' => 0, 'max_opens' => 0, 'ends_at' => $lNow + 30 * 86400] + ($hash !== null ? ['loaded_hash' => $hash] : []));
+$lV0 = $lRow(); $lH0 = (string) ($lV0['hash'] ?? '');
+check('[link stale] the edit form is given a fingerprint of the link as it was loaded', preg_match('/^[0-9a-f]{32}$/', $lH0) === 1, json_encode($lV0));
+$lTok = (string) ($lStored()['token'] ?? ''); [, , $lGH] = http_post("$baseL/?link=$lTok", ['go' => '1'], [], false);
+check('[link stale] ...and a guest opening the link (its counters change on their own) does not make the form look out of date', (int) ($lStored()['opens'] ?? 0) >= 1 && ($lRow()['hash'] ?? '') === $lH0, 'opens=' . ($lStored()['opens'] ?? '?'));
+$lA = $lSave(['ends_at' => $lNow + 3600, 'max_opens' => 5], $lH0);
+check('[link stale] tab A: shortening the link and limiting its openings saves', ($lA['ok'] ?? null) === true && (int) ($lStored()['endsAt'] ?? 0) === $lNow + 3600 && (int) ($lStored()['maxOpens'] ?? 0) === 5, json_encode($lA));
+$lB = $lSave(['label' => 'Public ends (renamed)'], $lH0);
+check('[link stale] tab B, opened before A saved: fixing the label from the old form is refused as out of date, saying so (it used to put the old end and limit back and say "Saved.")', ($lB['ok'] ?? null) === false && str_contains($lB['text'] ?? '', 'was changed somewhere else') && str_contains($lB['text'] ?? '', 'nothing was saved'), json_encode($lB));
+check('[link stale] ...and the link keeps A\'s end time and limit and its own label', (int) ($lStored()['endsAt'] ?? 0) === $lNow + 3600 && (int) ($lStored()['maxOpens'] ?? 0) === 5 && ($lStored()['label'] ?? '') === 'Public ends');
+$lH1 = (string) ($lRow()['hash'] ?? '');
+$lC = $lSave(['label' => 'Public ends (renamed)', 'ends_at' => $lNow + 3600, 'max_opens' => 5], $lH1);
+check('[link stale] after reloading (a fresh form) the same change saves', ($lC['ok'] ?? null) === true && ($lStored()['label'] ?? '') === 'Public ends (renamed)' && (int) ($lStored()['maxOpens'] ?? 0) === 5, json_encode($lC));
+$lD = $lSave(['label' => 'Public ends again', 'ends_at' => $lNow + 3600, 'max_opens' => 5], null);
+check('[link stale] a save that sends no fingerprint (an older page) is not refused', ($lD['ok'] ?? null) === true && ($lStored()['label'] ?? '') === 'Public ends again', json_encode($lD));
+$lP = $lAdmin(['action' => 'link_pause', 'id' => $lId]); $lR = $lRow();
+check('[link stale] pausing a link (its own button) does not make the form look out of date', ($lP['ok'] ?? null) === true && ($lR['hash'] ?? '') === (string) ($lRow()['hash'] ?? 'x') && ($lSave(['label' => 'Public ends again', 'ends_at' => $lNow + 3600, 'max_opens' => 5], (string) $lR['hash'])['ok'] ?? null) === true);
+
+// D10: a notes "save as" never overwrites a file that is already there
+echo "== audit group 1: notes saved under another name never replace an existing file ==\n";
+$fxD = new_fixture_dir('notesname'); mkdir("$fxD/Alpha", 0777, true); make_jpeg("$fxD/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+file_put_contents("$fxD/Alpha/forsale.md", "{gallery}\nA note about something for sale.\n"); file_put_contents("$fxD/Alpha/README.md", "# The project's own readme\nNot a gallery note.\n"); file_put_contents("$fxD/Alpha/second.md", "{gallery}\nAnother gallery note.\n");
+file_put_contents("$fxD/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nd-admin-pw-1']));
+copy($indexSrc, "$fxD/index.php");
+$portD = find_free_port(); start_server($fxD, $portD); $baseD = "http://127.0.0.1:$portD";
+[, , $dH] = http_post("$baseD/?admin", ['access_code' => 'nd-admin-pw-1'], [], false); $dOwn = ['Cookie: ' . extract_cookie_header($dH)];
+$dCsrf = admin_token($baseD, $dOwn);
+$dSave = fn (array $f) => json_decode(http_post("$baseD/?admin&folder=Alpha", $f + ['csrf_token' => $dCsrf, 'action' => 'save_notes'], array_merge($dOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$dReadme = file_get_contents("$fxD/Alpha/README.md"); $dSecond = file_get_contents("$fxD/Alpha/second.md");
+$dR = $dSave(['md_file' => 'forsale.md', 'new_name' => 'README.md', 'content' => "{gallery}\nsaved over it\n"]);
+check('[notes name] saving a note under the name of a file that is already there (a README that is not a gallery note) is refused saying so, and that file is untouched (it used to be overwritten)', file_get_contents("$fxD/Alpha/README.md") === $dReadme && ($dR['ok'] ?? null) === false && str_contains(json_encode($dR), 'already'), json_encode($dR));
+$dR = $dSave(['md_file' => 'forsale.md', 'new_name' => 'second', 'content' => "{gallery}\nsaved over it\n"]);
+check('[notes name] ...the same for another gallery note (the ".md" is added to the name, so "second" is "second.md")', file_get_contents("$fxD/Alpha/second.md") === $dSecond && ($dR['ok'] ?? null) === false, json_encode($dR));
+$dR = $dSave(['md_file' => '', 'new_name' => 'README.md', 'content' => "{gallery}\na new note\n"]);
+check('[notes name] ...and for a new note given such a name', file_get_contents("$fxD/Alpha/README.md") === $dReadme && ($dR['ok'] ?? null) === false, json_encode($dR));
+$dR = $dSave(['md_file' => 'forsale.md', 'new_name' => '', 'content' => "{gallery}\nedited in place\n"]);
+$dR2 = $dSave(['md_file' => 'forsale.md', 'new_name' => 'forsale.md', 'content' => "{gallery}\nedited again\n"]);
+check('[notes name] editing a note under its own name still saves (with the name left blank, and with it typed again)', ($dR['ok'] ?? null) === true && ($dR2['ok'] ?? null) === true && file_get_contents("$fxD/Alpha/forsale.md") === "{gallery}\nedited again\n", json_encode([$dR, $dR2]));
+$dR = $dSave(['md_file' => 'forsale.md', 'new_name' => 'brand-new', 'content' => "{gallery}\na copy\n"]);
+check('[notes name] a name nothing has taken still makes a new note', ($dR['ok'] ?? null) === true && file_get_contents("$fxD/Alpha/brand-new.md") === "{gallery}\na copy\n", json_encode($dR));
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";
