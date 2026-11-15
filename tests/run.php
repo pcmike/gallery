@@ -61,6 +61,7 @@ if (is_file($repoRoot . '/src/manifest.txt')) {
 
 $failCount = 0;
 $passCount = 0;
+$skipCount = 0;
 const PUBLIC_LOG_ID_FOR_TESTS = 'ffffffffff';
 $cleanupDirs = [];
 $cleanupProcs = [];
@@ -99,6 +100,13 @@ function check($description, $condition, $detail = null) {
         echo "  FAIL  $description\n";
         if ($detail !== null) echo '        ' . substr(str_replace("\n", ' ', (string) $detail), 0, 600) . "\n";
     }
+}
+
+/** A check that can't be made on this PHP or machine: said out loud, counted separately, never as a pass. */
+function skip($description, $why) {
+    global $skipCount;
+    $skipCount++;
+    echo "  skip  $description  ($why)\n";
 }
 
 function count_occurrences($haystack, $needle, $expected, $label) {
@@ -10712,6 +10720,9 @@ $wrRun = function (string $body, ?int $limitKb = null) use ($wrCode, $wrDir) {
 $wrGood = ['items' => ['p.jpg' => ['caption' => 'keep me']], 'x' => 1];
 $wrMake = function (string $name) use ($wrDir, $wrGood) { $p = "$wrDir/$name"; file_put_contents($p, data_file_guard_line() . json_encode($wrGood)); return $p; };
 $wrLeft = fn () => array_values(array_filter(scandir($wrDir), fn ($n) => preg_match('/\.[0-9a-f]{8}\.php$/', $n)));
+// A full disk is simulated with a limit on the size of a file a process may write (SIGXFSZ ignored, so a write past it fails). The static PHP builds (8.3, 8.5 here) are killed by
+// that instead of getting a failed write, so the checks that need it are skipped on them, said out loud, and run on the system PHP.
+$wrDisk = trim($wrRun('$f = tempnam(sys_get_temp_dir(), "wp"); $fh = fopen($f, "wb"); @fwrite($fh, str_repeat("x", 20000)); @fclose($fh); @unlink($f); echo "survived";', 8)) === 'survived';
 
 // G8: text that can't be written as JSON
 $wrP = $wrMake('g8.php'); $wrBefore = file_get_contents($wrP);
@@ -10724,7 +10735,8 @@ check('[data writer] data_file_encode says false for such data, and the guard li
 // F2: no room
 $wrP = $wrMake('f2.php'); $wrBefore = file_get_contents($wrP);
 $wrOut = $wrRun('$GLOBALS["__data_write_failed"] = false; json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = str_repeat("x", 20000); }, true); echo json_encode(!empty($GLOBALS["__data_write_failed"]));', 8);
-check('[data writer] a save that does not fit on the disk fails and leaves the good file byte for byte as it was (it used to cut it to the size that fitted), with no half-written leftover', trim($wrOut) === 'true' && file_get_contents($wrP) === $wrBefore && $wrLeft() === [], $wrOut . ' / ' . filesize($wrP));
+if ($wrDisk) check('[data writer] a save that does not fit on the disk fails and leaves the good file byte for byte as it was (it used to cut it to the size that fitted), with no half-written leftover', trim($wrOut) === 'true' && file_get_contents($wrP) === $wrBefore && $wrLeft() === [], $wrOut . ' / ' . filesize($wrP));
+else skip('[data writer] a save that does not fit on the disk leaves the good file as it was', 'this PHP is stopped by a file-size limit instead of getting a failed write');
 // ...but where a temporary file can't be added and the file itself can be changed, the save still happens in place, and a failure there puts the old text back
 if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     $wrRo = "$wrDir/ro"; mkdir($wrRo); $wrP = "$wrRo/f2b.php"; file_put_contents($wrP, data_file_guard_line() . json_encode($wrGood)); $wrBefore = file_get_contents($wrP); chmod($wrRo, 0555);
@@ -10732,14 +10744,16 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     check('[data writer] a folder that allows changing the file but not adding to it still takes the save, in place', str_contains((string) file_get_contents($wrP), 'changed in place'), $wrOut);
     file_put_contents($wrP, $wrBefore);
     $wrOut = $wrRun('$GLOBALS["__data_write_failed"] = false; json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = str_repeat("x", 20000); }, true); echo json_encode(!empty($GLOBALS["__data_write_failed"]));', 8);
-    check('[data writer] ...and when that in-place write runs out of room, what the file held is put back', trim($wrOut) === 'true' && file_get_contents($wrP) === $wrBefore, $wrOut . ' / ' . filesize($wrP));
+    if ($wrDisk) check('[data writer] ...and when that in-place write runs out of room, what the file held is put back', trim($wrOut) === 'true' && file_get_contents($wrP) === $wrBefore, $wrOut . ' / ' . filesize($wrP));
+    else skip('[data writer] ...and when that in-place write runs out of room, what the file held is put back', 'no full-disk simulation on this PHP');
     chmod($wrRo, 0755);
 }
 
 // F3: a first save that can't be finished leaves no empty file behind
 $wrP = "$wrDir/f3.php"; @unlink($wrP);
 $wrOut = $wrRun('json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = str_repeat("x", 20000); }, true);', 0);
-check('[data writer] a first save that has no room to be written leaves no empty file behind (an empty file is what "can\'t be read" is made of)', !file_exists($wrP) && $wrLeft() === [], $wrOut);
+if ($wrDisk) check('[data writer] a first save that has no room to be written leaves no empty file behind (an empty file is what "can\'t be read" is made of)', !file_exists($wrP) && $wrLeft() === [], $wrOut);
+else skip('[data writer] a first save that has no room to be written leaves no empty file behind', 'no full-disk simulation on this PHP');
 $GLOBALS['__data_write_failed'] = false; json_file_update($wrP, ['items' => []], function (&$d) { $d['items']['q.jpg'] = ['caption' => 'next']; }, true);
 check('[data writer] ...so the next save simply works', empty($GLOBALS['__data_write_failed']) && (json_decode(data_file_strip_guard(file_get_contents($wrP)), true)['items']['q.jpg']['caption'] ?? '') === 'next');
 foreach (['no bytes at all' => '', 'only the guard line' => data_file_guard_line()] as $wrName => $wrContent) {
@@ -10841,10 +10855,13 @@ check('[settings save] a form loaded before another save finished is still refus
 // F7: the writers that wrote in place (a notes save, the sign-in history trim, the update-check and log-view state) no longer cut a file short when the disk is full
 $wrP = "$wrDir/f7.md"; file_put_contents($wrP, "{gallery}\nA note about something for sale.\n"); $wrBefore = file_get_contents($wrP);
 $wrOut = $wrRun('echo json_encode(file_write_whole(' . var_export($wrP, true) . ', str_repeat("y", 20000)));', 8);
-check('[data writer] a text file written with no room on the disk comes out as it was (and no temporary file is left): it used to be cut short or emptied', trim($wrOut) === 'false' && file_get_contents($wrP) === $wrBefore && glob("$wrDir/f7.md.*") === [], $wrOut . ' / ' . filesize($wrP));
+if ($wrDisk) check('[data writer] a text file written with no room on the disk comes out as it was (and no temporary file is left): it used to be cut short or emptied', trim($wrOut) === 'false' && file_get_contents($wrP) === $wrBefore && glob("$wrDir/f7.md.*") === [], $wrOut . ' / ' . filesize($wrP));
+else skip('[data writer] a text file written with no room on the disk comes out as it was', 'no full-disk simulation on this PHP');
 chmod($wrP, 0640); $wrOut = $wrRun('echo json_encode(file_write_whole(' . var_export($wrP, true) . ', "{gallery}\nnew text\n"));');
 check('[data writer] ...and written normally it replaces the text whole and keeps the file\'s permissions', trim($wrOut) === 'true' && file_get_contents($wrP) === "{gallery}\nnew text\n" && (fileperms($wrP) & 0777) === 0640 && glob("$wrDir/f7.md.*") === [], $wrOut);
 // the same through the admin: a notes save on a disk with no room (this server may not write a file over 8 KB; a request body much over 16 KB is not read by it at all, so the note is kept just above 8 KB)
+if (!$wrDisk) skip('[data writer] a notes save that does not fit on the disk leaves the note as it was', 'no full-disk simulation on this PHP');
+else {
 $fxN = new_fixture_dir('notes-noroom'); mkdir("$fxN/Alpha", 0777, true); make_jpeg("$fxN/Alpha/a1.jpg", 40, 30, 20, 90, 160);
 file_put_contents("$fxN/Alpha/forsale.md", "{gallery}\nA note about something for sale.\n");
 file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nn-admin-pw-1']));
@@ -10857,6 +10874,7 @@ $baseN = "http://127.0.0.1:$portN";
 $nnCsrf = admin_token($baseN, $nnOwn); $nnBefore = file_get_contents("$fxN/Alpha/forsale.md");
 $nnR = json_decode(http_post("$baseN/?admin&folder=Alpha", ['csrf_token' => $nnCsrf, 'action' => 'save_notes', 'md_file' => 'forsale.md', 'new_name' => '', 'content' => "{gallery}\n" . str_repeat('A long note. ', 900)], array_merge($nnOwn, ['X-Requested-With: gallery-fetch']))[1], true);
 check('[data writer] a notes save that does not fit on the disk leaves the note as it was (the audit saw a 259-byte note become 0 bytes), and does not say it was saved', file_get_contents("$fxN/Alpha/forsale.md") === $nnBefore && !str_contains((string) json_encode($nnR), 'Notes saved') && glob("$fxN/Alpha/forsale.md.*") === [], json_encode($nnR) . ' / ' . filesize("$fxN/Alpha/forsale.md"));
+}
 
 // F14: a share link saved from a page opened earlier puts nothing back
 echo "== audit group 1: a share link saved from a page opened earlier ==\n";
@@ -11158,7 +11176,7 @@ check('[not listed photo log] the page\'s posts are not counted as wrong guesses
 /* --------------------------------------------------------------------- */
 
 // Audit group 4: the settings reader (C13: a file that can't be used shows nothing; G16: no ctype; the old LOG_PUBLIC_DAYS line; a byte-order mark).
-echo "== audit group 4: a settings file that can't be used shows nothing; no ctype needed; a BOM is read; an old setting is named ==\n";
+echo "== audit group 4: a settings file that can't be used shows nothing; no ctype needed; a BOM is named; an old setting is named ==\n";
 $g4Src = (string) file_get_contents($indexSrc);
 $g4Fn = function (string $name) use ($g4Src) { $from = strpos($g4Src, "\nfunction $name("); if ($from === false) return ''; $to = strpos($g4Src, "\n}\n", $from) + 3; return substr($g4Src, $from, $to - $from); };
 $g4Dir = new_fixture_dir('g4-fn');
@@ -11204,16 +11222,15 @@ $g4Hl = html_entity_decode(http_get("$baseS/?admin&health=1", $g4Own)[1], ENT_QU
 check('[old setting] Health says LOG_PUBLIC_DAYS is now "Keep visitor records for (days)" (LOG_KEEP_DAYS) and that the line is ignored, not that it is a typo; a real typo still says typo', str_contains($g4Hl, '"LOG_PUBLIC_DAYS" is now "Keep visitor records for (days)" (LOG_KEEP_DAYS)') && !preg_match('/"LOG_PUBLIC_DAYS" isn\'t a setting/', $g4Hl) && str_contains($g4Hl, '"LOG_PUBLC_DAYS" isn\'t a setting (a typo?)'), substr((string) strstr($g4Hl, 'LOG_PUBLIC'), 0, 200));
 // a byte-order mark
 file_put_contents("$fxS/.gallery-config.php", "\xEF\xBB\xBF" . $g4Good);
-check('[BOM] a settings file saved with a byte-order mark at its start (a Windows editor does that) is read as settings: the closed gallery stays closed, and nothing is reported (it used to count as broken)', $g4Ask('')[0] === 404 && $g4Ask('?admin')[0] === 200 && !str_contains(html_entity_decode(http_get("$baseS/?admin&health=1", $g4Own)[1], ENT_QUOTES), 'couldn\'t be read'));
+[$bmSt, $bmBody] = $g4Ask('');
+check('[BOM] a settings file with a byte-order mark at its start (a Windows editor adds one) is not used: 503, a page that says so and how to save the file again, and the closed gallery stays closed (the file would answer a direct request with 200 and, where errors are shown, a warning naming the server\'s folders)', $bmSt === 503 && str_contains($bmBody, 'byte-order mark') && str_contains($bmBody, 'without a BOM') && !str_contains($bmBody, 'a.jpg') && $g4Ask('?admin')[0] === 503);
+check('[BOM] ...the file is left exactly as it was found, and saved again without the mark everything is as before', file_get_contents("$fxS/.gallery-config.php") === "\xEF\xBB\xBF" . $g4Good && (file_put_contents("$fxS/.gallery-config.php", $g4Good) !== false) && $g4Ask('')[0] === 404);
 file_put_contents("$fxS/.gallery-config.php", data_file_guard_line_for_tests() . "\xEF\xBB\xBF" . json_encode($g4Cfg));
-check('[BOM] ...and so is one with it after the guard line', $g4Ask('')[0] === 404);
-file_put_contents("$fxS/.gallery-config.php", "\xEF\xBB\xBF" . $g4Good);
-[$dSt, $dBody] = http_get("$baseS/.gallery-config.php");
-check('[BOM] a settings file with a byte-order mark before its guard line still gives away nothing when asked for directly (nothing of the settings or the password is in the answer)', !str_contains($dBody, 'ADMIN_PASSWORD') && !str_contains($dBody, 'CLOSE_PUBLIC') && !str_contains($dBody, '$2y$') && strlen($dBody) <= 3, "$dSt " . bin2hex(substr($dBody, 0, 20)));
+check('[BOM] one after the guard line is not skipped either: the file is refused as it is not valid JSON', $g4Ask('')[0] === 503);
 file_put_contents("$fxS/.gallery-config.php", $g4Good);
-$g4P = $g4Run($g4Fn('data_file_strip_guard') . $g4Fn('gallery_config_clean') . $g4Fn('gallery_config_parse') . 'echo json_encode([gallery_config_parse("\xEF\xBB\xBF" . "<?php http_response_code(404); exit; ?>\n\xEF\xBB\xBF{\"A\": 1}"), gallery_config_parse("{\"A\": 1,, }")[0], gallery_config_parse("{\"A\": 1\xEF\xBB\xBF}")[0], gallery_config_parse("{\"A\": 1}\xEF\xBB\xBF")[0]]);');
+$g4P = $g4Run($g4Fn('data_file_strip_guard') . $g4Fn('gallery_config_clean') . $g4Fn('gallery_config_parse') . 'echo json_encode([gallery_config_parse("\xEF\xBB\xBF" . "<?php http_response_code(404); exit; ?>\n{\"A\": 1}"), gallery_config_parse("{\"A\": 1,, }")[0], gallery_config_parse("{\"A\": 1\xEF\xBB\xBF}")[0], gallery_config_parse("{\"A\": 1}\xEF\xBB\xBF")[0], gallery_config_parse("<?php http_response_code(404); exit; ?>\n{\"A\": 1}")]);');
 $g4Pd = json_decode($g4P, true);
-check('[BOM] only a byte-order mark at the start of the file, or of what follows the guard line, is skipped: one in the middle of the settings, or at the end, is still an error', is_array($g4Pd) && $g4Pd[0] === ['ok', ['A' => 1]] && $g4Pd[1] === 'broken' && $g4Pd[2] === 'broken' && $g4Pd[3] === 'broken', $g4P);
+check('[BOM] the reader names a byte-order mark at the start of the file as that, and treats one anywhere else as the error it is', is_array($g4Pd) && $g4Pd[0] === ['broken', [], 'bom'] && $g4Pd[1] === 'broken' && $g4Pd[2] === 'broken' && $g4Pd[3] === 'broken' && $g4Pd[4] === ['ok', ['A' => 1]], $g4P);
 // G16: no ctype
 $g4Hit = []; foreach (glob($repoRoot . '/src/php/*.php') as $g4F) if (preg_match('/\bctype_[a-z]+\(/', (string) file_get_contents($g4F))) $g4Hit[] = basename($g4F);
 check('[no ctype] nothing in the source calls a ctype function (the extension is packaged apart on some systems, and its absence was a 500 on every request once the settings file held two settings)', $g4Hit === [], implode(', ', $g4Hit));
@@ -11223,5 +11240,5 @@ check('[no ctype] a settings file with two settings and a trailing comma is read
 
 /* --------------------------------------------------------------------- */
 
-echo "\n$passCount passed, $failCount failed\n";
+echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

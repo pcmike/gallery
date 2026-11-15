@@ -165,12 +165,12 @@ function gallery_config_clean($raw) {
  *  where status is 'ok', 'broken' (not valid JSON: a third item says what the parser found) or 'invalid' (valid, but
  *  not an object of settings). */
 function gallery_config_parse($raw) {
-    $bom = "\xEF\xBB\xBF";   // (a Windows editor puts these three bytes at the start of a file it saves as UTF-8; they are not part of the settings)
     $raw = (string) $raw;
-    if (strncmp($raw, $bom, 3) === 0) $raw = substr($raw, 3);
-    $raw = data_file_strip_guard($raw);
-    if (strncmp($raw, $bom, 3) === 0) $raw = substr($raw, 3);   // (or at the start of what follows the guard line)
-    $raw = gallery_config_clean($raw);
+    // A Windows editor puts three invisible bytes (a byte-order mark) at the start of a file it saves as UTF-8. Before the guard line they make the file answer a
+    // direct request with 200 and, on a PHP that shows its errors, a warning that names the server's folders, instead of the 404 the guard line gives. So the file is
+    // not used until it is saved again without them (the refusal page says so).
+    if (strncmp($raw, "\xEF\xBB\xBF", 3) === 0) return ['broken', [], 'bom'];
+    $raw = gallery_config_clean(data_file_strip_guard($raw));
     if (trim($raw) === '') return ['ok', []];
     $decoded = json_decode($raw, true);
     if (json_last_error() !== JSON_ERROR_NONE) return ['broken', [], json_last_error_msg()];
@@ -212,9 +212,10 @@ function gallery_config_refuse_if_unusable() {
     if (PHP_SAPI === 'cli') return;
     $st = gallery_config_load();
     if (!in_array($st['status'], ['broken', 'invalid', 'unreadable'], true)) return;
-    $why = $st['status'] === 'broken' ? 'it is not valid JSON (' . ($st['reason'] !== '' ? $st['reason'] : 'the parser could not read it') . '): a stray comma or a missing quote is the usual cause'
+    $why = $st['status'] === 'broken' && ($st['reason'] ?? '') === 'bom' ? 'it starts with a byte-order mark (three invisible bytes that some Windows editors add), which makes it answer a direct request in a way it should not; save it again as UTF-8 without a BOM'
+        : ($st['status'] === 'broken' ? 'it is not valid JSON (' . ($st['reason'] !== '' ? $st['reason'] : 'the parser could not read it') . '): a stray comma or a missing quote is the usual cause'
         : ($st['status'] === 'invalid' ? 'it must hold an object of settings, like {"NAME": value}, and it holds something else'
-        : 'the web server is not allowed to read it (check the file\'s permissions)');
+        : 'the web server is not allowed to read it (check the file\'s permissions)'));
     $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     if (!headers_sent()) {
         http_response_code(503);
