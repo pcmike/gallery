@@ -10912,6 +10912,32 @@ check('[notes name] editing a note under its own name still saves (with the name
 $dR = $dSave(['md_file' => 'forsale.md', 'new_name' => 'brand-new', 'content' => "{gallery}\na copy\n"]);
 check('[notes name] a name nothing has taken still makes a new note', ($dR['ok'] ?? null) === true && file_get_contents("$fxD/Alpha/brand-new.md") === "{gallery}\na copy\n", json_encode($dR));
 
+// the notes editor posts the whole file: a tab opened before another save must not put the old text back
+echo "== audit group 1: a notes save from an editor that has gone stale ==\n";
+$fxK = new_fixture_dir('notesstale'); mkdir("$fxK/Alpha", 0777, true); make_jpeg("$fxK/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+file_put_contents("$fxK/Alpha/forsale.md", "{gallery}\nThe first text.\n");
+file_put_contents("$fxK/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ns-admin-pw-1']));
+copy($indexSrc, "$fxK/index.php");
+$portK = find_free_port(); start_server($fxK, $portK); $baseK = "http://127.0.0.1:$portK";
+[, , $kH] = http_post("$baseK/?admin", ['access_code' => 'ns-admin-pw-1'], [], false); $kOwn = ['Cookie: ' . extract_cookie_header($kH)];
+$kCsrf = admin_token($baseK, $kOwn);
+$kSave = fn (array $f, bool $fetch = true) => http_post("$baseK/?admin&folder=Alpha", $f + ['csrf_token' => $kCsrf, 'action' => 'save_notes', 'md_file' => 'forsale.md', 'new_name' => ''], array_merge($kOwn, $fetch ? ['X-Requested-With: gallery-fetch'] : []));
+$kNote = fn () => (string) file_get_contents("$fxK/Alpha/forsale.md");
+$kH0 = md5($kNote());
+check('[notes stale] the notes editor is given a fingerprint of the file as it was loaded', str_contains(http_get("$baseK/?admin&folder=Alpha", $kOwn)[1], 'name="loaded_hash" value="' . $kH0 . '"'));
+$kA = json_decode($kSave(['content' => "{gallery}\nA wrote this.\n", 'loaded_hash' => $kH0])[1], true);
+check('[notes stale] tab A saves the note', ($kA['ok'] ?? null) === true && $kNote() === "{gallery}\nA wrote this.\n", json_encode($kA));
+$kB = json_decode($kSave(['content' => "{gallery}\nB wrote this.\n", 'loaded_hash' => $kH0])[1], true);
+check('[notes stale] tab B, opened before A saved, is refused saying the note was changed somewhere else, and A\'s text stays (it used to be overwritten, with "saved")', ($kB['ok'] ?? null) === false && str_contains($kB['text'] ?? '', 'was changed somewhere else') && $kNote() === "{gallery}\nA wrote this.\n", json_encode($kB));
+$kPage = $kSave(['content' => "{gallery}\nB wrote this.\n", 'loaded_hash' => $kH0], false)[1];
+check('[notes stale] ...and through the plain form the page says so and still holds what B typed (to copy), with the old fingerprint so pressing Save again is refused too', str_contains($kPage, 'was changed somewhere else') && str_contains($kPage, 'B wrote this.') && str_contains($kPage, 'name="loaded_hash" value="' . $kH0 . '"') && $kNote() === "{gallery}\nA wrote this.\n");
+$kC = json_decode($kSave(['content' => "{gallery}\nB merged it.\n", 'loaded_hash' => md5($kNote())])[1], true);
+check('[notes stale] after reloading (the file as it is now) the save goes through', ($kC['ok'] ?? null) === true && $kNote() === "{gallery}\nB merged it.\n", json_encode($kC));
+$kD = json_decode($kSave(['content' => "{gallery}\nan older page.\n"])[1], true);
+check('[notes stale] a save that sends no fingerprint (an older page) is not refused', ($kD['ok'] ?? null) === true && $kNote() === "{gallery}\nan older page.\n", json_encode($kD));
+$kE = json_decode($kSave(['content' => "{gallery}\na copy.\n", 'new_name' => 'copy-of', 'loaded_hash' => 'stale'])[1], true);
+check('[notes stale] saving as a new name is not an overwrite of the stale file, so it is not refused', ($kE['ok'] ?? null) === true && file_get_contents("$fxK/Alpha/copy-of.md") === "{gallery}\na copy.\n", json_encode($kE));
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed\n";

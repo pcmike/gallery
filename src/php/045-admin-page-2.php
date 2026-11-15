@@ -168,7 +168,8 @@
       $raw = (string) @file_get_contents($adminFolderReal . '/' . $mdFile);
       // Shown exactly as stored, {gallery} line included: what you see is what a save writes. (Hiding the line used to
       // write it back without the marker, which quietly switched the notes off.)
-      $editable = $raw;
+      $editable = $raw; $loadedHash = md5($raw);
+      if (!empty($GLOBALS['__notes_stale']) && $GLOBALS['__notes_stale']['file'] === $mdFile) { $editable = $GLOBALS['__notes_stale']['content']; $loadedHash = $GLOBALS['__notes_stale']['hash']; }   // (a save refused as out of date: what was typed is kept in the box, and still carries the old fingerprint, so pressing Save again is refused too until the page is reloaded)
     ?>
       <div class="md-file">
         <div class="md-file-head">
@@ -187,6 +188,7 @@
           <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
           <input type="hidden" name="action" value="save_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
+          <input type="hidden" name="loaded_hash" value="<?= $loadedHash ?>">
           <textarea name="content" class="adm-textarea" aria-label="Contents of this notes file"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
           <div class="field-row md-actions">
             <div class="field">

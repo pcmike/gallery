@@ -10136,6 +10136,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         $targetPath = $adminFolderReal . '/' . $target;
+        // The editor was opened on the file as it was then (loaded_hash, from the page). Saving over a file that has changed since would put
+        // the old text back whole, so it is refused, and what was typed is handed back to the page so it can be copied. (A save with no
+        // fingerprint, from an older page, skips the check, as the other forms do; a save under another name overwrites nothing.)
+        $loadedHash = isset($_POST['loaded_hash']) && is_string($_POST['loaded_hash']) ? $_POST['loaded_hash'] : null;
+        if ($target === $existing && $loadedHash !== null && is_file($targetPath) && !hash_equals(md5((string) @file_get_contents($targetPath)), $loadedHash)) {
+            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => $loadedHash];
+            return ['type' => 'error', 'text' => '"' . $target . '"' . admin_stale_message() . ' What you typed is still in the box below, so you can copy it first.'];
+        }
         if ($target !== $existing && file_exists($targetPath)) {   // a different name that something already has (a README, another note): saving would replace it
             return ['type' => 'error', 'text' => 'A file named "' . $target . '" is already in this folder, so nothing was saved (it would have been overwritten). Choose another name, or open that file to change it.'];
         }
@@ -18955,7 +18963,8 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       $raw = (string) @file_get_contents($adminFolderReal . '/' . $mdFile);
       // Shown exactly as stored, {gallery} line included: what you see is what a save writes. (Hiding the line used to
       // write it back without the marker, which quietly switched the notes off.)
-      $editable = $raw;
+      $editable = $raw; $loadedHash = md5($raw);
+      if (!empty($GLOBALS['__notes_stale']) && $GLOBALS['__notes_stale']['file'] === $mdFile) { $editable = $GLOBALS['__notes_stale']['content']; $loadedHash = $GLOBALS['__notes_stale']['hash']; }   // (a save refused as out of date: what was typed is kept in the box, and still carries the old fingerprint, so pressing Save again is refused too until the page is reloaded)
     ?>
       <div class="md-file">
         <div class="md-file-head">
@@ -18974,6 +18983,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
           <input type="hidden" name="action" value="save_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
+          <input type="hidden" name="loaded_hash" value="<?= $loadedHash ?>">
           <textarea name="content" class="adm-textarea" aria-label="Contents of this notes file"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
           <div class="field-row md-actions">
             <div class="field">

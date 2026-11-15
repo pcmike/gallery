@@ -1128,6 +1128,14 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         $targetPath = $adminFolderReal . '/' . $target;
+        // The editor was opened on the file as it was then (loaded_hash, from the page). Saving over a file that has changed since would put
+        // the old text back whole, so it is refused, and what was typed is handed back to the page so it can be copied. (A save with no
+        // fingerprint, from an older page, skips the check, as the other forms do; a save under another name overwrites nothing.)
+        $loadedHash = isset($_POST['loaded_hash']) && is_string($_POST['loaded_hash']) ? $_POST['loaded_hash'] : null;
+        if ($target === $existing && $loadedHash !== null && is_file($targetPath) && !hash_equals(md5((string) @file_get_contents($targetPath)), $loadedHash)) {
+            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => $loadedHash];
+            return ['type' => 'error', 'text' => '"' . $target . '"' . admin_stale_message() . ' What you typed is still in the box below, so you can copy it first.'];
+        }
         if ($target !== $existing && file_exists($targetPath)) {   // a different name that something already has (a README, another note): saving would replace it
             return ['type' => 'error', 'text' => 'A file named "' . $target . '" is already in this folder, so nothing was saved (it would have been overwritten). Choose another name, or open that file to change it.'];
         }
