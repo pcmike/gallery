@@ -6425,14 +6425,14 @@ function public_log_wanted() {
 
 /** How this page was reached, for the public address's log: an arrival (an address typed or pasted, a bookmark, a link from another site or an app: the
  *  browser says it was not a click inside the gallery) as [folder path ('' is the front page) or, for a Not listed photo opened by its address, the photo,
- *  how, whether it was that photo]; null for a click inside the gallery, or a browser that doesn't say. */
+ *  how, whether it was that photo (then the folder is '': the photo is the code's)]; null for a click inside the gallery, or a browser that doesn't say. */
 function public_log_arrival() {
     if (!public_log_wanted()) return null;
     $site = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? ''));
     if ($site === '' || $site === 'same-origin') return null;
     $how = $site === 'none' ? 'typed' : (in_array($site, ['cross-site', 'same-site'], true) ? 'link' : 'other');
     $pass = $GLOBALS['photoPass'] ?? null;
-    if ($pass !== null) return ['f' => $pass, 'h' => $how, 'u' => true];
+    if ($pass !== null) return ['f' => '', 'h' => $how, 'u' => true];   // (a Not listed photo's page never names the photo: the log route works out which it is from the code on the request)
     $folder = $GLOBALS['currentFolderPath'] ?? null;
     return ['f' => $folder === null ? '' : $folder, 'h' => $how];
 }
@@ -6827,6 +6827,7 @@ function photo_code_params_translate($dir, $mediaExtensions, $self) {
     if (!is_string($k) || preg_match('/^[A-Za-z0-9]{8}$/D', $k) !== 1 || !AUTO_GROUP_BY_FOLDER || install_secret() === '') return;
     $params = [];
     foreach (['img', 'original', 'track', 'strip', 'video'] as $p) if (($_GET[$p] ?? null) === $k) $params[] = $p;
+    if (request_route() === 'linklog' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') $params[] = 'photo';   // (the page's reports of that photo carry its code in k= and name the photo by it: see run_linklog_route)
     if (!$params) return;   // (an ordinary request names a path, never its own code: nothing is scanned for it)
     if (gallery_is_closed() && !is_revealed() && !is_admin_browser() && link_viewer() === null) return;
     if (!is_admin_browser() && !is_revealed() && !login_throttle_allows($dir, 'link', client_ip())) return;
@@ -14057,23 +14058,64 @@ function link_queue_deliveries($link, array $pairs) {
     link_log_apply($link, $vid, $ip, $label, $country, array_values($pairs));
 }
 
+/** Is this post from the gallery's own page? The page sends JSON (a fetch or a beacon of the type application/json) from its own site. Another site can make a
+ *  browser post a form, or text/plain, and nothing else without being asked first (and this answers no such question), so those are not the page's: they write
+ *  nothing. A browser that says it is not the same site (Sec-Fetch-Site) is not the page's either; one that says nothing is let through on the type alone. */
+function linklog_post_is_ours() {
+    $type = strtolower(trim(explode(';', (string) ($_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? ''))[0]));
+    if ($type !== 'application/json') return false;
+    $site = strtolower((string) ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? ''));
+    return $site === '' || $site === 'same-origin';
+}
+
+/** May ?linklog record a folder (or a collection's page) for this visitor? When that page would answer this visitor: something this visitor may see lies under it
+ *  (the way the page decides, from the files they may see), or it is a collection they can open. The folder's own spelling is the only one that counts, so a name
+ *  has one row; a hidden, empty or missing one, and one that is not the gallery's at all, are all dropped the same way, doing the same work. $except is a photo
+ *  whose code the request carries: it is not counted here, or the code's holder could ask the log whether a folder is there. The files are scanned once per request,
+ *  and only when a post holds a folder line. */
+function linklog_folder_openable($dir, $mediaExtensions, $self, $path, $except = null) {
+    static $v = null;
+    if (!is_string($path) || $path === '') return false;
+    if ($v === null) {
+        $all = AUTO_GROUP_BY_FOLDER ? flatten_folder_tree(merge_extra_folders(scan_folder_tree($dir, $mediaExtensions, $self), $mediaExtensions, $self)) : [];
+        $items = $all ? items_get_all_for_files($dir, $all) : [];
+        $visible = []; $folders = [];
+        foreach ($all as $f) {
+            if ($f === $except || !viewer_may_see_item($dir, $f, $items)) continue;
+            $visible[] = $f;
+            for ($d = dirname($f); $d !== '.' && $d !== '' && $d !== '/' && !isset($folders[$d]); $d = dirname($d)) $folders[$d] = true;
+        }
+        $v = ['all' => $all, 'visible' => $visible, 'folders' => $folders];
+    }
+    if (isset($v['folders'][$path])) return true;
+    return AUTO_GROUP_BY_FOLDER && collections_any() && collection_page($dir, $path, $v['all'], $v['visible']) !== null;
+}
+
 /** ?linklog (a POST of {"e": [["s", "Rome/r1.jpg"], ...]}) from the page of someone using a link: what came on screen, what the viewer
- *  showed, what played, which folder page. Answers nothing (204). Anything the person couldn't see is ignored. */
+ *  showed, what played, which folder page. Answers nothing (204). Anything the person couldn't see is ignored: a photo they may not see, a folder whose page
+ *  would not answer them, a post that is not the gallery's own page's, and a line repeated in the same post (it counts once). A Not listed photo's own page
+ *  names its photo by the code (k= on this address, and in the lines): the photo is the code's, and the page's own word of where it lives is not asked for. */
 function run_linklog_route($dir, $mediaExtensions, $self) {
     header('Cache-Control: no-store');
     $link = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' ? visitor_log_link() : null;   // (someone on a link, someone with the private-view password, or an ordinary visitor when the public address's log is on)
-    if ($link === null) { http_response_code(204); return; }
+    if ($link === null || !linklog_post_is_ours()) { http_response_code(204); return; }
     $raw = (string) file_get_contents('php://input', false, null, 0, 20000);
     $in = json_decode($raw, true);
+    $code = is_string($_GET['k'] ?? null) ? $_GET['k'] : '';
+    $coded = $GLOBALS['__photo_coded'] ?? null;   // (the photo this request's code opens, worked out at the top of the request: see photo_code_params_translate)
+    if (is_string($coded) && !(valid_media_path($dir, $coded, $mediaExtensions, $self) && file_is_unlisted($dir, $coded) && viewer_may_see_item($dir, $coded, items_get_all_for_files($dir, [$coded])))) $coded = null;   // (this also notes the code as right: it is not a wrong guess)
+    if (!is_string($coded)) $coded = null;
     $batch = [];
     if (is_array($in) && is_array($in['e'] ?? null)) {
-        $mine = [];
+        $mine = []; $seen = [];
         foreach (array_slice($in['e'], 0, 120) as $e) {
             if (!is_array($e) || count($e) !== 2 || !is_string($e[0]) || !is_string($e[1]) || !in_array($e[0], ['s', 'o', 'p', 'f'], true) || strlen($e[1]) > 600 || strpbrk($e[1], "\0\r\n") !== false) continue;
             [$k, $item] = $e;
+            if ($k !== 'f' && $coded !== null && $code !== '' && $item === $code) $item = $coded;
+            if (isset($seen[$k . "\0" . $item])) continue;
+            $seen[$k . "\0" . $item] = true;
             if ($k === 'f') {
-                if ($item !== '' && (!is_dir(resolve_real_path($dir, $item)) || !preg_match('#^[^/]#', $item) || str_contains($item, '..'))) continue;
-                if ($item !== '' && folder_is_private($dir, $item) && !link_folder_reachable($link, $dir, $item)) continue;
+                if ($item !== '' && !linklog_folder_openable($dir, $mediaExtensions, $self, $item, $coded)) continue;
                 $batch[] = [$k, $item]; continue;
             }
             if (!valid_media_path($dir, $item, $mediaExtensions, $self)) continue;
@@ -14086,9 +14128,9 @@ function run_linklog_route($dir, $mediaExtensions, $self) {
     if (is_array($in) && is_array($in['a'] ?? null) && link_is_public_log($link)) {
         $a = $in['a']; $af = $a['f'] ?? null; $ah = $a['h'] ?? '';
         if (is_string($af) && strlen($af) <= 600 && strpbrk($af, "\0\r\n") === false && in_array($ah, ['typed', 'link', 'other'], true)) {
-            if (!empty($a['u'])) {   // a Not listed photo opened by its own address (the code is on this request too)
-                if (valid_media_path($dir, $af, $mediaExtensions, $self) && file_is_unlisted($dir, $af) && viewer_may_see_item($dir, $af, items_get_all_for_files($dir, [$af]))) $arrive = ['f' => $af, 'h' => $ah, 'u' => 1];
-            } elseif ($af === '' || ($af[0] !== '/' && !str_contains($af, '..') && is_dir(resolve_real_path($dir, $af)) && !folder_is_private($dir, $af))) $arrive = ['f' => $af, 'h' => $ah];
+            if (!empty($a['u'])) {   // a Not listed photo opened by its own address: the photo is the code's, whatever the page says
+                if ($coded !== null) $arrive = ['f' => $coded, 'h' => $ah, 'u' => 1];
+            } elseif ($af === '' || linklog_folder_openable($dir, $mediaExtensions, $self, $af, $coded)) $arrive = ['f' => $af, 'h' => $ah];
         }
     }
     if ($batch || $arrive) {

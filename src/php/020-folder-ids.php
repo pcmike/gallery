@@ -258,6 +258,7 @@ function photo_code_params_translate($dir, $mediaExtensions, $self) {
     if (!is_string($k) || preg_match('/^[A-Za-z0-9]{8}$/D', $k) !== 1 || !AUTO_GROUP_BY_FOLDER || install_secret() === '') return;
     $params = [];
     foreach (['img', 'original', 'track', 'strip', 'video'] as $p) if (($_GET[$p] ?? null) === $k) $params[] = $p;
+    if (request_route() === 'linklog' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') $params[] = 'photo';   // (the page's reports of that photo carry its code in k= and name the photo by it: see run_linklog_route)
     if (!$params) return;   // (an ordinary request names a path, never its own code: nothing is scanned for it)
     if (gallery_is_closed() && !is_revealed() && !is_admin_browser() && link_viewer() === null) return;
     if (!is_admin_browser() && !is_revealed() && !login_throttle_allows($dir, 'link', client_ip())) return;

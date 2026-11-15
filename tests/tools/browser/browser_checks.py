@@ -4812,6 +4812,35 @@ try:
         ok(b.js("typeof files === 'object' && files !== null && files.length === 1"), "[names] the folder that holds a Latin-1 name has a working script too, and lists only its usable photo")
     finally:
         srvN.terminate(); srvN.wait()
+    print("== a Not listed photo's own address with the public log on: the page names nothing, and the visit is logged by the photo's code")
+    import http.cookiejar as _cj, sqlite3 as _sq3p
+    SITE_P = WORK + "/sitenl"; os.makedirs(SITE_P + "/Drawer")
+    shutil.copy(HERE + "/../../../index.php", SITE_P + "/index.php"); os.utime(SITE_P + "/index.php", (time.time() - 3600,) * 2)
+    subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagefill($i,0,0,imagecolorallocate($i,40,150,90)); imagejpeg($i,$argv[1]);", SITE_P + "/Drawer/d1.jpg"], check=True)
+    PGUARD = "<?php http_response_code(404); exit; ?>\n"
+    phash = subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "nl-admin-pw"], capture_output=True, text=True).stdout
+    open(SITE_P + "/.gallery-config.php", "w").write(PGUARD + json.dumps({"ADMIN_PASSWORD": phash, "AUTO_GROUP_BY_FOLDER": True, "LOG_PUBLIC_VISITS": True}) + "\n")
+    open(SITE_P + "/Drawer/.gallery-items.php", "w").write(PGUARD + json.dumps({"restriction": "private", "unlisted": True, "items": {}, "groups": []}) + "\n")
+    sp_ = socket.socket(); sp_.bind(("127.0.0.1", 0)); PP = sp_.getsockname()[1]; sp_.close(); BP = f"http://127.0.0.1:{PP}"
+    srvP = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PP}", "-t", SITE_P], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        time.sleep(1.0)
+        pjar = _cj.CookieJar(); pop = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(pjar))
+        pop.open(urllib.request.Request(BP + "/?admin", data=urllib.parse.urlencode({"access_code": "nl-admin-pw"}).encode()), timeout=20).read()
+        ptok = json.loads(pop.open(BP + "/?admin&csrf=1", timeout=20).read())["token"]
+        pr = json.loads(pop.open(urllib.request.Request(BP + "/?admin&folder=Drawer", data=urllib.parse.urlencode({"csrf_token": ptok, "action": "photo_address", "file": "d1.jpg"}).encode(), headers={"X-Requested-With": "gallery-fetch"}), timeout=20).read())
+        pcode = pr.get("code", "")
+        b.viewport(1100, 800); b.call("Network.clearBrowserCookies")
+        b.goto(BP + "/?" + pcode, 2.0)
+        ok(bool(pcode) and b.js("document.documentElement.innerHTML.indexOf('Drawer') < 0 && document.documentElement.innerHTML.indexOf('d1.jpg') < 0"), "[not listed log] a Not listed photo's address, typed into a real browser with the public log on: the page holds neither the folder's name nor the file's", pcode)
+        ok(b.js("(() => { const i = document.querySelector('.card img'); return !!i && i.complete && i.naturalWidth > 0; })()"), "[not listed log] ...and the photo shows")
+        b.js("openLightbox(0)"); b.drain(1.0); b.js("window.dispatchEvent(new Event('pagehide'))"); b.drain(1.5)
+        pdb = _sq3p.connect(glob.glob(SITE_P + "/.gallery-visits-*.sqlite")[0]); pdb.row_factory = _sq3p.Row
+        pev = [(r["k"], r["f"], r["u"]) for r in pdb.execute("SELECT k, f, u FROM events WHERE src = 'ffffffffff' ORDER BY id")]; pdb.close()
+        ok(("arrive", "Drawer/d1.jpg", 1) in pev and ("opened", "Drawer/d1.jpg", None) in [(k, f, None) for k, f, u in pev], "[not listed log] ...and the visit is in the owner's log, by the code: the arrival (marked as a Not listed photo's) and the viewer opening it (they were never logged)", str(pev))
+        ok(b.js("(() => { const i = document.getElementById('lightbox-img'); return i.complete && i.naturalWidth > 0; })()"), "[not listed log] ...and the photo's own pictures are still served after the page's reports (they are not counted as wrong guesses)")
+    finally:
+        srvP.terminate(); srvP.wait()
 except Exception as e:
     fails += 1; print("  FAIL  the browser run crashed:", type(e).__name__, e)
 finally:

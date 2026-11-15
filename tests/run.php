@@ -6342,7 +6342,8 @@ $lgBeacon = function (array $events, $headers = null) use ($baseL, $lgH) {
     foreach ($http_response_header ?? [] as $h) if (preg_match('#^HTTP/\S+\s+(\d+)#', $h, $m)) $st = (int) $m[1];
     return [$st, $body];
 };
-[$lgBs] = $lgBeacon([['s', 'Rome/r1.jpg'], ['s', 'Rome/r2.jpg'], ['s', 'pub.jpg'], ['f', 'Rome'], ['o', 'Rome/r1.jpg'], ['o', 'Rome/r1.jpg'], ['p', 'Rome/clip.mp4'], ['s', 'Pisa/nope.jpg'], ['s', '../etc/passwd'], ['x', 'pub.jpg'], ['f', 'Nope']]);
+[$lgBs] = $lgBeacon([['s', 'Rome/r1.jpg'], ['s', 'Rome/r2.jpg'], ['s', 'pub.jpg'], ['f', 'Rome'], ['o', 'Rome/r1.jpg'], ['o', 'Rome/r1.jpg'], ['p', 'Rome/clip.mp4'], ['s', 'Pisa/nope.jpg'], ['s', '../etc/passwd'], ['x', 'pub.jpg'], ['f', 'Nope']]);   // (the opening twice in one post counts once: see below)
+$lgBeacon([['o', 'Rome/r1.jpg']]);   // (a second opening is a second post, as when the page has sent its batch in between)
 $lgT = $lgItems()['t'] ?? [];
 $lgVid = array_key_first($lgLog()['visitors']);
 $lgTally = fn ($rel) => $lgT["$lgVid|$rel"] ?? null;
@@ -9187,7 +9188,7 @@ check('[came in at] a later arrival (the front page, from a link) replaces where
 // a Not listed photo opened by its address
 $lgQ = '?' . ($lgAdmin(['action' => 'photo_address', 'file' => 'secret1.jpg'], '&folder=Drawer')['code'] ?? '-');
 $lgCode = substr($lgQ, -8);
-check('[came in at] the page of a Not listed photo\'s address says it was reached that way (the photo, not a folder)', str_contains($lgPage($lgQ, 'none'), 'galleryEntry = {"f":"Drawer\/secret1.jpg","h":"typed","u":true}'));
+check('[came in at] the page of a Not listed photo\'s address says it was reached that way (the photo, not a folder) and does not say which photo: the route works that out from the code', str_contains($lgPage($lgQ, 'none'), 'galleryEntry = {"f":"","h":"typed","u":true}') && !str_contains($lgPage($lgQ, 'none'), 'secret1'));
 $lgBeacon(['e' => [['o', 'Drawer/secret1.jpg']], 'a' => ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1]]);
 check('[came in at] ...without its code (the beacon asks without it) neither the arrival nor the open is kept', ($lgV3 = array_values($lgLog()['visitors'] ?? [])[0] ?? []) && ($lgV3['entry'] ?? null) === ['f' => '', 'h' => 'link'] && !preg_grep('~Drawer~', array_map(fn ($e) => (string) ($e['f'] ?? ''), $lgLog()['events'] ?? [])));
 $lgBeacon(['e' => [['o', 'Drawer/secret1.jpg']], 'a' => ['f' => 'Drawer/secret1.jpg', 'h' => 'typed', 'u' => 1]], "&photo=Drawer%2Fsecret1.jpg&k=$lgCode");
@@ -9328,7 +9329,7 @@ $mpQ1 = '?' . ($mpAddr['code'] ?? '-'); $mpK1 = substr($mpQ1, -8);
 $mpUnlock();
 $mpPage = http_get("$baseMp/$mpQ1", [$mpUA, 'Sec-Fetch-Site: none']);
 $mpUnlock();
-check('[mapped] a photo in a Not listed folder of the mapped place opens alone by its address (no neighbours, no folder, no way in), with its picture', ($mpAddr['ok'] ?? null) === true && $mpPage[0] === 200 && str_contains($mpPage[1], 'MAPSENTINEL-ONE') && !str_contains($mpPage[1], 'MAPSENTINEL-DEEP') && !preg_match('~href="\?folder=~', $mpPage[1]) && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=$mpK1")[0] === 200 && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=AAAAAAAAAAAA")[0] === 404);
+check('[mapped] a photo in a Not listed folder of the mapped place opens alone by its address (no neighbours, no folder, no way in), with its picture', ($mpAddr['ok'] ?? null) === true && $mpPage[0] === 200 && str_contains($mpPage[1], 'const files = ["' . $mpK1 . '"]') && !str_contains($mpPage[1], 'MAPSENTINEL') && !preg_match('~href="\?folder=~', $mpPage[1]) && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=$mpK1")[0] === 200 && http_get("$baseMp/?img=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&size=share&k=AAAAAAAAAAAA")[0] === 404);
 $mpUnlock();
 check('[mapped] ...its original needs the folder\'s own downloads switch (off to start with), and follows it', http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=$mpK1")[0] !== 200
     && (($mpAdmin(['action' => 'toggle_folder_originals', 'originals' => '1'], $mpFolder('Eurotrip/MapDrawer'))['ok'] ?? null) === true) && http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg&k=$mpK1")[0] === 200 && http_get("$baseMp/?original=Eurotrip%2FMapDrawer%2FMAPSENTINEL-ONE.jpg")[0] !== 200);
@@ -11056,6 +11057,103 @@ $zCsrf = admin_token($baseZ, $zOwn);
 $zR = json_decode(http_post("$baseZ/?admin", ['csrf_token' => $zCsrf, 'action' => 'save_group_label', 'group_key' => 'trip', 'display_name' => '0'], array_merge($zOwn, ['X-Requested-With: gallery-fetch']))[1], true);
 [, $zHome] = http_get("$baseZ/");
 check('[zero] a group named 0 shows that name (the group header said "trip")', preg_match('#<h2 class="group-label"[^>]*>0\b#', $zHome) === 1, json_encode($zR) . ' ' . substr((string) strstr($zHome, 'trip'), 0, 200));
+
+/* --------------------------------------------------------------------- */
+
+// Audit group 3: the log route (?linklog) and a Not listed photo's own page (E1-1 to E1-6, and a wrong guess counted for every post of that page).
+echo "== audit group 3: what the visitor log accepts is what this visitor may open; a Not listed photo's page logs by its code and names nothing ==\n";
+$fxG = new_fixture_dir('g3log');
+foreach (['Pisa', 'Rome', 'Drawer', 'emptydir', '.hidden-dir'] as $gD) mkdir("$fxG/$gD");
+make_jpeg("$fxG/pub.jpg", 80, 60, 200, 60, 60); make_jpeg("$fxG/Pisa/p1.jpg", 80, 60, 150, 60, 60); make_jpeg("$fxG/Rome/r1.jpg", 80, 60, 60, 60, 150);
+make_jpeg("$fxG/Drawer/d1.jpg", 80, 60, 60, 150, 60); make_jpeg("$fxG/Drawer/d2.jpg", 80, 60, 60, 150, 160);
+write_data_file("$fxG/Pisa/.gallery-items.php", ['folderId' => 'aaaaaaaaaaa1', 'items' => [], 'groups' => []]);
+write_data_file("$fxG/Rome/.gallery-items.php", ['folderId' => 'aaaaaaaaaaa2', 'restriction' => 'private', 'items' => [], 'groups' => []]);
+write_data_file("$fxG/Drawer/.gallery-items.php", ['folderId' => 'aaaaaaaaaaa3', 'restriction' => 'private', 'unlisted' => true, 'items' => [], 'groups' => []]);
+write_data_file("$fxG/.gallery-collections.php", ['collections' => [
+    ['id' => 'c000000000001', 'parent' => '', 'name' => 'best-of', 'title' => 'Best Of', 'items' => [['fid' => 'aaaaaaaaaaa1', 'mode' => 'all']], 'at' => 1],
+    ['id' => 'c000000000002', 'parent' => '', 'name' => 'family', 'title' => 'Family', 'items' => [['fid' => 'aaaaaaaaaaa1', 'mode' => 'all']], 'at' => 1, 'private' => true],
+]]);
+file_put_contents("$fxG/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g3-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'g3-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'LOG_PUBLIC_VISITS' => true]));
+copy($indexSrc, "$fxG/index.php");
+$portG = find_free_port(); start_server($fxG, $portG); $baseG = "http://127.0.0.1:$portG";
+[, , $gH] = http_post("$baseG/?admin", ['access_code' => 'g3-admin-pw-1'], [], false); $gCookie = extract_cookie_header($gH);
+$gCsrf = extract_csrf_token(http_get("$baseG/?admin", ["Cookie: $gCookie"])[1]);
+$gAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseG/?admin$q", $f + ['csrf_token' => $gCsrf], ['X-Requested-With: gallery-fetch', "Cookie: $gCookie"])[1], true) ?? [];
+$gUa = 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0';
+$gPost = function (string $query, $body, array $hdr = [], string $ct = 'application/json') use ($baseG) {   // (the page's own post: JSON, from the same site)
+    $h = array_merge($ct !== '' ? ["Content-Type: $ct"] : [], $hdr);
+    $opts = ['http' => ['method' => 'POST', 'header' => implode("\r\n", $h), 'content' => is_string($body) ? $body : json_encode($body), 'ignore_errors' => true, 'timeout' => 10]];
+    @file_get_contents("$baseG/?$query", false, stream_context_create($opts)); $st = 0;
+    foreach ($http_response_header ?? [] as $x) if (preg_match('#^HTTP/\S+\s+(\d+)#', $x, $m)) $st = (int) $m[1];
+    return $st;
+};
+$gPub = 'ffffffffff'; $gPriv = 'fffffffffd';
+$gEv = fn (string $src) => array_map(fn ($e) => $e['k'] . ':' . ($e['f'] ?? '') . (isset($e['u']) ? '(u)' : ''), vl_log($fxG, $src)['events']);
+$gFolderEv = fn (string $src, string $path) => count(array_filter(vl_log($fxG, $src)['events'], fn ($e) => $e['k'] === 'folder' && ($e['f'] ?? null) === $path));
+[, , $gRvH] = http_get("$baseG/?reveal", ['Authorization: Basic ' . base64_encode('x:g3-view-pw-1')], false); $gRv = extract_cookie_header($gRvH);
+$gMk = $gAdmin(['action' => 'link_create', 'label' => 'Everything', 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off', 'scope_type' => 'all']);
+$gLid = $gMk['id'] ?? ''; $gTok = (read_data_file("$fxG/.gallery-links.php")['links'][$gLid]['token'] ?? '');
+[, , $gGH] = http_post("$baseG/?link=$gTok", ['go' => '1'], [], false); $gGc = extract_cookie_header($gGH);
+check('[log route] the fixture is as the checks need it: an Everything link and a private-view cookie, and a collection page a stranger can open and a private one they can not', $gLid !== '' && $gTok !== '' && $gGc !== '' && $gRv !== '' && http_get("$baseG/?folder=best-of")[0] === 200 && http_get("$baseG/?folder=family")[0] === 404, json_encode([$gMk, $gGc, $gRv]));
+
+// E1-1, E1-2, E1-3: a folder line is kept when that folder's page would answer this visitor (the same answer for every kind of visitor, and for a spelling that is not the folder's own)
+$gVis = ['a stranger (the public address\'s log)' => [$gPub, [$gUa]], 'someone with the private-view password' => [$gPriv, ["Cookie: $gRv", $gUa]], 'a guest of an Everything link' => [$gLid, ["Cookie: $gGc", $gUa]]];
+$gPaths = ['Pisa', 'Rome', 'Drawer', 'emptydir', '.hidden-dir', './Pisa', 'Pisa/', 'Pisa//', 'Pisa/.', 'Nope', 'best-of', 'family', 'Pisa/p1.jpg', '..', 'Pisa/../Rome'];
+$gWrong = [];
+foreach ($gVis as $gWho => [$gSrc, $gHdr]) {
+    foreach ($gPaths as $gP) {
+        $gPage = http_get("$baseG/?folder=" . rawurlencode($gP), $gHdr)[0] === 200;
+        $gBefore = $gFolderEv($gSrc, $gP);
+        $gPost('linklog', ['e' => [['f', $gP]]], $gHdr);
+        $gKept = $gFolderEv($gSrc, $gP) > $gBefore;
+        if ($gKept !== $gPage) $gWrong[] = "$gWho / $gP: page " . ($gPage ? '200' : 'no') . ', logged ' . ($gKept ? 'yes' : 'no');
+    }
+}
+check('[log route] for a stranger, for someone with the private-view password and for an Everything link\'s guest, a folder line (a real folder, a private or Not listed one, an empty one, a dot folder, a collection, a file, and odd spellings of Pisa) is kept exactly when that folder\'s page would answer them', $gWrong === [], implode('; ', $gWrong));
+check('[log route] ...so the private-view visitor\'s "Opened the folder" for a private folder is there (it was dropped), and an Everything link\'s guest has none for the Not listed folder (a line was forged)', $gFolderEv($gPriv, 'Rome') === 1 && $gFolderEv($gLid, 'Drawer') === 0 && $gFolderEv($gLid, 'Rome') === 1 && $gFolderEv($gPriv, 'family') === 1 && $gFolderEv($gPub, 'family') === 0);
+$gBefore = count(vl_log($fxG, $gPub)['events']);
+$gMany = []; for ($i = 2; $i < 102; $i++) $gMany[] = ['f', str_repeat('./', $i) . 'Pisa'];
+$gPost('linklog', ['e' => $gMany], [$gUa]);
+check('[log route] a hundred spellings of one folder from a stranger add nothing (they used to be a hundred rows, up to 600 bytes each)', count(vl_log($fxG, $gPub)['events']) === $gBefore);
+$gArr = function (string $f) use ($gPost, $gEv, $gPub, $gUa) { $b = count(array_filter($gEv($gPub), fn ($x) => str_starts_with($x, 'arrive:'))); $gPost('linklog', ['e' => [], 'a' => ['f' => $f, 'h' => 'typed']], [$gUa]); return count(array_filter($gEv($gPub), fn ($x) => str_starts_with($x, 'arrive:'))) - $b; };
+check('[log route] how a visit began is held to the same rule: an arrival at a folder that is there is kept; at an odd spelling, a private folder or a Not listed one it is not', $gArr('Pisa') === 1 && $gArr('./Pisa') === 0 && $gArr('Rome') === 0 && $gArr('Drawer') === 0 && $gArr('nowhere') === 0);
+
+// E1-4: only the gallery's own page posts here, and a line is counted once in a post
+$gBefore = count($gEv($gPub));
+$gS1 = $gPost('linklog', json_encode(['e' => [['o', 'pub.jpg']], 'x' => '=']), ['Origin: http://evil.example', 'Sec-Fetch-Site: cross-site', $gUa], 'text/plain');
+$gS2 = $gPost('linklog', ['e' => [['o', 'pub.jpg']]], ['Origin: http://evil.example', 'Sec-Fetch-Site: cross-site', $gUa]);
+$gS3 = $gPost('linklog', ['e' => [['o', 'pub.jpg']]], [$gUa], '');
+check('[log route] a post another site can make (a form post of text/plain, JSON marked cross-site, or no content type) writes nothing, and is answered like any other (204)', $gS1 === 204 && $gS2 === 204 && $gS3 === 204 && count($gEv($gPub)) === $gBefore, json_encode([$gS1, $gS2, $gS3, array_slice($gEv($gPub), $gBefore)]));
+$gOn = fn () => (function () use ($fxG, $gPub) { $n = 0; foreach (vl_items($fxG, $gPub)['t'] ?? [] as $k => $v) if (str_ends_with($k, '|pub.jpg')) $n += (int) ($v['on'] ?? 0); return $n; })();
+$gOn0 = $gOn();
+$gPost('linklog', ['e' => [['o', 'pub.jpg']]], ['Sec-Fetch-Site: same-origin', $gUa]);
+$gOn1 = $gOn();
+$gRep = []; for ($i = 0; $i < 120; $i++) $gRep[] = ['o', 'pub.jpg'];
+$gPost('linklog', ['e' => $gRep], [$gUa]);
+check('[log route] the page\'s own post (JSON, same-origin) is logged, and 120 of the same line in one post count once (it was 120)', $gOn1 === $gOn0 + 1 && $gOn() === $gOn1 + 1, json_encode([$gOn0, $gOn1, $gOn()]));
+
+// E1-5, E1-6: a Not listed photo's own address
+$gA = $gAdmin(['action' => 'photo_address', 'file' => 'd1.jpg'], '&folder=Drawer'); $gCode = $gA['code'] ?? '';
+[, $gPage1] = http_get("$baseG/?$gCode", ['Sec-Fetch-Site: none', $gUa]);
+check('[not listed photo log] the page of a Not listed photo\'s own address, opened the way a typed one is, gives the script neither the folder\'s name nor the file\'s (it handed out the real path)', preg_match('/const galleryEntry = ([^;]*);/', $gPage1, $gM) === 1 && json_decode($gM[1], true) === ['f' => '', 'h' => 'typed', 'u' => true] && !str_contains($gPage1, 'Drawer') && !str_contains($gPage1, 'd1.jpg'), $gM[0] ?? '');
+$gBefore = count($gEv($gPub));
+$gS = $gPost("linklog&k=$gCode", ['e' => [['o', $gCode], ['s', $gCode]], 'a' => ['f' => '', 'h' => 'typed', 'u' => true]], ['Sec-Fetch-Site: same-origin', $gUa]);
+$gNew = array_slice($gEv($gPub), $gBefore);
+check('[not listed photo log] what that page posts (the photo by its code) is logged for that photo: the arrival, marked as a Not listed photo\'s, and the opening (they were dropped, so the log stayed empty)', $gS === 204 && in_array('arrive:Drawer/d1.jpg(u)', $gNew, true) && in_array('opened:Drawer/d1.jpg', $gNew, true), json_encode($gNew));
+$gBefore = count($gEv($gPub));
+$gPost("linklog&k=$gCode", ['e' => [['o', 'Drawer/d2.jpg'], ['o', 'Rome/r1.jpg']], 'a' => ['f' => 'Drawer/d2.jpg', 'h' => 'link', 'u' => true]], ['Sec-Fetch-Site: same-origin', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15']);
+$gNew = array_slice($gEv($gPub), $gBefore);
+check('[not listed photo log] the code is for that one photo: a line for another photo in the folder, or a private one, is refused, and the arrival is the code\'s photo whatever name the page says', !in_array('opened:Drawer/d2.jpg', $gNew, true) && !in_array('opened:Rome/r1.jpg', $gNew, true) && !in_array('arrive:Drawer/d2.jpg(u)', $gNew, true) && in_array('arrive:Drawer/d1.jpg(u)', $gNew, true), json_encode($gNew));
+$gBefore = count($gEv($gPub));
+$gPost("linklog&k=$gCode", ['e' => [['f', 'Drawer'], ['f', 'Pisa']]], ['Sec-Fetch-Site: same-origin', $gUa]);
+check('[not listed photo log] someone holding the code can not use the log to find out whether a folder is there: a line for the photo\'s own folder is dropped like any hidden one', $gFolderEv($gPub, 'Drawer') === 0);
+$gBefore = count($gEv($gPub));
+$gPost('linklog&k=WRONG123', ['e' => [['o', 'WRONG123']], 'a' => ['f' => '', 'h' => 'typed', 'u' => true]], ['Sec-Fetch-Site: same-origin', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36']);
+check('[not listed photo log] a wrong code logs nothing', count($gEv($gPub)) === $gBefore);
+$gImg = fn () => http_get("$baseG/?img=$gCode&k=$gCode&size=thumb", [$gUa])[0];
+$gOk0 = $gImg();
+for ($i = 0; $i < 14; $i++) $gPost("linklog&k=$gCode", ['e' => [['s', $gCode]]], ['Sec-Fetch-Site: same-origin', $gUa]);
+check('[not listed photo log] the page\'s posts are not counted as wrong guesses: after fifteen of them the photo\'s picture is still served (it stopped after ten, as for someone guessing)', $gOk0 === 200 && $gImg() === 200, json_encode([$gOk0, $gImg()]));
 
 /* --------------------------------------------------------------------- */
 
