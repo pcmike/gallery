@@ -15,6 +15,7 @@ Older versions copied each photo's location from its file into the folder data a
 - [ ] `warm_thumbnails`, the older name of the `prepare_media` admin action (search `'warm_thumbnails'`). Only an old open admin page or a script would still send it.
 - [ ] `login_password`, the older name of the sign-in field `access_code` (search `login_password`), "for scripts and older pages". Check README before removing: someone's script may post it.
 - [ ] `save_item` still accepts `loc_visibility` and `restriction` for "an older page, a script" (the switches now save themselves through `set_item_flag`).
+- [ ] `LOG_PUBLIC_DAYS`, the 2.6.4 name of `LOG_KEEP_DAYS` (Keep visitor records for): the settings reader (`gallery_setting(null, ...)` in `src/php/001-settings-and-config.php`, the `$renamed` list) says in Health that the old line is now the new setting, instead of calling it a typo. The old value is not carried over (it would start deleting records after an upgrade); the line is ignored.
 
 ## Old password storage
 - [ ] `upgrade_plaintext_passwords()` and its callers (sign-in and the first request), and the "plain text for a file not yet upgraded" branch of the password check (search `not yet upgraded`). Settings files from before passwords were hashed.

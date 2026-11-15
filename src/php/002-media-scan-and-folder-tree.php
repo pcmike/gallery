@@ -78,6 +78,7 @@ gallery_setting('ENABLE_MAP', false);   // (older settings files have this line:
 // constant buried in code. 0 turns grouping off.
 define('MAP_CLUSTER_RADIUS_MILES', gallery_setting('MAP_CLUSTER_RADIUS_MILES', 1));
 gallery_setting(null, null);   // done asking: report any name in the settings file that isn't a setting
+gallery_config_refuse_if_unusable();   // (a settings file that can't be used shows nothing: see there)
 
 $dir = __DIR__;
 $self = basename(__FILE__);

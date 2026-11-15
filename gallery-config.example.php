@@ -12,10 +12,11 @@
 // gallery's admin ("Settings") can also edit it; when it saves, it keeps
 // only the settings that differ from the defaults and drops these comments.
 //
-// Only the names below are settings. A name that isn't (a typo), a value of
-// the wrong kind, or a file that isn't valid JSON is ignored and reported in
-// the gallery's setup notices; it never breaks the site. Keep it out of git:
-// it holds your passwords (the gallery stores them as hashes once you sign in).
+// Only the names below are settings. A name that isn't (a typo) or a value of
+// the wrong kind is ignored and reported in the gallery's setup notices. A file
+// that isn't valid JSON can't tell the gallery what you meant, so the gallery
+// shows nothing until it is fixed (a short page names the file). Keep it out of
+// git: it holds your passwords (the gallery stores them as hashes once you sign in).
 {
     // --- What gets shown ---------------------------------------------------
     // "AUTO_GROUP_BY_FOLDER": false,       // default true (since 2.5.0): subfolders show as albums; false shows only the photos directly in the folder

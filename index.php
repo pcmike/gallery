@@ -153,7 +153,7 @@ function gallery_config_clean($raw) {
         if ($c === '"') { $inStr = true; $out .= $c; continue; }
         if ($c === ',') {
             $j = $i + 1;
-            while ($j < $n && ctype_space($raw[$j])) $j++;
+            while ($j < $n && strpos(" \t\n\r\v\f", $raw[$j]) !== false) $j++;   // (white space: no ctype extension needed)
             if ($j < $n && ($raw[$j] === '}' || $raw[$j] === ']')) continue;
         }
         $out .= $c;
@@ -162,13 +162,18 @@ function gallery_config_clean($raw) {
 }
 
 /** Reads the settings file's text into settings. Returns [status, settings]
- *  where status is 'ok', 'broken' (not valid JSON) or 'invalid' (valid, but
+ *  where status is 'ok', 'broken' (not valid JSON: a third item says what the parser found) or 'invalid' (valid, but
  *  not an object of settings). */
 function gallery_config_parse($raw) {
-    $raw = gallery_config_clean(data_file_strip_guard($raw));
+    $bom = "\xEF\xBB\xBF";   // (a Windows editor puts these three bytes at the start of a file it saves as UTF-8; they are not part of the settings)
+    $raw = (string) $raw;
+    if (strncmp($raw, $bom, 3) === 0) $raw = substr($raw, 3);
+    $raw = data_file_strip_guard($raw);
+    if (strncmp($raw, $bom, 3) === 0) $raw = substr($raw, 3);   // (or at the start of what follows the guard line)
+    $raw = gallery_config_clean($raw);
     if (trim($raw) === '') return ['ok', []];
     $decoded = json_decode($raw, true);
-    if (json_last_error() !== JSON_ERROR_NONE) return ['broken', []];
+    if (json_last_error() !== JSON_ERROR_NONE) return ['broken', [], json_last_error_msg()];
     if (!is_array($decoded) || ($decoded !== [] && array_is_list($decoded))) return ['invalid', []];
     return ['ok', $decoded];
 }
@@ -181,20 +186,51 @@ function gallery_config_load() {
     if (!is_file($path)) return $state;
     $raw = is_readable($path) ? @file_get_contents($path) : false;
     if ($raw === false) {
-        $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php exists but can't be read by the web server — using the settings in index.php.";
+        $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php exists but can't be read by the web server — nothing is shown until that is fixed.";
         $state['status'] = 'unreadable';
         return $state;
     }
-    [$status, $cfg] = gallery_config_parse($raw);
+    $parsed = gallery_config_parse($raw);
+    [$status, $cfg] = $parsed;
     if ($status === 'ok') {
         $state = ['status' => 'ok', 'cfg' => $cfg];
     } else {
         $GLOBALS['__gallery_config_problems'][] = $status === 'broken'
-            ? ".gallery-config.php couldn't be read (it isn't valid JSON — a stray comma or a missing quote?) — using the settings in index.php."
-            : ".gallery-config.php must hold an object of settings, like {\"NAME\": value} — using the settings in index.php.";
+            ? ".gallery-config.php couldn't be read (it isn't valid JSON — a stray comma or a missing quote?) — nothing is shown until that is fixed."
+            : ".gallery-config.php must hold an object of settings, like {\"NAME\": value} — nothing is shown until that is fixed.";
         $state['status'] = $status;
+        $state['reason'] = (string) ($parsed[2] ?? '');
     }
     return $state;
+}
+
+/** A settings file that is there but can't be used (not valid JSON, not an object of settings, or not readable by the web server) is no reason to run on the
+ *  defaults: the defaults open a closed gallery to everyone, and the passwords are in that file, so nobody could sign in either. Every request is answered with
+ *  a plain page that says what is wrong with the file and what to do, and nothing else is shown until it is fixed (or deleted, which starts the first-time setup
+ *  again). Not asked for on the command line (the tests load the functions there). */
+function gallery_config_refuse_if_unusable() {
+    if (PHP_SAPI === 'cli') return;
+    $st = gallery_config_load();
+    if (!in_array($st['status'], ['broken', 'invalid', 'unreadable'], true)) return;
+    $why = $st['status'] === 'broken' ? 'it is not valid JSON (' . ($st['reason'] !== '' ? $st['reason'] : 'the parser could not read it') . '): a stray comma or a missing quote is the usual cause'
+        : ($st['status'] === 'invalid' ? 'it must hold an object of settings, like {"NAME": value}, and it holds something else'
+        : 'the web server is not allowed to read it (check the file\'s permissions)');
+    $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    if (!headers_sent()) {
+        http_response_code(503);
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: no-store');
+        header('Retry-After: 120');
+        header('X-Robots-Tag: noindex, nofollow');
+        header('X-Content-Type-Options: nosniff');
+    }
+    echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">'
+        . '<title>This gallery\'s settings need fixing</title><style>:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1rem}code{background:rgba(127,127,127,.18);padding:.1em .3em;border-radius:3px}</style></head><body>'
+        . '<h1>This gallery\'s settings need fixing</h1>'
+        . '<p>The gallery\'s settings file (<code>' . $e(basename(gallery_config_path())) . '</code>) can\'t be used: ' . $e($why) . '. Until it is fixed, nothing is shown.</p>'
+        . '<p>If this is your gallery: open that file in your file manager or over SFTP and fix the mistake, then reload this page. Or delete the file to go back to the first-time setup (the settings in it are then lost).</p>'
+        . '</body></html>';
+    exit;
 }
 
 function gallery_setting($name, $default, $allowed = null) {
@@ -203,7 +239,11 @@ function gallery_setting($name, $default, $allowed = null) {
     if ($name === null) {
         // End of the settings block: whatever the file names that nothing asked for is a typo.
         foreach (array_keys($cfg) as $k) {
-            if (!isset($asked[$k])) $GLOBALS['__gallery_config_problems'][] = ".gallery-config.php: \"" . (is_string($k) ? $k : '?') . "\" isn't a setting (a typo?) — ignored.";
+            if (isset($asked[$k])) continue;
+            $renamed = ['LOG_PUBLIC_DAYS' => ['LOG_KEEP_DAYS', 'Keep visitor records for (days)']][$k] ?? null;   // (a setting an earlier version had, under its new name: see docs/LEGACY-REMOVAL.md)
+            $GLOBALS['__gallery_config_problems'][] = $renamed !== null
+                ? ".gallery-config.php: \"" . $k . "\" is now \"" . $renamed[1] . "\" (" . $renamed[0] . ") — set that instead; this line is ignored."
+                : ".gallery-config.php: \"" . (is_string($k) ? $k : '?') . "\" isn't a setting (a typo?) — ignored.";
         }
         return null;
     }
@@ -635,6 +675,7 @@ gallery_setting('ENABLE_MAP', false);   // (older settings files have this line:
 // constant buried in code. 0 turns grouping off.
 define('MAP_CLUSTER_RADIUS_MILES', gallery_setting('MAP_CLUSTER_RADIUS_MILES', 1));
 gallery_setting(null, null);   // done asking: report any name in the settings file that isn't a setting
+gallery_config_refuse_if_unusable();   // (a settings file that can't be used shows nothing: see there)
 
 $dir = __DIR__;
 $self = basename(__FILE__);
@@ -6128,7 +6169,7 @@ function ip_in_cidr($ip, $cidr) {
     $parts = explode('/', $cidr, 2);
     $netBin = ip_binary($parts[0]);
     if ($netBin === null || strlen($netBin) !== strlen($ipBin)) return false;
-    $bits = isset($parts[1]) ? (ctype_digit($parts[1]) ? (int) $parts[1] : -1) : strlen($netBin) * 8;
+    $bits = isset($parts[1]) ? (preg_match('/^[0-9]+$/D', $parts[1]) ? (int) $parts[1] : -1) : strlen($netBin) * 8;
     if ($bits < 0 || $bits > strlen($netBin) * 8) return false;
     $whole = intdiv($bits, 8);
     if ($whole > 0 && strncmp($ipBin, $netBin, $whole) !== 0) return false;
@@ -8394,7 +8435,7 @@ function quicktime_recorded_time($fh, $meta) {
     if ($meta['end'] - $meta['data'] > 1048576) return null;
     $from = $meta['data'];
     $probe = scrub_read($fh, $from + 4, 4);
-    if ($probe !== null && !ctype_alpha($probe)) $from += 4;   // (a version field comes first in some files, not in others)
+    if ($probe !== null && !preg_match('/^[A-Za-z]+$/D', $probe)) $from += 4;   // (a version field comes first in some files, not in others)
     $kids = scrub_boxes($fh, $from, $meta['end']);
     $keys = $items = null;
     foreach ($kids ?? [] as $k) { if ($k['type'] === 'keys') $keys = $k; elseif ($k['type'] === 'ilst') $items = $k; }

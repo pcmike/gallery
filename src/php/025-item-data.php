@@ -263,7 +263,7 @@ function quicktime_recorded_time($fh, $meta) {
     if ($meta['end'] - $meta['data'] > 1048576) return null;
     $from = $meta['data'];
     $probe = scrub_read($fh, $from + 4, 4);
-    if ($probe !== null && !ctype_alpha($probe)) $from += 4;   // (a version field comes first in some files, not in others)
+    if ($probe !== null && !preg_match('/^[A-Za-z]+$/D', $probe)) $from += 4;   // (a version field comes first in some files, not in others)
     $kids = scrub_boxes($fh, $from, $meta['end']);
     $keys = $items = null;
     foreach ($kids ?? [] as $k) { if ($k['type'] === 'keys') $keys = $k; elseif ($k['type'] === 'ilst') $items = $k; }

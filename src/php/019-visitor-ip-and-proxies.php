@@ -23,7 +23,7 @@ function ip_in_cidr($ip, $cidr) {
     $parts = explode('/', $cidr, 2);
     $netBin = ip_binary($parts[0]);
     if ($netBin === null || strlen($netBin) !== strlen($ipBin)) return false;
-    $bits = isset($parts[1]) ? (ctype_digit($parts[1]) ? (int) $parts[1] : -1) : strlen($netBin) * 8;
+    $bits = isset($parts[1]) ? (preg_match('/^[0-9]+$/D', $parts[1]) ? (int) $parts[1] : -1) : strlen($netBin) * 8;
     if ($bits < 0 || $bits > strlen($netBin) * 8) return false;
     $whole = intdiv($bits, 8);
     if ($whole > 0 && strncmp($ipBin, $netBin, $whole) !== 0) return false;

@@ -65,7 +65,7 @@ Replacing `index.php` with a newer version would reset anything you edited into 
 ```
 
 - It overrides `index.php`'s defaults and survives updates. A better default in a newer release still reaches everything you haven't set.
-- **Mistakes never break the site:** a misspelt name, a value of the wrong kind or invalid JSON is ignored and named in the owner's setup notices.
+- **A wrong name or value is ignored; a broken file is not:** a misspelt name or a value of the wrong kind is ignored and named in the owner's setup notices. A file that isn't valid JSON (a doubled comma or a missing quote is the usual cause), isn't an object of settings, or can't be read by the web server can't tell the gallery what you meant, so the gallery shows nothing until it is fixed: every address answers with a short page that names the file and what is wrong. Fix it over SFTP, or delete it to start the first-time setup again (the settings in it are then lost). Your passwords are in that file too, so nobody can sign in while it is broken.
 - It is private: a direct request answers 404 and its `.gallery-` name is covered by the [server rules](server.md#locking-down-the-files). Passwords in it are [hashes](admin.md#passwords). Keep it [out of git](upgrading.md#upgrading-and-backups).
 
 ### Settings in the admin

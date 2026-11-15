@@ -3187,8 +3187,8 @@ check('[setup] with the right code (typed in lower case, or with a space for the
 // A settings file that exists but isn't valid is never overwritten.
 file_put_contents($setupCfg, $cfgGuard . "{\"ENABLE_VIDEO\": true,\n");
 $brokenBytes = (string) file_get_contents($setupCfg);
-[, $rBroken] = http_post("$baseSetup/?admin", ['setup_code' => $setupCode, 'setup_password' => 'a-good-long-password-1', 'setup_password2' => 'a-good-long-password-1']);
-check('[setup] a settings file that is not valid is never overwritten: it says so and leaves the file exactly as it was', str_contains($rBroken, 'isn&#039;t valid') && (string) file_get_contents($setupCfg) === $brokenBytes);
+[$stBroken, $rBroken] = http_post("$baseSetup/?admin", ['setup_code' => $setupCode, 'setup_password' => 'a-good-long-password-1', 'setup_password2' => 'a-good-long-password-1']);
+check('[setup] a settings file that is not valid is never overwritten: the page says so (503, naming the file) and the file is left exactly as it was', $stBroken === 503 && str_contains($rBroken, 'not valid JSON') && (string) file_get_contents($setupCfg) === $brokenBytes);
 // Settings that were already there are kept when the password is added.
 file_put_contents($setupCfg, cfg_text(['ENABLE_VIDEO' => true, 'TRACK_VIEWS' => true]));
 $claimPw = "my 'first' admin password 1 // with, odd } chars";
@@ -3261,10 +3261,10 @@ check('[settings file] a typo\'d name, a wrong kind of value and a value not on 
 check('[settings file] ...and the good setting in the same file still applies', str_contains($h2, 'alt="clip.mp4"'));
 file_put_contents("$fxCfg/.gallery-config.php", $cfgGuard . "{\"ENABLE_VIDEO\": true,\n");   // not valid JSON
 [$st3, $h3] = http_get("$baseCfg/");
-check('[settings file] a settings file that is not valid JSON does not take the site down: it loads on the defaults, with a notice', $st3 === 200 && str_contains($h3, 'alt="photo.jpg"') && str_contains($h3, 'isn&#039;t valid JSON') && !str_contains($h3, 'alt="clip.mp4"'));
+check('[settings file] a settings file that is not valid JSON shows nothing (503, a page that names the file and says what is wrong); it used to load on the defaults, which opens a closed gallery', $st3 === 503 && str_contains($h3, '.gallery-config.php') && str_contains($h3, 'not valid JSON') && !str_contains($h3, 'photo.jpg'));
 file_put_contents("$fxCfg/.gallery-config.php", $cfgGuard . "[1, 2, 3]\n");   // valid JSON, but not an object of settings
 [$st4, $h4] = http_get("$baseCfg/");
-check('[settings file] a file that is valid JSON but not an object of settings is reported and ignored', $st4 === 200 && str_contains($h4, 'must hold an object of settings'));
+check('[settings file] a file that is valid JSON but not an object of settings is refused the same way, saying so', $st4 === 503 && str_contains($h4, 'must hold an object of settings'));
 // Hand-editing: comments and a trailing comma are fine, and the shipped example is a safe template.
 file_put_contents("$fxCfg/.gallery-config.php", $cfgGuard . "// my notes\n{\n    // \"ENABLE_TIMES\": true,\n    \"ENABLE_VIDEO\": true,   // yes please\n}\n");
 $hHand = $cfgHome();
@@ -3692,7 +3692,7 @@ check('[site settings] if the file was changed since the page loaded, the save i
 // A settings file the screen can't understand is never overwritten.
 file_put_contents($siteCfg, $siteHead . "{\"ADMIN_PASSWORD\": \"x\",\n");   // not valid JSON
 [, $sBroken] = http_get("$baseSite/?admin", [$siteAuth2]);   // site falls back to the defaults, so use Basic with the... default (no admin)
-check('[site settings] (setup) a syntax error in the file means the site runs on defaults', http_get("$baseSite/")[0] === 200);
+check('[site settings] a syntax error in the file means the site shows nothing until it is fixed (and the Settings screen never overwrites it)', http_get("$baseSite/")[0] === 503);
 // CSRF.
 file_put_contents($siteCfg, cfg_text(['ADMIN_PASSWORD' => $nasty]));
 [, $sAdmin8] = http_get("$baseSite/?admin", $siteHdrs2);
@@ -11154,6 +11154,72 @@ $gImg = fn () => http_get("$baseG/?img=$gCode&k=$gCode&size=thumb", [$gUa])[0];
 $gOk0 = $gImg();
 for ($i = 0; $i < 14; $i++) $gPost("linklog&k=$gCode", ['e' => [['s', $gCode]]], ['Sec-Fetch-Site: same-origin', $gUa]);
 check('[not listed photo log] the page\'s posts are not counted as wrong guesses: after fifteen of them the photo\'s picture is still served (it stopped after ten, as for someone guessing)', $gOk0 === 200 && $gImg() === 200, json_encode([$gOk0, $gImg()]));
+
+/* --------------------------------------------------------------------- */
+
+// Audit group 4: the settings reader (C13: a file that can't be used shows nothing; G16: no ctype; the old LOG_PUBLIC_DAYS line; a byte-order mark).
+echo "== audit group 4: a settings file that can't be used shows nothing; no ctype needed; a BOM is read; an old setting is named ==\n";
+$g4Src = (string) file_get_contents($indexSrc);
+$g4Fn = function (string $name) use ($g4Src) { $from = strpos($g4Src, "\nfunction $name("); if ($from === false) return ''; $to = strpos($g4Src, "\n}\n", $from) + 3; return substr($g4Src, $from, $to - $from); };
+$g4Dir = new_fixture_dir('g4-fn');
+$g4Run = function (string $code, bool $noIni = true) use ($g4Dir) {
+    $script = $g4Dir . '/run-' . bin2hex(random_bytes(3)) . '.php'; file_put_contents($script, "<?php error_reporting(0);\n" . $code);
+    $out = (string) shell_exec(escapeshellarg(PHP_BINARY) . ($noIni ? ' -n' : '') . ' ' . escapeshellarg($script) . ' 2>&1'); @unlink($script); return $out;
+};
+$fxS = new_fixture_dir('g4cfg'); make_jpeg("$fxS/a.jpg", 80, 60, 200, 60, 60);
+$g4Cfg = ['ADMIN_PASSWORD' => 'g4-admin-pw-1', 'CLOSE_PUBLIC_GALLERY' => true, 'LOG_PUBLIC_DAYS' => 30, 'ENABLE_SHARE_LINKS' => true];
+$g4Good = cfg_text($g4Cfg);
+file_put_contents("$fxS/.gallery-config.php", $g4Good);
+copy($indexSrc, "$fxS/index.php");
+$portS = find_free_port(); start_server($fxS, $portS); $baseS = "http://127.0.0.1:$portS";
+$g4Ask = fn (string $q) => http_get("$baseS/$q");
+check('[broken settings] the fixture is a closed gallery: a stranger gets nothing (404) while the file is good', $g4Ask('')[0] === 404 && $g4Ask('?img=a.jpg&size=thumb')[0] === 404 && !str_contains($g4Ask('')[1], 'a.jpg'));
+// a file that is not valid JSON
+file_put_contents("$fxS/.gallery-config.php", preg_replace('/\}\s*$/', ',, }', $g4Good));
+[$b1, $b1Body, $b1Hd] = $g4Ask('');
+$g4H = fn (array $hd, string $n) => (function () use ($hd, $n) { foreach ($hd as $h) if (stripos($h, "$n:") === 0) return trim(substr($h, strlen($n) + 1)); return ''; })();
+check('[broken settings] with a doubled comma in the file the gallery shows nothing: 503, a page that names the file and the parser\'s word and says what to do, kept out of caches and search engines (it used to open the closed gallery to everyone)', $b1 === 503 && str_contains($b1Body, '.gallery-config.php') && str_contains($b1Body, 'not valid JSON') && stripos($b1Body, 'fix') !== false && !str_contains($b1Body, 'a.jpg') && str_contains($g4H($b1Hd, 'Cache-Control'), 'no-store') && $g4H($b1Hd, 'Retry-After') !== '' && str_contains($g4H($b1Hd, 'X-Robots-Tag'), 'noindex'), "$b1 " . substr($b1Body, 0, 200));
+check('[broken settings] ...and so does every other address: a picture, the admin page, a share link, the one-word address, a POST', $g4Ask('?img=a.jpg&size=thumb')[0] === 503 && $g4Ask('?admin')[0] === 503 && $g4Ask('?link=abcdefgh')[0] === 503 && $g4Ask('?about')[0] === 503 && http_post("$baseS/?linklog", ['x' => 1])[0] === 503 && http_post("$baseS/?admin", ['access_code' => 'g4-admin-pw-1'])[0] === 503);
+check('[broken settings] ...the file itself is left exactly as it was found', file_get_contents("$fxS/.gallery-config.php") === preg_replace('/\}\s*$/', ',, }', $g4Good));
+// valid JSON that is not settings
+file_put_contents("$fxS/.gallery-config.php", data_file_guard_line_for_tests() . '[1,2]');
+[$b2, $b2Body] = $g4Ask('');
+check('[broken settings] a file that is valid JSON but not an object of settings is refused too, with its own reason', $b2 === 503 && str_contains($b2Body, 'must hold an object of settings') && !str_contains($b2Body, 'not valid JSON'));
+// a file the web server may not read
+file_put_contents("$fxS/.gallery-config.php", $g4Good); chmod("$fxS/.gallery-config.php", 0000);
+if (!is_readable("$fxS/.gallery-config.php")) {
+    [$b3, $b3Body] = $g4Ask('');
+    check('[broken settings] a file the web server is not allowed to read is refused too, naming the permissions', $b3 === 503 && str_contains($b3Body, 'not allowed to read') && !str_contains($b3Body, 'a.jpg'));
+} else check('[broken settings] (running as a user the file\'s permissions do not stop: the unreadable case is not tried here)', true);
+chmod("$fxS/.gallery-config.php", 0644);
+file_put_contents("$fxS/.gallery-config.php", $g4Good);
+check('[broken settings] with the file good again everything is as before (closed: 404), nothing needed clearing', $g4Ask('')[0] === 404 && $g4Ask('?admin')[0] === 200);
+// one wrong value in a good file is not a broken file
+file_put_contents("$fxS/.gallery-config.php", cfg_text($g4Cfg + ['TRACK_VIEWS' => 'yes']));
+check('[broken settings] a good file with one wrong value is not refused: that one setting falls back, as it always did', $g4Ask('')[0] === 404);
+// the old setting is named
+file_put_contents("$fxS/.gallery-config.php", cfg_text($g4Cfg + ['LOG_PUBLC_DAYS' => 5]));
+[, , $g4H1] = http_post("$baseS/?admin", ['access_code' => 'g4-admin-pw-1'], [], false); $g4Own = ['Cookie: ' . extract_cookie_header($g4H1)];
+$g4Hl = html_entity_decode(http_get("$baseS/?admin&health=1", $g4Own)[1], ENT_QUOTES);
+check('[old setting] Health says LOG_PUBLIC_DAYS is now "Keep visitor records for (days)" (LOG_KEEP_DAYS) and that the line is ignored, not that it is a typo; a real typo still says typo', str_contains($g4Hl, '"LOG_PUBLIC_DAYS" is now "Keep visitor records for (days)" (LOG_KEEP_DAYS)') && !preg_match('/"LOG_PUBLIC_DAYS" isn\'t a setting/', $g4Hl) && str_contains($g4Hl, '"LOG_PUBLC_DAYS" isn\'t a setting (a typo?)'), substr((string) strstr($g4Hl, 'LOG_PUBLIC'), 0, 200));
+// a byte-order mark
+file_put_contents("$fxS/.gallery-config.php", "\xEF\xBB\xBF" . $g4Good);
+check('[BOM] a settings file saved with a byte-order mark at its start (a Windows editor does that) is read as settings: the closed gallery stays closed, and nothing is reported (it used to count as broken)', $g4Ask('')[0] === 404 && $g4Ask('?admin')[0] === 200 && !str_contains(html_entity_decode(http_get("$baseS/?admin&health=1", $g4Own)[1], ENT_QUOTES), 'couldn\'t be read'));
+file_put_contents("$fxS/.gallery-config.php", data_file_guard_line_for_tests() . "\xEF\xBB\xBF" . json_encode($g4Cfg));
+check('[BOM] ...and so is one with it after the guard line', $g4Ask('')[0] === 404);
+file_put_contents("$fxS/.gallery-config.php", "\xEF\xBB\xBF" . $g4Good);
+[$dSt, $dBody] = http_get("$baseS/.gallery-config.php");
+check('[BOM] a settings file with a byte-order mark before its guard line still gives away nothing when asked for directly (nothing of the settings or the password is in the answer)', !str_contains($dBody, 'ADMIN_PASSWORD') && !str_contains($dBody, 'CLOSE_PUBLIC') && !str_contains($dBody, '$2y$') && strlen($dBody) <= 3, "$dSt " . bin2hex(substr($dBody, 0, 20)));
+file_put_contents("$fxS/.gallery-config.php", $g4Good);
+$g4P = $g4Run($g4Fn('data_file_strip_guard') . $g4Fn('gallery_config_clean') . $g4Fn('gallery_config_parse') . 'echo json_encode([gallery_config_parse("\xEF\xBB\xBF" . "<?php http_response_code(404); exit; ?>\n\xEF\xBB\xBF{\"A\": 1}"), gallery_config_parse("{\"A\": 1,, }")[0], gallery_config_parse("{\"A\": 1\xEF\xBB\xBF}")[0], gallery_config_parse("{\"A\": 1}\xEF\xBB\xBF")[0]]);');
+$g4Pd = json_decode($g4P, true);
+check('[BOM] only a byte-order mark at the start of the file, or of what follows the guard line, is skipped: one in the middle of the settings, or at the end, is still an error', is_array($g4Pd) && $g4Pd[0] === ['ok', ['A' => 1]] && $g4Pd[1] === 'broken' && $g4Pd[2] === 'broken' && $g4Pd[3] === 'broken', $g4P);
+// G16: no ctype
+$g4Hit = []; foreach (glob($repoRoot . '/src/php/*.php') as $g4F) if (preg_match('/\bctype_[a-z]+\(/', (string) file_get_contents($g4F))) $g4Hit[] = basename($g4F);
+check('[no ctype] nothing in the source calls a ctype function (the extension is packaged apart on some systems, and its absence was a 500 on every request once the settings file held two settings)', $g4Hit === [], implode(', ', $g4Hit));
+$g4C = $g4Run($g4Fn('data_file_strip_guard') . $g4Fn('gallery_config_clean') . $g4Fn('gallery_config_parse') . $g4Fn('ip_binary') . $g4Fn('ip_in_cidr') . 'echo json_encode([function_exists("ctype_space"), gallery_config_parse("{\"A\": 1,\n \"B\": 2, }"), ip_in_cidr("10.1.2.3", "10.0.0.0/8"), ip_in_cidr("10.1.2.3", "11.0.0.0/8"), ip_in_cidr("10.1.2.3", "10.0.0.0/x"), ip_in_cidr("10.1.2.3", "10.0.0.0/33"), ip_in_cidr("10.1.2.3", "10.1.2.3")]);');
+$g4Cd = json_decode($g4C, true);
+check('[no ctype] a settings file with two settings and a trailing comma is read, and a proxy range with a number after the slash is understood, in a PHP started without ini files (no ctype there on most systems)', is_array($g4Cd) && $g4Cd[1] === ['ok', ['A' => 1, 'B' => 2]] && $g4Cd[2] === true && $g4Cd[3] === false && $g4Cd[4] === false && $g4Cd[5] === false && $g4Cd[6] === true, $g4C);
 
 /* --------------------------------------------------------------------- */
 
