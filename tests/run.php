@@ -10692,5 +10692,172 @@ check('[dead link] ...and a live link\'s own address, asked for without signing 
 
 /* --------------------------------------------------------------------- */
 
+echo "== audit group 1: the data-file writer (a save never empties a good file; a link is never followed; bad text is refused and named) ==\n";
+// The writer's own functions, out of the built index.php, so they can be run in a process with a file-size limit (what no room on the disk does).
+$wrSrc = (string) file_get_contents($indexSrc);
+$wrFrom = strpos($wrSrc, 'function data_file_guard_line'); $wrTo = strpos($wrSrc, "\n}\n", strpos($wrSrc, 'function data_write_failure_text(')) + 3;
+$wrCode = substr($wrSrc, $wrFrom, $wrTo - $wrFrom);
+eval($wrCode);
+$wrDir = new_fixture_dir('writer-fn');
+// $body runs in a fresh PHP with the writer loaded; $limitKb (when given) caps the size of any file it writes, so a write that does not fit FAILS (SIGXFSZ ignored), as on a full disk.
+$wrRun = function (string $body, ?int $limitKb = null) use ($wrCode, $wrDir) {
+    $script = $wrDir . '/run-' . bin2hex(random_bytes(3)) . '.php';
+    file_put_contents($script, "<?php error_reporting(0);\n" . $wrCode . "\n" . $body);
+    $cmd = ($limitKb !== null ? "trap '' XFSZ; ulimit -f $limitKb; " : '') . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script);
+    $out = (string) shell_exec('bash -c ' . escapeshellarg($cmd) . ' 2>&1');
+    @unlink($script);
+    return $out;
+};
+$wrGood = ['items' => ['p.jpg' => ['caption' => 'keep me']], 'x' => 1];
+$wrMake = function (string $name) use ($wrDir, $wrGood) { $p = "$wrDir/$name"; file_put_contents($p, data_file_guard_line() . json_encode($wrGood)); return $p; };
+$wrLeft = fn () => array_values(array_filter(scandir($wrDir), fn ($n) => preg_match('/\.[0-9a-f]{8}\.php$/', $n)));
+
+// G8: text that can't be written as JSON
+$wrP = $wrMake('g8.php'); $wrBefore = file_get_contents($wrP);
+$GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+json_file_update($wrP, ['items' => []], function (&$d) { $d['items']['p.jpg']['caption'] = "caf\xE9"; }, true);
+check('[data writer] a save holding text that is not valid UTF-8 leaves the file exactly as it was (it used to leave only the guard line) and is reported as not saved', file_get_contents($wrP) === $wrBefore && !empty($GLOBALS['__data_write_failed']) && ($GLOBALS['__data_refused'][$wrP] ?? null) === 'text');
+check('[data writer] ...and the message says what is wrong and what to do about it', str_contains(data_write_failure_text('this folder'), 'isn\'t valid text') && str_contains(data_write_failure_text('this folder'), 'Retype'));
+check('[data writer] data_file_encode says false for such data, and the guard line plus JSON for the rest', data_file_encode(['a' => "x\xE9"]) === false && data_file_encode(['a' => 'ü<?php']) === data_file_guard_line() . '{"a":"' . chr(92) . 'u00fc' . chr(92) . 'u003C?php"}');
+
+// F2: no room
+$wrP = $wrMake('f2.php'); $wrBefore = file_get_contents($wrP);
+$wrOut = $wrRun('$GLOBALS["__data_write_failed"] = false; json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = str_repeat("x", 20000); }, true); echo json_encode(!empty($GLOBALS["__data_write_failed"]));', 8);
+check('[data writer] a save that does not fit on the disk fails and leaves the good file byte for byte as it was (it used to cut it to the size that fitted), with no half-written leftover', trim($wrOut) === 'true' && file_get_contents($wrP) === $wrBefore && $wrLeft() === [], $wrOut . ' / ' . filesize($wrP));
+// ...but where a temporary file can't be added and the file itself can be changed, the save still happens in place, and a failure there puts the old text back
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    $wrRo = "$wrDir/ro"; mkdir($wrRo); $wrP = "$wrRo/f2b.php"; file_put_contents($wrP, data_file_guard_line() . json_encode($wrGood)); $wrBefore = file_get_contents($wrP); chmod($wrRo, 0555);
+    $wrOut = $wrRun('json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = "changed in place"; }, true);');
+    check('[data writer] a folder that allows changing the file but not adding to it still takes the save, in place', str_contains((string) file_get_contents($wrP), 'changed in place'), $wrOut);
+    file_put_contents($wrP, $wrBefore);
+    $wrOut = $wrRun('$GLOBALS["__data_write_failed"] = false; json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = str_repeat("x", 20000); }, true); echo json_encode(!empty($GLOBALS["__data_write_failed"]));', 8);
+    check('[data writer] ...and when that in-place write runs out of room, what the file held is put back', trim($wrOut) === 'true' && file_get_contents($wrP) === $wrBefore, $wrOut . ' / ' . filesize($wrP));
+    chmod($wrRo, 0755);
+}
+
+// F3: a first save that can't be finished leaves no empty file behind
+$wrP = "$wrDir/f3.php"; @unlink($wrP);
+$wrOut = $wrRun('json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = str_repeat("x", 20000); }, true);', 0);
+check('[data writer] a first save that has no room to be written leaves no empty file behind (an empty file is what "can\'t be read" is made of)', !file_exists($wrP) && $wrLeft() === [], $wrOut);
+$GLOBALS['__data_write_failed'] = false; json_file_update($wrP, ['items' => []], function (&$d) { $d['items']['q.jpg'] = ['caption' => 'next']; }, true);
+check('[data writer] ...so the next save simply works', empty($GLOBALS['__data_write_failed']) && (json_decode(data_file_strip_guard(file_get_contents($wrP)), true)['items']['q.jpg']['caption'] ?? '') === 'next');
+foreach (['no bytes at all' => '', 'only the guard line' => data_file_guard_line()] as $wrName => $wrContent) {
+    $wrP = "$wrDir/f3-" . md5($wrName) . '.php'; file_put_contents($wrP, $wrContent);
+    $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+    json_file_update($wrP, ['items' => []], function (&$d) { $d['items']['q.jpg'] = ['caption' => 'fresh']; }, true);
+    check("[data writer] a data file with $wrName holds nothing to lose: the next save replaces it instead of being refused", empty($GLOBALS['__data_write_failed']) && (json_decode(data_file_strip_guard(file_get_contents($wrP)), true)['items']['q.jpg']['caption'] ?? '') === 'fresh');
+}
+$wrP = "$wrDir/f3-cut.php"; file_put_contents($wrP, data_file_guard_line() . '{"items":{"p.jpg":{"caption":"cut sho'); $wrBefore = file_get_contents($wrP);
+$GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+json_file_update($wrP, ['items' => []], function (&$d) { $d['items']['q.jpg'] = ['caption' => 'x']; }, true);
+check('[data writer] ...but a file that holds something that can\'t be read is still refused and left as it is (it may be restorable)', file_get_contents($wrP) === $wrBefore && ($GLOBALS['__data_refused'][$wrP] ?? null) === true);
+
+// D12: a link is not the gallery's file
+$wrTarget = "$wrDir/victim.json"; file_put_contents($wrTarget, '{"name":"another-app","version":"1"}'); $wrLink = "$wrDir/linked.php"; symlink($wrTarget, $wrLink);
+$GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+json_file_update($wrLink, ['items' => []], function (&$d) { $d['items']['o.jpg'] = ['caption' => 'hi']; }, true);
+check('[data writer] a data file that is a link is not written through: the file it points at is untouched, the save is reported as not made, and the message says why', file_get_contents($wrTarget) === '{"name":"another-app","version":"1"}' && is_link($wrLink) && ($GLOBALS['__data_refused'][$wrLink] ?? null) === 'link' && str_contains(data_write_failure_text('this folder'), 'is a link to a file somewhere else'));
+check('[data writer] ...and it is not read through either: the folder\'s settings count as can\'t be read (so the folder is hidden), not as what the other file says', json_file_load($wrLink, ['items' => []])[0] === 'broken');
+$wrDangling = "$wrDir/dangling.php"; symlink("$wrDir/not-made-by-us.php", $wrDangling);
+$GLOBALS['__data_write_failed'] = false; json_file_update($wrDangling, ['items' => []], function (&$d) { $d['items']['o.jpg'] = ['caption' => 'hi']; }, false);
+check('[data writer] a link to nothing makes no file where it points, for the files that are rebuilt as well as the protected ones', !file_exists("$wrDir/not-made-by-us.php") && !empty($GLOBALS['__data_write_failed']));
+
+// G8's trigger: cutting text by characters, with or without the mbstring extension
+$wrClip = 'text_clip'; $wrNoMb = str_replace("function_exists('mb_substr')", 'false', substr($wrSrc, strpos($wrSrc, 'function text_clip('), strpos($wrSrc, "\n}\n", strpos($wrSrc, 'function text_clip(')) + 3 - strpos($wrSrc, 'function text_clip(')));
+if (!function_exists('text_clip')) eval(substr($wrSrc, strpos($wrSrc, 'function text_clip('), strpos($wrSrc, "\n}\n", strpos($wrSrc, 'function text_clip(')) + 3 - strpos($wrSrc, 'function text_clip(')));
+eval(str_replace('function text_clip(', 'function text_clip_nombstring(', $wrNoMb));
+$wrRu = 'Июль 2026 — Август 2026, Москва и Санкт-Петербург';
+check('[data writer] text is cut by characters, never in the middle of one (with mbstring, and by the pattern matcher without it)', text_clip($wrRu, 20) === 'Июль 2026 — Август 2' && text_clip_nombstring($wrRu, 20) === 'Июль 2026 — Август 2' && text_clip_nombstring($wrRu, 20) !== substr($wrRu, 0, 20) && json_encode(text_clip_nombstring($wrRu, 7)) !== false && text_clip_nombstring('abc', 10) === 'abc' && text_clip_nombstring('', 5) === '');
+
+// the same through the admin, on a real gallery
+$fxW = new_fixture_dir('writer-http'); $wrOutside = new_fixture_dir('writer-outside');
+foreach (['Asia', 'Linked'] as $wrD) mkdir("$fxW/$wrD", 0777, true);
+make_jpeg("$fxW/Asia/a.jpg", 60, 60, 30, 70, 110); make_jpeg("$fxW/Asia/b.jpg", 60, 60, 90, 70, 110); make_jpeg("$fxW/Linked/l.jpg", 60, 60, 150, 70, 110);
+file_put_contents("$fxW/Asia/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['folderId' => 'dddddddddd01', 'displayName' => 'Asia trip', 'description' => 'Rice and rain', 'items' => ['a.jpg' => ['caption' => 'Tokyo']]]));
+file_put_contents("$wrOutside/victim.php", data_file_guard_line_for_tests() . json_encode(['items' => ['zz.jpg' => ['caption' => 'VICTIM', 'restriction' => 'private']], 'name' => 'another gallery']));
+symlink("$wrOutside/victim.php", "$fxW/Linked/.gallery-items.php");
+file_put_contents("$fxW/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'wr-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxW/index.php");
+$portW = find_free_port(); start_server($fxW, $portW); $baseW = "http://127.0.0.1:$portW";
+[, , $wrH] = http_post("$baseW/?admin", ['access_code' => 'wr-admin-pw-1'], [], false); $wrOwn = ['Cookie: ' . extract_cookie_header($wrH)];
+$wrCsrf = (string) extract_csrf_token(http_get("$baseW/?admin", $wrOwn)[1]);
+$wrAdmin = fn (array $f, string $q = '') => json_decode(http_post("$baseW/?admin$q", $f + ['csrf_token' => $wrCsrf], array_merge($wrOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+$wrItems = "$fxW/Asia/.gallery-items.php"; $wrBefore = file_get_contents($wrItems);
+$wrR = $wrAdmin(['action' => 'save_folder_identity', 'dates' => "caf\xE9 2019"], '&folder=Asia');
+check('[data writer] a Dates text that is not valid text is refused naming the field (it used to save the field empty), and nothing in the folder\'s file changes', ($wrR['ok'] ?? null) === false && str_contains($wrR['text'] ?? '', 'the Dates field') && str_contains($wrR['text'] ?? '', 'Retype') && file_get_contents($wrItems) === $wrBefore, json_encode($wrR));
+$wrR = $wrAdmin(['action' => 'save_item', 'file' => 'b.jpg', 'caption' => "caf\xE9", 'web' => '', 'lat' => '', 'lng' => '', 'loc_label' => ''], '&folder=Asia');
+check('[data writer] a caption that is not valid text is refused naming the field, and the folder\'s file keeps everything it held (it used to be cut down to the guard line and answer "Saved")', ($wrR['ok'] ?? null) === false && str_contains($wrR['text'] ?? '', 'the Caption field') && file_get_contents($wrItems) === $wrBefore, json_encode($wrR));
+$wrDates = 'Июль 2026 — Август 2026, Москва и Санкт-Петербург';
+$wrR = $wrAdmin(['action' => 'save_folder_identity', 'dates' => $wrDates], '&folder=Asia'); $wrStored = json_decode(data_file_strip_guard_for_tests(file_get_contents($wrItems)), true);
+check('[data writer] a 50-letter Cyrillic Dates text is saved whole (on a PHP without mbstring it was cut inside a letter and emptied the folder\'s file), with the folder\'s other settings kept', ($wrR['ok'] ?? null) === true && ($wrStored['dates'] ?? null) === $wrDates && ($wrStored['displayName'] ?? null) === 'Asia trip' && ($wrStored['items']['a.jpg']['caption'] ?? null) === 'Tokyo' && filesize($wrItems) > 100, json_encode($wrR) . ' / ' . filesize($wrItems));
+$wrDesc = str_repeat('Schöne Grüße aus München. ', 60);
+foreach ([0, 1, 2, 3] as $wrShift) { $wrR = $wrAdmin(['action' => 'save_folder_identity', 'description' => str_repeat('ü', $wrShift) . $wrDesc], '&folder=Asia'); if (($wrR['ok'] ?? null) !== true) break; }
+$wrStored = json_decode(data_file_strip_guard_for_tests(file_get_contents($wrItems)), true);
+check('[data writer] a long German description is saved at any offset of the cut (never cut inside a letter), and the file keeps its other settings', ($wrR['ok'] ?? null) === true && ($wrStored['displayName'] ?? null) === 'Asia trip' && (int) preg_match('//u', (string) ($wrStored['description'] ?? '')) === 1 && preg_match_all('/./su', (string) ($wrStored['description'] ?? '')) <= 1000 && strlen((string) ($wrStored['description'] ?? '')) > 900, json_encode($wrR));
+// D12 over HTTP
+$wrVictim = file_get_contents("$wrOutside/victim.php");
+http_get("$baseW/", []); http_get("$baseW/?folder=Linked", []); http_get("$baseW/?folder=Linked", $wrOwn);
+check('[data writer] page views (a stranger\'s and the owner\'s) of a folder whose settings file is a link to another file leave that other file untouched (they used to empty it of every entry the folder did not hold)', file_get_contents("$wrOutside/victim.php") === $wrVictim && is_link("$fxW/Linked/.gallery-items.php"));
+$wrR = $wrAdmin(['action' => 'save_item', 'file' => 'l.jpg', 'caption' => 'hello', 'web' => '', 'lat' => '', 'lng' => '', 'loc_label' => ''], '&folder=Linked');
+check('[data writer] a save in that folder is refused saying the settings file is a link, and writes nothing through it', ($wrR['ok'] ?? null) === false && str_contains($wrR['text'] ?? '', 'is a link to a file somewhere else') && file_get_contents("$wrOutside/victim.php") === $wrVictim, json_encode($wrR));
+check('[data writer] a stranger sees nothing of that folder, as for any settings file that can\'t be read', !str_contains(http_get("$baseW/", [])[1], 'folder=Linked') && http_get("$baseW/?folder=Linked", [])[0] === 404);
+
+// F1: writers that arrive together all get their change in
+$wrP = "$wrDir/f1.php"; file_put_contents($wrP, data_file_guard_line() . json_encode(['n' => 0, 'failed' => 0]));
+$wrKids = [];
+for ($wrK = 0; $wrK < 12; $wrK++) {
+    $wrScript = "$wrDir/kid-$wrK.php";
+    file_put_contents($wrScript, "<?php error_reporting(0);\n" . $wrCode . "\nfor (\$i = 0; \$i < 25; \$i++) { \$GLOBALS['__data_write_failed'] = false; json_file_update(" . var_export($wrP, true) . ", ['n' => 0, 'failed' => 0], function (&\$d) { \$d['n']++; }); if (!empty(\$GLOBALS['__data_write_failed'])) { json_file_update(" . var_export("$wrDir/f1-failed.php", true) . ", ['failed' => 0], function (&\$d) { \$d['failed']++; }); } }\n");
+    $wrKids[] = proc_open([PHP_BINARY, $wrScript], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $wrPipes);
+}
+foreach ($wrKids as $wrKid) proc_close($wrKid);
+$wrF1 = json_decode(data_file_strip_guard(file_get_contents($wrP)), true); $wrF1Failed = is_file("$wrDir/f1-failed.php") ? (json_decode(data_file_strip_guard(file_get_contents("$wrDir/f1-failed.php")), true)['failed'] ?? 0) : 0;
+check('[data writer] twelve processes saving into one file at once (25 times each) lose no change and none is told "not writable" (the writer used to give up after five tries and drop it)', ($wrF1['n'] ?? 0) === 300 && $wrF1Failed === 0, 'n=' . ($wrF1['n'] ?? '?') . ' dropped=' . $wrF1Failed);
+
+// F5: a Settings save waits for the lock the file's other writers hold (two saves at the same moment each built the file from what they had read before the other finished: both said "Saved." and one change was gone)
+$fxS = new_fixture_dir('settingslock'); mkdir("$fxS/Alpha", 0777, true); make_jpeg("$fxS/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+file_put_contents("$fxS/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'ss-admin-pw-1']));
+copy($indexSrc, "$fxS/index.php");
+$portS = find_free_port(); putenv('PHP_CLI_SERVER_WORKERS=4'); start_server($fxS, $portS); putenv('PHP_CLI_SERVER_WORKERS'); $baseS = "http://127.0.0.1:$portS";
+[, , $ssH] = http_post("$baseS/?admin", ['access_code' => 'ss-admin-pw-1'], [], false); $ssCookie = extract_cookie_header($ssH);
+$ssPage = http_get("$baseS/?admin", ['Cookie: ' . $ssCookie])[1]; $ssForm = '';
+foreach (html_post_forms($ssPage) as $ssF) if (str_contains($ssF['html'], 'value="save_site_settings"')) { $ssForm = $ssF['html']; break; }
+$ssBody = http_build_query(['set_LOG_PUBLIC_VISITS' => '1'] + form_default_fields($ssForm)); $ssBefore = file_get_contents("$fxS/.gallery-config.php");
+$ssLock = fopen("$fxS/index.php", 'r'); flock($ssLock, LOCK_EX);   // (what the password upgrade at sign-in, the country-file switch and the setup claim hold while they write this file)
+$ssSock = stream_socket_client("tcp://127.0.0.1:$portS", $en, $es, 10);
+fwrite($ssSock, "POST /?admin HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: $ssCookie\r\nX-Requested-With: gallery-fetch\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: " . strlen($ssBody) . "\r\nConnection: close\r\n\r\n" . $ssBody);
+usleep(900000); $ssDuring = file_get_contents("$fxS/.gallery-config.php");
+flock($ssLock, LOCK_UN); fclose($ssLock);
+$ssResp = stream_get_contents($ssSock); fclose($ssSock);
+check('[settings save] a Settings save waits while another writer of the settings file holds the lock, and goes through once it is let go', $ssDuring === $ssBefore && str_contains($ssResp, '"ok":true') && !empty(cfg_read("$fxS/.gallery-config.php")['LOG_PUBLIC_VISITS']), 'during-unchanged=' . json_encode($ssDuring === $ssBefore) . ' ' . substr($ssResp, -160));
+$ssPage = http_get("$baseS/?admin", ['Cookie: ' . $ssCookie])[1]; $ssForm = '';
+foreach (html_post_forms($ssPage) as $ssF) if (str_contains($ssF['html'], 'value="save_site_settings"')) { $ssForm = $ssF['html']; break; }
+$ssOld = form_default_fields($ssForm);
+file_put_contents("$fxS/.gallery-config.php", cfg_text(['LOG_PUBLIC_VISITS' => true, 'SORT_VIDEOS_FIRST' => true] + cfg_read("$fxS/.gallery-config.php")));   // (another save finished after this page was loaded)
+$ssR = json_decode(http_post("$baseS/?admin", ['set_LOG_PUBLIC_VISITS' => '0'] + $ssOld, ['Cookie: ' . $ssCookie, 'X-Requested-With: gallery-fetch'])[1], true) ?: [];
+check('[settings save] a form loaded before another save finished is still refused as out of date, and that other save is kept', ($ssR['ok'] ?? null) === false && !empty(cfg_read("$fxS/.gallery-config.php")['SORT_VIDEOS_FIRST']), json_encode($ssR));
+
+// F7: the writers that wrote in place (a notes save, the sign-in history trim, the update-check and log-view state) no longer cut a file short when the disk is full
+$wrP = "$wrDir/f7.md"; file_put_contents($wrP, "{gallery}\nA note about something for sale.\n"); $wrBefore = file_get_contents($wrP);
+$wrOut = $wrRun('echo json_encode(file_write_whole(' . var_export($wrP, true) . ', str_repeat("y", 20000)));', 8);
+check('[data writer] a text file written with no room on the disk comes out as it was (and no temporary file is left): it used to be cut short or emptied', trim($wrOut) === 'false' && file_get_contents($wrP) === $wrBefore && glob("$wrDir/f7.md.*") === [], $wrOut . ' / ' . filesize($wrP));
+chmod($wrP, 0640); $wrOut = $wrRun('echo json_encode(file_write_whole(' . var_export($wrP, true) . ', "{gallery}\nnew text\n"));');
+check('[data writer] ...and written normally it replaces the text whole and keeps the file\'s permissions', trim($wrOut) === 'true' && file_get_contents($wrP) === "{gallery}\nnew text\n" && (fileperms($wrP) & 0777) === 0640 && glob("$wrDir/f7.md.*") === [], $wrOut);
+// the same through the admin: a notes save on a disk with no room (this server may not write a file over 8 KB; a request body much over 16 KB is not read by it at all, so the note is kept just above 8 KB)
+$fxN = new_fixture_dir('notes-noroom'); mkdir("$fxN/Alpha", 0777, true); make_jpeg("$fxN/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+file_put_contents("$fxN/Alpha/forsale.md", "{gallery}\nA note about something for sale.\n");
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'nn-admin-pw-1']));
+copy($indexSrc, "$fxN/index.php"); @touch("$fxN/index.php", time() - 3600);
+$portN = find_free_port();
+$procN = proc_open(['bash', '-c', "trap '' XFSZ; ulimit -f 8; exec " . escapeshellarg(PHP_BINARY) . ' -d opcache.enable=0 -S 127.0.0.1:' . $portN . ' -t ' . escapeshellarg($fxN)], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipesN);
+$cleanupProcs[] = $procN; for ($wrW = 0; $wrW < 50 && !@fsockopen('127.0.0.1', $portN); $wrW++) usleep(100000);
+$baseN = "http://127.0.0.1:$portN";
+[, , $nnH] = http_post("$baseN/?admin", ['access_code' => 'nn-admin-pw-1'], [], false); $nnOwn = ['Cookie: ' . extract_cookie_header($nnH)];
+$nnCsrf = admin_token($baseN, $nnOwn); $nnBefore = file_get_contents("$fxN/Alpha/forsale.md");
+$nnR = json_decode(http_post("$baseN/?admin&folder=Alpha", ['csrf_token' => $nnCsrf, 'action' => 'save_notes', 'md_file' => 'forsale.md', 'new_name' => '', 'content' => "{gallery}\n" . str_repeat('A long note. ', 900)], array_merge($nnOwn, ['X-Requested-With: gallery-fetch']))[1], true);
+check('[data writer] a notes save that does not fit on the disk leaves the note as it was (the audit saw a 259-byte note become 0 bytes), and does not say it was saved', file_get_contents("$fxN/Alpha/forsale.md") === $nnBefore && !str_contains((string) json_encode($nnR), 'Notes saved') && glob("$fxN/Alpha/forsale.md.*") === [], json_encode($nnR) . ' / ' . filesize("$fxN/Alpha/forsale.md"));
+
+/* --------------------------------------------------------------------- */
+
 echo "\n$passCount passed, $failCount failed\n";
 exit($failCount > 0 ? 1 : 0);

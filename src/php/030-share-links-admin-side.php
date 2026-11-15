@@ -8,7 +8,7 @@
 
 function link_clip($s, $max) {
     $s = (string) $s;
-    return function_exists('mb_substr') ? mb_substr($s, 0, $max) : substr($s, 0, $max);
+    return text_clip($s, $max);
 }
 
 function link_state_label($state) {

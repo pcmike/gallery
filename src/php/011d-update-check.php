@@ -24,7 +24,8 @@ function update_state() {
     return json_file_read(update_state_path(), ['triedAt' => 0, 'checkedAt' => 0, 'latest' => '', 'page' => '', 'indexUrl' => '', 'sumUrl' => '', 'error' => '', 'updatedFrom' => '', 'updatedAt' => 0]);
 }
 function update_state_save(array $state) {
-    return @file_put_contents(update_state_path(), data_file_encode($state), LOCK_EX) !== false;
+    $encoded = data_file_encode($state);
+    return $encoded !== false && file_write_whole(update_state_path(), $encoded, '.php');
 }
 
 /** Where the newest release is announced: GitHub's own, unless the setting UPDATE_FEED_URL names another (a mirror of your own, or a test). */

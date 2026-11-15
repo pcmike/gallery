@@ -148,10 +148,12 @@ function stats_update_file($statsFile, $modifier) {
             }
             $modifier($data);
             $encoded = data_file_encode($data);
-            ftruncate($fp, 0);
-            rewind($fp);
-            fwrite($fp, $encoded);
-            fflush($fp);
+            if ($encoded !== false) {   // (text that can't be written as JSON leaves the file as it is)
+                ftruncate($fp, 0);
+                rewind($fp);
+                fwrite($fp, $encoded);
+                fflush($fp);
+            }
             flock($fp, LOCK_UN);
         }
         fclose($fp);

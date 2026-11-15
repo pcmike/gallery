@@ -348,6 +348,15 @@ function admin_stale_message() {
     return ' was changed somewhere else (another tab or device) since you opened this page, so nothing was saved. Reload to see the current values, then make your change again.';
 }
 
+/** The first $max characters of $text (not bytes: a cut in the middle of a character is not valid text, and the data file that held
+ *  it could not be written). Without the mbstring extension the characters are counted by the pattern matcher. */
+function text_clip($text, $max) {
+    $text = (string) $text; $max = max(0, (int) $max);
+    if (function_exists('mb_substr')) return mb_substr($text, 0, $max, 'UTF-8');
+    if ($max <= 65000 && preg_match('/^.{0,' . $max . '}/su', $text, $m) === 1) return $m[0];
+    return substr($text, 0, $max);
+}
+
 /** Plain single-line-ish text from a form field: control characters
  *  dropped, whitespace runs collapsed, length capped. Output is always
  *  HTML-escaped where it's shown, so this is about tidiness and bounding
@@ -361,7 +370,7 @@ function admin_clean_description($value, $maxLen) {
     $text = preg_replace('/\t/', ' ', (string) $text);
     $text = preg_replace('/[ ]+\n/', "\n", (string) $text);
     $text = trim(preg_replace('/\n{3,}/', "\n\n", (string) $text));
-    return function_exists('mb_substr') ? mb_substr($text, 0, $maxLen, 'UTF-8') : substr($text, 0, $maxLen);
+    return text_clip($text, $maxLen);
 }
 
 /** A folder's (or the gallery's) description as HTML: the same small Markdown as the notes (bold, italic, links, lists,
@@ -374,10 +383,7 @@ function render_description_html($text) {
 function admin_clean_text($value, $maxLen) {
     $text = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) $value);
     $text = trim(preg_replace('/\s+/u', ' ', (string) $text));
-    if (function_exists('mb_substr')) {
-        return mb_substr($text, 0, $maxLen, 'UTF-8');
-    }
-    return substr($text, 0, $maxLen);
+    return text_clip($text, $maxLen);
 }
 
 /** The admin password rule: at least 8 characters, with a letter (either case) and a number. It is the one credential
@@ -486,6 +492,16 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if (!admin_csrf_valid($_POST['csrf_token'] ?? '')) {
         if ($isFetch) admin_json_exit(['ok' => false, 'text' => 'Your session expired — reload the page and sign in again.']);
         return ['type' => 'error', 'text' => 'Your session expired — please try again.'];
+    }
+    // A posted value that isn't valid text can't be kept in the gallery's data files (a browser always sends valid text; a script or a
+    // broken client may not): nothing is saved, and the answer names the field so it can be retyped.
+    $fieldNames = ['caption' => 'Caption', 'description' => 'Description', 'dates' => 'Dates', 'display_name' => 'Name', 'web' => 'Web link', 'label' => 'Place name', 'loc_label' => 'Place name', 'coll_address' => 'Address', 'name' => 'Name'];
+    foreach ($_POST as $postKey => $postValue) {
+        if ($postKey === 'csrf_token' || preg_match('//u', $postValue) === 1) continue;
+        $what = isset($fieldNames[$postKey]) ? 'the ' . $fieldNames[$postKey] . ' field' : (preg_match('/^[a-z_]{1,40}$/', (string) $postKey) ? 'the "' . $postKey . '" field' : 'one of the fields');
+        $text = 'Nothing was saved: ' . $what . ' contains a character the gallery can\'t store (it isn\'t valid text). Retype that part, or paste it as plain text, and save again.';
+        if ($isFetch) admin_json_exit(['ok' => false, 'text' => $text]);
+        return ['type' => 'error', 'text' => $text];
     }
     $action = $_POST['action'] ?? '';
 
@@ -1094,7 +1110,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (has_gallery_marker($content)) {
             return ['type' => 'error', 'text' => 'Already active.'];
         }
-        if (@file_put_contents($path, "{gallery}\n" . $content) === false) {
+        if (!file_write_whole($path, "{gallery}\n" . $content)) {
             return ['type' => 'error', 'text' => 'Could not write to "' . $mdFile . '".'];
         }
         return ['type' => 'ok', 'text' => '"' . $mdFile . '" is now active.'];
@@ -1112,7 +1128,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         $targetPath = $adminFolderReal . '/' . $target;
-        if (@file_put_contents($targetPath, $content) === false) {
+        if (!file_write_whole($targetPath, $content)) {
             return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
         }
         if (!has_gallery_marker($content)) {

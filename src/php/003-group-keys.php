@@ -109,7 +109,7 @@ if (request_route() === 'appicon') {
 }
 if (request_route() === 'manifest') {
     $name = trim(preg_replace('/[\x00-\x1f]+/', ' ', (string) ($_GET['name'] ?? '')));
-    $name = $name === '' ? 'Gallery' : (function_exists('mb_substr') ? mb_substr($name, 0, 40) : substr($name, 0, 40));
+    $name = $name === '' ? 'Gallery' : text_clip($name, 40);
     $start = gallery_root_href();
     if ($start === './') {
         $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);

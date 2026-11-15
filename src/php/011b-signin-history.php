@@ -273,7 +273,7 @@ function browser_housekeeping() {
         if (count($keep) !== count($lines)) {
             $body = data_file_guard_line();
             foreach ($keep as $l) $body .= json_encode($l, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
-            @file_put_contents(signin_history_path($id), $body, LOCK_EX);
+            file_write_whole(signin_history_path($id), $body, '.php');
         }
         $trimmed[$id] = $now;
     }

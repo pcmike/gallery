@@ -1334,7 +1334,7 @@ if (request_route() === 'appicon') {
 }
 if (request_route() === 'manifest') {
     $name = trim(preg_replace('/[\x00-\x1f]+/', ' ', (string) ($_GET['name'] ?? '')));
-    $name = $name === '' ? 'Gallery' : (function_exists('mb_substr') ? mb_substr($name, 0, 40) : substr($name, 0, 40));
+    $name = $name === '' ? 'Gallery' : text_clip($name, 40);
     $start = gallery_root_href();
     if ($start === './') {
         $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
@@ -4088,12 +4088,25 @@ function data_file_strip_guard($raw) {
     return $raw;
 }
 
-/** JSON for a guarded data file. JSON_HEX_TAG writes "<" and ">" as
- *  \u003C/\u003E, so a caption that happens to contain "<?php" can never
- *  put a PHP open tag into the file — nothing after the guard line is
- *  ever parsed as code, even by a server with short tags on. */
+/** JSON for a guarded data file, or false when the data can't be written as JSON (a string in it that is not valid UTF-8). The
+ *  callers must stop on false: what they would write otherwise is the guard line and nothing else, in place of the file's data.
+ *  JSON_HEX_TAG writes "<" and ">" as \u003C/\u003E, so a caption that happens to contain "<?php" can never put a PHP open tag
+ *  into the file: nothing after the guard line is ever parsed as code, even by a server with short tags on. */
 function data_file_encode($data) {
-    return data_file_guard_line() . json_encode($data, JSON_HEX_TAG);
+    $json = json_encode($data, JSON_HEX_TAG);
+    return $json === false ? false : data_file_guard_line() . $json;
+}
+
+/** A data file that is a link (to another file, or to nothing) is never read or written: the gallery's own files are plain files in
+ *  its own folders, and writing through a link would change a file somewhere else on the server (the same rule as for photos and
+ *  folders, which are never followed). */
+function data_file_is_link($path) {
+    return is_link($path);
+}
+
+/** True for a data file with nothing in it (no bytes, or only the guard line): there is nothing a save could lose by replacing it. */
+function data_file_is_empty($raw) {
+    return trim(data_file_strip_guard($raw)) === '';
 }
 
 /** Reads a JSON data file and says how it went: ['missing', $defaultData] when there is no file, ['ok', data merged over the
@@ -4101,6 +4114,7 @@ function data_file_encode($data) {
  *  disk, a half-finished copy, a typo in a hand edit). A file that can't be read is not the same as a file with nothing in it: the
  *  callers that guard something decide what that means (see items_read, json_file_update). */
 function json_file_load($path, $defaultData) {
+    if (data_file_is_link($path)) return ['broken', $defaultData];   // (never read through a link; for the folder's settings, can't be read means hidden)
     if (!file_exists($path)) return ['missing', $defaultData];
     $raw = @file_get_contents($path);
     $decoded = $raw === false ? null : json_decode(data_file_strip_guard($raw), true);
@@ -4120,12 +4134,20 @@ function json_file_read($path, $defaultData) {
  *  still be able to restore with an almost empty file. The other files (sign-in throttle, logs) are rebuilt instead. */
 function json_file_update($path, $defaultData, $modifier, $protect = false) {
     $data = $defaultData;
+    if (data_file_is_link($path)) {   // a link is not the gallery's own file: nothing is read from it, nothing is written through it
+        $GLOBALS['__data_write_failed'] = true;
+        $GLOBALS['__data_refused'][$path] = 'link';
+        return $data;
+    }
     $existed = file_exists($path);
     // A writer that waited on the lock may be holding a file that was replaced (renamed over) in the meantime; it must start again
     // on the current one, or it would save its change on top of a version that no longer exists.
-    for ($try = 0, $fp = false; $try < 5; $try++) {
+    // (Every time round means another writer got in and replaced the file while this one waited, so the tries can't run out
+    // for as long as writers are making progress: the cap is only there to end a loop that would otherwise never finish.)
+    for ($try = 0, $fp = false; $try < 200; $try++) {
         $fp = @fopen($path, 'c+');
-        if (!$fp || !flock($fp, LOCK_EX)) break;
+        if (!$fp) break;
+        if (!flock($fp, LOCK_EX)) { fclose($fp); $fp = false; break; }   // (a lock that can't be taken is a save that can't be made safely)
         clearstatcache(true, $path);
         $here = @stat($path); $mine = fstat($fp);
         if ($here && $mine && $here['ino'] === $mine['ino'] && $here['dev'] === $mine['dev']) break;
@@ -4138,38 +4160,84 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
         $GLOBALS['__data_write_failed'] = true;
         return $data;
     }
-    $raw = stream_get_contents($fp);
+    $raw = (string) stream_get_contents($fp);
     $decoded = json_decode(data_file_strip_guard($raw), true);
     if (is_array($decoded)) $data = array_merge($data, $decoded);
-    if ($protect && !is_array($decoded) && $existed) {
+    $saved = false;
+    if ($protect && !is_array($decoded) && $existed && !data_file_is_empty($raw)) {
         $GLOBALS['__data_write_failed'] = true;
         $GLOBALS['__data_refused'][$path] = true;
     } else {
         $modifier($data);
-        if (!json_file_replace($path, data_file_encode($data), $fp)) $GLOBALS['__data_write_failed'] = true;   // disk full, quota, ...
+        $encoded = data_file_encode($data);
+        if ($encoded === false) {   // text in it that isn't valid UTF-8: the file is left exactly as it is
+            $GLOBALS['__data_write_failed'] = true;
+            $GLOBALS['__data_refused'][$path] = 'text';
+        } elseif (json_file_replace($path, $encoded, $fp, $raw)) {
+            $saved = true;
+        } else {
+            $GLOBALS['__data_write_failed'] = true;   // disk full, quota, ...
+        }
     }
+    // The empty file that opening it made (there was none before) is taken away again when nothing was saved into it: an empty file
+    // is what "can't be read" is made of, and it would hide the folder's photos from visitors and refuse the next save.
+    if (!$saved && !$existed && (int) (fstat($fp)['size'] ?? 1) === 0) @unlink($path);
     flock($fp, LOCK_UN);
     fclose($fp);
     return $data;
 }
 
-/** Puts $encoded in $path as a whole: written to a temporary file in the same folder, then renamed over the original (atomic on
- *  the same filesystem). If a temporary file can't be made (a folder that allows changing the file but not adding to it) it writes
- *  into the open handle $fp instead, as before. */
-function json_file_replace($path, $encoded, $fp) {
-    $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.php';   // (ends in .php and starts with the guard line, so a leftover is answered with a 404 like the real file)
-    $ok = false;
-    if (!is_link($path) && @file_put_contents($tmp, $encoded) === strlen($encoded)) {   // (a symlinked data file is written through, so the link stays a link)
+/** Puts $content in $path as a whole without ever cutting the live file short: it is written to a temporary file in the same folder
+ *  (named $path, a dot, eight hex digits, $tempEnding), checked to be complete, and renamed over the original (atomic on the same
+ *  filesystem). Says 'done'; or 'failed' when a temporary file could be made but the save could not be finished (no room, a quota): the
+ *  temporary file is taken away and the live file is exactly as it was; or 'no-temp' when no temporary file could be made (a folder
+ *  that allows changing a file but not adding to it), which the callers answer by writing in place. A data file's temporary name
+ *  ends in .php (it starts with the guard line, so a leftover is answered with a 404 like the real file); a text file's must not. */
+function file_swap_in($path, $content, $tempEnding = '.php') {
+    $content = (string) $content;
+    $tmp = $path . '.' . bin2hex(random_bytes(4)) . $tempEnding;
+    @file_put_contents($tmp, $content);
+    if (!file_exists($tmp)) return 'no-temp';
+    clearstatcache(true, $tmp);
+    if (@filesize($tmp) === strlen($content)) {
         @chmod($tmp, (@fileperms($path) ?: 0644) & 0777);
-        $ok = @rename($tmp, $path);
+        if (@rename($tmp, $path)) return 'done';
     }
-    if ($ok) return true;
     @unlink($tmp);
-    ftruncate($fp, 0);
-    rewind($fp);
-    $wrote = fwrite($fp, $encoded) === strlen($encoded);
-    fflush($fp);
+    return 'failed';
+}
+
+/** Writes $content into the open handle $fp in place, the way a save has to where no temporary file can be made. $old is what the file
+ *  held: nothing is attempted when the disk says there is no room for what the new text adds, and if the write comes out short, $old is
+ *  put back. */
+function file_write_in_place($path, $content, $fp, $old = '') {
+    $content = (string) $content; $old = (string) $old;
+    $free = @disk_free_space(dirname($path));
+    if ($free !== false && strlen($content) - strlen($old) > $free) return false;
+    $wrote = @ftruncate($fp, 0) && @rewind($fp) && @fwrite($fp, $content) === strlen($content) && @fflush($fp);
+    if (!$wrote) {   // (the file is empty or cut short now)
+        @ftruncate($fp, 0); @rewind($fp); @fwrite($fp, $old); @fflush($fp);
+    }
     return $wrote;
+}
+
+/** Puts $encoded in the data file $path as a whole, which the caller has open and locked as $fp ($old is what it held). */
+function json_file_replace($path, $encoded, $fp, $old = '') {
+    $done = file_swap_in($path, $encoded, '.php');
+    return $done === 'no-temp' ? file_write_in_place($path, $encoded, $fp, $old) : $done === 'done';
+}
+
+/** Writes a file that has no lock of its own (a text file, a state file) as a whole: never cut short by a save that can't be finished,
+ *  and never seen half-written. Returns whether it was written. */
+function file_write_whole($path, $content, $tempEnding = '.tmp') {
+    $done = file_swap_in($path, $content, $tempEnding);
+    if ($done !== 'no-temp') return $done === 'done';
+    $old = is_file($path) ? (string) @file_get_contents($path) : '';
+    $fp = @fopen($path, 'c+');
+    if (!$fp) return false;
+    $ok = flock($fp, LOCK_EX) && file_write_in_place($path, $content, $fp, $old);
+    flock($fp, LOCK_UN); fclose($fp);
+    return $ok;
 }
 
 /** How a failed save names a folder: "this folder", or, for a place from elsewhere on the server, its real path (the owner may not know where
@@ -4184,6 +4252,14 @@ function data_write_failure_place($dir, $folderReal) {
  *  being writable. $folder is how the sentence says where ("this folder"). */
 function data_write_failure_text($folder = 'this folder') {
     if (!empty($GLOBALS['__data_refused'])) {
+        $path = (string) array_key_first($GLOBALS['__data_refused']);
+        $why = $GLOBALS['__data_refused'][$path];
+        if ($why === 'link') {
+            return 'Nothing was saved: ' . basename($path) . ' in ' . $folder . ' is a link to a file somewhere else, which the gallery won\'t use (it would change that other file). Replace it with a real file, or delete the link, then try again.';
+        }
+        if ($why === 'text') {
+            return 'Nothing was saved: something in what you changed contains a character the gallery can\'t store (it isn\'t valid text), so ' . basename($path) . ' was left exactly as it is. Retype that part, or paste it as plain text, and save again.';
+        }
         return 'Nothing was saved: a settings file in ' . $folder . ' can\'t be read (it may have been cut short or edited by hand), so it was left exactly as it is. Restore .gallery-items.php there from a backup, or delete it to start that folder fresh. Until then its photos stay hidden from visitors. The Health check in Settings names it.';
     }
     return 'Nothing was saved: ' . $folder . ' isn\'t writable by the web server. Give the web server\'s user write permission on it (on many hosts: chmod 755 or 775 on the folder, owned by that user), then try again.';
@@ -4606,7 +4682,7 @@ function browser_housekeeping() {
         if (count($keep) !== count($lines)) {
             $body = data_file_guard_line();
             foreach ($keep as $l) $body .= json_encode($l, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
-            @file_put_contents(signin_history_path($id), $body, LOCK_EX);
+            file_write_whole(signin_history_path($id), $body, '.php');
         }
         $trimmed[$id] = $now;
     }
@@ -4986,7 +5062,8 @@ function update_state() {
     return json_file_read(update_state_path(), ['triedAt' => 0, 'checkedAt' => 0, 'latest' => '', 'page' => '', 'indexUrl' => '', 'sumUrl' => '', 'error' => '', 'updatedFrom' => '', 'updatedAt' => 0]);
 }
 function update_state_save(array $state) {
-    return @file_put_contents(update_state_path(), data_file_encode($state), LOCK_EX) !== false;
+    $encoded = data_file_encode($state);
+    return $encoded !== false && file_write_whole(update_state_path(), $encoded, '.php');
 }
 
 /** Where the newest release is announced: GitHub's own, unless the setting UPDATE_FEED_URL names another (a mirror of your own, or a test). */
@@ -9279,6 +9356,15 @@ function admin_stale_message() {
     return ' was changed somewhere else (another tab or device) since you opened this page, so nothing was saved. Reload to see the current values, then make your change again.';
 }
 
+/** The first $max characters of $text (not bytes: a cut in the middle of a character is not valid text, and the data file that held
+ *  it could not be written). Without the mbstring extension the characters are counted by the pattern matcher. */
+function text_clip($text, $max) {
+    $text = (string) $text; $max = max(0, (int) $max);
+    if (function_exists('mb_substr')) return mb_substr($text, 0, $max, 'UTF-8');
+    if ($max <= 65000 && preg_match('/^.{0,' . $max . '}/su', $text, $m) === 1) return $m[0];
+    return substr($text, 0, $max);
+}
+
 /** Plain single-line-ish text from a form field: control characters
  *  dropped, whitespace runs collapsed, length capped. Output is always
  *  HTML-escaped where it's shown, so this is about tidiness and bounding
@@ -9292,7 +9378,7 @@ function admin_clean_description($value, $maxLen) {
     $text = preg_replace('/\t/', ' ', (string) $text);
     $text = preg_replace('/[ ]+\n/', "\n", (string) $text);
     $text = trim(preg_replace('/\n{3,}/', "\n\n", (string) $text));
-    return function_exists('mb_substr') ? mb_substr($text, 0, $maxLen, 'UTF-8') : substr($text, 0, $maxLen);
+    return text_clip($text, $maxLen);
 }
 
 /** A folder's (or the gallery's) description as HTML: the same small Markdown as the notes (bold, italic, links, lists,
@@ -9305,10 +9391,7 @@ function render_description_html($text) {
 function admin_clean_text($value, $maxLen) {
     $text = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) $value);
     $text = trim(preg_replace('/\s+/u', ' ', (string) $text));
-    if (function_exists('mb_substr')) {
-        return mb_substr($text, 0, $maxLen, 'UTF-8');
-    }
-    return substr($text, 0, $maxLen);
+    return text_clip($text, $maxLen);
 }
 
 /** The admin password rule: at least 8 characters, with a letter (either case) and a number. It is the one credential
@@ -9417,6 +9500,16 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if (!admin_csrf_valid($_POST['csrf_token'] ?? '')) {
         if ($isFetch) admin_json_exit(['ok' => false, 'text' => 'Your session expired — reload the page and sign in again.']);
         return ['type' => 'error', 'text' => 'Your session expired — please try again.'];
+    }
+    // A posted value that isn't valid text can't be kept in the gallery's data files (a browser always sends valid text; a script or a
+    // broken client may not): nothing is saved, and the answer names the field so it can be retyped.
+    $fieldNames = ['caption' => 'Caption', 'description' => 'Description', 'dates' => 'Dates', 'display_name' => 'Name', 'web' => 'Web link', 'label' => 'Place name', 'loc_label' => 'Place name', 'coll_address' => 'Address', 'name' => 'Name'];
+    foreach ($_POST as $postKey => $postValue) {
+        if ($postKey === 'csrf_token' || preg_match('//u', $postValue) === 1) continue;
+        $what = isset($fieldNames[$postKey]) ? 'the ' . $fieldNames[$postKey] . ' field' : (preg_match('/^[a-z_]{1,40}$/', (string) $postKey) ? 'the "' . $postKey . '" field' : 'one of the fields');
+        $text = 'Nothing was saved: ' . $what . ' contains a character the gallery can\'t store (it isn\'t valid text). Retype that part, or paste it as plain text, and save again.';
+        if ($isFetch) admin_json_exit(['ok' => false, 'text' => $text]);
+        return ['type' => 'error', 'text' => $text];
     }
     $action = $_POST['action'] ?? '';
 
@@ -10025,7 +10118,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (has_gallery_marker($content)) {
             return ['type' => 'error', 'text' => 'Already active.'];
         }
-        if (@file_put_contents($path, "{gallery}\n" . $content) === false) {
+        if (!file_write_whole($path, "{gallery}\n" . $content)) {
             return ['type' => 'error', 'text' => 'Could not write to "' . $mdFile . '".'];
         }
         return ['type' => 'ok', 'text' => '"' . $mdFile . '" is now active.'];
@@ -10043,7 +10136,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         $targetPath = $adminFolderReal . '/' . $target;
-        if (@file_put_contents($targetPath, $content) === false) {
+        if (!file_write_whole($targetPath, $content)) {
             return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
         }
         if (!has_gallery_marker($content)) {
@@ -11270,8 +11363,25 @@ function gallery_config_render($cfg) {
  *  nothing else: captions, locations, hide flags, stats and notes are never
  *  read or written here. Returns an admin result array. */
 function site_settings_save($ajax = false) {
+    // One save at a time, and in line with the file's other writers (a password hashed at sign-in, the country-file switch), which hold
+    // this same lock: two saves at the same moment each built the file from what they had read before the other finished, so both said
+    // "Saved." and one change was gone.
+    $lock = @fopen(__FILE__, 'r');
+    if ($lock) flock($lock, LOCK_EX);
+    try {
+        return site_settings_save_locked($ajax);
+    } finally {
+        if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+    }
+}
+
+function site_settings_save_locked($ajax) {
     $state = gallery_config_load();
     $path = gallery_config_path();
+    if (is_file($path)) {   // (read again now that the lock is ours: another save may have finished since this request began)
+        [$freshStatus, $freshCfg] = gallery_config_parse((string) @file_get_contents($path));
+        if ($freshStatus === 'ok') $state = ['status' => 'ok', 'cfg' => $freshCfg];
+    }
     if (!in_array($state['status'], ['absent', 'ok'], true)) {
         return ['type' => 'error', 'text' => 'The settings file (.gallery-config.php) exists but can\'t be read as settings, so nothing was changed — saving would overwrite whatever is in it. Fix or delete that file, then try again.'];
     }
@@ -11402,7 +11512,7 @@ function site_settings_save($ajax = false) {
 
 function link_clip($s, $max) {
     $s = (string) $s;
-    return function_exists('mb_substr') ? mb_substr($s, 0, $max) : substr($s, 0, $max);
+    return text_clip($s, $max);
 }
 
 function link_state_label($state) {
@@ -15434,7 +15544,8 @@ function health_version_record($dir) {
     if (($data['version'] ?? '') === GALLERY_VERSION) return $data;
     $new = ['version' => GALLERY_VERSION, 'from' => (string) ($data['version'] ?? ''), 'at' => gmdate('Y-m-d'),
             'first' => ($data['first'] ?? '') !== '' ? (string) $data['first'] : gmdate('Y-m-d')];
-    return @file_put_contents($path, data_file_encode($new), LOCK_EX) !== false ? $new : null;
+    $encoded = data_file_encode($new);
+    return $encoded !== false && file_write_whole($path, $encoded, '.php') ? $new : null;
 }
 
 /** The server-side half of the health panel: rows of [group, status (ok|warn|bad|info), label, detail], and nothing is
@@ -22799,10 +22910,12 @@ function stats_update_file($statsFile, $modifier) {
             }
             $modifier($data);
             $encoded = data_file_encode($data);
-            ftruncate($fp, 0);
-            rewind($fp);
-            fwrite($fp, $encoded);
-            fflush($fp);
+            if ($encoded !== false) {   // (text that can't be written as JSON leaves the file as it is)
+                ftruncate($fp, 0);
+                rewind($fp);
+                fwrite($fp, $encoded);
+                fflush($fp);
+            }
             flock($fp, LOCK_UN);
         }
         fclose($fp);

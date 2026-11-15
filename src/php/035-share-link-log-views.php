@@ -832,7 +832,8 @@ function health_version_record($dir) {
     if (($data['version'] ?? '') === GALLERY_VERSION) return $data;
     $new = ['version' => GALLERY_VERSION, 'from' => (string) ($data['version'] ?? ''), 'at' => gmdate('Y-m-d'),
             'first' => ($data['first'] ?? '') !== '' ? (string) $data['first'] : gmdate('Y-m-d')];
-    return @file_put_contents($path, data_file_encode($new), LOCK_EX) !== false ? $new : null;
+    $encoded = data_file_encode($new);
+    return $encoded !== false && file_write_whole($path, $encoded, '.php') ? $new : null;
 }
 
 /** The server-side half of the health panel: rows of [group, status (ok|warn|bad|info), label, detail], and nothing is

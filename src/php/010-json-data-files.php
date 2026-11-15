@@ -38,12 +38,25 @@ function data_file_strip_guard($raw) {
     return $raw;
 }
 
-/** JSON for a guarded data file. JSON_HEX_TAG writes "<" and ">" as
- *  \u003C/\u003E, so a caption that happens to contain "<?php" can never
- *  put a PHP open tag into the file — nothing after the guard line is
- *  ever parsed as code, even by a server with short tags on. */
+/** JSON for a guarded data file, or false when the data can't be written as JSON (a string in it that is not valid UTF-8). The
+ *  callers must stop on false: what they would write otherwise is the guard line and nothing else, in place of the file's data.
+ *  JSON_HEX_TAG writes "<" and ">" as \u003C/\u003E, so a caption that happens to contain "<?php" can never put a PHP open tag
+ *  into the file: nothing after the guard line is ever parsed as code, even by a server with short tags on. */
 function data_file_encode($data) {
-    return data_file_guard_line() . json_encode($data, JSON_HEX_TAG);
+    $json = json_encode($data, JSON_HEX_TAG);
+    return $json === false ? false : data_file_guard_line() . $json;
+}
+
+/** A data file that is a link (to another file, or to nothing) is never read or written: the gallery's own files are plain files in
+ *  its own folders, and writing through a link would change a file somewhere else on the server (the same rule as for photos and
+ *  folders, which are never followed). */
+function data_file_is_link($path) {
+    return is_link($path);
+}
+
+/** True for a data file with nothing in it (no bytes, or only the guard line): there is nothing a save could lose by replacing it. */
+function data_file_is_empty($raw) {
+    return trim(data_file_strip_guard($raw)) === '';
 }
 
 /** Reads a JSON data file and says how it went: ['missing', $defaultData] when there is no file, ['ok', data merged over the
@@ -51,6 +64,7 @@ function data_file_encode($data) {
  *  disk, a half-finished copy, a typo in a hand edit). A file that can't be read is not the same as a file with nothing in it: the
  *  callers that guard something decide what that means (see items_read, json_file_update). */
 function json_file_load($path, $defaultData) {
+    if (data_file_is_link($path)) return ['broken', $defaultData];   // (never read through a link; for the folder's settings, can't be read means hidden)
     if (!file_exists($path)) return ['missing', $defaultData];
     $raw = @file_get_contents($path);
     $decoded = $raw === false ? null : json_decode(data_file_strip_guard($raw), true);
@@ -70,12 +84,20 @@ function json_file_read($path, $defaultData) {
  *  still be able to restore with an almost empty file. The other files (sign-in throttle, logs) are rebuilt instead. */
 function json_file_update($path, $defaultData, $modifier, $protect = false) {
     $data = $defaultData;
+    if (data_file_is_link($path)) {   // a link is not the gallery's own file: nothing is read from it, nothing is written through it
+        $GLOBALS['__data_write_failed'] = true;
+        $GLOBALS['__data_refused'][$path] = 'link';
+        return $data;
+    }
     $existed = file_exists($path);
     // A writer that waited on the lock may be holding a file that was replaced (renamed over) in the meantime; it must start again
     // on the current one, or it would save its change on top of a version that no longer exists.
-    for ($try = 0, $fp = false; $try < 5; $try++) {
+    // (Every time round means another writer got in and replaced the file while this one waited, so the tries can't run out
+    // for as long as writers are making progress: the cap is only there to end a loop that would otherwise never finish.)
+    for ($try = 0, $fp = false; $try < 200; $try++) {
         $fp = @fopen($path, 'c+');
-        if (!$fp || !flock($fp, LOCK_EX)) break;
+        if (!$fp) break;
+        if (!flock($fp, LOCK_EX)) { fclose($fp); $fp = false; break; }   // (a lock that can't be taken is a save that can't be made safely)
         clearstatcache(true, $path);
         $here = @stat($path); $mine = fstat($fp);
         if ($here && $mine && $here['ino'] === $mine['ino'] && $here['dev'] === $mine['dev']) break;
@@ -88,38 +110,84 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
         $GLOBALS['__data_write_failed'] = true;
         return $data;
     }
-    $raw = stream_get_contents($fp);
+    $raw = (string) stream_get_contents($fp);
     $decoded = json_decode(data_file_strip_guard($raw), true);
     if (is_array($decoded)) $data = array_merge($data, $decoded);
-    if ($protect && !is_array($decoded) && $existed) {
+    $saved = false;
+    if ($protect && !is_array($decoded) && $existed && !data_file_is_empty($raw)) {
         $GLOBALS['__data_write_failed'] = true;
         $GLOBALS['__data_refused'][$path] = true;
     } else {
         $modifier($data);
-        if (!json_file_replace($path, data_file_encode($data), $fp)) $GLOBALS['__data_write_failed'] = true;   // disk full, quota, ...
+        $encoded = data_file_encode($data);
+        if ($encoded === false) {   // text in it that isn't valid UTF-8: the file is left exactly as it is
+            $GLOBALS['__data_write_failed'] = true;
+            $GLOBALS['__data_refused'][$path] = 'text';
+        } elseif (json_file_replace($path, $encoded, $fp, $raw)) {
+            $saved = true;
+        } else {
+            $GLOBALS['__data_write_failed'] = true;   // disk full, quota, ...
+        }
     }
+    // The empty file that opening it made (there was none before) is taken away again when nothing was saved into it: an empty file
+    // is what "can't be read" is made of, and it would hide the folder's photos from visitors and refuse the next save.
+    if (!$saved && !$existed && (int) (fstat($fp)['size'] ?? 1) === 0) @unlink($path);
     flock($fp, LOCK_UN);
     fclose($fp);
     return $data;
 }
 
-/** Puts $encoded in $path as a whole: written to a temporary file in the same folder, then renamed over the original (atomic on
- *  the same filesystem). If a temporary file can't be made (a folder that allows changing the file but not adding to it) it writes
- *  into the open handle $fp instead, as before. */
-function json_file_replace($path, $encoded, $fp) {
-    $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.php';   // (ends in .php and starts with the guard line, so a leftover is answered with a 404 like the real file)
-    $ok = false;
-    if (!is_link($path) && @file_put_contents($tmp, $encoded) === strlen($encoded)) {   // (a symlinked data file is written through, so the link stays a link)
+/** Puts $content in $path as a whole without ever cutting the live file short: it is written to a temporary file in the same folder
+ *  (named $path, a dot, eight hex digits, $tempEnding), checked to be complete, and renamed over the original (atomic on the same
+ *  filesystem). Says 'done'; or 'failed' when a temporary file could be made but the save could not be finished (no room, a quota): the
+ *  temporary file is taken away and the live file is exactly as it was; or 'no-temp' when no temporary file could be made (a folder
+ *  that allows changing a file but not adding to it), which the callers answer by writing in place. A data file's temporary name
+ *  ends in .php (it starts with the guard line, so a leftover is answered with a 404 like the real file); a text file's must not. */
+function file_swap_in($path, $content, $tempEnding = '.php') {
+    $content = (string) $content;
+    $tmp = $path . '.' . bin2hex(random_bytes(4)) . $tempEnding;
+    @file_put_contents($tmp, $content);
+    if (!file_exists($tmp)) return 'no-temp';
+    clearstatcache(true, $tmp);
+    if (@filesize($tmp) === strlen($content)) {
         @chmod($tmp, (@fileperms($path) ?: 0644) & 0777);
-        $ok = @rename($tmp, $path);
+        if (@rename($tmp, $path)) return 'done';
     }
-    if ($ok) return true;
     @unlink($tmp);
-    ftruncate($fp, 0);
-    rewind($fp);
-    $wrote = fwrite($fp, $encoded) === strlen($encoded);
-    fflush($fp);
+    return 'failed';
+}
+
+/** Writes $content into the open handle $fp in place, the way a save has to where no temporary file can be made. $old is what the file
+ *  held: nothing is attempted when the disk says there is no room for what the new text adds, and if the write comes out short, $old is
+ *  put back. */
+function file_write_in_place($path, $content, $fp, $old = '') {
+    $content = (string) $content; $old = (string) $old;
+    $free = @disk_free_space(dirname($path));
+    if ($free !== false && strlen($content) - strlen($old) > $free) return false;
+    $wrote = @ftruncate($fp, 0) && @rewind($fp) && @fwrite($fp, $content) === strlen($content) && @fflush($fp);
+    if (!$wrote) {   // (the file is empty or cut short now)
+        @ftruncate($fp, 0); @rewind($fp); @fwrite($fp, $old); @fflush($fp);
+    }
     return $wrote;
+}
+
+/** Puts $encoded in the data file $path as a whole, which the caller has open and locked as $fp ($old is what it held). */
+function json_file_replace($path, $encoded, $fp, $old = '') {
+    $done = file_swap_in($path, $encoded, '.php');
+    return $done === 'no-temp' ? file_write_in_place($path, $encoded, $fp, $old) : $done === 'done';
+}
+
+/** Writes a file that has no lock of its own (a text file, a state file) as a whole: never cut short by a save that can't be finished,
+ *  and never seen half-written. Returns whether it was written. */
+function file_write_whole($path, $content, $tempEnding = '.tmp') {
+    $done = file_swap_in($path, $content, $tempEnding);
+    if ($done !== 'no-temp') return $done === 'done';
+    $old = is_file($path) ? (string) @file_get_contents($path) : '';
+    $fp = @fopen($path, 'c+');
+    if (!$fp) return false;
+    $ok = flock($fp, LOCK_EX) && file_write_in_place($path, $content, $fp, $old);
+    flock($fp, LOCK_UN); fclose($fp);
+    return $ok;
 }
 
 /** How a failed save names a folder: "this folder", or, for a place from elsewhere on the server, its real path (the owner may not know where
@@ -134,6 +202,14 @@ function data_write_failure_place($dir, $folderReal) {
  *  being writable. $folder is how the sentence says where ("this folder"). */
 function data_write_failure_text($folder = 'this folder') {
     if (!empty($GLOBALS['__data_refused'])) {
+        $path = (string) array_key_first($GLOBALS['__data_refused']);
+        $why = $GLOBALS['__data_refused'][$path];
+        if ($why === 'link') {
+            return 'Nothing was saved: ' . basename($path) . ' in ' . $folder . ' is a link to a file somewhere else, which the gallery won\'t use (it would change that other file). Replace it with a real file, or delete the link, then try again.';
+        }
+        if ($why === 'text') {
+            return 'Nothing was saved: something in what you changed contains a character the gallery can\'t store (it isn\'t valid text), so ' . basename($path) . ' was left exactly as it is. Retype that part, or paste it as plain text, and save again.';
+        }
         return 'Nothing was saved: a settings file in ' . $folder . ' can\'t be read (it may have been cut short or edited by hand), so it was left exactly as it is. Restore .gallery-items.php there from a backup, or delete it to start that folder fresh. Until then its photos stay hidden from visitors. The Health check in Settings names it.';
     }
     return 'Nothing was saved: ' . $folder . ' isn\'t writable by the web server. Give the web server\'s user write permission on it (on many hosts: chmod 755 or 775 on the folder, owned by that user), then try again.';

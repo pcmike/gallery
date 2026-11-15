@@ -488,8 +488,25 @@ function gallery_config_render($cfg) {
  *  nothing else: captions, locations, hide flags, stats and notes are never
  *  read or written here. Returns an admin result array. */
 function site_settings_save($ajax = false) {
+    // One save at a time, and in line with the file's other writers (a password hashed at sign-in, the country-file switch), which hold
+    // this same lock: two saves at the same moment each built the file from what they had read before the other finished, so both said
+    // "Saved." and one change was gone.
+    $lock = @fopen(__FILE__, 'r');
+    if ($lock) flock($lock, LOCK_EX);
+    try {
+        return site_settings_save_locked($ajax);
+    } finally {
+        if ($lock) { flock($lock, LOCK_UN); fclose($lock); }
+    }
+}
+
+function site_settings_save_locked($ajax) {
     $state = gallery_config_load();
     $path = gallery_config_path();
+    if (is_file($path)) {   // (read again now that the lock is ours: another save may have finished since this request began)
+        [$freshStatus, $freshCfg] = gallery_config_parse((string) @file_get_contents($path));
+        if ($freshStatus === 'ok') $state = ['status' => 'ok', 'cfg' => $freshCfg];
+    }
     if (!in_array($state['status'], ['absent', 'ok'], true)) {
         return ['type' => 'error', 'text' => 'The settings file (.gallery-config.php) exists but can\'t be read as settings, so nothing was changed — saving would overwrite whatever is in it. Fix or delete that file, then try again.'];
     }
