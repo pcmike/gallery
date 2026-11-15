@@ -268,23 +268,30 @@ function gallery_setting($name, $default, $allowed = null) {
 }
 
 /** The folders that really get mounted: every named EXTRA_FOLDERS entry, then each folder found inside every
- *  EXTRA_ROOTS path under its own name (the first to claim a name keeps it). Never follows a link. */
+ *  EXTRA_ROOTS path under its own name (the first to claim a name keeps it). Never follows a link. A name a folder of the gallery's own
+ *  already has is that folder's, as in the scan (which lists the real folder) and in every request (which then resolves the real one): the
+ *  place from elsewhere is left out and the Health check says so ($GLOBALS['__mount_clashes']). Names are text: a name of digits is a
+ *  number as an array key, so it is cast, never tested with is_string(). */
 function gallery_mounts() {
     static $mounts = null;
     if ($mounts !== null) return $mounts;
-    $named = EXTRA_FOLDERS;
-    $roots = EXTRA_ROOTS;
-    $mounts = [];
-    foreach ((array) $named as $name => $path) {
-        if (is_string($name) && is_string($path)) $mounts[$name] = $path;
+    $mounts = []; $GLOBALS['__mount_clashes'] = [];
+    $realFolder = function ($name) { $p = __DIR__ . '/' . $name; return is_dir($p) && !is_link($p) && $name[0] !== '.' && !in_array($name, SCAN_SKIP_FOLDERS, true); };
+    foreach ((array) EXTRA_FOLDERS as $name => $path) {
+        $name = (string) $name;
+        if ($name === '' || !is_string($path)) continue;
+        if ($realFolder($name)) { $GLOBALS['__mount_clashes'][$name] = $path; continue; }
+        $mounts[$name] = $path;
     }
-    foreach ((array) $roots as $root) {
+    foreach ((array) EXTRA_ROOTS as $root) {
         if (!is_string($root) || !is_dir($root) || is_link($root)) continue;
         foreach ((@scandir($root) ?: []) as $entry) {
+            $entry = (string) $entry;
             if ($entry[0] === '.' || isset($mounts[$entry])) continue;
             $path = rtrim($root, '/') . '/' . $entry;
             if (!is_dir($path) || is_link($path)) continue;
             if (!name_is_text($entry)) { scan_odd_name_note($path); continue; }   // (a folder whose name is not valid text is left out: see name_is_text)
+            if ($realFolder($entry)) { $GLOBALS['__mount_clashes'][$entry] = $path; continue; }
             $mounts[$entry] = $path;
         }
     }
@@ -925,7 +932,8 @@ function count_ignored_videos($realDir, $maxDirs = 40) {
  */
 function merge_extra_folders($rootNode, $mediaExtensions, $self) {
     foreach (gallery_mounts() as $virtualName => $realPath) {
-        if (!is_string($virtualName) || $virtualName === '' || strpbrk($virtualName, "/\\") !== false) continue;
+        $virtualName = (string) $virtualName;   // (a name of digits is a number as a key)
+        if ($virtualName === '' || strpbrk($virtualName, "/\\") !== false) continue;
         if (isset($rootNode['subdirs'][$virtualName])) continue;
         if (!is_dir($realPath) || is_link($realPath)) continue;
         $rootNode['subdirs'][$virtualName] = scan_folder_tree($realPath, $mediaExtensions, $self, false);
@@ -1077,7 +1085,7 @@ function sign_in_redirect() {
 // A closed gallery: before anything is read or served (a photo, a thumbnail, a folder, the map), a stranger gets the page of a link
 // that isn't valid, the same as for any bad address, so nothing says there is a gallery here. Still open to everyone: the sign-in, the
 // admin, a share link's own address, and the preview picture of a live link. "/admin/" (a folder address) is the sign-in as well.
-if (isset($_GET['folder']) && is_string($_GET['folder']) && in_array(strtolower(trim($_GET['folder'], '/')), ['admin', 'reveal'], true) && !is_dir($dir . '/' . trim($_GET['folder'], '/'))) {
+if (isset($_GET['folder']) && is_string($_GET['folder']) && in_array(strtolower(trim($_GET['folder'], '/')), ['admin', 'reveal'], true) && !is_dir($dir . '/' . trim($_GET['folder'], '/')) && !isset(gallery_mounts()[trim($_GET['folder'], '/')])) {   // (a place from elsewhere with that name is a folder)
     sign_in_redirect();
 }
 /**
@@ -7453,7 +7461,7 @@ function all_folder_paths($files) {
             $d = dirname($d);
         }
     }
-    $paths = array_keys($set);
+    $paths = array_map('strval', array_keys($set));   // (a top-level name of digits is a number as a key: 2024, 123, 0)
     usort($paths, 'strnatcasecmp');
     return $paths;
 }
@@ -11422,6 +11430,42 @@ function gallery_setting_definitions() {
     ];
 }
 
+/** The places from elsewhere as a list for comparing: [label, path, new (not already saved as it is, so a line the owner is adding or changing), root (its folders are shown)].
+ *  $saved is what the settings file holds now (['named' => .., 'roots' => ..]), or null to call none of them new. */
+function extra_folder_entries(array $named, array $roots, $saved = null) {
+    $out = [];
+    $savedRoots = $saved === null ? [] : array_map(function ($r) { return rtrim((string) $r, '/\\'); }, (array) ($saved['roots'] ?? []));
+    foreach ($named as $name => $path) {
+        $name = (string) $name; if (!is_string($path)) continue;
+        $old = $saved !== null && is_string($saved['named'][$name] ?? null) && rtrim($saved['named'][$name], '/\\') === rtrim($path, '/\\');
+        $out[] = ['label' => '"' . $name . '"', 'path' => rtrim($path, '/\\'), 'new' => $saved !== null && !$old, 'root' => false];
+    }
+    foreach ($roots as $path) {
+        if (!is_string($path)) continue;
+        $old = $saved !== null && in_array(rtrim($path, '/\\'), $savedRoots, true);
+        $out[] = ['label' => 'the folders in ' . rtrim($path, '/\\'), 'path' => rtrim($path, '/\\'), 'new' => $saved !== null && !$old, 'root' => true];
+    }
+    return $out;
+}
+
+/** Which of these places show the same photos twice: the same folder under two names, a place inside another, a named place inside a place whose folders are all
+ *  shown. Messages, one for each pair; with $onlyNew a pair of two lines that were both saved already is left out (the Health check says those). */
+function extra_folder_overlaps(array $entries, $onlyNew = true) {
+    $out = []; $n = count($entries);
+    $how = ' Keep one of them: to show a folder under another name, give it a Name in its own settings, or make a collection.';
+    for ($i = 0; $i < $n; $i++) {
+        for ($j = $i + 1; $j < $n; $j++) {
+            $a = $entries[$i]; $b = $entries[$j];
+            if ($onlyNew && !$a['new'] && !$b['new']) continue;
+            $pa = $a['path']; $pb = $b['path'];
+            if ($pa === $pb) $out[] = ucfirst($a['label']) . ' and ' . $b['label'] . ' are the same folder (' . $pa . '), so it would be shown twice.' . $how;
+            elseif (strpos($pa . '/', $pb . '/') === 0) $out[] = ucfirst($a['label']) . ' (' . $pa . ') lies inside ' . $b['label'] . ($b['root'] ? ', which are all shown already' : '') . ', so it would be shown twice.' . $how;
+            elseif (strpos($pb . '/', $pa . '/') === 0) $out[] = ucfirst($b['label']) . ' (' . $pb . ') lies inside ' . $a['label'] . ($a['root'] ? ', which are all shown already' : '') . ', so it would be shown twice.' . $how;
+        }
+    }
+    return $out;
+}
+
 /** Checks the places from elsewhere that the Settings screen posts (JSON: {"named": {name: path}, "roots": [path]})
  *  before anything is stored. A path must be a real, readable folder, written as the real path (no symlink anywhere in
  *  it, since the scan refuses to follow them), outside this gallery's own folder and not one that contains it. Returns
@@ -11438,6 +11482,13 @@ function site_settings_validate_extra_folders($raw, &$errors) {
         $p = rtrim($path, '/\\');
         if ($p === '' || preg_match('#[\x00-\x1F\x7F]#', $path) || !preg_match('#^(/|[A-Za-z]:[\\\\/])#', $p) || preg_grep('#^\.\.?$#', preg_split('#[\\\\/]+#', $p))) {
             $errors[] = "The path for $q must be a full path starting with / (no .. in it)."; $bad = true; return null;
+        }
+        foreach (['/etc', '/proc', '/sys', '/dev', '/boot', '/root'] as $sys) {
+            if ($p === $sys || str_starts_with($p . '/', $sys . '/')) { $errors[] = "The path for $q ($p) is part of the system ($sys), not a place for photos: the gallery would list everything in it and write thumbnails and view counts there. Give a folder of photos."; $bad = true; return null; }
+        }
+        $tempDir = rtrim((string) (realpath(sys_get_temp_dir()) ?: sys_get_temp_dir()), '/');
+        foreach (array_unique(['/var/lib', $tempDir]) as $sys) {
+            if ($sys !== '' && $p === $sys) { $errors[] = "The path for $q ($p) is the system's own $sys folder, which holds other programs' files, not a place for photos. Give a folder of photos (a folder inside it is fine)."; $bad = true; return null; }
         }
         if (!@is_dir($p) || !@is_readable($p)) {
             $errors[] = "The path for $q ($p) isn't a folder this server can read. Check it exists and that the web server may open it (and, on shared hosting, that PHP is allowed outside the website's folder)."; $bad = true; return null;
@@ -11472,6 +11523,10 @@ function site_settings_validate_extra_folders($raw, &$errors) {
     }
     $edit = null;   // (an Edit names the place it started from: its path, to carry that place's list of names to the new path)
     if (isset($in['edit']) && is_array($in['edit']) && is_string($in['edit']['path'] ?? null) && is_string($in['edit']['label'] ?? null)) $edit = ['path' => rtrim($in['edit']['path'], '/\\'), 'label' => $in['edit']['label']];
+    // The same photos twice: the same place under two names, a place inside another, a named place inside one whose folders are all shown. Only a line that is being added or
+    // changed is refused; two that were saved already are left alone (the Health check says they overlap), so an old setting never stops a save.
+    $overlaps = extra_folder_overlaps(extra_folder_entries($named, $roots, ['named' => is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [], 'roots' => is_array(EXTRA_ROOTS) ? EXTRA_ROOTS : []]), true);
+    foreach ($overlaps as $o) { $errors[] = $o; $bad = true; }
     return $bad ? null : ['named' => $named, 'roots' => $roots, 'edit' => $edit];
 }
 
@@ -12848,10 +12903,14 @@ function owned_head_ok($path, $strict) {
  *  ours (start with ".gallery-") but are not on the list: they are never touched], 'fingerprint' => string]. */
 function owned_plan($dir, $files) {
     $dir = rtrim((string) (realpath($dir) ?: $dir), '/');
-    $folders = ['' => $dir];
+    $folders = ['' => $dir]; $seenReal = [$dir => true];
     foreach (all_folder_paths($files) as $rel) {
         $real = resolve_real_path($dir, $rel);
-        if (is_string($real) && $real !== '' && is_dir($real) && !is_link($real)) $folders[$rel] = rtrim($real, '/');
+        if (!is_string($real) || $real === '' || !is_dir($real) || is_link($real)) continue;
+        $real = rtrim($real, '/');
+        if (isset($seenReal[$real])) continue;   // (one folder reached by two names, or a place inside another: its files are listed once, not once for each name)
+        $seenReal[$real] = true;
+        $folders[$rel] = $real;
     }
     $entries = []; $caches = []; $unknown = [];
     foreach ($folders as $rel => $real) {
@@ -12877,12 +12936,24 @@ function owned_plan($dir, $files) {
         }
     }
     usort($entries, function ($a, $b) { return strcmp($a['rel'], $b['rel']); });
+    // What the list is checked against when the red button is pressed: which files, and how big the ones that only change when the owner changes them. The sizes of what changes by
+    // itself (the visitor log and its side files, the Health and sign-in records, the backup) are left out, or a visit between "look at the list" and the button would refuse it.
+    $live = ['visits' => true, 'health' => true, 'signin' => true, 'lockouts' => true, 'update' => true, 'backup' => true, 'geo' => true];
     $lines = [];
-    foreach ($entries as $e) $lines[] = $e['kind'] . '|' . $e['rel'] . '|' . $e['size'];
+    foreach ($entries as $e) $lines[] = $e['kind'] . '|' . $e['rel'] . (isset($live[$e['kind']]) ? '' : '|' . $e['size']);
     foreach ($caches as $c) $lines[] = 'cache|' . $c['rel'];
-    $mapped = 0;   // (how many of these files lie in a place from elsewhere on the server: another gallery may use them too)
-    foreach ($entries as $e) if (strpos($e['path'], $dir . '/') !== 0) $mapped++;
-    return ['entries' => $entries, 'caches' => $caches, 'unknown' => $unknown, 'folders' => count($folders), 'mapped' => $mapped, 'fingerprint' => hash('sha256', implode("\n", $lines))];
+    $mapped = 0; $shared = ['count' => 0, 'bytes' => 0, 'where' => [], 'paths' => []];
+    foreach ($entries as $k => $e) {
+        if (strpos($e['path'], $dir . '/') === 0) continue;
+        $mapped++;   // (a file in a place from elsewhere on the server: another gallery may use it too)
+        if (in_array($e['kind'], ['items', 'stats', 'backups'], true)) {   // (what another gallery showing the same folder shares: its captions, private marks, view counts, backups)
+            $entries[$k]['shared'] = true; $shared['count']++; $shared['bytes'] += $e['size'];
+            $where = dirname($e['rel']); if ($where === '.') $where = '(top level)';   // (the folder as the gallery names it)
+            $shared['where'][$where] = ($shared['where'][$where] ?? 0) + 1;
+            if (count($shared['paths']) < 40) $shared['paths'][] = $e['rel'];
+        }
+    }
+    return ['entries' => $entries, 'caches' => $caches, 'unknown' => $unknown, 'folders' => count($folders), 'mapped' => $mapped, 'shared' => $shared, 'fingerprint' => hash('sha256', implode("\n", $lines))];
 }
 
 /** The list for the page: per kind, how many files, how many bytes. */
@@ -12893,9 +12964,12 @@ function owned_summary($plan) {
     foreach ($plan['caches'] as $c) { $rows['thumbs']['files'] += $c['thumbs']; $rows['thumbs']['bytes'] += $c['bytes']; }
     $files = 0; $bytes = 0; $thumbs = $rows['thumbs']['files'];
     foreach ($rows as $k => $r) { if ($k !== 'thumbs') $files += $r['files']; $bytes += $r['bytes']; }
+    $own = array_values(array_filter($plan['entries'], function ($e) { return empty($e['shared']); }));
+    $sh = $plan['shared'] ?? ['count' => 0, 'bytes' => 0, 'where' => [], 'paths' => []];
+    arsort($sh['where']); $sh['where'] = array_slice($sh['where'], 0, 8, true);
     return ['rows' => array_values(array_filter($rows, function ($r) { return $r['files'] > 0; })), 'files' => $files, 'thumbs' => $thumbs, 'bytes' => $bytes, 'thumbBytes' => $rows['thumbs']['bytes'],
-            'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'fingerprint' => $plan['fingerprint'],
-            'paths' => array_slice(array_column($plan['entries'], 'rel'), 0, 300), 'pathsMore' => max(0, count($plan['entries']) - 300)];
+            'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'shared' => $sh, 'fingerprint' => $plan['fingerprint'],
+            'paths' => array_slice(array_column($own, 'rel'), 0, 300), 'pathsMore' => max(0, count($own) - 300)];
 }
 
 /** The text inside the ZIP that says what each file is and how to put them back. */
@@ -12975,7 +13049,8 @@ function owned_zip_entries($plan, $withThumbs) {
 
 /** Delete exactly the plan. Returns ['ok' => bool, 'deleted' => n, 'thumbs' => n, 'left' => [paths], 'text' => message]. Fails closed: when any
  *  file in the plan does not pass its check again, nothing at all is deleted. */
-function owned_delete($plan) {
+function owned_delete($plan, $alsoShared = false) {
+    $plan['entries'] = array_values(array_filter($plan['entries'], function ($e) use ($alsoShared) { return $alsoShared || empty($e['shared']); }));   // (what another gallery showing the same folder shares stays unless the owner ticked the box)
     foreach ($plan['entries'] as $e) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
@@ -12998,7 +13073,7 @@ function owned_delete($plan) {
         }
         foreach ($byKind[$kind] ?? [] as $e) {
             if ($left) break 2;   // something could not be removed: stop here, the settings file (last) stays, and the page says what is left
-            if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) { $left[] = $e['rel']; continue; }
+            if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) { if (!file_exists($e['path']) && !is_link($e['path'])) continue; $left[] = $e['rel']; continue; }   // (already gone: nothing left to remove, and not a reason to stop)
             if (@unlink($e['path'])) $deleted++; else $left[] = $e['rel'];
         }
     }
@@ -13034,7 +13109,11 @@ function files_admin_action($action, $dir, $files) {
     if (!hash_equals($plan['fingerprint'], (string) ($_POST['fingerprint'] ?? ''))) $bad('The list has changed since you looked at it, so nothing was deleted. Look at it again.');
     $copied = (int) ($_SESSION['files_zip_done'] ?? 0) > time() - 3600;
     if (!$copied && ($_POST['nocopy'] ?? '') !== '1') $bad('Download a copy first, or say that you do not want one.');
-    $res = owned_delete($plan);
+    $res = owned_delete($plan, ($_POST['also_shared'] ?? '') === '1');
+    if (($_POST['also_shared'] ?? '') !== '1' && !empty($plan['shared']['count'])) {
+        $res['sharedLeft'] = (int) $plan['shared']['count'];
+        $res['text'] = (string) $res['text'] . ' ' . $plan['shared']['count'] . ' file' . ($plan['shared']['count'] === 1 ? '' : 's') . ' in places from elsewhere on the server (captions, private marks, view counts and backups that another gallery showing the same folders may use) ' . ($plan['shared']['count'] === 1 ? 'was' : 'were') . ' left alone.';
+    }
     if ($res['ok']) $_SESSION = [];
     admin_json_exit($res);
 }
@@ -15876,6 +15955,17 @@ function health_checks($dir, $files) {
     $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
 
     if (!empty($GLOBALS['__scan_truncated'])) $add('Folders and files', 'warn', 'The folder scan stopped early', 'This gallery looks at no more than ' . number_format(SCAN_MAX_FOLDERS) . ' folders and ' . number_format(SCAN_MAX_FILES) . ' photos on one visit, and this folder has more, so the rest are left out. Move the gallery into a smaller folder, or the extra folders out of it.');
+    gallery_mounts();   // (fills the list of places that a folder of the gallery's own, with the same name, keeps out)
+    $clashes = array_keys((array) ($GLOBALS['__mount_clashes'] ?? []));
+    if ($clashes) {
+        $clN = count($clashes);
+        $add('Folders and files', 'warn', $clN === 1 ? 'A place from elsewhere called "' . $clashes[0] . '" is not shown' : number_format($clN) . ' places from elsewhere are not shown',
+            'The gallery has a folder of its own with ' . ($clN === 1 ? 'that name' : 'those names') . ' (' . implode(', ', array_slice($clashes, 0, 5)) . ($clN > 5 ? ' and ' . number_format($clN - 5) . ' more' : '') . '), and a folder of its own always wins, so the place with the same name is left out. '
+            . 'Give the place another name in Settings (Server setup: folders from elsewhere), or rename the folder.');
+    }
+    $ovl = extra_folder_overlaps(extra_folder_entries(is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [], is_array(EXTRA_ROOTS) ? EXTRA_ROOTS : [], null), false);
+    if ($ovl) $add('Folders and files', 'warn', count($ovl) === 1 ? 'Two places from elsewhere show the same photos' : number_format(count($ovl)) . ' places from elsewhere overlap',
+        implode(' ', array_slice($ovl, 0, 3)) . (count($ovl) > 3 ? ' (and ' . number_format(count($ovl) - 3) . ' more.)' : '') . ' Change it in Settings (Server setup: folders from elsewhere); the Settings screen refuses a new line like these.');
     $cacheLinks = cache_link_folders($dir, $files);   // (a thumbnail folder that is a link is never followed: see image_cache_path)
     if ($cacheLinks) {
         $clN = count($cacheLinks);
@@ -16973,7 +17063,7 @@ function render_admin_site_settings($csrfToken) {
           rows.forEach(function (r) { h += '<tr><td>' + esc(r.label) + '<span class="fm-sub">' + esc(r.what) + '</span></td><td>' + num(r.files) + '</td><td>' + size(r.bytes) + '</td><td>' + esc(r.ifgone) + '</td></tr>'; });
         });
         h += '</tbody></table><p class="muted" style="margin:8px 0 0">' + num(j.files) + ' file' + (j.files === 1 ? '' : 's') + (j.thumbs ? ' and ' + num(j.thumbs) + ' thumbnail' + (j.thumbs === 1 ? '' : 's') + ' (' + size(j.thumbBytes) + ')' : '') + '. Never touched: your photos, videos, .md files and index.php.</p>';
-        if (j.mapped) h += '<p class="fm-warn" style="margin:8px 0 0">' + num(j.mapped) + ' of these file' + (j.mapped === 1 ? ' is' : 's are') + ' in places added from elsewhere on the server. If another gallery also shows those places, it uses them too (its captions, private marks and view counts are in them), and a delete here removes them for it as well. Its own settings, share links and sign-ins are not on this list and are never touched.</p>';
+        if (j.mapped) h += '<p class="fm-warn" style="margin:8px 0 0">' + num(j.mapped) + ' of these file' + (j.mapped === 1 ? ' is' : 's are') + ' in places added from elsewhere on the server.' + (j.shared && j.shared.count ? ' ' + num(j.shared.count) + ' of them hold captions, private marks, view counts or backups that another gallery showing the same folders uses too: Delete leaves those alone unless you tick a box at the last step.' : '') + ' Another gallery\'s own settings, share links and sign-ins are not on this list and are never touched.</p>';
         if (j.unknown && j.unknown.length) h += '<p class="muted" style="margin:6px 0 0">' + num(j.unknown.length) + ' other file' + (j.unknown.length === 1 ? ' starts' : 's start') + ' with <code>.gallery-</code> but ' + (j.unknown.length === 1 ? 'is not one' : 'are not ones') + ' the gallery makes, so ' + (j.unknown.length === 1 ? 'it is' : 'they are') + ' left alone: ' + esc(j.unknown.slice(0, 5).join(', ')) + '.</p>';
         return h;
       }
@@ -17050,22 +17140,32 @@ function render_admin_site_settings($csrfToken) {
         });
       }
       function step3(j, nocopy, password) {
-        var n = j.files, t = j.thumbs;
+        var sh = j.shared || { count: 0, where: {}, paths: [] }, also = false;
+        var n = j.files - sh.count, t = j.thumbs;
+        var where = Object.keys(sh.where || {}).map(function (k) { return esc(k) + ': ' + num(sh.where[k]); }).join('; ');
         var o = overlay('<div class="fm-step">Step 3 of 3</div><h3 class="fm-bad">This can\'t be undone</h3>'
-          + '<ul><li>' + num(n) + ' file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnail' + (t === 1 ? '' : 's') + ' (' + size(j.bytes) + ')' : '') + ' are deleted: settings, share links and their logs, captions, locations, private marks, view counts.</li>'
+          + '<ul><li><span data-fm-n>' + num(n) + '</span> file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnail' + (t === 1 ? '' : 's') + ' (' + size(j.bytes) + ')' : '') + ' are deleted: settings, share links and their logs, captions, locations, private marks, view counts.</li>'
           + '<li class="fm-bad"><strong>Nothing stays private.</strong> The private marks are among the files deleted, so every photo, video and folder you had marked private can be seen by anyone who reaches the gallery, and a closed gallery opens. If that matters, move the private ones out of the gallery folder first.</li>'
-          + (j.mapped ? '<li class="fm-bad"><strong>' + num(j.mapped) + ' of the files are in places from elsewhere on the server.</strong> If another gallery also shows those places, it loses its captions, private marks and view counts there too.</li>' : '')
+          + (sh.count ? '<li class="fm-bad"><strong>' + num(sh.count) + ' more file' + (sh.count === 1 ? ' is' : 's are') + ' in places from elsewhere on the server, and are left alone.</strong> They hold captions, private marks, view counts and backups that another gallery showing the same folders may use (' + where + '). <label class="fm-tick"><input type="checkbox" data-fm-shared> <span>Also delete these ' + num(sh.count) + ' (no other gallery needs them)</span></label></li>' : '')
           + '<li>Every share link stops working, and everyone is signed out. The admin is gone, and so are folders from elsewhere on the server that you had added (the folders themselves are not touched).</li><li>Your photos, videos, .md files and index.php are not touched.</li>'
           + '<li>The gallery is then plain and public, and the admin page offers to set it up again: open <code>?admin</code>, type the code from the file <code>gallery-setup-code.php</code> it makes beside index.php, and choose a password.</li></ul>'
-          + '<details class="fold"><summary style="cursor:pointer;font-weight:600">Show the ' + num(n) + ' files</summary><pre>' + esc(j.paths.join('\n')) + (j.pathsMore ? '\n… and ' + num(j.pathsMore) + ' more' : '') + (t ? '\n+ ' + num(t) + ' thumbnails in the .gallery-cache folders' : '') + '</pre></details>'
+          + '<details class="fold"><summary style="cursor:pointer;font-weight:600">Show the <span data-fm-n>' + num(n) + '</span> files</summary><pre data-fm-paths>' + esc(j.paths.join('\n')) + (j.pathsMore ? '\n… and ' + num(j.pathsMore) + ' more' : '') + (t ? '\n+ ' + num(t) + ' thumbnails in the .gallery-cache folders' : '') + '</pre></details>'
           + '<p class="muted">The list is checked again when you press the red button. If anything has changed since, nothing is deleted.</p><div class="fm-err" role="alert" data-fm-err></div>'
-          + '<div class="fm-acts"><button type="button" class="secondary" data-fm-x="cancel">Cancel</button><button type="button" class="fm-red" data-fm-x="go">Delete ' + num(n) + ' file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnails' : '') + ' for good</button></div>');
+          + '<div class="fm-acts"><button type="button" class="secondary" data-fm-x="cancel">Cancel</button><button type="button" class="fm-red" data-fm-x="go">Delete <span data-fm-n>' + num(n) + '</span> file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnails' : '') + ' for good</button></div>');
         var err = o.querySelector('[data-fm-err]');
+        var tick = o.querySelector('[data-fm-shared]');
+        if (tick) tick.addEventListener('change', function () {
+          also = tick.checked;
+          var total = j.files - (also ? 0 : sh.count);
+          [].forEach.call(o.querySelectorAll('[data-fm-n]'), function (x) { x.textContent = num(total); });
+          var pre = o.querySelector('[data-fm-paths]');
+          if (pre) pre.textContent = j.paths.concat(also ? sh.paths : []).join('\n') + (j.pathsMore ? '\n\u2026 and ' + num(j.pathsMore) + ' more' : '') + (also && sh.count > sh.paths.length ? '\n\u2026 and ' + num(sh.count - sh.paths.length) + ' more in places from elsewhere' : '') + (t ? '\n+ ' + num(t) + ' thumbnails in the .gallery-cache folders' : '');
+        });
         o.addEventListener('click', function (e) {
           var b = e.target.closest ? e.target.closest('[data-fm-x]') : null; if (!b) return;
           if (b.getAttribute('data-fm-x') === 'cancel') { o._close(); return; }
           b.disabled = true; err.textContent = '';
-          post({ action: 'files_delete', password: password, typed: 'DELETE', fingerprint: j.fingerprint, nocopy: nocopy ? '1' : '0' }).then(function (r) {
+          post({ action: 'files_delete', password: password, typed: 'DELETE', fingerprint: j.fingerprint, nocopy: nocopy ? '1' : '0', also_shared: also ? '1' : '0' }).then(function (r) {
             if (!r.ok && !r.left) { b.disabled = false; err.textContent = r.text || 'Not deleted.'; return; }
             o._close();
             var d = overlay('<h3>' + (r.ok ? 'Done' : 'Stopped') + '</h3><p>' + esc(r.text) + (r.ok ? ' You are signed out and the gallery is now plain and public, with its default settings. Your photos are as they were. To set it up again, open <code>?admin</code>, type the code from the file <code>gallery-setup-code.php</code> it makes beside index.php, and choose a password.' : '') + '</p>' + (r.left && r.left.length ? '<pre>' + esc(r.left.join('\n')) + '</pre>' : '') + '<div class="fm-acts"><button type="button" class="fm-primary" data-fm-x="done">Close</button></div>');

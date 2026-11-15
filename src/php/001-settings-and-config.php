@@ -268,23 +268,30 @@ function gallery_setting($name, $default, $allowed = null) {
 }
 
 /** The folders that really get mounted: every named EXTRA_FOLDERS entry, then each folder found inside every
- *  EXTRA_ROOTS path under its own name (the first to claim a name keeps it). Never follows a link. */
+ *  EXTRA_ROOTS path under its own name (the first to claim a name keeps it). Never follows a link. A name a folder of the gallery's own
+ *  already has is that folder's, as in the scan (which lists the real folder) and in every request (which then resolves the real one): the
+ *  place from elsewhere is left out and the Health check says so ($GLOBALS['__mount_clashes']). Names are text: a name of digits is a
+ *  number as an array key, so it is cast, never tested with is_string(). */
 function gallery_mounts() {
     static $mounts = null;
     if ($mounts !== null) return $mounts;
-    $named = EXTRA_FOLDERS;
-    $roots = EXTRA_ROOTS;
-    $mounts = [];
-    foreach ((array) $named as $name => $path) {
-        if (is_string($name) && is_string($path)) $mounts[$name] = $path;
+    $mounts = []; $GLOBALS['__mount_clashes'] = [];
+    $realFolder = function ($name) { $p = __DIR__ . '/' . $name; return is_dir($p) && !is_link($p) && $name[0] !== '.' && !in_array($name, SCAN_SKIP_FOLDERS, true); };
+    foreach ((array) EXTRA_FOLDERS as $name => $path) {
+        $name = (string) $name;
+        if ($name === '' || !is_string($path)) continue;
+        if ($realFolder($name)) { $GLOBALS['__mount_clashes'][$name] = $path; continue; }
+        $mounts[$name] = $path;
     }
-    foreach ((array) $roots as $root) {
+    foreach ((array) EXTRA_ROOTS as $root) {
         if (!is_string($root) || !is_dir($root) || is_link($root)) continue;
         foreach ((@scandir($root) ?: []) as $entry) {
+            $entry = (string) $entry;
             if ($entry[0] === '.' || isset($mounts[$entry])) continue;
             $path = rtrim($root, '/') . '/' . $entry;
             if (!is_dir($path) || is_link($path)) continue;
             if (!name_is_text($entry)) { scan_odd_name_note($path); continue; }   // (a folder whose name is not valid text is left out: see name_is_text)
+            if ($realFolder($entry)) { $GLOBALS['__mount_clashes'][$entry] = $path; continue; }
             $mounts[$entry] = $path;
         }
     }

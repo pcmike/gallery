@@ -383,6 +383,42 @@ function gallery_setting_definitions() {
     ];
 }
 
+/** The places from elsewhere as a list for comparing: [label, path, new (not already saved as it is, so a line the owner is adding or changing), root (its folders are shown)].
+ *  $saved is what the settings file holds now (['named' => .., 'roots' => ..]), or null to call none of them new. */
+function extra_folder_entries(array $named, array $roots, $saved = null) {
+    $out = [];
+    $savedRoots = $saved === null ? [] : array_map(function ($r) { return rtrim((string) $r, '/\\'); }, (array) ($saved['roots'] ?? []));
+    foreach ($named as $name => $path) {
+        $name = (string) $name; if (!is_string($path)) continue;
+        $old = $saved !== null && is_string($saved['named'][$name] ?? null) && rtrim($saved['named'][$name], '/\\') === rtrim($path, '/\\');
+        $out[] = ['label' => '"' . $name . '"', 'path' => rtrim($path, '/\\'), 'new' => $saved !== null && !$old, 'root' => false];
+    }
+    foreach ($roots as $path) {
+        if (!is_string($path)) continue;
+        $old = $saved !== null && in_array(rtrim($path, '/\\'), $savedRoots, true);
+        $out[] = ['label' => 'the folders in ' . rtrim($path, '/\\'), 'path' => rtrim($path, '/\\'), 'new' => $saved !== null && !$old, 'root' => true];
+    }
+    return $out;
+}
+
+/** Which of these places show the same photos twice: the same folder under two names, a place inside another, a named place inside a place whose folders are all
+ *  shown. Messages, one for each pair; with $onlyNew a pair of two lines that were both saved already is left out (the Health check says those). */
+function extra_folder_overlaps(array $entries, $onlyNew = true) {
+    $out = []; $n = count($entries);
+    $how = ' Keep one of them: to show a folder under another name, give it a Name in its own settings, or make a collection.';
+    for ($i = 0; $i < $n; $i++) {
+        for ($j = $i + 1; $j < $n; $j++) {
+            $a = $entries[$i]; $b = $entries[$j];
+            if ($onlyNew && !$a['new'] && !$b['new']) continue;
+            $pa = $a['path']; $pb = $b['path'];
+            if ($pa === $pb) $out[] = ucfirst($a['label']) . ' and ' . $b['label'] . ' are the same folder (' . $pa . '), so it would be shown twice.' . $how;
+            elseif (strpos($pa . '/', $pb . '/') === 0) $out[] = ucfirst($a['label']) . ' (' . $pa . ') lies inside ' . $b['label'] . ($b['root'] ? ', which are all shown already' : '') . ', so it would be shown twice.' . $how;
+            elseif (strpos($pb . '/', $pa . '/') === 0) $out[] = ucfirst($b['label']) . ' (' . $pb . ') lies inside ' . $a['label'] . ($a['root'] ? ', which are all shown already' : '') . ', so it would be shown twice.' . $how;
+        }
+    }
+    return $out;
+}
+
 /** Checks the places from elsewhere that the Settings screen posts (JSON: {"named": {name: path}, "roots": [path]})
  *  before anything is stored. A path must be a real, readable folder, written as the real path (no symlink anywhere in
  *  it, since the scan refuses to follow them), outside this gallery's own folder and not one that contains it. Returns
@@ -399,6 +435,13 @@ function site_settings_validate_extra_folders($raw, &$errors) {
         $p = rtrim($path, '/\\');
         if ($p === '' || preg_match('#[\x00-\x1F\x7F]#', $path) || !preg_match('#^(/|[A-Za-z]:[\\\\/])#', $p) || preg_grep('#^\.\.?$#', preg_split('#[\\\\/]+#', $p))) {
             $errors[] = "The path for $q must be a full path starting with / (no .. in it)."; $bad = true; return null;
+        }
+        foreach (['/etc', '/proc', '/sys', '/dev', '/boot', '/root'] as $sys) {
+            if ($p === $sys || str_starts_with($p . '/', $sys . '/')) { $errors[] = "The path for $q ($p) is part of the system ($sys), not a place for photos: the gallery would list everything in it and write thumbnails and view counts there. Give a folder of photos."; $bad = true; return null; }
+        }
+        $tempDir = rtrim((string) (realpath(sys_get_temp_dir()) ?: sys_get_temp_dir()), '/');
+        foreach (array_unique(['/var/lib', $tempDir]) as $sys) {
+            if ($sys !== '' && $p === $sys) { $errors[] = "The path for $q ($p) is the system's own $sys folder, which holds other programs' files, not a place for photos. Give a folder of photos (a folder inside it is fine)."; $bad = true; return null; }
         }
         if (!@is_dir($p) || !@is_readable($p)) {
             $errors[] = "The path for $q ($p) isn't a folder this server can read. Check it exists and that the web server may open it (and, on shared hosting, that PHP is allowed outside the website's folder)."; $bad = true; return null;
@@ -433,6 +476,10 @@ function site_settings_validate_extra_folders($raw, &$errors) {
     }
     $edit = null;   // (an Edit names the place it started from: its path, to carry that place's list of names to the new path)
     if (isset($in['edit']) && is_array($in['edit']) && is_string($in['edit']['path'] ?? null) && is_string($in['edit']['label'] ?? null)) $edit = ['path' => rtrim($in['edit']['path'], '/\\'), 'label' => $in['edit']['label']];
+    // The same photos twice: the same place under two names, a place inside another, a named place inside one whose folders are all shown. Only a line that is being added or
+    // changed is refused; two that were saved already are left alone (the Health check says they overlap), so an old setting never stops a save.
+    $overlaps = extra_folder_overlaps(extra_folder_entries($named, $roots, ['named' => is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [], 'roots' => is_array(EXTRA_ROOTS) ? EXTRA_ROOTS : []]), true);
+    foreach ($overlaps as $o) { $errors[] = $o; $bad = true; }
     return $bad ? null : ['named' => $named, 'roots' => $roots, 'edit' => $edit];
 }
 

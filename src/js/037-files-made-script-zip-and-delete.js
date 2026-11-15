@@ -16,7 +16,7 @@
           rows.forEach(function (r) { h += '<tr><td>' + esc(r.label) + '<span class="fm-sub">' + esc(r.what) + '</span></td><td>' + num(r.files) + '</td><td>' + size(r.bytes) + '</td><td>' + esc(r.ifgone) + '</td></tr>'; });
         });
         h += '</tbody></table><p class="muted" style="margin:8px 0 0">' + num(j.files) + ' file' + (j.files === 1 ? '' : 's') + (j.thumbs ? ' and ' + num(j.thumbs) + ' thumbnail' + (j.thumbs === 1 ? '' : 's') + ' (' + size(j.thumbBytes) + ')' : '') + '. Never touched: your photos, videos, .md files and index.php.</p>';
-        if (j.mapped) h += '<p class="fm-warn" style="margin:8px 0 0">' + num(j.mapped) + ' of these file' + (j.mapped === 1 ? ' is' : 's are') + ' in places added from elsewhere on the server. If another gallery also shows those places, it uses them too (its captions, private marks and view counts are in them), and a delete here removes them for it as well. Its own settings, share links and sign-ins are not on this list and are never touched.</p>';
+        if (j.mapped) h += '<p class="fm-warn" style="margin:8px 0 0">' + num(j.mapped) + ' of these file' + (j.mapped === 1 ? ' is' : 's are') + ' in places added from elsewhere on the server.' + (j.shared && j.shared.count ? ' ' + num(j.shared.count) + ' of them hold captions, private marks, view counts or backups that another gallery showing the same folders uses too: Delete leaves those alone unless you tick a box at the last step.' : '') + ' Another gallery\'s own settings, share links and sign-ins are not on this list and are never touched.</p>';
         if (j.unknown && j.unknown.length) h += '<p class="muted" style="margin:6px 0 0">' + num(j.unknown.length) + ' other file' + (j.unknown.length === 1 ? ' starts' : 's start') + ' with <code>.gallery-</code> but ' + (j.unknown.length === 1 ? 'is not one' : 'are not ones') + ' the gallery makes, so ' + (j.unknown.length === 1 ? 'it is' : 'they are') + ' left alone: ' + esc(j.unknown.slice(0, 5).join(', ')) + '.</p>';
         return h;
       }
@@ -93,22 +93,32 @@
         });
       }
       function step3(j, nocopy, password) {
-        var n = j.files, t = j.thumbs;
+        var sh = j.shared || { count: 0, where: {}, paths: [] }, also = false;
+        var n = j.files - sh.count, t = j.thumbs;
+        var where = Object.keys(sh.where || {}).map(function (k) { return esc(k) + ': ' + num(sh.where[k]); }).join('; ');
         var o = overlay('<div class="fm-step">Step 3 of 3</div><h3 class="fm-bad">This can\'t be undone</h3>'
-          + '<ul><li>' + num(n) + ' file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnail' + (t === 1 ? '' : 's') + ' (' + size(j.bytes) + ')' : '') + ' are deleted: settings, share links and their logs, captions, locations, private marks, view counts.</li>'
+          + '<ul><li><span data-fm-n>' + num(n) + '</span> file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnail' + (t === 1 ? '' : 's') + ' (' + size(j.bytes) + ')' : '') + ' are deleted: settings, share links and their logs, captions, locations, private marks, view counts.</li>'
           + '<li class="fm-bad"><strong>Nothing stays private.</strong> The private marks are among the files deleted, so every photo, video and folder you had marked private can be seen by anyone who reaches the gallery, and a closed gallery opens. If that matters, move the private ones out of the gallery folder first.</li>'
-          + (j.mapped ? '<li class="fm-bad"><strong>' + num(j.mapped) + ' of the files are in places from elsewhere on the server.</strong> If another gallery also shows those places, it loses its captions, private marks and view counts there too.</li>' : '')
+          + (sh.count ? '<li class="fm-bad"><strong>' + num(sh.count) + ' more file' + (sh.count === 1 ? ' is' : 's are') + ' in places from elsewhere on the server, and are left alone.</strong> They hold captions, private marks, view counts and backups that another gallery showing the same folders may use (' + where + '). <label class="fm-tick"><input type="checkbox" data-fm-shared> <span>Also delete these ' + num(sh.count) + ' (no other gallery needs them)</span></label></li>' : '')
           + '<li>Every share link stops working, and everyone is signed out. The admin is gone, and so are folders from elsewhere on the server that you had added (the folders themselves are not touched).</li><li>Your photos, videos, .md files and index.php are not touched.</li>'
           + '<li>The gallery is then plain and public, and the admin page offers to set it up again: open <code>?admin</code>, type the code from the file <code>gallery-setup-code.php</code> it makes beside index.php, and choose a password.</li></ul>'
-          + '<details class="fold"><summary style="cursor:pointer;font-weight:600">Show the ' + num(n) + ' files</summary><pre>' + esc(j.paths.join('\n')) + (j.pathsMore ? '\n… and ' + num(j.pathsMore) + ' more' : '') + (t ? '\n+ ' + num(t) + ' thumbnails in the .gallery-cache folders' : '') + '</pre></details>'
+          + '<details class="fold"><summary style="cursor:pointer;font-weight:600">Show the <span data-fm-n>' + num(n) + '</span> files</summary><pre data-fm-paths>' + esc(j.paths.join('\n')) + (j.pathsMore ? '\n… and ' + num(j.pathsMore) + ' more' : '') + (t ? '\n+ ' + num(t) + ' thumbnails in the .gallery-cache folders' : '') + '</pre></details>'
           + '<p class="muted">The list is checked again when you press the red button. If anything has changed since, nothing is deleted.</p><div class="fm-err" role="alert" data-fm-err></div>'
-          + '<div class="fm-acts"><button type="button" class="secondary" data-fm-x="cancel">Cancel</button><button type="button" class="fm-red" data-fm-x="go">Delete ' + num(n) + ' file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnails' : '') + ' for good</button></div>');
+          + '<div class="fm-acts"><button type="button" class="secondary" data-fm-x="cancel">Cancel</button><button type="button" class="fm-red" data-fm-x="go">Delete <span data-fm-n>' + num(n) + '</span> file' + (n === 1 ? '' : 's') + (t ? ' and ' + num(t) + ' thumbnails' : '') + ' for good</button></div>');
         var err = o.querySelector('[data-fm-err]');
+        var tick = o.querySelector('[data-fm-shared]');
+        if (tick) tick.addEventListener('change', function () {
+          also = tick.checked;
+          var total = j.files - (also ? 0 : sh.count);
+          [].forEach.call(o.querySelectorAll('[data-fm-n]'), function (x) { x.textContent = num(total); });
+          var pre = o.querySelector('[data-fm-paths]');
+          if (pre) pre.textContent = j.paths.concat(also ? sh.paths : []).join('\n') + (j.pathsMore ? '\n\u2026 and ' + num(j.pathsMore) + ' more' : '') + (also && sh.count > sh.paths.length ? '\n\u2026 and ' + num(sh.count - sh.paths.length) + ' more in places from elsewhere' : '') + (t ? '\n+ ' + num(t) + ' thumbnails in the .gallery-cache folders' : '');
+        });
         o.addEventListener('click', function (e) {
           var b = e.target.closest ? e.target.closest('[data-fm-x]') : null; if (!b) return;
           if (b.getAttribute('data-fm-x') === 'cancel') { o._close(); return; }
           b.disabled = true; err.textContent = '';
-          post({ action: 'files_delete', password: password, typed: 'DELETE', fingerprint: j.fingerprint, nocopy: nocopy ? '1' : '0' }).then(function (r) {
+          post({ action: 'files_delete', password: password, typed: 'DELETE', fingerprint: j.fingerprint, nocopy: nocopy ? '1' : '0', also_shared: also ? '1' : '0' }).then(function (r) {
             if (!r.ok && !r.left) { b.disabled = false; err.textContent = r.text || 'Not deleted.'; return; }
             o._close();
             var d = overlay('<h3>' + (r.ok ? 'Done' : 'Stopped') + '</h3><p>' + esc(r.text) + (r.ok ? ' You are signed out and the gallery is now plain and public, with its default settings. Your photos are as they were. To set it up again, open <code>?admin</code>, type the code from the file <code>gallery-setup-code.php</code> it makes beside index.php, and choose a password.' : '') + '</p>' + (r.left && r.left.length ? '<pre>' + esc(r.left.join('\n')) + '</pre>' : '') + '<div class="fm-acts"><button type="button" class="fm-primary" data-fm-x="done">Close</button></div>');

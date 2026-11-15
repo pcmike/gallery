@@ -100,10 +100,14 @@ function owned_head_ok($path, $strict) {
  *  ours (start with ".gallery-") but are not on the list: they are never touched], 'fingerprint' => string]. */
 function owned_plan($dir, $files) {
     $dir = rtrim((string) (realpath($dir) ?: $dir), '/');
-    $folders = ['' => $dir];
+    $folders = ['' => $dir]; $seenReal = [$dir => true];
     foreach (all_folder_paths($files) as $rel) {
         $real = resolve_real_path($dir, $rel);
-        if (is_string($real) && $real !== '' && is_dir($real) && !is_link($real)) $folders[$rel] = rtrim($real, '/');
+        if (!is_string($real) || $real === '' || !is_dir($real) || is_link($real)) continue;
+        $real = rtrim($real, '/');
+        if (isset($seenReal[$real])) continue;   // (one folder reached by two names, or a place inside another: its files are listed once, not once for each name)
+        $seenReal[$real] = true;
+        $folders[$rel] = $real;
     }
     $entries = []; $caches = []; $unknown = [];
     foreach ($folders as $rel => $real) {
@@ -129,12 +133,24 @@ function owned_plan($dir, $files) {
         }
     }
     usort($entries, function ($a, $b) { return strcmp($a['rel'], $b['rel']); });
+    // What the list is checked against when the red button is pressed: which files, and how big the ones that only change when the owner changes them. The sizes of what changes by
+    // itself (the visitor log and its side files, the Health and sign-in records, the backup) are left out, or a visit between "look at the list" and the button would refuse it.
+    $live = ['visits' => true, 'health' => true, 'signin' => true, 'lockouts' => true, 'update' => true, 'backup' => true, 'geo' => true];
     $lines = [];
-    foreach ($entries as $e) $lines[] = $e['kind'] . '|' . $e['rel'] . '|' . $e['size'];
+    foreach ($entries as $e) $lines[] = $e['kind'] . '|' . $e['rel'] . (isset($live[$e['kind']]) ? '' : '|' . $e['size']);
     foreach ($caches as $c) $lines[] = 'cache|' . $c['rel'];
-    $mapped = 0;   // (how many of these files lie in a place from elsewhere on the server: another gallery may use them too)
-    foreach ($entries as $e) if (strpos($e['path'], $dir . '/') !== 0) $mapped++;
-    return ['entries' => $entries, 'caches' => $caches, 'unknown' => $unknown, 'folders' => count($folders), 'mapped' => $mapped, 'fingerprint' => hash('sha256', implode("\n", $lines))];
+    $mapped = 0; $shared = ['count' => 0, 'bytes' => 0, 'where' => [], 'paths' => []];
+    foreach ($entries as $k => $e) {
+        if (strpos($e['path'], $dir . '/') === 0) continue;
+        $mapped++;   // (a file in a place from elsewhere on the server: another gallery may use it too)
+        if (in_array($e['kind'], ['items', 'stats', 'backups'], true)) {   // (what another gallery showing the same folder shares: its captions, private marks, view counts, backups)
+            $entries[$k]['shared'] = true; $shared['count']++; $shared['bytes'] += $e['size'];
+            $where = dirname($e['rel']); if ($where === '.') $where = '(top level)';   // (the folder as the gallery names it)
+            $shared['where'][$where] = ($shared['where'][$where] ?? 0) + 1;
+            if (count($shared['paths']) < 40) $shared['paths'][] = $e['rel'];
+        }
+    }
+    return ['entries' => $entries, 'caches' => $caches, 'unknown' => $unknown, 'folders' => count($folders), 'mapped' => $mapped, 'shared' => $shared, 'fingerprint' => hash('sha256', implode("\n", $lines))];
 }
 
 /** The list for the page: per kind, how many files, how many bytes. */
@@ -145,9 +161,12 @@ function owned_summary($plan) {
     foreach ($plan['caches'] as $c) { $rows['thumbs']['files'] += $c['thumbs']; $rows['thumbs']['bytes'] += $c['bytes']; }
     $files = 0; $bytes = 0; $thumbs = $rows['thumbs']['files'];
     foreach ($rows as $k => $r) { if ($k !== 'thumbs') $files += $r['files']; $bytes += $r['bytes']; }
+    $own = array_values(array_filter($plan['entries'], function ($e) { return empty($e['shared']); }));
+    $sh = $plan['shared'] ?? ['count' => 0, 'bytes' => 0, 'where' => [], 'paths' => []];
+    arsort($sh['where']); $sh['where'] = array_slice($sh['where'], 0, 8, true);
     return ['rows' => array_values(array_filter($rows, function ($r) { return $r['files'] > 0; })), 'files' => $files, 'thumbs' => $thumbs, 'bytes' => $bytes, 'thumbBytes' => $rows['thumbs']['bytes'],
-            'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'fingerprint' => $plan['fingerprint'],
-            'paths' => array_slice(array_column($plan['entries'], 'rel'), 0, 300), 'pathsMore' => max(0, count($plan['entries']) - 300)];
+            'unknown' => array_slice($plan['unknown'], 0, 20), 'folders' => $plan['folders'], 'mapped' => $plan['mapped'], 'shared' => $sh, 'fingerprint' => $plan['fingerprint'],
+            'paths' => array_slice(array_column($own, 'rel'), 0, 300), 'pathsMore' => max(0, count($own) - 300)];
 }
 
 /** The text inside the ZIP that says what each file is and how to put them back. */
@@ -227,7 +246,8 @@ function owned_zip_entries($plan, $withThumbs) {
 
 /** Delete exactly the plan. Returns ['ok' => bool, 'deleted' => n, 'thumbs' => n, 'left' => [paths], 'text' => message]. Fails closed: when any
  *  file in the plan does not pass its check again, nothing at all is deleted. */
-function owned_delete($plan) {
+function owned_delete($plan, $alsoShared = false) {
+    $plan['entries'] = array_values(array_filter($plan['entries'], function ($e) use ($alsoShared) { return $alsoShared || empty($e['shared']); }));   // (what another gallery showing the same folder shares stays unless the owner ticked the box)
     foreach ($plan['entries'] as $e) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
@@ -250,7 +270,7 @@ function owned_delete($plan) {
         }
         foreach ($byKind[$kind] ?? [] as $e) {
             if ($left) break 2;   // something could not be removed: stop here, the settings file (last) stays, and the page says what is left
-            if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) { $left[] = $e['rel']; continue; }
+            if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) { if (!file_exists($e['path']) && !is_link($e['path'])) continue; $left[] = $e['rel']; continue; }   // (already gone: nothing left to remove, and not a reason to stop)
             if (@unlink($e['path'])) $deleted++; else $left[] = $e['rel'];
         }
     }
@@ -286,7 +306,11 @@ function files_admin_action($action, $dir, $files) {
     if (!hash_equals($plan['fingerprint'], (string) ($_POST['fingerprint'] ?? ''))) $bad('The list has changed since you looked at it, so nothing was deleted. Look at it again.');
     $copied = (int) ($_SESSION['files_zip_done'] ?? 0) > time() - 3600;
     if (!$copied && ($_POST['nocopy'] ?? '') !== '1') $bad('Download a copy first, or say that you do not want one.');
-    $res = owned_delete($plan);
+    $res = owned_delete($plan, ($_POST['also_shared'] ?? '') === '1');
+    if (($_POST['also_shared'] ?? '') !== '1' && !empty($plan['shared']['count'])) {
+        $res['sharedLeft'] = (int) $plan['shared']['count'];
+        $res['text'] = (string) $res['text'] . ' ' . $plan['shared']['count'] . ' file' . ($plan['shared']['count'] === 1 ? '' : 's') . ' in places from elsewhere on the server (captions, private marks, view counts and backups that another gallery showing the same folders may use) ' . ($plan['shared']['count'] === 1 ? 'was' : 'were') . ' left alone.';
+    }
     if ($res['ok']) $_SESSION = [];
     admin_json_exit($res);
 }

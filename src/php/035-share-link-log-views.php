@@ -925,6 +925,17 @@ function health_checks($dir, $files) {
     $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
 
     if (!empty($GLOBALS['__scan_truncated'])) $add('Folders and files', 'warn', 'The folder scan stopped early', 'This gallery looks at no more than ' . number_format(SCAN_MAX_FOLDERS) . ' folders and ' . number_format(SCAN_MAX_FILES) . ' photos on one visit, and this folder has more, so the rest are left out. Move the gallery into a smaller folder, or the extra folders out of it.');
+    gallery_mounts();   // (fills the list of places that a folder of the gallery's own, with the same name, keeps out)
+    $clashes = array_keys((array) ($GLOBALS['__mount_clashes'] ?? []));
+    if ($clashes) {
+        $clN = count($clashes);
+        $add('Folders and files', 'warn', $clN === 1 ? 'A place from elsewhere called "' . $clashes[0] . '" is not shown' : number_format($clN) . ' places from elsewhere are not shown',
+            'The gallery has a folder of its own with ' . ($clN === 1 ? 'that name' : 'those names') . ' (' . implode(', ', array_slice($clashes, 0, 5)) . ($clN > 5 ? ' and ' . number_format($clN - 5) . ' more' : '') . '), and a folder of its own always wins, so the place with the same name is left out. '
+            . 'Give the place another name in Settings (Server setup: folders from elsewhere), or rename the folder.');
+    }
+    $ovl = extra_folder_overlaps(extra_folder_entries(is_array(EXTRA_FOLDERS) ? EXTRA_FOLDERS : [], is_array(EXTRA_ROOTS) ? EXTRA_ROOTS : [], null), false);
+    if ($ovl) $add('Folders and files', 'warn', count($ovl) === 1 ? 'Two places from elsewhere show the same photos' : number_format(count($ovl)) . ' places from elsewhere overlap',
+        implode(' ', array_slice($ovl, 0, 3)) . (count($ovl) > 3 ? ' (and ' . number_format(count($ovl) - 3) . ' more.)' : '') . ' Change it in Settings (Server setup: folders from elsewhere); the Settings screen refuses a new line like these.');
     $cacheLinks = cache_link_folders($dir, $files);   // (a thumbnail folder that is a link is never followed: see image_cache_path)
     if ($cacheLinks) {
         $clN = count($cacheLinks);

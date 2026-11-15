@@ -327,7 +327,8 @@ function count_ignored_videos($realDir, $maxDirs = 40) {
  */
 function merge_extra_folders($rootNode, $mediaExtensions, $self) {
     foreach (gallery_mounts() as $virtualName => $realPath) {
-        if (!is_string($virtualName) || $virtualName === '' || strpbrk($virtualName, "/\\") !== false) continue;
+        $virtualName = (string) $virtualName;   // (a name of digits is a number as a key)
+        if ($virtualName === '' || strpbrk($virtualName, "/\\") !== false) continue;
         if (isset($rootNode['subdirs'][$virtualName])) continue;
         if (!is_dir($realPath) || is_link($realPath)) continue;
         $rootNode['subdirs'][$virtualName] = scan_folder_tree($realPath, $mediaExtensions, $self, false);
@@ -479,7 +480,7 @@ function sign_in_redirect() {
 // A closed gallery: before anything is read or served (a photo, a thumbnail, a folder, the map), a stranger gets the page of a link
 // that isn't valid, the same as for any bad address, so nothing says there is a gallery here. Still open to everyone: the sign-in, the
 // admin, a share link's own address, and the preview picture of a live link. "/admin/" (a folder address) is the sign-in as well.
-if (isset($_GET['folder']) && is_string($_GET['folder']) && in_array(strtolower(trim($_GET['folder'], '/')), ['admin', 'reveal'], true) && !is_dir($dir . '/' . trim($_GET['folder'], '/'))) {
+if (isset($_GET['folder']) && is_string($_GET['folder']) && in_array(strtolower(trim($_GET['folder'], '/')), ['admin', 'reveal'], true) && !is_dir($dir . '/' . trim($_GET['folder'], '/')) && !isset(gallery_mounts()[trim($_GET['folder'], '/')])) {   // (a place from elsewhere with that name is a folder)
     sign_in_redirect();
 }
 /**

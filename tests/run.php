@@ -5519,7 +5519,8 @@ $fTree = function (string $root) { $out = []; $it = new RecursiveIteratorIterato
 $fList = $fAct(['action' => 'files_list']);
 $fKinds = array_column($fList['rows'] ?? [], 'files', 'kind');
 check('[files made] the list finds what the gallery made: its settings, share links and logs, secret, sign-in records, the folders\' captions, view counts, tidy-up backup, thumbnails (and the one in the mapped folder), and says how many and how big', ($fList['ok'] ?? false) && ($fKinds['settings'] ?? 0) === 1 && ($fKinds['links'] ?? 0) >= 1 && ($fKinds['secret'] ?? 0) === 1 && ($fKinds['signin'] ?? 0) >= 1 && ($fKinds['items'] ?? 0) === 2 && ($fKinds['stats'] ?? 0) === 1 && ($fKinds['backups'] ?? 0) === 1 && ($fKinds['meta'] ?? 0) === 1 && ($fList['thumbs'] ?? 0) === 2 && ($fList['folders'] ?? 0) >= 3, json_encode($fKinds));
-check('[files made] the list names every file in the paths it gives (the mapped folder under its name in the gallery), and never a photo, a note or a decoy', in_array('Mapped/.gallery-items.php', $fList['paths'] ?? [], true) && in_array('Pics/.gallery-items.php', $fList['paths'] ?? [], true) && in_array('.gallery-config.php', $fList['paths'] ?? [], true) && !array_filter($fList['paths'] ?? [], fn ($x) => preg_match('/\.(jpg|md|bak|old|txt)$|index\.php$|NoGuard|Linked|deep/', $x)));
+$fAllPaths = array_merge($fList['paths'] ?? [], $fList['shared']['paths'] ?? []);   // (this gallery's own, then the shared ones in a place from elsewhere, which Delete leaves alone unless the box is ticked)
+check('[files made] the list names every file in the paths it gives (the mapped folder under its name in the gallery, as shared data), and never a photo, a note or a decoy', in_array('Mapped/.gallery-items.php', $fList['shared']['paths'] ?? [], true) && !in_array('Mapped/.gallery-items.php', $fList['paths'] ?? [], true) && in_array('Pics/.gallery-items.php', $fList['paths'] ?? [], true) && in_array('.gallery-config.php', $fList['paths'] ?? [], true) && !array_filter($fAllPaths, fn ($x) => preg_match('/\.(jpg|md|bak|old|txt)$|index\.php$|NoGuard|Linked|deep/', $x)));
 check('[files made] names that only look like the gallery\'s own (a hand-made copy, a lookalike, a file with the right name but no guard line, a link) are listed as "left alone", not as the gallery\'s', ($fList['ok'] ?? false) && count(array_intersect($fList['unknown'] ?? [], ['.gallery-items.php.bak', '.gallery-config.php.old', '.gallery-linklog-zz.php', 'NoGuard/.gallery-items.php', 'Linked/.gallery-items.php'])) === 5 && !in_array('.gallery-setup', $fList['unknown'] ?? [], true));
 check('[files made] the Settings page has the group, closed, with the three buttons', ($fPage = http_get("$baseF/?admin", ["Cookie: $fCookie"])[1]) !== '' && preg_match('/<details class="site-group" id="files-made">/', $fPage) === 1 && str_contains($fPage, 'data-fm="list"') && str_contains($fPage, 'data-fm="zip"') && str_contains($fPage, 'data-fm="delete"') && str_contains($fPage, 'Files this gallery has made'));
 $fPanel = $fAct(['action' => 'media_panel']);
@@ -5546,7 +5547,7 @@ if ($haveUnzip) {
     $fListZ = $fAct(['action' => 'files_list']);
     [$fSt, $fZ, $fR] = $fZipFetch(false);
     $fNames = $fSt === 200 ? $zipNames($fZ) : [];
-    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name; the backup is not packed into it, and the log goes in as one consistent copy), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count(array_filter($fListZ['paths'], fn ($pp) => !preg_match('~\.gallery-backup(?:-[0-9a-f]{24}\.zip(?:\.tmp)?|\.php)$|\.sqlite-(?:wal|shm)$~', $pp))) + 1, json_encode($fNames));
+    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name; the backup is not packed into it, and the log goes in as one consistent copy), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count(array_filter(array_merge($fListZ['paths'], $fListZ['shared']['paths'] ?? []), fn ($pp) => !preg_match('~\.gallery-backup(?:-[0-9a-f]{24}\.zip(?:\.tmp)?|\.php)$|\.sqlite-(?:wal|shm)$~', $pp))) + 1, json_encode($fNames));
     $fReadme = (string) $zipEntry($fZ, 'README.txt');
     check('[files made] the README says what the files are, how to put them back and where the mapped folder is from, and warns that it is private', str_contains($fReadme, 'unzip this file over the same folder') && str_contains($fReadme, 'Mapped/') && str_contains($fReadme, $fxFMap) && str_contains($fReadme, 'private'));
     $fToken = basename((string) ($fR['url'] ?? ''));
@@ -5575,7 +5576,7 @@ check('[files made] making the ZIP changed nothing on disk (every file that is n
 touch("$fxF/index.php", time() - 3600);
 $fBefore = $fTree($fxF);
 $fListNow = $fAct(['action' => 'files_list']); $fFp2 = $fListNow['fingerprint'] ?? '';
-$fDel = $fAct(['action' => 'files_delete', 'password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => $fFp2, 'nocopy' => '1']);
+$fDel = $fAct(['action' => 'files_delete', 'password' => 'files-admin-pw-1', 'typed' => 'DELETE', 'fingerprint' => $fFp2, 'nocopy' => '1', 'also_shared' => '1']);   // (everything, the shared data in the mapped place too: the box ticked; without it that is left alone, see [files made] in the group 6 block)
 $fAfter = $fTree($fxF); $fMapAfter = $fTree($fxFMap);
 $fGone = array_diff_key($fBefore, $fAfter); $fGoneMap = array_diff_key($fMapBefore, $fMapAfter);
 $fKept = array_intersect_key($fAfter, $fBefore);
@@ -9412,12 +9413,12 @@ $mpOwn2 = ['Cookie: ' . extract_cookie_header($mpH3)];
 $mpCsrf2 = (string) extract_csrf_token(http_get("$baseMp2/?admin", $mpOwn2)[1]);
 $mpAdmin2 = fn (array $f) => json_decode(http_post("$baseMp2/?admin", $f + ['csrf_token' => $mpCsrf2], array_merge($mpOwn2, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
 $mpList = $mpAdmin2(['action' => 'files_list']);
-$mpPaths2 = (array) ($mpList['paths'] ?? []);
+$mpPaths2 = array_merge((array) ($mpList['paths'] ?? []), (array) ($mpList['shared']['paths'] ?? []));   // (this gallery's own and the shared data in the mapped place)
 check('[mapped] the list of what this gallery made includes the mapped place\'s data files (captions and marks, view counts), under its name in the gallery', in_array('Eurotrip/.gallery-items.php', $mpPaths2, true) && in_array('Eurotrip/Italy/.gallery-items.php', $mpPaths2, true) && ($mpList['mapped'] ?? 0) > 0);
 check('[mapped] ...and the other gallery\'s own files there (settings, links, secret, sign-ins, index.php, notes) are not on it: they are named as "other files" and never touched', !preg_grep('~^Eurotrip/\.gallery-(config|links|secret|login-attempts)\.php$~', $mpPaths2) && !in_array('Eurotrip/index.php', $mpPaths2, true) && in_array('Eurotrip/.gallery-config.php', (array) ($mpList['unknown'] ?? []), true));
 check('[mapped] the list and the delete\'s last step say that files in a mapped place may be in use by another gallery too (the page carries the words, the list carries the count)', str_contains(file_get_contents($indexSrc), 'in places added from elsewhere on the server') && str_contains(file_get_contents($indexSrc), '\'mapped\' => $plan[\'mapped\']'));
 $mpMediaBefore = $mpMediaOnly($mpTreeSha($fxMpSrc2)); $mpOtherBefore = array_filter($mpTreeSha($fxMpSrc2), fn ($k) => preg_match('~^(index\.php|notes\.md|\.gallery-(config|links|secret|login-attempts)\.php)$~', $k), ARRAY_FILTER_USE_KEY);
-$mpDel = $mpAdmin2(['action' => 'files_delete', 'password' => 'mp-admin-pw-2', 'typed' => 'DELETE', 'fingerprint' => (string) ($mpList['fingerprint'] ?? ''), 'nocopy' => '1']);
+$mpDel = $mpAdmin2(['action' => 'files_delete', 'password' => 'mp-admin-pw-2', 'typed' => 'DELETE', 'fingerprint' => (string) ($mpList['fingerprint'] ?? ''), 'nocopy' => '1', 'also_shared' => '1']);
 $mpAfter2 = $mpTreeSha($fxMpSrc2);
 check('[mapped] deleting what this gallery made, on a copy: the mapped place\'s data files go, and every photo, the notes, the other gallery\'s index.php, settings, links, secret and sign-ins are byte for byte as they were', ($mpDel['ok'] ?? null) === true && !preg_grep('~\.gallery-items\.php$~', array_keys($mpAfter2)) && $mpMediaOnly($mpAfter2) === $mpMediaBefore && array_filter($mpAfter2, fn ($k) => preg_match('~^(index\.php|notes\.md|\.gallery-(config|links|secret|login-attempts)\.php)$~', $k), ARRAY_FILTER_USE_KEY) === $mpOtherBefore);
 proc_terminate($mpProc2);
@@ -11329,6 +11330,118 @@ check('[tidy backups] ...another gallery\'s backup and an unmarked one in a mapp
 $g5D2 = $g5Admin(['action' => 'media_backups_delete', 'also_others' => '1']);
 check('[tidy backups] with the tick-box ticked it also deletes those in places from elsewhere; a file without the gallery\'s guard line is never deleted, ticked or not', ($g5D2['deleted'] ?? -1) === 2 && !is_file($g5Theirs[0]) && !is_file($g5Theirs[1]) && is_file($g5Never[0]) && is_file($g5Never[1]), json_encode($g5D2));
 check('[tidy backups] the Delete list (Files this gallery has made) knows a backup that carries a mark: it is the "Tidy-up backups" kind, as before', ($g5K = $g5Run($g5Fn('owned_top_names') . $g5Fn('owned_kind_of_name') . 'echo json_encode([owned_kind_of_name(".gallery-items.before-tidy-20220101-000000-deadbeef.php", false), owned_kind_of_name(".gallery-items.before-tidy-20220101-000000.php", false), owned_kind_of_name(".gallery-items.before-tidy-20220101-000000-xyz.php", false)]);')) !== '' && json_decode($g5K, true) === ['backups', 'backups', ''], $g5K);
+
+/* --------------------------------------------------------------------- */
+
+// Audit group 6: places from elsewhere (D5, D11, G1, G3, G10, and D14's form refuse-list and fingerprint) and the Delete list's shared data.
+echo "== audit group 6: a folder of the gallery's own wins over a place of the same name, names of digits are names, the form refuses overlaps and system folders, the Delete list lists a file once and leaves shared data alone ==\n";
+$o6 = new_fixture_dir('g6out'); $fx6 = new_fixture_dir('g6');
+foreach (['Europe/Germany', '123', 'Trips'] as $d) mkdir("$fx6/$d", 0777, true);
+foreach (['roots/Europe', 'roots/2024', 'named/a', 'named/b'] as $d) mkdir("$o6/$d", 0777, true);
+make_jpeg("$fx6/Europe/intro.jpg", 80, 60, 10, 10, 200); make_jpeg("$fx6/Europe/Germany/p.jpg", 80, 60, 200, 10, 10); make_jpeg("$fx6/123/x.jpg", 80, 60, 10, 200, 10); make_jpeg("$fx6/Trips/t.jpg", 80, 60, 90, 90, 90);
+make_jpeg("$o6/roots/Europe/intro.jpg", 80, 60, 250, 250, 0); make_jpeg("$o6/roots/2024/y.jpg", 80, 60, 0, 250, 250);
+make_jpeg("$o6/named/a/a.jpg", 80, 60, 5, 5, 5); make_jpeg("$o6/named/b/b.jpg", 80, 60, 6, 6, 6);
+write_data_file("$fx6/Europe/Germany/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+file_put_contents("$fx6/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g6-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_ROOTS' => [realpath("$o6/roots")], 'EXTRA_FOLDERS' => ['2019' => realpath("$o6/named/a"), 'Admin' => realpath("$o6/named/b")]]));
+copy($indexSrc, "$fx6/index.php");
+$port6 = find_free_port(); start_server($fx6, $port6); $base6 = "http://127.0.0.1:$port6";
+[, , $g6H] = http_post("$base6/?admin", ['access_code' => 'g6-admin-pw-1'], [], false); $g6Own = ['Cookie: ' . extract_cookie_header($g6H)];
+$g6Csrf = extract_csrf_token(http_get("$base6/?admin", $g6Own)[1]);
+$g6Adm = fn (array $f, string $q = '') => json_decode(http_post("$base6/?admin$q", $f + ['csrf_token' => $g6Csrf], array_merge($g6Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+
+// D5: the gallery's own folder wins, everywhere
+$g6Eu = http_get("$base6/?folder=Europe");
+check('[mounts] a place from elsewhere called Europe does not take over the gallery\'s own private-in-part Europe: a stranger is not shown the private Germany inside it, and Germany is a 404 as it was (it was listed, and answered 200)', $g6Eu[0] === 200 && !str_contains($g6Eu[1], 'Germany%2Fp.jpg') && http_get("$base6/?folder=Europe%2FGermany")[0] === 404);
+check('[mounts] ...its pictures are the real folder\'s (the mapped file of the same name was served), and nothing is made in the place that lost: no thumbnails or view counts are written there', md5(http_get("$base6/?img=Europe%2Fintro.jpg&size=full")[1]) === md5_file("$fx6/Europe/intro.jpg") && !is_dir("$o6/roots/Europe/.gallery-cache") && !is_file("$o6/roots/Europe/.gallery-stats.sqlite"));
+$g6Hl = html_entity_decode(http_get("$base6/?admin&health=1", $g6Own)[1], ENT_QUOTES);
+check('[mounts] ...and the Health check says that place is not shown, why, and what to do', str_contains($g6Hl, 'A place from elsewhere called "Europe" is not shown') && stripos($g6Hl, 'another name') !== false, substr((string) strstr($g6Hl, 'called "Europe"'), 0, 200));
+
+// G1: names of digits
+$g6Home = http_get("$base6/")[1];
+check('[mounts] a place from elsewhere named in digits ("2019" by name, "2024" found inside a roots folder) is shown: a card on the front page for each, its page opens and lists its photo, and its pictures are served (neither was shown, with no word of why)', substr_count($g6Home, 'folder=2024') > 0 && substr_count($g6Home, 'folder=2019') > 0 && str_contains(http_get("$base6/?folder=2024")[1], 'y.jpg') && str_contains(http_get("$base6/?folder=2019")[1], 'a.jpg') && http_get("$base6/?img=2024%2Fy.jpg&size=tile")[0] === 200 && http_get("$base6/?img=2019%2Fa.jpg&size=tile")[0] === 200);
+// G3: a real folder named in digits
+check('[mounts] a real top-level folder named in digits (123) can be worked on from the admin like any other: its download switch turns on (it said "Unknown folder"), its name saves, Not listed switches', ($g6Adm(['action' => 'toggle_folder_downloads', 'dl' => '1'], '&folder=123')['ok'] ?? null) === true && ($g6Adm(['action' => 'save_folder_identity', 'display_name' => 'One two three'], '&folder=123')['ok'] ?? null) !== false && ($g6Adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=123')['ok'] ?? null) === true && ($g6Adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '0'], '&folder=123')['ok'] ?? null) === true);
+check('[mounts] ...and the admin\'s folder tree marks it as the one open', substr_count(http_get("$base6/?admin&folder=123", $g6Own)[1], 'aria-current="page"') >= 1);
+// G10: a place called Admin
+[$g6S, $g6B] = http_get("$base6/?folder=Admin"); [$g6S2, , $g6Hd2] = http_get("$base6/?folder=admin", [], false); [$g6S3, , $g6Hd3] = http_get("$base6/?folder=reveal", [], false);
+check('[mounts] a place from elsewhere called Admin is a folder: its page opens and lists its photo (it sent the visitor to the sign-in); the lower-case address, and reveal, still go to the sign-in', $g6S === 200 && str_contains($g6B, 'b.jpg') && $g6S2 === 302 && $g6S3 === 302 && str_contains(implode(' ', $g6Hd2), 'reveal'));
+
+// D11 and D14: the form
+$fxF6 = new_fixture_dir('g6form'); make_jpeg("$fxF6/top.jpg", 60, 60, 1, 2, 3);
+foreach (['p1/sub', 'p2', 'archive/2019', 'archive/2020'] as $d) mkdir("$o6/$d", 0777, true);
+foreach (['p1/a.jpg', 'p1/sub/b.jpg', 'p2/c.jpg', 'archive/2019/d.jpg', 'archive/2020/e.jpg'] as $f) make_jpeg("$o6/$f", 40, 40, 9, 9, 9);
+file_put_contents("$fxF6/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g6f-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxF6/index.php");
+$portF6 = find_free_port(); start_server($fxF6, $portF6); $baseF6 = "http://127.0.0.1:$portF6";
+[, , $f6H] = http_post("$baseF6/?admin", ['access_code' => 'g6f-admin-pw-1'], [], false); $f6Own = ['Cookie: ' . extract_cookie_header($f6H)];
+$f6Cfg = "$fxF6/.gallery-config.php";
+$f6Ajax = function (array $fields) use ($baseF6, $f6Own, $f6Cfg) {
+    $csrf = extract_csrf_token(http_get("$baseF6/?admin", $f6Own)[1]);
+    return json_decode(http_post("$baseF6/?admin", array_merge(['csrf_token' => $csrf, 'action' => 'save_site_settings', 'config_hash' => md5_file($f6Cfg)], $fields), array_merge($f6Own, ['X-Requested-With: gallery-fetch']))[1], true) ?? ['ok' => null];
+};
+$f6J = fn (array $named = [], array $roots = []) => json_encode(['named' => (object) $named, 'roots' => $roots]);
+$p1 = realpath("$o6/p1"); $p1s = realpath("$o6/p1/sub"); $p2 = realpath("$o6/p2"); $ar = realpath("$o6/archive"); $ar19 = realpath("$o6/archive/2019");
+$f6Before = (string) file_get_contents($f6Cfg);
+$f6Refused = function (string $why, array $named, array $roots, string $word) use ($f6Ajax, $f6J, $f6Cfg, $f6Before) {
+    $r = $f6Ajax(['set_EXTRA_FOLDERS' => $f6J($named, $roots)]);
+    check("[extra folders] $why is refused, saying which two overlap and what to do, and the settings file is untouched", ($r['ok'] ?? null) === false && str_contains((string) ($r['text'] ?? ''), $word) && (string) file_get_contents($f6Cfg) === $f6Before, json_encode($r));
+};
+$f6Refused('the same folder under two names', ['One' => $p1, 'Two' => $p1], [], 'same folder');
+$f6Refused('a place inside another named place', ['Trips' => $p1, 'Nested' => $p1s], [], 'lies inside');
+$f6Refused('a named place inside a roots place (the folders in it are all shown already)', ['Holiday' => $ar19], [$ar], 'shown already');
+$f6Refused('a roots place inside another roots place', [], [$ar, $ar19], 'lies inside');
+$f6Ok = $f6Ajax(['set_EXTRA_FOLDERS' => $f6J(['One' => $p1, 'Two' => $p2], [$ar])]);
+check('[extra folders] places that do not overlap are saved as before (two named places and a roots place)', ($f6Ok['ok'] ?? null) === true, json_encode($f6Ok));
+// a line saved already (by hand, or by an older version) is never refused: the owner can still save anything else, and Health says it overlaps
+$f6Cfgd = cfg_read($f6Cfg); $f6Cfgd['EXTRA_FOLDERS'] = ['Other' => $p1, 'Other2' => $p1, 'Nested' => $p1s]; unset($f6Cfgd['EXTRA_ROOTS']); file_put_contents($f6Cfg, cfg_text($f6Cfgd));
+$f6Keep = $f6Ajax(['set_TRACK_VIEWS' => '1']); $f6Same = $f6Ajax(['set_EXTRA_FOLDERS' => $f6J(['Other' => $p1, 'Other2' => $p1, 'Nested' => $p1s])]);
+check('[extra folders] lines that overlap but were saved before are not refused: another setting saves, and saving the same places again saves', ($f6Keep['ok'] ?? null) === true && ($f6Same['ok'] ?? null) === true, json_encode([$f6Keep, $f6Same]));
+$f6Hl = html_entity_decode(http_get("$baseF6/?admin&health=1", $f6Own)[1], ENT_QUOTES);
+check('[extra folders] ...and the Health check says those places overlap', str_contains($f6Hl, 'places from elsewhere overlap') && str_contains($f6Hl, 'same folder'), substr((string) strstr($f6Hl, 'overlap'), 0, 200));
+$f6Add = $f6Ajax(['set_EXTRA_FOLDERS' => $f6J(['Other' => $p1, 'Other2' => $p1, 'Nested' => $p1s, 'Fresh' => $p2])]);
+check('[extra folders] adding a new, separate place next to old overlapping ones is fine, adding one that overlaps is not', ($f6Add['ok'] ?? null) === true && ($f6Ajax(['set_EXTRA_FOLDERS' => $f6J(['Other' => $p1, 'Other2' => $p1, 'Nested' => $p1s, 'Fresh' => $p2, 'More' => $p2])])['ok'] ?? null) === false);
+// the system's own folders
+$f6Sys = function (string $path, string $word) use ($f6Ajax, $f6J) { $r = $f6Ajax(['set_EXTRA_FOLDERS' => $f6J(['Sys' => $path])]); return ($r['ok'] ?? null) === false && str_contains((string) ($r['text'] ?? ''), $word); };
+$f6Tmp = rtrim((string) (realpath(sys_get_temp_dir()) ?: sys_get_temp_dir()), '/');
+check('[extra folders] the system\'s own folders are refused with the reason: /etc and what is inside it, /proc, /sys, /dev, /boot, /root (named, even when unreadable), and /var/lib and the system temp folder themselves', $f6Sys('/etc', 'part of the system') && $f6Sys('/etc/ssl', 'part of the system') && $f6Sys('/proc', 'part of the system') && $f6Sys('/sys', 'part of the system') && $f6Sys('/dev', 'part of the system') && $f6Sys('/root', 'part of the system') && $f6Sys('/var/lib', 'system\'s own') && $f6Sys($f6Tmp, 'system\'s own'));
+check('[extra folders] ...as a roots place too, and a folder inside the temp folder (where these tests keep theirs) is still fine', ($f6Ajax(['set_EXTRA_FOLDERS' => $f6J([], ['/etc'])])['ok'] ?? null) === false && ($f6Ajax(['set_EXTRA_FOLDERS' => $f6J(['Fine' => $p2])])['ok'] ?? null) === true);
+
+// D11 and D14: the Delete list
+$g6Fix = function (string $label, bool $stats = true) use ($o6, $indexSrc) {
+    $fx = new_fixture_dir("g6del-$label"); $o = new_fixture_dir("g6delo-$label");
+    mkdir("$fx/Own", 0777, true); mkdir("$o/Sub", 0777, true);
+    make_jpeg("$fx/Own/o.jpg", 60, 60, 1, 1, 1); make_jpeg("$o/o1.jpg", 60, 60, 2, 2, 2); make_jpeg("$o/Sub/o2.jpg", 60, 60, 3, 3, 3);
+    write_data_file("$fx/Own/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+    write_data_file("$o/.gallery-items.php", ['items' => ['o1.jpg' => ['caption' => 'shared caption']], 'groups' => []]);
+    write_data_file("$o/Sub/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+    if ($stats) { $pdo = new PDO('sqlite:' . realpath($o) . '/.gallery-stats.sqlite'); $pdo->exec('CREATE TABLE t (a)'); $pdo = null; }
+    // two names for one place and a place inside it, as an older version or a hand edit could have saved them (the form refuses them now)
+    file_put_contents("$fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => "g6d-$label-pw-1", 'AUTO_GROUP_BY_FOLDER' => true, 'LOG_PUBLIC_VISITS' => true, 'EXTRA_FOLDERS' => ['Other' => realpath($o), 'Other2' => realpath($o), 'Nested' => realpath($o) . '/Sub']]));   // (the public log is on so a visit writes to the visitor log, whose size is then not the same as it was)
+    copy($indexSrc, "$fx/index.php");
+    $port = find_free_port(); start_server($fx, $port); $base = "http://127.0.0.1:$port";
+    [, , $h] = http_post("$base/?admin", ['access_code' => "g6d-$label-pw-1"], [], false); $own = ['Cookie: ' . extract_cookie_header($h)];
+    $csrf = extract_csrf_token(http_get("$base/?admin", $own)[1]);
+    $adm = fn (array $f) => json_decode(http_post("$base/?admin", $f + ['csrf_token' => $csrf], array_merge($own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    return [$fx, $o, $base, $own, $adm, "g6d-$label-pw-1"];
+};
+[$fxD1, $oD1, $baseD1, $ownD1, $admD1, $pwD1] = $g6Fix('one');
+$d1a = $admD1(['action' => 'files_list']);
+$d1Db = vl_path($fxD1) !== null ? vl_db($fxD1) : null;   // (the visitor log grows while the gallery is looked at: here it is made to, by a table of rows the gallery ignores)
+if ($d1Db) { $d1Db->exec('CREATE TABLE IF NOT EXISTS junk (v TEXT)'); $d1Db->beginTransaction(); for ($i = 0; $i < 3000; $i++) $d1Db->exec("INSERT INTO junk VALUES ('" . bin2hex(random_bytes(12)) . "')"); $d1Db->commit(); $d1Db = null; }
+$d1b = $admD1(['action' => 'files_list']);
+$d1Vis = array_sum(array_map(fn ($r) => ($r['kind'] ?? '') === 'visits' ? $r['bytes'] : 0, $d1a['rows'] ?? [])) !== array_sum(array_map(fn ($r) => ($r['kind'] ?? '') === 'visits' ? $r['bytes'] : 0, $d1b['rows'] ?? []));
+check('[files made] the list\'s fingerprint is the same when asked again after visits that changed the visitor log\'s size (it included that size, so a Delete was refused as "the list has changed" again and again)', $d1Vis && ($d1a['fingerprint'] ?? 'a') === ($d1b['fingerprint'] ?? 'b') && $d1a['fingerprint'] !== '', json_encode([$d1a['fingerprint'] ?? null, $d1b['fingerprint'] ?? null]));
+$d1Sub = array_values(array_filter($d1b['paths'] ?? [], fn ($p) => str_ends_with($p, 'Sub/.gallery-items.php') || $p === 'Nested/.gallery-items.php'));
+check('[files made] one file reached by two names, and a place inside another, is listed once (a file was listed once for each name)', count($d1Sub) + count(array_filter($d1b['shared']['paths'] ?? [], fn ($p) => str_ends_with($p, 'Sub/.gallery-items.php') || $p === 'Nested/.gallery-items.php')) === 1, json_encode([$d1b['paths'] ?? null, $d1b['shared'] ?? null]));
+check('[files made] what lies in a place from elsewhere and is shared with whichever gallery shows it (captions, private marks, view counts) is counted apart, with where it is', ($d1b['shared']['count'] ?? -1) === 3 && ($d1b['shared']['bytes'] ?? 0) > 0 && count((array) ($d1b['shared']['where'] ?? [])) >= 1, json_encode($d1b['shared'] ?? null));
+$d1Del = $admD1(['action' => 'files_delete', 'password' => $pwD1, 'typed' => 'DELETE', 'fingerprint' => (string) ($d1b['fingerprint'] ?? ''), 'nocopy' => '1']);
+check('[files made] the Delete finishes in one go on such a list (it stopped half way: every private mark gone, the message naming a file that was in fact removed, and three presses to finish), and says what it left alone', ($d1Del['ok'] ?? null) === true && ($d1Del['sharedLeft'] ?? 0) === 3 && str_contains((string) ($d1Del['text'] ?? ''), 'left alone') && !is_file("$fxD1/.gallery-config.php") && !is_file("$fxD1/Own/.gallery-items.php"), json_encode($d1Del));
+check('[files made] ...the shared data in the place from elsewhere is still there, private mark and view counts included', is_file("$oD1/.gallery-items.php") && is_file("$oD1/Sub/.gallery-items.php") && is_file("$oD1/.gallery-stats.sqlite") && (read_data_file("$oD1/Sub/.gallery-items.php")['restriction'] ?? '') === 'private');
+[$fxD2, $oD2, $baseD2, $ownD2, $admD2, $pwD2] = $g6Fix('two');
+$d2 = $admD2(['action' => 'files_list']);
+$d2Del = $admD2(['action' => 'files_delete', 'password' => $pwD2, 'typed' => 'DELETE', 'fingerprint' => (string) ($d2['fingerprint'] ?? ''), 'nocopy' => '1', 'also_shared' => '1']);
+check('[files made] with the tick-box ticked (also_shared) the shared data in the places from elsewhere goes too, and nothing is said to be left alone', ($d2Del['ok'] ?? null) === true && !isset($d2Del['sharedLeft']) && !is_file("$oD2/.gallery-items.php") && !is_file("$oD2/Sub/.gallery-items.php") && !is_file("$oD2/.gallery-stats.sqlite"), json_encode($d2Del));
+check('[files made] the list always says how much is shared: nothing, when the places from elsewhere hold no data of anyone\'s yet', (function () use ($g6Adm) { $l = $g6Adm(['action' => 'files_list']); return ($l['shared']['count'] ?? -1) === 0; })());
 
 /* --------------------------------------------------------------------- */
 

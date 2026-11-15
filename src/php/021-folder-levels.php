@@ -36,7 +36,7 @@ function all_folder_paths($files) {
             $d = dirname($d);
         }
     }
-    $paths = array_keys($set);
+    $paths = array_map('strval', array_keys($set));   // (a top-level name of digits is a number as a key: 2024, 123, 0)
     usort($paths, 'strnatcasecmp');
     return $paths;
 }
