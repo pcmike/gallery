@@ -62,14 +62,14 @@ function video_poster_path($srcPath, $cacheDir, $filename) {
     if (!ENABLE_VIDEO_THUMBNAILS || !ENABLE_THUMBNAIL_CACHE) return null;
     $poster = image_cache_path($cacheDir, $filename, 'poster', $srcPath);
     if ($poster === null) return null;
-    if (is_file($poster) && filesize($poster) > 0) return $poster;
+    if (cache_file_ok($poster) && filesize($poster) > 0) return $poster;
     $failed = $poster . '.failed';
     if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;   // it didn't work lately; not again for a few hours
     $bin = ffmpeg_binary();
     if ($bin === '') return null;
     $lock = ffmpeg_take_turn(20);   // one at a time, in turn
     if (!$lock) return null;
-    if (is_file($poster) && filesize($poster) > 0) { flock($lock, LOCK_UN); fclose($lock); return $poster; }   // made by whoever had the turn before
+    if (cache_file_ok($poster) && filesize($poster) > 0) { flock($lock, LOCK_UN); fclose($lock); return $poster; }   // made by whoever had the turn before
     try {
         $duration = video_duration_seconds($srcPath);
         $tmp = $poster . '.tmp' . bin2hex(random_bytes(3));
@@ -101,7 +101,7 @@ function video_preview_path($srcPath, $cacheDir, $filename) {
     $base = image_cache_path($cacheDir, $filename, 'preview2', $srcPath);
     if ($base === null) return null;
     $clip = substr($base, 0, -4) . '.mp4';
-    if (is_file($clip) && filesize($clip) > 0) return $clip;
+    if (cache_file_ok($clip) && filesize($clip) > 0) return $clip;
     $failed = $clip . '.failed';
     if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;
     $bin = ffmpeg_binary();
@@ -109,7 +109,7 @@ function video_preview_path($srcPath, $cacheDir, $filename) {
  
     $lock = ffmpeg_take_turn(15);
     if (!$lock) return null;
-    if (is_file($clip) && filesize($clip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $clip; }
+    if (cache_file_ok($clip) && filesize($clip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $clip; }
     try {
         $duration = video_duration_seconds($srcPath);
         $start = $duration !== null && $duration > 3.5 ? min($duration / 3, $duration - 3) : 0;
@@ -143,7 +143,7 @@ function video_strip_path($srcPath, $cacheDir, $filename) {
     if (!ENABLE_VIDEO_PREVIEWS || !ENABLE_THUMBNAIL_CACHE) return null;
     $strip = image_cache_path($cacheDir, $filename, 'strip2', $srcPath);
     if ($strip === null) return null;
-    if (is_file($strip) && filesize($strip) > 0) return $strip;
+    if (cache_file_ok($strip) && filesize($strip) > 0) return $strip;
     $failed = $strip . '.failed';
     if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;
     $duration = video_duration_seconds($srcPath);
@@ -152,7 +152,7 @@ function video_strip_path($srcPath, $cacheDir, $filename) {
     if ($bin === '') return null;
     $lock = ffmpeg_take_turn(30);
     if (!$lock) return null;
-    if (is_file($strip) && filesize($strip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $strip; }
+    if (cache_file_ok($strip) && filesize($strip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $strip; }
     try {
         $tmp = $strip . '.tmp' . bin2hex(random_bytes(3));
         [$cols, $rows] = video_strip_layout($duration);

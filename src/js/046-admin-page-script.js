@@ -310,10 +310,13 @@
       panel.addEventListener('click', function (e) {
         const del = e.target.closest ? e.target.closest('.media-backups-delete') : null;
         if (!del) return;
-        if (!confirm('Delete the backups Tidy up made?\n\nThey are copies of the folders\' data (captions, links, private flags) from before the tidy. Do it once you have looked through the gallery and everything is as it should be.')) return;
+        const othersBox = backupsBox ? backupsBox.querySelector('.media-backups-others') : null;
+        const alsoOthers = !!(othersBox && othersBox.checked);
+        if (!confirm((alsoOthers ? 'Delete the backups Tidy up made, and the ones in places from elsewhere too?\n\nThe second kind may belong to another gallery that shows the same folders. ' : 'Delete the backups Tidy up made?\n\n') + 'They are copies of the folders\' data (captions, links, private flags) from before the tidy. Do it once you have looked through the gallery and everything is as it should be.')) return;
         del.disabled = true;
         const body = new URLSearchParams();
         body.set('csrf_token', panel.dataset.csrf); body.set('action', 'media_backups_delete');
+        if (alsoOthers) body.set('also_others', '1');
         fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
           .then(function (r) { return r.json(); })
           .then(function (j) { backupsBox.textContent = ''; backupsBox.appendChild(text('p', 'hint ' + (j.ok ? 'ok-text' : 'warn-text'), j.text || 'Done.')); syncTidyHead(); })

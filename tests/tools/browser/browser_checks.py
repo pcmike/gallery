@@ -1374,7 +1374,10 @@ try:
     ok(dn.startswith("Done."), "[prepare media] 'Tidy up now' does it (after a yes) and says so", dn[:200])
     bk = b.js("(() => { const l = document.querySelector('#media-panel .media-backups-line'); return l ? {text: l.innerText.replace(/\\s+/g, ' '), btn: !!l.querySelector('.media-backups-delete')} : null; })()")
     ok(bk is not None and re.search(r"\d+ backups? from Tidy up", bk["text"]) and bk["btn"], "[prepare media] a line under the panel says how many backups Tidy up made, with a button to delete them", str(bk))
+    # (the tick-box for backups in places from elsewhere is only drawn when such backups exist, which this fixture has none of: it is put on the page here, ticked, to see what the button then posts)
+    b.js("window.__posted = ''; const _f = window.fetch; window.fetch = (u, o) => { if (o && o.body && String(o.body).indexOf('media_backups_delete') >= 0) window.__posted = String(o.body); return _f(u, o); }; const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'media-backups-others'; cb.checked = true; document.querySelector('#media-panel .media-backups').appendChild(cb)")
     b.js("document.querySelector('#media-panel .media-backups-delete').click()"); b.drain(2)
+    ok("also_others=1" in b.js("window.__posted"), "[tidy backups] with the tick-box for backups in places from elsewhere ticked, the button asks for those too (also_others); without it (below) it does not", b.js("window.__posted"))
     ok(re.search(r"Deleted \d+ backups?\.", b.js("document.querySelector('#media-panel .media-backups').innerText") or "") and not b.js("!!document.querySelector('#media-panel .media-backups-line')"), "[prepare media] Delete the backups (after a yes) removes them and the line says so")
     ok(not b.problems(IGN), "...with no console or CSP errors in Prepare media", "; ".join(b.problems(IGN))[:300])
     # ---------------- the folder tree in the sidebar ----------------

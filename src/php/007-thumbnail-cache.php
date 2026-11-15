@@ -5,12 +5,36 @@ function cache_name($file, $variant, $mtime) {
     return $secret === '' ? md5($text) : substr(hash_hmac('sha256', $text, $secret), 0, 32);
 }
 
+/** One test for a file the gallery made in a .gallery-cache before it is read: a plain file, not a link, in a folder that is not a link. A link under a made
+ *  file's name could lead anywhere the server can read (whoever may write in a shown or mapped folder can plant one), and a made file is read and sent as
+ *  the gallery's own picture, so a link is never followed: the file is made again instead. */
+function cache_file_ok($path) {
+    return is_file($path) && !is_link($path) && !is_link(dirname($path));
+}
+
 function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
     if (!ENABLE_THUMBNAIL_CACHE) return null;
+    if (is_link($cacheDir)) { $GLOBALS['__cache_links'][$cacheDir] = true; return null; }   // (never followed, nothing written through it; the Health check says so)
     if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0775, true)) return null;
     if (!is_writable($cacheDir)) return null;
     $mtime = @filemtime($srcPath);
-    return $cacheDir . '/' . cache_name($filename, $variant, $mtime) . '.jpg';
+    $path = $cacheDir . '/' . cache_name($filename, $variant, $mtime) . '.jpg';
+    if (is_link($path)) @unlink($path);   // (a link planted under the name: only the link goes, never what it leads to, so the picture is made as a plain file and not written through it)
+    return $path;
+}
+
+/** Is this the name of a file the gallery makes in a .gallery-cache (or made in an earlier version)? A picture or clip (32 hex digits and .jpg or .mp4), the capture
+ *  dates (taken.json, taken2.json, taken3.json), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
+ *  written. Nothing else in a folder of that name is the gallery's, so nothing else is ever deleted from it. */
+function cache_entry_is_gallery_made($name) {
+    return preg_match('/^(?:[0-9a-f]{32}\.(?:jpg|mp4)|taken[0-9]*\.json|meta[0-9]*\.php)(?:\.failed|\.tmp[0-9a-f]+|\.[0-9a-f]{8}\.php)?$/D', (string) $name) === 1;
+}
+
+/** The folders (as the gallery names them) whose .gallery-cache is a link: not used, not swept (see image_cache_path). */
+function cache_link_folders($dir, $files) {
+    $out = [];
+    foreach (moved_in_folders($dir, $files) as $f) if (is_link($f['real'] . '/.gallery-cache')) $out[] = $f['rel'] === '' ? '(top level)' : $f['rel'];
+    return $out;
 }
 
 /** What a folder's .gallery-cache holds for its files, by name: [the names this gallery would make or read now (including capture dates
@@ -61,6 +85,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
     $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
     foreach ($byFolder as $folderPath => $folderFiles) {
         $cacheDir = $folderPath . '/.gallery-cache';
+        if (is_link($cacheDir)) { $GLOBALS['__cache_links'][$cacheDir] = true; continue; }   // (a link is never followed: what it leads to is not the gallery's to sweep)
         if (!is_dir($cacheDir)) continue;
         // A place from elsewhere on the server may also be shown by another gallery (an older copy still running there): its
         // thumbnails are named with that gallery's own key, so to this one they look like leftovers. Nothing is swept there.
@@ -68,6 +93,8 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
         [$valid, $renamed] = image_cache_expected_names($dir, $folderFiles, $imagickAvailable);
         foreach (scandir($cacheDir) as $entry) {
             if ($entry === '.' || $entry === '..') continue;
+            // Only what the gallery makes there is ever deleted: a folder of this name may be the owner's own, with their own files in it.
+            if (!cache_entry_is_gallery_made($entry) || is_link($cacheDir . '/' . $entry) || !is_file($cacheDir . '/' . $entry)) continue;
             // LEGACY (see docs/LEGACY-REMOVAL.md): before 2.4.0 the names were an unkeyed md5; a made file under the old name is moved to the new one, not made again.
             if (isset($renamed[$entry]) && $renamed[$entry] !== $entry) {
                 if (!file_exists($cacheDir . '/' . $renamed[$entry])) @rename($cacheDir . '/' . $entry, $cacheDir . '/' . $renamed[$entry]);
@@ -491,26 +518,45 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
     return ['next' => $i, 'total' => $total, 'made' => $made, 'failed' => $failed, 'worked' => $worked, 'read' => $read, 'unreadable' => $unreadable, 'done' => $i >= $total];
 }
 
-/** The backups Tidy up made: every .gallery-items.before-tidy-<date>.php in the folders that hold files, newest last. [['folder', 'file', 'at', 'bytes'], ...] */
+/** The short mark a gallery puts on the backups it makes (the end of their names), worked out from its install secret, so that it says which gallery made one
+ *  without being the secret. '' while the gallery has no secret yet (nothing to tell it apart by). */
+function tidy_backup_id() {
+    $secret = install_secret();
+    return $secret === '' ? '' : substr(hash_hmac('sha256', 'tidy-backup', $secret), 0, 8);
+}
+
+/** The backups Tidy up made: every .gallery-items.before-tidy-<date>[-<mark>].php that is the gallery's own kind of file (a plain file with the guard line) in the
+ *  folders that hold files, newest last. [['folder', 'file', 'at', 'bytes', 'owner' => 'this' | 'other' | 'unknown', 'id'], ...]. In the gallery's own folders every
+ *  one is this gallery's. In a place from elsewhere (another gallery may show it too) it is this gallery's when it carries this gallery's mark, 'other' when it carries
+ *  another's, and 'unknown' when it carries none (made before backups carried one). */
 function media_tidy_backups($dir, $files) {
+    $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
+    $mine = tidy_backup_id();
     $reals = [];
     foreach ($files as $file) $reals[containing_folder_real_path($dir, $file)] = ($slash = strrpos($file, '/')) === false ? '' : substr($file, 0, $slash);
     $out = [];
     foreach ($reals as $real => $folder) {
+        $inside = strpos(rtrim((string) (realpath($real) ?: $real), '/') . '/', $ownRoot) === 0;
         foreach (glob($real . '/.gallery-items.before-tidy-*.php') ?: [] as $f) {
-            if (!preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}\.php$/', basename($f)) || !is_file($f) || is_link($f)) continue;
-            $out[] = ['folder' => $folder, 'file' => $f, 'at' => (int) @filemtime($f), 'bytes' => (int) @filesize($f)];
+            if (!preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-([0-9a-f]{8}))?\.php$/', basename($f), $m) || !is_file($f) || is_link($f) || !owned_head_ok($f, true)) continue;
+            $id = $m[1] ?? '';
+            $owner = ($inside || ($id !== '' && $id === $mine)) ? 'this' : ($id !== '' ? 'other' : 'unknown');
+            $out[] = ['folder' => $folder, 'file' => $f, 'at' => (int) @filemtime($f), 'bytes' => (int) @filesize($f), 'owner' => $owner, 'id' => $id];
         }
     }
     usort($out, function ($a, $b) { return $a['at'] <=> $b['at'] ?: strcmp($a['file'], $b['file']); });
     return $out;
 }
 
-/** Removes the Tidy up backups (only files named exactly like them, in the folders that hold files); how many went. */
-function media_tidy_backups_delete($dir, $files) {
-    $n = 0;
-    foreach (media_tidy_backups($dir, $files) as $b) if (@unlink($b['file'])) $n++;
-    return $n;
+/** Removes this gallery's Tidy up backups; with $others also those in places from elsewhere that are another gallery's or carry no mark (the owner has said no other gallery
+ *  needs them). Only files named exactly like them with the gallery's guard line, never a link. [how many went, how many in places from elsewhere were left alone]. */
+function media_tidy_backups_delete($dir, $files, $others = false) {
+    $n = 0; $left = 0;
+    foreach (media_tidy_backups($dir, $files) as $b) {
+        if ($b['owner'] !== 'this' && !$others) { $left++; continue; }
+        if (@unlink($b['file'])) $n++;
+    }
+    return ['deleted' => $n, 'left' => $left];
 }
 
 /** What a person might want to look at in the media, in groups: [['key', 'title', 'hint', 'actionable', 'count', 'items' => [file, ...]], ...]

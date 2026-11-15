@@ -312,7 +312,7 @@ function media_tidy_run($dir, $files, $refresh, $apply) {
         $row = ['folder' => $info['folder']] + $res;
         if ($apply && $res['n']['changed'] > 0) {
             $src = items_path($folderReal);
-            $backup = $folderReal . '/.gallery-items.before-tidy-' . $stamp . '.php';
+            $backup = $folderReal . '/.gallery-items.before-tidy-' . $stamp . (($mark = tidy_backup_id()) !== '' ? '-' . $mark : '') . '.php';   // (the mark says which gallery made it: a folder from elsewhere may be shown by another one)
             if (!@copy($src, $backup)) {
                 $errors[] = ($info['folder'] === '' ? '(top level)' : $info['folder']) . ': a backup could not be made (is the folder writable by the web server?), so it was left as it is.';
                 $row['skipped'] = true;

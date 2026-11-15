@@ -633,8 +633,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         admin_json_exit($n === null ? ['ok' => false, 'text' => 'Nothing was removed: one of the files didn\'t check out as the gallery\'s own.'] : ['ok' => true, 'removed' => $n, 'text' => 'Removed.']);
     }
     if ($action === 'media_backups_delete') {
-        $n = media_tidy_backups_delete($dir, $files);
-        admin_json_exit(['ok' => true, 'deleted' => $n, 'text' => $n ? 'Deleted ' . $n . ' backup' . ($n === 1 ? '' : 's') . '.' : 'There were no backups.']);
+        $r = media_tidy_backups_delete($dir, $files, !empty($_POST['also_others']));
+        $n = $r['deleted']; $left = $r['left'];
+        $text = $n ? 'Deleted ' . $n . ' backup' . ($n === 1 ? '' : 's') . '.' : ($left ? 'Nothing was deleted.' : 'There were no backups.');
+        if ($left) $text .= ' ' . $left . ' in places from elsewhere ' . ($left === 1 ? 'was' : 'were') . ' left alone (another gallery\'s, or made before backups carried a mark): tick the box to delete those too.';
+        admin_json_exit(['ok' => true, 'deleted' => $n, 'left' => $left, 'text' => $text]);
     }
 
     if ($action === 'save_item') {

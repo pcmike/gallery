@@ -925,6 +925,13 @@ function health_checks($dir, $files) {
     $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
 
     if (!empty($GLOBALS['__scan_truncated'])) $add('Folders and files', 'warn', 'The folder scan stopped early', 'This gallery looks at no more than ' . number_format(SCAN_MAX_FOLDERS) . ' folders and ' . number_format(SCAN_MAX_FILES) . ' photos on one visit, and this folder has more, so the rest are left out. Move the gallery into a smaller folder, or the extra folders out of it.');
+    $cacheLinks = cache_link_folders($dir, $files);   // (a thumbnail folder that is a link is never followed: see image_cache_path)
+    if ($cacheLinks) {
+        $clN = count($cacheLinks);
+        $add('Folders and files', 'warn', $clN === 1 ? 'The thumbnail folder of "' . $cacheLinks[0] . '" is a link' : number_format($clN) . ' thumbnail folders are links',
+            'The gallery never follows a link, so it does not use ' . ($clN === 1 ? 'it' : 'them') . ' and keeps no pictures for ' . implode(', ', array_slice($cacheLinks, 0, 5)) . ($clN > 5 ? ' and ' . number_format($clN - 5) . ' more' : '')
+            . ': each picture there is sent as the original file, and a HEIC photo can\'t be shown. Delete the link (the folder called .gallery-cache inside ' . ($clN === 1 ? 'it' : 'each of them') . ') and the gallery makes a real folder at the next page load.');
+    }
     if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
         $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
         $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',

@@ -29,7 +29,7 @@ function owned_kind_of_name($name, $isTop) {
     }
     if ($name === '.gallery-items.php') return 'items';
     if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json') return 'stats';
-    if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}\.php$/D', $name)) return 'backups';
+    if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-[0-9a-f]{8})?\.php$/D', $name)) return 'backups';   // (an optional mark at the end says which gallery made it: see tidy_backup_id)
     return '';
 }
 
@@ -69,8 +69,22 @@ function owned_verify($path, $folderReal, $kind, $isTop) {
     if ($kind === 'thumbs') return owned_is_thumb_name($name) && basename($folderReal) === '.gallery-cache';
     if ($kind === 'meta') return $name === MEDIA_META_FILE && basename($folderReal) === '.gallery-cache' && owned_head_ok($path, true);
     if (owned_kind_of_name($name, $isTop) !== $kind) return false;
+    if ($kind === 'stats' && !owned_stats_file_ok($path, $name)) return false;
     if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings');
     return true;   // (a .sqlite or .json file of view counts has no guard line)
+}
+
+/** The plain-JSON view-count file of an older version (.gallery-stats.json) is the gallery's only if it is what that version wrote: an object with pageviews or photos. It is
+ *  only ever imported, never used, so a file of the owner's own with that name is not the gallery's. The .sqlite one is the gallery's live store by name, and a damaged one
+ *  (its header gone) is exactly what the Health check has to find, so it is not tested here; the PHP one has its guard line (checked by the caller). */
+function owned_stats_file_ok($path, $name) {
+    if (substr($name, -5) === '.json') {
+        $size = (int) @filesize($path);
+        if ($size < 2 || $size > 16777216) return false;
+        $d = json_decode((string) @file_get_contents($path), true);
+        return is_array($d) && (isset($d['pageviews']) || isset($d['photos']));
+    }
+    return true;
 }
 
 function owned_head_ok($path, $strict) {

@@ -10,10 +10,32 @@ function render_media_group_html($grp) {
 /** The "Backups from Tidy up" line of the Prepare media panel, as HTML; empty when there are none. */
 function render_media_backups_html($backups) {
     if (!$backups) return '';
-    $folders = []; foreach ($backups as $b) $folders[$b['folder']] = true;
-    $first = $backups[0]['at']; $last = $backups[count($backups) - 1]['at'];
+    $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $fmt = function ($t) { return gmdate('j M Y', $t); };
-    return '<p class="hint media-backups-line"><strong>' . count($backups) . ' backup' . (count($backups) === 1 ? '' : 's') . ' from Tidy up</strong> (the folders\' data as it was before, in ' . count($folders) . ' folder' . (count($folders) === 1 ? '' : 's') . ', ' . ($fmt($first) === $fmt($last) ? $fmt($first) : $fmt($first) . ' to ' . $fmt($last)) . '). Keep them until you have looked through the gallery. <button type="button" class="secondary media-backups-delete">Delete the backups&hellip;</button> <span class="media-backups-out" aria-live="polite"></span></p>';
+    $range = function ($list) use ($fmt) { $ts = array_column($list, 'at'); $a = min($ts); $z = max($ts); return $fmt($a) === $fmt($z) ? $fmt($a) : $fmt($a) . ' to ' . $fmt($z); };
+    $mine = array_values(array_filter($backups, function ($b) { return $b['owner'] === 'this'; }));
+    $others = array_values(array_filter($backups, function ($b) { return $b['owner'] !== 'this'; }));
+    $button = '<button type="button" class="secondary media-backups-delete">Delete the backups&hellip;</button> <span class="media-backups-out" aria-live="polite"></span>';
+    if ($mine) {
+        $folders = []; foreach ($mine as $b) $folders[$b['folder']] = true;
+        $html = '<p class="hint media-backups-line"><strong>' . count($mine) . ' backup' . (count($mine) === 1 ? '' : 's') . ' from Tidy up</strong> (the folders\' data as it was before, in ' . count($folders) . ' folder' . (count($folders) === 1 ? '' : 's') . ', ' . $range($mine) . '). Keep them until you have looked through the gallery. ' . $button . '</p>';
+    } else {
+        $html = '<p class="hint media-backups-line">No Tidy up backups of this gallery. ' . $button . '</p>';
+    }
+    if ($others) {
+        $by = []; foreach ($others as $b) $by[$b['folder']][] = $b;
+        $lines = [];
+        foreach ($by as $folder => $list) {
+            $marks = array_values(array_unique(array_column($list, 'id'))); sort($marks);
+            $who = implode(', ', array_map(function ($m) { return $m === '' ? 'no mark' : 'mark ' . $m; }, $marks));
+            $kb = array_sum(array_column($list, 'bytes')) / 1024;
+            $lines[] = $e($folder === '' ? '(top level)' : $folder) . ': ' . count($list) . ' (' . $range($list) . ', ' . ($kb < 10 ? number_format($kb, 1) : number_format($kb)) . ' KB, ' . $who . ')';
+        }
+        $n = count($others);
+        $html .= '<div class="media-backups-others-box"><p class="hint">' . $n . ' more backup' . ($n === 1 ? '' : 's') . ' lie' . ($n === 1 ? 's' : '') . ' in places from elsewhere on the server: another gallery\'s, or made before backups carried a mark. The button above leaves ' . ($n === 1 ? 'it' : 'them') . ' alone. '
+            . implode('; ', $lines) . '.</p><p><label class="check"><input type="checkbox" class="media-backups-others"> Also delete these (no other gallery needs them)</label></p></div>';
+    }
+    return $html;
 }
 
 /** Everything Prepare media's list says, one row per folder that has files: the folder, its files, how many photos have their tile pictures, and
@@ -66,7 +88,9 @@ function media_report($dir, $files) {
 function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     // ?size[]=x arrives as an array; anything that isn't a plain string
     // is just the default size.
-    if (!is_string($variant)) $variant = 'thumb';
+    // Only the sizes the pages ask for: any other value would make one more picture each (a decode of the original and a new file that, in a place mapped from
+    // elsewhere, is never swept), so it is the ordinary thumbnail.
+    if (!is_string($variant) || !in_array($variant, ['thumb', 'tile', 'tilehd', 'share', 'full', 'orig', 'cover', 'coverlg'], true)) $variant = 'thumb';
     $wantOriginal = $variant === 'orig';   // (what the viewer asks for a HEIC photo when this browser can show one: the file itself, not a converted copy)
     if ($wantOriginal) $variant = 'full';
     if (!in_array($filename, $validFiles, true)) {
@@ -123,7 +147,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     }
 
     $cachePath = image_cache_path($cacheDir, $filename, $variant, $srcPath);
-    if ($cachePath && file_exists($cachePath) && filemtime($cachePath) >= @filemtime($srcPath)) {
+    if ($cachePath && cache_file_ok($cachePath) && filemtime($cachePath) >= @filemtime($srcPath)) {
         header('Content-Type: image/jpeg');
         header('Cache-Control: ' . $cacheControl);
         readfile($cachePath);

@@ -7633,6 +7633,7 @@ check('[tidy] captions, links, private flags, the location switch, the removed-o
 check('[tidy] ...and the folder\'s own settings are untouched (name, cover, location switch)', ($tR['displayName'] ?? '') === 'Rome trip' && ($tR['cover'] ?? '') === 'imp.jpg' && ($tR['locationEnabled'] ?? false) === true);
 check('[tidy] careful keeps what it can\'t vouch for: the location that differs, the labelled one, the place for a file that says nothing and the unread file\'s; the old mark that might mean a removal stays', ($tRi['dif.jpg']['location']['lat'] ?? 0) === 10.5 && ($tRi['lab.jpg']['location']['label'] ?? '') === 'Hotel Roma' && ($tRi['shot.jpg']['location']['lat'] ?? 0) === 1.5 && ($tRi['late.jpg']['location']['lat'] ?? 0) === 41.9 && !empty($tRi['chk.jpg']['gpsChecked']));
 check('[tidy] each changed folder was copied first, to a guarded file that holds exactly what was there before; a folder with nothing to change got no backup', count(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")) === 1 && str_starts_with((string) file_get_contents(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")[0]), '<?php') && file_get_contents(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")[0]) === $tOrig && ($tApply['backups'] ?? 0) === 2 && count(glob("$fxT/Paris/.gallery-items.before-tidy-*.php")) === 1);
+check('[tidy backups] a backup Tidy up makes now carries the gallery\'s own mark at the end of its name (a gallery that shows the same folders makes its own, so each can tell which are its own)', preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}-[0-9a-f]{8}\.php$/', basename(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")[0])) === 1, basename(glob("$fxT/Rome/.gallery-items.before-tidy-*.php")[0]));
 check('[tidy] the removed copies are not lost: the photos still show the same locations, now from the files', abs((float) (item_get($baseT, $hdrT, 'Rome/imp.jpg')['auto']['lat'] ?? 0) - 41.9) < 0.01 && abs((float) (item_get($baseT, $hdrT, 'Paris/p1.jpg')['auto']['lat'] ?? 0) - 48.85) < 0.01 && substr_count(http_get("$baseT/?folder=Rome")[1], 'location-badge') >= 3);
 $tAgain = $tidyCall($baseT, $hdrT, ['mode' => 'careful']);
 check('[tidy] doing it again finds nothing more to remove', ($tAgain['totals']['copies'] ?? -1) === 0 && ($tAgain['totals']['marks'] ?? -1) === 0 && ($tAgain['totals']['changed'] ?? -1) === 0);
@@ -11237,6 +11238,97 @@ check('[no ctype] nothing in the source calls a ctype function (the extension is
 $g4C = $g4Run($g4Fn('data_file_strip_guard') . $g4Fn('gallery_config_clean') . $g4Fn('gallery_config_parse') . $g4Fn('ip_binary') . $g4Fn('ip_in_cidr') . 'echo json_encode([function_exists("ctype_space"), gallery_config_parse("{\"A\": 1,\n \"B\": 2, }"), ip_in_cidr("10.1.2.3", "10.0.0.0/8"), ip_in_cidr("10.1.2.3", "11.0.0.0/8"), ip_in_cidr("10.1.2.3", "10.0.0.0/x"), ip_in_cidr("10.1.2.3", "10.0.0.0/33"), ip_in_cidr("10.1.2.3", "10.1.2.3")]);');
 $g4Cd = json_decode($g4C, true);
 check('[no ctype] a settings file with two settings and a trailing comma is read, and a proxy range with a number after the slash is understood, in a PHP started without ini files (no ctype there on most systems)', is_array($g4Cd) && $g4Cd[1] === ['ok', ['A' => 1, 'B' => 2]] && $g4Cd[2] === true && $g4Cd[3] === false && $g4Cd[4] === false && $g4Cd[5] === false && $g4Cd[6] === true, $g4C);
+
+/* --------------------------------------------------------------------- */
+
+// Audit group 5: the thumbnail cache, what is deleted from it, and links (D4, D7, D1, D14's name-only deletes, D9).
+echo "== audit group 5: the cache keeps to its sizes, the sweep deletes only the gallery's own files, a made file is never read through a link, a backup belongs to the gallery that made it ==\n";
+$g5Src = (string) file_get_contents($indexSrc);
+$g5Fn = function (string $name) use ($g5Src) { $from = strpos($g5Src, "\nfunction $name("); if ($from === false) return ''; $to = strpos($g5Src, "\n}\n", $from) + 3; return substr($g5Src, $from, $to - $from); };
+$g5Dir = new_fixture_dir('g5-fn');
+$g5Run = function (string $code, string $at = '') use ($g5Dir) {
+    $d = $at !== '' ? $at : $g5Dir; $script = $d . '/run-' . bin2hex(random_bytes(3)) . '.php'; file_put_contents($script, "<?php error_reporting(0);\n" . $code);
+    $out = (string) shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script) . ' 2>&1'); @unlink($script); return $out;
+};
+$out5 = new_fixture_dir('g5out'); $fx5 = new_fixture_dir('g5');
+foreach (['Decoy/.gallery-cache/sub', 'Asia'] as $d) mkdir("$fx5/$d", 0777, true);
+foreach (['Mapped/.gallery-cache', 'victim/dir'] as $d) mkdir("$out5/$d", 0777, true);
+file_put_contents("$out5/victim/thesis.docx", 'report'); file_put_contents("$out5/victim/id_rsa", 'key'); file_put_contents("$out5/victim/dir/z", 'z'); file_put_contents("$out5/secret.txt", 'TOP-SECRET-DECOY');
+make_jpeg("$fx5/loose1.jpg", 80, 60, 200, 60, 60); make_jpeg("$fx5/Decoy/p.jpg", 80, 60, 150, 60, 60); make_jpeg("$fx5/Asia/a.jpg", 80, 60, 60, 60, 150);
+make_jpeg("$out5/Mapped/m1.jpg", 80, 60, 60, 150, 60); touch("$out5/Mapped/m1.jpg", strtotime('2001-01-01'));
+foreach (['IMG_0001.jpg', 'notes.txt'] as $n) file_put_contents("$fx5/Decoy/.gallery-cache/$n", 'the owner\'s own file'); file_put_contents("$fx5/Decoy/.gallery-cache/sub/x.jpg", 'x');
+foreach (['taken.json', 'taken2.json'] as $n) file_put_contents("$fx5/Decoy/.gallery-cache/$n", '{}');   // (what versions before this one kept there)
+file_put_contents("$fx5/Decoy/.gallery-cache/meta1.php", data_file_guard_line_for_tests() . '{}');
+symlink("$out5/victim", "$fx5/Asia/.gallery-cache");
+file_put_contents("$fx5/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g5-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_FOLDERS' => ['Mapped' => "$out5/Mapped"]]));
+copy($indexSrc, "$fx5/index.php");
+$port5 = find_free_port(); start_server($fx5, $port5); $base5 = "http://127.0.0.1:$port5";
+$g5Ls = fn (string $d) => array_values(array_diff(@scandir($d) ?: [], ['.', '..']));
+$g5Made = fn (string $d) => array_values(array_filter($g5Ls($d), fn ($n) => preg_match('/^[0-9a-f]{32}\.jpg$/', $n)));
+[, , $g5H] = http_post("$base5/?admin", ['access_code' => 'g5-admin-pw-1'], [], false); $g5Own = ['Cookie: ' . extract_cookie_header($g5H)];
+$g5Csrf = extract_csrf_token(http_get("$base5/?admin", $g5Own)[1]);
+$g5Admin = fn (array $f) => json_decode(http_post("$base5/?admin", $f + ['csrf_token' => $g5Csrf], array_merge($g5Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+
+// D4: a size nobody asks for makes no new picture
+http_get("$base5/?img=loose1.jpg&size=thumb"); $g5C1 = $g5Made("$fx5/.gallery-cache");
+$g5Odd = http_get("$base5/?img=loose1.jpg&size=zz1");
+for ($i = 2; $i <= 10; $i++) http_get("$base5/?img=loose1.jpg&size=zz$i");
+check('[cache size] ten sizes the pages never ask for make no new cached picture, and are answered as the ordinary thumbnail (it was one more file each, never swept in a mapped folder)', $g5Made("$fx5/.gallery-cache") === $g5C1 && $g5Odd[0] === 200 && count($g5C1) === 1, json_encode([$g5C1, $g5Made("$fx5/.gallery-cache")]));
+foreach (['tile', 'tilehd', 'share', 'cover', 'coverlg'] as $g5Sz) http_get("$base5/?img=loose1.jpg&size=$g5Sz");
+check('[cache size] ...while each size the pages do ask for still has its own picture (thumb, tile, tilehd, share, cover, coverlg)', count($g5Made("$fx5/.gallery-cache")) === 6, json_encode($g5Made("$fx5/.gallery-cache")));
+for ($i = 1; $i <= 10; $i++) http_get("$base5/?img=Mapped/m1.jpg&size=q$i");
+check('[cache size] the same in a place mapped from elsewhere: ten odd sizes leave one picture there', count($g5Made("$out5/Mapped/.gallery-cache")) === 1, json_encode($g5Ls("$out5/Mapped/.gallery-cache")));
+check('[cache size] a size given as a list, or empty, is the thumbnail too and makes nothing more', http_get("$base5/?img=loose1.jpg&size[]=x")[0] === 200 && http_get("$base5/?img=loose1.jpg&size=")[0] === 200 && count($g5Made("$fx5/.gallery-cache")) === 6);
+
+// D7: the sweep, on an ordinary page view
+$g5Old = []; foreach ($g5Made("$fx5/.gallery-cache") as $g5N) $g5Old[$g5N] = true;
+touch("$fx5/loose1.jpg", time() + 3600);   // (replaced: its pictures are now named differently, the old ones are leftovers of this gallery's own)
+http_get("$base5/?img=loose1.jpg&size=thumb");
+http_get("$base5/"); http_get("$base5/?folder=Decoy"); http_get("$base5/?folder=Asia");
+$g5After = $g5Ls("$fx5/Decoy/.gallery-cache");
+check('[cache sweep] a page view still sweeps this gallery\'s own leftovers: the pictures of the photo as it was before it was replaced are gone, the new one is kept', count(array_intersect_key($g5Old, array_flip($g5Made("$fx5/.gallery-cache")))) < count($g5Old) && count($g5Made("$fx5/.gallery-cache")) >= 1, json_encode($g5Made("$fx5/.gallery-cache")));
+check('[cache sweep] ...and files that are not the gallery\'s (the owner\'s IMG_0001.jpg and notes.txt, a folder with a file in it) are left alone in a folder called .gallery-cache (they were all deleted by anyone\'s first page view)', in_array('IMG_0001.jpg', $g5After, true) && in_array('notes.txt', $g5After, true) && is_file("$fx5/Decoy/.gallery-cache/sub/x.jpg"), json_encode($g5After));
+check('[cache sweep] ...what versions before this one left there (taken.json, taken2.json) is still cleaned up, and the file of what was read from the photos stays', !in_array('taken.json', $g5After, true) && !in_array('taken2.json', $g5After, true) && in_array('meta1.php', $g5After, true), json_encode($g5After));
+check('[cache sweep] a .gallery-cache that is a link is not swept, whatever it leads to: the files behind it (outside the gallery) are all still there', $g5Ls("$out5/victim") === ['dir', 'id_rsa', 'thesis.docx'] && is_file("$out5/victim/dir/z"), json_encode($g5Ls("$out5/victim")));
+$g5Health = html_entity_decode(http_get("$base5/?admin&health=1", $g5Own)[1], ENT_QUOTES);
+check('[cache sweep] ...and the Health check says that folder\'s thumbnail folder is a link, so not used, and what to do', str_contains($g5Health, 'Asia') && str_contains($g5Health, 'is a link') && stripos($g5Health, 'thumbnail') !== false && stripos($g5Health, 'delete the link') !== false, substr((string) strstr($g5Health, 'is a link'), 0, 200));
+
+// D1: a made picture is never read through a link, and nothing is written through a linked cache folder
+foreach ($g5Ls("$out5/Mapped/.gallery-cache") as $g5N) @unlink("$out5/Mapped/.gallery-cache/$g5N");
+http_get("$base5/?img=Mapped/m1.jpg&size=thumb");
+$g5T = $g5Made("$out5/Mapped/.gallery-cache"); $g5Planted = "$out5/Mapped/.gallery-cache/" . ($g5T[0] ?? 'none');
+@unlink($g5Planted); symlink("$out5/secret.txt", $g5Planted);
+[$g5St, $g5Body, $g5Hd] = http_get("$base5/?img=Mapped/m1.jpg&size=thumb");
+$g5Secret = file_get_contents("$out5/secret.txt");
+check('[cache link] a link planted under the thumbnail\'s own name (by anyone who can write in the mapped folder) is not followed, neither to read nor to write: the answer is a real picture or nothing, never the file it leads to, that file is untouched, and the link is gone (the picture is made as a plain file)', !str_contains($g5Body, 'TOP-SECRET') && ($g5St === 404 || ($g5St === 200 && str_starts_with($g5Body, "\xFF\xD8"))) && $g5Secret === 'TOP-SECRET-DECOY' && !is_link($g5Planted), "$g5St " . substr($g5Body, 0, 20) . ' secret: ' . substr($g5Secret, 0, 20));
+$g5Before = $g5Ls("$out5/victim"); [$g5St2, $g5Body2] = http_get("$base5/?img=Asia/a.jpg&size=thumb");
+check('[cache link] nothing is written through a .gallery-cache that is a link: asking for a thumbnail there leaves the folder it leads to exactly as it was, and the answer is still the photo', $g5Ls("$out5/victim") === $g5Before && $g5St2 === 200 && str_starts_with($g5Body2, "\xFF\xD8"), json_encode($g5Ls("$out5/victim")));
+$g5Ok = $g5Run($g5Fn('cache_file_ok') . "\n" . 'mkdir(__DIR__ . "/d"); mkdir(__DIR__ . "/real"); file_put_contents(__DIR__ . "/real/f.jpg", "x"); symlink(__DIR__ . "/real/f.jpg", __DIR__ . "/l.jpg"); symlink(__DIR__ . "/real", __DIR__ . "/linkdir"); echo json_encode([cache_file_ok(__DIR__ . "/real/f.jpg"), cache_file_ok(__DIR__ . "/l.jpg"), cache_file_ok(__DIR__ . "/d"), cache_file_ok(__DIR__ . "/none.jpg"), cache_file_ok(__DIR__ . "/linkdir/f.jpg")]);', (function () use ($g5Dir) { $d = $g5Dir . '/ok-' . bin2hex(random_bytes(2)); mkdir($d); return $d; })());
+check('[cache link] the one test for a made file: a plain file is ok; a link, a folder, nothing there, and a file inside a folder that is a link are not', json_decode($g5Ok, true) === [true, false, false, false, false], $g5Ok);
+
+// D14: the files the Delete list takes by name are checked to be the gallery's
+$g5Stats = "$g5Dir/stats"; mkdir($g5Stats);
+file_put_contents("$g5Stats/.gallery-stats.json", 'owner json'); file_put_contents("$g5Stats/.gallery-stats.sqlite", 'not a database');
+mkdir("$g5Stats/good"); file_put_contents("$g5Stats/good/.gallery-stats.json", '{"pageviews":3,"photos":{"a.jpg":2}}'); file_put_contents("$g5Stats/good/.gallery-stats.sqlite", "SQLite format 3\0" . str_repeat("\0", 100));
+$g5V = $g5Run($g5Fn('data_file_guard_line') . $g5Fn('owned_top_names') . $g5Fn('owned_kind_of_name') . $g5Fn('owned_is_thumb_name') . $g5Fn('owned_stats_file_ok') . $g5Fn('owned_head_ok') . $g5Fn('owned_verify') . "\n" . 'echo json_encode([owned_verify("' . $g5Stats . '/.gallery-stats.json", "' . $g5Stats . '", "stats", false), owned_verify("' . $g5Stats . '/.gallery-stats.sqlite", "' . $g5Stats . '", "stats", false), owned_verify("' . $g5Stats . '/good/.gallery-stats.json", "' . $g5Stats . '/good", "stats", false), owned_verify("' . $g5Stats . '/good/.gallery-stats.sqlite", "' . $g5Stats . '/good", "stats", false)]);');
+check('[files made] a .gallery-stats.json that is not what the gallery wrote (the owner\'s own text) is not taken as its own, the real one is; a .gallery-stats.sqlite is the gallery\'s live store by name, so a damaged one is still listed (the Health check reports it) and is not mistaken for someone else\'s', json_decode($g5V, true) === [false, true, true, true], $g5V);
+
+// D9: a Tidy-up backup belongs to the gallery that made it
+$g5Id = trim($g5Run($g5Fn('data_file_guard_line') . $g5Fn('install_secret') . $g5Fn('tidy_backup_id') . "\n" . 'echo tidy_backup_id();', (function () use ($g5Dir, $fx5) { $d = $g5Dir . '/id-' . bin2hex(random_bytes(2)); mkdir($d); copy("$fx5/.gallery-secret.php", "$d/.gallery-secret.php"); return $d; })()));
+check('[tidy backups] a gallery has a short mark of its own for its backups, worked out from its install secret (and not the secret itself)', preg_match('/^[0-9a-f]{8}$/', $g5Id) === 1 && !str_contains((string) file_get_contents("$fx5/.gallery-secret.php"), $g5Id), $g5Id);
+$g5G = data_file_guard_line_for_tests();
+$g5Bk = fn (string $where, string $stamp, string $mark, bool $guarded = true) => (function () use ($where, $stamp, $mark, $guarded) { $p = "$where/.gallery-items.before-tidy-$stamp$mark.php"; file_put_contents($p, $guarded ? data_file_guard_line_for_tests() . '{"items":{}}' : "<?php // owner's own\n"); return $p; })();
+$g5Mine = [$g5Bk("$fx5/Decoy", '20210101-000000', ''), $g5Bk("$out5/Mapped", '20220101-000000', "-$g5Id")];
+$g5Theirs = [$g5Bk("$out5/Mapped", '20230101-000000', '-deadbeef'), $g5Bk("$out5/Mapped", '20240101-000000', '')];
+$g5Never = [$g5Bk("$fx5/Decoy", '20200101-000000', '', false), $g5Bk("$out5/Mapped", '20250101-000000', "-$g5Id", false)];
+$g5Panel = http_get("$base5/?admin", $g5Own)[1];
+check('[tidy backups] the box says how many backups are this gallery\'s and how many lie in places from elsewhere (another gallery\'s, or made before backups carried a mark), with where they are and a tick-box for those', preg_match('/media-backups-line[^>]*>.*?2 backups/s', $g5Panel) === 1 && str_contains($g5Panel, 'media-backups-others') && str_contains($g5Panel, 'Mapped') && preg_match('/2 more backups lie in places from elsewhere/', $g5Panel) === 1, substr((string) strstr($g5Panel, 'media-backups'), 0, 400));
+$g5D1 = $g5Admin(['action' => 'media_backups_delete']);
+check('[tidy backups] "Delete backups" deletes this gallery\'s own (in its own folders, and in a mapped place when they carry its mark) and says what it left alone', ($g5D1['ok'] ?? false) && ($g5D1['deleted'] ?? -1) === 2 && !is_file($g5Mine[0]) && !is_file($g5Mine[1]) && str_contains((string) ($g5D1['text'] ?? ''), 'left alone'), json_encode($g5D1));
+check('[tidy backups] ...another gallery\'s backup and an unmarked one in a mapped place, and the owner\'s own unguarded file with the same kind of name, are all still there', is_file($g5Theirs[0]) && is_file($g5Theirs[1]) && is_file($g5Never[0]) && is_file($g5Never[1]));
+$g5D2 = $g5Admin(['action' => 'media_backups_delete', 'also_others' => '1']);
+check('[tidy backups] with the tick-box ticked it also deletes those in places from elsewhere; a file without the gallery\'s guard line is never deleted, ticked or not', ($g5D2['deleted'] ?? -1) === 2 && !is_file($g5Theirs[0]) && !is_file($g5Theirs[1]) && is_file($g5Never[0]) && is_file($g5Never[1]), json_encode($g5D2));
+check('[tidy backups] the Delete list (Files this gallery has made) knows a backup that carries a mark: it is the "Tidy-up backups" kind, as before', ($g5K = $g5Run($g5Fn('owned_top_names') . $g5Fn('owned_kind_of_name') . 'echo json_encode([owned_kind_of_name(".gallery-items.before-tidy-20220101-000000-deadbeef.php", false), owned_kind_of_name(".gallery-items.before-tidy-20220101-000000.php", false), owned_kind_of_name(".gallery-items.before-tidy-20220101-000000-xyz.php", false)]);')) !== '' && json_decode($g5K, true) === ['backups', 'backups', ''], $g5K);
 
 /* --------------------------------------------------------------------- */
 

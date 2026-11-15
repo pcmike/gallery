@@ -2218,14 +2218,14 @@ function video_poster_path($srcPath, $cacheDir, $filename) {
     if (!ENABLE_VIDEO_THUMBNAILS || !ENABLE_THUMBNAIL_CACHE) return null;
     $poster = image_cache_path($cacheDir, $filename, 'poster', $srcPath);
     if ($poster === null) return null;
-    if (is_file($poster) && filesize($poster) > 0) return $poster;
+    if (cache_file_ok($poster) && filesize($poster) > 0) return $poster;
     $failed = $poster . '.failed';
     if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;   // it didn't work lately; not again for a few hours
     $bin = ffmpeg_binary();
     if ($bin === '') return null;
     $lock = ffmpeg_take_turn(20);   // one at a time, in turn
     if (!$lock) return null;
-    if (is_file($poster) && filesize($poster) > 0) { flock($lock, LOCK_UN); fclose($lock); return $poster; }   // made by whoever had the turn before
+    if (cache_file_ok($poster) && filesize($poster) > 0) { flock($lock, LOCK_UN); fclose($lock); return $poster; }   // made by whoever had the turn before
     try {
         $duration = video_duration_seconds($srcPath);
         $tmp = $poster . '.tmp' . bin2hex(random_bytes(3));
@@ -2257,7 +2257,7 @@ function video_preview_path($srcPath, $cacheDir, $filename) {
     $base = image_cache_path($cacheDir, $filename, 'preview2', $srcPath);
     if ($base === null) return null;
     $clip = substr($base, 0, -4) . '.mp4';
-    if (is_file($clip) && filesize($clip) > 0) return $clip;
+    if (cache_file_ok($clip) && filesize($clip) > 0) return $clip;
     $failed = $clip . '.failed';
     if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;
     $bin = ffmpeg_binary();
@@ -2265,7 +2265,7 @@ function video_preview_path($srcPath, $cacheDir, $filename) {
  
     $lock = ffmpeg_take_turn(15);
     if (!$lock) return null;
-    if (is_file($clip) && filesize($clip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $clip; }
+    if (cache_file_ok($clip) && filesize($clip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $clip; }
     try {
         $duration = video_duration_seconds($srcPath);
         $start = $duration !== null && $duration > 3.5 ? min($duration / 3, $duration - 3) : 0;
@@ -2299,7 +2299,7 @@ function video_strip_path($srcPath, $cacheDir, $filename) {
     if (!ENABLE_VIDEO_PREVIEWS || !ENABLE_THUMBNAIL_CACHE) return null;
     $strip = image_cache_path($cacheDir, $filename, 'strip2', $srcPath);
     if ($strip === null) return null;
-    if (is_file($strip) && filesize($strip) > 0) return $strip;
+    if (cache_file_ok($strip) && filesize($strip) > 0) return $strip;
     $failed = $strip . '.failed';
     if (is_file($failed) && time() - (int) @filemtime($failed) < 21600) return null;
     $duration = video_duration_seconds($srcPath);
@@ -2308,7 +2308,7 @@ function video_strip_path($srcPath, $cacheDir, $filename) {
     if ($bin === '') return null;
     $lock = ffmpeg_take_turn(30);
     if (!$lock) return null;
-    if (is_file($strip) && filesize($strip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $strip; }
+    if (cache_file_ok($strip) && filesize($strip) > 0) { flock($lock, LOCK_UN); fclose($lock); return $strip; }
     try {
         $tmp = $strip . '.tmp' . bin2hex(random_bytes(3));
         [$cols, $rows] = video_strip_layout($duration);
@@ -2613,12 +2613,36 @@ function cache_name($file, $variant, $mtime) {
     return $secret === '' ? md5($text) : substr(hash_hmac('sha256', $text, $secret), 0, 32);
 }
 
+/** One test for a file the gallery made in a .gallery-cache before it is read: a plain file, not a link, in a folder that is not a link. A link under a made
+ *  file's name could lead anywhere the server can read (whoever may write in a shown or mapped folder can plant one), and a made file is read and sent as
+ *  the gallery's own picture, so a link is never followed: the file is made again instead. */
+function cache_file_ok($path) {
+    return is_file($path) && !is_link($path) && !is_link(dirname($path));
+}
+
 function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
     if (!ENABLE_THUMBNAIL_CACHE) return null;
+    if (is_link($cacheDir)) { $GLOBALS['__cache_links'][$cacheDir] = true; return null; }   // (never followed, nothing written through it; the Health check says so)
     if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0775, true)) return null;
     if (!is_writable($cacheDir)) return null;
     $mtime = @filemtime($srcPath);
-    return $cacheDir . '/' . cache_name($filename, $variant, $mtime) . '.jpg';
+    $path = $cacheDir . '/' . cache_name($filename, $variant, $mtime) . '.jpg';
+    if (is_link($path)) @unlink($path);   // (a link planted under the name: only the link goes, never what it leads to, so the picture is made as a plain file and not written through it)
+    return $path;
+}
+
+/** Is this the name of a file the gallery makes in a .gallery-cache (or made in an earlier version)? A picture or clip (32 hex digits and .jpg or .mp4), the capture
+ *  dates (taken.json, taken2.json, taken3.json), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
+ *  written. Nothing else in a folder of that name is the gallery's, so nothing else is ever deleted from it. */
+function cache_entry_is_gallery_made($name) {
+    return preg_match('/^(?:[0-9a-f]{32}\.(?:jpg|mp4)|taken[0-9]*\.json|meta[0-9]*\.php)(?:\.failed|\.tmp[0-9a-f]+|\.[0-9a-f]{8}\.php)?$/D', (string) $name) === 1;
+}
+
+/** The folders (as the gallery names them) whose .gallery-cache is a link: not used, not swept (see image_cache_path). */
+function cache_link_folders($dir, $files) {
+    $out = [];
+    foreach (moved_in_folders($dir, $files) as $f) if (is_link($f['real'] . '/.gallery-cache')) $out[] = $f['rel'] === '' ? '(top level)' : $f['rel'];
+    return $out;
 }
 
 /** What a folder's .gallery-cache holds for its files, by name: [the names this gallery would make or read now (including capture dates
@@ -2669,6 +2693,7 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
     $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
     foreach ($byFolder as $folderPath => $folderFiles) {
         $cacheDir = $folderPath . '/.gallery-cache';
+        if (is_link($cacheDir)) { $GLOBALS['__cache_links'][$cacheDir] = true; continue; }   // (a link is never followed: what it leads to is not the gallery's to sweep)
         if (!is_dir($cacheDir)) continue;
         // A place from elsewhere on the server may also be shown by another gallery (an older copy still running there): its
         // thumbnails are named with that gallery's own key, so to this one they look like leftovers. Nothing is swept there.
@@ -2676,6 +2701,8 @@ function gc_image_cache($dir, $files, $imagickAvailable) {
         [$valid, $renamed] = image_cache_expected_names($dir, $folderFiles, $imagickAvailable);
         foreach (scandir($cacheDir) as $entry) {
             if ($entry === '.' || $entry === '..') continue;
+            // Only what the gallery makes there is ever deleted: a folder of this name may be the owner's own, with their own files in it.
+            if (!cache_entry_is_gallery_made($entry) || is_link($cacheDir . '/' . $entry) || !is_file($cacheDir . '/' . $entry)) continue;
             // LEGACY (see docs/LEGACY-REMOVAL.md): before 2.4.0 the names were an unkeyed md5; a made file under the old name is moved to the new one, not made again.
             if (isset($renamed[$entry]) && $renamed[$entry] !== $entry) {
                 if (!file_exists($cacheDir . '/' . $renamed[$entry])) @rename($cacheDir . '/' . $entry, $cacheDir . '/' . $renamed[$entry]);
@@ -3099,26 +3126,45 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
     return ['next' => $i, 'total' => $total, 'made' => $made, 'failed' => $failed, 'worked' => $worked, 'read' => $read, 'unreadable' => $unreadable, 'done' => $i >= $total];
 }
 
-/** The backups Tidy up made: every .gallery-items.before-tidy-<date>.php in the folders that hold files, newest last. [['folder', 'file', 'at', 'bytes'], ...] */
+/** The short mark a gallery puts on the backups it makes (the end of their names), worked out from its install secret, so that it says which gallery made one
+ *  without being the secret. '' while the gallery has no secret yet (nothing to tell it apart by). */
+function tidy_backup_id() {
+    $secret = install_secret();
+    return $secret === '' ? '' : substr(hash_hmac('sha256', 'tidy-backup', $secret), 0, 8);
+}
+
+/** The backups Tidy up made: every .gallery-items.before-tidy-<date>[-<mark>].php that is the gallery's own kind of file (a plain file with the guard line) in the
+ *  folders that hold files, newest last. [['folder', 'file', 'at', 'bytes', 'owner' => 'this' | 'other' | 'unknown', 'id'], ...]. In the gallery's own folders every
+ *  one is this gallery's. In a place from elsewhere (another gallery may show it too) it is this gallery's when it carries this gallery's mark, 'other' when it carries
+ *  another's, and 'unknown' when it carries none (made before backups carried one). */
 function media_tidy_backups($dir, $files) {
+    $ownRoot = rtrim((string) (realpath($dir) ?: $dir), '/') . '/';
+    $mine = tidy_backup_id();
     $reals = [];
     foreach ($files as $file) $reals[containing_folder_real_path($dir, $file)] = ($slash = strrpos($file, '/')) === false ? '' : substr($file, 0, $slash);
     $out = [];
     foreach ($reals as $real => $folder) {
+        $inside = strpos(rtrim((string) (realpath($real) ?: $real), '/') . '/', $ownRoot) === 0;
         foreach (glob($real . '/.gallery-items.before-tidy-*.php') ?: [] as $f) {
-            if (!preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}\.php$/', basename($f)) || !is_file($f) || is_link($f)) continue;
-            $out[] = ['folder' => $folder, 'file' => $f, 'at' => (int) @filemtime($f), 'bytes' => (int) @filesize($f)];
+            if (!preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-([0-9a-f]{8}))?\.php$/', basename($f), $m) || !is_file($f) || is_link($f) || !owned_head_ok($f, true)) continue;
+            $id = $m[1] ?? '';
+            $owner = ($inside || ($id !== '' && $id === $mine)) ? 'this' : ($id !== '' ? 'other' : 'unknown');
+            $out[] = ['folder' => $folder, 'file' => $f, 'at' => (int) @filemtime($f), 'bytes' => (int) @filesize($f), 'owner' => $owner, 'id' => $id];
         }
     }
     usort($out, function ($a, $b) { return $a['at'] <=> $b['at'] ?: strcmp($a['file'], $b['file']); });
     return $out;
 }
 
-/** Removes the Tidy up backups (only files named exactly like them, in the folders that hold files); how many went. */
-function media_tidy_backups_delete($dir, $files) {
-    $n = 0;
-    foreach (media_tidy_backups($dir, $files) as $b) if (@unlink($b['file'])) $n++;
-    return $n;
+/** Removes this gallery's Tidy up backups; with $others also those in places from elsewhere that are another gallery's or carry no mark (the owner has said no other gallery
+ *  needs them). Only files named exactly like them with the gallery's guard line, never a link. [how many went, how many in places from elsewhere were left alone]. */
+function media_tidy_backups_delete($dir, $files, $others = false) {
+    $n = 0; $left = 0;
+    foreach (media_tidy_backups($dir, $files) as $b) {
+        if ($b['owner'] !== 'this' && !$others) { $left++; continue; }
+        if (@unlink($b['file'])) $n++;
+    }
+    return ['deleted' => $n, 'left' => $left];
 }
 
 /** What a person might want to look at in the media, in groups: [['key', 'title', 'hint', 'actionable', 'count', 'items' => [file, ...]], ...]
@@ -3188,10 +3234,32 @@ function render_media_group_html($grp) {
 /** The "Backups from Tidy up" line of the Prepare media panel, as HTML; empty when there are none. */
 function render_media_backups_html($backups) {
     if (!$backups) return '';
-    $folders = []; foreach ($backups as $b) $folders[$b['folder']] = true;
-    $first = $backups[0]['at']; $last = $backups[count($backups) - 1]['at'];
+    $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $fmt = function ($t) { return gmdate('j M Y', $t); };
-    return '<p class="hint media-backups-line"><strong>' . count($backups) . ' backup' . (count($backups) === 1 ? '' : 's') . ' from Tidy up</strong> (the folders\' data as it was before, in ' . count($folders) . ' folder' . (count($folders) === 1 ? '' : 's') . ', ' . ($fmt($first) === $fmt($last) ? $fmt($first) : $fmt($first) . ' to ' . $fmt($last)) . '). Keep them until you have looked through the gallery. <button type="button" class="secondary media-backups-delete">Delete the backups&hellip;</button> <span class="media-backups-out" aria-live="polite"></span></p>';
+    $range = function ($list) use ($fmt) { $ts = array_column($list, 'at'); $a = min($ts); $z = max($ts); return $fmt($a) === $fmt($z) ? $fmt($a) : $fmt($a) . ' to ' . $fmt($z); };
+    $mine = array_values(array_filter($backups, function ($b) { return $b['owner'] === 'this'; }));
+    $others = array_values(array_filter($backups, function ($b) { return $b['owner'] !== 'this'; }));
+    $button = '<button type="button" class="secondary media-backups-delete">Delete the backups&hellip;</button> <span class="media-backups-out" aria-live="polite"></span>';
+    if ($mine) {
+        $folders = []; foreach ($mine as $b) $folders[$b['folder']] = true;
+        $html = '<p class="hint media-backups-line"><strong>' . count($mine) . ' backup' . (count($mine) === 1 ? '' : 's') . ' from Tidy up</strong> (the folders\' data as it was before, in ' . count($folders) . ' folder' . (count($folders) === 1 ? '' : 's') . ', ' . $range($mine) . '). Keep them until you have looked through the gallery. ' . $button . '</p>';
+    } else {
+        $html = '<p class="hint media-backups-line">No Tidy up backups of this gallery. ' . $button . '</p>';
+    }
+    if ($others) {
+        $by = []; foreach ($others as $b) $by[$b['folder']][] = $b;
+        $lines = [];
+        foreach ($by as $folder => $list) {
+            $marks = array_values(array_unique(array_column($list, 'id'))); sort($marks);
+            $who = implode(', ', array_map(function ($m) { return $m === '' ? 'no mark' : 'mark ' . $m; }, $marks));
+            $kb = array_sum(array_column($list, 'bytes')) / 1024;
+            $lines[] = $e($folder === '' ? '(top level)' : $folder) . ': ' . count($list) . ' (' . $range($list) . ', ' . ($kb < 10 ? number_format($kb, 1) : number_format($kb)) . ' KB, ' . $who . ')';
+        }
+        $n = count($others);
+        $html .= '<div class="media-backups-others-box"><p class="hint">' . $n . ' more backup' . ($n === 1 ? '' : 's') . ' lie' . ($n === 1 ? 's' : '') . ' in places from elsewhere on the server: another gallery\'s, or made before backups carried a mark. The button above leaves ' . ($n === 1 ? 'it' : 'them') . ' alone. '
+            . implode('; ', $lines) . '.</p><p><label class="check"><input type="checkbox" class="media-backups-others"> Also delete these (no other gallery needs them)</label></p></div>';
+    }
+    return $html;
 }
 
 /** Everything Prepare media's list says, one row per folder that has files: the folder, its files, how many photos have their tile pictures, and
@@ -3244,7 +3312,9 @@ function media_report($dir, $files) {
 function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     // ?size[]=x arrives as an array; anything that isn't a plain string
     // is just the default size.
-    if (!is_string($variant)) $variant = 'thumb';
+    // Only the sizes the pages ask for: any other value would make one more picture each (a decode of the original and a new file that, in a place mapped from
+    // elsewhere, is never swept), so it is the ordinary thumbnail.
+    if (!is_string($variant) || !in_array($variant, ['thumb', 'tile', 'tilehd', 'share', 'full', 'orig', 'cover', 'coverlg'], true)) $variant = 'thumb';
     $wantOriginal = $variant === 'orig';   // (what the viewer asks for a HEIC photo when this browser can show one: the file itself, not a converted copy)
     if ($wantOriginal) $variant = 'full';
     if (!in_array($filename, $validFiles, true)) {
@@ -3301,7 +3371,7 @@ function serve_image($dir, $filename, $variant, $validFiles, $itemsData = []) {
     }
 
     $cachePath = image_cache_path($cacheDir, $filename, $variant, $srcPath);
-    if ($cachePath && file_exists($cachePath) && filemtime($cachePath) >= @filemtime($srcPath)) {
+    if ($cachePath && cache_file_ok($cachePath) && filemtime($cachePath) >= @filemtime($srcPath)) {
         header('Content-Type: image/jpeg');
         header('Cache-Control: ' . $cacheControl);
         readfile($cachePath);
@@ -8947,7 +9017,7 @@ function media_tidy_run($dir, $files, $refresh, $apply) {
         $row = ['folder' => $info['folder']] + $res;
         if ($apply && $res['n']['changed'] > 0) {
             $src = items_path($folderReal);
-            $backup = $folderReal . '/.gallery-items.before-tidy-' . $stamp . '.php';
+            $backup = $folderReal . '/.gallery-items.before-tidy-' . $stamp . (($mark = tidy_backup_id()) !== '' ? '-' . $mark : '') . '.php';   // (the mark says which gallery made it: a folder from elsewhere may be shown by another one)
             if (!@copy($src, $backup)) {
                 $errors[] = ($info['folder'] === '' ? '(top level)' : $info['folder']) . ': a backup could not be made (is the folder writable by the web server?), so it was left as it is.';
                 $row['skipped'] = true;
@@ -9721,8 +9791,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         admin_json_exit($n === null ? ['ok' => false, 'text' => 'Nothing was removed: one of the files didn\'t check out as the gallery\'s own.'] : ['ok' => true, 'removed' => $n, 'text' => 'Removed.']);
     }
     if ($action === 'media_backups_delete') {
-        $n = media_tidy_backups_delete($dir, $files);
-        admin_json_exit(['ok' => true, 'deleted' => $n, 'text' => $n ? 'Deleted ' . $n . ' backup' . ($n === 1 ? '' : 's') . '.' : 'There were no backups.']);
+        $r = media_tidy_backups_delete($dir, $files, !empty($_POST['also_others']));
+        $n = $r['deleted']; $left = $r['left'];
+        $text = $n ? 'Deleted ' . $n . ' backup' . ($n === 1 ? '' : 's') . '.' : ($left ? 'Nothing was deleted.' : 'There were no backups.');
+        if ($left) $text .= ' ' . $left . ' in places from elsewhere ' . ($left === 1 ? 'was' : 'were') . ' left alone (another gallery\'s, or made before backups carried a mark): tick the box to delete those too.';
+        admin_json_exit(['ok' => true, 'deleted' => $n, 'left' => $left, 'text' => $text]);
     }
 
     if ($action === 'save_item') {
@@ -12704,7 +12777,7 @@ function owned_kind_of_name($name, $isTop) {
     }
     if ($name === '.gallery-items.php') return 'items';
     if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json') return 'stats';
-    if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}\.php$/D', $name)) return 'backups';
+    if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-[0-9a-f]{8})?\.php$/D', $name)) return 'backups';   // (an optional mark at the end says which gallery made it: see tidy_backup_id)
     return '';
 }
 
@@ -12744,8 +12817,22 @@ function owned_verify($path, $folderReal, $kind, $isTop) {
     if ($kind === 'thumbs') return owned_is_thumb_name($name) && basename($folderReal) === '.gallery-cache';
     if ($kind === 'meta') return $name === MEDIA_META_FILE && basename($folderReal) === '.gallery-cache' && owned_head_ok($path, true);
     if (owned_kind_of_name($name, $isTop) !== $kind) return false;
+    if ($kind === 'stats' && !owned_stats_file_ok($path, $name)) return false;
     if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings');
     return true;   // (a .sqlite or .json file of view counts has no guard line)
+}
+
+/** The plain-JSON view-count file of an older version (.gallery-stats.json) is the gallery's only if it is what that version wrote: an object with pageviews or photos. It is
+ *  only ever imported, never used, so a file of the owner's own with that name is not the gallery's. The .sqlite one is the gallery's live store by name, and a damaged one
+ *  (its header gone) is exactly what the Health check has to find, so it is not tested here; the PHP one has its guard line (checked by the caller). */
+function owned_stats_file_ok($path, $name) {
+    if (substr($name, -5) === '.json') {
+        $size = (int) @filesize($path);
+        if ($size < 2 || $size > 16777216) return false;
+        $d = json_decode((string) @file_get_contents($path), true);
+        return is_array($d) && (isset($d['pageviews']) || isset($d['photos']));
+    }
+    return true;
 }
 
 function owned_head_ok($path, $strict) {
@@ -15789,6 +15876,13 @@ function health_checks($dir, $files) {
     $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
 
     if (!empty($GLOBALS['__scan_truncated'])) $add('Folders and files', 'warn', 'The folder scan stopped early', 'This gallery looks at no more than ' . number_format(SCAN_MAX_FOLDERS) . ' folders and ' . number_format(SCAN_MAX_FILES) . ' photos on one visit, and this folder has more, so the rest are left out. Move the gallery into a smaller folder, or the extra folders out of it.');
+    $cacheLinks = cache_link_folders($dir, $files);   // (a thumbnail folder that is a link is never followed: see image_cache_path)
+    if ($cacheLinks) {
+        $clN = count($cacheLinks);
+        $add('Folders and files', 'warn', $clN === 1 ? 'The thumbnail folder of "' . $cacheLinks[0] . '" is a link' : number_format($clN) . ' thumbnail folders are links',
+            'The gallery never follows a link, so it does not use ' . ($clN === 1 ? 'it' : 'them') . ' and keeps no pictures for ' . implode(', ', array_slice($cacheLinks, 0, 5)) . ($clN > 5 ? ' and ' . number_format($clN - 5) . ' more' : '')
+            . ': each picture there is sent as the original file, and a HEIC photo can\'t be shown. Delete the link (the folder called .gallery-cache inside ' . ($clN === 1 ? 'it' : 'each of them') . ') and the gallery makes a real folder at the next page load.');
+    }
     if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
         $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
         $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',
@@ -19476,10 +19570,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       panel.addEventListener('click', function (e) {
         const del = e.target.closest ? e.target.closest('.media-backups-delete') : null;
         if (!del) return;
-        if (!confirm('Delete the backups Tidy up made?\n\nThey are copies of the folders\' data (captions, links, private flags) from before the tidy. Do it once you have looked through the gallery and everything is as it should be.')) return;
+        const othersBox = backupsBox ? backupsBox.querySelector('.media-backups-others') : null;
+        const alsoOthers = !!(othersBox && othersBox.checked);
+        if (!confirm((alsoOthers ? 'Delete the backups Tidy up made, and the ones in places from elsewhere too?\n\nThe second kind may belong to another gallery that shows the same folders. ' : 'Delete the backups Tidy up made?\n\n') + 'They are copies of the folders\' data (captions, links, private flags) from before the tidy. Do it once you have looked through the gallery and everything is as it should be.')) return;
         del.disabled = true;
         const body = new URLSearchParams();
         body.set('csrf_token', panel.dataset.csrf); body.set('action', 'media_backups_delete');
+        if (alsoOthers) body.set('also_others', '1');
         fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } })
           .then(function (r) { return r.json(); })
           .then(function (j) { backupsBox.textContent = ''; backupsBox.appendChild(text('p', 'hint ' + (j.ok ? 'ok-text' : 'warn-text'), j.text || 'Done.')); syncTidyHead(); })
