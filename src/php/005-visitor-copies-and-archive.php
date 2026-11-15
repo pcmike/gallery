@@ -78,7 +78,7 @@ function archive_dos_time($ts) {
 
 /** A path as a ZIP entry name: UTF-8, forward slashes, nothing that could climb out of the folder it is unpacked into. */
 function archive_entry_name($name) {
-    if (!preg_match('//u', $name)) $name = mb_convert_encoding($name, 'UTF-8', 'ISO-8859-1');
+    if (!preg_match('//u', $name)) $name = preg_replace_callback('/[\x80-\xFF]/', function ($m) { return chr(0xC0 | (ord($m[0]) >> 6)) . chr(0x80 | (ord($m[0]) & 0x3F)); }, $name);   // (Latin-1 to UTF-8, by hand: no extension needed)
     $name = preg_replace('/[\x00-\x1F\x7F\\\\]/', '_', $name);
     $parts = array_filter(explode('/', $name), function ($p) { return $p !== '' && $p !== '.' && $p !== '..'; });
     return implode('/', $parts);

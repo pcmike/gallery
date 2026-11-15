@@ -6,5 +6,5 @@
   (function () {
     const btn = document.getElementById('select-btn'), bar = document.getElementById('select-bar'), gal = document.querySelector('.gallery');
     if (!btn || !bar || !ownerState) return;
-    const pageFolder = <?= json_encode($currentFolderPath === null ? '' : $currentFolderPath) ?>;
-    const stacks = <?= json_encode($arrangeStacks) ?>;
+    const pageFolder = <?= js_json($currentFolderPath === null ? '' : $currentFolderPath) ?>;
+    const stacks = <?= js_json($arrangeStacks) ?>;

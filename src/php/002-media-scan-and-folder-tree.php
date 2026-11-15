@@ -123,6 +123,26 @@ if (ENABLE_VIDEO) {
     $mediaExtensions[] = 'mp4';
 }
 
+/** Whether a file or folder name is valid text (UTF-8). A name that is not (a Latin-1 name from an old Windows disk or archive)
+ *  can't be written into the page's script, a link or a data file's keys without changing it, and then the picture, the buttons and
+ *  the ZIP would no longer find the file: so the gallery leaves such a name out everywhere, and the Health check names it. */
+function name_is_text($name) {
+    return preg_match('//u', (string) $name) === 1;
+}
+
+/** A name for the Health check, with every byte that is not valid text written as \xHH (caf\xE9.jpg, as an old Latin-1 archive has it). */
+function odd_name_display($name) {
+    return preg_replace_callback('~([\x00-\x7F]|[\xC2-\xDF][\x80-\xBF]|\xE0[\xA0-\xBF][\x80-\xBF]|[\xE1-\xEC\xEE\xEF][\x80-\xBF]{2}|\xED[\x80-\x9F][\x80-\xBF]|\xF0[\x90-\xBF][\x80-\xBF]{2}|[\xF1-\xF3][\x80-\xBF]{3}|\xF4[\x80-\x8F][\x80-\xBF]{2})|(.)~s',
+        function ($m) { return ($m[1] ?? '') !== '' ? $m[1] : sprintf('\\x%02X', ord($m[2])); }, (string) $name);
+}
+
+/** Remembers a file or folder the scan left out because its name is not valid text, for the Health check (each once, by its path from the gallery's folder). */
+function scan_odd_name_note($path) {
+    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
+    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
+    $GLOBALS['__odd_names'][$rel] = true;
+}
+
 /**
  * Recursively scans a real directory into a tree: ['files' => [bare
  * filenames loose directly here, already sorted per PHOTO_SORT_ORDER],
@@ -147,7 +167,7 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     // A folder it has no business walking into (a system or recycle folder), and a ceiling on how much one visit scans, so a gallery
     // dropped into a huge tree (a whole web root) cannot make every page crawl. The Health check says when the ceiling was hit.
     static $dirs = 0, $files = 0;
-    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; }
+    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; }
     if (++$dirs > SCAN_MAX_FOLDERS || $files > SCAN_MAX_FILES) { $GLOBALS['__scan_truncated'] = true; return $node; }
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
@@ -160,13 +180,15 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
         if (is_file($path)) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
             if (in_array($ext, $mediaExtensions, true)) {
-                $node['files'][] = $entry; $files++;
+                if (name_is_text($entry)) { $node['files'][] = $entry; $files++; }
+                else scan_odd_name_note($path);   // (left out: see name_is_text)
             }
             continue;
         }
         if (!is_dir($path) || $entry[0] === '.' || is_link($path) || in_array($entry, SCAN_SKIP_FOLDERS, true)) {
             continue;   // (dot folders such as .git and .gallery-cache are never photo folders)
         }
+        if (!name_is_text($entry)) { scan_odd_name_note($path); continue; }   // (a folder whose name is not valid text is left out with everything in it)
         $childReal = realpath($path);
         if ($childReal === false || $parentReal === false
             || strpos($childReal, $parentReal . DIRECTORY_SEPARATOR) !== 0) {
@@ -205,7 +227,7 @@ function count_media_in_subfolders($realDir, $mediaExtensions, $maxDirs = 40) {
     $truncated = false;
     $queue = [];
     foreach ((@scandir($realDir) ?: []) as $entry) {
-        if ($entry[0] === '.') continue;
+        if ($entry[0] === '.' || !name_is_text($entry)) continue;
         $path = $realDir . '/' . $entry;
         if (is_dir($path) && !is_link($path)) $queue[] = $path;
     }
@@ -216,7 +238,7 @@ function count_media_in_subfolders($realDir, $mediaExtensions, $maxDirs = 40) {
         }
         $current = array_shift($queue);
         foreach ((@scandir($current) ?: []) as $entry) {
-            if ($entry[0] === '.') continue;
+            if ($entry[0] === '.' || !name_is_text($entry)) continue;
             $path = $current . '/' . $entry;
             if (is_link($path)) continue;
             if (is_dir($path)) {
@@ -234,7 +256,7 @@ function count_media_in_subfolders($realDir, $mediaExtensions, $maxDirs = 40) {
 function hidden_subfolders_summary($realDir, $mediaExtensions, $maxDirs = 40) {
     $per = []; $visited = 0; $truncated = false; $queue = [];
     foreach ((@scandir($realDir) ?: []) as $entry) {
-        if ($entry[0] === '.') continue;
+        if ($entry[0] === '.' || !name_is_text($entry)) continue;
         $path = $realDir . '/' . $entry;
         if (is_dir($path) && !is_link($path)) $queue[] = [$path, $entry];
     }
@@ -242,7 +264,7 @@ function hidden_subfolders_summary($realDir, $mediaExtensions, $maxDirs = 40) {
         if ($visited++ >= $maxDirs) { $truncated = true; break; }
         [$current, $top] = array_shift($queue);
         foreach ((@scandir($current) ?: []) as $entry) {
-            if ($entry[0] === '.') continue;
+            if ($entry[0] === '.' || !name_is_text($entry)) continue;
             $path = $current . '/' . $entry;
             if (is_link($path)) continue;
             if (is_dir($path)) $queue[] = [$path, $top];
@@ -366,6 +388,7 @@ function count_folder_tree_files($node) {
 function valid_media_path($dir, $rel, $mediaExtensions, $self) {
     if (!is_string($rel) || $rel === '' || strlen($rel) > 2048) return false;
     if (strpbrk($rel, "\0\\") !== false) return false;
+    if (!name_is_text($rel)) return false;   // (a name that is not valid text is left out of the gallery: see name_is_text)
     $segments = explode('/', $rel);
     foreach ($segments as $seg) {
         if ($seg === '' || $seg === '.' || $seg === '..') return false;
@@ -608,11 +631,14 @@ if (AUTO_GROUP_BY_FOLDER) {
 } else {
     $folderTree = null;
     [$subfolderMediaCount, $subfolderMediaTruncated] = count_media_in_subfolders($dir, $mediaExtensions);
+    $GLOBALS['__odd_names'] = [];
     $files = array_filter(scandir($dir), function ($file) use ($dir, $mediaExtensions, $self) {
         if ($file === $self || $file === '.' || $file === '..') return false;
         if (!is_file("$dir/$file") || is_link("$dir/$file")) return false;   // (a link is never followed: it could point anywhere on the server)
         $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-        return in_array($ext, $mediaExtensions);
+        if (!in_array($ext, $mediaExtensions)) return false;
+        if (!name_is_text($file)) { scan_odd_name_note("$dir/$file"); return false; }   // (left out: see name_is_text)
+        return true;
     });
 
     // Base ordering, before any .md-driven repositioning — see

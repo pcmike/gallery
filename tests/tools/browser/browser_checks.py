@@ -4786,6 +4786,32 @@ try:
     finally:
         srvK.terminate(); srvK.wait()
         b.viewport(1280, 900)
+    print("== names that aren't valid text, and a folder named like the start of a script: the page's script still runs")
+    SITE_N = WORK + "/namesite"; os.makedirs(SITE_N + "/latin1"); os.makedirs(SITE_N + "/<!--<script>")
+    shutil.copy(HERE + "/../../../index.php", SITE_N + "/index.php"); os.utime(SITE_N + "/index.php", (time.time() - 3600,) * 2)
+    subprocess.run(["php", "-r", "$i=imagecreatetruecolor(120,90); imagefill($i,0,0,imagecolorallocate($i,40,90,200)); imagejpeg($i,$argv[1]);", SITE_N + "/ok.jpg"], check=True)
+    _jpg = open(SITE_N + "/ok.jpg", "rb").read(); _bad = b"caf\xe9.jpg"; _nb = os.fsencode(SITE_N)
+    for _rel in (b"latin1/ok.jpg", b"latin1/" + _bad, _bad, b"<!--<script>/in.jpg"):
+        open(_nb + b"/" + _rel, "wb").write(_jpg)
+    NGUARD = "<?php http_response_code(404); exit; ?>\n"
+    nhash = subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "names-admin-pw"], capture_output=True, text=True).stdout
+    open(SITE_N + "/.gallery-config.php", "w").write(NGUARD + json.dumps({"ADMIN_PASSWORD": nhash, "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    open(SITE_N + "/.gallery-items.php", "w").write(NGUARD + json.dumps({"items": {"ok.jpg": {"caption": "cap <!--<script> x"}}, "groups": []}) + "\n")
+    sn_ = socket.socket(); sn_.bind(("127.0.0.1", 0)); PN = sn_.getsockname()[1]; sn_.close(); BN = f"http://127.0.0.1:{PN}"
+    srvN = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PN}", "-t", SITE_N], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        time.sleep(1.0)
+        b.viewport(1280, 900); b.goto(BN + "/", 2.0)
+        ok(b.js("typeof files === 'object' && files !== null && files.length === 3 && typeof openLightbox === 'function'"), "[names] with a Latin-1 file name, a Latin-1 folder name and a folder named \"<!--<script>\" on disk, the front page's script runs (it did not run at all), and its list holds the three usable photos", str(b.js("typeof files + ' ' + (typeof files === 'object' && files ? files.length : '-')")))
+        ok(not b.problems(IGN), "[names] ...with no JavaScript errors", "; ".join(b.problems(IGN))[:300])
+        ok(b.js("captions.includes('cap <!--<script> x') && files.includes('<!--<script>/in.jpg')"), "[names] ...and the script is given the real caption and folder name, whole")
+        b.js("document.querySelector('.card').click()"); b.drain(0.8)
+        ok(b.js("document.getElementById('lightbox').classList.contains('open')"), "[names] ...and a tile opens the viewer")
+        b.key("Escape", "Escape", 27); b.drain(0.3)
+        b.goto(BN + "/?folder=latin1", 2.0)
+        ok(b.js("typeof files === 'object' && files !== null && files.length === 1"), "[names] the folder that holds a Latin-1 name has a working script too, and lists only its usable photo")
+    finally:
+        srvN.terminate(); srvN.wait()
 except Exception as e:
     fails += 1; print("  FAIL  the browser run crashed:", type(e).__name__, e)
 finally:

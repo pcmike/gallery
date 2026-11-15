@@ -242,7 +242,9 @@ function gallery_mounts() {
         foreach ((@scandir($root) ?: []) as $entry) {
             if ($entry[0] === '.' || isset($mounts[$entry])) continue;
             $path = rtrim($root, '/') . '/' . $entry;
-            if (is_dir($path) && !is_link($path)) $mounts[$entry] = $path;
+            if (!is_dir($path) || is_link($path)) continue;
+            if (!name_is_text($entry)) { scan_odd_name_note($path); continue; }   // (a folder whose name is not valid text is left out: see name_is_text)
+            $mounts[$entry] = $path;
         }
     }
     return $mounts;

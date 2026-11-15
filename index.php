@@ -242,7 +242,9 @@ function gallery_mounts() {
         foreach ((@scandir($root) ?: []) as $entry) {
             if ($entry[0] === '.' || isset($mounts[$entry])) continue;
             $path = rtrim($root, '/') . '/' . $entry;
-            if (is_dir($path) && !is_link($path)) $mounts[$entry] = $path;
+            if (!is_dir($path) || is_link($path)) continue;
+            if (!name_is_text($entry)) { scan_odd_name_note($path); continue; }   // (a folder whose name is not valid text is left out: see name_is_text)
+            $mounts[$entry] = $path;
         }
     }
     return $mounts;
@@ -678,6 +680,26 @@ if (ENABLE_VIDEO) {
     $mediaExtensions[] = 'mp4';
 }
 
+/** Whether a file or folder name is valid text (UTF-8). A name that is not (a Latin-1 name from an old Windows disk or archive)
+ *  can't be written into the page's script, a link or a data file's keys without changing it, and then the picture, the buttons and
+ *  the ZIP would no longer find the file: so the gallery leaves such a name out everywhere, and the Health check names it. */
+function name_is_text($name) {
+    return preg_match('//u', (string) $name) === 1;
+}
+
+/** A name for the Health check, with every byte that is not valid text written as \xHH (caf\xE9.jpg, as an old Latin-1 archive has it). */
+function odd_name_display($name) {
+    return preg_replace_callback('~([\x00-\x7F]|[\xC2-\xDF][\x80-\xBF]|\xE0[\xA0-\xBF][\x80-\xBF]|[\xE1-\xEC\xEE\xEF][\x80-\xBF]{2}|\xED[\x80-\x9F][\x80-\xBF]|\xF0[\x90-\xBF][\x80-\xBF]{2}|[\xF1-\xF3][\x80-\xBF]{3}|\xF4[\x80-\x8F][\x80-\xBF]{2})|(.)~s',
+        function ($m) { return ($m[1] ?? '') !== '' ? $m[1] : sprintf('\\x%02X', ord($m[2])); }, (string) $name);
+}
+
+/** Remembers a file or folder the scan left out because its name is not valid text, for the Health check (each once, by its path from the gallery's folder). */
+function scan_odd_name_note($path) {
+    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
+    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
+    $GLOBALS['__odd_names'][$rel] = true;
+}
+
 /**
  * Recursively scans a real directory into a tree: ['files' => [bare
  * filenames loose directly here, already sorted per PHOTO_SORT_ORDER],
@@ -702,7 +724,7 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     // A folder it has no business walking into (a system or recycle folder), and a ceiling on how much one visit scans, so a gallery
     // dropped into a huge tree (a whole web root) cannot make every page crawl. The Health check says when the ceiling was hit.
     static $dirs = 0, $files = 0;
-    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; }
+    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; }
     if (++$dirs > SCAN_MAX_FOLDERS || $files > SCAN_MAX_FILES) { $GLOBALS['__scan_truncated'] = true; return $node; }
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
@@ -715,13 +737,15 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
         if (is_file($path)) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
             if (in_array($ext, $mediaExtensions, true)) {
-                $node['files'][] = $entry; $files++;
+                if (name_is_text($entry)) { $node['files'][] = $entry; $files++; }
+                else scan_odd_name_note($path);   // (left out: see name_is_text)
             }
             continue;
         }
         if (!is_dir($path) || $entry[0] === '.' || is_link($path) || in_array($entry, SCAN_SKIP_FOLDERS, true)) {
             continue;   // (dot folders such as .git and .gallery-cache are never photo folders)
         }
+        if (!name_is_text($entry)) { scan_odd_name_note($path); continue; }   // (a folder whose name is not valid text is left out with everything in it)
         $childReal = realpath($path);
         if ($childReal === false || $parentReal === false
             || strpos($childReal, $parentReal . DIRECTORY_SEPARATOR) !== 0) {
@@ -760,7 +784,7 @@ function count_media_in_subfolders($realDir, $mediaExtensions, $maxDirs = 40) {
     $truncated = false;
     $queue = [];
     foreach ((@scandir($realDir) ?: []) as $entry) {
-        if ($entry[0] === '.') continue;
+        if ($entry[0] === '.' || !name_is_text($entry)) continue;
         $path = $realDir . '/' . $entry;
         if (is_dir($path) && !is_link($path)) $queue[] = $path;
     }
@@ -771,7 +795,7 @@ function count_media_in_subfolders($realDir, $mediaExtensions, $maxDirs = 40) {
         }
         $current = array_shift($queue);
         foreach ((@scandir($current) ?: []) as $entry) {
-            if ($entry[0] === '.') continue;
+            if ($entry[0] === '.' || !name_is_text($entry)) continue;
             $path = $current . '/' . $entry;
             if (is_link($path)) continue;
             if (is_dir($path)) {
@@ -789,7 +813,7 @@ function count_media_in_subfolders($realDir, $mediaExtensions, $maxDirs = 40) {
 function hidden_subfolders_summary($realDir, $mediaExtensions, $maxDirs = 40) {
     $per = []; $visited = 0; $truncated = false; $queue = [];
     foreach ((@scandir($realDir) ?: []) as $entry) {
-        if ($entry[0] === '.') continue;
+        if ($entry[0] === '.' || !name_is_text($entry)) continue;
         $path = $realDir . '/' . $entry;
         if (is_dir($path) && !is_link($path)) $queue[] = [$path, $entry];
     }
@@ -797,7 +821,7 @@ function hidden_subfolders_summary($realDir, $mediaExtensions, $maxDirs = 40) {
         if ($visited++ >= $maxDirs) { $truncated = true; break; }
         [$current, $top] = array_shift($queue);
         foreach ((@scandir($current) ?: []) as $entry) {
-            if ($entry[0] === '.') continue;
+            if ($entry[0] === '.' || !name_is_text($entry)) continue;
             $path = $current . '/' . $entry;
             if (is_link($path)) continue;
             if (is_dir($path)) $queue[] = [$path, $top];
@@ -921,6 +945,7 @@ function count_folder_tree_files($node) {
 function valid_media_path($dir, $rel, $mediaExtensions, $self) {
     if (!is_string($rel) || $rel === '' || strlen($rel) > 2048) return false;
     if (strpbrk($rel, "\0\\") !== false) return false;
+    if (!name_is_text($rel)) return false;   // (a name that is not valid text is left out of the gallery: see name_is_text)
     $segments = explode('/', $rel);
     foreach ($segments as $seg) {
         if ($seg === '' || $seg === '.' || $seg === '..') return false;
@@ -1163,11 +1188,14 @@ if (AUTO_GROUP_BY_FOLDER) {
 } else {
     $folderTree = null;
     [$subfolderMediaCount, $subfolderMediaTruncated] = count_media_in_subfolders($dir, $mediaExtensions);
+    $GLOBALS['__odd_names'] = [];
     $files = array_filter(scandir($dir), function ($file) use ($dir, $mediaExtensions, $self) {
         if ($file === $self || $file === '.' || $file === '..') return false;
         if (!is_file("$dir/$file") || is_link("$dir/$file")) return false;   // (a link is never followed: it could point anywhere on the server)
         $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-        return in_array($ext, $mediaExtensions);
+        if (!in_array($ext, $mediaExtensions)) return false;
+        if (!name_is_text($file)) { scan_odd_name_note("$dir/$file"); return false; }   // (left out: see name_is_text)
+        return true;
     });
 
     // Base ordering, before any .md-driven repositioning — see
@@ -1899,7 +1927,7 @@ function archive_dos_time($ts) {
 
 /** A path as a ZIP entry name: UTF-8, forward slashes, nothing that could climb out of the folder it is unpacked into. */
 function archive_entry_name($name) {
-    if (!preg_match('//u', $name)) $name = mb_convert_encoding($name, 'UTF-8', 'ISO-8859-1');
+    if (!preg_match('//u', $name)) $name = preg_replace_callback('/[\x80-\xFF]/', function ($m) { return chr(0xC0 | (ord($m[0]) >> 6)) . chr(0x80 | (ord($m[0]) & 0x3F)); }, $name);   // (Latin-1 to UTF-8, by hand: no extension needed)
     $name = preg_replace('/[\x00-\x1F\x7F\\\\]/', '_', $name);
     $parts = array_filter(explode('/', $name), function ($p) { return $p !== '' && $p !== '.' && $p !== '..'; });
     return implode('/', $parts);
@@ -3292,6 +3320,14 @@ function file_version($file) {
  *  ?strip, ?track) is turned back into the photo's own at the top of the request (see photo_code_params_translate). */
 function photo_ref($file) {
     return ($GLOBALS['photoPass'] ?? null) === $file ? (string) ($_GET['k'] ?? '') : $file;
+}
+
+/** A value written into the gallery page's own <script> (names, captions, links: text anyone who can name a file can choose). < > and & are written
+ *  as escapes, so nothing in it can form markup (a name holding "<!--<script" would otherwise stop the page's script from ever running), and
+ *  text that is not valid UTF-8 is written with the replacement character, so a bad name can never make the value vanish ("const files = ;"). */
+function js_json($value) {
+    $json = json_encode($value, JSON_HEX_TAG | JSON_HEX_AMP | JSON_INVALID_UTF8_SUBSTITUTE);
+    return $json === false ? 'null' : $json;
 }
 
 function img_url($file, $size) {
@@ -7024,7 +7060,7 @@ function link_public_media($dir) {
         $all = [];
         foreach ((array) @scandir($dir) as $f) {
             if ($f === $self || $f === '.' || $f === '..' || !is_file("$dir/$f")) continue;
-            if (in_array(strtolower(pathinfo($f, PATHINFO_EXTENSION)), $mediaExtensions, true)) $all[] = $f;
+            if (in_array(strtolower(pathinfo($f, PATHINFO_EXTENSION)), $mediaExtensions, true) && name_is_text($f)) $all[] = $f;
         }
         usort($all, 'strnatcasecmp');
     }
@@ -8520,11 +8556,12 @@ function media_taken_times($folderReal, $names) {
         $changed = true;
     }
     if ($changed) {
-        $live = array_intersect_key($known, array_flip($names));
+        $live = array_filter(array_intersect_key($known, array_flip($names)), 'name_is_text', ARRAY_FILTER_USE_KEY);   // (a name that is not valid text can't be written as JSON: it is left out, never allowed to empty the whole file)
+        $encoded = json_encode($live);
         $dirOk = is_dir($folderReal . '/.gallery-cache') || @mkdir($folderReal . '/.gallery-cache', 0755);
-        if ($dirOk) {
+        if ($dirOk && $encoded !== false) {
             $tmp = $cachePath . '.tmp' . bin2hex(random_bytes(3));
-            if (@file_put_contents($tmp, json_encode($live)) !== false && !@rename($tmp, $cachePath)) @unlink($tmp);
+            if (@file_put_contents($tmp, $encoded) !== false && !@rename($tmp, $cachePath)) @unlink($tmp);
         }
     }
     return $out;
@@ -15668,6 +15705,13 @@ function health_checks($dir, $files) {
     $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
 
     if (!empty($GLOBALS['__scan_truncated'])) $add('Folders and files', 'warn', 'The folder scan stopped early', 'This gallery looks at no more than ' . number_format(SCAN_MAX_FOLDERS) . ' folders and ' . number_format(SCAN_MAX_FILES) . ' photos on one visit, and this folder has more, so the rest are left out. Move the gallery into a smaller folder, or the extra folders out of it.');
+    if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
+        $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
+        $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',
+            'The gallery leaves ' . ($oddN === 1 ? 'it' : 'them') . ' out (nothing on disk is touched), and everything inside a folder named this way with it, because such a name can\'t be written into a page or a link without changing it: '
+            . implode(', ', array_map('odd_name_display', array_slice($oddAll, 0, 8))) . ($oddN > 8 ? ' and ' . number_format($oddN - 8) . ' more' : '') . '. Names like this come from old Windows disks and archives (they are in Latin-1, not UTF-8). '
+            . 'Rename ' . ($oddN === 1 ? 'it' : 'each one') . ', in your file manager or over SFTP, so the name is plain text, and it appears at the next page load.');
+    }
 
     // --- signed-in browsers: what looks wrong, and how big the histories have grown
     foreach (browser_rows() as $br) {
@@ -24339,6 +24383,13 @@ function video_tile_parts($file, $duration = null) {
     return ['attrs' => $attrs, 'inner' => $inner];
 }
 
+/** A photo's information link as it may be printed: the saved value when it is an http or https address, else ''. The save refuses anything else,
+ *  but a folder's data file can also be written by hand, restored, or kept by another gallery on the same folder, so every print checks again. */
+function item_web_link($entry) {
+    $w = is_array($entry) ? ($entry['web'] ?? '') : '';
+    return (is_string($w) && preg_match('#^https?://#i', $w)) ? $w : '';
+}
+
 /** One clickable gallery card. Shows a live-updatable view-count badge
  *  (hidden until >0); a small corner tag for a standalone sold/reserved
  *  item ($status is '', 'sold', or 'reserved' — a grouped item's ribbon
@@ -24369,7 +24420,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // extending the view-badge's own corner into a flex row (see
     // .card-badges) rather than stacking into a cramped cluster.
     $itemBadges = '';
-    if (!empty($itemEntry['caption'])) {
+    if (($itemEntry['caption'] ?? '') !== '') {
         // A hover tooltip on desktop (title); a tap target that opens a
         // small popover on a touch screen, where hover doesn't exist.
         $itemBadges .= '<span class="item-badge caption-badge" title="' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8')
@@ -24382,9 +24433,9 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
                      . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($locTitle, ENT_QUOTES, 'UTF-8')
                      . '" onclick="event.stopPropagation()">' . ui_icon('pin') . '</a>';
     }
-    if (!empty($itemEntry['web'])) {
-        $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
-                     . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
+    if (($itemWeb = item_web_link($itemEntry)) !== '') {
+        $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8')
+                     . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8')
                      . '" onclick="event.stopPropagation()">' . ui_icon('globe') . '</a>';
     }
     // The ring is drawn by .ringed::after, above the picture: an inset shadow on the card itself sat underneath it, unseen.
@@ -24634,7 +24685,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
                 . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">' . $coverParts['inner'];
     }
     $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
-    if (!empty($meta['dates']) && folder_words_visible($dir, $folderPath)) {
+    if (($meta['dates'] ?? '') !== '' && folder_words_visible($dir, $folderPath)) {
         $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
     $chgText = changes_card_text($folderPath);   // (the owner's amber note of what is new in it, see the Changes tab: '' for everyone else and when there is nothing)
@@ -25052,7 +25103,7 @@ foreach ($folderGroupKeys as $folderKey => $_true) {
 $rootItemsData = items_read($dir);
 foreach (($rootItemsData['groups'] ?? []) as $groupKey => $groupMeta) {
     if (isset($folderGroupKeys[$groupKey]) || !isset($groups[$groupKey])) continue;
-    if (!empty($groupMeta['displayName'])) {
+    if (is_string($groupMeta['displayName'] ?? null) && $groupMeta['displayName'] !== '') {
         $groupLabels[$groupKey] = $groupMeta['displayName'];
     }
 }
@@ -26915,27 +26966,28 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (is_admin_browser()) echo render_share_kit(); ?>
 
 <script>
-  const files = <?= json_encode(array_map('photo_ref', $files)) ?>;
+  const files = <?= js_json(array_map('photo_ref', $files)) ?>;
   // A short tag per file that changes when the file is replaced — appended to
   // the full-size image / video address so a browser that cached the old
   // picture (they're cached for a year) fetches the new one.
-  const fileVersions = <?= json_encode(array_map('file_version', $files)) ?>;
+  const fileVersions = <?= js_json(array_map('file_version', $files)) ?>;
   // Admin-written captions only — never the raw filename. A visitor
   // curious enough to open dev tools shouldn't learn anything from a
   // filename an unrevealed caption-less photo never meant to publish.
-  const captions = <?= json_encode(array_map(function ($f) use ($itemsData) {
-      return (!empty($itemsData[$f]['caption'])) ? $itemsData[$f]['caption'] : null;
+  const captions = <?= js_json(array_map(function ($f) use ($itemsData) {
+      $c = $itemsData[$f]['caption'] ?? '';
+      return ($c !== '' && is_string($c)) ? $c : null;
   }, $files)) ?>;
   // Where each file was taken, only for photos whose location is meant to be public and only when the map feature
   // is on (the little map in the viewer loads a third-party map, like the overview map does), and each file's web link.
-  const locations = <?= json_encode(array_map(function ($f) use ($itemsData) {
+  const locations = <?= js_json(array_map(function ($f) use ($itemsData) {
       $entry = $itemsData[$f] ?? [];
       if (!ENABLE_PHOTO_LOCATION || !photo_location_visible($entry)) return null;
       return [(float) $entry['location']['lat'], (float) $entry['location']['lng']];
   }, $files)) ?>;
-  const webLinks = <?= json_encode(array_map(function ($f) use ($itemsData) {
-      $w = $itemsData[$f]['web'] ?? '';
-      return preg_match('#^https?://#i', (string) $w) ? $w : null;
+  const webLinks = <?= js_json(array_map(function ($f) use ($itemsData) {
+      $w = item_web_link($itemsData[$f] ?? null);
+      return $w !== '' ? $w : null;
   }, $files)) ?>;
   // For the signed-in owner only: which files are private and which is its folder's cover (the tiles' stars and locks and the
   // viewer's two buttons are drawn from this, and kept in step when one is pressed).
@@ -26943,23 +26995,23 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       if (is_admin_browser()) {
           $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = [];
           foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; }   // (the address itself when it is known, so Copy needs no round trip)
-          echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain
   // link to a private photo opens nothing for anyone without access, and a download is offered per what the person's link
   // allows. null means "all of them".
   const downloadOk = <?php
-      if ($photoPass !== null || (($linkViewer !== null || PUBLIC_DOWNLOAD_MODE === 'some') && !is_revealed())) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
+      if ($photoPass !== null || (($linkViewer !== null || PUBLIC_DOWNLOAD_MODE === 'some') && !is_revealed())) echo js_json(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
       else echo 'null';
   ?>;
   const copyLinkOk = <?php
-      if (!is_admin_browser()) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return !file_is_hidden($dir, $f, $itemsData); }, $files));
+      if (!is_admin_browser()) echo js_json(array_map(function ($f) use ($dir, $itemsData) { return !file_is_hidden($dir, $f, $itemsData); }, $files));
       else echo 'null';
   ?>;
-  const initialPhoto = <?= json_encode($requestedPhoto === null ? null : photo_ref($requestedPhoto)) ?>;
-  const galleryRootHref = <?= json_encode(gallery_root_href()) ?>;
-  const passQ = <?= json_encode($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '') ?>;   // (on a photo's own address, the viewer's own requests for it carry the code too)
+  const initialPhoto = <?= js_json($requestedPhoto === null ? null : photo_ref($requestedPhoto)) ?>;
+  const galleryRootHref = <?= js_json(gallery_root_href()) ?>;
+  const passQ = <?= js_json($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '') ?>;   // (on a photo's own address, the viewer's own requests for it carry the code too)
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
   const showCountsPublicly = <?= view_counts_shown() ? 'true' : 'false' ?>;
   let current = 0;
@@ -27020,7 +27072,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       lock: ['.card .priv-toggle, .folder-card .priv-toggle', 'The lock: press it to make this photo private (a visitor never sees it); press again to make it public.'],
       pencil: ['.card .edit-toggle', 'The pencil: press it to add a caption, a place or a link.'],
       star: ['.card .cover-toggle', 'The star: press it to make this photo the folder\'s cover picture.'],
-      select: ['#select-btn', <?= json_encode('Select: press it, then tap photos to make them private or public' . (ENABLE_SHARE_LINKS ? ', share them' : '') . ', or place them side by side.') ?>],
+      select: ['#select-btn', <?= js_json('Select: press it, then tap photos to make them private or public' . (ENABLE_SHARE_LINKS ? ', share them' : '') . ', or place them side by side.') ?>],
       share: ['.page-share', 'Share: this makes a link, a QR code and a log of who looked.']
     }[m[1]];
     if (m[1] === 'share' && !document.querySelector('.page-share')) what = ['#select-btn', 'Select: press it, tick the photos you want to share, then press Share…'];
@@ -27314,8 +27366,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   (function () {
     const btn = document.getElementById('select-btn'), bar = document.getElementById('select-bar'), gal = document.querySelector('.gallery');
     if (!btn || !bar || !ownerState) return;
-    const pageFolder = <?= json_encode($currentFolderPath === null ? '' : $currentFolderPath) ?>;
-    const stacks = <?= json_encode($arrangeStacks) ?>;
+    const pageFolder = <?= js_json($currentFolderPath === null ? '' : $currentFolderPath) ?>;
+    const stacks = <?= js_json($arrangeStacks) ?>;
     const arrRow = bar.querySelector('.select-arr');
     const loose = function () { return gal ? [].slice.call(gal.querySelectorAll(':scope > .card[data-file]')) : []; };
     const canArrange = !!arrRow && loose().length >= 2;   // photos shown one by one here, not only inside group boxes
@@ -28936,7 +28988,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   })();
 
 <?php if (visitor_log_link() !== null): ?>
-  const galleryEntry = <?= json_encode(public_log_arrival()) ?>;   // (how this page was reached, for the public address's log: null unless it was an arrival)
+  const galleryEntry = <?= js_json(public_log_arrival()) ?>;   // (how this page was reached, for the public address's log: null unless it was an arrival)
   // For someone using a share link (or, when the public address's log is on, an ordinary visitor): tell the gallery's owner, in small batches, what came on screen (a picture that stayed more than a
   // moment), what the viewer showed, what played and which folder page this is. Nothing is sent that the page itself didn't show.
   (function () {

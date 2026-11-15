@@ -925,6 +925,13 @@ function health_checks($dir, $files) {
     $add('Folders and files', 'info', number_format(count($files) - $videos) . ' photo' . (count($files) - $videos === 1 ? '' : 's') . ($videos ? ' and ' . number_format($videos) . ' video' . ($videos === 1 ? '' : 's') : ''), 'in ' . number_format(count($folders)) . ' folder' . (count($folders) === 1 ? '' : 's') . $sampled . '.');
 
     if (!empty($GLOBALS['__scan_truncated'])) $add('Folders and files', 'warn', 'The folder scan stopped early', 'This gallery looks at no more than ' . number_format(SCAN_MAX_FOLDERS) . ' folders and ' . number_format(SCAN_MAX_FILES) . ' photos on one visit, and this folder has more, so the rest are left out. Move the gallery into a smaller folder, or the extra folders out of it.');
+    if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
+        $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
+        $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',
+            'The gallery leaves ' . ($oddN === 1 ? 'it' : 'them') . ' out (nothing on disk is touched), and everything inside a folder named this way with it, because such a name can\'t be written into a page or a link without changing it: '
+            . implode(', ', array_map('odd_name_display', array_slice($oddAll, 0, 8))) . ($oddN > 8 ? ' and ' . number_format($oddN - 8) . ' more' : '') . '. Names like this come from old Windows disks and archives (they are in Latin-1, not UTF-8). '
+            . 'Rename ' . ($oddN === 1 ? 'it' : 'each one') . ', in your file manager or over SFTP, so the name is plain text, and it appears at the next page load.');
+    }
 
     // --- signed-in browsers: what looks wrong, and how big the histories have grown
     foreach (browser_rows() as $br) {

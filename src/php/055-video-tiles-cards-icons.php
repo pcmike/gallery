@@ -33,6 +33,13 @@ function video_tile_parts($file, $duration = null) {
     return ['attrs' => $attrs, 'inner' => $inner];
 }
 
+/** A photo's information link as it may be printed: the saved value when it is an http or https address, else ''. The save refuses anything else,
+ *  but a folder's data file can also be written by hand, restored, or kept by another gallery on the same folder, so every print checks again. */
+function item_web_link($entry) {
+    $w = is_array($entry) ? ($entry['web'] ?? '') : '';
+    return (is_string($w) && preg_match('#^https?://#i', $w)) ? $w : '';
+}
+
 /** One clickable gallery card. Shows a live-updatable view-count badge
  *  (hidden until >0); a small corner tag for a standalone sold/reserved
  *  item ($status is '', 'sold', or 'reserved' — a grouped item's ribbon
@@ -63,7 +70,7 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     // extending the view-badge's own corner into a flex row (see
     // .card-badges) rather than stacking into a cramped cluster.
     $itemBadges = '';
-    if (!empty($itemEntry['caption'])) {
+    if (($itemEntry['caption'] ?? '') !== '') {
         // A hover tooltip on desktop (title); a tap target that opens a
         // small popover on a touch screen, where hover doesn't exist.
         $itemBadges .= '<span class="item-badge caption-badge" title="' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8')
@@ -76,9 +83,9 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
                      . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($locTitle, ENT_QUOTES, 'UTF-8')
                      . '" onclick="event.stopPropagation()">' . ui_icon('pin') . '</a>';
     }
-    if (!empty($itemEntry['web'])) {
-        $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
-                     . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemEntry['web'], ENT_QUOTES, 'UTF-8')
+    if (($itemWeb = item_web_link($itemEntry)) !== '') {
+        $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8')
+                     . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8')
                      . '" onclick="event.stopPropagation()">' . ui_icon('globe') . '</a>';
     }
     // The ring is drawn by .ringed::after, above the picture: an inset shadow on the card itself sat underneath it, unseen.
@@ -328,7 +335,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
                 . '" loading="lazy" alt="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">' . $coverParts['inner'];
     }
     $html .= '<span class="folder-cover-label">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>';
-    if (!empty($meta['dates']) && folder_words_visible($dir, $folderPath)) {
+    if (($meta['dates'] ?? '') !== '' && folder_words_visible($dir, $folderPath)) {
         $html .= '<span class="folder-cover-dates">' . htmlspecialchars($meta['dates'], ENT_QUOTES, 'UTF-8') . '</span>';
     }
     $chgText = changes_card_text($folderPath);   // (the owner's amber note of what is new in it, see the Changes tab: '' for everyone else and when there is nothing)

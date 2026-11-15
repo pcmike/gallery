@@ -186,6 +186,14 @@ function photo_ref($file) {
     return ($GLOBALS['photoPass'] ?? null) === $file ? (string) ($_GET['k'] ?? '') : $file;
 }
 
+/** A value written into the gallery page's own <script> (names, captions, links: text anyone who can name a file can choose). < > and & are written
+ *  as escapes, so nothing in it can form markup (a name holding "<!--<script" would otherwise stop the page's script from ever running), and
+ *  text that is not valid UTF-8 is written with the replacement character, so a bad name can never make the value vanish ("const files = ;"). */
+function js_json($value) {
+    $json = json_encode($value, JSON_HEX_TAG | JSON_HEX_AMP | JSON_INVALID_UTF8_SUBSTITUTE);
+    return $json === false ? 'null' : $json;
+}
+
 function img_url($file, $size) {
     $v = file_version($file);
     return '?img=' . rawurlencode(photo_ref($file)) . '&size=' . $size . ($v !== '' ? '&v=' . $v : '') . (($GLOBALS['photoPass'] ?? null) === $file ? '&k=' . rawurlencode((string) ($_GET['k'] ?? '')) : '');   // (on a photo's own address its pictures ask with the same code)

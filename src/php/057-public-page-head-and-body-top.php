@@ -107,7 +107,7 @@ foreach ($folderGroupKeys as $folderKey => $_true) {
 $rootItemsData = items_read($dir);
 foreach (($rootItemsData['groups'] ?? []) as $groupKey => $groupMeta) {
     if (isset($folderGroupKeys[$groupKey]) || !isset($groups[$groupKey])) continue;
-    if (!empty($groupMeta['displayName'])) {
+    if (is_string($groupMeta['displayName'] ?? null) && $groupMeta['displayName'] !== '') {
         $groupLabels[$groupKey] = $groupMeta['displayName'];
     }
 }

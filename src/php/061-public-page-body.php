@@ -598,27 +598,28 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (is_admin_browser()) echo render_share_kit(); ?>
 
 <script>
-  const files = <?= json_encode(array_map('photo_ref', $files)) ?>;
+  const files = <?= js_json(array_map('photo_ref', $files)) ?>;
   // A short tag per file that changes when the file is replaced — appended to
   // the full-size image / video address so a browser that cached the old
   // picture (they're cached for a year) fetches the new one.
-  const fileVersions = <?= json_encode(array_map('file_version', $files)) ?>;
+  const fileVersions = <?= js_json(array_map('file_version', $files)) ?>;
   // Admin-written captions only — never the raw filename. A visitor
   // curious enough to open dev tools shouldn't learn anything from a
   // filename an unrevealed caption-less photo never meant to publish.
-  const captions = <?= json_encode(array_map(function ($f) use ($itemsData) {
-      return (!empty($itemsData[$f]['caption'])) ? $itemsData[$f]['caption'] : null;
+  const captions = <?= js_json(array_map(function ($f) use ($itemsData) {
+      $c = $itemsData[$f]['caption'] ?? '';
+      return ($c !== '' && is_string($c)) ? $c : null;
   }, $files)) ?>;
   // Where each file was taken, only for photos whose location is meant to be public and only when the map feature
   // is on (the little map in the viewer loads a third-party map, like the overview map does), and each file's web link.
-  const locations = <?= json_encode(array_map(function ($f) use ($itemsData) {
+  const locations = <?= js_json(array_map(function ($f) use ($itemsData) {
       $entry = $itemsData[$f] ?? [];
       if (!ENABLE_PHOTO_LOCATION || !photo_location_visible($entry)) return null;
       return [(float) $entry['location']['lat'], (float) $entry['location']['lng']];
   }, $files)) ?>;
-  const webLinks = <?= json_encode(array_map(function ($f) use ($itemsData) {
-      $w = $itemsData[$f]['web'] ?? '';
-      return preg_match('#^https?://#i', (string) $w) ? $w : null;
+  const webLinks = <?= js_json(array_map(function ($f) use ($itemsData) {
+      $w = item_web_link($itemsData[$f] ?? null);
+      return $w !== '' ? $w : null;
   }, $files)) ?>;
   // For the signed-in owner only: which files are private and which is its folder's cover (the tiles' stars and locks and the
   // viewer's two buttons are drawn from this, and kept in step when one is pressed).
@@ -626,22 +627,22 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       if (is_admin_browser()) {
           $ownerPriv = []; $ownerOwn = []; $ownerInh = []; $ownerUnl = [];
           foreach ($files as $f) { $ps = owner_privacy_state($dir, $f, $itemsData); $ownerPriv[$f] = $ps['priv']; $ownerOwn[$f] = $ps['own']; $ownerInh[$f] = $ps['inh']; if (file_is_unlisted($dir, $f)) $ownerUnl[$f] = photo_address_code($dir, $f, $itemsData) ?: true; }   // (the address itself when it is known, so Copy needs no round trip)
-          echo json_encode(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
+          echo js_json(['priv' => (object) $ownerPriv, 'own' => (object) $ownerOwn, 'inh' => (object) $ownerInh, 'unl' => (object) $ownerUnl, 'cover' => (object) owner_cover_flags($dir, $files)]);
       } else echo 'null';
   ?>;
   // Per file, for someone who is not the owner: whether the viewer's download button and copy-link button apply to it. A plain
   // link to a private photo opens nothing for anyone without access, and a download is offered per what the person's link
   // allows. null means "all of them".
   const downloadOk = <?php
-      if ($photoPass !== null || (($linkViewer !== null || PUBLIC_DOWNLOAD_MODE === 'some') && !is_revealed())) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
+      if ($photoPass !== null || (($linkViewer !== null || PUBLIC_DOWNLOAD_MODE === 'some') && !is_revealed())) echo js_json(array_map(function ($f) use ($dir, $itemsData) { return viewer_may_download($dir, $f, $itemsData); }, $files));
       else echo 'null';
   ?>;
   const copyLinkOk = <?php
-      if (!is_admin_browser()) echo json_encode(array_map(function ($f) use ($dir, $itemsData) { return !file_is_hidden($dir, $f, $itemsData); }, $files));
+      if (!is_admin_browser()) echo js_json(array_map(function ($f) use ($dir, $itemsData) { return !file_is_hidden($dir, $f, $itemsData); }, $files));
       else echo 'null';
   ?>;
-  const initialPhoto = <?= json_encode($requestedPhoto === null ? null : photo_ref($requestedPhoto)) ?>;
-  const galleryRootHref = <?= json_encode(gallery_root_href()) ?>;
-  const passQ = <?= json_encode($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '') ?>;   // (on a photo's own address, the viewer's own requests for it carry the code too)
+  const initialPhoto = <?= js_json($requestedPhoto === null ? null : photo_ref($requestedPhoto)) ?>;
+  const galleryRootHref = <?= js_json(gallery_root_href()) ?>;
+  const passQ = <?= js_json($photoPass !== null ? '&k=' . rawurlencode((string) $_GET['k']) : '') ?>;   // (on a photo's own address, the viewer's own requests for it carry the code too)
   const trackingEnabled = <?= TRACK_VIEWS ? 'true' : 'false' ?>;
   const showCountsPublicly = <?= view_counts_shown() ? 'true' : 'false' ?>;

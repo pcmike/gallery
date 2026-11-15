@@ -5717,7 +5717,7 @@ check('[features] "Show me" goes to the first folder that has photos of its own 
 $srcF5 = (string) file_get_contents($indexSrc);
 check('[features] there is ONE "Act on many photos at once" row (no second row about sharing), and its words mention sharing only when Share links is on', substr_count($nTab, 'Act on many photos at once') === 1 && !str_contains($nTab, 'Share something privately') && substr_count($srcF5, "(ENABLE_SHARE_LINKS ? ', share them' : '')") === 2);
 check('[show me] the note has a tail aimed at the button, and is placed again whenever the page moves (scroll, resize, load), with an instant scroll so nothing is still moving when it is placed', str_contains($srcF5, '.show-me-note::before') && str_contains($srcF5, '.show-me-note.below::before') && str_contains($srcF5, '.show-me-note.above::before') && str_contains($srcF5, "window.addEventListener('scroll', later, true)") && str_contains($srcF5, "window.addEventListener('resize', later)") && str_contains($srcF5, "window.addEventListener('load', later)") && str_contains($srcF5, "behavior: 'instant'") && str_contains($srcF5, "note.style.setProperty('--tail-x'"));
-check('[show me] the Select note says "share them" only when Share links is on (the page tells the browser which)', str_contains($srcF5, "json_encode('Select: press it, then tap photos to make them private or public' . (ENABLE_SHARE_LINKS ? ', share them' : '')"));
+check('[show me] the Select note says "share them" only when Share links is on (the page tells the browser which)', str_contains($srcF5, "js_json('Select: press it, then tap photos to make them private or public' . (ENABLE_SHARE_LINKS ? ', share them' : '')"));
 check('[select] the bar offers only what would change something: Make private unless every picked photo is already private on its own, Make public only when one is (or, in a private folder, is not yet public on its own), Folder only when one has a setting of its own to take back', str_contains($srcF5, "const canPrivate = !n || picked.some(function (f) { return ownOf(f) !== 'private'; });") && str_contains($srcF5, "ownerState.inh[f] ? ownOf(f) !== 'public' : ownOf(f) === 'private'") && str_contains($srcF5, "bar.querySelector('[data-select=private]').hidden = !canPrivate || !!collPage;") && str_contains($srcF5, "bar.querySelector('[data-select=inherit]').hidden = !inPriv || !canFolder || !!collPage;") && str_contains($srcF5, '.select-bar .select-btns button[hidden] { display: none; }'));
 check('[visitor downloads] the folder chooser in Settings is gone (each folder has its own switch), with nothing of it left in the page script', !str_contains($srcF5, 'data-dlfolders') && !str_contains($srcF5, 'class="menu dl-menu"') && !str_contains($srcF5, "l.className = 'dl-opt'"));
 check('[path bar] a folder with no sibling has its own blue pill after the way up (so the bar says where you are), and a folder with siblings keeps its row of folders exactly as before', str_contains($srcF5, '<nav class="folder-pills" aria-label="This folder"><a href="?folder=<?= htmlspecialchars(rawurlencode($currentFolderPath)') && str_contains($srcF5, 'count($folderPills) >= 2') && str_contains($srcF5, 'aria-label="Other folders here"'));
@@ -8933,7 +8933,7 @@ check('[photo address] asking again gives the same address (nothing is stored to
 $nlUnlock();
 $nlPass = http_get("$baseNl/$nlAQ", [], false);
 $nlUnlock();
-check('[photo address] a stranger with the address gets that photo (and its pictures carry the code)', $nlPass[0] === 200 && str_contains($nlPass[1], 'NOTLISTED-SENTINEL.jpg') && str_contains($nlPass[1], '&amp;k=' . substr($nlAQ, -8)) || str_contains($nlPass[1], '&k=' . substr($nlAQ, -8)));
+check('[photo address] a stranger with the address gets that photo (its pictures carry the code in the page, and the script is given it too: "&" is written as \\u0026 there)', $nlPass[0] === 200 && str_contains($nlPass[1], '&amp;k=' . substr($nlAQ, -8)) && str_contains($nlPass[1], 'const passQ = "' . chr(92) . 'u0026k=' . substr($nlAQ, -8) . '"'));
 $nlUnlock();
 check('[photo address] ...and nothing else: no other photo, no public photo, no other folder, in the page', !str_contains($nlPass[1], 'NOTLISTED-TWO') && !str_contains($nlPass[1], 'front.jpg') && !str_contains($nlPass[1], 'open-1') && !str_contains($nlPass[1], 'PRIVATE-PLAIN') && !str_contains($nlPass[1], 'NOTLISTED-DEEP') && !str_contains($nlPass[1], 'Open%2F') );
 $nlUnlock();
@@ -10937,6 +10937,125 @@ $kD = json_decode($kSave(['content' => "{gallery}\nan older page.\n"])[1], true)
 check('[notes stale] a save that sends no fingerprint (an older page) is not refused', ($kD['ok'] ?? null) === true && $kNote() === "{gallery}\nan older page.\n", json_encode($kD));
 $kE = json_decode($kSave(['content' => "{gallery}\na copy.\n", 'new_name' => 'copy-of', 'loaded_hash' => 'stale'])[1], true);
 check('[notes stale] saving as a new name is not an overwrite of the stale file, so it is not refused', ($kE['ok'] ?? null) === true && file_get_contents("$fxK/Alpha/copy-of.md") === "{gallery}\na copy.\n", json_encode($kE));
+
+/* --------------------------------------------------------------------- */
+
+// Audit group 2: names that are not UTF-8, and data printed into the page's script (G5, E2-1, G19, E2-3, G15, the "taken times" cache, a group label of 0).
+echo "== audit group 2: names that aren't valid text are left out and named in Health; data printed into the page's script can't stop it ==\n";
+$g2Src = (string) file_get_contents($indexSrc);
+// Functions out of the built index.php, run in a fresh PHP (so a fatal error shows as a failed check, not a dead run).
+$g2Fn = function (string $name) use ($g2Src) {
+    $from = strpos($g2Src, "\nfunction $name(");
+    if ($from === false) return '';
+    $to = strpos($g2Src, "\n}\n", $from) + 3;
+    return substr($g2Src, $from, $to - $from);
+};
+$g2Dir = new_fixture_dir('g2-fn');
+$g2Run = function (string $code) use ($g2Dir) {
+    $script = $g2Dir . '/run-' . bin2hex(random_bytes(3)) . '.php';
+    file_put_contents($script, "<?php error_reporting(0);\n" . $code);
+    $out = (string) shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script) . ' 2>&1');
+    @unlink($script);
+    return $out;
+};
+$g2Bs = chr(92);
+
+// the fixture: a name that is Latin-1 (a file and a folder), a folder named like the start of a script, hostile and plain captions, web links, a caption of 0
+$g2Bad = "caf\xE9.jpg"; $g2BadDir = "bad\xE9dir";
+$fxN = new_fixture_dir('badnames');
+make_jpeg("$fxN/ok.jpg", 40, 30, 20, 90, 160); make_jpeg("$fxN/$g2Bad", 40, 30, 60, 90, 20); make_jpeg("$fxN/b.jpg", 40, 30, 90, 90, 20); make_jpeg("$fxN/zero.jpg", 40, 30, 10, 90, 20);
+mkdir("$fxN/latin1"); make_jpeg("$fxN/latin1/ok.jpg", 40, 30, 20, 90, 160); make_jpeg("$fxN/latin1/$g2Bad", 40, 30, 60, 90, 20);
+mkdir("$fxN/$g2BadDir"); make_jpeg("$fxN/$g2BadDir/inside.jpg", 40, 30, 20, 20, 160);
+mkdir("$fxN/<!--<script>"); make_jpeg("$fxN/<!--<script>/in.jpg", 40, 30, 20, 160, 160);
+write_data_file("$fxN/.gallery-items.php", ['items' => [
+    'ok.jpg' => ['web' => 'javascript:alert(1)'],
+    'b.jpg' => ['caption' => 'cap <!--<script> x', 'web' => 'https://example.com/info'],
+    'zero.jpg' => ['caption' => '0'],
+], 'groups' => []]);
+write_data_file("$fxN/latin1/.gallery-items.php", ['items' => [], 'groups' => [], 'dates' => '0']);
+file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'bn-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'PHOTO_SORT_ORDER' => 'taken']));
+copy($indexSrc, "$fxN/index.php");
+$portN = find_free_port(); start_server($fxN, $portN); $baseN = "http://127.0.0.1:$portN";
+[, , $nH] = http_post("$baseN/?admin", ['access_code' => 'bn-admin-pw-1'], [], false); $nOwn = ['Cookie: ' . extract_cookie_header($nH)];
+$g2Files = function (string $page) {   // the page's own list of photos, as the script receives it (null when the page prints nothing there)
+    return preg_match('/const files = (\[.*?\]);/s', $page, $m) === 1 ? json_decode($m[1], true) : null;
+};
+$g2NoBytes = fn ($list) => is_array($list) && count(array_filter($list, fn ($f) => str_contains((string) $f, "\xE9"))) === 0;
+
+// G5: the page's script is alive and does not list the names it can't use
+[, $nHome] = http_get("$baseN/");
+$nList = $g2Files($nHome);
+check('[names] one file named in Latin-1 no longer kills the front page: the script is printed with its list of photos (it used to print "const files = ;" and the script never ran)', !str_contains($nHome, 'const files = ;') && is_array($nList), substr((string) strstr($nHome, 'const files ='), 0, 120));
+check('[names] ...the list holds the photos that can be used (a root photo, one in a folder, one in a folder named like a script) and none of the names that aren\'t valid text, nor anything inside a folder whose name isn\'t', is_array($nList) && in_array('ok.jpg', $nList, true) && in_array('latin1/ok.jpg', $nList, true) && in_array('<!--<script>/in.jpg', $nList, true) && $g2NoBytes($nList) && !in_array("$g2BadDir/inside.jpg", $nList, true), json_encode($nList));
+[, $nFolder] = http_get("$baseN/?folder=latin1"); $nFList = $g2Files($nFolder);
+check('[names] ...and the same for the folder that holds one (its page\'s script runs, and lists only its usable photo)', !str_contains($nFolder, 'const files = ;') && is_array($nFList) && in_array('latin1/ok.jpg', $nFList, true) && $g2NoBytes($nFList), json_encode($nFList));
+check('[names] the name that isn\'t valid text is not on the page anywhere, as a tile, a link or an address', !str_contains($nHome, "caf\xE9") && !str_contains($nHome, 'caf%E9') && !str_contains($nHome, "bad\xE9") && !str_contains($nHome, 'bad%E9'));
+check('[names] its picture is no longer served by address (404, as for a file that isn\'t there), and the others in the folder still are', http_get("$baseN/?img=latin1/caf%E9.jpg&size=tile")[0] === 404 && http_get("$baseN/?img=latin1/ok.jpg&size=tile")[0] === 200);
+check('[names] a folder whose name isn\'t valid text is answered like a folder that isn\'t there, and what is inside it is not served either', http_get("$baseN/?folder=bad%E9dir")[0] === http_get("$baseN/?folder=no-such-folder")[0] && http_get("$baseN/?img=bad%E9dir/inside.jpg&size=tile")[0] === 404);
+[, $nHealth] = http_get("$baseN/?admin&health=1", $nOwn);
+check('[names] the owner\'s Health check names each one (the bad byte written as \\xE9, the folder it is in) and says what to do', str_contains($nHealth, 'have names that are not valid text') && str_contains($nHealth, 'caf\\xE9.jpg') && str_contains($nHealth, 'latin1/caf\\xE9.jpg') && str_contains($nHealth, 'bad\\xE9dir') && stripos($nHealth, 'rename') !== false, substr((string) strstr($nHealth, 'not valid text'), 0, 300));
+check('[names] ...and nothing on disk was touched (the files are where they were, under the same names)', is_file("$fxN/$g2Bad") && is_file("$fxN/latin1/$g2Bad") && is_dir("$fxN/$g2BadDir"));
+
+// G19: the ZIP
+$g2Zip = fn (string $url) => (function () use ($url, $nOwn, $g2Dir) { [$st, $body] = http_get($url, $nOwn); $f = $g2Dir . '/z-' . bin2hex(random_bytes(3)) . '.zip'; file_put_contents($f, $body); $o = trim((string) shell_exec('unzip -Z1 ' . escapeshellarg($f) . ' 2>/dev/null')); @unlink($f); return [$st, $o === '' ? [] : explode("\n", $o)]; })();
+if (trim((string) shell_exec('command -v unzip')) !== '') {
+    [$nzSt, $nzNames] = $g2Zip("$baseN/?archive&folder=latin1");
+    check('[names] the owner\'s ZIP of a folder holding such a name is a sound ZIP of the rest (it was a 500 without mbstring, and with it the file went in under a converted name)', $nzSt === 200 && count($nzNames) === 1 && str_ends_with($nzNames[0], '/ok.jpg'), json_encode([$nzSt, $nzNames]));
+    [$nzSt, $nzNames] = $g2Zip("$baseN/?archive");
+    check('[names] ...and so is the ZIP of everything: no entry for a name that isn\'t valid text, or for what is inside a folder named so', $nzSt === 200 && count($nzNames) > 0 && count(array_filter($nzNames, fn ($n) => str_contains($n, "\xE9") || str_contains($n, "\xC3\xA9") || str_contains($n, 'inside.jpg'))) === 0, json_encode([$nzSt, $nzNames]));
+}
+$g2Out = $g2Run($g2Fn('archive_entry_name') . "\n" . 'echo json_encode([archive_entry_name("Asia/caf\\xE9.jpg"), archive_entry_name("../a//b/./c")], JSON_UNESCAPED_UNICODE);');
+check('[names] a Latin-1 name given to the ZIP naming function comes out as UTF-8 without needing mbstring (an undefined-function fatal before), and ordinary names are as they were', $g2Out === '["Asia\/café.jpg","a\/b\/c"]', $g2Out);
+
+// the "taken times" cache: a failed encode must never leave an empty file
+mkdir("$g2Dir/taken", 0777, true); make_jpeg("$g2Dir/taken/a.jpg", 20, 20, 1, 2, 3);
+$g2Out = $g2Run('function media_capture_time($p) { return null; }' . "\n" . $g2Fn('name_is_text') . "\n" . $g2Fn('media_taken_times') . "\n" . 'media_taken_times(' . var_export("$g2Dir/taken", true) . ', ["a.jpg", "caf\\xE9.jpg"]); echo "done";');
+$g2Cache = @file_get_contents("$g2Dir/taken/.gallery-cache/taken3.json"); $g2Dec = $g2Cache === false ? null : json_decode($g2Cache, true);
+check('[names] the folder\'s "taken times" cache is still written (with the usable names) when the folder holds a name that isn\'t valid text; it used to be an empty file, so every page view read every file again', str_ends_with($g2Out, 'done') && is_array($g2Dec) && array_keys($g2Dec) === ['a.jpg'], $g2Out . ' ' . var_export($g2Cache, true));
+$g2Taken = (string) @file_get_contents("$fxN/.gallery-cache/taken3.json");
+check('[names] ...and on the real gallery (photos in date order, one top folder holding a bad name) the cache is not empty and holds the usable photos', is_array($g2TakenDec = json_decode($g2Taken, true)) && isset($g2TakenDec['ok.jpg'], $g2TakenDec['b.jpg']) && count(array_filter(array_keys($g2TakenDec), fn ($k) => str_contains((string) $k, "\xE9"))) === 0, var_export($g2Taken, true));
+
+// the same with Show folders off (a flat scan of the top folder)
+$fxF = new_fixture_dir('badnames-flat');
+make_jpeg("$fxF/ok.jpg", 40, 30, 20, 90, 160); make_jpeg("$fxF/$g2Bad", 40, 30, 60, 90, 20); make_jpeg("$fxF/b.jpg", 40, 30, 90, 90, 20);
+file_put_contents("$fxF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'bf-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => false]));
+copy($indexSrc, "$fxF/index.php");
+$portF = find_free_port(); start_server($fxF, $portF); $baseF = "http://127.0.0.1:$portF";
+[, , $fH] = http_post("$baseF/?admin", ['access_code' => 'bf-admin-pw-1'], [], false); $fOwn = ['Cookie: ' . extract_cookie_header($fH)];
+[, $fHome] = http_get("$baseF/"); $fList = $g2Files($fHome);
+check('[names] with folders off (one flat list) the page\'s script runs too, and the list leaves the name out', !str_contains($fHome, 'const files = ;') && is_array($fList) && in_array('ok.jpg', $fList, true) && $g2NoBytes($fList), json_encode($fList));
+check('[names] ...and its picture is a 404', http_get("$baseF/?img=caf%E9.jpg&size=tile")[0] === 404 && http_get("$baseF/?img=ok.jpg&size=tile")[0] === 200);
+check('[names] ...and Health names it here too', str_contains(http_get("$baseF/?admin&health=1", $fOwn)[1], 'caf\\xE9.jpg'));
+unlink("$fxF/$g2Bad");
+check('[names] with every name good there is no such row', !str_contains(http_get("$baseF/?admin&health=1", $fOwn)[1], 'not valid text'));
+
+// E2-1: data printed into the page's script
+check('[script] a folder, a file or a caption holding "<!--<script>" is not printed as it is anywhere in the page (it put the browser in a state where the script never ran)', !str_contains($nHome, '<!--<script') && !str_contains($nFolder, '<!--<script') && !str_contains(http_get("$baseN/?folder=" . rawurlencode('<!--<script>'))[1], '<!--<script'));
+check('[script] ...and what the script is given is still the real text (the caption and the folder name arrive whole)', preg_match('/const captions = (\[.*?\]);/s', $nHome, $g2Cm) === 1 && in_array('cap <!--<script> x', (array) json_decode($g2Cm[1], true), true) && in_array('<!--<script>/in.jpg', (array) $nList, true));
+$g2Out = $g2Run($g2Fn('js_json') . "\n" . 'echo json_encode([js_json("<!--<script>"), js_json("a&b"), js_json("caf\\xE9"), js_json(["k" => "</script>"]), js_json(null)]);');
+$g2J = json_decode($g2Out, true);
+check('[script] js_json writes < > & as escapes (so no markup can be formed), and always gives text the script can read (a name that is not valid text comes out with the replacement character, never nothing)', is_array($g2J) && $g2J[0] === '"' . $g2Bs . 'u003C!--' . $g2Bs . 'u003Cscript' . $g2Bs . 'u003E"' && $g2J[1] === '"a' . $g2Bs . 'u0026b"' && str_starts_with($g2J[2], '"caf') && strlen($g2J[2]) > 6 && !str_contains($g2J[3], '<') && $g2J[4] === 'null', $g2Out);
+$g2Scripted = '';   // the files that print data into the page's own script: none of it may be written with a bare json_encode (the helper is the one way)
+$g2P = (string) file_get_contents($repoRoot . '/src/php/061-public-page-body.php'); $g2Scripted .= substr($g2P, (int) strpos($g2P, "\n<script>"));
+foreach (['063-public-page-script-glue-select-tooltips', '067-public-page-script-glue-owner-select', '081-public-page-script-glue-share-popover'] as $g2F) $g2Scripted .= (string) file_get_contents($repoRoot . "/src/php/$g2F.php");
+check('[script] every value the gallery page prints into its script goes through js_json (a bare json_encode there is what let a name break the page)', str_contains($g2Scripted, 'js_json(') && !str_contains($g2Scripted, 'json_encode('));
+
+// E2-3: a web link is printed only if it is http or https
+check('[web link] a "javascript:" link that got into a folder\'s data file (by hand, or from another gallery on the same folder) is not printed as the tile\'s link, and an https link still is', !str_contains($nHome, 'javascript:') && str_contains($nHome, 'class="item-badge web-badge" href="https://example.com/info"'));
+
+// G15: text that is exactly 0 is text
+check('[zero] a caption of 0 shows (the tile has its caption badge, and the viewer is given it)', substr_count($nHome, 'class="item-badge caption-badge"') === 2 && in_array('0', (array) (preg_match('/const captions = (\[.*?\]);/s', $nHome, $g2Cz) === 1 ? json_decode($g2Cz[1], true) : []), true));
+check('[zero] ...and so do Dates of 0, on the folder\'s card', str_contains($nHome, 'class="folder-cover-dates">0</span>'));
+$fxZ = new_fixture_dir('zerolabel');
+make_jpeg("$fxZ/trip_1.jpg", 40, 30, 20, 90, 160); make_jpeg("$fxZ/trip_2.jpg", 40, 30, 60, 90, 20); make_jpeg("$fxZ/solo.jpg", 40, 30, 90, 90, 20);
+file_put_contents("$fxZ/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'bz-admin-pw-1', 'AUTO_GROUP_BY_FILENAME' => true, 'AUTO_GROUP_BY_FOLDER' => true]));
+copy($indexSrc, "$fxZ/index.php");
+$portZ = find_free_port(); start_server($fxZ, $portZ); $baseZ = "http://127.0.0.1:$portZ";
+[, , $zH] = http_post("$baseZ/?admin", ['access_code' => 'bz-admin-pw-1'], [], false); $zOwn = ['Cookie: ' . extract_cookie_header($zH)];
+$zCsrf = admin_token($baseZ, $zOwn);
+$zR = json_decode(http_post("$baseZ/?admin", ['csrf_token' => $zCsrf, 'action' => 'save_group_label', 'group_key' => 'trip', 'display_name' => '0'], array_merge($zOwn, ['X-Requested-With: gallery-fetch']))[1], true);
+[, $zHome] = http_get("$baseZ/");
+check('[zero] a group named 0 shows that name (the group header said "trip")', preg_match('#<h2 class="group-label"[^>]*>0\b#', $zHome) === 1, json_encode($zR) . ' ' . substr((string) strstr($zHome, 'trip'), 0, 200));
 
 /* --------------------------------------------------------------------- */
 

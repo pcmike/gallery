@@ -426,11 +426,12 @@ function media_taken_times($folderReal, $names) {
         $changed = true;
     }
     if ($changed) {
-        $live = array_intersect_key($known, array_flip($names));
+        $live = array_filter(array_intersect_key($known, array_flip($names)), 'name_is_text', ARRAY_FILTER_USE_KEY);   // (a name that is not valid text can't be written as JSON: it is left out, never allowed to empty the whole file)
+        $encoded = json_encode($live);
         $dirOk = is_dir($folderReal . '/.gallery-cache') || @mkdir($folderReal . '/.gallery-cache', 0755);
-        if ($dirOk) {
+        if ($dirOk && $encoded !== false) {
             $tmp = $cachePath . '.tmp' . bin2hex(random_bytes(3));
-            if (@file_put_contents($tmp, json_encode($live)) !== false && !@rename($tmp, $cachePath)) @unlink($tmp);
+            if (@file_put_contents($tmp, $encoded) !== false && !@rename($tmp, $cachePath)) @unlink($tmp);
         }
     }
     return $out;
