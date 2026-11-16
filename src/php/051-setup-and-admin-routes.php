@@ -41,6 +41,7 @@ function run_admin_setup() {
                 session_regenerate_id(true);
                 $_SESSION['admin_auth'] = admin_session_marker($result['stored']);
                 set_admin_reveal_cookie($result['stored']);
+                admin_session_bind(true);
                 $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Your admin password is set and you\'re signed in. Settings (left) is where the gallery-wide settings live; the password is kept in .gallery-config.php, which survives updating index.php.'];
                 @unlink(admin_setup_code_path());
                 @unlink(__DIR__ . '/.gallery-setup');
@@ -98,6 +99,8 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     // cookie never starts a session just by asking for ?admin.
     if (isset($_COOKIE[admin_session_name()])) admin_start_session();
     $sessionAuthed = session_status() === PHP_SESSION_ACTIVE && admin_session_authed();
+    if ($sessionAuthed) admin_session_bind();
+    elseif (session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['admin_auth'])) $_SESSION = [];   // (a session that was signed in and is not any more: its browser was ended, signed out, idle too long, or the password changed; nothing of it is kept)
     if (!$sessionAuthed && !isset($_SERVER['PHP_AUTH_USER']) && !isset($_SERVER['PHP_AUTH_PW']) && browser_owner_may_resume()) {
         // The session is gone (a browser that forgets session cookies, or four hours passed) but this browser signed in a while
         // ago and kept the cookie: start a fresh session, as a sign-in does. Its CSRF token is new, so a change made from a page
@@ -105,6 +108,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         admin_start_session();
         session_regenerate_id(true);
         $_SESSION['admin_auth'] = admin_session_marker();
+        admin_session_bind(true);
         $sessionAuthed = true;
     }
     if (!$sessionAuthed && !login_throttle_allows($dir, 'admin', $ip)) {
@@ -136,6 +140,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             $_SESSION['admin_auth'] = admin_session_marker($upgraded['ADMIN_PASSWORD'] ?? null);
             login_throttle_record_success($dir, 'admin', $ip);
             set_admin_reveal_cookie($upgraded['ADMIN_PASSWORD'] ?? null);
+            admin_session_bind(true);
             header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin'), true, 303);
             return;
         } else {

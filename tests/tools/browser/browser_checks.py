@@ -1580,6 +1580,10 @@ try:
     ok(stored_password_is(cfg(), "PRIVATE_VIEW_PASSWORD", "viewer-pass") and b.js("document.querySelector('input[name=pw_private]').value") == "", "setting the private-view password saves from the button beside it, and the boxes are cleared")
     b.js("document.querySelector('.pw-btn[data-pw=admin]').click()"); b.drain(0.6)
     ok("Type the new password first" in b.js("document.querySelector('.pw-btn[data-pw=admin]').parentNode.querySelector('.rowstate').textContent"), "pressing a password button with nothing typed says so")
+    b.js("document.querySelector('input[name=pw_admin]').focus()"); b.call("Input.insertText", {"text": "brand-new-pw-9"}); b.js("document.querySelector('input[name=pw_admin2]').focus()"); b.call("Input.insertText", {"text": "brand-new-pw-9"})
+    b.js("document.querySelector('.pw-btn[data-pw=admin]').click()"); b.drain(0.6)
+    ok("current admin password first" in b.js("document.querySelector('.pw-btn[data-pw=admin]').parentNode.querySelector('.rowstate').textContent") and b.js("document.querySelector('input[name=pw_admin_current]').getAttribute('autocomplete')") == "current-password", "a new admin password with no current one typed is not sent: the page says to type the current one first")
+    b.js("document.querySelector('input[name=pw_admin]').value = ''; document.querySelector('input[name=pw_admin2]').value = ''")
     # enabling folders changes what the rest of the admin shows: it refreshes when you leave
     tog("AUTO_GROUP_BY_FOLDER"); b.drain(1.0)
     ok(chk("AUTO_GROUP_BY_FOLDER") is True and '"AUTO_GROUP_BY_FOLDER": true' in cfg() and b.js("window.__confirms.length") == 0 and b.js("(() => { const w = document.querySelector('input[name=set_AUTO_GROUP_BY_FOLDER][type=checkbox]').closest('.site-row').querySelector('.effect[data-effect=off]'); return !w || w.hidden; })()"), "turning subfolders on saves at once, with no question (the orange 'turning this on shows ...' line gives way to the 'turning this off hides ...' one)")

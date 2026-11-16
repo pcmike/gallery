@@ -2589,12 +2589,13 @@
     [].forEach.call(form.querySelectorAll('.pw-btn'), function (btn) {
       function go() {
         var kind = btn.getAttribute('data-pw'), node = stateOf(btn), f = {}, els = form.elements;
-        if (kind === 'admin') { f.pw_admin = els['pw_admin'].value; f.pw_admin2 = els['pw_admin2'].value; }
+        if (kind === 'admin') { f.pw_admin = els['pw_admin'].value; f.pw_admin2 = els['pw_admin2'].value; f.pw_admin_current = els['pw_admin_current'].value; }
         else if (kind === 'private') { f.pw_private = els['pw_private'].value; f.pw_private2 = els['pw_private2'].value; }
         else { f.pw_private_remove = '1'; }
         if ((kind === 'admin' && !f.pw_admin) || (kind === 'private' && !f.pw_private)) { say(node, 'Type the new password first.', 'err'); return; }
+        if (kind === 'admin' && !f.pw_admin_current) { say(node, 'Type the current admin password first (it is how the gallery knows it is you).', 'err'); return; }
         post(f, node, null, function () {
-          ['pw_admin', 'pw_admin2', 'pw_private', 'pw_private2'].forEach(function (n) { if (els[n]) els[n].value = ''; });
+          ['pw_admin_current', 'pw_admin', 'pw_admin2', 'pw_private', 'pw_private2'].forEach(function (n) { if (els[n]) els[n].value = ''; });
         });
       }
       btn.addEventListener('click', go);

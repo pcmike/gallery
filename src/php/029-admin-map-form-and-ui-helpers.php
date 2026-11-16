@@ -613,7 +613,14 @@ function site_settings_save_locked($ajax) {
     $newAdmin = null;
     $adminPw = (string) ($_POST['pw_admin'] ?? '');
     if ($adminPw !== '') {
-        if ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
+        // The one credential that can change the gallery is changed only by someone who knows it: a signed-in session that was left open
+        // (or borrowed) is not enough. A wrong one counts against the sign-in throttle, like a wrong one at the sign-in page.
+        $curPw = $_POST['pw_admin_current'] ?? '';
+        if (ADMIN_PASSWORD !== '' && !(is_string($curPw) && $curPw !== '' && login_throttle_allows(__DIR__, 'admin', client_ip()) && password_matches(ADMIN_PASSWORD, $curPw))) {
+            if (is_string($curPw) && $curPw !== '') login_throttle_record_failure(__DIR__, 'admin', client_ip());
+            $errors[] = !login_throttle_allows(__DIR__, 'admin', client_ip()) ? 'Too many wrong passwords were typed from your connection. Wait a moment, then try again.' : 'To change the admin password, type the current admin password first' . ($curPw === '' ? '.' : ': the one you typed isn\'t right.');
+        }
+        elseif ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
         elseif (!admin_password_ok($adminPw)) $errors[] = 'The admin password needs at least 8 characters, with at least one letter and one number: it is the one credential that can change your gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $adminPw)) $errors[] = 'The admin password can\'t contain control characters.';
         else { $newAdmin = password_for_storage($adminPw); $setOrUnset('ADMIN_PASSWORD', $newAdmin); }
@@ -664,6 +671,7 @@ function site_settings_save_locked($ajax) {
     if ($newAdmin !== null) {
         $_SESSION['admin_auth'] = admin_session_marker($newAdmin);
         set_admin_reveal_cookie($newAdmin);   // every token made under the old password stops working; this browser gets a new one
+        admin_session_bind(true);   // (this session follows the new token, so the owner who changed the password stays signed in)
     }
     $n = count($cfg);
     if ($ajax) {

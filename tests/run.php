@@ -195,12 +195,27 @@ function form_default_fields($formHtml) {
  *  changing only $overrides. $postUrl is the page's own URL (these forms
  *  have no action, so a browser posts them back to it). Returns
  *  [status, body, headers, fieldsSent]. */
-function user_submit($postUrl, $pageHtml, $needle, $overrides = [], $headers = []) {
+function user_submit($postUrl, $pageHtml, $needle, $overrides = [], $headers = [], $carryCookies = false) {
     foreach (html_post_forms($pageHtml) as $form) {
         if (!str_contains($form['html'], $needle)) continue;
         // A photo's privacy and location switches are forms of their own: a search for "the photo's form" means the one with its caption.
         if (str_contains($form['html'], 'value="set_item_flag"') && !str_contains($needle, 'set_item_flag')) continue;
         $fields = array_merge(form_default_fields($form['html']), $overrides);
+        if ($carryCookies) {
+            // A browser keeps the cookies a response sets and sends them with the redirect that follows: do the same (a form that changes
+            // the admin password hands the browser a new sign-in token, and the page it lands on is only shown to that token).
+            [$st, $body, $hd] = http_post($postUrl, $fields, $headers, false);
+            for ($hop = 0; $hop < 3 && $st >= 300 && $st < 400; $hop++) {
+                $loc = ''; foreach ($hd as $h) if (stripos($h, 'Location:') === 0) $loc = trim(substr($h, 9));
+                $jar = [];
+                foreach ($headers as $i => $h) if (stripos($h, 'Cookie:') === 0) { foreach (explode(';', substr($h, 7)) as $p) { [$n, $v] = array_pad(explode('=', trim($p), 2), 2, ''); if ($n !== '') $jar[$n] = $v; } unset($headers[$i]); }
+                foreach ($hd as $h) if (stripos($h, 'Set-Cookie:') === 0) { [$p] = explode(';', trim(substr($h, 11)), 2); [$n, $v] = array_pad(explode('=', $p, 2), 2, ''); if ($v === '' || stripos($h, '1970') !== false) unset($jar[$n]); else $jar[$n] = $v; }
+                $headers = array_values($headers); if ($jar) $headers[] = 'Cookie: ' . implode('; ', array_map(fn ($k, $v) => "$k=$v", array_keys($jar), $jar));
+                $url = preg_match('#^https?://#', $loc) ? $loc : preg_replace('#[?\#].*$#', '', $postUrl) . (str_starts_with($loc, '?') ? $loc : '?' . ltrim($loc, '/?'));
+                [$st, $body, $hd] = http_get($url, $headers, false);
+            }
+            return [$st, $body, $hd, $fields, $headers];
+        }
         [$st, $body, $hd] = http_post($postUrl, $fields, $headers);
         return [$st, $body, $hd, $fields];
     }
@@ -3146,7 +3161,7 @@ check('[admin reveal] logging out clears that cookie too', (bool) array_filter($
 [, , $arLogin2Hd] = http_post("$baseAr/?admin", ['login_password' => 'reveal-test-pw-12'], [], false);
 $arC2 = extract_cookie_header($arLogin2Hd);
 [, $arSet] = http_get("$baseAr/?admin", ["Cookie: $arC2"]); $arF = form_default_fields((function ($pg) { foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; })($arSet));
-[, $arPwBody, $arPwHd] = http_post("$baseAr/?admin", ['csrf_token' => $arF['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $arF['config_hash'], 'pw_admin' => 'a-brand-new-admin-pw-1', 'pw_admin2' => 'a-brand-new-admin-pw-1'], ["Cookie: $arC2", 'X-Requested-With: gallery-fetch'], false);
+[, $arPwBody, $arPwHd] = http_post("$baseAr/?admin", ['csrf_token' => $arF['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $arF['config_hash'], 'pw_admin' => 'a-brand-new-admin-pw-1', 'pw_admin2' => 'a-brand-new-admin-pw-1', 'pw_admin_current' => 'reveal-test-pw-12'], ["Cookie: $arC2", 'X-Requested-With: gallery-fetch'], false);
 $arC3 = extract_cookie_header($arPwHd);
 $arPwJson = json_decode($arPwBody, true);
 check('[admin reveal] changing the admin password through the page\'s script works', ($arPwJson['ok'] ?? null) === true, (string) $arPwBody);
@@ -3426,7 +3441,7 @@ $wrSubN = $wrBlock($wrPg, 'nginx'); $wrSubA = $wrBlock($wrPg, 'apache');
 check('[rules] for a gallery at a folder\'s address the blocks are written for it (the begin line, the photo location, the folder rewrite, the redirect setting\'s value), with no "top of the site" warning', str_contains($wrSubN, 'begin (for /photos/)') && str_contains($wrSubN, 'location ~* ^/photos/.*\.(jpe?g|png|gif|webp|bmp|heic|heif|mov|mp4|m4v)$ {') && str_contains($wrSubN, "rewrite ^/photos/(.+)/\$ /photos/index.php?folder=\$1 last;") && str_contains($wrSubA, 'begin (for /photos/)') && str_contains($wrPg, '<code>/photos</code>') && !str_contains($wrPg, 'At the top of the site'));
 check('[pin grouping] Settings has no pin-grouping row any more: it is each folder\'s own (the built-in default is 1 mile, and a line already in the settings file is still read)', !str_contains($flRootAdmin, 'id="setting-MAP_CLUSTER_RADIUS_MILES"') && str_contains($flRootAdmin, 'name="map_radius"'));
 // Passwords.
-$flFields = fn ($pw) => user_submit("$baseFl/?admin", http_get("$baseFl/?admin#site", $flHdrs)[1], 'value="save_site_settings"', ['pw_admin' => $pw, 'pw_admin2' => $pw], $flHdrs)[1];
+$flFields = fn ($pw) => user_submit("$baseFl/?admin", http_get("$baseFl/?admin#site", $flHdrs)[1], 'value="save_site_settings"', ['pw_admin' => $pw, 'pw_admin2' => $pw, 'pw_admin_current' => 'flag-admin-pw-1'], $flHdrs, true)[1];
 foreach (['abcdefghijkl' => 'letters only', '1234567890' => 'numbers only', 'abc123' => 'under 8', '          ' => 'spaces'] as $pw => $why) {
     $out = $flFields((string) $pw);
     check("[passwords] an admin password that is $why is refused with the rule", str_contains($out, 'at least 8 characters') && str_contains($out, 'letter') && str_contains($out, 'number'));
@@ -3664,14 +3679,14 @@ file_put_contents($siteCfg, cfg_text(['ADMIN_PASSWORD' => 'first-admin-pw-123'])
 [, $rBad] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['set_PHOTO_SORT_ORDER' => 'random', 'set_MAP_CLUSTER_RADIUS_MILES' => '-5', 'set_ENABLE_VIDEO' => '1'], $siteHdrs);
 check('[site settings] a value that isn\'t one of the choices, or a number out of range, saves nothing and says why', str_contains($rBad, 'Nothing was saved') && str_contains($rBad, 'Photo order') && str_contains($rBad, 'Map pin grouping') && (string) file_get_contents($siteCfg) === $cfgBytes);
 // Passwords.
-[, $rMis] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => 'a-new-long-password-1', 'pw_admin2' => 'different-long-password-2'], $siteHdrs);
-[, $rShort] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => 'short', 'pw_admin2' => 'short'], $siteHdrs);
+[, $rMis] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => 'a-new-long-password-1', 'pw_admin2' => 'different-long-password-2', 'pw_admin_current' => 'first-admin-pw-123'], $siteHdrs);
+[, $rShort] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => 'short', 'pw_admin2' => 'short', 'pw_admin_current' => 'first-admin-pw-123'], $siteHdrs);
 check('[site settings] a new admin password that doesn\'t match, or is too short, is refused and the old one stays', str_contains($rMis, "don't match") || str_contains($rMis, 'don&#039;t match'));
 check('[site settings] ...too short is refused with the reason', str_contains($rShort, 'at least 8 characters') && (string) file_get_contents($siteCfg) === $cfgBytes);
 $nasty = "p'a1\\ss\"w \$x<?php echo 'X'; system('id'); ?>\n";
 $nasty = str_replace("\n", '', $nasty);
-[, $rPw] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => $nasty, 'pw_admin2' => $nasty], $siteHdrs);
-check('[site settings] changing the admin password works, and you stay signed in (the session still opens the admin, no password asked)', str_contains($rPw, 'admin password changed') && str_contains(http_get("$baseSite/?admin", [$siteHdrs[1]])[1], 'Gallery Admin'));
+[, $rPw, , , $sAfterHdrs] = user_submit("$baseSite/?admin", $sAdmin4, 'value="save_site_settings"', ['pw_admin' => $nasty, 'pw_admin2' => $nasty, 'pw_admin_current' => 'first-admin-pw-123'], $siteHdrs, true);
+check('[site settings] changing the admin password works, and you stay signed in (the session still opens the admin, no password asked)', str_contains($rPw, 'admin password changed') && str_contains(http_get("$baseSite/?admin", array_values(array_filter($sAfterHdrs, fn ($h) => stripos($h, 'Cookie:') === 0)))[1], 'Gallery Admin'));
 $pwCfg = cfg_read($siteCfg);
 check('[site settings] a password full of quotes, backslashes, $ and PHP tags is stored as a hash that verifies exactly (and none of its text is in the file)', pw_stored_ok($pwCfg['ADMIN_PASSWORD'] ?? null, $nasty) && !str_contains((string) file_get_contents($siteCfg), 'system'));
 check('[site settings] the new password logs in through the form (a redirect into the admin); the old one no longer does (the form again)', http_post("$baseSite/?admin", ['login_password' => $nasty], [], false)[0] === 303 && http_post("$baseSite/?admin", ['login_password' => 'first-admin-pw-123'], [], false)[0] === 200);
@@ -4234,7 +4249,7 @@ check('[browsers] "Sign out all other browsers" ends every other one and keeps t
 $stHg3 = $stGuest(); $stTg3 = $stTok($stLine($stHg3, $stName)); $stHb = $stLogin(); $stTb = $stTok($stLine($stHb, $stName));
 [, $stSet2] = http_get("$baseSt/?admin", ["Cookie: $stJarO"]);
 $stF = form_default_fields((function ($pg) { foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return $f['html']; return ''; })($stSet2));
-[, $stPwBody, $stPwHd] = http_post("$baseSt/?admin", ['csrf_token' => $stF['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $stF['config_hash'], 'pw_admin' => 'stay-new-admin-pw-2', 'pw_admin2' => 'stay-new-admin-pw-2'], ["Cookie: $stJarO", 'X-Requested-With: gallery-fetch'], false);
+[, $stPwBody, $stPwHd] = http_post("$baseSt/?admin", ['csrf_token' => $stF['csrf_token'], 'action' => 'save_site_settings', 'config_hash' => $stF['config_hash'], 'pw_admin' => 'stay-new-admin-pw-2', 'pw_admin2' => 'stay-new-admin-pw-2', 'pw_admin_current' => 'stay-admin-pw-1'], ["Cookie: $stJarO", 'X-Requested-With: gallery-fetch'], false);
 $stTnew = $stTok($stLine($stPwHd, $stName));
 check('[browsers] changing the admin password works, and hands the browser that changed it a new token', (json_decode($stPwBody, true)['ok'] ?? null) === true && preg_match('/^[0-9a-f]{64}$/', $stTnew) === 1, $stPwBody);
 check('[browsers] ...while another browser\'s owner token, made under the old password, no longer opens the admin or shows private photos; the guest\'s token (another password) is unaffected', $stIsLogin(http_get("$baseSt/?admin", ["Cookie: $stName=$stTb"])[1]) && $stSecret($stTb) === 404 && $stSecret($stTg3) === 200);
@@ -4757,7 +4772,7 @@ check('[pw hash] when the folder can\'t be written, signing in still works and t
 $hpAdminCookie = extract_cookie_header($hpHd4);
 [, $hpAdminPg] = http_get("$baseHp/?admin", ["Cookie: $hpAdminCookie"]);
 check('[pw hash] (setup) the owner is signed in, and the plain password that was left in the file is a hash by now', $hpS4 === 303 && pw_stored_ok(cfg_read($hpCfg)['ADMIN_PASSWORD'] ?? null, 'plain-admin-pw-1'));
-user_submit("$baseHp/?admin", $hpAdminPg, 'value="save_site_settings"', ['pw_admin' => 'changed-admin-pw-2', 'pw_admin2' => 'changed-admin-pw-2', 'pw_private' => 'new view pw', 'pw_private2' => 'new view pw'], ["Cookie: $hpAdminCookie"]);
+user_submit("$baseHp/?admin", $hpAdminPg, 'value="save_site_settings"', ['pw_admin' => 'changed-admin-pw-2', 'pw_admin2' => 'changed-admin-pw-2', 'pw_admin_current' => 'plain-admin-pw-1', 'pw_private' => 'new view pw', 'pw_private2' => 'new view pw'], ["Cookie: $hpAdminCookie"]);
 $hpNow = cfg_read($hpCfg);
 check('[pw hash] changing both passwords in Settings stores two new hashes, and nothing readable', pw_stored_ok($hpNow['ADMIN_PASSWORD'] ?? null, 'changed-admin-pw-2') && pw_stored_ok($hpNow['PRIVATE_VIEW_PASSWORD'] ?? null, 'new view pw') && !str_contains((string) file_get_contents($hpCfg), 'changed-admin-pw-2'));
 check('[pw hash] ...the new ones work and the old admin password does not', http_post("$baseHp/?admin", ['login_password' => 'changed-admin-pw-2'], [], false)[0] === 303 && http_post("$baseHp/?admin", ['login_password' => 'plain-admin-pw-1'], [], false)[0] === 200 && http_post("$baseHp/?reveal", ['login_password' => 'new view pw'], [], false)[0] === 302);
@@ -11607,6 +11622,162 @@ foreach (['overview', 'flat'] as $dnMode) {
     foreach ($dnA as $dnK => $dnVa) if (($dnB[$dnK] ?? '(missing)') !== $dnVa) $dnDiff[] = "[$dnK] letters: $dnVa / digits: " . ($dnB[$dnK] ?? '(missing)');
     check("[digit names] in the $dnMode display mode, " . count($dnA) . " pages and actions (the folders and the one from elsewhere, their pages as a stranger, the owner and a link guest, the pictures, the ZIP, the admin and its actions, links with digit ids and folder ids, collections, Own gallery, Not listed addresses, covers, the visitor log, the Changes tab) answer exactly the same under names of digits as under letters", $dnDiff === [] && count($dnA) > 300, count($dnDiff) . ' differ: ' . implode(' | ', array_slice($dnDiff, 0, 6)));
 }
+
+// =====================================================================================================================
+// [admin sessions] the session follows the browser's sign-in token (C1), idles out (C4), a sign-out from another site is refused (C2),
+// changing the admin password asks for the current one (C5), and no admin address changes the owner's data (C3)
+// =====================================================================================================================
+echo "== admin sessions ==\n";
+$fxS = new_fixture_dir('sessions');
+mkdir("$fxS/Trip"); mkdir("$fxS/sessions");
+make_jpeg("$fxS/pub.jpg", 80, 60, 200, 60, 60); make_jpeg("$fxS/Trip/t1.jpg", 80, 60, 60, 60, 150);
+file_put_contents("$fxS/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'sess-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'sess-view-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_SHARE_LINKS' => true, 'ADMIN_STAY_SIGNED_IN_DAYS' => 0]));
+file_put_contents("$fxS/sess-router.php", "<?php\nini_set('session.save_path', __DIR__ . '/sessions');\nreturn false;\n");
+copy($indexSrc, "$fxS/index.php");
+$portS = find_free_port(); start_server($fxS, $portS, "$fxS/sess-router.php"); $baseS = "http://127.0.0.1:$portS";
+$sUA = fn ($n) => "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/12$n.0 Safari/537.36";
+/** The cookies a response sets, by what they are: [session, token] values ('' when not set or expired). */
+$sCookies = function (array $hd) {
+    $o = ['session' => '', 'token' => ''];
+    foreach ($hd as $h) {
+        if (stripos($h, 'Set-Cookie:') !== 0) continue;
+        [$pair] = explode(';', trim(substr($h, 11)), 2); [$n, $v] = array_pad(explode('=', $pair, 2), 2, '');
+        if (str_starts_with($n, 'gallery_admin_')) $o['session'] = $n . '=' . $v;
+        if (str_starts_with($n, 'gallery_reveal_')) $o['token'] = $n . '=' . $v;
+    }
+    return $o;
+};
+$sLogin = function (string $ua, string $pw = 'sess-admin-pw-1') use ($baseS, $sUA, $sCookies) {
+    [, , $h] = http_post("$baseS/?admin", ['login_password' => $pw], [$sUA($ua)], false);
+    $c = $sCookies($h);
+    return ['session' => $c['session'], 'token' => $c['token'], 'ua' => $ua, 'both' => trim($c['session'] . '; ' . $c['token'], '; ')];
+};
+$sTokenHash = fn (array $b) => hash('sha256', explode('=', $b['token'], 2)[1] ?? '');
+/** Is this cookie set a signed-in admin? (the quick token address answers JSON for a signed-in owner and the sign-in page otherwise) */
+$sIn = function (string $cookie, array $extra = []) use ($baseS) {
+    [$st, $body, $hd] = http_get("$baseS/?admin&csrf=1", array_merge(['Cookie: ' . $cookie], $extra));
+    return [$st === 200 && is_array(json_decode($body, true)) && isset(json_decode($body, true)['token']), $hd];
+};
+$sCsrf = fn (string $cookie, string $ua) => json_decode(http_get("$baseS/?admin&csrf=1", ["Cookie: $cookie", $ua])[1], true)['token'] ?? '';
+$sPost = function (array $b, array $f, array $extra = []) use ($baseS, $sUA, $sCsrf) {
+    return http_post("$baseS/?admin", $f + ['csrf_token' => $sCsrf($b['both'], $sUA($b['ua']))], array_merge(['X-Requested-With: gallery-fetch', 'Cookie: ' . $b['both'], $sUA($b['ua'])], $extra), false);
+};
+
+$sA = $sLogin('1'); $sB = $sLogin('2');
+check('[admin sessions] two browsers each sign in and each gets a session cookie and a token', $sA['session'] !== '' && $sA['token'] !== '' && $sB['session'] !== '' && $sB['token'] !== '' && $sA['token'] !== $sB['token'], json_encode([$sA, $sB]));
+check('[admin sessions] both are signed in', $sIn($sA['both'])[0] && $sIn($sB['both'])[0]);
+
+// --- C1: ending a browser ends its session too
+[, $sEndBody] = $sPost($sA, ['action' => 'browser_cancel', 'id' => substr($sTokenHash($sB), 0, 12)]);
+check('[admin sessions] browser A ends browser B from the list', (json_decode($sEndBody, true)['ok'] ?? null) === true, $sEndBody);
+[$sBIn, $sBHd] = $sIn($sB['both'], [$sUA('2')]);
+check('[admin sessions] ...and B, which still holds its session cookie, is signed out at once (it gets the sign-in page, not the owner\'s)', !$sBIn);
+$sBNew = $sCookies($sBHd);
+check('[admin sessions] ...and the request is not handed a new token', $sBNew['token'] === '' || str_ends_with($sBNew['token'], '='), $sBNew['token']);
+check('[admin sessions] ...while A is untouched', $sIn($sA['both'])[0]);
+// "sign out all other browsers"
+$sC = $sLogin('3');
+check('[admin sessions] a third browser signs in', $sIn($sC['both'])[0]);
+[, $sAllBody] = $sPost($sA, ['action' => 'browser_cancel_others']);
+check('[admin sessions] "Sign out all other browsers" signs the third one out as well, session cookie and all', (json_decode($sAllBody, true)['ok'] ?? null) === true && !$sIn($sC['both'], [$sUA('3')])[0] && $sIn($sA['both'])[0], $sAllBody);
+// a session cookie on its own, without the token
+check('[admin sessions] a copy of the session cookie alone (no token) is not signed in', !$sIn($sA['session'])[0]);
+// the token alone still brings the browser back in when it is allowed to stay signed in (here it is not: ADMIN_STAY_SIGNED_IN_DAYS 0), and a plain sign-in again in the same browser keeps working
+$sA2 = $sLogin('1');
+check('[admin sessions] signing in again keeps working', $sIn($sA2['both'])[0]);
+[, $sReBody, $sReHd] = http_post("$baseS/?admin", ['login_password' => 'sess-admin-pw-1'], ["Cookie: {$sA2['both']}", $sUA('1')], false);
+$sRe = $sCookies($sReHd); $sA3 = ['session' => $sRe['session'] !== '' ? $sRe['session'] : $sA2['session'], 'token' => $sRe['token'] !== '' ? $sRe['token'] : $sA2['token'], 'ua' => '1'];
+$sA3['both'] = $sA3['session'] . '; ' . $sA3['token'];
+check('[admin sessions] signing in again while already signed in keeps the browser signed in', $sIn($sA3['both'])[0], json_encode($sRe));
+
+// --- C4: a session that has been idle for more than four hours is over
+$sFiles = glob("$fxS/sessions/sess_*") ?: [];
+$sMy = ''; $sSid = explode('=', $sA3['session'], 2)[1] ?? '';
+foreach ($sFiles as $f) if (basename($f) === 'sess_' . $sSid) $sMy = $f;
+check('[admin sessions] the browser\'s session file is found (for the idle test)', $sMy !== '', $sSid);
+if ($sMy !== '') {
+    $sRaw = (string) file_get_contents($sMy);
+    // an older session (made before this check) carries no last-used time and no token: it keeps working
+    file_put_contents($sMy, preg_replace(['/admin_last\|i:\d+;/', '/admin_tok\|s:\d+:"[0-9a-f]+";/'], '', $sRaw));
+    check('[admin sessions] a session made by an earlier version (no last-used time, no token mark) still works, once', $sIn($sA3['both'])[0]);
+    $sRaw = (string) file_get_contents($sMy);
+    check('[admin sessions] ...and is marked then', str_contains($sRaw, 'admin_last|i:') && str_contains($sRaw, 'admin_tok|s:64:'), $sRaw);
+    // used a little under four hours ago: still in; five hours: out
+    file_put_contents($sMy, preg_replace('/admin_last\|i:\d+;/', 'admin_last|i:' . (time() - 3 * 3600) . ';', $sRaw));
+    check('[admin sessions] a session last used three hours ago is still signed in', $sIn($sA3['both'])[0]);
+    $sRaw = (string) file_get_contents($sMy);
+    check('[admin sessions] ...and using it moves the last-used time on', preg_match('/admin_last\|i:(\d+);/', $sRaw, $m) && (int) $m[1] > time() - 600, $sRaw);
+    file_put_contents($sMy, preg_replace('/admin_last\|i:\d+;/', 'admin_last|i:' . (time() - 5 * 3600) . ';', $sRaw));
+    [$sOld] = $sIn($sA3['both']);
+    check('[admin sessions] a session last used five hours ago is over, even though its token is good', !$sOld);
+    [, $sLoginPg] = http_get("$baseS/?admin", ["Cookie: {$sA3['both']}", $sUA('1')]);
+    check('[admin sessions] ...and the page asks for the access code', str_contains($sLoginPg, 'name="access_code"'));
+    $sA4 = $sLogin('1');
+    check('[admin sessions] signing in again works', $sIn($sA4['both'])[0]);
+}
+
+// --- C2: a sign-out sent from another site is refused
+$sD = $sLogin('4');
+$sOut = function (array $b, ?string $site) use ($baseS, $sUA) {
+    $h = ['Cookie: ' . $b['both'], $sUA($b['ua'])]; if ($site !== null) $h[] = 'Sec-Fetch-Site: ' . $site;
+    [$st, $body, $hd] = http_post("$baseS/?reveal", ['logout' => '1'], $h, false);
+    return [$st, $body, $hd];
+};
+foreach (['cross-site', 'same-site', 'none'] as $site) {
+    [$st, $body, $hd] = $sOut($sD, $site);
+    check("[admin sessions] a sign-out sent with Sec-Fetch-Site: $site is refused (403) and says why", $st === 403 && stripos($body, 'another site') !== false, "$st " . substr($body, 0, 120));
+    check("[admin sessions] ...($site) nothing is signed out and no cookie is touched", $sIn($sD['both'])[0] && $sCookies($hd) === ['session' => '', 'token' => '']);
+}
+[$st] = $sOut($sD, 'same-origin');
+check('[admin sessions] a sign-out from the gallery\'s own page works (303)', $st === 303 && !$sIn($sD['both'], [$sUA('4')])[0], (string) $st);
+$sE = $sLogin('5');
+[$st] = $sOut($sE, null);
+check('[admin sessions] a sign-out from a browser that sends no Sec-Fetch-Site (an older one) still works', $st === 303 && !$sIn($sE['both'], [$sUA('5')])[0], (string) $st);
+// a visitor's lock
+[, , $gHd] = http_post("$baseS/?reveal", ['login_password' => 'sess-view-pw-1'], [$sUA('6')], false);
+$sGC = $sCookies($gHd)['token'];
+check('[admin sessions] a private-view visitor signs in (for the lock test)', $sGC !== '' && !str_ends_with($sGC, '='), json_encode($gHd));
+[$st] = http_post("$baseS/?reveal", ['logout' => '1'], ["Cookie: $sGC", $sUA('6'), 'Sec-Fetch-Site: cross-site'], false);
+check('[admin sessions] a private-view visitor\'s sign-out from another site is refused as well', $st === 403, (string) $st);
+[$st] = http_post("$baseS/?reveal", ['logout' => '1'], ["Cookie: $sGC", $sUA('6'), 'Sec-Fetch-Site: same-origin'], false);
+check('[admin sessions] ...and from the gallery\'s own page it works', $st === 303, (string) $st);
+
+// --- C5: changing the admin password needs the current one
+$sF = $sLogin('7');
+$sChg = fn (array $b, array $f) => json_decode($sPost($b, $f + ['action' => 'save_site_settings'])[1], true) ?? [];
+$sCfgHash = function (array $b) use ($baseS, $sUA) {
+    [, $pg] = http_get("$baseS/?admin", ["Cookie: {$b['both']}", $sUA($b['ua'])]);
+    foreach (html_post_forms($pg) as $f) if (str_contains($f['html'], 'value="save_site_settings"')) return form_default_fields($f['html'])['config_hash'] ?? '';
+    return '';
+};
+$sOther = $sLogin('8');
+$r = $sChg($sF, ['config_hash' => $sCfgHash($sF), 'pw_admin' => 'sess-admin-pw-2', 'pw_admin2' => 'sess-admin-pw-2']);
+check('[admin sessions] a new admin password with no current one is refused, naming what to do', ($r['ok'] ?? null) === false && stripos((string) ($r['text'] ?? ''), 'current') !== false, json_encode($r));
+$r = $sChg($sF, ['config_hash' => $sCfgHash($sF), 'pw_admin' => 'sess-admin-pw-2', 'pw_admin2' => 'sess-admin-pw-2', 'pw_admin_current' => 'not-the-password']);
+check('[admin sessions] ...and with a wrong current one', ($r['ok'] ?? null) === false && stripos((string) ($r['text'] ?? ''), 'current') !== false, json_encode($r));
+check('[admin sessions] ...the password is unchanged (the old one still signs in, the new one does not) and other browsers are untouched', $sLogin('9')['session'] !== '' && $sLogin('9', 'sess-admin-pw-2')['session'] === '' && $sIn($sOther['both'])[0] && $sIn($sF['both'])[0]);
+$r = $sChg($sF, ['config_hash' => $sCfgHash($sF), 'pw_admin' => 'sess-admin-pw-2', 'pw_admin2' => 'sess-admin-pw-2', 'pw_admin_current' => 'sess-admin-pw-1']);
+check('[admin sessions] with the right current password it is changed', ($r['ok'] ?? null) === true, json_encode($r));
+check('[admin sessions] ...the new password signs in, the old one does not, a browser made under the old password is signed out', $sLogin('9', 'sess-admin-pw-2')['session'] !== '' && $sLogin('9')['session'] === '' && !$sIn($sOther['both'], [$sUA('8')])[0]);
+
+// --- C3: no address of the admin changes the owner's data, whether it comes with the session or with the token alone from another site
+$sOwner = $sLogin('10', 'sess-admin-pw-2');
+$sAdminPost = fn (array $f) => json_decode($sPost($sOwner, $f)[1], true) ?? [];
+$sAdminPost(['action' => 'photo_address', 'file' => 'pub.jpg']);
+$sSnap = function () use ($fxS) {
+    $o = [];
+    foreach (array_merge(glob("$fxS/*.md") ?: [], glob("$fxS/.gallery-items.php") ?: [], glob("$fxS/.gallery-config.php") ?: [], glob("$fxS/.gallery-links.php") ?: [], glob("$fxS/.gallery-collections.php") ?: [], glob("$fxS/*.jpg") ?: [], glob("$fxS/Trip/*") ?: [], glob("$fxS/Trip/.gallery-*") ?: [], ["$fxS/index.php"]) as $f)
+        if (is_file($f)) $o[basename(dirname($f)) . '/' . basename($f)] = md5_file($f);
+    ksort($o); return $o;
+};
+$sGets = ['?admin', '?admin&classic=1', '?admin&shell=1', '?admin&folder=Trip', '?admin&inframe=1', '?admin&csrf=1', '?admin&health=1', '?admin&hidden=1', '?admin&item=pub.jpg', '?admin&changed=1', '?admin&changes_list=1', '?admin&shelltree=1', '?admin&shellmeta=1', '?admin&shellcounts=1', '?admin&privcounts=1', '?admin&pbcounts=1', '?admin&linkspanel=1', '?admin&linkpreview=0123456789', '?admin&linkphotos=0123456789', '?admin&linkcover=0123456789', '?admin&browserspanel=1', '?admin&browserhist=0123456789ab', '?admin&visits=1&tab=visitors', '?admin&visitsexport=1', '?admin&backupdownload=1', '?admin&filesdownload=1', '?admin&accelcheck=1&prefix=x', '?admin&since=1', '?admin&after=1'];
+$sBefore = $sSnap(); $sTok = $sOwner['token'];
+foreach ($sGets as $q) {
+    http_get("$baseS/$q", ["Cookie: {$sOwner['both']}", $sUA('10')]);
+    http_get("$baseS/$q", ["Cookie: $sTok", $sUA('10'), 'Sec-Fetch-Site: cross-site']);
+}
+$sAfter = $sSnap();
+check('[admin sessions] ' . count($sGets) . ' admin addresses, opened with the session and with the token alone from another site, change none of the owner\'s data (settings, items, links, collections, notes, photos, the script)', $sBefore === $sAfter, json_encode(array_keys(array_diff_assoc($sAfter, $sBefore))));
 
 /* --------------------------------------------------------------------- */
 

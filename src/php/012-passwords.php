@@ -91,9 +91,28 @@ function upgrade_plaintext_passwords() {
     }
 }
 
+/** The admin's session is good when (1) it carries the marker of the current admin password, (2) it was used within the last four hours
+ *  (a session left alone that long is over, whatever its cookie says), and (3) the browser also carries a good owner's sign-in token, and
+ *  it is the very token the session was made with. So ending a browser in Settings (or signing it out, or changing the password) ends its
+ *  session at once, and a copy of the session cookie without the token is no use. A session made by an earlier version carries neither a
+ *  time nor a token mark: it is accepted once and marked (admin_session_bind) on that request. */
 function admin_session_authed() {
-    return isset($_SESSION['admin_auth']) && is_string($_SESSION['admin_auth'])
-        && hash_equals(admin_session_marker(), $_SESSION['admin_auth']);
+    if (!isset($_SESSION['admin_auth']) || !is_string($_SESSION['admin_auth']) || !hash_equals(admin_session_marker(), $_SESSION['admin_auth'])) return false;
+    $last = $_SESSION['admin_last'] ?? null;
+    if ($last !== null && (!is_int($last) || time() - $last > 14400)) return false;   // (four hours: the same as the session's server-side life, admin_start_session)
+    $b = browser_lookup();
+    if ($b === null || $b['kind'] !== 'owner') return false;
+    $tok = $_SESSION['admin_tok'] ?? null;
+    if ($tok !== null && (!is_string($tok) || !hash_equals($tok, $b['hash']))) return false;
+    return true;
+}
+
+/** Marks the admin session as used now and as belonging to this browser's sign-in token (the one in the cookie this request carries, which
+ *  every caller has just checked or just made). Called at every sign-in and on every admin request that the session signs in. */
+function admin_session_bind($rebind = false) {
+    $_SESSION['admin_last'] = time();
+    $c = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
+    if (($rebind || empty($_SESSION['admin_tok'])) && is_string($c) && preg_match('/^[0-9a-f]{64}$/', $c)) $_SESSION['admin_tok'] = hash('sha256', $c);
 }
 
 /* -----------------------------------------------------------------------

@@ -5505,9 +5505,28 @@ function upgrade_plaintext_passwords() {
     }
 }
 
+/** The admin's session is good when (1) it carries the marker of the current admin password, (2) it was used within the last four hours
+ *  (a session left alone that long is over, whatever its cookie says), and (3) the browser also carries a good owner's sign-in token, and
+ *  it is the very token the session was made with. So ending a browser in Settings (or signing it out, or changing the password) ends its
+ *  session at once, and a copy of the session cookie without the token is no use. A session made by an earlier version carries neither a
+ *  time nor a token mark: it is accepted once and marked (admin_session_bind) on that request. */
 function admin_session_authed() {
-    return isset($_SESSION['admin_auth']) && is_string($_SESSION['admin_auth'])
-        && hash_equals(admin_session_marker(), $_SESSION['admin_auth']);
+    if (!isset($_SESSION['admin_auth']) || !is_string($_SESSION['admin_auth']) || !hash_equals(admin_session_marker(), $_SESSION['admin_auth'])) return false;
+    $last = $_SESSION['admin_last'] ?? null;
+    if ($last !== null && (!is_int($last) || time() - $last > 14400)) return false;   // (four hours: the same as the session's server-side life, admin_start_session)
+    $b = browser_lookup();
+    if ($b === null || $b['kind'] !== 'owner') return false;
+    $tok = $_SESSION['admin_tok'] ?? null;
+    if ($tok !== null && (!is_string($tok) || !hash_equals($tok, $b['hash']))) return false;
+    return true;
+}
+
+/** Marks the admin session as used now and as belonging to this browser's sign-in token (the one in the cookie this request carries, which
+ *  every caller has just checked or just made). Called at every sign-in and on every admin request that the session signs in. */
+function admin_session_bind($rebind = false) {
+    $_SESSION['admin_last'] = time();
+    $c = $_COOKIE[REVEAL_COOKIE_NAME] ?? '';
+    if (($rebind || empty($_SESSION['admin_tok'])) && is_string($c) && preg_match('/^[0-9a-f]{64}$/', $c)) $_SESSION['admin_tok'] = hash('sha256', $c);
 }
 
 /* -----------------------------------------------------------------------
@@ -7575,6 +7594,16 @@ function run_reveal_route($dir) {
     // The lock in the icon strip, when it is open, locks the private items again: whoever is signed in (a viewer with the
     // private-view password, or the owner signed in to the admin) is signed out of this browser.
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
+        // Only the gallery's own page may end a sign-in: a form on another site (or a link someone else sent) that posts here is refused,
+        // and nothing is signed out. A browser that doesn't say where a request came from (an older one) is let through, as before.
+        $site = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? null;
+        if ($site !== null && $site !== 'same-origin') {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=UTF-8');
+            header('Cache-Control: no-store');
+            echo "This sign-out came from another site, so it was ignored and you are still signed in. Use the lock in the gallery itself to sign out.\n";
+            return;
+        }
         $ownerToken = browser_lookup();   // (asked directly: with a preview open is_admin_browser() says no, and the owner's session must end all the same)
         if ($ownerToken !== null && $ownerToken['kind'] === 'owner') {
             admin_start_session();
@@ -7639,6 +7668,7 @@ function run_reveal_route($dir) {
         $_SESSION['admin_auth'] = admin_session_marker($upgraded['ADMIN_PASSWORD'] ?? null);
         login_throttle_record_success($dir, 'admin', $ip);
         set_admin_reveal_cookie($upgraded['ADMIN_PASSWORD'] ?? null);
+        admin_session_bind(true);
         header('Location: ./' . $backPage, true, 303);
         return;
     }
@@ -11663,7 +11693,14 @@ function site_settings_save_locked($ajax) {
     $newAdmin = null;
     $adminPw = (string) ($_POST['pw_admin'] ?? '');
     if ($adminPw !== '') {
-        if ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
+        // The one credential that can change the gallery is changed only by someone who knows it: a signed-in session that was left open
+        // (or borrowed) is not enough. A wrong one counts against the sign-in throttle, like a wrong one at the sign-in page.
+        $curPw = $_POST['pw_admin_current'] ?? '';
+        if (ADMIN_PASSWORD !== '' && !(is_string($curPw) && $curPw !== '' && login_throttle_allows(__DIR__, 'admin', client_ip()) && password_matches(ADMIN_PASSWORD, $curPw))) {
+            if (is_string($curPw) && $curPw !== '') login_throttle_record_failure(__DIR__, 'admin', client_ip());
+            $errors[] = !login_throttle_allows(__DIR__, 'admin', client_ip()) ? 'Too many wrong passwords were typed from your connection. Wait a moment, then try again.' : 'To change the admin password, type the current admin password first' . ($curPw === '' ? '.' : ': the one you typed isn\'t right.');
+        }
+        elseif ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
         elseif (!admin_password_ok($adminPw)) $errors[] = 'The admin password needs at least 8 characters, with at least one letter and one number: it is the one credential that can change your gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $adminPw)) $errors[] = 'The admin password can\'t contain control characters.';
         else { $newAdmin = password_for_storage($adminPw); $setOrUnset('ADMIN_PASSWORD', $newAdmin); }
@@ -11714,6 +11751,7 @@ function site_settings_save_locked($ajax) {
     if ($newAdmin !== null) {
         $_SESSION['admin_auth'] = admin_session_marker($newAdmin);
         set_admin_reveal_cookie($newAdmin);   // every token made under the old password stops working; this browser gets a new one
+        admin_session_bind(true);   // (this session follows the new token, so the owner who changed the password stays signed in)
     }
     $n = count($cfg);
     if ($ajax) {
@@ -16621,9 +16659,10 @@ function render_admin_password_rows($fromFile) {
         <div class="site-row">
           <div>
             <div class="name">Admin password <?php if (isset($fromFile['ADMIN_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
-            <div class="help">Set. Leave blank to keep it; to change it use 8+ characters with a letter and a number. It can't be removed here.</div>
+            <div class="help">Set. Leave blank to keep it; to change it, type the current one first, then a new one of 8+ characters with a letter and a number. It can't be removed here.</div>
           </div>
           <div class="ctl col">
+            <input type="password" name="pw_admin_current" autocomplete="current-password" placeholder="Current admin password">
             <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password">
             <input type="password" name="pw_admin2" autocomplete="new-password" placeholder="Type it again">
             <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="admin">Change admin password</button><span class="rowstate" role="status" aria-live="polite"></span></span>
@@ -21954,12 +21993,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     [].forEach.call(form.querySelectorAll('.pw-btn'), function (btn) {
       function go() {
         var kind = btn.getAttribute('data-pw'), node = stateOf(btn), f = {}, els = form.elements;
-        if (kind === 'admin') { f.pw_admin = els['pw_admin'].value; f.pw_admin2 = els['pw_admin2'].value; }
+        if (kind === 'admin') { f.pw_admin = els['pw_admin'].value; f.pw_admin2 = els['pw_admin2'].value; f.pw_admin_current = els['pw_admin_current'].value; }
         else if (kind === 'private') { f.pw_private = els['pw_private'].value; f.pw_private2 = els['pw_private2'].value; }
         else { f.pw_private_remove = '1'; }
         if ((kind === 'admin' && !f.pw_admin) || (kind === 'private' && !f.pw_private)) { say(node, 'Type the new password first.', 'err'); return; }
+        if (kind === 'admin' && !f.pw_admin_current) { say(node, 'Type the current admin password first (it is how the gallery knows it is you).', 'err'); return; }
         post(f, node, null, function () {
-          ['pw_admin', 'pw_admin2', 'pw_private', 'pw_private2'].forEach(function (n) { if (els[n]) els[n].value = ''; });
+          ['pw_admin_current', 'pw_admin', 'pw_admin2', 'pw_private', 'pw_private2'].forEach(function (n) { if (els[n]) els[n].value = ''; });
         });
       }
       btn.addEventListener('click', go);
@@ -22861,6 +22901,7 @@ function run_admin_setup() {
                 session_regenerate_id(true);
                 $_SESSION['admin_auth'] = admin_session_marker($result['stored']);
                 set_admin_reveal_cookie($result['stored']);
+                admin_session_bind(true);
                 $_SESSION['admin_flash'] = ['type' => 'ok', 'text' => 'Your admin password is set and you\'re signed in. Settings (left) is where the gallery-wide settings live; the password is kept in .gallery-config.php, which survives updating index.php.'];
                 @unlink(admin_setup_code_path());
                 @unlink(__DIR__ . '/.gallery-setup');
@@ -22918,6 +22959,8 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     // cookie never starts a session just by asking for ?admin.
     if (isset($_COOKIE[admin_session_name()])) admin_start_session();
     $sessionAuthed = session_status() === PHP_SESSION_ACTIVE && admin_session_authed();
+    if ($sessionAuthed) admin_session_bind();
+    elseif (session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['admin_auth'])) $_SESSION = [];   // (a session that was signed in and is not any more: its browser was ended, signed out, idle too long, or the password changed; nothing of it is kept)
     if (!$sessionAuthed && !isset($_SERVER['PHP_AUTH_USER']) && !isset($_SERVER['PHP_AUTH_PW']) && browser_owner_may_resume()) {
         // The session is gone (a browser that forgets session cookies, or four hours passed) but this browser signed in a while
         // ago and kept the cookie: start a fresh session, as a sign-in does. Its CSRF token is new, so a change made from a page
@@ -22925,6 +22968,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         admin_start_session();
         session_regenerate_id(true);
         $_SESSION['admin_auth'] = admin_session_marker();
+        admin_session_bind(true);
         $sessionAuthed = true;
     }
     if (!$sessionAuthed && !login_throttle_allows($dir, 'admin', $ip)) {
@@ -22956,6 +23000,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
             $_SESSION['admin_auth'] = admin_session_marker($upgraded['ADMIN_PASSWORD'] ?? null);
             login_throttle_record_success($dir, 'admin', $ip);
             set_admin_reveal_cookie($upgraded['ADMIN_PASSWORD'] ?? null);
+            admin_session_bind(true);
             header('Location: ?' . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? $_SERVER['QUERY_STRING'] : 'admin'), true, 303);
             return;
         } else {

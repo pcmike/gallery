@@ -154,9 +154,10 @@ function render_admin_password_rows($fromFile) {
         <div class="site-row">
           <div>
             <div class="name">Admin password <?php if (isset($fromFile['ADMIN_PASSWORD'])): ?><span class="src">your setting</span><?php endif; ?></div>
-            <div class="help">Set. Leave blank to keep it; to change it use 8+ characters with a letter and a number. It can't be removed here.</div>
+            <div class="help">Set. Leave blank to keep it; to change it, type the current one first, then a new one of 8+ characters with a letter and a number. It can't be removed here.</div>
           </div>
           <div class="ctl col">
+            <input type="password" name="pw_admin_current" autocomplete="current-password" placeholder="Current admin password">
             <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password">
             <input type="password" name="pw_admin2" autocomplete="new-password" placeholder="Type it again">
             <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="admin">Change admin password</button><span class="rowstate" role="status" aria-live="polite"></span></span>

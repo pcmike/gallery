@@ -150,6 +150,16 @@ function run_reveal_route($dir) {
     // The lock in the icon strip, when it is open, locks the private items again: whoever is signed in (a viewer with the
     // private-view password, or the owner signed in to the admin) is signed out of this browser.
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['logout'])) {
+        // Only the gallery's own page may end a sign-in: a form on another site (or a link someone else sent) that posts here is refused,
+        // and nothing is signed out. A browser that doesn't say where a request came from (an older one) is let through, as before.
+        $site = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? null;
+        if ($site !== null && $site !== 'same-origin') {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=UTF-8');
+            header('Cache-Control: no-store');
+            echo "This sign-out came from another site, so it was ignored and you are still signed in. Use the lock in the gallery itself to sign out.\n";
+            return;
+        }
         $ownerToken = browser_lookup();   // (asked directly: with a preview open is_admin_browser() says no, and the owner's session must end all the same)
         if ($ownerToken !== null && $ownerToken['kind'] === 'owner') {
             admin_start_session();
@@ -214,6 +224,7 @@ function run_reveal_route($dir) {
         $_SESSION['admin_auth'] = admin_session_marker($upgraded['ADMIN_PASSWORD'] ?? null);
         login_throttle_record_success($dir, 'admin', $ip);
         set_admin_reveal_cookie($upgraded['ADMIN_PASSWORD'] ?? null);
+        admin_session_bind(true);
         header('Location: ./' . $backPage, true, 303);
         return;
     }
