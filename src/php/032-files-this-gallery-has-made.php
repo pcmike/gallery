@@ -13,7 +13,7 @@
 /** The files the gallery makes beside index.php, by exact name: name => kind. */
 function owned_top_names() {
     return ['.gallery-config.php' => 'settings', '.gallery-links.php' => 'links', '.gallery-collections.php' => 'collections', '.gallery-secret.php' => 'secret', '.gallery-stay.php' => 'signin', '.gallery-browsers.php' => 'signin', '.gallery-browsers-log.php' => 'signin',
-            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo'];
+            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo', '.gallery-geo-state.php.lock' => 'geo', '.gallery-backup.lock' => 'backup'];
 }
 
 /** The kind of a file name, or '' when the gallery makes no file with that name. $isTop: the folder is the gallery's own (the one index.php is in). */
@@ -27,7 +27,11 @@ function owned_kind_of_name($name, $isTop) {
         if (preg_match('/^\.gallery-geo\.[0-9a-f]{8}\.php$/D', $name)) return 'geo';   // (a download that was cut off)
         if (preg_match('/^\.gallery-signin-[0-9a-f]{12}\.php$/D', $name)) return 'signin';   // (one signed-in browser's address history)
     }
+    // what a save, a Restore or an update leaves when it is cut off: a data file's temporary copy (its name, a dot, eight hex digits and .php or .tmp), a settings write, a Restore or an update download
+    if ($isTop && (preg_match('/^\.gallery-restore-[0-9a-f]{8}\.tmp$/D', $name) || preg_match('/^\.gallery-update-[0-9a-f]{8}\.tmp$/D', $name) || preg_match('/^\.gallery-config\.php\.tmp\.[0-9a-f]{8}$/D', $name))) return 'leftovers';
+    if (preg_match('/^(\.gallery-.+)\.[0-9a-f]{8}\.(?:php|tmp)$/D', $name, $lm) && $lm[1] !== $name && !in_array(owned_kind_of_name($lm[1], $isTop), ['', 'leftovers'], true)) return 'leftovers';
     if ($name === '.gallery-items.php') return 'items';
+    if ($name === '.gallery-stats.sqlite-wal' || $name === '.gallery-stats.sqlite-shm') return 'stats';   // (the side files SQLite keeps beside the view counts)
     if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json' || preg_match('/^\.gallery-stats\.joined-\d{8}-\d{6}\.php$/D', $name)) return 'stats';   // (the last: a JSON store set aside once its counts were joined to the database)
     if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-[0-9a-f]{8})?\.php$/D', $name)) return 'backups';   // (an optional mark at the end says which gallery made it: see tidy_backup_id)
     return '';
@@ -43,7 +47,8 @@ function owned_kind_info() {
         'links' => ['Share links', 'beside index.php', 'Every share link: what it covers, how long it lasts, its name.', 'Every share link stops working.'],
         'visits' => ['Visitor log', 'beside index.php', 'Who opened the gallery and each share link, what they looked at and when (a SQLite file).', 'The log is gone; it starts again from nothing.'],
         'backup' => ['Backup', 'beside index.php', 'The one backup copy (a ZIP of your settings, share links, collections, captions, view counts, the visitor log and the rest that can\'t be made again) and the note of how the last one went. It holds password hashes, the install secret and visitor IP addresses.', 'The backup is gone; the next one is made within a week (or press Back up now in the Health check).'],
-        'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.5 kept in these files. Nothing reads them any more.', 'They are gone; nothing else changes.'],
+        'leftovers' => ['Left-over temporary files', 'beside index.php or in a folder', 'Half-written copies that a save, a Restore or an update leaves when it is cut off. Nothing reads them.', 'They are gone; nothing else changes.'],
+        'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.5 kept in these files. Nothing reads them any more, and the backup holds them until you remove them.', 'They are gone; nothing else changes.'],
         'collections' => ['Collections', 'beside index.php', 'The collections you made: where each one lives and which folders and photos it holds.', 'Every collection is gone; the folders and photos in them are untouched.'],
         'secret' => ['Install secret', 'beside index.php', 'Keeps sign-ins and private-view cookies from being forged.', 'Everyone signed in is signed out.'],
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],
@@ -70,7 +75,7 @@ function owned_verify($path, $folderReal, $kind, $isTop) {
     if ($kind === 'meta') return $name === MEDIA_META_FILE && basename($folderReal) === '.gallery-cache' && owned_head_ok($path, true);
     if (owned_kind_of_name($name, $isTop) !== $kind) return false;
     if ($kind === 'stats' && !owned_stats_file_ok($path, $name)) return false;
-    if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings');
+    if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings' && $kind !== 'leftovers');
     return true;   // (a .sqlite or .json file of view counts has no guard line)
 }
 
@@ -143,7 +148,7 @@ function owned_plan($dir, $files) {
     foreach ($entries as $k => $e) {
         if (strpos($e['path'], $dir . '/') === 0) continue;
         $mapped++;   // (a file in a place from elsewhere on the server: another gallery may use it too)
-        if (in_array($e['kind'], ['items', 'stats', 'backups'], true)) {   // (what another gallery showing the same folder shares: its captions, private marks, view counts, backups)
+        if (in_array($e['kind'], ['items', 'stats', 'backups', 'leftovers'], true)) {   // (what another gallery showing the same folder shares: its captions, private marks, view counts, backups)
             $entries[$k]['shared'] = true; $shared['count']++; $shared['bytes'] += $e['size'];
             $where = dirname($e['rel']); if ($where === '.') $where = '(top level)';   // (the folder as the gallery names it)
             $shared['where'][$where] = ($shared['where'][$where] ?? 0) + 1;
@@ -185,6 +190,7 @@ function owned_readme($plan, $withThumbs) {
         if ($k === 'thumbs') { if ($withThumbs) $t .= "\r\n- " . $i[0] . ' (' . $i[2] . ") in the .gallery-cache folders.\r\n"; continue; }
         if (empty($by[$k])) continue;
         $t .= "\r\n- " . $i[0] . ': ' . $i[2] . "\r\n";
+        if ($k === 'backup' || $k === 'visits') { $t .= '    ' . count($by[$k]) . ' file' . (count($by[$k]) === 1 ? '' : 's') . " (their names carry a secret, so they are not printed here)\r\n"; continue; }
         foreach (array_slice($by[$k], 0, 12) as $r) $t .= '    ' . $r . "\r\n";
         if (count($by[$k]) > 12) $t .= '    and ' . (count($by[$k]) - 12) . " more\r\n";
     }
@@ -252,7 +258,7 @@ function owned_delete($plan, $alsoShared = false) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
     // order: everything in the folders and the thumbnails first, then the gallery's own data, the settings file last
-    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
+    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'leftovers', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
     $deleted = 0; $thumbs = 0; $left = [];
     $byKind = [];
     foreach ($plan['entries'] as $e) $byKind[$e['kind']][] = $e;
@@ -305,7 +311,7 @@ function files_admin_action($action, $dir, $files) {
     if ((string) ($_POST['typed'] ?? '') !== 'DELETE') $bad('Type DELETE (in capitals) to go on.');
     if (!hash_equals($plan['fingerprint'], (string) ($_POST['fingerprint'] ?? ''))) $bad('The list has changed since you looked at it, so nothing was deleted. Look at it again.');
     $copied = (int) ($_SESSION['files_zip_done'] ?? 0) > time() - 3600;
-    if (!$copied && ($_POST['nocopy'] ?? '') !== '1') $bad('Download a copy first, or say that you do not want one.');
+    if (!$copied && ($_POST['nocopy'] ?? '') !== '1') $bad('No whole copy has been downloaded yet, so nothing was deleted. Press Download ZIP and wait until the browser says the file has arrived (a copy that was cancelled or cut off does not count), or tick "I don\'t want a copy".');
     $res = owned_delete($plan, ($_POST['also_shared'] ?? '') === '1');
     if (($_POST['also_shared'] ?? '') !== '1' && !empty($plan['shared']['count'])) {
         $res['sharedLeft'] = (int) $plan['shared']['count'];
@@ -331,8 +337,9 @@ function files_download_route($dir, $files) {
     $total = archive_total_size($sizes, $names, $zip64);
     $slot = archive_take_slot();
     if ($slot === null) { http_response_code(503); header('Retry-After: 30'); header('Content-Type: text/plain; charset=UTF-8'); echo 'An archive is already being made. Try again in a minute.'; return; }
-    $_SESSION['files_zip_done'] = time();
+    $sid = session_id();
     session_write_close();
+    @ini_set('session.use_cookies', '0'); @ini_set('session.cache_limiter', '');   // (changed now, while headers can still be: the session is opened again after the last byte, and has no cookie to send then)
     @set_time_limit(0);
     ignore_user_abort(false);
     @ini_set('zlib.output_compression', '0');
@@ -344,8 +351,16 @@ function files_download_route($dir, $files) {
     header('X-Content-Type-Options: nosniff');
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-store');
-    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;
-    archive_stream($entries, $zip64);
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;   // (no bytes were sent: not a copy)
+    $sent = archive_stream($entries, $zip64);
+    if ($sent === true) files_mark_copy_taken($sid);   // (only now has the whole copy gone out: a download the browser dropped makes archive_stream stop and say false)
+}
+
+/** Notes in the signed-in session that a whole copy has been sent (the Delete accepts that for an hour). The headers are long gone by now, so the session is opened by its id without a cookie. */
+function files_mark_copy_taken($sid) {
+    if ((string) $sid === '') return;
+    @session_id((string) $sid);
+    if (@session_start()) { $_SESSION['files_zip_done'] = time(); session_write_close(); }
 }
 
 

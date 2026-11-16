@@ -2397,10 +2397,10 @@
         go.addEventListener('click', run); pw.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); run(); } });
         b.after(pw, ' ', go); pw.focus(); return;
       }
-      var name = { run: 'backup_run', restore: 'backup_restore_log', newlog: 'backup_new_log' }[act]; if (!name) return;
+      var name = { run: 'backup_run', accept: 'backup_accept', restore: 'backup_restore_log', newlog: 'backup_new_log' }[act]; if (!name) return;
       [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = true; });
-      say(act === 'run' ? 'Backing up\u2026' : 'Working\u2026');
-      post(name).then(function (j) {
+      say(act === 'run' || act === 'accept' ? 'Backing up\u2026' : 'Working\u2026');
+      post(name, act === 'accept' ? { name: b.getAttribute('data-backup-name') || '' } : null).then(function (j) {
         if (j.ok && act === 'run') {   // Back up now: only the Backup row and the Backup box are drawn again, in place (no reload), and the row says what was done
           window.__siteDirty = true;
           return redrawBackupPart(panel).then(function (done) {

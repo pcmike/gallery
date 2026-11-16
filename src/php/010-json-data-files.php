@@ -94,10 +94,11 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
     // on the current one, or it would save its change on top of a version that no longer exists.
     // (Every time round means another writer got in and replaced the file while this one waited, so the tries can't run out
     // for as long as writers are making progress: the cap is only there to end a loop that would otherwise never finish.)
+    $lockFailed = false;
     for ($try = 0, $fp = false; $try < 200; $try++) {
         $fp = @fopen($path, 'c+');
         if (!$fp) break;
-        if (!flock($fp, LOCK_EX)) { fclose($fp); $fp = false; break; }   // (a lock that can't be taken is a save that can't be made safely)
+        if (!flock($fp, LOCK_EX)) { fclose($fp); $fp = false; $lockFailed = true; break; }   // (a lock that can't be taken is a save that can't be made safely)
         clearstatcache(true, $path);
         $here = @stat($path); $mine = fstat($fp);
         if ($here && $mine && $here['ino'] === $mine['ino'] && $here['dev'] === $mine['dev']) break;
@@ -108,6 +109,7 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
         // so the admin can say so instead of reporting a save that never
         // happened (see run_admin_route).
         $GLOBALS['__data_write_failed'] = true;
+        $GLOBALS['__data_write_cause'][$path] = $try >= 200 ? 'busy' : ($lockFailed ? 'lock' : (is_dir($path) ? 'dir' : (file_exists($path) && !(is_readable($path) && is_writable($path)) && is_writable(dirname($path)) ? 'file' : 'folder')));
         return $data;
     }
     $raw = (string) stream_get_contents($fp);
@@ -127,6 +129,7 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
             $saved = true;
         } else {
             $GLOBALS['__data_write_failed'] = true;   // disk full, quota, ...
+            $GLOBALS['__data_write_cause'][$path] = 'space';
         }
     }
     // The empty file that opening it made (there was none before) is taken away again when nothing was saved into it: an empty file
@@ -212,6 +215,13 @@ function data_write_failure_text($folder = 'this folder') {
         }
         return 'Nothing was saved: a settings file in ' . $folder . ' can\'t be read (it may have been cut short or edited by hand), so it was left exactly as it is. Restore .gallery-items.php there from a backup, or delete it to start that folder fresh. Until then its photos stay hidden from visitors. The Health check in Settings names it.';
     }
+    $cause = (array) ($GLOBALS['__data_write_cause'] ?? []);
+    $cpath = (string) array_key_first($cause); $cname = basename($cpath); $why = $cause[$cpath] ?? '';
+    if ($why === 'busy') return 'Nothing was saved: other saves kept changing ' . $cname . ' in ' . $folder . ' for too long, so this one gave up without changing it. Nothing was lost. Wait a moment and save again.';
+    if ($why === 'lock') return 'Nothing was saved: the server would not let the gallery lock ' . $cname . ' in ' . $folder . ', which it needs to save safely, so the file was left as it is. Ask your host whether file locking is turned off there, then try again.';
+    if ($why === 'dir') return 'Nothing was saved: ' . $cname . ' in ' . $folder . ' is a folder, not a file, so the gallery can\'t keep its settings there. Move or remove that folder, then try again.';
+    if ($why === 'file') return 'Nothing was saved: ' . $cname . ' in ' . $folder . ' can\'t be opened by the web server (its permissions don\'t allow it), so it was left as it is. Give the web server\'s user read and write permission on that file (on many hosts: chmod 644 or 664, owned by that user), then try again.';
+    if ($why === 'space') return 'Nothing was saved: there was no room to write ' . $cname . ' in ' . $folder . ' (the disk or the account\'s storage allowance is full), so it was left exactly as it is. Free some space, then try again.';
     return 'Nothing was saved: ' . $folder . ' isn\'t writable by the web server. Give the web server\'s user write permission on it (on many hosts: chmod 755 or 775 on the folder, owned by that user), then try again.';
 }
 

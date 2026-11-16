@@ -31,9 +31,16 @@ function health_heavy($dir, $files, $force) {
     $p = __DIR__ . '/.gallery-health-cache.php';
     $c = is_file($p) ? json_file_read($p, []) : [];
     $live = visitlog_find();
+    $zipNow = backup_find(); $zsig = $zipNow === null ? '' : basename($zipNow) . '|' . (int) @filesize($zipNow) . '|' . (int) @filemtime($zipNow);   // (a backup made, replaced or cut short since the last look: looked at again)
     $same = (($c['log'] ?? null) === null) === ($live === null) && ($c['file'] ?? '') === ($live === null ? '' : basename($live));   // (a log that came or went, or was swapped, since the last look: looked at again)
-    if (!$force && $same && array_key_exists('log', $c) && isset($c['at'], $c['stats']) && time() - (int) $c['at'] < 3600 && ($c['v'] ?? '') === GALLERY_VERSION) return $c;
-    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
+    if (!$force && $same && array_key_exists('log', $c) && isset($c['at'], $c['stats']) && time() - (int) $c['at'] < 3600 && ($c['v'] ?? '') === GALLERY_VERSION) {
+        if (($c['zsig'] ?? null) !== $zsig) {   // (the backup file was made, replaced or changed since: only it is looked through again, nothing else)
+            $c['zsig'] = $zsig; $c['zip'] = $zipNow === null ? null : backup_zip_verify($zipNow)[0];
+            if (is_writable(__DIR__)) json_file_update($p, [], function (&$d) use ($c) { $d = $c; });
+        }
+        return $c;
+    }
+    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
     if ($live !== null && visitlog_driver_ok()) $r['log'] = ['why' => backup_sqlite_check($live)];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if ($e['kind'] !== 'stats') continue;
@@ -57,7 +64,7 @@ function health_heavy($dir, $files, $force) {
 function backup_has_log() {
     $zip = backup_find(); if ($zip === null) return false;
     $ix = backup_zip_index($zip); if ($ix === null) return false;
-    foreach ($ix as $n => $m) if (preg_match('~^\.gallery-visits-[0-9a-f]{24}\.sqlite$~', $n)) return true;
+    foreach ($ix as $n => $m) if (preg_match('~^\.gallery-visits-[0-9a-f]{24}\.sqlite$~D', $n)) return true;
     return false;
 }
 
@@ -81,6 +88,8 @@ function health_database_rows($add, $dir, $files) {
     if ($logFile !== null && ($heavy['log']['why'] ?? '') !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
         $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $heavy['log']['why'] . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
+    } elseif (!$vlOk && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') {
+        $add($G, 'warn', 'The visitor log is from a newer version', $vlWhy . ' ' . $uses . ' The file is not damaged: the older Visitors history is safe in it.', null, health_backup_buttons(false, true, false));
     } elseif (!$vlOk) {
         $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
             'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',
@@ -117,15 +126,23 @@ function health_database_rows($add, $dir, $files) {
     }
     // --- the backup
     $buttons = health_backup_buttons(false, false, true);
-    $hasProblem = false; foreach ($bk['problems'] as $pr) if (is_array($pr)) $hasProblem = true;
+    $hasProblem = false; $heldRows = [];
+    foreach ($bk['problems'] as $pr) { if (!is_array($pr)) continue; if (($pr[2] ?? '') === 'held') $heldRows[] = $pr; else $hasProblem = true; }
+    foreach ($heldRows as $pr) {   // (a list that lost a lot: the backup kept the copy from before; the owner says whether the live one is right)
+        $nm = htmlspecialchars((string) $pr[0], ENT_QUOTES, 'UTF-8');
+        $add($G, 'warn', 'The backup kept the earlier copy of ' . $pr[0], $pr[1] . ', so the backup kept the copy from before (made ' . health_ago($bk['at']) . ') instead of this one. The live file was not touched. If they are meant to be gone, press the button and the next backup takes the live file; if not, put the file back from the backup (unzip it over the gallery\'s folder). Until then this part of the backup is not updated.', null,
+            '<div class="health-act"><button type="button" class="secondary" data-backup-act="accept" data-backup-name="' . $nm . '" data-backup-ask="Use the live copy of ' . $nm . ' in the backup from now on? The earlier copy in the backup is replaced by it.">That\'s right, use the new one</button> <span class="muted health-act-out" role="status" aria-live="polite"></span></div>');
+    }
     if (!is_writable(__DIR__)) $add($G, 'warn', 'No backup can be made', 'The gallery\'s folder is not writable by the web server, so the backup (a file beside index.php) can\'t be written. Make the folder writable.');
     elseif (!$bk['have']) {
         if ($bk['result'] === 'failed') $add($G, 'warn', 'There is no backup: the last try did not work', $bk['why'], null, $buttons);
         else $add($G, 'opt', 'No backup yet', 'The first one is made by itself after a coming visit, and then once a week. Or make it now.', null, $buttons);
+    } elseif (($heavy['zip'] ?? true) === false) {
+        $add($G, 'warn', 'The backup file is damaged', 'The backup from ' . health_ago($bk['at']) . ' does not check out when it is read back: the file was cut short or changed after it was made. Restore and Download refuse it, so nothing bad can come from it, but it can\'t help you either. Make a new one now.', null, $buttons);
     } elseif ($bk['result'] === 'failed' && $bk['tried'] > $bk['at']) {
         $add($G, 'warn', 'The last backup did not work', $bk['why'] . ' The backup from ' . health_ago($bk['at']) . ' is still there.', null, $buttons);
     } elseif ($hasProblem) {
-        $parts = []; foreach ($bk['problems'] as $pr) if (is_array($pr)) $parts[] = $pr[0] . ' ' . $pr[1] . ($pr[2] === 'carried' ? ' (the copy from the backup before is kept)' : ' (no earlier copy: it is not in the backup)');
+        $parts = []; foreach ($bk['problems'] as $pr) if (is_array($pr) && ($pr[2] ?? '') !== 'held') $parts[] = $pr[0] . ' ' . $pr[1] . ($pr[2] === 'carried' ? ' (the copy from the backup before is kept)' : ' (no earlier copy: it is not in the backup)');
         $add($G, 'warn', 'Backup made ' . health_ago($bk['at']) . ', but ' . count($parts) . ' part' . (count($parts) === 1 ? '' : 's') . ' could not be read soundly', implode('. ', array_slice($parts, 0, 3)) . (count($parts) > 3 ? '. And ' . (count($parts) - 3) . ' more.' : '.') . ' A damaged file never replaces a good copy in the backup.', null, $buttons);
     } elseif (time() - $bk['at'] > 2 * backup_week()) {
         $add($G, 'opt', 'The backup is ' . health_ago($bk['at']), 'It is made once a week by the first visit after the week; none has come since. Make one now.', null, $buttons);

@@ -27,11 +27,20 @@ function visitlog_path($set = null) {
     if ($path !== null) return $path;
     return $path = visitlog_find() ?? __DIR__ . '/.gallery-visits-' . bin2hex(random_bytes(12)) . '.sqlite';
 }
+/** Every log file there is by its exact name (a name that only looks like one, such as one that ends in a line break, is not one). */
+function visitlog_all() {
+    $out = [];
+    foreach ((array) glob(__DIR__ . '/.gallery-visits-*.sqlite') as $f) if (preg_match('~/\.gallery-visits-[0-9a-f]{24}\.sqlite$~D', $f) && is_file($f) && !is_link($f)) $out[] = $f;
+    sort($out);
+    return $out;
+}
 /** The log's file that is already there (the smallest name if two first hits made one each at the same moment), or null. */
 function visitlog_find() {
-    $best = null;
-    foreach ((array) glob(__DIR__ . '/.gallery-visits-*.sqlite') as $f) if (preg_match('~/\.gallery-visits-[0-9a-f]{24}\.sqlite$~', $f) && is_file($f) && !is_link($f) && ($best === null || $f < $best)) $best = $f;
-    return $best;
+    return visitlog_all()[0] ?? null;
+}
+/** The log and the side files SQLite keeps beside it are for the web server user alone (they hold every visitor's address, as the backup does). */
+function visitlog_private($file) {
+    foreach (['', '-wal', '-shm'] as $sfx) if (is_file($file . $sfx) && !is_link($file . $sfx) && (@fileperms($file . $sfx) & 077) !== 0) @chmod($file . $sfx, 0600);
 }
 function visitlog_driver_ok() { return class_exists('PDO') && in_array('sqlite', \PDO::getAvailableDrivers(), true); }   // (spelt with the leading backslash on purpose: the upgrade test forces the view counts' flat-file mode by replacing the other spelling)
 
@@ -50,14 +59,16 @@ function visitlog_schema($pdo) {
 }
 
 function visitlog_open($file, $new) {
+    if ($new) { @touch($file); @chmod($file, 0600); }   // (made private before SQLite makes its side files, which copy the file's permissions)
     $pdo = new PDO('sqlite:' . $file);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->exec('PRAGMA busy_timeout = 5000');
+    $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
+    if ($ver > 3) { $pdo = null; throw new RuntimeException('newer'); }   // (a log kept by a newer version of the gallery: nothing is written into what this version can't know the shape of)
     if ($new) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
     $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA synchronous = NORMAL');
-    $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
     if ($ver < 3) {   // (the tables are made once, not on every connection; version 2 added the log of disk activity, version 3 the count of times a photo was on a visitor's screen)
         if ($ver < 1) visitlog_schema($pdo);
         if ($ver < 2) changes_schema($pdo);
@@ -83,10 +94,11 @@ function visitlog_db() {
             foreach ([$file, $file . '-wal', $file . '-shm'] as $f) @unlink($f);
             $pdo = visitlog_open(visitlog_path($best), false);
         }
+        visitlog_private(visitlog_path());
         $db = $pdo;
     } catch (Throwable $e) {
-        error_log('gallery: the visitor log could not be opened: ' . $e->getMessage());
-        $GLOBALS['__visitlog_error'] = 'cantwrite';
+        if ($e->getMessage() === 'newer') $GLOBALS['__visitlog_error'] = 'newer';
+        else { error_log('gallery: the visitor log could not be opened: ' . $e->getMessage()); $GLOBALS['__visitlog_error'] = 'cantwrite'; }
         $db = null;
     }
     return $db;
@@ -98,6 +110,7 @@ function visitlog_check() {
     if ($r !== null) return $r;
     if (!visitlog_driver_ok()) return $r = [false, 'This server\'s PHP has no SQLite (the pdo_sqlite extension), which the visitor log needs.'];
     $db = visitlog_db();
+    if ($db === null && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') return $r = [false, 'The visitor log was made by a newer version of the gallery than this one, so nothing is written into it (it is left exactly as it is). Put the newer index.php back, or set the log aside in the Health check to start a new one with this version.'];
     if ($db === null) return $r = [false, 'SQLite is there, but the log\'s file can\'t be made or written in the gallery\'s folder. The web server has to be allowed to write there.'];
     try { $db->exec('INSERT OR REPLACE INTO meta (k, v) VALUES (\'checked\', \'' . time() . '\')'); }
     catch (Throwable $e) { return $r = [false, 'SQLite is there, but writing to the log failed (' . $e->getMessage() . ').']; }

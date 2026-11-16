@@ -18,3 +18,11 @@ Let each share link choose how its folders are shown, instead of always followin
 - **Sketch:** a per-link "Show folders as: Cards / Flat / Same as the gallery" in the link form, with the choice kept on the link and applied to its pages and its preview.
 - **Note:** held back for now because the link form is already long and few people would change it. Worth building if people ask for one link to look different from the gallery.
 
+
+## The backup noticing changed records, not only removed ones
+
+Make the backup's "this part lost a lot" check look inside records, so a bulk edit is caught as well as a bulk delete.
+
+- **Today:** the weekly backup keeps the earlier copy of a list (share links, collections, a folder's captions file) when at least 3 records, and at least a quarter of what the backup held, have gone from the live file. It looks only at which records are still there. A caption emptied or a private mark flipped changes a record without removing it, so it is not caught, and the changed copy replaces the old one.
+- **Sketch:** compare the records field by field (for captions, the caption, the location and the private mark), and hold the part when many of them changed the same way, with the same Health row and one-click confirm as for removed records.
+- **Note:** held back because it needs a rule for what counts as "many" for each field, and an ordinary bulk edit (Tidy up, a long editing session) would trip it often. Worth revisiting once the removed-records check has been in use for a while and the owner knows how often it speaks up.

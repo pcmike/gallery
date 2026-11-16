@@ -5562,7 +5562,7 @@ if ($haveUnzip) {
     $fListZ = $fAct(['action' => 'files_list']);
     [$fSt, $fZ, $fR] = $fZipFetch(false);
     $fNames = $fSt === 200 ? $zipNames($fZ) : [];
-    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name; the backup is not packed into it, and the log goes in as one consistent copy), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count(array_filter(array_merge($fListZ['paths'], $fListZ['shared']['paths'] ?? []), fn ($pp) => !preg_match('~\.gallery-backup(?:-[0-9a-f]{24}\.zip(?:\.tmp)?|\.php)$|\.sqlite-(?:wal|shm)$~', $pp))) + 1, json_encode($fNames));
+    check('[files made] the ZIP starts with a README and holds exactly the gallery\'s own files by their paths (the mapped folder under its name; the backup is not packed into it, and the log goes in as one consistent copy), with the guard line still on the data files, and no photo, note, decoy or thumbnail', $fSt === 200 && ($fNames[0] ?? '') === 'README.txt' && in_array('Pics/.gallery-items.php', $fNames, true) && in_array('Mapped/.gallery-items.php', $fNames, true) && in_array('.gallery-config.php', $fNames, true) && in_array('Pics/.gallery-cache/meta1.php', $fNames, true) && !array_filter(array_slice($fNames, 1), fn ($n) => preg_match('/\.(jpg|md|bak|old|txt)$|NoGuard|Linked|deep|index\.php$|\.gallery-setup/', $n)) && str_starts_with((string) $zipEntry($fZ, 'Pics/.gallery-items.php'), $fGuard) && count($fNames) === count(array_filter(array_merge($fListZ['paths'], $fListZ['shared']['paths'] ?? []), fn ($pp) => !preg_match('~\.gallery-backup(?:-[0-9a-f]{24}\.zip(?:\.tmp)?|\.php|\.lock)$|\.sqlite-(?:wal|shm)$~', $pp))) + 1, json_encode($fNames));
     $fReadme = (string) $zipEntry($fZ, 'README.txt');
     check('[files made] the README says what the files are, how to put them back and where the mapped folder is from, and warns that it is private', str_contains($fReadme, 'unzip this file over the same folder') && str_contains($fReadme, 'Mapped/') && str_contains($fReadme, $fxFMap) && str_contains($fReadme, 'private'));
     $fToken = basename((string) ($fR['url'] ?? ''));
@@ -5599,7 +5599,7 @@ check('[files made] the delete reports what it did and removes only the gallery\
 $fNotOurs = ['/one.jpg', '/Pics/a.jpg', '/Pics/b.jpg', '/Notes/n.jpg', '/Notes/gallery.md', '/Linked/l.jpg', '/NoGuard/g.jpg', '/index.php', '/.gallery-items.php.bak', '/.gallery-config.php.old', '/.gallery-linklog-zz.php', '/.gallery-signin-0123456789ab.php.bak', '/.gallery-signin-notahexid1234.php', '/.gallery-signin-0123456789cd.php', '/Pics/my.gallery-items.php', '/NoGuard/.gallery-items.php', '/deep/.gallery-items.php', '/.gallery-setup', '/Pics/.gallery-cache/notes.txt'];
 $fSame = true; foreach ($fNotOurs as $k) if (($fBefore[$k] ?? null) !== ($fAfter[$k] ?? 'gone')) { $fSame = false; echo "    changed or gone: $k\n"; }
 check('[files made] every photo, note, decoy, lookalike and index.php is exactly as it was (checksums before and after), the symlink still points where it did, and the file outside is untouched', $fSame && ($fAfter['/Linked/.gallery-items.php'] ?? '') === 'link:' . "$fxFOut/important.txt" && file_get_contents("$fxFOut/important.txt") === 'a file outside the gallery that a link points at' && ($fMapAfter['/m.jpg'] ?? '') === ($fMapBefore['/m.jpg'] ?? 'x'));
-check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !glob("$fxF/.gallery-visits-*.sqlite") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-(?:signin-[0-9a-f]{12}\.php|visits-[0-9a-f]{24}\.sqlite|backup-[0-9a-f]{24}\.zip|backup\.php|health-cache\.php)$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
+check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !glob("$fxF/.gallery-visits-*.sqlite") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-(?:signin-[0-9a-f]{12}\.php|visits-[0-9a-f]{24}\.sqlite|backup-[0-9a-f]{24}\.zip|backup\.(?:php|lock)|health-cache\.php)$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
 @unlink("$fxF/.gallery-setup");   // (the owner's own marker file is left by the delete; here it is removed by hand to see the plain state)
 check('[files made] afterwards the gallery has no admin (only the set-up page, which asks for a code), the old sign-in cookie opens nothing, and the gallery itself is plain and public', !str_contains(http_get("$baseF/?admin", [])[1], 'Gallery Admin') && str_contains(http_get("$baseF/?admin", [])[1], 'Set up your gallery') && !str_contains(http_get("$baseF/?admin", ["Cookie: $fCookie"])[1], 'Gallery Admin') && http_get("$baseF/")[0] === 200);
 @unlink("$fxF/gallery-setup-code.php");
@@ -10754,6 +10754,14 @@ $wrP = $wrMake('f2.php'); $wrBefore = file_get_contents($wrP);
 $wrOut = $wrRun('$GLOBALS["__data_write_failed"] = false; json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = str_repeat("x", 20000); }, true); echo json_encode(!empty($GLOBALS["__data_write_failed"]));', 8);
 if ($wrDisk) check('[data writer] a save that does not fit on the disk fails and leaves the good file byte for byte as it was (it used to cut it to the size that fitted), with no half-written leftover', trim($wrOut) === 'true' && file_get_contents($wrP) === $wrBefore && $wrLeft() === [], $wrOut . ' / ' . filesize($wrP));
 else skip('[data writer] a save that does not fit on the disk leaves the good file as it was', 'this PHP is stopped by a file-size limit instead of getting a failed write');
+// F9: a save that fails says WHY (the full disk here; the other causes are in the group 13 block)
+$wrOut2 = $wrRun('$GLOBALS["__data_write_failed"] = false; $GLOBALS["__data_write_cause"] = []; json_file_update(' . var_export($wrP, true) . ', ["items" => []], function (&$d) { $d["items"]["p.jpg"]["caption"] = str_repeat("x", 20000); }, true); echo data_write_failure_text("this folder");', 8);
+if ($wrDisk) check('[save causes] a save that does not fit on the disk says there was no room (the disk or the account\'s allowance is full), that the file is as it was, and what to do: not "the folder isn\'t writable"', str_contains($wrOut2, 'no room') && str_contains($wrOut2, 'Free some space') && !str_contains($wrOut2, "isn't writable"), $wrOut2);
+else skip('[save causes] a save that does not fit on the disk says there was no room', 'this PHP is stopped by a file-size limit instead of getting a failed write');
+// the two causes that can't be made to happen here (another writer replacing the file two hundred times running; the system refusing a lock) are checked for what they say
+$wrOut3 = $wrRun('$GLOBALS["__data_write_cause"] = [' . var_export($wrP, true) . ' => "busy"]; echo data_write_failure_text("this folder"); echo "|"; $GLOBALS["__data_write_cause"] = [' . var_export($wrP, true) . ' => "lock"]; echo data_write_failure_text("this folder");');
+[$wrBusy, $wrLock] = explode('|', $wrOut3) + ['', ''];
+check('[save causes] "other saves kept changing the file" says so and that nothing was lost; "the system refused a lock" says so and who to ask; neither says "isn\'t writable"', str_contains($wrBusy, 'kept changing') && str_contains($wrBusy, 'Nothing was lost') && str_contains($wrLock, 'lock') && str_contains($wrLock, 'host') && !str_contains($wrBusy . $wrLock, "isn't writable"), $wrOut3);
 // ...but where a temporary file can't be added and the file itself can be changed, the save still happens in place, and a failure there puts the old text back
 if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
     $wrRo = "$wrDir/ro"; mkdir($wrRo); $wrP = "$wrRo/f2b.php"; file_put_contents($wrP, data_file_guard_line() . json_encode($wrGood)); $wrBefore = file_get_contents($wrP); chmod($wrRo, 0555);
@@ -12143,6 +12151,291 @@ return false;
 }
 
 /* --------------------------------------------------------------------- */
+
+/* --------------------------------------------------------------------- */
+// audit group 13: the backup and Restore (one copy, a fresh name each time, a lock that dies with the run, stale copies in the temp folder, the response not held,
+// Health looks at the zip again, "Download a copy first" means a copy arrived, leftovers in Files-made, a log from a newer version is not written to,
+// causes named in a failed save, Restore beside a second log, the log's permissions, the older logs in the backup, and the held part)
+echo "== audit group 13: the backup ==\n";
+{
+    $g13Site = function ($label, array $cfg = [], $workers = 1, array $env = [], $signin = true) use ($indexSrc) {
+        $dir = new_fixture_dir($label);
+        mkdir("$dir/Alpha", 0777, true);
+        make_jpeg("$dir/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+        file_put_contents("$dir/.gallery-config.php", cfg_text($cfg + ['ADMIN_PASSWORD' => 'g13-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$dir/index.php");
+        foreach ($env as $k => $v) putenv("$k=$v");
+        if ($workers > 1) putenv("PHP_CLI_SERVER_WORKERS=$workers");
+        $port = find_free_port(); start_server($dir, $port);
+        putenv('PHP_CLI_SERVER_WORKERS'); foreach ($env as $k => $v) putenv($k);
+        $s = ['dir' => $dir, 'port' => $port, 'base' => "http://127.0.0.1:$port", 'own' => [], 'csrf' => '', 'admin' => null];
+        if ($signin) {
+            [, , $h] = http_post($s['base'] . '/?admin', ['access_code' => 'g13-admin-pw-1'], [], false);
+            $s['own'] = ['Cookie: ' . extract_cookie_header($h)];
+            $s['csrf'] = (string) extract_csrf_token(http_get($s['base'] . '/?admin&classic=1', $s['own'])[1]);
+            $s['admin'] = fn (array $f) => json_decode(http_post($s['base'] . '/?admin', $f + ['csrf_token' => $s['csrf']], array_merge($s['own'], ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+        }
+        return $s;
+    };
+    $g13Zips = fn ($dir) => array_values(array_filter(glob("$dir/.gallery-backup-*") ?: [], fn ($f) => preg_match('~/\.gallery-backup-[0-9a-f]{24}\.zip$~D', $f)));
+    $g13Tmps = fn ($dir) => array_values(glob("$dir/.gallery-backup-*.tmp") ?: []);
+    $g13State = function ($dir) { $p = "$dir/.gallery-backup.php"; if (!is_file($p)) return []; $raw = (string) file_get_contents($p); return json_decode(substr($raw, (int) strpos($raw, "\n") + 1), true) ?: []; };
+    $g13StateSet = function ($dir, array $kv) use ($g13State) { file_put_contents("$dir/.gallery-backup.php", "<?php http_response_code(404); exit; ?>\n" . json_encode(array_merge($g13State($dir), $kv))); };
+    $g13Idx = function ($path) {
+        $raw = (string) @file_get_contents($path); $n = strlen($raw);
+        if ($n < 22) return null;
+        $e = unpack('Vsig/vdisk/vcd/vn/vtotal/Vlen/Voff/vcomment', substr($raw, $n - 22));
+        if ($e['sig'] !== 0x06054b50) return null;
+        $out = []; $at = $e['off'];
+        for ($i = 0; $i < $e['n']; $i++) {
+            $h = unpack('Vsig/vmade/vneed/vflags/vmethod/vtime/vdate/Vcrc/Vcsize/Vusize/vnlen/velen/vclen/vdisk/vint/Vext/Voff', substr($raw, $at, 46));
+            $out[substr($raw, $at + 46, $h['nlen'])] = ['crc' => $h['crc'], 'size' => $h['usize'], 'offset' => $h['off']];
+            $at += 46 + $h['nlen'] + $h['elen'] + $h['clen'];
+        }
+        return $out;
+    };
+    $g13Read = function ($path, $name) use ($g13Idx) {
+        $ix = $g13Idx($path); if (!isset($ix[$name])) return null;
+        $raw = (string) file_get_contents($path); $o = $ix[$name]['offset'];
+        $lh = unpack('Vsig/vver/vflags/vmethod/vtime/vdate/Vcrc/Vcsize/Vusize/vnlen/velen', substr($raw, $o, 30));
+        return substr($raw, $o + 30 + $lh['nlen'] + $lh['elen'], $ix[$name]['size']);
+    };
+    $g13Json = fn ($raw) => is_string($raw) ? (json_decode(substr($raw, (int) strpos($raw, "\n") + 1), true) ?? 'bad') : null;
+    $g13Make = function ($zipPath, array $entries) {   // a stored ZIP of the kind the gallery writes: name => data
+        $out = ''; $cd = ''; $n = 0;
+        foreach ($entries as $name => $data) {
+            $crc = hexdec(hash('crc32b', $data)); $off = strlen($out);
+            $out .= pack('VvvvvvVVVvv', 0x04034b50, 20, 0, 0, 0, 0x21, $crc, strlen($data), strlen($data), strlen($name), 0) . $name . $data;
+            $cd .= pack('VvvvvvvVVVvvvvvVV', 0x02014b50, 20, 20, 0, 0, 0, 0x21, $crc, strlen($data), strlen($data), strlen($name), 0, 0, 0, 0, 0, $off) . $name;
+            $n++;
+        }
+        file_put_contents($zipPath, $out . $cd . pack('VvvvvVVv', 0x06054b50, 0, 0, $n, $n, strlen($cd), strlen($out), 0));
+    };
+    $g13BigDb = function ($path, $mb) { $d = new PDO('sqlite:' . $path); $d->exec('PRAGMA journal_mode=DELETE'); $d->exec('CREATE TABLE junk (b BLOB)'); $d->beginTransaction(); for ($i = 0; $i < $mb; $i++) $d->exec('INSERT INTO junk VALUES (randomblob(1048576))'); $d->commit(); $d = null; };
+    $g13Head = fn ($s) => $g13Zips($s['dir']);
+    // one GET over a raw socket: [seconds until the response was over, bytes read]; $stopAfter closes the connection early; $headers adds request lines
+    $g13Get = function ($port, $path, array $headers = [], $stopAfter = null, $method = 'GET') {
+        $t0 = microtime(true);
+        $sock = @stream_socket_client("tcp://127.0.0.1:$port", $en, $es, 5);
+        if (!$sock) return [0.0, 0, ''];
+        fwrite($sock, "$method $path HTTP/1.1\r\nHost: x\r\nUser-Agent: g13 Mozilla\r\nConnection: close\r\n" . implode("\r\n", $headers) . ($headers ? "\r\n" : '') . "\r\n");
+        stream_set_timeout($sock, 60);
+        $buf = ''; while (!str_contains($buf, "\r\n\r\n") && !feof($sock)) { $c = fread($sock, 8192); if ($c === false || $c === '') break; $buf .= $c; }
+        $head = (string) substr($buf, 0, (int) strpos($buf, "\r\n\r\n")); $body = (string) substr($buf, (int) strpos($buf, "\r\n\r\n") + 4); $got = strlen($body);
+        $len = preg_match('/^Content-Length:\s*(\d+)/mi', $head, $m) ? (int) $m[1] : null;
+        if ($method !== 'HEAD') while (!feof($sock) && ($len === null || $got < $len) && ($stopAfter === null || $got < $stopAfter)) { $c = fread($sock, 65536); if ($c === false || $c === '') break; $got += strlen($c); }
+        fclose($sock);
+        return [microtime(true) - $t0, $got, $head];
+    };
+
+    // ---- F10: eight first requests at once make ONE backup (and D13: each new backup has a name of its own) ----
+    $g1 = $g13Site('g13-first', [], 8, [], false);
+    $g13BigDb("{$g1['dir']}/.gallery-stats.sqlite", 60);
+    $g1Cmd = escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('$i = $argv[1]; @file_get_contents("http://127.0.0.1:' . $g1['port'] . '/", false, stream_context_create(["http" => ["timeout" => 60, "header" => "User-Agent: Par$i Mozilla\r\n"]]));');
+    $g1Procs = []; for ($i = 0; $i < 8; $i++) $g1Procs[] = proc_open($g1Cmd . ' ' . $i, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $g1Pipes);
+    foreach ($g1Procs as $pp) proc_close($pp);
+    for ($i = 0; $i < 80 && (!$g13Zips($g1['dir']) || $g13Tmps($g1['dir'])); $i++) usleep(250000);
+    sleep(2);
+    check('[backup first] eight first requests at the same moment make one backup ZIP, and no half-made file is left', count($g13Zips($g1['dir'])) === 1 && !$g13Tmps($g1['dir']), json_encode([array_map('basename', $g13Zips($g1['dir'])), array_map('basename', $g13Tmps($g1['dir']))]));
+    // the same thing without relying on luck: the sign-in's own page starts the first backup (the 100 MB database keeps it busy for seconds), and "Back up now" is pressed while it runs
+    $g1c = $g13Site('g13-first2', [], 4, [], false);
+    $g13BigDb("{$g1c['dir']}/.gallery-stats.sqlite", 100);
+    [, , $g1cH] = http_post($g1c['base'] . '/?admin', ['access_code' => 'g13-admin-pw-1'], [], false);
+    $g1cOwn = ['Cookie: ' . extract_cookie_header($g1cH)]; $g1cCsrf = (string) extract_csrf_token(http_get($g1c['base'] . '/?admin&classic=1', $g1cOwn)[1]);
+    $g1cBusyAt = microtime(true); $g1cR = json_decode(http_post($g1c['base'] . '/?admin', ['csrf_token' => $g1cCsrf, 'action' => 'backup_run'], array_merge($g1cOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    for ($i = 0; $i < 80 && (!$g13Zips($g1c['dir']) || $g13Tmps($g1c['dir'])); $i++) usleep(250000);
+    sleep(2);
+    check('[backup first] "Back up now" pressed while the first backup is being made does not make a second ZIP: it is told one is being made (or it waited and found it done), and one ZIP is left', count($g13Zips($g1c['dir'])) === 1 && !$g13Tmps($g1c['dir']) && (($g1cR['busy'] ?? false) === true || ($g1cR['ok'] ?? false) === true), json_encode([$g1cR, array_map('basename', $g13Zips($g1c['dir']))]));
+    $g1Adm = (function () use (&$g1) { [, , $h] = http_post($g1['base'] . '/?admin', ['access_code' => 'g13-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($h)]; $csrf = (string) extract_csrf_token(http_get($g1['base'] . '/?admin&classic=1', $own)[1]); return fn (array $f) => json_decode(http_post($g1['base'] . '/?admin', $f + ['csrf_token' => $csrf], array_merge($own, ['X-Requested-With: gallery-fetch']))[1], true) ?: []; })();
+    $g1Before = array_map('basename', $g13Zips($g1['dir']));
+    $g1R = $g1Adm(['action' => 'backup_run']); $g1After = array_map('basename', $g13Zips($g1['dir']));
+    $g1R2 = $g1Adm(['action' => 'backup_run']); $g1After2 = array_map('basename', $g13Zips($g1['dir']));
+    check('[backup name] every new backup has a fresh name and the old one is gone: still one ZIP, in the same pattern, readable only by the web server user', ($g1R['ok'] ?? null) === true && count($g1After) === 1 && $g1After !== $g1Before && count($g1After2) === 1 && $g1After2 !== $g1After && (fileperms($g13Zips($g1['dir'])[0]) & 0777) === 0600, json_encode([$g1Before, $g1After, $g1After2]));
+    check('[backup name] the lock is a file of its own (the same name every time, so two runs can never pick different ones)', is_file("{$g1['dir']}/.gallery-backup.lock") && !$g13Tmps($g1['dir']));
+
+    // ---- F17: a lock that is held means "being made right now"; a leftover .tmp that nobody holds does not ----
+    $g15 = $g13Site('g13-lock', []);
+    $g15['admin'](['action' => 'backup_run']);
+    $g15Stale = "{$g15['dir']}/.gallery-backup-" . bin2hex(random_bytes(12)) . '.zip.tmp'; file_put_contents($g15Stale, 'half a backup');
+    $g15R = $g15['admin'](['action' => 'backup_run']);
+    check('[backup lock] a half-made file left by a killed run that nothing holds does not make "Back up now" say it is being made right now: the backup is made and the file goes', ($g15R['ok'] ?? null) === true && !is_file($g15Stale), json_encode($g15R));
+    $g15Lock = fopen("{$g15['dir']}/.gallery-backup.lock", 'c'); flock($g15Lock, LOCK_EX);
+    $g15Busy = $g15['admin'](['action' => 'backup_run']);
+    flock($g15Lock, LOCK_UN); fclose($g15Lock);
+    $g15After = $g15['admin'](['action' => 'backup_run']);
+    check('[backup lock] while another run holds the lock, "Back up now" says one is being made, and once it is let go the backup is made', ($g15Busy['ok'] ?? null) === false && ($g15Busy['busy'] ?? null) === true && ($g15After['ok'] ?? null) === true, json_encode([$g15Busy, $g15After]));
+
+    // ---- F11: copies a killed backup left in the temp folder are swept (only the gallery's own, only old ones) ----
+    $g4Tmp = new_fixture_dir('g13-tmpdir');
+    $g4 = $g13Site('g13-sweep', [], 1, ['TMPDIR' => $g4Tmp]);
+    $g4Old = ["$g4Tmp/gallery-backup-oldoldold1", "$g4Tmp/gallery-files-oldoldold2", "$g4Tmp/gallery-backup-purmsjtqr28gf5iuo6p"];
+    $g4Keep = ["$g4Tmp/gallery-backup-fresh123456", "$g4Tmp/gallery-files-fresh654321", "$g4Tmp/unrelated-old-file", "$g4Tmp/gallery-backup-notafile"];
+    foreach (array_merge($g4Old, $g4Keep) as $f) { if (str_ends_with($f, 'notafile')) mkdir($f); else file_put_contents($f, 'a copy'); }
+    foreach (array_merge($g4Old, ["$g4Tmp/unrelated-old-file", "$g4Tmp/gallery-backup-notafile"]) as $f) touch($f, time() - 7200);
+    file_put_contents("$g4Tmp/target-of-a-link", 'x'); symlink("$g4Tmp/target-of-a-link", "$g4Tmp/gallery-backup-alinkalink"); exec('touch -h -d "2 hours ago" ' . escapeshellarg("$g4Tmp/gallery-backup-alinkalink"));
+    $g4R = $g4['admin'](['action' => 'backup_run']);
+    check('[backup sweep] a backup removes the gallery\'s own temporary copies that are over an hour old (a killed run left them) and nothing else: not a newer copy, not another name, not a folder, not a link', ($g4R['ok'] ?? null) === true && !array_filter($g4Old, 'file_exists') && !array_filter($g4Keep, fn ($f) => !file_exists($f)) && is_link("$g4Tmp/gallery-backup-alinkalink") && is_file("$g4Tmp/target-of-a-link"), json_encode(array_map('basename', glob("$g4Tmp/*"))));
+
+    // ---- F12: the page is sent first, the backup is made after it (where PHP is not FPM the request used to last as long as the backup) ----
+    $g5 = $g13Site('g13-slow', [], 1, [], false);
+    $g13BigDb("{$g5['dir']}/.gallery-stats.sqlite", 100);
+    [$g5Time, $g5Bytes] = $g13Get($g5['port'], '/');
+    $g5Zips = count($g13Zips($g5['dir']));
+    $g5T0 = microtime(true); for ($i = 0; $i < 240 && !$g13Zips($g5['dir']); $i++) usleep(250000); $g5Wait = microtime(true) - $g5T0;
+    check('[backup response] the visitor whose request starts the weekly backup gets the whole page back before the backup is made', $g5Bytes > 500 && $g5Zips === 0 && $g5Time < 1.0, json_encode([$g5Time, $g5Bytes, $g5Zips, $g5Wait]));
+    check('[backup response] ... and the backup is made after it all the same', count($g13Zips($g5['dir'])) === 1, json_encode(array_map('basename', glob("{$g5['dir']}/.gallery-*") ?: [])));
+
+    // ---- F13: Health looks at the backup file again ----
+    $g6 = $g13Site('g13-health', []);
+    $g6['admin'](['action' => 'backup_run']);
+    $g6Zip = $g13Zips($g6['dir'])[0]; $g6Size = filesize($g6Zip);
+    $g6Panel = fn () => (string) (json_decode(http_post($g6['base'] . '/?admin', ['csrf_token' => $g6['csrf'], 'action' => 'health_panel', 'recheck' => '1'], array_merge($g6['own'], ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '');
+    $g6Ok = $g6Panel();
+    $fh = fopen($g6Zip, 'r+b'); ftruncate($fh, (int) ($g6Size * 0.6)); fclose($fh);
+    $g6Bad = $g6Panel();
+    $g6['admin'](['action' => 'backup_run']);
+    $g6Back = $g6Panel();
+    check('[backup health] a backup file that was cut short after it was made is not shown as "made just now": a row says the file is damaged and offers Back up now', str_contains($g6Ok, 'Backup: made') && !str_contains($g6Bad, 'Backup: made') && str_contains($g6Bad, 'The backup file is damaged') && str_contains($g6Bad, 'data-backup-act="run"'), substr(strip_tags($g6Bad), 0, 300));
+    check('[backup health] ... and a new backup clears it', str_contains($g6Back, 'Backup: made') && !str_contains($g6Back, 'The backup file is damaged'));
+
+    // ---- D13: what is printed and what is accepted ----
+    $g3 = $g13Site('g13-names', ['LOG_PUBLIC_VISITS' => true]);
+    for ($i = 0; $i < 3; $i++) http_get($g3['base'] . '/?folder=Alpha');
+    $g3['admin'](['action' => 'backup_run']);
+    $g3Log = basename(glob("{$g3['dir']}/.gallery-visits-*.sqlite")[0] ?? ''); $g3Zip = basename($g13Zips($g3['dir'])[0] ?? '');
+    $g3P = $g3['admin'](['action' => 'files_zip_prepare', 'password' => 'g13-admin-pw-1', 'thumbs' => '0']);
+    file_put_contents("{$g3['dir']}/copy.zip", http_get($g3['base'] . '/' . ltrim((string) ($g3P['url'] ?? ''), '/'), $g3['own'])[1]);
+    $g3Readme = (string) $g13Read("{$g3['dir']}/copy.zip", 'README.txt');
+    check('[backup names] the copy ZIP\'s README does not print the secret names of the backup or the visitor log (it names what each is)', $g3Readme !== '' && $g3Log !== '' && $g3Zip !== '' && !str_contains($g3Readme, $g3Log) && !str_contains($g3Readme, $g3Zip) && str_contains($g3Readme, 'Visitor log') && str_contains($g3Readme, 'Backup'), substr($g3Readme, 0, 200));
+    $g3Entry = ".gallery-visits-" . str_repeat('a', 24) . ".sqlite\n";
+    $g13Make("{$g3['dir']}/planted.zip", ['README.txt' => 'x', $g3Entry => (string) file_get_contents("{$g3['dir']}/" . $g3Log)]);
+    foreach ($g13Zips($g3['dir']) as $z) unlink($z);
+    rename("{$g3['dir']}/planted.zip", "{$g3['dir']}/.gallery-backup-" . str_repeat('b', 24) . '.zip');
+    $g3Re = $g3['admin'](['action' => 'backup_restore_log']);
+    check('[backup names] a name inside a ZIP that ends in a line break is not the visitor log: Restore says the backup has none and puts nothing in place', ($g3Re['ok'] ?? null) === false && str_contains((string) ($g3Re['text'] ?? ''), 'no visitor log') && !glob("{$g3['dir']}/.gallery-visits-*\n*") && is_file("{$g3['dir']}/$g3Log"), json_encode($g3Re));
+
+    // ---- F17: Restore beside a second log; the log is private to the web server user ----
+    $g11 = $g13Site('g13-restore', ['LOG_PUBLIC_VISITS' => true]);
+    for ($i = 0; $i < 3; $i++) http_get($g11['base'] . '/?folder=Alpha');
+    $g11Live = glob("{$g11['dir']}/.gallery-visits-*.sqlite")[0] ?? '';
+    $g11['admin'](['action' => 'backup_run']);
+    $g11Other = "{$g11['dir']}/.gallery-visits-" . str_repeat('0', 24) . '.sqlite'; copy($g11Live, $g11Other);
+    $g11Re = $g11['admin'](['action' => 'backup_restore_log']);
+    $g11Valid = array_values(array_filter(glob("{$g11['dir']}/.gallery-visits-*.sqlite") ?: [], fn ($f) => preg_match('~/\.gallery-visits-[0-9a-f]{24}\.sqlite$~D', $f)));
+    $g11Aside = glob("{$g11['dir']}/.gallery-visits-*.damaged-*.sqlite") ?: [];
+    check('[restore] with a second log beside the live one (made by a visit in the moment between), Restore leaves exactly one log, the backup\'s, and every other one is kept aside, never deleted', ($g11Re['ok'] ?? null) === true && $g11Valid === [$g11Live] && count($g11Aside) === 2, json_encode([$g11Re, array_map('basename', $g11Valid), array_map('basename', $g11Aside)]));
+    $g12 = $g13Site('g13-mode', ['LOG_PUBLIC_VISITS' => true]);
+    for ($i = 0; $i < 2; $i++) http_get($g12['base'] . '/?folder=Alpha');
+    $g12Log = glob("{$g12['dir']}/.gallery-visits-*.sqlite")[0] ?? '';
+    $g12Modes = function () use ($g12Log) { $o = []; foreach (['', '-wal', '-shm'] as $s) if (is_file($g12Log . $s)) $o[$s] = fileperms($g12Log . $s) & 0777; return $o; };
+    $g12First = $g12Modes();
+    foreach (['', '-wal', '-shm'] as $s) if (is_file($g12Log . $s)) chmod($g12Log . $s, 0644);
+    for ($i = 0; $i < 2; $i++) http_get($g12['base'] . '/?folder=Alpha');
+    $g12Later = $g12Modes();
+    check('[log mode] the visitor log is made readable by the web server user only, as the backup is (and so are its side files); one that was made looser is tightened by the next visit', $g12Log !== '' && $g12First !== [] && !array_filter($g12First, fn ($m) => ($m & 077) !== 0) && !array_filter($g12Later, fn ($m) => ($m & 077) !== 0), json_encode([$g12First, $g12Later]));
+
+    // ---- F9: the visitor log of a newer version is not written to ----
+    $g9 = $g13Site('g13-newer', ['LOG_PUBLIC_VISITS' => true]);
+    $g9Beacon = function ($n) use ($g9) { for ($i = 0; $i < $n; $i++) { http_get($g9['base'] . '/?folder=Alpha'); @file_get_contents($g9['base'] . '/?linklog', false, stream_context_create(['http' => ['method' => 'POST', 'header' => "Content-Type: application/json\r\nUser-Agent: Mozilla/5.0 g13-$i-" . bin2hex(random_bytes(3)) . "\r\n", 'content' => json_encode(['e' => [['f', 'Alpha']]]), 'ignore_errors' => true, 'timeout' => 5]])); } };
+    $g9Beacon(3);
+    $g9Log = glob("{$g9['dir']}/.gallery-visits-*.sqlite")[0] ?? '';
+    $g9Count = function () use ($g9Log) { $d = new PDO('sqlite:' . $g9Log); $r = [(int) $d->query('SELECT COUNT(*) FROM visitors')->fetchColumn(), (int) $d->query('SELECT COUNT(*) FROM events')->fetchColumn(), (int) $d->query('PRAGMA user_version')->fetchColumn()]; return $r; };
+    $d9 = new PDO('sqlite:' . $g9Log); $d9->exec('PRAGMA user_version = 9'); $d9->exec('PRAGMA wal_checkpoint(TRUNCATE)'); $d9 = null;
+    $g9Before = $g9Count();
+    $g9Beacon(4);
+    $g9After = $g9Count();
+    $g9Html = (string) (json_decode(http_post($g9['base'] . '/?admin', ['csrf_token' => $g9['csrf'], 'action' => 'health_panel', 'recheck' => '1'], array_merge($g9['own'], ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '');
+    check('[log version] a visitor log kept by a newer version of the gallery is left exactly as it is (nothing is written into it, its version stays), and the pages still open', $g9Before[0] + $g9Before[1] > 0 && $g9Before === $g9After && $g9After[2] === 9 && str_contains(http_get($g9['base'] . '/?folder=Alpha')[1], 'a1.jpg'), json_encode([$g9Before, $g9After]));
+    check('[log version] ... and the Health check says why nothing is logged (the log is from a newer version) and what to do', str_contains($g9Html, 'newer version'), substr(strip_tags($g9Html), 0, 300));
+
+    // ---- F17: the older logs are in the backup ----
+    $g13o = $g13Site('g13-oldlogs', []);
+    $g13oFiles = ['.gallery-linklog-aabbccddee.php' => data_file_guard_line_for_tests() . json_encode(['v' => 1, 'visitors' => [], 'events' => [['t' => 1, 'k' => 'open']]]), '.gallery-linklog-aabbccddee-items.php' => data_file_guard_line_for_tests() . json_encode(['t' => [], 'f' => []]), '.gallery-linklog-aabbccddee-q.php' => data_file_guard_line_for_tests() . json_encode([1, 'v', '1.2.3.4', 'l', 'US', 'open', 'a.jpg']) . "\n"];
+    foreach ($g13oFiles as $n => $c) file_put_contents("{$g13o['dir']}/$n", $c);
+    $g13oR = $g13o['admin'](['action' => 'backup_run']);
+    $g13oZip = $g13Zips($g13o['dir'])[0] ?? ''; $g13oIx = $g13Idx($g13oZip) ?: [];
+    $g13oSame = true; foreach ($g13oFiles as $n => $c) if (($g13Read($g13oZip, $n) ?? '') !== $c) $g13oSame = false;
+    check('[backup old logs] the visitor logs that versions before 2.6.5 kept are in the backup, whole, and the README says what they are', ($g13oR['ok'] ?? null) === true && ($g13oR['problems'] ?? 1) === 0 && $g13oSame && str_contains((string) $g13Read($g13oZip, 'README.txt'), 'before 2.6.5'), json_encode([$g13oR, array_keys($g13oIx)]));
+
+    // ---- F9: a save that fails says why ----
+    $g10 = $g13Site('g13-causes', []);
+    $g10Save = fn () => item_save($g10['base'] . '/?admin&folder=Alpha', $g10['own'], 'a1.jpg', ['caption' => 'g13 caption']);
+    mkdir("{$g10['dir']}/Alpha/.gallery-items.php");
+    $g10Msg = fn ($r) => preg_match('/Nothing was saved:[^<]*/', html_entity_decode((string) ($r[1] ?? ''), ENT_QUOTES), $m) ? $m[0] : 'no message: ' . substr(strip_tags((string) ($r[1] ?? '')), 0, 200);
+    $g10Dir = $g10Msg($g10Save()); rmdir("{$g10['dir']}/Alpha/.gallery-items.php");
+    file_put_contents("{$g10['dir']}/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . '{}'); chmod("{$g10['dir']}/Alpha/.gallery-items.php", 0000);
+    $g10File = $g10Msg($g10Save()); chmod("{$g10['dir']}/Alpha/.gallery-items.php", 0644);
+    check('[save causes] a save into a place where the data file is a folder says so and what to do (not "isn\'t writable")', str_contains($g10Dir, 'is a folder') && !str_contains($g10Dir, "isn't writable"), $g10Dir);
+    check('[save causes] a save into a data file the web server may not open says so and names the permission to give (not "the folder isn\'t writable")', str_contains($g10File, 'permission') && !str_contains($g10File, "isn't writable"), $g10File);
+
+    // ---- D8 (and the leftovers in the list): "Download a copy first" means a copy arrived ----
+    $g7 = $g13Site('g13-copy', []);
+    $g13BigDb("{$g7['dir']}/.gallery-stats.sqlite", 40);
+    $g7Left = ['.gallery-restore-1a2b3c4d.tmp' => 'a log being put back', '.gallery-links.php.5e6f7a8b.php' => data_file_guard_line_for_tests() . '{}', '.gallery-update-aabbccdd.tmp' => '<?php // a download', '.gallery-config.php.tmp.0a1b2c3d' => '<?php // a settings write',
+               '.gallery-geo-state.php.lock' => '', '.gallery-stats.sqlite-wal' => 'wal', '.gallery-stats.sqlite-shm' => 'shm', 'Alpha/.gallery-items.php.12345678.php' => data_file_guard_line_for_tests() . '{}'];
+    foreach ($g7Left as $n => $c) file_put_contents("{$g7['dir']}/$n", $c);
+    $g7List = $g7['admin'](['action' => 'files_list']);
+    $g7Paths = (array) ($g7List['paths'] ?? []); $g7Unknown = (array) ($g7List['unknown'] ?? []);
+    $g7Missing = array_values(array_filter(array_keys($g7Left), fn ($n) => !in_array($n, $g7Paths, true) || in_array($n, $g7Unknown, true)));
+    check('[files made] the leftovers the gallery can make (a half-written settings or data file, a Restore or update download that was cut off, a lock, the view counts\' -wal and -shm files) are in the list and are not "unknown"', $g7Missing === [] && in_array('.gallery-backup.lock', $g7Paths, true), json_encode([$g7Missing, array_slice($g7Paths, 0, 40), $g7Unknown]));
+    $g7Pw = 'g13-admin-pw-1'; $g7Fp = (string) ($g7List['fingerprint'] ?? '');
+    $g7Del = fn () => $g7['admin'](['action' => 'files_delete', 'password' => $g7Pw, 'typed' => 'DELETE', 'fingerprint' => $g7Fp, 'nocopy' => '0']);
+    $g7Prep = fn () => (string) ($g7['admin'](['action' => 'files_zip_prepare', 'password' => $g7Pw, 'thumbs' => '0'])['url'] ?? '');
+    $g7U = $g7Prep(); $g13Get($g7['port'], '/' . ltrim($g7U, '/'), $g7['own'], null, 'HEAD');
+    $g7A = $g7Del();
+    check('[copy first] a request that only asks for the headers (HEAD) is not a copy: the Delete is refused, says why and what to do, and nothing is deleted', ($g7A['ok'] ?? null) === false && str_contains((string) ($g7A['text'] ?? ''), 'copy') && is_file("{$g7['dir']}/.gallery-config.php"), json_encode($g7A));
+    $g7U = $g7Prep(); [, $g7Got] = $g13Get($g7['port'], '/' . ltrim($g7U, '/'), $g7['own'], 65536); usleep(1500000);
+    $g7B = $g7Del();
+    check('[copy first] a download the browser stopped part-way is not a copy either: the Delete is refused and nothing is deleted', $g7Got >= 65536 && ($g7B['ok'] ?? null) === false && is_file("{$g7['dir']}/.gallery-config.php"), json_encode([$g7Got, $g7B]));
+    $g7U = $g7Prep(); [, $g7All] = $g13Get($g7['port'], '/' . ltrim($g7U, '/'), $g7['own']); usleep(500000);
+    $g7C = $g7Del(); clearstatcache();
+    check('[copy first] once the whole copy has been sent the Delete goes through, and it takes the leftovers with it', $g7All > 40000000 && ($g7C['ok'] ?? null) === true && !is_file("{$g7['dir']}/.gallery-config.php") && !array_filter(array_keys($g7Left), fn ($n) => file_exists("{$g7['dir']}/$n")), json_encode([$g7All, $g7C, array_values(array_filter(array_keys($g7Left), fn ($n) => file_exists("{$g7['dir']}/$n"))), is_file("{$g7['dir']}/.gallery-config.php"), array_map('basename', glob("{$g7['dir']}/.gallery-*") ?: []), substr((string) @file_get_contents("{$g7['dir']}/.gallery-config.php"), 0, 200)]));
+
+    // ---- the part that lost a lot is held ----
+    $g14 = $g13Site('g13-hold', ['ENABLE_SHARE_LINKS' => true]);
+    $g14Items = "{$g14['dir']}/Alpha/.gallery-items.php";
+    $g14Write = function ($n, $prefix = 'p') use ($g14Items) { $it = []; for ($i = 1; $i <= $n; $i++) $it[sprintf('%s%02d.jpg', $prefix, $i)] = ['caption' => "caption $i"]; file_put_contents($g14Items, data_file_guard_line_for_tests() . json_encode(['items' => $it ?: new stdClass()])); };
+    $g14Names = fn () => (function () use ($g13Zips, $g13Read, $g13Json, $g14) { $z = $g13Zips($g14['dir'])[0] ?? ''; $d = $g13Json($g13Read($z, 'Alpha/.gallery-items.php')); return is_array($d) ? array_keys((array) ($d['items'] ?? [])) : null; })();
+    $g14Run = fn () => $g14['admin'](['action' => 'backup_run']);
+    $g14Held = fn () => array_values(array_filter((array) ($g13State($g14['dir'])['problems'] ?? []), fn ($p) => ($p[2] ?? '') === 'held'));
+    $g14Write(12); $g14Run();
+    check('[backup hold] a first backup takes what is there', count((array) $g14Names()) === 12 && !$g14Held());
+    $g14Write(10); $g14Run();
+    check('[backup hold] two records gone out of twelve is an ordinary change: the new copy is taken', count((array) $g14Names()) === 10 && !$g14Held());
+    $g14Write(0); $g14R3 = $g14Run(); $g14Live = (string) file_get_contents($g14Items);
+    $g14Page = http_get($g14['base'] . '/?admin&classic=1', $g14['own'])[1];
+    check('[backup hold] a captions file that has lost all ten records is not put in: the zip keeps the copy from before (ten records, under the file\'s own name), the live file is not touched, and the answer says a part was held', ($g14R3['ok'] ?? null) === true && count((array) $g14Names()) === 10 && count($g14Held()) === 1 && ($g13State($g14['dir'])['result'] ?? '') === 'partial' && str_contains($g14Live, '"items":{}'), json_encode([$g14R3, $g13State($g14['dir'])['problems'] ?? null]));
+    check('[backup hold] Health says which part, how many records the backup keeps and how many are gone from the live file, and offers "That\'s right, use the new one"', str_contains($g14Page, 'data-backup-act="accept"') && str_contains($g14Page, 'data-backup-name="Alpha/.gallery-items.php"') && preg_match('/\b10\b/', strip_tags($g14Page)) === 1 && str_contains($g14Page, 'kept'), substr(strip_tags($g14Page), 0, 400));
+    for ($i = 0; $i < 3; $i++) {   // automatic runs before anyone signs in: each one gets the same answer
+        $g13StateSet($g14['dir'], ['ok_at' => time() - 8 * 86400, 'try_at' => time() - 8 * 86400]); $was = filemtime($g13Zips($g14['dir'])[0]);
+        http_get($g14['base'] . '/', ['User-Agent: auto' . $i . ' Mozilla']);
+        for ($w = 0; $w < 60 && ($g13State($g14['dir'])['by'] ?? '') !== 'auto' || ($g13State($g14['dir'])['ok_at'] ?? 0) < time() - 60; $w++) usleep(250000);
+    }
+    check('[backup hold] three automatic backups in a row before anyone signs in keep the same ten records (each one compares with the zip\'s copy, which the hold keeps), and the part is still held', count((array) $g14Names()) === 10 && count($g14Held()) === 1 && ($g13State($g14['dir'])['by'] ?? '') === 'auto', json_encode([$g13State($g14['dir'])]));
+    $g14Write(8, 'n'); $g14Run();
+    check('[backup hold] eight new records do not make up for ten lost ones: still held', count((array) $g14Names()) === 10 && count($g14Held()) === 1);
+    $g14Acc = $g14['admin'](['action' => 'backup_accept', 'name' => 'Alpha/.gallery-items.php']);
+    check('[backup hold] "That\'s right, use the new one" takes the live copy at once, clears the hold and leaves the live file alone', ($g14Acc['ok'] ?? null) === true && ($g14Names() ?? []) === array_map(fn ($i) => sprintf('n%02d.jpg', $i), range(1, 8)) && !$g14Held() && ($g13State($g14['dir'])['result'] ?? '') === 'ok', json_encode([$g14Acc, $g13State($g14['dir'])]));
+    $g14Wrong = $g14['admin'](['action' => 'backup_accept', 'name' => 'Alpha/.gallery-items.php']);
+    check('[backup hold] accepting a part that is not held is refused and says so', ($g14Wrong['ok'] ?? null) === false && str_contains((string) ($g14Wrong['text'] ?? ''), 'not held'), json_encode($g14Wrong));
+    $g14Write(12); $g14Run(); $g14['admin'](['action' => 'backup_accept', 'name' => 'Alpha/.gallery-items.php']);   // (all of the eight were gone from the twelve: held, then agreed to, so the twelve are the copy now)
+    $g14Write(6); $g14Run(); $heldNow = count($g14Held());
+    $g14Write(11); $g14Run();
+    check('[backup hold] half of twelve gone is held, and when the live file comes back to eleven the next backup takes it and the hold clears by itself', $heldNow === 1 && count((array) $g14Names()) === 11 && !$g14Held());
+    // share links and collections: the same rule, by the records' ids
+    $g14Links = "{$g14['dir']}/.gallery-links.php"; $g14Coll = "{$g14['dir']}/.gallery-collections.php";
+    $g14Guard = data_file_guard_line_for_tests();
+    file_put_contents($g14Coll, $g14Guard . json_encode(['collections' => [['id' => 'cx1'], ['id' => 'cx2']]])); $g14Run();
+    file_put_contents($g14Coll, $g14Guard . json_encode(['collections' => []])); $g14Run();
+    check('[backup hold] a short list (two records, both gone) is an ordinary change: taken, nothing held', !in_array('.gallery-collections.php', array_column($g14Held(), 0), true) && count((array) ($g13Json($g13Read($g13Zips($g14['dir'])[0], '.gallery-collections.php'))['collections'] ?? [1])) === 0);
+    file_put_contents($g14Links, $g14Guard . json_encode(['links' => array_map(fn ($i) => ['id' => "link$i"], range(1, 6)), 'folderIndex' => [], 'seenAt' => 0]));
+    file_put_contents($g14Coll, $g14Guard . json_encode(['collections' => array_map(fn ($i) => ['id' => "coll$i", 'name' => "c$i"], range(1, 4))]));
+    $g14Run();
+    file_put_contents($g14Links, $g14Guard . json_encode(['links' => [], 'folderIndex' => [], 'seenAt' => 0]));
+    file_put_contents($g14Coll, $g14Guard . json_encode(['collections' => [['id' => 'coll1', 'name' => 'c1']]]));
+    $g14Run(); $g14Z = $g13Zips($g14['dir'])[0]; $g14Hp = array_column($g14Held(), 0);
+    check('[backup hold] share links (by id) and collections (by id) follow the same rule: six links all gone and three of four collections gone are both held, and the zip keeps the earlier copies', in_array('.gallery-links.php', $g14Hp, true) && in_array('.gallery-collections.php', $g14Hp, true) && count((array) ($g13Json($g13Read($g14Z, '.gallery-links.php'))['links'] ?? [])) === 6 && count((array) ($g13Json($g13Read($g14Z, '.gallery-collections.php'))['collections'] ?? [])) === 4, json_encode($g14Hp));
+}
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

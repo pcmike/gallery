@@ -4384,10 +4384,11 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
     // on the current one, or it would save its change on top of a version that no longer exists.
     // (Every time round means another writer got in and replaced the file while this one waited, so the tries can't run out
     // for as long as writers are making progress: the cap is only there to end a loop that would otherwise never finish.)
+    $lockFailed = false;
     for ($try = 0, $fp = false; $try < 200; $try++) {
         $fp = @fopen($path, 'c+');
         if (!$fp) break;
-        if (!flock($fp, LOCK_EX)) { fclose($fp); $fp = false; break; }   // (a lock that can't be taken is a save that can't be made safely)
+        if (!flock($fp, LOCK_EX)) { fclose($fp); $fp = false; $lockFailed = true; break; }   // (a lock that can't be taken is a save that can't be made safely)
         clearstatcache(true, $path);
         $here = @stat($path); $mine = fstat($fp);
         if ($here && $mine && $here['ino'] === $mine['ino'] && $here['dev'] === $mine['dev']) break;
@@ -4398,6 +4399,7 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
         // so the admin can say so instead of reporting a save that never
         // happened (see run_admin_route).
         $GLOBALS['__data_write_failed'] = true;
+        $GLOBALS['__data_write_cause'][$path] = $try >= 200 ? 'busy' : ($lockFailed ? 'lock' : (is_dir($path) ? 'dir' : (file_exists($path) && !(is_readable($path) && is_writable($path)) && is_writable(dirname($path)) ? 'file' : 'folder')));
         return $data;
     }
     $raw = (string) stream_get_contents($fp);
@@ -4417,6 +4419,7 @@ function json_file_update($path, $defaultData, $modifier, $protect = false) {
             $saved = true;
         } else {
             $GLOBALS['__data_write_failed'] = true;   // disk full, quota, ...
+            $GLOBALS['__data_write_cause'][$path] = 'space';
         }
     }
     // The empty file that opening it made (there was none before) is taken away again when nothing was saved into it: an empty file
@@ -4502,6 +4505,13 @@ function data_write_failure_text($folder = 'this folder') {
         }
         return 'Nothing was saved: a settings file in ' . $folder . ' can\'t be read (it may have been cut short or edited by hand), so it was left exactly as it is. Restore .gallery-items.php there from a backup, or delete it to start that folder fresh. Until then its photos stay hidden from visitors. The Health check in Settings names it.';
     }
+    $cause = (array) ($GLOBALS['__data_write_cause'] ?? []);
+    $cpath = (string) array_key_first($cause); $cname = basename($cpath); $why = $cause[$cpath] ?? '';
+    if ($why === 'busy') return 'Nothing was saved: other saves kept changing ' . $cname . ' in ' . $folder . ' for too long, so this one gave up without changing it. Nothing was lost. Wait a moment and save again.';
+    if ($why === 'lock') return 'Nothing was saved: the server would not let the gallery lock ' . $cname . ' in ' . $folder . ', which it needs to save safely, so the file was left as it is. Ask your host whether file locking is turned off there, then try again.';
+    if ($why === 'dir') return 'Nothing was saved: ' . $cname . ' in ' . $folder . ' is a folder, not a file, so the gallery can\'t keep its settings there. Move or remove that folder, then try again.';
+    if ($why === 'file') return 'Nothing was saved: ' . $cname . ' in ' . $folder . ' can\'t be opened by the web server (its permissions don\'t allow it), so it was left as it is. Give the web server\'s user read and write permission on that file (on many hosts: chmod 644 or 664, owned by that user), then try again.';
+    if ($why === 'space') return 'Nothing was saved: there was no room to write ' . $cname . ' in ' . $folder . ' (the disk or the account\'s storage allowance is full), so it was left exactly as it is. Free some space, then try again.';
     return 'Nothing was saved: ' . $folder . ' isn\'t writable by the web server. Give the web server\'s user write permission on it (on many hosts: chmod 755 or 775 on the folder, owned by that user), then try again.';
 }
 
@@ -9990,7 +10000,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $why = gallery_config_merge(['HEALTH_SET_ASIDE' => $now ?: null]);
         admin_json_exit($why === '' ? ['ok' => true, 'text' => !empty($_POST['back']) ? 'Brought back.' : 'Set aside.'] : ['ok' => false, 'text' => $why]);
     }
-    if (in_array($action, ['backup_run', 'backup_restore_log', 'backup_new_log', 'backup_download_prepare'], true)) backup_admin_action($action, $dir, $files);
+    if (in_array($action, ['backup_run', 'backup_accept', 'backup_restore_log', 'backup_new_log', 'backup_download_prepare'], true)) backup_admin_action($action, $dir, $files);
     if ($action === 'health_remove_old_logs') {   // the visitor logs of versions before 2.6.5 (Health > Left behind): the exact files and the stand-in record, nothing else
         $n = visitlog_old_leftovers_remove();
         admin_json_exit($n === null ? ['ok' => false, 'text' => 'Nothing was removed: one of the files didn\'t check out as the gallery\'s own.'] : ['ok' => true, 'removed' => $n, 'text' => 'Removed.']);
@@ -12192,7 +12202,7 @@ function links_admin_action($action, $dir, $files) {
         link_apply_fields($rec, $f);
         $rec['_new'] = true;
         $taken = false;
-        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
         links_update(function (&$d) use (&$rec, $f, &$taken) {
             if (($why = link_apply_address($rec, $f['_address'], $d)) !== '') { $taken = $why; return; }
             unset($rec['_new']);
@@ -12488,7 +12498,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         $name = collection_free_name($dir, $files, $parentRel, $title);
         $rec = ['id' => 'c' . bin2hex(random_bytes(6)), 'parent' => $parentFid, 'name' => $name, 'title' => $title, 'description' => '', 'cover' => null, 'dates' => '', 'position' => null,
                 'private' => false, 'front' => false, 'ownGallery' => false, 'items' => [], 'at' => time()];
-        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
         collections_update(function (&$d) use ($rec) { $d['collections'][] = $rec; });
         collection_saved_or_fail();
         $path = $parentRel === '' ? $name : $parentRel . '/' . $name;
@@ -12497,7 +12507,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
     if ($action === 'collection_delete') {
         $id = (string) ($_POST['id'] ?? '');
         if (collection_find_by_id($id) === null) collection_fail('That collection is not here (it may already be gone).');
-        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
         collections_update(function (&$d) use ($id) { $d['collections'] = array_values(array_filter((array) $d['collections'], function ($r) use ($id) { return !is_array($r) || ($r['id'] ?? '') !== $id; })); });
         collection_saved_or_fail();
         own_galleries_recompute($dir, $files);
@@ -12518,7 +12528,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
     $rec = isset($_POST['id']) ? collection_find_by_id((string) $_POST['id']) : ($adminFolderPath !== null ? collection_at($dir, $adminFolderPath, $files) : null);
     if ($rec === null) collection_fail('That collection is not here.');
     $id = $rec['id'];
-    $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+    $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
     if ($action === 'toggle_collection_flag') {
         $field = isset($_POST['front']) ? 'front' : (isset($_POST['owngallery']) ? 'ownGallery' : (isset($_POST['private']) ? 'private' : ''));
         if ($field === '') collection_fail('Nothing to change.');
@@ -13021,7 +13031,7 @@ function link_capability_text_html($l, $cap, $report, $map, $index, $dir, $rootF
 /** The files the gallery makes beside index.php, by exact name: name => kind. */
 function owned_top_names() {
     return ['.gallery-config.php' => 'settings', '.gallery-links.php' => 'links', '.gallery-collections.php' => 'collections', '.gallery-secret.php' => 'secret', '.gallery-stay.php' => 'signin', '.gallery-browsers.php' => 'signin', '.gallery-browsers-log.php' => 'signin',
-            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo'];
+            '.gallery-login-attempts.php' => 'signin', '.gallery-lockouts.php' => 'lockouts', '.gallery-health.php' => 'health', '.gallery-backup.php' => 'backup', '.gallery-health-cache.php' => 'health', '.gallery-update.php' => 'update', '.gallery-previous.php' => 'previous', '.gallery-geo.php' => 'geo', '.gallery-geo-state.php' => 'geo', '.gallery-geo-state.php.lock' => 'geo', '.gallery-backup.lock' => 'backup'];
 }
 
 /** The kind of a file name, or '' when the gallery makes no file with that name. $isTop: the folder is the gallery's own (the one index.php is in). */
@@ -13035,7 +13045,11 @@ function owned_kind_of_name($name, $isTop) {
         if (preg_match('/^\.gallery-geo\.[0-9a-f]{8}\.php$/D', $name)) return 'geo';   // (a download that was cut off)
         if (preg_match('/^\.gallery-signin-[0-9a-f]{12}\.php$/D', $name)) return 'signin';   // (one signed-in browser's address history)
     }
+    // what a save, a Restore or an update leaves when it is cut off: a data file's temporary copy (its name, a dot, eight hex digits and .php or .tmp), a settings write, a Restore or an update download
+    if ($isTop && (preg_match('/^\.gallery-restore-[0-9a-f]{8}\.tmp$/D', $name) || preg_match('/^\.gallery-update-[0-9a-f]{8}\.tmp$/D', $name) || preg_match('/^\.gallery-config\.php\.tmp\.[0-9a-f]{8}$/D', $name))) return 'leftovers';
+    if (preg_match('/^(\.gallery-.+)\.[0-9a-f]{8}\.(?:php|tmp)$/D', $name, $lm) && $lm[1] !== $name && !in_array(owned_kind_of_name($lm[1], $isTop), ['', 'leftovers'], true)) return 'leftovers';
     if ($name === '.gallery-items.php') return 'items';
+    if ($name === '.gallery-stats.sqlite-wal' || $name === '.gallery-stats.sqlite-shm') return 'stats';   // (the side files SQLite keeps beside the view counts)
     if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json' || preg_match('/^\.gallery-stats\.joined-\d{8}-\d{6}\.php$/D', $name)) return 'stats';   // (the last: a JSON store set aside once its counts were joined to the database)
     if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-[0-9a-f]{8})?\.php$/D', $name)) return 'backups';   // (an optional mark at the end says which gallery made it: see tidy_backup_id)
     return '';
@@ -13051,7 +13065,8 @@ function owned_kind_info() {
         'links' => ['Share links', 'beside index.php', 'Every share link: what it covers, how long it lasts, its name.', 'Every share link stops working.'],
         'visits' => ['Visitor log', 'beside index.php', 'Who opened the gallery and each share link, what they looked at and when (a SQLite file).', 'The log is gone; it starts again from nothing.'],
         'backup' => ['Backup', 'beside index.php', 'The one backup copy (a ZIP of your settings, share links, collections, captions, view counts, the visitor log and the rest that can\'t be made again) and the note of how the last one went. It holds password hashes, the install secret and visitor IP addresses.', 'The backup is gone; the next one is made within a week (or press Back up now in the Health check).'],
-        'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.5 kept in these files. Nothing reads them any more.', 'They are gone; nothing else changes.'],
+        'leftovers' => ['Left-over temporary files', 'beside index.php or in a folder', 'Half-written copies that a save, a Restore or an update leaves when it is cut off. Nothing reads them.', 'They are gone; nothing else changes.'],
+        'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.5 kept in these files. Nothing reads them any more, and the backup holds them until you remove them.', 'They are gone; nothing else changes.'],
         'collections' => ['Collections', 'beside index.php', 'The collections you made: where each one lives and which folders and photos it holds.', 'Every collection is gone; the folders and photos in them are untouched.'],
         'secret' => ['Install secret', 'beside index.php', 'Keeps sign-ins and private-view cookies from being forged.', 'Everyone signed in is signed out.'],
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],
@@ -13078,7 +13093,7 @@ function owned_verify($path, $folderReal, $kind, $isTop) {
     if ($kind === 'meta') return $name === MEDIA_META_FILE && basename($folderReal) === '.gallery-cache' && owned_head_ok($path, true);
     if (owned_kind_of_name($name, $isTop) !== $kind) return false;
     if ($kind === 'stats' && !owned_stats_file_ok($path, $name)) return false;
-    if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings');
+    if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings' && $kind !== 'leftovers');
     return true;   // (a .sqlite or .json file of view counts has no guard line)
 }
 
@@ -13151,7 +13166,7 @@ function owned_plan($dir, $files) {
     foreach ($entries as $k => $e) {
         if (strpos($e['path'], $dir . '/') === 0) continue;
         $mapped++;   // (a file in a place from elsewhere on the server: another gallery may use it too)
-        if (in_array($e['kind'], ['items', 'stats', 'backups'], true)) {   // (what another gallery showing the same folder shares: its captions, private marks, view counts, backups)
+        if (in_array($e['kind'], ['items', 'stats', 'backups', 'leftovers'], true)) {   // (what another gallery showing the same folder shares: its captions, private marks, view counts, backups)
             $entries[$k]['shared'] = true; $shared['count']++; $shared['bytes'] += $e['size'];
             $where = dirname($e['rel']); if ($where === '.') $where = '(top level)';   // (the folder as the gallery names it)
             $shared['where'][$where] = ($shared['where'][$where] ?? 0) + 1;
@@ -13193,6 +13208,7 @@ function owned_readme($plan, $withThumbs) {
         if ($k === 'thumbs') { if ($withThumbs) $t .= "\r\n- " . $i[0] . ' (' . $i[2] . ") in the .gallery-cache folders.\r\n"; continue; }
         if (empty($by[$k])) continue;
         $t .= "\r\n- " . $i[0] . ': ' . $i[2] . "\r\n";
+        if ($k === 'backup' || $k === 'visits') { $t .= '    ' . count($by[$k]) . ' file' . (count($by[$k]) === 1 ? '' : 's') . " (their names carry a secret, so they are not printed here)\r\n"; continue; }
         foreach (array_slice($by[$k], 0, 12) as $r) $t .= '    ' . $r . "\r\n";
         if (count($by[$k]) > 12) $t .= '    and ' . (count($by[$k]) - 12) . " more\r\n";
     }
@@ -13260,7 +13276,7 @@ function owned_delete($plan, $alsoShared = false) {
         if (!owned_verify($e['path'], $e['folder'], $e['kind'], $e['top'])) return ['ok' => false, 'deleted' => 0, 'thumbs' => 0, 'left' => [], 'text' => 'Something in the list did not check out, so nothing was deleted: ' . $e['rel']];
     }
     // order: everything in the folders and the thumbnails first, then the gallery's own data, the settings file last
-    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
+    $order = ['thumbs', 'meta', 'items', 'stats', 'backups', 'links', 'collections', 'visits', 'backup', 'leftovers', 'oldlogs', 'lockouts', 'signin', 'geo', 'update', 'previous', 'health', 'secret', 'settings'];
     $deleted = 0; $thumbs = 0; $left = [];
     $byKind = [];
     foreach ($plan['entries'] as $e) $byKind[$e['kind']][] = $e;
@@ -13313,7 +13329,7 @@ function files_admin_action($action, $dir, $files) {
     if ((string) ($_POST['typed'] ?? '') !== 'DELETE') $bad('Type DELETE (in capitals) to go on.');
     if (!hash_equals($plan['fingerprint'], (string) ($_POST['fingerprint'] ?? ''))) $bad('The list has changed since you looked at it, so nothing was deleted. Look at it again.');
     $copied = (int) ($_SESSION['files_zip_done'] ?? 0) > time() - 3600;
-    if (!$copied && ($_POST['nocopy'] ?? '') !== '1') $bad('Download a copy first, or say that you do not want one.');
+    if (!$copied && ($_POST['nocopy'] ?? '') !== '1') $bad('No whole copy has been downloaded yet, so nothing was deleted. Press Download ZIP and wait until the browser says the file has arrived (a copy that was cancelled or cut off does not count), or tick "I don\'t want a copy".');
     $res = owned_delete($plan, ($_POST['also_shared'] ?? '') === '1');
     if (($_POST['also_shared'] ?? '') !== '1' && !empty($plan['shared']['count'])) {
         $res['sharedLeft'] = (int) $plan['shared']['count'];
@@ -13339,8 +13355,9 @@ function files_download_route($dir, $files) {
     $total = archive_total_size($sizes, $names, $zip64);
     $slot = archive_take_slot();
     if ($slot === null) { http_response_code(503); header('Retry-After: 30'); header('Content-Type: text/plain; charset=UTF-8'); echo 'An archive is already being made. Try again in a minute.'; return; }
-    $_SESSION['files_zip_done'] = time();
+    $sid = session_id();
     session_write_close();
+    @ini_set('session.use_cookies', '0'); @ini_set('session.cache_limiter', '');   // (changed now, while headers can still be: the session is opened again after the last byte, and has no cookie to send then)
     @set_time_limit(0);
     ignore_user_abort(false);
     @ini_set('zlib.output_compression', '0');
@@ -13352,8 +13369,16 @@ function files_download_route($dir, $files) {
     header('X-Content-Type-Options: nosniff');
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-store');
-    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;
-    archive_stream($entries, $zip64);
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') return;   // (no bytes were sent: not a copy)
+    $sent = archive_stream($entries, $zip64);
+    if ($sent === true) files_mark_copy_taken($sid);   // (only now has the whole copy gone out: a download the browser dropped makes archive_stream stop and say false)
+}
+
+/** Notes in the signed-in session that a whole copy has been sent (the Delete accepts that for an hour). The headers are long gone by now, so the session is opened by its id without a cookie. */
+function files_mark_copy_taken($sid) {
+    if ((string) $sid === '') return;
+    @session_id((string) $sid);
+    if (@session_start()) { $_SESSION['files_zip_done'] = time(); session_write_close(); }
 }
 
 
@@ -14050,11 +14075,20 @@ function visitlog_path($set = null) {
     if ($path !== null) return $path;
     return $path = visitlog_find() ?? __DIR__ . '/.gallery-visits-' . bin2hex(random_bytes(12)) . '.sqlite';
 }
+/** Every log file there is by its exact name (a name that only looks like one, such as one that ends in a line break, is not one). */
+function visitlog_all() {
+    $out = [];
+    foreach ((array) glob(__DIR__ . '/.gallery-visits-*.sqlite') as $f) if (preg_match('~/\.gallery-visits-[0-9a-f]{24}\.sqlite$~D', $f) && is_file($f) && !is_link($f)) $out[] = $f;
+    sort($out);
+    return $out;
+}
 /** The log's file that is already there (the smallest name if two first hits made one each at the same moment), or null. */
 function visitlog_find() {
-    $best = null;
-    foreach ((array) glob(__DIR__ . '/.gallery-visits-*.sqlite') as $f) if (preg_match('~/\.gallery-visits-[0-9a-f]{24}\.sqlite$~', $f) && is_file($f) && !is_link($f) && ($best === null || $f < $best)) $best = $f;
-    return $best;
+    return visitlog_all()[0] ?? null;
+}
+/** The log and the side files SQLite keeps beside it are for the web server user alone (they hold every visitor's address, as the backup does). */
+function visitlog_private($file) {
+    foreach (['', '-wal', '-shm'] as $sfx) if (is_file($file . $sfx) && !is_link($file . $sfx) && (@fileperms($file . $sfx) & 077) !== 0) @chmod($file . $sfx, 0600);
 }
 function visitlog_driver_ok() { return class_exists('PDO') && in_array('sqlite', \PDO::getAvailableDrivers(), true); }   // (spelt with the leading backslash on purpose: the upgrade test forces the view counts' flat-file mode by replacing the other spelling)
 
@@ -14073,14 +14107,16 @@ function visitlog_schema($pdo) {
 }
 
 function visitlog_open($file, $new) {
+    if ($new) { @touch($file); @chmod($file, 0600); }   // (made private before SQLite makes its side files, which copy the file's permissions)
     $pdo = new PDO('sqlite:' . $file);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->exec('PRAGMA busy_timeout = 5000');
+    $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
+    if ($ver > 3) { $pdo = null; throw new RuntimeException('newer'); }   // (a log kept by a newer version of the gallery: nothing is written into what this version can't know the shape of)
     if ($new) $pdo->exec('PRAGMA auto_vacuum = FULL');   // (a trim gives the room back; set before the first table)
     $pdo->exec('PRAGMA journal_mode = WAL');
     $pdo->exec('PRAGMA synchronous = NORMAL');
-    $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
     if ($ver < 3) {   // (the tables are made once, not on every connection; version 2 added the log of disk activity, version 3 the count of times a photo was on a visitor's screen)
         if ($ver < 1) visitlog_schema($pdo);
         if ($ver < 2) changes_schema($pdo);
@@ -14106,10 +14142,11 @@ function visitlog_db() {
             foreach ([$file, $file . '-wal', $file . '-shm'] as $f) @unlink($f);
             $pdo = visitlog_open(visitlog_path($best), false);
         }
+        visitlog_private(visitlog_path());
         $db = $pdo;
     } catch (Throwable $e) {
-        error_log('gallery: the visitor log could not be opened: ' . $e->getMessage());
-        $GLOBALS['__visitlog_error'] = 'cantwrite';
+        if ($e->getMessage() === 'newer') $GLOBALS['__visitlog_error'] = 'newer';
+        else { error_log('gallery: the visitor log could not be opened: ' . $e->getMessage()); $GLOBALS['__visitlog_error'] = 'cantwrite'; }
         $db = null;
     }
     return $db;
@@ -14121,6 +14158,7 @@ function visitlog_check() {
     if ($r !== null) return $r;
     if (!visitlog_driver_ok()) return $r = [false, 'This server\'s PHP has no SQLite (the pdo_sqlite extension), which the visitor log needs.'];
     $db = visitlog_db();
+    if ($db === null && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') return $r = [false, 'The visitor log was made by a newer version of the gallery than this one, so nothing is written into it (it is left exactly as it is). Put the newer index.php back, or set the log aside in the Health check to start a new one with this version.'];
     if ($db === null) return $r = [false, 'SQLite is there, but the log\'s file can\'t be made or written in the gallery\'s folder. The web server has to be allowed to write there.'];
     try { $db->exec('INSERT OR REPLACE INTO meta (k, v) VALUES (\'checked\', \'' . time() . '\')'); }
     catch (Throwable $e) { return $r = [false, 'SQLite is there, but writing to the log failed (' . $e->getMessage() . ').']; }
@@ -14873,10 +14911,33 @@ function changes_card_text($folderPath) {
  * There is no cron here, so "weekly" means the first request after a week has passed (answered first; the backup runs after the page has been sent).
  * ----------------------------------------------------------------------- */
 
+/** Every backup ZIP beside index.php by its exact name (a fresh one is made each time, so after a run there is one; the last moment of a swap there may be two). */
+function backup_all() {
+    $out = [];
+    foreach ((array) glob(__DIR__ . '/.gallery-backup-*.zip') as $f) if (preg_match('~/\.gallery-backup-[0-9a-f]{24}\.zip$~D', $f) && is_file($f) && !is_link($f)) $out[] = $f;
+    return $out;
+}
+/** The backup: the newest ZIP (a name that only looks like one, such as one that ends in a line break, is not one). */
 function backup_find() {
-    $best = null;
-    foreach ((array) glob(__DIR__ . '/.gallery-backup-*.zip') as $f) if (preg_match('~/\.gallery-backup-[0-9a-f]{24}\.zip$~', $f) && is_file($f) && !is_link($f) && ($best === null || $f < $best)) $best = $f;
+    $best = null; $bestT = -1;
+    foreach (backup_all() as $f) {
+        $t = (int) @filemtime($f);
+        if ($best === null || $t > $bestT || ($t === $bestT && $f < $best)) { $best = $f; $bestT = $t; }
+    }
     return $best;
+}
+/** A copy of a data file a killed backup (or Files-made ZIP) left in the server's temporary folder is removed once it is over an hour old: only this gallery's own names
+ *  (gallery-backup-… and gallery-files-…), only plain files this user owns, never a link or a folder. */
+function backup_sweep_temp() {
+    $tmp = rtrim(sys_get_temp_dir(), '/'); $me = getmyuid();
+    $dh = @opendir($tmp); if (!$dh) return;
+    while (($n = readdir($dh)) !== false) {
+        if (!preg_match('/^gallery-(?:backup|files)-[A-Za-z0-9]{6,24}$/D', $n)) continue;
+        $p = $tmp . '/' . $n;
+        if (is_link($p) || !is_file($p) || time() - (int) @filemtime($p) < 3600 || @fileowner($p) !== $me) continue;
+        @unlink($p);
+    }
+    closedir($dh);
 }
 function backup_state_path() { return __DIR__ . '/.gallery-backup.php'; }
 /** How the last tries went: ok_at, try_at, by (auto|you), result (ok|partial|failed), why, files, bytes, problems [[name, why, carried|left out]]. */
@@ -14897,7 +14958,7 @@ function backup_folders($dir, $files) {
 
 /** What goes in: [{rel, path, kind, mtime, sqlite}], the names as the Files-this-gallery-made list gives them (a mapped folder under its name in the gallery). */
 function backup_parts($dir, $files) {
-    $keep = ['settings', 'links', 'collections', 'secret', 'lockouts', 'items', 'stats'];
+    $keep = ['settings', 'links', 'collections', 'secret', 'lockouts', 'items', 'stats', 'oldlogs'];
     $parts = [];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if (!in_array($e['kind'], $keep, true)) continue;
@@ -14957,13 +15018,17 @@ function backup_copy_sqlite($src, $dest) {
 }
 
 /** Is a copied data file whole and readable as what it is? '' or the reason. */
-function backup_check_file($path, $kind) {
+function backup_check_file($path, $kind, $rel = '') {
     $raw = (string) @file_get_contents($path);
     if ($raw === '') return 'is empty';
     if ($kind === 'settings') return gallery_config_parse($raw)[0] === 'ok' ? '' : 'can\'t be read as settings';
     if ($kind === 'secret') return preg_match('/^[0-9a-f]{64}$/m', $raw) ? '' : 'does not hold the key';
     if ($kind === 'notes') return trim((string) strtok($raw, "\n")) === '{gallery}' ? '' : 'is not a note';
     if ($kind === 'lockouts') return '';
+    if ($kind === 'oldlogs') {   // (what versions before 2.6.5 kept the visitor logs in: guarded JSON, or for the -q file guarded lines)
+        if (strncmp($raw, '<?php', 5) !== 0) return 'does not start the way the gallery writes it';
+        return substr($rel, -6) === '-q.php' || is_array(json_decode(data_file_strip_guard($raw), true)) ? '' : 'can\'t be read (it is not whole)';
+    }
     return is_array(json_decode(data_file_strip_guard($raw), true)) ? '' : 'can\'t be read (it is not whole)';
 }
 
@@ -14978,9 +15043,33 @@ function backup_copy_part($part, $tmpDir) {
     }
     $tmp = owned_snapshot($part['path']);
     if ($tmp === null) return [null, 'could not be copied whole'];
-    $why = backup_check_file($tmp, $part['kind']);
+    $why = backup_check_file($tmp, $part['kind'], $part['rel']);
     if ($why !== '') { @unlink($tmp); return [null, $why]; }
     return [$tmp, ''];
+}
+
+/** The records in a list-type part, by what names them: a share link's or collection's id, a photo's or group's name in a folder's data file. null when it can't be told. */
+function backup_record_ids($kind, $path) {
+    $d = json_decode(data_file_strip_guard((string) @file_get_contents($path)), true);
+    if (!is_array($d)) return null;
+    $ids = [];
+    if ($kind === 'items') { foreach (['items', 'groups'] as $k) if (isset($d[$k]) && is_array($d[$k])) foreach (array_keys($d[$k]) as $n) $ids[$k . ':' . $n] = true; return array_keys($ids); }
+    $list = $d[$kind === 'links' ? 'links' : 'collections'] ?? [];
+    if (!is_array($list)) return null;
+    foreach ($list as $r) if (is_array($r) && isset($r['id']) && is_string($r['id'])) $ids[$r['id']] = true;
+    return array_keys($ids);
+}
+
+/** Has a list lost a lot since the copy in the backup before? Counts the records of the old copy that are no longer in the new one (new records do not make up for them):
+ *  at least 3 gone and at least a quarter of what the old copy had. Returns the sentence for Health and the README, or '' when it is an ordinary change. */
+function backup_held_reason($kind, $newPath, $oldPath) {
+    if (!in_array($kind, ['links', 'collections', 'items'], true)) return '';
+    $old = backup_record_ids($kind, $oldPath); $new = backup_record_ids($kind, $newPath);
+    if ($old === null || $new === null || !$old) return '';
+    $lost = count(array_diff($old, $new)); $had = count($old);
+    if ($lost < 3 || $lost * 4 < $had) return '';
+    $noun = ['links' => 'share links', 'collections' => 'collections', 'items' => 'captions and photo records'][$kind];
+    return $lost . ' of the ' . $had . ' ' . $noun . ' in the backup are gone from the live file';
 }
 
 /* ---- reading a ZIP this gallery wrote (stored, not compressed; no ZIP64: a backup is far smaller than 4 GB) ---- */
@@ -15038,7 +15127,7 @@ function backup_zip_verify($path) {
 
 function backup_readme($manifest) {
     $t = "THE BACKUP\r\n\r\nMade " . gmdate('Y-m-d H:i', $manifest['made']) . " UTC by gallery " . $manifest['version'] . ($manifest['by'] === 'you' ? ' (asked for)' : ' (the weekly one)') . ".\r\n\r\n";
-    $t .= "Everything the gallery keeps that can't be made again: the settings, share links, collections, the install secret, the captions and flags in each folder's data file,\r\nthe view counts, the visitor log (with the change log and lockouts in it) and the notes (.md files that begin with {gallery}).\r\n";
+    $t .= "Everything the gallery keeps that can't be made again: the settings, share links, collections, the install secret, the captions and flags in each folder's data file,\r\nthe view counts, the visitor log (with the change log and lockouts in it), the visitor logs that versions before 2.6.5 kept (.gallery-linklog-…) and the notes (.md files that begin with {gallery}).\r\n";
     $t .= "Not in it: your photos and videos (they are your own files), thumbnails and the read-once file data (made again), the country file (downloaded again) and the signed-in browsers (people sign in again).\r\n\r\n";
     $t .= "HOW TO PUT FILES BACK: unzip over the folder index.php is in, so each file lands next to its photos (a folder shown from elsewhere on the server appears under the name it has in the gallery:\r\nput its files in the real folder it comes from). To put back the visitor log only, press Restore in the Health check.\r\n\r\n";
     $t .= "KEEP THIS FILE PRIVATE: it holds password hashes, the install secret, share-link addresses and visitor IP addresses.\r\n\r\nFILES (MANIFEST.json has the checksums):\r\n";
@@ -15047,44 +15136,70 @@ function backup_readme($manifest) {
     return $t;
 }
 
-/** Makes the backup now: a whole new ZIP, checked, replacing the old one. Returns ['ok' => bool, 'busy' => bool, 'why' => text, 'files' => n, 'bytes' => n, 'problems' => [[name, why, carried|left out]]]. */
+/** Makes the backup now: a whole new ZIP under a fresh name, checked, replacing the old one. Returns ['ok' => bool, 'busy' => bool, 'why' => text, 'files' => n, 'bytes' => n, 'problems' => [[name, why, carried|held|left out]]].
+ *  Only one run at a time: a lock on .gallery-backup.lock (the system lets it go when the run ends, however it ends). */
 function backup_run($manual, $dir, $files) {
     $now = time();
-    $zip = backup_find() ?? (__DIR__ . '/.gallery-backup-' . bin2hex(random_bytes(12)) . '.zip');
-    $work = $zip . '.tmp';
+    $busy = ['ok' => false, 'busy' => true, 'why' => 'A backup is being made right now.', 'files' => 0, 'bytes' => 0, 'problems' => []];
     $fail = function ($why, $problems = []) use ($now, $manual) {
         backup_state_set(['try_at' => $now, 'by' => $manual ? 'you' : 'auto', 'result' => 'failed', 'why' => $why, 'problems' => $problems]);
         return ['ok' => false, 'busy' => false, 'why' => $why, 'files' => 0, 'bytes' => 0, 'problems' => $problems];
     };
     if (!is_writable(__DIR__)) return $fail('The gallery\'s folder is not writable by the web server, so a backup can\'t be made.');
-    if (is_file($work)) {
-        if ($now - (int) @filemtime($work) < 900) return ['ok' => false, 'busy' => true, 'why' => 'A backup is being made right now.', 'files' => 0, 'bytes' => 0, 'problems' => []];
-        @unlink($work);
-    }
-    $lock = @fopen($work, 'xb');
-    if (!$lock) return ['ok' => false, 'busy' => true, 'why' => 'A backup is being made right now.', 'files' => 0, 'bytes' => 0, 'problems' => []];
-    @chmod($work, 0600);
-    backup_state_set(['try_at' => $now, 'by' => $manual ? 'you' : 'auto']);
+    $lockPath = __DIR__ . '/.gallery-backup.lock';
+    if (is_link($lockPath)) return $fail('.gallery-backup.lock is a link, which the gallery won\'t use. Delete it, then try again.');
+    $guard = @fopen($lockPath, 'c');
+    if (!$guard) return $fail('The backup\'s lock file (.gallery-backup.lock) can\'t be made in the gallery\'s folder, so no backup can be made safely. Make the folder writable by the web server.');
+    @chmod($lockPath, 0600);
+    if (!flock($guard, LOCK_EX | LOCK_NB)) { fclose($guard); return $busy; }
+    $out = null; $work = '';
     $cleanup = []; $tmpDir = sys_get_temp_dir();
     try {
+        foreach ((array) glob(__DIR__ . '/.gallery-backup-*.zip.tmp') as $stale) if (preg_match('~/\.gallery-backup-[0-9a-f]{24}\.zip\.tmp$~D', $stale) && is_file($stale) && !is_link($stale)) @unlink($stale);   // (the lock is ours: whatever is left was a run that was killed)
+        backup_sweep_temp();
+        $oldZip = backup_find();
+        $zip = __DIR__ . '/.gallery-backup-' . bin2hex(random_bytes(12)) . '.zip';
+        $work = $zip . '.tmp';
+        $out = @fopen($work, 'xb');
+        if (!$out) return $fail('The new backup\'s file could not be made in the gallery\'s folder.');
+        @chmod($work, 0600);
+        $st = backup_state();
+        $accept = array_flip(array_map('strval', (array) ($st['accept'] ?? [])));
+        backup_state_set(['try_at' => $now, 'by' => $manual ? 'you' : 'auto']);
         $parts = backup_parts($dir, $files);
-        $old = is_file($zip) ? backup_zip_index($zip) : null;
-        $oldOk = $old !== null && backup_zip_verify($zip)[0];   // (an old backup that does not check out is not carried from)
+        $old = $oldZip !== null ? backup_zip_index($oldZip) : null;
+        $oldOk = $old !== null && backup_zip_verify($oldZip)[0];   // (an old backup that does not check out is not carried from)
         $need = 0; foreach ($parts as $p) $need += (int) @filesize($p['path']);
         $tf = @disk_free_space($tmpDir); $df = @disk_free_space(__DIR__);
-        if (($tf !== false && $tf < $need + 8388608) || ($df !== false && $df < $need + (int) @filesize($zip) + 8388608)) return $fail('There is not enough room on the disk to make the backup (it needs about ' . (int) ceil(($need * 2 + 8388608) / 1048576) . ' MB free).');
+        if (($tf !== false && $tf < $need + 8388608) || ($df !== false && $df < $need + (int) ($oldZip !== null ? @filesize($oldZip) : 0) + 8388608)) return $fail('There is not enough room on the disk to make the backup (it needs about ' . (int) ceil(($need * 2 + 8388608) / 1048576) . ' MB free).');
         if ($need > 1500000000) return $fail('What there is to back up is over 1.5 GB, more than a backup of this kind holds.');
         $entries = []; $mparts = []; $problems = []; $leftOut = [];
+        $carryOld = function ($rel) use ($oldOk, $old, $oldZip, $tmpDir, &$cleanup) {   // the part as the backup before has it, in a temporary file, or null
+            if (!$oldOk || !isset($old[$rel])) return null;
+            $carry = @tempnam($tmpDir, 'gallery-backup-');
+            if ($carry === false) return null;
+            $cleanup[] = $carry;
+            return backup_zip_extract($oldZip, $old, $rel, $carry) ? $carry : null;
+        };
         foreach ($parts as $p) {
             [$tmp, $why] = backup_copy_part($p, $tmpDir);
             if ($tmp !== null) {
                 $cleanup[] = $tmp;
+                $held = '';
+                if (!isset($accept[$p['rel']]) && in_array($p['kind'], ['links', 'collections', 'items'], true) && ($carry = $carryOld($p['rel'])) !== null) {
+                    $held = backup_held_reason($p['kind'], $tmp, $carry);
+                    if ($held !== '') {   // a list that lost a lot: the backup keeps the copy from before, under the file's own name, and Health asks (the live file is not touched)
+                        $entries[] = ['name' => $p['rel'], 'path' => $carry, 'size' => (int) filesize($carry), 'mtime' => $p['mtime']];
+                        $mparts[] = ['name' => $p['rel'], 'kind' => $p['kind'], 'size' => (int) filesize($carry), 'sha256' => hash_file('sha256', $carry), 'state' => 'carried', 'why' => $held . ', so the copy from before was kept'];
+                        $problems[] = [$p['rel'], $held, 'held'];
+                        continue;
+                    }
+                }
                 $entries[] = ['name' => $p['rel'], 'path' => $tmp, 'size' => (int) filesize($tmp), 'mtime' => $p['mtime']];
                 $mparts[] = ['name' => $p['rel'], 'kind' => $p['kind'], 'size' => (int) filesize($tmp), 'sha256' => hash_file('sha256', $tmp), 'state' => 'new', 'why' => ''];
                 continue;
             }
-            $carry = null;
-            if ($oldOk && isset($old[$p['rel']])) { $carry = @tempnam($tmpDir, 'gallery-backup-'); if ($carry !== false) $cleanup[] = $carry; if ($carry === false || !backup_zip_extract($zip, $old, $p['rel'], $carry)) $carry = null; }
+            $carry = $carryOld($p['rel']);
             if ($carry !== null) {
                 $entries[] = ['name' => $p['rel'], 'path' => $carry, 'size' => (int) filesize($carry), 'mtime' => $p['mtime']];
                 $mparts[] = ['name' => $p['rel'], 'kind' => $p['kind'], 'size' => (int) filesize($carry), 'sha256' => hash_file('sha256', $carry), 'state' => 'carried', 'why' => 'it ' . $why . ' now'];
@@ -15096,22 +15211,24 @@ function backup_run($manual, $dir, $files) {
         $readme = backup_readme($manifest); $mj = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         $all = array_merge([['name' => 'README.txt', 'data' => $readme, 'size' => strlen($readme), 'mtime' => $now], ['name' => 'MANIFEST.json', 'data' => $mj, 'size' => strlen($mj), 'mtime' => $now]], $entries);
         $failed = false;
-        $okWrite = archive_stream($all, false, function ($b) use ($lock, &$failed) { if (@fwrite($lock, $b) === false) $failed = true; });
-        $flushed = @fflush($lock); fclose($lock); $lock = null;
+        $okWrite = archive_stream($all, false, function ($b) use ($out, &$failed) { if (@fwrite($out, $b) === false) $failed = true; });
+        $flushed = @fflush($out); fclose($out); $out = null;
         if (!$okWrite || $failed || !$flushed) return $fail('The backup could not be written (the disk may be full); the old one is untouched.', $problems);
         [$vok, $vn] = backup_zip_verify($work);
         if (!$vok || $vn !== count($all)) return $fail('The new backup did not check out when it was read back, so it was thrown away; the old one is untouched.', $problems);
         if (!@rename($work, $zip)) return $fail('The new backup could not be put in place; the old one is untouched.', $problems);
+        foreach (backup_all() as $other) if ($other !== $zip) @unlink($other);   // (one copy: the new one replaces the old, whatever its name)
         $bytes = (int) @filesize($zip);
-        backup_state_set(['ok_at' => $now, 'try_at' => $now, 'by' => $manual ? 'you' : 'auto', 'result' => $problems ? 'partial' : 'ok', 'why' => '', 'files' => count($entries), 'bytes' => $bytes, 'problems' => $problems]);
+        backup_state_set(['ok_at' => $now, 'try_at' => $now, 'by' => $manual ? 'you' : 'auto', 'result' => $problems ? 'partial' : 'ok', 'why' => '', 'files' => count($entries), 'bytes' => $bytes, 'problems' => $problems, 'accept' => []]);
         return ['ok' => true, 'busy' => false, 'why' => '', 'files' => count($entries), 'bytes' => $bytes, 'problems' => $problems];
     } catch (Throwable $e) {
         error_log('gallery: the backup failed: ' . $e->getMessage());
         return $fail('The backup stopped on an error (' . substr($e->getMessage(), 0, 120) . '); the old one is untouched.');
     } finally {
-        if (is_resource($lock)) fclose($lock);
+        if (is_resource($out)) fclose($out);
         foreach ($cleanup as $c) if (strncmp(basename($c), 'gallery-', 8) === 0 && is_file($c) && !is_link($c)) @unlink($c);
-        if (is_file($work)) @unlink($work);
+        if ($work !== '' && is_file($work)) @unlink($work);
+        flock($guard, LOCK_UN); fclose($guard);
     }
 }
 
@@ -15125,14 +15242,42 @@ function backup_due() {
     return time() - $last >= backup_week() && time() - $try >= 6 * 3600;
 }
 
-/** Called by every page: when a backup is due, it is made after the page has been sent. */
+/** Can this request's page be held back and sent whole before the backup starts? Only an ordinary page (a plain GET of the gallery or of the admin's main page, nothing streamed), with no other
+ *  output buffer or compression in the way. */
+function backup_page_can_wait() {
+    if (PHP_SAPI === 'cli' || headers_sent() || ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') return false;
+    if (filter_var(ini_get('zlib.output_compression'), FILTER_VALIDATE_BOOLEAN)) return false;
+    foreach (ob_get_status(true) as $st) if (($st['name'] ?? '') !== 'default output handler') return false;   // (a buffer that compresses or changes the page would make its length wrong)
+    $route = request_route();
+    return $route === '' || ($route === 'admin' && !array_diff(array_keys($_GET), ['admin', 'classic']));
+}
+
+/** Sends the page that was held back, whole, with its length, and lets the visitor's connection finish (the backup then runs with nobody waiting). Where PHP offers no call for it. */
+function backup_send_page($level) {
+    if (ob_get_level() !== $level || headers_sent() || in_array(http_response_code(), [204, 304], true)) return;
+    foreach (headers_list() as $h) if (stripos($h, 'content-length:') === 0 || stripos($h, 'content-encoding:') === 0) return;
+    $body = (string) ob_get_contents();
+    if (function_exists('apache_setenv')) @apache_setenv('no-gzip', '1');   // (Apache's mod_deflate would make the page chunked and lose its length: this one page, once a week, goes out uncompressed)
+    header('Content-Length: ' . strlen($body));
+    header('Connection: close');
+    ob_end_clean();
+    echo $body;
+    while (ob_get_level() > 0) @ob_end_flush();   // (PHP's own buffer, when php.ini sets one, goes out too)
+    flush();
+}
+
+/** Called by every page: when a backup is due, it is made after the page has been sent (where PHP is not PHP-FPM or LiteSpeed, the page is held until it is whole and sent with its length). */
 function backup_after_response($dir, $files) {
     static $set = false;
     if ($set || !backup_due() || !is_writable(__DIR__)) return;
     $set = true;
-    register_shutdown_function(function () use ($dir, $files) {
-        if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request();
+    $level = null;
+    if (!function_exists('fastcgi_finish_request') && !function_exists('litespeed_finish_request') && backup_page_can_wait()) { ob_start(); $level = ob_get_level(); }
+    register_shutdown_function(function () use ($dir, $files, $level) {
         ignore_user_abort(true); @set_time_limit(180);
+        if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request();
+        elseif (function_exists('litespeed_finish_request')) @litespeed_finish_request();
+        elseif ($level !== null) backup_send_page($level);
         try { backup_run(false, $dir, $files); } catch (Throwable $e) { error_log('gallery: the weekly backup failed: ' . $e->getMessage()); }
     });
 }
@@ -15146,19 +15291,22 @@ function backup_status() {
 
 /* ---- the visitor log: set a damaged one aside, restore the backup's ---- */
 
-/** The log (and the side files SQLite keeps beside it) renamed to .damaged-<date>: never deleted. The next write starts a new log. Returns the new names, or null when there was no log. */
-function backup_set_log_aside() {
-    $live = visitlog_find();
-    if ($live === null) return null;
+/** Every log (and the side files SQLite keeps beside it) renamed to .damaged-<date>, except the one named $except: never deleted. The next write starts a new log. Returns the new names, or null when there was no log. */
+function backup_set_log_aside($except = null) {
+    $lives = visitlog_all();
+    if ($except !== null) $lives = array_values(array_filter($lives, fn ($f) => basename($f) !== $except));
+    if (!$lives) return null;
     @unlink(__DIR__ . '/.gallery-health-cache.php');   // (what Health last found about the log is not true any more)
     $stamp = gmdate('Ymd-His'); $moved = [];
-    for ($n = 0; ; $n++) {   // (a name that is taken, even by an earlier one set aside in the same second, is never written over)
-        $base = preg_replace('~\.sqlite$~', '.damaged-' . $stamp . ($n ? '-' . $n : '') . '.sqlite', $live);
-        if (!file_exists($base) && !file_exists($base . '-wal') && !file_exists($base . '-shm')) break;
-    }
-    foreach (['', '-wal', '-shm'] as $sfx) {
-        $f = $live . $sfx;
-        if (is_file($f) && @rename($f, $base . $sfx)) $moved[] = basename($base . $sfx);
+    foreach ($lives as $live) {
+        for ($n = 0; ; $n++) {   // (a name that is taken, even by an earlier one set aside in the same second, is never written over)
+            $base = preg_replace('~\.sqlite$~', '.damaged-' . $stamp . ($n ? '-' . $n : '') . '.sqlite', $live);
+            if (!file_exists($base) && !file_exists($base . '-wal') && !file_exists($base . '-shm')) break;
+        }
+        foreach (['', '-wal', '-shm'] as $sfx) {
+            $f = $live . $sfx;
+            if (is_file($f) && @rename($f, $base . $sfx)) $moved[] = basename($base . $sfx);
+        }
     }
     return $moved;
 }
@@ -15169,7 +15317,7 @@ function backup_restore_log() {
     if ($zip === null) return [false, 'There is no backup.'];
     $index = backup_zip_index($zip);
     if ($index === null || !backup_zip_verify($zip)[0]) return [false, 'The backup itself does not check out, so nothing was changed.'];
-    $name = null; foreach ($index as $n => $m) if (preg_match('~^\.gallery-visits-[0-9a-f]{24}\.sqlite$~', $n)) { $name = $n; break; }
+    $name = null; foreach ($index as $n => $m) if (preg_match('~^\.gallery-visits-[0-9a-f]{24}\.sqlite$~D', $n)) { $name = $n; break; }
     if ($name === null) return [false, 'The backup has no visitor log in it.'];
     $tmp = __DIR__ . '/.gallery-restore-' . bin2hex(random_bytes(4)) . '.tmp';
     if (!backup_zip_extract($zip, $index, $name, $tmp)) { @unlink($tmp); return [false, 'The log could not be read out of the backup.']; }
@@ -15180,6 +15328,7 @@ function backup_restore_log() {
     backup_set_log_aside();
     if (!@rename($tmp, __DIR__ . '/' . $name)) { @unlink($tmp); return [false, 'The log could not be put in place.']; }
     @chmod(__DIR__ . '/' . $name, 0600);
+    backup_set_log_aside($name);   // (a visit in the moment between may have started a log of its own: with two, the gallery would read whichever sorts first, perhaps not the one just put back)
     @unlink(__DIR__ . '/.gallery-health-cache.php');
     return [true, 'The log from the backup is back. The one it replaced was kept, renamed with .damaged- and the date.'];
 }
@@ -15188,6 +15337,13 @@ function backup_restore_log() {
 
 /** The buttons' requests (JSON; ends the request): backup_run (Back up now), backup_restore_log, backup_new_log (set the log aside), backup_download_prepare (password, then a one-time address). */
 function backup_admin_action($action, $dir, $files) {
+    if ($action === 'backup_accept') {   // "That's right, use the new one": the next backup takes the live copy of a part it held, and is made now
+        $name = (string) ($_POST['name'] ?? '');
+        $held = false; foreach ((array) (backup_state()['problems'] ?? []) as $pr) if (is_array($pr) && ($pr[2] ?? '') === 'held' && (string) $pr[0] === $name) $held = true;
+        if (!$held) admin_json_exit(['ok' => false, 'text' => 'That part is not held in the backup (it may have been taken already), so nothing was changed.']);
+        backup_state_set(['accept' => array_values(array_unique(array_merge((array) (backup_state()['accept'] ?? []), [$name])))]);
+        $action = 'backup_run';
+    }
     if ($action === 'backup_run') {
         $r = backup_run(true, $dir, $files);
         $left = 0; foreach ($r['problems'] as $pr) if ($pr[2] === 'left out') $left++;
@@ -16416,9 +16572,16 @@ function health_heavy($dir, $files, $force) {
     $p = __DIR__ . '/.gallery-health-cache.php';
     $c = is_file($p) ? json_file_read($p, []) : [];
     $live = visitlog_find();
+    $zipNow = backup_find(); $zsig = $zipNow === null ? '' : basename($zipNow) . '|' . (int) @filesize($zipNow) . '|' . (int) @filemtime($zipNow);   // (a backup made, replaced or cut short since the last look: looked at again)
     $same = (($c['log'] ?? null) === null) === ($live === null) && ($c['file'] ?? '') === ($live === null ? '' : basename($live));   // (a log that came or went, or was swapped, since the last look: looked at again)
-    if (!$force && $same && array_key_exists('log', $c) && isset($c['at'], $c['stats']) && time() - (int) $c['at'] < 3600 && ($c['v'] ?? '') === GALLERY_VERSION) return $c;
-    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
+    if (!$force && $same && array_key_exists('log', $c) && isset($c['at'], $c['stats']) && time() - (int) $c['at'] < 3600 && ($c['v'] ?? '') === GALLERY_VERSION) {
+        if (($c['zsig'] ?? null) !== $zsig) {   // (the backup file was made, replaced or changed since: only it is looked through again, nothing else)
+            $c['zsig'] = $zsig; $c['zip'] = $zipNow === null ? null : backup_zip_verify($zipNow)[0];
+            if (is_writable(__DIR__)) json_file_update($p, [], function (&$d) use ($c) { $d = $c; });
+        }
+        return $c;
+    }
+    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
     if ($live !== null && visitlog_driver_ok()) $r['log'] = ['why' => backup_sqlite_check($live)];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if ($e['kind'] !== 'stats') continue;
@@ -16442,7 +16605,7 @@ function health_heavy($dir, $files, $force) {
 function backup_has_log() {
     $zip = backup_find(); if ($zip === null) return false;
     $ix = backup_zip_index($zip); if ($ix === null) return false;
-    foreach ($ix as $n => $m) if (preg_match('~^\.gallery-visits-[0-9a-f]{24}\.sqlite$~', $n)) return true;
+    foreach ($ix as $n => $m) if (preg_match('~^\.gallery-visits-[0-9a-f]{24}\.sqlite$~D', $n)) return true;
     return false;
 }
 
@@ -16466,6 +16629,8 @@ function health_database_rows($add, $dir, $files) {
     if ($logFile !== null && ($heavy['log']['why'] ?? '') !== '') {   // (a damaged file is looked at first: it also makes the check below fail, and "can't be written" would be the wrong thing to say)
         $add($G, 'bad', 'The visitor log is damaged', 'The file ' . $heavy['log']['why'] . '. ' . $uses . ' Only that history is at risk: your photos, share links, settings and captions are in other files. ' . ($bk['have'] && backup_has_log() ? 'The backup from ' . health_ago($bk['at']) . ' has a sound copy.' : 'There is no sound copy in a backup.'),
             null, health_backup_buttons($bk['have'] && backup_has_log(), true, false));
+    } elseif (!$vlOk && ($GLOBALS['__visitlog_error'] ?? '') === 'newer') {
+        $add($G, 'warn', 'The visitor log is from a newer version', $vlWhy . ' ' . $uses . ' The file is not damaged: the older Visitors history is safe in it.', null, health_backup_buttons(false, true, false));
     } elseif (!$vlOk) {
         $add($G, (LOG_PUBLIC_VISITS || ENABLE_SHARE_LINKS) ? 'warn' : 'info', 'Visitor log: needs SQLite', $vlWhy . ' Until then nothing is logged and the Visitors and Changes tabs stay hidden. ' . $uses, null, '', [
             'PHP needs its SQLite extension (`pdo_sqlite`). Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM (or Apache). Shared hosting: switch `pdo_sqlite` on in the host\'s PHP extensions page.',
@@ -16502,15 +16667,23 @@ function health_database_rows($add, $dir, $files) {
     }
     // --- the backup
     $buttons = health_backup_buttons(false, false, true);
-    $hasProblem = false; foreach ($bk['problems'] as $pr) if (is_array($pr)) $hasProblem = true;
+    $hasProblem = false; $heldRows = [];
+    foreach ($bk['problems'] as $pr) { if (!is_array($pr)) continue; if (($pr[2] ?? '') === 'held') $heldRows[] = $pr; else $hasProblem = true; }
+    foreach ($heldRows as $pr) {   // (a list that lost a lot: the backup kept the copy from before; the owner says whether the live one is right)
+        $nm = htmlspecialchars((string) $pr[0], ENT_QUOTES, 'UTF-8');
+        $add($G, 'warn', 'The backup kept the earlier copy of ' . $pr[0], $pr[1] . ', so the backup kept the copy from before (made ' . health_ago($bk['at']) . ') instead of this one. The live file was not touched. If they are meant to be gone, press the button and the next backup takes the live file; if not, put the file back from the backup (unzip it over the gallery\'s folder). Until then this part of the backup is not updated.', null,
+            '<div class="health-act"><button type="button" class="secondary" data-backup-act="accept" data-backup-name="' . $nm . '" data-backup-ask="Use the live copy of ' . $nm . ' in the backup from now on? The earlier copy in the backup is replaced by it.">That\'s right, use the new one</button> <span class="muted health-act-out" role="status" aria-live="polite"></span></div>');
+    }
     if (!is_writable(__DIR__)) $add($G, 'warn', 'No backup can be made', 'The gallery\'s folder is not writable by the web server, so the backup (a file beside index.php) can\'t be written. Make the folder writable.');
     elseif (!$bk['have']) {
         if ($bk['result'] === 'failed') $add($G, 'warn', 'There is no backup: the last try did not work', $bk['why'], null, $buttons);
         else $add($G, 'opt', 'No backup yet', 'The first one is made by itself after a coming visit, and then once a week. Or make it now.', null, $buttons);
+    } elseif (($heavy['zip'] ?? true) === false) {
+        $add($G, 'warn', 'The backup file is damaged', 'The backup from ' . health_ago($bk['at']) . ' does not check out when it is read back: the file was cut short or changed after it was made. Restore and Download refuse it, so nothing bad can come from it, but it can\'t help you either. Make a new one now.', null, $buttons);
     } elseif ($bk['result'] === 'failed' && $bk['tried'] > $bk['at']) {
         $add($G, 'warn', 'The last backup did not work', $bk['why'] . ' The backup from ' . health_ago($bk['at']) . ' is still there.', null, $buttons);
     } elseif ($hasProblem) {
-        $parts = []; foreach ($bk['problems'] as $pr) if (is_array($pr)) $parts[] = $pr[0] . ' ' . $pr[1] . ($pr[2] === 'carried' ? ' (the copy from the backup before is kept)' : ' (no earlier copy: it is not in the backup)');
+        $parts = []; foreach ($bk['problems'] as $pr) if (is_array($pr) && ($pr[2] ?? '') !== 'held') $parts[] = $pr[0] . ' ' . $pr[1] . ($pr[2] === 'carried' ? ' (the copy from the backup before is kept)' : ' (no earlier copy: it is not in the backup)');
         $add($G, 'warn', 'Backup made ' . health_ago($bk['at']) . ', but ' . count($parts) . ' part' . (count($parts) === 1 ? '' : 's') . ' could not be read soundly', implode('. ', array_slice($parts, 0, 3)) . (count($parts) > 3 ? '. And ' . (count($parts) - 3) . ' more.' : '.') . ' A damaged file never replaces a good copy in the backup.', null, $buttons);
     } elseif (time() - $bk['at'] > 2 * backup_week()) {
         $add($G, 'opt', 'The backup is ' . health_ago($bk['at']), 'It is made once a week by the first visit after the week; none has come since. Make one now.', null, $buttons);
@@ -21989,10 +22162,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         go.addEventListener('click', run); pw.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); run(); } });
         b.after(pw, ' ', go); pw.focus(); return;
       }
-      var name = { run: 'backup_run', restore: 'backup_restore_log', newlog: 'backup_new_log' }[act]; if (!name) return;
+      var name = { run: 'backup_run', accept: 'backup_accept', restore: 'backup_restore_log', newlog: 'backup_new_log' }[act]; if (!name) return;
       [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = true; });
-      say(act === 'run' ? 'Backing up\u2026' : 'Working\u2026');
-      post(name).then(function (j) {
+      say(act === 'run' || act === 'accept' ? 'Backing up\u2026' : 'Working\u2026');
+      post(name, act === 'accept' ? { name: b.getAttribute('data-backup-name') || '' } : null).then(function (j) {
         if (j.ok && act === 'run') {   // Back up now: only the Backup row and the Backup box are drawn again, in place (no reload), and the row says what was done
           window.__siteDirty = true;
           return redrawBackupPart(panel).then(function (done) {
@@ -23353,7 +23526,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
 
     $resultMessage = null;
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
         $resultMessage = handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups);
         // A save that couldn't write must not read as a save: say what to fix.
         if (!empty($GLOBALS['__data_write_failed']) && ($resultMessage['type'] ?? '') === 'ok') {

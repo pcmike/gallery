@@ -264,7 +264,7 @@ function links_admin_action($action, $dir, $files) {
         link_apply_fields($rec, $f);
         $rec['_new'] = true;
         $taken = false;
-        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
         links_update(function (&$d) use (&$rec, $f, &$taken) {
             if (($why = link_apply_address($rec, $f['_address'], $d)) !== '') { $taken = $why; return; }
             unset($rec['_new']);

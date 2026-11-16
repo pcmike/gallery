@@ -122,7 +122,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         $name = collection_free_name($dir, $files, $parentRel, $title);
         $rec = ['id' => 'c' . bin2hex(random_bytes(6)), 'parent' => $parentFid, 'name' => $name, 'title' => $title, 'description' => '', 'cover' => null, 'dates' => '', 'position' => null,
                 'private' => false, 'front' => false, 'ownGallery' => false, 'items' => [], 'at' => time()];
-        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
         collections_update(function (&$d) use ($rec) { $d['collections'][] = $rec; });
         collection_saved_or_fail();
         $path = $parentRel === '' ? $name : $parentRel . '/' . $name;
@@ -131,7 +131,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
     if ($action === 'collection_delete') {
         $id = (string) ($_POST['id'] ?? '');
         if (collection_find_by_id($id) === null) collection_fail('That collection is not here (it may already be gone).');
-        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
         collections_update(function (&$d) use ($id) { $d['collections'] = array_values(array_filter((array) $d['collections'], function ($r) use ($id) { return !is_array($r) || ($r['id'] ?? '') !== $id; })); });
         collection_saved_or_fail();
         own_galleries_recompute($dir, $files);
@@ -152,7 +152,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
     $rec = isset($_POST['id']) ? collection_find_by_id((string) $_POST['id']) : ($adminFolderPath !== null ? collection_at($dir, $adminFolderPath, $files) : null);
     if ($rec === null) collection_fail('That collection is not here.');
     $id = $rec['id'];
-    $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+    $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
     if ($action === 'toggle_collection_flag') {
         $field = isset($_POST['front']) ? 'front' : (isset($_POST['owngallery']) ? 'ownGallery' : (isset($_POST['private']) ? 'private' : ''));
         if ($field === '') collection_fail('Nothing to change.');

@@ -264,7 +264,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
 
     $resultMessage = null;
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = [];
+        $GLOBALS['__data_write_failed'] = false; $GLOBALS['__data_refused'] = []; $GLOBALS['__data_write_cause'] = [];
         $resultMessage = handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $groups, $explicitGroups);
         // A save that couldn't write must not read as a save: say what to fix.
         if (!empty($GLOBALS['__data_write_failed']) && ($resultMessage['type'] ?? '') === 'ok') {
