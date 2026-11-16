@@ -28,7 +28,7 @@ function owned_kind_of_name($name, $isTop) {
         if (preg_match('/^\.gallery-signin-[0-9a-f]{12}\.php$/D', $name)) return 'signin';   // (one signed-in browser's address history)
     }
     if ($name === '.gallery-items.php') return 'items';
-    if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json') return 'stats';
+    if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json' || preg_match('/^\.gallery-stats\.joined-\d{8}-\d{6}\.php$/D', $name)) return 'stats';   // (the last: a JSON store set aside once its counts were joined to the database)
     if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-[0-9a-f]{8})?\.php$/D', $name)) return 'backups';   // (an optional mark at the end says which gallery made it: see tidy_backup_id)
     return '';
 }

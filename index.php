@@ -12872,7 +12872,7 @@ function owned_kind_of_name($name, $isTop) {
         if (preg_match('/^\.gallery-signin-[0-9a-f]{12}\.php$/D', $name)) return 'signin';   // (one signed-in browser's address history)
     }
     if ($name === '.gallery-items.php') return 'items';
-    if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json') return 'stats';
+    if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json' || preg_match('/^\.gallery-stats\.joined-\d{8}-\d{6}\.php$/D', $name)) return 'stats';   // (the last: a JSON store set aside once its counts were joined to the database)
     if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-[0-9a-f]{8})?\.php$/D', $name)) return 'backups';   // (an optional mark at the end says which gallery made it: see tidy_backup_id)
     return '';
 }
@@ -16253,13 +16253,21 @@ function health_heavy($dir, $files, $force) {
     $live = visitlog_find();
     $same = (($c['log'] ?? null) === null) === ($live === null) && ($c['file'] ?? '') === ($live === null ? '' : basename($live));   // (a log that came or went, or was swapped, since the last look: looked at again)
     if (!$force && $same && array_key_exists('log', $c) && isset($c['at'], $c['stats']) && time() - (int) $c['at'] < 3600 && ($c['v'] ?? '') === GALLERY_VERSION) return $c;
-    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'stats' => ['n' => 0, 'bad' => []]];
+    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
     if ($live !== null && visitlog_driver_ok()) $r['log'] = ['why' => backup_sqlite_check($live)];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
-        if ($e['kind'] !== 'stats' || substr($e['path'], -7) !== '.sqlite') continue;
-        $r['stats']['n']++;
-        $w = backup_sqlite_check($e['path']);
-        if ($w !== '') $r['stats']['bad'][] = [$e['rel'], $w];
+        if ($e['kind'] !== 'stats') continue;
+        if (substr($e['path'], -7) === '.sqlite') {
+            if (!visitlog_driver_ok()) { $r['stats']['nodriver'][] = $e['rel']; continue; }   // (this PHP can't open it: the counts are in it, not lost)
+            $r['stats']['n']++;
+            $w = backup_sqlite_check($e['path']);
+            if ($w !== '') { $r['stats']['bad'][] = [$e['rel'], $w]; continue; }
+            $w = stats_sqlite_write_check($e['path']);
+            if ($w !== '') $r['stats']['ro'][] = [$e['rel'], $w];
+        } elseif (basename($e['path']) === '.gallery-stats.php' && !data_file_is_link($e['path'])) {   // (the JSON store: a file that can't be read is left as it is, and nothing is counted there until it is mended)
+            $raw = (string) @file_get_contents($e['path']);
+            if (!data_file_is_empty($raw) && !is_array(json_decode(data_file_strip_guard($raw), true))) $r['stats']['bad'][] = [$e['rel'], 'could not be read as view counts'];
+        }
     }
     if (is_writable(__DIR__)) json_file_update($p, [], function (&$d) use ($r) { $d = $r; });
     return $r;
@@ -16311,13 +16319,21 @@ function health_database_rows($add, $dir, $files) {
             $add($G, 'opt', 'The change records take ' . $chText, 'More than the ' . number_format(CHANGES_WARN_MB) . ' MB you asked to be warned at. The oldest entry is from ' . ($chOld > 0 ? gmdate('j M Y', $chOld) : 'an unknown date') . '. Trim the log in the Changes tab, or set how long entries are kept in Settings (Visitors and logs).');
         else $add($G, 'ok', 'Change log: ready', number_format($chN) . ' entr' . ($chN === 1 ? 'y' : 'ies') . ' in the Changes tab, taking ' . $chText . '.' . ($chOld > 0 ? ' The oldest is from ' . gmdate('j M Y', $chOld) . '.' : ''));
     }
-    if ($heavy['stats']['n'] > 0) {
+    $statsRo = $heavy['stats']['ro'] ?? []; $statsNoDriver = $heavy['stats']['nodriver'] ?? [];
+    $statsNames = function ($list) { $n = array_map(function ($b) { return is_array($b) ? $b[0] : $b; }, $list); return implode('; ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : ''); };
+    if ($statsNoDriver) {
+        $add($G, 'warn', 'View counts are kept in a database this server can\'t open (' . count($statsNoDriver) . ' folder' . (count($statsNoDriver) === 1 ? '' : 's') . ')', $statsNames($statsNoDriver) . '. This PHP has no SQLite (`pdo_sqlite`), so the counts in those files are neither shown nor added to; nothing is lost, and nothing is counted in a second place beside them. Turn `pdo_sqlite` on (Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM or Apache) and they carry on as they were.');
+    }
+    if ($statsRo) {
+        $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');
+    }
+    if ($heavy['stats']['n'] > 0 || ($heavy['stats']['bad'] ?? [])) {
         $bad = $heavy['stats']['bad'];
         if ($bad) {
             $names = implode('; ', array_map(function ($b) { return $b[0]; }, array_slice($bad, 0, 3))) . (count($bad) > 3 ? ' and ' . (count($bad) - 3) . ' more' : '');
-            $add($G, 'bad', 'View counts are damaged in ' . count($bad) . ' folder' . (count($bad) === 1 ? '' : 's'), $names . '. Counting views there does not work until the file is replaced. The backup holds a copy of each one (unzip it over the folder: the README in the backup says how); or delete the damaged .gallery-stats.sqlite file and counting starts again from nothing.', null,
+            $add($G, 'bad', 'View counts are damaged in ' . count($bad) . ' folder' . (count($bad) === 1 ? '' : 's'), $names . '. Counting views there does not work until the file is replaced (it is left exactly as it is: nothing is counted beside it). The backup holds a copy of each one (unzip it over the folder: the README in the backup says how); or delete the damaged view-count file and counting starts again from nothing.', null,
                 $bk['have'] ? '<div class="health-act"><button type="button" class="secondary" data-backup-act="download">Download the backup</button> <span class="muted health-act-out" role="status" aria-live="polite"></span></div>' : '');
-        } else $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
+        } elseif (!$statsRo) $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
     }
     // --- the backup
     $buttons = health_backup_buttons(false, false, true);
@@ -23203,9 +23219,15 @@ function stats_connection($folderPath) {
     }
     $conn = ['mode' => 'file', 'pdo' => null, 'file' => $folderPath . '/.gallery-stats.php'];
     if (class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+        // With SQLite here the counts live in the database and nowhere else: a database that can't be opened or written costs the counts
+        // (mode 'failed': nothing is counted and nothing is shown, Health says why), never the page, and never moves the counting to the
+        // JSON store, which would split the counts between two places.
+        $conn['mode'] = 'failed';
         try {
             $pdo = new PDO('sqlite:' . $folderPath . '/.gallery-stats.sqlite');
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $pdo->setAttribute(PDO::ATTR_TIMEOUT, 2);
+            $pdo->exec('PRAGMA busy_timeout = 2000');   // (a writer that holds the lock for a minute makes this one give up in two seconds, not wait a minute)
             $pdo->exec('PRAGMA journal_mode = WAL');
             $pdo->exec('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)');
             // Keyed by a hash of the photo's path, not the path itself: a
@@ -23216,13 +23238,22 @@ function stats_connection($folderPath) {
             $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views_h (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
             $conn['pdo'] = $pdo;
             $conn['mode'] = 'sqlite';
-        } catch (Exception $e) {
-            $conn['mode'] = 'file';
+        } catch (Throwable $e) {
+            stats_note_failure($folderPath, $e);
         }
     }
     $GLOBALS['__stats_pool'][$folderPath] = $conn;
     stats_import_legacy($folderPath, $conn);
+    if ($conn['mode'] === 'sqlite') stats_join_json_store($folderPath, $conn);
     return $conn;
+}
+
+/** A view count that could not be read or saved: said once in the server's error log (the page carries on without the number), and
+ *  remembered for this request. Health looks at the files themselves (health_heavy), so it needs nothing from here. */
+function stats_note_failure($folderPath, $e) {
+    if (isset($GLOBALS['__stats_failed'][$folderPath])) return;
+    $GLOBALS['__stats_failed'][$folderPath] = true;
+    error_log('gallery: the view counts in ' . $folderPath . ' could not be used, so nothing was counted there: ' . preg_replace('~\s+~', ' ', $e->getMessage()));
 }
 
 /** The stats key for a photo in the SQLite store. */
@@ -23240,6 +23271,7 @@ function stats_key($relativePath) {
  * writable the old data is simply left where it was.
  */
 function stats_import_legacy($folderPath, $conn) {
+    if ($conn['mode'] === 'failed') return;   // (the database is there but can't be used: what an older version recorded stays where it is)
     $legacy = ['pageviews' => 0, 'photos' => []];
     $legacyJson = $folderPath . '/.gallery-stats.json';
     $removeJson = false;
@@ -23305,60 +23337,108 @@ function stats_import_legacy($folderPath, $conn) {
     if ($removeJson) @unlink($legacyJson);
 }
 
-/** Reads-modifies-writes the flat-file JSON backend under an exclusive lock. */
-function stats_update_file($statsFile, $modifier) {
-    $data = ['pageviews' => 0, 'photos' => []];
-    $fp = @fopen($statsFile, 'c+');
-    if ($fp) {
-        if (flock($fp, LOCK_EX)) {
-            $raw = stream_get_contents($fp);
-            $decoded = json_decode(data_file_strip_guard($raw), true);
-            if (is_array($decoded)) {
-                $data = array_merge($data, $decoded);
-            }
-            if (!isset($data['photos']) || !is_array($data['photos'])) {
-                $data['photos'] = [];
-            }
-            $modifier($data);
-            $encoded = data_file_encode($data);
-            if ($encoded !== false) {   // (text that can't be written as JSON leaves the file as it is)
-                ftruncate($fp, 0);
-                rewind($fp);
-                fwrite($fp, $encoded);
-                fflush($fp);
-            }
-            flock($fp, LOCK_UN);
-        }
-        fclose($fp);
+/** Can this view-count database be written to right now? '' when it can, else why not (read-only file or side files, a lock held, a folder that
+ *  can't be written). Tries one write and takes it back (rolls the transaction back), so nothing is changed. */
+function stats_sqlite_write_check($path) {
+    try {
+        $p = new PDO('sqlite:' . $path);
+        $p->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $p->exec('PRAGMA busy_timeout = 2000');
+        $p->exec('BEGIN IMMEDIATE');
+        $p->exec("INSERT OR REPLACE INTO stats(key, value) VALUES('write-check', 0)");   // (a read-only file lets the lock be taken; only a write finds out)
+        $p->exec('ROLLBACK');
+        return '';
+    } catch (Throwable $e) {
+        return 'could not be written to (' . substr(preg_replace('~^SQLSTATE\[[^\]]*\]:\s*(?:General error:\s*\d+\s*)?~', '', preg_replace('~\s+~', ' ', $e->getMessage())), 0, 120) . ')';
     }
-    return $data;
 }
 
-/** The one sitewide pageview counter — always the gallery root's own store. */
+/** A JSON store (.gallery-stats.php, kept while this server had no SQLite) is joined to the database once SQLite is here, so a move to
+ *  another host does not look like the counts were reset: its counts are added to the database's in one transaction (with a mark of what
+ *  was added, so the same file is never added twice), and the file is then set aside as .gallery-stats.joined-<date>.php (still guarded,
+ *  and on the list of files the gallery has made) so a server without SQLite that shares the folder starts a store of its own. The
+ *  other way round (a database this server can't open) can't be joined: the database keeps only hashes. Health says where the counts are. */
+function stats_join_json_store($folderPath, $conn) {
+    $path = $folderPath . '/.gallery-stats.php';
+    if ($conn['mode'] !== 'sqlite' || data_file_is_link($path) || !is_file($path)) return;
+    [$status, $d] = json_file_load($path, ['pageviews' => 0, 'photos' => []]);
+    if ($status !== 'ok' || !is_array($d['photos'] ?? null)) return;   // (a store that can't be read is left where it is: Health says so)
+    $pdo = $conn['pdo'];
+    $mark = 'joined:' . hash('sha256', json_encode([(int) $d['pageviews'], $d['photos']]));
+    try {
+        $pdo->beginTransaction();
+        $seen = $pdo->prepare('SELECT 1 FROM stats WHERE key = :k'); $seen->execute([':k' => $mark]);
+        if (!$seen->fetchColumn()) {
+            if ((int) $d['pageviews'] > 0) {
+                $pdo->prepare("INSERT INTO stats(key, value) VALUES('pageviews', :v) ON CONFLICT(key) DO UPDATE SET value = value + :v")->execute([':v' => (int) $d['pageviews']]);
+            }
+            $ins = $pdo->prepare('INSERT INTO photo_views_h(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
+            foreach ($d['photos'] as $name => $views) $ins->execute([':k' => stats_key((string) $name), ':v' => (int) $views]);
+            $pdo->prepare('INSERT INTO stats(key, value) VALUES(:k, 1)')->execute([':k' => $mark]);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        stats_note_failure($folderPath, $e);
+        return;
+    }
+    $aside = $folderPath . '/.gallery-stats.joined-' . gmdate('Ymd-His') . '.php';
+    if (!file_exists($aside)) @rename($path, $aside);   // (if it can't be moved the mark above stops it being added again)
+}
+
+/** Changes the flat-file JSON backend under the data files' own lock: the new content is written whole to a temporary file and renamed over
+ *  the store (so a reader never meets it half written), and a store that exists but can't be read is left exactly as it is instead of
+ *  being started again from nothing over counts that may still be mended by hand. Returns the data, or null when nothing was saved
+ *  (an unreadable store, a link, a folder that can't be written). */
+function stats_update_file($statsFile, $modifier) {
+    $before = $GLOBALS['__data_write_failed'] ?? false;
+    unset($GLOBALS['__data_refused'][$statsFile]);
+    $GLOBALS['__data_write_failed'] = false;
+    $data = json_file_update($statsFile, ['pageviews' => 0, 'photos' => []], function (&$d) use ($modifier) {
+        if (!isset($d['photos']) || !is_array($d['photos'])) $d['photos'] = [];
+        $modifier($d);
+    }, true);
+    $failed = !empty($GLOBALS['__data_write_failed']) || isset($GLOBALS['__data_refused'][$statsFile]);
+    unset($GLOBALS['__data_refused'][$statsFile]);
+    $GLOBALS['__data_write_failed'] = $before;   // (a count that could not be saved is not an admin's save that could not be)
+    return $failed ? null : $data;
+}
+
+/** The one sitewide pageview counter — always the gallery root's own store. Returns the new total, or null when it could not be counted. */
 function stats_bump_pageview($rootDir) {
     $conn = stats_connection($rootDir);
-    if ($conn['mode'] === 'sqlite') {
-        $pdo = $conn['pdo'];
-        $pdo->exec("INSERT INTO stats(key, value) VALUES('pageviews', 1)
-                    ON CONFLICT(key) DO UPDATE SET value = value + 1");
-        return (int) $pdo->query("SELECT value FROM stats WHERE key = 'pageviews'")->fetchColumn();
+    try {
+        if ($conn['mode'] === 'sqlite') {
+            $pdo = $conn['pdo'];
+            $pdo->exec("INSERT INTO stats(key, value) VALUES('pageviews', 1)
+                        ON CONFLICT(key) DO UPDATE SET value = value + 1");
+            return (int) $pdo->query("SELECT value FROM stats WHERE key = 'pageviews'")->fetchColumn();
+        }
+        if ($conn['mode'] !== 'file') return null;
+        $stats = stats_update_file($conn['file'], function (&$data) {
+            $data['pageviews'] = ($data['pageviews'] ?? 0) + 1;
+        });
+        return $stats === null ? null : (int) $stats['pageviews'];
+    } catch (Throwable $e) {
+        stats_note_failure($rootDir, $e);
+        return null;
     }
-    $stats = stats_update_file($conn['file'], function (&$data) {
-        $data['pageviews'] = ($data['pageviews'] ?? 0) + 1;
-    });
-    return (int) $stats['pageviews'];
 }
 
 /** The sitewide page-load total, read without counting a view (the admin
- *  shows it; stats_bump_pageview() is what counts one). */
+ *  shows it; stats_bump_pageview() is what counts one). 0 when it can't be read. */
 function stats_get_pageviews($rootDir) {
     $conn = stats_connection($rootDir);
-    if ($conn['mode'] === 'sqlite') {
-        return (int) $conn['pdo']->query("SELECT value FROM stats WHERE key = 'pageviews'")->fetchColumn();
+    try {
+        if ($conn['mode'] === 'sqlite') {
+            return (int) $conn['pdo']->query("SELECT value FROM stats WHERE key = 'pageviews'")->fetchColumn();
+        }
+        if ($conn['mode'] !== 'file') return 0;
+        return (int) (json_file_read($conn['file'], [])['pageviews'] ?? 0);
+    } catch (Throwable $e) {
+        stats_note_failure($rootDir, $e);
+        return 0;
     }
-    if (!file_exists($conn['file'])) return 0;
-    $data = json_decode(data_file_strip_guard(@file_get_contents($conn['file'])), true);
-    return is_array($data) ? (int) ($data['pageviews'] ?? 0) : 0;
 }
 
 /** The same photo under the other names its place has had ("eurotrip/paris/a.jpg" for "Eurotrip/paris/a.jpg", say), for a photo in a named place
@@ -23381,57 +23461,70 @@ function stats_alias_paths($relativePath) {
     return array_map(function ($other) use ($rest) { return $other . $rest; }, $byLabel[$label]);
 }
 
-/** Increments one photo's view count (in its own folder's store) and returns its new total (with what it was counted under its place's earlier names). */
+/** Increments one photo's view count (in its own folder's store) and returns its new total (with what it was counted under its place's earlier names),
+ *  or null when it could not be counted. */
 function stats_bump_photo($folderPath, $relativePath) {
     $conn = stats_connection($folderPath);
-    if ($conn['mode'] === 'sqlite') {
-        $pdo = $conn['pdo'];
-        $key = stats_key($relativePath);
-        $stmt = $pdo->prepare(
-            "INSERT INTO photo_views_h(key, views) VALUES(:k, 1)
-             ON CONFLICT(key) DO UPDATE SET views = views + 1"
-        );
-        $stmt->execute([':k' => $key]);
-        $sel = $pdo->prepare('SELECT views FROM photo_views_h WHERE key = :k');
-        $sel->execute([':k' => $key]);
-        $total = (int) $sel->fetchColumn();
-        foreach (stats_alias_paths($relativePath) as $alt) { $sel->execute([':k' => stats_key($alt)]); $total += (int) $sel->fetchColumn(); }
+    try {
+        if ($conn['mode'] === 'sqlite') {
+            $pdo = $conn['pdo'];
+            $key = stats_key($relativePath);
+            $stmt = $pdo->prepare(
+                "INSERT INTO photo_views_h(key, views) VALUES(:k, 1)
+                 ON CONFLICT(key) DO UPDATE SET views = views + 1"
+            );
+            $stmt->execute([':k' => $key]);
+            $sel = $pdo->prepare('SELECT views FROM photo_views_h WHERE key = :k');
+            $sel->execute([':k' => $key]);
+            $total = (int) $sel->fetchColumn();
+            foreach (stats_alias_paths($relativePath) as $alt) { $sel->execute([':k' => stats_key($alt)]); $total += (int) $sel->fetchColumn(); }
+            return $total;
+        }
+        if ($conn['mode'] !== 'file') return null;
+        $stats = stats_update_file($conn['file'], function (&$data) use ($relativePath) {
+            $data['photos'][$relativePath] = ($data['photos'][$relativePath] ?? 0) + 1;
+        });
+        if ($stats === null) return null;
+        $total = (int) ($stats['photos'][$relativePath] ?? 0);
+        foreach (stats_alias_paths($relativePath) as $alt) $total += (int) ($stats['photos'][$alt] ?? 0);
         return $total;
+    } catch (Throwable $e) {
+        stats_note_failure($folderPath, $e);
+        return null;
     }
-    $stats = stats_update_file($conn['file'], function (&$data) use ($relativePath) {
-        $data['photos'][$relativePath] = ($data['photos'][$relativePath] ?? 0) + 1;
-    });
-    $total = (int) ($stats['photos'][$relativePath] ?? 0);
-    foreach (stats_alias_paths($relativePath) as $alt) $total += (int) ($stats['photos'][$alt] ?? 0);
-    return $total;
 }
 
-/** View counts from one folder's own store, as relativePath => views.
+/** View counts from one folder's own store, as relativePath => views ([] when they can't be read).
  *  $candidateFiles names the files whose counts are wanted: the SQLite
  *  store keeps only hashes, so it can answer only for paths it's asked
  *  about (the JSON store has the names and returns everything). */
 function stats_get_photo_views($folderPath, $candidateFiles = []) {
     $conn = stats_connection($folderPath);
-    if ($conn['mode'] === 'sqlite') {
-        $byKey = [];
-        foreach ($conn['pdo']->query('SELECT key, views FROM photo_views_h') as $row) {
-            $byKey[$row['key']] = (int) $row['views'];
+    try {
+        if ($conn['mode'] === 'sqlite') {
+            $byKey = [];
+            foreach ($conn['pdo']->query('SELECT key, views FROM photo_views_h') as $row) {
+                $byKey[$row['key']] = (int) $row['views'];
+            }
+            $result = [];
+            foreach ($candidateFiles as $file) {
+                $key = stats_key($file); $sum = $byKey[$key] ?? 0; $any = isset($byKey[$key]);
+                foreach (stats_alias_paths($file) as $alt) { $ak = stats_key($alt); if (isset($byKey[$ak])) { $sum += $byKey[$ak]; $any = true; } }
+                if ($any) $result[$file] = $sum;
+            }
+            return $result;
         }
-        $result = [];
-        foreach ($candidateFiles as $file) {
-            $key = stats_key($file); $sum = $byKey[$key] ?? 0; $any = isset($byKey[$key]);
-            foreach (stats_alias_paths($file) as $alt) { $ak = stats_key($alt); if (isset($byKey[$ak])) { $sum += $byKey[$ak]; $any = true; } }
-            if ($any) $result[$file] = $sum;
+        if ($conn['mode'] !== 'file') return [];
+        $data = json_file_read($conn['file'], []);
+        $photos = (isset($data['photos']) && is_array($data['photos'])) ? $data['photos'] : [];
+        foreach ($candidateFiles as $file) {   // (the counts under the place's earlier names are added to the one under its present name)
+            foreach (stats_alias_paths($file) as $alt) if (isset($photos[$alt])) $photos[$file] = (int) ($photos[$file] ?? 0) + (int) $photos[$alt];
         }
-        return $result;
+        return $photos;
+    } catch (Throwable $e) {
+        stats_note_failure($folderPath, $e);
+        return [];
     }
-    if (!file_exists($conn['file'])) return [];
-    $data = json_decode(data_file_strip_guard(@file_get_contents($conn['file'])), true);
-    $photos = (is_array($data) && isset($data['photos']) && is_array($data['photos'])) ? $data['photos'] : [];
-    foreach ($candidateFiles as $file) {   // (the counts under the place's earlier names are added to the one under its present name)
-        foreach (stats_alias_paths($file) as $alt) if (isset($photos[$alt])) $photos[$file] = (int) ($photos[$file] ?? 0) + (int) $photos[$alt];
-    }
-    return $photos;
 }
 
 /** Every tracked photo's view count across the whole tree, merged from
@@ -23531,12 +23624,12 @@ if (request_route() === 'track') {
             $groupKey = $fileToGroupKey[$requested] ?? group_key($requested);
             $groupFiles = $groups[$groupKey] ?? [$requested];
             $currentPhotoViews = stats_get_photo_views($requestedFolder, $groupFiles);
-            $newCount = stats_bump_photo($requestedFolder, $requested);   // (every time the viewer shows the photo: the same moment the visitor log counts as "opened")
+            $newCount = stats_bump_photo($requestedFolder, $requested);   // (every time the viewer shows the photo: the same moment the visitor log counts as "opened"; null: it could not be counted)
             $groupTotal = 0;
             foreach ($groupFiles as $gf) {
                 $groupTotal += ($gf === $requested) ? $newCount : (int) ($currentPhotoViews[$gf] ?? 0);
             }
-            $response = [
+            if ($newCount !== null) $response = [
                 'ok' => true,
                 'photo' => ($GLOBALS['__photo_coded'] ?? null) === $requested ? (string) $_GET['k'] : $requested,   // (asked for by its code: answered by its code)
                 'photoViews' => $newCount,
@@ -23558,7 +23651,7 @@ $viewCount = 0;
 $photoViews = [];
 if (TRACK_VIEWS) {
     // The site total counts visits, not page loads (see visit_is_new()): the number shown is the running total either way.
-    $viewCount = visit_is_new() ? stats_bump_pageview($dir) : stats_get_pageviews($dir);
+    $viewCount = (int) (visit_is_new() ? stats_bump_pageview($dir) : stats_get_pageviews($dir));
     $photoViews = stats_get_all_photo_views($dir, $files);
 }
 

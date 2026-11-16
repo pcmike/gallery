@@ -33,13 +33,21 @@ function health_heavy($dir, $files, $force) {
     $live = visitlog_find();
     $same = (($c['log'] ?? null) === null) === ($live === null) && ($c['file'] ?? '') === ($live === null ? '' : basename($live));   // (a log that came or went, or was swapped, since the last look: looked at again)
     if (!$force && $same && array_key_exists('log', $c) && isset($c['at'], $c['stats']) && time() - (int) $c['at'] < 3600 && ($c['v'] ?? '') === GALLERY_VERSION) return $c;
-    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'stats' => ['n' => 0, 'bad' => []]];
+    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
     if ($live !== null && visitlog_driver_ok()) $r['log'] = ['why' => backup_sqlite_check($live)];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
-        if ($e['kind'] !== 'stats' || substr($e['path'], -7) !== '.sqlite') continue;
-        $r['stats']['n']++;
-        $w = backup_sqlite_check($e['path']);
-        if ($w !== '') $r['stats']['bad'][] = [$e['rel'], $w];
+        if ($e['kind'] !== 'stats') continue;
+        if (substr($e['path'], -7) === '.sqlite') {
+            if (!visitlog_driver_ok()) { $r['stats']['nodriver'][] = $e['rel']; continue; }   // (this PHP can't open it: the counts are in it, not lost)
+            $r['stats']['n']++;
+            $w = backup_sqlite_check($e['path']);
+            if ($w !== '') { $r['stats']['bad'][] = [$e['rel'], $w]; continue; }
+            $w = stats_sqlite_write_check($e['path']);
+            if ($w !== '') $r['stats']['ro'][] = [$e['rel'], $w];
+        } elseif (basename($e['path']) === '.gallery-stats.php' && !data_file_is_link($e['path'])) {   // (the JSON store: a file that can't be read is left as it is, and nothing is counted there until it is mended)
+            $raw = (string) @file_get_contents($e['path']);
+            if (!data_file_is_empty($raw) && !is_array(json_decode(data_file_strip_guard($raw), true))) $r['stats']['bad'][] = [$e['rel'], 'could not be read as view counts'];
+        }
     }
     if (is_writable(__DIR__)) json_file_update($p, [], function (&$d) use ($r) { $d = $r; });
     return $r;
@@ -91,13 +99,21 @@ function health_database_rows($add, $dir, $files) {
             $add($G, 'opt', 'The change records take ' . $chText, 'More than the ' . number_format(CHANGES_WARN_MB) . ' MB you asked to be warned at. The oldest entry is from ' . ($chOld > 0 ? gmdate('j M Y', $chOld) : 'an unknown date') . '. Trim the log in the Changes tab, or set how long entries are kept in Settings (Visitors and logs).');
         else $add($G, 'ok', 'Change log: ready', number_format($chN) . ' entr' . ($chN === 1 ? 'y' : 'ies') . ' in the Changes tab, taking ' . $chText . '.' . ($chOld > 0 ? ' The oldest is from ' . gmdate('j M Y', $chOld) . '.' : ''));
     }
-    if ($heavy['stats']['n'] > 0) {
+    $statsRo = $heavy['stats']['ro'] ?? []; $statsNoDriver = $heavy['stats']['nodriver'] ?? [];
+    $statsNames = function ($list) { $n = array_map(function ($b) { return is_array($b) ? $b[0] : $b; }, $list); return implode('; ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : ''); };
+    if ($statsNoDriver) {
+        $add($G, 'warn', 'View counts are kept in a database this server can\'t open (' . count($statsNoDriver) . ' folder' . (count($statsNoDriver) === 1 ? '' : 's') . ')', $statsNames($statsNoDriver) . '. This PHP has no SQLite (`pdo_sqlite`), so the counts in those files are neither shown nor added to; nothing is lost, and nothing is counted in a second place beside them. Turn `pdo_sqlite` on (Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM or Apache) and they carry on as they were.');
+    }
+    if ($statsRo) {
+        $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');
+    }
+    if ($heavy['stats']['n'] > 0 || ($heavy['stats']['bad'] ?? [])) {
         $bad = $heavy['stats']['bad'];
         if ($bad) {
             $names = implode('; ', array_map(function ($b) { return $b[0]; }, array_slice($bad, 0, 3))) . (count($bad) > 3 ? ' and ' . (count($bad) - 3) . ' more' : '');
-            $add($G, 'bad', 'View counts are damaged in ' . count($bad) . ' folder' . (count($bad) === 1 ? '' : 's'), $names . '. Counting views there does not work until the file is replaced. The backup holds a copy of each one (unzip it over the folder: the README in the backup says how); or delete the damaged .gallery-stats.sqlite file and counting starts again from nothing.', null,
+            $add($G, 'bad', 'View counts are damaged in ' . count($bad) . ' folder' . (count($bad) === 1 ? '' : 's'), $names . '. Counting views there does not work until the file is replaced (it is left exactly as it is: nothing is counted beside it). The backup holds a copy of each one (unzip it over the folder: the README in the backup says how); or delete the damaged view-count file and counting starts again from nothing.', null,
                 $bk['have'] ? '<div class="health-act"><button type="button" class="secondary" data-backup-act="download">Download the backup</button> <span class="muted health-act-out" role="status" aria-live="polite"></span></div>' : '');
-        } else $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
+        } elseif (!$statsRo) $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
     }
     // --- the backup
     $buttons = health_backup_buttons(false, false, true);

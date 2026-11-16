@@ -11779,6 +11779,119 @@ foreach ($sGets as $q) {
 $sAfter = $sSnap();
 check('[admin sessions] ' . count($sGets) . ' admin addresses, opened with the session and with the token alone from another site, change none of the owner\'s data (settings, items, links, collections, notes, photos, the script)', $sBefore === $sAfter, json_encode(array_keys(array_diff_assoc($sAfter, $sBefore))));
 
+// =====================================================================================================================
+// [view counts] a database that can't be written, is locked or is damaged costs the counts, never the page; the JSON store is never
+// restarted from nothing or written in place; the two stores are never mixed up (F4, F6)
+// =====================================================================================================================
+echo "== view counts ==\n";
+$vHasSqlite = class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true);
+$vForceJson = fn (string $src) => str_replace("in_array('sqlite', PDO::getAvailableDrivers(), true)", 'false', $src);
+$vNoDriver = fn (string $src) => str_replace("class_exists('PDO') && in_array('sqlite', \\PDO::getAvailableDrivers(), true)", 'false', $vForceJson($src));
+$vMake = function (string $label, string $indexText, array $cfg = []) use ($indexSrc) {
+    $fx = new_fixture_dir($label);
+    make_jpeg("$fx/a.jpg", 80, 60, 200, 60, 60); make_jpeg("$fx/b.jpg", 80, 60, 60, 60, 200);
+    file_put_contents("$fx/.gallery-config.php", cfg_text($cfg + ['ADMIN_PASSWORD' => 'vc-admin-pw-1', 'TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true]));
+    file_put_contents("$fx/index.php", $indexText);
+    $port = find_free_port(); start_server($fx, $port);
+    return [$fx, "http://127.0.0.1:$port"];
+};
+$vTrack = function (string $base, string $f = 'a.jpg') { [$st, $b] = http_get("$base/?track=" . rawurlencode($f)); return [$st, json_decode($b, true) ?? []]; };
+$vHealth = function (string $base) {
+    [, , $h] = http_post("$base/?admin", ['login_password' => 'vc-admin-pw-1'], [], false); $ck = extract_cookie_header($h);
+    $csrf = extract_csrf_token(http_get("$base/?admin", ["Cookie: $ck"])[1]);
+    return json_decode(http_post("$base/?admin", ['csrf_token' => $csrf, 'action' => 'health_panel', 'recheck' => '1'], ["Cookie: $ck", 'X-Requested-With: gallery-fetch'])[1], true)['html'] ?? '';
+};
+$vChmod = function (string $fx, int $mode) { foreach (glob("$fx/.gallery-stats.sqlite*") ?: [] as $f) @chmod($f, $mode); };
+
+if ($vHasSqlite && function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    // --- F4: the database can't be written
+    [$fxV, $baseV] = $vMake('viewcounts', (string) file_get_contents($indexSrc));
+    [, $t1] = $vTrack($baseV); [, $t2] = $vTrack($baseV);
+    check('[view counts] counting works to start with (the same photo twice: 1, then 2)', ($t1['photoViews'] ?? 0) === 1 && ($t2['photoViews'] ?? 0) === 2, json_encode([$t1, $t2]));
+    $vChmod($fxV, 0444);
+    [$st, $body] = http_get("$baseV/");
+    check('[view counts] a read-only database does not take the front page down: it answers 200 with the photos', $st === 200 && str_contains($body, 'a.jpg') && str_contains($body, 'b.jpg'), (string) $st);
+    [$st, $tr] = $vTrack($baseV);
+    check('[view counts] ...nor the count request: it answers 200 and says it did not count', $st === 200 && ($tr['ok'] ?? null) === false, json_encode($tr));
+    check('[view counts] ...and the counts are not started again somewhere else (no JSON store made beside the database)', !is_file("$fxV/.gallery-stats.php"));
+    $vH = $vHealth($baseV);
+    check('[view counts] Health says the view counts can\'t be written, naming the file and what to do', str_contains($vH, 'View counts can') && str_contains($vH, '.gallery-stats.sqlite') && stripos($vH, 'writable') !== false, substr(strip_tags($vH), 0, 300));
+    // the main file mended on its own: SQLite made its side files read-only too while the main one was, and they are not mended by that
+    @chmod("$fxV/.gallery-stats.sqlite", 0644);
+    [$st] = http_get("$baseV/"); [$st2, $tr2] = $vTrack($baseV);
+    check('[view counts] with only the main file mended the page and the count request still answer 200 (they may not count yet)', $st === 200 && $st2 === 200, "$st $st2");
+    $vChmod($fxV, 0644);
+    [$st, $tr3] = $vTrack($baseV);
+    check('[view counts] with every file writable again counting goes on from where it was (3), in the same database', $st === 200 && ($tr3['photoViews'] ?? 0) === 3 && !is_file("$fxV/.gallery-stats.php"), json_encode($tr3));
+    // --- F4: another process holds the write lock
+    $vLockCode = '$p = new PDO("sqlite:' . "$fxV/.gallery-stats.sqlite" . '"); $p->exec("PRAGMA busy_timeout=1000"); $p->exec("BEGIN IMMEDIATE"); file_put_contents("' . "$fxV/lock-ready" . '", "1"); sleep(9); $p->exec("ROLLBACK");';
+    $vLock = proc_open([PHP_BINARY, '-r', $vLockCode], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $vLockPipes);
+    for ($i = 0; $i < 50 && !is_file("$fxV/lock-ready"); $i++) usleep(100000);
+    $t0 = microtime(true); [$st, $trL] = $vTrack($baseV); $vElapsed = microtime(true) - $t0;
+    $t0 = microtime(true); [$stF] = http_get("$baseV/"); $vElapsedF = microtime(true) - $t0;
+    check('[view counts] a write lock held for nine seconds does not hang the count request (answered inside five seconds, 200, not counted)', $st === 200 && ($trL['ok'] ?? null) === false && $vElapsed < 5, "$st " . round($vElapsed, 1) . 's ' . json_encode($trL));
+    check('[view counts] ...nor the front page (a new visit would count a visit: it answers 200 inside five seconds)', $stF === 200 && $vElapsedF < 5, "$stF " . round($vElapsedF, 1) . 's');
+    proc_terminate($vLock); proc_close($vLock); usleep(300000);
+    [$st, $trA] = $vTrack($baseV);
+    check('[view counts] when the lock is let go counting works again', $st === 200 && ($trA['photoViews'] ?? 0) === 4, json_encode($trA));
+
+    // --- F6: a database that is not a database is not replaced by a JSON store
+    [$fxG, $baseG] = $vMake('viewcounts-garbage', (string) file_get_contents($indexSrc));
+    file_put_contents("$fxG/.gallery-stats.sqlite", "this is not a database, it is some text that is long enough to look like one\n" . str_repeat('x', 5000));
+    $vGarbage = (string) file_get_contents("$fxG/.gallery-stats.sqlite");
+    [$st, $body] = http_get("$baseG/"); [$st2, $trG] = $vTrack($baseG);
+    check('[view counts] a damaged database costs the counts only: the front page and the count request answer 200', $st === 200 && $st2 === 200 && ($trG['ok'] ?? null) === false, "$st $st2 " . json_encode($trG));
+    check('[view counts] ...the damaged file is left exactly as it was, and no JSON store is started beside it (the counts are not split in two)', (string) file_get_contents("$fxG/.gallery-stats.sqlite") === $vGarbage && !is_file("$fxG/.gallery-stats.php"));
+    check('[view counts] ...and Health names it as damaged', str_contains($vHealth($baseG), 'View counts are damaged in 1 folder'));
+}
+
+// --- F6: the JSON store (a server without SQLite) is never restarted from nothing, and never written in place
+[$fxJ, $baseJ] = $vMake('viewcounts-json', $vForceJson((string) file_get_contents($indexSrc)));
+[, $j1] = $vTrack($baseJ); [, $j2] = $vTrack($baseJ);
+check('[view counts json] counting works in the JSON store', ($j2['photoViews'] ?? 0) === 2 && is_file("$fxJ/.gallery-stats.php"), json_encode([$j1, $j2]));
+$vIno = fileinode("$fxJ/.gallery-stats.php"); $vTrack($baseJ);
+clearstatcache();
+check('[view counts json] a count is saved by replacing the file whole (a reader never meets it half written), and leaves nothing beside it', fileinode("$fxJ/.gallery-stats.php") !== $vIno && glob("$fxJ/.gallery-stats.php.*") === []);
+$vBroken = data_file_guard_line_for_tests() . '{"pageviews": 5, "photos": {"a.jpg": 40';
+file_put_contents("$fxJ/.gallery-stats.php", $vBroken);
+[$st, $jb] = $vTrack($baseJ); [$stF] = http_get("$baseJ/");
+check('[view counts json] a store that can\'t be read costs the count only: 200, not counted', $st === 200 && $stF === 200 && ($jb['ok'] ?? null) === false, json_encode($jb));
+check('[view counts json] ...and it is left exactly as it was, not restarted from nothing over the counts that may still be mended by hand', (string) file_get_contents("$fxJ/.gallery-stats.php") === $vBroken);
+check('[view counts json] ...and Health names it as damaged', str_contains($vHealth($baseJ), 'View counts are damaged in 1 folder'));
+file_put_contents("$fxJ/.gallery-stats.php", data_file_guard_line_for_tests() . '{"pageviews": 5, "photos": {"a.jpg": 40}}');
+[, $jm] = $vTrack($baseJ);
+check('[view counts json] mended by hand, counting goes on from the number in it (41)', ($jm['photoViews'] ?? 0) === 41, json_encode($jm));
+
+// --- F6: a JSON store left by a server without SQLite is joined to the database once SQLite is there
+if ($vHasSqlite) {
+    $fxM = new_fixture_dir('viewcounts-join');
+    make_jpeg("$fxM/a.jpg", 80, 60, 200, 60, 60); make_jpeg("$fxM/b.jpg", 80, 60, 60, 60, 200);
+    file_put_contents("$fxM/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'vc-admin-pw-1', 'TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true]));
+    write_data_file("$fxM/.gallery-stats.php", ['pageviews' => 10, 'photos' => ['a.jpg' => 5, 'b.jpg' => 2]]);
+    copy($indexSrc, "$fxM/index.php"); $portM = find_free_port(); start_server($fxM, $portM); $baseM = "http://127.0.0.1:$portM";
+    [, $mBody] = http_get("$baseM/");
+    check('[view counts join] the counts a JSON store holds are carried into the database when SQLite is there (a.jpg 5, b.jpg 2)', str_contains($mBody, 'data-photo="a.jpg">' . ico('eye') . ' 5<') && str_contains($mBody, 'data-photo="b.jpg">' . ico('eye') . ' 2<'));
+    check('[view counts join] ...the visits carry over too (10, and this one makes 11)', str_contains($mBody, '11 visits'));
+    check('[view counts join] ...the JSON store is set aside under a name of its own (so it is not counted twice) and the database is in use', !is_file("$fxM/.gallery-stats.php") && glob("$fxM/.gallery-stats.joined-*.php") !== [] && is_file("$fxM/.gallery-stats.sqlite"));
+    [, $mTr] = $vTrack($baseM); [, $mBody2] = http_get("$baseM/");
+    check('[view counts join] ...counting goes on from there (6) and a later look does not add the old counts again', ($mTr['photoViews'] ?? 0) === 6 && str_contains($mBody2, 'data-photo="a.jpg">' . ico('eye') . ' 6<'));
+    [, , $mH] = http_post("$baseM/?admin", ['login_password' => 'vc-admin-pw-1'], [], false); $mCk = extract_cookie_header($mH);
+    $mCsrf = extract_csrf_token(http_get("$baseM/?admin", ["Cookie: $mCk"])[1]);
+    $mFiles = json_encode(json_decode(http_post("$baseM/?admin", ['csrf_token' => $mCsrf, 'action' => 'files_list'], ["Cookie: $mCk", 'X-Requested-With: gallery-fetch'])[1], true));
+    check('[view counts join] ...and the set-aside file is on the list of files the gallery has made', str_contains($mFiles, '.gallery-stats.joined-'));
+
+    // --- the database is there but this PHP can't open it (the site moved to a server without SQLite): the counts are not lost, Health says where they are
+    $fxN = new_fixture_dir('viewcounts-nodriver');
+    make_jpeg("$fxN/a.jpg", 80, 60, 200, 60, 60);
+    $nPdo = new PDO('sqlite:' . "$fxN/.gallery-stats.sqlite"); $nPdo->exec('CREATE TABLE stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)'); $nPdo->exec('CREATE TABLE photo_views_h (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)'); $nPdo->exec("INSERT INTO photo_views_h VALUES ('" . hash('sha256', 'a.jpg') . "', 12)"); $nPdo = null;
+    file_put_contents("$fxN/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'vc-admin-pw-1', 'TRACK_VIEWS' => true, 'SHOW_VIEW_COUNTS_PUBLICLY' => true]));
+    file_put_contents("$fxN/index.php", $vNoDriver((string) file_get_contents($indexSrc)));
+    $portN = find_free_port(); start_server($fxN, $portN); $baseN = "http://127.0.0.1:$portN";
+    $nSize = filesize("$fxN/.gallery-stats.sqlite"); [$st] = http_get("$baseN/");
+    $nH = $vHealth($baseN);
+    check('[view counts nodriver] a database this PHP can\'t open is left alone, the page answers, and Health says the counts are in it and what to do', $st === 200 && filesize("$fxN/.gallery-stats.sqlite") === $nSize && str_contains($nH, 'SQLite') && str_contains($nH, '.gallery-stats.sqlite') && !str_contains($nH, 'View counts are damaged'), substr(strip_tags($nH), 0, 400));
+}
+
 /* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
