@@ -11445,5 +11445,170 @@ check('[files made] the list always says how much is shared: nothing, when the p
 
 /* --------------------------------------------------------------------- */
 
+// Names of digits. PHP turns a name like 2024, 0, 123 or -5 into a number when it is an array key, "0" is false, and "007" is loosely equal to "7": every place that
+// lists a folder, a group or a collection by name has to give text back. The same gallery is built twice, once under letters and once under such names, and a long
+// list of pages and admin actions is run on both: any difference in what they answer is a place that mishandles a name.
+echo "== names of digits: the same gallery under letters and under 2024, 0, 123, 007, -5, 1e3, 7, 1000, 5, 00, 12, 2025 answers the same ==\n";
+$dnTwin = function (array $names, string $label, string $mode = 'overview') use ($indexSrc) {
+    [$T, $S, $U, $mappedName, $grp, $fids, $newLinkId] = $names;
+    $fx = new_fixture_dir("twin-$label"); $mo = new_fixture_dir("twin-m-$label");
+    foreach ($T as $t) { mkdir("$fx/$t/$S/$U", 0777, true); make_jpeg("$fx/$t/a.jpg", 50, 40, 10, 20, 30); make_jpeg("$fx/$t/b.jpg", 50, 40, 30, 20, 10); make_jpeg("$fx/$t/$S/c.jpg", 50, 40, 5, 5, 5); make_jpeg("$fx/$t/$S/$U/d.jpg", 50, 40, 6, 6, 6); }
+    make_jpeg("$fx/loose.jpg", 50, 40, 1, 2, 3); make_jpeg("$fx/{$grp}_01.jpg", 50, 40, 7, 7, 7); make_jpeg("$fx/{$grp}_02.jpg", 50, 40, 8, 8, 8);
+    make_jpeg("$mo/m.jpg", 50, 40, 9, 9, 9);
+    file_put_contents("$fx/forsale.md", "{gallery}\nThe {$grp} box {group: $grp} {photos: loose.jpg}\n");
+    file_put_contents("$fx/{$T[0]}/notes.md", "{gallery}\nNotes here {group: Pics} {photos: a.jpg, b.jpg}\n");
+    write_data_file("$fx/{$T[2]}/.gallery-items.php", ['restriction' => 'private', 'items' => [], 'groups' => []]);
+    write_data_file("$fx/{$T[0]}/.gallery-items.php", ['folderId' => $fids[0], 'items' => [], 'groups' => []]);
+    write_data_file("$fx/{$T[1]}/.gallery-items.php", ['folderId' => $fids[1], 'items' => [], 'groups' => []]);
+    file_put_contents("$fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'tw-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'AUTO_GROUP_BY_FILENAME' => true, 'ENABLE_SHARE_LINKS' => true, 'ENABLE_PHOTO_LOCATION' => true, 'LOG_PUBLIC_VISITS' => true, 'FOLDER_DISPLAY_MODE' => $mode, 'EXTRA_FOLDERS' => [$mappedName => realpath($mo)]]));
+    copy($indexSrc, "$fx/index.php");
+    $port = find_free_port(); start_server($fx, $port); $base = "http://127.0.0.1:$port";
+    [, , $h] = http_post("$base/?admin", ['access_code' => 'tw-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($h)];
+    $csrf = extract_csrf_token(http_get("$base/?admin", $own)[1]);
+    $adm = fn (array $f, string $q = '') => json_decode(http_post("$base/?admin$q", $f + ['csrf_token' => $csrf], array_merge($own, ['X-Requested-With: gallery-fetch']))[1], true) ?: ['_raw' => true];
+    $sig = function ($r) {
+        [$st, $body] = $r;
+        $files = preg_match('/const files = (\[.*?\]);/s', $body, $m) === 1 ? count((array) json_decode($m[1], true)) : -1;
+        return $st . '|cards=' . substr_count($body, 'class="card') . '|fcov=' . substr_count($body, 'folder-cover-link') . '|grp=' . substr_count($body, 'group-box') . '|cur=' . substr_count($body, 'aria-current="page"') . '|df=' . substr_count($body, 'data-file="') . '|files=' . $files . '|h2=' . substr_count($body, 'group-label') . '|fl=' . substr_count($body, '?folder=');
+    };
+    $out = [];
+    $paths = []; foreach ($T as $i => $t) { $paths["T$i"] = $t; $paths["T$i/S"] = "$t/$S"; $paths["T$i/S/U"] = "$t/$S/$U"; } $paths['M'] = $mappedName;
+    $out['home'] = $sig(http_get("$base/"));
+    $out['home-owner'] = $sig(http_get("$base/", $own));
+    foreach ($paths as $k => $p) {
+        $out["pub folder $k"] = $sig(http_get("$base/?folder=" . rawurlencode($p)));
+        $out["own folder $k"] = $sig(http_get("$base/?folder=" . rawurlencode($p), $own));
+        $out["admin folder $k"] = $sig(http_get("$base/?admin&folder=" . rawurlencode($p), $own));
+        $f = $k === 'M' ? 'm.jpg' : (str_ends_with($k, '/U') ? 'd.jpg' : (str_ends_with($k, '/S') ? 'c.jpg' : 'a.jpg'));
+        $out["img $k"] = http_get("$base/?img=" . rawurlencode("$p/$f") . '&size=thumb', $own)[0];
+        $out["pub img $k"] = http_get("$base/?img=" . rawurlencode("$p/$f") . '&size=thumb')[0];
+        $out["photo $k"] = $sig(http_get("$base/?photo=" . rawurlencode("$p/$f"), $own));
+        $out["archive $k"] = http_get("$base/?archive&folder=" . rawurlencode($p), $own)[0];
+    }
+    $out['find'] = $sig(http_get("$base/?find=a", $own));
+    $out['map'] = $sig(http_get("$base/?map", $own));
+    $out['group page'] = $sig(http_get("$base/?folder=" . rawurlencode($grp), $own));
+    // admin actions on every top folder, nested folder and the mapped one
+    foreach (array_intersect_key($paths, array_flip(['T0', 'T1', 'T3', 'T0/S', 'M'])) as $k => $p) {   // (a name PHP makes a number, one that is falsy, one that is only loosely a number, a nested one, a place from elsewhere)
+        $q = '&folder=' . rawurlencode($p);
+        $res = [];
+        foreach ([['toggle_folder_downloads', ['dl' => '1']], ['toggle_folder_downloads', ['dl' => '0']], ['toggle_folder_originals', ['originals' => '1']], ['toggle_folder_unlisted', ['unlisted' => '1']], ['toggle_folder_unlisted', ['unlisted' => '0']],
+            ['toggle_folder_restriction', ['hidden' => '1']], ['toggle_folder_restriction', ['hidden' => '0']], ['toggle_folder_own_gallery', ['owngallery' => '1']], ['toggle_folder_own_gallery', ['owngallery' => '0']], ['toggle_folder_address_file', ['addrfile' => '1']],
+            ['save_folder_identity', ['display_name' => 'Named', 'description' => 'd', 'dates' => 'x']], ['downloads_inside', ['mode' => 'on']], ['toggle_location_enabled', ['enabled' => '1']], ['health_panel', []], ['media_report', []], ['media_panel', []],
+            ['set_item_flag', ['file' => $k === 'M' ? 'm.jpg' : 'a.jpg', 'flag' => 'private', 'on' => '1']], ['set_item_flag', ['file' => $k === 'M' ? 'm.jpg' : 'a.jpg', 'flag' => 'private', 'on' => '0']],
+            ['save_item', ['file' => $k === 'M' ? 'm.jpg' : 'a.jpg', 'caption' => 'cap', 'web' => '', 'lat' => '', 'lng' => '', 'loc_label' => '']]] as [$act, $extra]) {
+            $r = $adm(['action' => $act] + $extra, $q);
+            $res[] = $act . ':' . var_export($r['ok'] ?? ($r['_raw'] ?? '?'), true);
+        }
+        $out["actions $k"] = implode(',', $res);
+    }
+    // share links scoped to folders, a collection, the Health text, the export
+    $ids = [];
+    foreach ($T as $i => $t) {
+        $r = $adm(['action' => 'link_create', 'label' => "L$i", 'title_mode' => 'gallery', 'max_opens' => 0, 'ends_at' => 0, 'locations' => 'public', 'heads_up' => 'off', 'downloads' => 'off', 'scope_type' => 'folders', 'scope_folders' => json_encode([$t])]);
+        $out["link folders $i"] = var_export($r['ok'] ?? '?', true);
+        $ids[$i] = $r['id'] ?? '';
+        $tok = $ids[$i] !== '' ? (read_data_file("$fx/.gallery-links.php")['links'][$ids[$i]]['token'] ?? '') : '';
+        if ($tok !== '') {
+            [, , $gh] = http_post("$base/?link=$tok", ['go' => '1'], [], false); $gc = extract_cookie_header($gh);
+            $out["guest home $i"] = $sig(http_get("$base/", ["Cookie: $gc"]));
+            $out["guest folder $i"] = $sig(http_get("$base/?folder=" . rawurlencode($t), ["Cookie: $gc"]));
+            $out["guest img $i"] = http_get("$base/?img=" . rawurlencode("$t/a.jpg") . '&size=thumb', ["Cookie: $gc"])[0];
+            $out["guest img other $i"] = http_get("$base/?img=" . rawurlencode(($T[($i + 1) % count($T)]) . "/a.jpg") . '&size=thumb', ["Cookie: $gc"])[0];
+        }
+    }
+    // a link whose id is made of digits (a number as an array key) and folders whose ids are
+    $lf = "$fx/.gallery-links.php"; $ld = read_data_file($lf);
+    if (!empty($ids[0]) && isset($ld['links'][$ids[0]])) {
+        $rec = $ld['links'][$ids[0]]; $rec['id'] = $newLinkId; unset($ld['links'][$ids[0]]); $ld['links'][$newLinkId] = $rec;
+        write_data_file($lf, $ld);
+        $tok0 = $rec['token'] ?? '';
+        [, , $gh0] = http_post("$base/?link=$tok0", ['go' => '1'], [], false); $gc0 = extract_cookie_header($gh0);
+        $out['idlink guest home'] = $sig(http_get("$base/", ["Cookie: $gc0"]));
+        $out['idlink guest folder'] = $sig(http_get("$base/?folder=" . rawurlencode($T[0]), ["Cookie: $gc0"]));
+        $out['idlink guest img'] = http_get("$base/?img=" . rawurlencode("{$T[0]}/a.jpg") . '&size=thumb', ["Cookie: $gc0"])[0];
+        $out['idlink log opens'] = count(vl_log($fx, $newLinkId)['events']);
+        $post = fn ($b) => @file_get_contents("$base/?linklog", false, stream_context_create(['http' => ['method' => 'POST', 'header' => "Content-Type: application/json\r\nCookie: $gc0\r\n" . $ua[0], 'content' => json_encode(['e' => $b]), 'ignore_errors' => true, 'timeout' => 10]]));
+        $post([['f', $T[0]], ['o', "{$T[0]}/a.jpg"], ['s', "{$T[0]}/b.jpg"]]);
+        $out['idlink log after post'] = count(vl_log($fx, $newLinkId)['events']);
+        $out['idlink visitors tab'] = substr_count(http_get("$base/?admin&visits=1&tab=visitors&src=$newLinkId", $own)[1], '<tr');
+        $out['idlink media tab'] = substr_count(http_get("$base/?admin&visits=1&tab=media&src=$newLinkId", $own)[1], 'sl-th');
+        $out['idlink links panel'] = substr_count(http_get("$base/?admin", $own)[1], $newLinkId) > 0 ? 'mentioned' : 'absent';
+        foreach (['link_pause', 'link_resume', 'link_extend', 'link_revoke'] as $a) $out["idlink $a"] = var_export($adm(['action' => $a, 'id' => $newLinkId, 'days' => '5'])['ok'] ?? '?', true);
+        $out['idlink guest after revoke'] = http_get("$base/", ["Cookie: $gc0"])[0];
+    }
+    // the folders' own download lists as they are stored, and what the pages say after them
+    foreach ([0, 1] as $i) { $adm(['action' => 'toggle_folder_downloads', 'dl' => '1'], '&folder=' . rawurlencode($T[$i])); }
+    $cfgNow = cfg_read("$fx/.gallery-config.php");
+    $out['download list types'] = implode(',', array_map('gettype', (array) ($cfgNow['PUBLIC_DOWNLOAD_FOLDERS'] ?? [])));
+    foreach ([0, 1] as $i) {
+        $pg = http_get("$base/?admin&folder=" . rawurlencode($T[$i]), $own)[1];
+        $out["download switch on $i"] = preg_match('/data-action="toggle_folder_downloads"[^>]*checked|toggle_folder_downloads[^>]*aria-checked="true"/', $pg) === 1 ? 'on' : (substr_count($pg, 'dl-inside') > 0 ? 'has-inside' : 'no');
+        $out["download original $i"] = http_get("$base/?original=" . rawurlencode("{$T[$i]}/a.jpg"))[0];
+        $out["download original public page $i"] = substr_count(http_get("$base/?folder=" . rawurlencode($T[$i]))[1], 'download');
+    }
+    // what changed on disk (the Changes tab): a folder added, photos added to one, a folder taken away
+    http_get("$base/?admin", $own);
+    $newName = $grp === 'trip' ? 'Newdir' : '2030'; mkdir("$fx/$newName", 0777, true); make_jpeg("$fx/$newName/n1.jpg", 40, 30, 1, 1, 1); make_jpeg("$fx/$newName/n2.jpg", 40, 30, 2, 2, 2);
+    make_jpeg("$fx/{$T[3]}/added.jpg", 40, 30, 3, 3, 3);
+    http_get("$base/?admin", $own); http_get("$base/?folder=" . rawurlencode($newName), $own);
+    $cl = json_decode(http_get("$base/?admin&changes_list=1", $own)[1], true); $out['changes after add'] = ($cl['n'] ?? '?') . '|' . json_encode($cl['counts'] ?? array_keys((array) $cl)) . '|' . substr_count((string) ($cl['html'] ?? ''), 'fc-chg');
+    foreach (glob("$fx/{$T[5]}/*/*/*.jpg") as $ph) unlink($ph); foreach (glob("$fx/{$T[5]}/*/*.jpg") as $ph) unlink($ph); foreach (glob("$fx/{$T[5]}/*.jpg") as $ph) unlink($ph);
+    http_get("$base/?admin", $own); http_get("$base/", $own);
+    $cl = json_decode(http_get("$base/?admin&changes_list=1", $own)[1], true); $out['changes after removal'] = ($cl['n'] ?? '?') . '|' . json_encode($cl['counts'] ?? array_keys((array) $cl)) . '|' . substr_count((string) ($cl['html'] ?? ''), 'fc-chg');
+    $out['home after changes'] = $sig(http_get("$base/", $own));
+    $c = $adm(['action' => 'collection_create', 'parent' => '', 'title' => $grp === 'trip' ? 'Best' : '2020']);
+    $out['collection create'] = var_export($c['ok'] ?? '?', true);
+    if (!empty($c['id'])) $out['collection add'] = var_export(($adm(['action' => 'collection_member_add', 'id' => $c['id'], 'items' => json_encode([['path' => $T[0]], ['path' => $T[1], 'file' => 'a.jpg']])])['ok'] ?? '?'), true);
+    $hl = html_entity_decode(http_get("$base/?admin&health=1", $own)[1], ENT_QUOTES);
+    $out['health rows'] = substr_count($hl, 'health-row');
+    $out['admin home'] = $sig(http_get("$base/?admin&classic=1", $own));
+    foreach (['export_items', 'export_tree'] as $a) $out["export $a"] = http_get("$base/?admin&$a=1", $own)[0];
+    // an Own gallery folder, arrived at by a typed address
+    $adm(['action' => 'toggle_folder_own_gallery', 'owngallery' => '1'], '&folder=' . rawurlencode($T[0]));
+    $out['own gallery typed top'] = $sig(http_get("$base/?folder=" . rawurlencode($T[0]), ['Sec-Fetch-Site: none']));
+    $out['own gallery typed nested'] = $sig(http_get("$base/?folder=" . rawurlencode("{$T[0]}/$S"), ['Sec-Fetch-Site: none']));
+    $out['own gallery typed other'] = $sig(http_get("$base/?folder=" . rawurlencode($T[1]), ['Sec-Fetch-Site: none']));
+    $adm(['action' => 'toggle_folder_own_gallery', 'owngallery' => '0'], '&folder=' . rawurlencode($T[0]));
+    // a Not listed photo's own address, in a folder with a digit name
+    foreach ([0, 3] as $i) {
+        $adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '1'], '&folder=' . rawurlencode($T[$i]));
+        $pa = $adm(['action' => 'photo_address', 'file' => 'a.jpg'], '&folder=' . rawurlencode($T[$i]));
+        $out["not listed addr $i"] = var_export($pa['ok'] ?? '?', true);
+        $code = $pa['code'] ?? '';
+        if ($code !== '') { $out["not listed page $i"] = $sig(http_get("$base/?$code", ['Sec-Fetch-Site: none'])); $out["not listed img $i"] = http_get("$base/?img=$code&k=$code&size=thumb")[0]; }
+        $out["not listed folder stranger $i"] = http_get("$base/?folder=" . rawurlencode($T[$i]))[0];
+        $adm(['action' => 'toggle_folder_unlisted', 'unlisted' => '0'], '&folder=' . rawurlencode($T[$i]));
+    }
+    // covers
+    $out['cover follow'] = var_export($adm(['action' => 'set_folder_cover', 'mode' => 'follow', 'child' => $S], '&folder=' . rawurlencode($T[0]))['ok'] ?? '?', true);
+    $out['cover photos'] = var_export($adm(['action' => 'cover_photos', 'child' => $S], '&folder=' . rawurlencode($T[0]))['ok'] ?? '?', true);
+    $out['home after covers'] = $sig(http_get("$base/"));
+    // the visitor log: folder lines for every folder, then the Visitors tab
+    $ua = ['User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0'];
+    $lines = [['f', '']]; foreach ($T as $t) { $lines[] = ['f', $t]; $lines[] = ['f', "$t/$S"]; } $lines[] = ['f', $mappedName];
+    $opts = ['http' => ['method' => 'POST', 'header' => implode("\r\n", array_merge(['Content-Type: application/json'], $ua)), 'content' => json_encode(['e' => $lines]), 'ignore_errors' => true, 'timeout' => 10]];
+    @file_get_contents("$base/?linklog", false, stream_context_create($opts));
+    $ev = vl_log($fx, 'ffffffffff')['events']; $out['log folder events'] = count(array_filter($ev, fn ($e) => $e['k'] === 'folder'));
+    foreach (['folders', 'media', 'timeline', 'visitors'] as $tab) $out["visits tab $tab"] = substr_count(http_get("$base/?admin&visits=1&tab=$tab&src=ffffffffff", $own)[1], '<tr');
+    $fl = $adm(['action' => 'files_list']); $out['files list'] = ($fl['files'] ?? '?') . '|' . count($fl['rows'] ?? []);
+    $mr = $adm(['action' => 'media_report']); $out['media report'] = count($mr['rows'] ?? []);
+    $out['collection page'] = $sig(http_get("$base/?folder=" . rawurlencode($grp === 'trip' ? 'best' : '2020')));
+    $out['collection page owner'] = $sig(http_get("$base/?folder=" . rawurlencode($grp === 'trip' ? 'best' : '2020'), $own));
+    $out['archive all'] = http_get("$base/?archive", $own)[0];
+    return $out;
+
+};
+
+foreach (['overview', 'flat'] as $dnMode) {
+    $dnA = $dnTwin([['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet', 'Kilo', 'Lima'], 'Sub', 'Deep', 'Mapped', 'trip', ['abcdefabcdef', 'fedcbafedcba'], 'abcdef0123'], "a-$dnMode", $dnMode);
+    $dnB = $dnTwin([['2024', '0', '123', '007', '-5', '1e3', '7', '1000', '5', '00', '12', '2025'], '2023', '2022', '2019', '2021', ['123456789012', '210987654321'], '1234567890'], "b-$dnMode", $dnMode);
+    $dnDiff = [];
+    foreach ($dnA as $dnK => $dnVa) if (($dnB[$dnK] ?? '(missing)') !== $dnVa) $dnDiff[] = "[$dnK] letters: $dnVa / digits: " . ($dnB[$dnK] ?? '(missing)');
+    check("[digit names] in the $dnMode display mode, " . count($dnA) . " pages and actions (the folders and the one from elsewhere, their pages as a stranger, the owner and a link guest, the pictures, the ZIP, the admin and its actions, links with digit ids and folder ids, collections, Own gallery, Not listed addresses, covers, the visitor log, the Changes tab) answer exactly the same under names of digits as under letters", $dnDiff === [] && count($dnA) > 300, count($dnDiff) . ' differ: ' . implode(' | ', array_slice($dnDiff, 0, 6)));
+}
+
+/* --------------------------------------------------------------------- */
+
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

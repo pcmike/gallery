@@ -38,7 +38,7 @@ function folder_id_map_folders($dir, $files) {
 /** The same, with the collections too: a link names a collection the way it names a folder, by an id, and it is found where it lives. */
 function folder_id_map($dir, $files) {
     $map = folder_id_map_folders($dir, $files);
-    if (collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) $map[$cRec['id']][] = $cPath;
+    if (collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) $map[$cRec['id']][] = (string) $cPath;
     return $map;
 }
 

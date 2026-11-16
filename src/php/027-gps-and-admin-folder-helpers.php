@@ -148,6 +148,7 @@ function render_admin_folder_nav($files, $currentFolder) {
     $collNodes = []; $collCount = [];   // the collections stand among the folders they live beside, in italics (they are not folders on disk)
     if (AUTO_GROUP_BY_FOLDER && collections_any()) {
         foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $cPath = (string) $cPath;   // (an address of digits is a number as a key)
             $collNodes[$cPath] = $cRec; $collCount[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
             $children[$cRec['parentPath']][] = $cPath;
         }

@@ -91,7 +91,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
     // stamped with its hidden id (a folder that can't be written to can't be remembered, so it is refused).
     $validFolders = array_fill_keys(all_folder_paths($files), true);
     $collectionIds = [];   // a collection can be picked like a folder: the link remembers it by the collection's own id
-    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) { $validFolders[$cPath] = true; $collectionIds[$cPath] = $cRec['id']; }
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) { $cPath = (string) $cPath; $validFolders[$cPath] = true; $collectionIds[$cPath] = $cRec['id']; }
     $validFiles = array_fill_keys($files, true);
     $index = [];   // id => path, for the links file's list of where folders were last seen
     $list = function ($key) { $v = json_decode((string) ($_POST[$key] ?? '[]'), true); return is_array($v) ? array_slice(array_values(array_unique(array_filter($v, 'is_string'))), 0, 60) : []; };

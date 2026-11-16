@@ -107,6 +107,7 @@ function folder_display_meta($dir, $folderRel) {
  *  (ascending), everything else after in natural order — by name, or by
  *  folder mtime when PHOTO_SORT_ORDER says so. */
 function order_folder_children($dir, $prefix, $names) {
+    $names = array_map('strval', array_values((array) $names));   // (names come from array keys, where a name of digits is a number: they are given back as text, so a strict comparison with a name never misses one)
     $meta = [];
     foreach ($names as $name) {
         $meta[$name] = folder_display_meta($dir, $prefix . $name);

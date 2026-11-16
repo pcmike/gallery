@@ -479,9 +479,9 @@ if (isset($_GET['folder'])) {
     // window of nine around this one plus "All" back to the parent.
     $pillParent = strpos($currentFolderPath, '/') === false ? '' : dirname($currentFolderPath);
     $pillPrefix = $pillParent === '' ? '' : $pillParent . '/';
-    $pillNames = array_keys(split_folder_level($pillParent === '' ? $files : folder_files_under($files, $pillParent), $pillPrefix)['folders']);
+    $pillNames = array_map('strval', array_keys(split_folder_level($pillParent === '' ? $files : folder_files_under($files, $pillParent), $pillPrefix)['folders']));   // (text: a name of digits is a number as a key)
     if ($pillParent === '' && !empty($groupOrder)) {
-        $mainOrder = array_values(array_filter($groupOrder, function ($k) use ($pillNames) { return in_array($k, $pillNames, true); }));
+        $mainOrder = array_values(array_filter(array_map('strval', $groupOrder), function ($k) use ($pillNames) { return in_array($k, $pillNames, true); }));
         $pillNames = count($mainOrder) === count($pillNames) ? $mainOrder : order_folder_children($dir, '', $pillNames);
     } else {
         $pillNames = order_folder_children($dir, $pillPrefix, $pillNames);

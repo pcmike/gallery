@@ -6727,7 +6727,7 @@ function folder_id_map_folders($dir, $files) {
 /** The same, with the collections too: a link names a collection the way it names a folder, by an id, and it is found where it lives. */
 function folder_id_map($dir, $files) {
     $map = folder_id_map_folders($dir, $files);
-    if (collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) $map[$cRec['id']][] = $cPath;
+    if (collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) $map[$cRec['id']][] = (string) $cPath;
     return $map;
 }
 
@@ -7532,6 +7532,7 @@ function folder_display_meta($dir, $folderRel) {
  *  (ascending), everything else after in natural order — by name, or by
  *  folder mtime when PHOTO_SORT_ORDER says so. */
 function order_folder_children($dir, $prefix, $names) {
+    $names = array_map('strval', array_values((array) $names));   // (names come from array keys, where a name of digits is a number: they are given back as text, so a strict comparison with a name never misses one)
     $meta = [];
     foreach ($names as $name) {
         $meta[$name] = folder_display_meta($dir, $prefix . $name);
@@ -7851,6 +7852,7 @@ function collection_cards($dir, $parentPath, $all, $visible) {
         if ($files) $out[] = [$r['name'], $r, $files];
     }
     foreach ($fromElsewhere as $path => $r) {
+        $path = (string) $path;   // (an address of digits is a number as a key)
         if (!collection_viewer_sees($r)) continue;
         $files = array_values(array_filter(collection_member_files($dir, $r, $all), function ($f) use ($vis) { return isset($vis[$f]); }));
         if (!$files) continue;
@@ -9314,6 +9316,7 @@ function render_admin_folder_nav($files, $currentFolder) {
     $collNodes = []; $collCount = [];   // the collections stand among the folders they live beside, in italics (they are not folders on disk)
     if (AUTO_GROUP_BY_FOLDER && collections_any()) {
         foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $cPath = (string) $cPath;   // (an address of digits is a number as a key)
             $collNodes[$cPath] = $cRec; $collCount[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
             $children[$cRec['parentPath']][] = $cPath;
         }
@@ -11814,7 +11817,7 @@ function link_input_from_post($now, $existing, $dir, $files) {
     // stamped with its hidden id (a folder that can't be written to can't be remembered, so it is refused).
     $validFolders = array_fill_keys(all_folder_paths($files), true);
     $collectionIds = [];   // a collection can be picked like a folder: the link remembers it by the collection's own id
-    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) { $validFolders[$cPath] = true; $collectionIds[$cPath] = $cRec['id']; }
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (collections_registry($dir, $files)['byPath'] as $cPath => $cRec) { $cPath = (string) $cPath; $validFolders[$cPath] = true; $collectionIds[$cPath] = $cRec['id']; }
     $validFiles = array_fill_keys($files, true);
     $index = [];   // id => path, for the links file's list of where folders were last seen
     $list = function ($key) { $v = json_decode((string) ($_POST[$key] ?? '[]'), true); return is_array($v) ? array_slice(array_values(array_unique(array_filter($v, 'is_string'))), 0, 60) : []; };
@@ -12365,7 +12368,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         collection_saved_or_fail();
         $now = collection_find_by_id($id);
         $reg = collections_registry($dir, $files);
-        $newPath = null; foreach ($reg['byPath'] as $p => $r) if ($r['id'] === $id) $newPath = $p;
+        $newPath = null; foreach ($reg['byPath'] as $p => $r) if ($r['id'] === $id) $newPath = (string) $p;
         admin_json_exit(['ok' => true, 'text' => 'Saved', 'hash' => $newHash, 'path' => $newPath, 'name' => $now['name']]);
     }
     if ($action === 'collection_member_add' || $action === 'collection_member_add_files') {
@@ -17251,6 +17254,7 @@ function shell_folder_tree($files, $current) {
     $collNodes = [];   // the collections stand among the folders they live beside, in italics: they are not folders on disk
     if (AUTO_GROUP_BY_FOLDER && collections_any()) {
         foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $cPath = (string) $cPath;   // (an address of digits is a number as a key)
             $collNodes[$cPath] = $cRec; $own[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
             $children[$cRec['parentPath']][] = $cPath;
         }
@@ -17358,6 +17362,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     $collNodes = [];   // collections stand among the folders they live beside, in italics
     if (AUTO_GROUP_BY_FOLDER && collections_any()) {
         foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $cPath = (string) $cPath;   // (an address of digits is a number as a key)
             $collNodes[$cPath] = $cRec; $own[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
             $children[$cRec['parentPath']][] = $cPath;
         }
@@ -17492,7 +17497,7 @@ function owner_phone_bar_css() {
 function shell_folder_labels($dir, $files) {
     $labels = [];
     $paths = all_folder_paths($files);
-    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (array_keys(collections_registry($dir, $files)['byPath']) as $cPath) $paths[] = $cPath;   // (a collection's title is its display name)
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (array_keys(collections_registry($dir, $files)['byPath']) as $cPath) $paths[] = (string) $cPath;   // (a collection's title is its display name)
     if (count($paths) <= 400) foreach ($paths as $path) { $l = folder_display_meta($dir, $path)['label']; if ($l !== '') $labels[$path] = $l; }
     return $labels;
 }
@@ -23602,9 +23607,9 @@ if (isset($_GET['folder'])) {
     // window of nine around this one plus "All" back to the parent.
     $pillParent = strpos($currentFolderPath, '/') === false ? '' : dirname($currentFolderPath);
     $pillPrefix = $pillParent === '' ? '' : $pillParent . '/';
-    $pillNames = array_keys(split_folder_level($pillParent === '' ? $files : folder_files_under($files, $pillParent), $pillPrefix)['folders']);
+    $pillNames = array_map('strval', array_keys(split_folder_level($pillParent === '' ? $files : folder_files_under($files, $pillParent), $pillPrefix)['folders']));   // (text: a name of digits is a number as a key)
     if ($pillParent === '' && !empty($groupOrder)) {
-        $mainOrder = array_values(array_filter($groupOrder, function ($k) use ($pillNames) { return in_array($k, $pillNames, true); }));
+        $mainOrder = array_values(array_filter(array_map('strval', $groupOrder), function ($k) use ($pillNames) { return in_array($k, $pillNames, true); }));
         $pillNames = count($mainOrder) === count($pillNames) ? $mainOrder : order_folder_children($dir, '', $pillNames);
     } else {
         $pillNames = order_folder_children($dir, $pillPrefix, $pillNames);

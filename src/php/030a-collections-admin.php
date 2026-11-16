@@ -204,7 +204,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         collection_saved_or_fail();
         $now = collection_find_by_id($id);
         $reg = collections_registry($dir, $files);
-        $newPath = null; foreach ($reg['byPath'] as $p => $r) if ($r['id'] === $id) $newPath = $p;
+        $newPath = null; foreach ($reg['byPath'] as $p => $r) if ($r['id'] === $id) $newPath = (string) $p;
         admin_json_exit(['ok' => true, 'text' => 'Saved', 'hash' => $newHash, 'path' => $newPath, 'name' => $now['name']]);
     }
     if ($action === 'collection_member_add' || $action === 'collection_member_add_files') {

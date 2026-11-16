@@ -61,6 +61,7 @@ function shell_folder_tree($files, $current) {
     $collNodes = [];   // the collections stand among the folders they live beside, in italics: they are not folders on disk
     if (AUTO_GROUP_BY_FOLDER && collections_any()) {
         foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $cPath = (string) $cPath;   // (an address of digits is a number as a key)
             $collNodes[$cPath] = $cRec; $own[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
             $children[$cRec['parentPath']][] = $cPath;
         }
@@ -168,6 +169,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
     $collNodes = [];   // collections stand among the folders they live beside, in italics
     if (AUTO_GROUP_BY_FOLDER && collections_any()) {
         foreach (collections_registry($GLOBALS['dir'], $files)['byPath'] as $cPath => $cRec) {
+            $cPath = (string) $cPath;   // (an address of digits is a number as a key)
             $collNodes[$cPath] = $cRec; $own[$cPath] = count(collection_member_files($GLOBALS['dir'], $cRec, $files));
             $children[$cRec['parentPath']][] = $cPath;
         }
@@ -302,7 +304,7 @@ function owner_phone_bar_css() {
 function shell_folder_labels($dir, $files) {
     $labels = [];
     $paths = all_folder_paths($files);
-    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (array_keys(collections_registry($dir, $files)['byPath']) as $cPath) $paths[] = $cPath;   // (a collection's title is its display name)
+    if (AUTO_GROUP_BY_FOLDER && collections_any()) foreach (array_keys(collections_registry($dir, $files)['byPath']) as $cPath) $paths[] = (string) $cPath;   // (a collection's title is its display name)
     if (count($paths) <= 400) foreach ($paths as $path) { $l = folder_display_meta($dir, $path)['label']; if ($l !== '') $labels[$path] = $l; }
     return $labels;
 }

@@ -204,6 +204,7 @@ function collection_cards($dir, $parentPath, $all, $visible) {
         if ($files) $out[] = [$r['name'], $r, $files];
     }
     foreach ($fromElsewhere as $path => $r) {
+        $path = (string) $path;   // (an address of digits is a number as a key)
         if (!collection_viewer_sees($r)) continue;
         $files = array_values(array_filter(collection_member_files($dir, $r, $all), function ($f) use ($vis) { return isset($vis[$f]); }));
         if (!$files) continue;
