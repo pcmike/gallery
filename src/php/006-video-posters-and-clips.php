@@ -17,10 +17,13 @@ function ffmpeg_binary() {
     $found = '';
     if (!function_exists('proc_open')) return $found;
     $remember = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__ . '|' . FFMPEG_PATH), 0, 10) . '.txt';
-    if (is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
-        return $found = trim((string) @file_get_contents($remember));
-    }
     $candidates = FFMPEG_PATH !== '' ? [FFMPEG_PATH] : ['ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg', '/snap/bin/ffmpeg'];
+    if (is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
+        // The note sits in the system's shared temp folder, where another account or program may be able to write: what it says is only believed when it is
+        // "none" or one of the places this function would look itself. Anything else is ignored, and the places are looked at again.
+        $note = trim((string) @file_get_contents($remember));
+        if ($note === '' || in_array($note, $candidates, true)) return $found = $note;
+    }
     foreach ($candidates as $c) {
         if ($c !== 'ffmpeg' && !is_executable($c)) continue;
         if (run_quietly([$c, '-version'], 5) === 0) { $found = $c; break; }
@@ -74,7 +77,7 @@ function video_poster_path($srcPath, $cacheDir, $filename) {
         $duration = video_duration_seconds($srcPath);
         $tmp = $poster . '.tmp' . bin2hex(random_bytes(3));
         foreach ([$duration !== null ? max(0, min(1.0, $duration / 3)) : 0, 0] as $at) {
-            $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $at), '-i', $srcPath, '-map_metadata', '-1', '-frames:v', '1',
+            $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $at), '-f', 'mov', '-protocol_whitelist', 'file', '-i', $srcPath, '-map_metadata', '-1', '-frames:v', '1',
                 '-vf', "scale='min(1600,iw)':'min(1600,ih)':force_original_aspect_ratio=decrease", '-q:v', '3', '-f', 'image2', $tmp], 25);
             if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $poster)) return $poster; }
             @unlink($tmp);
@@ -114,7 +117,7 @@ function video_preview_path($srcPath, $cacheDir, $filename) {
         $duration = video_duration_seconds($srcPath);
         $start = $duration !== null && $duration > 3.5 ? min($duration / 3, $duration - 3) : 0;
         $tmp = $clip . '.tmp' . bin2hex(random_bytes(3));
-        $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $start), '-t', '3', '-i', $srcPath, '-an', '-map_metadata', '-1',
+        $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $start), '-t', '3', '-f', 'mov', '-protocol_whitelist', 'file', '-i', $srcPath, '-an', '-map_metadata', '-1',
             '-vf', 'scale=w=min(640\\,iw):h=-2,fps=15', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '27', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-f', 'mp4', $tmp], 45);
         if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $clip)) return $clip; }
         @unlink($tmp);
@@ -158,7 +161,7 @@ function video_strip_path($srcPath, $cacheDir, $filename) {
         [$cols, $rows] = video_strip_layout($duration);
         $args = [$bin, '-v', 'error', '-nostdin', '-y'];
         if ($duration > 20) array_push($args, '-skip_frame', 'nokey');   // a long video: only its key frames are read, which is much quicker
-        array_push($args, '-i', $srcPath, '-an', '-map_metadata', '-1', '-vf',
+        array_push($args, '-f', 'mov', '-protocol_whitelist', 'file', '-i', $srcPath, '-an', '-map_metadata', '-1', '-vf',
             sprintf('fps=%.5F,crop=min(iw\\,ih):min(iw\\,ih),scale=320:320,tile=%dx%d', $cols * $rows / $duration * 1.05, $cols, $rows),
             '-frames:v', '1', '-q:v', '4', '-f', 'image2', $tmp);
         $code = run_quietly($args, 90);
@@ -251,6 +254,19 @@ function video_pictures_expected() {
     return ENABLE_VIDEO_THUMBNAILS && ENABLE_THUMBNAIL_CACHE && ffmpeg_binary() !== '';
 }
 
+/** What the three pictures drawn here (the video placeholder, the map's preview, the home-screen icon) are when this PHP has no GD to draw them with: a small
+ *  plain dark picture of the same colour, so a tile, a link preview or an icon is dark instead of a broken picture and an error in the log. It is not cached for
+ *  long, so adding GD gives the real drawing within the hour. */
+function render_plain_picture($kind) {
+    $data = $kind === 'png'
+        ? base64_decode('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAGUlEQVQokWPk5xdgIAUwkaR6VMOohiGlAQDAkwBOaTShMQAAAABJRU5ErkJggg==')
+        : base64_decode('/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcgSlBFRyB2NjIpLCBxdWFsaXR5ID0gODAK/9sAQwAGBAUGBQQGBgUGBwcGCAoQCgoJCQoUDg8MEBcUGBgXFBYWGh0lHxobIxwWFiAsICMmJykqKRkfLTAtKDAlKCko/9sAQwEHBwcKCAoTCgoTKBoWGigoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo/8AAEQgADAAQAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A+eqKKKYH/9k=');
+    header('Content-Type: ' . ($kind === 'png' ? 'image/png' : 'image/jpeg'));
+    header('Cache-Control: public, max-age=3600');
+    header('Content-Length: ' . strlen($data));
+    echo $data;
+}
+
 /**
  * Renders a generic "this is a video" placeholder graphic — a dark tile
  * with a plain play triangle — wherever a video's "thumbnail" or share-
@@ -261,6 +277,7 @@ function video_pictures_expected() {
  * one is cheap enough to just do on every request.
  */
 function render_video_placeholder_image($maxDim) {
+    if (!function_exists('imagecreatetruecolor')) { render_plain_picture('jpeg'); return; }
     $w = max(1, (int) $maxDim);
     $h = max(1, (int) round($w * 0.75));
     $img = imagecreatetruecolor($w, $h);
@@ -291,6 +308,7 @@ function render_video_placeholder_image($maxDim) {
  * nothing to cache or key; cheap enough to draw per request.
  */
 function render_map_icon_image() {
+    if (!function_exists('imagecreatetruecolor')) { render_plain_picture('jpeg'); return; }
     $w = 1200;
     $h = 630;
     $img = imagecreatetruecolor($w, $h);
@@ -316,6 +334,7 @@ function render_map_icon_image() {
 
 /** The home-screen icon: a dark square with a small mountain-and-sun picture, as a PNG of $px pixels. */
 function render_app_icon_image($px) {
+    if (!function_exists('imagecreatetruecolor')) { render_plain_picture('png'); return; }
     // The same line drawing as the gallery icon in the icon strip (a rounded frame, a sun, a hill line; ui_icon_paths()'s 'gallery'),
     // drawn here in PHP so no image file is needed. Drawn four times larger and shrunk, which smooths the edges.
     $k = 4; $big = $px * $k;

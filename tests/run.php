@@ -5070,7 +5070,7 @@ check('[video previews] with ffmpeg, a video\'s tile carries the address of its 
 [$pvSt, $pvBody, $pvHd] = http_get("$vtBase/?preview=clip.mp4");
 $pvH = fn ($n) => (function () use ($pvHd, $n) { foreach ($pvHd as $h) if (stripos($h, "$n:") === 0) return trim(substr($h, strlen($n) + 1)); return ''; })();
 $pvLog = (string) file_get_contents($vtLog);
-check('[video previews] the clip is made once, a few seconds, no sound, no metadata, never through a shell, and sent as video/mp4 with its length', $pvSt === 200 && $pvH('Content-Type') === 'video/mp4' && (int) $pvH('Content-Length') === strlen($pvBody) && $pvBody === file_get_contents($vtFrame) && $vtClips() === 1 && str_contains($pvLog, ' -an ') && str_contains($pvLog, 'libx264') && str_contains($pvLog, '-t 3 -i ' . "$vtDir/clip.mp4"));
+check('[video previews] the clip is made once, a few seconds, no sound, no metadata, never through a shell, and sent as video/mp4 with its length', $pvSt === 200 && $pvH('Content-Type') === 'video/mp4' && (int) $pvH('Content-Length') === strlen($pvBody) && $pvBody === file_get_contents($vtFrame) && $vtClips() === 1 && str_contains($pvLog, ' -an ') && str_contains($pvLog, 'libx264') && str_contains($pvLog, '-t 3 -f mov -protocol_whitelist file -i ' . "$vtDir/clip.mp4"));
 [$pvSt2, $pvBody2, $pvHd2] = http_get("$vtBase/?preview=clip.mp4", ['Range: bytes=0-9']);
 check('[video previews] it can be fetched in parts (Safari plays nothing from a server that can\'t), and asking again makes nothing new', $pvSt2 === 206 && strlen($pvBody2) === 10 && $pvBody2 === substr($pvBody, 0, 10) && (bool) array_filter($pvHd2, fn ($h) => stripos($h, 'Content-Range: bytes 0-9/' . strlen($pvBody)) === 0) && $vtClips() === 1);
 $pvListing = array_diff(scandir("$vtDir/.gallery-cache"), ['.', '..']); http_get("$vtBase/");
@@ -11958,6 +11958,65 @@ if ($vHasSqlite) {
     [, $hPage] = http_get("http://127.0.0.1:$portH/");
     preg_match_all('#\bid="(group-[^"]*)"#u', $hPage, $hIds);
     check('[group ids] two names with no letter or digit in them (🎉 and 🎈) are two boxes with two different ids', count($hIds[1]) >= 2 && count(array_unique($hIds[1])) === count($hIds[1]) && !in_array('group-', $hIds[1], true), json_encode($hIds[1], JSON_UNESCAPED_UNICODE));
+}
+
+/* --------------------------------------------------------------------- */
+/* Group 11: the programs the gallery starts or hands files to (ImageMagick, ffmpeg) and what it draws without GD. */
+{
+    // ---- D3: ImageMagick is told what a file is by its first bytes, never asked to guess from the contents
+    $fxP = new_fixture_dir('picture-kinds');
+    make_jpeg("$fxP/good.jpg", 80, 60, 200, 60, 60);
+    $pngIm = imagecreatetruecolor(80, 60); imagefill($pngIm, 0, 0, imagecolorallocate($pngIm, 60, 60, 200)); imagepng($pngIm, "$fxP/really-a-png.jpg");
+    file_put_contents("$fxP/ps.jpg", "%!PS-Adobe-3.0\n%%BoundingBox: 0 0 80 60\n0 1 0 setrgbcolor 0 0 80 60 rectfill showpage\n");
+    file_put_contents("$fxP/svg.jpg", '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="lime"/></svg>');
+    file_put_contents("$fxP/empty.jpg", ''); file_put_contents("$fxP/fake.jpg", 'this is not a picture');
+    file_put_contents("$fxP/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'pk-admin-pw-1', 'ENABLE_THUMBNAIL_CACHE' => true]));
+    copy($indexSrc, "$fxP/index.php"); $portP = find_free_port(); start_server($fxP, $portP); $baseP = "http://127.0.0.1:$portP";
+    $pkPixel = function ($body) { $im = @imagecreatefromstring((string) $body); if (!$im) return null; $c = imagecolorat($im, (int) (imagesx($im) / 2), (int) (imagesy($im) / 2)); return [($c >> 16) & 255, ($c >> 8) & 255, $c & 255]; };
+    $pkGood = http_get("$baseP/?img=good.jpg&size=thumb"); $pkPng = http_get("$baseP/?img=really-a-png.jpg&size=thumb");
+    check('[picture kinds] a photo still gets its thumbnail, and a PNG with a .jpg name is read as the PNG it is', $pkGood[0] === 200 && ($pkPixel($pkGood[1])[0] ?? 0) > 150 && $pkPng[0] === 200 && ($pkPixel($pkPng[1])[2] ?? 0) > 150);
+    $pkPs = http_get("$baseP/?img=ps.jpg&size=thumb"); $pkSvg = http_get("$baseP/?img=svg.jpg&size=thumb");
+    $pkGreen = fn ($r) => $r[0] === 200 && ($px = $pkPixel($r[1])) !== null && $px[1] > 200 && $px[0] < 60 && $px[2] < 60;
+    check('[picture kinds] a .jpg that holds PostScript or SVG is never handed to Ghostscript or the SVG reader: no thumbnail is drawn from it (the green it paints is not in the answer)', !$pkGreen($pkPs) && !$pkGreen($pkSvg), 'ps ' . $pkPs[0] . ', svg ' . $pkSvg[0]);
+    // ---- G11: the files that are no picture are named by Prepare media
+    [, , $pkH] = http_post("$baseP/?admin", ['login_password' => 'pk-admin-pw-1'], [], false); $pkCk = extract_cookie_header($pkH);
+    $pkRun = prepare_media_run($baseP, ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch']);
+    $pkHealth = json_decode(http_post("$baseP/?admin", ['csrf_token' => extract_csrf_token(http_get("$baseP/?admin", ["Cookie: $pkCk"])[1]), 'action' => 'health_panel', 'recheck' => '1'], ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch'], false)[1] ?? '', true)['html'] ?? '';
+    $pkRow = function ($h) { $i = strpos($h, 'couldn&#039;t be made'); if ($i === false) return ''; $j = strpos($h, 'with no capture date', $i); return substr($h, $i, ($j === false ? 2500 : $j - $i)); };
+    $pkNames = $pkRow($pkHealth);
+    check('[not pictures] Health names the files that are no picture (empty, text, PostScript, SVG with a picture\'s name) under "could not be made", and not the good ones', $pkNames !== '' && str_contains($pkNames, 'empty.jpg') && str_contains($pkNames, 'fake.jpg') && str_contains($pkNames, 'ps.jpg') && str_contains($pkNames, 'svg.jpg') && !str_contains($pkNames, 'good.jpg') && !str_contains($pkNames, 'really-a-png.jpg'), substr(strip_tags($pkNames), 0, 300));
+    check('[not pictures] ...and replacing one of them with a real picture takes it off the list', (function () use ($fxP, $baseP, $pkCk) { make_jpeg("$fxP/fake.jpg", 80, 60, 10, 200, 10); touch("$fxP/fake.jpg", time() + 5); prepare_media_run($baseP, ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch']); $h = json_decode(http_post("$baseP/?admin", ['csrf_token' => extract_csrf_token(http_get("$baseP/?admin", ["Cookie: $pkCk"])[1]), 'action' => 'health_panel', 'recheck' => '1'], ["Cookie: $pkCk", 'X-Requested-With: gallery-fetch'], false)[1] ?? '', true)['html'] ?? ''; $i = strpos($h, 'couldn&#039;t be made'); $j = $i === false ? false : strpos($h, 'with no capture date', $i); $row = $i === false ? '' : substr($h, $i, ($j === false ? 2500 : $j - $i)); return !str_contains($row, 'fake.jpg') && str_contains($row, 'empty.jpg'); })());
+
+    // ---- D6: ffmpeg is told what the file is (mov/mp4 only, the only video kinds here) and may read local files only
+    [$d6Dir, $d6Base] = $vtSite('pinned', ['FFMPEG_PATH' => $vtOk], ['pin.mp4' => 3]);
+    @unlink($vtLog); http_get("$d6Base/?img=pin.mp4&size=thumb"); http_get("$d6Base/?preview=pin.mp4");
+    $d6Log = (string) file_get_contents($vtLog);
+    check('[ffmpeg] every run that reads a video says what it is and where it may read from (-f mov -protocol_whitelist file) before the video', substr_count($d6Log, '-f mov -protocol_whitelist file -i ' . $d6Dir . '/pin.mp4') >= 2 && !preg_match('/ -i (?!.*-f mov)/', ''), substr($d6Log, 0, 300));
+
+    // ---- D2: a note in the shared temp folder naming some other program is not run
+    $d2Dir = new_fixture_dir('ffmpeg-note'); make_minimal_mp4("$d2Dir/clip.mp4", 3);
+    file_put_contents("$d2Dir/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true]));
+    $d2Ran = "$d2Dir/_evil-ran.txt"; $d2Evil = "$d2Dir/_evil.sh";
+    file_put_contents($d2Evil, "#!/bin/sh\necho RAN >> " . escapeshellarg($d2Ran) . "\nexit 1\n"); chmod($d2Evil, 0755);
+    copy($indexSrc, "$d2Dir/index.php"); $d2Note = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', realpath($d2Dir) . '|'), 0, 10) . '.txt';
+    file_put_contents($d2Note, $d2Evil);
+    $d2Port = find_free_port(); start_server($d2Dir, $d2Port);
+    $d2St = http_get("http://127.0.0.1:$d2Port/?img=clip.mp4&size=thumb")[0];
+    check('[ffmpeg] a note in the shared temp folder that names some other program is ignored: the program is not run (the page still answers, with the placeholder)', !is_file($d2Ran) && $d2St === 200, 'status ' . $d2St . (is_file($d2Ran) ? ', it RAN' : ''));
+    @unlink($d2Note);
+
+    // ---- G18: without GD (the function switched off for this server) the three drawn pictures are small plain ones, not a 500
+    $g18Dir = new_fixture_dir('no-gd'); make_jpeg("$g18Dir/a.jpg", 80, 60, 1, 2, 3); make_minimal_mp4("$g18Dir/clip.mp4", 3);
+    file_put_contents("$g18Dir/.gallery-config.php", cfg_text(['ENABLE_VIDEO' => true, 'ENABLE_PHOTO_LOCATION' => true]));
+    copy($indexSrc, "$g18Dir/index.php"); @touch("$g18Dir/index.php", time() - 3600);
+    $g18Port = find_free_port();
+    $g18Proc = proc_open([PHP_BINARY, '-d', 'opcache.enable=0', '-d', 'disable_functions=imagecreatetruecolor', '-S', '127.0.0.1:' . $g18Port, '-t', $g18Dir], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $g18Pipes);
+    $cleanupProcs[] = $g18Proc; for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $g18Port); $i++) usleep(100000);
+    $g18 = fn ($q) => http_get("http://127.0.0.1:$g18Port/?$q");
+    $g18Thumb = $g18('img=clip.mp4&size=thumb'); $g18Map = $g18('mapicon'); $g18App = $g18('appicon');
+    $g18Type = fn ($r) => (function () use ($r) { foreach ($r[2] as $h) if (stripos($h, 'Content-Type:') === 0) return trim(substr($h, 13)); return ''; })();
+    check('[no GD] a video\'s placeholder, the map\'s preview picture and the home-screen icon are small plain pictures, not a 500 (a tile, a link preview and an icon are dark, not broken)', $g18Thumb[0] === 200 && $g18Type($g18Thumb) === 'image/jpeg' && @imagecreatefromstring($g18Thumb[1]) !== false && $g18Map[0] === 200 && $g18Type($g18Map) === 'image/jpeg' && $g18App[0] === 200 && $g18Type($g18App) === 'image/png' && @imagecreatefromstring($g18App[1]) !== false, json_encode([$g18Thumb[0], $g18Map[0], $g18App[0]]));
+    check('[no GD] ...and the front page still answers', $g18('')[0] === 200);
 }
 
 /* --------------------------------------------------------------------- */

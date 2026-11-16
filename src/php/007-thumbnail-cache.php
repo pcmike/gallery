@@ -174,6 +174,39 @@ function image_memory_raise() {
     return $now === -1 || $now >= 268435456;
 }
 
+/** What kind of picture a file really is, by its first bytes: 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', or null for anything else (an empty file, text, PostScript,
+ *  a PDF, an SVG, a file of another kind with a picture's name). ImageMagick works out a file's kind from its contents and would start Ghostscript or its SVG reader
+ *  on a file named .jpg that is really one of those, so it is always told which of these to read the file as, and never asked to guess. A file of the wrong
+ *  extension but a good picture (a PNG named .jpg) is still read, as the PNG it is. */
+function picture_coder_for($path) {
+    $h = @file_get_contents($path, false, null, 0, 16);
+    if (!is_string($h) || strlen($h) < 2) return null;
+    if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return 'jpeg';
+    if (strncmp($h, "\x89PNG\r\n\x1a\n", 8) === 0) return 'png';
+    if (strncmp($h, 'GIF87a', 6) === 0 || strncmp($h, 'GIF89a', 6) === 0) return 'gif';
+    if (strlen($h) >= 12 && substr($h, 0, 4) === 'RIFF' && substr($h, 8, 4) === 'WEBP') return 'webp';
+    if (strncmp($h, 'BM', 2) === 0) return 'bmp';
+    if (strlen($h) >= 12 && substr($h, 4, 4) === 'ftyp' && in_array(substr($h, 8, 4), ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'], true)) return 'heic';
+    return null;
+}
+
+/** Reads a picture into an Imagick object as the kind it really is (see picture_coder_for). Throws for a file that is none of those kinds, which the callers
+ *  take as "Imagick could not" and go on to GD, which refuses anything that is not a picture. */
+function picture_read_into($img, $path) {
+    $coder = picture_coder_for($path);
+    if ($coder === null) throw new Exception('not a kind of picture the gallery reads');
+    $img->readImage($coder . ':' . $path);
+}
+
+/** Whether a file looks like a picture at all (its first bytes say it is one of the kinds above, and for the kinds PHP can measure, PHP agrees). False for a
+ *  file that no decoder will ever open: the Prepare media list names those. A picture that is merely too big, or a decoder that fails today, is not "no picture". */
+function photo_decodes($path) {
+    $coder = picture_coder_for($path);
+    if ($coder === null) return false;
+    if ($coder === 'heic') return true;
+    return @getimagesize($path) !== false;
+}
+
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
  *  available, otherwise GD. Returns true on success. The long side ends up at most $maxDim (a picture is never enlarged).
  *  The JPEG is progressive: it paints coarse-to-fine while it loads. */
@@ -181,7 +214,7 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
     if (class_exists('Imagick')) {
         try {
             $img = new Imagick();
-            $img->readImage($srcPath);
+            picture_read_into($img, $srcPath);
             $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) {
                 $img->autoOrient();
@@ -248,7 +281,7 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
     if (class_exists('Imagick')) {
         try {
             $img = new Imagick();
-            $img->readImage($srcPath);
+            picture_read_into($img, $srcPath);
             $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) $img->autoOrient();
             $img->setImageFormat('jpeg');
@@ -320,7 +353,7 @@ function generate_tile_jpegs($srcPath, $targets) {
     if (class_exists('Imagick')) {
         try {
             $img = new Imagick();
-            $img->readImage($srcPath);
+            picture_read_into($img, $srcPath);
             $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) $img->autoOrient();
             $img->setImageFormat('jpeg');
@@ -458,6 +491,7 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
     $start = microtime(true);
     $made = 0; $failed = 0; $worked = 0; $read = 0; $unreadable = 0; $i = max(0, (int) $from); $step = max(1, (int) $step);
     $records = []; $unmark = [];   // folderReal => [bare name => record], folderReal => [bare names whose old "read, nothing found" mark goes]
+    $notPictures = [];   // folderReal => [bare name => real path] of photos whose pictures could not be made because the file is not a picture at all
     for (; $i < $total; $i += $step) {
         if ($worked > 0 && microtime(true) - $start > $budget) break;
         $file = $files[$i];
@@ -476,7 +510,8 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
             }
             if ($missing) {   // one reading of the photo makes every size that is missing
                 $did = true;
-                if (generate_tile_jpegs($src, $missing)) $made += count($missing); else $failed += count($missing);
+                if (generate_tile_jpegs($src, $missing)) $made += count($missing);
+                else { $failed += count($missing); if (!photo_decodes($src)) $notPictures[$folderReal][basename($file)] = $src; }
             }
         }
         $videoMade = false;
@@ -503,6 +538,16 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
         }
         if ($did) $worked++;
         if ($videoMade) { $i += $step; break; }   // (one video per call: the page asks again at once)
+    }
+    // A file with a picture's name that no decoder will open (empty, text, a damaged header) is recorded as such, so Prepare media can name it
+    // (the record is for this file as it is now: a replaced file has a new one and the mark goes with it).
+    foreach ($notPictures as $folderReal => $names) {
+        $have = media_meta_load($folderReal);
+        foreach ($names as $bare => $src) {
+            $rec = $records[$folderReal][$bare] ?? (media_meta_fresh($have[$bare] ?? null, $src) ? $have[$bare] : media_meta_read_file($src));
+            $rec['px'] = 'bad';
+            $records[$folderReal][$bare] = $rec;
+        }
     }
     foreach ($records as $folderReal => $recs) {
         media_meta_store($folderReal, $recs);
@@ -566,7 +611,7 @@ function media_attention($dir, $files) {
     static $memo = [];
     $key = count($files) . '|' . (string) ($files[0] ?? '') . '|' . (string) ($files[count($files) - 1] ?? '');
     if (isset($memo[$key])) return $memo[$key];
-    $g = ['unreadable' => [], 'unread' => [], 'legacy' => [], 'videoFailed' => [], 'videoMissing' => [], 'undated' => [], 'differs' => []];
+    $g = ['notpicture' => [], 'unreadable' => [], 'unread' => [], 'legacy' => [], 'videoFailed' => [], 'videoMissing' => [], 'undated' => [], 'differs' => []];
     $ff = ffmpeg_binary() !== '';
     $byFolder = [];
     foreach ($files as $file) $byFolder[containing_folder_real_path($dir, $file)][] = $file;
@@ -579,6 +624,7 @@ function media_attention($dir, $files) {
                 $rec = $recs[$bare] ?? null;
                 if (!media_meta_fresh($rec, $folderReal . '/' . $bare)) $g['unread'][] = $file;
                 else {
+                    if (($rec['px'] ?? '') === 'bad') $g['notpicture'][] = $file;
                     if (($rec['gs'] ?? '') === 'unreadable') $g['unreadable'][] = $file;
                     if (($rec['t'] ?? null) === null) $g['undated'][] = $file;
                 }
@@ -597,6 +643,7 @@ function media_attention($dir, $files) {
     // [title, hint, to deal with (else for information), counted as "needs attention"]: files not read yet and videos not made yet are
     // to be done by the Prepare button, which is routine (every new photo is that until it is first shown), so they are listed but not counted.
     $meta = [
+        'notpicture' => ['Pictures that could not be made', 'These are not pictures any program here can open (an empty file, a text file, a damaged one, or a file of another kind with a picture\'s name), so their tiles stay blank. Replace or delete them.', true, true],
         'unreadable' => ['Files that could not be read', 'The gallery could not get a capture date or location from these (a damaged file, or a kind it cannot read). They still show.', true, true],
         'unread' => ['Files not read yet', 'Prepare the rest reads them.', true, false],
         'legacy' => ['Old "nothing found" marks', 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.', true, true],

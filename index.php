@@ -2188,10 +2188,13 @@ function ffmpeg_binary() {
     $found = '';
     if (!function_exists('proc_open')) return $found;
     $remember = sys_get_temp_dir() . '/gallery-ffmpeg-' . substr(hash('sha256', __DIR__ . '|' . FFMPEG_PATH), 0, 10) . '.txt';
-    if (is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
-        return $found = trim((string) @file_get_contents($remember));
-    }
     $candidates = FFMPEG_PATH !== '' ? [FFMPEG_PATH] : ['ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg', '/snap/bin/ffmpeg'];
+    if (is_file($remember) && time() - (int) @filemtime($remember) < 86400) {
+        // The note sits in the system's shared temp folder, where another account or program may be able to write: what it says is only believed when it is
+        // "none" or one of the places this function would look itself. Anything else is ignored, and the places are looked at again.
+        $note = trim((string) @file_get_contents($remember));
+        if ($note === '' || in_array($note, $candidates, true)) return $found = $note;
+    }
     foreach ($candidates as $c) {
         if ($c !== 'ffmpeg' && !is_executable($c)) continue;
         if (run_quietly([$c, '-version'], 5) === 0) { $found = $c; break; }
@@ -2245,7 +2248,7 @@ function video_poster_path($srcPath, $cacheDir, $filename) {
         $duration = video_duration_seconds($srcPath);
         $tmp = $poster . '.tmp' . bin2hex(random_bytes(3));
         foreach ([$duration !== null ? max(0, min(1.0, $duration / 3)) : 0, 0] as $at) {
-            $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $at), '-i', $srcPath, '-map_metadata', '-1', '-frames:v', '1',
+            $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $at), '-f', 'mov', '-protocol_whitelist', 'file', '-i', $srcPath, '-map_metadata', '-1', '-frames:v', '1',
                 '-vf', "scale='min(1600,iw)':'min(1600,ih)':force_original_aspect_ratio=decrease", '-q:v', '3', '-f', 'image2', $tmp], 25);
             if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $poster)) return $poster; }
             @unlink($tmp);
@@ -2285,7 +2288,7 @@ function video_preview_path($srcPath, $cacheDir, $filename) {
         $duration = video_duration_seconds($srcPath);
         $start = $duration !== null && $duration > 3.5 ? min($duration / 3, $duration - 3) : 0;
         $tmp = $clip . '.tmp' . bin2hex(random_bytes(3));
-        $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $start), '-t', '3', '-i', $srcPath, '-an', '-map_metadata', '-1',
+        $code = run_quietly([$bin, '-v', 'error', '-nostdin', '-y', '-ss', sprintf('%.2f', $start), '-t', '3', '-f', 'mov', '-protocol_whitelist', 'file', '-i', $srcPath, '-an', '-map_metadata', '-1',
             '-vf', 'scale=w=min(640\\,iw):h=-2,fps=15', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '27', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-f', 'mp4', $tmp], 45);
         if ($code === 0 && is_file($tmp) && filesize($tmp) > 0) { @chmod($tmp, 0644); if (@rename($tmp, $clip)) return $clip; }
         @unlink($tmp);
@@ -2329,7 +2332,7 @@ function video_strip_path($srcPath, $cacheDir, $filename) {
         [$cols, $rows] = video_strip_layout($duration);
         $args = [$bin, '-v', 'error', '-nostdin', '-y'];
         if ($duration > 20) array_push($args, '-skip_frame', 'nokey');   // a long video: only its key frames are read, which is much quicker
-        array_push($args, '-i', $srcPath, '-an', '-map_metadata', '-1', '-vf',
+        array_push($args, '-f', 'mov', '-protocol_whitelist', 'file', '-i', $srcPath, '-an', '-map_metadata', '-1', '-vf',
             sprintf('fps=%.5F,crop=min(iw\\,ih):min(iw\\,ih),scale=320:320,tile=%dx%d', $cols * $rows / $duration * 1.05, $cols, $rows),
             '-frames:v', '1', '-q:v', '4', '-f', 'image2', $tmp);
         $code = run_quietly($args, 90);
@@ -2422,6 +2425,19 @@ function video_pictures_expected() {
     return ENABLE_VIDEO_THUMBNAILS && ENABLE_THUMBNAIL_CACHE && ffmpeg_binary() !== '';
 }
 
+/** What the three pictures drawn here (the video placeholder, the map's preview, the home-screen icon) are when this PHP has no GD to draw them with: a small
+ *  plain dark picture of the same colour, so a tile, a link preview or an icon is dark instead of a broken picture and an error in the log. It is not cached for
+ *  long, so adding GD gives the real drawing within the hour. */
+function render_plain_picture($kind) {
+    $data = $kind === 'png'
+        ? base64_decode('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAGUlEQVQokWPk5xdgIAUwkaR6VMOohiGlAQDAkwBOaTShMQAAAABJRU5ErkJggg==')
+        : base64_decode('/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcgSlBFRyB2NjIpLCBxdWFsaXR5ID0gODAK/9sAQwAGBAUGBQQGBgUGBwcGCAoQCgoJCQoUDg8MEBcUGBgXFBYWGh0lHxobIxwWFiAsICMmJykqKRkfLTAtKDAlKCko/9sAQwEHBwcKCAoTCgoTKBoWGigoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo/8AAEQgADAAQAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A+eqKKKYH/9k=');
+    header('Content-Type: ' . ($kind === 'png' ? 'image/png' : 'image/jpeg'));
+    header('Cache-Control: public, max-age=3600');
+    header('Content-Length: ' . strlen($data));
+    echo $data;
+}
+
 /**
  * Renders a generic "this is a video" placeholder graphic — a dark tile
  * with a plain play triangle — wherever a video's "thumbnail" or share-
@@ -2432,6 +2448,7 @@ function video_pictures_expected() {
  * one is cheap enough to just do on every request.
  */
 function render_video_placeholder_image($maxDim) {
+    if (!function_exists('imagecreatetruecolor')) { render_plain_picture('jpeg'); return; }
     $w = max(1, (int) $maxDim);
     $h = max(1, (int) round($w * 0.75));
     $img = imagecreatetruecolor($w, $h);
@@ -2462,6 +2479,7 @@ function render_video_placeholder_image($maxDim) {
  * nothing to cache or key; cheap enough to draw per request.
  */
 function render_map_icon_image() {
+    if (!function_exists('imagecreatetruecolor')) { render_plain_picture('jpeg'); return; }
     $w = 1200;
     $h = 630;
     $img = imagecreatetruecolor($w, $h);
@@ -2487,6 +2505,7 @@ function render_map_icon_image() {
 
 /** The home-screen icon: a dark square with a small mountain-and-sun picture, as a PNG of $px pixels. */
 function render_app_icon_image($px) {
+    if (!function_exists('imagecreatetruecolor')) { render_plain_picture('png'); return; }
     // The same line drawing as the gallery icon in the icon strip (a rounded frame, a sun, a hill line; ui_icon_paths()'s 'gallery'),
     // drawn here in PHP so no image file is needed. Drawn four times larger and shrunk, which smooths the edges.
     $k = 4; $big = $px * $k;
@@ -2797,6 +2816,39 @@ function image_memory_raise() {
     return $now === -1 || $now >= 268435456;
 }
 
+/** What kind of picture a file really is, by its first bytes: 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', or null for anything else (an empty file, text, PostScript,
+ *  a PDF, an SVG, a file of another kind with a picture's name). ImageMagick works out a file's kind from its contents and would start Ghostscript or its SVG reader
+ *  on a file named .jpg that is really one of those, so it is always told which of these to read the file as, and never asked to guess. A file of the wrong
+ *  extension but a good picture (a PNG named .jpg) is still read, as the PNG it is. */
+function picture_coder_for($path) {
+    $h = @file_get_contents($path, false, null, 0, 16);
+    if (!is_string($h) || strlen($h) < 2) return null;
+    if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return 'jpeg';
+    if (strncmp($h, "\x89PNG\r\n\x1a\n", 8) === 0) return 'png';
+    if (strncmp($h, 'GIF87a', 6) === 0 || strncmp($h, 'GIF89a', 6) === 0) return 'gif';
+    if (strlen($h) >= 12 && substr($h, 0, 4) === 'RIFF' && substr($h, 8, 4) === 'WEBP') return 'webp';
+    if (strncmp($h, 'BM', 2) === 0) return 'bmp';
+    if (strlen($h) >= 12 && substr($h, 4, 4) === 'ftyp' && in_array(substr($h, 8, 4), ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'], true)) return 'heic';
+    return null;
+}
+
+/** Reads a picture into an Imagick object as the kind it really is (see picture_coder_for). Throws for a file that is none of those kinds, which the callers
+ *  take as "Imagick could not" and go on to GD, which refuses anything that is not a picture. */
+function picture_read_into($img, $path) {
+    $coder = picture_coder_for($path);
+    if ($coder === null) throw new Exception('not a kind of picture the gallery reads');
+    $img->readImage($coder . ':' . $path);
+}
+
+/** Whether a file looks like a picture at all (its first bytes say it is one of the kinds above, and for the kinds PHP can measure, PHP agrees). False for a
+ *  file that no decoder will ever open: the Prepare media list names those. A picture that is merely too big, or a decoder that fails today, is not "no picture". */
+function photo_decodes($path) {
+    $coder = picture_coder_for($path);
+    if ($coder === null) return false;
+    if ($coder === 'heic') return true;
+    return @getimagesize($path) !== false;
+}
+
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
  *  available, otherwise GD. Returns true on success. The long side ends up at most $maxDim (a picture is never enlarged).
  *  The JPEG is progressive: it paints coarse-to-fine while it loads. */
@@ -2804,7 +2856,7 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
     if (class_exists('Imagick')) {
         try {
             $img = new Imagick();
-            $img->readImage($srcPath);
+            picture_read_into($img, $srcPath);
             $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) {
                 $img->autoOrient();
@@ -2871,7 +2923,7 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
     if (class_exists('Imagick')) {
         try {
             $img = new Imagick();
-            $img->readImage($srcPath);
+            picture_read_into($img, $srcPath);
             $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) $img->autoOrient();
             $img->setImageFormat('jpeg');
@@ -2943,7 +2995,7 @@ function generate_tile_jpegs($srcPath, $targets) {
     if (class_exists('Imagick')) {
         try {
             $img = new Imagick();
-            $img->readImage($srcPath);
+            picture_read_into($img, $srcPath);
             $icc = image_icc_profile($img);
             if (method_exists($img, 'autoOrient')) $img->autoOrient();
             $img->setImageFormat('jpeg');
@@ -3081,6 +3133,7 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
     $start = microtime(true);
     $made = 0; $failed = 0; $worked = 0; $read = 0; $unreadable = 0; $i = max(0, (int) $from); $step = max(1, (int) $step);
     $records = []; $unmark = [];   // folderReal => [bare name => record], folderReal => [bare names whose old "read, nothing found" mark goes]
+    $notPictures = [];   // folderReal => [bare name => real path] of photos whose pictures could not be made because the file is not a picture at all
     for (; $i < $total; $i += $step) {
         if ($worked > 0 && microtime(true) - $start > $budget) break;
         $file = $files[$i];
@@ -3099,7 +3152,8 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
             }
             if ($missing) {   // one reading of the photo makes every size that is missing
                 $did = true;
-                if (generate_tile_jpegs($src, $missing)) $made += count($missing); else $failed += count($missing);
+                if (generate_tile_jpegs($src, $missing)) $made += count($missing);
+                else { $failed += count($missing); if (!photo_decodes($src)) $notPictures[$folderReal][basename($file)] = $src; }
             }
         }
         $videoMade = false;
@@ -3126,6 +3180,16 @@ function media_prepare_batch($dir, $files, $from, $budget, $step = 1, $again = f
         }
         if ($did) $worked++;
         if ($videoMade) { $i += $step; break; }   // (one video per call: the page asks again at once)
+    }
+    // A file with a picture's name that no decoder will open (empty, text, a damaged header) is recorded as such, so Prepare media can name it
+    // (the record is for this file as it is now: a replaced file has a new one and the mark goes with it).
+    foreach ($notPictures as $folderReal => $names) {
+        $have = media_meta_load($folderReal);
+        foreach ($names as $bare => $src) {
+            $rec = $records[$folderReal][$bare] ?? (media_meta_fresh($have[$bare] ?? null, $src) ? $have[$bare] : media_meta_read_file($src));
+            $rec['px'] = 'bad';
+            $records[$folderReal][$bare] = $rec;
+        }
     }
     foreach ($records as $folderReal => $recs) {
         media_meta_store($folderReal, $recs);
@@ -3189,7 +3253,7 @@ function media_attention($dir, $files) {
     static $memo = [];
     $key = count($files) . '|' . (string) ($files[0] ?? '') . '|' . (string) ($files[count($files) - 1] ?? '');
     if (isset($memo[$key])) return $memo[$key];
-    $g = ['unreadable' => [], 'unread' => [], 'legacy' => [], 'videoFailed' => [], 'videoMissing' => [], 'undated' => [], 'differs' => []];
+    $g = ['notpicture' => [], 'unreadable' => [], 'unread' => [], 'legacy' => [], 'videoFailed' => [], 'videoMissing' => [], 'undated' => [], 'differs' => []];
     $ff = ffmpeg_binary() !== '';
     $byFolder = [];
     foreach ($files as $file) $byFolder[containing_folder_real_path($dir, $file)][] = $file;
@@ -3202,6 +3266,7 @@ function media_attention($dir, $files) {
                 $rec = $recs[$bare] ?? null;
                 if (!media_meta_fresh($rec, $folderReal . '/' . $bare)) $g['unread'][] = $file;
                 else {
+                    if (($rec['px'] ?? '') === 'bad') $g['notpicture'][] = $file;
                     if (($rec['gs'] ?? '') === 'unreadable') $g['unreadable'][] = $file;
                     if (($rec['t'] ?? null) === null) $g['undated'][] = $file;
                 }
@@ -3220,6 +3285,7 @@ function media_attention($dir, $files) {
     // [title, hint, to deal with (else for information), counted as "needs attention"]: files not read yet and videos not made yet are
     // to be done by the Prepare button, which is routine (every new photo is that until it is first shown), so they are listed but not counted.
     $meta = [
+        'notpicture' => ['Pictures that could not be made', 'These are not pictures any program here can open (an empty file, a text file, a damaged one, or a file of another kind with a picture\'s name), so their tiles stay blank. Replace or delete them.', true, true],
         'unreadable' => ['Files that could not be read', 'The gallery could not get a capture date or location from these (a damaged file, or a kind it cannot read). They still show.', true, true],
         'unread' => ['Files not read yet', 'Prepare the rest reads them.', true, false],
         'legacy' => ['Old "nothing found" marks', 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.', true, true],
@@ -9224,7 +9290,9 @@ function extract_heic_gps($realPath, &$status = null) {
     if (!class_exists('Imagick')) { $status = 'unreadable'; return null; }
     try {
         $im = new Imagick();
-        $im->pingImage($realPath);
+        $coder = picture_coder_for($realPath);
+        if ($coder === null) { $status = 'unreadable'; return null; }   // (not a kind of picture: nothing is handed to ImageMagick to guess at)
+        $im->pingImage($coder . ':' . $realPath);
         $props = $im->getImageProperties('exif:GPS*');
         $im->clear();
     } catch (Exception $e) {
@@ -16076,6 +16144,7 @@ function health_checks($dir, $files) {
         $go = ['site', 'media-panel', '→ Prepare media'];
         $n = function ($x, $one, $many = null) { return number_format($x) . ' ' . ($x === 1 ? $one : ($many ?? $one . 's')); };
         $rowFor = [
+            'notpicture' => ['warn', function ($c) use ($n) { return $n($c, 'picture') . ' couldn\'t be made'; }, 'These files have a picture\'s name but are not pictures any program here can open (an empty file, a text file, a damaged one), so their tiles stay blank. Replace or delete them.'],
             'unreadable' => ['warn', function ($c) use ($n) { return $n($c, 'file') . ' couldn\'t be read'; }, 'No capture date or location could be read from these (a damaged file, or a kind the gallery can\'t read). They still show.'],
             'legacy' => ['info', function ($c) use ($n) { return $n($c, 'old "nothing found" mark'); }, 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.'],
             'videoFailed' => ['warn', function ($c) use ($n) { return $n($c, 'video') . ' ffmpeg couldn\'t make pictures for'; }, 'Not tried again for six hours.'],

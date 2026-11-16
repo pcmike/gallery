@@ -8,7 +8,9 @@ function extract_heic_gps($realPath, &$status = null) {
     if (!class_exists('Imagick')) { $status = 'unreadable'; return null; }
     try {
         $im = new Imagick();
-        $im->pingImage($realPath);
+        $coder = picture_coder_for($realPath);
+        if ($coder === null) { $status = 'unreadable'; return null; }   // (not a kind of picture: nothing is handed to ImageMagick to guess at)
+        $im->pingImage($coder . ':' . $realPath);
         $props = $im->getImageProperties('exif:GPS*');
         $im->clear();
     } catch (Exception $e) {

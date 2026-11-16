@@ -987,6 +987,7 @@ function health_checks($dir, $files) {
         $go = ['site', 'media-panel', '→ Prepare media'];
         $n = function ($x, $one, $many = null) { return number_format($x) . ' ' . ($x === 1 ? $one : ($many ?? $one . 's')); };
         $rowFor = [
+            'notpicture' => ['warn', function ($c) use ($n) { return $n($c, 'picture') . ' couldn\'t be made'; }, 'These files have a picture\'s name but are not pictures any program here can open (an empty file, a text file, a damaged one), so their tiles stay blank. Replace or delete them.'],
             'unreadable' => ['warn', function ($c) use ($n) { return $n($c, 'file') . ' couldn\'t be read'; }, 'No capture date or location could be read from these (a damaged file, or a kind the gallery can\'t read). They still show.'],
             'legacy' => ['info', function ($c) use ($n) { return $n($c, 'old "nothing found" mark'); }, 'An earlier version looked at these and found no location; they are left alone. Tidy up and Read everything again deal with them.'],
             'videoFailed' => ['warn', function ($c) use ($n) { return $n($c, 'video') . ' ffmpeg couldn\'t make pictures for'; }, 'Not tried again for six hours.'],
