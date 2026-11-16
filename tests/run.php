@@ -3994,7 +3994,7 @@ check('[instant] the folder location switch works in place too: off answers JSON
 $jLocOn = $locAjax('&folder=Lisbon', true);
 check('[instant] ...and on answers JSON and turns it back on', ($jLocOn['ok'] ?? null) === true && !empty(read_data_file("$fxMapF/Lisbon/.gallery-items.php")['locationEnabled']));
 [, $mapAdminAgain] = http_get("$baseMapF/?admin&folder=Paris", $mapHdrs);
-check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 6);   // (the page's own confirms: Prepare media's "read everything again", "tidy up" and "delete the backups", the two a collection asks (delete one; adding what a link would gain access to), and one more elsewhere)
+check('[instant] in the admin the map and location settings are switches with orange warnings beside them and no dialogs: a Save button exists only for browsers without JavaScript', substr_count($mapAdminAgain, 'class="instant-form') >= 2 && str_contains($mapAdminAgain, 'class="warn-note">Visitors\' browsers load code') && !preg_match('/<form[^>]*instant-form[^>]*onsubmit/', $mapAdminAgain) && substr_count(preg_replace('#<style.*?</style>#s', '', $mapAdminAgain), 'confirm(') <= 7);   // (the page's own confirms: Prepare media's "read everything again", "tidy up" and "delete the backups", the two a collection asks (delete one; adding what a link would gain access to), Go back's question when a folder is Not listed, and one more elsewhere)
 
 // Locations off for the whole gallery (the map is part of that): nothing anywhere.
 file_put_contents("$fxMapF/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'map-admin-pw-123', 'AUTO_GROUP_BY_FOLDER' => true, 'ENABLE_PHOTO_LOCATION' => false]));
@@ -8565,7 +8565,7 @@ $geCfg(['COUNTRY_LOOKUP' => true, 'TRUSTED_PROXY' => 'proxy']);
 [, , $geHc2] = http_post("$baseGe/?reveal", ['access_code' => 'ge-view-pw-1'], ['X-Forwarded-For: 203.0.113.9', 'CloudFront-Viewer-Country: NZ', 'User-Agent: ge-test'], false);
 $geHt2 = ''; foreach ($geHc2 as $x) if (stripos($x, "Set-Cookie: $geName=") === 0) $geHt2 = explode(';', explode('=', trim(substr($x, 11)), 2)[1])[0];
 $geHl2 = json_decode(explode("\n", (string) file_get_contents("$fxGe/.gallery-signin-" . substr(hash('sha256', $geHt2), 0, 12) . ".php"))[1], true);
-check('[country] behind "another proxy" the CloudFront header is believed too (only from the proxy you named), and a visitor who sends that header to a gallery with no proxy named gets nothing from it', ($geHl2['cc'] ?? '') === 'NZ');
+check('[country] behind "another proxy" a country header a visitor could have sent (CloudFront\'s) is not read: the file says US for this address, not NZ (see [country proxy])', ($geHl2['cc'] ?? '') === 'US');
 // the download, from a file server of our own
 $fxGs = new_fixture_dir('geoserver'); $geYm = gmdate('Y-m'); $gePrev = gmdate('Y-m', strtotime('first day of last month 00:00:00 UTC'));
 file_put_contents("$fxGs/dbip-country-lite-$geYm.mmdb.gz", gzencode(make_test_mmdb(['203.0.113.0/24' => 'ES', '198.51.100.0/24' => 'IT'])));
@@ -12017,6 +12017,129 @@ if ($vHasSqlite) {
     $g18Type = fn ($r) => (function () use ($r) { foreach ($r[2] as $h) if (stripos($h, 'Content-Type:') === 0) return trim(substr($h, 13)); return ''; })();
     check('[no GD] a video\'s placeholder, the map\'s preview picture and the home-screen icon are small plain pictures, not a 500 (a tile, a link preview and an icon are dark, not broken)', $g18Thumb[0] === 200 && $g18Type($g18Thumb) === 'image/jpeg' && @imagecreatefromstring($g18Thumb[1]) !== false && $g18Map[0] === 200 && $g18Type($g18Map) === 'image/jpeg' && $g18App[0] === 200 && $g18Type($g18App) === 'image/png' && @imagecreatefromstring($g18App[1]) !== false, json_encode([$g18Thumb[0], $g18Map[0], $g18App[0]]));
     check('[no GD] ...and the front page still answers', $g18('')[0] === 200);
+}
+
+/* --------------------------------------------------------------------- */
+/* Group 12: the updater and the country file. */
+{
+    // A stand-in server that can send people on (a redirect), slow down, and keep a count of what was asked of it. PHP_CLI_SERVER_WORKERS lets two requests run at once.
+    $fxR = new_fixture_dir('standin'); $rdLog = "$fxR/_hits.log";
+    file_put_contents("$fxR/router.php", '<?php
+$p = parse_url($_SERVER["REQUEST_URI"], PHP_URL_PATH); $port = $_SERVER["SERVER_PORT"];
+file_put_contents(__DIR__ . "/_hits.log", $_SERVER["REQUEST_METHOD"] . " " . $p . "\n", FILE_APPEND);
+if ($p === "/same-host.bin") { header("Location: /real.bin", true, 302); exit; }
+if ($p === "/to-http.bin") { header("Location: http://example.com/real.bin", true, 302); exit; }
+if ($p === "/to-other-local.bin") { header("Location: http://localhost:$port/real.bin", true, 302); exit; }
+if ($p === "/to-other-https.bin") { header("Location: https://evil.example/real.bin", true, 302); exit; }
+if ($p === "/loop.bin") { header("Location: /loop.bin", true, 302); exit; }
+if ($p === "/slow-code.txt") { sleep(3); header("Content-Type: text/plain"); readfile(__DIR__ . "/code.txt"); exit; }
+if ($p === "/missing.gz") { http_response_code(404); exit; }
+return false;
+');
+    $portR = find_free_port();
+    $rdProc = proc_open([PHP_BINARY, '-d', 'opcache.enable=0', '-S', '127.0.0.1:' . $portR, '-t', $fxR, "$fxR/router.php"], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $rdPipes, null, ['PHP_CLI_SERVER_WORKERS' => '4'] + getenv());
+    $cleanupProcs[] = $rdProc; for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $portR); $i++) usleep(100000);
+    $baseR = "http://127.0.0.1:$portR";
+    $rdOld = (string) file_get_contents($indexSrc);
+    preg_match("/define\\('GALLERY_VERSION', '(\\d+\\.\\d+\\.\\d+)'\\)/", $rdOld, $rdM); $rdCur = $rdM[1];
+    $rdNew = str_replace("define('GALLERY_VERSION', '$rdCur')", "define('GALLERY_VERSION', '9.9.9')", $rdOld);
+    file_put_contents("$fxR/real.bin", 'the real thing, long enough to read');
+    // an update fixture of its own, whose release files are the stand-in's
+    $rdSite = function ($label, $assets) use ($fxR, $baseR, $rdNew, $rdOld, $indexSrc) {
+        $d = new_fixture_dir('upd-' . $label); make_jpeg("$d/a.jpg", 60, 60, 10, 10, 10);
+        file_put_contents("$fxR/code.txt", $rdNew); file_put_contents("$fxR/sum.txt", hash('sha256', $rdNew) . "  index.php\n");
+        file_put_contents("$fxR/feed-$label.json", json_encode(['tag_name' => 'v9.9.9', 'html_url' => "$baseR/releases/tag/v9.9.9", 'assets' => $assets]));
+        file_put_contents("$d/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'rd-admin-pw-1', 'UPDATE_FEED_URL' => "$baseR/feed-$label.json"]));
+        copy($indexSrc, "$d/index.php"); $p = find_free_port(); start_server($d, $p, null); $b = "http://127.0.0.1:$p";
+        [, , $h] = http_post("$b/?admin", ['access_code' => 'rd-admin-pw-1'], ['User-Agent: rd-test'], false); $own = ['Cookie: ' . extract_cookie_header($h), 'User-Agent: rd-test'];
+        $csrf = (string) extract_csrf_token(http_get("$b/?admin", $own)[1]);
+        $post = fn (array $f) => json_decode(http_post("$b/?admin", $f + ['csrf_token' => $csrf], array_merge($own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+        return [$d, $b, $post];
+    };
+    $rdAssets = fn ($codePath) => [['name' => 'index.php', 'browser_download_url' => "$baseR$codePath"], ['name' => 'index.php.sha256', 'browser_download_url' => "$baseR/sum.txt"]];
+    // C11: a redirect is followed only to somewhere the download may come from
+    [$dA, , $postA] = $rdSite('away-https', $rdAssets('/to-other-https.bin')); $rA = $postA(['action' => 'update_apply']);
+    check('[update redirect] a release file that is sent on to some other server (here https://evil.example) is refused with that server named, and nothing changes', ($rA['ok'] ?? null) === false && str_contains((string) ($rA['text'] ?? ''), 'evil.example') && (string) file_get_contents("$dA/index.php") === $rdOld && !is_file("$dA/.gallery-previous.php"), json_encode($rA));
+    [$dB, , $postB] = $rdSite('away-local', $rdAssets('/to-other-local.bin')); $rB = $postB(['action' => 'update_apply']);
+    check('[update redirect] ...and so is one sent on to another name for this machine (the stand-in for "another host")', ($rB['ok'] ?? null) === false && str_contains((string) ($rB['text'] ?? ''), 'localhost') && (string) file_get_contents("$dB/index.php") === $rdOld, json_encode($rB));
+    [$dC, , $postC] = $rdSite('away-http', $rdAssets('/to-http.bin')); $rC = $postC(['action' => 'update_apply']);
+    check('[update redirect] ...and one sent on to plain http anywhere else', ($rC['ok'] ?? null) === false && (string) file_get_contents("$dC/index.php") === $rdOld, json_encode($rC));
+    [$dD, , $postD] = $rdSite('loop', $rdAssets('/loop.bin')); $rD = $postD(['action' => 'update_apply']);
+    check('[update redirect] ...a download sent on again and again stops (three hops), and nothing changes', ($rD['ok'] ?? null) === false && (string) file_get_contents("$dD/index.php") === $rdOld);
+    // the country file's download: https anywhere, plain http only to this machine, three hops
+    $fxCg = new_fixture_dir('geo-redirect'); make_jpeg("$fxCg/a.jpg", 60, 60, 1, 1, 1);
+    file_put_contents("$fxR/real.bin", gzencode(make_test_mmdb(['203.0.113.0/24' => 'ES'])));
+    $cgCfg = fn (array $o) => file_put_contents("$fxCg/.gallery-config.php", cfg_text($o + ['ADMIN_PASSWORD' => (is_file("$fxCg/.gallery-config.php") ? (cfg_read("$fxCg/.gallery-config.php")['ADMIN_PASSWORD'] ?? 'rd-admin-pw-1') : 'rd-admin-pw-1')]));
+    $cgCfg(['COUNTRY_DB_URL' => "$baseR/same-host.bin"]); copy($indexSrc, "$fxCg/index.php"); $cgPort = find_free_port(); start_server($fxCg, $cgPort); $cgBase = "http://127.0.0.1:$cgPort";
+    [, , $cgH] = http_post("$cgBase/?admin", ['access_code' => 'rd-admin-pw-1'], ['User-Agent: rd-test'], false); $cgOwn = ['Cookie: ' . extract_cookie_header($cgH), 'User-Agent: rd-test'];
+    $cgCsrf = (string) extract_csrf_token(http_get("$cgBase/?admin", $cgOwn)[1]);
+    $cgPost = fn (array $f) => json_decode(http_post("$cgBase/?admin", $f + ['csrf_token' => $cgCsrf], array_merge($cgOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $cgA = $cgPost(['action' => 'geo_probe']);
+    check('[country redirect] a country file that is sent on to another place on the same server is fetched as before', ($cgA['ok'] ?? null) === true, json_encode($cgA));
+    $cgCfg(['COUNTRY_DB_URL' => "$baseR/to-http.bin"]); $cgB = $cgPost(['action' => 'geo_probe']);
+    check('[country redirect] ...but one sent on to plain http on another server is refused, naming the address (it was followed to any host and over http)', ($cgB['ok'] ?? null) === false && str_contains((string) ($cgB['text'] ?? ''), 'not allowed'), json_encode($cgB));
+    // C14: a file that unpacks to far more than any country list is refused before it fills the memory; a file asking for endless work gives no country and no wait
+    file_put_contents("$fxR/bomb.bin", gzencode(str_repeat("\0", 110 * 1048576), 1));
+    $cgCfg(['COUNTRY_DB_URL' => "$baseR/bomb.bin"]); $cgC = $cgPost(['action' => 'geo_enable']);
+    check('[country file] a small download that would unpack to over 100 MB is refused with a reason (no memory error, no file kept)', ($cgC['ok'] ?? null) === false && !is_file("$fxCg/.gallery-geo.php") && str_contains((string) ($cgC['text'] ?? ''), 'unpacked'), json_encode($cgC) . ' ' . strlen((string) file_get_contents("$fxR/bomb.bin")));
+    $hostile = str_replace("\xE1" . chr(0x40 | 7) . 'country' . "\xE1" . chr(0x40 | 8) . 'iso_code' . chr(0x40 | 2) . 'US', "\xFF\xFF\xFF\xFF\x20\x00\x20\x00", make_test_mmdb(['203.0.113.0/24' => 'US']));
+    $cgD = $hostile !== make_test_mmdb(['203.0.113.0/24' => 'US']);
+    $fxHg = new_fixture_dir('geo-hostile'); file_put_contents("$fxHg/.gallery-config.php", cfg_text(['COUNTRY_LOOKUP' => true, 'TRUSTED_PROXY' => 'proxy', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32'], 'ADMIN_PASSWORD' => 'rd-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'hg-view-pw-1']));
+    file_put_contents("$fxHg/.gallery-geo.php", "<?php http_response_code(404); exit; ?>\n" . $hostile);
+    file_put_contents("$fxHg/.gallery-geo-state.php", "<?php http_response_code(404); exit; ?>\n" . json_encode(['ym' => gmdate('Y-m'), 'at' => time(), 'triedAt' => time(), 'error' => '']));
+    copy($indexSrc, "$fxHg/index.php"); $hgPort = find_free_port(); start_server($fxHg, $hgPort); $hgT0 = microtime(true);
+    $hgSt = http_post("http://127.0.0.1:$hgPort/?reveal", ['access_code' => 'hg-view-pw-1'], ['X-Forwarded-For: 203.0.113.9', 'User-Agent: rd-test'], false)[0];
+    check('[country file] a crafted file that claims millions of entries and points back at itself gives no country and no wait: a sign-in from an address in it is answered at once (it used to run until the time limit)', $cgD && microtime(true) - $hgT0 < 4 && $hgSt > 0, round(microtime(true) - $hgT0, 1) . ' s, status ' . $hgSt);
+    // C15: no file and a source that keeps failing: the daily wait is kept
+    $fxNf = new_fixture_dir('geo-nofile'); make_jpeg("$fxNf/a.jpg", 60, 60, 1, 1, 1);
+    file_put_contents("$fxNf/.gallery-config.php", cfg_text(['COUNTRY_LOOKUP' => true, 'COUNTRY_DB_URL' => "$baseR/missing.gz", 'ADMIN_PASSWORD' => 'rd-admin-pw-1']));
+    copy($indexSrc, "$fxNf/index.php"); $nfPort = find_free_port(); start_server($fxNf, $nfPort);
+    [, , $nfH] = http_post("http://127.0.0.1:$nfPort/?admin", ['access_code' => 'rd-admin-pw-1'], ['User-Agent: rd-test'], false); $nfOwn = ['Cookie: ' . extract_cookie_header($nfH), 'User-Agent: rd-test'];
+    file_put_contents($rdLog, ''); for ($i = 0; $i < 4; $i++) http_get("http://127.0.0.1:$nfPort/?admin", $nfOwn);
+    $nfHits = substr_count((string) file_get_contents($rdLog), '/missing.gz');
+    check('[country file] with the option on, no file and a source that answers 404, four admin pages ask the source only once (this month and last month), not on every page', $nfHits >= 1 && $nfHits <= 2, $nfHits . ' requests');
+    // C8: behind "another proxy" the country file, when it is on, comes before a header a visitor can send
+    $fxPx = new_fixture_dir('geo-proxy'); make_jpeg("$fxPx/a.jpg", 60, 60, 1, 1, 1);
+    file_put_contents("$fxPx/.gallery-config.php", cfg_text(['COUNTRY_LOOKUP' => true, 'TRUSTED_PROXY' => 'proxy', 'TRUSTED_PROXY_RANGES' => ['127.0.0.1/32'], 'ADMIN_PASSWORD' => 'px-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'px-view-pw-1']));
+    file_put_contents("$fxPx/.gallery-geo.php", "<?php http_response_code(404); exit; ?>\n" . make_test_mmdb(['203.0.113.0/24' => 'US']));
+    file_put_contents("$fxPx/.gallery-geo-state.php", "<?php http_response_code(404); exit; ?>\n" . json_encode(['ym' => gmdate('Y-m'), 'at' => time(), 'triedAt' => time(), 'error' => '']));
+    copy($indexSrc, "$fxPx/index.php"); $pxPort = find_free_port(); start_server($fxPx, $pxPort); $pxName = 'gallery_reveal_' . substr(hash('sha256', $fxPx), 0, 10);
+    $pxCc = function ($ip, $hdr) use ($pxPort, $pxName, $fxPx) {
+        [, , $h] = http_post("http://127.0.0.1:$pxPort/?reveal", ['access_code' => 'px-view-pw-1'], ['X-Forwarded-For: ' . $ip, $hdr, 'User-Agent: px-test'], false);
+        $t = ''; foreach ($h as $x) if (stripos($x, "Set-Cookie: $pxName=") === 0) $t = explode(';', explode('=', trim(substr($x, 11)), 2)[1])[0];
+        foreach (explode("\n", (string) @file_get_contents("$fxPx/.gallery-signin-" . substr(hash('sha256', $t), 0, 12) . '.php')) as $l) if ($l !== '' && $l[0] === '{') return json_decode($l, true)['cc'] ?? '';
+        return null;
+    };
+    check('[country proxy] behind "another proxy" a CloudFront or Vercel header the visitor sent is not read: the country is the file\'s (US, not NZ or KP)', $pxCc('203.0.113.9', 'CloudFront-Viewer-Country: NZ') === 'US' && $pxCc('203.0.113.9', 'X-Vercel-IP-Country: KP') === 'US');
+    check('[country proxy] ...and for an address the file does not know there is no country, not the header\'s (nothing a visitor writes becomes their country)', $pxCc('8.8.4.4', 'CloudFront-Viewer-Country: NZ') === '');
+
+    // C10: two presses of Update now at the same moment keep the file that was replaced, not the new one
+    $slowAssets = fn () => [['name' => 'index.php', 'browser_download_url' => "$baseR/slow-code.txt"], ['name' => 'index.php.sha256', 'browser_download_url' => "$baseR/sum.txt"]];
+    [$dE, $bE, $postE] = $rdSite('twice', $slowAssets());
+    $rdEnv = getenv(); $rdEnv['PHP_CLI_SERVER_WORKERS'] = '4';
+    $mw = new_fixture_dir('upd-twice-mw'); // (a second server on the same folder that can answer two requests at once: the built-in one answers them one after the other)
+    $mwPort = find_free_port(); $mwProc = proc_open([PHP_BINARY, '-d', 'opcache.enable=0', '-S', '127.0.0.1:' . $mwPort, '-t', $dE], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $mwPipes, null, $rdEnv);
+    $cleanupProcs[] = $mwProc; for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $mwPort); $i++) usleep(100000);
+    [, , $mwH] = http_post("http://127.0.0.1:$mwPort/?admin", ['access_code' => 'rd-admin-pw-1'], ['User-Agent: rd-test'], false); $mwOwn = ['Cookie: ' . extract_cookie_header($mwH), 'User-Agent: rd-test'];
+    $mwCsrf = (string) extract_csrf_token(http_get("http://127.0.0.1:$mwPort/?admin", $mwOwn)[1]);
+    $mwCmd = escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('$c = stream_context_create(["http" => ["method" => "POST", "ignore_errors" => true, "timeout" => 60, "header" => "Content-Type: application/x-www-form-urlencoded\r\nX-Requested-With: gallery-fetch\r\nUser-Agent: rd-test\r\nCookie: ' . str_replace("\r\n", '', $mwOwn[0] === '' ? '' : substr($mwOwn[0], 8)) . '", "content" => "action=update_apply&csrf_token=' . $mwCsrf . '"]]); echo @file_get_contents("http://127.0.0.1:' . $mwPort . '/?admin", false, $c);');
+    $mwP = [proc_open($mwCmd, [1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $mp1), proc_open($mwCmd, [1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $mp2)];
+    $mwOut = [stream_get_contents($mp1[1]), stream_get_contents($mp2[1])]; foreach ($mwP as $pp) proc_close($pp);
+    $prevV = preg_match("/define\\('GALLERY_VERSION', '(\\d+\\.\\d+\\.\\d+)'\\)/", (string) @file_get_contents("$dE/.gallery-previous.php"), $pm) ? $pm[1] : '';
+    check('[update twice] two presses of Update now at the same moment update once, and the file kept for Go back is the old version (it used to be the new one)', preg_match("/define\\('GALLERY_VERSION', '9\\.9\\.9'\\)/", (string) file_get_contents("$dE/index.php")) === 1 && $prevV === $rdCur, 'kept: ' . $prevV . ' answers: ' . json_encode($mwOut));
+
+    // F16: Go back to a version from before Not listed says what it does when any folder is Not listed
+    $fxGb = new_fixture_dir('goback'); make_jpeg("$fxGb/a.jpg", 60, 60, 1, 1, 1); mkdir("$fxGb/Drawer"); make_jpeg("$fxGb/Drawer/s.jpg", 60, 60, 2, 2, 2);
+    file_put_contents("$fxGb/Drawer/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['restriction' => 'private', 'unlisted' => true]));
+    file_put_contents("$fxGb/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'gb-admin-pw-1']));
+    copy($indexSrc, "$fxGb/index.php"); file_put_contents("$fxGb/.gallery-previous.php", data_file_guard_line_for_tests() . str_replace("define('GALLERY_VERSION', '$rdCur')", "define('GALLERY_VERSION', '2.6.3')", $rdOld));
+    file_put_contents("$fxGb/.gallery-update.php", data_file_guard_line_for_tests() . json_encode(['triedAt' => time(), 'checkedAt' => time(), 'latest' => '', 'page' => '', 'indexUrl' => '', 'sumUrl' => '', 'error' => '', 'updatedFrom' => '2.6.3', 'updatedAt' => time()]));
+    $gbPort = find_free_port(); start_server($fxGb, $gbPort);
+    [, , $gbH] = http_post("http://127.0.0.1:$gbPort/?admin", ['access_code' => 'gb-admin-pw-1'], ['User-Agent: gb-test'], false); $gbOwn = ['Cookie: ' . extract_cookie_header($gbH), 'User-Agent: gb-test'];
+    $gbPage = http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1];
+    check('[go back] with a Not listed folder, the Go back button to a version that does not know Not listed carries a question that says what happens (private, open to an "Everything" link) and that the mark is kept', str_contains($gbPage, 'data-update="undo" data-warn="You have 1 Not listed folder.') && str_contains($gbPage, 'Everything') && str_contains($gbPage, 'updating again hides it again'));
+    unlink("$fxGb/Drawer/.gallery-items.php");
+    check('[go back] ...and with none, the button has no question', !str_contains(http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1], 'data-warn=') && str_contains(http_get("http://127.0.0.1:$gbPort/?admin", $gbOwn)[1], 'data-update="undo"'));
 }
 
 /* --------------------------------------------------------------------- */

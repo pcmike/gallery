@@ -92,16 +92,19 @@ function client_ip_proxy_hint() {
     return '';
 }
 
-/** The country of this visitor ("US"), or '': what a trusted proxy says (Cloudflare's header; CloudFront's and Vercel's when the proxy setting is "another
- *  proxy" and the connection comes from one you named), else the country file when that option is on. */
+/** The country of this visitor ("US"), or '': what Cloudflare says (its header, when the proxy setting is Cloudflare and the connection comes from Cloudflare), else the
+ *  country file when that option is on. Nothing else: no header a visitor could have sent. */
 function client_country() {
     static $c = null;
     if ($c !== null) return $c;
     $peer = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    // Two sources only, and neither can be written by a visitor: Cloudflare's own country header, when the setting says Cloudflare and the connection really comes from
+    // Cloudflare (which overwrites any such header a visitor sends), else the country file, which is worked out from the address the gallery already believes. Any
+    // other header would be believed only as far as the proxy that passes it on: nginx, Caddy and the rest pass a header of that name straight through from the
+    // visitor, so a stolen sign-in cookie could name the owner's country and never raise the new-country flag. (CloudFront's and Vercel's headers were read
+    // here once, for "another proxy"; they are not any more.)
     $h = '';
-    if ($peer !== '' && TRUSTED_PROXY !== 'direct' && ip_in_ranges($peer, trusted_proxy_ranges())) {
-        $h = TRUSTED_PROXY === 'cloudflare' ? (string) ($_SERVER['HTTP_CF_IPCOUNTRY'] ?? '') : (string) ($_SERVER['HTTP_CLOUDFRONT_VIEWER_COUNTRY'] ?? $_SERVER['HTTP_X_VERCEL_IP_COUNTRY'] ?? '');
-    }
+    if ($peer !== '' && TRUSTED_PROXY === 'cloudflare' && ip_in_ranges($peer, trusted_proxy_ranges())) $h = (string) ($_SERVER['HTTP_CF_IPCOUNTRY'] ?? '');
     $h = strtoupper(trim($h));
     if (!preg_match('/^[A-Z]{2}$/', $h) || $h === 'XX' || $h === 'T1') $h = '';
     return $c = $h !== '' ? $h : geo_db_country(client_ip());

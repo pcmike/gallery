@@ -408,6 +408,7 @@
         var b = ev.target.closest ? ev.target.closest('[data-update]') : null;
         if (!b || b.disabled) return;
         var what = b.getAttribute('data-update'), was = b.textContent;
+        if (what === 'undo' && b.getAttribute('data-warn') && !window.confirm(b.getAttribute('data-warn'))) return;   // (going back to a version that doesn't know Not listed: asked first)
         b.disabled = true;
         if (what === 'check') {
           say('Checking…'); b.textContent = 'Checking…';

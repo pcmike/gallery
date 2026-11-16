@@ -39,12 +39,18 @@ function update_allowed_prefix() {
     return is_array($p) && !empty($p['host']) ? ($p['scheme'] ?? 'https') . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '') . '/' : '';
 }
 
+/** The servers a release download may be sent on to, besides the one it started at: GitHub's own (a release file on github.com is answered with a redirect to
+ *  release-assets.githubusercontent.com, older ones to objects.githubusercontent.com). Anything else is refused, with the host named. */
+function update_redirect_hosts() {
+    return ['github.com', 'api.github.com', '.githubusercontent.com'];
+}
+
 /** Asks the feed what the newest release is and remembers the answer (or the failure). Returns the state. */
 function update_fetch() {
     $st = update_state();
     $st['triedAt'] = time();
     $fail = function ($why) use (&$st) { $st['error'] = $why; update_state_save($st); return $st; };
-    $r = geo_http(update_feed_url(), 'GET', ['Accept: application/vnd.github+json'], 1000000, 10);
+    $r = geo_http(update_feed_url(), 'GET', ['Accept: application/vnd.github+json'], 1000000, 10, update_redirect_hosts());
     if ($r['status'] === 0) return $fail($r['error'] !== '' ? $r['error'] : 'Could not reach the releases page.');
     if ($r['status'] !== 200) return $fail('The releases page answered ' . $r['status'] . '.');
     $j = json_decode($r['body'], true);
@@ -131,14 +137,19 @@ function update_apply() {
     $lock = @fopen(__FILE__, 'r');
     if ($lock) flock($lock, LOCK_EX);
     try {
-        $f = geo_http($st['indexUrl'], 'GET', [], 12000000, 120);
+        // Two presses at once: the second waits here for the first, and by now index.php on disk is the new one. It is not "the file to keep" any more.
+        $onDisk = update_text_version((string) @file_get_contents(__FILE__));
+        if ($onDisk !== '' && $onDisk !== GALLERY_VERSION) return ['ok' => false, 'text' => 'Nothing was changed: this gallery was just updated to ' . $onDisk . ' by another request. Reload the page.'];
+        $f = geo_http($st['indexUrl'], 'GET', [], 12000000, 120, update_redirect_hosts());
         if ($f['status'] !== 200 || strlen($f['body']) < 100000) return ['ok' => false, 'text' => 'Nothing was changed: the file could not be downloaded' . ($f['error'] !== '' ? ' (' . $f['error'] . ')' : '') . '.'];
-        $s = geo_http($st['sumUrl'], 'GET', [], 4096, 30);
+        $s = geo_http($st['sumUrl'], 'GET', [], 4096, 30, update_redirect_hosts());
         if ($s['status'] !== 200 || !preg_match('/^([0-9a-fA-F]{64})\b/', trim($s['body']), $m)) return ['ok' => false, 'text' => 'Nothing was changed: the checksum could not be downloaded.'];
         $code = $f['body'];
         if (!hash_equals(strtolower($m[1]), hash('sha256', $code))) return ['ok' => false, 'text' => 'Nothing was changed: the download did not match its checksum.'];
         if (strncmp($code, '<?php', 5) !== 0 || update_text_version($code) !== $new || !update_php_parses($code)) return ['ok' => false, 'text' => 'Nothing was changed: the download is not the PHP file for version ' . $new . '.'];
         $old = (string) @file_get_contents(__FILE__);
+        $oldV = update_text_version($old);
+        if ($oldV === '' || !version_compare($oldV, $new, '<')) return ['ok' => false, 'text' => 'Nothing was changed: the file in place is not older than the one to install, so it is not kept over an earlier one.'];
         $guarded = data_file_guard_line() . $old;
         if ($old === '' || @file_put_contents(update_backup_path(), $guarded) !== strlen($guarded)) return ['ok' => false, 'text' => 'Nothing was changed: the current file could not be kept first (is the folder writable?).'];
         $why = update_swap_in($code);
@@ -181,9 +192,18 @@ function update_headsups() {
     $out = [];
     $st = update_state();
     $back = update_backup_version();
-    if ($back !== '' && $st['updatedAt'] > 0 && time() - (int) $st['updatedAt'] < 86400 && version_compare($back, GALLERY_VERSION, '<'))
+    if ($back !== '' && $st['updatedAt'] > 0 && time() - (int) $st['updatedAt'] < 86400 && version_compare($back, GALLERY_VERSION, '<')) {
+        // Going back to a version from before Not listed (2.6.4 and older) turns every Not listed folder into an ordinary private one, which anyone holding an
+        // "Everything" share link can open. The mark stays, so going forward again hides them again; the button says so first when there are any.
+        $warn = '';
+        if (version_compare($back, '2.6.4', '<=')) {
+            $dir = $GLOBALS['dir'] ?? __DIR__; $n = 0;
+            foreach (all_folder_paths($GLOBALS['__admin_files'] ?? []) as $fp) if (folder_unlisted_cached($dir, $fp)) $n++;
+            if ($n > 0) $warn = 'You have ' . $n . ' Not listed folder' . ($n === 1 ? '' : 's') . '. Version ' . $back . ' does not know Not listed: it treats ' . ($n === 1 ? 'that folder' : 'them') . ' as ordinary private folders, which anyone you gave an "Everything" share link to can open. The Not listed mark is kept, and updating again hides ' . ($n === 1 ? 'it' : 'them') . ' again. Go back anyway?';
+        }
         $out[] = ['label' => 'Updated from ' . $back . ' to ' . GALLERY_VERSION, 'detail' => 'The file it replaced is kept, in case something doesn\'t look right.',
-            'html' => '<div class="health-act"><button type="button" class="secondary" data-update="undo">Go back to ' . $e($back) . '</button></div>', 'attr' => ' data-update-row'];
+            'html' => '<div class="health-act"><button type="button" class="secondary" data-update="undo"' . ($warn !== '' ? ' data-warn="' . $e($warn) . '"' : '') . '>Go back to ' . $e($back) . '</button></div>', 'attr' => ' data-update-row'];
+    }
     $n = update_newer();
     if ($n !== null) {
         $can = update_can_replace();

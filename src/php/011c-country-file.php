@@ -40,24 +40,50 @@ function geo_months() {
     return [gmdate('Y-m'), gmdate('Y-m', strtotime('first day of last month 00:00:00 UTC'))];
 }
 
-/** One request, with curl if this PHP has it, else PHP's own streams. Returns ['status' => int (0: no answer), 'headers' => [lowercase name => value], 'body' => string, 'error' => text]. */
-function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 30000000, $timeout = 40) {
+/** The address a Location header means, from the address that sent it (an absolute one, or one starting with / or relative to the same folder); '' if it can't be made. */
+function geo_resolve_url($base, $location) {
+    $location = trim((string) $location);
+    if ($location === '' || preg_match('/[\x00-\x20]/', $location)) return '';
+    if (preg_match('#^[a-z][a-z0-9+.-]*://#i', $location)) return $location;
+    $b = parse_url((string) $base);
+    if (!is_array($b) || empty($b['scheme']) || empty($b['host'])) return '';
+    $root = $b['scheme'] . '://' . $b['host'] . (isset($b['port']) ? ':' . $b['port'] : '');
+    if (strncmp($location, '//', 2) === 0) return $b['scheme'] . ':' . $location;
+    if ($location[0] === '/') return $root . $location;
+    $dir = isset($b['path']) ? preg_replace('#/[^/]*$#', '/', $b['path']) : '/';
+    return $root . $dir . $location;
+}
+
+/** Is this address's host one of $hosts (a name, or ".example.com" for it and everything under it)? */
+function geo_host_in($url, array $hosts) {
+    $h = strtolower((string) (parse_url((string) $url, PHP_URL_HOST) ?? ''));
+    if ($h === '') return false;
+    foreach ($hosts as $x) {
+        $x = strtolower((string) $x);
+        if ($x === '') continue;
+        if ($x[0] === '.' ? ($h === substr($x, 1) || substr($h, -strlen($x)) === $x) : $h === $x) return true;
+    }
+    return false;
+}
+
+/** One request, with curl if this PHP has it, else PHP's own streams, and no following of redirects (geo_http does that, one checked step at a time).
+ *  Returns ['status' => int (0: no answer), 'headers' => [lowercase name => value], 'body' => string, 'error' => text]. */
+function geo_http_once($url, $method, array $headers, $maxBytes, $timeout) {
     $out = ['status' => 0, 'headers' => [], 'body' => '', 'error' => ''];
-    if (!geo_url_ok($url)) { $out['error'] = 'That address is not allowed (it must be https).'; return $out; }
     if (function_exists('curl_init')) {
         $ch = curl_init($url); $hd = [];
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 3, CURLOPT_TIMEOUT => $timeout, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_NOBODY => $method === 'HEAD',
-            CURLOPT_HTTPHEADER => $headers, CURLOPT_USERAGENT => 'Drop-in Photo Gallery ' . GALLERY_VERSION, CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS, CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS | CURLPROTO_HTTP,
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => $timeout, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_NOBODY => $method === 'HEAD',
+            CURLOPT_HTTPHEADER => $headers, CURLOPT_USERAGENT => 'Drop-in Photo Gallery ' . GALLERY_VERSION, CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_HEADERFUNCTION => function ($c, $l) use (&$hd) { if (strpos($l, ':') !== false) { [$k, $v] = explode(':', $l, 2); $hd[strtolower(trim($k))] = trim($v); } return strlen($l); },
             CURLOPT_WRITEFUNCTION => function ($c, $d) use (&$out, $maxBytes) { $out['body'] .= $d; return strlen($out['body']) > $maxBytes ? 0 : strlen($d); }]);
         curl_exec($ch);
         $out['status'] = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE); $out['headers'] = $hd;
         if (curl_errno($ch) !== 0 && $out['status'] === 0) $out['error'] = curl_error($ch);
-        curl_close($ch);
+        if (PHP_VERSION_ID < 80500) curl_close($ch);   // (deprecated in PHP 8.5, where the handle is closed when it goes out of use)
         return $out;
     }
     if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) { $out['error'] = 'This server does not allow PHP to fetch addresses (allow_url_fopen is off and curl is not installed).'; return $out; }
-    $ctx = stream_context_create(['http' => ['method' => $method, 'header' => implode("\r\n", array_merge($headers, ['User-Agent: Drop-in Photo Gallery ' . GALLERY_VERSION])), 'timeout' => $timeout, 'ignore_errors' => true, 'follow_location' => 1, 'max_redirects' => 3]]);
+    $ctx = stream_context_create(['http' => ['method' => $method, 'header' => implode("\r\n", array_merge($headers, ['User-Agent: Drop-in Photo Gallery ' . GALLERY_VERSION])), 'timeout' => $timeout, 'ignore_errors' => true, 'follow_location' => 0, 'max_redirects' => 1]]);
     $fh = @fopen($url, 'rb', false, $ctx);
     if (!$fh) { $out['error'] = 'Could not connect.'; return $out; }
     $meta = stream_get_meta_data($fh);
@@ -67,6 +93,29 @@ function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 300000
     }
     if ($method !== 'HEAD') while (!feof($fh) && strlen($out['body']) <= $maxBytes) { $d = fread($fh, 65536); if ($d === false || $d === '') break; $out['body'] .= $d; }
     fclose($fh);
+    return $out;
+}
+
+/** One request, following up to three redirects, each one checked the way the first address was: https (or plain http to this machine only, for tests). With
+ *  $hosts (the updater passes GitHub's), a redirect may only lead to the first address's own host or one of those, so an address that is sent on somewhere
+ *  else is refused with the host named. Returns what geo_http_once() does. */
+function geo_http($url, $method = 'GET', array $headers = [], $maxBytes = 30000000, $timeout = 40, $hosts = null) {
+    $out = ['status' => 0, 'headers' => [], 'body' => '', 'error' => ''];
+    $cur = $url;
+    $allowed = $hosts === null ? null : array_merge($hosts, [(string) (parse_url((string) $url, PHP_URL_HOST) ?? '')]);
+    for ($hop = 0; $hop <= 3; $hop++) {
+        if (!geo_url_ok($cur)) { $out['error'] = $hop === 0 ? 'That address is not allowed (it must be https).' : 'The download was sent on to an address that is not allowed (' . (string) (parse_url($cur, PHP_URL_HOST) ?: $cur) . '; it must be https).'; return $out; }
+        if ($hop > 0 && $allowed !== null && !geo_host_in($cur, $allowed)) { $out['error'] = 'The download was sent on to ' . (string) parse_url($cur, PHP_URL_HOST) . ', which is not a server this is expected to come from'; return $out; }
+        $r = geo_http_once($cur, $method, $headers, $maxBytes, $timeout);
+        if (in_array($r['status'], [301, 302, 303, 307, 308], true) && isset($r['headers']['location'])) {
+            $next = geo_resolve_url($cur, $r['headers']['location']);
+            if ($next === '') { $out['error'] = 'The server sent the download on to an address that could not be read.'; return $out; }
+            $cur = $next;
+            continue;
+        }
+        return $r;
+    }
+    $out['error'] = 'The download was sent on too many times.';
     return $out;
 }
 
@@ -128,6 +177,10 @@ function geo_rd($fh, $pos, $n) {
 /** Decodes one value of the data section at $pos (moved on past it); $base is where the data section (or the metadata) starts, which pointers are counted from. */
 function geo_mmdb_value($fh, &$pos, $base, $depth = 0) {
     if ($depth > 8) return null;
+    // A file is taken on trust only as far as the work it asks for is small: one lookup decodes at most 4000 values, nothing in a real record is
+    // bigger than 64 KB, and no map or list has more than 512 entries (a crafted file claiming millions, or pointing back at itself, used to run until the time limit).
+    if ($depth === 0) $GLOBALS['__geo_work'] = 0;
+    if (++$GLOBALS['__geo_work'] > 4000) return null;
     $ctrl = ord(geo_rd($fh, $pos, 1)); $pos++;
     $type = $ctrl >> 5;
     if ($type === 1) {   // a pointer: the value is somewhere else in the data section
@@ -144,6 +197,7 @@ function geo_mmdb_value($fh, &$pos, $base, $depth = 0) {
         $k = $size - 28; $e = array_values(unpack('C*', geo_rd($fh, $pos, $k))); $pos += $k;
         $size = $size === 29 ? 29 + $e[0] : ($size === 30 ? 285 + ($e[0] << 8) + $e[1] : 65821 + ($e[0] << 16) + ($e[1] << 8) + $e[2]);
     }
+    if ($size > ($type === 7 || $type === 11 ? 512 : 65536)) return null;
     switch ($type) {
         case 2: $s = geo_rd($fh, $pos, $size); $pos += $size; return $s;
         case 3: $s = geo_rd($fh, $pos, 8); $pos += 8; return $size === 8 ? unpack('E', $s)[1] : 0.0;
@@ -255,8 +309,8 @@ function geo_refresh($force = false) {
     @set_time_limit(120);
     $dl = geo_http($probe['url'], 'GET', [], 40000000, 100);
     if ($dl['status'] !== 200 || strlen($dl["body"]) < 100) return $fail($dl['status'] === 0 ? ($dl['error'] !== '' ? $dl['error'] : 'The download did not finish.') : 'The download answered ' . $dl['status'] . '.');
-    $raw = @gzdecode($dl['body']); unset($dl);
-    if (!is_string($raw) || strlen($raw) < 100) return $fail('The downloaded file could not be unpacked.');
+    $raw = @gzdecode($dl['body'], 32 * 1048576); unset($dl);   // (a country list unpacks to about ten megabytes; a file that claims far more is refused before it fills the memory or the disk)
+    if (!is_string($raw) || strlen($raw) < 100) return $fail('The downloaded file could not be unpacked (or it is far bigger than a country list is).');
     $tmp = __DIR__ . '/.gallery-geo.' . bin2hex(random_bytes(4)) . '.php';   // (ends in .php and starts with the guard line, so a leftover is answered with a 404 like the real file)
     if (@file_put_contents($tmp, data_file_guard_line() . $raw, LOCK_EX) === false) { @unlink($tmp); return $fail('The folder can\'t be written to.'); }
     $rawLen = strlen($raw); unset($raw);
@@ -280,7 +334,8 @@ function geo_maybe_refresh($inAdmin = false) {
     static $armed = false;
     if ($armed || !COUNTRY_LOOKUP) return;
     $stamp = (int) @filemtime(geo_state_path());
-    if (is_file(geo_db_path()) && $stamp > 0 && time() - $stamp < 7 * 86400) return;
+    if (is_file(geo_db_path())) { if ($stamp > 0 && time() - $stamp < 7 * 86400) return; }
+    elseif (time() - (int) geo_state()['triedAt'] < 86400) return;   // (no file yet, and it was tried within the day: a failed try waits a day, it is not repeated by every page)
     if (!$inAdmin && !function_exists('fastcgi_finish_request')) return;
     $armed = true;
     register_shutdown_function(function () use ($inAdmin) {
