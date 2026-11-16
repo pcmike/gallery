@@ -11931,6 +11931,36 @@ if ($vHasSqlite) {
 }
 
 /* --------------------------------------------------------------------- */
+/* Group 10: group keys and element ids. */
+{
+    $fxG = new_fixture_dir('groupids');
+    foreach (['Europe.jpg', 'Москва.jpg', 'other.jpg', 'a.jpg', 'b.jpg', 'c.jpg', 'Café.jpg'] as $gn) make_jpeg("$fxG/$gn", 80, 60, 120, 120, 120);
+    foreach (['Europe', 'Москва', 'trips', '日本'] as $gd) { mkdir("$fxG/$gd"); make_jpeg("$fxG/$gd/in.jpg", 80, 60, 60, 60, 160); make_jpeg("$fxG/$gd/in2.jpg", 80, 60, 60, 60, 170); }
+    file_put_contents("$fxG/notes.md", "{gallery}\n\n(1) Our trips {group: trips} {photos: other.jpg}.\n\n(2) Привет {group: Привет} {photos: a.jpg, b.jpg}.\n\n(3) Ein Tag {group: Zürich} {photos: c.jpg}.\n");
+    copy($indexSrc, "$fxG/index.php"); $portG = find_free_port(); start_server($fxG, $portG); $baseG = "http://127.0.0.1:$portG";
+    [, $gPage] = http_get("$baseG/");
+    $gImgs = (function ($h) { preg_match_all('#img=([^&"]+)&amp;size=thumb#', $h, $m); return array_values(array_unique(array_map('rawurldecode', $m[1]))); })($gPage);
+    check('[group ids] a photo named like a folder (Europe.jpg beside Europe/, Москва.jpg beside Москва/) is on the page, not replaced by the folder', in_array('Europe.jpg', $gImgs, true) && in_array('Москва.jpg', $gImgs, true), json_encode($gImgs, JSON_UNESCAPED_UNICODE));
+    check('[group ids] ...and so is the folder', str_contains($gPage, 'folder-cover-label">Europe<') && str_contains($gPage, 'folder-cover-label">Москва<'));
+    preg_match_all('#\bid="(group-[^"]*)"#u', $gPage, $gIds); $gDup = array_keys(array_filter(array_count_values($gIds[1]), fn ($n) => $n > 1));
+    check('[group ids] no two things on the page share an id (a folder, its same-named photo, and names in other scripts)', !$gDup && !in_array('group-', $gIds[1], true), json_encode([$gDup, $gIds[1]], JSON_UNESCAPED_UNICODE));
+    check('[group ids] a name in another script keeps its own letters in its id (nothing is translated): Москва and 日本 for the folders, Привет for the group', str_contains($gPage, 'id="group-Москва"') && str_contains($gPage, 'id="group-日本"') && str_contains($gPage, 'id="group-Привет"'));
+    check('[group ids] {group: Привет} in the notes makes a box (it was dropped without a word), and a name with an accent keeps it (Zürich, not zrich)', str_contains($gPage, 'id="group-Привет"') && str_contains($gPage, 'id="group-zürich"') && !str_contains($gPage, 'id="group-zrich"'));
+    check('[group ids] a name in English letters has the id it always had (Europe.jpg is group-europe-jpg, capitals lower-cased)', str_contains($gPage, 'id="group-europe"') && str_contains($gPage, 'id="group-europe-jpg"'));
+    // a group named like a folder: the folder stays, the photo stays, and a notice says why
+    check('[group ids] {group: trips} in the notes when there is a folder trips does not take the folder\'s place: the folder card stays, other.jpg is shown on its own', str_contains($gPage, 'folder-cover-label">trips<') && in_array('other.jpg', $gImgs, true));
+    check('[group ids] ...and a setup notice names the group and the folder', str_contains($gPage, 'The group {group: trips} in your notes has the same name as the folder trips'));
+    // the same for a name with nothing to keep in it
+    $fxH = new_fixture_dir('groupids2');
+    make_jpeg("$fxH/x.jpg", 80, 60, 1, 2, 3); make_jpeg("$fxH/y.jpg", 80, 60, 3, 2, 1);
+    file_put_contents("$fxH/notes.md", "{gallery}\n\n(1) One {group: 🎉} {photos: x.jpg}.\n\n(2) Two {group: 🎈} {photos: y.jpg}.\n");
+    copy($indexSrc, "$fxH/index.php"); $portH = find_free_port(); start_server($fxH, $portH);
+    [, $hPage] = http_get("http://127.0.0.1:$portH/");
+    preg_match_all('#\bid="(group-[^"]*)"#u', $hPage, $hIds);
+    check('[group ids] two names with no letter or digit in them (🎉 and 🎈) are two boxes with two different ids', count($hIds[1]) >= 2 && count(array_unique($hIds[1])) === count($hIds[1]) && !in_array('group-', $hIds[1], true), json_encode($hIds[1], JSON_UNESCAPED_UNICODE));
+}
+
+/* --------------------------------------------------------------------- */
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

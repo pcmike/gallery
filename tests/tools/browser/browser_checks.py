@@ -147,6 +147,21 @@ try:
     b.js("document.body.click()")
     ok(b.js("[...document.querySelectorAll('.card .tile-open')].every(x => x.closest('.card') && x.parentElement.classList.contains('card') && x.querySelector('a, button') === null)"), "[keyboard] every tile button is a direct child of its tile and holds no other control (no control inside a control)")
     ok(b.js("[...document.querySelectorAll('.linked-photos-thumbs [data-open]')].every(x => x.getAttribute('tabindex') === '0' && x.getAttribute('role') === 'button')"), "[keyboard] the small pictures under a note are buttons too")
+    # ---------------- ids in other scripts: an address that names one lands on it ----------------
+    SITEG = WORK + "/siteg"; os.makedirs(SITEG + "/Москва"); shutil.copy(HERE + "/../../../index.php", SITEG + "/index.php")
+    for gf in ("Москва/in.jpg", "Москва/in2.jpg", "Москва.jpg", "日本.jpg", "other.jpg"):
+        subprocess.run(["php", "-r", "$im = imagecreatetruecolor(160, 120); imagefill($im, 0, 0, imagecolorallocate($im, 90, 120, 200)); imagejpeg($im, $argv[1]);", SITEG + "/" + gf], check=True)
+    sg = socket.socket(); sg.bind(("127.0.0.1", 0)); PORTG = sg.getsockname()[1]; sg.close(); BG = f"http://127.0.0.1:{PORTG}"
+    srvg = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORTG}", "-t", SITEG], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); time.sleep(1.0)
+    try:
+        b.goto(BG + "/", 1.5)
+        gids = b.js("[...document.querySelectorAll('[id^=group-]')].map(e => e.id)")
+        ok(len(gids) == len(set(gids)) and "group-Москва" in gids and "group-日本" in gids and "group-Москва-jpg" in gids and "group-" not in gids, "[group ids] a folder and a photo with names in other scripts each have an id of their own", str(gids))
+        b.goto(BG + "/#group-" + urllib.parse.quote("日本"), 1.5)
+        ok(b.js("(() => { const e = document.getElementById('group-日本'); return !!e && e.classList.contains('find-ring'); })()"), "[group ids] an address that names one of them (#group-日本, as a browser writes it) scrolls to it and rings it")
+    finally:
+        srvg.terminate(); srvg.wait()
+    b.goto(B + "/", 1.5)
     # a link button pressed twice within its moment goes back to the link picture (it used to keep the tick until the page was reloaded)
     if b.js("!!document.querySelector('.permalink-copy')"):
         b.js("(() => { const l = document.querySelector('.permalink-copy'); window.__pl = l; l.click(); l.click(); })()"); b.drain(0.4)

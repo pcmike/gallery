@@ -148,6 +148,9 @@ foreach ($files as $file) {
     $groups[group_key($file)][] = $file;
 }
 foreach ($folderGroups as $folderKey => $members) {
+    // A photo whose name (without its extension) is a folder's name (Europe.jpg beside Europe/) used to be replaced by the folder's group and shown
+    // to nobody. It stays: on its own, keyed by its full file name, as a photo that shares a name with another does below.
+    foreach ($groups[$folderKey] ?? [] as $displaced) $groups[$displaced] = [$displaced];
     $groups[$folderKey] = $members;
 }
 
@@ -181,6 +184,14 @@ foreach ($groups as $key => $groupFiles) {
     }
 }
 
+// A {group: Name} whose id is the same as a folder's name used to take that folder's place, and its photos with it (a folder's card is shown
+// for the key, and the photos the group named were nowhere). The folder keeps its place; the group is not made, its photos are shown on their own,
+// and a notice says why.
+foreach ($explicitGroups as $slug => $g) {
+    if (!isset($folderGroups[$slug])) continue;
+    $galleryNotices[] = 'The group {group: ' . ($g['name'] ?? $slug) . '} in your notes has the same name as the folder ' . $slug . ', so it was not made, and its photos are shown on their own. Give the group another name in the notes.';
+    unset($explicitGroups[$slug]);
+}
 foreach ($explicitClaims as $file => $claimed) {
     $inNamedGroup = false;
     foreach ($explicitGroups as $g) {

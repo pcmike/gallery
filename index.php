@@ -1334,10 +1334,17 @@ function group_mention_pattern($key) {
     return '/(?<![\p{L}\p{N}_])' . preg_quote($key, '/') . '(?![\p{L}\p{N}_])/iu';
 }
 
+/** The id-safe form of a name (a group's, a folder's, a photo's): letters and digits of any script kept as they are (nothing is translated),
+ *  ASCII capitals folded to lower case, every run of anything else one hyphen. A name in English letters gives what it always gave, so saved
+ *  addresses (#group-trip-2024) keep finding their place. A name with nothing in it to keep (only symbols, or not valid UTF-8) gets a short
+ *  code made from the name itself, so two such names never share one id. */
 function slugify($text) {
-    $text = strtolower($text);
-    $text = preg_replace('/[^a-z0-9]+/', '-', $text);
-    return trim($text, '-');
+    $text = (string) $text;
+    if (preg_match('//u', $text) === 1) {
+        $slug = trim((string) preg_replace('/[^\p{L}\p{N}]+/u', '-', strtolower($text)), '-');
+        if ($slug !== '') return $slug;
+    }
+    return 'g' . substr(md5($text), 0, 8);
 }
 
 // $groups is built later (see "GROUPING" below), after .md files are
@@ -3868,6 +3875,9 @@ foreach ($files as $file) {
     $groups[group_key($file)][] = $file;
 }
 foreach ($folderGroups as $folderKey => $members) {
+    // A photo whose name (without its extension) is a folder's name (Europe.jpg beside Europe/) used to be replaced by the folder's group and shown
+    // to nobody. It stays: on its own, keyed by its full file name, as a photo that shares a name with another does below.
+    foreach ($groups[$folderKey] ?? [] as $displaced) $groups[$displaced] = [$displaced];
     $groups[$folderKey] = $members;
 }
 
@@ -3901,6 +3911,14 @@ foreach ($groups as $key => $groupFiles) {
     }
 }
 
+// A {group: Name} whose id is the same as a folder's name used to take that folder's place, and its photos with it (a folder's card is shown
+// for the key, and the photos the group named were nowhere). The folder keeps its place; the group is not made, its photos are shown on their own,
+// and a notice says why.
+foreach ($explicitGroups as $slug => $g) {
+    if (!isset($folderGroups[$slug])) continue;
+    $galleryNotices[] = 'The group {group: ' . ($g['name'] ?? $slug) . '} in your notes has the same name as the folder ' . $slug . ', so it was not made, and its photos are shown on their own. Give the group another name in the notes.';
+    unset($explicitGroups[$slug]);
+}
 foreach ($explicitClaims as $file => $claimed) {
     $inNamedGroup = false;
     foreach ($explicitGroups as $g) {
@@ -10399,7 +10417,7 @@ function admin_export_tree($dir, $files) {
 
 function admin_export_items($adminFolderPath, $adminFolderReal) {
     $data = items_read($adminFolderReal);
-    $name = ($adminFolderPath === null ? 'root' : slugify($adminFolderPath)) . '-gallery-items.json';
+    $name = ($adminFolderPath === null ? 'root' : (trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($adminFolderPath)), '-') ?: 'folder')) . '-gallery-items.json';
     header('Content-Type: application/json');
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $name . '"');

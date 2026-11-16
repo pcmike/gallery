@@ -31,10 +31,17 @@ function group_mention_pattern($key) {
     return '/(?<![\p{L}\p{N}_])' . preg_quote($key, '/') . '(?![\p{L}\p{N}_])/iu';
 }
 
+/** The id-safe form of a name (a group's, a folder's, a photo's): letters and digits of any script kept as they are (nothing is translated),
+ *  ASCII capitals folded to lower case, every run of anything else one hyphen. A name in English letters gives what it always gave, so saved
+ *  addresses (#group-trip-2024) keep finding their place. A name with nothing in it to keep (only symbols, or not valid UTF-8) gets a short
+ *  code made from the name itself, so two such names never share one id. */
 function slugify($text) {
-    $text = strtolower($text);
-    $text = preg_replace('/[^a-z0-9]+/', '-', $text);
-    return trim($text, '-');
+    $text = (string) $text;
+    if (preg_match('//u', $text) === 1) {
+        $slug = trim((string) preg_replace('/[^\p{L}\p{N}]+/u', '-', strtolower($text)), '-');
+        if ($slug !== '') return $slug;
+    }
+    return 'g' . substr(md5($text), 0, 8);
 }
 
 // $groups is built later (see "GROUPING" below), after .md files are

@@ -24,7 +24,7 @@ function admin_export_tree($dir, $files) {
 
 function admin_export_items($adminFolderPath, $adminFolderReal) {
     $data = items_read($adminFolderReal);
-    $name = ($adminFolderPath === null ? 'root' : slugify($adminFolderPath)) . '-gallery-items.json';
+    $name = ($adminFolderPath === null ? 'root' : (trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($adminFolderPath)), '-') ?: 'folder')) . '-gallery-items.json';
     header('Content-Type: application/json');
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="' . $name . '"');
