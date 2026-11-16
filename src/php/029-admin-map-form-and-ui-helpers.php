@@ -22,7 +22,7 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
         <div class="map-sub"<?= $on ? '' : ' hidden' ?>>
           <div class="field" style="max-width:300px;">
             <label>Pin grouping (miles)</label>
-            <input type="number" name="map_radius" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?>">
+            <input type="number" name="map_radius" aria-label="Pin grouping (miles)" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?>">
             <span class="rowstate" role="status" aria-live="polite"></span>
           </div>
           <p class="hint">Photos closer than this always share one numbered pin; pressing it zooms in (pins that would overlap on screen also merge until you zoom in). <strong>0 turns grouping off.</strong> Blank uses the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).</p>
@@ -113,9 +113,9 @@ function ui_segmented_site($name, $options, $siteValue, $current, $label = '') {
 function ui_menu($name, $options, $current, $label = '') {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $cur = isset($options[$current]) ? $options[$current] : (string) reset($options);
-    $out = '<div class="menu" data-menu><button type="button" class="menu-btn" aria-haspopup="listbox" aria-expanded="false" aria-label="' . $esc($label) . ': ' . $esc($cur) . '"><span class="menu-label">' . $esc($cur) . '</span>'
+    $out = '<div class="menu" data-menu><button type="button" class="menu-btn" aria-expanded="false" aria-label="' . $esc($label) . ': ' . $esc($cur) . '"><span class="menu-label">' . $esc($cur) . '</span>'
          . '<svg class="menu-chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="#aab2ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>'
-         . '<div class="menu-pop" role="listbox" aria-label="' . $esc($label) . '" hidden>';
+         . '<div class="menu-pop" role="radiogroup" aria-label="' . $esc($label) . '" hidden>';
     foreach ($options as $value => $text) {
         $out .= '<label class="menu-opt"><input type="radio" name="' . $esc($name) . '" value="' . $esc($value) . '"' . ((string) $current === (string) $value ? ' checked' : '') . '><span class="menu-text">' . $esc($text) . '</span><span class="menu-tick" aria-hidden="true">&#10003;</span></label>';
     }

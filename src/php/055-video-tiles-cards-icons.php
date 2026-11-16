@@ -40,6 +40,17 @@ function item_web_link($entry) {
     return (is_string($w) && preg_match('#^https?://#i', $w)) ? $w : '';
 }
 
+/** The words a screen reader says for a photo or a video: its caption when it has one, else its file name without the folder it sits in
+ *  (a picture's name, "Europe/France/eiffel.jpg", is read out whole otherwise). A Not listed photo's own page ($nameless) says "Photo":
+ *  its name and folder are not on that page. */
+function photo_alt_text($file, $entry, $nameless = false) {
+    $cap = is_array($entry) ? trim((string) ($entry['caption'] ?? '')) : '';
+    if ($cap !== '') return $cap;
+    if ($nameless) return 'Photo';
+    $slash = strrpos($file, '/');
+    return $slash === false ? $file : substr($file, $slash + 1);
+}
+
 /** One clickable gallery card. Shows a live-updatable view-count badge
  *  (hidden until >0); a small corner tag for a standalone sold/reserved
  *  item ($status is '', 'sold', or 'reserved' — a grouped item's ribbon
@@ -74,19 +85,19 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         // A hover tooltip on desktop (title); a tap target that opens a
         // small popover on a touch screen, where hover doesn't exist.
         $itemBadges .= '<span class="item-badge caption-badge" title="' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8')
-                     . '" role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') toggleCaptionPopover(this, event)">' . ui_icon('caption') . '</span>';
+                     . '" aria-label="Caption: ' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8') . '" role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') toggleCaptionPopover(this, event)">' . ui_icon('caption') . '</span>';
     }
     if (photo_location_visible($itemEntry ?? [])) {
         $loc = $itemEntry['location'];
         $locTitle = trim(($loc['label'] ?? '') !== '' ? $loc['label'] : ($loc['lat'] . ', ' . $loc['lng']));
         $itemBadges .= '<a class="item-badge location-badge" href="' . htmlspecialchars(osm_location_url($loc['lat'], $loc['lng']), ENT_QUOTES, 'UTF-8')
                      . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($locTitle, ENT_QUOTES, 'UTF-8')
-                     . '" onclick="event.stopPropagation()">' . ui_icon('pin') . '</a>';
+                     . '" aria-label="Where this was taken: ' . htmlspecialchars($locTitle, ENT_QUOTES, 'UTF-8') . '" onclick="event.stopPropagation()">' . ui_icon('pin') . '</a>';
     }
     if (($itemWeb = item_web_link($itemEntry)) !== '') {
         $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8')
                      . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8')
-                     . '" onclick="event.stopPropagation()">' . ui_icon('globe') . '</a>';
+                     . '" aria-label="Information link: ' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8') . '" onclick="event.stopPropagation()">' . ui_icon('globe') . '</a>';
     }
     // The ring is drawn by .ringed::after, above the picture: an inset shadow on the card itself sat underneath it, unseen.
     $colorStyle = $color ? ' style="--ring: ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ';"' : '';
@@ -109,13 +120,13 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
             $lockTitle = $isPriv ? 'Link off: this photo can\'t be opened by its link. Press to switch it on' : 'Link on: anyone with this photo\'s link can open it. Press to switch it off';
         }
         $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . ($isFolder ? ' is-folder' : '') . ($addrLock ? ' is-addr' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
-            . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($addrLock ? '' : ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : ''))) . '</button>';
+            . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '" aria-label="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($addrLock ? '' : ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : ''))) . '</button>';
     }
     // And a star beside it: press to make this photo its folder's cover (a gold star when it already is).
     if ($ownerLock !== '') {
         $isCoverNow = !empty(owner_cover_flags($GLOBALS['dir'], [$file])[$file]);
         $ownerLock .= '<button type="button" class="cover-toggle' . ($isCoverNow ? ' is-cover' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isCoverNow ? 'true' : 'false')
-            . '" title="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '">' . ui_icon('star') . '</button>';
+            . '" title="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '" aria-label="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '">' . ui_icon('star') . '</button>';
         // And a pencil in the other lower corner: opens the viewer with the editor for this photo's caption, link, place and switches.
         $ownerLock .= '<button type="button" class="edit-toggle" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8')
             . '" title="Edit caption, link and location" aria-label="Edit caption, link and location">' . ui_icon('edit') . '</button>';
@@ -129,9 +140,15 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
     if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
+    // What a screen reader says about the picture: the caption when the photo has one, else its file name (a Not listed photo's own page says "Photo": its name is not on that page).
+    $altText = photo_alt_text($file, $itemEntry ?? [], $nameless);
+    // A keyboard (and a screen reader) opens the viewer through a real button laid over the picture. It is a sibling of the badges and the owner's
+    // buttons, never their parent: Tab stops on it first, Enter or Space presses it, and the press reaches the tile's own click handler, which opens the
+    // viewer (or, while the owner is choosing photos, picks the tile). A mouse or a finger never touches it (it takes no pointer), so they act as before.
+    $openBtn = '<button type="button" class="tile-open" aria-label="' . htmlspecialchars('Open ' . ($vt['inner'] !== '' ? 'video' : 'photo') . ': ' . $altText, ENT_QUOTES, 'UTF-8') . '"></button>';
     return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($nameless ? 'Photo' : $file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
+         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($altText, ENT_QUOTES, 'UTF-8') . '">' . $openBtn . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . '</div>';
 }
@@ -357,7 +374,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if (ENABLE_SHARE_LINKS && is_admin_browser() && folder_is_private($dir, $folderPath)) {
         // for the owner, on a private folder, the link icon asks what to share: a plain link opens nothing for anyone else
         $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Share this folder…" aria-label="Share this folder…" data-gs-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" data-gs-label="' . htmlspecialchars(link_folder_label($dir, $folderPath), ENT_QUOTES, 'UTF-8') . '">' . ui_icon('link') . '</a>';
-    } elseif (is_admin_browser() || !folder_is_private($dir, $folderPath)) $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
+    } elseif (is_admin_browser() || !folder_is_private($dir, $folderPath)) $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link" aria-label="Copy link to this folder">' . ui_icon('link') . '</a>';
     $html .= '</div>';
     return $html;
 }

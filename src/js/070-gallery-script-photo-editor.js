@@ -68,7 +68,7 @@
         box.querySelectorAll('.caption-badge, .location-badge, .web-badge').forEach(function (b) { b.remove(); });
         const made = [], svg = function (n) { return '<svg class="ico" aria-hidden="true"><use href="#i-' + n + '"></use></svg>'; };
         if (v.caption) {
-          const s = document.createElement('span'); s.className = 'item-badge caption-badge'; s.title = v.caption; s.setAttribute('role', 'button'); s.tabIndex = 0; s.innerHTML = svg('caption');
+          const s = document.createElement('span'); s.className = 'item-badge caption-badge'; s.title = v.caption; s.setAttribute('aria-label', 'Caption: ' + v.caption); s.setAttribute('role', 'button'); s.tabIndex = 0; s.innerHTML = svg('caption');
           s.addEventListener('click', function (e) { toggleCaptionPopover(s, e); });
           s.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') toggleCaptionPopover(s, e); });
           made.push(s);
@@ -76,12 +76,12 @@
         if (place) {
           const a = document.createElement('a'); a.className = 'item-badge location-badge'; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.innerHTML = svg('pin');
           a.href = 'https://www.openstreetmap.org/?mlat=' + encodeURIComponent(v.lat) + '&mlon=' + encodeURIComponent(v.lng) + '#map=16/' + encodeURIComponent(v.lat) + '/' + encodeURIComponent(v.lng);
-          a.title = v.label || (v.lat + ', ' + v.lng); a.addEventListener('click', function (e) { e.stopPropagation(); });
+          a.title = v.label || (v.lat + ', ' + v.lng); a.setAttribute('aria-label', 'Where this was taken: ' + a.title); a.addEventListener('click', function (e) { e.stopPropagation(); });
           made.push(a);
         }
         if (v.web) {
           const a = document.createElement('a'); a.className = 'item-badge web-badge'; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.innerHTML = svg('globe');
-          a.href = v.web; a.title = 'Information link: ' + v.web; a.addEventListener('click', function (e) { e.stopPropagation(); });
+          a.href = v.web; a.title = 'Information link: ' + v.web; a.setAttribute('aria-label', a.title); a.addEventListener('click', function (e) { e.stopPropagation(); });
           made.push(a);
         }
         made.reverse().forEach(function (el) { box.insertBefore(el, box.firstChild); });

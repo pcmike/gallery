@@ -5,6 +5,7 @@
       lightboxVideo.style.display = 'none';
       lightboxVideo.src = '';
       lightboxImg.style.display = '';
+      lightboxImg.alt = (typeof altTexts !== 'undefined' && altTexts[current]) || '';
       const fullQ = '?img=' + encodeURIComponent(file), verQ = (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ;
       const asOriginal = heicOk && /\.hei[cf]$/i.test(file);   // (a browser that shows HEIC is sent the photo itself; if it can't after all, the converted copy)
       lightboxImg.onerror = asOriginal ? function () { lightboxImg.onerror = null; lightboxImg.src = fullQ + '&size=full' + verQ; } : null;
@@ -16,7 +17,7 @@
     if (copyBtn) copyBtn.hidden = !!(copyLinkOk && !copyLinkOk[current]);
     const newAddrBtn = document.getElementById('lightbox-newaddr');
     if (newAddrBtn) newAddrBtn.hidden = !ownerIsUnlisted(file);   // (a Not listed photo has an address of its own, and the owner can replace it)
-    if (copyBtn) copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s link' : 'Copy link';
+    if (copyBtn) { copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s link' : 'Copy link'; copyBtn.setAttribute('aria-label', copyBtn.title); }
     applyZoom();
     updateLightboxExtras();
     toolsFade();

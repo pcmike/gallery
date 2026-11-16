@@ -54,7 +54,7 @@
     font-size: 0; margin: 0 0 14px;
   }
   p.breadcrumb a {
-    font-size: 0.82rem; line-height: 1;
+    font-size: 0.82rem; line-height: 1; overflow-wrap: anywhere;
     color: var(--muted); text-decoration: none;
     background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07);
     padding: 7px 13px; border-radius: 999px;
@@ -112,6 +112,7 @@
     margin: 0 0 4px;
     font-size: 1.6rem;
     font-weight: 600;
+    overflow-wrap: anywhere;   /* (a long name with no spaces wraps instead of running off a phone's screen) */
   }
   header p {
     margin: 0;
@@ -151,7 +152,7 @@
   .gallery-notices li:last-child {
     margin-bottom: 0;
   }
-  .note-box {
+  .note-box { overflow-wrap: anywhere;
     background: #202225;
     border-left: 4px solid var(--accent);
     border-radius: 8px;
@@ -394,6 +395,7 @@
   .folder-cover .sold-badge-corner, .folder-cover .reserved-badge-corner { z-index: 2; }
   .folder-cover-label {
     display: block;
+    overflow-wrap: anywhere;
     padding: 10px 12px 2px;
     font-weight: 600;
     font-size: 0.95rem;
@@ -508,6 +510,8 @@
   .map-back .map-back-x { width: 44px; padding: 0; font-size: 1.4rem; line-height: 1; }
   @media (hover: hover) { .map-back button:hover { background: rgba(255,255,255,0.14); } }
   @media (prefers-reduced-motion: reduce) { .map-back { transition: none; } }
+  /* For someone who asked their system for less motion: nothing slides, grows or flashes (a highlighted target stays marked, without the fade). */
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
   /* Select (the owner's way to act on several photos): tiles are picked with a tap; where the photos sit one by one a picked tile
      can also be held and dragged next to another (Arrange). */
   .select-bar { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; background: rgba(30,30,34,0.97); border: 1px solid #3a3a42; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 90; display: flex; flex-direction: column; gap: 8px; }
@@ -594,6 +598,16 @@
   .card:hover img {
     transform: scale(1.05);
   }
+  /* The keyboard's way into a tile: a button laid over the picture that no pointer ever touches (a click anywhere on the tile is the tile's own,
+     as always), drawn only as a ring while it has the focus. The badges and the owner's buttons sit above it (they are siblings, not inside it). */
+  .card .tile-open { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: inherit; background: transparent; color: transparent; pointer-events: none; cursor: pointer; }
+  .card .tile-open:focus { outline: none; }
+  .card .tile-open:focus-visible { outline: 3px solid #fff; outline-offset: -3px; box-shadow: inset 0 0 0 6px var(--accent); }
+  .skip-link { position: absolute; left: 8px; top: -80px; z-index: 400; padding: 10px 14px; border-radius: 8px; background: #fff; color: #111; font-weight: 600; text-decoration: none; }
+  .skip-link:focus { top: 8px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .linked-photos-thumbs [data-open]:focus { outline: none; }
+  .linked-photos-thumbs [data-open]:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent); }
 
   /* Flat with folder names: the label and the divider are buttons that copy a link to themselves. */
   .label-copy { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; }

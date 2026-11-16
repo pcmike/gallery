@@ -11102,7 +11102,7 @@ function render_admin_map_form($itemsHere, $csrfToken, $isRoot) {
         <div class="map-sub"<?= $on ? '' : ' hidden' ?>>
           <div class="field" style="max-width:300px;">
             <label>Pin grouping (miles)</label>
-            <input type="number" name="map_radius" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?>">
+            <input type="number" name="map_radius" aria-label="Pin grouping (miles)" min="0" max="10000" step="any" value="<?= $radius === null ? '' : $esc($radius) ?>" placeholder="<?= (int) MAP_CLUSTER_RADIUS_MILES ?>">
             <span class="rowstate" role="status" aria-live="polite"></span>
           </div>
           <p class="hint">Photos closer than this always share one numbered pin; pressing it zooms in (pins that would overlap on screen also merge until you zoom in). <strong>0 turns grouping off.</strong> Blank uses the default (<?= $esc(MAP_CLUSTER_RADIUS_MILES) ?>).</p>
@@ -11193,9 +11193,9 @@ function ui_segmented_site($name, $options, $siteValue, $current, $label = '') {
 function ui_menu($name, $options, $current, $label = '') {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $cur = isset($options[$current]) ? $options[$current] : (string) reset($options);
-    $out = '<div class="menu" data-menu><button type="button" class="menu-btn" aria-haspopup="listbox" aria-expanded="false" aria-label="' . $esc($label) . ': ' . $esc($cur) . '"><span class="menu-label">' . $esc($cur) . '</span>'
+    $out = '<div class="menu" data-menu><button type="button" class="menu-btn" aria-expanded="false" aria-label="' . $esc($label) . ': ' . $esc($cur) . '"><span class="menu-label">' . $esc($cur) . '</span>'
          . '<svg class="menu-chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="#aab2ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>'
-         . '<div class="menu-pop" role="listbox" aria-label="' . $esc($label) . '" hidden>';
+         . '<div class="menu-pop" role="radiogroup" aria-label="' . $esc($label) . '" hidden>';
     foreach ($options as $value => $text) {
         $out .= '<label class="menu-opt"><input type="radio" name="' . $esc($name) . '" value="' . $esc($value) . '"' . ((string) $current === (string) $value ? ' checked' : '') . '><span class="menu-text">' . $esc($text) . '</span><span class="menu-tick" aria-hidden="true">&#10003;</span></label>';
     }
@@ -13789,15 +13789,15 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         <div class="sl-f"><span class="sl-k">How many browsers can open it?</span>
           <?php $du = (int) DEFAULT_LINK_USES; $duPick = in_array($du, [0, 1, 2, 5, 10], true) ? (string) $du : 'n'; ?>
           <?= ui_segmented('opens_pick', ['1' => 'Just one', '2' => '2', '5' => '5', '10' => '10', '0' => 'Unlimited', 'n' => 'Other…'], $duPick, 'Browsers') ?>
-          <input type="number" name="opens_other" min="1" max="100000" value="<?= $duPick === 'n' ? $du : 3 ?>"<?= $duPick === 'n' ? '' : ' hidden' ?>>
+          <input type="number" name="opens_other" aria-label="How many browsers can open it" min="1" max="100000" value="<?= $duPick === 'n' ? $du : 3 ?>"<?= $duPick === 'n' ? '' : ' hidden' ?>>
           <span class="sl-h">Counted per browser, not per page. Once someone is in, they can keep looking until the link ends.</span></div>
         <div class="sl-f"><span class="sl-k">When does it stop working?</span>
           <?= ui_segmented('ends_pick', ['86400' => '1 day', '604800' => '1 week', '2592000' => '30 days', 'pick' => 'Pick a date…', '0' => 'Never'], '0', 'Ends') ?>
-          <input type="datetime-local" name="ends_at_local" hidden>
+          <input type="datetime-local" name="ends_at_local" aria-label="The date and time it stops working" hidden>
           <span class="sl-h">In your browser's time zone. People already inside are signed out at that moment.</span></div>
         <div class="sl-f"><span class="sl-k">Starts</span>
           <?= ui_segmented('starts_pick', ['now' => 'Immediately', 'pick' => 'Pick a date…'], 'now', 'Starts') ?>
-          <input type="datetime-local" name="starts_at_local" hidden></div>
+          <input type="datetime-local" name="starts_at_local" aria-label="The date and time it starts" hidden></div>
         <button type="button" class="linklike sl-grp-reset" data-sl="grpreset" data-grp-reset hidden>Back to the defaults</button>
          </div></details>
 
@@ -13820,7 +13820,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
          <div class="sl-grp-b">
         <div class="sl-f"><span class="sl-k">Title on the opening page and in message previews</span>
           <?= ui_segmented('title_mode', ['gallery' => 'The gallery\'s title', 'neutral' => 'A neutral title', 'custom' => 'My own text…'], 'gallery', 'Title') ?>
-          <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" hidden>
+          <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" aria-label="Your own title" hidden>
           <label class="sl-only sl-pic"><input type="checkbox" name="picture" checked> <span><strong>Show a preview photo</strong> <small>In message previews and on the opening page, the same one every time for this link: the front page's own cover photo if it has one and it is public, else a cover from one of the public folders, or a photo you choose. Never a private photo and never a folder name. It starts on with the gallery's title and off with the other two, since a photo says which gallery it is. Without a photo the icon is the gallery's.</small></span></label>
           <div class="sl-coverrow" data-coverrow hidden>
             <span class="sl-coverimg" aria-hidden="true"><img alt="" hidden></span>
@@ -15322,7 +15322,7 @@ function visits_link_go($id, array $labels, $bare = false) {
 function visits_blocked_html(array $rows, array $labels) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $reasons = ['expired' => ['expired', 'extend it'], 'used_up' => ['already used', 'raise its browser limit, or extend it'], 'paused' => ['paused', 'resume it'], 'revoked' => ['revoked', 'it was ended on purpose'], 'scheduled' => ['not started', 'it opens on its start date'], 'replaced' => ['old address', 'the link has a new address']];
-    $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table vt-blk"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Link</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
+    $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table vt-blk"><thead><tr><th scope="col">IP address</th><th scope="col">Where</th><th scope="col">Browser</th><th scope="col">Link</th><th scope="col">First tried</th><th scope="col">Last tried</th><th scope="col">Tries</th></tr></thead><tbody>';
     foreach ($rows as $b) {
         $why = []; $hint = [];
         foreach (array_keys((array) json_decode((string) $b['why'], true)) as $s) { $r = $reasons[$s] ?? [$s, '']; $why[$r[0]] = true; if ($r[1] !== '') $hint[$r[1]] = true; }
@@ -15437,7 +15437,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         [$rows, $total] = visits_load_visitors($db, $f, 300);
         $linkSrcs = []; foreach ($rows as $r) if ($r['src'] !== PUBLIC_LOG_ID && $r['src'] !== PRIVATE_LOG_ID && $r['src'] !== LOCKOUT_LOG_ID) $linkSrcs[$r['src']] = true;
         $via = visits_via_map($db, array_keys($linkSrcs), $labels);
-        $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Came in at</th><th>First seen</th><th>Last seen</th><th>Visits</th><th>Seen</th><th>Opened</th></tr></thead><tbody>';
+        $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th scope="col">IP address</th><th scope="col">Where</th><th scope="col">Browser</th><th scope="col">Came in at</th><th scope="col">First seen</th><th scope="col">Last seen</th><th scope="col">Visits</th><th scope="col">Seen</th><th scope="col">Opened</th></tr></thead><tbody>';
         foreach ($rows as $r) {
             $pub = $r['src'] === PUBLIC_LOG_ID; $priv = $r['src'] === PRIVATE_LOG_ID; $lock = $r['src'] === LOCKOUT_LOG_ID; $l = $links[$r['src']] ?? null;
             if ($lock) $came = '<button type="button" class="vt-src" data-src="lockouts" title="Show only the lockouts">Locked out: ' . $esc(lockout_kind_names()[(string) $r['entry_h']] ?? 'sign-in') . (((int) $r['opens']) > 1 ? ' &times;' . (int) $r['opens'] : '') . '</button>';
@@ -15465,7 +15465,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
     if ($tab === 'folders') {
         $fo = visits_folder_stats($m, $opens);
         if (!$fo) return $wrap('<p class="muted sl-none">Nothing has been looked at yet.</p>');
-        $out = '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>Folder</th><th>Opens</th><th>Media seen</th><th>Opened</th><th>Downloaded</th><th>First seen</th><th>Last activity</th></tr></thead><tbody>';
+        $out = '<div class="sl-scroll"><table class="sl-table"><thead><tr><th scope="col">Folder</th><th scope="col">Opens</th><th scope="col">Media seen</th><th scope="col">Opened</th><th scope="col">Downloaded</th><th scope="col">First seen</th><th scope="col">Last activity</th></tr></thead><tbody>';
         foreach ($fo as $rel => $x) {
             $rel = (string) $rel; $priv = $rel !== '' && folder_is_private($dir, $rel);
             $go = function ($n, $what, $text) use ($esc, $rel) { return $n > 0 ? '<button type="button" class="linklike sl-num" data-media="' . $what . '" data-folder="' . $esc($rel === '' ? '/' : $rel) . '">' . $esc($text) . '</button>' : '—'; };
@@ -15623,8 +15623,8 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
         <div class="admin-modal-card">
           <h3 id="vt-modal-title">Trim the log</h3>
           <div class="sl-modal-body">
-            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><?= visits_trim_options($links) ?></select></div>
-            <div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="vt-trim-age"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="vt-trim-date" hidden></div>
+            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src" aria-label="Which records"><?= visits_trim_options($links) ?></select></div>
+            <div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="vt-trim-age" aria-label="Remove what is older than"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="vt-trim-date" aria-label="Remove what is older than this date" hidden></div>
             <p class="hint" id="vt-trim-out" role="status">Counting&hellip;</p>
             <p class="hint">Opens, views and the number of visitors stay. To keep the lines themselves, download them first: <a id="vt-trim-dl-events" href="#">the timeline</a> &middot; <a id="vt-trim-dl-items" href="#">what they looked at</a> &middot; <a id="vt-trim-dl-visitors" href="#">visitors</a> (CSV, with IP addresses).</p>
           </div>
@@ -16678,9 +16678,9 @@ function render_admin_password_rows($fromFile) {
             <div class="help">Set. Leave blank to keep it; to change it, type the current one first, then a new one of 8+ characters with a letter and a number. It can't be removed here.</div>
           </div>
           <div class="ctl col">
-            <input type="password" name="pw_admin_current" autocomplete="current-password" placeholder="Current admin password">
-            <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password">
-            <input type="password" name="pw_admin2" autocomplete="new-password" placeholder="Type it again">
+            <input type="password" name="pw_admin_current" autocomplete="current-password" placeholder="Current admin password" aria-label="Current admin password">
+            <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password" aria-label="New admin password">
+            <input type="password" name="pw_admin2" autocomplete="new-password" placeholder="Type it again" aria-label="New admin password, again">
             <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="admin">Change admin password</button><span class="rowstate" role="status" aria-live="polite"></span></span>
           </div>
         </div>
@@ -16691,8 +16691,8 @@ function render_admin_password_rows($fromFile) {
             <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><div class="warn-note">Removing it ends private view for everyone you gave it to. Nothing is deleted.</div><?php endif; ?>
           </div>
           <div class="ctl col">
-            <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password">
-            <input type="password" name="pw_private2" autocomplete="new-password" placeholder="Type it again">
+            <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password" aria-label="New private-view password">
+            <input type="password" name="pw_private2" autocomplete="new-password" placeholder="Type it again" aria-label="New private-view password, again">
             <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private">Set private-view password</button><span class="rowstate" role="status" aria-live="polite"></span></span>
             <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private-remove">Remove it (turn private view off)</button><span class="rowstate" role="status" aria-live="polite"></span></span>
             <label class="muted nojs-only"><input type="checkbox" name="pw_private_remove" value="1"> Remove it (turn private view off)</label><?php endif; ?>
@@ -16748,7 +16748,7 @@ function render_admin_browsers_panel($csrfToken) {
           <?php if ($hint !== ''): ?><div class="warn-note"><?= $e($hint) ?> Until then every visitor looks like the proxy, so the addresses here tell you nothing.</div><?php endif; ?>
           <div class="br-scroll">
           <table class="br-table">
-            <thead><tr><th>Browser</th><th>Signed in</th><th>Last here</th><th>Last address</th><th>Addresses</th><th>Device changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
+            <thead><tr><th scope="col">Browser</th><th scope="col">Signed in</th><th scope="col">Last here</th><th scope="col">Last address</th><th scope="col">Addresses</th><th scope="col">Device changes</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <?php foreach ($rows as $r): $hs = signin_history_stats($r['id']); ?>
             <tbody class="br-item <?= trim(($r['current'] ? 'br-me ' : '') . ($r['flags'] ? 'br-flagged' : '')) ?>" data-id="<?= $e($r['id']) ?>">
               <tr class="br-main">
@@ -16775,7 +16775,7 @@ function render_admin_browsers_panel($csrfToken) {
             <summary>Recently signed out (<?= count($ended) ?>)<span class="muted"> · kept <?= (int) BROWSER_ENDED_DAYS ?> days</span></summary>
             <div class="br-scroll">
             <table class="br-table br-table-ended">
-              <thead><tr><th>Browser</th><th>Signed in</th><th>Signed out</th><th>Why</th><th>Addresses</th><th>Device changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th scope="col">Browser</th><th scope="col">Signed in</th><th scope="col">Signed out</th><th scope="col">Why</th><th scope="col">Addresses</th><th scope="col">Device changes</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
               <?php foreach ($ended as $r): $hasH = is_file(signin_history_path($r['id'])); $hs = $hasH ? signin_history_stats($r['id']) : null; ?>
               <tbody class="br-item" data-id="<?= $e($r['id']) ?>">
                 <tr class="br-main">
@@ -17051,7 +17051,7 @@ function render_admin_site_settings($csrfToken) {
                 <?php elseif ($d['type'] === 'enum'): ?>
                   <?= count($d['options']) >= 3 ? ui_menu('set_' . $name, $d['options'], $now, $d['label']) : ui_segmented('set_' . $name, $d['options'], ($name === 'PHOTO_SORT_ORDER' && $now === 'mtime') ? 'taken' : $now, $d['label']) ?>
                 <?php elseif ($d['type'] === 'text'): ?>
-                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
+                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" aria-label="<?= $esc($d['label']) ?>" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
                 <?php elseif ($d['type'] === 'folders'): $extraNamed = (array) EXTRA_FOLDERS; $extraRoots = array_values((array) EXTRA_ROOTS); ?>
                   <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode(['named' => (object) $extraNamed, 'roots' => $extraRoots], JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>">
                     <ul class="extra-list"><?php foreach ($extraRoots as $rpath): ?><li><span class="extra-what"><code><?= $esc($rpath) ?></code></span><button type="button" class="extra-remove secondary" data-kind="root" data-name="<?= $esc($rpath) ?>">Remove</button><span class="muted extra-note">&rarr; its folders are at the top of the gallery</span></li><?php endforeach; ?><?php foreach ($extraNamed as $fname => $fpath): ?><li><span class="extra-what"><strong><?= $esc($fname) ?></strong> <span class="muted">&rarr;</span> <code><?= $esc($fpath) ?></code></span><button type="button" class="extra-remove secondary" data-kind="named" data-name="<?= $esc($fname) ?>">Remove</button></li><?php endforeach; ?></ul>
@@ -17063,7 +17063,7 @@ function render_admin_site_settings($csrfToken) {
                     </div>
                   </div>
                 <?php else: ?>
-                  <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="<?= $esc($d['step'] ?? '1') ?>" value="<?= $esc($now) ?>" style="max-width:110px;">
+                  <input type="number" name="set_<?= $esc($name) ?>" aria-label="<?= $esc($d['label']) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="<?= $esc($d['step'] ?? '1') ?>" value="<?= $esc($now) ?>" style="max-width:110px;">
                 <?php endif; ?>
 
                 <span class="rowstate" role="status" aria-live="polite"></span>
@@ -18398,6 +18398,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .admin-folder-nav .ftoggle { position:absolute; left:-1px; top:5px; width:14px; height:22px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; border-radius:4px; }
   .admin-folder-nav .ftoggle::before { content:""; font-size:0.7rem; display:block; margin:calc((22px - .43em) / 2) auto 0; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; transition:transform .12s; }
   .admin-folder-nav li.collapsed > .ftoggle::before { transform:rotate(-90deg); }
+  @media (pointer: coarse) { .admin-folder-nav .ftoggle::after { content: ''; position: absolute; inset: -4px -6px -4px -8px; } }   /* (the arrow keeps its size; the finger gets 28 by 30 px) */
   .admin-folder-nav .ftoggle:hover { color:var(--text); background:rgba(255,255,255,0.08); }
   .admin-folder-nav li.collapsed > ul { display:none; }
   .admin-main { min-width:0; }
@@ -18778,6 +18779,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .menu-opt:has(input:focus-visible) { outline:2px solid #aab2ff; outline-offset:-2px; }
   @media (hover: hover) { .menu-opt:hover { background:rgba(255,255,255,0.07); } }
   @media (prefers-reduced-motion: reduce) { .menu-chev { transition:none; } }
+  .skip-link { position:absolute; left:8px; top:-80px; z-index:400; padding:10px 14px; border-radius:8px; background:#fff; color:#111; font-weight:600; text-decoration:none; }
+  .skip-link:focus { top:8px; }
+  .admin-main:focus { outline:none; }
+  /* For someone who asked their system for less motion: nothing slides, grows or flashes (a highlighted target stays marked, without the fade). */
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
   /* One clear chevron for every plain fold (Prepare media's, the server rules, "How to read this", ...): bold, in the accent colour, turning when open, on a tap-sized row. */
   details:is(.fold, .media-more, .media-tidy-box, .media-leftover-box, .media-again-box, .media-attn, .md-file, .sort-details) > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; min-height:44px; padding:0 4px; border-radius:8px; font-weight:600; }
   details:is(.fold, .media-more, .media-tidy-box, .media-leftover-box, .media-again-box, .media-attn, .md-file, .sort-details) > summary::-webkit-details-marker { display:none; }
@@ -19182,6 +19188,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 </style>
 </head>
 <body<?= $inframe ? ' class="inframe"' : ' class="pb-on"' ?>>
+<a class="skip-link" href="#admin-main">Skip to the content</a>
 <?= ui_icon_sprite() ?>
 <?= $inframe ? shell_frame_script('admin') : owner_phone_bar('admin', $files, $adminFolderPath, (bool) ($adminHidden || $adminEdited['total'] > 0), '', admin_nav_counts($dir, $files), (int) $adminEdited['total']) ?>
 <header class="admin-bar">
@@ -19225,7 +19232,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <?= render_admin_folder_nav($files, $adminFolderPath) ?: '<p class="muted">No subfolders.</p>' ?>
   </details>
 </aside>
-<main class="admin-main"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
+<main class="admin-main" id="admin-main" tabindex="-1"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
 <script>(function () {   // Before the sections are drawn: hide them all, and let the one the address or the last visit names show as soon as it is drawn, so no other section flashes up while the page loads (the tab script below takes over, and without JavaScript every section stays visible).
   var m = document.currentScript.parentNode, n = ['features', 'hidden', 'links', 'visits', 'changes', 'settings', 'notes', 'collections', 'site'], h = '', s = '';
   try { h = decodeURIComponent((location.hash || '').slice(1)); } catch (e) {}
@@ -19370,7 +19377,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           <div class="field-row md-actions">
             <div class="field">
               <label>Save as a different filename (optional)</label>
-              <input type="text" name="new_name" class="adm-newname" placeholder="leave blank to overwrite this file">
+              <input type="text" name="new_name" class="adm-newname" aria-label="Save as a different filename (optional)" placeholder="leave blank to overwrite this file">
             </div>
             <button type="submit">Save</button>
           </div>
@@ -19394,7 +19401,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         <div class="field-row md-actions">
           <div class="field">
             <label>Filename</label>
-            <input type="text" name="new_name" class="adm-newname" placeholder="notes.md" required>
+            <input type="text" name="new_name" class="adm-newname" aria-label="Filename" placeholder="notes.md" required>
           </div>
           <button type="submit">Create</button>
         </div>
@@ -19465,7 +19472,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     if (e.hidden && e.closest) e = e.closest('details') || e;   // (a row hidden because the setting it needs is off: go to its group)
     if (e.tagName === 'DETAILS') e.open = true;
     for (var up = e.parentElement; up; up = up.parentElement) if (up.tagName === 'DETAILS') up.open = true;   // (a setting inside a folded group opens the group)
-    e.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    e.scrollIntoView({ behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'), block: 'start' });
     e.classList.add('flash-target');
     setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
   }
@@ -20051,6 +20058,42 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   document.querySelectorAll('.adm-textarea').forEach(function (ta) {
     ta.addEventListener('focus', function () { lastNote = ta; });
   });
+  // The admin's question boxes (every .admin-modal): Tab stays inside the box that is open (the page behind can't be reached, as aria-modal says), and when it
+  // closes the focus goes back to what had it before it opened (it used to drop to the top of the page after every confirm).
+  (function () {
+    var lastOutside = null, openers = new Map();
+    function box(el) { return el && el.closest ? el.closest('.admin-modal') : null; }
+    document.addEventListener('focusin', function (e) { if (!box(e.target)) lastOutside = e.target; });
+    function visible(m) { return m && !m.hidden; }
+    [].forEach.call(document.querySelectorAll('.admin-modal'), function (m) {
+      new MutationObserver(function () {
+        if (visible(m)) { if (!openers.has(m)) openers.set(m, lastOutside); }
+        else if (openers.has(m)) {
+          var back = openers.get(m); openers.delete(m);
+          if (back && document.contains(back) && !document.querySelector('.admin-modal:not([hidden])')) { try { back.focus({ preventScroll: true }); } catch (x) {} }
+        }
+      }).observe(m, { attributes: true, attributeFilter: ['hidden'] });
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey) return;
+      var m = document.querySelector('.admin-modal:not([hidden])'); if (!m) return;
+      var ring = [].slice.call(m.querySelectorAll('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter(function (x) { return !x.disabled && !x.hidden && x.getClientRects().length > 0 && !x.closest('[hidden]'); });
+      if (!ring.length) { e.preventDefault(); return; }
+      var first = ring[0], last = ring[ring.length - 1], at = document.activeElement;
+      if (e.shiftKey && (at === first || !m.contains(at))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (at === last || !m.contains(at))) { e.preventDefault(); first.focus(); }
+    });
+  })();
+  // Tabs (the folder's page tabs and the notes reference): Left and Right move to the neighbour and open it, Home and End to the ends.
+  document.addEventListener('keydown', function (e) {
+    var t = e.target; if (!t || !t.closest || e.ctrlKey || e.metaKey || e.altKey) return;
+    var tab = t.closest('[role="tab"]'); if (!tab || tab !== t) return;
+    var list = tab.closest('[role="tablist"]'); if (!list) return;
+    var all = [].slice.call(list.querySelectorAll('[role="tab"]')).filter(function (x) { return !x.hidden && x.getClientRects().length > 0; }), i = all.indexOf(tab), to = -1;
+    if (e.key === 'ArrowRight') to = (i + 1) % all.length; else if (e.key === 'ArrowLeft') to = (i - 1 + all.length) % all.length; else if (e.key === 'Home') to = 0; else if (e.key === 'End') to = all.length - 1;
+    if (to < 0 || i < 0) return;
+    e.preventDefault(); all[to].focus(); all[to].click();
+  });
   // The notes reference shows one section at a time (without JavaScript every section is simply listed).
   [].forEach.call(document.querySelectorAll('.notes-reference'), function (ref) {
     var tabs = ref.querySelectorAll('.ref-tabs button'), panels = ref.querySelectorAll('.ref-panel');
@@ -20099,10 +20142,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     var tabs = [].slice.call(document.querySelectorAll('.admin-tabs a[data-tab], .side-hidden[data-tab], .side-link[data-tab]'));
     var panels = [].slice.call(document.querySelectorAll('.tab-panel'));
     var names = tabs.map(function (t) { return t.getAttribute('data-tab'); });
-    var KEY = 'galleryAdminTab';
+    var KEY = 'galleryAdminTab', baseTitle = '';
     function show(name) {
       if (names.indexOf(name) < 0) name = names.indexOf('settings') >= 0 ? 'settings' : names[0];
       document.documentElement.removeAttribute('data-early');   // (the loading-time rule in the stylesheet: from here the .active section is the one shown)
+      // The page's title says which tab is open (the title was the same for every tab, so the tab strip and a screen reader's page list could not tell them apart).
+      if (!baseTitle) baseTitle = document.title;
+      var cur = tabs.filter(function (t) { return t.getAttribute('data-tab') === name; })[0];
+      if (cur) { var nm = (cur.getAttribute('aria-label') || cur.textContent || '').replace(/\s+\d+\s*$/, '').replace(/\s+/g, ' ').trim(); if (nm) document.title = nm + ' — ' + baseTitle; }
       panels.forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-tab') === name); });
       tabs.forEach(function (t) {
         var on = t.getAttribute('data-tab') === name;
@@ -20862,7 +20909,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       form.querySelector('.sl-err').textContent = '';
       form.querySelector('[data-openin-menu]').setAttribute('data-want', v.openIn || '');
       if (focusField === 'address') form._addrMode = 'custom';
-      addrSync(form); syncForm(form); form.hidden = false; form.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); form.querySelector(focusField === 'address' ? '[name=address]' : '[name=label]').focus();
+      addrSync(form); syncForm(form); form.hidden = false; form.scrollIntoView({ block: 'nearest', behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth') }); form.querySelector(focusField === 'address' ? '[name=address]' : '[name=label]').focus();
     }
     function formFields(form) {
       var now = Math.floor(Date.now() / 1000), ends = radioValue(form, 'ends_pick'), opens = radioValue(form, 'opens_pick'), scope = radioValue(form, 'scope_type');
@@ -21037,7 +21084,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         form.hidden = true;
         return refresh().then(function () {
           var row = box.querySelector('details.sl-row[data-id="' + j.id + '"]');
-          if (row) { row.open = true; row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+          if (row) { row.open = true; row.scrollIntoView({ block: 'nearest', behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth') }); }
           say(editing ? 'Saved.' : 'Link made. Copy it from here.');
         });
       }).catch(function (x) { btn.disabled = false; failed(x); });
@@ -23859,6 +23906,19 @@ function markdown_to_plaintext($text, $maxLen = 160) {
     return unprotect_inline_code($text);
 }
 
+/** The words that name a small picture under a note (what a screen reader says on it): "Open photo: <caption or file name>". */
+function thumb_open_label($file, $vt) {
+    return 'Open ' . ($vt['inner'] !== '' ? 'video' : 'photo') . ': ' . photo_alt_text($file, ($GLOBALS['itemsData'] ?? [])[$file] ?? [], false);
+}
+/** A small picture under a note. A photo's picture is itself the control (a button to a keyboard, named by its caption or file name);
+ *  a video's picture sits inside a button-span that says so (see render_group_thumbs). Enter and Space press either (see the page script). */
+function thumb_open_html($file, $idx, $vt) {
+    $alt = htmlspecialchars(photo_alt_text($file, ($GLOBALS['itemsData'] ?? [])[$file] ?? [], false), ENT_QUOTES, 'UTF-8');
+    $src = htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8');
+    if ($vt['inner'] === '') return '<img src="' . $src . '" loading="lazy" role="button" tabindex="0" data-open="1" onclick="openLightbox(' . (int) $idx . ')" alt="' . $alt . '">';
+    return '<img src="' . $src . '" loading="lazy" alt="">';
+}
+
 /**
  * Small clickable thumbnail strip + jump link + live-updatable view total
  * for a photo group, shown right under the paragraph that mentions it.
@@ -23887,10 +23947,8 @@ function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status,
         $idx = array_search($gf, $allFiles, true);
         if ($idx === false) continue;
         $vt = video_tile_parts($gf, $GLOBALS['videoDurations'][$gf] ?? null);
-        $img = '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
-             . '" loading="lazy" ' . ($vt['inner'] === '' ? 'onclick="openLightbox(' . (int)$idx . ')" ' : '') . 'alt="'
-             . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
-        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
+        $img = thumb_open_html($gf, $idx, $vt);
+        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' role="button" tabindex="0" data-open="1" aria-label="' . htmlspecialchars(thumb_open_label($gf, $vt), ENT_QUOTES, 'UTF-8') . '" onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
     }
     $html .= '</div>';
     $html .= '<div class="linked-photos-meta">';
@@ -23919,10 +23977,8 @@ function render_photo_thumbs_plain($clusterFiles, $allFiles, $permalinkHtml = ''
         $idx = array_search($gf, $allFiles, true);
         if ($idx === false) continue;
         $vt = video_tile_parts($gf, $GLOBALS['videoDurations'][$gf] ?? null);
-        $img = '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
-             . '" loading="lazy" ' . ($vt['inner'] === '' ? 'onclick="openLightbox(' . (int)$idx . ')" ' : '') . 'alt="'
-             . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
-        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
+        $img = thumb_open_html($gf, $idx, $vt);
+        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' role="button" tabindex="0" data-open="1" aria-label="' . htmlspecialchars(thumb_open_label($gf, $vt), ENT_QUOTES, 'UTF-8') . '" onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
     }
     $html .= '</div>';
     if ($permalinkHtml !== '') {
@@ -23939,7 +23995,7 @@ function render_photo_thumbs_plain($clusterFiles, $allFiles, $permalinkHtml = ''
  */
 function render_permalink_button($anchorId) {
     return '<a class="permalink-copy" href="#' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8')
-         . '" title="Copy link">' . ui_icon('link') . '</a>';
+         . '" title="Copy link" aria-label="Copy a link to this part of the page">' . ui_icon('link') . '</a>';
 }
 
 /** Whether a rendered notes file has nothing to show: no text and no
@@ -24814,6 +24870,17 @@ function item_web_link($entry) {
     return (is_string($w) && preg_match('#^https?://#i', $w)) ? $w : '';
 }
 
+/** The words a screen reader says for a photo or a video: its caption when it has one, else its file name without the folder it sits in
+ *  (a picture's name, "Europe/France/eiffel.jpg", is read out whole otherwise). A Not listed photo's own page ($nameless) says "Photo":
+ *  its name and folder are not on that page. */
+function photo_alt_text($file, $entry, $nameless = false) {
+    $cap = is_array($entry) ? trim((string) ($entry['caption'] ?? '')) : '';
+    if ($cap !== '') return $cap;
+    if ($nameless) return 'Photo';
+    $slash = strrpos($file, '/');
+    return $slash === false ? $file : substr($file, $slash + 1);
+}
+
 /** One clickable gallery card. Shows a live-updatable view-count badge
  *  (hidden until >0); a small corner tag for a standalone sold/reserved
  *  item ($status is '', 'sold', or 'reserved' — a grouped item's ribbon
@@ -24848,19 +24915,19 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
         // A hover tooltip on desktop (title); a tap target that opens a
         // small popover on a touch screen, where hover doesn't exist.
         $itemBadges .= '<span class="item-badge caption-badge" title="' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8')
-                     . '" role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') toggleCaptionPopover(this, event)">' . ui_icon('caption') . '</span>';
+                     . '" aria-label="Caption: ' . htmlspecialchars($itemEntry['caption'], ENT_QUOTES, 'UTF-8') . '" role="button" tabindex="0" onclick="toggleCaptionPopover(this, event)" onkeydown="if (event.key === \'Enter\' || event.key === \' \') toggleCaptionPopover(this, event)">' . ui_icon('caption') . '</span>';
     }
     if (photo_location_visible($itemEntry ?? [])) {
         $loc = $itemEntry['location'];
         $locTitle = trim(($loc['label'] ?? '') !== '' ? $loc['label'] : ($loc['lat'] . ', ' . $loc['lng']));
         $itemBadges .= '<a class="item-badge location-badge" href="' . htmlspecialchars(osm_location_url($loc['lat'], $loc['lng']), ENT_QUOTES, 'UTF-8')
                      . '" target="_blank" rel="noopener noreferrer" title="' . htmlspecialchars($locTitle, ENT_QUOTES, 'UTF-8')
-                     . '" onclick="event.stopPropagation()">' . ui_icon('pin') . '</a>';
+                     . '" aria-label="Where this was taken: ' . htmlspecialchars($locTitle, ENT_QUOTES, 'UTF-8') . '" onclick="event.stopPropagation()">' . ui_icon('pin') . '</a>';
     }
     if (($itemWeb = item_web_link($itemEntry)) !== '') {
         $itemBadges .= '<a class="item-badge web-badge" href="' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8')
                      . '" target="_blank" rel="noopener noreferrer" title="Information link: ' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8')
-                     . '" onclick="event.stopPropagation()">' . ui_icon('globe') . '</a>';
+                     . '" aria-label="Information link: ' . htmlspecialchars($itemWeb, ENT_QUOTES, 'UTF-8') . '" onclick="event.stopPropagation()">' . ui_icon('globe') . '</a>';
     }
     // The ring is drawn by .ringed::after, above the picture: an inset shadow on the card itself sat underneath it, unseen.
     $colorStyle = $color ? ' style="--ring: ' . htmlspecialchars($color, ENT_QUOTES, 'UTF-8') . ';"' : '';
@@ -24883,13 +24950,13 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
             $lockTitle = $isPriv ? 'Link off: this photo can\'t be opened by its link. Press to switch it on' : 'Link on: anyone with this photo\'s link can open it. Press to switch it off';
         }
         $ownerLock = '<button type="button" class="priv-toggle' . ($isPriv ? ' is-private' : '') . ($isFolder ? ' is-folder' : '') . ($addrLock ? ' is-addr' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isPriv ? 'true' : 'false')
-            . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($addrLock ? '' : ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : ''))) . '</button>';
+            . '" title="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '" aria-label="' . htmlspecialchars($lockTitle, ENT_QUOTES, 'UTF-8') . '">' . ui_icon($isPriv ? 'lock' : 'unlock') . ($addrLock ? '' : ($isFolder ? '<span>Folder</span>' : ($isPriv ? '<span>Private</span>' : ''))) . '</button>';
     }
     // And a star beside it: press to make this photo its folder's cover (a gold star when it already is).
     if ($ownerLock !== '') {
         $isCoverNow = !empty(owner_cover_flags($GLOBALS['dir'], [$file])[$file]);
         $ownerLock .= '<button type="button" class="cover-toggle' . ($isCoverNow ? ' is-cover' : '') . '" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '" aria-pressed="' . ($isCoverNow ? 'true' : 'false')
-            . '" title="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '">' . ui_icon('star') . '</button>';
+            . '" title="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '" aria-label="' . ($isCoverNow ? 'This is the folder\'s cover photo' : 'Make this the folder\'s cover photo') . '">' . ui_icon('star') . '</button>';
         // And a pencil in the other lower corner: opens the viewer with the editor for this photo's caption, link, place and switches.
         $ownerLock .= '<button type="button" class="edit-toggle" data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8')
             . '" title="Edit caption, link and location" aria-label="Edit caption, link and location">' . ui_icon('edit') . '</button>';
@@ -24903,9 +24970,15 @@ function render_card($file, $index, $photoViews, $status = '', $color = null, $a
     }
     $ownerAttrs = $ownerLock !== '' ? ' data-file="' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . '"' : '';
     if ($ownerLock !== '') $ownerLock .= '<span class="sel-mark" aria-hidden="true">' . ui_icon('check') . '</span>';
+    // What a screen reader says about the picture: the caption when the photo has one, else its file name (a Not listed photo's own page says "Photo": its name is not on that page).
+    $altText = photo_alt_text($file, $itemEntry ?? [], $nameless);
+    // A keyboard (and a screen reader) opens the viewer through a real button laid over the picture. It is a sibling of the badges and the owner's
+    // buttons, never their parent: Tab stops on it first, Enter or Space presses it, and the press reaches the tile's own click handler, which opens the
+    // viewer (or, while the owner is choosing photos, picks the tile). A mouse or a finger never touches it (it takes no pointer), so they act as before.
+    $openBtn = '<button type="button" class="tile-open" aria-label="' . htmlspecialchars('Open ' . ($vt['inner'] !== '' ? 'video' : 'photo') . ': ' . $altText, ENT_QUOTES, 'UTF-8') . '"></button>';
     return '<div class="card' . ($ownerLock !== '' ? ' owner-card' : '') . ($hasAddr ? ' has-addr' : '') . ($vt['inner'] !== '' ? ' vtile' : '') . ($status ? ' ' . $status : '') . ($color ? ' ringed' : '') . '"' . $ownerAttrs . $vt['attrs'] . $idAttr . $colorStyle . ' onclick="openLightbox(' . $index . ')"><img src="'
          . htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8')
-         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($nameless ? 'Photo' : $file, ENT_QUOTES, 'UTF-8') . '">' . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
+         . '"' . tile_srcset_attrs($file) . ' loading="lazy" alt="' . htmlspecialchars($altText, ENT_QUOTES, 'UTF-8') . '">' . $openBtn . $vt['inner'] . $ownerLock . $durationBadge . $statusBadge
          . '<div class="card-badges">' . $itemBadges . $badge . '</div>'
          . '</div>';
 }
@@ -25131,7 +25204,7 @@ function render_folder_cover_card($folderPath, $label, $recursiveFiles, $manualC
     if (ENABLE_SHARE_LINKS && is_admin_browser() && folder_is_private($dir, $folderPath)) {
         // for the owner, on a private folder, the link icon asks what to share: a plain link opens nothing for anyone else
         $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Share this folder…" aria-label="Share this folder…" data-gs-folder="' . htmlspecialchars($folderPath, ENT_QUOTES, 'UTF-8') . '" data-gs-label="' . htmlspecialchars(link_folder_label($dir, $folderPath), ENT_QUOTES, 'UTF-8') . '">' . ui_icon('link') . '</a>';
-    } elseif (is_admin_browser() || !folder_is_private($dir, $folderPath)) $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link">' . ui_icon('link') . '</a>';
+    } elseif (is_admin_browser() || !folder_is_private($dir, $folderPath)) $html .= '<a class="permalink-copy folder-permalink-copy" href="' . $folderUrl . '" title="Copy link" aria-label="Copy link to this folder">' . ui_icon('link') . '</a>';
     $html .= '</div>';
     return $html;
 }
@@ -25727,7 +25800,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     font-size: 0; margin: 0 0 14px;
   }
   p.breadcrumb a {
-    font-size: 0.82rem; line-height: 1;
+    font-size: 0.82rem; line-height: 1; overflow-wrap: anywhere;
     color: var(--muted); text-decoration: none;
     background: var(--card); border: 1px solid rgba(255, 255, 255, 0.07);
     padding: 7px 13px; border-radius: 999px;
@@ -25785,6 +25858,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     margin: 0 0 4px;
     font-size: 1.6rem;
     font-weight: 600;
+    overflow-wrap: anywhere;   /* (a long name with no spaces wraps instead of running off a phone's screen) */
   }
   header p {
     margin: 0;
@@ -25824,7 +25898,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .gallery-notices li:last-child {
     margin-bottom: 0;
   }
-  .note-box {
+  .note-box { overflow-wrap: anywhere;
     background: #202225;
     border-left: 4px solid var(--accent);
     border-radius: 8px;
@@ -26067,6 +26141,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .folder-cover .sold-badge-corner, .folder-cover .reserved-badge-corner { z-index: 2; }
   .folder-cover-label {
     display: block;
+    overflow-wrap: anywhere;
     padding: 10px 12px 2px;
     font-weight: 600;
     font-size: 0.95rem;
@@ -26181,6 +26256,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .map-back .map-back-x { width: 44px; padding: 0; font-size: 1.4rem; line-height: 1; }
   @media (hover: hover) { .map-back button:hover { background: rgba(255,255,255,0.14); } }
   @media (prefers-reduced-motion: reduce) { .map-back { transition: none; } }
+  /* For someone who asked their system for less motion: nothing slides, grows or flashes (a highlighted target stays marked, without the fade). */
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
   /* Select (the owner's way to act on several photos): tiles are picked with a tap; where the photos sit one by one a picked tile
      can also be held and dragged next to another (Arrange). */
   .select-bar { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px 12px; background: rgba(30,30,34,0.97); border: 1px solid #3a3a42; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 90; display: flex; flex-direction: column; gap: 8px; }
@@ -26267,6 +26344,16 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   .card:hover img {
     transform: scale(1.05);
   }
+  /* The keyboard's way into a tile: a button laid over the picture that no pointer ever touches (a click anywhere on the tile is the tile's own,
+     as always), drawn only as a ring while it has the focus. The badges and the owner's buttons sit above it (they are siblings, not inside it). */
+  .card .tile-open { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: inherit; background: transparent; color: transparent; pointer-events: none; cursor: pointer; }
+  .card .tile-open:focus { outline: none; }
+  .card .tile-open:focus-visible { outline: 3px solid #fff; outline-offset: -3px; box-shadow: inset 0 0 0 6px var(--accent); }
+  .skip-link { position: absolute; left: 8px; top: -80px; z-index: 400; padding: 10px 14px; border-radius: 8px; background: #fff; color: #111; font-weight: 600; text-decoration: none; }
+  .skip-link:focus { top: 8px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .linked-photos-thumbs [data-open]:focus { outline: none; }
+  .linked-photos-thumbs [data-open]:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent); }
 
   /* Flat with folder names: the label and the divider are buttons that copy a link to themselves. */
   .label-copy { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; }
@@ -26326,6 +26413,8 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     line-height: 1;
   }
   a.item-badge { pointer-events: auto; }
+  /* On a touch screen the 20 px badge keeps its look, and a larger invisible area around it takes the finger (a near miss no longer opens the photo: 28 by 28 px, touching its neighbour's). */
+  @media (pointer: coarse) { .item-badge { position: relative; } .item-badge::after { content: ''; position: absolute; inset: -4px; } }
   .item-badge.caption-badge { pointer-events: auto; cursor: pointer; }
   /* The same answer as the owner's lock and star: over a caption, location or link badge it lights up (a ring, the accent colour, a
      little larger), and pressing it sinks it, so it is clear it is a button. */
@@ -26472,6 +26561,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
     touch-action: none;
   }
   .lightbox.open { display: flex; }
+  .lightbox:focus { outline: none; }   /* (the viewer itself takes the focus when it opens; only the buttons inside show a ring) */
   .lightbox img, .lightbox video {
     object-fit: contain;   /* whatever size the box ends up, the picture inside keeps its own shape (Safari clamps one side of an image in a flex box without the other) */
     max-width: 90vw;
@@ -26800,6 +26890,7 @@ gallery notices (also shown on the page itself, in a collapsed banner):
 </head>
 <?php $shellOwner = ADMIN_PASSWORD !== '' && is_admin_browser(); $shellInframe = $shellOwner && !empty($_GET['inframe']); ?>
 <body<?= $shellInframe ? ' class="inframe"' : ($shellOwner ? ' class="pb-on"' : '') ?>>
+<a class="skip-link" href="#content">Skip to the photos</a>
 <?= ui_icon_sprite() ?>
 <?php if ($shellOwner): ?><div id="live-folder" hidden data-folder="<?= htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-last="<?= changes_last_id() ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>"></div><?php endif; ?>
 <?php // Once the page has scrolled, two round buttons float at the bottom right of the screen: to the top, and to the bottom. The same on every page and device. ?>
@@ -27309,7 +27400,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php endif; ?>
 </div>
 <?php endif; ?>
-<div class="lightbox" id="lightbox">
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Photo viewer" tabindex="-1">
   <button class="close" type="button" onclick="closeLightbox()" aria-label="Close"><?= ui_icon('close') ?></button>
   <button class="nav prev" type="button" onclick="navigate(-1)" aria-label="Previous"><?= ui_icon('chev-left') ?></button>
   <img id="lightbox-img" src="" alt="">
@@ -27337,10 +27428,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-newaddr" id="lightbox-newaddr" type="button" title="New link: the old one stops working" aria-label="New link: the old one stops working" hidden><?= ui_icon('linkoff') ?></button>
 <?php endif; ?>
-    <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link"><?= ui_icon('link') ?></button>
-    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
+    <button class="lightbox-copy" id="lightbox-copy-btn" type="button" title="Copy link" aria-label="Copy link"><?= ui_icon('link') ?></button>
+    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" aria-label="Information link" hidden><?= ui_icon('globe') ?></a>
 <?php if (ENABLE_PHOTO_LOCATION): ?>
-    <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>
+    <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" aria-label="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>
 <?php endif; ?>
     </div>
     <span class="tools-more tools-more-l" aria-hidden="true"><?= ui_icon('chev-left') ?></span>
@@ -27402,6 +27493,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       $c = $itemsData[$f]['caption'] ?? '';
       return ($c !== '' && is_string($c)) ? $c : null;
   }, $files)) ?>;
+  // What a screen reader says for the big picture: the caption, else the file name without its folder ("Photo" on a Not listed photo's own page).
+  const altTexts = <?= js_json(array_map(function ($f) use ($itemsData) { return photo_alt_text($f, $itemsData[$f] ?? [], photo_ref($f) !== $f); }, $files)) ?>;
   // Where each file was taken, only for photos whose location is meant to be public and only when the map feature
   // is on (the little map in the viewer loads a third-party map, like the overview map does), and each file's web link.
   const locations = <?= js_json(array_map(function ($f) use ($itemsData) {
@@ -27582,15 +27675,27 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     document.querySelectorAll('.caption-popover').forEach(function (p) { p.remove(); });
   });
 
+  let lbReturnTo = null;
   function openLightbox(index) {
     if (window.__scrubbedAt && Date.now() - window.__scrubbedAt < 600) return;   // the tap that ends a finger-scrub of a video tile is not a tap
     if (window.__previewHalt) window.__previewHalt();   // a clip playing on a tile stops while the viewer is open
+    // Where the person was (the tile's button, the owner's pencil), so closing the viewer puts them back there. A mouse or a finger leaves nothing
+    // focused, and then there is nothing to go back to.
+    if (!lightbox.classList.contains('open')) {
+      const was = document.activeElement;
+      lbReturnTo = was && was !== document.body && !lightbox.contains(was) ? was : null;
+    }
     current = index;
     updateImage();
     lightbox.classList.add('open');
     toolsFade();
+    // The viewer takes the focus (Tab then starts at Close, and stays inside it: see the key handler), a screen reader is told a dialog opened,
+    // and the page behind is left alone. preventScroll: the page must not jump to wherever the viewer sits in the markup.
+    try { lightbox.focus({ preventScroll: true }); } catch (x) {}
   }
   function closeLightbox() {
+    const back = lbReturnTo; lbReturnTo = null;
+    if (back && lightbox.classList.contains('open')) setTimeout(function () { try { if (document.contains(back) && !lightbox.classList.contains('open')) back.focus({ preventScroll: true }); } catch (x) {} }, 0);
     if (lbEdit && lbEdit.isOpen()) lbEdit.close();
     if (typeof collapseMiniMap === 'function') collapseMiniMap();
     if (typeof setZoom === 'function' && zoomMode !== 'fit') setZoom('fit');
@@ -27722,13 +27827,13 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     document.querySelectorAll('.priv-toggle').forEach(function (b) {
       const f = b.getAttribute('data-file'), k = lockKind(f), addr = k === 'aon' || k === 'aoff', on = addr ? k === 'aoff' : !!ownerState.priv[f];
       b.classList.toggle('is-private', on); b.classList.toggle('is-folder', k === 'inh'); b.classList.toggle('is-addr', addr); b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.title = lockTitle(f);
+      b.title = lockTitle(f); b.setAttribute('aria-label', b.title);
       b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (addr ? '' : (k === 'inh' ? '<span>Folder</span>' : (on ? '<span>Private</span>' : '')));
     });
     document.querySelectorAll('.cover-toggle').forEach(function (b) {
       const on = !!ownerState.cover[b.getAttribute('data-file')];
       b.classList.toggle('is-cover', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.title = on ? 'This is the folder’s cover photo' : 'Make this the folder’s cover photo';
+      b.title = on ? 'This is the folder’s cover photo' : 'Make this the folder’s cover photo'; b.setAttribute('aria-label', b.title);
     });
     const file = files[current], lc = document.getElementById('lightbox-cover'), lp = document.getElementById('lightbox-private');
     if (lc && file !== undefined) {
@@ -28131,7 +28236,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         box.querySelectorAll('.caption-badge, .location-badge, .web-badge').forEach(function (b) { b.remove(); });
         const made = [], svg = function (n) { return '<svg class="ico" aria-hidden="true"><use href="#i-' + n + '"></use></svg>'; };
         if (v.caption) {
-          const s = document.createElement('span'); s.className = 'item-badge caption-badge'; s.title = v.caption; s.setAttribute('role', 'button'); s.tabIndex = 0; s.innerHTML = svg('caption');
+          const s = document.createElement('span'); s.className = 'item-badge caption-badge'; s.title = v.caption; s.setAttribute('aria-label', 'Caption: ' + v.caption); s.setAttribute('role', 'button'); s.tabIndex = 0; s.innerHTML = svg('caption');
           s.addEventListener('click', function (e) { toggleCaptionPopover(s, e); });
           s.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') toggleCaptionPopover(s, e); });
           made.push(s);
@@ -28139,12 +28244,12 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
         if (place) {
           const a = document.createElement('a'); a.className = 'item-badge location-badge'; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.innerHTML = svg('pin');
           a.href = 'https://www.openstreetmap.org/?mlat=' + encodeURIComponent(v.lat) + '&mlon=' + encodeURIComponent(v.lng) + '#map=16/' + encodeURIComponent(v.lat) + '/' + encodeURIComponent(v.lng);
-          a.title = v.label || (v.lat + ', ' + v.lng); a.addEventListener('click', function (e) { e.stopPropagation(); });
+          a.title = v.label || (v.lat + ', ' + v.lng); a.setAttribute('aria-label', 'Where this was taken: ' + a.title); a.addEventListener('click', function (e) { e.stopPropagation(); });
           made.push(a);
         }
         if (v.web) {
           const a = document.createElement('a'); a.className = 'item-badge web-badge'; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.innerHTML = svg('globe');
-          a.href = v.web; a.title = 'Information link: ' + v.web; a.addEventListener('click', function (e) { e.stopPropagation(); });
+          a.href = v.web; a.title = 'Information link: ' + v.web; a.setAttribute('aria-label', a.title); a.addEventListener('click', function (e) { e.stopPropagation(); });
           made.push(a);
         }
         made.reverse().forEach(function (el) { box.insertBefore(el, box.firstChild); });
@@ -28493,7 +28598,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       const a = document.createElement('a'); a.href = '#' + sec.id;
       const priv = sec.getAttribute('data-sec-priv');
       if (priv) {
-        a.className = 'priv'; a.title = priv === 'own' ? 'Private folder' : 'Hidden because a folder above it is private';
+        a.className = 'priv'; a.title = priv === 'own' ? 'Private folder' : 'Hidden because a folder above it is private';   // (the folder's name follows the icon, so the name says which folder; the title says why it is marked)
         a.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg>';
       }
       a.appendChild(document.createTextNode(sec.getAttribute('data-sec')));
@@ -28633,6 +28738,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       lightboxVideo.style.display = 'none';
       lightboxVideo.src = '';
       lightboxImg.style.display = '';
+      lightboxImg.alt = (typeof altTexts !== 'undefined' && altTexts[current]) || '';
       const fullQ = '?img=' + encodeURIComponent(file), verQ = (fileVersions[current] ? '&v=' + fileVersions[current] : '') + passQ;
       const asOriginal = heicOk && /\.hei[cf]$/i.test(file);   // (a browser that shows HEIC is sent the photo itself; if it can't after all, the converted copy)
       lightboxImg.onerror = asOriginal ? function () { lightboxImg.onerror = null; lightboxImg.src = fullQ + '&size=full' + verQ; } : null;
@@ -28644,7 +28750,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     if (copyBtn) copyBtn.hidden = !!(copyLinkOk && !copyLinkOk[current]);
     const newAddrBtn = document.getElementById('lightbox-newaddr');
     if (newAddrBtn) newAddrBtn.hidden = !ownerIsUnlisted(file);   // (a Not listed photo has an address of its own, and the owner can replace it)
-    if (copyBtn) copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s link' : 'Copy link';
+    if (copyBtn) { copyBtn.title = ownerIsUnlisted(file) ? 'Copy this photo\'s link' : 'Copy link'; copyBtn.setAttribute('aria-label', copyBtn.title); }
     applyZoom();
     updateLightboxExtras();
     toolsFade();
@@ -29005,13 +29111,13 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   function updateLightboxExtras() {
     const web = webLinks[current];
     if (webLink) {
-      if (web) { webLink.href = web; webLink.title = 'Information link: ' + web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); webLink.title = ''; }
+      if (web) { webLink.href = web; webLink.title = 'Information link: ' + web; webLink.setAttribute('aria-label', webLink.title); webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); webLink.title = ''; webLink.removeAttribute('aria-label'); }
     }
     if (!mapBox || !mapToggle) return;
     const loc = locations[current];
     mapToggle.hidden = !loc;
     mapToggle.classList.toggle('off', !miniShown());
-    mapToggle.title = miniShown() ? 'Hide the little map' : 'Show where this was taken';
+    mapToggle.title = miniShown() ? 'Hide the little map' : 'Show where this was taken'; mapToggle.setAttribute('aria-label', mapToggle.title); mapToggle.setAttribute('aria-pressed', miniShown() ? 'true' : 'false');
     mapToggle.classList.toggle('on', miniShown());
     // A reminder that the map is there, on every photo that has a location, for as long as the viewer hasn't pressed the button
     // (either way): a short pulse, restarted for each photo.
@@ -29059,12 +29165,34 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     if (web) { webLink.href = web; webLink.title = 'Information link: ' + web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); webLink.title = ''; }
   }
 <?php endif; ?>
+  // A small picture under a note, or a clip's picture, is a button: Enter and Space press it (Space must not also scroll the page).
+  document.addEventListener('keydown', (e) => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || e.ctrlKey || e.metaKey || e.altKey || !e.target || !e.target.closest) return;
+    const b = e.target.closest('[data-open]');
+    if (!b || b !== e.target) return;
+    e.preventDefault();
+    b.click();
+  });
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
+    // Another box opened over the viewer (the owner's "Share just this photo", the QR code, a question) has the keys, and so does any field:
+    // typing a name must not zoom or change the photo behind it, nor Escape close the viewer under a box that has just taken it.
+    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;   // (a browser's own shortcut: Ctrl+Z, Alt+Left for back)
+    // Tab stays inside the viewer: from the last button to the first and back (a screen reader is told the rest of the page is gone: aria-modal).
+    if (e.key === 'Tab') {
+      const ring = [].slice.call(lightbox.querySelectorAll('button, a[href], input, select, textarea, video[controls], [tabindex]:not([tabindex="-1"])')).filter(function (el) { return !el.disabled && !el.hidden && el.getClientRects().length > 0 && !el.closest('[hidden]'); });
+      if (!ring.length) { e.preventDefault(); return; }
+      const first = ring[0], last = ring[ring.length - 1], at = document.activeElement;
+      if (e.shiftKey && (at === first || at === lightbox || !lightbox.contains(at))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (at === last || !lightbox.contains(at))) { e.preventDefault(); first.focus(); }
+      return;
+    }
     if (lbEdit && lbEdit.isOpen()) {
       if (e.key === 'Escape') { lbEdit.close(); return; }
       if (e.target && e.target.closest && e.target.closest('#lb-editor')) return;   // typing: the arrows, Z and the rest belong to the field
     }
+    if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;   // (any other field: its keys are its own)
     if (e.key === 'Escape') { if (miniExpanded) { collapseMiniMap(); return; } if (zoomMode !== 'fit') { setZoom('fit'); return; } closeLightbox(); return; }
     if (e.key === 'z' || e.key === 'Z') { cycleZoom(); return; }
     // A focused <video>'s native controls already use arrow keys (seek)
@@ -29084,12 +29212,17 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
   // Touch gestures: swipe left/right to move between photos, swipe down to close.
   let touchStartX = 0;
   let touchStartY = 0;
+  let multiTouch = false;   // a second finger came down: it is a pinch (or a two-finger drag), never a swipe, until every finger is up
   lightbox.addEventListener('touchstart', (e) => {
+    if (e.touches && e.touches.length > 1) { multiTouch = true; return; }
+    multiTouch = false;
     const t = e.changedTouches[0];
     touchStartX = t.clientX;
     touchStartY = t.clientY;
   }, { passive: true });
+  lightbox.addEventListener('touchcancel', () => { multiTouch = false; }, { passive: true });
   lightbox.addEventListener('touchend', (e) => {
+    if (multiTouch) { if (!e.touches || e.touches.length === 0) multiTouch = false; return; }
     const t = e.changedTouches[0];
     const deltaX = t.clientX - touchStartX;
     const deltaY = t.clientY - touchStartY;
@@ -29125,7 +29258,16 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
     legacyCopy(text);
     return Promise.resolve();
   }
+  // The tick is only a picture: say it too, for a screen reader (a polite status line nobody sees).
+  function sayCopied() {
+    let r = document.getElementById('sr-live');
+    if (!r) { r = document.createElement('div'); r.id = 'sr-live'; r.className = 'sr-only'; r.setAttribute('role', 'status'); r.setAttribute('aria-live', 'polite'); document.body.appendChild(r); }
+    r.textContent = '';
+    setTimeout(function () { r.textContent = 'Link copied'; }, 50);
+  }
   function flashCopied(el) {
+    if (el.classList.contains('copied')) return;
+    sayCopied();   // (pressed again within the moment: the first one's timer puts the icon back; keeping the tick as "the original" left it for good)
     const original = el.innerHTML;
     el.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg>';
     el.classList.add('copied');
@@ -29365,7 +29507,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       els.forEach(function (c) { c.classList.add('live-new'); });
       marked = els.length;
       if (marked) {
-        els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        els[0].scrollIntoView({ block: 'center', behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth') });
         pill(function (t) { t.textContent = (marked === 1 ? '1 new item is' : marked + ' new items are') + ' marked.'; }, false);
       }
     }).catch(function () {}).then(function () {

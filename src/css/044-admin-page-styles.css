@@ -465,6 +465,7 @@
   .admin-folder-nav .ftoggle { position:absolute; left:-1px; top:5px; width:14px; height:22px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; z-index:1; border-radius:4px; }
   .admin-folder-nav .ftoggle::before { content:""; font-size:0.7rem; display:block; margin:calc((22px - .43em) / 2) auto 0; width:0; height:0; border-left:.3em solid transparent; border-right:.3em solid transparent; border-top:.43em solid currentColor; transition:transform .12s; }
   .admin-folder-nav li.collapsed > .ftoggle::before { transform:rotate(-90deg); }
+  @media (pointer: coarse) { .admin-folder-nav .ftoggle::after { content: ''; position: absolute; inset: -4px -6px -4px -8px; } }   /* (the arrow keeps its size; the finger gets 28 by 30 px) */
   .admin-folder-nav .ftoggle:hover { color:var(--text); background:rgba(255,255,255,0.08); }
   .admin-folder-nav li.collapsed > ul { display:none; }
   .admin-main { min-width:0; }
@@ -845,6 +846,11 @@
   .menu-opt:has(input:focus-visible) { outline:2px solid #aab2ff; outline-offset:-2px; }
   @media (hover: hover) { .menu-opt:hover { background:rgba(255,255,255,0.07); } }
   @media (prefers-reduced-motion: reduce) { .menu-chev { transition:none; } }
+  .skip-link { position:absolute; left:8px; top:-80px; z-index:400; padding:10px 14px; border-radius:8px; background:#fff; color:#111; font-weight:600; text-decoration:none; }
+  .skip-link:focus { top:8px; }
+  .admin-main:focus { outline:none; }
+  /* For someone who asked their system for less motion: nothing slides, grows or flashes (a highlighted target stays marked, without the fade). */
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
   /* One clear chevron for every plain fold (Prepare media's, the server rules, "How to read this", ...): bold, in the accent colour, turning when open, on a tap-sized row. */
   details:is(.fold, .media-more, .media-tidy-box, .media-leftover-box, .media-again-box, .media-attn, .md-file, .sort-details) > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; min-height:44px; padding:0 4px; border-radius:8px; font-weight:600; }
   details:is(.fold, .media-more, .media-tidy-box, .media-leftover-box, .media-again-box, .media-attn, .md-file, .sort-details) > summary::-webkit-details-marker { display:none; }

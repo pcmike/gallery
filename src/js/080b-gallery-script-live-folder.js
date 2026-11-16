@@ -127,7 +127,7 @@
       els.forEach(function (c) { c.classList.add('live-new'); });
       marked = els.length;
       if (marked) {
-        els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        els[0].scrollIntoView({ block: 'center', behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth') });
         pill(function (t) { t.textContent = (marked === 1 ? '1 new item is' : marked + ' new items are') + ' marked.'; }, false);
       }
     }).catch(function () {}).then(function () {

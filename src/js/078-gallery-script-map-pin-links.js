@@ -172,13 +172,13 @@
   function updateLightboxExtras() {
     const web = webLinks[current];
     if (webLink) {
-      if (web) { webLink.href = web; webLink.title = 'Information link: ' + web; webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); webLink.title = ''; }
+      if (web) { webLink.href = web; webLink.title = 'Information link: ' + web; webLink.setAttribute('aria-label', webLink.title); webLink.hidden = false; } else { webLink.hidden = true; webLink.removeAttribute('href'); webLink.title = ''; webLink.removeAttribute('aria-label'); }
     }
     if (!mapBox || !mapToggle) return;
     const loc = locations[current];
     mapToggle.hidden = !loc;
     mapToggle.classList.toggle('off', !miniShown());
-    mapToggle.title = miniShown() ? 'Hide the little map' : 'Show where this was taken';
+    mapToggle.title = miniShown() ? 'Hide the little map' : 'Show where this was taken'; mapToggle.setAttribute('aria-label', mapToggle.title); mapToggle.setAttribute('aria-pressed', miniShown() ? 'true' : 'false');
     mapToggle.classList.toggle('on', miniShown());
     // A reminder that the map is there, on every photo that has a location, for as long as the viewer hasn't pressed the button
     // (either way): a short pulse, restarted for each photo.

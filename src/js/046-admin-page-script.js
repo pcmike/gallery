@@ -45,7 +45,7 @@
     if (e.hidden && e.closest) e = e.closest('details') || e;   // (a row hidden because the setting it needs is off: go to its group)
     if (e.tagName === 'DETAILS') e.open = true;
     for (var up = e.parentElement; up; up = up.parentElement) if (up.tagName === 'DETAILS') up.open = true;   // (a setting inside a folded group opens the group)
-    e.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    e.scrollIntoView({ behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'), block: 'start' });
     e.classList.add('flash-target');
     setTimeout(function () { e.classList.remove('flash-target'); }, 2500);
   }
@@ -631,6 +631,42 @@
   document.querySelectorAll('.adm-textarea').forEach(function (ta) {
     ta.addEventListener('focus', function () { lastNote = ta; });
   });
+  // The admin's question boxes (every .admin-modal): Tab stays inside the box that is open (the page behind can't be reached, as aria-modal says), and when it
+  // closes the focus goes back to what had it before it opened (it used to drop to the top of the page after every confirm).
+  (function () {
+    var lastOutside = null, openers = new Map();
+    function box(el) { return el && el.closest ? el.closest('.admin-modal') : null; }
+    document.addEventListener('focusin', function (e) { if (!box(e.target)) lastOutside = e.target; });
+    function visible(m) { return m && !m.hidden; }
+    [].forEach.call(document.querySelectorAll('.admin-modal'), function (m) {
+      new MutationObserver(function () {
+        if (visible(m)) { if (!openers.has(m)) openers.set(m, lastOutside); }
+        else if (openers.has(m)) {
+          var back = openers.get(m); openers.delete(m);
+          if (back && document.contains(back) && !document.querySelector('.admin-modal:not([hidden])')) { try { back.focus({ preventScroll: true }); } catch (x) {} }
+        }
+      }).observe(m, { attributes: true, attributeFilter: ['hidden'] });
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey) return;
+      var m = document.querySelector('.admin-modal:not([hidden])'); if (!m) return;
+      var ring = [].slice.call(m.querySelectorAll('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter(function (x) { return !x.disabled && !x.hidden && x.getClientRects().length > 0 && !x.closest('[hidden]'); });
+      if (!ring.length) { e.preventDefault(); return; }
+      var first = ring[0], last = ring[ring.length - 1], at = document.activeElement;
+      if (e.shiftKey && (at === first || !m.contains(at))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (at === last || !m.contains(at))) { e.preventDefault(); first.focus(); }
+    });
+  })();
+  // Tabs (the folder's page tabs and the notes reference): Left and Right move to the neighbour and open it, Home and End to the ends.
+  document.addEventListener('keydown', function (e) {
+    var t = e.target; if (!t || !t.closest || e.ctrlKey || e.metaKey || e.altKey) return;
+    var tab = t.closest('[role="tab"]'); if (!tab || tab !== t) return;
+    var list = tab.closest('[role="tablist"]'); if (!list) return;
+    var all = [].slice.call(list.querySelectorAll('[role="tab"]')).filter(function (x) { return !x.hidden && x.getClientRects().length > 0; }), i = all.indexOf(tab), to = -1;
+    if (e.key === 'ArrowRight') to = (i + 1) % all.length; else if (e.key === 'ArrowLeft') to = (i - 1 + all.length) % all.length; else if (e.key === 'Home') to = 0; else if (e.key === 'End') to = all.length - 1;
+    if (to < 0 || i < 0) return;
+    e.preventDefault(); all[to].focus(); all[to].click();
+  });
   // The notes reference shows one section at a time (without JavaScript every section is simply listed).
   [].forEach.call(document.querySelectorAll('.notes-reference'), function (ref) {
     var tabs = ref.querySelectorAll('.ref-tabs button'), panels = ref.querySelectorAll('.ref-panel');
@@ -679,10 +715,14 @@
     var tabs = [].slice.call(document.querySelectorAll('.admin-tabs a[data-tab], .side-hidden[data-tab], .side-link[data-tab]'));
     var panels = [].slice.call(document.querySelectorAll('.tab-panel'));
     var names = tabs.map(function (t) { return t.getAttribute('data-tab'); });
-    var KEY = 'galleryAdminTab';
+    var KEY = 'galleryAdminTab', baseTitle = '';
     function show(name) {
       if (names.indexOf(name) < 0) name = names.indexOf('settings') >= 0 ? 'settings' : names[0];
       document.documentElement.removeAttribute('data-early');   // (the loading-time rule in the stylesheet: from here the .active section is the one shown)
+      // The page's title says which tab is open (the title was the same for every tab, so the tab strip and a screen reader's page list could not tell them apart).
+      if (!baseTitle) baseTitle = document.title;
+      var cur = tabs.filter(function (t) { return t.getAttribute('data-tab') === name; })[0];
+      if (cur) { var nm = (cur.getAttribute('aria-label') || cur.textContent || '').replace(/\s+\d+\s*$/, '').replace(/\s+/g, ' ').trim(); if (nm) document.title = nm + ' — ' + baseTitle; }
       panels.forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-tab') === name); });
       tabs.forEach(function (t) {
         var on = t.getAttribute('data-tab') === name;
@@ -1442,7 +1482,7 @@
       form.querySelector('.sl-err').textContent = '';
       form.querySelector('[data-openin-menu]').setAttribute('data-want', v.openIn || '');
       if (focusField === 'address') form._addrMode = 'custom';
-      addrSync(form); syncForm(form); form.hidden = false; form.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); form.querySelector(focusField === 'address' ? '[name=address]' : '[name=label]').focus();
+      addrSync(form); syncForm(form); form.hidden = false; form.scrollIntoView({ block: 'nearest', behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth') }); form.querySelector(focusField === 'address' ? '[name=address]' : '[name=label]').focus();
     }
     function formFields(form) {
       var now = Math.floor(Date.now() / 1000), ends = radioValue(form, 'ends_pick'), opens = radioValue(form, 'opens_pick'), scope = radioValue(form, 'scope_type');
@@ -1617,7 +1657,7 @@
         form.hidden = true;
         return refresh().then(function () {
           var row = box.querySelector('details.sl-row[data-id="' + j.id + '"]');
-          if (row) { row.open = true; row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+          if (row) { row.open = true; row.scrollIntoView({ block: 'nearest', behavior: (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth') }); }
           say(editing ? 'Saved.' : 'Link made. Copy it from here.');
         });
       }).catch(function (x) { btn.disabled = false; failed(x); });

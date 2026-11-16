@@ -83,15 +83,27 @@
     document.querySelectorAll('.caption-popover').forEach(function (p) { p.remove(); });
   });
 
+  let lbReturnTo = null;
   function openLightbox(index) {
     if (window.__scrubbedAt && Date.now() - window.__scrubbedAt < 600) return;   // the tap that ends a finger-scrub of a video tile is not a tap
     if (window.__previewHalt) window.__previewHalt();   // a clip playing on a tile stops while the viewer is open
+    // Where the person was (the tile's button, the owner's pencil), so closing the viewer puts them back there. A mouse or a finger leaves nothing
+    // focused, and then there is nothing to go back to.
+    if (!lightbox.classList.contains('open')) {
+      const was = document.activeElement;
+      lbReturnTo = was && was !== document.body && !lightbox.contains(was) ? was : null;
+    }
     current = index;
     updateImage();
     lightbox.classList.add('open');
     toolsFade();
+    // The viewer takes the focus (Tab then starts at Close, and stays inside it: see the key handler), a screen reader is told a dialog opened,
+    // and the page behind is left alone. preventScroll: the page must not jump to wherever the viewer sits in the markup.
+    try { lightbox.focus({ preventScroll: true }); } catch (x) {}
   }
   function closeLightbox() {
+    const back = lbReturnTo; lbReturnTo = null;
+    if (back && lightbox.classList.contains('open')) setTimeout(function () { try { if (document.contains(back) && !lightbox.classList.contains('open')) back.focus({ preventScroll: true }); } catch (x) {} }, 0);
     if (lbEdit && lbEdit.isOpen()) lbEdit.close();
     if (typeof collapseMiniMap === 'function') collapseMiniMap();
     if (typeof setZoom === 'function' && zoomMode !== 'fit') setZoom('fit');

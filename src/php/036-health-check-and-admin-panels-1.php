@@ -157,9 +157,9 @@ function render_admin_password_rows($fromFile) {
             <div class="help">Set. Leave blank to keep it; to change it, type the current one first, then a new one of 8+ characters with a letter and a number. It can't be removed here.</div>
           </div>
           <div class="ctl col">
-            <input type="password" name="pw_admin_current" autocomplete="current-password" placeholder="Current admin password">
-            <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password">
-            <input type="password" name="pw_admin2" autocomplete="new-password" placeholder="Type it again">
+            <input type="password" name="pw_admin_current" autocomplete="current-password" placeholder="Current admin password" aria-label="Current admin password">
+            <input type="password" name="pw_admin" autocomplete="new-password" placeholder="New admin password" aria-label="New admin password">
+            <input type="password" name="pw_admin2" autocomplete="new-password" placeholder="Type it again" aria-label="New admin password, again">
             <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="admin">Change admin password</button><span class="rowstate" role="status" aria-live="polite"></span></span>
           </div>
         </div>
@@ -170,8 +170,8 @@ function render_admin_password_rows($fromFile) {
             <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><div class="warn-note">Removing it ends private view for everyone you gave it to. Nothing is deleted.</div><?php endif; ?>
           </div>
           <div class="ctl col">
-            <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password">
-            <input type="password" name="pw_private2" autocomplete="new-password" placeholder="Type it again">
+            <input type="password" name="pw_private" autocomplete="new-password" placeholder="New private-view password" aria-label="New private-view password">
+            <input type="password" name="pw_private2" autocomplete="new-password" placeholder="Type it again" aria-label="New private-view password, again">
             <span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private">Set private-view password</button><span class="rowstate" role="status" aria-live="polite"></span></span>
             <?php if (PRIVATE_VIEW_PASSWORD !== ''): ?><span class="pwline"><button type="button" class="pw-btn secondary" data-pw="private-remove">Remove it (turn private view off)</button><span class="rowstate" role="status" aria-live="polite"></span></span>
             <label class="muted nojs-only"><input type="checkbox" name="pw_private_remove" value="1"> Remove it (turn private view off)</label><?php endif; ?>
@@ -227,7 +227,7 @@ function render_admin_browsers_panel($csrfToken) {
           <?php if ($hint !== ''): ?><div class="warn-note"><?= $e($hint) ?> Until then every visitor looks like the proxy, so the addresses here tell you nothing.</div><?php endif; ?>
           <div class="br-scroll">
           <table class="br-table">
-            <thead><tr><th>Browser</th><th>Signed in</th><th>Last here</th><th>Last address</th><th>Addresses</th><th>Device changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
+            <thead><tr><th scope="col">Browser</th><th scope="col">Signed in</th><th scope="col">Last here</th><th scope="col">Last address</th><th scope="col">Addresses</th><th scope="col">Device changes</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <?php foreach ($rows as $r): $hs = signin_history_stats($r['id']); ?>
             <tbody class="br-item <?= trim(($r['current'] ? 'br-me ' : '') . ($r['flags'] ? 'br-flagged' : '')) ?>" data-id="<?= $e($r['id']) ?>">
               <tr class="br-main">
@@ -254,7 +254,7 @@ function render_admin_browsers_panel($csrfToken) {
             <summary>Recently signed out (<?= count($ended) ?>)<span class="muted"> · kept <?= (int) BROWSER_ENDED_DAYS ?> days</span></summary>
             <div class="br-scroll">
             <table class="br-table br-table-ended">
-              <thead><tr><th>Browser</th><th>Signed in</th><th>Signed out</th><th>Why</th><th>Addresses</th><th>Device changes</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th scope="col">Browser</th><th scope="col">Signed in</th><th scope="col">Signed out</th><th scope="col">Why</th><th scope="col">Addresses</th><th scope="col">Device changes</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
               <?php foreach ($ended as $r): $hasH = is_file(signin_history_path($r['id'])); $hs = $hasH ? signin_history_stats($r['id']) : null; ?>
               <tbody class="br-item" data-id="<?= $e($r['id']) ?>">
                 <tr class="br-main">
@@ -530,7 +530,7 @@ function render_admin_site_settings($csrfToken) {
                 <?php elseif ($d['type'] === 'enum'): ?>
                   <?= count($d['options']) >= 3 ? ui_menu('set_' . $name, $d['options'], $now, $d['label']) : ui_segmented('set_' . $name, $d['options'], ($name === 'PHOTO_SORT_ORDER' && $now === 'mtime') ? 'taken' : $now, $d['label']) ?>
                 <?php elseif ($d['type'] === 'text'): ?>
-                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
+                  <input type="text" name="set_<?= $esc($name) ?>" value="<?= $esc($now) ?>" placeholder="empty = off" aria-label="<?= $esc($d['label']) ?>" spellcheck="false" autocomplete="off" data-label="<?= $esc($d['label']) ?>" style="max-width:180px;">
                 <?php elseif ($d['type'] === 'folders'): $extraNamed = (array) EXTRA_FOLDERS; $extraRoots = array_values((array) EXTRA_ROOTS); ?>
                   <div class="extra-folders" data-name="set_<?= $esc($name) ?>" data-map="<?= $esc(json_encode(['named' => (object) $extraNamed, 'roots' => $extraRoots], JSON_HEX_TAG)) ?>" data-label="<?= $esc($d['label']) ?>">
                     <ul class="extra-list"><?php foreach ($extraRoots as $rpath): ?><li><span class="extra-what"><code><?= $esc($rpath) ?></code></span><button type="button" class="extra-remove secondary" data-kind="root" data-name="<?= $esc($rpath) ?>">Remove</button><span class="muted extra-note">&rarr; its folders are at the top of the gallery</span></li><?php endforeach; ?><?php foreach ($extraNamed as $fname => $fpath): ?><li><span class="extra-what"><strong><?= $esc($fname) ?></strong> <span class="muted">&rarr;</span> <code><?= $esc($fpath) ?></code></span><button type="button" class="extra-remove secondary" data-kind="named" data-name="<?= $esc($fname) ?>">Remove</button></li><?php endforeach; ?></ul>
@@ -542,7 +542,7 @@ function render_admin_site_settings($csrfToken) {
                     </div>
                   </div>
                 <?php else: ?>
-                  <input type="number" name="set_<?= $esc($name) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="<?= $esc($d['step'] ?? '1') ?>" value="<?= $esc($now) ?>" style="max-width:110px;">
+                  <input type="number" name="set_<?= $esc($name) ?>" aria-label="<?= $esc($d['label']) ?>" min="<?= (int) $d['min'] ?>" max="<?= (int) $d['max'] ?>" step="<?= $esc($d['step'] ?? '1') ?>" value="<?= $esc($now) ?>" style="max-width:110px;">
                 <?php endif; ?>
 
                 <span class="rowstate" role="status" aria-live="polite"></span>

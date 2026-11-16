@@ -161,15 +161,15 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
         <div class="sl-f"><span class="sl-k">How many browsers can open it?</span>
           <?php $du = (int) DEFAULT_LINK_USES; $duPick = in_array($du, [0, 1, 2, 5, 10], true) ? (string) $du : 'n'; ?>
           <?= ui_segmented('opens_pick', ['1' => 'Just one', '2' => '2', '5' => '5', '10' => '10', '0' => 'Unlimited', 'n' => 'Other…'], $duPick, 'Browsers') ?>
-          <input type="number" name="opens_other" min="1" max="100000" value="<?= $duPick === 'n' ? $du : 3 ?>"<?= $duPick === 'n' ? '' : ' hidden' ?>>
+          <input type="number" name="opens_other" aria-label="How many browsers can open it" min="1" max="100000" value="<?= $duPick === 'n' ? $du : 3 ?>"<?= $duPick === 'n' ? '' : ' hidden' ?>>
           <span class="sl-h">Counted per browser, not per page. Once someone is in, they can keep looking until the link ends.</span></div>
         <div class="sl-f"><span class="sl-k">When does it stop working?</span>
           <?= ui_segmented('ends_pick', ['86400' => '1 day', '604800' => '1 week', '2592000' => '30 days', 'pick' => 'Pick a date…', '0' => 'Never'], '0', 'Ends') ?>
-          <input type="datetime-local" name="ends_at_local" hidden>
+          <input type="datetime-local" name="ends_at_local" aria-label="The date and time it stops working" hidden>
           <span class="sl-h">In your browser's time zone. People already inside are signed out at that moment.</span></div>
         <div class="sl-f"><span class="sl-k">Starts</span>
           <?= ui_segmented('starts_pick', ['now' => 'Immediately', 'pick' => 'Pick a date…'], 'now', 'Starts') ?>
-          <input type="datetime-local" name="starts_at_local" hidden></div>
+          <input type="datetime-local" name="starts_at_local" aria-label="The date and time it starts" hidden></div>
         <button type="button" class="linklike sl-grp-reset" data-sl="grpreset" data-grp-reset hidden>Back to the defaults</button>
          </div></details>
 
@@ -192,7 +192,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
          <div class="sl-grp-b">
         <div class="sl-f"><span class="sl-k">Title on the opening page and in message previews</span>
           <?= ui_segmented('title_mode', ['gallery' => 'The gallery\'s title', 'neutral' => 'A neutral title', 'custom' => 'My own text…'], 'gallery', 'Title') ?>
-          <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" hidden>
+          <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" aria-label="Your own title" hidden>
           <label class="sl-only sl-pic"><input type="checkbox" name="picture" checked> <span><strong>Show a preview photo</strong> <small>In message previews and on the opening page, the same one every time for this link: the front page's own cover photo if it has one and it is public, else a cover from one of the public folders, or a photo you choose. Never a private photo and never a folder name. It starts on with the gallery's title and off with the other two, since a photo says which gallery it is. Without a photo the icon is the gallery's.</small></span></label>
           <div class="sl-coverrow" data-coverrow hidden>
             <span class="sl-coverimg" aria-hidden="true"><img alt="" hidden></span>

@@ -100,13 +100,13 @@
     document.querySelectorAll('.priv-toggle').forEach(function (b) {
       const f = b.getAttribute('data-file'), k = lockKind(f), addr = k === 'aon' || k === 'aoff', on = addr ? k === 'aoff' : !!ownerState.priv[f];
       b.classList.toggle('is-private', on); b.classList.toggle('is-folder', k === 'inh'); b.classList.toggle('is-addr', addr); b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.title = lockTitle(f);
+      b.title = lockTitle(f); b.setAttribute('aria-label', b.title);
       b.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + (on ? 'lock' : 'unlock') + '"></use></svg>' + (addr ? '' : (k === 'inh' ? '<span>Folder</span>' : (on ? '<span>Private</span>' : '')));
     });
     document.querySelectorAll('.cover-toggle').forEach(function (b) {
       const on = !!ownerState.cover[b.getAttribute('data-file')];
       b.classList.toggle('is-cover', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.title = on ? 'This is the folder’s cover photo' : 'Make this the folder’s cover photo';
+      b.title = on ? 'This is the folder’s cover photo' : 'Make this the folder’s cover photo'; b.setAttribute('aria-label', b.title);
     });
     const file = files[current], lc = document.getElementById('lightbox-cover'), lp = document.getElementById('lightbox-private');
     if (lc && file !== undefined) {

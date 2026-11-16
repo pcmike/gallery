@@ -5,6 +5,7 @@
 </style>
 </head>
 <body<?= $inframe ? ' class="inframe"' : ' class="pb-on"' ?>>
+<a class="skip-link" href="#admin-main">Skip to the content</a>
 <?= ui_icon_sprite() ?>
 <?= $inframe ? shell_frame_script('admin') : owner_phone_bar('admin', $files, $adminFolderPath, (bool) ($adminHidden || $adminEdited['total'] > 0), '', admin_nav_counts($dir, $files), (int) $adminEdited['total']) ?>
 <header class="admin-bar">
@@ -48,7 +49,7 @@
     <?= render_admin_folder_nav($files, $adminFolderPath) ?: '<p class="muted">No subfolders.</p>' ?>
   </details>
 </aside>
-<main class="admin-main"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
+<main class="admin-main" id="admin-main" tabindex="-1"<?= !empty($GLOBALS['__admin_fresh']) ? ' data-land="features"' : '' ?>>
 <script>(function () {   // Before the sections are drawn: hide them all, and let the one the address or the last visit names show as soon as it is drawn, so no other section flashes up while the page loads (the tab script below takes over, and without JavaScript every section stays visible).
   var m = document.currentScript.parentNode, n = ['features', 'hidden', 'links', 'visits', 'changes', 'settings', 'notes', 'collections', 'site'], h = '', s = '';
   try { h = decodeURIComponent((location.hash || '').slice(1)); } catch (e) {}
@@ -193,7 +194,7 @@
           <div class="field-row md-actions">
             <div class="field">
               <label>Save as a different filename (optional)</label>
-              <input type="text" name="new_name" class="adm-newname" placeholder="leave blank to overwrite this file">
+              <input type="text" name="new_name" class="adm-newname" aria-label="Save as a different filename (optional)" placeholder="leave blank to overwrite this file">
             </div>
             <button type="submit">Save</button>
           </div>
@@ -217,7 +218,7 @@
         <div class="field-row md-actions">
           <div class="field">
             <label>Filename</label>
-            <input type="text" name="new_name" class="adm-newname" placeholder="notes.md" required>
+            <input type="text" name="new_name" class="adm-newname" aria-label="Filename" placeholder="notes.md" required>
           </div>
           <button type="submit">Create</button>
         </div>

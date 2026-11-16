@@ -8,6 +8,7 @@
 </head>
 <?php $shellOwner = ADMIN_PASSWORD !== '' && is_admin_browser(); $shellInframe = $shellOwner && !empty($_GET['inframe']); ?>
 <body<?= $shellInframe ? ' class="inframe"' : ($shellOwner ? ' class="pb-on"' : '') ?>>
+<a class="skip-link" href="#content">Skip to the photos</a>
 <?= ui_icon_sprite() ?>
 <?php if ($shellOwner): ?><div id="live-folder" hidden data-folder="<?= htmlspecialchars((string) $currentFolderPath, ENT_QUOTES, 'UTF-8') ?>" data-last="<?= changes_last_id() ?>" data-noun="<?= ENABLE_VIDEO ? 'item' : 'photo' ?>"></div><?php endif; ?>
 <?php // Once the page has scrolled, two round buttons float at the bottom right of the screen: to the top, and to the bottom. The same on every page and device. ?>
@@ -517,7 +518,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php endif; ?>
 </div>
 <?php endif; ?>
-<div class="lightbox" id="lightbox">
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Photo viewer" tabindex="-1">
   <button class="close" type="button" onclick="closeLightbox()" aria-label="Close"><?= ui_icon('close') ?></button>
   <button class="nav prev" type="button" onclick="navigate(-1)" aria-label="Previous"><?= ui_icon('chev-left') ?></button>
   <img id="lightbox-img" src="" alt="">
@@ -545,10 +546,10 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
 <?php if (is_admin_browser()): ?>
     <button class="lightbox-copy owner-newaddr" id="lightbox-newaddr" type="button" title="New link: the old one stops working" aria-label="New link: the old one stops working" hidden><?= ui_icon('linkoff') ?></button>
 <?php endif; ?>
-    <button class="lightbox-copy" id="lightbox-copy-btn" title="Copy link"><?= ui_icon('link') ?></button>
-    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" hidden><?= ui_icon('globe') ?></a>
+    <button class="lightbox-copy" id="lightbox-copy-btn" type="button" title="Copy link" aria-label="Copy link"><?= ui_icon('link') ?></button>
+    <a class="lightbox-copy lightbox-web" id="lightbox-web" href="#" target="_blank" rel="noopener noreferrer" title="Information link" aria-label="Information link" hidden><?= ui_icon('globe') ?></a>
 <?php if (ENABLE_PHOTO_LOCATION): ?>
-    <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>
+    <button class="lightbox-copy lightbox-map-toggle" id="lightbox-map-toggle" type="button" title="Show or hide the little map" aria-label="Show or hide the little map" hidden><?= ui_icon('pin') ?></button>
 <?php endif; ?>
     </div>
     <span class="tools-more tools-more-l" aria-hidden="true"><?= ui_icon('chev-left') ?></span>
@@ -610,6 +611,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       $c = $itemsData[$f]['caption'] ?? '';
       return ($c !== '' && is_string($c)) ? $c : null;
   }, $files)) ?>;
+  // What a screen reader says for the big picture: the caption, else the file name without its folder ("Photo" on a Not listed photo's own page).
+  const altTexts = <?= js_json(array_map(function ($f) use ($itemsData) { return photo_alt_text($f, $itemsData[$f] ?? [], photo_ref($f) !== $f); }, $files)) ?>;
   // Where each file was taken, only for photos whose location is meant to be public and only when the map feature
   // is on (the little map in the viewer loads a third-party map, like the overview map does), and each file's web link.
   const locations = <?= js_json(array_map(function ($f) use ($itemsData) {

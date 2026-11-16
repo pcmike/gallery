@@ -63,7 +63,7 @@
       const a = document.createElement('a'); a.href = '#' + sec.id;
       const priv = sec.getAttribute('data-sec-priv');
       if (priv) {
-        a.className = 'priv'; a.title = priv === 'own' ? 'Private folder' : 'Hidden because a folder above it is private';
+        a.className = 'priv'; a.title = priv === 'own' ? 'Private folder' : 'Hidden because a folder above it is private';   // (the folder's name follows the icon, so the name says which folder; the title says why it is marked)
         a.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-lock"></use></svg>';
       }
       a.appendChild(document.createTextNode(sec.getAttribute('data-sec')));

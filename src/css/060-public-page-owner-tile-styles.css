@@ -23,6 +23,8 @@
     line-height: 1;
   }
   a.item-badge { pointer-events: auto; }
+  /* On a touch screen the 20 px badge keeps its look, and a larger invisible area around it takes the finger (a near miss no longer opens the photo: 28 by 28 px, touching its neighbour's). */
+  @media (pointer: coarse) { .item-badge { position: relative; } .item-badge::after { content: ''; position: absolute; inset: -4px; } }
   .item-badge.caption-badge { pointer-events: auto; cursor: pointer; }
   /* The same answer as the owner's lock and star: over a caption, location or link badge it lights up (a ring, the accent colour, a
      little larger), and pressing it sinks it, so it is clear it is a button. */
@@ -169,6 +171,7 @@
     touch-action: none;
   }
   .lightbox.open { display: flex; }
+  .lightbox:focus { outline: none; }   /* (the viewer itself takes the focus when it opens; only the buttons inside show a ring) */
   .lightbox img, .lightbox video {
     object-fit: contain;   /* whatever size the box ends up, the picture inside keeps its own shape (Safari clamps one side of an image in a flex box without the other) */
     max-width: 90vw;

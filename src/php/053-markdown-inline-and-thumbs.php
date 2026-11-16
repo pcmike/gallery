@@ -49,6 +49,19 @@ function markdown_to_plaintext($text, $maxLen = 160) {
     return unprotect_inline_code($text);
 }
 
+/** The words that name a small picture under a note (what a screen reader says on it): "Open photo: <caption or file name>". */
+function thumb_open_label($file, $vt) {
+    return 'Open ' . ($vt['inner'] !== '' ? 'video' : 'photo') . ': ' . photo_alt_text($file, ($GLOBALS['itemsData'] ?? [])[$file] ?? [], false);
+}
+/** A small picture under a note. A photo's picture is itself the control (a button to a keyboard, named by its caption or file name);
+ *  a video's picture sits inside a button-span that says so (see render_group_thumbs). Enter and Space press either (see the page script). */
+function thumb_open_html($file, $idx, $vt) {
+    $alt = htmlspecialchars(photo_alt_text($file, ($GLOBALS['itemsData'] ?? [])[$file] ?? [], false), ENT_QUOTES, 'UTF-8');
+    $src = htmlspecialchars(img_url($file, 'thumb'), ENT_QUOTES, 'UTF-8');
+    if ($vt['inner'] === '') return '<img src="' . $src . '" loading="lazy" role="button" tabindex="0" data-open="1" onclick="openLightbox(' . (int) $idx . ')" alt="' . $alt . '">';
+    return '<img src="' . $src . '" loading="lazy" alt="">';
+}
+
 /**
  * Small clickable thumbnail strip + jump link + live-updatable view total
  * for a photo group, shown right under the paragraph that mentions it.
@@ -77,10 +90,8 @@ function render_group_thumbs($key, $groupFiles, $allFiles, $photoViews, $status,
         $idx = array_search($gf, $allFiles, true);
         if ($idx === false) continue;
         $vt = video_tile_parts($gf, $GLOBALS['videoDurations'][$gf] ?? null);
-        $img = '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
-             . '" loading="lazy" ' . ($vt['inner'] === '' ? 'onclick="openLightbox(' . (int)$idx . ')" ' : '') . 'alt="'
-             . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
-        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
+        $img = thumb_open_html($gf, $idx, $vt);
+        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' role="button" tabindex="0" data-open="1" aria-label="' . htmlspecialchars(thumb_open_label($gf, $vt), ENT_QUOTES, 'UTF-8') . '" onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
     }
     $html .= '</div>';
     $html .= '<div class="linked-photos-meta">';
@@ -109,10 +120,8 @@ function render_photo_thumbs_plain($clusterFiles, $allFiles, $permalinkHtml = ''
         $idx = array_search($gf, $allFiles, true);
         if ($idx === false) continue;
         $vt = video_tile_parts($gf, $GLOBALS['videoDurations'][$gf] ?? null);
-        $img = '<img src="' . htmlspecialchars(img_url($gf, 'thumb'), ENT_QUOTES, 'UTF-8')
-             . '" loading="lazy" ' . ($vt['inner'] === '' ? 'onclick="openLightbox(' . (int)$idx . ')" ' : '') . 'alt="'
-             . htmlspecialchars($gf, ENT_QUOTES, 'UTF-8') . '">';
-        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
+        $img = thumb_open_html($gf, $idx, $vt);
+        $html .= $vt['inner'] === '' ? $img : '<span class="vthumb vtile"' . $vt['attrs'] . ' role="button" tabindex="0" data-open="1" aria-label="' . htmlspecialchars(thumb_open_label($gf, $vt), ENT_QUOTES, 'UTF-8') . '" onclick="openLightbox(' . (int)$idx . ')">' . $img . $vt['inner'] . '</span>';
     }
     $html .= '</div>';
     if ($permalinkHtml !== '') {
@@ -129,7 +138,7 @@ function render_photo_thumbs_plain($clusterFiles, $allFiles, $permalinkHtml = ''
  */
 function render_permalink_button($anchorId) {
     return '<a class="permalink-copy" href="#' . htmlspecialchars($anchorId, ENT_QUOTES, 'UTF-8')
-         . '" title="Copy link">' . ui_icon('link') . '</a>';
+         . '" title="Copy link" aria-label="Copy a link to this part of the page">' . ui_icon('link') . '</a>';
 }
 
 /** Whether a rendered notes file has nothing to show: no text and no

@@ -107,6 +107,53 @@ try:
     ok(r is not None and r["shown"] and r["inside"] and r["w"] > 40 and r["h"] > 10, "tapping the caption badge shows a popover inside its card", str(r))
     ok(r is not None and r["text"] and not r["lightboxOpened"], "...holding the caption text, without also opening the lightbox", str(r))
     b.js("document.body.click()"); ok(b.js("document.querySelector('.caption-popover') === null"), "...and tapping elsewhere dismisses it")
+    # ---------------- keyboard: the tiles and the viewer (no mouse) ----------------
+    print("== keyboard: tiles and viewer")
+    def kp(key, code, vk, text=None, shift=False):
+        p = {"key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": 8 if shift else 0}
+        b.call("Input.dispatchKeyEvent", dict(p, type="keyDown", **({"text": text} if text else {})))
+        b.call("Input.dispatchKeyEvent", dict(p, type="keyUp")); b.drain(0.15)
+    LB_OPEN = "document.getElementById('lightbox').classList.contains('open')"
+    b.goto(B + "/", 1.5); b.js("document.activeElement && document.activeElement.blur(); window.scrollTo(0, 0)")
+    reached = False
+    for _ in range(80):
+        kp("Tab", "Tab", 9)
+        if b.js("!!document.activeElement && document.activeElement.classList.contains('tile-open')"): reached = True; break
+    ok(reached, "[keyboard] Tab reaches a photo tile (a button laid over the picture)")
+    tname = b.js("document.activeElement.getAttribute('aria-label')") or ""
+    ok(tname.startswith("Open photo: ") or tname.startswith("Open video: "), "[keyboard] ...and it is named for what it opens", tname)
+    ok(b.js("getComputedStyle(document.activeElement).outlineStyle") == "solid" and b.js("getComputedStyle(document.activeElement).outlineWidth") != "0px", "[keyboard] ...with a visible ring while it has the focus")
+    tidx = b.js("[...document.querySelectorAll('.tile-open')].indexOf(document.activeElement)")
+    ok(b.js("(() => { const t = document.activeElement.getBoundingClientRect(), c = document.activeElement.closest('.card').getBoundingClientRect(); return Math.abs(t.width - c.width) < 2 && Math.abs(t.height - c.height) < 2; })()"), "[keyboard] ...covering the whole tile")
+    y_before = b.js("scrollY")
+    kp("Enter", "Enter", 13, "\r")
+    ok(b.js(LB_OPEN), "[keyboard] Enter on a focused tile opens the viewer")
+    ok(b.js("document.activeElement === document.getElementById('lightbox')") and b.js("document.getElementById('lightbox').getAttribute('role')") == "dialog" and b.js("document.getElementById('lightbox').getAttribute('aria-modal')") == "true", "[keyboard] ...which takes the focus and is a dialog (role, aria-modal)", b.js("document.activeElement.id + '/' + document.activeElement.tagName"))
+    stay = True
+    for i in range(24):
+        kp("Tab", "Tab", 9, shift=(i % 2 == 1) and i > 10)
+        if not b.js("document.getElementById('lightbox').contains(document.activeElement)"): stay = False; break
+    ok(stay, "[keyboard] Tab and Shift+Tab 24 times never leave the viewer (the page behind is out of reach)", b.js("document.activeElement.tagName + '.' + document.activeElement.className"))
+    b.js("document.getElementById('lightbox').focus()"); kp("Tab", "Tab", 9, shift=True)
+    ok(b.js("document.getElementById('lightbox').contains(document.activeElement) && document.activeElement !== document.getElementById('lightbox')"), "[keyboard] Shift+Tab from the top of the viewer goes to its last button, not out to the page")
+    kp("Escape", "Escape", 27)
+    ok(not b.js(LB_OPEN), "[keyboard] Escape closes the viewer")
+    ok(b.js("[...document.querySelectorAll('.tile-open')].indexOf(document.activeElement)") == tidx, "[keyboard] ...and the focus is back on the tile that opened it", str(b.js("document.activeElement.tagName + '.' + document.activeElement.className")))
+    y1 = b.js("scrollY"); kp(" ", "Space", 32, " ")
+    ok(b.js(LB_OPEN) and b.js("scrollY") == y1, "[keyboard] Space on a focused tile opens the viewer and does not scroll the page behind it", f"{y1} -> {b.js('scrollY')}")
+    kp("Escape", "Escape", 27)
+    b.js("(() => { const bd = document.querySelector('.caption-badge'); bd.focus(); })()"); kp("Enter", "Enter", 13, "\r")
+    ok(not b.js(LB_OPEN) and b.js("document.querySelector('.caption-popover') !== null"), "[keyboard] Enter on a badge inside a tile does its own job and does not also open the viewer")
+    b.js("document.body.click()")
+    ok(b.js("[...document.querySelectorAll('.card .tile-open')].every(x => x.closest('.card') && x.parentElement.classList.contains('card') && x.querySelector('a, button') === null)"), "[keyboard] every tile button is a direct child of its tile and holds no other control (no control inside a control)")
+    ok(b.js("[...document.querySelectorAll('.linked-photos-thumbs [data-open]')].every(x => x.getAttribute('tabindex') === '0' && x.getAttribute('role') === 'button')"), "[keyboard] the small pictures under a note are buttons too")
+    # a link button pressed twice within its moment goes back to the link picture (it used to keep the tick until the page was reloaded)
+    if b.js("!!document.querySelector('.permalink-copy')"):
+        b.js("(() => { const l = document.querySelector('.permalink-copy'); window.__pl = l; l.click(); l.click(); })()"); b.drain(0.4)
+        said = b.js("(document.getElementById('sr-live') || {}).textContent")
+        b.drain(1.8)
+        ok(b.js("!window.__pl.classList.contains('copied') && window.__pl.innerHTML.includes('#i-link')"), "[copy tick] a link button pressed twice in a row gets its link picture back (not stuck on the tick)", b.js("window.__pl.innerHTML")[:120])
+        ok(said == "Link copied", "[copy tick] ...and the copy is said aloud too: a polite status line reads 'Link copied'", str(said))
     # folders
     cover = b.js("(() => { const a = document.querySelector('.folder-cover-link'); return a ? a.getAttribute('href') : null; })()")
     ok(cover is not None, "folder cover cards are present"); 
@@ -492,6 +539,11 @@ try:
     b.js("document.querySelector('.card[data-file=\"p1.jpg\"]').click()"); b.drain(0.4)
     sp2 = b.js("(() => { const c = document.querySelector('.card[data-file=\"p1.jpg\"]'), m = c.querySelector('.sel-mark').getBoundingClientRect(), r = c.getBoundingClientRect(), t = c.querySelector('.priv-toggle').getBoundingClientRect(); return {sel: c.classList.contains('sel'), bottomLeft: m.bottom > r.bottom - 14 && m.left < r.left + 14, overlap: !(m.right < t.left || m.left > t.right || m.bottom < t.top || m.top > t.bottom), still: c.querySelector('.priv-toggle').classList.contains('is-private')}; })()")
     ok(sp2["sel"] and sp2["bottomLeft"] and not sp2["overlap"] and sp2["still"], "[select mode] pressing the tile picks it (the privacy is unchanged), and the tick is at the bottom left, clear of the pill", str(sp2))
+    for _i in range(2):
+        b.js("document.querySelector('.card[data-file=\"p2.jpg\"] .tile-open').focus()")
+        b.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "text": "\r"}); b.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13}); b.drain(0.3)
+        if _i == 0: kb_on = b.js("document.querySelector('.card[data-file=\"p2.jpg\"]').classList.contains('sel')") and not b.js("document.getElementById('lightbox').classList.contains('open')")
+    ok(kb_on and not b.js("document.querySelector('.card[data-file=\"p2.jpg\"]').classList.contains('sel')"), "[select mode] Enter on a focused tile picks it (and does not open the viewer), and Enter again lets it go: the owner can choose photos from the keyboard")
     SBTN = "[...document.querySelectorAll('#select-bar .select-btns button')].filter(x => x.offsetParent !== null).map(x => x.innerText.trim())"
     ok(b.js(SBTN)[:1] == ["Make public"] and "Make private" not in b.js(SBTN), "[select] with only a private photo picked the bar offers Make public (Make private would change nothing)", str(b.js(SBTN)))
     b.js("document.querySelector('.card[data-file=\"p2.jpg\"]').click()"); b.drain(0.3)
@@ -1212,6 +1264,11 @@ try:
     b.swipe(200, 400, 210, 200); ok(isopen(), "swiping UP does not close it")
     b.swipe(200, 300, 205, 600); ok(not isopen(), "swiping DOWN closes the lightbox")
     shot(b, "10-after-swipe-close")
+    b.js("openLightbox(files.findIndex(f => !f.includes('/')))"); b.drain(0.5); c3 = cap()
+    b.pinch(200, 400, 60, 220); ok(isopen() and cap() == c3, "[pinch] spreading two fingers in the viewer does not turn to another photo", f"{c3!r} -> {cap()!r}")
+    b.pinch(200, 400, 220, 60); ok(isopen() and cap() == c3, "[pinch] ...nor does pinching them together", f"{c3!r} -> {cap()!r}")
+    b.swipe(300, 400, 100, 410); ok(cap() != c3, "[pinch] ...and a swipe straight afterwards still turns the page", cap())
+    b.js("closeLightbox()")
     # the arrows never cross a folder boundary
     b.goto(B + "/", 1.5)
     seen = b.js("""(() => { const dir = f => f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '';
@@ -2555,7 +2612,7 @@ try:
         ok(wait18("document.querySelector('.priv-folder-form .rowstate').textContent === 'Saved'") and "restriction" not in items18() and not b.js("document.querySelector('.priv-folder-form input[type=checkbox]').checked"), "[privacy] Make public opens the folder")
         import urllib.request
         vis = urllib.request.urlopen(B18 + "/?folder=Churches").read().decode("utf-8", "replace")
-        ok('alt="Churches/a.jpg"' in vis and 'alt="Churches/c.jpg"' in vis and 'alt="Churches/d.jpg"' in vis and 'alt="Churches/b.jpg"' not in vis, "[privacy] a visitor now sees the three photos that followed the folder, and not the one kept private")
+        ok('alt="a.jpg"' in vis and 'alt="c.jpg"' in vis and 'alt="d.jpg"' in vis and 'alt="b.jpg"' not in vis, "[privacy] a visitor now sees the three photos that followed the folder, and not the one kept private")
         # a phone: one row of three, the banner fits, the settings fit
         b.call("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True})
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
@@ -3079,7 +3136,7 @@ try:
         shot(b, "20b-link-one-photo")
         b.goto(BL + "/?folder=Rome&x=1", 1.2)
         alts = b.js("[...document.querySelectorAll('.gallery .card img')].map(i => i.getAttribute('alt'))")
-        ok(alts == ["Rome/r1.jpg"], "[share links] ...and closing it shows the folder with only that photo in it (Rome's other private photo is not there)", str(alts))
+        ok(alts == ["r1.jpg"], "[share links] ...and closing it shows the folder with only that photo in it (Rome's other private photo is not there)", str(alts))
         # --- the owner's Shares tab ---
         b.goto(BL + "/?admin", 1.2)
         b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": LPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
@@ -3741,6 +3798,11 @@ try:
         ok(b.js("document.querySelector('.gs-title').textContent") == "Share just this photo" and b.js("!document.querySelector('.lb-sharepop')"), "[viewer] Share just this photo… closes the question and opens the short form for that photo")
         vp = b.js("""(() => { const m = document.querySelector('.gs-modal'); return {seg: !!m.querySelector('.gs-seg'), ck: m.querySelector('#gs-addr').checked, prev: m.querySelector('.gs-addrprev').textContent, note: !m.querySelector('.gs-addrnote').hidden, rand: !m.querySelector('.gs-addrrand').hidden}; })()""")
         ok(not vp["seg"] and not vp["ck"] and vp["prev"] == "" and not vp["note"] and vp["rand"], "[viewer] ...with no Opens or Stops working rows, and for one private photo (a one-off share) the address starts random: the box is unticked and a line says a random code is made", str(vp))
+        zm0 = b.js("zoomMode"); cur0 = b.js("current"); name0 = b.js("document.querySelector('.gs-modal .gs-name').value"); b.js("document.querySelector('.gs-modal .gs-name').focus()")
+        for kk, cc, vv, tt in (("z", "KeyZ", 90, "z"), ("Z", "KeyZ", 90, "Z"), ("ArrowLeft", "ArrowLeft", 37, None), ("ArrowRight", "ArrowRight", 39, None)):
+            b.call("Input.dispatchKeyEvent", dict({"type": "keyDown", "key": kk, "code": cc, "windowsVirtualKeyCode": vv}, **({"text": tt} if tt else {}))); b.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": kk, "code": cc, "windowsVirtualKeyCode": vv})
+        ok(b.js("zoomMode") == zm0 and b.js("current") == cur0 and b.js("!!document.querySelector('.gs-modal')") and b.js("document.getElementById('lightbox').classList.contains('open')"), "[viewer] typing Z and pressing the arrow keys in the share box over the viewer does not zoom or change the photo behind it", f"{zm0}/{cur0} -> {b.js('zoomMode')}/{b.js('current')}")
+        b.js("(() => { const f = document.querySelector('.gs-modal .gs-name'); f.value = " + json.dumps(name0) + "; f.dispatchEvent(new Event('input', {bubbles: true})); })()")   # (the letters typed above went into the field: put it back as it was)
         b.js("document.querySelector('#gs-addr').click()"); b.drain(0.2)
         ok(b.js("!document.querySelector('.gs-addrnote').hidden") and b.js("document.querySelector('.gs-addrprev').textContent") == "…/auntcarol", "[viewer] ticking the box there switches to the name, with the note that it is easy to guess")
         b.js("document.querySelector('#gs-addr').click()"); b.drain(0.2)

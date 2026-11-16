@@ -37,6 +37,8 @@ Settings are switched in the admin's **Settings**, or in a [settings file](setti
 ### Plain gallery
 Copy `index.php` into the folder. Visitors see every photo in it, and each subfolder as a cover card, by date taken, oldest first, with a full-screen viewer (arrows, swipe). `?photo=name.jpg` opens one photo and previews correctly when pasted into Discord or Reddit. Until you ask, nothing is written but thumbnails. If videos exist while video is off, a collapsed owner-only notice gives a count.
 
+**With a keyboard or a screen reader.** Tab stops on every photo and video (a button named for the caption or the file name); Enter or Space opens the viewer, which takes the focus, keeps Tab inside it, and gives the focus back to the tile when Escape closes it. Left and Right change photo, Z zooms. As the owner, Enter on a tile in *Select* mode picks it. A *Skip to the photos* link comes first on the page.
+
 ### For-sale listing
 Settings: `AUTO_GROUP_BY_FILENAME` on; optionally `TRACK_VIEWS` on (and `SHOW_VIEW_COUNTS_PUBLICLY` off to keep the numbers to yourself).
 1. Copy [`examples/example-forsale.md`](../../examples/example-forsale.md) into the folder as `forsale.md`.

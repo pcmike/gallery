@@ -1,9 +1,31 @@
+  // A small picture under a note, or a clip's picture, is a button: Enter and Space press it (Space must not also scroll the page).
+  document.addEventListener('keydown', (e) => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || e.ctrlKey || e.metaKey || e.altKey || !e.target || !e.target.closest) return;
+    const b = e.target.closest('[data-open]');
+    if (!b || b !== e.target) return;
+    e.preventDefault();
+    b.click();
+  });
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
+    // Another box opened over the viewer (the owner's "Share just this photo", the QR code, a question) has the keys, and so does any field:
+    // typing a name must not zoom or change the photo behind it, nor Escape close the viewer under a box that has just taken it.
+    if (e.target && e.target.closest && e.target.closest('.gs-modal, .gs-large, .fp-modal, .admin-modal, .map-modal')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;   // (a browser's own shortcut: Ctrl+Z, Alt+Left for back)
+    // Tab stays inside the viewer: from the last button to the first and back (a screen reader is told the rest of the page is gone: aria-modal).
+    if (e.key === 'Tab') {
+      const ring = [].slice.call(lightbox.querySelectorAll('button, a[href], input, select, textarea, video[controls], [tabindex]:not([tabindex="-1"])')).filter(function (el) { return !el.disabled && !el.hidden && el.getClientRects().length > 0 && !el.closest('[hidden]'); });
+      if (!ring.length) { e.preventDefault(); return; }
+      const first = ring[0], last = ring[ring.length - 1], at = document.activeElement;
+      if (e.shiftKey && (at === first || at === lightbox || !lightbox.contains(at))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (at === last || !lightbox.contains(at))) { e.preventDefault(); first.focus(); }
+      return;
+    }
     if (lbEdit && lbEdit.isOpen()) {
       if (e.key === 'Escape') { lbEdit.close(); return; }
       if (e.target && e.target.closest && e.target.closest('#lb-editor')) return;   // typing: the arrows, Z and the rest belong to the field
     }
+    if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;   // (any other field: its keys are its own)
     if (e.key === 'Escape') { if (miniExpanded) { collapseMiniMap(); return; } if (zoomMode !== 'fit') { setZoom('fit'); return; } closeLightbox(); return; }
     if (e.key === 'z' || e.key === 'Z') { cycleZoom(); return; }
     // A focused <video>'s native controls already use arrow keys (seek)
@@ -23,12 +45,17 @@
   // Touch gestures: swipe left/right to move between photos, swipe down to close.
   let touchStartX = 0;
   let touchStartY = 0;
+  let multiTouch = false;   // a second finger came down: it is a pinch (or a two-finger drag), never a swipe, until every finger is up
   lightbox.addEventListener('touchstart', (e) => {
+    if (e.touches && e.touches.length > 1) { multiTouch = true; return; }
+    multiTouch = false;
     const t = e.changedTouches[0];
     touchStartX = t.clientX;
     touchStartY = t.clientY;
   }, { passive: true });
+  lightbox.addEventListener('touchcancel', () => { multiTouch = false; }, { passive: true });
   lightbox.addEventListener('touchend', (e) => {
+    if (multiTouch) { if (!e.touches || e.touches.length === 0) multiTouch = false; return; }
     const t = e.changedTouches[0];
     const deltaX = t.clientX - touchStartX;
     const deltaY = t.clientY - touchStartY;
@@ -64,7 +91,16 @@
     legacyCopy(text);
     return Promise.resolve();
   }
+  // The tick is only a picture: say it too, for a screen reader (a polite status line nobody sees).
+  function sayCopied() {
+    let r = document.getElementById('sr-live');
+    if (!r) { r = document.createElement('div'); r.id = 'sr-live'; r.className = 'sr-only'; r.setAttribute('role', 'status'); r.setAttribute('aria-live', 'polite'); document.body.appendChild(r); }
+    r.textContent = '';
+    setTimeout(function () { r.textContent = 'Link copied'; }, 50);
+  }
   function flashCopied(el) {
+    if (el.classList.contains('copied')) return;
+    sayCopied();   // (pressed again within the moment: the first one's timer puts the icon back; keeping the tick as "the original" left it for good)
     const original = el.innerHTML;
     el.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-check"></use></svg>';
     el.classList.add('copied');

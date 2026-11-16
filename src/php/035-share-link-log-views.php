@@ -251,7 +251,7 @@ function visits_link_go($id, array $labels, $bare = false) {
 function visits_blocked_html(array $rows, array $labels) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $reasons = ['expired' => ['expired', 'extend it'], 'used_up' => ['already used', 'raise its browser limit, or extend it'], 'paused' => ['paused', 'resume it'], 'revoked' => ['revoked', 'it was ended on purpose'], 'scheduled' => ['not started', 'it opens on its start date'], 'replaced' => ['old address', 'the link has a new address']];
-    $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table vt-blk"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Link</th><th>First tried</th><th>Last tried</th><th>Tries</th></tr></thead><tbody>';
+    $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table vt-blk"><thead><tr><th scope="col">IP address</th><th scope="col">Where</th><th scope="col">Browser</th><th scope="col">Link</th><th scope="col">First tried</th><th scope="col">Last tried</th><th scope="col">Tries</th></tr></thead><tbody>';
     foreach ($rows as $b) {
         $why = []; $hint = [];
         foreach (array_keys((array) json_decode((string) $b['why'], true)) as $s) { $r = $reasons[$s] ?? [$s, '']; $why[$r[0]] = true; if ($r[1] !== '') $hint[$r[1]] = true; }
@@ -366,7 +366,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
         [$rows, $total] = visits_load_visitors($db, $f, 300);
         $linkSrcs = []; foreach ($rows as $r) if ($r['src'] !== PUBLIC_LOG_ID && $r['src'] !== PRIVATE_LOG_ID && $r['src'] !== LOCKOUT_LOG_ID) $linkSrcs[$r['src']] = true;
         $via = visits_via_map($db, array_keys($linkSrcs), $labels);
-        $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th>IP address</th><th>Where</th><th>Browser</th><th>Came in at</th><th>First seen</th><th>Last seen</th><th>Visits</th><th>Seen</th><th>Opened</th></tr></thead><tbody>';
+        $out = '<div class="sl-scroll"><table class="sl-table sl-cards vt-table"><thead><tr><th scope="col">IP address</th><th scope="col">Where</th><th scope="col">Browser</th><th scope="col">Came in at</th><th scope="col">First seen</th><th scope="col">Last seen</th><th scope="col">Visits</th><th scope="col">Seen</th><th scope="col">Opened</th></tr></thead><tbody>';
         foreach ($rows as $r) {
             $pub = $r['src'] === PUBLIC_LOG_ID; $priv = $r['src'] === PRIVATE_LOG_ID; $lock = $r['src'] === LOCKOUT_LOG_ID; $l = $links[$r['src']] ?? null;
             if ($lock) $came = '<button type="button" class="vt-src" data-src="lockouts" title="Show only the lockouts">Locked out: ' . $esc(lockout_kind_names()[(string) $r['entry_h']] ?? 'sign-in') . (((int) $r['opens']) > 1 ? ' &times;' . (int) $r['opens'] : '') . '</button>';
@@ -394,7 +394,7 @@ function render_visits_fragment($tab, array $f, $dir, $files) {
     if ($tab === 'folders') {
         $fo = visits_folder_stats($m, $opens);
         if (!$fo) return $wrap('<p class="muted sl-none">Nothing has been looked at yet.</p>');
-        $out = '<div class="sl-scroll"><table class="sl-table"><thead><tr><th>Folder</th><th>Opens</th><th>Media seen</th><th>Opened</th><th>Downloaded</th><th>First seen</th><th>Last activity</th></tr></thead><tbody>';
+        $out = '<div class="sl-scroll"><table class="sl-table"><thead><tr><th scope="col">Folder</th><th scope="col">Opens</th><th scope="col">Media seen</th><th scope="col">Opened</th><th scope="col">Downloaded</th><th scope="col">First seen</th><th scope="col">Last activity</th></tr></thead><tbody>';
         foreach ($fo as $rel => $x) {
             $rel = (string) $rel; $priv = $rel !== '' && folder_is_private($dir, $rel);
             $go = function ($n, $what, $text) use ($esc, $rel) { return $n > 0 ? '<button type="button" class="linklike sl-num" data-media="' . $what . '" data-folder="' . $esc($rel === '' ? '/' : $rel) . '">' . $esc($text) . '</button>' : '—'; };
@@ -552,8 +552,8 @@ function render_admin_visits_panel($csrfToken, $dir, $files) {
         <div class="admin-modal-card">
           <h3 id="vt-modal-title">Trim the log</h3>
           <div class="sl-modal-body">
-            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src"><?= visits_trim_options($links) ?></select></div>
-            <div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="vt-trim-age"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="vt-trim-date" hidden></div>
+            <div class="sl-f"><span class="sl-k">Which records</span><select id="vt-trim-src" aria-label="Which records"><?= visits_trim_options($links) ?></select></div>
+            <div class="sl-f"><span class="sl-k">Remove what is older than</span><select id="vt-trim-age" aria-label="Remove what is older than"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="pick">A date&hellip;</option></select> <input type="date" id="vt-trim-date" aria-label="Remove what is older than this date" hidden></div>
             <p class="hint" id="vt-trim-out" role="status">Counting&hellip;</p>
             <p class="hint">Opens, views and the number of visitors stay. To keep the lines themselves, download them first: <a id="vt-trim-dl-events" href="#">the timeline</a> &middot; <a id="vt-trim-dl-items" href="#">what they looked at</a> &middot; <a id="vt-trim-dl-visitors" href="#">visitors</a> (CSV, with IP addresses).</p>
           </div>
