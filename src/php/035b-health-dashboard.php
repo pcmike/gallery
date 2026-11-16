@@ -307,7 +307,8 @@ function health_strip($dir, $files) {
         $out[] = ['Links', number_format($act) . ($other ? ' / ' . number_format($other) : ''), null, $html, number_format($act) . ' in use' . ($other ? ', ' . number_format($other) . ' paused, ended or not started yet' : '')];
     }
     if (visitlog_find() !== null && visitlog_driver_ok()) { $out[] = ['Visitors', number_format(visitlog_visitor_count())]; $out[] = ['Log', health_bytes(visitlog_size())]; }
-    $bk = backup_status(); $out[] = ['Backup', $bk['have'] ? health_ago_short($bk['at']) : 'none', null, null, $bk['have'] ? 'The backup was made ' . health_ago($bk['at']) : 'No backup has been made yet'];
+    $bk = backup_status(); $bkBad = $bk['have'] && (health_heavy($dir, $files, false)['zip'] ?? true) === false;   // (the file read back, as the row below does: a ZIP cut short is not "just now")
+    $out[] = ['Backup', !$bk['have'] ? 'none' : ($bkBad ? 'damaged' : health_ago_short($bk['at'])), null, null, !$bk['have'] ? 'No backup has been made yet' : ($bkBad ? 'The backup file does not check out when it is read back' : 'The backup was made ' . health_ago($bk['at']))];
     $vols = health_volumes($dir, $files);
     if (count($vols) === 1) $out[] = ['Disk free', health_bytes($vols[0]['free'])];
     elseif ($vols) {

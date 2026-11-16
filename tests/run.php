@@ -12297,6 +12297,7 @@ echo "== audit group 13: the backup ==\n";
     $g6Back = $g6Panel();
     check('[backup health] a backup file that was cut short after it was made is not shown as "made just now": a row says the file is damaged and offers Back up now', str_contains($g6Ok, 'Backup: made') && !str_contains($g6Bad, 'Backup: made') && str_contains($g6Bad, 'The backup file is damaged') && str_contains($g6Bad, 'data-backup-act="run"'), substr(strip_tags($g6Bad), 0, 300));
     check('[backup health] ... and a new backup clears it', str_contains($g6Back, 'Backup: made') && !str_contains($g6Back, 'The backup file is damaged'));
+    check('[backup health] the numbers strip says the same: a ZIP cut short reads "damaged" there, not "just now"', str_contains(strip_tags($g6Bad), 'damagedBackup') && !str_contains(strip_tags($g6Ok), 'damagedBackup') && !str_contains(strip_tags($g6Back), 'damagedBackup'), substr(strip_tags($g6Bad), 0, 300));
 
     // ---- D13: what is printed and what is accepted ----
     $g3 = $g13Site('g13-names', ['LOG_PUBLIC_VISITS' => true]);
@@ -12324,6 +12325,19 @@ echo "== audit group 13: the backup ==\n";
     $g11Valid = array_values(array_filter(glob("{$g11['dir']}/.gallery-visits-*.sqlite") ?: [], fn ($f) => preg_match('~/\.gallery-visits-[0-9a-f]{24}\.sqlite$~D', $f)));
     $g11Aside = glob("{$g11['dir']}/.gallery-visits-*.damaged-*.sqlite") ?: [];
     check('[restore] with a second log beside the live one (made by a visit in the moment between), Restore leaves exactly one log, the backup\'s, and every other one is kept aside, never deleted', ($g11Re['ok'] ?? null) === true && $g11Valid === [$g11Live] && count($g11Aside) === 2, json_encode([$g11Re, array_map('basename', $g11Valid), array_map('basename', $g11Aside)]));
+    // ---- X8: a ZIP somebody put beside the backup is never the one Restore and Download use ----
+    $g8 = $g13Site('g13-planted', ['LOG_PUBLIC_VISITS' => true]);
+    for ($i = 0; $i < 3; $i++) http_get($g8['base'] . '/?folder=Alpha');
+    $g8['admin'](['action' => 'backup_run']);
+    $g8Real = $g13Zips($g8['dir'])[0]; $g8Sum = sha1_file($g8Real);
+    $g8Plant = "{$g8['dir']}/.gallery-backup-" . str_repeat('c', 24) . '.zip';
+    $g13Make($g8Plant, ['README.txt' => 'planted', ".gallery-visits-" . str_repeat('d', 24) . ".sqlite" => 'not a database']); touch($g8Plant, time() + 100);
+    $g8Re = $g8['admin'](['action' => 'backup_restore_log']);
+    $g8P = $g8['admin'](['action' => 'backup_download_prepare', 'password' => 'g13-admin-pw-1']);
+    $g8Got = http_get($g8['base'] . '/' . ltrim((string) ($g8P['url'] ?? ''), '/'), $g8['own'])[1];
+    check('[backup planted] a ZIP with a newer date put beside the backup is not the backup: Restore reads the real one (it works), and Download sends the real one, byte for byte', ($g8Re['ok'] ?? null) === true && sha1($g8Got) === $g8Sum, json_encode([$g8Re, strlen($g8Got), filesize($g8Real)]));
+    $g8['admin'](['action' => 'backup_run']);
+    check('[backup planted] ...and the next backup removes it: one ZIP is left', count($g13Zips($g8['dir'])) === 1 && !is_file($g8Plant), json_encode(array_map('basename', $g13Zips($g8['dir']))));
     $g12 = $g13Site('g13-mode', ['LOG_PUBLIC_VISITS' => true]);
     for ($i = 0; $i < 2; $i++) http_get($g12['base'] . '/?folder=Alpha');
     $g12Log = glob("{$g12['dir']}/.gallery-visits-*.sqlite")[0] ?? '';
@@ -12435,6 +12449,9 @@ echo "== audit group 13: the backup ==\n";
     file_put_contents($g14Coll, $g14Guard . json_encode(['collections' => [['id' => 'coll1', 'name' => 'c1']]]));
     $g14Run(); $g14Z = $g13Zips($g14['dir'])[0]; $g14Hp = array_column($g14Held(), 0);
     check('[backup hold] share links (by id) and collections (by id) follow the same rule: six links all gone and three of four collections gone are both held, and the zip keeps the earlier copies', in_array('.gallery-links.php', $g14Hp, true) && in_array('.gallery-collections.php', $g14Hp, true) && count((array) ($g13Json($g13Read($g14Z, '.gallery-links.php'))['links'] ?? [])) === 6 && count((array) ($g13Json($g13Read($g14Z, '.gallery-collections.php'))['collections'] ?? [])) === 4, json_encode($g14Hp));
+    $g14Held0 = count($g14Held()); $g14LockP = "{$g14['dir']}/.gallery-backup.lock"; @unlink($g14LockP); symlink("{$g14['dir']}/nowhere", $g14LockP);
+    $g14Fail = $g14Run(); $g14Page2 = http_get($g14['base'] . '/?admin&classic=1', $g14['own'])[1]; unlink($g14LockP);
+    check('[backup hold] a backup run that fails (here: its lock file is a link, which the gallery won\'t use) does not make Health forget the parts the backup is holding: the rows and their buttons stay', ($g14Fail['ok'] ?? true) === false && $g14Held0 >= 2 && count($g14Held()) === $g14Held0 && substr_count($g14Page2, 'data-backup-act="accept"') >= 2, json_encode([$g14Fail, $g14Held0, count($g14Held())]));
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";

@@ -19,10 +19,14 @@ function backup_all() {
     foreach ((array) glob(__DIR__ . '/.gallery-backup-*.zip') as $f) if (preg_match('~/\.gallery-backup-[0-9a-f]{24}\.zip$~D', $f) && is_file($f) && !is_link($f)) $out[] = $f;
     return $out;
 }
-/** The backup: the newest ZIP (a name that only looks like one, such as one that ends in a line break, is not one). */
+/** The backup: the ZIP the last run wrote (its name is kept in the note), so a ZIP that someone else put beside it, with whatever date, is never the one Restore and Download use (the next run removes it);
+ *  with no note, or its ZIP gone, the newest (a name that only looks like one, such as one that ends in a line break, is not one). */
 function backup_find() {
+    $all = backup_all();
+    $named = (string) (backup_state()['zip'] ?? '');
+    if ($named !== '') foreach ($all as $f) if (basename($f) === $named) return $f;
     $best = null; $bestT = -1;
-    foreach (backup_all() as $f) {
+    foreach ($all as $f) {
         $t = (int) @filemtime($f);
         if ($best === null || $t > $bestT || ($t === $bestT && $f < $best)) { $best = $f; $bestT = $t; }
     }
@@ -244,6 +248,7 @@ function backup_run($manual, $dir, $files) {
     $now = time();
     $busy = ['ok' => false, 'busy' => true, 'why' => 'A backup is being made right now.', 'files' => 0, 'bytes' => 0, 'problems' => []];
     $fail = function ($why, $problems = []) use ($now, $manual) {
+        if (!$problems) $problems = array_values(array_filter((array) (backup_state()['problems'] ?? []), fn ($pr) => is_array($pr) && ($pr[2] ?? '') === 'held'));   // (a run that could not finish does not make Health forget the parts the backup is holding: the ZIP still keeps them)
         backup_state_set(['try_at' => $now, 'by' => $manual ? 'you' : 'auto', 'result' => 'failed', 'why' => $why, 'problems' => $problems]);
         return ['ok' => false, 'busy' => false, 'why' => $why, 'files' => 0, 'bytes' => 0, 'problems' => $problems];
     };
@@ -321,7 +326,7 @@ function backup_run($manual, $dir, $files) {
         if (!@rename($work, $zip)) return $fail('The new backup could not be put in place; the old one is untouched.', $problems);
         foreach (backup_all() as $other) if ($other !== $zip) @unlink($other);   // (one copy: the new one replaces the old, whatever its name)
         $bytes = (int) @filesize($zip);
-        backup_state_set(['ok_at' => $now, 'try_at' => $now, 'by' => $manual ? 'you' : 'auto', 'result' => $problems ? 'partial' : 'ok', 'why' => '', 'files' => count($entries), 'bytes' => $bytes, 'problems' => $problems, 'accept' => []]);
+        backup_state_set(['ok_at' => $now, 'try_at' => $now, 'by' => $manual ? 'you' : 'auto', 'result' => $problems ? 'partial' : 'ok', 'why' => '', 'files' => count($entries), 'bytes' => $bytes, 'problems' => $problems, 'accept' => [], 'zip' => basename($zip)]);
         return ['ok' => true, 'busy' => false, 'why' => '', 'files' => count($entries), 'bytes' => $bytes, 'problems' => $problems];
     } catch (Throwable $e) {
         error_log('gallery: the backup failed: ' . $e->getMessage());
