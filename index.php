@@ -2863,6 +2863,26 @@ function photo_decodes($path) {
     return @getimagesize($path) !== false;
 }
 
+/** Opens a picture for GD, turned the right way up by its EXIF orientation (a JPEG only). The caller is told false when the
+ *  file can't be read or is not a picture GD knows. Raises this request's memory limit first (see image_memory_raise). */
+function gd_open_upright($srcPath) {
+    image_memory_raise();
+    $data = @file_get_contents($srcPath);
+    if ($data === false) return false;
+    $src = @imagecreatefromstring($data);
+    if (!$src) return false;
+    $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
+    if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
+        $exif = @exif_read_data($srcPath);
+        if (!empty($exif['Orientation'])) {
+            if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
+            if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
+            if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
+        }
+    }
+    return $src;
+}
+
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
  *  available, otherwise GD. Returns true on success. The long side ends up at most $maxDim (a picture is never enlarged).
  *  The JPEG is progressive: it paints coarse-to-fine while it loads. */
@@ -2895,21 +2915,8 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
         }
     }
     if (extension_loaded('gd')) {
-        image_memory_raise();
-        $data = @file_get_contents($srcPath);
-        if ($data === false) return false;
-        $src = @imagecreatefromstring($data);
+        $src = gd_open_upright($srcPath);
         if (!$src) return false;
-
-        $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
-        if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
-            $exif = @exif_read_data($srcPath);
-            if (!empty($exif['Orientation'])) {
-                if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
-                if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
-                if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
-            }
-        }
 
         $w = imagesx($src);
         $h = imagesy($src);
@@ -2958,20 +2965,8 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
         }
     }
     if (extension_loaded('gd')) {
-        image_memory_raise();
-        $data = @file_get_contents($srcPath);
-        if ($data === false) return false;
-        $src = @imagecreatefromstring($data);
+        $src = gd_open_upright($srcPath);
         if (!$src) return false;
-        $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
-        if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
-            $exif = @exif_read_data($srcPath);
-            if (!empty($exif['Orientation'])) {
-                if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
-                if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
-                if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
-            }
-        }
         $w = imagesx($src);
         $h = imagesy($src);
         $side = min($w, $h);
@@ -3041,20 +3036,8 @@ function generate_tile_jpegs($srcPath, $targets) {
         if (!$targets) return true;
     }
     if (extension_loaded('gd')) {
-        image_memory_raise();
-        $data = @file_get_contents($srcPath);
-        if ($data === false) return false;
-        $src = @imagecreatefromstring($data);
+        $src = gd_open_upright($srcPath);
         if (!$src) return false;
-        $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
-        if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
-            $exif = @exif_read_data($srcPath);
-            if (!empty($exif['Orientation'])) {
-                if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
-                if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
-                if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
-            }
-        }
         $w = imagesx($src);
         $h = imagesy($src);
         $side = min($w, $h);
@@ -7830,7 +7813,6 @@ function run_reveal_route($dir) {
 
 function collections_path() { return __DIR__ . '/.gallery-collections.php'; }
 function collections_default() { return ['collections' => []]; }
-function collections_read() { return json_file_read(collections_path(), collections_default()); }
 function collections_update($modifier) { collections_cache_reset(); $r = json_file_update(collections_path(), collections_default(), $modifier, true); collections_cache_reset(); return $r; }
 /** Forget what was worked out this request (after a change, and between the parts of a test). */
 function collections_cache_reset() { $GLOBALS['__collections_cache'] = null; $GLOBALS['__collections_registry'] = null; }
@@ -13722,7 +13704,6 @@ KIT_CSS;
   // ---- the short form: Share this folder / photo / these photos
   var modal = null, draftKey = 'galleryShareDraft';
   function seg(name, list, cur) { return '<div class="gs-seg" data-seg="' + name + '" role="radiogroup">' + list.map(function (o) { return '<button type="button" role="radio" aria-checked="' + (String(o[0]) === String(cur)) + '" data-v="' + o[0] + '" class="' + (String(o[0]) === String(cur) ? 'on' : '') + '">' + o[1] + '</button>'; }).join('') + '</div>'; }
-  function segValue(root, name) { var b = root.querySelector('[data-seg=' + name + '] .on'); return b ? b.getAttribute('data-v') : ''; }
   function csrf() { return fetch((cfg.admin || '?admin') + '&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); }).then(function (j) { return j.token; }); }
   function closeModal() { if (modal && modal.parentNode) modal.parentNode.removeChild(modal); modal = null; document.removeEventListener('keydown', onKey, true); }
   function onKey(e) { if (e.key === 'Escape' && modal) { e.preventDefault(); e.stopPropagation(); closeModal(); } }
@@ -15438,12 +15419,6 @@ function link_csv_cell($v) {
     $s = (string) $v;
     if ($s !== '' && strpbrk($s[0], "=+-@\t\r") !== false) $s = "'" . $s;   // a spreadsheet would run it as a formula otherwise
     return '"' . str_replace('"', '""', $s) . '"';
-}
-
-function link_seg_html($name, $options, $current, $label = 'Choose one') {
-    $out = '<div class="sl-segbar" role="group" aria-label="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">';
-    foreach ($options as $v => $t) $out .= '<button type="button" class="sl-segbtn' . ((string) $v === (string) $current ? ' on' : '') . '" data-tab="' . htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($t, ENT_QUOTES, 'UTF-8') . '</button>';
-    return $out . '</div>';
 }
 
 /** Country names by their two-letter codes. */
@@ -18635,7 +18610,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .sl-table tr:last-child td { border-bottom:0; }
   .sl-table .rj .sl-why { color:#e0a028; }
   .sl-ipt { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:0.82rem; }
-  .sl-table .linklike.sl-ipt, .sl-table .linklike.sl-viewed, .sl-table .linklike.sl-num { color:#aab2ff; font-weight:600; }
+  .sl-table .linklike.sl-ipt, .sl-table .linklike.sl-num { color:#aab2ff; font-weight:600; }
   .sl-cards td::before { content:none; }
   @media (max-width: 640px) {
     .sl-cards, .sl-cards tbody, .sl-cards tr, .sl-cards td { display:block; }
@@ -18852,19 +18827,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .site-row.flash-target { outline:2px solid var(--accent); outline-offset:3px; border-radius:6px; }
   .subhead.flash-target { outline:2px solid var(--accent); outline-offset:4px; border-radius:4px; }
   .media-panel.flash-target { outline:2px solid var(--accent); outline-offset:3px; }
-  .dl-folders { margin:10px 0; }
-  .dl-folders[hidden], .dl-none[hidden] { display:none; }
-  .dl-folders .dl-menu { display:block; margin-left:0; }
-  .dl-folders .dl-menu .menu-pop { left:0; right:auto; min-width:max(100%, 260px); max-width:min(440px, 92vw); max-height:320px; overflow:auto; }
-  .dl-opt { display:flex; justify-content:space-between; align-items:center; gap:16px; min-height:44px; padding:0 14px; cursor:pointer; font-size:0.9rem; position:relative; }
-  .dl-opt input { position:absolute; opacity:0; width:100%; height:100%; left:0; top:0; margin:0; cursor:pointer; }
-  .dl-opt .dl-tick { color:#aab2ff; opacity:0; flex:none; }
-  .dl-opt:has(input:checked) { font-weight:600; color:#fff; }
-  .dl-opt:has(input:checked) .dl-tick { opacity:1; }
-  .dl-opt:has(input:focus-visible) { outline:2px solid #aab2ff; outline-offset:-2px; }
-  @media (hover: hover) { .dl-opt:hover { background:rgba(255,255,255,0.07); } }
-  .dl-opt.dl-d1 { padding-left:32px; } .dl-opt.dl-d2 { padding-left:50px; } .dl-opt.dl-d3 { padding-left:68px; } .dl-opt.dl-d4 { padding-left:86px; } .dl-opt.dl-d5 { padding-left:104px; }
-  .dl-none-text { margin:0; }
   .media-panel.in-group { margin:10px 0 14px 12px; padding:12px 14px; background:#141416; border:1px solid #26262a; border-radius:12px; }
   .media-panel .media-title { margin:0 0 8px; font-size:1rem; }
   .fm-btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
@@ -19311,8 +19273,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .coll-switches .coll-front.is-off { opacity:.45; }
   @media (max-width:640px) { .cm-dl { grid-template-columns:max-content 1fr; } }
 
-  .priv-folder-note { margin:2px 0 12px 54px; max-width:68ch; line-height:1.45; }
-  .priv-folder-note strong { color:var(--text); }
   @media (max-width: 600px) {
     /* On a phone a switch keeps its label beside it (a long label wraps within its own column) and its status goes under the label. */
     .instant-row { display:grid; grid-template-columns:42px minmax(0,1fr); column-gap:12px; row-gap:0; align-items:center; }
@@ -19522,7 +19482,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .vt-opt.on { background:#23244a; }
   .vt-opt .tk { margin-left:auto; color:#aab2ff; font-weight:700; }
   .vt-opt .vt-n { margin-left:6px; }
-  .vt-none { padding:8px 10px; margin:0; }
   .vt .cc2 { display:inline-block; min-width:28px; color:#aab2ff; }
   .vt-done { width:100%; min-height:38px; background:#2a2a30; border:0; border-radius:8px; margin-top:6px; color:var(--text); font:inherit; cursor:pointer; }
   .vt-sheetbg { display:none; }
@@ -21773,15 +21732,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   // photos stay private, how many become public) and waits for a yes.
   [].forEach.call(document.querySelectorAll('.priv-folder-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
-    var csrf = form.querySelector('input[name=csrf_token]').value, box = form.querySelector('input[type=checkbox]'), note = form.querySelector('.priv-folder-note');
+    var csrf = form.querySelector('input[name=csrf_token]').value, box = form.querySelector('input[type=checkbox]');
     var node = form.querySelector('.rowstate'), modal = document.getElementById('priv-modal');
     var counts = { stay: +form.getAttribute('data-stay') || 0, open: +form.getAttribute('data-open') || 0 };
     var noun = form.getAttribute('data-noun') || 'photo';
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
     function paint() {
       var dlBlock = document.querySelector('.dl-block'); if (dlBlock) dlBlock.hidden = box.checked;   // (a private folder offers visitors nothing: the download switch is for a public one)
-      if (!note) return;
-      note.innerHTML = box.checked ? note.getAttribute('data-on').replace('%stay%', word(counts.stay)).replace('%open%', word(counts.open)).replace('%becomes%', counts.open === 1 ? 'becomes' : 'become') : note.getAttribute('data-off');
     }
     function say(text, kind) {
       node.textContent = text; node.className = 'rowstate ' + (kind || ''); clearTimeout(node._t);

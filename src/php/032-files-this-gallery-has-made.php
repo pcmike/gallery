@@ -684,7 +684,6 @@ KIT_CSS;
   // ---- the short form: Share this folder / photo / these photos
   var modal = null, draftKey = 'galleryShareDraft';
   function seg(name, list, cur) { return '<div class="gs-seg" data-seg="' + name + '" role="radiogroup">' + list.map(function (o) { return '<button type="button" role="radio" aria-checked="' + (String(o[0]) === String(cur)) + '" data-v="' + o[0] + '" class="' + (String(o[0]) === String(cur) ? 'on' : '') + '">' + o[1] + '</button>'; }).join('') + '</div>'; }
-  function segValue(root, name) { var b = root.querySelector('[data-seg=' + name + '] .on'); return b ? b.getAttribute('data-v') : ''; }
   function csrf() { return fetch((cfg.admin || '?admin') + '&csrf=1', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); }).then(function (j) { return j.token; }); }
   function closeModal() { if (modal && modal.parentNode) modal.parentNode.removeChild(modal); modal = null; document.removeEventListener('keydown', onKey, true); }
   function onKey(e) { if (e.key === 'Escape' && modal) { e.preventDefault(); e.stopPropagation(); closeModal(); } }

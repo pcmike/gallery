@@ -12985,5 +12985,61 @@ echo "== audit group 15: Start counting afresh (view counts whose key is gone) =
     check('[afresh] with a key file that can\'t be read the folder is restarted too: the unreadable key is removed, a new one is made, counting starts at 1', ($r3['ok'] ?? false) === true && ($n3['photoViews'] ?? null) === 1 && preg_match('/"key":\s*"[0-9a-f]{64}"/', (string) $keyOf($al)) === 1, json_encode([$r3, $n3]));
 }
 
+/* --------------------------------------------------------------------- */
+// audit group 17: code nothing uses is gone, and the three copies of "open a picture for GD, turned the right way up" are one
+echo "== audit group 17: dead code removed, one copy of the GD opener ==\n";
+{
+    $g17Src = (string) file_get_contents($indexSrc);
+    $g17Gone = [];
+    foreach (['function collections_read(', 'function link_seg_html(', 'function segValue(', '.priv-folder-note', "note.getAttribute('data-on')"] as $needle) if (str_contains($g17Src, $needle)) $g17Gone[] = $needle;
+    check('[dead code] two functions and a script helper nothing called, and the private-folder note script/rules for markup that is no longer printed, are gone from the built page', $g17Gone === [], json_encode($g17Gone));
+    $g17Css = [];
+    foreach (['dl-folders', 'dl-menu', 'dl-none', 'dl-none-text', 'dl-opt', 'dl-tick', 'dl-d1', 'dl-d2', 'dl-d3', 'dl-d4', 'dl-d5', 'sl-viewed', 'vt-none'] as $cls) if (preg_match('/(?<![\w-])' . preg_quote($cls, '/') . '(?![\w-])/', $g17Src)) $g17Css[] = $cls;
+    check('[dead code] the thirteen style classes nothing prints (the old download folder chooser, "viewed" and "none" leftovers) are gone', $g17Css === [], json_encode($g17Css));
+    // the ones a script found "unused" but that are put together at run time must still be there
+    check('[dead code] ...and the classes that are built from pieces (sl-d1..6 for the indent, ft-opt for the "Per link" chip, ed-pub for the public tag) are still styled', str_contains($g17Src, '.sl-d1') && str_contains($g17Src, '.sl-d6') && str_contains($g17Src, '.ft-opt') && str_contains($g17Src, '.ed-pub'));
+    check('[one copy] the GD "open and turn upright" code is written once (the EXIF rotation lines appear once, in one function)', substr_count($g17Src, 'imagerotate($src, 180, 0)') === 1 && substr_count($g17Src, 'function gd_open_upright(') === 1);
+
+    // The shared opener, run for real: a PHP with only GD to make pictures with (the same binary with Imagick left out), a 40x20 photo
+    // that says "turn me a quarter turn" (EXIF Orientation 6; red on its left half, blue on its right), asked for at each kind of size.
+    // Turned, it is 20 wide and 40 tall with the red half on top. This passes on the build before the change too: it is the proof that
+    // moving the code changed nothing.
+    if (!extension_loaded('exif')) {
+        echo "  skip  [one copy] this PHP has no exif extension, so a photo's turn can't be read here\n";
+    } else {
+        $g17Fx = new_fixture_dir('g17-gd');
+        $g17Im = imagecreatetruecolor(40, 20); imagefilledrectangle($g17Im, 0, 0, 19, 19, imagecolorallocate($g17Im, 220, 20, 20)); imagefilledrectangle($g17Im, 20, 0, 39, 19, imagecolorallocate($g17Im, 20, 20, 220));
+        ob_start(); imagejpeg($g17Im, null, 95); $g17J = (string) ob_get_clean(); unset($g17Im);
+        $g17Tiff = 'MM' . pack('n', 42) . pack('N', 8) . pack('n', 1) . pack('nnN', 0x0112, 3, 1) . pack('nn', 6, 0) . pack('N', 0);
+        $g17Exif = "Exif\0\0" . $g17Tiff;
+        file_put_contents("$g17Fx/turned.jpg", substr($g17J, 0, 2) . "\xFF\xE1" . pack('n', strlen($g17Exif) + 2) . $g17Exif . substr($g17J, 2));
+        copy($indexSrc, "$g17Fx/index.php"); @touch("$g17Fx/index.php", time() - 3600);
+        file_put_contents("$g17Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g17-admin-pw-1', 'ENABLE_THUMBNAIL_CACHE' => true, 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        $g17Port = find_free_port(); $g17Cmd = [PHP_BINARY];
+        if (extension_loaded('imagick')) {
+            $g17Cmd[] = '-n'; $g17ExtDir = (string) ini_get('extension_dir');
+            foreach (get_loaded_extensions() as $ex) if (strtolower($ex) !== 'imagick' && strtolower($ex) !== 'zend opcache' && is_file("$g17ExtDir/" . strtolower($ex) . '.so')) { $g17Cmd[] = '-d'; $g17Cmd[] = 'extension=' . strtolower($ex); }
+        }
+        array_push($g17Cmd, '-d', 'opcache.enable=0', '-S', "127.0.0.1:$g17Port", '-t', $g17Fx);
+        $g17Proc = proc_open($g17Cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $g17Pipes); $cleanupProcs[] = $g17Proc;
+        $g17T = microtime(true) + 5; while (microtime(true) < $g17T) { $c = @fsockopen('127.0.0.1', $g17Port, $e, $m, 0.1); if ($c) { fclose($c); break; } usleep(50000); }
+        $g17Base = "http://127.0.0.1:$g17Port";
+        $g17Probe = function ($size) use ($g17Base) {
+            [$st, $body] = http_get("$g17Base/?img=turned.jpg&size=$size");
+            $im = $st === 200 ? @imagecreatefromstring((string) $body) : false;
+            if (!$im) return ['st' => $st, 'ok' => false];
+            $px = function ($x, $y) use ($im) { $c = imagecolorat($im, $x, $y); return [($c >> 16) & 255, ($c >> 8) & 255, $c & 255]; };
+            $w = imagesx($im); $h = imagesy($im);
+            return ['st' => $st, 'ok' => true, 'w' => $w, 'h' => $h, 'top' => $px((int) ($w / 2), 2), 'bottom' => $px((int) ($w / 2), $h - 3)];
+        };
+        $isRed = fn ($p) => $p[0] > 150 && $p[2] < 100; $isBlue = fn ($p) => $p[2] > 150 && $p[0] < 100;
+        $g17Thumb = $g17Probe('thumb');
+        check('[one copy] with only GD, the photo that asks for a quarter turn comes out standing (20 wide, 40 tall) with its left half on top', ($g17Thumb['ok'] ?? false) && $g17Thumb['w'] === 20 && $g17Thumb['h'] === 40 && $isRed($g17Thumb['top']) && $isBlue($g17Thumb['bottom']), json_encode($g17Thumb));
+        $g17Tile = $g17Probe('tile'); $g17Cover = $g17Probe('cover');
+        check('[one copy] ...and the tile and the folder-cover squares are cut from the turned photo (red above, blue below), not from the lying one', ($g17Tile['ok'] ?? false) && $g17Tile['w'] === 20 && $g17Tile['h'] === 20 && $isRed($g17Tile['top']) && $isBlue($g17Tile['bottom']) && ($g17Cover['ok'] ?? false) && $g17Cover['w'] === 20 && $g17Cover['h'] === 20 && $isRed($g17Cover['top']) && $isBlue($g17Cover['bottom']), json_encode([$g17Tile, $g17Cover]));
+        proc_terminate($g17Proc);
+    }
+}
+
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

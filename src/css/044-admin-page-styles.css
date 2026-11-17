@@ -282,7 +282,7 @@
   .sl-table tr:last-child td { border-bottom:0; }
   .sl-table .rj .sl-why { color:#e0a028; }
   .sl-ipt { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:0.82rem; }
-  .sl-table .linklike.sl-ipt, .sl-table .linklike.sl-viewed, .sl-table .linklike.sl-num { color:#aab2ff; font-weight:600; }
+  .sl-table .linklike.sl-ipt, .sl-table .linklike.sl-num { color:#aab2ff; font-weight:600; }
   .sl-cards td::before { content:none; }
   @media (max-width: 640px) {
     .sl-cards, .sl-cards tbody, .sl-cards tr, .sl-cards td { display:block; }
@@ -499,19 +499,6 @@
   .site-row.flash-target { outline:2px solid var(--accent); outline-offset:3px; border-radius:6px; }
   .subhead.flash-target { outline:2px solid var(--accent); outline-offset:4px; border-radius:4px; }
   .media-panel.flash-target { outline:2px solid var(--accent); outline-offset:3px; }
-  .dl-folders { margin:10px 0; }
-  .dl-folders[hidden], .dl-none[hidden] { display:none; }
-  .dl-folders .dl-menu { display:block; margin-left:0; }
-  .dl-folders .dl-menu .menu-pop { left:0; right:auto; min-width:max(100%, 260px); max-width:min(440px, 92vw); max-height:320px; overflow:auto; }
-  .dl-opt { display:flex; justify-content:space-between; align-items:center; gap:16px; min-height:44px; padding:0 14px; cursor:pointer; font-size:0.9rem; position:relative; }
-  .dl-opt input { position:absolute; opacity:0; width:100%; height:100%; left:0; top:0; margin:0; cursor:pointer; }
-  .dl-opt .dl-tick { color:#aab2ff; opacity:0; flex:none; }
-  .dl-opt:has(input:checked) { font-weight:600; color:#fff; }
-  .dl-opt:has(input:checked) .dl-tick { opacity:1; }
-  .dl-opt:has(input:focus-visible) { outline:2px solid #aab2ff; outline-offset:-2px; }
-  @media (hover: hover) { .dl-opt:hover { background:rgba(255,255,255,0.07); } }
-  .dl-opt.dl-d1 { padding-left:32px; } .dl-opt.dl-d2 { padding-left:50px; } .dl-opt.dl-d3 { padding-left:68px; } .dl-opt.dl-d4 { padding-left:86px; } .dl-opt.dl-d5 { padding-left:104px; }
-  .dl-none-text { margin:0; }
   .media-panel.in-group { margin:10px 0 14px 12px; padding:12px 14px; background:#141416; border:1px solid #26262a; border-radius:12px; }
   .media-panel .media-title { margin:0 0 8px; font-size:1rem; }
   .fm-btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
@@ -958,8 +945,6 @@
   .coll-switches .coll-front.is-off { opacity:.45; }
   @media (max-width:640px) { .cm-dl { grid-template-columns:max-content 1fr; } }
 
-  .priv-folder-note { margin:2px 0 12px 54px; max-width:68ch; line-height:1.45; }
-  .priv-folder-note strong { color:var(--text); }
   @media (max-width: 600px) {
     /* On a phone a switch keeps its label beside it (a long label wraps within its own column) and its status goes under the label. */
     .instant-row { display:grid; grid-template-columns:42px minmax(0,1fr); column-gap:12px; row-gap:0; align-items:center; }
@@ -1169,7 +1154,6 @@
   .vt-opt.on { background:#23244a; }
   .vt-opt .tk { margin-left:auto; color:#aab2ff; font-weight:700; }
   .vt-opt .vt-n { margin-left:6px; }
-  .vt-none { padding:8px 10px; margin:0; }
   .vt .cc2 { display:inline-block; min-width:28px; color:#aab2ff; }
   .vt-done { width:100%; min-height:38px; background:#2a2a30; border:0; border-radius:8px; margin-top:6px; color:var(--text); font:inherit; cursor:pointer; }
   .vt-sheetbg { display:none; }

@@ -207,6 +207,26 @@ function photo_decodes($path) {
     return @getimagesize($path) !== false;
 }
 
+/** Opens a picture for GD, turned the right way up by its EXIF orientation (a JPEG only). The caller is told false when the
+ *  file can't be read or is not a picture GD knows. Raises this request's memory limit first (see image_memory_raise). */
+function gd_open_upright($srcPath) {
+    image_memory_raise();
+    $data = @file_get_contents($srcPath);
+    if ($data === false) return false;
+    $src = @imagecreatefromstring($data);
+    if (!$src) return false;
+    $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
+    if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
+        $exif = @exif_read_data($srcPath);
+        if (!empty($exif['Orientation'])) {
+            if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
+            if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
+            if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
+        }
+    }
+    return $src;
+}
+
 /** Resizes (and, for HEIC, converts) an image to JPEG using Imagick if
  *  available, otherwise GD. Returns true on success. The long side ends up at most $maxDim (a picture is never enlarged).
  *  The JPEG is progressive: it paints coarse-to-fine while it loads. */
@@ -239,21 +259,8 @@ function generate_resized_jpeg($srcPath, $destPath, $maxDim, $quality = 82) {
         }
     }
     if (extension_loaded('gd')) {
-        image_memory_raise();
-        $data = @file_get_contents($srcPath);
-        if ($data === false) return false;
-        $src = @imagecreatefromstring($data);
+        $src = gd_open_upright($srcPath);
         if (!$src) return false;
-
-        $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
-        if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
-            $exif = @exif_read_data($srcPath);
-            if (!empty($exif['Orientation'])) {
-                if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
-                if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
-                if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
-            }
-        }
 
         $w = imagesx($src);
         $h = imagesy($src);
@@ -302,20 +309,8 @@ function generate_cover_jpeg($srcPath, $destPath, $dim) {
         }
     }
     if (extension_loaded('gd')) {
-        image_memory_raise();
-        $data = @file_get_contents($srcPath);
-        if ($data === false) return false;
-        $src = @imagecreatefromstring($data);
+        $src = gd_open_upright($srcPath);
         if (!$src) return false;
-        $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
-        if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
-            $exif = @exif_read_data($srcPath);
-            if (!empty($exif['Orientation'])) {
-                if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
-                if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
-                if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
-            }
-        }
         $w = imagesx($src);
         $h = imagesy($src);
         $side = min($w, $h);
@@ -385,20 +380,8 @@ function generate_tile_jpegs($srcPath, $targets) {
         if (!$targets) return true;
     }
     if (extension_loaded('gd')) {
-        image_memory_raise();
-        $data = @file_get_contents($srcPath);
-        if ($data === false) return false;
-        $src = @imagecreatefromstring($data);
+        $src = gd_open_upright($srcPath);
         if (!$src) return false;
-        $ext = strtolower(pathinfo($srcPath, PATHINFO_EXTENSION));
-        if (function_exists('exif_read_data') && in_array($ext, ['jpg', 'jpeg'], true)) {
-            $exif = @exif_read_data($srcPath);
-            if (!empty($exif['Orientation'])) {
-                if ($exif['Orientation'] === 3) $src = imagerotate($src, 180, 0);
-                if ($exif['Orientation'] === 6) $src = imagerotate($src, -90, 0);
-                if ($exif['Orientation'] === 8) $src = imagerotate($src, 90, 0);
-            }
-        }
         $w = imagesx($src);
         $h = imagesy($src);
         $side = min($w, $h);

@@ -14,7 +14,6 @@
 
 function collections_path() { return __DIR__ . '/.gallery-collections.php'; }
 function collections_default() { return ['collections' => []]; }
-function collections_read() { return json_file_read(collections_path(), collections_default()); }
 function collections_update($modifier) { collections_cache_reset(); $r = json_file_update(collections_path(), collections_default(), $modifier, true); collections_cache_reset(); return $r; }
 /** Forget what was worked out this request (after a change, and between the parts of a test). */
 function collections_cache_reset() { $GLOBALS['__collections_cache'] = null; $GLOBALS['__collections_registry'] = null; }

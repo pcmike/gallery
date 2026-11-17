@@ -23,12 +23,6 @@ function link_csv_cell($v) {
     return '"' . str_replace('"', '""', $s) . '"';
 }
 
-function link_seg_html($name, $options, $current, $label = 'Choose one') {
-    $out = '<div class="sl-segbar" role="group" aria-label="' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '">';
-    foreach ($options as $v => $t) $out .= '<button type="button" class="sl-segbtn' . ((string) $v === (string) $current ? ' on' : '') . '" data-tab="' . htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($t, ENT_QUOTES, 'UTF-8') . '</button>';
-    return $out . '</div>';
-}
-
 /** Country names by their two-letter codes. */
 function visit_country_names() {
     static $names = [

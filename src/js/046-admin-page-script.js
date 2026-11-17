@@ -1927,15 +1927,13 @@
   // photos stay private, how many become public) and waits for a yes.
   [].forEach.call(document.querySelectorAll('.priv-folder-form'), function (form) {
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
-    var csrf = form.querySelector('input[name=csrf_token]').value, box = form.querySelector('input[type=checkbox]'), note = form.querySelector('.priv-folder-note');
+    var csrf = form.querySelector('input[name=csrf_token]').value, box = form.querySelector('input[type=checkbox]');
     var node = form.querySelector('.rowstate'), modal = document.getElementById('priv-modal');
     var counts = { stay: +form.getAttribute('data-stay') || 0, open: +form.getAttribute('data-open') || 0 };
     var noun = form.getAttribute('data-noun') || 'photo';
     function word(n) { return n + ' ' + noun + (n === 1 ? '' : 's'); }
     function paint() {
       var dlBlock = document.querySelector('.dl-block'); if (dlBlock) dlBlock.hidden = box.checked;   // (a private folder offers visitors nothing: the download switch is for a public one)
-      if (!note) return;
-      note.innerHTML = box.checked ? note.getAttribute('data-on').replace('%stay%', word(counts.stay)).replace('%open%', word(counts.open)).replace('%becomes%', counts.open === 1 ? 'becomes' : 'become') : note.getAttribute('data-off');
     }
     function say(text, kind) {
       node.textContent = text; node.className = 'rowstate ' + (kind || ''); clearTimeout(node._t);
