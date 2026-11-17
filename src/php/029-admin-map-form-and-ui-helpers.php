@@ -298,7 +298,7 @@ function gallery_setting_definitions() {
              'offwarn' => 'Photos are sent at full size, iPhone (HEIC) photos can\'t show, and nothing can be read from the files ahead of time, so photo locations read from the files stop showing. Nothing is deleted.'],
         ]],
         ['title' => 'Visitors and logs', 'items' => [
-            ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views', 'status' => 'earlierviews',
+            ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
              'help' => 'Visits (one per visitor per half hour) and each photo\'s views (every time it is opened large). Everyone is counted but you, bots and link previews: someone on a share link or with the private-view password counts too. You always see the numbers here.'],
             ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
              'help' => 'Off keeps the numbers to yourself: nobody else sees them, share-link guests and private-view visitors included (you still see them when signed in).', 'requires' => 'TRACK_VIEWS'],
@@ -368,7 +368,7 @@ function gallery_setting_definitions() {
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'CHECK_FOR_UPDATES', 'type' => 'bool', 'label' => 'Look for a new version of the gallery',
-             'help' => 'Once a day the Health check asks GitHub which version is newest and says so when it is newer, with View release and Update now. Only an ordinary request is made (GitHub sees this server\'s address); nothing about your gallery is sent. Off: no automatic look; Check now still works.'],
+             'help' => 'Once a day the Health check asks GitHub which version is newest, and says so when it is newer (View release, Update now). GitHub sees this server\'s address and the request\'s name, Drop-in Photo Gallery ' . GALLERY_VERSION . '; nothing else. Off: no automatic look; Check now still works.'],
             ['name' => 'UPDATE_FEED_URL', 'type' => 'text', 'in' => true, 'label' => 'Where new versions are announced', 'help' => ''],
             ['name' => 'TRUSTED_PROXY', 'type' => 'enum', 'label' => 'Where visitors\' IP addresses come from', 'status' => 'clientip',
              'options' => ['direct' => 'The connection', 'cloudflare' => 'Cloudflare', 'proxy' => 'Another proxy'],
@@ -621,6 +621,7 @@ function site_settings_save_locked($ajax) {
             $errors[] = !login_throttle_allows(__DIR__, 'admin', client_ip()) ? 'Too many wrong passwords were typed from your connection. Wait a moment, then try again.' : 'To change the admin password, type the current admin password first' . ($curPw === '' ? '.' : ': the one you typed isn\'t right.');
         }
         elseif ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
+        elseif (($tooLong = password_length_problem($adminPw, 'The admin password')) !== '') $errors[] = $tooLong;
         elseif (!admin_password_ok($adminPw)) $errors[] = 'The admin password needs at least 8 characters, with at least one letter and one number: it is the one credential that can change your gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $adminPw)) $errors[] = 'The admin password can\'t contain control characters.';
         else { $newAdmin = password_for_storage($adminPw); $setOrUnset('ADMIN_PASSWORD', $newAdmin); }
@@ -630,6 +631,7 @@ function site_settings_save_locked($ajax) {
         $setOrUnset('PRIVATE_VIEW_PASSWORD', '');
     } elseif ($viewPw !== '') {
         if ($viewPw !== (string) ($_POST['pw_private2'] ?? '')) $errors[] = 'The two private-view passwords you typed don\'t match.';
+        elseif (($tooLong = password_length_problem($viewPw, 'The private-view password')) !== '') $errors[] = $tooLong;
         elseif (preg_match('/[\x00-\x1F\x7F]/', $viewPw)) $errors[] = 'The private-view password can\'t contain control characters.';
         else $setOrUnset('PRIVATE_VIEW_PASSWORD', password_for_storage($viewPw));
     }

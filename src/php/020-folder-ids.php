@@ -491,7 +491,7 @@ function link_public_media($dir) {
     } else {
         $all = [];
         foreach ((array) @scandir($dir) as $f) {
-            if ($f === $self || $f === '.' || $f === '..' || !is_file("$dir/$f")) continue;
+            if ($f === $self || $f === '.' || $f === '..' || $f[0] === '.' || !is_file("$dir/$f") || is_link("$dir/$f")) continue;   // (the same files the scan keeps: no dot file, no link)
             if (in_array(strtolower(pathinfo($f, PATHINFO_EXTENSION)), $mediaExtensions, true) && name_is_text($f)) $all[] = $f;
         }
         usort($all, 'strnatcasecmp');

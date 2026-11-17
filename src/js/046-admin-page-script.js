@@ -176,7 +176,6 @@
             if (!j.ok || !j.rows.length) { reportBox.appendChild(text('p', 'muted', j.ok ? 'There are no photos or videos yet.' : (j.text || 'The list could not be loaded.'))); return; }
             const wrap = text('div', 'media-table-wrap', ''), table = document.createElement('table'), thead = document.createElement('thead'), head = document.createElement('tr'), tbody = document.createElement('tbody');
             const heads = ['Folder', 'Files', 'Thumbnails', 'Videos', 'In the files', 'Dates', 'Saved'];
-            if (j.earlierAny) heads.push('Earlier views');
             table.className = 'media-table';
             heads.forEach(function (h) { head.appendChild(text('th', '', h)); });
             thead.appendChild(head); table.appendChild(thead); table.appendChild(tbody);
@@ -200,7 +199,6 @@
               tr.appendChild(lc);
               tr.appendChild(text('td', '', r.dated + (r.undated ? ' of ' + (r.dated + r.undated) : '') + ' dated'));
               tr.appendChild(text('td', '', own.join(', ') || '—'));
-              if (j.earlierAny) tr.appendChild(text('td', r.earlier && !r.earlier.added ? 'note-text' : '', r.earlier ? (r.earlier.added ? 'added' : fmt(r.earlier.found) + ' found') : '—'));
               [].forEach.call(tr.children, function (td, i) { td.setAttribute('data-label', heads[i]); });
               tbody.appendChild(tr);
             });
@@ -527,6 +525,17 @@
         howFold('backupfile', state === 'open');
       });
     };
+    // And for the view counts: the gallery root's database (the page-view total and a key mark; each folder's database holds the counts under keyed names, so a fetched
+    // copy is far less than the log, but it is still the folder's data and was never meant to be public).
+    const runStatsFile = function () {
+      const url = probe.getAttribute('data-stats-file');
+      if (!url) return;
+      ask(url).then(function (state) {
+        mirror('statsfile', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
+          : state === 'open' ? 'Anyone can download the view-count database (.gallery-stats.sqlite): how often the gallery and its photos were opened. Its photo names are keyed, but it is not meant to be public. The server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+        howFold('statsfile', state === 'open');
+      });
+    };
     // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
     const runShareTidy = function () {
       const url = probe.getAttribute('data-share-probe');
@@ -565,9 +574,14 @@
             wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' reaches the gallery (checked just now from this browser). The gallery is closed, so this check, which sends no sign-in, is shown the invalid-link page.');
             return;
           }
-          mirror('tidy', state === 'works' ? 'ok-text' : state === 'no' ? 'note-text' : '', state === 'works' ? folderUrl + ' opens that folder.'
-            : state === 'no' ? 'Not set up (optional): ' + folderUrl + ' doesn\'t open that folder; the ?folder= links work regardless.' : 'Couldn\'t tell (the request failed or was redirected).');
+          // With a private or Not listed folder, the missing rule is more than a tidiness: the web server answers an address of a folder that exists itself (a redirect,
+          // a 403 or a file list) and a missing one with a 404, so a stranger can tell which private names exist, and the gallery's own identical "not found" never gets asked.
+          const hiddenLeak = state === 'no' && probe.getAttribute('data-any-hidden-folder') === '1';
+          const leakSay = 'A private or Not listed folder can be told from a missing one by anyone who asks for its address: your web server answers a folder that exists by itself (a redirect, a 403 or a file list) and a missing one with a 404, so the gallery never gets to give both the same answer. Add the "tidy folder links" rule (in the block below).';
+          mirror('tidy', state === 'works' ? 'ok-text' : hiddenLeak ? 'warn-text' : state === 'no' ? 'note-text' : '', state === 'works' ? folderUrl + ' opens that folder.'
+            : hiddenLeak ? leakSay : state === 'no' ? 'Not set up (optional): ' + folderUrl + ' doesn\'t open that folder; the ?folder= links work regardless.' : 'Couldn\'t tell (the request failed or was redirected).');
           if (state === 'works') wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' opens that folder (checked just now from this browser).');
+          else if (hiddenLeak) wrChip('tidy', 'bad', 'Tidy folder links: not set up', leakSay, '', true);
           else if (state === 'no') wrChip('tidy', 'grey', 'Tidy folder links: not set up', 'Optional: ' + folderUrl + ' does not open that folder yet. The gallery works without them, with ?folder= links. The rule is in the block below.', '', true);
           else wrChip('tidy', 'grey', 'Tidy folder links: couldn\'t check', 'Couldn\'t check tidy folder links from this browser just now.', '');
         });
@@ -617,7 +631,7 @@
         });
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
-    window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runBackupFile(); runTidy(); runShareTidy(); runAccel(); };
+    window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runBackupFile(); runStatsFile(); runTidy(); runShareTidy(); runAccel(); };
     window.__healthProbe();
   })();
   // The directive reference starts expanded on a desktop and collapsed
@@ -844,7 +858,7 @@
         [].forEach.call(form.querySelectorAll('input[type=hidden][data-send]'), function (h) { body.set(h.name, h.value); });
         var revert = function () { if (isBox) el.checked = !el.checked; else el.value = el.getAttribute('data-prev'); if (el.name === 'map_enabled' && sub) sub.hidden = !el.checked; };
         say(node, 'Saving…', 'busy');
-        fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+        fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
@@ -877,13 +891,13 @@
         var body = new URLSearchParams();
         body.set('csrf_token', csrf); body.set('action', 'save_folder_identity'); body.set('loaded_hash', hashInput.value);
         fields.forEach(function (kv) { body.append(kv[0], kv[1]); });
-        return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+        return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
             if (j.ok) {
               if (j.hash) [].forEach.call(document.querySelectorAll('.identity-form input[name=loaded_hash]'), function (h) { h.value = j.hash; }); say(node, 'Saved', 'ok'); window.__siteDirty = true; if (onOk) onOk();
-              if (j.path) { var q = new URLSearchParams(location.search); if (q.get('folder') !== j.path) { q.set('folder', j.path); location.replace(location.pathname + '?' + q.toString() + location.hash); } }   // (a collection whose address was changed is now at another address)
+              if (j.path) { var q = new URLSearchParams(location.search); if (q.get('folder') !== j.path) { q.set('folder', j.path); location.replace('?' + q.toString() + location.hash); } }   // (a collection whose address was changed is now at another address)
             }
             else { say(node, j.text, 'err'); if (onErr) onErr(); }
           })
@@ -1025,7 +1039,7 @@
     }
     function refresh() {
       var openPaths = cards().filter(function (c) { return c.classList.contains('open'); }).map(function (c) { return c.getAttribute('data-path'); });
-      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+      return fetch(location.href, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html'), fresh = doc.getElementById('ed-root');
         if (!fresh) { location.reload(); return; }
         root.innerHTML = fresh.innerHTML;
@@ -1135,7 +1149,7 @@
     function refresh(light) {   // light: the window came back; only this panel is asked for (not the whole page), and the sidebar's numbers are the page's other part's business
       var openIds = [].map.call(box.querySelectorAll('details.sl-row[open]'), function (d) { return d.getAttribute('data-id'); });
       var formOpen = !box.querySelector('#sl-form').hidden;
-      return fetch(light ? '?admin&linkspanel=1' : location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+      return fetch(light ? '?admin&linkspanel=1' : location.href, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html'), fresh = doc.getElementById('sl-root');
         if (!fresh) { location.reload(); return; }
         var keepForm = formOpen ? box.querySelector('#sl-form') : null;
@@ -1931,7 +1945,7 @@
       var body = new URLSearchParams();
       body.set('csrf_token', csrf); body.set('action', 'toggle_folder_restriction'); if (hide) body.set('hidden', '1');
       say('Saving…', 'busy');
-      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+      fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
           headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
@@ -1944,7 +1958,7 @@
     function closeModal() { if (modal) modal.hidden = true; box.focus(); }
     function ask() {
       say('', '');
-      fetch(location.pathname + location.search + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
+      fetch(location.href.replace(/#.*$/, '') + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
           if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
@@ -2140,7 +2154,7 @@
     var chain = Promise.resolve();
     // Whole-gallery settings are not about any folder, so a save is sent to this page's address without its folder: removing the very place
     // you are standing in (the Folders from elsewhere list) must not leave the next save pointing at a folder that is gone.
-    function siteUrl() { var q = new URLSearchParams(location.search); q.delete('folder'); var t = q.toString(); return location.pathname + (t ? '?' + t : '?admin'); }
+    function siteUrl() { var q = new URLSearchParams(location.search); q.delete('folder'); var t = q.toString(); return t ? '?' + t : '?admin'; }
     var sync = document.querySelector('.sitesync');
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });   // no submit button without JavaScript: Enter must not post the whole form
     function say(node, text, kind) {
@@ -2155,7 +2169,7 @@
     function refreshChrome() {
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(function () {
-        fetch(location.pathname + location.search, { credentials: 'same-origin' })
+        fetch(location.href, { credentials: 'same-origin' })
           .then(function (r) { return r.text(); })
           .then(function (html) { return html.indexOf('admin-folders') >= 0 ? html : fetch(siteUrl(), { credentials: 'same-origin' }).then(function (r) { return r.text(); }); })   // (the folder you are in may be the place just removed)
           .then(function (html) {
@@ -2414,36 +2428,6 @@
         say(j.text || 'It did not work.', true);
       }).catch(function () { [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = false; }); say('Could not reach the gallery.', true); });
     });
-    // Count views: the views another gallery counted for the photos now shown here (found in each folder's own stats file under an older path)
-    // are offered under the setting they belong to, once something is found. Looked for when the group is opened (it reads each folder's file).
-    (function () {
-      var box = form.querySelector('[data-earlier]'); if (!box) return;
-      var text = box.querySelector('.earlier-text'), add = box.querySelector('.earlier-add'), hint = box.querySelector('.earlier-hint'), act = box.querySelector('.earlier-act');
-      var group = box.closest('details'), asked = false;
-      function fmtN(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
-      function ask(extra) {
-        var body = new URLSearchParams(); body.set('csrf_token', box.getAttribute('data-csrf')); body.set('action', extra || 'media_moved');
-        return fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); });
-      }
-      function look() {
-        if (asked) return; asked = true;
-        ask().then(function (j) {
-          if (!j.ok || !j.track || !(j.views > 0)) return;
-          text.textContent = ''; var st = document.createElement('strong'); st.textContent = fmtN(j.views) + ' earlier views'; text.appendChild(st);
-          text.appendChild(document.createTextNode(' found for ' + j.viewFolders + (j.viewFolders === 1 ? ' folder' : ' folders') + ', counted by another gallery under their old addresses.'));
-          act.hidden = false; hint.hidden = false; add.disabled = false; box.hidden = false;
-        }).catch(function () { asked = false; });
-      }
-      if (group) { group.addEventListener('toggle', function () { if (group.open) look(); }); if (group.open) look(); }
-      add.addEventListener('click', function () {
-        add.disabled = true; text.textContent = 'Adding…';
-        ask('media_moved_views').then(function (j) {
-          if (!j.ok) { text.textContent = j.text || 'Not added.'; add.disabled = false; return; }
-          text.textContent = 'Added ' + fmtN(j.added) + ' views to ' + j.folders + (j.folders === 1 ? ' folder' : ' folders') + '.';
-          act.hidden = true; hint.hidden = true; window.__siteDirty = true;
-        }).catch(function () { text.textContent = 'The server did not answer.'; add.disabled = false; });
-      });
-    })();
     // Search the settings: type a few words and only the settings that have all of them (in the name, the help, the choices, the setting's
     // own word such as TRACK_VIEWS, or the group's title) stay; their groups open by themselves, and clearing the box puts every group back as it was.
     (function () {
@@ -2782,7 +2766,7 @@
     function go(mode) {
       var fd = new URLSearchParams(); fd.set('csrf_token', csrf); fd.set('action', 'downloads_inside'); fd.set('mode', mode); fd.set('apply', '1');
       state.textContent = 'Saving…';
-      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: fd.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      fetch(location.href, { method: 'POST', credentials: 'same-origin', body: fd.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
           if (!j.ok) { state.textContent = j.text; return; }
@@ -2804,7 +2788,7 @@
     function say(text, kind) { state.textContent = text; state.className = 'rowstate ' + (kind || ''); clearTimeout(state._t); if (kind === 'ok') state._t = setTimeout(function () { state.textContent = ''; state.className = 'rowstate'; }, 3000); }
     function send(fields) {
       var body = new URLSearchParams(); body.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
-      return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
     }
     function fail(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); }
@@ -2854,7 +2838,7 @@
   (function () {
     function request(csrf, fields) {
       var body = new URLSearchParams(); body.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
-      return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
     }
     function go(url) { location.href = url + (window.parent !== window && /[?&]inframe=1/.test(location.search) ? '&inframe=1' : ''); }

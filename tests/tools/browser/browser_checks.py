@@ -63,17 +63,17 @@ try:
     ok(bar is not None and bar["sameRow"] and bar["right"] <= 2 and bar["comboLeft"] <= 2 and bar["href"] == "?about" and bar["icon"] and bar["styled"] and bar["title"] == "About this gallery software (opens in a new tab)" and not bar["footer"] and b.js("document.querySelector('.map-preview-heading .page-visits') === null"), "[page bar] the map buttons are on the left and the gallery icon, in the very same bordered button style, is on the right of the same row (the footer is gone), with the visit count, when shown, just before it", str(bar))
     b.goto(B + "/?folder=Asia", 1.2)
     b.goto(B + "/?reveal&folder=Asia", 1.0)
-    gb = b.js("""(() => { const g = document.getElementById('goback'), r = g.getBoundingClientRect(), inp = document.getElementById('gate').getBoundingClientRect();
+    gb = b.js("""(() => { const g = document.getElementById('goback'), r = g.getBoundingClientRect(), inp = document.getElementById('lens').getBoundingClientRect();
         return {here: location.search, svg: !!g.querySelector('svg'), w: Math.round(r.width), centered: Math.abs((r.left + r.right) / 2 - innerWidth / 2) < 3, above: r.bottom < inp.top, buttons: document.querySelectorAll('button').length, headings: document.querySelectorAll('h1,h2,h3').length, text: document.body.innerText.trim()}; })()""")
     shot(b, "01d-signin-goback")
-    ok("reveal" in gb["here"] and gb["svg"] and gb["w"] >= 96 and gb["centered"] and gb["above"] and gb["buttons"] == 0 and gb["headings"] == 0 and gb["text"] == "", "[sign-in] the page is a large line drawing of a lock above one box: no heading, no button, no words", str(gb))
+    ok("reveal" in gb["here"] and gb["svg"] and gb["w"] >= 96 and gb["centered"] and gb["above"] and gb["buttons"] == 0 and gb["headings"] == 0 and gb["text"] == "", "[sign-in] the page is the gallery's own icon, drawn large, above one box: no heading, no button, no words", str(gb))
     b.js("document.getElementById('goback').click()"); b.drain(1.0)
-    ok(b.js("location.search") == "?folder=Asia" and b.js("history.length") >= 2, "[sign-in] The lock drawing returns to the page the visitor was on (the browser's own back)", b.js("location.href"))
+    ok(b.js("location.search") == "?folder=Asia" and b.js("history.length") >= 2, "[sign-in] The icon drawing returns to the page the visitor was on (the browser's own back)", b.js("location.href"))
     b.goto(B + "/?reveal&folder=Asia", 1.0)
     b.js("document.getElementById('goback').click()"); b.drain(1.0)
-    ok(b.js("location.search") == "?folder=Asia", "[sign-in] opened directly, with no earlier page, the lock drawing still lands on the gallery page it belongs to", b.js("location.href"))
+    ok(b.js("location.search") == "?folder=Asia", "[sign-in] opened directly, with no earlier page, the icon drawing still lands on the gallery page it belongs to", b.js("location.href"))
     b.goto(B + "/?reveal", 1.0)
-    b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "viewer-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
+    b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "viewer-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
     ok(b.js("document.querySelector('.lock-link') === null") and b.js("document.querySelector('form#lock-form') !== null") and "reveal" not in b.js("location.search"), "[lock] after entering the password the page is the plain gallery address, signed in (a small sign-out form, no lock icon)", b.js("location.href"))
     shot(b, "01c-lock-open")
     b.js("(() => { const f = document.querySelector('form#lock-form'), i = document.createElement('input'); i.type = 'hidden'; i.name = 'logout'; i.value = '1'; f.appendChild(i); f.submit(); })()"); b.drain(1.5)
@@ -493,7 +493,7 @@ try:
             bp.close()
         # the owner on a phone: the pill sits above the bottom bar, not on its buttons
         b.goto(BM + "/?admin", 1.5)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "map-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.5)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "map-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.5)
         b.goto(BM + "/", 2.5)
         if b.js("document.getElementById('map-preview-body').hidden"): b.tap(*pm_centre("#map-toggle")); b.drain(3.5)
         its = pm_items(PM); gr = [i for i in its if i[0] == "group"]
@@ -1130,6 +1130,23 @@ try:
                 ok(tg["w"] >= 18 and tg["h"] >= 38 and tg["turned"], "[health] the fold control is a bold chevron (20 px) on a tap-sized button that turns when open", str(tg))
         finally:
             srv11.terminate(); srv11.wait()
+    # a PRIVATE folder with the tidy-folder rule missing is more than untidy: the web server tells a folder that exists from one that doesn't, so the chip is red and says why
+    SITE11P = WORK + "/site11p"; os.makedirs(SITE11P + "/Trips"); os.makedirs(SITE11P + "/Priv"); os.makedirs(WORK + "/site11proot"); os.symlink(SITE11P, WORK + "/site11proot/trip")
+    shutil.copy(HERE + "/../../../index.php", SITE11P + "/index.php"); os.utime(SITE11P + "/index.php", (time.time() - 3600,) * 2)
+    for nm in ("photo.jpg", "Trips/pic.jpg", "Priv/p.jpg"):
+        subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", SITE11P + "/" + nm], check=True)
+    open(SITE11P + "/.gallery-config.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "lock-admin-pw"], capture_output=True, text=True).stdout, "AUTO_GROUP_BY_FOLDER": True}) + "\n")
+    open(SITE11P + "/Priv/.gallery-items.php", "w").write("<?php http_response_code(404); exit; ?>\n" + json.dumps({"restriction": "private"}) + "\n")
+    s11p = socket.socket(); s11p.bind(("127.0.0.1", 0)); P11P = s11p.getsockname()[1]; s11p.close()
+    srv11p = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P11P}", "-t", WORK + "/site11proot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    try:
+        b.call("Network.setExtraHTTPHeaders", {"headers": {}}); b.goto(f"http://127.0.0.1:{P11P}/trip/", 2.5)
+        b.call("Network.setExtraHTTPHeaders", {"headers": lockauth}); b.viewport(1280, 900); b.goto(f"http://127.0.0.1:{P11P}/trip/?admin", 2.5); b.drain(2.5)
+        tp = b.js("""(() => { const c = document.querySelector('[data-wr-chip=tidy]'), m = document.querySelector('[data-wr-msg=tidy]'), pr = document.getElementById('server-probe'); return {cls: c ? c.className : '', text: c ? c.textContent.trim() : '', msg: m ? m.textContent : '', msgHidden: m ? m.hidden : null, probe: pr ? pr.dataset.anyHiddenFolder : null}; })()""")
+        ok(tp["probe"] == "1" and "bad" in tp["cls"].split() and tp["text"].endswith("Tidy folder links: not set up") and tp["msgHidden"] is False and "private or Not listed folder" in tp["msg"], "[tidy check] with a private folder and the rule missing, the chip is red and says why (the web server tells a folder that exists from one that doesn't)", str(tp))
+    finally:
+        srv11p.terminate(); srv11p.wait(); b.call("Network.setExtraHTTPHeaders", {"headers": {}})
     # a CLOSED gallery turns away the check's cookie-less request for /Folder/ with the invalid-link page, which only the gallery sends: that still means the address reaches it
     raw11 = open(SITE11 + "/.gallery-config.php").read(); head11, _, body11 = raw11.partition("\n"); cfg11 = json.loads(body11)
     cfg11.update({"ENABLE_SHARE_LINKS": True, "CLOSE_PUBLIC_GALLERY": True})
@@ -1192,13 +1209,13 @@ try:
         b.call("Network.setExtraHTTPHeaders", {"headers": {}})
         b.viewport(390, 800); b.goto(f"http://127.0.0.1:{PLK}/?admin", 1.0)
         lk = b.js("""(() => { const e = document.getElementById('lock-secs'); return e ? {h: document.querySelector('h1').textContent, secs: e.textContent, over: document.documentElement.scrollWidth > innerWidth, retryHidden: getComputedStyle(document.getElementById('lock-again')).display === 'none'} : null; })()""")
-        ok(lk is not None and lk["h"] == "Sign-in paused" and re.fullmatch(r"0:0[1-6]", lk["secs"]) and not lk["over"] and lk["retryHidden"], "[lockout page] on a phone the lockout page says sign-in is paused, shows the seconds left, does not scroll sideways, and keeps its Try again button hidden until the time is up", str(lk))
+        ok(lk is not None and lk["h"] == "Out of focus for a moment" and re.fullmatch(r"0:0[1-6]", lk["secs"]) and not lk["over"] and lk["retryHidden"], "[lockout page] on a phone the lockout page says sign-in is paused, shows the seconds left, does not scroll sideways, and keeps its Try again button hidden until the time is up", str(lk))
         t1 = b.js("document.getElementById('lock-secs').textContent"); b.drain(2.2); t2 = b.js("document.getElementById('lock-secs') ? document.getElementById('lock-secs').textContent : 'gone'")
         ok(t1 != t2 and t2 != "gone", "[lockout page] the number counts down while the page is open", f"{t1} -> {t2}")
         back = False; end = time.time() + 14
         while time.time() < end:
             b.drain(0.5)
-            if b.js("!!document.querySelector('input[name=access_code]')"): back = True; break
+            if b.js("!!document.querySelector('input[name=lens]')"): back = True; break
         ok(back, "[lockout page] when the time is up the page takes the visitor back to the sign-in form by itself (a fresh visit, not the wrong code sent again)")
     finally:
         srvLk.terminate(); srvLk.wait(); b.viewport(1280, 900)
@@ -1304,9 +1321,9 @@ try:
     b.viewport(1280, 900); b.goto(B + "/?admin", 1.2)
     challenged = any("www-authenticate" in {k.lower() for k in e.get("params", {}).get("response", {}).get("headers", {})} for e in b.events if e.get("method") == "Network.responseReceived")
     ok(not challenged, "a stale saved password gets no WWW-Authenticate challenge, so the browser has nothing to open its own login dialog with")
-    ok(b.js("document.querySelector('input[name=access_code]') !== null") and "saved login" in b.js("document.body.innerText"), "...it gets the ordinary password form, which says the saved login no longer matches", b.js("document.body.innerText")[:150])
+    ok(b.js("document.querySelector('input[name=lens]') !== null") and "Out of focus" in b.js("document.body.innerText"), "...it gets the ordinary password form, which says the saved login no longer matches", b.js("document.body.innerText")[:150])
     b.goto(B + "/?reveal", 1.0)
-    ok(b.js("document.querySelector('input[name=access_code]') !== null") and not any("www-authenticate" in {k.lower() for k in e.get("params", {}).get("response", {}).get("headers", {})} for e in b.events if e.get("method") == "Network.responseReceived"), "the private view does the same")
+    ok(b.js("document.querySelector('input[name=lens]') !== null") and not any("www-authenticate" in {k.lower() for k in e.get("params", {}).get("response", {}).get("headers", {})} for e in b.events if e.get("method") == "Network.responseReceived"), "the private view does the same")
     b.call("Network.setExtraHTTPHeaders", {"headers": {}})
     print("== logging in (a real person: press the lock, type the password)")
     b.viewport(1280, 900); b.goto(B + "/", 1.5)
@@ -1315,11 +1332,11 @@ try:
     if st:
         b.goto(B + "/?reveal", 1.2)
         ok("?reveal" in b.js("location.href"), "?reveal goes to the sign-in", b.js("location.href"))
-        ok(b.js("document.querySelector('input[type=text][name=access_code]') !== null && document.querySelector('input[type=password]') === null") and b.js("document.activeElement && document.activeElement.name") == "access_code" and b.js("getComputedStyle(document.activeElement).webkitTextSecurity") == "disc", "...which is a one-box form with the box already focused, drawn as dots but NOT a password field (and read-only until focused: no browser or password-manager pop-up or save prompt)")
+        ok(b.js("document.querySelector('input[type=text][name=lens]') !== null && document.querySelector('input[type=password]') === null") and b.js("document.activeElement && document.activeElement.name") == "lens" and b.js("getComputedStyle(document.activeElement).webkitTextSecurity") == "disc", "...which is a one-box form with the box already focused, drawn as dots but NOT a password field (and read-only until focused: no browser or password-manager pop-up or save prompt)")
         shot(b, "login-form")
         b.call("Input.insertText", {"text": "wrong-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.0)
-        ok("isn" in b.js("document.body.innerText") and b.js("document.querySelector('input[name=access_code]') !== null"), "a wrong password shows a message and the form again")
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "adm-pw"})
+        ok("Out of focus" in b.js("document.body.innerText") and b.js("document.querySelector('input[name=lens]') !== null"), "a wrong password shows a message and the form again")
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "adm-pw"})
         b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
         ok("admin" not in b.js("location.search") and "reveal" not in b.js("location.search") and b.js("document.querySelector('form#lock-form') !== null") and b.js("document.querySelector('h1').textContent") != "Gallery Admin", "the admin password typed into that same box signs the owner in and returns to the page they were on (the title leads on to the admin)", b.js("location.href"))
         ok(not b.problems(IGN), "...with no console or CSP errors", "; ".join(b.problems(IGN))[:300])
@@ -1332,7 +1349,7 @@ try:
         ok(len(stay) >= 1 and all(c["httpOnly"] and c["sameSite"] == "Lax" and not c["session"] for c in stay) and any(time.time() + 2.9 * 86400 < c["expires"] <= time.time() + 3 * 86400 + 60 for c in stay) and len(sess) >= 1 and all(c["session"] for c in sess), "[browsers] a sign-in leaves a long-lived token cookie (HttpOnly, SameSite=Lax, about 3 days) beside the session cookie (which has no expiry)", str([(c["name"], c["httpOnly"], c["sameSite"], c["session"], round(c["expires"] - time.time())) for c in stay + sess]))
         for c in sess: b.call("Network.deleteCookies", {"name": c["name"], "domain": c["domain"], "path": c["path"]})
         b.goto(B + "/?admin", 1.0)
-        ok(b.js("document.querySelector('h1').textContent") == "Gallery Admin" and b.js("document.querySelector('input[name=access_code]') === null"), "[stay signed in] with the session cookie gone (a Home Screen app closed) ?admin still opens, no password asked")
+        ok(b.js("document.querySelector('h1').textContent") == "Gallery Admin" and b.js("document.querySelector('input[name=lens]') === null"), "[stay signed in] with the session cookie gone (a Home Screen app closed) ?admin still opens, no password asked")
         ok(any(c["name"].startswith("gallery_admin_") for c in b.call("Network.getCookies", {"urls": [B + "/"]})["cookies"]), "[stay signed in] ...and the browser has a fresh session cookie again")
         b.goto(B + "/", 1.2)
         ok(b.js("document.querySelector('.lock-link') === null") and b.js("document.querySelector('h1 a.title-admin') !== null") and b.js("document.querySelector('footer') === null"), "on the gallery the owner sees no lock and the title leads to the admin (there is no footer)")
@@ -1346,7 +1363,7 @@ try:
         b.js("(() => { const f = document.querySelector('form#lock-form'), i = document.createElement('input'); i.type = 'hidden'; i.name = 'logout'; i.value = '1'; f.appendChild(i); f.submit(); })()"); b.drain(1.5)
         ok(b.js("document.querySelector('form#lock-form') === null") and "?admin" not in b.js("location.href"), "signing out through the page's small form signs the owner out and stays on the same page", b.js("location.href"))
         b.goto(B + "/?admin", 1.0)
-        ok(b.js("document.querySelector('input[name=access_code]') !== null"), "...and ?admin asks for the password again")
+        ok(b.js("document.querySelector('input[name=lens]') !== null"), "...and ?admin asks for the password again")
 
     b.viewport(390, 844, mobile=True)   # back to the phone the admin checks below are about
     b.call("Network.setExtraHTTPHeaders", {"headers": {"Authorization": "Basic " + auth}})
@@ -1541,7 +1558,7 @@ try:
     srv2 = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PORT2}", "-t", SITE2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
     b.viewport(1280, 900); b.goto(B2 + "/?admin", 1.0)
-    b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "site-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
+    b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "site-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.5)
     b.js("document.querySelector('.side-link[data-tab=site]').click()"); b.drain(0.4); shot(b, "14-site-settings")
     vis2 = "[...document.querySelectorAll('.tab-panel')].filter(p => getComputedStyle(p).display !== 'none').map(p => p.dataset.tab)"
     cfg = lambda: open(cfgfile).read()
@@ -1941,7 +1958,7 @@ try:
         b.viewport(1280, 900)
         # sign in as the owner
         b.goto(B15 + "/?admin", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "phone-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "phone-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         ok(b.js("document.querySelector('h1') && document.querySelector('h1').textContent") == "Gallery Admin", "[owner] signed in to the admin")
         b.goto(B15 + "/?admin#site", 1.2)
         b.js("document.getElementById('media-panel').closest('details.site-group').open = true; document.querySelectorAll('details.media-outer').forEach(d => { d.open = true; })"); b.drain(0.2)   # (inside the Thumbnails group, which starts closed)
@@ -2032,7 +2049,7 @@ try:
     try:
         b.viewport(1100, 800)
         b.goto(B17 + "/?admin", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "arr-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "arr-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         b.goto(B17 + "/", 1.5)
         order17 = lambda: b.js("[...document.querySelectorAll('.gallery > .card')].map(c => c.querySelector('img').alt[0]).join('')")
         def rect17(f): return b.js("(() => { const r = document.querySelector(\".card[data-file='" + f + ".jpg']\").getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()")
@@ -2067,7 +2084,7 @@ try:
         ok(order17() == "acgbdefh" and not b.js("!!document.getElementById('select-btn')") and not b.js("!!document.querySelector('.card[data-file]')"), "[arrange] a visitor sees the placed order and has no Arrange button")
         # back in: release and reset from the bar, and the strip on a phone
         b.goto(B17 + "/?admin", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "arr-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "arr-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         b.goto(B17 + "/", 1.2)
         b.js("document.getElementById('select-btn').click()"); b.drain(0.2)
         ok(b.js("document.querySelector('[data-select=release]').disabled && !document.querySelector('[data-select=reset]').disabled"), "[arrange] with nothing selected Release waits, and Reset folder is ready (there are placed photos)")
@@ -2330,7 +2347,7 @@ try:
     try:
         b.viewport(1100, 1000)
         b.goto(B16 + "/?admin", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "pf-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "pf-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         nav16 = [0]
         def go16(url):
             nav16[0] += 1; b.goto(B16 + url.replace("#", "&n=%d#" % nav16[0]), 1.5)
@@ -2435,7 +2452,7 @@ try:
         state18 = lambda sel: b.js("(document.querySelector(%s).closest('.field').querySelector('.rowstate') || {}).textContent" % json.dumps(sel))
         b.call("Emulation.setTouchEmulationEnabled", {"enabled": False}); b.viewport(1100, 1000)
         b.goto(B18 + "/?admin&folder=Churches", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "p18-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "p18-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         b.goto(B18 + "/?admin&folder=Churches", 1.5)
         ok(b.js("(() => { const bt = document.querySelector('.identity-form .nojs-only button'); return !!bt && bt.offsetParent === null; })()"), "[settings] the folder settings have no Save button on screen (it is only for a browser without JavaScript)")
         type18("input[name=display_name]", "Churches of Europe")
@@ -2722,7 +2739,7 @@ try:
         ok(crumb_og() == "\u2190 Album" and b.js("!document.getElementById('lightbox').classList.contains('open')"), "[own gallery] ...and closing the viewer leaves them on the album's grid, not on the gallery's front page", str(crumb_og()))
         # the folder's switch, in the admin
         b.goto(BOG + "/?admin&classic=1", 1.5)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "pog-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(3.0)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "pog-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(3.0)
         b.goto(BOG + "/?admin&folder=Elsewhere&n=1", 1.5)
         sw_og = "document.querySelector('.unlisted-form input[type=checkbox][name=owngallery]')"
         ok(not b.js("%s.checked" % sw_og), "[own gallery] the folder's Navigation switch starts off for a folder that is not marked")
@@ -2742,7 +2759,6 @@ try:
     for nm in ("a.jpg", "b.jpg"):
         subprocess.run(["php", "-r", "$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);", COPLACE + "/paris/" + nm], check=True)
     for nm in ("1a" * 16 + ".jpg", "2b" * 16 + ".jpg", "3c" * 16 + ".mp4"): open(COPLACE + "/paris/.gallery-cache/" + nm, "wb").write(b"x" * 2048)
-    subprocess.run(["php", "-r", "$d=new PDO('sqlite:'.$argv[1]); $d->exec('CREATE TABLE stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)'); $d->exec('CREATE TABLE photo_views_h (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)'); foreach (['paris/a.jpg'=>10,'b.jpg'=>5] as $k=>$v) $d->prepare('INSERT INTO photo_views_h(key,views) VALUES(?,?)')->execute([hash('sha256',$k),$v]);", COPLACE + "/paris/.gallery-stats.sqlite"], check=True)
     shutil.copy(HERE + "/../../../index.php", SITECO + "/index.php"); os.utime(SITECO + "/index.php", (time.time() - 3600,) * 2)
     guard_co = "<?php http_response_code(404); exit; ?>\n"
     open(SITECO + "/.gallery-config.php", "w").write(guard_co + json.dumps({"ADMIN_PASSWORD": subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "pco-admin-pw"], capture_output=True, text=True).stdout, "AUTO_GROUP_BY_FOLDER": True, "TRACK_VIEWS": True, "ENABLE_SHARE_LINKS": True, "EXTRA_FOLDERS": {"Eurotrip": COPLACE}}) + "\n")
@@ -2759,7 +2775,7 @@ try:
                 b.drain(0.2)
             return bool(b.js(cond))
         b.goto(BCO + "/?admin&classic=1", 1.5)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "pco-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(3.0)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "pco-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(3.0)
         b.goto(BCO + "/?admin&folder=France&n=1", 1.5)
         b.js("window.confirm = () => true")
         b.js("document.querySelector('.cm-new input[name=title]').focus()"); b.call("Input.insertText", {"text": "Best of France"})
@@ -2818,13 +2834,10 @@ try:
         # Prepare media: moved in
         b.goto(BCO + "/?admin&classic=1&n=4#site", 1.5)
         b.js("[...document.querySelectorAll('details.site-group')].forEach(g => { if (g.querySelector('summary').textContent.indexOf('Videos and thumbnails') >= 0 || g.querySelector('summary').textContent.indexOf('Visitors and logs') >= 0) g.open = true; }); const o = document.querySelector('#media-panel details.media-outer'); if (o) o.open = true;"); b.drain(0.5)
-        ok(waitco("!document.querySelector('[data-earlier]').hidden", 8) and "15 earlier views" in b.js("document.querySelector('.earlier-text').textContent") and b.js("document.querySelector('[data-earlier]').closest('.site-row').id") == "setting-TRACK_VIEWS", "[moved in] Count views shows the earlier views a place another gallery counted, under the setting itself")
         ok(waitco("!document.querySelector('.media-moved').hidden", 8) and not b.js("document.querySelector('.media-leftover-box').hidden") and b.js("document.querySelector('.media-views-add')") is None, "[moved in] Prepare media shows the leftover thumbnails of a place another gallery showed (and no longer the views)")
         ok(b.js("document.querySelector('.media-leftover-go').disabled") and "3 found" in b.js("document.querySelector('.media-leftover-sum').textContent"), "[moved in] the Remove button waits until the box says no other gallery shows these folders")
         b.js("document.querySelector('.media-leftover-box').open = true; document.querySelector('.media-leftover-ok').click()"); b.drain(0.4)
         ok(not b.js("document.querySelector('.media-leftover-go').disabled"), "[moved in] ticking the box lets it through")
-        b.js("document.querySelector('.earlier-add').click()")
-        ok(waitco("document.querySelector('.earlier-text').textContent.indexOf('Added 15 views') >= 0", 8), "[moved in] Add earlier views adds them, once, and says how many")
         b.js("document.querySelector('.media-leftover-go').click()")
         ok(waitco("document.querySelector('.media-leftover-out').textContent.indexOf('Removed 3 files') >= 0", 8) and not any(f.endswith((".jpg", ".mp4")) and len(f) == 36 for f in os.listdir(COPLACE + "/paris/.gallery-cache")), "[moved in] Remove takes the leftover thumbnails away and says how many")
         ok(os.path.isfile(COPLACE + "/paris/a.jpg") and os.path.isfile(COPLACE + "/paris/b.jpg"), "[moved in] the photos are exactly where they were")
@@ -2887,7 +2900,7 @@ try:
         vis19 = urllib.request.urlopen(B19 + "/?folder=Eurotrip").read().decode("utf-8", "replace")
         ok('class="folder-priv' not in vis19 and 'class="fc-priv"' not in vis19 and "(2 private)" not in vis19, "[privacy] a visitor sees no pill and no count on the folder cards")
         b.goto(B19 + "/?admin&folder=Eurotrip", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "p19-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "p19-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         b.goto(B19 + "/?folder=Eurotrip", 1.5)
         cards = b.js("""(() => Object.fromEntries([...document.querySelectorAll('.folder-cover')].map(c => [c.querySelector('.folder-cover-label').textContent, {pill: (c.querySelector('.folder-priv') || {}).textContent || '', dashed: !!c.querySelector('.folder-priv.inh'), count: c.querySelector('.folder-cover-count').textContent.trim()}])))()""")
         ok(cards.get("Florence", {}).get("pill") == "" and cards.get("Rome", {}).get("pill") == "Private" and cards.get("Pisa", {}).get("pill") == "Private", "[privacy] the owner sees the red Private pill on the private folders' cards and none on the public one", str(cards))
@@ -3070,7 +3083,7 @@ try:
     ok(b.js("document.querySelector('h1').textContent") == "Gallery Admin", "reloading stays signed in")
     b.js("[...document.querySelectorAll('button')].find(x => x.textContent.trim() == 'Log out').click()"); b.drain(1.5)
     b.goto(B3 + "/?admin", 1.0)
-    ok(b.js("document.querySelector('input[name=access_code]') !== null") and b.js("document.querySelector('input[name=setup_password]') === null") and not os.path.exists(SITE3 + "/gallery-setup-code.php"), "once logged out, ?admin is the login form and setup never comes back; the code file was removed when the password was set")
+    ok(b.js("document.querySelector('input[name=lens]') !== null") and b.js("document.querySelector('input[name=setup_password]') === null") and not os.path.exists(SITE3 + "/gallery-setup-code.php"), "once logged out, ?admin is the login form and setup never comes back; the code file was removed when the password was set")
     srv3.terminate(); srv3.wait()
     b.viewport(1280, 900)
     # ---------------- share links: the opening page, a link holder's page, and the Shares tab with its log ----------------
@@ -3165,7 +3178,7 @@ try:
         ok(alts == ["r1.jpg"], "[share links] ...and closing it shows the folder with only that photo in it (Rome's other private photo is not there)", str(alts))
         # --- the owner's Shares tab ---
         b.goto(BL + "/?admin", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": LPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": LPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(1.8)
         b.js("location.hash = '#links'"); b.drain(2.0)   # (a change of the part after # is not a page load: goto would wait for one that never comes)
         body = b.js("document.body.innerText")
         ok("new since you last looked" in body and "Mark & Jen" in body, "[share links tab] each link is a row, named exactly as typed, saying how many happenings are new since the owner last looked")
@@ -4314,6 +4327,7 @@ try:
     ss_ = socket.socket(); ss_.bind(("127.0.0.1", 0)); PS = ss_.getsockname()[1]; ss_.close(); BS = f"http://127.0.0.1:{PS}"
     se_ = socket.socket(); se_.bind(("127.0.0.1", 0)); PE = se_.getsockname()[1]; se_.close()
     open(WORK + "/evil/evil.html", "w").write(f"<!doctype html><title>other site</title><iframe id=pub src='{BS}/?folder=Rome' width=500 height=300></iframe><iframe id=adm src='{BS}/?admin&folder=Rome&inframe=1' width=500 height=300></iframe>")
+    open(WORK + "/evil/evil2.html", "w").write(f"<!doctype html><title>another site</title><iframe id=pub src='http://localhost:{BS.rsplit(':', 1)[1]}/?folder=Rome' width=500 height=300></iframe>")   # (a different host: not the same site, so the owner's cookie is not sent)
     srvS = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PS}", "-t", SITE_S], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     srvE = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{PE}", "-t", WORK + "/evil"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1.0)
@@ -4329,7 +4343,7 @@ try:
     try:
         b.viewport(1400, 900)
         b.goto(BS + "/?admin", 1.0)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": SPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": SPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
         # the owner's own gallery page: the title (no pill) opens the shell on that folder
         b.goto(BS + "/?folder=Rome", 1.2)
         pill = b.js("(() => { const a = document.querySelector('h1 a.title-admin'); return {href: a ? a.getAttribute('href') : '', pill: !!document.querySelector('a.admin-pill')}; })()")
@@ -4583,11 +4597,21 @@ try:
         b.js("(() => { const w = document.getElementById('sh-frame').contentWindow; w.__liveMin = 0; w.dispatchEvent(new Event('focus')); })()")
         ok(swait("(() => { const c = document.querySelector('#sh-whole a[data-tab=changes] .count'); return !!c && c.textContent.trim() !== " + json.dumps(chn0) + "; })()", 9.0), "[shell] when the window comes back to the page in the frame, the sidebar's Changes number follows what arrived on disk (without a click or a reload)", chn0 + " -> " + chn())
         os.unlink(SITE_S + "/Pisa/chshell1.jpg")
-        # another site can frame the public gallery (it is public anyway) but not the admin page, even with &inframe=1
+        # another site can frame the public gallery (it is public anyway) but not the admin page, even with &inframe=1; and a page on the same site (another port,
+        # which still gets the owner's cookie) can frame neither the admin nor the gallery as the owner sees it (his tools and his token)
         b.goto(f"http://127.0.0.1:{PE}/evil.html", 2.5)
         tree_ = b.call("Page.getFrameTree")["frameTree"]
         kids = [c["frame"]["url"] for c in tree_.get("childFrames", [])]
-        ok(any("folder=Rome" in u and "admin" not in u for u in kids) and not any("admin" in u and not u.startswith("chrome-error") for u in kids), "[shell] a page on another origin can't frame the admin page (even with &inframe=1) while the public gallery page is still framed as before", str(kids))
+        ok(not any(not u.startswith("chrome-error") for u in kids), "[shell] a page on the same site, with the owner's cookie, can frame neither the admin page (even with &inframe=1) nor the gallery page as the owner sees it", str(kids))
+        b.goto(f"http://127.0.0.1:{PE}/evil2.html", 2.5)
+        tree2_ = b.call("Page.getFrameTree")["frameTree"]
+        kids2 = [c["frame"]["url"] for c in tree2_.get("childFrames", [])]
+        # (a frame on another host lives in its own browser process, so the page's own frame list does not show it: ask the browser for every target)
+        try:
+            kids2 += [t.get("url", "") for t in b.call("Target.getTargets").get("targetInfos", []) if t.get("type") == "iframe"]
+        except Exception as e_:
+            kids2.append("getTargets failed: " + str(e_))
+        ok(any("folder=Rome" in u and not u.startswith("chrome-error") for u in kids2), "[shell] ...while a page on another site can still frame the public gallery page (it gets no cookie, so it is the stranger's page, and public)", str(kids2))
     finally:
         srvS.terminate(); srvS.wait(); srvE.terminate(); srvE.wait()
         b.viewport(1280, 900)
@@ -4603,7 +4627,7 @@ try:
     time.sleep(1.0)
     try:
         b.viewport(1280, 900); b.goto(BQ + "/?admin&shell=1", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "share-default-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "share-default-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
         swait(FR + " && " + FR + ".querySelector('.gallery')")
         b.js(FR + ".getElementById('select-btn').click()"); b.drain(0.5)
         b.js(FR + ".querySelector('.card').click()"); b.drain(0.4)
@@ -4668,7 +4692,7 @@ try:
         hit(BH + "/?img=a.jpg&size=thumb", UA_WIN, "192.0.2.44", "DE", cookie=ck1)    # the same browser, as another kind of device, from another country
         ck2 = "; ".join(hit(BH + "/?reveal", UA_PHONE, "203.0.113.200", "US", urllib.parse.urlencode({"access_code": "hist-view-pw"}).encode()))
         b.viewport(1280, 900); b.goto(BH + "/?admin&classic=1", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "hist-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "hist-admin-pw"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
         b.goto(BH + "/?admin&classic=1#site", 1.5)
         b.js("[...document.querySelectorAll('details.site-group')].find(d => d.textContent.includes('Signing in and passwords')).open = true"); b.drain(0.4)
         lst = b.js("""(() => { const r = document.getElementById('browsers-row'); return {n: r.querySelectorAll('tbody.br-item').length, me: !!r.querySelector('tbody.br-me'), flags: [...r.querySelectorAll('.br-flag')].map(f => f.dataset.flag + '|' + f.className), flagged: r.querySelectorAll('tbody.br-flagged').length, last: [...r.querySelectorAll('tbody.br-item')].map(l => l.innerText.replace(/\\s+/g, ' ')).join(' // ')}; })()""")
@@ -4747,7 +4771,7 @@ try:
     time.sleep(1.0)
     try:
         b.viewport(1280, 900); b.goto(BF + "/?admin&shell=1", 1.2)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "flat-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.5)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "flat-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.5)
         locks = b.js("[...document.querySelectorAll('.sh-tree .flock')].map(x => x.dataset.lockPath + ':' + x.classList.contains('on'))")
         ok(locks == ["Paris:False", "Paris/Montmartre:False", "Rome:False"] or locks == ["Paris:false", "Paris/Montmartre:false", "Rome:false"], "[flat tree] a lock beside every folder, all open (visible) to start with", str(locks))
         b.js("[...document.querySelectorAll('.sh-tree .flock')].find(x => x.dataset.lockPath === 'Paris').click()"); b.drain(1.5)
@@ -4782,7 +4806,7 @@ try:
         ok(b.js("document.querySelector('.group-label .label-copy .lc-t').textContent") == "Rome", "[flat label] ...then goes back to the folder's name")
         # the phone Menu of the owner: a lock beside each folder
         b.goto(BF + "/?admin&classic=1", 1.0)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "flat-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "flat-admin-pw-1"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
         b.viewport(390, 844, True); b.goto(BF + "/?admin&classic=1&again=1", 1.2)
         b.js("document.getElementById('pb-menu').click()"); b.drain(0.6)
         pl = b.js("[...document.querySelectorAll('#pb-sheet .pb-lk')].map(x => x.dataset.lockPath + ':' + x.classList.contains('on'))")
@@ -4841,7 +4865,7 @@ try:
     try:
         b.viewport(1280, 900)
         b.goto(BK + "/?admin&classic=1", 1.0)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": KPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": KPW}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.0)
         for _ in range(8): _ur.urlopen(BK + "/?folder=Alpha").read()   # (visits by a stranger: the log has something in it)
         b.goto(BK + "/?admin&classic=1", 2.0); b.js("adminGoTo('site')"); b.drain(0.5)
         ok(kwait("!!(" + krow("Backup: made") + ") && !!(" + krow("Visitor log: sound") + ")"), "[dashboard] the Health check shows the log as sound and the backup as made (the first visit made it by itself)", b.js("(() => { const p = " + HP + "; return p ? p.textContent.replace(/\\s+/g, ' ').slice(0, 600) : 'no panel'; })()"))

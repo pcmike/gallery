@@ -389,7 +389,7 @@ function admin_credentials_valid() {
  *  and a stale saved password must not bring that dialog back. */
 function admin_reject_saved_credentials() {
     http_response_code(401);
-    render_login_page('Enter your access code', '', 'Your browser sent a saved login that no longer matches. Type your current access code.');
+    render_login_page('Enter your access code', '', 'Out of focus.');
 }
 
 /** The password form for ?admin and ?reveal: one field, no username, no
@@ -407,11 +407,12 @@ function login_return_query() {
 }
 
 /** The password typed into the sign-in form, or null if this request isn't that form being sent. The box is called
- *  access_code (not a name a password manager recognises); login_password is still read, for scripts and older pages. */
+ *  lens (nothing to do with passwords or codes, so nothing for a password manager to recognise); access_code (the name before 2.6.5) and
+ *  login_password (older still) are still read, for scripts, old bookmarks and pages already open. */
 function login_form_password() {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') return null;
-    foreach (['access_code', 'login_password'] as $name) {
-        if (isset($_POST[$name]) && is_string($_POST[$name])) return $name === 'access_code' ? str_replace(["\r", "\n"], '', $_POST[$name]) : $_POST[$name];
+    foreach (['lens', 'access_code', 'login_password'] as $name) {
+        if (isset($_POST[$name]) && is_string($_POST[$name])) return $name !== 'login_password' ? str_replace(["\r", "\n"], '', $_POST[$name]) : $_POST[$name];
     }
     return null;
 }
@@ -428,5 +429,5 @@ function render_login_page($heading, $blurb, $error = '') {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
-<title>Access</title>
+<title><?= htmlspecialchars(($shownTitle = gallery_title_early(__DIR__)) !== '' ? $shownTitle : 'Gallery', ENT_QUOTES, 'UTF-8') ?></title>
 <style>

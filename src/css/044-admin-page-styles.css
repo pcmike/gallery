@@ -1119,9 +1119,6 @@
   .cv-tab { padding:6px 12px; border-radius:18px; border:1px solid #34343a; background:transparent; color:var(--muted); font-size:0.85rem; min-height:36px; cursor:pointer; }
   .cv-tab.on { background:#1e1f3a; color:#fff; border-color:#5a62e6; }
   .cv-photogrid { grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:8px; }
-  .earlier-views { margin-top:8px; padding:8px 10px; border:1px solid #3d4194; border-radius:8px; background:#0f0f14; }
-  .earlier-views[hidden], .earlier-act[hidden], .earlier-hint[hidden] { display:none; }
-  .earlier-views p { margin:4px 0; font-size:0.85rem; }
 
   /* The Visitors tab. */
   .vt .vt-sum { margin:0 0 12px; }

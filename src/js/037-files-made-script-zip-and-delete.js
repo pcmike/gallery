@@ -3,7 +3,7 @@
       function num(n) { return Number(n).toLocaleString(); }
       function post(fields) {
         var b = new URLSearchParams(); b.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { b.set(k, fields[k]); });
-        return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: b.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: b.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
       }
       function load() { return post({ action: 'files_list' }).then(function (j) { if (!j.ok) throw new Error(j.text || 'Could not list'); sum = j; return j; }); }
@@ -122,7 +122,7 @@
             if (!r.ok && !r.left) { b.disabled = false; err.textContent = r.text || 'Not deleted.'; return; }
             o._close();
             var d = overlay('<h3>' + (r.ok ? 'Done' : 'Stopped') + '</h3><p>' + esc(r.text) + (r.ok ? ' You are signed out and the gallery is now plain and public, with its default settings. Your photos are as they were. To set it up again, open <code>?admin</code>, type the code from the file <code>gallery-setup-code.php</code> it makes beside index.php, and choose a password.' : '') + '</p>' + (r.left && r.left.length ? '<pre>' + esc(r.left.join('\n')) + '</pre>' : '') + '<div class="fm-acts"><button type="button" class="fm-primary" data-fm-x="done">Close</button></div>');
-            d.addEventListener('click', function (e2) { if (e2.target.closest && e2.target.closest('[data-fm-x]')) { d._close(); location.href = location.pathname; } });
+            d.addEventListener('click', function (e2) { if (e2.target.closest && e2.target.closest('[data-fm-x]')) { d._close(); location.href = location.href.replace(/[?#].*$/, ''); } });
           }).catch(function () { b.disabled = false; err.textContent = 'Could not reach the gallery: check your connection.'; });
         });
       }

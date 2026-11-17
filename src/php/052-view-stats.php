@@ -28,7 +28,7 @@ function stats_connection($folderPath) {
     if (isset($GLOBALS['__stats_pool'][$folderPath])) {
         return $GLOBALS['__stats_pool'][$folderPath];
     }
-    $conn = ['mode' => 'file', 'pdo' => null, 'file' => $folderPath . '/.gallery-stats.php'];
+    $conn = ['mode' => 'file', 'pdo' => null, 'file' => $folderPath . '/.gallery-stats.php', 'key' => null, 'why' => ''];
     if (class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
         // With SQLite here the counts live in the database and nowhere else: a database that can't be opened or written costs the counts
         // (mode 'failed': nothing is counted and nothing is shown, Health says why), never the page, and never moves the counting to the
@@ -41,12 +41,15 @@ function stats_connection($folderPath) {
             $pdo->exec('PRAGMA busy_timeout = 2000');   // (a writer that holds the lock for a minute makes this one give up in two seconds, not wait a minute)
             $pdo->exec('PRAGMA journal_mode = WAL');
             $pdo->exec('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)');
-            // Keyed by a hash of the photo's path, not the path itself: a
-            // SQLite file is binary and can't carry the PHP guard the JSON
-            // stores do, so it could be fetched by URL — and a readable
-            // filename in it would hand over a hidden item's exact name.
-            // Counts are still kept for every item, hidden or not.
-            $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views_h (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
+            // Keyed by a keyed hash of the photo's file name inside this folder, not the name itself: a SQLite file is binary and can't carry
+            // the PHP guard the JSON stores do, so it could be fetched by URL, and a readable (or unkeyed, guessable) name in it would hand
+            // over a hidden item's exact name. The key is a random one kept in a guarded file of this folder's own (.gallery-stats-key.php:
+            // fetching it answers 404 whatever the server's rules), so the counts follow the folder wherever it is shown, copied with it,
+            // and are not tied to this install's secret. Counts are still kept for every item, hidden or not.
+            $reset = stats_drop_old_counts($pdo);   // (2.6.5: the older table, keyed by an unkeyed hash of the photo's path, is dropped: see LEGACY-REMOVAL.md)
+            $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views_k (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
+            $conn['key'] = stats_bind_key($folderPath, $pdo, $conn['why']);
+            if ($conn['key'] === null) throw new RuntimeException('the folder\'s view-count key: ' . $conn['why']);
             $conn['pdo'] = $pdo;
             $conn['mode'] = 'sqlite';
         } catch (Throwable $e) {
@@ -67,9 +70,73 @@ function stats_note_failure($folderPath, $e) {
     error_log('gallery: the view counts in ' . $folderPath . ' could not be used, so nothing was counted there: ' . preg_replace('~\s+~', ' ', $e->getMessage()));
 }
 
-/** The stats key for a photo in the SQLite store. */
-function stats_key($relativePath) {
-    return hash('sha256', (string) $relativePath);
+/** The photo's file name inside its own folder: what its views are kept under (the SQLite store lives in that folder, so the name alone is
+ *  unique there, and the counts stay with the folder when it is renamed, moved or shown by another gallery). */
+function stats_photo_name($relativePath) {
+    $p = (string) $relativePath;
+    return ($i = strrpos($p, '/')) === false ? $p : substr($p, $i + 1);
+}
+
+/** The key a photo's views are kept under in a folder's SQLite store: HMAC-SHA256 of its file name with the folder's own key. */
+function stats_key($name, $folderKey) {
+    return hash_hmac('sha256', stats_photo_name($name), (string) $folderKey);
+}
+
+/** The folder's own view-count key (32 random bytes in a guarded file of the folder) as ['key' => bytes], or ['why' => 'missing'|'broken'|'unwritable'].
+ *  A key is made only when asked ($create) and only when there is no file at all: a file that is there and can't be read as a key is never
+ *  replaced (counts made with it could still be mended by hand), and a missing one is never replaced behind counts that were made with it. */
+function stats_folder_key($folderPath, $create) {
+    $path = $folderPath . '/.gallery-stats-key.php';
+    $valid = function ($d) { return is_string($d['key'] ?? null) && preg_match('/^[0-9a-f]{64}$/D', $d['key']) === 1; };
+    [$status, $d] = json_file_load($path, ['key' => '']);
+    if ($status === 'ok') return $valid($d) ? ['key' => hex2bin($d['key'])] : ['why' => 'broken'];
+    if ($status === 'broken') return ['why' => 'broken'];
+    if (!$create) return ['why' => 'missing'];
+    json_file_update($path, ['key' => ''], function (&$data) use ($valid) { if (!$valid($data)) $data['key'] = bin2hex(random_bytes(32)); }, true);
+    [$status, $d] = json_file_load($path, ['key' => '']);
+    return $status === 'ok' && $valid($d) ? ['key' => hex2bin($d['key'])] : ['why' => 'unwritable'];
+}
+
+/** Ties a folder's database to its key. The database remembers which key its counts were made with (a short fingerprint, in the stats table), so a
+ *  key that has gone missing or been replaced is noticed instead of being quietly made anew behind counts nobody can read any more. Returns the
+ *  key (bytes), or null with $why set: 'missing' (counts exist, the key file is gone), 'mismatch' (another key is there), 'broken' or 'unwritable'. */
+function stats_bind_key($folderPath, $pdo, &$why) {
+    $why = '';
+    $marks = $pdo->query("SELECT key FROM stats WHERE key LIKE 'keyid:%'")->fetchAll(PDO::FETCH_COLUMN);
+    $r = stats_folder_key($folderPath, !$marks);   // (a key is made only for a database that has no counts made with another)
+    if (!isset($r['key'])) { $why = $r['why']; return null; }
+    $id = 'keyid:' . substr(hash('sha256', $r['key']), 0, 12);
+    if ($marks && !in_array($id, $marks, true)) { $why = 'mismatch'; return null; }
+    if (!$marks) $pdo->prepare('INSERT OR IGNORE INTO stats(key, value) VALUES(:k, 1)')->execute([':k' => $id]);
+    return $r['key'];
+}
+
+/** Looks (and changes nothing) at whether a folder's database and its key file agree: '' when they do, or when no counts were made under a key yet;
+ *  'missing', 'mismatch' or 'broken' when counts exist and the key to read them is gone, another one, or unreadable. For the Health check. */
+function stats_key_check($sqlitePath) {
+    try {
+        $pdo = new PDO('sqlite:' . $sqlitePath);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $marks = $pdo->query("SELECT key FROM stats WHERE key LIKE 'keyid:%'")->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {
+        return '';   // (an older database with no such table yet, or one Health names for another reason)
+    }
+    if (!$marks) return '';
+    $r = stats_folder_key(dirname($sqlitePath), false);
+    if (!isset($r['key'])) return $r['why'];
+    return in_array('keyid:' . substr(hash('sha256', $r['key']), 0, 12), $marks, true) ? '' : 'mismatch';
+}
+
+/** The one-time reset (2.6.5): a database made by an older version keeps its counts in photo_views_h, keyed by a plain SHA-256 of the photo's path,
+ *  which anyone who can fetch the file can test a guessed path against. That table is dropped and the file compacted, so the old hashes don't linger
+ *  in free pages: the counts start again, under the folder's own key. True when there was something to drop. */
+function stats_drop_old_counts($pdo) {
+    if (!$pdo->query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'photo_views_h'")->fetchColumn()) return false;
+    $pdo->exec('DROP TABLE photo_views_h');
+    $pdo->exec("DELETE FROM stats WHERE key LIKE 'carried:%'");   // (the marks the earlier-views button left: that button is gone)
+    @$pdo->exec('VACUUM');
+    @$pdo->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    return true;
 }
 
 /**
@@ -120,9 +187,9 @@ function stats_import_legacy($folderPath, $conn) {
                 $pdo->prepare("INSERT INTO stats(key, value) VALUES('pageviews', :v) ON CONFLICT(key) DO UPDATE SET value = value + :v")
                     ->execute([':v' => $legacy['pageviews']]);
             }
-            $ins = $pdo->prepare('INSERT INTO photo_views_h(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
+            $ins = $pdo->prepare('INSERT INTO photo_views_k(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
             foreach ($legacy['photos'] as $name => $views) {
-                $ins->execute([':k' => stats_key($name), ':v' => $views]);
+                $ins->execute([':k' => stats_key($name, $conn['key']), ':v' => $views]);
             }
             if ($dropLegacyTable) $pdo->exec('DROP TABLE photo_views');
             $pdo->commit();
@@ -183,8 +250,8 @@ function stats_join_json_store($folderPath, $conn) {
             if ((int) $d['pageviews'] > 0) {
                 $pdo->prepare("INSERT INTO stats(key, value) VALUES('pageviews', :v) ON CONFLICT(key) DO UPDATE SET value = value + :v")->execute([':v' => (int) $d['pageviews']]);
             }
-            $ins = $pdo->prepare('INSERT INTO photo_views_h(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
-            foreach ($d['photos'] as $name => $views) $ins->execute([':k' => stats_key((string) $name), ':v' => (int) $views]);
+            $ins = $pdo->prepare('INSERT INTO photo_views_k(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
+            foreach ($d['photos'] as $name => $views) $ins->execute([':k' => stats_key((string) $name, $conn['key']), ':v' => (int) $views]);
             $pdo->prepare('INSERT INTO stats(key, value) VALUES(:k, 1)')->execute([':k' => $mark]);
         }
         $pdo->commit();
@@ -253,7 +320,8 @@ function stats_get_pageviews($rootDir) {
 }
 
 /** The same photo under the other names its place has had ("eurotrip/paris/a.jpg" for "Eurotrip/paris/a.jpg", say), for a photo in a named place
- *  from elsewhere on the server (EXTRA_FOLDERS); [] for any other. Its views were recorded under each of those names and are added up. */
+ *  from elsewhere on the server (EXTRA_FOLDERS); [] for any other. Its views were recorded under each of those names and are added up. Only the
+ *  JSON store (no SQLite here) is kept by path; the SQLite store is kept by the name inside the folder and needs none of this. */
 function stats_alias_paths($relativePath) {
     static $byLabel = [];
     $slash = strpos((string) $relativePath, '/');
@@ -279,17 +347,15 @@ function stats_bump_photo($folderPath, $relativePath) {
     try {
         if ($conn['mode'] === 'sqlite') {
             $pdo = $conn['pdo'];
-            $key = stats_key($relativePath);
+            $key = stats_key($relativePath, $conn['key']);   // (by the name inside its folder: a renamed or moved folder keeps its counts, so there are no earlier names to add up here)
             $stmt = $pdo->prepare(
-                "INSERT INTO photo_views_h(key, views) VALUES(:k, 1)
+                "INSERT INTO photo_views_k(key, views) VALUES(:k, 1)
                  ON CONFLICT(key) DO UPDATE SET views = views + 1"
             );
             $stmt->execute([':k' => $key]);
-            $sel = $pdo->prepare('SELECT views FROM photo_views_h WHERE key = :k');
+            $sel = $pdo->prepare('SELECT views FROM photo_views_k WHERE key = :k');
             $sel->execute([':k' => $key]);
-            $total = (int) $sel->fetchColumn();
-            foreach (stats_alias_paths($relativePath) as $alt) { $sel->execute([':k' => stats_key($alt)]); $total += (int) $sel->fetchColumn(); }
-            return $total;
+            return (int) $sel->fetchColumn();
         }
         if ($conn['mode'] !== 'file') return null;
         $stats = stats_update_file($conn['file'], function (&$data) use ($relativePath) {
@@ -314,14 +380,13 @@ function stats_get_photo_views($folderPath, $candidateFiles = []) {
     try {
         if ($conn['mode'] === 'sqlite') {
             $byKey = [];
-            foreach ($conn['pdo']->query('SELECT key, views FROM photo_views_h') as $row) {
+            foreach ($conn['pdo']->query('SELECT key, views FROM photo_views_k') as $row) {
                 $byKey[$row['key']] = (int) $row['views'];
             }
             $result = [];
             foreach ($candidateFiles as $file) {
-                $key = stats_key($file); $sum = $byKey[$key] ?? 0; $any = isset($byKey[$key]);
-                foreach (stats_alias_paths($file) as $alt) { $ak = stats_key($alt); if (isset($byKey[$ak])) { $sum += $byKey[$ak]; $any = true; } }
-                if ($any) $result[$file] = $sum;
+                $key = stats_key($file, $conn['key']);
+                if (isset($byKey[$key])) $result[$file] = $byKey[$key];
             }
             return $result;
         }

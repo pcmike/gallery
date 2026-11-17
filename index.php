@@ -749,6 +749,16 @@ function scan_odd_name_note($path) {
     $GLOBALS['__odd_names'][$rel] = true;
 }
 
+/** Remembers a picture or video the scan left out because its name starts with a dot, for the Health check (each once, by its path from the
+ *  gallery's folder). A dot name is a hidden file on Linux and macOS, and a folder starting with a dot is never a photo folder either; the
+ *  one that matters in practice is macOS's own: copied to a disk or share it can't keep its extra data on, a Mac leaves a "._IMG_0412.jpg"
+ *  beside every photo, a few kilobytes that are no picture. */
+function scan_dot_file_note($path) {
+    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
+    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
+    $GLOBALS['__dot_files'][$rel] = true;
+}
+
 /**
  * Recursively scans a real directory into a tree: ['files' => [bare
  * filenames loose directly here, already sorted per PHOTO_SORT_ORDER],
@@ -773,7 +783,7 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     // A folder it has no business walking into (a system or recycle folder), and a ceiling on how much one visit scans, so a gallery
     // dropped into a huge tree (a whole web root) cannot make every page crawl. The Health check says when the ceiling was hit.
     static $dirs = 0, $files = 0;
-    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; }
+    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = []; }
     if (++$dirs > SCAN_MAX_FOLDERS || $files > SCAN_MAX_FILES) { $GLOBALS['__scan_truncated'] = true; return $node; }
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
@@ -786,7 +796,8 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
         if (is_file($path)) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
             if (in_array($ext, $mediaExtensions, true)) {
-                if (name_is_text($entry)) { $node['files'][] = $entry; $files++; }
+                if ($entry[0] === '.') scan_dot_file_note($path);   // (a dot file is hidden, the way a dot folder is: never a photo)
+                elseif (name_is_text($entry)) { $node['files'][] = $entry; $files++; }
                 else scan_odd_name_note($path);   // (left out: see name_is_text)
             }
             continue;
@@ -1001,6 +1012,7 @@ function valid_media_path($dir, $rel, $mediaExtensions, $self) {
         if ($seg === '' || $seg === '.' || $seg === '..') return false;
     }
     $file = array_pop($segments);
+    if ($file[0] === '.') return false;   // (a dot file is hidden, as a dot folder is: the scan leaves it out, so it is never served)
     foreach ($segments as $seg) {   // (the scan never enters a dot folder or a system folder, so nothing in one is a gallery photo)
         if ($seg[0] === '.' || in_array($seg, SCAN_SKIP_FOLDERS, true)) return false;
     }
@@ -1238,12 +1250,13 @@ if (AUTO_GROUP_BY_FOLDER) {
 } else {
     $folderTree = null;
     [$subfolderMediaCount, $subfolderMediaTruncated] = count_media_in_subfolders($dir, $mediaExtensions);
-    $GLOBALS['__odd_names'] = [];
+    $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = [];
     $files = array_filter(scandir($dir), function ($file) use ($dir, $mediaExtensions, $self) {
         if ($file === $self || $file === '.' || $file === '..') return false;
         if (!is_file("$dir/$file") || is_link("$dir/$file")) return false;   // (a link is never followed: it could point anywhere on the server)
         $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
         if (!in_array($ext, $mediaExtensions)) return false;
+        if ($file[0] === '.') { scan_dot_file_note("$dir/$file"); return false; }   // (a dot file is hidden, the way a dot folder is: never a photo)
         if (!name_is_text($file)) { scan_odd_name_note("$dir/$file"); return false; }   // (left out: see name_is_text)
         return true;
     });
@@ -3655,14 +3668,11 @@ function serve_video($dir, $filename, $validFiles, $itemsData = []) {
 
 /* -----------------------------------------------------------------------
  * Moved in from another gallery. A folder shown here that another gallery showed before (the old copy being retired) holds two things
- * that gallery left behind and this one cannot reuse:
- *   - its thumbnails and video pictures, named with that gallery's own key, which sit in the folder's .gallery-cache for ever when the
- *     folder is a place from elsewhere on the server (the clean-up skips those, see gc_image_cache; a folder inside the gallery's own
- *     folder is swept clean by itself); and
- *   - its view counts, kept in the folder's own .gallery-stats.sqlite under the path as that gallery saw the photo.
- * Prepare media offers both: add the old counts to this gallery's own (once per folder, old rows never changed), and remove the
- * leftover thumbnails (only after the owner says no other gallery still shows the folders). Nothing here ever touches a photo, a
- * caption, a flag, or the files that hold what was read from the photos.
+ * that gallery left behind and this one cannot reuse: its thumbnails and video pictures, named with that gallery's own key, which sit in the
+ * folder's .gallery-cache for ever when the folder is a place from elsewhere on the server (the clean-up skips those, see gc_image_cache; a
+ * folder inside the gallery's own folder is swept clean by itself). Prepare media offers to remove them (only after the owner says no other
+ * gallery still shows the folders). Nothing here ever touches a photo, a caption, a flag, or the files that hold what was read from the photos.
+ * (Its view counts used to be a second thing to carry over by a button. They are kept under the folder's own key now and follow it by themselves.)
  * ----------------------------------------------------------------------- */
 
 /** The folders of $files (paths relative to $dir) as ['real' => real path, 'rel' => the folder as the gallery names it, 'files' => [...]]. */
@@ -3704,7 +3714,6 @@ function moved_in_leftovers($dir, $files) {
 /** What a Left behind row of the Health check is about, as [how many, a fingerprint of exactly those things] (null for a row that is not one of these). "Set aside" keeps the fingerprint:
  *  the row stays quiet only while it is about the very same things, so anything new (or anything gone) brings it back, and a count that happens to match does not hide different things. */
 function health_aside_state($key, $dir, $files) {
-    if ($key === 'earlier-views') { $ev = moved_in_earlier_views($dir, $files); return [(int) $ev['views'], md5(json_encode($ev['rows']))]; }
     if ($key === 'leftover-thumbs') {
         $lo = moved_in_leftovers($dir, $files); $all = [];
         foreach ($lo['folders'] as $f) foreach ($f['names'] as $nm) $all[] = $f['real'] . '/' . $nm;
@@ -3726,70 +3735,6 @@ function moved_in_remove_leftovers($dir, $files) {
         }
     }
     return ['count' => $n, 'bytes' => $bytes];
-}
-
-/** The shorter paths an older gallery may have saved a photo's views under: $file without its leading folders, one at a time, down to the bare name
- *  (a gallery showing "Eurotrip/paris/a.jpg" here may have shown "paris/a.jpg", or, with the folder as its top, "a.jpg"). */
-function moved_in_old_paths($file) {
-    $parts = explode('/', $file); $out = [];
-    for ($i = 1; $i < count($parts); $i++) $out[] = implode('/', array_slice($parts, $i));
-    return $out;
-}
-
-/** The marker kept in a folder's stats file once its earlier views were added, so that pressing the button again adds nothing. */
-function moved_in_marker_key($folderRel) {
-    return 'carried:' . stats_key((string) $folderRel);
-}
-
-/** Views other galleries counted for the photos shown here, found in each folder's own stats file under an older path, and not added yet.
- *  Read-only. ['views' => total waiting, 'folders' => number with some, 'done' => folders already added, 'rows' => [folder => ['found' => n, 'added' => bool]]]. */
-function moved_in_earlier_views($dir, $files, $apply = false) {
-    $out = ['views' => 0, 'folders' => 0, 'done' => 0, 'rows' => [], 'added' => 0, 'addedFolders' => 0];
-    $drivers = class_exists('PDO') ? PDO::getAvailableDrivers() : [];
-    if (!in_array('sqlite', $drivers, true)) return $out;   // (no SQLite: the older flat-file counts are not read)
-    foreach (moved_in_folders($dir, $files) as $f) {
-        $db = $f['real'] . '/.gallery-stats.sqlite';
-        if (!is_file($db) || is_link($db)) continue;
-        try {
-            $pdo = new PDO('sqlite:' . $db);
-            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-            $has = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='photo_views_h'")->fetchColumn();
-            if (!$has) continue;
-            $rowsByKey = [];
-            foreach ($pdo->query('SELECT key, views FROM photo_views_h') as $r) $rowsByKey[$r['key']] = (int) $r['views'];
-            $marker = moved_in_marker_key($f['rel']);
-            $hasStats = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='stats'")->fetchColumn();
-            $done = false;
-            if ($hasStats) { $m = $pdo->prepare('SELECT value FROM stats WHERE key = :k'); $m->execute([':k' => $marker]); $done = $m->fetchColumn() !== false; }
-            $found = 0; $adds = [];
-            foreach ($f['files'] as $file) {
-                $own = stats_key($file); $sum = 0; $seen = [];
-                foreach (moved_in_old_paths($file) as $old) {
-                    $k = stats_key($old);
-                    if ($k === $own || isset($seen[$k]) || !isset($rowsByKey[$k])) continue;
-                    $seen[$k] = true; $sum += $rowsByKey[$k];
-                }
-                if ($sum > 0) { $found += $sum; $adds[$own] = $sum; }
-            }
-            if ($found === 0 && !$done) continue;
-            $out['rows'][$f['rel']] = ['found' => $done ? 0 : $found, 'added' => $done];
-            if ($done) { $out['done']++; continue; }
-            $out['views'] += $found; $out['folders']++;
-            if ($apply && $adds) {
-                $pdo->exec('PRAGMA busy_timeout = 5000');
-                $pdo->exec('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)');
-                $pdo->beginTransaction();
-                $up = $pdo->prepare('INSERT INTO photo_views_h(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
-                foreach ($adds as $key => $v) $up->execute([':k' => $key, ':v' => $v]);
-                $pdo->prepare('INSERT OR REPLACE INTO stats(key, value) VALUES(:k, 1)')->execute([':k' => $marker]);
-                $pdo->commit();
-                $out['added'] += $found; $out['addedFolders']++;
-            }
-        } catch (Exception $e) {
-            continue;
-        }
-    }
-    return $out;
 }
 /* -----------------------------------------------------------------------
  * GROUPING: discover qualifying .md files, extract {group:}/{photos:}
@@ -4645,6 +4590,13 @@ function send_viewer_aware_cache_headers() {
     if (is_revealed() || link_viewer() !== null) {
         header('Cache-Control: private, no-store');
     }
+    // The page as the owner sees it (his lock, cover and share buttons, and the token that makes them work) and as a private-view visitor sees
+    // it (private photos in it) is not for another site to frame and have someone press things in: only this site may. The same words the admin
+    // page inside the shell already sends. A stranger's page and a link guest's say nothing: embedding those is wanted one day (ROADMAP).
+    if (is_admin_browser() || is_revealed()) {
+        header('X-Frame-Options: SAMEORIGIN');
+        header("Content-Security-Policy: frame-ancestors 'self'; base-uri 'none'; form-action 'self'; object-src 'none'");
+    }
 }
 function admin_session_name() {
     return 'gallery_admin_' . substr(hash('sha256', __DIR__), 0, 10);
@@ -5345,7 +5297,8 @@ function geo_admin_action($action) {
  * New versions. The gallery can ask GitHub (the project's releases page) which version is the newest, at most once a day, from the Settings
  * page and never while a page is being built: the page asks afterwards, in the background, and says nothing when it can't be reached. If the
  * newest is newer than this one, the Health check says so with two buttons, View release and Update now. The only thing sent is an ordinary
- * request for the releases page (so GitHub sees this server's address); nothing about the gallery, its photos or its visitors. CHECK_FOR_UPDATES
+ * request for the releases page: GitHub sees this server's address and the User-Agent "Drop-in Photo Gallery <version>" (the owner chose to
+ * keep the version in it, 2026-11-17); nothing about the gallery's photos or its visitors. CHECK_FOR_UPDATES
  * turns the daily check off (the Check now button still works).
  *
  * Update now replaces this file (index.php) and nothing else. It downloads the release's index.php and its .sha256 from the project's own
@@ -5972,7 +5925,7 @@ function admin_credentials_valid() {
  *  and a stale saved password must not bring that dialog back. */
 function admin_reject_saved_credentials() {
     http_response_code(401);
-    render_login_page('Enter your access code', '', 'Your browser sent a saved login that no longer matches. Type your current access code.');
+    render_login_page('Enter your access code', '', 'Out of focus.');
 }
 
 /** The password form for ?admin and ?reveal: one field, no username, no
@@ -5990,11 +5943,12 @@ function login_return_query() {
 }
 
 /** The password typed into the sign-in form, or null if this request isn't that form being sent. The box is called
- *  access_code (not a name a password manager recognises); login_password is still read, for scripts and older pages. */
+ *  lens (nothing to do with passwords or codes, so nothing for a password manager to recognise); access_code (the name before 2.6.5) and
+ *  login_password (older still) are still read, for scripts, old bookmarks and pages already open. */
 function login_form_password() {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') return null;
-    foreach (['access_code', 'login_password'] as $name) {
-        if (isset($_POST[$name]) && is_string($_POST[$name])) return $name === 'access_code' ? str_replace(["\r", "\n"], '', $_POST[$name]) : $_POST[$name];
+    foreach (['lens', 'access_code', 'login_password'] as $name) {
+        if (isset($_POST[$name]) && is_string($_POST[$name])) return $name !== 'login_password' ? str_replace(["\r", "\n"], '', $_POST[$name]) : $_POST[$name];
     }
     return null;
 }
@@ -6011,39 +5965,42 @@ function render_login_page($heading, $blurb, $error = '') {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
-<title>Access</title>
+<title><?= htmlspecialchars(($shownTitle = gallery_title_early(__DIR__)) !== '' ? $shownTitle : 'Gallery', ENT_QUOTES, 'UTF-8') ?></title>
 <style>
   :root { color-scheme: dark; }
   html, body { height:100%; }
   body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; margin:0; }
   .wrap { box-sizing:border-box; min-height:100%; max-width:360px; margin:0 auto; padding:12vh 24px 0; display:flex; flex-direction:column; justify-content:flex-start; }
-  .mark { display:block; width:104px; height:104px; margin:0 auto 14px; color:#8a8a93; transition:color .2s; }
+  .mark { display:block; width:160px; height:160px; margin:0 auto 18px; color:#8a8a93; transition:color .2s; }
   .mark:hover, .mark:focus-visible { color:#eaeaea; outline:none; }
-  .mark svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.1; stroke-linecap:round; stroke-linejoin:round; }
+  .mark svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:0.8; stroke-linecap:round; stroke-linejoin:round; }
   p { color:#9a9aa0; font-size:0.9rem; margin:0 0 18px; text-align:center; }
-  .gate { display:block; width:100%; box-sizing:border-box; padding:12px 14px; font:inherit; font-size:1.05rem; text-align:center; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:10px; -webkit-text-security:disc; text-security:disc; }
-  .gate:focus { outline:2px solid #5865f2; outline-offset:1px; }
+  .lens { display:block; width:100%; box-sizing:border-box; padding:12px 14px; font:inherit; font-size:1.05rem; text-align:center; background:#1a1a1c; color:#eaeaea; border:1px solid #3a3a3e; border-radius:10px; -webkit-text-security:disc; text-security:disc; }
+  .lens:focus { outline:2px solid #5865f2; outline-offset:1px; }
   /* Safari's own key / contacts Autofill button inside a field */
-  .gate::-webkit-credentials-auto-fill-button, .gate::-webkit-contacts-auto-fill-button, .gate::-webkit-autofill-button { display:none !important; visibility:hidden !important; pointer-events:none !important; }
-  .err { background:rgba(237,66,69,0.15); color:#ff8a8c; padding:8px 12px; border-radius:8px; font-size:0.9rem; margin-bottom:14px; text-align:center; }
+  .lens::-webkit-credentials-auto-fill-button, .lens::-webkit-contacts-auto-fill-button, .lens::-webkit-autofill-button { display:none !important; visibility:hidden !important; pointer-events:none !important; }
+  .miss { background:rgba(237,66,69,0.15); color:#ff8a8c; padding:8px 12px; border-radius:8px; font-size:0.9rem; margin-bottom:14px; text-align:center; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <a class="mark" id="goback" href="./<?= htmlspecialchars(login_return_query(), ENT_QUOTES, 'UTF-8') ?>" aria-label="Back to the gallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/><path d="M12 14.6v2.8"/></svg></a>
+  <a class="mark" id="goback" href="./<?= htmlspecialchars(login_return_query(), ENT_QUOTES, 'UTF-8') ?>" aria-label="Back to the gallery"><?= LINK_ICON_GALLERY ?></a>
   <?php if ($blurb !== ''): ?><p><?= htmlspecialchars($blurb, ENT_QUOTES, 'UTF-8') ?></p><?php endif; ?>
-  <?php if ($error !== ''): ?><div class="err" role="alert"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
+  <?php if ($error !== ''): ?><div class="miss"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div><?php endif; ?>
   <form method="post" action="" autocomplete="off">
     <?php // Not a password field (a browser or manager offers to fill, and to save, whatever is typed into one): a text box
           // drawn as dots, named nothing a manager recognises, every common manager told to leave it alone, and read-only
-          // until it is focused, which keeps iOS Safari's Autofill from picking it up when the page loads. Return sends it. ?>
-    <input type="text" class="gate" id="gate" name="access_code" readonly onfocus="this.removeAttribute('readonly');" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" autofocus required
+          // until it is focused, which keeps iOS Safari's Autofill from picking it up when the page loads. Return sends it.
+          // THE OWNER'S DECISION (2026-11-17, audit group 15, H-22): this page is made like the owner's other one (pcmike.net/dp/a): nothing on it
+          // says what it is, so there is no label, no heading, no button and no aria- names, and a screen reader is not helped here on purpose.
+          // An audit will flag it; it is not to be "fixed". ?>
+    <input type="text" class="lens" id="lens" name="lens" readonly onfocus="this.removeAttribute('readonly');" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" autofocus required
            data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other">
   </form>
 </div>
 <script>
   (function () {
-    var box = document.getElementById('gate');
+    var box = document.getElementById('lens');
     // Where the browser can't draw text as dots, showing what is typed would be worse than a manager's pop-up: use a real password box.
     if (!(window.CSS && CSS.supports && (CSS.supports('-webkit-text-security', 'disc') || CSS.supports('text-security', 'disc')))) {
       var pw = document.createElement('input');
@@ -6051,7 +6008,7 @@ function render_login_page($heading, $blurb, $error = '') {
       box.parentNode.replaceChild(pw, box); pw.focus();
     }
   })();
-  // The lock drawing is the way back, and really goes back to where the visitor was (same scroll position, same open photo)
+  // The drawing is the way back, and really goes back to where the visitor was (same scroll position, same open photo)
   // when they came from a page of this site; otherwise its link takes them to that page.
   document.getElementById('goback').addEventListener('click', function (e) {
     try {
@@ -7379,7 +7336,7 @@ function link_public_media($dir) {
     } else {
         $all = [];
         foreach ((array) @scandir($dir) as $f) {
-            if ($f === $self || $f === '.' || $f === '..' || !is_file("$dir/$f")) continue;
+            if ($f === $self || $f === '.' || $f === '..' || $f[0] === '.' || !is_file("$dir/$f") || is_link("$dir/$f")) continue;   // (the same files the scan keeps: no dot file, no link)
             if (in_array(strtolower(pathinfo($f, PATHINFO_EXTENSION)), $mediaExtensions, true) && name_is_text($f)) $all[] = $f;
         }
         usort($all, 'strnatcasecmp');
@@ -7818,7 +7775,7 @@ function run_reveal_route($dir) {
     // looking at the form never is.
     $attempting = $formPass !== null || isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']);
     if ($attempting && (!login_throttle_allows($dir, 'reveal', $ip) || (ADMIN_PASSWORD !== '' && !login_throttle_allows($dir, 'admin', $ip)))) {
-        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', max(login_throttle_wait($dir, 'reveal', $ip), login_throttle_wait($dir, 'admin', $ip)));
+        render_lockout_page('Out of focus for a moment', 'Too many tries from your connection. Hold still for a moment.', max(login_throttle_wait($dir, 'reveal', $ip), login_throttle_wait($dir, 'admin', $ip)));
         return;
     }
     $asAdmin = is_string($supplied) && ADMIN_PASSWORD !== '' && password_matches(ADMIN_PASSWORD, $supplied);
@@ -7831,10 +7788,10 @@ function run_reveal_route($dir) {
         if ($formPass === null && (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']))) {
             // A wrong saved Basic password (see admin_reject_saved_credentials): the form, never a challenge.
             http_response_code(401);
-            render_login_page($heading, $prompt, 'Your browser sent a saved login that no longer matches. Type the current access code.');
+            render_login_page($heading, $prompt, 'Out of focus.');
             return;
         }
-        render_login_page($heading, $prompt, $formPass !== null ? 'That code isn\'t right.' : '');
+        render_login_page($heading, $prompt, $formPass !== null ? 'Out of focus.' : '');
         return;
     }
     login_throttle_record_success($dir, 'reveal', $ip);
@@ -8357,7 +8314,7 @@ function render_leaflet_map($points, $legend, $mapId, $heightCss, $loadLibrary, 
   function escapeHtml(s) {
     var d = document.createElement('div');
     d.textContent = s;
-    return d.innerHTML;
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');   // (an address or a name goes into an attribute too: the quotes must not end it)
   }
 
   function popupHtml(pt) {
@@ -9801,6 +9758,15 @@ function admin_password_ok($pw) {
     return strlen($pw) >= 8 && preg_match('/[A-Za-z]/', $pw) && preg_match('/\d/', $pw);
 }
 
+/** What is wrong with a password's length, in words, or '': bcrypt (what stores every password here) reads only the first 72 BYTES, so a longer one
+ *  would be accepted and then sign in with just those 72, which is weaker than it looks. Said in bytes because that is what counts: a letter, digit
+ *  or symbol on a plain keyboard is one byte, so most passwords fit; an accented letter takes two, other alphabets two or three, an emoji four. */
+function password_length_problem($pw, $what) {
+    $n = strlen((string) $pw);
+    if ($n <= 72) return '';
+    return $what . ' is ' . $n . ' bytes long, and the most the gallery can use is 72 (a plain letter, digit or symbol is one byte; an accented letter takes two, a letter of another alphabet two or three, an emoji four, so those fit fewer). Use a shorter one.';
+}
+
 /** Answers a request made by the admin page's own script (a switch saved in
  *  place) with JSON, and ends the request. */
 function admin_json_exit($payload) {
@@ -9989,7 +9955,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'health_panel') {
         $GLOBALS['dir'] = $dir; $GLOBALS['__admin_files'] = $files;
         $hid = admin_any_hidden($dir, $files, []) ? admin_hidden_data($dir, $files) : null;
-        $GLOBALS['__lock_probe'] = ['anyPrivate' => !empty($hid['folders']) || !empty($hid['items'])];   // (as the page sets it: the lock row only worries once something is private)
+        $GLOBALS['__lock_probe'] = ['anyPrivate' => !empty($hid['folders']) || !empty($hid['items']), 'anyHiddenFolder' => !empty($hid['folders'])];   // (as the page sets it: the lock row only worries once something is private)
         ob_start(); render_admin_health_panel(); $html = ob_get_clean();
         admin_json_exit(['ok' => true, 'text' => '', 'html' => $html]);
     }
@@ -9998,25 +9964,17 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'media_report') {
         session_write_close();
         $out = [];
-        $earlier = TRACK_VIEWS ? moved_in_earlier_views($dir, $files)['rows'] : [];   // (views an older gallery counted for these photos: shown as a column only when there are some)
-        foreach (media_report($dir, $files) as $row) { $row['earlier'] = $earlier[$row['folder']] ?? null; $out[] = $row; }
+        foreach (media_report($dir, $files) as $row) $out[] = $row;
         $att = media_attention($dir, $files);
-        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out, 'earlierAny' => count($earlier) > 0, 'attention' => $att['attention'], 'backupsHtml' => render_media_backups_html(media_tidy_backups($dir, $files))]);
+        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out, 'attention' => $att['attention'], 'backupsHtml' => render_media_backups_html(media_tidy_backups($dir, $files))]);
     }
 
-    // Moved in from another gallery (Prepare media): what an older gallery left in these folders, and the two things to do about it.
+    // Moved in from another gallery (Prepare media): the thumbnails another gallery left in these folders, and what to do about them.
     if ($action === 'media_moved') {
         session_write_close();
-        $ev = TRACK_VIEWS ? moved_in_earlier_views($dir, $files) : ['views' => 0, 'folders' => 0];
         $lo = moved_in_leftovers($dir, $files);
-        admin_json_exit(['ok' => true, 'text' => '', 'track' => TRACK_VIEWS, 'views' => $ev['views'], 'viewFolders' => $ev['folders'],
+        admin_json_exit(['ok' => true, 'text' => '',
             'leftovers' => ['count' => $lo['count'], 'bytes' => $lo['bytes'], 'folders' => array_map(function ($f) { return ['folder' => $f['folder'], 'count' => $f['count'], 'bytes' => $f['bytes']]; }, array_slice($lo['folders'], 0, 60)), 'more' => max(0, count($lo['folders']) - 60)]]);
-    }
-    if ($action === 'media_moved_views') {
-        if (!TRACK_VIEWS) admin_json_exit(['ok' => false, 'text' => 'Counting views is switched off in Settings, so there is nothing to add them to.']);
-        @set_time_limit(120);
-        $r = moved_in_earlier_views($dir, $files, true);
-        admin_json_exit(['ok' => true, 'text' => '', 'added' => $r['added'], 'folders' => $r['addedFolders']]);
     }
     if ($action === 'media_moved_remove') {
         if (empty($_POST['others_gone'])) admin_json_exit(['ok' => false, 'text' => 'Tick the box that says no other gallery still shows these folders first.']);
@@ -11610,7 +11568,7 @@ function gallery_setting_definitions() {
              'offwarn' => 'Photos are sent at full size, iPhone (HEIC) photos can\'t show, and nothing can be read from the files ahead of time, so photo locations read from the files stop showing. Nothing is deleted.'],
         ]],
         ['title' => 'Visitors and logs', 'items' => [
-            ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views', 'status' => 'earlierviews',
+            ['name' => 'TRACK_VIEWS', 'type' => 'bool', 'label' => 'Count views',
              'help' => 'Visits (one per visitor per half hour) and each photo\'s views (every time it is opened large). Everyone is counted but you, bots and link previews: someone on a share link or with the private-view password counts too. You always see the numbers here.'],
             ['name' => 'SHOW_VIEW_COUNTS_PUBLICLY', 'type' => 'bool', 'label' => 'Show view counts to visitors',
              'help' => 'Off keeps the numbers to yourself: nobody else sees them, share-link guests and private-view visitors included (you still see them when signed in).', 'requires' => 'TRACK_VIEWS'],
@@ -11680,7 +11638,7 @@ function gallery_setting_definitions() {
         ]],
         ['title' => 'Server setup (advanced)', 'items' => [
             ['name' => 'CHECK_FOR_UPDATES', 'type' => 'bool', 'label' => 'Look for a new version of the gallery',
-             'help' => 'Once a day the Health check asks GitHub which version is newest and says so when it is newer, with View release and Update now. Only an ordinary request is made (GitHub sees this server\'s address); nothing about your gallery is sent. Off: no automatic look; Check now still works.'],
+             'help' => 'Once a day the Health check asks GitHub which version is newest, and says so when it is newer (View release, Update now). GitHub sees this server\'s address and the request\'s name, Drop-in Photo Gallery ' . GALLERY_VERSION . '; nothing else. Off: no automatic look; Check now still works.'],
             ['name' => 'UPDATE_FEED_URL', 'type' => 'text', 'in' => true, 'label' => 'Where new versions are announced', 'help' => ''],
             ['name' => 'TRUSTED_PROXY', 'type' => 'enum', 'label' => 'Where visitors\' IP addresses come from', 'status' => 'clientip',
              'options' => ['direct' => 'The connection', 'cloudflare' => 'Cloudflare', 'proxy' => 'Another proxy'],
@@ -11933,6 +11891,7 @@ function site_settings_save_locked($ajax) {
             $errors[] = !login_throttle_allows(__DIR__, 'admin', client_ip()) ? 'Too many wrong passwords were typed from your connection. Wait a moment, then try again.' : 'To change the admin password, type the current admin password first' . ($curPw === '' ? '.' : ': the one you typed isn\'t right.');
         }
         elseif ($adminPw !== (string) ($_POST['pw_admin2'] ?? '')) $errors[] = 'The two admin passwords you typed don\'t match.';
+        elseif (($tooLong = password_length_problem($adminPw, 'The admin password')) !== '') $errors[] = $tooLong;
         elseif (!admin_password_ok($adminPw)) $errors[] = 'The admin password needs at least 8 characters, with at least one letter and one number: it is the one credential that can change your gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $adminPw)) $errors[] = 'The admin password can\'t contain control characters.';
         else { $newAdmin = password_for_storage($adminPw); $setOrUnset('ADMIN_PASSWORD', $newAdmin); }
@@ -11942,6 +11901,7 @@ function site_settings_save_locked($ajax) {
         $setOrUnset('PRIVATE_VIEW_PASSWORD', '');
     } elseif ($viewPw !== '') {
         if ($viewPw !== (string) ($_POST['pw_private2'] ?? '')) $errors[] = 'The two private-view passwords you typed don\'t match.';
+        elseif (($tooLong = password_length_problem($viewPw, 'The private-view password')) !== '') $errors[] = $tooLong;
         elseif (preg_match('/[\x00-\x1F\x7F]/', $viewPw)) $errors[] = 'The private-view password can\'t contain control characters.';
         else $setOrUnset('PRIVATE_VIEW_PASSWORD', password_for_storage($viewPw));
     }
@@ -13108,6 +13068,7 @@ function owned_kind_of_name($name, $isTop) {
     if (preg_match('/^(\.gallery-.+)\.[0-9a-f]{8}\.(?:php|tmp)$/D', $name, $lm) && $lm[1] !== $name && !in_array(owned_kind_of_name($lm[1], $isTop), ['', 'leftovers'], true)) return 'leftovers';
     if ($name === '.gallery-items.php') return 'items';
     if ($name === '.gallery-stats.sqlite-wal' || $name === '.gallery-stats.sqlite-shm') return 'stats';   // (the side files SQLite keeps beside the view counts)
+    if ($name === '.gallery-stats-key.php') return 'stats';   // (the folder's own key to its view counts: kept, and deleted, with them)
     if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json' || preg_match('/^\.gallery-stats\.joined-\d{8}-\d{6}\.php$/D', $name)) return 'stats';   // (the last: a JSON store set aside once its counts were joined to the database)
     if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-[0-9a-f]{8})?\.php$/D', $name)) return 'backups';   // (an optional mark at the end says which gallery made it: see tidy_backup_id)
     return '';
@@ -13134,7 +13095,7 @@ function owned_kind_info() {
         'update' => ['New-version check', 'beside index.php', 'The newest version GitHub last reported, and when this gallery was last updated.', 'Made again by the next check.'],
         'previous' => ['Earlier version kept', 'beside index.php', 'The index.php that Update now replaced, kept so Go back can put it in again.', 'Go back is no longer possible; the gallery itself is not affected.'],
         'items' => ['Captions, locations, private marks, folder names', 'in each folder', 'What you typed or chose for the photos and folders in it.', 'All of it is lost.'],
-        'stats' => ['View counts', 'in each folder', 'How many times each photo was looked at.', 'Counts start again from 0.'],
+        'stats' => ['View counts', 'in each folder', 'How many times each photo was looked at, and the small key file (.gallery-stats-key.php) the counts are kept under. A folder copied with both keeps its counts wherever it is shown.', 'Counts start again from 0.'],
         'backups' => ['Tidy-up backups', 'in each folder', 'Copies kept when Tidy up changed a folder\'s data.', 'The backups are gone.'],
         'meta' => ['What the files say about themselves', 'in each .gallery-cache', 'When each photo was taken and where, read once.', 'Read again as photos are shown (Prepare media).'],
         'thumbs' => ['Thumbnails and video clips', 'in each .gallery-cache', 'Small copies that make pages fast and let iPhone photos show.', 'Made again as photos are shown (Prepare media).'],
@@ -16414,6 +16375,11 @@ function health_checks($dir, $files) {
             'The gallery leaves ' . ($unN === 1 ? 'it' : 'them') . ' out, with everything inside, and touches nothing there: ' . implode(', ', array_slice($unreadable, 0, 8)) . ($unN > 8 ? ' and ' . number_format($unN - 8) . ' more' : '')
             . '. Give the web server\'s user permission to open ' . ($unN === 1 ? 'it' : 'each one') . ' (on many hosts: chmod 755, owned by that user, in your file manager or over SFTP), then press Check again.');
     }
+    if (!empty($GLOBALS['__dot_files'])) {   // (pictures and videos whose name starts with a dot: left out like a dot folder, said once and quietly)
+        $dotN = count($GLOBALS['__dot_files']); $dotAll = array_keys($GLOBALS['__dot_files']);
+        $add('Folders and files', 'ok', $dotN === 1 ? 'A file starting with a dot is left out' : number_format($dotN) . ' files starting with a dot are left out',
+            'A name that starts with a dot is a hidden file, so the gallery leaves it out the way it leaves out a folder that starts with one. Nothing on disk is touched. A Mac that copies photos to a disk or share it can\'t keep its extra data on leaves one ._ copy beside each photo (a few kilobytes, not a picture): ' . implode(', ', array_slice($dotAll, 0, 6)) . ($dotN > 6 ? ' and ' . number_format($dotN - 6) . ' more' : '') . '. To show one, rename it without the dot.');
+    }
     if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
         $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
         $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',
@@ -16495,9 +16461,6 @@ function health_checks($dir, $files) {
         $add('Left behind', $isAside ? 'aside' : $status, $label . ($isAside ? ' (set aside)' : ''), $detail, $link, $btn);
     };
     if (AUTO_GROUP_BY_FOLDER) {
-        $ev = moved_in_earlier_views($dir, $files);
-        if ($ev['views'] > 0) $leftBehind('earlier-views', 'warn', number_format($ev['views']) . ' earlier view' . ($ev['views'] === 1 ? ' is' : 's are') . ' waiting to be added',
-            'Counted by another gallery, under the old addresses of ' . $ev['folders'] . ' folder' . ($ev['folders'] === 1 ? '' : 's') . '.' . (TRACK_VIEWS ? '' : ' Turn on Count views first.'), ['site', 'setting-TRACK_VIEWS', '→ Count views']);
         $lo = moved_in_leftovers($dir, $files);
         if ($lo['count'] > 0) $leftBehind('leftover-thumbs', 'opt', number_format($lo['count']) . ' leftover thumbnail' . ($lo['count'] === 1 ? '' : 's') . ' (' . ($lo['bytes'] >= 1048576 ? round($lo['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($lo['bytes'] / 1024)) . ' KB') . ') in folders from elsewhere on the server',
             'Pictures made for photos that are gone now (deleted, renamed or replaced), or by another gallery that showed the same folders. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', '→ Prepare media']);
@@ -16684,7 +16647,7 @@ function health_heavy($dir, $files, $force) {
         }
         return $c;
     }
-    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'unreadable' => gallery_unreadable_folders($dir), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
+    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'unreadable' => gallery_unreadable_folders($dir), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => [], 'key' => []]];
     if ($live !== null && visitlog_driver_ok()) $r['log'] = ['why' => backup_sqlite_check($live)];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if ($e['kind'] !== 'stats') continue;
@@ -16695,6 +16658,8 @@ function health_heavy($dir, $files, $force) {
             if ($w !== '') { $r['stats']['bad'][] = [$e['rel'], $w]; continue; }
             $w = stats_sqlite_write_check($e['path']);
             if ($w !== '') $r['stats']['ro'][] = [$e['rel'], $w];
+            $w = stats_key_check($e['path']);
+            if ($w !== '') $r['stats']['key'][] = [$e['rel'], $w];
         } elseif (basename($e['path']) === '.gallery-stats.php' && !data_file_is_link($e['path'])) {   // (the JSON store: a file that can't be read is left as it is, and nothing is counted there until it is mended)
             $raw = (string) @file_get_contents($e['path']);
             if (!data_file_is_empty($raw) && !is_array(json_decode(data_file_strip_guard($raw), true))) $r['stats']['bad'][] = [$e['rel'], 'could not be read as view counts'];
@@ -16752,10 +16717,16 @@ function health_database_rows($add, $dir, $files) {
             $add($G, 'opt', 'The change records take ' . $chText, 'More than the ' . number_format(CHANGES_WARN_MB) . ' MB you asked to be warned at. The oldest entry is from ' . ($chOld > 0 ? gmdate('j M Y', $chOld) : 'an unknown date') . '. Trim the log in the Changes tab, or set how long entries are kept in Settings (Visitors and logs).');
         else $add($G, 'ok', 'Change log: ready', number_format($chN) . ' entr' . ($chN === 1 ? 'y' : 'ies') . ' in the Changes tab, taking ' . $chText . '.' . ($chOld > 0 ? ' The oldest is from ' . gmdate('j M Y', $chOld) . '.' : ''));
     }
-    $statsRo = $heavy['stats']['ro'] ?? []; $statsNoDriver = $heavy['stats']['nodriver'] ?? [];
+    $statsRo = $heavy['stats']['ro'] ?? []; $statsNoDriver = $heavy['stats']['nodriver'] ?? []; $statsKey = $heavy['stats']['key'] ?? [];
     $statsNames = function ($list) { $n = array_map(function ($b) { return is_array($b) ? $b[0] : $b; }, $list); return implode('; ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : ''); };
     if ($statsNoDriver) {
         $add($G, 'warn', 'View counts are kept in a database this server can\'t open (' . count($statsNoDriver) . ' folder' . (count($statsNoDriver) === 1 ? '' : 's') . ')', $statsNames($statsNoDriver) . '. This PHP has no SQLite (`pdo_sqlite`), so the counts in those files are neither shown nor added to; nothing is lost, and nothing is counted in a second place beside them. Turn `pdo_sqlite` on (Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM or Apache) and they carry on as they were.');
+    }
+    if ($statsKey) {   // (a folder's counts were made under a key that is not there: nothing is counted in it, and nothing is made anew behind the counts)
+        $kn = count($statsKey);
+        $why = ['missing' => 'its key file (.gallery-stats-key.php) is missing', 'mismatch' => 'its key file is not the one the counts were made with', 'broken' => 'its key file can\'t be read'];
+        $add($G, 'warn', 'View counts can\'t be read in ' . $kn . ' folder' . ($kn === 1 ? '' : 's'), $statsNames(array_map(function ($b) use ($why) { return [$b[0] . ' (' . ($why[$b[1]] ?? $b[1]) . ')']; }, $statsKey))
+            . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again.');
     }
     if ($statsRo) {
         $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');
@@ -17042,10 +17013,10 @@ function render_admin_health_panel() {
       <?php endforeach; ?>
       <div class="health-group all-quiet" data-health-group="web">
         <h3 class="subhead">Web server (tested by your browser, just now)</h3>
-        <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : []) as [$key, $label]): ?>
+        <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : [], is_file(__DIR__ . '/.gallery-stats.sqlite') ? [['statsfile', 'The view counts can\'t be fetched by their address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
-            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if (in_array($key, ['tidy', 'sharetidy', 'accel'], true)): ?><a class="health-more" href="#site" onclick="return adminGoToRules();">&rarr; Web server rules</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if (in_array($key, ['tidy', 'sharetidy', 'accel'], true)): ?><a class="health-more" href="#site" onclick="return adminGoToRules();">&rarr; Web server rules</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile' || $key === 'statsfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
           </div>
         <?php endforeach; ?>
       </div>
@@ -17442,13 +17413,6 @@ function render_admin_site_settings($csrfToken) {
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
                 <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Set "FFMPEG_PATH" in .gallery-config.php.' ?></div>
                 <?php endif; ?>
-                <?php if (($d['status'] ?? '') === 'earlierviews'): ?>
-                <div class="earlier-views" data-earlier data-csrf="<?= $esc($csrfToken) ?>" hidden>
-                  <p class="earlier-text"></p>
-                  <p class="earlier-act"><button type="button" class="secondary earlier-add">Add earlier views to the counts</button></p>
-                  <p class="hint earlier-hint">Adds each folder's once, in one press. The old numbers are not changed, and it can't be undone.</p>
-                </div>
-                <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'visitlog' && !visitlog_check_quiet()[0]): ?>
                 <div class="help warn-text"><strong>Needs SQLite.</strong> <?= $esc(visitlog_check_quiet()[1]) ?></div>
                 <?php endif; ?>
@@ -17550,7 +17514,7 @@ function render_admin_site_settings($csrfToken) {
       function num(n) { return Number(n).toLocaleString(); }
       function post(fields) {
         var b = new URLSearchParams(); b.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { b.set(k, fields[k]); });
-        return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: b.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+        return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: b.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
       }
       function load() { return post({ action: 'files_list' }).then(function (j) { if (!j.ok) throw new Error(j.text || 'Could not list'); sum = j; return j; }); }
@@ -17669,7 +17633,7 @@ function render_admin_site_settings($csrfToken) {
             if (!r.ok && !r.left) { b.disabled = false; err.textContent = r.text || 'Not deleted.'; return; }
             o._close();
             var d = overlay('<h3>' + (r.ok ? 'Done' : 'Stopped') + '</h3><p>' + esc(r.text) + (r.ok ? ' You are signed out and the gallery is now plain and public, with its default settings. Your photos are as they were. To set it up again, open <code>?admin</code>, type the code from the file <code>gallery-setup-code.php</code> it makes beside index.php, and choose a password.' : '') + '</p>' + (r.left && r.left.length ? '<pre>' + esc(r.left.join('\n')) + '</pre>' : '') + '<div class="fm-acts"><button type="button" class="fm-primary" data-fm-x="done">Close</button></div>');
-            d.addEventListener('click', function (e2) { if (e2.target.closest && e2.target.closest('[data-fm-x]')) { d._close(); location.href = location.pathname; } });
+            d.addEventListener('click', function (e2) { if (e2.target.closest && e2.target.closest('[data-fm-x]')) { d._close(); location.href = location.href.replace(/[?#].*$/, ''); } });
           }).catch(function () { b.disabled = false; err.textContent = 'Could not reach the gallery: check your connection.'; });
         });
       }
@@ -17909,7 +17873,7 @@ function owner_phone_bar($context, $files, $folder, $showEdited, $logoutHtml, $c
         . 'function applyFolds(){[].forEach.call(sheet.querySelectorAll(".pb-g[data-path]"),function(g){var p=g.getAttribute("data-path");if(g.hasAttribute("data-here")||!(p in fs))return;var t=g.querySelector(":scope > .pb-fr > button.pb-t");if(!t)return;g.classList.toggle("collapsed",fs[p]===0);t.setAttribute("aria-expanded",fs[p]===0?"false":"true")})}applyFolds();'
         // something was changed on this page (a setting, a folder\'s privacy): the Menu is asked for again, from the page itself, the next time it opens, so its locks and counts are not out of date
         . 'document.addEventListener("change",function(e){if(admin&&!sheet.contains(e.target))stale=true});'
-        . 'function refresh(){if(sBusy)return;sBusy=true;fetch(location.pathname+location.search,{credentials:"same-origin",cache:"no-store"}).then(function(r){return r.text()}).then(function(h){var d=new DOMParser().parseFromString(h,"text/html"),n=d.querySelector("#pb-sheet .pb-scroll"),o=sheet.querySelector(".pb-scroll");if(!n||!o)return;o.innerHTML=n.innerHTML;applyFolds();stale=false;loaded=0}).catch(function(){}).then(function(){sBusy=false})}'
+        . 'function refresh(){if(sBusy)return;sBusy=true;fetch(location.href,{credentials:"same-origin",cache:"no-store"}).then(function(r){return r.text()}).then(function(h){var d=new DOMParser().parseFromString(h,"text/html"),n=d.querySelector("#pb-sheet .pb-scroll"),o=sheet.querySelector(".pb-scroll");if(!n||!o)return;o.innerHTML=n.innerHTML;applyFolds();stale=false;loaded=0}).catch(function(){}).then(function(){sBusy=false})}'
         . 'sheet.addEventListener("click",function(e){var lk=e.target.closest?e.target.closest(".flock"):null;if(lk){e.preventDefault();window.galleryFolderLock&&window.galleryFolderLock(lk);return}var t=e.target.closest?e.target.closest(".pb-t"):null;if(t&&t.tagName==="BUTTON"){var g=t.closest(".pb-g"),c=g.classList.toggle("collapsed");t.setAttribute("aria-expanded",c?"false":"true");fs[g.getAttribute("data-path")]=c?0:1;try{localStorage.setItem(FK,JSON.stringify(fs))}catch(x){}return}var a=e.target.closest?e.target.closest("a"):null;if(!a)return;if(a.hasAttribute("data-keep")){e.preventDefault();location.href=a.getAttribute("href").split("#")[0]+location.hash;return}if(!admin&&a.getAttribute("href").indexOf("?admin")===0)flag();open_(false);if(admin&&a.getAttribute("href").charAt(0)==="#")top()});'
         . 'bar.addEventListener("click",function(e){var a=e.target.closest?e.target.closest("a.pb-i"):null;if(!a)return;var h=a.getAttribute("href")||"";'
         // on the gallery page the Gallery button is also "up": scrolled down it goes to the top of this page, at the top it goes up one folder
@@ -18321,6 +18285,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $GLOBALS['__admin_fresh'] = $fresh;
     $GLOBALS['__lock_probe'] = lock_probe_targets($dir, $files);
     $GLOBALS['__lock_probe']['anyPrivate'] = !empty($adminHidden['folders']) || !empty($adminHidden['items']);   // (the lock check only worries once something is private)
+    $GLOBALS['__lock_probe']['anyHiddenFolder'] = !empty($adminHidden['folders']);   // (a private or Not listed folder: the tidy-folder-link check worries once there is one, see data-any-hidden-folder)
     $GLOBALS['__admin_files'] = $files;
     $itemsHere = items_read($adminFolderReal);
     $adminCollection = $adminFolderPath !== null && AUTO_GROUP_BY_FOLDER ? collection_at($dir, $adminFolderPath, $files) : null;   // (a collection has a settings page of its own, and no folder on disk)
@@ -18353,7 +18318,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <meta name="robots" content="noindex, nofollow">
 <?php if (!$inframe): ?>
 <script>(function () {   // on a computer the admin is the shell (this page is what the shell frames, and what a phone gets); ?classic=1 stays on this page
-  try { if (/[?&]classic=1/.test(location.search)) document.cookie = 'galleryClassic=1; path=/; max-age=31536000; SameSite=Lax'; if (document.cookie.indexOf('galleryClassic=1') >= 0) return; } catch (e) {}
+  try { if (/[?&]classic=1/.test(location.search)) document.cookie = 'galleryClassic=1; path=' + <?= json_encode(gallery_cookie_path(), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?> + '; max-age=31536000; SameSite=Lax'; if (document.cookie.indexOf('galleryClassic=1') >= 0) return; } catch (e) {}
   if (window.matchMedia && window.matchMedia('(min-width: 801px)').matches) {
     var h = (location.hash || '').slice(1);
     location.replace(location.search.replace(/[?&]classic=1/, '') + '&shell=1' + (/^(settings|notes|features|hidden|links|collections|site)$/.test(h) ? '&tab=' + h : ''));
@@ -19494,9 +19459,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .cv-tab { padding:6px 12px; border-radius:18px; border:1px solid #34343a; background:transparent; color:var(--muted); font-size:0.85rem; min-height:36px; cursor:pointer; }
   .cv-tab.on { background:#1e1f3a; color:#fff; border-color:#5a62e6; }
   .cv-photogrid { grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:8px; }
-  .earlier-views { margin-top:8px; padding:8px 10px; border:1px solid #3d4194; border-radius:8px; background:#0f0f14; }
-  .earlier-views[hidden], .earlier-act[hidden], .earlier-hint[hidden] { display:none; }
-  .earlier-views p { margin:4px 0; font-size:0.85rem; }
 
   /* The Visitors tab. */
   .vt .vt-sum { margin:0 0 12px; }
@@ -19698,7 +19660,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     <div class="flash <?= htmlspecialchars($resultMessage['type'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($resultMessage['text'], ENT_QUOTES, 'UTF-8') ?></div>
   <?php endif; ?>
 
-  <div id="server-probe" hidden data-any-private="<?= !empty($GLOBALS['__lock_probe']['anyPrivate']) ? '1' : '0' ?>" data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>" data-visits="<?= htmlspecialchars(is_file(visitlog_path()) ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . basename(visitlog_path()) : '', ENT_QUOTES, 'UTF-8') ?>" data-backup-file="<?= htmlspecialchars(backup_find() !== null ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . basename(backup_find()) : '', ENT_QUOTES, 'UTF-8') ?>" data-share-probe="<?= htmlspecialchars(ENABLE_SHARE_LINKS ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . LINK_PROBE_TOKEN : '', ENT_QUOTES, 'UTF-8') ?>"></div>
+  <div id="server-probe" hidden data-any-private="<?= !empty($GLOBALS['__lock_probe']['anyPrivate']) ? '1' : '0' ?>" data-photo="<?= htmlspecialchars($GLOBALS['__lock_probe']['photo'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-cache="<?= htmlspecialchars($GLOBALS['__lock_probe']['cache'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder="<?= htmlspecialchars($GLOBALS['__lock_probe']['folder'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-folder-url="<?= htmlspecialchars($GLOBALS['__lock_probe']['folderUrl'] ?? '', ENT_QUOTES, 'UTF-8') ?>" data-files="<?= (int) ($GLOBALS['__lock_probe']['count'] ?? 0) ?>" data-any-hidden-folder="<?= !empty($GLOBALS['__lock_probe']['anyHiddenFolder']) ? '1' : '0' ?>" data-stats-file="<?= htmlspecialchars(is_file(__DIR__ . '/.gallery-stats.sqlite') ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . '.gallery-stats.sqlite' : '', ENT_QUOTES, 'UTF-8') ?>" data-visits="<?= htmlspecialchars(is_file(visitlog_path()) ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . basename(visitlog_path()) : '', ENT_QUOTES, 'UTF-8') ?>" data-backup-file="<?= htmlspecialchars(backup_find() !== null ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . basename(backup_find()) : '', ENT_QUOTES, 'UTF-8') ?>" data-share-probe="<?= htmlspecialchars(ENABLE_SHARE_LINKS ? (rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/') . LINK_PROBE_TOKEN : '', ENT_QUOTES, 'UTF-8') ?>"></div>
   <div class="tab-panel" data-tab="features">
 <?= render_admin_features_panel($adminEdited, $adminHidden ?: []) ?>
   </div>
@@ -19827,7 +19789,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             <button type="submit">Save</button>
           </div>
         </form>
-        <form method="post" onsubmit="return confirm('Delete <?= htmlspecialchars(addslashes($mdFile), ENT_QUOTES, 'UTF-8') ?>? This can\'t be undone.');" style="margin-top:6px;">
+        <form method="post" onsubmit="return confirm(<?= htmlspecialchars(json_encode('Delete ' . $mdFile . '? This can\'t be undone.', JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE), ENT_QUOTES, 'UTF-8') ?>);" style="margin-top:6px;">
           <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
           <input type="hidden" name="action" value="delete_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
@@ -20047,7 +20009,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             if (!j.ok || !j.rows.length) { reportBox.appendChild(text('p', 'muted', j.ok ? 'There are no photos or videos yet.' : (j.text || 'The list could not be loaded.'))); return; }
             const wrap = text('div', 'media-table-wrap', ''), table = document.createElement('table'), thead = document.createElement('thead'), head = document.createElement('tr'), tbody = document.createElement('tbody');
             const heads = ['Folder', 'Files', 'Thumbnails', 'Videos', 'In the files', 'Dates', 'Saved'];
-            if (j.earlierAny) heads.push('Earlier views');
             table.className = 'media-table';
             heads.forEach(function (h) { head.appendChild(text('th', '', h)); });
             thead.appendChild(head); table.appendChild(thead); table.appendChild(tbody);
@@ -20071,7 +20032,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
               tr.appendChild(lc);
               tr.appendChild(text('td', '', r.dated + (r.undated ? ' of ' + (r.dated + r.undated) : '') + ' dated'));
               tr.appendChild(text('td', '', own.join(', ') || '—'));
-              if (j.earlierAny) tr.appendChild(text('td', r.earlier && !r.earlier.added ? 'note-text' : '', r.earlier ? (r.earlier.added ? 'added' : fmt(r.earlier.found) + ' found') : '—'));
               [].forEach.call(tr.children, function (td, i) { td.setAttribute('data-label', heads[i]); });
               tbody.appendChild(tr);
             });
@@ -20398,6 +20358,17 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         howFold('backupfile', state === 'open');
       });
     };
+    // And for the view counts: the gallery root's database (the page-view total and a key mark; each folder's database holds the counts under keyed names, so a fetched
+    // copy is far less than the log, but it is still the folder's data and was never meant to be public).
+    const runStatsFile = function () {
+      const url = probe.getAttribute('data-stats-file');
+      if (!url) return;
+      ask(url).then(function (state) {
+        mirror('statsfile', state === 'blocked' ? 'ok-text' : state === 'open' ? 'warn-text' : '', state === 'blocked' ? 'Yes: asked for by its plain address, the server refuses it.'
+          : state === 'open' ? 'Anyone can download the view-count database (.gallery-stats.sqlite): how often the gallery and its photos were opened. Its photo names are keyed, but it is not meant to be public. The server isn\'t refusing files that start with .gallery-. Add the server rules (Settings, Server setup) and check again.' : 'Couldn\'t check from this browser just now.');
+        howFold('statsfile', state === 'open');
+      });
+    };
     // Does the tidy share address (/trip/<code>) reach the gallery? The fixed probe address answers 200 with X-Gallery-Link: invalid when it does.
     const runShareTidy = function () {
       const url = probe.getAttribute('data-share-probe');
@@ -20436,9 +20407,14 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
             wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' reaches the gallery (checked just now from this browser). The gallery is closed, so this check, which sends no sign-in, is shown the invalid-link page.');
             return;
           }
-          mirror('tidy', state === 'works' ? 'ok-text' : state === 'no' ? 'note-text' : '', state === 'works' ? folderUrl + ' opens that folder.'
-            : state === 'no' ? 'Not set up (optional): ' + folderUrl + ' doesn\'t open that folder; the ?folder= links work regardless.' : 'Couldn\'t tell (the request failed or was redirected).');
+          // With a private or Not listed folder, the missing rule is more than a tidiness: the web server answers an address of a folder that exists itself (a redirect,
+          // a 403 or a file list) and a missing one with a 404, so a stranger can tell which private names exist, and the gallery's own identical "not found" never gets asked.
+          const hiddenLeak = state === 'no' && probe.getAttribute('data-any-hidden-folder') === '1';
+          const leakSay = 'A private or Not listed folder can be told from a missing one by anyone who asks for its address: your web server answers a folder that exists by itself (a redirect, a 403 or a file list) and a missing one with a 404, so the gallery never gets to give both the same answer. Add the "tidy folder links" rule (in the block below).';
+          mirror('tidy', state === 'works' ? 'ok-text' : hiddenLeak ? 'warn-text' : state === 'no' ? 'note-text' : '', state === 'works' ? folderUrl + ' opens that folder.'
+            : hiddenLeak ? leakSay : state === 'no' ? 'Not set up (optional): ' + folderUrl + ' doesn\'t open that folder; the ?folder= links work regardless.' : 'Couldn\'t tell (the request failed or was redirected).');
           if (state === 'works') wrChip('tidy', 'ok', 'Tidy folder links', '', folderUrl + ' opens that folder (checked just now from this browser).');
+          else if (hiddenLeak) wrChip('tidy', 'bad', 'Tidy folder links: not set up', leakSay, '', true);
           else if (state === 'no') wrChip('tidy', 'grey', 'Tidy folder links: not set up', 'Optional: ' + folderUrl + ' does not open that folder yet. The gallery works without them, with ?folder= links. The rule is in the block below.', '', true);
           else wrChip('tidy', 'grey', 'Tidy folder links: couldn\'t check', 'Couldn\'t check tidy folder links from this browser just now.', '');
         });
@@ -20488,7 +20464,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         });
     };
     if (banner) banner.querySelector('.lock-recheck').addEventListener('click', function () { runLock(); runTidy(); });
-    window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runBackupFile(); runTidy(); runShareTidy(); runAccel(); };
+    window.__healthProbe = function () { mirrorLater(); runLock(); runVisitLog(); runBackupFile(); runStatsFile(); runTidy(); runShareTidy(); runAccel(); };
     window.__healthProbe();
   })();
   // The directive reference starts expanded on a desktop and collapsed
@@ -20715,7 +20691,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         [].forEach.call(form.querySelectorAll('input[type=hidden][data-send]'), function (h) { body.set(h.name, h.value); });
         var revert = function () { if (isBox) el.checked = !el.checked; else el.value = el.getAttribute('data-prev'); if (el.name === 'map_enabled' && sub) sub.hidden = !el.checked; };
         say(node, 'Saving…', 'busy');
-        fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+        fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
@@ -20748,13 +20724,13 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         var body = new URLSearchParams();
         body.set('csrf_token', csrf); body.set('action', 'save_folder_identity'); body.set('loaded_hash', hashInput.value);
         fields.forEach(function (kv) { body.append(kv[0], kv[1]); });
-        return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+        return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
             headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
           .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
           .then(function (j) {
             if (j.ok) {
               if (j.hash) [].forEach.call(document.querySelectorAll('.identity-form input[name=loaded_hash]'), function (h) { h.value = j.hash; }); say(node, 'Saved', 'ok'); window.__siteDirty = true; if (onOk) onOk();
-              if (j.path) { var q = new URLSearchParams(location.search); if (q.get('folder') !== j.path) { q.set('folder', j.path); location.replace(location.pathname + '?' + q.toString() + location.hash); } }   // (a collection whose address was changed is now at another address)
+              if (j.path) { var q = new URLSearchParams(location.search); if (q.get('folder') !== j.path) { q.set('folder', j.path); location.replace('?' + q.toString() + location.hash); } }   // (a collection whose address was changed is now at another address)
             }
             else { say(node, j.text, 'err'); if (onErr) onErr(); }
           })
@@ -20896,7 +20872,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     function refresh() {
       var openPaths = cards().filter(function (c) { return c.classList.contains('open'); }).map(function (c) { return c.getAttribute('data-path'); });
-      return fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+      return fetch(location.href, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html'), fresh = doc.getElementById('ed-root');
         if (!fresh) { location.reload(); return; }
         root.innerHTML = fresh.innerHTML;
@@ -21006,7 +20982,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function refresh(light) {   // light: the window came back; only this panel is asked for (not the whole page), and the sidebar's numbers are the page's other part's business
       var openIds = [].map.call(box.querySelectorAll('details.sl-row[open]'), function (d) { return d.getAttribute('data-id'); });
       var formOpen = !box.querySelector('#sl-form').hidden;
-      return fetch(light ? '?admin&linkspanel=1' : location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+      return fetch(light ? '?admin&linkspanel=1' : location.href, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
         var doc = new DOMParser().parseFromString(html, 'text/html'), fresh = doc.getElementById('sl-root');
         if (!fresh) { location.reload(); return; }
         var keepForm = formOpen ? box.querySelector('#sl-form') : null;
@@ -21802,7 +21778,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
       var body = new URLSearchParams();
       body.set('csrf_token', csrf); body.set('action', 'toggle_folder_restriction'); if (hide) body.set('hidden', '1');
       say('Saving…', 'busy');
-      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(),
+      fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(),
           headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
@@ -21815,7 +21791,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function closeModal() { if (modal) modal.hidden = true; box.focus(); }
     function ask() {
       say('', '');
-      fetch(location.pathname + location.search + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
+      fetch(location.href.replace(/#.*$/, '') + '&privcounts=1', { credentials: 'same-origin', cache: 'no-store' })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
           if (j.counts) counts = { stay: j.counts.stay, open: j.counts.open };
@@ -22011,7 +21987,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     var chain = Promise.resolve();
     // Whole-gallery settings are not about any folder, so a save is sent to this page's address without its folder: removing the very place
     // you are standing in (the Folders from elsewhere list) must not leave the next save pointing at a folder that is gone.
-    function siteUrl() { var q = new URLSearchParams(location.search); q.delete('folder'); var t = q.toString(); return location.pathname + (t ? '?' + t : '?admin'); }
+    function siteUrl() { var q = new URLSearchParams(location.search); q.delete('folder'); var t = q.toString(); return t ? '?' + t : '?admin'; }
     var sync = document.querySelector('.sitesync');
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });   // no submit button without JavaScript: Enter must not post the whole form
     function say(node, text, kind) {
@@ -22026,7 +22002,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function refreshChrome() {
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(function () {
-        fetch(location.pathname + location.search, { credentials: 'same-origin' })
+        fetch(location.href, { credentials: 'same-origin' })
           .then(function (r) { return r.text(); })
           .then(function (html) { return html.indexOf('admin-folders') >= 0 ? html : fetch(siteUrl(), { credentials: 'same-origin' }).then(function (r) { return r.text(); }); })   // (the folder you are in may be the place just removed)
           .then(function (html) {
@@ -22285,36 +22261,6 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         say(j.text || 'It did not work.', true);
       }).catch(function () { [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = false; }); say('Could not reach the gallery.', true); });
     });
-    // Count views: the views another gallery counted for the photos now shown here (found in each folder's own stats file under an older path)
-    // are offered under the setting they belong to, once something is found. Looked for when the group is opened (it reads each folder's file).
-    (function () {
-      var box = form.querySelector('[data-earlier]'); if (!box) return;
-      var text = box.querySelector('.earlier-text'), add = box.querySelector('.earlier-add'), hint = box.querySelector('.earlier-hint'), act = box.querySelector('.earlier-act');
-      var group = box.closest('details'), asked = false;
-      function fmtN(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
-      function ask(extra) {
-        var body = new URLSearchParams(); body.set('csrf_token', box.getAttribute('data-csrf')); body.set('action', extra || 'media_moved');
-        return fetch('?admin', { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'gallery-fetch' } }).then(function (r) { return r.json(); });
-      }
-      function look() {
-        if (asked) return; asked = true;
-        ask().then(function (j) {
-          if (!j.ok || !j.track || !(j.views > 0)) return;
-          text.textContent = ''; var st = document.createElement('strong'); st.textContent = fmtN(j.views) + ' earlier views'; text.appendChild(st);
-          text.appendChild(document.createTextNode(' found for ' + j.viewFolders + (j.viewFolders === 1 ? ' folder' : ' folders') + ', counted by another gallery under their old addresses.'));
-          act.hidden = false; hint.hidden = false; add.disabled = false; box.hidden = false;
-        }).catch(function () { asked = false; });
-      }
-      if (group) { group.addEventListener('toggle', function () { if (group.open) look(); }); if (group.open) look(); }
-      add.addEventListener('click', function () {
-        add.disabled = true; text.textContent = 'Adding…';
-        ask('media_moved_views').then(function (j) {
-          if (!j.ok) { text.textContent = j.text || 'Not added.'; add.disabled = false; return; }
-          text.textContent = 'Added ' + fmtN(j.added) + ' views to ' + j.folders + (j.folders === 1 ? ' folder' : ' folders') + '.';
-          act.hidden = true; hint.hidden = true; window.__siteDirty = true;
-        }).catch(function () { text.textContent = 'The server did not answer.'; add.disabled = false; });
-      });
-    })();
     // Search the settings: type a few words and only the settings that have all of them (in the name, the help, the choices, the setting's
     // own word such as TRACK_VIEWS, or the group's title) stay; their groups open by themselves, and clearing the box puts every group back as it was.
     (function () {
@@ -22653,7 +22599,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function go(mode) {
       var fd = new URLSearchParams(); fd.set('csrf_token', csrf); fd.set('action', 'downloads_inside'); fd.set('mode', mode); fd.set('apply', '1');
       state.textContent = 'Saving…';
-      fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: fd.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      fetch(location.href, { method: 'POST', credentials: 'same-origin', body: fd.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); })
         .then(function (j) {
           if (!j.ok) { state.textContent = j.text; return; }
@@ -22675,7 +22621,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     function say(text, kind) { state.textContent = text; state.className = 'rowstate ' + (kind || ''); clearTimeout(state._t); if (kind === 'ok') state._t = setTimeout(function () { state.textContent = ''; state.className = 'rowstate'; }, 3000); }
     function send(fields) {
       var body = new URLSearchParams(); body.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
-      return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
     }
     function fail(e) { say(e && e.message === 'session' ? 'Your session ended: reload the page and sign in again.' : 'Couldn\'t save: check your connection.', 'err'); }
@@ -22725,7 +22671,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   (function () {
     function request(csrf, fields) {
       var body = new URLSearchParams(); body.set('csrf_token', csrf); Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
-      return fetch(location.pathname + location.search, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
+      return fetch(location.href, { method: 'POST', credentials: 'same-origin', body: body.toString(), headers: { 'X-Requested-With': 'gallery-fetch', 'Content-Type': 'application/x-www-form-urlencoded' } })
         .then(function (r) { if ((r.headers.get('content-type') || '').indexOf('json') < 0) throw new Error('session'); return r.json(); });
     }
     function go(url) { location.href = url + (window.parent !== window && /[?&]inframe=1/.test(location.search) ? '&inframe=1' : ''); }
@@ -23412,6 +23358,7 @@ function run_admin_setup() {
         if (!$codeOk) {
             // (nothing about the password is looked at until the code is right)
         } elseif ($pw !== $pw2) $error = 'The two passwords you typed don\'t match.';
+        elseif (($tooLong = password_length_problem($pw, 'That password')) !== '') $error = $tooLong;
         elseif (!admin_password_ok($pw)) $error = 'Use at least 8 characters with at least one letter and one number: this one password can change your whole gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $pw)) $error = 'The password can\'t contain control characters.';
         else {
@@ -23496,7 +23443,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     if (!$sessionAuthed && !login_throttle_allows($dir, 'admin', $ip)) {
         // Only someone who is not signed in is held back: a session that is already signed in is not guessing anything, and whoever shares this address
         // (a roommate, a proxy that hides the real one) must not be able to lock the owner out of the admin by guessing wrong.
-        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', login_throttle_wait($dir, 'admin', $ip));
+        render_lockout_page('Out of focus for a moment', 'Too many tries from your connection. Hold still for a moment.', login_throttle_wait($dir, 'admin', $ip));
         return;
     }
     if (!$sessionAuthed) {
@@ -23511,7 +23458,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         } elseif ($formPass !== null) {
             if (!password_matches(ADMIN_PASSWORD, $formPass)) {
                 login_throttle_record_failure($dir, 'admin', $ip);
-                render_login_page('Enter your access code', '', 'That code isn\'t right.');
+                render_login_page('Enter your access code', '', 'Out of focus.');
                 return;
             }
             // A fresh session id at the moment of login, so nothing issued
@@ -23723,7 +23670,7 @@ function stats_connection($folderPath) {
     if (isset($GLOBALS['__stats_pool'][$folderPath])) {
         return $GLOBALS['__stats_pool'][$folderPath];
     }
-    $conn = ['mode' => 'file', 'pdo' => null, 'file' => $folderPath . '/.gallery-stats.php'];
+    $conn = ['mode' => 'file', 'pdo' => null, 'file' => $folderPath . '/.gallery-stats.php', 'key' => null, 'why' => ''];
     if (class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
         // With SQLite here the counts live in the database and nowhere else: a database that can't be opened or written costs the counts
         // (mode 'failed': nothing is counted and nothing is shown, Health says why), never the page, and never moves the counting to the
@@ -23736,12 +23683,15 @@ function stats_connection($folderPath) {
             $pdo->exec('PRAGMA busy_timeout = 2000');   // (a writer that holds the lock for a minute makes this one give up in two seconds, not wait a minute)
             $pdo->exec('PRAGMA journal_mode = WAL');
             $pdo->exec('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)');
-            // Keyed by a hash of the photo's path, not the path itself: a
-            // SQLite file is binary and can't carry the PHP guard the JSON
-            // stores do, so it could be fetched by URL — and a readable
-            // filename in it would hand over a hidden item's exact name.
-            // Counts are still kept for every item, hidden or not.
-            $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views_h (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
+            // Keyed by a keyed hash of the photo's file name inside this folder, not the name itself: a SQLite file is binary and can't carry
+            // the PHP guard the JSON stores do, so it could be fetched by URL, and a readable (or unkeyed, guessable) name in it would hand
+            // over a hidden item's exact name. The key is a random one kept in a guarded file of this folder's own (.gallery-stats-key.php:
+            // fetching it answers 404 whatever the server's rules), so the counts follow the folder wherever it is shown, copied with it,
+            // and are not tied to this install's secret. Counts are still kept for every item, hidden or not.
+            $reset = stats_drop_old_counts($pdo);   // (2.6.5: the older table, keyed by an unkeyed hash of the photo's path, is dropped: see LEGACY-REMOVAL.md)
+            $pdo->exec('CREATE TABLE IF NOT EXISTS photo_views_k (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
+            $conn['key'] = stats_bind_key($folderPath, $pdo, $conn['why']);
+            if ($conn['key'] === null) throw new RuntimeException('the folder\'s view-count key: ' . $conn['why']);
             $conn['pdo'] = $pdo;
             $conn['mode'] = 'sqlite';
         } catch (Throwable $e) {
@@ -23762,9 +23712,73 @@ function stats_note_failure($folderPath, $e) {
     error_log('gallery: the view counts in ' . $folderPath . ' could not be used, so nothing was counted there: ' . preg_replace('~\s+~', ' ', $e->getMessage()));
 }
 
-/** The stats key for a photo in the SQLite store. */
-function stats_key($relativePath) {
-    return hash('sha256', (string) $relativePath);
+/** The photo's file name inside its own folder: what its views are kept under (the SQLite store lives in that folder, so the name alone is
+ *  unique there, and the counts stay with the folder when it is renamed, moved or shown by another gallery). */
+function stats_photo_name($relativePath) {
+    $p = (string) $relativePath;
+    return ($i = strrpos($p, '/')) === false ? $p : substr($p, $i + 1);
+}
+
+/** The key a photo's views are kept under in a folder's SQLite store: HMAC-SHA256 of its file name with the folder's own key. */
+function stats_key($name, $folderKey) {
+    return hash_hmac('sha256', stats_photo_name($name), (string) $folderKey);
+}
+
+/** The folder's own view-count key (32 random bytes in a guarded file of the folder) as ['key' => bytes], or ['why' => 'missing'|'broken'|'unwritable'].
+ *  A key is made only when asked ($create) and only when there is no file at all: a file that is there and can't be read as a key is never
+ *  replaced (counts made with it could still be mended by hand), and a missing one is never replaced behind counts that were made with it. */
+function stats_folder_key($folderPath, $create) {
+    $path = $folderPath . '/.gallery-stats-key.php';
+    $valid = function ($d) { return is_string($d['key'] ?? null) && preg_match('/^[0-9a-f]{64}$/D', $d['key']) === 1; };
+    [$status, $d] = json_file_load($path, ['key' => '']);
+    if ($status === 'ok') return $valid($d) ? ['key' => hex2bin($d['key'])] : ['why' => 'broken'];
+    if ($status === 'broken') return ['why' => 'broken'];
+    if (!$create) return ['why' => 'missing'];
+    json_file_update($path, ['key' => ''], function (&$data) use ($valid) { if (!$valid($data)) $data['key'] = bin2hex(random_bytes(32)); }, true);
+    [$status, $d] = json_file_load($path, ['key' => '']);
+    return $status === 'ok' && $valid($d) ? ['key' => hex2bin($d['key'])] : ['why' => 'unwritable'];
+}
+
+/** Ties a folder's database to its key. The database remembers which key its counts were made with (a short fingerprint, in the stats table), so a
+ *  key that has gone missing or been replaced is noticed instead of being quietly made anew behind counts nobody can read any more. Returns the
+ *  key (bytes), or null with $why set: 'missing' (counts exist, the key file is gone), 'mismatch' (another key is there), 'broken' or 'unwritable'. */
+function stats_bind_key($folderPath, $pdo, &$why) {
+    $why = '';
+    $marks = $pdo->query("SELECT key FROM stats WHERE key LIKE 'keyid:%'")->fetchAll(PDO::FETCH_COLUMN);
+    $r = stats_folder_key($folderPath, !$marks);   // (a key is made only for a database that has no counts made with another)
+    if (!isset($r['key'])) { $why = $r['why']; return null; }
+    $id = 'keyid:' . substr(hash('sha256', $r['key']), 0, 12);
+    if ($marks && !in_array($id, $marks, true)) { $why = 'mismatch'; return null; }
+    if (!$marks) $pdo->prepare('INSERT OR IGNORE INTO stats(key, value) VALUES(:k, 1)')->execute([':k' => $id]);
+    return $r['key'];
+}
+
+/** Looks (and changes nothing) at whether a folder's database and its key file agree: '' when they do, or when no counts were made under a key yet;
+ *  'missing', 'mismatch' or 'broken' when counts exist and the key to read them is gone, another one, or unreadable. For the Health check. */
+function stats_key_check($sqlitePath) {
+    try {
+        $pdo = new PDO('sqlite:' . $sqlitePath);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $marks = $pdo->query("SELECT key FROM stats WHERE key LIKE 'keyid:%'")->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {
+        return '';   // (an older database with no such table yet, or one Health names for another reason)
+    }
+    if (!$marks) return '';
+    $r = stats_folder_key(dirname($sqlitePath), false);
+    if (!isset($r['key'])) return $r['why'];
+    return in_array('keyid:' . substr(hash('sha256', $r['key']), 0, 12), $marks, true) ? '' : 'mismatch';
+}
+
+/** The one-time reset (2.6.5): a database made by an older version keeps its counts in photo_views_h, keyed by a plain SHA-256 of the photo's path,
+ *  which anyone who can fetch the file can test a guessed path against. That table is dropped and the file compacted, so the old hashes don't linger
+ *  in free pages: the counts start again, under the folder's own key. True when there was something to drop. */
+function stats_drop_old_counts($pdo) {
+    if (!$pdo->query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'photo_views_h'")->fetchColumn()) return false;
+    $pdo->exec('DROP TABLE photo_views_h');
+    $pdo->exec("DELETE FROM stats WHERE key LIKE 'carried:%'");   // (the marks the earlier-views button left: that button is gone)
+    @$pdo->exec('VACUUM');
+    @$pdo->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    return true;
 }
 
 /**
@@ -23815,9 +23829,9 @@ function stats_import_legacy($folderPath, $conn) {
                 $pdo->prepare("INSERT INTO stats(key, value) VALUES('pageviews', :v) ON CONFLICT(key) DO UPDATE SET value = value + :v")
                     ->execute([':v' => $legacy['pageviews']]);
             }
-            $ins = $pdo->prepare('INSERT INTO photo_views_h(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
+            $ins = $pdo->prepare('INSERT INTO photo_views_k(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
             foreach ($legacy['photos'] as $name => $views) {
-                $ins->execute([':k' => stats_key($name), ':v' => $views]);
+                $ins->execute([':k' => stats_key($name, $conn['key']), ':v' => $views]);
             }
             if ($dropLegacyTable) $pdo->exec('DROP TABLE photo_views');
             $pdo->commit();
@@ -23878,8 +23892,8 @@ function stats_join_json_store($folderPath, $conn) {
             if ((int) $d['pageviews'] > 0) {
                 $pdo->prepare("INSERT INTO stats(key, value) VALUES('pageviews', :v) ON CONFLICT(key) DO UPDATE SET value = value + :v")->execute([':v' => (int) $d['pageviews']]);
             }
-            $ins = $pdo->prepare('INSERT INTO photo_views_h(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
-            foreach ($d['photos'] as $name => $views) $ins->execute([':k' => stats_key((string) $name), ':v' => (int) $views]);
+            $ins = $pdo->prepare('INSERT INTO photo_views_k(key, views) VALUES(:k, :v) ON CONFLICT(key) DO UPDATE SET views = views + :v');
+            foreach ($d['photos'] as $name => $views) $ins->execute([':k' => stats_key((string) $name, $conn['key']), ':v' => (int) $views]);
             $pdo->prepare('INSERT INTO stats(key, value) VALUES(:k, 1)')->execute([':k' => $mark]);
         }
         $pdo->commit();
@@ -23948,7 +23962,8 @@ function stats_get_pageviews($rootDir) {
 }
 
 /** The same photo under the other names its place has had ("eurotrip/paris/a.jpg" for "Eurotrip/paris/a.jpg", say), for a photo in a named place
- *  from elsewhere on the server (EXTRA_FOLDERS); [] for any other. Its views were recorded under each of those names and are added up. */
+ *  from elsewhere on the server (EXTRA_FOLDERS); [] for any other. Its views were recorded under each of those names and are added up. Only the
+ *  JSON store (no SQLite here) is kept by path; the SQLite store is kept by the name inside the folder and needs none of this. */
 function stats_alias_paths($relativePath) {
     static $byLabel = [];
     $slash = strpos((string) $relativePath, '/');
@@ -23974,17 +23989,15 @@ function stats_bump_photo($folderPath, $relativePath) {
     try {
         if ($conn['mode'] === 'sqlite') {
             $pdo = $conn['pdo'];
-            $key = stats_key($relativePath);
+            $key = stats_key($relativePath, $conn['key']);   // (by the name inside its folder: a renamed or moved folder keeps its counts, so there are no earlier names to add up here)
             $stmt = $pdo->prepare(
-                "INSERT INTO photo_views_h(key, views) VALUES(:k, 1)
+                "INSERT INTO photo_views_k(key, views) VALUES(:k, 1)
                  ON CONFLICT(key) DO UPDATE SET views = views + 1"
             );
             $stmt->execute([':k' => $key]);
-            $sel = $pdo->prepare('SELECT views FROM photo_views_h WHERE key = :k');
+            $sel = $pdo->prepare('SELECT views FROM photo_views_k WHERE key = :k');
             $sel->execute([':k' => $key]);
-            $total = (int) $sel->fetchColumn();
-            foreach (stats_alias_paths($relativePath) as $alt) { $sel->execute([':k' => stats_key($alt)]); $total += (int) $sel->fetchColumn(); }
-            return $total;
+            return (int) $sel->fetchColumn();
         }
         if ($conn['mode'] !== 'file') return null;
         $stats = stats_update_file($conn['file'], function (&$data) use ($relativePath) {
@@ -24009,14 +24022,13 @@ function stats_get_photo_views($folderPath, $candidateFiles = []) {
     try {
         if ($conn['mode'] === 'sqlite') {
             $byKey = [];
-            foreach ($conn['pdo']->query('SELECT key, views FROM photo_views_h') as $row) {
+            foreach ($conn['pdo']->query('SELECT key, views FROM photo_views_k') as $row) {
                 $byKey[$row['key']] = (int) $row['views'];
             }
             $result = [];
             foreach ($candidateFiles as $file) {
-                $key = stats_key($file); $sum = $byKey[$key] ?? 0; $any = isset($byKey[$key]);
-                foreach (stats_alias_paths($file) as $alt) { $ak = stats_key($alt); if (isset($byKey[$ak])) { $sum += $byKey[$ak]; $any = true; } }
-                if ($any) $result[$file] = $sum;
+                $key = stats_key($file, $conn['key']);
+                if (isset($byKey[$key])) $result[$file] = $byKey[$key];
             }
             return $result;
         }
@@ -29482,7 +29494,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
       // a pin whose photo is in another folder opens that folder's page: remember where it was pressed, so that page can lead back
       const far = e.target.closest && e.target.closest('.leaflet-popup a[href^="?folder="]');
-      if (far) { try { sessionStorage.setItem('galleryMapBack', JSON.stringify({ from: location.pathname + location.search, t: Date.now() })); } catch (err) {} return; }
+      if (far) { try { sessionStorage.setItem('galleryMapBack', JSON.stringify({ from: location.href, t: Date.now() })); } catch (err) {} return; }
       const a = e.target.closest && e.target.closest('.leaflet-popup a[href^="#group-"]'); if (!a) return;
       let id; try { id = decodeURIComponent(a.getAttribute('href').slice(1)); } catch (err) { return; }
       const target = document.getElementById(id); if (!target) return;   // not on this page: the link does what it always did
@@ -29500,7 +29512,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       let rec = null;
       try { rec = JSON.parse(sessionStorage.getItem('galleryMapBack') || 'null'); sessionStorage.removeItem('galleryMapBack'); } catch (err) { rec = null; }
       if (!rec || typeof rec.from !== 'string' || !(Date.now() - rec.t < 120000) || location.hash.indexOf('#group-') !== 0) return;
-      setTimeout(function () { const back = rec.from.split('#')[0]; showPill(false, /[?&]map\b/.test(back) ? back : back + '#map'); }, 700);
+      setTimeout(function () { const back = String(rec.from).split('#')[0]; try { if (new URL(back, location.href).origin !== location.origin) return; } catch (err) { return; } showPill(false, /[?&]map\b/.test(back) ? back : back + '#map'); }, 700);
     })();
     // the full map opened again, or a photo opened large: the pill has done its job
     if (modal && window.MutationObserver) new MutationObserver(function () { if (!modal.hidden) dropPill(); }).observe(modal, { attributes: true, attributeFilter: ['hidden'] });

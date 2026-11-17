@@ -416,6 +416,15 @@ function admin_password_ok($pw) {
     return strlen($pw) >= 8 && preg_match('/[A-Za-z]/', $pw) && preg_match('/\d/', $pw);
 }
 
+/** What is wrong with a password's length, in words, or '': bcrypt (what stores every password here) reads only the first 72 BYTES, so a longer one
+ *  would be accepted and then sign in with just those 72, which is weaker than it looks. Said in bytes because that is what counts: a letter, digit
+ *  or symbol on a plain keyboard is one byte, so most passwords fit; an accented letter takes two, other alphabets two or three, an emoji four. */
+function password_length_problem($pw, $what) {
+    $n = strlen((string) $pw);
+    if ($n <= 72) return '';
+    return $what . ' is ' . $n . ' bytes long, and the most the gallery can use is 72 (a plain letter, digit or symbol is one byte; an accented letter takes two, a letter of another alphabet two or three, an emoji four, so those fit fewer). Use a shorter one.';
+}
+
 /** Answers a request made by the admin page's own script (a switch saved in
  *  place) with JSON, and ends the request. */
 function admin_json_exit($payload) {
@@ -604,7 +613,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'health_panel') {
         $GLOBALS['dir'] = $dir; $GLOBALS['__admin_files'] = $files;
         $hid = admin_any_hidden($dir, $files, []) ? admin_hidden_data($dir, $files) : null;
-        $GLOBALS['__lock_probe'] = ['anyPrivate' => !empty($hid['folders']) || !empty($hid['items'])];   // (as the page sets it: the lock row only worries once something is private)
+        $GLOBALS['__lock_probe'] = ['anyPrivate' => !empty($hid['folders']) || !empty($hid['items']), 'anyHiddenFolder' => !empty($hid['folders'])];   // (as the page sets it: the lock row only worries once something is private)
         ob_start(); render_admin_health_panel(); $html = ob_get_clean();
         admin_json_exit(['ok' => true, 'text' => '', 'html' => $html]);
     }
@@ -613,25 +622,17 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'media_report') {
         session_write_close();
         $out = [];
-        $earlier = TRACK_VIEWS ? moved_in_earlier_views($dir, $files)['rows'] : [];   // (views an older gallery counted for these photos: shown as a column only when there are some)
-        foreach (media_report($dir, $files) as $row) { $row['earlier'] = $earlier[$row['folder']] ?? null; $out[] = $row; }
+        foreach (media_report($dir, $files) as $row) $out[] = $row;
         $att = media_attention($dir, $files);
-        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out, 'earlierAny' => count($earlier) > 0, 'attention' => $att['attention'], 'backupsHtml' => render_media_backups_html(media_tidy_backups($dir, $files))]);
+        admin_json_exit(['ok' => true, 'text' => '', 'cache' => ENABLE_THUMBNAIL_CACHE, 'rows' => $out, 'attention' => $att['attention'], 'backupsHtml' => render_media_backups_html(media_tidy_backups($dir, $files))]);
     }
 
-    // Moved in from another gallery (Prepare media): what an older gallery left in these folders, and the two things to do about it.
+    // Moved in from another gallery (Prepare media): the thumbnails another gallery left in these folders, and what to do about them.
     if ($action === 'media_moved') {
         session_write_close();
-        $ev = TRACK_VIEWS ? moved_in_earlier_views($dir, $files) : ['views' => 0, 'folders' => 0];
         $lo = moved_in_leftovers($dir, $files);
-        admin_json_exit(['ok' => true, 'text' => '', 'track' => TRACK_VIEWS, 'views' => $ev['views'], 'viewFolders' => $ev['folders'],
+        admin_json_exit(['ok' => true, 'text' => '',
             'leftovers' => ['count' => $lo['count'], 'bytes' => $lo['bytes'], 'folders' => array_map(function ($f) { return ['folder' => $f['folder'], 'count' => $f['count'], 'bytes' => $f['bytes']]; }, array_slice($lo['folders'], 0, 60)), 'more' => max(0, count($lo['folders']) - 60)]]);
-    }
-    if ($action === 'media_moved_views') {
-        if (!TRACK_VIEWS) admin_json_exit(['ok' => false, 'text' => 'Counting views is switched off in Settings, so there is nothing to add them to.']);
-        @set_time_limit(120);
-        $r = moved_in_earlier_views($dir, $files, true);
-        admin_json_exit(['ok' => true, 'text' => '', 'added' => $r['added'], 'folders' => $r['addedFolders']]);
     }
     if ($action === 'media_moved_remove') {
         if (empty($_POST['others_gone'])) admin_json_exit(['ok' => false, 'text' => 'Tick the box that says no other gallery still shows these folders first.']);

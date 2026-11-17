@@ -30,6 +30,7 @@ function run_admin_setup() {
         if (!$codeOk) {
             // (nothing about the password is looked at until the code is right)
         } elseif ($pw !== $pw2) $error = 'The two passwords you typed don\'t match.';
+        elseif (($tooLong = password_length_problem($pw, 'That password')) !== '') $error = $tooLong;
         elseif (!admin_password_ok($pw)) $error = 'Use at least 8 characters with at least one letter and one number: this one password can change your whole gallery.';
         elseif (preg_match('/[\x00-\x1F\x7F]/', $pw)) $error = 'The password can\'t contain control characters.';
         else {
@@ -114,7 +115,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
     if (!$sessionAuthed && !login_throttle_allows($dir, 'admin', $ip)) {
         // Only someone who is not signed in is held back: a session that is already signed in is not guessing anything, and whoever shares this address
         // (a roommate, a proxy that hides the real one) must not be able to lock the owner out of the admin by guessing wrong.
-        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', login_throttle_wait($dir, 'admin', $ip));
+        render_lockout_page('Out of focus for a moment', 'Too many tries from your connection. Hold still for a moment.', login_throttle_wait($dir, 'admin', $ip));
         return;
     }
     if (!$sessionAuthed) {
@@ -129,7 +130,7 @@ function run_admin_route($dir, $files, $groups, $folderGroupKeys, $explicitGroup
         } elseif ($formPass !== null) {
             if (!password_matches(ADMIN_PASSWORD, $formPass)) {
                 login_throttle_record_failure($dir, 'admin', $ip);
-                render_login_page('Enter your access code', '', 'That code isn\'t right.');
+                render_login_page('Enter your access code', '', 'Out of focus.');
                 return;
             }
             // A fresh session id at the moment of login, so nothing issued

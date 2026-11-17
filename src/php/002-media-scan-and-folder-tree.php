@@ -144,6 +144,16 @@ function scan_odd_name_note($path) {
     $GLOBALS['__odd_names'][$rel] = true;
 }
 
+/** Remembers a picture or video the scan left out because its name starts with a dot, for the Health check (each once, by its path from the
+ *  gallery's folder). A dot name is a hidden file on Linux and macOS, and a folder starting with a dot is never a photo folder either; the
+ *  one that matters in practice is macOS's own: copied to a disk or share it can't keep its extra data on, a Mac leaves a "._IMG_0412.jpg"
+ *  beside every photo, a few kilobytes that are no picture. */
+function scan_dot_file_note($path) {
+    $root = isset($GLOBALS['dir']) ? rtrim((string) $GLOBALS['dir'], '/') . '/' : '';
+    $rel = ($root !== '/' && $root !== '' && strncmp($path, $root, strlen($root)) === 0) ? substr($path, strlen($root)) : $path;
+    $GLOBALS['__dot_files'][$rel] = true;
+}
+
 /**
  * Recursively scans a real directory into a tree: ['files' => [bare
  * filenames loose directly here, already sorted per PHOTO_SORT_ORDER],
@@ -168,7 +178,7 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
     // A folder it has no business walking into (a system or recycle folder), and a ceiling on how much one visit scans, so a gallery
     // dropped into a huge tree (a whole web root) cannot make every page crawl. The Health check says when the ceiling was hit.
     static $dirs = 0, $files = 0;
-    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; }
+    if ($isRoot) { $dirs = 0; $files = 0; $GLOBALS['__scan_truncated'] = false; $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = []; }
     if (++$dirs > SCAN_MAX_FOLDERS || $files > SCAN_MAX_FILES) { $GLOBALS['__scan_truncated'] = true; return $node; }
     $entries = @scandir($realDir);
     if ($entries === false) return $node;
@@ -181,7 +191,8 @@ function scan_folder_tree($realDir, $mediaExtensions, $self, $isRoot = true) {
         if (is_file($path)) {
             $ext = strtolower(pathinfo($entry, PATHINFO_EXTENSION));
             if (in_array($ext, $mediaExtensions, true)) {
-                if (name_is_text($entry)) { $node['files'][] = $entry; $files++; }
+                if ($entry[0] === '.') scan_dot_file_note($path);   // (a dot file is hidden, the way a dot folder is: never a photo)
+                elseif (name_is_text($entry)) { $node['files'][] = $entry; $files++; }
                 else scan_odd_name_note($path);   // (left out: see name_is_text)
             }
             continue;
@@ -396,6 +407,7 @@ function valid_media_path($dir, $rel, $mediaExtensions, $self) {
         if ($seg === '' || $seg === '.' || $seg === '..') return false;
     }
     $file = array_pop($segments);
+    if ($file[0] === '.') return false;   // (a dot file is hidden, as a dot folder is: the scan leaves it out, so it is never served)
     foreach ($segments as $seg) {   // (the scan never enters a dot folder or a system folder, so nothing in one is a gallery photo)
         if ($seg[0] === '.' || in_array($seg, SCAN_SKIP_FOLDERS, true)) return false;
     }
@@ -633,12 +645,13 @@ if (AUTO_GROUP_BY_FOLDER) {
 } else {
     $folderTree = null;
     [$subfolderMediaCount, $subfolderMediaTruncated] = count_media_in_subfolders($dir, $mediaExtensions);
-    $GLOBALS['__odd_names'] = [];
+    $GLOBALS['__odd_names'] = []; $GLOBALS['__dot_files'] = [];
     $files = array_filter(scandir($dir), function ($file) use ($dir, $mediaExtensions, $self) {
         if ($file === $self || $file === '.' || $file === '..') return false;
         if (!is_file("$dir/$file") || is_link("$dir/$file")) return false;   // (a link is never followed: it could point anywhere on the server)
         $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
         if (!in_array($ext, $mediaExtensions)) return false;
+        if ($file[0] === '.') { scan_dot_file_note("$dir/$file"); return false; }   // (a dot file is hidden, the way a dot folder is: never a photo)
         if (!name_is_text($file)) { scan_odd_name_note("$dir/$file"); return false; }   // (left out: see name_is_text)
         return true;
     });

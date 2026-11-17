@@ -32,6 +32,7 @@ function owned_kind_of_name($name, $isTop) {
     if (preg_match('/^(\.gallery-.+)\.[0-9a-f]{8}\.(?:php|tmp)$/D', $name, $lm) && $lm[1] !== $name && !in_array(owned_kind_of_name($lm[1], $isTop), ['', 'leftovers'], true)) return 'leftovers';
     if ($name === '.gallery-items.php') return 'items';
     if ($name === '.gallery-stats.sqlite-wal' || $name === '.gallery-stats.sqlite-shm') return 'stats';   // (the side files SQLite keeps beside the view counts)
+    if ($name === '.gallery-stats-key.php') return 'stats';   // (the folder's own key to its view counts: kept, and deleted, with them)
     if ($name === '.gallery-stats.php' || $name === '.gallery-stats.sqlite' || $name === '.gallery-stats.json' || preg_match('/^\.gallery-stats\.joined-\d{8}-\d{6}\.php$/D', $name)) return 'stats';   // (the last: a JSON store set aside once its counts were joined to the database)
     if (preg_match('/^\.gallery-items\.before-tidy-\d{8}-\d{6}(?:-[0-9a-f]{8})?\.php$/D', $name)) return 'backups';   // (an optional mark at the end says which gallery made it: see tidy_backup_id)
     return '';
@@ -58,7 +59,7 @@ function owned_kind_info() {
         'update' => ['New-version check', 'beside index.php', 'The newest version GitHub last reported, and when this gallery was last updated.', 'Made again by the next check.'],
         'previous' => ['Earlier version kept', 'beside index.php', 'The index.php that Update now replaced, kept so Go back can put it in again.', 'Go back is no longer possible; the gallery itself is not affected.'],
         'items' => ['Captions, locations, private marks, folder names', 'in each folder', 'What you typed or chose for the photos and folders in it.', 'All of it is lost.'],
-        'stats' => ['View counts', 'in each folder', 'How many times each photo was looked at.', 'Counts start again from 0.'],
+        'stats' => ['View counts', 'in each folder', 'How many times each photo was looked at, and the small key file (.gallery-stats-key.php) the counts are kept under. A folder copied with both keeps its counts wherever it is shown.', 'Counts start again from 0.'],
         'backups' => ['Tidy-up backups', 'in each folder', 'Copies kept when Tidy up changed a folder\'s data.', 'The backups are gone.'],
         'meta' => ['What the files say about themselves', 'in each .gallery-cache', 'When each photo was taken and where, read once.', 'Read again as photos are shown (Prepare media).'],
         'thumbs' => ['Thumbnails and video clips', 'in each .gallery-cache', 'Small copies that make pages fast and let iPhone photos show.', 'Made again as photos are shown (Prepare media).'],

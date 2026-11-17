@@ -63,7 +63,7 @@ function health_heavy($dir, $files, $force) {
         }
         return $c;
     }
-    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'unreadable' => gallery_unreadable_folders($dir), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
+    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'unreadable' => gallery_unreadable_folders($dir), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => [], 'key' => []]];
     if ($live !== null && visitlog_driver_ok()) $r['log'] = ['why' => backup_sqlite_check($live)];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if ($e['kind'] !== 'stats') continue;
@@ -74,6 +74,8 @@ function health_heavy($dir, $files, $force) {
             if ($w !== '') { $r['stats']['bad'][] = [$e['rel'], $w]; continue; }
             $w = stats_sqlite_write_check($e['path']);
             if ($w !== '') $r['stats']['ro'][] = [$e['rel'], $w];
+            $w = stats_key_check($e['path']);
+            if ($w !== '') $r['stats']['key'][] = [$e['rel'], $w];
         } elseif (basename($e['path']) === '.gallery-stats.php' && !data_file_is_link($e['path'])) {   // (the JSON store: a file that can't be read is left as it is, and nothing is counted there until it is mended)
             $raw = (string) @file_get_contents($e['path']);
             if (!data_file_is_empty($raw) && !is_array(json_decode(data_file_strip_guard($raw), true))) $r['stats']['bad'][] = [$e['rel'], 'could not be read as view counts'];
@@ -131,10 +133,16 @@ function health_database_rows($add, $dir, $files) {
             $add($G, 'opt', 'The change records take ' . $chText, 'More than the ' . number_format(CHANGES_WARN_MB) . ' MB you asked to be warned at. The oldest entry is from ' . ($chOld > 0 ? gmdate('j M Y', $chOld) : 'an unknown date') . '. Trim the log in the Changes tab, or set how long entries are kept in Settings (Visitors and logs).');
         else $add($G, 'ok', 'Change log: ready', number_format($chN) . ' entr' . ($chN === 1 ? 'y' : 'ies') . ' in the Changes tab, taking ' . $chText . '.' . ($chOld > 0 ? ' The oldest is from ' . gmdate('j M Y', $chOld) . '.' : ''));
     }
-    $statsRo = $heavy['stats']['ro'] ?? []; $statsNoDriver = $heavy['stats']['nodriver'] ?? [];
+    $statsRo = $heavy['stats']['ro'] ?? []; $statsNoDriver = $heavy['stats']['nodriver'] ?? []; $statsKey = $heavy['stats']['key'] ?? [];
     $statsNames = function ($list) { $n = array_map(function ($b) { return is_array($b) ? $b[0] : $b; }, $list); return implode('; ', array_slice($n, 0, 3)) . (count($n) > 3 ? ' and ' . (count($n) - 3) . ' more' : ''); };
     if ($statsNoDriver) {
         $add($G, 'warn', 'View counts are kept in a database this server can\'t open (' . count($statsNoDriver) . ' folder' . (count($statsNoDriver) === 1 ? '' : 's') . ')', $statsNames($statsNoDriver) . '. This PHP has no SQLite (`pdo_sqlite`), so the counts in those files are neither shown nor added to; nothing is lost, and nothing is counted in a second place beside them. Turn `pdo_sqlite` on (Debian or Ubuntu: `sudo apt install php-sqlite3`, then reload PHP-FPM or Apache) and they carry on as they were.');
+    }
+    if ($statsKey) {   // (a folder's counts were made under a key that is not there: nothing is counted in it, and nothing is made anew behind the counts)
+        $kn = count($statsKey);
+        $why = ['missing' => 'its key file (.gallery-stats-key.php) is missing', 'mismatch' => 'its key file is not the one the counts were made with', 'broken' => 'its key file can\'t be read'];
+        $add($G, 'warn', 'View counts can\'t be read in ' . $kn . ' folder' . ($kn === 1 ? '' : 's'), $statsNames(array_map(function ($b) use ($why) { return [$b[0] . ' (' . ($why[$b[1]] ?? $b[1]) . ')']; }, $statsKey))
+            . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again.');
     }
     if ($statsRo) {
         $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');

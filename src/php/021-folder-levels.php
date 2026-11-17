@@ -194,7 +194,7 @@ function run_reveal_route($dir) {
     // looking at the form never is.
     $attempting = $formPass !== null || isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']);
     if ($attempting && (!login_throttle_allows($dir, 'reveal', $ip) || (ADMIN_PASSWORD !== '' && !login_throttle_allows($dir, 'admin', $ip)))) {
-        render_lockout_page('Sign-in paused', 'Too many wrong access codes were entered from your connection. Sign-in is paused for a moment.', max(login_throttle_wait($dir, 'reveal', $ip), login_throttle_wait($dir, 'admin', $ip)));
+        render_lockout_page('Out of focus for a moment', 'Too many tries from your connection. Hold still for a moment.', max(login_throttle_wait($dir, 'reveal', $ip), login_throttle_wait($dir, 'admin', $ip)));
         return;
     }
     $asAdmin = is_string($supplied) && ADMIN_PASSWORD !== '' && password_matches(ADMIN_PASSWORD, $supplied);
@@ -207,10 +207,10 @@ function run_reveal_route($dir) {
         if ($formPass === null && (isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['PHP_AUTH_PW']))) {
             // A wrong saved Basic password (see admin_reject_saved_credentials): the form, never a challenge.
             http_response_code(401);
-            render_login_page($heading, $prompt, 'Your browser sent a saved login that no longer matches. Type the current access code.');
+            render_login_page($heading, $prompt, 'Out of focus.');
             return;
         }
-        render_login_page($heading, $prompt, $formPass !== null ? 'That code isn\'t right.' : '');
+        render_login_page($heading, $prompt, $formPass !== null ? 'Out of focus.' : '');
         return;
     }
     login_throttle_record_success($dir, 'reveal', $ip);

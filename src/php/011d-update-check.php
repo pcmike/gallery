@@ -2,7 +2,8 @@
  * New versions. The gallery can ask GitHub (the project's releases page) which version is the newest, at most once a day, from the Settings
  * page and never while a page is being built: the page asks afterwards, in the background, and says nothing when it can't be reached. If the
  * newest is newer than this one, the Health check says so with two buttons, View release and Update now. The only thing sent is an ordinary
- * request for the releases page (so GitHub sees this server's address); nothing about the gallery, its photos or its visitors. CHECK_FOR_UPDATES
+ * request for the releases page: GitHub sees this server's address and the User-Agent "Drop-in Photo Gallery <version>" (the owner chose to
+ * keep the version in it, 2026-11-17); nothing about the gallery's photos or its visitors. CHECK_FOR_UPDATES
  * turns the daily check off (the Check now button still works).
  *
  * Update now replaces this file (index.php) and nothing else. It downloads the release's index.php and its .sha256 from the project's own

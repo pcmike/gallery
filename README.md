@@ -1,6 +1,6 @@
 # Gallery
 
-**A single-file, drop-in PHP photo gallery** for trips, family albums and "for sale" listings. No database, no dependencies, no build step: put `index.php` in a folder of photos and it shows a gallery.
+**A single-file, drop-in PHP photo gallery** for trips, family albums and "for sale" listings. No database server, no dependencies, no build step: put `index.php` in a folder of photos and it shows a gallery.
 
 <p align="center">
 <a href="https://github.com/pcmike/gallery/releases/latest"><img src="https://img.shields.io/github/v/release/pcmike/gallery?color=5865f2" alt="Latest release"></a>
@@ -19,7 +19,7 @@
 - **Folders only you can open, and albums that stand alone.** Keep a Not listed folder for yourself and share its photos one at a time by their own links (replaceable in one press), and let someone who arrives on one album see just that album.
 - **Hand-picked collections.** Group folders and single photos from anywhere under a name of your own ("Best of Paris") as a card of its own, without moving anything on disk, and give a share link just that set; each member shows only to people who could already see it.
 - **Edit on the page.** A pencil on every photo for the caption, place and privacy; select many photos to change them together.
-- **Everything else is opt-in.** Folders show as albums from the start; maps, video, share links and passwords stay off until you switch them on, and the admin says what each one publishes. Nothing leaves your server unless you turn it on (a map loads its tiles from OpenStreetMap when someone opens one).
+- **Everything else is opt-in.** Folders show as albums from the start; maps, video, share links and passwords stay off until you switch them on, and the admin says what each one publishes. Nothing about your photos leaves your server unless you turn it on (a map loads its tiles from OpenStreetMap when someone opens one). The one thing the server does by itself is the daily look at GitHub for a newer version, which you can switch off (`CHECK_FOR_UPDATES`).
 - **Looks after itself.** A health check for the server (it says when a new version is out, and can install it with one press and go back), a built-in backup of everything it has made, and guarded data files.
 
 ## Quick start

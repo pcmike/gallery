@@ -960,6 +960,11 @@ function health_checks($dir, $files) {
             'The gallery leaves ' . ($unN === 1 ? 'it' : 'them') . ' out, with everything inside, and touches nothing there: ' . implode(', ', array_slice($unreadable, 0, 8)) . ($unN > 8 ? ' and ' . number_format($unN - 8) . ' more' : '')
             . '. Give the web server\'s user permission to open ' . ($unN === 1 ? 'it' : 'each one') . ' (on many hosts: chmod 755, owned by that user, in your file manager or over SFTP), then press Check again.');
     }
+    if (!empty($GLOBALS['__dot_files'])) {   // (pictures and videos whose name starts with a dot: left out like a dot folder, said once and quietly)
+        $dotN = count($GLOBALS['__dot_files']); $dotAll = array_keys($GLOBALS['__dot_files']);
+        $add('Folders and files', 'ok', $dotN === 1 ? 'A file starting with a dot is left out' : number_format($dotN) . ' files starting with a dot are left out',
+            'A name that starts with a dot is a hidden file, so the gallery leaves it out the way it leaves out a folder that starts with one. Nothing on disk is touched. A Mac that copies photos to a disk or share it can\'t keep its extra data on leaves one ._ copy beside each photo (a few kilobytes, not a picture): ' . implode(', ', array_slice($dotAll, 0, 6)) . ($dotN > 6 ? ' and ' . number_format($dotN - 6) . ' more' : '') . '. To show one, rename it without the dot.');
+    }
     if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
         $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
         $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',
@@ -1041,9 +1046,6 @@ function health_checks($dir, $files) {
         $add('Left behind', $isAside ? 'aside' : $status, $label . ($isAside ? ' (set aside)' : ''), $detail, $link, $btn);
     };
     if (AUTO_GROUP_BY_FOLDER) {
-        $ev = moved_in_earlier_views($dir, $files);
-        if ($ev['views'] > 0) $leftBehind('earlier-views', 'warn', number_format($ev['views']) . ' earlier view' . ($ev['views'] === 1 ? ' is' : 's are') . ' waiting to be added',
-            'Counted by another gallery, under the old addresses of ' . $ev['folders'] . ' folder' . ($ev['folders'] === 1 ? '' : 's') . '.' . (TRACK_VIEWS ? '' : ' Turn on Count views first.'), ['site', 'setting-TRACK_VIEWS', '→ Count views']);
         $lo = moved_in_leftovers($dir, $files);
         if ($lo['count'] > 0) $leftBehind('leftover-thumbs', 'opt', number_format($lo['count']) . ' leftover thumbnail' . ($lo['count'] === 1 ? '' : 's') . ' (' . ($lo['bytes'] >= 1048576 ? round($lo['bytes'] / 1048576, 1) . ' MB' : max(1, (int) round($lo['bytes'] / 1024)) . ' KB') . ') in folders from elsewhere on the server',
             'Pictures made for photos that are gone now (deleted, renamed or replaced), or by another gallery that showed the same folders. They only take up disk. Tidy leftover thumbnails removes them once no other gallery shows those folders.', ['site', 'media-panel', '→ Prepare media']);

@@ -13,7 +13,7 @@ Older versions copied each photo's location from its file into the folder data a
 
 ## Old names
 - [ ] `warm_thumbnails`, the older name of the `prepare_media` admin action (search `'warm_thumbnails'`). Only an old open admin page or a script would still send it.
-- [ ] `login_password`, the older name of the sign-in field `access_code` (search `login_password`), "for scripts and older pages". Check README before removing: someone's script may post it.
+- [ ] `access_code` and `login_password`, the older names of the sign-in field (it is called `lens` since 2.6.5; `access_code` was its name before that, and `login_password` before that), still read by `login_form_password()` "for scripts, old bookmarks and pages already open" (search `login_password`). Check README before removing: someone's script may post one of them.
 - [ ] `save_item` still accepts `loc_visibility` and `restriction` for "an older page, a script" (the switches now save themselves through `set_item_flag`).
 - [ ] `LOG_PUBLIC_DAYS`, the 2.6.4 name of `LOG_KEEP_DAYS` (Keep visitor records for): the settings reader (`gallery_setting(null, ...)` in `src/php/001-settings-and-config.php`, the `$renamed` list) says in Health that the old line is now the new setting, instead of calling it a typo. The old value is not carried over (it would start deleting records after an upgrade); the line is ignored.
 
@@ -21,7 +21,8 @@ Older versions copied each photo's location from its file into the folder data a
 - [ ] `upgrade_plaintext_passwords()` and its callers (sign-in and the first request), and the "plain text for a file not yet upgraded" branch of the password check (search `not yet upgraded`). Settings files from before passwords were hashed.
 
 ## Old view-count stores
-- [ ] `stats_import_legacy()`: folds the plain-JSON store (`.gallery-stats.json`) and the old SQLite table `photo_views` (readable filenames) into the current `photo_views_h`, then deletes the old ones. Also its call in the stats connection code and its tests.
+- [ ] `stats_drop_old_counts()` (in `src/php/052-view-stats.php`) and its one call in `stats_connection()`: the one-time reset of 2.6.5. A folder's database made by an older version kept its counts in the table `photo_views_h`, keyed by a plain SHA-256 of the photo's path (which anyone who could fetch the file could test a guessed path against). That table is dropped, the file compacted, and counting starts again under the folder's own key (`.gallery-stats-key.php`). Delete the function, the call and its test (`[view counts] a database made by the version before ...`) once no install can still hold a `photo_views_h` table. The `DELETE ... 'carried:%'` line goes with it: the marks of the earlier-views button, which is gone.
+- [ ] `stats_import_legacy()`: folds the plain-JSON store (`.gallery-stats.json`) and the old SQLite table `photo_views` (readable filenames) into the current `photo_views_k` (keyed by the folder's own key since 2.6.5), then deletes the old ones. Also its call in the stats connection code and its tests.
 
 ## Old visitor-download switch
 - [ ] `ENABLE_PUBLIC_DOWNLOAD` (the on/off switch before `PUBLIC_DOWNLOAD_MODE`, 2.4.0): still read, and counted as `all` when `PUBLIC_DOWNLOAD_MODE` is absent (search `PUBLIC_DOWNLOAD_MODE` where it is defined); the Settings page drops the old line when the new setting is saved. Remove the fallback and the constant once nobody has the old line.

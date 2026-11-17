@@ -128,6 +128,13 @@ function send_viewer_aware_cache_headers() {
     if (is_revealed() || link_viewer() !== null) {
         header('Cache-Control: private, no-store');
     }
+    // The page as the owner sees it (his lock, cover and share buttons, and the token that makes them work) and as a private-view visitor sees
+    // it (private photos in it) is not for another site to frame and have someone press things in: only this site may. The same words the admin
+    // page inside the shell already sends. A stranger's page and a link guest's say nothing: embedding those is wanted one day (ROADMAP).
+    if (is_admin_browser() || is_revealed()) {
+        header('X-Frame-Options: SAMEORIGIN');
+        header("Content-Security-Policy: frame-ancestors 'self'; base-uri 'none'; form-action 'self'; object-src 'none'");
+    }
 }
 function admin_session_name() {
     return 'gallery_admin_' . substr(hash('sha256', __DIR__), 0, 10);

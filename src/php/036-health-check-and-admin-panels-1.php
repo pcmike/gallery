@@ -79,10 +79,10 @@ function render_admin_health_panel() {
       <?php endforeach; ?>
       <div class="health-group all-quiet" data-health-group="web">
         <h3 class="subhead">Web server (tested by your browser, just now)</h3>
-        <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : []) as [$key, $label]): ?>
+        <?php foreach (array_merge([['lock', 'Private photos can\'t be fetched by their address'], ['tidy', 'Tidy folder links'], ['accel', 'nginx internal redirect']], ENABLE_SHARE_LINKS ? [['sharetidy', 'Tidy share addresses']] : [], is_file(visitlog_path()) ? [['visitlog', 'The visitor log can\'t be fetched by its address']] : [], backup_find() !== null ? [['backupfile', 'The backup can\'t be fetched by its address']] : [], is_file(__DIR__ . '/.gallery-stats.sqlite') ? [['statsfile', 'The view counts can\'t be fetched by their address']] : []) as [$key, $label]): ?>
           <div class="health-row health-info quiet pending" data-health-row="<?= $key ?>"<?= ($key === 'lock' && !empty($GLOBALS['__lock_probe']['anyPrivate'])) ? '' : ' data-optional="1"' ?>>
             <span class="health-mark muted">&bull;</span>
-            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if (in_array($key, ['tidy', 'sharetidy', 'accel'], true)): ?><a class="health-more" href="#site" onclick="return adminGoToRules();">&rarr; Web server rules</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
+            <div><div class="health-label"><?= $esc($label) ?></div><div class="health-detail" data-health="<?= $key ?>">Checking&hellip;</div><?php if (in_array($key, ['tidy', 'sharetidy', 'accel'], true)): ?><a class="health-more" href="#site" onclick="return adminGoToRules();">&rarr; Web server rules</a><?php endif; ?><?php if ($key === 'visitlog' || $key === 'backupfile' || $key === 'statsfile') echo health_how_html(health_how_gallery_files(), $key, true); ?></div>
           </div>
         <?php endforeach; ?>
       </div>
@@ -478,13 +478,6 @@ function render_admin_site_settings($csrfToken) {
                 <div class="help"><?= $esc($d['help']) ?></div>
                 <?php if (($d['status'] ?? '') === 'ffmpeg'): $ffFound = ffmpeg_binary(); ?>
                 <div class="help ffstatus <?= $ffFound !== '' ? 'ok-text' : 'warn-text' ?>"><strong>ffmpeg on this server: <?= $ffFound !== '' ? 'found' : 'not found' ?></strong> <?= $ffFound !== '' ? '(' . $esc($ffFound) . ')' : 'Videos show the browser\'s own first frame. Installed somewhere unusual? Set "FFMPEG_PATH" in .gallery-config.php.' ?></div>
-                <?php endif; ?>
-                <?php if (($d['status'] ?? '') === 'earlierviews'): ?>
-                <div class="earlier-views" data-earlier data-csrf="<?= $esc($csrfToken) ?>" hidden>
-                  <p class="earlier-text"></p>
-                  <p class="earlier-act"><button type="button" class="secondary earlier-add">Add earlier views to the counts</button></p>
-                  <p class="hint earlier-hint">Adds each folder's once, in one press. The old numbers are not changed, and it can't be undone.</p>
-                </div>
                 <?php endif; ?>
                 <?php if (($d['status'] ?? '') === 'visitlog' && !visitlog_check_quiet()[0]): ?>
                 <div class="help warn-text"><strong>Needs SQLite.</strong> <?= $esc(visitlog_check_quiet()[1]) ?></div>

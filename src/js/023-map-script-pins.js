@@ -17,7 +17,7 @@
   function escapeHtml(s) {
     var d = document.createElement('div');
     d.textContent = s;
-    return d.innerHTML;
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');   // (an address or a name goes into an attribute too: the quotes must not end it)
   }
 
   function popupHtml(pt) {

@@ -22,6 +22,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     $GLOBALS['__admin_fresh'] = $fresh;
     $GLOBALS['__lock_probe'] = lock_probe_targets($dir, $files);
     $GLOBALS['__lock_probe']['anyPrivate'] = !empty($adminHidden['folders']) || !empty($adminHidden['items']);   // (the lock check only worries once something is private)
+    $GLOBALS['__lock_probe']['anyHiddenFolder'] = !empty($adminHidden['folders']);   // (a private or Not listed folder: the tidy-folder-link check worries once there is one, see data-any-hidden-folder)
     $GLOBALS['__admin_files'] = $files;
     $itemsHere = items_read($adminFolderReal);
     $adminCollection = $adminFolderPath !== null && AUTO_GROUP_BY_FOLDER ? collection_at($dir, $adminFolderPath, $files) : null;   // (a collection has a settings page of its own, and no folder on disk)
@@ -54,7 +55,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <meta name="robots" content="noindex, nofollow">
 <?php if (!$inframe): ?>
 <script>(function () {   // on a computer the admin is the shell (this page is what the shell frames, and what a phone gets); ?classic=1 stays on this page
-  try { if (/[?&]classic=1/.test(location.search)) document.cookie = 'galleryClassic=1; path=/; max-age=31536000; SameSite=Lax'; if (document.cookie.indexOf('galleryClassic=1') >= 0) return; } catch (e) {}
+  try { if (/[?&]classic=1/.test(location.search)) document.cookie = 'galleryClassic=1; path=' + <?= json_encode(gallery_cookie_path(), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?> + '; max-age=31536000; SameSite=Lax'; if (document.cookie.indexOf('galleryClassic=1') >= 0) return; } catch (e) {}
   if (window.matchMedia && window.matchMedia('(min-width: 801px)').matches) {
     var h = (location.hash || '').slice(1);
     location.replace(location.search.replace(/[?&]classic=1/, '') + '&shell=1' + (/^(settings|notes|features|hidden|links|collections|site)$/.test(h) ? '&tab=' + h : ''));

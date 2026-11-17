@@ -1,5 +1,5 @@
   (function () {
-    var box = document.getElementById('gate');
+    var box = document.getElementById('lens');
     // Where the browser can't draw text as dots, showing what is typed would be worse than a manager's pop-up: use a real password box.
     if (!(window.CSS && CSS.supports && (CSS.supports('-webkit-text-security', 'disc') || CSS.supports('text-security', 'disc')))) {
       var pw = document.createElement('input');
@@ -7,7 +7,7 @@
       box.parentNode.replaceChild(pw, box); pw.focus();
     }
   })();
-  // The lock drawing is the way back, and really goes back to where the visitor was (same scroll position, same open photo)
+  // The drawing is the way back, and really goes back to where the visitor was (same scroll position, same open photo)
   // when they came from a page of this site; otherwise its link takes them to that page.
   document.getElementById('goback').addEventListener('click', function (e) {
     try {

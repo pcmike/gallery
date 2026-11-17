@@ -67,7 +67,7 @@
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
       // a pin whose photo is in another folder opens that folder's page: remember where it was pressed, so that page can lead back
       const far = e.target.closest && e.target.closest('.leaflet-popup a[href^="?folder="]');
-      if (far) { try { sessionStorage.setItem('galleryMapBack', JSON.stringify({ from: location.pathname + location.search, t: Date.now() })); } catch (err) {} return; }
+      if (far) { try { sessionStorage.setItem('galleryMapBack', JSON.stringify({ from: location.href, t: Date.now() })); } catch (err) {} return; }
       const a = e.target.closest && e.target.closest('.leaflet-popup a[href^="#group-"]'); if (!a) return;
       let id; try { id = decodeURIComponent(a.getAttribute('href').slice(1)); } catch (err) { return; }
       const target = document.getElementById(id); if (!target) return;   // not on this page: the link does what it always did
@@ -85,7 +85,7 @@
       let rec = null;
       try { rec = JSON.parse(sessionStorage.getItem('galleryMapBack') || 'null'); sessionStorage.removeItem('galleryMapBack'); } catch (err) { rec = null; }
       if (!rec || typeof rec.from !== 'string' || !(Date.now() - rec.t < 120000) || location.hash.indexOf('#group-') !== 0) return;
-      setTimeout(function () { const back = rec.from.split('#')[0]; showPill(false, /[?&]map\b/.test(back) ? back : back + '#map'); }, 700);
+      setTimeout(function () { const back = String(rec.from).split('#')[0]; try { if (new URL(back, location.href).origin !== location.origin) return; } catch (err) { return; } showPill(false, /[?&]map\b/.test(back) ? back : back + '#map'); }, 700);
     })();
     // the full map opened again, or a photo opened large: the pill has done its job
     if (modal && window.MutationObserver) new MutationObserver(function () { if (!modal.hidden) dropPill(); }).observe(modal, { attributes: true, attributeFilter: ['hidden'] });

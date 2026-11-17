@@ -1248,8 +1248,9 @@ if (is_file("$fxNested/.gallery-stats.php")) {
     $rootHasEiffelEntry = isset($rootData['photos']['Paris/eiffel.jpg']);
 } elseif (is_file("$fxNested/.gallery-stats.sqlite")) {
     $rootPdo = new PDO('sqlite:' . "$fxNested/.gallery-stats.sqlite");
-    $stmt = $rootPdo->prepare('SELECT views FROM photo_views_h WHERE key = :k');
-    $stmt->execute([':k' => hash('sha256', 'Paris/eiffel.jpg')]);
+    $stmt = $rootPdo->prepare('SELECT views FROM photo_views_k WHERE key = :k');
+    $rootKeyRaw = is_file("$fxNested/.gallery-stats-key.php") ? (string) file_get_contents("$fxNested/.gallery-stats-key.php") : '';
+    $stmt->execute([':k' => hash_hmac('sha256', 'eiffel.jpg', preg_match('/"key":\s*"([0-9a-f]{64})"/', $rootKeyRaw, $rootKeyM) ? hex2bin($rootKeyM[1]) : '')]);
     $rootHasEiffelEntry = $stmt->fetchColumn() !== false;
 }
 check('the gallery root\'s own stats store has no entry for a subfolder photo', !$rootHasEiffelEntry);
@@ -1903,12 +1904,12 @@ $authHeader = 'Authorization: Basic ' . base64_encode('admin:test-admin-pw-123')
 $wrongAuthHeader = 'Authorization: Basic ' . base64_encode('admin:wrong-password');
 
 [$noAuthStatus, $noAuthBody, $noAuthHeaders] = http_get("$baseAdmin/?admin");
-check('?admin with no credentials shows a password form (200), not a browser Basic-Auth pop-up', $noAuthStatus === 200 && str_contains($noAuthBody, 'name="access_code"') && !array_filter($noAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0));
+check('?admin with no credentials shows a password form (200), not a browser Basic-Auth pop-up', $noAuthStatus === 200 && str_contains($noAuthBody, 'name="lens"') && !array_filter($noAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0));
 check('?admin\'s login form is never indexed or cached', str_contains($noAuthBody, 'noindex') && (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'X-Robots-Tag: noindex') === 0) && (bool) array_filter($noAuthHeaders, fn($h) => stripos($h, 'Cache-Control: no-store') === 0));
 check('...and asking for it starts no session (no Set-Cookie for an anonymous visitor)', !array_filter($noAuthHeaders, fn($h) => stripos($h, 'Set-Cookie:') === 0));
 
 [$wrongAuthStatus, $wrongAuthBody, $wrongAuthHeaders] = http_get("$baseAdmin/?admin", [$wrongAuthHeader]);
-check('?admin with a wrong password in a Basic header (a script, or a browser re-sending an old saved one) returns 401 and the login form, and NEVER a WWW-Authenticate challenge (that is what opens the browser\'s own dialog)', $wrongAuthStatus === 401 && !array_filter($wrongAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0) && str_contains($wrongAuthBody, 'name="access_code"') && (str_contains($wrongAuthBody, 'saved login') ));
+check('?admin with a wrong password in a Basic header (a script, or a browser re-sending an old saved one) returns 401 and the login form, and NEVER a WWW-Authenticate challenge (that is what opens the browser\'s own dialog)', $wrongAuthStatus === 401 && !array_filter($wrongAuthHeaders, fn($h) => stripos($h, 'WWW-Authenticate') === 0) && str_contains($wrongAuthBody, 'name="lens"') && str_contains($wrongAuthBody, 'Out of focus.'));
 
 [$okStatus, $adminBody, $adminHeaders] = http_get("$baseAdmin/?admin", [$authHeader]);
 [$acSt, $acBody, $acHd] = http_get("$baseAdmin/?admin&accelcheck=1&prefix=%2Fkb", [$authHeader]);
@@ -2186,7 +2187,7 @@ check('[lock] pressing it forgets this browser\'s private-view cookie and goes b
 check('[lock] the owner (signed in to the admin) sees it open too, and it is the same sign-out button', str_contains($lockAdminBody, 'class="lock-form"') && str_contains($lockAdminBody, 'name="logout"') && str_contains($lockAdminBody, 'signed in as the owner'));
 [$lockAdminOutStatus, , $lockAdminOutHd] = http_post("$basePrivate/?reveal", ['logout' => '1', 'folder' => ''], ["Cookie: $sessCookie"], false);
 [, $afterOwnerOut] = http_get("$basePrivate/?admin", ["Cookie: $sessCookie"]);
-check('[lock] pressing it as the owner signs the owner out completely: the admin session is gone (the old cookie opens the login form, not the admin) and both its cookies are expired, so the private items lock again', $lockAdminOutStatus === 303 && str_contains($afterOwnerOut, 'name="access_code"') && !str_contains($afterOwnerOut, 'Gallery Admin') && count(array_filter($lockAdminOutHd, fn($h) => stripos($h, 'Set-Cookie:') === 0 && (stripos($h, '1970') !== false || stripos($h, 'Max-Age=0') !== false))) >= 2);
+check('[lock] pressing it as the owner signs the owner out completely: the admin session is gone (the old cookie opens the login form, not the admin) and both its cookies are expired, so the private items lock again', $lockAdminOutStatus === 303 && str_contains($afterOwnerOut, 'name="lens"') && !str_contains($afterOwnerOut, 'Gallery Admin') && count(array_filter($lockAdminOutHd, fn($h) => stripos($h, 'Set-Cookie:') === 0 && (stripos($h, '1970') !== false || stripos($h, 'Max-Age=0') !== false))) >= 2);
 [, $adminLoginBody, $adminLoginHeadersFirst] = http_get("$basePrivate/?admin", [$adminAuth]);
 $sessCookie = extract_cookie_header($adminLoginHeadersFirst);
 $adminCsrf = extract_csrf_token($adminLoginBody);
@@ -2251,11 +2252,11 @@ for ($i = 0; $i < 5; $i++) {
 [$adminLockedStatus] = http_get("$basePrivate/?admin", [$adminAuth]);
 check('5 failed admin attempts lock out the admin login', $adminLockedStatus === 429);
 [, $adLockBody, $adLockHd] = http_get("$basePrivate/?admin", [$adminAuth]);
-check('[lockout page] the admin lockout is a proper page, not bare text: it says sign-in is paused in its own words, counts the seconds left (and says so in Retry-After),', str_contains($adLockBody, 'Sign-in paused') && str_contains($adLockBody, 'id="lock-secs"') && str_contains($adLockBody, 'wrong access codes') && (bool) preg_grep('~^Retry-After: (\\d+)$~i', array_map('trim', $adLockHd)) && (bool) preg_grep('~^Content-Type: text/html~i', $adLockHd));
+check('[lockout page] the admin lockout is a proper page, not bare text: it says sign-in is paused in its own words, counts the seconds left (and says so in Retry-After),', str_contains($adLockBody, 'Out of focus for a moment') && str_contains($adLockBody, 'id="lock-secs"') && !str_contains($adLockBody, 'access code') && (bool) preg_grep('~^Retry-After: (\\d+)$~i', array_map('trim', $adLockHd)) && (bool) preg_grep('~^Content-Type: text/html~i', $adLockHd));
 [$revealStillWorksStatus] = http_get("$basePrivate/?reveal", [$revealAuth], false);
 check('...and the shared sign-in box holds it too (429 for that address, even with the right private-view password), so it can\'t be used to keep guessing the admin password', $revealStillWorksStatus === 429 && http_get("$basePrivate/?reveal")[0] === 200);
 [, $rvLockBody] = http_post("$basePrivate/?reveal", ['login_password' => 'wrong'], [], false);
-check('[lockout page] the shared sign-in box shows the same page for a locked address, and never a retry of what was typed (the page\'s own try-again is a plain visit)', str_contains($rvLockBody, 'Sign-in paused') && str_contains($rvLockBody, 'location.assign(location.href)') && !str_contains($rvLockBody, '<form'));
+check('[lockout page] the shared sign-in box shows the same page for a locked address, and never a retry of what was typed (the page\'s own try-again is a plain visit)', str_contains($rvLockBody, 'Out of focus for a moment') && str_contains($rvLockBody, 'location.assign(location.href)') && !str_contains($rvLockBody, '<form'));
 
 // Neither password feature does anything when unset (the default).
 [$revealInertStatus] = http_get("$base1/?reveal");
@@ -3229,7 +3230,7 @@ file_put_contents("$fxSetup/.gallery-setup", '');
 [, $loginAgain] = http_get("$baseSetup/?admin");
 $beforeSecond = (string) file_get_contents($setupCfg);
 [, $second] = http_post("$baseSetup/?admin", ['setup_code' => $setupCode, 'setup_password' => 'an-attackers-password-1', 'setup_password2' => 'an-attackers-password-1']);
-check('[setup] once a password exists, setup never appears again, even with the old code and a .gallery-setup file: it is the login form, and no code file is made', str_contains($loginAgain, 'name="access_code"') && !str_contains($loginAgain, 'name="setup_password"') && !file_exists($setupCodeFile));
+check('[setup] once a password exists, setup never appears again, even with the old code and a .gallery-setup file: it is the login form, and no code file is made', str_contains($loginAgain, 'name="lens"') && !str_contains($loginAgain, 'name="setup_password"') && !file_exists($setupCodeFile));
 check('[setup] ...and a second visitor posting a new password changes nothing', !str_contains($second, 'Your admin password is set') && (string) file_get_contents($setupCfg) === $beforeSecond && pw_stored_ok(cfg_read($setupCfg)['ADMIN_PASSWORD'] ?? null, $claimPw));
 check('[setup] ...the chosen password (with quotes, slashes, a comma and a brace in it) logs in through the form', http_post("$baseSetup/?admin", ['login_password' => $claimPw], [], false)[0] === 303 && http_post("$baseSetup/?admin", ['login_password' => 'an-attackers-password-1'], [], false)[0] === 200);
 unlink("$fxSetup/.gallery-setup");
@@ -3464,9 +3465,9 @@ $lkHome = http_get("$baseLk/")[1];
 check('[lock] ...and once a photo is private it is hidden and still there is no lock icon', !str_contains($lkHome, 'lock-link') && !str_contains($lkHome, 'alt="b.jpg"'));
 [, $lkForm] = http_get("$baseLk/?reveal");
 $lkFormText = preg_replace('#<(script|style)\b.*?</\1>#s', '', $lkForm);
-check('[lock] the sign-in page is bare: one large lock drawing and one box, with no heading, no button and no words about passwords or signing in', substr_count($lkFormText, '<h1') === 0 && !str_contains($lkForm, '<button') && !str_contains($lkFormText, 'Continue') && !str_contains($lkFormText, 'Go Back') && str_contains($lkForm, 'class="mark" id="goback"') && str_contains($lkForm, 'name="access_code"') && !preg_match('/password|sign in|admin|private-view/i', trim(strip_tags($lkFormText))));
+check('[lock] the sign-in page is bare: one large lock drawing and one box, with no heading, no button and no words about passwords or signing in', substr_count($lkFormText, '<h1') === 0 && !str_contains($lkForm, '<button') && !str_contains($lkFormText, 'Continue') && !str_contains($lkFormText, 'Go Back') && str_contains($lkForm, 'class="mark" id="goback"') && str_contains($lkForm, 'name="lens"') && !preg_match('/password|sign in|admin|private-view/i', trim(strip_tags($lkFormText))));
 [$lkBadSt, $lkBad] = http_post("$baseLk/?reveal", ['login_password' => 'nope'], [], false);
-check('[lock] a wrong password is refused with a message', $lkBadSt === 200 && str_contains($lkBad, "isn't right") || str_contains($lkBad, 'isn&#039;t right'));
+check('[lock] a wrong password is refused with a message', $lkBadSt === 200 && str_contains($lkBad, 'Out of focus.') || str_contains($lkBad, 'isn&#039;t right'));
 $fxLk2 = new_fixture_dir('lockboth');
 make_jpeg("$fxLk2/a.jpg", 60, 60, 1, 2, 3); mkdir("$fxLk2/Sub"); make_jpeg("$fxLk2/Sub/b.jpg", 60, 60, 4, 5, 6);
 file_put_contents("$fxLk2/.gallery-config.php", cfg_text(['PRIVATE_VIEW_PASSWORD' => 'view-only', 'ADMIN_PASSWORD' => 'owner-pw-12345', 'AUTO_GROUP_BY_FOLDER' => true]));
@@ -4099,7 +4100,7 @@ $cookieOf = fn ($hd) => extract_cookie_header($hd);
 
 // Wrong password: the form again, with a message, and nothing logged in.
 [$s1, $b1, $h1] = http_post("$baseLogin/?admin", ['login_password' => 'nope']);
-check('[login] a wrong password re-shows the form with a plain message (200), and sets no session', $s1 === 200 && str_contains($b1, 'That code isn&#039;t right') && str_contains($b1, 'name="access_code"') && !array_filter($h1, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0));
+check('[login] a wrong password re-shows the form with a plain message (200), and sets no session', $s1 === 200 && str_contains($b1, 'Out of focus.') && str_contains($b1, 'name="lens"') && !array_filter($h1, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0));
 // Right password: redirected back to the same admin URL, with a session cookie; no Authorization header needed afterwards.
 [$s2, , $h2] = http_post("$baseLogin/?admin&folder=Sub", ['login_password' => 'login-pw'], [], false);
 $loginCookie = $cookieOf($h2); $loc2 = ''; foreach ($h2 as $h) if (stripos($h, 'Location:') === 0) $loc2 = trim(substr($h, 9));
@@ -4112,7 +4113,7 @@ check('[admin layout] the sections are real tabs (Folder settings, Notes; no Pho
 check('[admin layout] the page has no thumbnail grid, per-photo forms or Select bar (the pencil and the Select button on the gallery do all of that)', !str_contains($b3, 'class="photo-editor"') && !str_contains($b3, 'class="thumb-grid"') && !str_contains($b3, 'class="item-editor"') && !str_contains($b3, 'id="bulk-bar"') && !str_contains($b3, 'name="loaded_hash" value="' . md5('x') . '"'));
 check('[admin layout] the Folder settings tab is the one that opens first', str_contains($b3, "names.indexOf('settings') >= 0 ? 'settings' : names[0]"));
 check('[admin layout] the anchors inside the panels still exist', str_contains($b3, 'id="settings"') && str_contains($b3, 'id="notes"') && !str_contains($b3, 'id="export"'));
-check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="access_code"'));
+check('[login] the same URL without the cookie is the form again', str_contains(http_get("$baseLogin/?admin&folder=Sub")[1], 'name="lens"'));
 check('[login] a login also counts as private view (the viewer cookie is set too)', str_contains($loginCookie, '=') && substr_count($loginCookie, '=') >= 2);
 // A saved change from an expired session must not be saved, and must say why.
 [$s4, $b4] = http_post("$baseLogin/?admin", ['action' => 'save_item', 'file' => 'one.jpg', 'caption' => 'should not stick']);
@@ -4125,10 +4126,10 @@ $logoutForm = ''; foreach (html_post_forms($b5) as $f) if (str_contains($f['html
 check('[login] the admin page has a Log out button', $logoutForm !== '');
 [$s6, , $h6] = http_post("$baseLogin/?admin", form_default_fields($logoutForm), ["Cookie: $loginCookie"], false);
 check('[login] logging out redirects away and expires the cookies', $s6 === 303 && (bool) array_filter($h6, fn($h) => stripos($h, 'Set-Cookie: gallery_admin_') === 0 && stripos($h, 'expires=Thu, 01 Jan 1970') !== false));
-check('[login] after logging out, the old cookie no longer opens the admin', str_contains(http_get("$baseLogin/?admin", ["Cookie: $loginCookie"])[1], 'name="access_code"'));
+check('[login] after logging out, the old cookie no longer opens the admin', str_contains(http_get("$baseLogin/?admin", ["Cookie: $loginCookie"])[1], 'name="lens"'));
 // The private view uses the same kind of form.
 [$sv1, $bv1] = http_get("$baseLogin/?reveal");
-check('[login] ?reveal (the sign-in the lock leads to) shows a one-box form (no heading)', $sv1 === 200 && str_contains($bv1, 'name="access_code"') && !str_contains($bv1, '<h1'));
+check('[login] ?reveal (the sign-in the lock leads to) shows a one-box form (no heading)', $sv1 === 200 && str_contains($bv1, 'name="lens"') && !str_contains($bv1, '<h1'));
 [$sv2, , $hv2] = http_post("$baseLogin/?reveal", ['login_password' => 'view-pw'], [], false);
 check('[login] the right private-view password redirects to the plain gallery and sets the viewer cookie', $sv2 === 302 && str_contains($cookieOf($hv2), '='));
 // Five wrong passwords lock the next attempt for a minute, even a right one.
@@ -4155,7 +4156,7 @@ foreach (['?admin', '?reveal', '?admin&folder=Sub', '?admin&hidden=1', '?map', '
     foreach ($stHd as $h) if (stripos($h, 'WWW-Authenticate') === 0) $challenges[] = "$route: $h";
 }
 check('[stale password] no route ever answers with a WWW-Authenticate challenge, even when the browser re-sends an old saved password', $challenges === [], implode(' | ', $challenges));
-check('[stale password] ?admin and ?reveal answer such a request with 401 and the ordinary login form, saying the saved password doesn\'t match', $stA === 401 && $stR === 401 && str_contains($stBodyA, 'name="access_code"') && str_contains($stBodyR, 'name="access_code"') && str_contains($stBodyA, 'saved login') && str_contains($stBodyR, 'saved login'));
+check('[stale password] ?admin and ?reveal answer such a request with 401 and the ordinary login form, with the same "Out of focus." as a wrong entry (the saved login is no longer named)', $stA === 401 && $stR === 401 && str_contains($stBodyA, 'name="lens"') && str_contains($stBodyR, 'name="lens"') && str_contains($stBodyA, 'Out of focus.') && str_contains($stBodyR, 'Out of focus.'));
 check('[stale password] typing the current password into the form still logs you in while the browser keeps sending the old one', $stLoginStatus === 302);
 check('[stale password] the source never sends a WWW-Authenticate header at all (a guard against it creeping back)', !preg_match('/header\(\s*[\'"]WWW-Authenticate/i', $indexContents));
 
@@ -4192,7 +4193,7 @@ $stTok = fn (string $line) => explode(';', explode('=', $line, 2)[1] ?? '')[0];
 $stSession = function (array $h) { foreach ($h as $x) if (stripos($x, 'Set-Cookie: gallery_admin_') === 0) return explode(';', trim(substr($x, 11)))[0]; return ''; };
 $stFile = fn () => json_decode(explode("\n", (string) @file_get_contents("$fxSt/.gallery-browsers.php"), 2)[1] ?? '[]', true) ?: [];
 $stPutFile = function (array $d) use ($fxSt) { file_put_contents("$fxSt/.gallery-browsers.php", "<?php http_response_code(404); exit; ?>\n" . json_encode($d)); };
-$stIsLogin = fn (string $body) => str_contains($body, 'name="access_code"');
+$stIsLogin = fn (string $body) => str_contains($body, 'name="lens"');
 $stSecret = fn ($tok) => http_get("$baseSt/?img=Sub%2Fsecret.jpg&size=thumb", $tok === '' ? [] : ["Cookie: $stName=$tok"])[0];
 
 $stH1 = $stLogin(); $stC1 = $stLine($stH1, $stName); $stT1 = $stTok($stC1); $stS1 = $stSession($stH1);
@@ -5192,7 +5193,7 @@ copy(__DIR__ . '/../index.php', "$fxQ/index.php");
 $portQ = find_free_port(); start_server($fxQ, $portQ); $baseQ = "http://127.0.0.1:$portQ";
 $qForm = http_get("$baseQ/?reveal")[1]; $qAdminForm = http_get("$baseQ/?admin")[1];
 foreach (['?reveal' => $qForm, '?admin' => $qAdminForm] as $label => $html) {
-    check("[sign-in box] $label: the box is a text box (never type=password), called access_code, read-only until it is focused, with every common password manager told to leave it alone, and the form asks the browser not to remember it", str_contains($html, '<input type="text" class="gate"') && !str_contains($html, '<textarea') && !str_contains($html, 'type="password"') && str_contains($html, 'name="access_code"') && !str_contains($html, 'login_password') && !str_contains($html, 'aria-labelledby') && str_contains($html, 'readonly onfocus="this.removeAttribute(\'readonly\');"') && str_contains($html, '::-webkit-credentials-auto-fill-button')
+    check("[sign-in box] $label: the box is a text box (never type=password), called lens, read-only until it is focused, with every common password manager told to leave it alone, and the form asks the browser not to remember it", str_contains($html, '<input type="text" class="lens"') && !str_contains($html, '<textarea') && !str_contains($html, 'type="password"') && str_contains($html, 'name="lens"') && !str_contains($html, 'login_password') && !str_contains($html, 'aria-labelledby') && str_contains($html, 'readonly onfocus="this.removeAttribute(\'readonly\');"') && str_contains($html, '::-webkit-credentials-auto-fill-button')
         && str_contains($html, 'autocomplete="off"') && str_contains($html, 'data-lpignore="true"') && str_contains($html, 'data-1p-ignore="true"') && str_contains($html, 'data-bwignore="true"') && str_contains($html, 'data-form-type="other"') && str_contains($html, '<form method="post" action="" autocomplete="off">'));
     check("[sign-in box] $label: what is typed is drawn as dots (CSS), with autocorrect, capitals and spell-check off, and a script falls back to a real password box where the browser can't draw dots", str_contains($html, '-webkit-text-security:disc') && str_contains($html, 'autocapitalize="off"') && str_contains($html, 'autocorrect="off"') && str_contains($html, 'spellcheck="false"') && str_contains($html, "pw.type = 'password'"));
 }
@@ -5204,7 +5205,7 @@ foreach (['?reveal' => $qForm, '?admin' => $qAdminForm] as $label => $html) {
     $visible = strip_tags(preg_replace('#<(script|style)\\b.*?</\\1>#s', '', $html));
     check("[sign-in box] $label: nothing on the page, in its title, heading or the box's own name, says \"password\" or \"sign in\" (words a browser's Autofill reads), and a wrong code says so without them", !preg_match('/password|sign in/i', $visible) && !preg_match('/<title>[^<]*(password|sign in)/i', $html) && !preg_match('/aria-label="[^"]*(password|sign)/i', $html));
 }
-check('[sign-in box] a code typed with a line break in it (a paste) is sent without it, and a wrong one is answered in the same words', http_post("$baseQ/?reveal", ['access_code' => "gate view\r\n"], [], false)[0] === 302 && str_contains(http_post("$baseQ/?reveal", ['access_code' => 'nope'])[1], "That code isn&#039;t right"));
+check('[sign-in box] a code typed with a line break in it (a paste) is sent without it, and a wrong one is answered in the same words', http_post("$baseQ/?reveal", ['access_code' => "gate view\r\n"], [], false)[0] === 302 && str_contains(http_post("$baseQ/?reveal", ['access_code' => 'nope'])[1], 'Out of focus.'));
 check('[sign-in box] the first-run setup page keeps real password fields, since choosing a password is where a manager should help (and its boxes accept the 8 characters the rule allows: they wrongly demanded 12)', (function () { $d = new_fixture_dir('gate-setup'); make_jpeg("$d/a.jpg", 40, 30, 1, 2, 3); copy(__DIR__ . '/../index.php', "$d/index.php"); $p = find_free_port(); start_server($d, $p); touch("$d/index.php", time()); $h = http_get("http://127.0.0.1:$p/?admin")[1]; return str_contains($h, 'type="password" id="setup_password" name="setup_password"') && str_contains($h, 'minlength="8"') && !str_contains($h, 'minlength="12"'); })());
 
 /* --------------------------------------------------------------------- */
@@ -8222,9 +8223,8 @@ check('[collections links] the Collections tab names the share links that includ
 $clCheckB = $clAdmin(['action' => 'collection_member_add', 'id' => 'c0000000000a1', 'items' => json_encode([['path' => 'Pics/b', 'file' => 'pub.jpg']]), 'check' => '1']);
 check('[collections links] adding a private photo to a collection that a link includes first says which links would gain access to what (a public photo says nothing), and the check changes nothing', str_contains((string) ($clCheckA['warn'] ?? ''), 'Names the mix') && str_contains((string) ($clCheckA['warn'] ?? ''), 'PRIV-OWN.jpg') && ($clCheckB['warn'] ?? 'x') === '' && count(read_data_file("$fxCl/.gallery-collections.php")['collections'][0]['items']) === 3);
 
-echo "== moved in from another gallery: earlier views and leftover thumbnails (Prepare media) ==\n";
-// A place from elsewhere that an older gallery showed: its view counts are in the folder's own stats file under that gallery's paths, and its thumbnails sit in
-// the folder's .gallery-cache under that gallery's key. Prepare media adds the counts once, and removes the thumbnails only when told no other gallery shows the place.
+echo "== moved in from another gallery: leftover thumbnails (Prepare media) ==\n";
+// A place from elsewhere that an older gallery showed: its thumbnails sit in the folder's .gallery-cache under that gallery's key. Prepare media removes them only when told no other gallery shows the place. (Its view counts used to be a second thing to carry over; they are kept under the folder's own key now and follow the folder: see the view-count tests.)
 $fxMv = new_fixture_dir('movedin'); $mvPlace = new_fixture_dir('movedinplace');
 mkdir("$mvPlace/paris", 0775, true); mkdir("$fxMv/Own", 0775, true);
 foreach (['a', 'b', 'c'] as $mvI => $mvN) make_jpeg("$mvPlace/paris/$mvN.jpg", 60, 50, 40 + $mvI * 50, 80, 120);
@@ -8235,9 +8235,6 @@ mkdir("$mvPlace/paris/.gallery-cache", 0775, true);
 foreach ($mvOld as $mvF) file_put_contents("$mvPlace/paris/.gallery-cache/$mvF", str_repeat('x', 2048));
 file_put_contents("$mvPlace/paris/.gallery-cache/keep-me.txt", 'not a made picture'); file_put_contents("$mvPlace/paris/.gallery-cache/" . str_repeat('4d', 15) . '.jpg', 'thirty hex digits, not a made name');
 mkdir("$fxMv/Own/.gallery-cache", 0775, true); file_put_contents("$fxMv/Own/.gallery-cache/" . str_repeat('5e', 16) . '.jpg', 'in the gallery\'s own folder: the clean-up sweeps these itself');
-$mvDb = new PDO('sqlite:' . "$mvPlace/paris/.gallery-stats.sqlite"); $mvDb->exec('CREATE TABLE stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)'); $mvDb->exec('CREATE TABLE photo_views_h (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
-foreach (['paris/a.jpg' => 10, 'b.jpg' => 5, 'unrelated/zzz.jpg' => 99] as $mvK => $mvV) $mvDb->prepare('INSERT INTO photo_views_h(key, views) VALUES(?, ?)')->execute([hash('sha256', $mvK), $mvV]);
-$mvDb = null;
 file_put_contents("$fxMv/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mv-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => true, 'EXTRA_FOLDERS' => ['Eurotrip' => $mvPlace]]));
 copy($indexSrc, "$fxMv/index.php");
 $portMv = find_free_port(); start_server($fxMv, $portMv); $baseMv = "http://127.0.0.1:$portMv";
@@ -8245,27 +8242,15 @@ $portMv = find_free_port(); start_server($fxMv, $portMv); $baseMv = "http://127.
 $mvOwn = ['Cookie: ' . extract_cookie_header($mvH1)];
 $mvCsrf = (string) extract_csrf_token(http_get("$baseMv/?admin", $mvOwn)[1]);
 $mvAdmin = fn (array $f) => json_decode(http_post("$baseMv/?admin", $f + ['csrf_token' => $mvCsrf], array_merge($mvOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
-$mvRows = function () use ($mvPlace) { $db = new PDO('sqlite:' . "$mvPlace/paris/.gallery-stats.sqlite"); $out = []; foreach ($db->query('SELECT key, views FROM photo_views_h') as $r) $out[$r['key']] = (int) $r['views']; return $out; };
 $mvSum = fn () => md5(implode('|', array_map(fn ($f) => md5_file("$mvPlace/paris/$f"), ['a.jpg', 'b.jpg', 'c.jpg', 'notes.txt'])));
 $mvPhotosBefore = $mvSum();
 $mvScan = $mvAdmin(['action' => 'media_moved']);
-check('[moved in] Prepare media finds the earlier views (the photo saved as paris/a.jpg and the one saved by its bare name; not the unrelated row) and the three leftover pictures, and nothing in the gallery\'s own folder', ($mvScan['ok'] ?? null) === true && ($mvScan['views'] ?? 0) === 15 && ($mvScan['viewFolders'] ?? 0) === 1 && ($mvScan['leftovers']['count'] ?? 0) === 3 && ($mvScan['leftovers']['bytes'] ?? 0) === 3 * 2048 && ($mvScan['leftovers']['folders'][0]['folder'] ?? '') === 'Eurotrip/paris' && count($mvScan['leftovers']['folders']) === 1, json_encode($mvScan));
-check('[moved in] ...looking changed nothing: the old rows, the photos and the made pictures are as they were', $mvRows()[hash('sha256', 'paris/a.jpg')] === 10 && count($mvRows()) === 3 && $mvSum() === $mvPhotosBefore && count(array_filter($mvOld, fn ($f) => is_file("$mvPlace/paris/.gallery-cache/$f"))) === 3);
+check('[moved in] Prepare media finds the three leftover pictures and nothing in the gallery\'s own folder', ($mvScan['ok'] ?? null) === true && ($mvScan['leftovers']['count'] ?? 0) === 3 && ($mvScan['leftovers']['bytes'] ?? 0) === 3 * 2048 && ($mvScan['leftovers']['folders'][0]['folder'] ?? '') === 'Eurotrip/paris' && count($mvScan['leftovers']['folders']) === 1 && !isset($mvScan['views']), json_encode($mvScan));
+check('[moved in] ...looking changed nothing: the photos and the made pictures are as they were', $mvSum() === $mvPhotosBefore && count(array_filter($mvOld, fn ($f) => is_file("$mvPlace/paris/.gallery-cache/$f"))) === 3);
 // The Health check says so, in amber, and the rows can be set aside (and brought back); a row comes back by itself if there is more of it.
 $mvPage = fn () => http_get("$baseMv/?admin&classic=1", $mvOwn)[1];
 $mvHp = $mvPage();
-check('[left behind] the Health check has an amber row for the earlier views waiting, a quiet optional one for the leftover pictures, each with a Set aside button', str_contains($mvHp, '15 earlier views are waiting to be added') && preg_match('~health-warn[^>]*>(?:(?!health-row).)*15 earlier views are waiting~s', $mvHp) === 1 && str_contains($mvHp, '3 leftover thumbnails') && str_contains($mvHp, 'data-aside="earlier-views"') && str_contains($mvHp, 'data-aside="leftover-thumbs"'));
-$mvAside = $mvAdmin(['action' => 'health_set_aside', 'key' => 'earlier-views']);
-$mvHp2 = $mvPage();
-check('[left behind] Set aside keeps the amount (15) and a fingerprint of what was set aside in the settings file; the row turns quiet ("set aside" with a Bring back button), and the summary says how many are set aside', ($mvAside['ok'] ?? null) === true && (cfg_read("$fxMv/.gallery-config.php")['HEALTH_SET_ASIDE']['earlier-views']['n'] ?? null) === 15 && strlen((string) (cfg_read("$fxMv/.gallery-config.php")['HEALTH_SET_ASIDE']['earlier-views']['h'] ?? '')) === 32 && str_contains($mvHp2, '15 earlier views are waiting to be added (set aside)') && str_contains($mvHp2, 'data-aside-back="earlier-views"') && preg_match('~health-warn[^>]*>(?:(?!health-row).)*earlier views are waiting~s', $mvHp2) !== 1 && str_contains($mvHp2, '1 set aside'));
-check('[left behind] ...and the button that adds them is still where it was (Settings > Count views): the data is reachable', str_contains($mvHp2, 'class="earlier-add"') || str_contains($mvHp2, 'earlier-add'));
-$mvCfgNow = cfg_read("$fxMv/.gallery-config.php"); $mvKeepAside = $mvCfgNow['HEALTH_SET_ASIDE'];
-$mvCfgNow['HEALTH_SET_ASIDE'] = ['earlier-views' => ['n' => 15, 'h' => str_repeat('0', 32)]]; file_put_contents("$fxMv/.gallery-config.php", cfg_text($mvCfgNow));
-check('[left behind] a record about something else (same amount, another fingerprint) does not hide the row: it comes back by itself', str_contains($mvPage(), 'data-aside="earlier-views"') && !str_contains($mvPage(), 'earlier views are waiting to be added (set aside)'));
-$mvCfgNow['HEALTH_SET_ASIDE'] = ['earlier-views' => 15]; file_put_contents("$fxMv/.gallery-config.php", cfg_text($mvCfgNow));
-check('[left behind] an old-style record (just a number) hides nothing', str_contains($mvPage(), 'data-aside="earlier-views"') && !str_contains($mvPage(), 'earlier views are waiting to be added (set aside)'));
-$mvCfgNow['HEALTH_SET_ASIDE'] = $mvKeepAside; file_put_contents("$fxMv/.gallery-config.php", cfg_text($mvCfgNow));
-check('[left behind] ...and the real record, written again, hides it again (nothing changed since it was set aside)', str_contains($mvPage(), '15 earlier views are waiting to be added (set aside)'));
+check('[left behind] the Health check has a quiet optional row for the leftover pictures with a Set aside button, and no row about earlier views (that button is gone)', str_contains($mvHp, '3 leftover thumbnails') && str_contains($mvHp, 'data-aside="leftover-thumbs"') && !str_contains($mvHp, 'earlier view') && !str_contains($mvHp, 'data-aside="earlier-views"'));
 // leftover pictures: set aside while they are the same three; a fourth, or a different three (same number), brings the row back
 $mvAdmin(['action' => 'health_set_aside', 'key' => 'leftover-thumbs']);
 check('[left behind] the leftover pictures set aside: the row is quiet (set aside, with Bring back)', str_contains($mvPage(), '3 leftover thumbnails') && str_contains($mvPage(), '(set aside)') && str_contains($mvPage(), 'data-aside-back="leftover-thumbs"'));
@@ -8279,21 +8264,16 @@ $mvPg = $mvPage();
 check('[left behind] 4 become 3 but not the same 3 (one gone, one different): the row comes back, an amount alone does not decide', str_contains($mvPg, 'data-aside="leftover-thumbs"') && !str_contains($mvPg, 'data-aside-back="leftover-thumbs"'));
 unlink("$mvPlace/paris/.gallery-cache/" . str_repeat('6f', 16) . '.jpg'); file_put_contents("$mvPlace/paris/.gallery-cache/" . str_repeat('1a', 16) . '.jpg', str_repeat('x', 2048));
 $mvCfgNow = cfg_read("$fxMv/.gallery-config.php"); unset($mvCfgNow['HEALTH_SET_ASIDE']['leftover-thumbs']); if (!$mvCfgNow['HEALTH_SET_ASIDE']) unset($mvCfgNow['HEALTH_SET_ASIDE']); file_put_contents("$fxMv/.gallery-config.php", cfg_text($mvCfgNow));
-$mvAside2 = $mvAdmin(['action' => 'health_set_aside', 'key' => 'earlier-views']); $mvBack = $mvAdmin(['action' => 'health_set_aside', 'key' => 'earlier-views', 'back' => '1']);
-check('[left behind] Bring back takes it out of the settings file again', ($mvAside2['ok'] ?? null) === true && ($mvBack['ok'] ?? null) === true && !isset(cfg_read("$fxMv/.gallery-config.php")['HEALTH_SET_ASIDE']['earlier-views']));
+$mvAside2 = $mvAdmin(['action' => 'health_set_aside', 'key' => 'leftover-thumbs']); $mvBack = $mvAdmin(['action' => 'health_set_aside', 'key' => 'leftover-thumbs', 'back' => '1']);
+check('[left behind] Bring back takes it out of the settings file again', ($mvAside2['ok'] ?? null) === true && ($mvBack['ok'] ?? null) === true && !isset((cfg_read("$fxMv/.gallery-config.php")['HEALTH_SET_ASIDE'] ?? [])['leftover-thumbs']));
 check('[left behind] a row that is not one of these (a safety row) cannot be set aside', ($mvAdmin(['action' => 'health_set_aside', 'key' => 'lock'])['ok'] ?? null) === false && ($mvAdmin(['action' => 'health_set_aside', 'key' => '../x'])['ok'] ?? null) === false && !isset(cfg_read("$fxMv/.gallery-config.php")['HEALTH_SET_ASIDE']));
 $mvCfgNow = cfg_read("$fxMv/.gallery-config.php");
-check('[left behind] Count views carries the add button and its text (hidden until something is found), and Prepare media no longer has an earlier-views line', str_contains($mvPage(), 'data-earlier') && !str_contains($mvPage(), 'media-views-add'));
+check('[left behind] Count views has no add-earlier-views button any more (it is gone with the feature), and Prepare media has no earlier-views line', !str_contains($mvPage(), 'data-earlier') && !str_contains($mvPage(), 'earlier-add') && !str_contains($mvPage(), 'media-views-add'));
 $mvAddNo = $mvAdmin(['action' => 'media_moved_remove']);
 check('[moved in] removing the leftovers without ticking the box (no other gallery shows these folders) is refused, and nothing goes', ($mvAddNo['ok'] ?? null) === false && count(array_filter($mvOld, fn ($f) => is_file("$mvPlace/paris/.gallery-cache/$f"))) === 3);
-$mvAdd = $mvAdmin(['action' => 'media_moved_views']);
-$mvAfter = $mvRows();
-check('[moved in] adding the earlier views puts them under the keys this gallery uses (Eurotrip/paris/a.jpg 10, b.jpg 5), and the old rows are exactly as they were', ($mvAdd['ok'] ?? null) === true && ($mvAdd['added'] ?? 0) === 15 && ($mvAdd['folders'] ?? 0) === 1 && ($mvAfter[hash('sha256', 'Eurotrip/paris/a.jpg')] ?? 0) === 10 && ($mvAfter[hash('sha256', 'Eurotrip/paris/b.jpg')] ?? 0) === 5 && $mvAfter[hash('sha256', 'paris/a.jpg')] === 10 && $mvAfter[hash('sha256', 'b.jpg')] === 5 && $mvAfter[hash('sha256', 'unrelated/zzz.jpg')] === 99 && !isset($mvAfter[hash('sha256', 'Eurotrip/paris/c.jpg')]));
-$mvAddTwice = $mvAdmin(['action' => 'media_moved_views']); $mvScan2 = $mvAdmin(['action' => 'media_moved']);
-check('[moved in] pressing it again adds nothing (it is remembered per folder), and the page no longer offers it', ($mvAddTwice['added'] ?? -1) === 0 && ($mvAdd['ok'] ?? null) === true && $mvRows()[hash('sha256', 'Eurotrip/paris/a.jpg')] === 10 && ($mvScan2['views'] ?? -1) === 0);
+check('[moved in] the action that added earlier views is gone: asking for it answers like any unknown action and adds nothing', ($mvAdmin(['action' => 'media_moved_views'])['added'] ?? null) === null);
 $mvRep = $mvAdmin(['action' => 'media_report']);
-$mvParis = array_values(array_filter($mvRep['rows'] ?? [], fn ($r) => ($r['folder'] ?? '') === 'Eurotrip/paris'))[0] ?? [];
-check('[moved in] the folder list marks that folder as added (the column only shows while some folder has earlier views)', ($mvRep['earlierAny'] ?? null) === true && ($mvParis['earlier']['added'] ?? null) === true);
+check('[moved in] the folder list has no Earlier views column (there is nothing to carry over)', !isset($mvRep['earlierAny']) && ($mvRep['ok'] ?? null) === true);
 // a picture this gallery made itself is not a leftover
 http_get("$baseMv/?img=" . rawurlencode('Eurotrip/paris/a.jpg') . '&size=thumb', $mvOwn);
 $mvOwnMade = array_values(array_diff(array_map('basename', glob("$mvPlace/paris/.gallery-cache/*.jpg")), array_merge($mvOld, [str_repeat('4d', 15) . '.jpg'])));
@@ -8302,16 +8282,13 @@ check('[moved in] a picture this gallery made itself in that folder is never lis
 $mvAdmin(['action' => 'health_set_aside', 'key' => 'leftover-thumbs']); $mvAsideBefore = cfg_read("$fxMv/.gallery-config.php")['HEALTH_SET_ASIDE']['leftover-thumbs'] ?? null;
 $mvRm = $mvAdmin(['action' => 'media_moved_remove', 'others_gone' => '1']);
 check('[moved in] with the box ticked the leftover pictures go (2 pictures and 1 clip) and only them: the look-alike name, the other file, this gallery\'s own picture, the photos and the notes stay', ($mvRm['ok'] ?? null) === true && ($mvRm['count'] ?? 0) === 3 && !file_exists("$mvPlace/paris/.gallery-cache/{$mvOld[0]}") && !file_exists("$mvPlace/paris/.gallery-cache/{$mvOld[2]}") && is_file("$mvPlace/paris/.gallery-cache/keep-me.txt") && is_file("$mvPlace/paris/.gallery-cache/" . str_repeat('4d', 15) . '.jpg') && is_file("$mvPlace/paris/.gallery-cache/{$mvOwnMade[0]}") && $mvSum() === $mvPhotosBefore && is_file("$fxMv/Own/.gallery-cache/" . str_repeat('5e', 16) . '.jpg'));
-check('[moved in] ...and the old view rows are still there', $mvRows()[hash('sha256', 'paris/a.jpg')] === 10);
 check('[left behind] removing the leftover pictures also takes the set-aside note about them out of the settings file', is_array($mvAsideBefore) && !isset((cfg_read("$fxMv/.gallery-config.php")['HEALTH_SET_ASIDE'] ?? [])['leftover-thumbs']));
 file_put_contents("$fxMv/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'mv-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'TRACK_VIEWS' => false, 'EXTRA_FOLDERS' => ['Eurotrip' => $mvPlace]]));
 [, , $mvH2] = http_post("$baseMv/?admin", ['access_code' => 'mv-admin-pw-1'], [], false); $mvOwn = ['Cookie: ' . extract_cookie_header($mvH2)];
 $mvCsrf = (string) extract_csrf_token(http_get("$baseMv/?admin", $mvOwn)[1]);
 $mvAdmin = fn (array $f) => json_decode(http_post("$baseMv/?admin", $f + ['csrf_token' => $mvCsrf], array_merge($mvOwn, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
-$mvOff = $mvAdmin(['action' => 'media_moved']); $mvOffAdd = $mvAdmin(['action' => 'media_moved_views']);
-check('[moved in] with counting off there are no earlier views to offer, and adding is refused', ($mvOff['track'] ?? null) === false && ($mvOff['views'] ?? -1) === 0 && ($mvOffAdd['ok'] ?? null) === false, json_encode([$mvOff, $mvOffAdd]));
 [, $mvSettingsPage] = http_get("$baseMv/?admin", $mvOwn);
-check('[moved in] the Prepare media panel has the group, the tick box and the Tidy up heading ready for the page script, and Count views has the add button', str_contains($mvSettingsPage, 'class="media-moved"') && str_contains($mvSettingsPage, 'earlier-add') && str_contains($mvSettingsPage, 'media-leftover-ok') && str_contains($mvSettingsPage, 'media-leftover-go') && str_contains($mvSettingsPage, 'class="subhead media-tidy-head"'));
+check('[moved in] the Prepare media panel has the group, the tick box and the Tidy up heading ready for the page script', str_contains($mvSettingsPage, 'class="media-moved"') && str_contains($mvSettingsPage, 'media-leftover-ok') && str_contains($mvSettingsPage, 'media-leftover-go') && str_contains($mvSettingsPage, 'class="subhead media-tidy-head"'));
 
 echo "== thumbnail clean-up and places from elsewhere on the server ==\n";
 // A place from elsewhere (EXTRA_FOLDERS, EXTRA_ROOTS) may also be shown by another gallery, which keeps its own thumbnails there under names made with
@@ -9525,8 +9502,8 @@ $rnOff = $rnSave([]);
 $rnOn = $rnSave(['Other' => $rnSrcReal]);
 check('[rename] taking the place out and adding it again under another name still finds its counts (9): the names it had are kept for its path', ($rnOff['ok'] ?? null) === true && ($rnOn['ok'] ?? null) === true && $rnTrack('Other') === 9);
 $rnDb = new PDO('sqlite:' . "$fxRnSrc/Paris/.gallery-stats.sqlite");
-$rnRows = $rnDb->query('SELECT COUNT(*), SUM(views) FROM photo_views_h')->fetch(PDO::FETCH_NUM);
-check('[rename] nothing was copied or rewritten: one row per name the place had (Eurotrip, eurotrip, Eurotrip2026, Other), and together they hold exactly the nine views', (int) $rnRows[0] === 4 && (int) $rnRows[1] === 9, json_encode($rnRows));
+$rnRows = $rnDb->query('SELECT COUNT(*), SUM(views) FROM photo_views_k')->fetch(PDO::FETCH_NUM);
+check('[rename] nothing was copied or rewritten, and no row was added for a new name: the views are kept under the file name inside its folder, so under every name the place had there is one row, holding exactly the nine views', (int) $rnRows[0] === 1 && (int) $rnRows[1] === 9, json_encode($rnRows));
 check('[rename] the photo is byte for byte as it was made', md5_file("$fxRnSrc/Paris/a.jpg") === $rnMd5);
 $rnBad = $rnSave(['Good' => $rnSrcReal, 'bad/name' => $rnSrcReal], ['path' => $rnSrcReal, 'label' => 'Good']);
 check('[rename] a refused edit changes nothing (the names are not recorded from a save that failed)', ($rnBad['ok'] ?? null) === false && (cfg_read($rnCfgPath)['EXTRA_FOLDERS'] ?? null) === ['Other' => $rnSrcReal]);
@@ -9742,7 +9719,8 @@ check('[bare file] a wrong code with the suffix is the same "not valid" page as 
 foreach ([1, 2] as $i) http_get("$baseBf/?$cB");
 http_get("$baseBf/?$cB", ['User-Agent: facebookexternalhit/1.1']);
 $bfDb = new PDO('sqlite:' . "$fxBf/shelf/.gallery-stats.sqlite");
-$bfViews = (int) $bfDb->query("SELECT views FROM photo_views_h WHERE key = '" . hash('sha256', 'shelf/b.jpg') . "'")->fetchColumn();
+$bfKeyRaw = is_file("$fxBf/shelf/.gallery-stats-key.php") ? (string) file_get_contents("$fxBf/shelf/.gallery-stats-key.php") : '';
+$bfViews = (int) $bfDb->query("SELECT views FROM photo_views_k WHERE key = '" . hash_hmac('sha256', 'b.jpg', preg_match('/"key":\s*"([0-9a-f]{64})"/', $bfKeyRaw, $bfKeyM) ? hex2bin($bfKeyM[1]) : '') . "'")->fetchColumn();
 $bfLogRec = vl_log($fxBf, 'ffffffffff');
 $bfOpened = count(array_filter($bfLogRec['events'] ?? [], fn ($e) => ($e['k'] ?? '') === 'opened' && ($e['f'] ?? '') === 'shelf/b.jpg'));
 $bfEntry = array_values($bfLogRec['visitors'] ?? [])[0]['entry'] ?? [];
@@ -10101,8 +10079,8 @@ for ($i = 0; $i < 6; $i++) http_post("$baseLk3/?admin", ['access_code' => 'wrong
 [$lkOwnS, $lkOwnB] = http_get("$baseLk3/?admin", $lkOwn3);
 $lkAct = json_decode(http_post("$baseLk3/?admin", ['action' => 'visits_seen', 'csrf_token' => $lkCsrf3], array_merge($lkOwn3, ['X-Requested-With: gallery-fetch']))[1], true);
 [$lkGuessS, $lkGuessB] = http_post("$baseLk3/?admin", ['access_code' => 'lk-admin-pw-3'], [], false);
-check('[lockouts] a lockout started by someone else at the same address does not hold back a session that is already signed in: it still opens the admin and still saves, while the stranger gets the lockout page', $lkAnS === 429 && str_contains($lkAnB, 'Sign-in paused') && $lkOwnS === 200 && str_contains($lkOwnB, 'Gallery Admin') && !str_contains($lkOwnB, 'Sign-in paused') && ($lkAct['ok'] ?? false) === true);
-check('[lockouts] ...and the stranger is still held back from guessing: even the right code, typed while the lockout lasts, is turned away', $lkGuessS === 429 && str_contains($lkGuessB, 'Sign-in paused'));
+check('[lockouts] a lockout started by someone else at the same address does not hold back a session that is already signed in: it still opens the admin and still saves, while the stranger gets the lockout page', $lkAnS === 429 && str_contains($lkAnB, 'Out of focus for a moment') && $lkOwnS === 200 && str_contains($lkOwnB, 'Gallery Admin') && !str_contains($lkOwnB, 'Sign-in paused') && ($lkAct['ok'] ?? false) === true);
+check('[lockouts] ...and the stranger is still held back from guessing: even the right code, typed while the lockout lasts, is turned away', $lkGuessS === 429 && str_contains($lkGuessB, 'Out of focus for a moment'));
 
 /* --------------------------------------------------------------------- */
 
@@ -11719,7 +11697,7 @@ if ($sMy !== '') {
     [$sOld] = $sIn($sA3['both']);
     check('[admin sessions] a session last used five hours ago is over, even though its token is good', !$sOld);
     [, $sLoginPg] = http_get("$baseS/?admin", ["Cookie: {$sA3['both']}", $sUA('1')]);
-    check('[admin sessions] ...and the page asks for the access code', str_contains($sLoginPg, 'name="access_code"'));
+    check('[admin sessions] ...and the page asks for the access code', str_contains($sLoginPg, 'name="lens"'));
     $sA4 = $sLogin('1');
     check('[admin sessions] signing in again works', $sIn($sA4['both'])[0]);
 }
@@ -12692,6 +12670,259 @@ echo "== audit group 14: GPS zeros, the build's check, the Markdown underscore =
     $mport = find_free_port(); start_server($md, $mport);
     $t0 = microtime(true); $mpage = http_get("http://127.0.0.1:$mport/?folder=Alpha")[1]; $took = microtime(true) - $t0;
     check('[markdown] a note with a 90 KB line of "_a _a _a" no longer costs seconds on every page that shows it (it took 2.4 s), and ordinary emphasis next to it still works', $took < 1.0 && str_contains($mpage, '<em>this</em>') && str_contains($mpage, '<em>fine</em>') && str_contains($mpage, '<strong>bold</strong>'), json_encode([$took, strlen($mpage)]));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 15, part 1: dot files are not photos (G4), a password longer than bcrypt can use is refused (C6)
+echo "== audit group 15: dot files, long passwords ==\n";
+{
+    $g15Site = function ($label, array $cfg = [], $prep = null) use ($indexSrc) {
+        $dir = new_fixture_dir($label);
+        mkdir("$dir/Alpha", 0777, true);
+        make_jpeg("$dir/Alpha/b.jpg", 40, 30, 20, 90, 160);
+        make_jpeg("$dir/a.jpg", 40, 30, 120, 90, 60);
+        if ($prep) $prep($dir);
+        file_put_contents("$dir/.gallery-config.php", cfg_text($cfg + ['ADMIN_PASSWORD' => 'g15-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$dir/index.php");
+        $port = find_free_port(); start_server($dir, $port);
+        $s = ['dir' => $dir, 'port' => $port, 'base' => "http://127.0.0.1:$port"];
+        [, , $h] = http_post($s['base'] . '/?admin', ['access_code' => 'g15-admin-pw-1'], [], false);
+        $s['own'] = ['Cookie: ' . extract_cookie_header($h)];
+        return $s;
+    };
+    $dots = function ($dir) {
+        file_put_contents("$dir/._a.jpg", random_bytes(4096));            // what macOS leaves beside a.jpg
+        make_jpeg("$dir/.hidden.jpg", 40, 30, 200, 10, 10);                // a real picture, hidden the Unix way
+        file_put_contents("$dir/Alpha/._b.jpg", random_bytes(4096));
+        make_jpeg("$dir/Alpha/.c.jpg", 40, 30, 10, 200, 10);
+        file_put_contents("$dir/.DS_Store", 'x'); file_put_contents("$dir/Alpha/.htaccess", 'x');   // (not pictures: never counted)
+    };
+
+    // ---- G4 ----
+    $D = $g15Site('g15-dots', [], $dots);
+    $root = http_get($D['base'] . '/')[1]; $alpha = http_get($D['base'] . '/?folder=Alpha')[1];
+    check('[dot files] a file whose name starts with a dot (macOS ._a.jpg, a hidden .hidden.jpg) is not a photo: not on the front page, not in its folder, and the real photos still are', !str_contains($root, '._a.jpg') && !str_contains($root, '.hidden.jpg') && !str_contains($alpha, '._b.jpg') && !str_contains($alpha, '.c.jpg') && str_contains($root, 'a.jpg') && str_contains($alpha, 'b.jpg'), json_encode([substr_count($root, '._a.jpg'), substr_count($root, '.hidden.jpg'), substr_count($alpha, '._b.jpg'), substr_count($alpha, '.c.jpg')]));
+    $codes = [];
+    foreach (['._a.jpg', '.hidden.jpg', 'Alpha/._b.jpg', 'Alpha/.c.jpg'] as $f) $codes[$f] = [http_get($D['base'] . '/?img=' . rawurlencode($f) . '&size=tile')[0], http_get($D['base'] . '/?img=' . str_replace('%2F', '/', rawurlencode($f)))[0]];
+    $okImg = http_get($D['base'] . '/?img=a.jpg&size=tile')[0];
+    check('[dot files] such a file is not served either (it used to be: .hidden.jpg was public), while a photo beside it still is', array_unique(array_merge(...array_values($codes))) === [404] && $okImg === 200, json_encode([$codes, $okImg]));
+    $health = http_get($D['base'] . '/?admin&health=1', $D['own'])[1];
+    check('[dot files] Health says, quietly, that 4 files starting with a dot are left out (and does not count .DS_Store or .htaccess, which are no pictures)', str_contains($health, '4 files starting with a dot are left out') && !str_contains($health, '6 files starting with a dot'), json_encode(preg_match('/[^<>]{0,60}starting with a dot[^<>]{0,80}/', $health, $mm) ? $mm[0] : 'no row'));
+    $clean = $g15Site('g15-nodots');
+    check('[dot files] with no dot file there is no such row', !str_contains(http_get($clean['base'] . '/?admin&health=1', $clean['own'])[1], 'starting with a dot'));
+    $F = $g15Site('g15-dots-flat', ['AUTO_GROUP_BY_FOLDER' => false], $dots);
+    $flat = http_get($F['base'] . '/')[1];
+    check('[dot files] the same with Show subfolders off (the flat scan): not listed, not served', !str_contains($flat, '._a.jpg') && !str_contains($flat, '.hidden.jpg') && http_get($F['base'] . '/?img=.hidden.jpg&size=tile')[0] === 404 && http_get($F['base'] . '/?img=a.jpg&size=tile')[0] === 200);
+
+    // ---- C6 ----
+    $pw72 = 'a1' . str_repeat('x', 70); $pw73 = $pw72 . 'y';
+    $P = $g15Site('g15-pw');
+    $page = http_get($P['base'] . '/?admin&classic=1', $P['own'])[1];
+    $set = fn (array $o) => user_submit($P['base'] . '/?admin', $page, 'value="save_site_settings"', $o + ['pw_admin_current' => 'g15-admin-pw-1'], $P['own'])[1];
+    $r73 = html_entity_decode($set(['pw_admin' => $pw73, 'pw_admin2' => $pw73]), ENT_QUOTES);
+    check('[password length] an admin password of 73 bytes is refused, the message says how long it is and that 72 is the most (a letter after byte 72 never counted)', str_contains($r73, 'Nothing was saved') && str_contains($r73, 'is 73 bytes long') && str_contains($r73, 'most the gallery can use is 72'), json_encode(preg_match('/Nothing was saved[^<]{0,200}/', $r73, $mm) ? $mm[0] : substr(strip_tags($r73), 0, 200)));
+    $cyr = 'a1' . str_repeat("\xD0\x96", 36);   // 2 + 72 bytes = 74 bytes, 38 characters
+    $rC = html_entity_decode($set(['pw_admin' => $cyr, 'pw_admin2' => $cyr]), ENT_QUOTES);
+    check('[password length] the limit is in bytes: 38 characters of a two-byte alphabet (74 bytes) are refused too, and the message says other alphabets fit fewer', str_contains($rC, 'is 74 bytes long') && str_contains($rC, 'accented'), json_encode(preg_match('/Nothing was saved[^<]{0,200}/', $rC, $mm) ? $mm[0] : substr(strip_tags($rC), 0, 200)));
+    $after = http_post($P['base'] . '/?admin', ['access_code' => 'g15-admin-pw-1'], [], false)[0];
+    check('[password length] a refused change leaves the old password in force', $after === 302 || $after === 303, (string) $after);
+    $r72 = html_entity_decode($set(['pw_admin' => $pw72, 'pw_admin2' => $pw72]), ENT_QUOTES);
+    $in72 = http_post($P['base'] . '/?admin', ['access_code' => $pw72], [], false)[0];
+    check('[password length] exactly 72 bytes is accepted and signs in', !str_contains($r72, 'bytes long') && ($in72 === 302 || $in72 === 303), json_encode([$in72, substr(strip_tags($r72), 0, 160)]));
+    $own2 = $P['own'];   // (the password change ended the old browser's token only if the form says so; sign in fresh)
+    [, , $h2] = http_post($P['base'] . '/?admin', ['access_code' => $pw72], [], false); $own2 = ['Cookie: ' . extract_cookie_header($h2)];
+    $page2 = http_get($P['base'] . '/?admin&classic=1', $own2)[1];
+    $rV = html_entity_decode(user_submit($P['base'] . '/?admin', $page2, 'value="save_site_settings"', ['pw_private' => $pw73, 'pw_private2' => $pw73, 'pw_admin_current' => $pw72], $own2)[1], ENT_QUOTES);
+    check('[password length] the private-view password has the same limit (the same bcrypt, the same silent cut)', str_contains($rV, 'Nothing was saved') && str_contains($rV, 'is 73 bytes long'), json_encode(preg_match('/Nothing was saved[^<]{0,200}/', $rV, $mm) ? $mm[0] : substr(strip_tags($rV), 0, 200)));
+    // first-run setup
+    $U = new_fixture_dir('g15-setup'); make_jpeg("$U/a.jpg", 40, 30, 1, 2, 3); copy($indexSrc, "$U/index.php");
+    $uport = find_free_port(); start_server($U, $uport); $ub = "http://127.0.0.1:$uport";
+    http_get("$ub/?admin");
+    $rS = html_entity_decode(http_post("$ub/?admin", ['setup_code' => setup_code_for_tests($U), 'setup_password' => $pw73, 'setup_password2' => $pw73])[1], ENT_QUOTES);
+    check('[password length] first-run setup refuses a 73-byte password the same way, and nothing is claimed (no settings file yet)', str_contains($rS, 'is 73 bytes long') && !is_file("$U/.gallery-config.php"), json_encode([substr(strip_tags($rS), 0, 200), is_file("$U/.gallery-config.php")]));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 15, part 2: the owner's and the private-view visitor's gallery pages refuse to be framed by another site (C-1), and the admin's
+// "classic" preference cookie is kept to the gallery's own folder like every other cookie (H-13)
+echo "== audit group 15: framing, the classic cookie ==\n";
+{
+    $hdr = function (array $h, $name) { foreach ($h as $l) if (stripos($l, "$name:") === 0) return trim(substr($l, strlen($name) + 1)); return null; };
+    $dir = new_fixture_dir('g15-frame');
+    mkdir("$dir/Alpha", 0777, true); make_jpeg("$dir/Alpha/b.jpg", 40, 30, 20, 90, 160); make_jpeg("$dir/a.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$dir/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g15-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'g15-view-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$dir/index.php");
+    $port = find_free_port(); start_server($dir, $port); $base = "http://127.0.0.1:$port";
+    [, , $ha] = http_post("$base/?admin", ['access_code' => 'g15-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($ha)];
+    [, , $hv] = http_post("$base/?reveal", ['access_code' => 'g15-view-pw-1'], [], false); $viewer = ['Cookie: ' . extract_cookie_header($hv)];
+    $ownerPages = []; $viewerPages = []; $strangerPages = [];
+    foreach (['/', '/?folder=Alpha'] as $u) {
+        $ownerPages[$u] = http_get($base . $u, $own)[2]; $viewerPages[$u] = http_get($base . $u, $viewer)[2]; $strangerPages[$u] = http_get($base . $u)[2];
+    }
+    $isFramed = fn (array $h) => $hdr($h, 'X-Frame-Options') === 'SAMEORIGIN' && str_contains((string) $hdr($h, 'Content-Security-Policy'), "frame-ancestors 'self'");
+    check('[framing] the gallery page as the owner sees it (his tools, his token) can only be framed by its own site: X-Frame-Options SAMEORIGIN and frame-ancestors \'self\' (the shell still frames it)', $isFramed($ownerPages['/']) && $isFramed($ownerPages['/?folder=Alpha']), json_encode([$hdr($ownerPages['/'], 'X-Frame-Options'), $hdr($ownerPages['/'], 'Content-Security-Policy')]));
+    check('[framing] and as a private-view visitor sees it (private photos in it)', $isFramed($viewerPages['/']) && $isFramed($viewerPages['/?folder=Alpha']), json_encode([$hdr($viewerPages['/'], 'X-Frame-Options'), $hdr($viewerPages['/'], 'Content-Security-Policy')]));
+    check('[framing] the public page, as a stranger sees it, is still frameable (embedding it is wanted one day: ROADMAP) and says nothing about frames', $hdr($strangerPages['/'], 'X-Frame-Options') === null && $hdr($strangerPages['/'], 'Content-Security-Policy') === null && $hdr($strangerPages['/?folder=Alpha'], 'X-Frame-Options') === null, json_encode([$hdr($strangerPages['/'], 'X-Frame-Options'), $hdr($strangerPages['/'], 'Content-Security-Policy')]));
+    $shellFrame = http_get("$base/?inframe=1", $own)[2];
+    check('[framing] the shell\'s own frame of the owner\'s gallery page (inframe=1) is the same origin, so it is allowed', $isFramed($shellFrame));
+
+    // H-13: a gallery in a folder keeps this cookie to the folder
+    $parent = new_fixture_dir('g15-sub'); mkdir("$parent/kb", 0777, true); make_jpeg("$parent/kb/a.jpg", 40, 30, 1, 2, 3);
+    file_put_contents("$parent/kb/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g15-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false])); copy($indexSrc, "$parent/kb/index.php");
+    $sport = find_free_port(); start_server($parent, $sport); $sb = "http://127.0.0.1:$sport/kb";
+    [, , $hs] = http_post("$sb/?admin", ['access_code' => 'g15-admin-pw-1'], [], false); $sown = ['Cookie: ' . extract_cookie_header($hs)];
+    $sub = http_get("$sb/?admin&classic=1", $sown)[1]; $root = http_get("$base/?admin&classic=1", $own)[1];
+    check('[classic cookie] the admin page for a gallery in /kb/ keeps the "classic" preference to /kb (it was kept to the whole domain, shared with every other site and gallery on it)', str_contains($sub, "galleryClassic=1; path=' + \"/kb\" + '; max-age") && !str_contains($sub, "path=' + \"/\" + '"), json_encode(preg_match("/galleryClassic=1; path=[^;]*;/", $sub, $mm) ? $mm[0] : 'not found'));
+    check('[classic cookie] and for a gallery at the top of its site it is the whole site, as before', str_contains($root, "galleryClassic=1; path=' + \"/\" + '; max-age"));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 15, part 3: the sign-in page (H-22), addresses built from the page's own address (E2-4), the notes Delete question (E2-obs), the
+// private-folder warning's data (S1)
+echo "== audit group 15: the sign-in page, addresses, the Delete question ==\n";
+{
+    $dir = new_fixture_dir('g15-signin');
+    mkdir("$dir/Alpha", 0777, true); make_jpeg("$dir/Alpha/b.jpg", 40, 30, 20, 90, 160); make_jpeg("$dir/a.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$dir/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['restriction' => 'private']));
+    file_put_contents("$dir/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g15-admin-pw-1', 'PRIVATE_VIEW_PASSWORD' => 'g15-view-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$dir/index.php");
+    $port = find_free_port(); start_server($dir, $port); $base = "http://127.0.0.1:$port";
+    $forms = ['?admin' => http_get("$base/?admin")[1], '?reveal' => http_get("$base/?reveal")[1]];
+    foreach ($forms as $label => $html) {
+        $visible = strip_tags(preg_replace('#<(script|style)\b.*?</\1>#s', '', $html));
+        check("[sign-in page] $label: the box is called lens (nothing like password or code), is not type=password, has no label, heading, button or aria- name, and every manager is still told to leave it alone", str_contains($html, '<input type="text" class="lens" id="lens" name="lens"') && !str_contains($html, 'type="password"') && !str_contains($html, 'access_code') && !preg_match('/<(label|h[1-6]|button)\b/i', $html) && !preg_match('/aria-(label|labelledby|describedby|invalid)="[^"]*"[^>]*id="lens"|id="lens"[^>]*aria-/', $html) && str_contains($html, 'data-lpignore="true"') && str_contains($html, 'data-1p-ignore="true"') && str_contains($html, 'autocomplete="off"'));
+        $frontTitle = preg_match('#<title>(.*?) — Gallery</title>#s', http_get("$base/")[1], $tm) ? html_entity_decode($tm[1], ENT_QUOTES) : '(none)';
+        $loginTitle = preg_match('#<title>(.*?)</title>#s', $html, $tl) ? html_entity_decode($tl[1], ENT_QUOTES) : '(none)';
+        check("[sign-in page] $label: the picture above the box is the gallery's own icon (the frame with a sun and mountains), 160 px, still the way back; the page title is the gallery's own, as its front page has it", str_contains($html, '<a class="mark" id="goback"') && str_contains($html, '<circle cx="9" cy="10" r="1.6"/>') && !str_contains($html, '<rect x="5" y="11" width="14" height="9.5"') && str_contains($html, 'width:160px') && $loginTitle === $frontTitle && $loginTitle !== 'Access' && $loginTitle !== '(none)', json_encode([$loginTitle, $frontTitle]));
+    }
+    [$s1, , $h1] = http_post("$base/?reveal", ['lens' => 'g15-view-pw-1'], [], false);
+    [$s2] = http_post("$base/?reveal", ['access_code' => 'g15-view-pw-1'], [], false);
+    [$s3] = http_post("$base/?reveal", ['login_password' => 'g15-view-pw-1'], [], false);
+    [$s4, , $h4] = http_post("$base/?admin", ['lens' => 'g15-admin-pw-1'], [], false); $own1 = ['Cookie: ' . extract_cookie_header($h4)];
+    check('[sign-in page] the new name signs in, and the two older names still do (scripts, bookmarks, a page that was already open)', $s1 === 302 && $s2 === 302 && $s3 === 302 && $s4 === 303, json_encode([$s1, $s2, $s3, $s4]));
+    [$ws, $wb] = http_post("$base/?reveal", ['lens' => 'wrong-one-1']);
+    [$as, $ab] = http_post("$base/?admin", ['lens' => 'wrong-one-2']);
+    $says = fn ($b) => trim(strip_tags(preg_replace('#<(script|style)\b.*?</\1>#s', '', $b)));
+    check('[sign-in page] a wrong entry stays on the same page and says only "Out of focus." (no "code", no "password", no alert role, a neutral class), on both doors', $ws === 200 && $as === 200 && str_contains($says($wb), 'Out of focus.') && str_contains($says($ab), 'Out of focus.') && !preg_match('/code|password|wrong|right/i', preg_replace('/^.*?Out of focus\./s', '', $says($wb)) . $says($ab)) && !str_contains($wb . $ab, 'role="alert"') && str_contains($wb, 'class="miss"'), json_encode([$says($wb), $says($ab)]));
+    // five misses pause the address: the pause page speaks in the same style
+    for ($i = 0; $i < 6; $i++) [$ls, $lb] = http_post("$base/?admin", ['lens' => "wrong-$i"]);
+    check('[sign-in page] the pause after five misses has the same style (it used to say "wrong access codes"), still counts the seconds and says to wait', $ls === 429 && str_contains($lb, 'Out of focus for a moment') && !preg_match('/access code|wrong code|password/i', strip_tags(preg_replace('#<(script|style)\b.*?</\1>#s', '', $lb))) && str_contains($lb, 'lock-secs'), json_encode([$ls, $says($lb)]));
+
+    // E2-4: no page builds an address from the path (a path that starts with // is another site's name)
+    $dir2 = new_fixture_dir('g15-paths'); mkdir("$dir2/Alpha", 0777, true); make_jpeg("$dir2/Alpha/b.jpg", 40, 30, 20, 90, 160); make_jpeg("$dir2/a.jpg", 40, 30, 120, 90, 60);
+    file_put_contents("$dir2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g15-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false, 'ENABLE_SHARE_LINKS' => true])); copy($indexSrc, "$dir2/index.php");
+    $p2 = find_free_port(); start_server($dir2, $p2); $b2 = "http://127.0.0.1:$p2";
+    [, , $ho] = http_post("$b2/?admin", ['access_code' => 'g15-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($ho)];
+    $pages = ['admin' => http_get("$b2/?admin&classic=1", $own)[1], 'shell' => http_get("$b2/?admin&shell=1", $own)[1], 'owner gallery' => http_get("$b2/", $own)[1], 'owner folder' => http_get("$b2/?folder=Alpha", $own)[1], 'stranger' => http_get("$b2/")[1]];
+    $bad = [];
+    foreach ($pages as $k => $html) if (preg_match('/fetch\(\s*location\.pathname|location\.(replace|assign)\(\s*location\.pathname|location\.href\s*=\s*location\.pathname|from:\s*location\.pathname/', $html)) $bad[] = $k;
+    check('[addresses] no page the owner or a stranger gets makes a request or a redirect from location.pathname (a page served under //other.example/ would have followed it to that site: the Menu would insert its HTML and three admin posts would send it the sign-in token)', !$bad, json_encode($bad));
+    $sh = http_get("$b2/?admin&shell=1", $own)[1] . http_get("$b2/?inframe=1", $own)[1];
+    check('[addresses] the phone Menu\'s own refresh asks for location.href', !preg_match('/fetch\(location\.pathname/', $sh) && str_contains(http_get("$b2/", $own)[1] . $sh, 'fetch(location.href,'));
+    // the owner's page really answers at such a path on PHP's server; what it sends back no longer points away
+    $odd = @file_get_contents("http://127.0.0.1:$p2//evil.example/?admin&classic=1", false, stream_context_create(['http' => ['header' => implode("\r\n", $own), 'ignore_errors' => true, 'timeout' => 5]]));
+    check('[addresses] asked at //evil.example/, the admin page carries nothing that builds an address from that path', is_string($odd) && !preg_match('/location\.pathname/', preg_replace('#galleryMenuFolders\|"\+location\.pathname\.replace#', '', $odd)) || (is_string($odd) && !preg_match('/(fetch|replace)\([^)]{0,40}location\.pathname/', $odd)), is_string($odd) ? strlen($odd) : 'no answer');
+
+    // E2-obs: a notes file with a line break in its name
+    file_put_contents("$dir2/Alpha/odd\nname.md", "{gallery}\nhello\n"); file_put_contents("$dir2/Alpha/plain.md", "hello\n");
+    $np = http_get("$b2/?admin&classic=1&folder=Alpha", $own)[1]; $conf = [];
+    preg_match_all('/onsubmit="return confirm\(([^"]*)\);"/', $np, $mm); foreach ($mm[1] as $c) $conf[] = html_entity_decode($c, ENT_QUOTES);
+    $oddOne = array_values(array_filter($conf, fn ($c) => str_contains($c, 'odd')));
+    check('[delete question] a notes file whose name has a line break in it still asks before Delete (the line break used to end the script string, the question never came, and Delete went ahead)', count($oddOne) === 1 && !str_contains($oddOne[0], "\n") && str_contains($oddOne[0], '\\n') && is_array(json_decode($oddOne[0], true)) === false && json_decode($oddOne[0]) !== null, json_encode([$conf]));
+
+    // S1: the admin page says whether a private or Not listed folder exists, for the browser's check of the tidy-folder rule
+    $adm = http_get("$base/?admin&classic=1", $own1)[1];
+    $adm2 = http_get("$b2/?admin&classic=1", $own)[1];
+    check('[tidy rule] the admin page tells its script whether a private folder exists (1 here, 0 in a gallery with none), so the missing rule is only an alarm when something private is there', str_contains($adm, 'data-any-hidden-folder="1"') && str_contains($adm2, 'data-any-hidden-folder="0"'), json_encode([preg_match('/data-any-hidden-folder="[01]"/', $adm, $q1) ? $q1[0] : null, preg_match('/data-any-hidden-folder="[01]"/', $adm2, $q2) ? $q2[0] : null]));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 15, part 4 (S4): a photo's view count is kept under a keyed hash of its file name inside its own folder, the key is a guarded file
+// of that folder's own, the counts follow the folder wherever it is shown, and the older unkeyed counts are dropped once
+echo "== audit group 15: view counts under a key of the folder's own ==\n";
+{
+    $mk = function ($label, array $cfg = [], $prep = null) use ($indexSrc) {
+        $dir = new_fixture_dir($label);
+        mkdir("$dir/Alpha", 0777, true); make_jpeg("$dir/Alpha/b.jpg", 40, 30, 20, 90, 160); make_jpeg("$dir/Alpha/c.jpg", 40, 30, 90, 20, 160);
+        if ($prep) $prep($dir);
+        file_put_contents("$dir/.gallery-config.php", cfg_text($cfg + ['ADMIN_PASSWORD' => 'g15-admin-pw-1', 'TRACK_VIEWS' => true, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$dir/index.php");
+        $port = find_free_port(); start_server($dir, $port);
+        $s = ['dir' => $dir, 'base' => "http://127.0.0.1:$port"];
+        [, , $h] = http_post($s['base'] . '/?admin', ['access_code' => 'g15-admin-pw-1'], [], false); $s['own'] = ['Cookie: ' . extract_cookie_header($h)];
+        return $s;
+    };
+    $track = fn ($s, $path) => json_decode(http_get($s['base'] . '/?track=' . rawurlencode($path))[1], true) ?: [];
+    $keyHex = fn ($folder) => (function () use ($folder) { $r = is_file("$folder/.gallery-stats-key.php") ? (string) file_get_contents("$folder/.gallery-stats-key.php") : ''; return preg_match('/"key":\s*"([0-9a-f]{64})"/', $r, $m) ? $m[1] : null; })();
+    $rows = fn ($folder) => (function () use ($folder) { $o = []; try { $p = new PDO('sqlite:' . "$folder/.gallery-stats.sqlite"); foreach ($p->query('SELECT key, views FROM photo_views_k') as $r) $o[$r['key']] = (int) $r['views']; } catch (Throwable $e) { return null; } return $o; })();
+    $healthText = fn ($s) => html_entity_decode((string) (json_decode(http_post($s['base'] . '/?admin', ['csrf_token' => extract_csrf_token(http_get($s['base'] . '/?admin&classic=1', $s['own'])[1]), 'action' => 'health_panel', 'recheck' => '1'], array_merge($s['own'], ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? ''), ENT_QUOTES);
+
+    $A = $mk('g15-views');
+    $seq = []; foreach ([1, 2, 3] as $_) $seq[] = $track($A, 'Alpha/b.jpg')['photoViews'] ?? null;
+    check('[view counts] a photo\'s views are counted as before (1, 2, 3 on the answer to each beacon)', $seq === [1, 2, 3], json_encode($seq));
+    $kf = "{$A['dir']}/Alpha/.gallery-stats-key.php";
+    $kraw = is_file($kf) ? (string) file_get_contents($kf) : '';
+    [$ks, $kb] = http_get($A['base'] . '/Alpha/.gallery-stats-key.php');
+    check('[view counts] the folder has a key of its own: a guarded file with 32 random bytes, answered with 404 and nothing else when fetched, whatever the server\'s rules', strncmp($kraw, data_file_guard_line_for_tests(), strlen(data_file_guard_line_for_tests())) === 0 && $keyHex("{$A['dir']}/Alpha") !== null && $ks === 404 && $kb === '', json_encode([substr($kraw, 0, 60), $ks]));
+    $kk = $keyHex("{$A['dir']}/Alpha"); $want = $kk !== null ? hash_hmac('sha256', 'b.jpg', hex2bin($kk)) : '';
+    $r1 = $rows("{$A['dir']}/Alpha");
+    check('[view counts] the count is kept under the HMAC of the file name inside its folder (b.jpg, not Alpha/b.jpg), in a new table; the older table is not there', $r1 === [$want => 3], json_encode([$r1, $want]));
+    $blob = ''; foreach (glob("{$A['dir']}/Alpha/.gallery-stats.sqlite*") as $f) $blob .= (string) file_get_contents($f);
+    check('[view counts] the database file holds neither the name nor a plain hash of it or of its path (anyone who could fetch the file could test a guessed path against such a hash)', !str_contains($blob, 'b.jpg') && !str_contains($blob, hash('sha256', 'Alpha/b.jpg')) && !str_contains($blob, hash('sha256', 'b.jpg')) && !str_contains($blob, 'photo_views_h'), strlen($blob));
+    http_get($A['base'] . '/'); $root = $rows($A['dir']); $rootKey = $keyHex($A['dir']);
+    check('[view counts] the gallery root has its own key too (its page-view total is not under it, but the database is bound to one)', $rootKey !== null && $rootKey !== $kk);
+
+    // the folder moves, with its dot files, to another place in another gallery: the counts come with it
+    $B = $mk('g15-views2', [], function ($d) { mkdir("$d/Trip/Deep", 0777, true); });
+    exec('cp -a ' . escapeshellarg("{$A['dir']}/Alpha") . ' ' . escapeshellarg("{$B['dir']}/Trip/Deep/Alpha2"));
+    $moved = $track($B, 'Trip/Deep/Alpha2/b.jpg')['photoViews'] ?? null;
+    check('[view counts] a folder copied with its dot files into another gallery, deeper and under another name, keeps its counts (the next view is the 4th), with no button to press', $moved === 4, json_encode($moved));
+    $A2 = $mk('g15-views3'); $t1 = $track($A2, 'Alpha/b.jpg')['photoViews'] ?? null; rename("{$A2['dir']}/Alpha", "{$A2['dir']}/Renamed"); $t2 = $track($A2, 'Renamed/b.jpg')['photoViews'] ?? null;
+    check('[view counts] renaming a folder does not start its counts again', $t1 === 1 && $t2 === 2, json_encode([$t1, $t2]));
+
+    // a key that is gone, or another one, is noticed: nothing is counted, nothing is made anew behind the counts, Health says what to do
+    $fd = "{$B['dir']}/Trip/Deep/Alpha2"; $keep = (string) file_get_contents("$fd/.gallery-stats-key.php"); $before = $rows($fd);
+    unlink("$fd/.gallery-stats-key.php");
+    $gone = $track($B, 'Trip/Deep/Alpha2/b.jpg'); $hMiss = $healthText($B);
+    check('[view counts] with the key file gone nothing is counted, no new key is made behind the counts, and the counts in the database are untouched', ($gone['ok'] ?? null) !== true && !is_file("$fd/.gallery-stats-key.php") && $rows($fd) === $before, json_encode([$gone, is_file("$fd/.gallery-stats-key.php")]));
+    check('[view counts] Health names the folder and what to do (put the key file back, or delete the database to count afresh)', str_contains($hMiss, "View counts can't be read in 1 folder") && str_contains($hMiss, 'Trip/Deep/Alpha2') && str_contains($hMiss, 'key file (.gallery-stats-key.php) is missing') && str_contains($hMiss, 'Put the key file back'), json_encode(preg_match('/View counts can[^<]{0,300}/', $hMiss, $mm) ? $mm[0] : 'no row'));
+    file_put_contents("$fd/.gallery-stats-key.php", data_file_guard_line_for_tests() . json_encode(['key' => str_repeat('ab', 32)]));
+    $other = $track($B, 'Trip/Deep/Alpha2/b.jpg'); $hOther = $healthText($B);
+    check('[view counts] a different key in its place is noticed too (nothing counted, Health says it is not the one the counts were made with)', ($other['ok'] ?? null) !== true && $rows($fd) === $before && str_contains($hOther, 'is not the one the counts were made with'), json_encode([$other]));
+    file_put_contents("$fd/.gallery-stats-key.php", $keep);
+    $back = $track($B, 'Trip/Deep/Alpha2/b.jpg')['photoViews'] ?? null;
+    check('[view counts] with the right key back, counting carries on from where it was (the 5th)', $back === 5 && !str_contains($healthText($B), "View counts can't be read"), json_encode($back));
+
+    // a database an older version made: its table (keyed by an unkeyed hash of the path) is dropped once, the page-view total stays, and no old hash lingers
+    $C = $mk('g15-views4', [], function ($d) {
+        $p = new PDO('sqlite:' . "$d/Alpha/.gallery-stats.sqlite"); $p->exec('CREATE TABLE stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)'); $p->exec('CREATE TABLE photo_views_h (key TEXT PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0)');
+        $ins = $p->prepare('INSERT INTO photo_views_h(key, views) VALUES(?, ?)'); foreach (['Alpha/b.jpg' => 10, 'Alpha/c.jpg' => 6] as $k => $v) $ins->execute([hash('sha256', $k), $v]);
+        $p->exec("INSERT INTO stats(key, value) VALUES('pageviews', 7)"); $p = null;
+    });
+    $c1 = $track($C, 'Alpha/b.jpg')['photoViews'] ?? null;
+    $blobC = ''; foreach (glob("{$C['dir']}/Alpha/.gallery-stats.sqlite*") as $f) $blobC .= (string) file_get_contents($f);
+    $pdoC = new PDO('sqlite:' . "{$C['dir']}/Alpha/.gallery-stats.sqlite"); $tables = $pdoC->query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")->fetchAll(PDO::FETCH_COLUMN); $pv = (int) $pdoC->query("SELECT value FROM stats WHERE key='pageviews'")->fetchColumn();
+    check('[view counts] a database made by the version before has its old table dropped once (the counts start again at 1, under the folder\'s key), keeps its page-view total, and no old hash is left in the file', $c1 === 1 && in_array('photo_views_k', $tables, true) && !in_array('photo_views_h', $tables, true) && $pv === 7 && !str_contains($blobC, hash('sha256', 'Alpha/b.jpg')) && !str_contains($blobC, hash('sha256', 'Alpha/c.jpg')), json_encode([$c1, $tables, $pv]));
+
+    // the key file is the gallery's own: in the backup, and counted as a view-count file in the list of what the gallery made
+    $bk = json_decode(http_post($A['base'] . '/?admin', ['csrf_token' => extract_csrf_token(http_get($A['base'] . '/?admin&classic=1', $A['own'])[1]), 'action' => 'backup_run'], array_merge($A['own'], ['X-Requested-With: gallery-fetch']))[1], true);
+    $zips = glob("{$A['dir']}/.gallery-backup-*.zip") ?: []; $zraw = $zips ? (string) file_get_contents($zips[0]) : '';
+    check('[view counts] the backup holds each folder\'s key file with its database (a restore would otherwise bring counts nobody can read)', ($bk['ok'] ?? null) === true && str_contains($zraw, 'Alpha/.gallery-stats-key.php'), json_encode([$bk['ok'] ?? null, count($zips)]));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 15, part 5: Health asks the browser whether the view-count database can be fetched by its address (S4), like the visitor log and the backup
+echo "== audit group 15: the view-count database's own fetch check ==\n";
+{
+    $dir = new_fixture_dir('g15-statsrow'); make_jpeg("$dir/a.jpg", 40, 30, 20, 90, 160);
+    file_put_contents("$dir/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g15-admin-pw-1', 'TRACK_VIEWS' => true, 'LOG_PUBLIC_VISITS' => false])); copy($indexSrc, "$dir/index.php");
+    $port = find_free_port(); start_server($dir, $port); $base = "http://127.0.0.1:$port";
+    [, , $h] = http_post("$base/?admin", ['access_code' => 'g15-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($h)];
+    $before = http_get("$base/?admin&classic=1", $own)[1];
+    http_get("$base/");   // (a visit: the page-view total is kept in the root's database)
+    $after = http_get("$base/?admin&classic=1", $own)[1];
+    check('[stats fetch check] with no view-count database yet the page has nothing to test (no address, no row)', !str_contains($before, 'data-health-row="statsfile"') && str_contains($before, 'data-stats-file=""'), json_encode(preg_match('/data-stats-file="[^"]*"/', $before, $m1) ? $m1[0] : null));
+    check('[stats fetch check] once the root has a database the page hands the script its address and has a row for the answer, with the same "How to fix" fold as the log and the backup', str_contains($after, 'data-stats-file="/.gallery-stats.sqlite"') && str_contains($after, 'data-health-row="statsfile"') && (str_contains($after, "The view counts can't be fetched by their address") || str_contains($after, 'The view counts can&#039;t be fetched by their address')) && str_contains($after, 'data-how-for="statsfile"'), json_encode(preg_match('/data-stats-file="[^"]*"/', $after, $m2) ? $m2[0] : null));
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";

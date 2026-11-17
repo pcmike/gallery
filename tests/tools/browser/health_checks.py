@@ -31,7 +31,7 @@ try:
     with Browser() as b:
         b.viewport(1280, 900)
         b.goto(B + "/photos/?admin", 1.5)
-        b.js("document.querySelector('input[name=access_code]').focus()"); b.call("Input.insertText", {"text": "hc-pw-1234"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.5)
+        b.js("document.querySelector('input[name=lens]').focus()"); b.call("Input.insertText", {"text": "hc-pw-1234"}); b.js("document.querySelector('form').requestSubmit()"); b.drain(2.5)
         for mode in ("shell", "plain"):
             site()   # (fresh old logs for each way of looking)
             b.goto(B + "/photos/?admin&shell=1&tab=site" if mode == "shell" else B + "/photos/?admin&classic=1#site", 2.5)

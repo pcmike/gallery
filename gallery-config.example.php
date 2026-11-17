@@ -62,7 +62,7 @@
     // "BROWSER_END_ON_FAMILY": false,      // ... from a different kind of device (a phone one day, a Windows computer the next)
     // "BROWSER_END_ON_COUNTRY": false,     // ... from a new country (needs COUNTRY_LOOKUP, or a Cloudflare/CloudFront/Vercel country header)
     // "BROWSER_END_ON_NETWORKS": false,    // ... when it passes the networks limit
-    // "COUNTRY_LOOKUP": false,             // download DB-IP's free country file (about 4 MB, CC BY 4.0) and look addresses up on this server; the only request the gallery makes by itself to another site (Settings turns it on in two steps)
+    // "COUNTRY_LOOKUP": false,             // download DB-IP's free country file (about 4 MB, CC BY 4.0) and look addresses up on this server; one of the two requests the gallery makes by itself to another site (the other is the daily look at GitHub for a newer version, "CHECK_FOR_UPDATES"); Settings turns it on in two steps
     // "COUNTRY_DB_URL": "",                // another source for that file: https, or http only to 127.0.0.1; {ym} stands for the year and month
     // "DEFAULT_LINK_USES": 2,              // how many browsers a new share link lets in (a link for one person: a phone and a computer); 0: unlimited, for a group
 
