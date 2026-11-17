@@ -2666,7 +2666,7 @@ function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
 }
 
 /** Is this the name of a file the gallery makes in a .gallery-cache (or made in an earlier version)? A picture or clip (32 hex digits and .jpg or .mp4), the capture
- *  dates (taken.json, taken2.json, taken3.json), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
+ *  dates (taken.json, taken2.json, taken3.json, taken4.json), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
  *  written. Nothing else in a folder of that name is the gallery's, so nothing else is ever deleted from it. */
 function cache_entry_is_gallery_made($name) {
     return preg_match('/^(?:[0-9a-f]{32}\.(?:jpg|mp4)|taken[0-9]*\.json|meta[0-9]*\.php)(?:\.failed|\.tmp[0-9a-f]+|\.[0-9a-f]{8}\.php)?$/D', (string) $name) === 1;
@@ -2690,7 +2690,7 @@ function image_cache_expected_names($dir, $folderFiles, $imagickAvailable) {
         $variants = $isHeic ? ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'tile', 'tilehd', 'share', 'cover', 'coverlg'];
         if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
         $mtime = @filemtime(resolve_real_path($dir, $file));
-        $valid['taken3.json'] = true;   // the capture dates found for sorting (see media_taken_times)
+        $valid['taken4.json'] = true;   // the capture dates found for sorting (see media_taken_times)
         $valid[MEDIA_META_FILE] = true;   // what was read from the files: when taken, where (see media_meta_ensure)
         if (is_video_file($file)) { $valid[cache_name($file, 'preview2', $mtime) . '.mp4'] = true; $renamed[md5($file . '|preview2|' . $mtime) . '.mp4'] = cache_name($file, 'preview2', $mtime) . '.mp4'; }   // and its short clip (see video_preview_path)
         foreach ($variants as $variant) {
@@ -4799,7 +4799,7 @@ function signin_ended_add($id, array $rec, $reason, $detail = '', $at = null) {
  */
 function browser_note_event($h, $ip, $label) {
     $now = time(); $id = substr($h, 0, 12); $cc = geo_country($ip); $net = signin_net_key($ip);
-    $ua = substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 300);
+    $ua = text_clip((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 300);
     $sys = signin_is_system_ua($ua);
     $raised = []; $detailOf = []; $ended = null;
     json_file_update(browsers_path(), [], function (&$d) use ($h, $now, $ip, $label, $cc, $net, $sys, &$raised, &$detailOf, &$ended) {
@@ -5608,12 +5608,14 @@ function password_for_storage($plain) {
 }
 
 /** A random secret that belongs to this install, kept in its own small data
- *  file (.gallery-secret.php, answers 404 like the others). The sign-in
- *  cookies are keyed with it, so someone who only has a copy of the settings
- *  file (and so the password hashes) still can't make a valid cookie. $create
- *  makes it if it doesn't exist (at a sign-in); without it, a missing secret
- *  is just ''. If the folder can't be written the cookies fall back to being
- *  derived from the stored password alone. */
+ *  file (.gallery-secret.php, answers 404 like the others). It keys four
+ *  things only: the names of the thumbnails and clips, the cookies of people
+ *  on a share link (and of Preview as a link), every Not listed photo's own
+ *  address, and the mark on Tidy up's backups. (Sign-ins and private-view
+ *  sign-ins are stored tokens and do not use it.) $create makes it if it
+ *  doesn't exist; without it, a missing secret is just ''. A file that is
+ *  there but holds no key is never replaced (a new key would change every
+ *  Not listed address without a word): see install_secret_damaged(). */
 function install_secret($create = false) {
     static $secret = null;
     if ($secret !== null && ($secret !== '' || !$create)) return $secret;
@@ -5631,6 +5633,12 @@ function install_secret($create = false) {
     if (!@link($tmp, $path) && !is_file($path)) @rename($tmp, $path);
     @unlink($tmp);
     return $secret = $read();
+}
+
+/** Is the secret key's file there but without a key in it (cut short, or changed in an editor)? It is left as it is: replacing it would change every Not listed photo's address. */
+function install_secret_damaged() {
+    $path = __DIR__ . '/.gallery-secret.php';
+    return is_file($path) && !is_link($path) && install_secret() === '';
 }
 
 /** After a successful sign-in: any password the settings file still holds in
@@ -5792,7 +5800,7 @@ function browser_issue($kind, $stored = null, $viaScript = false) {
         foreach ($d as $k => $r) if (is_array($r) && ($r['via'] ?? '') === 'script' && ++$scripts > 10) unset($d[$k]);
         if (count($d) > 60) $d = array_slice($d, 0, 60, true);
     });
-    if (!$viaScript) signin_history_append(substr($newHash, 0, 12), ['t' => $now, 'ip' => $ip, 'cc' => $cc, 'ua' => substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 300), 'e' => 'signin']);
+    if (!$viaScript) signin_history_append(substr($newHash, 0, 12), ['t' => $now, 'ip' => $ip, 'cc' => $cc, 'ua' => text_clip((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 300), 'e' => 'signin']);
     if (is_array($replaced)) signin_ended_add(substr($old, 0, 12), $replaced, 'again');
     browser_cookie($token, $days >= 1 ? $exp : 0);
     $_COOKIE[REVEAL_COOKIE_NAME] = $token;   // (so the rest of this request already is that browser)
@@ -8674,7 +8682,7 @@ function media_sort_spec_for_folder($folderReal) {
 /** The capture time in a TIFF block (the shape EXIF uses): the original date in the Exif part, else the digitized date, else
  *  the file's date field; null when there is none. Read by hand, so it needs no PHP extension and works for JPEG and HEIC alike.
  *  An offset the camera recorded (iPhones do) makes it exact; without one it is taken as UTC, good enough to order by. */
-function tiff_capture_time($tiff) {
+function tiff_capture_time($tiff, &$offsetSeconds = null) {
     $n = strlen($tiff);
     if ($n < 8) return null;
     $le = substr($tiff, 0, 2) === 'II';
@@ -8702,10 +8710,13 @@ function tiff_capture_time($tiff) {
         if (!isset($map[$tag])) continue;
         $t = $text($map[$tag]);
         if ($t === null || !preg_match('/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)$/', $t, $m) || (int) $m[1] < 1971) continue;
+        if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1]) || (int) $m[4] > 23 || (int) $m[5] > 59 || (int) $m[6] > 59) continue;   // (month 13, 25 o'clock: not a time)
         $ts = gmmktime((int) $m[4], (int) $m[5], (int) $m[6], (int) $m[2], (int) $m[3], (int) $m[1]);
-        if ($tag === 0x9003 && isset($exif[0x9011]) && preg_match('/^([+-])(\d\d):(\d\d)$/', (string) $text($exif[0x9011]), $o)) {
-            $ts -= ($o[1] === '-' ? -1 : 1) * ((int) $o[2] * 3600 + (int) $o[3] * 60);
-        }
+        if ($ts > time() + 172800) continue;   // (a date in the future is not when it was taken: a video's is refused the same way)
+        // The clock time the camera wrote is what is used, for every photo and video alike: a phone also records its time zone and a camera does not, and
+        // converting only the phone's would put a mixed folder in the wrong order by the zone's offset. The offset a phone recorded is handed back for the day it is wanted.
+        $offsetSeconds = null;
+        if ($tag === 0x9003 && isset($exif[0x9011]) && preg_match('/^([+-])(\d\d):(\d\d)$/', (string) $text($exif[0x9011]), $o)) $offsetSeconds = ($o[1] === '-' ? -1 : 1) * ((int) $o[2] * 3600 + (int) $o[3] * 60);
         return $ts;
     }
     return null;
@@ -8742,8 +8753,10 @@ function quicktime_recorded_time($fh, $meta) {
             if ($d['type'] !== 'data' || $d['end'] - $d['data'] < 9 || $d['end'] - $d['data'] > 72) continue;
             $text = scrub_read($fh, $d['data'] + 8, $d['end'] - $d['data'] - 8);
             if ($text === null || !preg_match('/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:?\d\d)$/', $text)) return null;
-            $ts = strtotime($text);
-            return $ts !== false && $ts > 31536000 && $ts < time() + 172800 ? $ts : null;
+            // the clock time written (2026-10-13T12:54:49+0200 is 12:54), like a photo's: the zone is not applied
+            if (!preg_match('/^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)/', $text, $m) || !checkdate((int) $m[2], (int) $m[3], (int) $m[1]) || (int) $m[4] > 23 || (int) $m[5] > 59 || (int) $m[6] > 59) return null;
+            $ts = gmmktime((int) $m[4], (int) $m[5], (int) $m[6], (int) $m[2], (int) $m[3], (int) $m[1]);
+            return $ts > 31536000 && $ts < time() + 172800 ? $ts : null;
         }
     }
     return null;
@@ -8860,7 +8873,7 @@ function media_capture_time($path) {
  *  its modified time. Reading dates out of many files is slow, so what is found is kept (by file name, size and modified
  *  time) in the folder's cache. */
 function media_taken_times($folderReal, $names) {
-    $cachePath = $folderReal . '/.gallery-cache/taken3.json';
+    $cachePath = $folderReal . '/.gallery-cache/taken4.json';
     $known = [];
     $raw = is_file($cachePath) ? json_decode((string) @file_get_contents($cachePath), true) : null;
     if (is_array($raw)) $known = $raw;
@@ -9062,7 +9075,7 @@ function media_meta_load($folderReal, $reset = false) {
 
 /** Whether a record still describes the file as it is now (the same modified time and size). */
 function media_meta_fresh($rec, $realPath) {
-    return is_array($rec) && ($rec['m'] ?? null) === (int) @filemtime($realPath) && ($rec['s'] ?? null) === (int) @filesize($realPath);
+    return is_array($rec) && ($rec['tv'] ?? 0) === 2 && ($rec['m'] ?? null) === (int) @filemtime($realPath) && ($rec['s'] ?? null) === (int) @filesize($realPath);   // (tv 2: taken times are the clock time written; records read before that are read again)
 }
 
 /** A fresh record whose file could be read: nothing is left to do for this file. (A file that couldn't be read is tried again.) */
@@ -9074,7 +9087,7 @@ function media_meta_ready($rec, $realPath) {
  *  gs how the location read went ('ok', 'none' = the file has none, 'unreadable' = the file couldn't be read, 'na' = this kind of
  *  file doesn't carry one), r when it was read. Never throws. */
 function media_meta_read_file($realPath) {
-    $rec = ['m' => (int) @filemtime($realPath), 's' => (int) @filesize($realPath), 't' => null, 'g' => null, 'gs' => 'na', 'r' => time()];
+    $rec = ['m' => (int) @filemtime($realPath), 's' => (int) @filesize($realPath), 't' => null, 'g' => null, 'gs' => 'na', 'r' => time(), 'tv' => 2];
     if (!is_readable($realPath)) { $rec['gs'] = 'unreadable'; return $rec; }
     try { $t = media_capture_time($realPath); } catch (Throwable $e) { $t = null; }
     $rec['t'] = is_int($t) ? $t : null;
@@ -9271,11 +9284,13 @@ function exif_gps_to_decimal($component, $ref) {
         if (is_string($frac) && strpos($frac, '/') !== false) {
             [$num, $den] = array_pad(explode('/', $frac, 2), 2, '1');
             $den = (float) $den;
-            return $den != 0 ? ((float) $num) / $den : 0.0;
+            return $den != 0 ? ((float) $num) / $den : null;   // (a zero denominator is no number: a camera with no fix writes 0/0, and that was a 0.0 here)
         }
         return (float) $frac;
     };
-    $decimal = $toFloat($component[0]) + ($toFloat($component[1]) / 60) + ($toFloat($component[2]) / 3600);
+    $parts = [$toFloat($component[0]), $toFloat($component[1]), $toFloat($component[2])];
+    if (in_array(null, $parts, true)) return null;
+    $decimal = $parts[0] + ($parts[1] / 60) + ($parts[2] / 3600);
     return (strtoupper((string) $ref) === 'S' || strtoupper((string) $ref) === 'W') ? -$decimal : $decimal;
 }
 
@@ -9393,7 +9408,7 @@ function extract_heic_gps($realPath, &$status = null) {
     if (empty($props['exif:GPSLatitude']) || empty($props['exif:GPSLongitude'])) return null;
     $lat = exif_gps_to_decimal($split($props['exif:GPSLatitude']), $props['exif:GPSLatitudeRef'] ?? 'N');
     $lng = exif_gps_to_decimal($split($props['exif:GPSLongitude']), $props['exif:GPSLongitudeRef'] ?? 'E');
-    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng)) return null;
+    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng) || ($lat == 0.0 && $lng == 0.0)) return null;   // (0 N 0 E is in the sea off Africa: what a camera with no fix writes, not a place)
     $status = 'ok';
     return ['lat' => round($lat, 6), 'lng' => round($lng, 6)];
 }
@@ -9408,7 +9423,7 @@ function extract_jpeg_gps($realPath, &$status = null) {
     if (!is_array($exif) || empty($exif['GPSLatitude']) || empty($exif['GPSLongitude'])) return null;
     $lat = exif_gps_to_decimal($exif['GPSLatitude'], $exif['GPSLatitudeRef'] ?? 'N');
     $lng = exif_gps_to_decimal($exif['GPSLongitude'], $exif['GPSLongitudeRef'] ?? 'E');
-    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng)) return null;
+    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng) || ($lat == 0.0 && $lng == 0.0)) return null;   // (0 N 0 E is in the sea off Africa: what a camera with no fix writes, not a place)
     $status = 'ok';
     return ['lat' => round($lat, 6), 'lng' => round($lng, 6)];
 }
@@ -9730,6 +9745,27 @@ function text_clip($text, $max) {
     return substr($text, 0, $max);
 }
 
+/** The longest each text the owner types may be, in characters. The pages show it beside the field (n / max) and a save past it is refused with the number. */
+function text_limits() {
+    return ['caption' => 1000, 'web' => 500, 'place' => 100, 'name' => 200, 'notes' => 50000, 'description' => 1000, 'dates' => 80, 'linkname' => 80, 'linknote' => 200, 'linktitle' => 80];
+}
+function text_limit($key) { return (int) (text_limits()[$key] ?? 0); }
+function text_length($text) { $text = (string) $text; return function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : (int) (preg_match_all('/./su', $text) ?: strlen($text)); }
+/** Control characters dropped (a form field has no use for them); newline and tab stay when $keep says so. */
+function text_strip_controls($text, $keep = "\n\t") {
+    $drop = '';
+    foreach (range(0, 31) as $c) if (strpos((string) $keep, chr($c)) === false) $drop .= sprintf('\x%02X', $c);
+    return (string) preg_replace('/[' . $drop . '\x7F]/u', '', (string) $text);
+}
+/** The first refusal among [noun, new text, the text it replaces, limit key]: a text past its limit is refused with the number and what to do, unless it is the very text already saved (one kept from before the limit is not locked out, only what is changed is held to it). '' when all fit. */
+function text_limit_refusal(array $checks) {
+    foreach ($checks as [$noun, $new, $old, $key]) {
+        $max = text_limit($key); $n = text_length($new);
+        if ($n > $max && (string) $new !== trim(text_strip_controls((string) $old))) return 'The ' . $noun . ' is ' . number_format($n) . ' characters; the limit is ' . number_format($max) . '. Shorten it and save again; nothing was changed.';
+    }
+    return '';
+}
+
 /** Plain single-line-ish text from a form field: control characters
  *  dropped, whitespace runs collapsed, length capped. Output is always
  *  HTML-escaped where it's shown, so this is about tidiness and bounding
@@ -10019,11 +10055,17 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (!in_array($fullPath, $files, true)) {
             return ['type' => 'error', 'text' => 'Unknown file.'];
         }
-        $caption = trim((string) ($_POST['caption'] ?? ''));
-        $web = trim((string) ($_POST['web'] ?? ''));
+        $caption = trim(text_strip_controls((string) ($_POST['caption'] ?? '')));
+        $web = trim(text_strip_controls((string) ($_POST['web'] ?? ''), ''));
         $lat = trim((string) ($_POST['lat'] ?? ''));
         $lng = trim((string) ($_POST['lng'] ?? ''));
-        $locLabel = trim((string) ($_POST['loc_label'] ?? ''));
+        $locLabel = trim(text_strip_controls((string) ($_POST['loc_label'] ?? '')));
+        $was = items_read($adminFolderReal)['items'][$bare] ?? [];
+        $tooLong = text_limit_refusal([['caption', $caption, $was['caption'] ?? '', 'caption'], ['web link', $web, $was['web'] ?? '', 'web'], ['place name', $locLabel, $was['location']['label'] ?? '', 'place']]);
+        if ($tooLong !== '') {
+            if ($isFetch) admin_json_exit(['ok' => false, 'text' => $tooLong]);
+            return ['type' => 'error', 'text' => $tooLong];
+        }
         // The privacy and location-visibility switches save themselves (set_item_flag); a form that does post them (an
         // older page, a script) still sets them, and one that doesn't leaves them as they are.
         $visibility = isset($_POST['loc_visibility']) ? (string) $_POST['loc_visibility'] : null;
@@ -10040,6 +10082,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         // The editor in the viewer saves caption and link as they are typed: with keep_loc it leaves the place alone (a place
         // read from the photo's GPS stays "not saved yet" until the owner chooses to keep it).
         $keepLoc = ($_POST['keep_loc'] ?? '') === '1';
+        if (!$keepLoc && ($lat === '') !== ($lng === '')) {   // (only one of the two typed: the place used to be deleted, with its label, and the answer was "Saved")
+            $msg = 'A place needs both a latitude and a longitude: fill in the ' . ($lat === '' ? 'latitude' : 'longitude') . ' too, or clear both to remove the place. Nothing was changed.';
+            if ($isFetch) admin_json_exit(['ok' => false, 'text' => $msg]);
+            return ['type' => 'error', 'text' => $msg];
+        }
         $stale = false; $newHash = null;
         items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility, $restriction, $loadedHash, $keepLoc, &$stale, &$newHash) {
             $entry = $data['items'][$bare] ?? [];
@@ -10146,7 +10193,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (isset($explicitGroups[$groupKey])) {
             return ['type' => 'error', 'text' => 'That name is controlled by a {group:} directive and can\'t be changed here.'];
         }
-        $displayName = trim((string) ($_POST['display_name'] ?? ''));
+        $displayName = trim(text_strip_controls((string) ($_POST['display_name'] ?? ''), ''));
+        $tooLong = text_limit_refusal([['group name', $displayName, items_read($dir)['groups'][$groupKey]['displayName'] ?? '', 'name']]);
+        if ($tooLong !== '') return ['type' => 'error', 'text' => $tooLong];
         items_update($dir, function (&$data) use ($groupKey, $displayName) {
             if ($displayName === '') {
                 unset($data['groups'][$groupKey]);
@@ -10163,7 +10212,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         // (the page saves each field as it is changed).
         $updates = [];
         if (array_key_exists('display_name', $_POST)) {
-            $displayName = trim((string) $_POST['display_name']);
+            $displayName = trim(text_strip_controls((string) $_POST['display_name'], ''));
+            $tooLong = text_limit_refusal([['name', $displayName, items_read($adminFolderReal)['displayName'] ?? '', 'name']]);
+            if ($tooLong !== '') { if ($isFetch) admin_json_exit(['ok' => false, 'text' => $tooLong]); return ['type' => 'error', 'text' => $tooLong]; }
             $updates['displayName'] = $displayName !== '' ? $displayName : null;
         }
         if (array_key_exists('description', $_POST)) {
@@ -10253,7 +10304,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $rel = $adminFolderPath . '/' . $name;
         if ($name === '' || !in_array($rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
         if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo\'s link is switched off, so it has none. Switch it on first (its lock).'];
-        if (install_secret(true) === '') return ['type' => 'error', 'text' => 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
+        if (install_secret(true) === '') return ['type' => 'error', 'text' => install_secret_damaged()
+            ? 'The gallery\'s secret key file (.gallery-secret.php) is there but holds no key (it may have been cut short or changed in an editor), so it cannot make an address. Put the file back from the backup, or delete it so a new key is made (a new key changes every Not listed photo\'s address), then try again. Nothing was changed.'
+            : 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
         $fid = folder_id_stamp($adminFolderReal);
         if ($fid === '') return ['type' => 'error', 'text' => 'This folder is not writable, so it cannot be given the id its photos\' addresses need.'];
         $fresh = !empty($_POST['fresh']);
@@ -10495,7 +10548,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'save_notes') {
         $existing = basename((string) ($_POST['md_file'] ?? ''));
         $newName = trim((string) ($_POST['new_name'] ?? ''));
-        $content = (string) ($_POST['content'] ?? '');
+        $content = text_strip_controls((string) ($_POST['content'] ?? ''), "\n\r\t");
         $target = basename($newName !== '' ? $newName : $existing);
         if ($target === '') {
             return ['type' => 'error', 'text' => 'A filename is required.'];
@@ -10504,6 +10557,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         $targetPath = $adminFolderReal . '/' . $target;
+        $tooLong = text_limit_refusal([['notes text', $content, is_file($targetPath) ? (string) @file_get_contents($targetPath) : '', 'notes']]);
+        if ($tooLong !== '') {
+            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => (string) ($_POST['loaded_hash'] ?? '')];   // (what was typed goes back into the box, so nothing is lost)
+            return ['type' => 'error', 'text' => $tooLong];
+        }
         // The editor was opened on the file as it was then (loaded_hash, from the page). Saving over a file that has changed since would put
         // the old text back whole, so it is refused, and what was typed is handed back to the page so it can be copied. (A save with no
         // fingerprint, from an older page, skips the check, as the other forms do; a save under another name overwrites nothing.)
@@ -11390,7 +11448,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <?php if ($collection !== null): ?><div class="field-col"><?php endif; ?>
         <div class="field">
           <label><?= $isRoot ? 'Gallery title' : 'Display name' ?> <span class="rowstate" role="status" aria-live="polite"></span></label>
-          <input type="text" name="display_name" aria-label="Name" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
+          <input type="text" name="display_name" aria-label="Name" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
           <?php if ($isRoot): ?>
             <p class="hint">Shown at the top of the page, in the browser tab and in shared links, instead of "<?= $esc($name) ?>". If blank, a "# Heading" at the top of a notes file is used, then the folder name.</p>
           <?php elseif ($collection !== null): ?>
@@ -11409,7 +11467,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <?php endif; ?>
         <div class="field">
           <label>Dates (optional) <span class="rowstate" role="status" aria-live="polite"></span></label>
-          <input type="text" name="dates" aria-label="Dates" maxlength="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
+          <input type="text" name="dates" aria-label="Dates" maxlength="80" data-count="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
           <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
             <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
               <button type="button" class="linklike date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
@@ -11425,7 +11483,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <?php if (!$isRoot && $collection === null && AUTO_GROUP_BY_FOLDER) render_admin_cover_row($adminFolderPath); ?>
         <div class="field wide">
           <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
-          <textarea name="description" aria-label="Description" maxlength="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
+          <textarea name="description" aria-label="Description" maxlength="1000" data-count="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
           <p class="hint">Centred box at the top of <?= $isRoot ? 'the page' : 'its page' ?>, also used in shared-link previews. A little Markdown works (<code>**bold**</code>, <code>*italic*</code>, <code>[words](https://…)</code>, <code>- list</code>, <code>## heading</code>); <code>{left}</code>, <code>{center}</code> or <code>{right}</code> aligns a paragraph.</p>
         </div>
         <?php if (!$isRoot && AUTO_GROUP_BY_FOLDER):
@@ -12489,7 +12547,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         if ($parentRel !== '' && empty(folder_files_under($files, $parentRel))) collection_fail('That folder is not here.');
         $title = trim((string) ($_POST['title'] ?? ''));
         if ($title === '') collection_fail('Give the collection a name.');
-        if (strlen($title) > 200) $title = substr($title, 0, 200);
+        $title = text_clip(text_strip_controls($title, ''), text_limit('name'));
         $parentFid = '';
         if ($parentRel !== '') {
             $parentFid = collection_folder_id($dir, $parentRel);
@@ -12544,7 +12602,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
     }
     if ($action === 'save_folder_identity') {
         $changes = [];
-        if (array_key_exists('display_name', $_POST)) $changes['title'] = substr(trim((string) $_POST['display_name']), 0, 200);
+        if (array_key_exists('display_name', $_POST)) $changes['title'] = text_clip(trim(text_strip_controls((string) $_POST['display_name'], '')), text_limit('name'));
         if (array_key_exists('description', $_POST)) $changes['description'] = admin_clean_description($_POST['description'], 1000);
         if (array_key_exists('dates', $_POST)) $changes['dates'] = admin_clean_text($_POST['dates'], 80);
         if (array_key_exists('sort_order', $_POST)) {
@@ -12739,7 +12797,7 @@ function render_admin_collections_section($dir, $files, $parentPath, $csrfToken)
     </ul>
     <?php endif; ?>
     <form class="cm-new" method="post" onsubmit="return false;">
-      <input type="text" name="title" maxlength="80" placeholder="Name of the new collection" aria-label="Name of the new collection">
+      <input type="text" name="title" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" placeholder="Name of the new collection" aria-label="Name of the new collection">
       <button type="submit" class="primary">New collection</button>
       <span class="rowstate" role="status" aria-live="polite"></span>
     </form>
@@ -12822,7 +12880,7 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
     <p class="hint" style="margin:0 0 6px">Hand-picked sets that show up as cards. Everything here is a view of folders and photos that stay where they are.</p>
     <div class="cm-section cm-tabnew" data-csrf="<?= $csrfToken ?>" data-parent="">
       <form class="cm-new" method="post" onsubmit="return false;">
-        <input type="text" name="title" maxlength="80" placeholder="Name of the new collection" aria-label="Name of the new collection">
+        <input type="text" name="title" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" placeholder="Name of the new collection" aria-label="Name of the new collection">
         <button type="submit" class="primary">New collection</button>
         <span class="rowstate" role="status" aria-live="polite"></span>
       </form>
@@ -13068,7 +13126,7 @@ function owned_kind_info() {
         'leftovers' => ['Left-over temporary files', 'beside index.php or in a folder', 'Half-written copies that a save, a Restore or an update leaves when it is cut off. Nothing reads them.', 'They are gone; nothing else changes.'],
         'oldlogs' => ['Older visitor logs', 'beside index.php', 'The logs that versions before 2.6.5 kept in these files. Nothing reads them any more, and the backup holds them until you remove them.', 'They are gone; nothing else changes.'],
         'collections' => ['Collections', 'beside index.php', 'The collections you made: where each one lives and which folders and photos it holds.', 'Every collection is gone; the folders and photos in them are untouched.'],
-        'secret' => ['Install secret', 'beside index.php', 'Keeps sign-ins and private-view cookies from being forged.', 'Everyone signed in is signed out.'],
+        'secret' => ['Install secret', 'beside index.php', 'The key behind the names of thumbnails, the cookies of people on a share link, every Not listed photo\'s own address and the mark on Tidy up\'s backups. (Sign-ins do not use it.)', 'Every Not listed photo\'s address stops working (a new key is made, and the addresses are different), people on a share link have to open their link again, and thumbnails are made again under new names. The backup keeps the key.'],
         'signin' => ['Sign-in records', 'beside index.php', 'Who is signed in (one token each), the address history of each browser, and the wrong-password throttle.', 'Everyone is signed out and the histories are gone; the throttle starts again.'],
         'lockouts' => ['Lockout counts', 'beside index.php', 'How many times a connection was paused for too many wrong codes or addresses, per day and kind (no addresses), for the Health check.', 'The count starts again from nothing.'],
         'geo' => ['Country file', 'beside index.php', 'The list of address ranges per country (from DB-IP) that says which country an address is in, and when it was fetched.', 'Countries are no longer looked up; turning the option on again fetches it again.'],
@@ -13944,7 +14002,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       <form class="sl-form" id="sl-form" hidden data-folders="<?= $esc(json_encode($folderOpts, JSON_HEX_TAG | JSON_HEX_AMP)) ?>" data-private="<?= $esc(json_encode(['f' => $privNow['folders'], 'i' => $privNow['items'], 's' => $privNow['shown']], JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
         <div class="sl-form-head"><h3 class="sl-form-title">New share link</h3><button type="button" class="linklike sl-resetall" data-sl="resetall" hidden></button></div>
         <input type="hidden" name="id" value="">
-        <label class="sl-f"><span class="sl-k">Name <span class="muted">(only you see it)</span></span><input type="text" name="label" maxlength="80" placeholder="Aunt Carol" autocomplete="off"></label>
+        <label class="sl-f"><span class="sl-k">Name <span class="muted">(only you see it)</span></span><input type="text" name="label" maxlength="80" data-count="80" placeholder="Aunt Carol" autocomplete="off"></label>
         <div class="sl-f sl-addrblock" data-addr>
           <label class="sl-only sl-addrck"><input type="checkbox" name="addr_name" checked> <span>Use the name as the address <code class="sl-addrprev" data-addrprev>…/auntcarol</code></span></label>
           <div class="sl-addr" data-addrrow hidden><span class="sl-addrbase" title="<?= $esc($loc) ?>">…<?= $esc($loc) ?></span><input type="text" name="address" maxlength="40" placeholder="auntcarol" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Address"><button type="button" class="secondary" data-sl="addrrandom">Random</button></div>
@@ -14009,7 +14067,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
          <div class="sl-grp-b">
         <div class="sl-f"><span class="sl-k">Title on the opening page and in message previews</span>
           <?= ui_segmented('title_mode', ['gallery' => 'The gallery\'s title', 'neutral' => 'A neutral title', 'custom' => 'My own text…'], 'gallery', 'Title') ?>
-          <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" aria-label="Your own title" hidden>
+          <input type="text" name="title_text" maxlength="80" data-count="80" placeholder="Photos for Carol" aria-label="Your own title" hidden>
           <label class="sl-only sl-pic"><input type="checkbox" name="picture" checked> <span><strong>Show a preview photo</strong> <small>In message previews and on the opening page, the same one every time for this link: the front page's own cover photo if it has one and it is public, else a cover from one of the public folders, or a photo you choose. Never a private photo and never a folder name. It starts on with the gallery's title and off with the other two, since a photo says which gallery it is. Without a photo the icon is the gallery's.</small></span></label>
           <div class="sl-coverrow" data-coverrow hidden>
             <span class="sl-coverimg" aria-hidden="true"><img alt="" hidden></span>
@@ -14017,7 +14075,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
             <button type="button" class="secondary" data-cover-choose>Choose…</button><button type="button" class="linklike" data-cover-auto hidden>Automatic</button>
             <input type="hidden" name="picture_seed" value=""><input type="hidden" name="picture_file" value="">
           </div></div>
-        <label class="sl-f"><span class="sl-k">Note on the opening page <span class="muted">(optional)</span></span><textarea name="note" rows="2" maxlength="200" placeholder="Hi Carol, here are the Rome photos."></textarea></label>
+        <label class="sl-f"><span class="sl-k">Note on the opening page <span class="muted">(optional)</span></span><textarea name="note" rows="2" maxlength="200" data-count="200" placeholder="Hi Carol, here are the Rome photos."></textarea></label>
         <div class="sl-f"><span class="sl-k">Heads-up at the top of the gallery</span>
           <?= ui_segmented('heads_up', ['default' => 'Use the site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'], 'default', 'Heads-up') ?>
           <span class="sl-h">“The link being used to access this media expires on …”, a thin line they can dismiss. Not shown when there is no end date.</span></div>
@@ -15478,7 +15536,7 @@ function visits_source_labels() {
 
 /** What the Visitors tab takes from the address bar: sources ("public" and link ids, comma separated), countries (codes), a search, and for the Media view the folders, the choice and "show all". */
 function visits_filters() {
-    $raw = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? substr($_GET[$k], 0, 1000) : ''; };
+    $raw = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? text_clip($_GET[$k], 1000) : ''; };
     $csv = function ($k, $rx) use ($raw) {
         $out = [];
         foreach (explode(',', $raw($k)) as $v) {
@@ -15501,7 +15559,7 @@ function visits_filters() {
         'src' => $csv('src', '/^[0-9a-f]{10}$/'),
         'blocked' => $blocked,
         'cc' => $csv('cc', '/^[A-Z]{2}$/'),
-        'q' => substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', isset($_GET['q']) && is_string($_GET['q']) ? $_GET['q'] : '')), 0, 80),
+        'q' => text_clip(trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', isset($_GET['q']) && is_string($_GET['q']) ? $_GET['q'] : '')), 80),
         'folders' => array_map(function ($f) { return $f === '/' ? '' : (string) $f; }, $list('folders')),
         'what' => in_array($what, ['viewed', 'recent', 'photos', 'videos', 'private', 'opened', 'downloaded'], true) ? $what : 'viewed',
         'all' => isset($_GET['all']) && $_GET['all'] === '1',
@@ -15988,9 +16046,14 @@ function visits_tz() {
     return new DateTimeZone('UTC');
 }
 
-/** A writer of times for a CSV: 2026-11-12 21:04:05 in the given zone, or nothing for 0. */
-function visits_time_writer(DateTimeZone $tz) {
-    return function ($t) use ($tz) { return $t ? (new DateTime('@' . (int) $t))->setTimezone($tz)->format('Y-m-d H:i:s') : ''; };
+/** A writer of times for a CSV: 2026-11-12 21:04:05 in the given zone, or nothing for 0. $firstOffset is set to the UTC offset (UTC-04:00) of the first time written since it was last emptied: the line's own offset, which tells the repeated hour of a daylight-saving change apart. */
+function visits_time_writer(DateTimeZone $tz, &$firstOffset = null) {
+    return function ($t) use ($tz, &$firstOffset) {
+        if (!$t) return '';
+        $d = (new DateTime('@' . (int) $t))->setTimezone($tz);
+        if ($firstOffset === null) $firstOffset = 'UTC' . $d->format('P');   // (UTC-04:00, not -04:00: a cell that starts with a minus sign is made safe for a spreadsheet by a quote in front of it)
+        return $d->format('Y-m-d H:i:s');
+    };
 }
 
 /** One line of the timeline CSV: [time, source, ip, what, folder, file, count] for an event row (joined to its visitor's ip). $src names a source, $iso writes a time. */
@@ -16012,14 +16075,15 @@ function visits_report($ip, $dir) {
     if (!$who) { http_response_code(404); header('Content-Type: text/plain; charset=UTF-8'); echo 'Nothing is logged for that address.'; return; }
     $labels = visits_source_labels();
     $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
-    $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);
+    $off = null; $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz, $off);
     $slug = trim(substr((string) preg_replace('/[^A-Za-z0-9.]+/', '-', $ip), 0, 45), '-.');
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();
     header('Content-Disposition: attachment; filename="visitors-report-' . $slug . '.csv"');
     header('X-Content-Type-Options: nosniff');
     echo "\xEF\xBB\xBF";
-    $line = function (array $r) { echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $line = function (array $r) use (&$off) { $off = null; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $lineT = function (array $r) use (&$off) { $r[] = $off ?? ''; $off = null; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };   // (a line with times ends with the UTC offset of its first one)
     $first = $last = 0; $visits = $seen = $opened = 0;
     foreach ($who as $r) { $first = $first ? min($first, (int) $r['first']) : (int) $r['first']; $last = max($last, (int) $r['last']); if ($r['src'] !== LOCKOUT_LOG_ID) { $visits += (int) $r['opens']; $seen += (int) $r['seen']; $opened += (int) $r['views']; } }
     $line(['Visitor report']);
@@ -16033,28 +16097,28 @@ function visits_report($ip, $dir) {
     $line(['Opened', $opened]);
     $line([]);
     $line(['Who: one line per source and browser']);
-    $line(['source', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at']);
+    $line(['source', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at', 'utc_offset']);
     $links = (array) (links_read()['links'] ?? []); $via = [];
     foreach (visits_query($db, 'SELECT n.src, n.vid, n.name FROM notes n JOIN visitors v ON v.src = n.src AND v.vid = n.vid WHERE n.kind = \'via\' AND v.ip = ?', [$ip])->fetchAll() as $n) $via[$n['src']][$n['vid']][] = link_address_label($n['name'], link_address_is_custom($n['name']));
     foreach ($who as $r)
-        $line([$src($r['src']), $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], (int) $r['seen'] ?: '', $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
+        $lineT([$src($r['src']), $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], (int) $r['seen'] ?: '', $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
                $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Not listed photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
     $line([]);
     $line(['What they looked at: one line per photo or video']);
-    $line(['source', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity']);
+    $line(['source', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity', 'utc_offset']);
     foreach (visits_query($db, 'SELECT i.* FROM items i JOIN visitors v ON v.src = i.src AND v.vid = i.vid WHERE v.ip = ? ORDER BY i.src, i.item', [$ip]) as $r)
-        $line([$src($r['src']), link_item_folder($r['item']), basename($r['item']), $iso($r['sf']), (int) $r['sn'] ?: '', (int) $r['opn'], (int) $r['pln'], (int) $r['dwn'], $iso(max((int) $r['sl'], (int) $r['opl'], (int) $r['pll'], (int) $r['dwl']))]);
+        $lineT([$src($r['src']), link_item_folder($r['item']), basename($r['item']), $iso($r['sf']), (int) $r['sn'] ?: '', (int) $r['opn'], (int) $r['pln'], (int) $r['dwn'], $iso(max((int) $r['sl'], (int) $r['opl'], (int) $r['pll'], (int) $r['dwl']))]);
     $line([]);
     $line(['Folders they opened']);
-    $line(['source', 'folder', 'opens', 'first_opened', 'last_opened']);
+    $line(['source', 'folder', 'opens', 'first_opened', 'last_opened', 'utc_offset']);
     foreach (visits_query($db, 'SELECT o.* FROM folders o JOIN visitors v ON v.src = o.src AND v.vid = o.vid WHERE v.ip = ? ORDER BY o.src, o.folder', [$ip]) as $r)
-        $line([$src($r['src']), $r['folder'] === '' ? 'Front page' : $r['folder'], $r['n'], $iso($r['first']), $iso($r['last'])]);
+        $lineT([$src($r['src']), $r['folder'] === '' ? 'Front page' : $r['folder'], $r['n'], $iso($r['first']), $iso($r['last'])]);
     $line([]);
     $line(['Timeline: everything in order']);
-    $line(['time', 'source', 'what', 'folder', 'file', 'count']);
+    $line(['time', 'source', 'what', 'folder', 'file', 'count', 'utc_offset']);
     foreach (visits_query($db, 'SELECT e.*, v.ip FROM events e JOIN visitors v ON v.src = e.src AND v.vid = e.vid WHERE v.ip = ? ORDER BY e.t, e.id', [$ip]) as $e) {
         $c = visits_event_cells($e, $src, $iso); unset($c[2]);   // (the address is at the top of the file)
-        $line(array_values($c));
+        $lineT(array_values($c));
     }
 }
 
@@ -16075,14 +16139,15 @@ function visits_export($what, array $f, $dir, $tab = '') {
     // (a CSV of the Folders or Media view starts with what it was narrowed to, so the file says what it is once it is renamed or put beside others: every column is the same on each line)
     $ctxHead = ['link', 'country', 'search']; $isCtx = $what === 'folders' || $what === 'media';
     $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at'], 'blocked' => ['source', 'ip', 'where', 'browser', 'first_tried', 'last_tried', 'tries', 'why'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count'], 'folders' => array_merge($ctxHead, ['folder', 'opens', 'media_seen', 'opened', 'downloaded', 'first_seen', 'last_activity']), 'media' => array_merge($ctxHead, ['folders', 'show', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'])][$what];
-    $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);
+    $off = null; $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz, $off);
     $head[] = 'time_zone';   // (the zone every time on the line is in: a file says so on each line, as the Folders and Media ones say what they were narrowed to)
+    $head[] = 'utc_offset';   // (the offset of the line's first time, such as UTC-04:00 or UTC-05:00: the repeated hour when the clocks go back reads the same twice in the time column)
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="visitors-' . $name . visits_scope_slug($f, $labels) . '.csv"');
     header('X-Content-Type-Options: nosniff');
     echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";
-    $line = function (array $r) use ($tzName) { $r[] = $tzName; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $line = function (array $r) use ($tzName, &$off) { $r[] = $tzName; $r[] = $off ?? ''; $off = null; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
     $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
     $ctx = $isCtx ? [$f['src'] ? implode('; ', array_map($src, $f['src'])) : 'all links', $f['cc'] ? implode('; ', $f['cc']) : 'all countries', $f['q']] : [];
     if ($what === 'folders') {
@@ -16339,6 +16404,16 @@ function health_checks($dir, $files) {
             'The gallery never follows a link, so it does not use ' . ($clN === 1 ? 'it' : 'them') . ' and keeps no pictures for ' . implode(', ', array_slice($cacheLinks, 0, 5)) . ($clN > 5 ? ' and ' . number_format($clN - 5) . ' more' : '')
             . ': each picture there is sent as the original file, and a HEIC photo can\'t be shown. Delete the link (the folder called .gallery-cache inside ' . ($clN === 1 ? 'it' : 'each of them') . ') and the gallery makes a real folder at the next page load.');
     }
+    if (install_secret_damaged()) {
+        $add('Folders and files', 'bad', 'The install secret file is damaged', 'The file .gallery-secret.php is there but holds no key (it may have been cut short or changed in an editor), so the gallery can\'t make a Not listed photo\'s address, and its thumbnails are named without the key. Nothing was replaced, because a new key would change every Not listed photo\'s address without a word. Put the file back from the backup (it keeps the key), or delete it: a new key is made, every Not listed photo\'s address stops working, and people on a share link open their link again.');
+    }
+    $unreadable = (array) (health_heavy($dir, $files, false)['unreadable'] ?? []);
+    if ($unreadable) {   // (a folder the web server may not open is simply not there on the page: this is the only place that says so)
+        $unN = count($unreadable);
+        $add('Folders and files', 'warn', $unN === 1 ? 'A folder can\'t be read by the web server' : number_format($unN) . ' folders can\'t be read by the web server',
+            'The gallery leaves ' . ($unN === 1 ? 'it' : 'them') . ' out, with everything inside, and touches nothing there: ' . implode(', ', array_slice($unreadable, 0, 8)) . ($unN > 8 ? ' and ' . number_format($unN - 8) . ' more' : '')
+            . '. Give the web server\'s user permission to open ' . ($unN === 1 ? 'it' : 'each one') . ' (on many hosts: chmod 755, owned by that user, in your file manager or over SFTP), then press Check again.');
+    }
     if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
         $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);
         $add('Folders and files', 'warn', $oddN === 1 ? 'A file or folder has a name that is not valid text' : number_format($oddN) . ' files and folders have names that are not valid text',
@@ -16572,6 +16647,29 @@ function health_ago_short($t) {
 }
 function health_bytes($b) { return $b >= 1073741824 ? round($b / 1073741824, 1) . ' GB' : ($b >= 1048576 ? round($b / 1048576, $b >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($b / 1024)) . ' KB'); }
 
+/** The folders the web server may not open, from the gallery's own folder (and every place from elsewhere it shows) down: [path from the gallery's folder]. The page leaves them out without a word; this is how the Health check can say so.
+ *  The same ceilings as the page's own scan, and a link or a dot folder is never entered. */
+function gallery_unreadable_folders($dir) {
+    $roots = [rtrim((string) (realpath($dir) ?: $dir), '/') => '']; $self = basename((string) ($_SERVER['SCRIPT_NAME'] ?? 'index.php'));
+    foreach (gallery_mounts() as $name => $real) if (is_string($real) && $real !== '') $roots[rtrim($real, '/')] = (string) $name;
+    $bad = []; $seen = 0;
+    foreach ($roots as $root => $label) {
+        $todo = [[$root, $label]];
+        while ($todo && $seen < SCAN_MAX_FOLDERS) {
+            [$here, $rel] = array_pop($todo); $seen++;
+            $entries = @scandir($here);
+            if ($entries === false) { $bad[] = $rel === '' ? '(the gallery\'s own folder)' : $rel; continue; }
+            foreach ($entries as $e) {
+                if ($e === '.' || $e === '..' || $e[0] === '.' || ($here === $root && $label === '' && $e === $self) || in_array($e, SCAN_SKIP_FOLDERS, true)) continue;
+                $p = $here . '/' . $e;
+                if (is_link($p) || !is_dir($p) || !name_is_text($e)) continue;
+                $todo[] = [$p, ($rel === '' ? '' : $rel . '/') . $e];
+            }
+        }
+    }
+    return $bad;
+}
+
 /** The checks that take a moment (each database looked through, every folder's data files listed), kept for an hour and looked at again by "Check again". */
 function health_heavy($dir, $files, $force) {
     $p = __DIR__ . '/.gallery-health-cache.php';
@@ -16586,7 +16684,7 @@ function health_heavy($dir, $files, $force) {
         }
         return $c;
     }
-    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
+    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'unreadable' => gallery_unreadable_folders($dir), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
     if ($live !== null && visitlog_driver_ok()) $r['log'] = ['why' => backup_sqlite_check($live)];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if ($e['kind'] !== 'stats') continue;
@@ -17175,9 +17273,9 @@ function admin_browser_history_route() {
         header('Content-Type: text/csv; charset=UTF-8');
         shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
         header('Content-Disposition: attachment; filename="signin-' . $id . '.csv"');
-        $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);   // (the zone the browser named, as the visitor CSVs do; none sent is UTC, and each line says which)
-        echo "time,address,country,event,what it said it was,time_zone\n";
-        foreach (signin_history_read($id) as $l) echo implode(',', [link_csv_cell($iso((int) $l['t'])), link_csv_cell($l['ip']), link_csv_cell($l['cc'] ?? ''), link_csv_cell($l['e'] ?? ''), link_csv_cell($l['ua'] ?? ''), link_csv_cell($tzName)]) . "\n";
+        $off = null; $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz, $off);   // (the zone the browser named, as the visitor CSVs do; none sent is UTC, and each line says which)
+        echo "time,address,country,event,what it said it was,time_zone,utc_offset\n";
+        foreach (signin_history_read($id) as $l) { $off = null; $when = $iso((int) $l['t']); echo implode(',', [link_csv_cell($when), link_csv_cell($l['ip']), link_csv_cell($l['cc'] ?? ''), link_csv_cell($l['e'] ?? ''), link_csv_cell($l['ua'] ?? ''), link_csv_cell($tzName), link_csv_cell($off ?? '')]) . "\n"; }
         return;
     }
     admin_json_exit(['ok' => true, 'html' => render_browser_history_html($id)]);
@@ -19525,6 +19623,9 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
   .ch-gone code { color:#ff9a9d; } .ch-came code { color:#8fe0a8; }
   .ch-when, .ch-go { margin-top:8px; }
   @media (max-width: 800px) { .ch-x { margin-left:0; } .ch-h { flex-wrap:wrap; } .ch-t { min-width:0; } }
+  .char-count { display: block; margin-top: 3px; font-size: 0.75rem; opacity: 0.7; text-align: right; font-variant-numeric: tabular-nums; }
+  .char-count.near { opacity: 1; color: #b7791f; }
+  .char-count.over { opacity: 1; color: #d9534f; font-weight: 600; }
   <?= owner_phone_bar_css() ?>
   html:has(> body.inframe) { scrollbar-gutter:stable; }  /* (the scrollbar's room is always kept, blank when there is nothing to scroll, so a short page is not centred a few pixels differently from a long one) */
   body.inframe .admin-bar, body.inframe .admin-side, body.inframe .admin-folder-head { display:none !important; }
@@ -19671,7 +19772,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         <input type="hidden" name="group_key" value="<?= htmlspecialchars($gKey, ENT_QUOTES, 'UTF-8') ?>">
         <div class="field">
           <label><?= htmlspecialchars($gKey, ENT_QUOTES, 'UTF-8') ?> (<?= count($gFiles) ?> item<?= count($gFiles) === 1 ? '' : 's' ?>)</label>
-          <input type="text" name="display_name" aria-label="Group name" value="<?= htmlspecialchars($isExplicit ? $explicitGroups[$gKey]['name'] : ($itemsHere['groups'][$gKey]['displayName'] ?? ''), ENT_QUOTES, 'UTF-8') ?>" <?= $isExplicit ? 'disabled' : '' ?>>
+          <input type="text" name="display_name" aria-label="Group name" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" value="<?= htmlspecialchars($isExplicit ? $explicitGroups[$gKey]['name'] : ($itemsHere['groups'][$gKey]['displayName'] ?? ''), ENT_QUOTES, 'UTF-8') ?>" <?= $isExplicit ? 'disabled' : '' ?>>
         </div>
         <?php if (!$isExplicit): ?><button type="submit">Save</button><?php else: ?><span class="muted">Controlled by {group:} in a .md</span><?php endif; ?>
       </form>
@@ -19717,7 +19818,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           <input type="hidden" name="action" value="save_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
           <input type="hidden" name="loaded_hash" value="<?= $loadedHash ?>">
-          <textarea name="content" class="adm-textarea" aria-label="Contents of this notes file"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
+          <textarea name="content" class="adm-textarea" aria-label="Contents of this notes file" maxlength="<?= text_limit('notes') ?>" data-count="<?= text_limit('notes') ?>"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
           <div class="field-row md-actions">
             <div class="field">
               <label>Save as a different filename (optional)</label>
@@ -19740,12 +19841,11 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_notes">
         <input type="hidden" name="md_file" value="">
-        <textarea name="content" class="adm-textarea" aria-label="Contents of the new notes file">{gallery}
-</textarea>
+        <textarea name="content" class="adm-textarea" aria-label="Contents of the new notes file" maxlength="<?= text_limit('notes') ?>" data-count="<?= text_limit('notes') ?>"><?php $typedNew = !empty($GLOBALS['__notes_stale']) && $GLOBALS['__notes_stale']['file'] === '' ? $GLOBALS['__notes_stale']['content'] : "{gallery}\n"; echo htmlspecialchars($typedNew, ENT_QUOTES, 'UTF-8'); ?></textarea>
         <div class="field-row md-actions">
           <div class="field">
             <label>Filename</label>
-            <input type="text" name="new_name" class="adm-newname" aria-label="Filename" placeholder="notes.md" required>
+            <input type="text" name="new_name" class="adm-newname" aria-label="Filename" placeholder="notes.md" required<?php if (!empty($GLOBALS['__notes_stale']) && $GLOBALS['__notes_stale']['file'] === '') echo ' value="' . htmlspecialchars(basename((string) ($_POST['new_name'] ?? '')), ENT_QUOTES, 'UTF-8') . '"'; ?>>
           </div>
           <button type="submit">Create</button>
         </div>
@@ -23132,6 +23232,20 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     return true;
   }
+
+// A text field that has a limit shows how much of it is used as you type (n / limit): data-count holds the limit, the counter is made when the field is first touched.
+(function () {
+  function show(el) {
+    var max = parseInt(el.getAttribute('data-count'), 10); if (!max) return;
+    var c = el.nextElementSibling && el.nextElementSibling.classList && el.nextElementSibling.classList.contains('char-count') ? el.nextElementSibling : null;
+    if (!c) { c = document.createElement('span'); c.className = 'char-count'; c.setAttribute('aria-hidden', 'true'); el.insertAdjacentElement('afterend', c); }
+    var n = Array.from(el.value).length;
+    c.textContent = n.toLocaleString() + ' / ' + max.toLocaleString();
+    c.classList.toggle('near', n >= max * 0.9 && n <= max); c.classList.toggle('over', n > max);
+  }
+  function hit(e) { var el = e.target; if (el && el.getAttribute && el.getAttribute('data-count')) show(el); }
+  document.addEventListener('focusin', hit); document.addEventListener('input', hit);
+})();
 </script>
 </body>
 </html>
@@ -24221,7 +24335,7 @@ function inline_markdown($text) {
     $text = preg_replace('/\*\*(.+?)\*\*/s', '<strong>$1</strong>', $text);
     $text = preg_replace('/__(.+?)__/s', '<u>$1</u>', $text);
     $text = preg_replace('/\*(.+?)\*/s', '<em>$1</em>', $text);
-    $text = preg_replace('/(?<![a-zA-Z0-9])_(.+?)_(?![a-zA-Z0-9])/s', '<em>$1</em>', $text);
+    $text = preg_replace('/(?<![a-zA-Z0-9])_(.{1,2000}?)_(?![a-zA-Z0-9])/s', '<em>$1</em>', $text);   // (the inner part is capped: with none, a long line of "_a _a _a" took seconds, every page that shows the note paid it)
     $text = preg_replace('/~~(.+?)~~/s', '<del>$1</del>', $text);
     $text = preg_replace('/`([^`]+)`/', '<code>$1</code>', $text);
     $text = preg_replace_callback('/\[([^\]]+)\]\(\x1A(\d+)\x1B\)/', function ($m) use ($urls) {
@@ -27225,6 +27339,9 @@ gallery notices (also shown on the page itself, in a collapsed banner):
   @keyframes live-new-pulse { 0% { outline-color:#fff; } 100% { outline-color:#f5c26b; } }
   @media (prefers-reduced-motion: reduce) { .card.live-new, .folder-cover.live-new { animation:none; } }
   .live-note-fixed a { color:#c7ccff; }
+  .char-count { display: block; margin-top: 3px; font-size: 0.75rem; opacity: 0.7; text-align: right; font-variant-numeric: tabular-nums; }
+  .char-count.near { opacity: 1; color: #b7791f; }
+  .char-count.over { opacity: 1; color: #d9534f; font-weight: 600; }
   <?= owner_phone_bar_css() ?>
   body.inframe .crumb-bar { display: none; }
   body.inframe .crumb-bar.has-sec { display: flex; }   /* (inside the admin the tree and the title line are the way back and the folders beside this one; the pills for the page's own folders stay) */
@@ -27794,8 +27911,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       <button type="button" class="lbe-hidekb" id="lbe-hidekb"><?= ui_icon('chev-down') ?> Hide keyboard</button>
     </div>
     <div class="lbe-body">
-      <label class="lbe-field"><span>Caption</span><input type="text" id="lbe-caption" maxlength="500" autocomplete="off" enterkeyhint="done"></label>
-      <label class="lbe-field"><span>Information link</span><input type="url" id="lbe-web" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://&hellip;" enterkeyhint="done"><em class="lbe-err" id="lbe-web-err"></em></label>
+      <label class="lbe-field"><span>Caption</span><input type="text" id="lbe-caption" maxlength="<?= text_limit('caption') ?>" data-count="<?= text_limit('caption') ?>" autocomplete="off" enterkeyhint="done"></label>
+      <label class="lbe-field"><span>Information link</span><input type="url" id="lbe-web" maxlength="<?= text_limit('web') ?>" data-count="<?= text_limit('web') ?>" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://&hellip;" enterkeyhint="done"><em class="lbe-err" id="lbe-web-err"></em></label>
       <div class="lbe-pills" id="lbe-pills">
         <button type="button" class="lbe-pill" id="lbe-private" aria-pressed="false" title="Hidden from visitors unless they have the private-view password"><?= ui_icon('lock') ?> Private</button>
         <button type="button" class="lbe-pill" id="lbe-loc" aria-pressed="false" title="Show this photo's location to visitors"><?= ui_icon('pin') ?> Location</button>
@@ -27810,7 +27927,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
             <label class="lbe-field"><span>Longitude</span><input type="text" id="lbe-lng" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done"></label>
           </div>
           <em class="lbe-err" id="lbe-loc-err"></em>
-          <label class="lbe-field"><span>Location label (optional)</span><input type="text" id="lbe-label" maxlength="200" autocomplete="off" enterkeyhint="done"></label>
+          <label class="lbe-field"><span>Location label (optional)</span><input type="text" id="lbe-label" maxlength="<?= text_limit('place') ?>" data-count="<?= text_limit('place') ?>" autocomplete="off" enterkeyhint="done"></label>
           <p class="lbe-autohint" id="lbe-autohint" hidden>Shown as it is, nothing to save. Type a label to name the place, or change the numbers to set your own.</p>
         </div>
       </div>
@@ -28877,6 +28994,20 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       }).catch(function (err) { say(err && err.message === 'signed out' ? 'Your admin session ended: sign in again' : 'Not saved: ' + (err && err.message ? err.message : 'try again')); if (from) from.focus(); });
     });
   })();
+
+// A text field that has a limit shows how much of it is used as you type (n / limit): data-count holds the limit, the counter is made when the field is first touched.
+(function () {
+  function show(el) {
+    var max = parseInt(el.getAttribute('data-count'), 10); if (!max) return;
+    var c = el.nextElementSibling && el.nextElementSibling.classList && el.nextElementSibling.classList.contains('char-count') ? el.nextElementSibling : null;
+    if (!c) { c = document.createElement('span'); c.className = 'char-count'; c.setAttribute('aria-hidden', 'true'); el.insertAdjacentElement('afterend', c); }
+    var n = Array.from(el.value).length;
+    c.textContent = n.toLocaleString() + ' / ' + max.toLocaleString();
+    c.classList.toggle('near', n >= max * 0.9 && n <= max); c.classList.toggle('over', n > max);
+  }
+  function hit(e) { var el = e.target; if (el && el.getAttribute && el.getAttribute('data-count')) show(el); }
+  document.addEventListener('focusin', hit); document.addEventListener('input', hit);
+})();
 <?php endif; ?>
   // Once the page has scrolled, the two round buttons at the bottom right (to the top, to the bottom) show.
   (function () {

@@ -127,7 +127,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
       <form class="sl-form" id="sl-form" hidden data-folders="<?= $esc(json_encode($folderOpts, JSON_HEX_TAG | JSON_HEX_AMP)) ?>" data-private="<?= $esc(json_encode(['f' => $privNow['folders'], 'i' => $privNow['items'], 's' => $privNow['shown']], JSON_HEX_TAG | JSON_HEX_AMP)) ?>">
         <div class="sl-form-head"><h3 class="sl-form-title">New share link</h3><button type="button" class="linklike sl-resetall" data-sl="resetall" hidden></button></div>
         <input type="hidden" name="id" value="">
-        <label class="sl-f"><span class="sl-k">Name <span class="muted">(only you see it)</span></span><input type="text" name="label" maxlength="80" placeholder="Aunt Carol" autocomplete="off"></label>
+        <label class="sl-f"><span class="sl-k">Name <span class="muted">(only you see it)</span></span><input type="text" name="label" maxlength="80" data-count="80" placeholder="Aunt Carol" autocomplete="off"></label>
         <div class="sl-f sl-addrblock" data-addr>
           <label class="sl-only sl-addrck"><input type="checkbox" name="addr_name" checked> <span>Use the name as the address <code class="sl-addrprev" data-addrprev>…/auntcarol</code></span></label>
           <div class="sl-addr" data-addrrow hidden><span class="sl-addrbase" title="<?= $esc($loc) ?>">…<?= $esc($loc) ?></span><input type="text" name="address" maxlength="40" placeholder="auntcarol" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Address"><button type="button" class="secondary" data-sl="addrrandom">Random</button></div>
@@ -192,7 +192,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
          <div class="sl-grp-b">
         <div class="sl-f"><span class="sl-k">Title on the opening page and in message previews</span>
           <?= ui_segmented('title_mode', ['gallery' => 'The gallery\'s title', 'neutral' => 'A neutral title', 'custom' => 'My own text…'], 'gallery', 'Title') ?>
-          <input type="text" name="title_text" maxlength="80" placeholder="Photos for Carol" aria-label="Your own title" hidden>
+          <input type="text" name="title_text" maxlength="80" data-count="80" placeholder="Photos for Carol" aria-label="Your own title" hidden>
           <label class="sl-only sl-pic"><input type="checkbox" name="picture" checked> <span><strong>Show a preview photo</strong> <small>In message previews and on the opening page, the same one every time for this link: the front page's own cover photo if it has one and it is public, else a cover from one of the public folders, or a photo you choose. Never a private photo and never a folder name. It starts on with the gallery's title and off with the other two, since a photo says which gallery it is. Without a photo the icon is the gallery's.</small></span></label>
           <div class="sl-coverrow" data-coverrow hidden>
             <span class="sl-coverimg" aria-hidden="true"><img alt="" hidden></span>
@@ -200,7 +200,7 @@ function render_admin_links_panel($csrfToken, $dir, $files) {
             <button type="button" class="secondary" data-cover-choose>Choose…</button><button type="button" class="linklike" data-cover-auto hidden>Automatic</button>
             <input type="hidden" name="picture_seed" value=""><input type="hidden" name="picture_file" value="">
           </div></div>
-        <label class="sl-f"><span class="sl-k">Note on the opening page <span class="muted">(optional)</span></span><textarea name="note" rows="2" maxlength="200" placeholder="Hi Carol, here are the Rome photos."></textarea></label>
+        <label class="sl-f"><span class="sl-k">Note on the opening page <span class="muted">(optional)</span></span><textarea name="note" rows="2" maxlength="200" data-count="200" placeholder="Hi Carol, here are the Rome photos."></textarea></label>
         <div class="sl-f"><span class="sl-k">Heads-up at the top of the gallery</span>
           <?= ui_segmented('heads_up', ['default' => 'Use the site setting (' . (SHARE_HEADS_UP ? 'on' : 'off') . ')', 'on' => 'On', 'off' => 'Off'], 'default', 'Heads-up') ?>
           <span class="sl-h">“The link being used to access this media expires on …”, a thin line they can dismiss. Not shown when there is no end date.</span></div>

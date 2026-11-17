@@ -1248,3 +1248,6 @@
   .ch-gone code { color:#ff9a9d; } .ch-came code { color:#8fe0a8; }
   .ch-when, .ch-go { margin-top:8px; }
   @media (max-width: 800px) { .ch-x { margin-left:0; } .ch-h { flex-wrap:wrap; } .ch-t { min-width:0; } }
+  .char-count { display: block; margin-top: 3px; font-size: 0.75rem; opacity: 0.7; text-align: right; font-variant-numeric: tabular-nums; }
+  .char-count.near { opacity: 1; color: #b7791f; }
+  .char-count.over { opacity: 1; color: #d9534f; font-weight: 600; }

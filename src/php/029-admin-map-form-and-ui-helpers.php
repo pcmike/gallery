@@ -136,7 +136,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <?php if ($collection !== null): ?><div class="field-col"><?php endif; ?>
         <div class="field">
           <label><?= $isRoot ? 'Gallery title' : 'Display name' ?> <span class="rowstate" role="status" aria-live="polite"></span></label>
-          <input type="text" name="display_name" aria-label="Name" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
+          <input type="text" name="display_name" aria-label="Name" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" value="<?= $esc($itemsHere['displayName'] ?? '') ?>">
           <?php if ($isRoot): ?>
             <p class="hint">Shown at the top of the page, in the browser tab and in shared links, instead of "<?= $esc($name) ?>". If blank, a "# Heading" at the top of a notes file is used, then the folder name.</p>
           <?php elseif ($collection !== null): ?>
@@ -155,7 +155,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <?php endif; ?>
         <div class="field">
           <label>Dates (optional) <span class="rowstate" role="status" aria-live="polite"></span></label>
-          <input type="text" name="dates" aria-label="Dates" maxlength="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
+          <input type="text" name="dates" aria-label="Dates" maxlength="80" data-count="80" placeholder="Oct 1-11th, 2026" value="<?= $esc($itemsHere['dates'] ?? '') ?>">
           <?php if ($dateSuggestion && $dateSuggestion['text'] !== trim((string) ($itemsHere['dates'] ?? ''))): ?>
             <p class="hint">This folder's photos span <strong><?= $esc($dateSuggestion['text']) ?></strong><?= $dateSuggestion['source'] !== '' ? ' (' . $esc($dateSuggestion['source']) . ')' : '' ?>.
               <button type="button" class="linklike date-suggest" data-dates="<?= $esc($dateSuggestion['text']) ?>">Use these dates</button></p>
@@ -171,7 +171,7 @@ function render_admin_identity_form($itemsHere, $csrfToken, $adminFolderPath, $d
         <?php if (!$isRoot && $collection === null && AUTO_GROUP_BY_FOLDER) render_admin_cover_row($adminFolderPath); ?>
         <div class="field wide">
           <label>Description <span class="rowstate" role="status" aria-live="polite"></span></label>
-          <textarea name="description" aria-label="Description" maxlength="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
+          <textarea name="description" aria-label="Description" maxlength="1000" data-count="1000" rows="4" style="min-height:90px; font-family:inherit;"><?= $esc($itemsHere['description'] ?? '') ?></textarea>
           <p class="hint">Centred box at the top of <?= $isRoot ? 'the page' : 'its page' ?>, also used in shared-link previews. A little Markdown works (<code>**bold**</code>, <code>*italic*</code>, <code>[words](https://…)</code>, <code>- list</code>, <code>## heading</code>); <code>{left}</code>, <code>{center}</code> or <code>{right}</code> aligns a paragraph.</p>
         </div>
         <?php if (!$isRoot && AUTO_GROUP_BY_FOLDER):

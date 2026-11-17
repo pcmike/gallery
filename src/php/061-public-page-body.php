@@ -567,8 +567,8 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
       <button type="button" class="lbe-hidekb" id="lbe-hidekb"><?= ui_icon('chev-down') ?> Hide keyboard</button>
     </div>
     <div class="lbe-body">
-      <label class="lbe-field"><span>Caption</span><input type="text" id="lbe-caption" maxlength="500" autocomplete="off" enterkeyhint="done"></label>
-      <label class="lbe-field"><span>Information link</span><input type="url" id="lbe-web" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://&hellip;" enterkeyhint="done"><em class="lbe-err" id="lbe-web-err"></em></label>
+      <label class="lbe-field"><span>Caption</span><input type="text" id="lbe-caption" maxlength="<?= text_limit('caption') ?>" data-count="<?= text_limit('caption') ?>" autocomplete="off" enterkeyhint="done"></label>
+      <label class="lbe-field"><span>Information link</span><input type="url" id="lbe-web" maxlength="<?= text_limit('web') ?>" data-count="<?= text_limit('web') ?>" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://&hellip;" enterkeyhint="done"><em class="lbe-err" id="lbe-web-err"></em></label>
       <div class="lbe-pills" id="lbe-pills">
         <button type="button" class="lbe-pill" id="lbe-private" aria-pressed="false" title="Hidden from visitors unless they have the private-view password"><?= ui_icon('lock') ?> Private</button>
         <button type="button" class="lbe-pill" id="lbe-loc" aria-pressed="false" title="Show this photo's location to visitors"><?= ui_icon('pin') ?> Location</button>
@@ -583,7 +583,7 @@ if (ENABLE_PHOTO_LOCATION && $mapPoints) {
             <label class="lbe-field"><span>Longitude</span><input type="text" id="lbe-lng" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done"></label>
           </div>
           <em class="lbe-err" id="lbe-loc-err"></em>
-          <label class="lbe-field"><span>Location label (optional)</span><input type="text" id="lbe-label" maxlength="200" autocomplete="off" enterkeyhint="done"></label>
+          <label class="lbe-field"><span>Location label (optional)</span><input type="text" id="lbe-label" maxlength="<?= text_limit('place') ?>" data-count="<?= text_limit('place') ?>" autocomplete="off" enterkeyhint="done"></label>
           <p class="lbe-autohint" id="lbe-autohint" hidden>Shown as it is, nothing to save. Type a label to name the place, or change the numbers to set your own.</p>
         </div>
       </div>

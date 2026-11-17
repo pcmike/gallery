@@ -25,12 +25,14 @@ function password_for_storage($plain) {
 }
 
 /** A random secret that belongs to this install, kept in its own small data
- *  file (.gallery-secret.php, answers 404 like the others). The sign-in
- *  cookies are keyed with it, so someone who only has a copy of the settings
- *  file (and so the password hashes) still can't make a valid cookie. $create
- *  makes it if it doesn't exist (at a sign-in); without it, a missing secret
- *  is just ''. If the folder can't be written the cookies fall back to being
- *  derived from the stored password alone. */
+ *  file (.gallery-secret.php, answers 404 like the others). It keys four
+ *  things only: the names of the thumbnails and clips, the cookies of people
+ *  on a share link (and of Preview as a link), every Not listed photo's own
+ *  address, and the mark on Tidy up's backups. (Sign-ins and private-view
+ *  sign-ins are stored tokens and do not use it.) $create makes it if it
+ *  doesn't exist; without it, a missing secret is just ''. A file that is
+ *  there but holds no key is never replaced (a new key would change every
+ *  Not listed address without a word): see install_secret_damaged(). */
 function install_secret($create = false) {
     static $secret = null;
     if ($secret !== null && ($secret !== '' || !$create)) return $secret;
@@ -48,6 +50,12 @@ function install_secret($create = false) {
     if (!@link($tmp, $path) && !is_file($path)) @rename($tmp, $path);
     @unlink($tmp);
     return $secret = $read();
+}
+
+/** Is the secret key's file there but without a key in it (cut short, or changed in an editor)? It is left as it is: replacing it would change every Not listed photo's address. */
+function install_secret_damaged() {
+    $path = __DIR__ . '/.gallery-secret.php';
+    return is_file($path) && !is_link($path) && install_secret() === '';
 }
 
 /** After a successful sign-in: any password the settings file still holds in
@@ -209,7 +217,7 @@ function browser_issue($kind, $stored = null, $viaScript = false) {
         foreach ($d as $k => $r) if (is_array($r) && ($r['via'] ?? '') === 'script' && ++$scripts > 10) unset($d[$k]);
         if (count($d) > 60) $d = array_slice($d, 0, 60, true);
     });
-    if (!$viaScript) signin_history_append(substr($newHash, 0, 12), ['t' => $now, 'ip' => $ip, 'cc' => $cc, 'ua' => substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 300), 'e' => 'signin']);
+    if (!$viaScript) signin_history_append(substr($newHash, 0, 12), ['t' => $now, 'ip' => $ip, 'cc' => $cc, 'ua' => text_clip((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 300), 'e' => 'signin']);
     if (is_array($replaced)) signin_ended_add(substr($old, 0, 12), $replaced, 'again');
     browser_cookie($token, $days >= 1 ? $exp : 0);
     $_COOKIE[REVEAL_COOKIE_NAME] = $token;   // (so the rest of this request already is that browser)

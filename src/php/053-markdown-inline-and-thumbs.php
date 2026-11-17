@@ -19,7 +19,7 @@ function inline_markdown($text) {
     $text = preg_replace('/\*\*(.+?)\*\*/s', '<strong>$1</strong>', $text);
     $text = preg_replace('/__(.+?)__/s', '<u>$1</u>', $text);
     $text = preg_replace('/\*(.+?)\*/s', '<em>$1</em>', $text);
-    $text = preg_replace('/(?<![a-zA-Z0-9])_(.+?)_(?![a-zA-Z0-9])/s', '<em>$1</em>', $text);
+    $text = preg_replace('/(?<![a-zA-Z0-9])_(.{1,2000}?)_(?![a-zA-Z0-9])/s', '<em>$1</em>', $text);   // (the inner part is capped: with none, a long line of "_a _a _a" took seconds, every page that shows the note paid it)
     $text = preg_replace('/~~(.+?)~~/s', '<del>$1</del>', $text);
     $text = preg_replace('/`([^`]+)`/', '<code>$1</code>', $text);
     $text = preg_replace_callback('/\[([^\]]+)\]\(\x1A(\d+)\x1B\)/', function ($m) use ($urls) {

@@ -219,7 +219,7 @@ function media_sort_spec_for_folder($folderReal) {
 /** The capture time in a TIFF block (the shape EXIF uses): the original date in the Exif part, else the digitized date, else
  *  the file's date field; null when there is none. Read by hand, so it needs no PHP extension and works for JPEG and HEIC alike.
  *  An offset the camera recorded (iPhones do) makes it exact; without one it is taken as UTC, good enough to order by. */
-function tiff_capture_time($tiff) {
+function tiff_capture_time($tiff, &$offsetSeconds = null) {
     $n = strlen($tiff);
     if ($n < 8) return null;
     $le = substr($tiff, 0, 2) === 'II';
@@ -247,10 +247,13 @@ function tiff_capture_time($tiff) {
         if (!isset($map[$tag])) continue;
         $t = $text($map[$tag]);
         if ($t === null || !preg_match('/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)$/', $t, $m) || (int) $m[1] < 1971) continue;
+        if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1]) || (int) $m[4] > 23 || (int) $m[5] > 59 || (int) $m[6] > 59) continue;   // (month 13, 25 o'clock: not a time)
         $ts = gmmktime((int) $m[4], (int) $m[5], (int) $m[6], (int) $m[2], (int) $m[3], (int) $m[1]);
-        if ($tag === 0x9003 && isset($exif[0x9011]) && preg_match('/^([+-])(\d\d):(\d\d)$/', (string) $text($exif[0x9011]), $o)) {
-            $ts -= ($o[1] === '-' ? -1 : 1) * ((int) $o[2] * 3600 + (int) $o[3] * 60);
-        }
+        if ($ts > time() + 172800) continue;   // (a date in the future is not when it was taken: a video's is refused the same way)
+        // The clock time the camera wrote is what is used, for every photo and video alike: a phone also records its time zone and a camera does not, and
+        // converting only the phone's would put a mixed folder in the wrong order by the zone's offset. The offset a phone recorded is handed back for the day it is wanted.
+        $offsetSeconds = null;
+        if ($tag === 0x9003 && isset($exif[0x9011]) && preg_match('/^([+-])(\d\d):(\d\d)$/', (string) $text($exif[0x9011]), $o)) $offsetSeconds = ($o[1] === '-' ? -1 : 1) * ((int) $o[2] * 3600 + (int) $o[3] * 60);
         return $ts;
     }
     return null;
@@ -287,8 +290,10 @@ function quicktime_recorded_time($fh, $meta) {
             if ($d['type'] !== 'data' || $d['end'] - $d['data'] < 9 || $d['end'] - $d['data'] > 72) continue;
             $text = scrub_read($fh, $d['data'] + 8, $d['end'] - $d['data'] - 8);
             if ($text === null || !preg_match('/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:?\d\d)$/', $text)) return null;
-            $ts = strtotime($text);
-            return $ts !== false && $ts > 31536000 && $ts < time() + 172800 ? $ts : null;
+            // the clock time written (2026-10-13T12:54:49+0200 is 12:54), like a photo's: the zone is not applied
+            if (!preg_match('/^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)/', $text, $m) || !checkdate((int) $m[2], (int) $m[3], (int) $m[1]) || (int) $m[4] > 23 || (int) $m[5] > 59 || (int) $m[6] > 59) return null;
+            $ts = gmmktime((int) $m[4], (int) $m[5], (int) $m[6], (int) $m[2], (int) $m[3], (int) $m[1]);
+            return $ts > 31536000 && $ts < time() + 172800 ? $ts : null;
         }
     }
     return null;
@@ -405,7 +410,7 @@ function media_capture_time($path) {
  *  its modified time. Reading dates out of many files is slow, so what is found is kept (by file name, size and modified
  *  time) in the folder's cache. */
 function media_taken_times($folderReal, $names) {
-    $cachePath = $folderReal . '/.gallery-cache/taken3.json';
+    $cachePath = $folderReal . '/.gallery-cache/taken4.json';
     $known = [];
     $raw = is_file($cachePath) ? json_decode((string) @file_get_contents($cachePath), true) : null;
     if (is_array($raw)) $known = $raw;

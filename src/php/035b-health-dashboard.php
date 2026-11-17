@@ -26,6 +26,29 @@ function health_ago_short($t) {
 }
 function health_bytes($b) { return $b >= 1073741824 ? round($b / 1073741824, 1) . ' GB' : ($b >= 1048576 ? round($b / 1048576, $b >= 10485760 ? 0 : 1) . ' MB' : max(1, (int) ceil($b / 1024)) . ' KB'); }
 
+/** The folders the web server may not open, from the gallery's own folder (and every place from elsewhere it shows) down: [path from the gallery's folder]. The page leaves them out without a word; this is how the Health check can say so.
+ *  The same ceilings as the page's own scan, and a link or a dot folder is never entered. */
+function gallery_unreadable_folders($dir) {
+    $roots = [rtrim((string) (realpath($dir) ?: $dir), '/') => '']; $self = basename((string) ($_SERVER['SCRIPT_NAME'] ?? 'index.php'));
+    foreach (gallery_mounts() as $name => $real) if (is_string($real) && $real !== '') $roots[rtrim($real, '/')] = (string) $name;
+    $bad = []; $seen = 0;
+    foreach ($roots as $root => $label) {
+        $todo = [[$root, $label]];
+        while ($todo && $seen < SCAN_MAX_FOLDERS) {
+            [$here, $rel] = array_pop($todo); $seen++;
+            $entries = @scandir($here);
+            if ($entries === false) { $bad[] = $rel === '' ? '(the gallery\'s own folder)' : $rel; continue; }
+            foreach ($entries as $e) {
+                if ($e === '.' || $e === '..' || $e[0] === '.' || ($here === $root && $label === '' && $e === $self) || in_array($e, SCAN_SKIP_FOLDERS, true)) continue;
+                $p = $here . '/' . $e;
+                if (is_link($p) || !is_dir($p) || !name_is_text($e)) continue;
+                $todo[] = [$p, ($rel === '' ? '' : $rel . '/') . $e];
+            }
+        }
+    }
+    return $bad;
+}
+
 /** The checks that take a moment (each database looked through, every folder's data files listed), kept for an hour and looked at again by "Check again". */
 function health_heavy($dir, $files, $force) {
     $p = __DIR__ . '/.gallery-health-cache.php';
@@ -40,7 +63,7 @@ function health_heavy($dir, $files, $force) {
         }
         return $c;
     }
-    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
+    $r = ['at' => time(), 'v' => GALLERY_VERSION, 'log' => null, 'file' => $live === null ? '' : basename($live), 'zsig' => $zsig, 'zip' => $zipNow === null ? null : backup_zip_verify($zipNow)[0], 'unreadable' => gallery_unreadable_folders($dir), 'stats' => ['n' => 0, 'bad' => [], 'ro' => [], 'nodriver' => []]];
     if ($live !== null && visitlog_driver_ok()) $r['log'] = ['why' => backup_sqlite_check($live)];
     foreach (owned_plan($dir, $files)['entries'] as $e) {
         if ($e['kind'] !== 'stats') continue;

@@ -144,7 +144,7 @@
         <input type="hidden" name="group_key" value="<?= htmlspecialchars($gKey, ENT_QUOTES, 'UTF-8') ?>">
         <div class="field">
           <label><?= htmlspecialchars($gKey, ENT_QUOTES, 'UTF-8') ?> (<?= count($gFiles) ?> item<?= count($gFiles) === 1 ? '' : 's' ?>)</label>
-          <input type="text" name="display_name" aria-label="Group name" value="<?= htmlspecialchars($isExplicit ? $explicitGroups[$gKey]['name'] : ($itemsHere['groups'][$gKey]['displayName'] ?? ''), ENT_QUOTES, 'UTF-8') ?>" <?= $isExplicit ? 'disabled' : '' ?>>
+          <input type="text" name="display_name" aria-label="Group name" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" value="<?= htmlspecialchars($isExplicit ? $explicitGroups[$gKey]['name'] : ($itemsHere['groups'][$gKey]['displayName'] ?? ''), ENT_QUOTES, 'UTF-8') ?>" <?= $isExplicit ? 'disabled' : '' ?>>
         </div>
         <?php if (!$isExplicit): ?><button type="submit">Save</button><?php else: ?><span class="muted">Controlled by {group:} in a .md</span><?php endif; ?>
       </form>
@@ -190,7 +190,7 @@
           <input type="hidden" name="action" value="save_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
           <input type="hidden" name="loaded_hash" value="<?= $loadedHash ?>">
-          <textarea name="content" class="adm-textarea" aria-label="Contents of this notes file"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
+          <textarea name="content" class="adm-textarea" aria-label="Contents of this notes file" maxlength="<?= text_limit('notes') ?>" data-count="<?= text_limit('notes') ?>"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
           <div class="field-row md-actions">
             <div class="field">
               <label>Save as a different filename (optional)</label>
@@ -213,12 +213,11 @@
         <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
         <input type="hidden" name="action" value="save_notes">
         <input type="hidden" name="md_file" value="">
-        <textarea name="content" class="adm-textarea" aria-label="Contents of the new notes file">{gallery}
-</textarea>
+        <textarea name="content" class="adm-textarea" aria-label="Contents of the new notes file" maxlength="<?= text_limit('notes') ?>" data-count="<?= text_limit('notes') ?>"><?php $typedNew = !empty($GLOBALS['__notes_stale']) && $GLOBALS['__notes_stale']['file'] === '' ? $GLOBALS['__notes_stale']['content'] : "{gallery}\n"; echo htmlspecialchars($typedNew, ENT_QUOTES, 'UTF-8'); ?></textarea>
         <div class="field-row md-actions">
           <div class="field">
             <label>Filename</label>
-            <input type="text" name="new_name" class="adm-newname" aria-label="Filename" placeholder="notes.md" required>
+            <input type="text" name="new_name" class="adm-newname" aria-label="Filename" placeholder="notes.md" required<?php if (!empty($GLOBALS['__notes_stale']) && $GLOBALS['__notes_stale']['file'] === '') echo ' value="' . htmlspecialchars(basename((string) ($_POST['new_name'] ?? '')), ENT_QUOTES, 'UTF-8') . '"'; ?>>
           </div>
           <button type="submit">Create</button>
         </div>

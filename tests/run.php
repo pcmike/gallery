@@ -1467,7 +1467,7 @@ $soStored = json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo
 check('[sort] saved, the folder keeps only what was chosen (order, direction, videos on, private off; "the site\'s" choices are not stored)', ($soStored['photoSort'] ?? null) == ['order' => 'taken', 'desc' => true, 'video' => true, 'private' => false] && isset($soStored['items']['z-located.jpg']) && true && $soStored['locationEnabled'] === true, json_encode($soStored));
 check('[sort] ...and it is the order visitors get in that folder', $soOrder() === ['m.mp4', 'z-located.jpg', 'b-late.jpg', 'c-mid.jpg', 'a-early.jpg'], json_encode($soOrder()));
 check('[sort] ...but a visitor\'s own choice still beats the folder\'s', $soOrder('?sort=name') === ['a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg']);
-check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken3.json") && count(json_decode(file_get_contents("$fxSo/.gallery-cache/taken3.json"), true)) >= 5);
+check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken4.json") && count(json_decode(file_get_contents("$fxSo/.gallery-cache/taken4.json"), true)) >= 5);
 [, $soPage] = http_get("$baseSo/");
 check('[sort] the page has the sort button, with only the toggles that apply here (videos, located; private only for the owner)', str_contains($soPage, 'id="sort-menu-btn"') && str_contains($soPage, 'data-flag="video"') && str_contains($soPage, 'data-flag="located"') && !str_contains($soPage, 'data-flag="private"'));
 [, $soPageOwner] = http_get("$baseSo/", ["Cookie: $soSess"]);
@@ -4632,7 +4632,7 @@ $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
 check('[plain] a copy of index.php with no settings changed shows the root photos and the subfolder as a cover card (subfolders are on by default)', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && str_contains($plain, 'Subfolder') && str_contains($plain, '?folder=Subfolder'));
 $newEntries = array_values(array_filter(array_diff($after, $before), fn ($f) => !preg_match('/^\.gallery-visits-[0-9a-f]{24}\.sqlite(-wal|-shm)?$/', $f)));   // (the log of disk activity is made by the first page, with the visitor log's name)
 $plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
-check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken3.json', 'meta1.php'], true)));
+check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', ($newEntries === [] || $newEntries === ['.gallery-cache']) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken4.json', 'meta1.php'], true)));
 http_get("$basePlain/?admin");
 check('[plain] ...asking for ?admin before any password exists is the one request that writes more: the set-up code file beside index.php (gallery-setup-code.php, a guard line and the code), and nothing else', array_values(array_diff(array_diff(scandir($fxPlain), ['.', '..']), $after)) === ['gallery-setup-code.php']);
 @unlink("$fxPlain/gallery-setup-code.php");
@@ -5666,7 +5666,7 @@ check('[link summary] the paragraph ends with Edit… and the Settings list, the
 check('[link summary] a revoked link says so in the paragraph, has no Edit…, no address and no Share… or QR code; a paused link has the Copy button in the share kit (its row button is Resume), an active one has not', str_contains($nPara($nGone['id']), 'Revoked ') && !str_contains($nPara($nGone['id']), 'Edit…') && !str_contains($nRows[$nGone['id']], 'class="gs-mount"') && str_contains($nRows[$nPause['id']], 'class="gs-mount" data-name="Paused one" data-copy="1"') && str_contains($nRows[$nBusy['id']], 'data-copy="0"'));
 check('[link summary] a link with an old address that still works has a one-line "Old addresses" row that opens the Pause, Resume and Kill buttons; a link without any has none', str_contains($nRows[$nAlias['id']], '<details class="sl-old"') && str_contains($nRows[$nAlias['id']], 'Old addresses (1)') && str_contains($nRows[$nAlias['id']], 'Manage…') && str_contains($nRows[$nAlias['id']], 'data-sl="aliaspause"') && !str_contains($nRows[$nPlain['id']], 'sl-old'));
 // the form
-check('[new link form] the name comes first, then the address with the box "Use the name as the address" ticked and the placeholders that go together (Aunt Carol, auntcarol), the sentence, and four folded rows', preg_match('/name="label" maxlength="80" placeholder="Aunt Carol".*?name="addr_name" checked.*?Use the name as the address.*?placeholder="auntcarol".*?data-asis.*?data-grp="scope".*?data-grp="limits".*?data-grp="privacy".*?data-grp="page"/s', $nTab) === 1 && substr_count($nTab, '<details class="sl-grp"') === 4 && !str_contains($nTab, '<details class="sl-grp" open') && substr_count($nTab, 'data-cl="') === 6);
+check('[new link form] the name comes first, then the address with the box "Use the name as the address" ticked and the placeholders that go together (Aunt Carol, auntcarol), the sentence, and four folded rows', preg_match('/name="label" maxlength="80" data-count="80" placeholder="Aunt Carol".*?name="addr_name" checked.*?Use the name as the address.*?placeholder="auntcarol".*?data-asis.*?data-grp="scope".*?data-grp="limits".*?data-grp="privacy".*?data-grp="page"/s', $nTab) === 1 && substr_count($nTab, '<details class="sl-grp"') === 4 && !str_contains($nTab, '<details class="sl-grp" open') && substr_count($nTab, 'data-cl="') === 6);
 check('[new link form] with the default set to Unlimited (0) the defaults are Unlimited and Never (not 10 and 1 week), Immediately, downloads and ZIP Off, locations "Shown only", the public gallery', preg_match('/name="opens_pick" value="0" checked/', $nTab) === 1 && preg_match('/name="ends_pick" value="0" checked/', $nTab) === 1 && preg_match('/name="starts_pick" value="now" checked/', $nTab) === 1 && preg_match('/name="downloads" value="off" checked/', $nTab) === 1 && preg_match('/name="zip" value="off" checked/', $nTab) === 1 && preg_match('/name="locations" value="public" checked/', $nTab) === 1 && preg_match('/name="scope_type" value="public" checked/', $nTab) === 1 && str_contains($nTab, 'data-default-uses="0"') && !str_contains($nTab, 'data-uses-note'));
 check('[new link form] downloads and ZIP offer Off, Everything, Everything but private and Only some folders; locations are "Shown only" and "All" (never "as the public sees them")', substr_count($nTab, 'Everything but private') >= 2 && str_contains($nTab, '<span>Only some folders</span>') && str_contains($nTab, '<span>Shown only</span>') && str_contains($nTab, '<span>All</span>') && !str_contains($nTab, 'As the public sees them') && !str_contains($nTab, 'as the public sees them'));
 check('[new link form] the preview photo keeps its Choose… and Automatic buttons inside the opening page row', preg_match('/data-grp="page".*?name="picture".*?data-cover-choose.*?data-cover-auto.*?name="note"/s', $nTab) === 1);
@@ -6423,7 +6423,7 @@ $lgVisCsvRow = (function () use ($lgFrag, $lgId) { $ln = explode("\r\n", $lgFrag
 check('[seen column] the Visitors table has a Seen column between Visits and Opened, with the visitor\'s total, and the Visitors CSV has a seen column in the same place', str_contains($lgSeenVis, '<th scope="col">Visits</th><th scope="col">Seen</th><th scope="col">Opened</th>') && str_contains($lgSeenVis, 'data-label="Seen">') && str_contains($lgFrag("visitsexport=visitors&src=$lgId")[1], '"visits","seen","opened"') && ($lgMigOk ? (int) ($lgVisCsvRow[7] ?? 0) >= 1 : true), json_encode($lgVisCsvRow));
 $lgRep = $lgFrag('visitsexport=report&ip=127.0.0.1'); $lgRepBody = ltrim($lgRep[1], "\xEF\xBB\xBF"); $lgRepHdr = implode("\n", $lgRep[2]);
 check('[report] one address\'s report is one CSV with its name, its sections in order (who, what they looked at, folders, the timeline), and the address in the file name', $lgRep[0] === 200 && str_contains($lgRepHdr, 'filename="visitors-report-127.0.0.1.csv"') && str_starts_with($lgRepBody, "\"Visitor report\"\r\n\"IP address\",\"127.0.0.1\"\r\n") && ($lgPos = array_map(fn ($t) => strpos($lgRepBody, $t), ['"Who: one line per source and browser"', '"What they looked at: one line per photo or video"', '"Folders they opened"', '"Timeline: everything in order"'])) && $lgPos === array_filter($lgPos, fn ($x) => $x !== false) && $lgPos === (function ($a) { sort($a); return $a; })($lgPos), json_encode([$lgRep[0], $lgPos, substr($lgRepBody, 0, 200)]));
-check('[report] it says what they looked at (the picture, with its seen, opened and downloaded counts), has the timeline with no address column, and names the browser', str_contains($lgRepBody, '"source","folder","file","first_seen","seen","opened","played","downloaded","last_activity"') && str_contains($lgRepBody, '"r1.jpg"') && str_contains($lgRepBody, "\r\n\"time\",\"source\",\"what\",\"folder\",\"file\",\"count\"\r\n") && str_contains($lgRepBody, '"source","browser","first_seen","last_seen","visits","seen","opened","came_in_on","came_in_at"'));
+check('[report] it says what they looked at (the picture, with its seen, opened and downloaded counts), has the timeline with no address column, and names the browser', str_contains($lgRepBody, '"source","folder","file","first_seen","seen","opened","played","downloaded","last_activity","utc_offset"') && str_contains($lgRepBody, '"r1.jpg"') && str_contains($lgRepBody, "\r\n\"time\",\"source\",\"what\",\"folder\",\"file\",\"count\",\"utc_offset\"\r\n") && str_contains($lgRepBody, '"source","browser","first_seen","last_seen","visits","seen","opened","came_in_on","came_in_at","utc_offset"'));
 check('[report] it does not follow the tab\'s choices (a source or search that leaves this address out still gives all of it), and every source for the address is in it', str_contains($lgFrag("visitsexport=report&ip=127.0.0.1&src=public&q=zzz")[1], '"r1.jpg"') && substr_count($lgRepBody, "\r\n") > 20);
 check('[report] an address that was never logged, or is not an address, or has wildcards in it, gets nothing (404) and not an empty file', $lgFrag('visitsexport=report&ip=9.9.9.9')[0] === 404 && $lgFrag('visitsexport=report&ip=not-an-ip')[0] === 404 && $lgFrag('visitsexport=report&ip=127.0.0.%25')[0] === 404 && $lgFrag('visitsexport=report')[0] === 404);
 check('[report] it needs the owner (without a sign-in it gives nothing), and the tab has the link on each visitor and a menu item for the address the search holds', !str_contains(http_get("$baseL/?admin&visitsexport=report&ip=127.0.0.1")[1], 'r1.jpg') && str_contains($lgSeenVis, 'class="vt-rep" data-export="report" data-ip="127.0.0.1"') && preg_match('~data-export="report" class="vt-repmenu" hidden>This visitor\'s report~', $lgFrag('visits=1&tab=visitors')[1] . http_get("$baseL/?admin", ["Cookie: $lgAdminCookie"])[1]) === 1);
@@ -6431,11 +6431,11 @@ check('[report] it needs the owner (without a sign-in it gives nothing), and the
 $lgTzRow = function ($tz) use ($lgFrag, $lgId) { $ln = explode("\r\n", $lgFrag("visitsexport=visitors&src=$lgId" . $tz)[1]); return [str_getcsv(ltrim($ln[0] ?? '', "\xEF\xBB\xBF"), ',', '"', ''), str_getcsv($ln[1] ?? '', ',', '"', '')]; };
 [$lgTzH0, $lgTz0] = $lgTzRow(''); [$lgTzHn, $lgTzN] = $lgTzRow('&tz=America/New_York'); [$lgTzHk, $lgTzK] = $lgTzRow('&tz=Asia/Kolkata'); [, $lgTzBad] = $lgTzRow('&tz=' . rawurlencode('Mars/Olympus')); [, $lgTzDots] = $lgTzRow('&tz=' . rawurlencode('../../etc/passwd'));
 $lgTzAt = function ($zone) use ($lgTz0) { return (new DateTime($lgTz0[4], new DateTimeZone('UTC')))->setTimezone(new DateTimeZone($zone))->format('Y-m-d H:i:s'); };
-check('[time zone] a CSV is written in the zone the browser sends (its own name for it, so daylight saving is right for each line), and each line names it in a last column; with none sent it is UTC, and says so', end($lgTzH0) === 'time_zone' && end($lgTz0) === 'UTC' && end($lgTzN) === 'America/New_York' && ($lgTzN[4] ?? '') === $lgTzAt('America/New_York') && end($lgTzK) === 'Asia/Kolkata' && ($lgTzK[4] ?? '') === $lgTzAt('Asia/Kolkata') && ($lgTzN[4] ?? '') !== ($lgTz0[4] ?? ''), json_encode([$lgTz0, $lgTzN, $lgTzK]));
+check('[time zone] a CSV is written in the zone the browser sends (its own name for it, so daylight saving is right for each line), and each line names it in the column before the last (the last is the UTC offset); with none sent it is UTC, and says so', ($lgTzH0[count($lgTzH0) - 2] ?? '') === 'time_zone' && end($lgTzH0) === 'utc_offset' && ($lgTz0[count($lgTz0) - 2] ?? '') === 'UTC' && ($lgTzN[count($lgTzN) - 2] ?? '') === 'America/New_York' && ($lgTzN[4] ?? '') === $lgTzAt('America/New_York') && ($lgTzK[count($lgTzK) - 2] ?? '') === 'Asia/Kolkata' && ($lgTzK[4] ?? '') === $lgTzAt('Asia/Kolkata') && ($lgTzN[4] ?? '') !== ($lgTz0[4] ?? ''), json_encode([$lgTz0, $lgTzN, $lgTzK]));
 check('[time zone] a name that is not a zone (made up, or a path, or too long) is not trusted: the file is in UTC, as if none was sent', $lgTzBad === $lgTz0 && $lgTzDots === $lgTz0 && $lgTzRow('&tz=' . str_repeat('a', 80))[1] === $lgTz0);
 $lgRepNy = ltrim($lgFrag('visitsexport=report&ip=127.0.0.1&tz=America/New_York')[1], "\xEF\xBB\xBF");
 check('[time zone] the one-address report says at the top which zone its times are in (and what that is against UTC just now), and keeps saying UTC when none was sent', preg_match('~"Made","[0-9: -]+ \(every time in this file is America/New_York, UTC[+-][0-9]{2}:[0-9]{2} now\)"~', $lgRepNy) === 1 && str_contains($lgRepBody, '(every time in this file is UTC)') && !str_contains($lgRepBody, 'now)'));
-check('[time zone] every kind of CSV carries the zone column (the visitors, the folders, the media, the timeline, the blocked tries)', (function () use ($lgFrag, $lgId) { foreach (['visitors', 'items', 'events', 'folders', 'media', 'blocked'] as $k) { $b = ltrim($lgFrag("visitsexport=$k&tz=Europe/Paris" . ($k === 'blocked' ? '' : "&src=$lgId"))[1], "\xEF\xBB\xBF"); $ln = explode("\r\n", $b); if (!str_ends_with($ln[0], ',"time_zone"') || (isset($ln[1]) && $ln[1] !== '' && !str_ends_with($ln[1], ',"Europe/Paris"'))) return false; } return true; })());
+check('[time zone] every kind of CSV carries the zone column (the visitors, the folders, the media, the timeline, the blocked tries)', (function () use ($lgFrag, $lgId) { foreach (['visitors', 'items', 'events', 'folders', 'media', 'blocked'] as $k) { $b = ltrim($lgFrag("visitsexport=$k&tz=Europe/Paris" . ($k === 'blocked' ? '' : "&src=$lgId"))[1], "\xEF\xBB\xBF"); $ln = explode("\r\n", $b); if (!str_ends_with($ln[0], ',"time_zone","utc_offset"') || (isset($ln[1]) && $ln[1] !== '' && !str_contains($ln[1], ',"Europe/Paris",'))) return false; } return true; })());
 $lgLinkTime = $lgFrag("visits=1&tab=timeline&src=$lgId")[1];
 check('[share log] the Timeline has the same lines for a link, each naming the address that did it (a button that searches it) and the link it came in on', str_contains($lgLinkTime, 'Scrolled through') && str_contains($lgLinkTime, 'Played') && str_contains($lgLinkTime, 'class="linklike vt-ip" data-ip="127.0.0.1"') && str_contains($lgLinkTime, 'via ') && str_contains($lgLinkTime, 'public address') === false);
 check('[share log] in the Timeline the opened, played and downloaded lines carry a small picture that opens the folder at that photo (as the Media tab\'s do), and the scroll line\'s pictures do too', preg_match('~class="sl-tth" href="\?folder=Rome&amp;find=Rome%2Fr1\.jpg"~', $lgIpTime) === 1 && preg_match('~class="sl-evpic"><a class="sl-tth"[^>]*>.*?Opened <b>r1\.jpg</b>~s', $lgIpTime) === 1 && preg_match('~Played <b>clip\.mp4</b>~', $lgIpTime) === 1 && preg_match('~class="sl-strip"><a class="sl-tth"~', $lgIpTime) === 1 && !str_contains($lgIpTime, 'sl-mini2'));
@@ -8455,8 +8455,8 @@ $hiFirstT = (int) ($hiLines($hiId)[0]['t'] ?? 0);
 $hiZoned = fn (string $zone) => $hiFirstT ? (new DateTime('@' . $hiFirstT))->setTimezone(new DateTimeZone($zone))->format('Y-m-d H:i:s') : '';
 $csvTokyo = http_get("$baseHi/?admin&browserhist=$hiId&csv=1&tz=Asia%2FTokyo", $hiOwnCk)[1]; $csvPlain = http_get("$baseHi/?admin&browserhist=$hiId&csv=1", $hiOwnCk)[1]; $csvBadTz = http_get("$baseHi/?admin&browserhist=$hiId&csv=1&tz=" . rawurlencode('../Nope'), $hiOwnCk)[1];
 $hiRows = fn (string $csv) => array_values(array_filter(explode("\n", rtrim($csv))));
-check('[details] the CSV is in the zone the browser names (&tz=Asia/Tokyo): the first line\'s time is that zone\'s, the header ends with time_zone, and every line says which zone it is in', $hiFirstT > 0 && str_contains($hiRows($csvTokyo)[0], ',time_zone') && str_contains($csvTokyo, $hiZoned('Asia/Tokyo')) && !array_filter(array_slice($hiRows($csvTokyo), 1), fn ($l) => !str_ends_with(rtrim($l), '"Asia/Tokyo"')), substr($csvTokyo, 0, 200));
-check('[details] ...with no zone sent (or a name that is not one) it is UTC, and says so on every line', str_contains($csvPlain, $hiZoned('UTC')) && !array_filter(array_slice($hiRows($csvPlain), 1), fn ($l) => !str_ends_with(rtrim($l), '"UTC"')) && str_contains($csvBadTz, $hiZoned('UTC')) && !array_filter(array_slice($hiRows($csvBadTz), 1), fn ($l) => !str_ends_with(rtrim($l), '"UTC"')), substr($csvPlain, 0, 200));
+check('[details] the CSV is in the zone the browser names (&tz=Asia/Tokyo): the first line\'s time is that zone\'s, the header ends with time_zone, and every line says which zone it is in', $hiFirstT > 0 && str_contains($hiRows($csvTokyo)[0], ',time_zone') && str_contains($csvTokyo, $hiZoned('Asia/Tokyo')) && !array_filter(array_slice($hiRows($csvTokyo), 1), fn ($l) => !str_contains($l, '"Asia/Tokyo"')), substr($csvTokyo, 0, 200));
+check('[details] ...with no zone sent (or a name that is not one) it is UTC, and says so on every line', str_contains($csvPlain, $hiZoned('UTC')) && !array_filter(array_slice($hiRows($csvPlain), 1), fn ($l) => !str_contains($l, '"UTC"')) && str_contains($csvBadTz, $hiZoned('UTC')) && !array_filter(array_slice($hiRows($csvBadTz), 1), fn ($l) => !str_contains($l, '"UTC"')), substr($csvPlain, 0, 200));
 check('[details] a made-up or missing id is a 404, and a guest or a stranger cannot ask (it is an admin address)', http_get("$baseHi/?admin&browserhist=ffffffffffff", $hiOwnCk)[0] === 404 && http_get("$baseHi/?admin&browserhist=notanid", $hiOwnCk)[0] === 404 && !str_contains(http_get("$baseHi/?admin&browserhist=$hiId", $hiH('203.0.113.9', 'US', $uaIphone, $hiTok))[1], '198.51.100.7') && !str_contains(http_get("$baseHi/?admin&browserhist=$hiId")[1], '198.51.100.7'));
 // what the browser says is stored and shown as text, never as markup; a spreadsheet formula is made safe
 $hiEvil = $hiGuest('203.0.113.77', 'US', '=HYPERLINK("http://x")<script>alert(1)</script>"><img src=x onerror=1>'); $hiEvilId = substr(hash('sha256', $hiEvil), 0, 12);
@@ -9075,7 +9075,7 @@ for ($i = 0; $i < 9; $i++) http_get("$baseNl/?Gu3ss0$i" . 'ZZ', [], false);
 check('[lockout] nine wrong addresses are counted but pause no one: a right address still opens, and a wrong one is still just not found', $nlCountFor() === 9 && str_contains(http_get("$baseNl/?$nlNewCode", [], false)[1], 'const files = ["' . $nlNewCode . '"]'));
 http_get("$baseNl/?Gu3ss10Z", [], false);
 $nlPaused = http_get("$baseNl/?$nlNewCode", [], false);
-check('[lockout] ten wrong ones pause that visitor for a minute: even a right address gets a friendly "Please wait" page (429, Retry-After) that says nothing of the photo', $nlPaused[0] === 429 && str_contains($nlPaused[1], 'Please wait a moment') && !str_contains($nlPaused[1], 'NOTLISTED') && (bool) preg_grep('~^Retry-After: 60~i', $nlPaused[2]), 'status ' . $nlPaused[0] . '; headers ' . implode(' | ', array_map('trim', array_slice((array) $nlPaused[2], 0, 6))) . '; attempts on file ' . $nlCountFor() . '; body starts ' . substr(preg_replace('/\\s+/', ' ', strip_tags((string) $nlPaused[1])), 0, 120));
+check('[lockout] ten wrong ones pause that visitor for a minute: even a right address gets a friendly "Please wait" page (429, Retry-After) that says nothing of the photo', $nlPaused[0] === 429 && str_contains($nlPaused[1], 'Please wait a moment') && !str_contains($nlPaused[1], 'NOTLISTED') && (bool) preg_grep('~^Retry-After: (?:59|60)~i', $nlPaused[2]), 'status ' . $nlPaused[0] . '; headers ' . implode(' | ', array_map('trim', array_slice((array) $nlPaused[2], 0, 6))) . '; attempts on file ' . $nlCountFor() . '; body starts ' . substr(preg_replace('/\\s+/', ' ', strip_tags((string) $nlPaused[1])), 0, 120));
 check('[lockout page] ...and that page counts the seconds left down (about a minute at the start), in the words of addresses', preg_match('~id="lock-secs"[^>]*>(\\d):(\\d\\d)<~', $nlPaused[1], $nlM) === 1 && ((int) $nlM[1] * 60 + (int) $nlM[2]) >= 55 && ((int) $nlM[1] * 60 + (int) $nlM[2]) <= 60 && str_contains($nlPaused[1], 'addresses that did not work'));
 check('[lockout] the pause is only for addresses: the gallery itself and the owner are not affected', http_get("$baseNl/", [], false)[0] === 200 && str_contains(http_get("$baseNl/?$nlNewCode", $nlOwn, false)[1], 'NOTLISTED-SENTINEL.jpg'));   // (the owner gets the gallery's own page, with the photo opened over its folder)
 // a right code that is turned away for another reason (the folder's downloads are switched off) is not a guess
@@ -11054,9 +11054,9 @@ check('[names] a Latin-1 name given to the ZIP naming function comes out as UTF-
 // the "taken times" cache: a failed encode must never leave an empty file
 mkdir("$g2Dir/taken", 0777, true); make_jpeg("$g2Dir/taken/a.jpg", 20, 20, 1, 2, 3);
 $g2Out = $g2Run('function media_capture_time($p) { return null; }' . "\n" . $g2Fn('name_is_text') . "\n" . $g2Fn('media_taken_times') . "\n" . 'media_taken_times(' . var_export("$g2Dir/taken", true) . ', ["a.jpg", "caf\\xE9.jpg"]); echo "done";');
-$g2Cache = @file_get_contents("$g2Dir/taken/.gallery-cache/taken3.json"); $g2Dec = $g2Cache === false ? null : json_decode($g2Cache, true);
+$g2Cache = @file_get_contents("$g2Dir/taken/.gallery-cache/taken4.json"); $g2Dec = $g2Cache === false ? null : json_decode($g2Cache, true);
 check('[names] the folder\'s "taken times" cache is still written (with the usable names) when the folder holds a name that isn\'t valid text; it used to be an empty file, so every page view read every file again', str_ends_with($g2Out, 'done') && is_array($g2Dec) && array_keys($g2Dec) === ['a.jpg'], $g2Out . ' ' . var_export($g2Cache, true));
-$g2Taken = (string) @file_get_contents("$fxN/.gallery-cache/taken3.json");
+$g2Taken = (string) @file_get_contents("$fxN/.gallery-cache/taken4.json");
 check('[names] ...and on the real gallery (photos in date order, one top folder holding a bad name) the cache is not empty and holds the usable photos', is_array($g2TakenDec = json_decode($g2Taken, true)) && isset($g2TakenDec['ok.jpg'], $g2TakenDec['b.jpg']) && count(array_filter(array_keys($g2TakenDec), fn ($k) => str_contains((string) $k, "\xE9"))) === 0, var_export($g2Taken, true));
 
 // the same with Show folders off (a flat scan of the top folder)
@@ -12452,6 +12452,246 @@ echo "== audit group 13: the backup ==\n";
     $g14Held0 = count($g14Held()); $g14LockP = "{$g14['dir']}/.gallery-backup.lock"; @unlink($g14LockP); symlink("{$g14['dir']}/nowhere", $g14LockP);
     $g14Fail = $g14Run(); $g14Page2 = http_get($g14['base'] . '/?admin&classic=1', $g14['own'])[1]; unlink($g14LockP);
     check('[backup hold] a backup run that fails (here: its lock file is a link, which the gallery won\'t use) does not make Health forget the parts the backup is holding: the rows and their buttons stay', ($g14Fail['ok'] ?? true) === false && $g14Held0 >= 2 && count($g14Held()) === $g14Held0 && substr_count($g14Page2, 'data-backup-act="accept"') >= 2, json_encode([$g14Fail, $g14Held0, count($g14Held())]));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 14, part 1: limits on the texts the owner types (shown as you type, refused past the limit with the number, a text already saved is not locked out),
+// and the three places a text was cut by bytes (a letter split in two)
+echo "== audit group 14: limits on typed text, and text cut inside a letter ==\n";
+{
+    $g14Site = function ($label, array $cfg = [], $ua = null) use ($indexSrc) {
+        $dir = new_fixture_dir($label);
+        mkdir("$dir/Alpha", 0777, true);
+        make_jpeg("$dir/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+        file_put_contents("$dir/.gallery-config.php", cfg_text($cfg + ['ADMIN_PASSWORD' => 'g14-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$dir/index.php");
+        $port = find_free_port(); start_server($dir, $port);
+        $s = ['dir' => $dir, 'port' => $port, 'base' => "http://127.0.0.1:$port"];
+        $uah = $ua !== null ? ['User-Agent: ' . $ua] : [];
+        [, , $h] = http_post($s['base'] . '/?admin', ['access_code' => 'g14-admin-pw-1'], $uah, false);
+        $s['own'] = array_merge(['Cookie: ' . extract_cookie_header($h)], $uah);
+        $s['csrf'] = (string) extract_csrf_token(http_get($s['base'] . '/?admin&classic=1', $s['own'])[1]);
+        $s['admin'] = fn (array $f, $folder = '') => json_decode(http_post($s['base'] . '/?admin' . ($folder !== '' ? '&folder=' . $folder : ''), $f + ['csrf_token' => $s['csrf']], array_merge($s['own'], ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+        $s['page'] = fn (array $f, $q = '?admin&folder=Alpha') => http_post($s['base'] . '/' . $q, $f + ['csrf_token' => $s['csrf']], $s['own'])[1];
+        return $s;
+    };
+    $g14Items = fn ($s) => is_file("{$s['dir']}/Alpha/.gallery-items.php") ? read_data_file("{$s['dir']}/Alpha/.gallery-items.php") : [];
+    $g14Save = fn ($s, array $o) => $s['admin']($o + ['action' => 'save_item', 'file' => 'a1.jpg', 'caption' => '', 'web' => '', 'lat' => '', 'lng' => '', 'loc_label' => ''], 'Alpha');
+    $L = $g14Site('g14-limits', ['ENABLE_SHARE_LINKS' => true]);
+
+    // ---- the caption, the web link and the place name ----
+    $c1000 = str_repeat('c', 1000); $r1 = $g14Save($L, ['caption' => $c1000]);
+    check('[limits] a caption of exactly 1,000 characters is saved whole', ($r1['ok'] ?? false) === true && ($g14Items($L)['items']['a1.jpg']['caption'] ?? '') === $c1000, json_encode($r1));
+    $r2 = $g14Save($L, ['caption' => $c1000 . 'x']);
+    check('[limits] 1,001 characters is refused, the answer says how long it is and what the limit is, and the saved caption is as it was', ($r2['ok'] ?? true) === false && str_contains((string) ($r2['text'] ?? ''), '1,001 characters') && str_contains((string) ($r2['text'] ?? ''), 'limit is 1,000') && ($g14Items($L)['items']['a1.jpg']['caption'] ?? '') === $c1000, json_encode($r2));
+    $rW = $g14Save($L, ['caption' => 'k', 'web' => 'https://example.org/' . str_repeat('w', 480)]); $rW2 = $g14Save($L, ['caption' => 'k', 'web' => 'https://example.org/' . str_repeat('w', 481)]);
+    check('[limits] a web link of 500 characters is saved and 501 is refused with the number', ($rW['ok'] ?? false) === true && ($rW2['ok'] ?? true) === false && str_contains((string) ($rW2['text'] ?? ''), 'web link is 501') && strlen($g14Items($L)['items']['a1.jpg']['web'] ?? '') === 500, json_encode([$rW, $rW2]));
+    $rP = $g14Save($L, ['caption' => 'k', 'lat' => '48.85', 'lng' => '2.35', 'loc_label' => str_repeat('p', 100)]); $rP2 = $g14Save($L, ['caption' => 'k', 'lat' => '48.85', 'lng' => '2.35', 'loc_label' => str_repeat('p', 101)]);
+    check('[limits] a place name of 100 characters is saved and 101 is refused with the number', ($rP['ok'] ?? false) === true && ($rP2['ok'] ?? true) === false && str_contains((string) ($rP2['text'] ?? ''), 'place name is 101'), json_encode([$rP, $rP2]));
+    $rC = $g14Save($L, ['caption' => "two\nlines\x01 and a tab\there", 'web' => '']);
+    $capC = (string) ($g14Items($L)['items']['a1.jpg']['caption'] ?? '');
+    check('[limits] control characters are dropped quietly, a newline and a tab stay', ($rC['ok'] ?? false) === true && $capC === "two\nlines and a tab\there", json_encode($capC));
+    // a caption saved before there was a limit is not locked out: only a change to it is held to the limit
+    $long = rtrim(str_repeat('old ', 375));   // 1,499 characters
+    file_put_contents("{$L['dir']}/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['items' => ['a1.jpg' => ['caption' => $long]]]));
+    $rKeep = $g14Save($L, ['caption' => $long, 'web' => 'https://example.org/new']); $rChg = $g14Save($L, ['caption' => $long . 'more', 'web' => 'https://example.org/new']);
+    check('[limits] a caption that was saved before the limit (1,500 characters) is kept as it is while something else on the photo is changed, and refused only when the caption itself is changed', ($rKeep['ok'] ?? false) === true && ($g14Items($L)['items']['a1.jpg']['caption'] ?? '') === $long && ($rChg['ok'] ?? true) === false, json_encode([$rKeep, $rChg]));
+
+    // ---- a folder's name, a note's text ----
+    $rN = $L['admin'](['action' => 'save_folder_identity', 'display_name' => str_repeat('n', 200)], 'Alpha'); $rN2 = $L['admin'](['action' => 'save_folder_identity', 'display_name' => str_repeat('n', 201)], 'Alpha');
+    check('[limits] a folder name of 200 characters is saved and 201 is refused with the number (and the saved name stays)', ($rN['ok'] ?? false) === true && ($rN2['ok'] ?? true) === false && str_contains((string) ($rN2['text'] ?? ''), '201 characters') && strlen($g14Items($L)['displayName'] ?? '') === 200, json_encode([$rN, $rN2]));
+    $nBody = "{gallery}\n" . str_repeat('x', 49990);
+    $pN = $L['page'](['action' => 'save_notes', 'md_file' => '', 'new_name' => 'limit.md', 'content' => $nBody]);
+    $nOk = is_file("{$L['dir']}/Alpha/limit.md");
+    $pN2 = $L['page'](['action' => 'save_notes', 'md_file' => '', 'new_name' => 'toolong.md', 'content' => $nBody . str_repeat('y', 20)]);
+    check('[limits] a note of 50,000 characters or fewer is saved; one over it is refused naming the number, nothing is written, and what was typed is handed back in the box', $nOk && !is_file("{$L['dir']}/Alpha/toolong.md") && str_contains(html_entity_decode($pN2, ENT_QUOTES), 'limit is 50,000') && str_contains($pN2, str_repeat('y', 20)), json_encode([$nOk, is_file("{$L['dir']}/Alpha/toolong.md"), str_contains(html_entity_decode($pN2, ENT_QUOTES), 'limit is 50,000'), str_contains($pN2, str_repeat('y', 20)), preg_match('/limit is[^<]{0,60}/', html_entity_decode($pN2, ENT_QUOTES), $mm) ? $mm[0] : substr(strip_tags($pN2), -300)]));
+
+    // ---- the limits are shown beside the fields ----
+    $pubL = http_get($L['base'] . '/?folder=Alpha', $L['own'])[1];
+    check('[limits] the viewer\'s editor fields carry their limits (caption 1,000, link 500, place 100) for the counter', str_contains($pubL, 'id="lbe-caption" maxlength="1000" data-count="1000"') && str_contains($pubL, 'id="lbe-web" maxlength="500" data-count="500"') && str_contains($pubL, 'id="lbe-label" maxlength="100" data-count="100"'));
+    $admL = http_get($L['base'] . '/?admin&classic=1&folder=Alpha', $L['own'])[1];
+    check('[limits] the folder form shows its limits too (name 200, dates 80, description 1,000) and so does the notes editor (50,000)', str_contains($admL, 'name="display_name" aria-label="Name" maxlength="200" data-count="200"') && str_contains($admL, 'name="dates" aria-label="Dates" maxlength="80" data-count="80"') && str_contains($admL, 'name="description" aria-label="Description" maxlength="1000" data-count="1000"') && str_contains($admL, 'maxlength="50000" data-count="50000"'));
+    $admS = http_get($L['base'] . '/?admin&classic=1', $L['own'])[1];
+    check('[limits] the share link form shows its limits (name 80, note 200, title 80)', str_contains($admS, 'name="label" maxlength="80" data-count="80"') && str_contains($admS, 'name="note" rows="2" maxlength="200" data-count="200"') && str_contains($admS, 'name="title_text" maxlength="80" data-count="80"'));
+
+    // ---- text cut by bytes (a letter split in two) ----
+    $ua = str_repeat('a', 299) . "\xC3\xA9 tail";
+    $U = $g14Site('g14-ua', [], $ua);
+    http_get($U['base'] . '/?admin&classic=1', $U['own']);
+    $hist = glob("{$U['dir']}/.gallery-signin-*.php") ?: []; $histBytes = $hist ? filesize($hist[0]) : 0;
+    check('[cut letters] an admin browser whose User-Agent has a two-letter-wide character on byte 300 still gets its sign-in recorded in the history (the cut used to make invalid text and the record was silently dropped)', $histBytes > strlen(data_file_guard_line_for_tests()) + 20, json_encode([count($hist), $histBytes]));
+    $titleCy = 'a' . str_repeat("\xD0\x96", 250);
+    $mk = $L['admin'](['action' => 'collection_create', 'parent' => '', 'title' => $titleCy]);
+    $collFile = "{$L['dir']}/.gallery-collections.php"; $collRaw = is_file($collFile) ? (string) file_get_contents($collFile) : '';
+    $collTitles = array_column((array) (json_decode(substr($collRaw, (int) strpos($collRaw, "\n") + 1), true)['collections'] ?? []), 'title');
+    check('[cut letters] a collection named in a script of two-byte letters, longer than the limit, is made with its name cut after a whole letter (it was cut inside one and refused as "a character the gallery can\'t store")', ($mk['ok'] ?? false) === true && count($collTitles) === 1 && preg_match_all('/./su', (string) $collTitles[0]) === 200 && preg_match('//u', (string) $collTitles[0]) === 1, json_encode([$mk, array_map('strlen', $collTitles)]));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 14, part 2: one coordinate alone no longer deletes the place (G9); photos and videos are ordered and dated by the clock time written (G7)
+echo "== audit group 14: a place needs both coordinates; taken times are the clock time written ==\n";
+{
+    $g14Exif = function ($path, $dateText, $offsetText = null, $mtime = null) {
+        $im = imagecreatetruecolor(40, 30); imagefill($im, 0, 0, imagecolorallocate($im, 90, 90, 200));
+        ob_start(); imagejpeg($im); $jpeg = ob_get_clean(); unset($im);
+        $date = $dateText . "\0"; $off = $offsetText !== null ? $offsetText . "\0" : '';
+        $n = $off !== '' ? 2 : 1;
+        $exifIfd = 8 + 2 + 12 + 4;
+        $dataStart = $exifIfd + 2 + 12 * $n + 4;
+        $tiff = 'II' . pack('v', 42) . pack('V', 8) . pack('v', 1) . pack('vvVV', 0x8769, 4, 1, $exifIfd) . pack('V', 0)
+              . pack('v', $n) . pack('vvVV', 0x9003, 2, strlen($date), $dataStart)
+              . ($off !== '' ? pack('vvVV', 0x9011, 2, strlen($off), $dataStart + strlen($date)) : '') . pack('V', 0) . $date . $off;
+        $exif = "Exif\0\0" . $tiff;
+        file_put_contents($path, substr($jpeg, 0, 2) . "\xFF\xE1" . pack('n', strlen($exif) + 2) . $exif . substr($jpeg, 2));
+        if ($mtime !== null) touch($path, $mtime);
+    };
+    $g14Place = function ($label, array $cfg = []) use ($indexSrc) {
+        $dir = new_fixture_dir($label); mkdir("$dir/Trip", 0777, true);
+        file_put_contents("$dir/.gallery-config.php", cfg_text($cfg + ['ADMIN_PASSWORD' => 'g14-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$dir/index.php");
+        return $dir;
+    };
+
+    // ---- G9 ----
+    $D = $g14Place('g14-place');
+    make_jpeg("$D/Trip/p.jpg", 40, 30, 20, 90, 160);
+    $port = find_free_port(); start_server($D, $port); $base = "http://127.0.0.1:$port";
+    [, , $h] = http_post("$base/?admin", ['access_code' => 'g14-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($h)];
+    $csrf = (string) extract_csrf_token(http_get("$base/?admin&classic=1", $own)[1]);
+    $adm = fn (array $f) => json_decode(http_post("$base/?admin&folder=Trip", $f + ['csrf_token' => $csrf], array_merge($own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $base1 = ['action' => 'save_item', 'file' => 'p.jpg', 'caption' => 'c', 'web' => ''];
+    $stored = fn () => read_data_file("$D/Trip/.gallery-items.php")['items']['p.jpg'] ?? [];
+    $gA = $adm($base1 + ['lat' => '48.85', 'lng' => '2.35', 'loc_label' => 'Paris']);
+    $gB = $adm($base1 + ['lat' => '10.5', 'lng' => '', 'loc_label' => 'Paris']); $afterB = $stored();
+    $gC = $adm($base1 + ['lat' => '', 'lng' => '20', 'loc_label' => 'Paris']); $afterC = $stored();
+    check('[place] a latitude typed without a longitude (or the other way round) is refused, says which one is missing and that nothing changed, and the saved place and its label stay', ($gA['ok'] ?? false) === true && ($gB['ok'] ?? true) === false && str_contains((string) ($gB['text'] ?? ''), 'longitude') && ($gC['ok'] ?? true) === false && str_contains((string) ($gC['text'] ?? ''), 'latitude') && ($afterB['location']['label'] ?? '') === 'Paris' && ($afterC['location']['lat'] ?? 0) == 48.85 && empty($afterC['locationCleared']), json_encode([$gB, $gC, $afterC]));
+    $gD = $adm($base1 + ['lat' => '', 'lng' => '', 'loc_label' => '']);
+    check('[place] both boxes emptied still removes the place (that is what clearing is)', ($gD['ok'] ?? false) === true && !isset($stored()['location']) && !empty($stored()['locationCleared']), json_encode($stored()));
+
+    // ---- G7 ----
+    $T = $g14Place('g14-taken');
+    $g14Exif("$T/Trip/phone.jpg", '2026:10:11 12:00:00', '+11:00');          // a phone in Sydney: its zone is recorded
+    $g14Exif("$T/Trip/camera.jpg", '2026:10:11 11:00:00');                   // a camera an hour EARLIER on the same wall clock: no zone
+    $g14Exif("$T/Trip/future.jpg", '2099:01:01 10:00:00', null, strtotime('2019-01-01 10:00:00'));
+    $g14Exif("$T/Trip/nonsense.jpg", '2026:13:45 25:61:61', null, strtotime('2018-01-01 10:00:00'));
+    $tport = find_free_port(); start_server($T, $tport); $tbase = "http://127.0.0.1:$tport";
+    $order = function ($q) use ($tbase) { $b = http_get("$tbase/?folder=Trip" . $q)[1]; preg_match_all('#<div class="card[^>]*><img src="[^"]*"(?: srcset="[^"]*")?(?: sizes="[^"]*")? loading="lazy" alt="([^"]+)"#', $b, $m); return $m[1]; };
+    $ordered = $order('&sort=taken');
+    check('[taken] a phone photo (clock 12:00, zone +11:00) and a camera photo an hour earlier (11:00, no zone) are in that order: the camera photo first (it was sorted ten hours after)', array_search('camera.jpg', $ordered, true) !== false && array_search('camera.jpg', $ordered, true) < array_search('phone.jpg', $ordered, true), json_encode($ordered));
+    check('[taken] a date in the year 2099 and a date that is not a date (month 13, 25 o\'clock) are not times the photos were taken: they are ordered by the file\'s own date (2019 and 2018) and so come before the real ones', array_slice($ordered, 0, 2) === ['nonsense.jpg', 'future.jpg'], json_encode($ordered));
+    [, , $th] = http_post("$tbase/?admin", ['access_code' => 'g14-admin-pw-1'], [], false); $town = ['Cookie: ' . extract_cookie_header($th)];
+    $L2 = $g14Place('g14-taken-la'); mkdir("$L2/Day", 0777, true); $g14Exif("$L2/Day/la.jpg", '2026:10:11 18:00:00', '-07:00');
+    $lport = find_free_port(); start_server($L2, $lport); $lbase = "http://127.0.0.1:$lport";
+    [, , $lh] = http_post("$lbase/?admin", ['access_code' => 'g14-admin-pw-1'], [], false); $lown = ['Cookie: ' . extract_cookie_header($lh)];
+    $laPage = http_get("$lbase/?admin&classic=1&folder=Day", $lown)[1];
+    check('[taken] the suggested Dates for a photo taken at 18:00 in Los Angeles (zone -07:00) is Oct 11th, not the next day', str_contains($laPage, 'Oct 11th, 2026') && !str_contains($laPage, 'Oct 12th, 2026'), json_encode(preg_match('/Oct 1\dth, 2026/', $laPage, $mm) ? $mm : substr(strip_tags($laPage), 0, 100)));
+}
+
+// ---- F15: the repeated hour of a daylight-saving change is told apart by the UTC offset column ----
+{
+    $dir = new_fixture_dir('g14-dst'); mkdir("$dir/Alpha", 0777, true); make_jpeg("$dir/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    file_put_contents("$dir/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g14-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => true]));
+    copy($indexSrc, "$dir/index.php");
+    $port = find_free_port(); start_server($dir, $port); $base = "http://127.0.0.1:$port";
+    for ($i = 0; $i < 2; $i++) @file_get_contents("$base/?linklog", false, stream_context_create(['http' => ['method' => 'POST', 'header' => "Content-Type: application/json\r\nUser-Agent: Mozilla/5.0 dst$i\r\n", 'content' => json_encode(['e' => [['f', 'Alpha']]]), 'ignore_errors' => true, 'timeout' => 5]]));
+    [, , $h] = http_post("$base/?admin", ['access_code' => 'g14-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($h)];
+    $log = glob("$dir/.gallery-visits-*.sqlite")[0] ?? '';
+    $ok = false;
+    if ($log !== '') {
+        $d = new PDO('sqlite:' . $log); $d->exec('DELETE FROM events'); $d->exec('DELETE FROM visitors');
+        $d->exec("INSERT INTO visitors (src, vid, ip, first, last, opens, views) VALUES ('public', 'vdst', '1.2.3.4', 1793000000, 1793100000, 4, 0)");
+        foreach ([1793507400, 1793511000, 1793514600, 1793518200] as $t) $d->exec("INSERT INTO events (src, t, t1, vid, k, f) VALUES ('public', $t, $t, 'vdst', 'folder', 'Alpha')");   // 2026-11-01 04:30, 05:30, 06:30, 07:30 UTC
+        $d = null; $ok = true;
+    }
+    $csv = http_get("$base/?admin&visitsexport=events&tz=" . rawurlencode('America/New_York'), $own)[1];
+    $rows = array_map(fn ($l) => str_getcsv($l, ',', '"', ''), array_values(array_filter(preg_split('/\r?\n/', ltrim($csv, "\xEF\xBB\xBF")))));
+    $head = $rows[0] ?? []; $body = array_slice($rows, 1);
+    $at = array_search('utc_offset', $head, true);
+    $times = array_map(fn ($r) => ($r[0] ?? '') . ' ' . ($at !== false ? ($r[$at] ?? '?') : '?'), $body);
+    check('[time zone] the timeline CSV ends with a utc_offset column, and the two 01:30:00 of the day the clocks go back are told apart (UTC-04:00, then UTC-05:00)', $ok && $at === count($head) - 1 && $times === ['2026-11-01 00:30:00 UTC-04:00', '2026-11-01 01:30:00 UTC-04:00', '2026-11-01 01:30:00 UTC-05:00', '2026-11-01 02:30:00 UTC-05:00'], json_encode([$ok, $head, $times]));
+    $csv2 = http_get("$base/?admin&visitsexport=events&tz=Nowhere/Land", $own)[1];
+    check('[time zone] with no zone known the column is still there and says UTC+00:00', str_contains($csv2, 'utc_offset') && str_contains($csv2, 'UTC+00:00'));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 14, part 3: Health names a folder the web server can't read (G14) and a damaged install secret (X4); the Files-made words about the secret are true (X5)
+echo "== audit group 14: a folder that can't be read and a damaged secret are named in Health ==\n";
+{
+    $dir = new_fixture_dir('g14-health'); mkdir("$dir/Open", 0777, true); mkdir("$dir/Shut", 0777, true); mkdir("$dir/Drawer", 0777, true);
+    make_jpeg("$dir/Open/o.jpg", 40, 30, 20, 90, 160); make_jpeg("$dir/Shut/s.jpg", 40, 30, 120, 90, 60); make_jpeg("$dir/Drawer/d.jpg", 40, 30, 60, 60, 60);
+    file_put_contents("$dir/Drawer/.gallery-items.php", data_file_guard_line_for_tests() . json_encode(['restriction' => 'private', 'unlisted' => true]));
+    file_put_contents("$dir/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g14-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$dir/index.php");
+    $port = find_free_port(); start_server($dir, $port); $base = "http://127.0.0.1:$port";
+    [, , $h] = http_post("$base/?admin", ['access_code' => 'g14-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($h)];
+    $csrf = (string) extract_csrf_token(http_get("$base/?admin&classic=1", $own)[1]);
+    $panel = fn () => html_entity_decode((string) (json_decode(http_post("$base/?admin", ['csrf_token' => $csrf, 'action' => 'health_panel', 'recheck' => '1'], array_merge($own, ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? ''), ENT_QUOTES);
+    $before = $panel();
+    chmod("$dir/Shut", 0000);
+    $with = $panel();
+    chmod("$dir/Shut", 0755);
+    check('[health folders] a folder the web server may not open gets a row naming it and what to do (it is simply not there on the page), and a gallery with none has no such row', !str_contains($before, 'can\'t be read by the web server') && str_contains($with, 'A folder can\'t be read by the web server') && str_contains($with, 'Shut') && str_contains($with, 'chmod 755'), substr(strip_tags($with), 0, 200));
+    check('[health folders] ...and once it can be read again the row is gone after Check again', !str_contains($panel(), 'can\'t be read by the web server'));
+    // the install secret
+    $adm = fn (array $f, $folder = '') => json_decode(http_post("$base/?admin" . ($folder !== '' ? '&folder=' . $folder : ''), $f + ['csrf_token' => $csrf], array_merge($own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $ok1 = $adm(['action' => 'photo_address', 'file' => 'd.jpg'], 'Drawer');
+    $secretPath = "$dir/.gallery-secret.php"; $good = (string) @file_get_contents($secretPath);
+    file_put_contents($secretPath, data_file_guard_line_for_tests() . "garbage that is not a key\n");
+    $badAddr = $adm(['action' => 'photo_address', 'file' => 'd.jpg'], 'Drawer');
+    $panelBad = $panel(); $after = (string) file_get_contents($secretPath);
+    check('[install secret] a key file that is there but holds no key is named in Health as damaged (what it affects, how to put it right), and the message of a Not listed photo\'s address says the file is damaged instead of "is the folder writable?"', str_contains($panelBad, 'The install secret file is damaged') && str_contains(html_entity_decode((string) ($badAddr['text'] ?? ''), ENT_QUOTES), 'holds no key') && !str_contains((string) ($badAddr['text'] ?? ''), 'is the folder writable'), json_encode([$ok1['ok'] ?? null, $badAddr]));
+    check('[install secret] ...and it is not replaced (a new key would change every Not listed address without a word): the file is exactly as it was', $after === data_file_guard_line_for_tests() . "garbage that is not a key\n");
+    file_put_contents($secretPath, $good);
+    check('[install secret] with the key back there is no such row', !str_contains($panel(), 'The install secret file is damaged'));
+    $files = $adm(['action' => 'files_list'])['rows'] ?? [];
+    $secretRow = array_values(array_filter($files, fn ($r) => ($r['kind'] ?? '') === 'secret'))[0] ?? [];
+    check('[files made] the install secret is described as what it does: thumbnail names, share-link cookies, Not listed addresses (and says sign-ins do not use it), and what deleting it does', str_contains((string) ($secretRow['what'] ?? ''), 'Not listed') && str_contains((string) ($secretRow['what'] ?? ''), 'Sign-ins do not use it') && str_contains((string) ($secretRow['ifgone'] ?? ''), 'address') && !str_contains((string) ($secretRow['what'] ?? '') . ($secretRow['ifgone'] ?? ''), 'signed out'), json_encode($secretRow));
+}
+
+/* --------------------------------------------------------------------- */
+// audit group 14, part 4: a block of zeros in a photo's GPS is no location (G12); a stray part is named by the build (G23); a long run of underscores does not cost seconds (E1-7)
+echo "== audit group 14: GPS zeros, the build's check, the Markdown underscore ==\n";
+{
+    $dir = new_fixture_dir('g14-gps'); mkdir("$dir/Trip", 0777, true);
+    make_gps_jpeg("$dir/Trip/zero-den.jpg", 'N', [[0, 0], [0, 0], [0, 0]], 'E', [[0, 0], [0, 0], [0, 0]]);
+    make_gps_jpeg("$dir/Trip/zero-num.jpg", 'N', [[0, 1], [0, 1], [0, 1]], 'E', [[0, 1], [0, 1], [0, 1]]);
+    make_gps_jpeg("$dir/Trip/paris.jpg", 'N', [[48, 1], [51, 1], [30, 1]], 'E', [[2, 1], [21, 1], [7, 1]]);
+    make_gps_jpeg("$dir/Trip/equator.jpg", 'N', [[0, 1], [0, 1], [0, 1]], 'E', [[10, 1], [0, 1], [0, 1]]);
+    file_put_contents("$dir/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g14-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false, 'ENABLE_PHOTO_LOCATION' => true, 'ENABLE_MAP' => true]));
+    copy($indexSrc, "$dir/index.php");
+    $port = find_free_port(); start_server($dir, $port); $base = "http://127.0.0.1:$port";
+    [, , $h] = http_post("$base/?admin", ['access_code' => 'g14-admin-pw-1'], [], false); $own = ['Cookie: ' . extract_cookie_header($h)];
+    first_look($base, ['Trip/zero-den.jpg', 'Trip/zero-num.jpg', 'Trip/paris.jpg', 'Trip/equator.jpg'], $own);
+    $auto = fn ($f) => item_get($base, $own, "Trip/$f")['auto'] ?? null;
+    $az = [$auto('zero-den.jpg'), $auto('zero-num.jpg')]; $ap = $auto('paris.jpg'); $ae = $auto('equator.jpg');
+    if (!function_exists('exif_read_data')) skip('[gps zeros] a GPS block of zeros is no location', 'this PHP has no exif extension');
+    else {
+        check('[gps zeros] a photo whose GPS block holds only zeros (0/0 or 0/1: what a camera without a fix writes) offers no location, instead of a pin at 0 N 0 E', $az === [null, null], json_encode($az));
+        check('[gps zeros] a real place still comes through (48.858333 N, 2.351944 E), and so does a place on the equator that is not on the prime meridian', is_array($ap) && abs($ap['lat'] - 48.858333) < 0.0001 && abs($ap['lng'] - 2.351944) < 0.0001 && is_array($ae) && abs($ae['lng'] - 10.0) < 0.0001, json_encode([$ap, $ae]));
+    }
+
+    // G23: the build tool names a part that is in src/ but not in the manifest, and counts parts, not comment lines
+    $bt = new_fixture_dir('g14-build'); $repo = dirname($indexSrc);
+    if (is_dir("$repo/src")) {
+    exec('cp -r ' . escapeshellarg("$repo/src") . ' ' . escapeshellarg("$bt/src") . ' && cp ' . escapeshellarg("$repo/build.php") . ' ' . escapeshellarg("$bt/build.php"));
+    $run = function () use ($bt) { $o = []; exec('cd ' . escapeshellarg($bt) . ' && ' . escapeshellarg(PHP_BINARY) . ' build.php ' . escapeshellarg("$bt/out.php") . ' 2>&1', $o, $rc); return [$rc, implode("\n", $o)]; };
+    [$rc0, $out0] = $run();
+    $partsReal = count(array_filter(array_map('trim', file("$bt/src/manifest.txt")), fn ($l) => $l !== '' && $l[0] !== '#'));
+    file_put_contents("$bt/src/manifest.txt", "# a note in the manifest\n" . file_get_contents("$bt/src/manifest.txt"));
+    [$rc1, $out1] = $run();
+    file_put_contents("$bt/src/php/998-stray.php", "<?php // a part nobody listed\n");
+    [$rc2, $out2] = $run(); $chk = (function () use ($bt) { $o = []; exec('cd ' . escapeshellarg($bt) . ' && ' . escapeshellarg(PHP_BINARY) . ' build.php --check 2>&1', $o, $rc); return [$rc, implode("\n", $o)]; })();
+    check('[build] the part count is the number of parts (a comment line in the manifest is not one)', $rc0 === 0 && $rc1 === 0 && str_contains($out0, "$partsReal parts") && str_contains($out1, "$partsReal parts"), json_encode([$out0, $out1, $partsReal]));
+    check('[build] a part that lies in src/ but is not in the manifest stops the build and the check, naming it (it used to be left out and "up to date" was said)', $rc2 === 2 && str_contains($out2, 'php/998-stray.php') && $chk[0] !== 0 && str_contains($chk[1], 'php/998-stray.php'), json_encode([$rc2, $out2, $chk]));
+
+    }
+    // E1-7
+    $md = new_fixture_dir('g14-md'); mkdir("$md/Alpha", 0777, true); make_jpeg("$md/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    file_put_contents("$md/Alpha/n.md", "{gallery}\n" . str_repeat('_a ', 30000) . "\n\nand _this_ is *fine* and **bold**\n");
+    file_put_contents("$md/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g14-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false])); copy($indexSrc, "$md/index.php");
+    $mport = find_free_port(); start_server($md, $mport);
+    $t0 = microtime(true); $mpage = http_get("http://127.0.0.1:$mport/?folder=Alpha")[1]; $took = microtime(true) - $t0;
+    check('[markdown] a note with a 90 KB line of "_a _a _a" no longer costs seconds on every page that shows it (it took 2.4 s), and ordinary emphasis next to it still works', $took < 1.0 && str_contains($mpage, '<em>this</em>') && str_contains($mpage, '<em>fine</em>') && str_contains($mpage, '<strong>bold</strong>'), json_encode([$took, strlen($mpage)]));
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";

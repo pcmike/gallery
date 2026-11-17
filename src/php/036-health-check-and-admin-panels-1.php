@@ -310,9 +310,9 @@ function admin_browser_history_route() {
         header('Content-Type: text/csv; charset=UTF-8');
         shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
         header('Content-Disposition: attachment; filename="signin-' . $id . '.csv"');
-        $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);   // (the zone the browser named, as the visitor CSVs do; none sent is UTC, and each line says which)
-        echo "time,address,country,event,what it said it was,time_zone\n";
-        foreach (signin_history_read($id) as $l) echo implode(',', [link_csv_cell($iso((int) $l['t'])), link_csv_cell($l['ip']), link_csv_cell($l['cc'] ?? ''), link_csv_cell($l['e'] ?? ''), link_csv_cell($l['ua'] ?? ''), link_csv_cell($tzName)]) . "\n";
+        $off = null; $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz, $off);   // (the zone the browser named, as the visitor CSVs do; none sent is UTC, and each line says which)
+        echo "time,address,country,event,what it said it was,time_zone,utc_offset\n";
+        foreach (signin_history_read($id) as $l) { $off = null; $when = $iso((int) $l['t']); echo implode(',', [link_csv_cell($when), link_csv_cell($l['ip']), link_csv_cell($l['cc'] ?? ''), link_csv_cell($l['e'] ?? ''), link_csv_cell($l['ua'] ?? ''), link_csv_cell($tzName), link_csv_cell($off ?? '')]) . "\n"; }
         return;
     }
     admin_json_exit(['ok' => true, 'html' => render_browser_history_html($id)]);

@@ -3361,3 +3361,17 @@
     }
     return true;
   }
+
+// A text field that has a limit shows how much of it is used as you type (n / limit): data-count holds the limit, the counter is made when the field is first touched.
+(function () {
+  function show(el) {
+    var max = parseInt(el.getAttribute('data-count'), 10); if (!max) return;
+    var c = el.nextElementSibling && el.nextElementSibling.classList && el.nextElementSibling.classList.contains('char-count') ? el.nextElementSibling : null;
+    if (!c) { c = document.createElement('span'); c.className = 'char-count'; c.setAttribute('aria-hidden', 'true'); el.insertAdjacentElement('afterend', c); }
+    var n = Array.from(el.value).length;
+    c.textContent = n.toLocaleString() + ' / ' + max.toLocaleString();
+    c.classList.toggle('near', n >= max * 0.9 && n <= max); c.classList.toggle('over', n > max);
+  }
+  function hit(e) { var el = e.target; if (el && el.getAttribute && el.getAttribute('data-count')) show(el); }
+  document.addEventListener('focusin', hit); document.addEventListener('input', hit);
+})();

@@ -140,7 +140,7 @@ function signin_ended_add($id, array $rec, $reason, $detail = '', $at = null) {
  */
 function browser_note_event($h, $ip, $label) {
     $now = time(); $id = substr($h, 0, 12); $cc = geo_country($ip); $net = signin_net_key($ip);
-    $ua = substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 300);
+    $ua = text_clip((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 300);
     $sys = signin_is_system_ua($ua);
     $raised = []; $detailOf = []; $ended = null;
     json_file_update(browsers_path(), [], function (&$d) use ($h, $now, $ip, $label, $cc, $net, $sys, &$raised, &$detailOf, &$ended) {

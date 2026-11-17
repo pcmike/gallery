@@ -145,7 +145,7 @@ function media_meta_load($folderReal, $reset = false) {
 
 /** Whether a record still describes the file as it is now (the same modified time and size). */
 function media_meta_fresh($rec, $realPath) {
-    return is_array($rec) && ($rec['m'] ?? null) === (int) @filemtime($realPath) && ($rec['s'] ?? null) === (int) @filesize($realPath);
+    return is_array($rec) && ($rec['tv'] ?? 0) === 2 && ($rec['m'] ?? null) === (int) @filemtime($realPath) && ($rec['s'] ?? null) === (int) @filesize($realPath);   // (tv 2: taken times are the clock time written; records read before that are read again)
 }
 
 /** A fresh record whose file could be read: nothing is left to do for this file. (A file that couldn't be read is tried again.) */
@@ -157,7 +157,7 @@ function media_meta_ready($rec, $realPath) {
  *  gs how the location read went ('ok', 'none' = the file has none, 'unreadable' = the file couldn't be read, 'na' = this kind of
  *  file doesn't carry one), r when it was read. Never throws. */
 function media_meta_read_file($realPath) {
-    $rec = ['m' => (int) @filemtime($realPath), 's' => (int) @filesize($realPath), 't' => null, 'g' => null, 'gs' => 'na', 'r' => time()];
+    $rec = ['m' => (int) @filemtime($realPath), 's' => (int) @filesize($realPath), 't' => null, 'g' => null, 'gs' => 'na', 'r' => time(), 'tv' => 2];
     if (!is_readable($realPath)) { $rec['gs'] = 'unreadable'; return $rec; }
     try { $t = media_capture_time($realPath); } catch (Throwable $e) { $t = null; }
     $rec['t'] = is_int($t) ? $t : null;
@@ -354,11 +354,13 @@ function exif_gps_to_decimal($component, $ref) {
         if (is_string($frac) && strpos($frac, '/') !== false) {
             [$num, $den] = array_pad(explode('/', $frac, 2), 2, '1');
             $den = (float) $den;
-            return $den != 0 ? ((float) $num) / $den : 0.0;
+            return $den != 0 ? ((float) $num) / $den : null;   // (a zero denominator is no number: a camera with no fix writes 0/0, and that was a 0.0 here)
         }
         return (float) $frac;
     };
-    $decimal = $toFloat($component[0]) + ($toFloat($component[1]) / 60) + ($toFloat($component[2]) / 3600);
+    $parts = [$toFloat($component[0]), $toFloat($component[1]), $toFloat($component[2])];
+    if (in_array(null, $parts, true)) return null;
+    $decimal = $parts[0] + ($parts[1] / 60) + ($parts[2] / 3600);
     return (strtoupper((string) $ref) === 'S' || strtoupper((string) $ref) === 'W') ? -$decimal : $decimal;
 }
 

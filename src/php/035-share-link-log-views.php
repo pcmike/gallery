@@ -82,7 +82,7 @@ function visits_source_labels() {
 
 /** What the Visitors tab takes from the address bar: sources ("public" and link ids, comma separated), countries (codes), a search, and for the Media view the folders, the choice and "show all". */
 function visits_filters() {
-    $raw = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? substr($_GET[$k], 0, 1000) : ''; };
+    $raw = function ($k) { return isset($_GET[$k]) && is_string($_GET[$k]) ? text_clip($_GET[$k], 1000) : ''; };
     $csv = function ($k, $rx) use ($raw) {
         $out = [];
         foreach (explode(',', $raw($k)) as $v) {
@@ -105,7 +105,7 @@ function visits_filters() {
         'src' => $csv('src', '/^[0-9a-f]{10}$/'),
         'blocked' => $blocked,
         'cc' => $csv('cc', '/^[A-Z]{2}$/'),
-        'q' => substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', isset($_GET['q']) && is_string($_GET['q']) ? $_GET['q'] : '')), 0, 80),
+        'q' => text_clip(trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', isset($_GET['q']) && is_string($_GET['q']) ? $_GET['q'] : '')), 80),
         'folders' => array_map(function ($f) { return $f === '/' ? '' : (string) $f; }, $list('folders')),
         'what' => in_array($what, ['viewed', 'recent', 'photos', 'videos', 'private', 'opened', 'downloaded'], true) ? $what : 'viewed',
         'all' => isset($_GET['all']) && $_GET['all'] === '1',
@@ -592,9 +592,14 @@ function visits_tz() {
     return new DateTimeZone('UTC');
 }
 
-/** A writer of times for a CSV: 2026-11-12 21:04:05 in the given zone, or nothing for 0. */
-function visits_time_writer(DateTimeZone $tz) {
-    return function ($t) use ($tz) { return $t ? (new DateTime('@' . (int) $t))->setTimezone($tz)->format('Y-m-d H:i:s') : ''; };
+/** A writer of times for a CSV: 2026-11-12 21:04:05 in the given zone, or nothing for 0. $firstOffset is set to the UTC offset (UTC-04:00) of the first time written since it was last emptied: the line's own offset, which tells the repeated hour of a daylight-saving change apart. */
+function visits_time_writer(DateTimeZone $tz, &$firstOffset = null) {
+    return function ($t) use ($tz, &$firstOffset) {
+        if (!$t) return '';
+        $d = (new DateTime('@' . (int) $t))->setTimezone($tz);
+        if ($firstOffset === null) $firstOffset = 'UTC' . $d->format('P');   // (UTC-04:00, not -04:00: a cell that starts with a minus sign is made safe for a spreadsheet by a quote in front of it)
+        return $d->format('Y-m-d H:i:s');
+    };
 }
 
 /** One line of the timeline CSV: [time, source, ip, what, folder, file, count] for an event row (joined to its visitor's ip). $src names a source, $iso writes a time. */
@@ -616,14 +621,15 @@ function visits_report($ip, $dir) {
     if (!$who) { http_response_code(404); header('Content-Type: text/plain; charset=UTF-8'); echo 'Nothing is logged for that address.'; return; }
     $labels = visits_source_labels();
     $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
-    $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);
+    $off = null; $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz, $off);
     $slug = trim(substr((string) preg_replace('/[^A-Za-z0-9.]+/', '-', $ip), 0, 45), '-.');
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();
     header('Content-Disposition: attachment; filename="visitors-report-' . $slug . '.csv"');
     header('X-Content-Type-Options: nosniff');
     echo "\xEF\xBB\xBF";
-    $line = function (array $r) { echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $line = function (array $r) use (&$off) { $off = null; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $lineT = function (array $r) use (&$off) { $r[] = $off ?? ''; $off = null; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };   // (a line with times ends with the UTC offset of its first one)
     $first = $last = 0; $visits = $seen = $opened = 0;
     foreach ($who as $r) { $first = $first ? min($first, (int) $r['first']) : (int) $r['first']; $last = max($last, (int) $r['last']); if ($r['src'] !== LOCKOUT_LOG_ID) { $visits += (int) $r['opens']; $seen += (int) $r['seen']; $opened += (int) $r['views']; } }
     $line(['Visitor report']);
@@ -637,28 +643,28 @@ function visits_report($ip, $dir) {
     $line(['Opened', $opened]);
     $line([]);
     $line(['Who: one line per source and browser']);
-    $line(['source', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at']);
+    $line(['source', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at', 'utc_offset']);
     $links = (array) (links_read()['links'] ?? []); $via = [];
     foreach (visits_query($db, 'SELECT n.src, n.vid, n.name FROM notes n JOIN visitors v ON v.src = n.src AND v.vid = n.vid WHERE n.kind = \'via\' AND v.ip = ?', [$ip])->fetchAll() as $n) $via[$n['src']][$n['vid']][] = link_address_label($n['name'], link_address_is_custom($n['name']));
     foreach ($who as $r)
-        $line([$src($r['src']), $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], (int) $r['seen'] ?: '', $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
+        $lineT([$src($r['src']), $r['ua'], $iso($r['first']), $iso($r['last']), $r['opens'], (int) $r['seen'] ?: '', $r['views'], visits_via_text($links[$r['src']] ?? null, $via[$r['src']][$r['vid']] ?? null, !empty($via[$r['src']]), $r['first']),
                $r['entry_f'] === null ? '' : ($r['entry_u'] ? 'Not listed photo ' . basename((string) $r['entry_f']) : ($r['entry_f'] === '' ? 'Front page' : $r['entry_f']))]);
     $line([]);
     $line(['What they looked at: one line per photo or video']);
-    $line(['source', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity']);
+    $line(['source', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity', 'utc_offset']);
     foreach (visits_query($db, 'SELECT i.* FROM items i JOIN visitors v ON v.src = i.src AND v.vid = i.vid WHERE v.ip = ? ORDER BY i.src, i.item', [$ip]) as $r)
-        $line([$src($r['src']), link_item_folder($r['item']), basename($r['item']), $iso($r['sf']), (int) $r['sn'] ?: '', (int) $r['opn'], (int) $r['pln'], (int) $r['dwn'], $iso(max((int) $r['sl'], (int) $r['opl'], (int) $r['pll'], (int) $r['dwl']))]);
+        $lineT([$src($r['src']), link_item_folder($r['item']), basename($r['item']), $iso($r['sf']), (int) $r['sn'] ?: '', (int) $r['opn'], (int) $r['pln'], (int) $r['dwn'], $iso(max((int) $r['sl'], (int) $r['opl'], (int) $r['pll'], (int) $r['dwl']))]);
     $line([]);
     $line(['Folders they opened']);
-    $line(['source', 'folder', 'opens', 'first_opened', 'last_opened']);
+    $line(['source', 'folder', 'opens', 'first_opened', 'last_opened', 'utc_offset']);
     foreach (visits_query($db, 'SELECT o.* FROM folders o JOIN visitors v ON v.src = o.src AND v.vid = o.vid WHERE v.ip = ? ORDER BY o.src, o.folder', [$ip]) as $r)
-        $line([$src($r['src']), $r['folder'] === '' ? 'Front page' : $r['folder'], $r['n'], $iso($r['first']), $iso($r['last'])]);
+        $lineT([$src($r['src']), $r['folder'] === '' ? 'Front page' : $r['folder'], $r['n'], $iso($r['first']), $iso($r['last'])]);
     $line([]);
     $line(['Timeline: everything in order']);
-    $line(['time', 'source', 'what', 'folder', 'file', 'count']);
+    $line(['time', 'source', 'what', 'folder', 'file', 'count', 'utc_offset']);
     foreach (visits_query($db, 'SELECT e.*, v.ip FROM events e JOIN visitors v ON v.src = e.src AND v.vid = e.vid WHERE v.ip = ? ORDER BY e.t, e.id', [$ip]) as $e) {
         $c = visits_event_cells($e, $src, $iso); unset($c[2]);   // (the address is at the top of the file)
-        $line(array_values($c));
+        $lineT(array_values($c));
     }
 }
 
@@ -679,14 +685,15 @@ function visits_export($what, array $f, $dir, $tab = '') {
     // (a CSV of the Folders or Media view starts with what it was narrowed to, so the file says what it is once it is renamed or put beside others: every column is the same on each line)
     $ctxHead = ['link', 'country', 'search']; $isCtx = $what === 'folders' || $what === 'media';
     $head = ['visitors' => ['source', 'ip', 'where', 'browser', 'first_seen', 'last_seen', 'visits', 'seen', 'opened', 'came_in_on', 'came_in_at'], 'blocked' => ['source', 'ip', 'where', 'browser', 'first_tried', 'last_tried', 'tries', 'why'], 'items' => ['source', 'ip', 'browser', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'], 'events' => ['time', 'source', 'ip', 'what', 'folder', 'file', 'count'], 'folders' => array_merge($ctxHead, ['folder', 'opens', 'media_seen', 'opened', 'downloaded', 'first_seen', 'last_activity']), 'media' => array_merge($ctxHead, ['folders', 'show', 'folder', 'file', 'first_seen', 'seen', 'opened', 'played', 'downloaded', 'last_activity'])][$what];
-    $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz);
+    $off = null; $tz = visits_tz(); $tzName = $tz->getName(); $iso = visits_time_writer($tz, $off);
     $head[] = 'time_zone';   // (the zone every time on the line is in: a file says so on each line, as the Folders and Media ones say what they were narrowed to)
+    $head[] = 'utc_offset';   // (the offset of the line's first time, such as UTC-04:00 or UTC-05:00: the repeated hour when the clocks go back reads the same twice in the time column)
     header('Content-Type: text/csv; charset=UTF-8');
     shell_frame_headers();   // (a download may sit in this site's own admin frame, as it does on a desktop; no other site may frame it)
     header('Content-Disposition: attachment; filename="visitors-' . $name . visits_scope_slug($f, $labels) . '.csv"');
     header('X-Content-Type-Options: nosniff');
     echo "\xEF\xBB\xBF" . implode(',', array_map('link_csv_cell', $head)) . "\r\n";
-    $line = function (array $r) use ($tzName) { $r[] = $tzName; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
+    $line = function (array $r) use ($tzName, &$off) { $r[] = $tzName; $r[] = $off ?? ''; $off = null; echo implode(',', array_map('link_csv_cell', $r)) . "\r\n"; };
     $src = function ($s) use ($labels) { return $labels[$s] ?? 'A deleted link'; };
     $ctx = $isCtx ? [$f['src'] ? implode('; ', array_map($src, $f['src'])) : 'all links', $f['cc'] ? implode('; ', $f['cc']) : 'all countries', $f['q']] : [];
     if ($what === 'folders') {
@@ -942,6 +949,16 @@ function health_checks($dir, $files) {
         $add('Folders and files', 'warn', $clN === 1 ? 'The thumbnail folder of "' . $cacheLinks[0] . '" is a link' : number_format($clN) . ' thumbnail folders are links',
             'The gallery never follows a link, so it does not use ' . ($clN === 1 ? 'it' : 'them') . ' and keeps no pictures for ' . implode(', ', array_slice($cacheLinks, 0, 5)) . ($clN > 5 ? ' and ' . number_format($clN - 5) . ' more' : '')
             . ': each picture there is sent as the original file, and a HEIC photo can\'t be shown. Delete the link (the folder called .gallery-cache inside ' . ($clN === 1 ? 'it' : 'each of them') . ') and the gallery makes a real folder at the next page load.');
+    }
+    if (install_secret_damaged()) {
+        $add('Folders and files', 'bad', 'The install secret file is damaged', 'The file .gallery-secret.php is there but holds no key (it may have been cut short or changed in an editor), so the gallery can\'t make a Not listed photo\'s address, and its thumbnails are named without the key. Nothing was replaced, because a new key would change every Not listed photo\'s address without a word. Put the file back from the backup (it keeps the key), or delete it: a new key is made, every Not listed photo\'s address stops working, and people on a share link open their link again.');
+    }
+    $unreadable = (array) (health_heavy($dir, $files, false)['unreadable'] ?? []);
+    if ($unreadable) {   // (a folder the web server may not open is simply not there on the page: this is the only place that says so)
+        $unN = count($unreadable);
+        $add('Folders and files', 'warn', $unN === 1 ? 'A folder can\'t be read by the web server' : number_format($unN) . ' folders can\'t be read by the web server',
+            'The gallery leaves ' . ($unN === 1 ? 'it' : 'them') . ' out, with everything inside, and touches nothing there: ' . implode(', ', array_slice($unreadable, 0, 8)) . ($unN > 8 ? ' and ' . number_format($unN - 8) . ' more' : '')
+            . '. Give the web server\'s user permission to open ' . ($unN === 1 ? 'it' : 'each one') . ' (on many hosts: chmod 755, owned by that user, in your file manager or over SFTP), then press Check again.');
     }
     if (!empty($GLOBALS['__odd_names'])) {   // (names the scan left out because they are not valid text: an old Latin-1 archive or disk has them)
         $oddAll = array_keys($GLOBALS['__odd_names']); $oddN = count($oddAll);

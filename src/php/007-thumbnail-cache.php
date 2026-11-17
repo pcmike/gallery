@@ -24,7 +24,7 @@ function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
 }
 
 /** Is this the name of a file the gallery makes in a .gallery-cache (or made in an earlier version)? A picture or clip (32 hex digits and .jpg or .mp4), the capture
- *  dates (taken.json, taken2.json, taken3.json), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
+ *  dates (taken.json, taken2.json, taken3.json, taken4.json), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
  *  written. Nothing else in a folder of that name is the gallery's, so nothing else is ever deleted from it. */
 function cache_entry_is_gallery_made($name) {
     return preg_match('/^(?:[0-9a-f]{32}\.(?:jpg|mp4)|taken[0-9]*\.json|meta[0-9]*\.php)(?:\.failed|\.tmp[0-9a-f]+|\.[0-9a-f]{8}\.php)?$/D', (string) $name) === 1;
@@ -48,7 +48,7 @@ function image_cache_expected_names($dir, $folderFiles, $imagickAvailable) {
         $variants = $isHeic ? ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'tile', 'tilehd', 'share', 'cover', 'coverlg'];
         if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
         $mtime = @filemtime(resolve_real_path($dir, $file));
-        $valid['taken3.json'] = true;   // the capture dates found for sorting (see media_taken_times)
+        $valid['taken4.json'] = true;   // the capture dates found for sorting (see media_taken_times)
         $valid[MEDIA_META_FILE] = true;   // what was read from the files: when taken, where (see media_meta_ensure)
         if (is_video_file($file)) { $valid[cache_name($file, 'preview2', $mtime) . '.mp4'] = true; $renamed[md5($file . '|preview2|' . $mtime) . '.mp4'] = cache_name($file, 'preview2', $mtime) . '.mp4'; }   // and its short clip (see video_preview_path)
         foreach ($variants as $variant) {

@@ -113,7 +113,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
         if ($parentRel !== '' && empty(folder_files_under($files, $parentRel))) collection_fail('That folder is not here.');
         $title = trim((string) ($_POST['title'] ?? ''));
         if ($title === '') collection_fail('Give the collection a name.');
-        if (strlen($title) > 200) $title = substr($title, 0, 200);
+        $title = text_clip(text_strip_controls($title, ''), text_limit('name'));
         $parentFid = '';
         if ($parentRel !== '') {
             $parentFid = collection_folder_id($dir, $parentRel);
@@ -168,7 +168,7 @@ function collections_admin_action($action, $dir, $adminFolderPath, $files) {
     }
     if ($action === 'save_folder_identity') {
         $changes = [];
-        if (array_key_exists('display_name', $_POST)) $changes['title'] = substr(trim((string) $_POST['display_name']), 0, 200);
+        if (array_key_exists('display_name', $_POST)) $changes['title'] = text_clip(trim(text_strip_controls((string) $_POST['display_name'], '')), text_limit('name'));
         if (array_key_exists('description', $_POST)) $changes['description'] = admin_clean_description($_POST['description'], 1000);
         if (array_key_exists('dates', $_POST)) $changes['dates'] = admin_clean_text($_POST['dates'], 80);
         if (array_key_exists('sort_order', $_POST)) {
@@ -363,7 +363,7 @@ function render_admin_collections_section($dir, $files, $parentPath, $csrfToken)
     </ul>
     <?php endif; ?>
     <form class="cm-new" method="post" onsubmit="return false;">
-      <input type="text" name="title" maxlength="80" placeholder="Name of the new collection" aria-label="Name of the new collection">
+      <input type="text" name="title" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" placeholder="Name of the new collection" aria-label="Name of the new collection">
       <button type="submit" class="primary">New collection</button>
       <span class="rowstate" role="status" aria-live="polite"></span>
     </form>
@@ -446,7 +446,7 @@ function render_admin_collections_overview($dir, $files, $csrfToken) {
     <p class="hint" style="margin:0 0 6px">Hand-picked sets that show up as cards. Everything here is a view of folders and photos that stay where they are.</p>
     <div class="cm-section cm-tabnew" data-csrf="<?= $csrfToken ?>" data-parent="">
       <form class="cm-new" method="post" onsubmit="return false;">
-        <input type="text" name="title" maxlength="80" placeholder="Name of the new collection" aria-label="Name of the new collection">
+        <input type="text" name="title" maxlength="<?= text_limit('name') ?>" data-count="<?= text_limit('name') ?>" placeholder="Name of the new collection" aria-label="Name of the new collection">
         <button type="submit" class="primary">New collection</button>
         <span class="rowstate" role="status" aria-live="polite"></span>
       </form>

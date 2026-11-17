@@ -23,7 +23,7 @@ function extract_heic_gps($realPath, &$status = null) {
     if (empty($props['exif:GPSLatitude']) || empty($props['exif:GPSLongitude'])) return null;
     $lat = exif_gps_to_decimal($split($props['exif:GPSLatitude']), $props['exif:GPSLatitudeRef'] ?? 'N');
     $lng = exif_gps_to_decimal($split($props['exif:GPSLongitude']), $props['exif:GPSLongitudeRef'] ?? 'E');
-    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng)) return null;
+    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng) || ($lat == 0.0 && $lng == 0.0)) return null;   // (0 N 0 E is in the sea off Africa: what a camera with no fix writes, not a place)
     $status = 'ok';
     return ['lat' => round($lat, 6), 'lng' => round($lng, 6)];
 }
@@ -38,7 +38,7 @@ function extract_jpeg_gps($realPath, &$status = null) {
     if (!is_array($exif) || empty($exif['GPSLatitude']) || empty($exif['GPSLongitude'])) return null;
     $lat = exif_gps_to_decimal($exif['GPSLatitude'], $exif['GPSLatitudeRef'] ?? 'N');
     $lng = exif_gps_to_decimal($exif['GPSLongitude'], $exif['GPSLongitudeRef'] ?? 'E');
-    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng)) return null;
+    if ($lat === null || $lng === null || !is_valid_coordinate($lat, $lng) || ($lat == 0.0 && $lng == 0.0)) return null;   // (0 N 0 E is in the sea off Africa: what a camera with no fix writes, not a place)
     $status = 'ok';
     return ['lat' => round($lat, 6), 'lng' => round($lng, 6)];
 }
@@ -360,6 +360,27 @@ function text_clip($text, $max) {
     return substr($text, 0, $max);
 }
 
+/** The longest each text the owner types may be, in characters. The pages show it beside the field (n / max) and a save past it is refused with the number. */
+function text_limits() {
+    return ['caption' => 1000, 'web' => 500, 'place' => 100, 'name' => 200, 'notes' => 50000, 'description' => 1000, 'dates' => 80, 'linkname' => 80, 'linknote' => 200, 'linktitle' => 80];
+}
+function text_limit($key) { return (int) (text_limits()[$key] ?? 0); }
+function text_length($text) { $text = (string) $text; return function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : (int) (preg_match_all('/./su', $text) ?: strlen($text)); }
+/** Control characters dropped (a form field has no use for them); newline and tab stay when $keep says so. */
+function text_strip_controls($text, $keep = "\n\t") {
+    $drop = '';
+    foreach (range(0, 31) as $c) if (strpos((string) $keep, chr($c)) === false) $drop .= sprintf('\x%02X', $c);
+    return (string) preg_replace('/[' . $drop . '\x7F]/u', '', (string) $text);
+}
+/** The first refusal among [noun, new text, the text it replaces, limit key]: a text past its limit is refused with the number and what to do, unless it is the very text already saved (one kept from before the limit is not locked out, only what is changed is held to it). '' when all fit. */
+function text_limit_refusal(array $checks) {
+    foreach ($checks as [$noun, $new, $old, $key]) {
+        $max = text_limit($key); $n = text_length($new);
+        if ($n > $max && (string) $new !== trim(text_strip_controls((string) $old))) return 'The ' . $noun . ' is ' . number_format($n) . ' characters; the limit is ' . number_format($max) . '. Shorten it and save again; nothing was changed.';
+    }
+    return '';
+}
+
 /** Plain single-line-ish text from a form field: control characters
  *  dropped, whitespace runs collapsed, length capped. Output is always
  *  HTML-escaped where it's shown, so this is about tidiness and bounding
@@ -649,11 +670,17 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (!in_array($fullPath, $files, true)) {
             return ['type' => 'error', 'text' => 'Unknown file.'];
         }
-        $caption = trim((string) ($_POST['caption'] ?? ''));
-        $web = trim((string) ($_POST['web'] ?? ''));
+        $caption = trim(text_strip_controls((string) ($_POST['caption'] ?? '')));
+        $web = trim(text_strip_controls((string) ($_POST['web'] ?? ''), ''));
         $lat = trim((string) ($_POST['lat'] ?? ''));
         $lng = trim((string) ($_POST['lng'] ?? ''));
-        $locLabel = trim((string) ($_POST['loc_label'] ?? ''));
+        $locLabel = trim(text_strip_controls((string) ($_POST['loc_label'] ?? '')));
+        $was = items_read($adminFolderReal)['items'][$bare] ?? [];
+        $tooLong = text_limit_refusal([['caption', $caption, $was['caption'] ?? '', 'caption'], ['web link', $web, $was['web'] ?? '', 'web'], ['place name', $locLabel, $was['location']['label'] ?? '', 'place']]);
+        if ($tooLong !== '') {
+            if ($isFetch) admin_json_exit(['ok' => false, 'text' => $tooLong]);
+            return ['type' => 'error', 'text' => $tooLong];
+        }
         // The privacy and location-visibility switches save themselves (set_item_flag); a form that does post them (an
         // older page, a script) still sets them, and one that doesn't leaves them as they are.
         $visibility = isset($_POST['loc_visibility']) ? (string) $_POST['loc_visibility'] : null;
@@ -670,6 +697,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         // The editor in the viewer saves caption and link as they are typed: with keep_loc it leaves the place alone (a place
         // read from the photo's GPS stays "not saved yet" until the owner chooses to keep it).
         $keepLoc = ($_POST['keep_loc'] ?? '') === '1';
+        if (!$keepLoc && ($lat === '') !== ($lng === '')) {   // (only one of the two typed: the place used to be deleted, with its label, and the answer was "Saved")
+            $msg = 'A place needs both a latitude and a longitude: fill in the ' . ($lat === '' ? 'latitude' : 'longitude') . ' too, or clear both to remove the place. Nothing was changed.';
+            if ($isFetch) admin_json_exit(['ok' => false, 'text' => $msg]);
+            return ['type' => 'error', 'text' => $msg];
+        }
         $stale = false; $newHash = null;
         items_update($adminFolderReal, function (&$data) use ($bare, $caption, $web, $lat, $lng, $locLabel, $visibility, $restriction, $loadedHash, $keepLoc, &$stale, &$newHash) {
             $entry = $data['items'][$bare] ?? [];
@@ -776,7 +808,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (isset($explicitGroups[$groupKey])) {
             return ['type' => 'error', 'text' => 'That name is controlled by a {group:} directive and can\'t be changed here.'];
         }
-        $displayName = trim((string) ($_POST['display_name'] ?? ''));
+        $displayName = trim(text_strip_controls((string) ($_POST['display_name'] ?? ''), ''));
+        $tooLong = text_limit_refusal([['group name', $displayName, items_read($dir)['groups'][$groupKey]['displayName'] ?? '', 'name']]);
+        if ($tooLong !== '') return ['type' => 'error', 'text' => $tooLong];
         items_update($dir, function (&$data) use ($groupKey, $displayName) {
             if ($displayName === '') {
                 unset($data['groups'][$groupKey]);
@@ -793,7 +827,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         // (the page saves each field as it is changed).
         $updates = [];
         if (array_key_exists('display_name', $_POST)) {
-            $displayName = trim((string) $_POST['display_name']);
+            $displayName = trim(text_strip_controls((string) $_POST['display_name'], ''));
+            $tooLong = text_limit_refusal([['name', $displayName, items_read($adminFolderReal)['displayName'] ?? '', 'name']]);
+            if ($tooLong !== '') { if ($isFetch) admin_json_exit(['ok' => false, 'text' => $tooLong]); return ['type' => 'error', 'text' => $tooLong]; }
             $updates['displayName'] = $displayName !== '' ? $displayName : null;
         }
         if (array_key_exists('description', $_POST)) {
@@ -883,7 +919,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $rel = $adminFolderPath . '/' . $name;
         if ($name === '' || !in_array($rel, $files, true)) return ['type' => 'error', 'text' => 'Unknown file: nothing was changed.'];
         if (item_restriction(items_read($adminFolderReal)['items'][$name] ?? null) === 'private') return ['type' => 'error', 'text' => 'This photo\'s link is switched off, so it has none. Switch it on first (its lock).'];
-        if (install_secret(true) === '') return ['type' => 'error', 'text' => 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
+        if (install_secret(true) === '') return ['type' => 'error', 'text' => install_secret_damaged()
+            ? 'The gallery\'s secret key file (.gallery-secret.php) is there but holds no key (it may have been cut short or changed in an editor), so it cannot make an address. Put the file back from the backup, or delete it so a new key is made (a new key changes every Not listed photo\'s address), then try again. Nothing was changed.'
+            : 'The gallery could not make its secret key, so it cannot make an address (is the folder writable?).'];
         $fid = folder_id_stamp($adminFolderReal);
         if ($fid === '') return ['type' => 'error', 'text' => 'This folder is not writable, so it cannot be given the id its photos\' addresses need.'];
         $fresh = !empty($_POST['fresh']);
@@ -1125,7 +1163,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
     if ($action === 'save_notes') {
         $existing = basename((string) ($_POST['md_file'] ?? ''));
         $newName = trim((string) ($_POST['new_name'] ?? ''));
-        $content = (string) ($_POST['content'] ?? '');
+        $content = text_strip_controls((string) ($_POST['content'] ?? ''), "\n\r\t");
         $target = basename($newName !== '' ? $newName : $existing);
         if ($target === '') {
             return ['type' => 'error', 'text' => 'A filename is required.'];
@@ -1134,6 +1172,11 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $target .= '.md';
         }
         $targetPath = $adminFolderReal . '/' . $target;
+        $tooLong = text_limit_refusal([['notes text', $content, is_file($targetPath) ? (string) @file_get_contents($targetPath) : '', 'notes']]);
+        if ($tooLong !== '') {
+            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => (string) ($_POST['loaded_hash'] ?? '')];   // (what was typed goes back into the box, so nothing is lost)
+            return ['type' => 'error', 'text' => $tooLong];
+        }
         // The editor was opened on the file as it was then (loaded_hash, from the page). Saving over a file that has changed since would put
         // the old text back whole, so it is refused, and what was typed is handed back to the page so it can be copied. (A save with no
         // fingerprint, from an older page, skips the check, as the other forms do; a save under another name overwrites nothing.)
