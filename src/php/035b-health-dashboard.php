@@ -93,6 +93,17 @@ function backup_has_log() {
     return false;
 }
 
+/** The buttons under "View counts can't be read": one per folder named in the row (the first three), each asking first and sending the folder's file name. */
+function health_stats_afresh_buttons(array $statsKey) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $b = '<div class="health-act">';
+    foreach (array_slice($statsKey, 0, 3) as $k) {
+        $folder = dirname((string) $k[0]); $folder = $folder === '.' ? 'the gallery\'s top folder' : $folder;
+        $b .= '<button type="button" class="secondary" data-backup-act="statsafresh" data-stats-rel="' . $esc($k[0]) . '" data-backup-ask="Start counting afresh in ' . $esc($folder) . '? Its view counts (.gallery-stats.sqlite and its two side files) are deleted for good, and counting starts again from 0. They can\'t be read without their key anyway. Nothing else in the folder is touched. If you can still find the folder\'s .gallery-stats-key.php, put that back instead.">Start counting afresh in ' . $esc($folder) . '</button> ';
+    }
+    return $b . '<span class="muted health-act-out" role="status" aria-live="polite"></span></div>';
+}
+
 function health_backup_buttons($withRestore, $withNew, $withDownload) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $b = '<div class="health-act">';
@@ -142,7 +153,7 @@ function health_database_rows($add, $dir, $files) {
         $kn = count($statsKey);
         $why = ['missing' => 'its key file (.gallery-stats-key.php) is missing', 'mismatch' => 'its key file is not the one the counts were made with', 'broken' => 'its key file can\'t be read'];
         $add($G, 'warn', 'View counts can\'t be read in ' . $kn . ' folder' . ($kn === 1 ? '' : 's'), $statsNames(array_map(function ($b) use ($why) { return [$b[0] . ' (' . ($why[$b[1]] ?? $b[1]) . ')']; }, $statsKey))
-            . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again.');
+            . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again. Or press the button below: it does exactly that deletion for one folder.', null, health_stats_afresh_buttons($statsKey));
     }
     if ($statsRo) {
         $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');
@@ -153,7 +164,7 @@ function health_database_rows($add, $dir, $files) {
             $names = implode('; ', array_map(function ($b) { return $b[0]; }, array_slice($bad, 0, 3))) . (count($bad) > 3 ? ' and ' . (count($bad) - 3) . ' more' : '');
             $add($G, 'bad', 'View counts are damaged in ' . count($bad) . ' folder' . (count($bad) === 1 ? '' : 's'), $names . '. Counting views there does not work until the file is replaced (it is left exactly as it is: nothing is counted beside it). The backup holds a copy of each one (unzip it over the folder: the README in the backup says how); or delete the damaged view-count file and counting starts again from nothing.', null,
                 $bk['have'] ? '<div class="health-act"><button type="button" class="secondary" data-backup-act="download">Download the backup</button> <span class="muted health-act-out" role="status" aria-live="polite"></span></div>' : '');
-        } elseif (!$statsRo) $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
+        } elseif (!$statsRo && !$statsKey) $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
     }
     // --- the backup
     $buttons = health_backup_buttons(false, false, true);

@@ -12925,5 +12925,64 @@ echo "== audit group 15: the view-count database's own fetch check ==\n";
     check('[stats fetch check] once the root has a database the page hands the script its address and has a row for the answer, with the same "How to fix" fold as the log and the backup', str_contains($after, 'data-stats-file="/.gallery-stats.sqlite"') && str_contains($after, 'data-health-row="statsfile"') && (str_contains($after, "The view counts can't be fetched by their address") || str_contains($after, 'The view counts can&#039;t be fetched by their address')) && str_contains($after, 'data-how-for="statsfile"'), json_encode(preg_match('/data-stats-file="[^"]*"/', $after, $m2) ? $m2[0] : null));
 }
 
+/* --------------------------------------------------------------------- */
+// audit group 15, part 6: the "Start counting afresh" button on Health's "View counts can't be read" row: it deletes one folder's view-count database and
+// nothing else, only when Health itself says that folder's key is missing, another one or unreadable
+echo "== audit group 15: Start counting afresh (view counts whose key is gone) ==\n";
+{
+    $mk = function ($label) use ($indexSrc) {
+        $dir = new_fixture_dir($label);
+        foreach (['Alpha', 'Beta'] as $f) { mkdir("$dir/$f", 0777, true); make_jpeg("$dir/$f/b.jpg", 40, 30, 20, 90, 160); }
+        file_put_contents("$dir/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g15-admin-pw-1', 'TRACK_VIEWS' => true, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$dir/index.php");
+        $port = find_free_port(); start_server($dir, $port);
+        $s = ['dir' => $dir, 'base' => "http://127.0.0.1:$port"];
+        [, , $h] = http_post($s['base'] . '/?admin', ['access_code' => 'g15-admin-pw-1'], [], false); $s['own'] = ['Cookie: ' . extract_cookie_header($h)];
+        $s['csrf'] = (string) extract_csrf_token(http_get($s['base'] . '/?admin&classic=1', $s['own'])[1]);
+        return $s;
+    };
+    $track = fn ($s, $path) => json_decode(http_get($s['base'] . '/?track=' . rawurlencode($path))[1], true) ?: [];
+    $health = fn ($s) => (string) (json_decode(http_post($s['base'] . '/?admin', ['csrf_token' => $s['csrf'], 'action' => 'health_panel', 'recheck' => '1'], array_merge($s['own'], ['X-Requested-With: gallery-fetch']))[1], true)['html'] ?? '');
+    $afresh = fn ($s, $rel) => json_decode(http_post($s['base'] . '/?admin', ['csrf_token' => $s['csrf'], 'action' => 'stats_afresh', 'rel' => $rel], array_merge($s['own'], ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $sqliteFiles = fn ($d) => array_map('basename', glob("$d/.gallery-stats.sqlite*") ?: []);
+    $keyOf = fn ($d) => is_file("$d/.gallery-stats-key.php") ? (string) file_get_contents("$d/.gallery-stats-key.php") : null;
+
+    $A = $mk('g15-afresh');
+    foreach (['Alpha', 'Beta'] as $f) { $track($A, "$f/b.jpg"); $track($A, "$f/b.jpg"); }
+    $al = "{$A['dir']}/Alpha"; $be = "{$A['dir']}/Beta";
+    // a healthy folder is refused, whatever the request says
+    $r0 = $afresh($A, 'Alpha/.gallery-stats.sqlite');
+    check('[afresh] a folder whose counts read fine is refused ("read fine") and nothing is deleted', ($r0['ok'] ?? true) === false && str_contains((string) ($r0['text'] ?? ''), 'read fine') && is_file("$al/.gallery-stats.sqlite") && $track($A, 'Alpha/b.jpg')['photoViews'] === 3, json_encode($r0));
+    // a key that is gone
+    $keyAl = $keyOf($al); unlink("$al/.gallery-stats-key.php");
+    $h1 = $health($A);
+    $hAttr = html_entity_decode($h1, ENT_QUOTES);
+    check('[afresh] Health\'s row for the folder with its key gone has a button naming the folder and the file, asking first what is lost', str_contains($h1, 'data-backup-act="statsafresh"') && str_contains($h1, 'data-stats-rel="Alpha/.gallery-stats.sqlite"') && str_contains($hAttr, 'Start counting afresh in Alpha') && str_contains($hAttr, 'deleted for good') && !str_contains($h1, 'data-stats-rel="Beta/'), json_encode(preg_match('/View counts can[^<]{0,200}/', $hAttr, $m) ? $m[0] : null));
+    check('[afresh] while a folder\'s key is gone the row that says "View counts: sound" is not shown beside the warning', !str_contains($h1, 'View counts: sound'), json_encode(str_contains($h1, 'View counts: sound')));
+    // things that are not the folder's database are refused, and nothing is removed
+    $bad = [];
+    foreach (['../index.php', 'Alpha/b.jpg', '.gallery-config.php', 'Alpha/.gallery-stats-key.php', 'Gamma/.gallery-stats.sqlite', "Alpha/../Beta/.gallery-stats.sqlite", '', 'Alpha/.gallery-stats.sqlite-wal'] as $rel) { $r = $afresh($A, $rel); if (($r['ok'] ?? true) !== false) $bad[] = $rel; }
+    check('[afresh] a path that is not a view-count database of this gallery (index.php, a photo, the config, the key file, a made-up folder, a path with ..) is refused and nothing is deleted', !$bad && is_file("$A[dir]/index.php") && is_file("$al/b.jpg") && is_file("$A[dir]/.gallery-config.php") && is_file("$al/.gallery-stats.sqlite") && is_file("$be/.gallery-stats.sqlite") && is_file("$be/.gallery-stats-key.php"), json_encode($bad));
+    // a stranger and a request with no token can't do it
+    $rs = json_decode(http_post($A['base'] . '/?admin', ['action' => 'stats_afresh', 'rel' => 'Alpha/.gallery-stats.sqlite'], ['X-Requested-With: gallery-fetch'])[1], true);
+    $rn = json_decode(http_post($A['base'] . '/?admin', ['action' => 'stats_afresh', 'rel' => 'Alpha/.gallery-stats.sqlite'], array_merge($A['own'], ['X-Requested-With: gallery-fetch']))[1], true);
+    check('[afresh] a stranger, and the owner without the page\'s token, are refused (the database is still there)', ($rs['ok'] ?? false) !== true && ($rn['ok'] ?? false) !== true && is_file("$al/.gallery-stats.sqlite"), json_encode([$rs, $rn]));
+    $betaBefore = array_map(fn ($f) => hash_file('sha256', "$be/$f"), $sqliteFiles($be));
+    $r1 = $afresh($A, 'Alpha/.gallery-stats.sqlite');
+    check('[afresh] pressed for the folder with its key gone: done, its database and side files are deleted, the other folder\'s counts and key are untouched', ($r1['ok'] ?? false) === true && !$sqliteFiles($al) && array_map(fn ($f) => hash_file('sha256', "$be/$f"), $sqliteFiles($be)) === $betaBefore && is_file("$be/.gallery-stats-key.php") && is_file("$al/b.jpg"), json_encode([$r1, $sqliteFiles($al)]));
+    $n1 = $track($A, 'Alpha/b.jpg');
+    check('[afresh] ...then counting starts again from 1 with a new key, and Health no longer lists the folder', ($n1['photoViews'] ?? null) === 1 && $keyOf($al) !== null && $keyOf($al) !== $keyAl && !str_contains($health($A), "View counts can't be read"), json_encode([$n1, $keyOf($al) === $keyAl]));
+    // another key in its place: the key stays (it reads fine), the counts under the old one go, counting restarts under it
+    $other = data_file_guard_line_for_tests() . json_encode(['key' => str_repeat('ab', 32)]);
+    $track($A, 'Beta/b.jpg'); file_put_contents("$be/.gallery-stats-key.php", $other);
+    $hm = $health($A);
+    $r2 = $afresh($A, 'Beta/.gallery-stats.sqlite'); $n2 = $track($A, 'Beta/b.jpg');
+    check('[afresh] with another key in its place the row shows the button, the key file is kept as it was, and counting restarts at 1 under it', str_contains($hm, 'data-stats-rel="Beta/.gallery-stats.sqlite"') && ($r2['ok'] ?? false) === true && $keyOf($be) === $other && ($n2['photoViews'] ?? null) === 1, json_encode([$r2, $n2]));
+    // a key file that can't be read: it goes too (a new one can't be made over it), a new one is made
+    file_put_contents("$al/.gallery-stats-key.php", data_file_guard_line_for_tests() . 'not json at all');
+    $r3 = $afresh($A, 'Alpha/.gallery-stats.sqlite'); $n3 = $track($A, 'Alpha/b.jpg');
+    check('[afresh] with a key file that can\'t be read the folder is restarted too: the unreadable key is removed, a new one is made, counting starts at 1', ($r3['ok'] ?? false) === true && ($n3['photoViews'] ?? null) === 1 && preg_match('/"key":\s*"[0-9a-f]{64}"/', (string) $keyOf($al)) === 1, json_encode([$r3, $n3]));
+}
+
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

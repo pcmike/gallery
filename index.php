@@ -9994,6 +9994,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $why = gallery_config_merge(['HEALTH_SET_ASIDE' => $now ?: null]);
         admin_json_exit($why === '' ? ['ok' => true, 'text' => !empty($_POST['back']) ? 'Brought back.' : 'Set aside.'] : ['ok' => false, 'text' => $why]);
     }
+    if ($action === 'stats_afresh') { [$ok, $text] = stats_start_afresh((string) ($_POST['rel'] ?? ''), $dir, $files); admin_json_exit(['ok' => $ok, 'text' => $text]); }
     if (in_array($action, ['backup_run', 'backup_accept', 'backup_restore_log', 'backup_new_log', 'backup_download_prepare'], true)) backup_admin_action($action, $dir, $files);
     if ($action === 'health_remove_old_logs') {   // the visitor logs of versions before 2.6.5 (Health > Left behind): the exact files and the stand-in record, nothing else
         $n = visitlog_old_leftovers_remove();
@@ -16677,6 +16678,17 @@ function backup_has_log() {
     return false;
 }
 
+/** The buttons under "View counts can't be read": one per folder named in the row (the first three), each asking first and sending the folder's file name. */
+function health_stats_afresh_buttons(array $statsKey) {
+    $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
+    $b = '<div class="health-act">';
+    foreach (array_slice($statsKey, 0, 3) as $k) {
+        $folder = dirname((string) $k[0]); $folder = $folder === '.' ? 'the gallery\'s top folder' : $folder;
+        $b .= '<button type="button" class="secondary" data-backup-act="statsafresh" data-stats-rel="' . $esc($k[0]) . '" data-backup-ask="Start counting afresh in ' . $esc($folder) . '? Its view counts (.gallery-stats.sqlite and its two side files) are deleted for good, and counting starts again from 0. They can\'t be read without their key anyway. Nothing else in the folder is touched. If you can still find the folder\'s .gallery-stats-key.php, put that back instead.">Start counting afresh in ' . $esc($folder) . '</button> ';
+    }
+    return $b . '<span class="muted health-act-out" role="status" aria-live="polite"></span></div>';
+}
+
 function health_backup_buttons($withRestore, $withNew, $withDownload) {
     $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     $b = '<div class="health-act">';
@@ -16726,7 +16738,7 @@ function health_database_rows($add, $dir, $files) {
         $kn = count($statsKey);
         $why = ['missing' => 'its key file (.gallery-stats-key.php) is missing', 'mismatch' => 'its key file is not the one the counts were made with', 'broken' => 'its key file can\'t be read'];
         $add($G, 'warn', 'View counts can\'t be read in ' . $kn . ' folder' . ($kn === 1 ? '' : 's'), $statsNames(array_map(function ($b) use ($why) { return [$b[0] . ' (' . ($why[$b[1]] ?? $b[1]) . ')']; }, $statsKey))
-            . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again.');
+            . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again. Or press the button below: it does exactly that deletion for one folder.', null, health_stats_afresh_buttons($statsKey));
     }
     if ($statsRo) {
         $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');
@@ -16737,7 +16749,7 @@ function health_database_rows($add, $dir, $files) {
             $names = implode('; ', array_map(function ($b) { return $b[0]; }, array_slice($bad, 0, 3))) . (count($bad) > 3 ? ' and ' . (count($bad) - 3) . ' more' : '');
             $add($G, 'bad', 'View counts are damaged in ' . count($bad) . ' folder' . (count($bad) === 1 ? '' : 's'), $names . '. Counting views there does not work until the file is replaced (it is left exactly as it is: nothing is counted beside it). The backup holds a copy of each one (unzip it over the folder: the README in the backup says how); or delete the damaged view-count file and counting starts again from nothing.', null,
                 $bk['have'] ? '<div class="health-act"><button type="button" class="secondary" data-backup-act="download">Download the backup</button> <span class="muted health-act-out" role="status" aria-live="polite"></span></div>' : '');
-        } elseif (!$statsRo) $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
+        } elseif (!$statsRo && !$statsKey) $add($G, 'ok', 'View counts: sound', number_format($heavy['stats']['n']) . ' folder' . ($heavy['stats']['n'] === 1 ? ' keeps its' : 's keep their') . ' view counts in a database of its own, ' . ($heavy['stats']['n'] === 1 ? 'looked through (' : 'all looked through (') . health_ago($heavy['at']) . ').');
     }
     // --- the backup
     $buttons = health_backup_buttons(false, false, true);
@@ -22244,10 +22256,10 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
         go.addEventListener('click', run); pw.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); run(); } });
         b.after(pw, ' ', go); pw.focus(); return;
       }
-      var name = { run: 'backup_run', accept: 'backup_accept', restore: 'backup_restore_log', newlog: 'backup_new_log' }[act]; if (!name) return;
+      var name = { run: 'backup_run', accept: 'backup_accept', restore: 'backup_restore_log', newlog: 'backup_new_log', statsafresh: 'stats_afresh' }[act]; if (!name) return;
       [].forEach.call(row.querySelectorAll('button'), function (x) { x.disabled = true; });
       say(act === 'run' || act === 'accept' ? 'Backing up\u2026' : 'Working\u2026');
-      post(name, act === 'accept' ? { name: b.getAttribute('data-backup-name') || '' } : null).then(function (j) {
+      post(name, act === 'accept' ? { name: b.getAttribute('data-backup-name') || '' } : act === 'statsafresh' ? { rel: b.getAttribute('data-stats-rel') || '' } : null).then(function (j) {
         if (j.ok && act === 'run') {   // Back up now: only the Backup row and the Backup box are drawn again, in place (no reload), and the row says what was done
           window.__siteDirty = true;
           return redrawBackupPart(panel).then(function (done) {
@@ -23767,6 +23779,24 @@ function stats_key_check($sqlitePath) {
     $r = stats_folder_key(dirname($sqlitePath), false);
     if (!isset($r['key'])) return $r['why'];
     return in_array('keyid:' . substr(hash('sha256', $r['key']), 0, 12), $marks, true) ? '' : 'mismatch';
+}
+
+/** Health's "Start counting afresh" button: deletes one folder's view-count database (and its two side files) so counting can begin again from 0. Only for
+ *  a database the gallery owns (found by the Files-made list, never a path the request names) whose key Health itself reports as missing, another one or
+ *  unreadable: a healthy folder's counts are refused. A key file that can't be read is removed too (a new one can't be made over it); a key that reads fine
+ *  stays, and the new database is tied to it. Nothing else in the folder is touched. [ok, text]. */
+function stats_start_afresh($rel, $dir, $files) {
+    $hit = null;
+    foreach (owned_plan($dir, $files)['entries'] as $e) if ($e['kind'] === 'stats' && $e['rel'] === $rel && basename($e['path']) === '.gallery-stats.sqlite') { $hit = $e; break; }
+    if ($hit === null || is_link($hit['path'])) return [false, 'That is not one of this gallery\'s view-count databases, so nothing was deleted.'];
+    $why = stats_key_check($hit['path']);
+    if (!in_array($why, ['missing', 'mismatch', 'broken'], true)) return [false, 'The view counts in that folder read fine, so nothing was deleted.'];
+    $folder = dirname($hit['path']); $failed = [];
+    foreach (['', '-wal', '-shm'] as $sfx) if (file_exists($hit['path'] . $sfx) && !@unlink($hit['path'] . $sfx)) $failed[] = basename($hit['path']) . $sfx;
+    if ($why === 'broken' && file_exists($folder . '/.gallery-stats-key.php') && !@unlink($folder . '/.gallery-stats-key.php')) $failed[] = '.gallery-stats-key.php';
+    @unlink(__DIR__ . '/.gallery-health-cache.php');   // (what Health last found is not true any more)
+    if ($failed) return [false, 'Could not delete ' . implode(', ', $failed) . ': the web server is not allowed to. Make the folder writable by it (the same owner as the folder), or delete those files yourself, then check again.'];
+    return [true, 'Deleted. Counting starts again from 0 in that folder.'];
 }
 
 /** The one-time reset (2.6.5): a database made by an older version keeps its counts in photo_views_h, keyed by a plain SHA-256 of the photo's path,

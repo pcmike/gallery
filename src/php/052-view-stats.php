@@ -127,6 +127,24 @@ function stats_key_check($sqlitePath) {
     return in_array('keyid:' . substr(hash('sha256', $r['key']), 0, 12), $marks, true) ? '' : 'mismatch';
 }
 
+/** Health's "Start counting afresh" button: deletes one folder's view-count database (and its two side files) so counting can begin again from 0. Only for
+ *  a database the gallery owns (found by the Files-made list, never a path the request names) whose key Health itself reports as missing, another one or
+ *  unreadable: a healthy folder's counts are refused. A key file that can't be read is removed too (a new one can't be made over it); a key that reads fine
+ *  stays, and the new database is tied to it. Nothing else in the folder is touched. [ok, text]. */
+function stats_start_afresh($rel, $dir, $files) {
+    $hit = null;
+    foreach (owned_plan($dir, $files)['entries'] as $e) if ($e['kind'] === 'stats' && $e['rel'] === $rel && basename($e['path']) === '.gallery-stats.sqlite') { $hit = $e; break; }
+    if ($hit === null || is_link($hit['path'])) return [false, 'That is not one of this gallery\'s view-count databases, so nothing was deleted.'];
+    $why = stats_key_check($hit['path']);
+    if (!in_array($why, ['missing', 'mismatch', 'broken'], true)) return [false, 'The view counts in that folder read fine, so nothing was deleted.'];
+    $folder = dirname($hit['path']); $failed = [];
+    foreach (['', '-wal', '-shm'] as $sfx) if (file_exists($hit['path'] . $sfx) && !@unlink($hit['path'] . $sfx)) $failed[] = basename($hit['path']) . $sfx;
+    if ($why === 'broken' && file_exists($folder . '/.gallery-stats-key.php') && !@unlink($folder . '/.gallery-stats-key.php')) $failed[] = '.gallery-stats-key.php';
+    @unlink(__DIR__ . '/.gallery-health-cache.php');   // (what Health last found is not true any more)
+    if ($failed) return [false, 'Could not delete ' . implode(', ', $failed) . ': the web server is not allowed to. Make the folder writable by it (the same owner as the folder), or delete those files yourself, then check again.'];
+    return [true, 'Deleted. Counting starts again from 0 in that folder.'];
+}
+
 /** The one-time reset (2.6.5): a database made by an older version keeps its counts in photo_views_h, keyed by a plain SHA-256 of the photo's path,
  *  which anyone who can fetch the file can test a guessed path against. That table is dropped and the file compacted, so the old hashes don't linger
  *  in free pages: the counts start again, under the folder's own key. True when there was something to drop. */

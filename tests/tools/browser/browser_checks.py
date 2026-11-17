@@ -1147,6 +1147,77 @@ try:
         ok(tp["probe"] == "1" and "bad" in tp["cls"].split() and tp["text"].endswith("Tidy folder links: not set up") and tp["msgHidden"] is False and "private or Not listed folder" in tp["msg"], "[tidy check] with a private folder and the rule missing, the chip is red and says why (the web server tells a folder that exists from one that doesn't)", str(tp))
     finally:
         srv11p.terminate(); srv11p.wait(); b.call("Network.setExtraHTTPHeaders", {"headers": {}})
+    # the view-count database (.gallery-stats.sqlite) is asked for by its plain address the way a stranger would, and the Health row says what came back: open (a warning with the fix) or refused (a green yes)
+    mkstats = lambda marked: subprocess.run(["php", "-r", "$d = new PDO('sqlite:' . $argv[1]); $d->exec('create table stats (key text primary key, value integer)'); if ($argv[2] === '1') $d->exec(\"insert into stats values ('keyid:0123456789ab', 1)\");", SITE11 + "/.gallery-stats.sqlite", "1" if marked else "0"], check=True)
+    mkstats(False)
+    try:
+        for variant, router, expect in (("open", None, False), ("refused", WORK + "/lockrouter.php", True)):
+            s11s = socket.socket(); s11s.bind(("127.0.0.1", 0)); P11S = s11s.getsockname()[1]; s11s.close()
+            srv11s = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P11S}", "-t", WORK + "/site11root"] + ([router] if router else []), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(1.0)
+            try:
+                b.call("Network.setExtraHTTPHeaders", {"headers": lockauth}); b.viewport(1280, 900)
+                b.goto(f"http://127.0.0.1:{P11S}/trip/?admin&classic=1", 2.5); b.js("adminGoTo('site')"); b.drain(0.5)
+                getrow = "(() => { const d = document.querySelector('[data-health=statsfile]'); const r = d && d.closest('.health-row'); return r ? {text: d.textContent.replace(/\\s+/g, ' ').trim(), label: r.querySelector('.health-label').textContent.trim(), cls: r.className, how: (() => { const h = r.querySelector('.health-how[data-how-for=statsfile]'); return h ? !h.hidden : null; })()} : null; })()"
+                want = "Yes: asked for by its plain address" if expect else "Anyone can download the view-count database"
+                got = None; end_ = time.time() + 12
+                while time.time() < end_:
+                    got = b.js(getrow)
+                    if got and want in got["text"]: break
+                    b.drain(0.3)
+                ok(bool(got) and want in got["text"] and got["label"].startswith("The view counts can't be fetched by their address"), f"[view counts file, {variant}] the Health row for the view-count database says " + ("the server refuses it" if expect else "anyone can download it") + " (the browser asked for its address)", str(got))
+                if expect:
+                    ok("loud" not in got["cls"].split() and got["how"] in (None, False), "[view counts file, refused] ...and it is not loud and shows no How to fix fold", str(got))
+                else:
+                    ok("loud" in got["cls"].split() and got["how"] is True, "[view counts file, open] ...and it is loud and shows the How to fix fold with the server rules", str(got))
+            finally:
+                srv11s.terminate(); srv11s.wait(); b.call("Network.setExtraHTTPHeaders", {"headers": {}})
+        # a database whose counts were made under a key that is not in the folder: Health says so and offers Start counting afresh, which asks first and then deletes the database
+        for sfx in ("", "-wal", "-shm"):
+            try: os.unlink(SITE11 + "/.gallery-stats.sqlite" + sfx)
+            except OSError: pass
+        mkstats(True)
+        try: os.unlink(SITE11 + "/.gallery-health-cache.php")   # (what Health found a moment ago, with no counts to read, is not true now)
+        except OSError: pass
+        s11a = socket.socket(); s11a.bind(("127.0.0.1", 0)); P11A = s11a.getsockname()[1]; s11a.close()
+        srv11a = subprocess.Popen([os.environ.get("PHP_SERVER", "php"), "-S", f"127.0.0.1:{P11A}", "-t", WORK + "/site11root"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        try:
+            b.call("Network.setExtraHTTPHeaders", {"headers": lockauth}); b.viewport(1280, 900)
+            b.goto(f"http://127.0.0.1:{P11A}/trip/?admin&classic=1", 2.5); b.js("adminGoTo('site')"); b.drain(0.5)
+            BTN = "document.querySelector('#health-panel [data-backup-act=statsafresh]')"
+            def wait11(expr, limit=12.0):
+                end_ = time.time() + limit
+                while time.time() < end_:
+                    try:
+                        if b.js(expr): return True
+                    except Exception: pass
+                    b.drain(0.3)
+                return False
+            has_btn = wait11("!!" + BTN)
+            ok(has_btn, "[afresh button] the Health row for a folder whose view counts can't be read has a Start counting afresh button", b.js("(() => { const p = document.getElementById('health-panel'); return p ? p.textContent.replace(/\\s+/g, ' ').slice(0, 300) : 'no panel'; })()"))
+            if has_btn:
+                b.js("(() => { const p = document.getElementById('health-panel'); if (!p.classList.contains('show-all')) { const t = p.querySelector('.health-toggle'); if (t) t.click(); } })()"); b.drain(0.3)
+                b.js(BTN + ".scrollIntoView({block: 'center'})"); b.drain(0.2); shot(b, "61-health-afresh-button")
+                b.js(BTN + ".click()"); b.drain(0.4)
+                shot(b, "62-health-afresh-asking")
+                st1 = b.js("(() => { const x = " + BTN + "; const o = x.parentNode.querySelector('.health-act-out'); return {label: x.textContent, msg: o.textContent, cancel: [...x.parentNode.querySelectorAll('button')].some(y => y.textContent === 'Cancel'), still: " + "true" + "}; })()")
+                ok(st1["label"] == "Yes, go ahead" and st1["cancel"] and "deleted for good" in st1["msg"] and os.path.exists(SITE11 + "/.gallery-stats.sqlite"), "[afresh button] the first press only asks (in the row: what is lost, Yes go ahead, Cancel) and deletes nothing", str(st1))
+                b.js("[...document.querySelectorAll('#health-panel [data-backup-act=statsafresh]')][0].parentNode.querySelector('button.secondary:not([data-backup-act])').click()"); b.drain(0.3)
+                ok(b.js(BTN + ".textContent.startsWith('Start counting afresh')") and os.path.exists(SITE11 + "/.gallery-stats.sqlite"), "[afresh button] Cancel puts the button back and deletes nothing")
+                b.js(BTN + ".click()"); b.drain(0.3); b.js(BTN + ".click()")
+                gone = False; end_ = time.time() + 12
+                while time.time() < end_:
+                    if not os.path.exists(SITE11 + "/.gallery-stats.sqlite"): gone = True; break
+                    b.drain(0.3)
+                b.drain(1.5); b.js("adminGoTo('site')"); b.drain(0.5)
+                ok(gone and wait11("!!document.querySelector('#health-panel') && !" + BTN + " && !document.querySelector('#health-panel').textContent.includes(\"View counts can't be read\")"), "[afresh button] the second press deletes the database and the row is gone after the page is drawn again", b.js("(() => { const p = document.getElementById('health-panel'); return p ? p.textContent.replace(/\\s+/g, ' ').slice(0, 300) : 'no panel'; })()"))
+        finally:
+            srv11a.terminate(); srv11a.wait(); b.call("Network.setExtraHTTPHeaders", {"headers": {}})
+    finally:
+        for sfx in ("", "-wal", "-shm"):
+            try: os.unlink(SITE11 + "/.gallery-stats.sqlite" + sfx)
+            except OSError: pass
     # a CLOSED gallery turns away the check's cookie-less request for /Folder/ with the invalid-link page, which only the gallery sends: that still means the address reaches it
     raw11 = open(SITE11 + "/.gallery-config.php").read(); head11, _, body11 = raw11.partition("\n"); cfg11 = json.loads(body11)
     cfg11.update({"ENABLE_SHARE_LINKS": True, "CLOSE_PUBLIC_GALLERY": True})
