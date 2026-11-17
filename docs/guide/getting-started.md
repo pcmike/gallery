@@ -52,7 +52,7 @@ Visitors see each item's text with its photos beneath ("View 2 photos"), a box p
 Settings: `ENABLE_PHOTO_LOCATION` (maps come with it, and contact a third party from the visitor's browser: OpenStreetMap), `ENABLE_VIDEO`, and an admin password.
 1. Folders like `trip/Paris/`, `trip/Lisbon/` appear as cover cards (natural name order; subfolders are on by default). They nest to any depth. *Settings → Folders and photos → Folder style* can instead put every photo on one page, folder by folder (*Flat*), with the folder names, descriptions and notes shown if you want them; a folder can choose for itself in its own settings.
 2. In `?admin`, open a folder and fill in *Display name*, *Dates* (it suggests the span of the photos), *Description* and *Position*.
-3. Tick **Show photo locations publicly for this folder**. This publishes the GPS of every photo there that has some (a warning says how many); a single photo opts out with its own *Location* switch (press its pencil).
+3. Tick **Show photo locations to visitors for this folder**. This publishes the GPS of every photo there that has some (a warning says how many); a single photo opts out with its own *Location* switch (press its pencil).
 4. Press a photo's pencil to give it a *Caption* and *Information link* and correct a location, and press its star to pick the folder card's picture.
 5. The map appears on the front page once a photo has a visible location.
 
@@ -73,7 +73,7 @@ A place that an older gallery (another copy of this one) already shows can be ad
 
 **A good order:**
 1. **Update the old gallery first** to a version that leaves other galleries' thumbnails alone (2.6.4 or later), if it is going to run beside this one for a while.
-2. **Set this gallery up before adding the place:** turn on what you used there (*Videos*, *Share links*, *Count visits*), and keep it closed (`CLOSE_PUBLIC_GALLERY`) until you have checked it.
+2. **Set this gallery up before adding the place:** turn on what you used there (*Videos*, *Share links*, *Count views*), and keep it closed (`CLOSE_PUBLIC_GALLERY`) until you have checked it.
 3. **Add the place** under *Settings → Server setup → Folders from elsewhere*, and look through the gallery as the owner: **check every private mark**, because whatever has none is public here as soon as this gallery is.
 4. **Open it** (switch the closed gallery off). Once the old gallery is retired, **Tidy leftover thumbnails** removes what it left behind.
 5. **Retire the old gallery by hand**: nothing in this gallery deletes another install's files. Its folder (`index.php`, `.gallery-config.php`, `.gallery-links.php` and the link logs, the sign-in files, the install secret) can go when you are sure; first take a **Files ZIP** of it if you want the history of who opened which share link, which is kept only there. Its share links stop working. Its front-page visit counter is not carried.

@@ -341,7 +341,7 @@ function backup_run($manual, $dir, $files) {
 
 /** Is a backup due: none yet or the last good one is a week old, and the last try was not in the last six hours (a try that keeps failing does not run on every request). */
 function backup_due() {
-    if (!is_file(__DIR__ . '/.gallery-config.php')) return false;   // (a gallery that was never set up has nothing the owner made: a bare drop-in folder writes nothing at all)
+    if (!is_file(__DIR__ . '/.gallery-config.php')) return false;   // (a gallery that was never set up has nothing the owner made: a bare drop-in folder holds only thumbnails and the Changes log)
     $st = backup_state();
     $have = backup_find() !== null;
     $last = $have ? (int) ($st['ok_at'] ?? 0) : 0;

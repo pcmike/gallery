@@ -66,22 +66,13 @@ What changes at each version, and what to back up.
 
 **Upgrading to 2.0 from 1.x** leaves the gallery looking the same, with three notes: `?download` now redirects to this repository instead of serving the script (serving it would hand `ADMIN_PASSWORD` to any visitor); view counts carry over (1.x's `.gallery-stats.json` is imported on the first request with `TRACK_VIEWS` on, then removed); and you may see a new setup notice counting photos in subfolders when `AUTO_GROUP_BY_FOLDER` is off. See [CHANGELOG.md](../../CHANGELOG.md).
 
-**Keeping runtime data out of git.** If your deployed gallery is in git, add these to `.gitignore` (they hold GPS and passwords):
+**Keeping runtime data out of git.** If your deployed gallery is in git, add these two lines to `.gitignore` (what the gallery writes holds GPS, password hashes, the install secret, share-link addresses and visitor IP addresses, the weekly backup ZIP among it):
 
 ```
-.gallery-cache/
-.gallery-items.php
-.gallery-config.php
-.gallery-stats.*
-.gallery-login-attempts.php
-.gallery-stay.php
-.gallery-secret.php
-.gallery-health.php
-.gallery-update.php
-.gallery-previous.php
-.gallery-links.php
-.gallery-visits-*.sqlite*
-.gallery-linklog-*.php   (before 2.6.5)
+.gallery-*
+gallery-setup-code.php
 ```
 
-`.gallery-items.php`, `.gallery-config.php`, `.gallery-links.php`, the visitor log (`.gallery-visits-*.sqlite`) and your `.md` files can't be regenerated: use the admin's JSON export for captions and your host's backups for the rest.
+Every name the gallery writes starts with `.gallery-` (the settings, the data files, the logs, the backup, the thumbnail folder `.gallery-cache/`), except the one-time setup code file. *Files this gallery has made* in Settings lists them all.
+
+`.gallery-items.php`, `.gallery-config.php`, `.gallery-collections.php`, `.gallery-links.php`, the visitor log (`.gallery-visits-*.sqlite`), the view counts (`.gallery-stats.sqlite` with its `.gallery-stats-key.php`) and your `.md` files can't be regenerated. The gallery makes a weekly backup of its own files (see [the database and the backup](admin.md#the-database-and-the-backup)); for the rest, use the admin's JSON export for captions and your host's backups.

@@ -12,7 +12,7 @@
 // gallery's admin ("Settings") can also edit it; when it saves, it keeps
 // only the settings that differ from the defaults and drops these comments.
 //
-// Only the names below are settings. A name that isn't (a typo) or a value of
+// Only names the gallery knows are settings (the names below, and the few the admin keeps itself: docs/guide/settings.md lists every one). A name that isn't (a typo) or a value of
 // the wrong kind is ignored and reported in the gallery's setup notices. A file
 // that isn't valid JSON can't tell the gallery what you meant, so the gallery
 // shows nothing until it is fixed (a short page names the file). Keep it out of
@@ -40,9 +40,11 @@
     // "ENABLE_VIDEO_THUMBNAILS": false,    // default true: a real picture for each video (needs ffmpeg on the server; does nothing without it)
     // "ENABLE_VIDEO_PREVIEWS": false,      // default true: hovering over a video plays a short silent clip (needs ffmpeg)
     // "FFMPEG_PATH": "/usr/local/bin/ffmpeg",   // only if ffmpeg is somewhere the gallery doesn't look
-    // "PUBLIC_DOWNLOAD_MODE": "all",       // default "off": a download-original button for visitors without a share link: "all" (every public photo) or "some" (only the folders in PUBLIC_DOWNLOAD_FOLDERS). Signed-in people always have it; visitors never get a ZIP
-    // "PUBLIC_DOWNLOAD_FOLDERS": ["Paris"], // the folders "some" allows (each includes what is inside it)
-    // (the older "ENABLE_PUBLIC_DOWNLOAD": true still reads as "all" until PUBLIC_DOWNLOAD_MODE is set)
+    // "PUBLIC_DOWNLOAD_MODE": "some",      // default "off": a download-original button for visitors without a share link, in the folders PUBLIC_DOWNLOAD_FOLDERS names (the admin keeps these three lines: each folder's own "Visitors can download originals" switch). Signed-in people always have it; visitors never get a ZIP
+    // "PUBLIC_DOWNLOAD_FOLDERS": ["Paris"], // the folders whose own photos can be downloaded (not the folders inside them)
+    // "PUBLIC_DOWNLOAD_ROOT": true,        // the photos on the gallery's main page
+    // (an older "all", or the older "ENABLE_PUBLIC_DOWNLOAD": true, is read as off: switch the folders on one by one)
+    // "SCRUB_LOCATION_DATA": false,        // default true: the location (GPS) is taken out of every original a visitor is sent; false: only where the gallery hides the location (a folder can keep it for itself)
 
     // --- Locations and the map ---------------------------------------------
     // "ENABLE_PHOTO_LOCATION": true,       // default false: allow photo locations to be shown (per-folder switch in the admin); maps come with it (they load Leaflet and OpenStreetMap tiles)
@@ -63,14 +65,18 @@
     // "BROWSER_END_ON_COUNTRY": false,     // ... from a new country (needs COUNTRY_LOOKUP, or a Cloudflare/CloudFront/Vercel country header)
     // "BROWSER_END_ON_NETWORKS": false,    // ... when it passes the networks limit
     // "COUNTRY_LOOKUP": false,             // download DB-IP's free country file (about 4 MB, CC BY 4.0) and look addresses up on this server; one of the two requests the gallery makes by itself to another site (the other is the daily look at GitHub for a newer version, "CHECK_FOR_UPDATES"); Settings turns it on in two steps
+    // "CHECK_FOR_UPDATES": false,          // default true: once a day the Health check asks GitHub which version is newest (GitHub sees this server's address); false: only "Check now" looks
+    // "UPDATE_FEED_URL": "",               // only for a mirror of your own or a test: where that look is sent instead of GitHub
     // "COUNTRY_DB_URL": "",                // another source for that file: https, or http only to 127.0.0.1; {ym} stands for the year and month
     // "DEFAULT_LINK_USES": 2,              // how many browsers a new share link lets in (a link for one person: a phone and a computer); 0: unlimited, for a group
 
-    // --- Share links (README: Share links) ---------------------------------
+    // --- Share links (docs/guide/private-and-sharing.md) ---------------------------------
     // "ENABLE_SHARE_LINKS": true,          // default false: temporary links that let someone see private photos (made in the admin's Shares tab)
     // "SHARE_HEADS_UP": true,              // default false: a thin line at the top for people using a link, saying when it ends (each link can override)
     // "LOG_PUBLIC_VISITS": true,           // default false: also log who opens the public address (their IP address, browser and what they looked at), in the Visitors tab; needs PHP's SQLite (pdo_sqlite)
     // "LOG_KEEP_DAYS": 30,                 // how many days visitor records (the public address and every share link) are kept (0, the default: until you trim the log in the Visitors tab)
+    // "CHANGES_KEEP_DAYS": 0,              // how many days the Changes tab's entries (the log of disk activity) are kept (0: until you trim the log)
+    // "CHANGES_WARN_MB": 20,               // the Health check warns when the Changes entries take more than this many megabytes (0: never)
     // "LOG_WARN_MB": 100,                  // the Health check warns when the visitor records take more than this many megabytes (default 100; 0: never)
     // "CLOSE_PUBLIC_GALLERY": true,        // default false: only you, private-view sign-ins and people using a share link see anything; everyone else gets the page of a link that is not valid (needs ENABLE_SHARE_LINKS and ADMIN_PASSWORD; sign in at .../admin)
     // "TRUSTED_PROXY": "cloudflare",       // where visitors' addresses come from, for link logs and the sign-in throttle: "direct" (the default), "cloudflare" or "proxy"
@@ -79,5 +85,5 @@
     // --- Server setup (advanced) ----------------------------------------
     // "EXTRA_ROOTS": ["/space/trip"],         // the folders inside each place appear at the top of the gallery (editable in the admin)
     // "EXTRA_FOLDERS": { "OldTrip2020": "/mnt/archive/trip-2020" },   // or one place shown as one folder with this name
-    // "NGINX_ACCEL_REDIRECT_PREFIX": "/kb",   // only once the matching nginx config is in place (README)
+    // "NGINX_ACCEL_REDIRECT_PREFIX": "/kb",   // only once the matching nginx config is in place (docs/guide/server.md)
 }

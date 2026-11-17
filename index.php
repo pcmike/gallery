@@ -30,14 +30,15 @@
  *     survives replacing this file with a newer version (see
  *     gallery_setting() below and the guide). TRACK_VIEWS,
  *     ENABLE_VIDEO and ENABLE_PHOTO_LOCATION are off by default
- *     (subfolders are on by default since 2.5.0) — this script writes nothing to disk
- *     (apart from thumbnails in .gallery-cache, what the admin saves and,
- *     once, the setup code file when ?admin is first opened with no password),
- *     makes no outbound/third-party requests of its own (a map, which only appears
+ *     (subfolders are on by default since 2.5.0) — this script writes only its own
+ *     files (thumbnails in .gallery-cache, what the admin saves, the setup code
+ *     file when ?admin is first opened with no password and, on a server with
+ *     SQLite, the Changes log's database),
+ *     makes no outbound/third-party requests of its own beyond the daily look at GitHub
+ *     for a newer version (CHECK_FOR_UPDATES, on by default, can be switched off) (a map, which only appears
  *     once photo locations are on, loads its code from a CDN and its tiles
  *     from OpenStreetMap when a visitor opens it; the country file,
- *     COUNTRY_LOOKUP, is the one thing the server fetches, only once
- *     switched on), and doesn't show a single
+ *     COUNTRY_LOOKUP, is fetched only once switched on), and doesn't show a single
  *     video file or photo location unless you turn one on; subfolders
  *     show as albums unless you switch them off.
  *     (With AUTO_GROUP_BY_FOLDER off it still peeks into subfolders, read-
@@ -313,8 +314,8 @@ function loose_media_in_roots() {
 function count_loose_media_in_roots() { return count(loose_media_in_roots()); }
 
 // Turn photo/group/page view tracking on or off. Off by default — this
-// script writes nothing to the folder's disk unless you turn something
-// on. Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
+// script writes no view counts unless you turn this on (it still keeps its
+// thumbnails, its settings and, with SQLite, the Changes log). Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
 // into the folder, and is what enables the live view-count badges. See
 // the guide for details.
 define('TRACK_VIEWS', gallery_setting('TRACK_VIEWS', false));
@@ -331,8 +332,8 @@ define('SHOW_VIEW_COUNTS_PUBLICLY', gallery_setting('SHOW_VIEW_COUNTS_PUBLICLY',
 // has the button. Where the gallery doesn't show a photo's location, a visitor who isn't signed in is given the file
 // with the location blanked out (see location_scrub_plan).
 // 2.4.0: the same question a share link answers, minus what does not apply to a stranger (they only ever see public photos, and they get no
-// ZIP): off, everything, or only some folders. A settings file from before has the old on/off switch; on reads as Everything until the
-// new setting is chosen (then the old line is dropped, see site_settings_save()).
+// ZIP). A settings file from before has the old on/off switch and "all"; since 2.6.5 both read as off until a folder's own switch is used
+// (then the old line is replaced, see site_settings_save()).
 define('PUBLIC_DOWNLOAD_MODE', (function () {
     $legacy = gallery_setting('ENABLE_PUBLIC_DOWNLOAD', false);
     $mode = gallery_setting('PUBLIC_DOWNLOAD_MODE', 'off', ['off', 'all', 'some']);
@@ -15259,7 +15260,7 @@ function backup_run($manual, $dir, $files) {
 
 /** Is a backup due: none yet or the last good one is a week old, and the last try was not in the last six hours (a try that keeps failing does not run on every request). */
 function backup_due() {
-    if (!is_file(__DIR__ . '/.gallery-config.php')) return false;   // (a gallery that was never set up has nothing the owner made: a bare drop-in folder writes nothing at all)
+    if (!is_file(__DIR__ . '/.gallery-config.php')) return false;   // (a gallery that was never set up has nothing the owner made: a bare drop-in folder holds only thumbnails and the Changes log)
     $st = backup_state();
     $have = backup_find() !== null;
     $last = $have ? (int) ($st['ok_at'] ?? 0) : 0;
@@ -26017,14 +26018,14 @@ function render_about_page() {
     <li>Optional maps, loaded only when someone opens one</li>
     <li>Sorting by name or date either way round, with videos, located photos or private items first; visitors can re-sort for themselves with one button</li>
     <li>Drag and drop to place photos next to each other (the church shots taken on other days), kept together under every sort</li>
-    <li>Download the original (if allowed) or a whole folder as a ZIP, with hidden locations removed from what visitors get</li>
+    <li>Download the original (if allowed) or a whole folder as a ZIP, with locations removed from what visitors get (Scrub location data, on to start with)</li>
     <li>Shareable links to a photo, folder or map, with proper previews; end a gallery link with <code>#map</code> and it opens with the small map showing (and a link icon on that map copies it)</li>
   </ul>
 
   <h2>For the owner</h2>
   <ul>
     <li><strong>Set up in the browser:</strong> upload <code>index.php</code>, open <code>?admin</code>, type the one-time code from a small file the gallery makes beside it, and choose a password</li>
-    <li><strong>An admin shell on a computer:</strong> a sidebar of folders, Features, Edited, Shares and Settings that stays put while one frame shows the page; on a phone, a bar at the bottom with Gallery, Folder, Notes and Menu</li>
+    <li><strong>An admin shell on a computer:</strong> a sidebar of folders and the whole-gallery pages (Features, Collections, Edited, Shares, Visitors, Changes, Settings) that stays put while one frame shows the page; on a phone, a bar at the bottom with Gallery, Folder, Notes and Menu</li>
     <li><strong>A Features page</strong> that lists everything you can switch on and where each one stands, and <strong>Settings</strong> in short folded groups that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Edit right on the gallery:</strong> a pencil on every photo opens its caption, link, place, private and cover switches beside or under the photo, saved as you type; <em>Select</em> makes many photos private or public, or places them next to each other by drag and drop</li>
     <li><strong>A lock and a star on every tile</strong>, for you alone: one press makes a photo private or public, or its folder's cover</li>
@@ -26053,11 +26054,11 @@ function render_about_page() {
 
   <h2>Careful by default</h2>
   <ul>
-    <li>Writes only its own small files (thumbnails, settings, captions) and never touches your photos</li>
+    <li>Writes only its own small files (thumbnails, settings, captions and, with SQLite, the Changes log) and never touches your photos</li>
     <li>Locations, maps, video, share links and passwords stay off until you turn them on (folders show as albums from the start, as cover cards or flattened into one page), and the admin says what each one publishes</li>
     <li>Private items are removed outright for anyone without the password, and the sign-in box is built so browsers don't offer to save it</li>
     <li>A settings file that cannot be read hides its folder instead of opening it, and every save swaps in a whole file, so nothing is seen half-done</li>
-    <li>It contacts no other site on its own, except the optional country file; a map, once someone opens one, loads its code and tiles from a CDN and OpenStreetMap</li>
+    <li>On its own it contacts one other site, GitHub, once a day to see whether a newer version is out (switch it off in Settings), and the optional country file; a map, once someone opens one, loads its code and tiles from a CDN and OpenStreetMap</li>
   </ul>
 
   <h2>Documentation</h2>
@@ -26215,15 +26216,6 @@ geo_maybe_refresh();   // (the country file, when that option is on: a look at o
 send_viewer_aware_cache_headers();
 ?>
 <!-- Drop-in Photo Gallery v<?= htmlspecialchars(GALLERY_VERSION) ?> — github.com/pcmike -->
-<?php if (!empty($galleryNotices) && notices_visible()): ?>
-<!--
-gallery notices (also shown on the page itself, in a collapsed banner):
-<?php foreach ($galleryNotices as $notice): ?>
-  - <?= htmlspecialchars(str_replace('--', '- -', $notice), ENT_QUOTES, 'UTF-8') ?>
-
-<?php endforeach; ?>
--->
-<?php endif; ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>

@@ -1,15 +1,15 @@
 # Code that exists only to carry old installs forward
 
-Everything here is there so that an install made with an older version keeps working after an upgrade. None of it is needed by a fresh install. When upgrade support is dropped (a major version, on its own branch, after 2.3.0 ships), this is the list to work through. **Rule: when you add code like this, add a line here in the same commit.** Line numbers are `index.php` at 2.3.0-dev and will drift; search for the name.
+Everything here is there so that an install made with an older version keeps working after an upgrade. None of it is needed by a fresh install. When upgrade support is dropped (a major version, on its own branch), this is the list to work through. **Rule: when you add code like this, add a line here in the same commit.** Line numbers are not given (the code is in `src/php`, `src/js` and `src/css` and moves); search for the name.
 
-Decision still to make (the owner): is 2.3.0 → 3.0 a clean break ("upgrade to 2.3.x first")? If yes, everything below goes. If some of it should stay for a while, tick it off the removal list and say why.
+Decision still to make (the owner): is the next major version a clean break ("upgrade to the last 2.x first")? If yes, everything below goes. If some of it should stay for a while, tick it off the removal list and say why.
 
 ## Old "nothing found" marks and saved copies of file locations (2.2.x and earlier)
 Older versions copied each photo's location from its file into the folder data and put a `gpsChecked` mark on photos where the file had none. Since 2.3.0 the files are read once into `.gallery-cache/meta1.php`.
 - [ ] `gpsChecked`: `media_file_location()` (skips a photo that has one), `media_folder_summary()` (`legacy` count), `media_tidy_items()`, the editor's "read it now" check in `?admin` item loading, the "Read everything again" part that unsets it (`media_prepare_batch`, search `unset(... 'gpsChecked')`), report text about "old marks" (search `old "nothing found" mark`), and the `legacy` column of `media_report()`.
 - [ ] **Tidy up**: `media_tidy_items()`, `media_tidy_run()`, the `media_tidy` admin action, the Tidy box and its script in `render_admin_thumbnails_panel()`, the `.gallery-items.before-tidy-<date>.php` backups it makes (and their cleanup), and the report hints about saved copies (`own`, `fromFile`).
 - [ ] Tests: the `[tidy]` section of `tests/run.php` (fixtures `tidy-careful`, `tidy-refresh`, `tidy-nocache`), and the legacy-mark cases in `[prepare media]` and `[locations]`; the Tidy checks in `tests/tools/browser/browser_checks.py`.
-- [ ] Docs: the Tidy up bullets in README, CHANGELOG (kept in history) and `?about`.
+- [ ] Docs: the *Tidy up saved locations* text in `docs/guide/notes-and-folders.md`, and the CHANGELOG entries (kept in history).
 
 ## Old names
 - [ ] `warm_thumbnails`, the older name of the `prepare_media` admin action (search `'warm_thumbnails'`). Only an old open admin page or a script would still send it.
@@ -25,7 +25,7 @@ Older versions copied each photo's location from its file into the folder data a
 - [ ] `stats_import_legacy()`: folds the plain-JSON store (`.gallery-stats.json`) and the old SQLite table `photo_views` (readable filenames) into the current `photo_views_k` (keyed by the folder's own key since 2.6.5), then deletes the old ones. Also its call in the stats connection code and its tests.
 
 ## Old visitor-download switch
-- [ ] `ENABLE_PUBLIC_DOWNLOAD` (the on/off switch before `PUBLIC_DOWNLOAD_MODE`, 2.4.0): still read, and counted as `all` when `PUBLIC_DOWNLOAD_MODE` is absent (search `PUBLIC_DOWNLOAD_MODE` where it is defined); the Settings page drops the old line when the new setting is saved. Remove the fallback and the constant once nobody has the old line.
+- [ ] `ENABLE_PUBLIC_DOWNLOAD` (the on/off switch before `PUBLIC_DOWNLOAD_MODE`, 2.4.0): still read so an old line raises no notice; since 2.6.5 both it and `PUBLIC_DOWNLOAD_MODE: all` are read as off (fail closed; search `PUBLIC_DOWNLOAD_MODE` where it is defined), and `all` stays in the allowed values only so that it is read at all; the Settings page drops the old line when the new setting is saved. Remove the fallback and the constant once nobody has the old line.
 
 ## Old addresses
 - [ ] `?admin&hidden=1` (redirects to `?admin#hidden`) and the tab key `hidden`, the name the Edited tab keeps from when it was the Hidden and then the Private tab. Links and bookmarks to `#hidden` still work; renaming the key to `edited` would break them.
@@ -41,6 +41,11 @@ Older versions copied each photo's location from its file into the folder data a
 
 ## The 2.3.2 stay-signed-in token (2.4.0)
 - [ ] `legacy_stay_path()`, `legacy_stay_take()`, `legacy_stay_forget()` and the `ADMIN_STAY_COOKIE_NAME` constant (search `LEGACY (see docs/LEGACY-REMOVAL.md): the "stay signed in"`): a browser that still holds the old cookie (`gallery_stay_…`, file `.gallery-stay.php`) is signed in by it once and given a token of the new kind. The longest such token lives 30 days, so a release or two after 2.4.0 the whole group can go; also the `.gallery-stay.php` entry in `owned_top_names()` and `.gitignore`, and the `[browsers]` test of it.
+
+## Setup marker and address shapes, found in the 2.6.5 audit
+- [ ] `.gallery-setup` (the empty file that opened first-run setup before 2.4.0): `@unlink(__DIR__ . '/.gallery-setup')` in the setup route (`051`) and its skip in the Files-made list (`032`). Kept only for installs that used the old marker; nothing reads the file.
+- [ ] The 16-character random share-link address shape (`019`, the pattern `[A-Za-z0-9]{16}` beside the 8-character one): kept for links made before 2.6.5. New links are 8 characters with a capital.
+- [ ] The `mtime` value of `PHOTO_SORT_ORDER` (`001`; the guide says "the older `mtime` still works").
 
 ## Not legacy (keep)
 - The Health panel's "Upgraded from X on Y" record: a feature, not a compatibility shim.

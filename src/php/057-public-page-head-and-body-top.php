@@ -23,14 +23,14 @@
     <li>Optional maps, loaded only when someone opens one</li>
     <li>Sorting by name or date either way round, with videos, located photos or private items first; visitors can re-sort for themselves with one button</li>
     <li>Drag and drop to place photos next to each other (the church shots taken on other days), kept together under every sort</li>
-    <li>Download the original (if allowed) or a whole folder as a ZIP, with hidden locations removed from what visitors get</li>
+    <li>Download the original (if allowed) or a whole folder as a ZIP, with locations removed from what visitors get (Scrub location data, on to start with)</li>
     <li>Shareable links to a photo, folder or map, with proper previews; end a gallery link with <code>#map</code> and it opens with the small map showing (and a link icon on that map copies it)</li>
   </ul>
 
   <h2>For the owner</h2>
   <ul>
     <li><strong>Set up in the browser:</strong> upload <code>index.php</code>, open <code>?admin</code>, type the one-time code from a small file the gallery makes beside it, and choose a password</li>
-    <li><strong>An admin shell on a computer:</strong> a sidebar of folders, Features, Edited, Shares and Settings that stays put while one frame shows the page; on a phone, a bar at the bottom with Gallery, Folder, Notes and Menu</li>
+    <li><strong>An admin shell on a computer:</strong> a sidebar of folders and the whole-gallery pages (Features, Collections, Edited, Shares, Visitors, Changes, Settings) that stays put while one frame shows the page; on a phone, a bar at the bottom with Gallery, Folder, Notes and Menu</li>
     <li><strong>A Features page</strong> that lists everything you can switch on and where each one stands, and <strong>Settings</strong> in short folded groups that save as you flip them, with a health check that looks over the server for you</li>
     <li><strong>Edit right on the gallery:</strong> a pencil on every photo opens its caption, link, place, private and cover switches beside or under the photo, saved as you type; <em>Select</em> makes many photos private or public, or places them next to each other by drag and drop</li>
     <li><strong>A lock and a star on every tile</strong>, for you alone: one press makes a photo private or public, or its folder's cover</li>
@@ -59,11 +59,11 @@
 
   <h2>Careful by default</h2>
   <ul>
-    <li>Writes only its own small files (thumbnails, settings, captions) and never touches your photos</li>
+    <li>Writes only its own small files (thumbnails, settings, captions and, with SQLite, the Changes log) and never touches your photos</li>
     <li>Locations, maps, video, share links and passwords stay off until you turn them on (folders show as albums from the start, as cover cards or flattened into one page), and the admin says what each one publishes</li>
     <li>Private items are removed outright for anyone without the password, and the sign-in box is built so browsers don't offer to save it</li>
     <li>A settings file that cannot be read hides its folder instead of opening it, and every save swaps in a whole file, so nothing is seen half-done</li>
-    <li>It contacts no other site on its own, except the optional country file; a map, once someone opens one, loads its code and tiles from a CDN and OpenStreetMap</li>
+    <li>On its own it contacts one other site, GitHub, once a day to see whether a newer version is out (switch it off in Settings), and the optional country file; a map, once someone opens one, loads its code and tiles from a CDN and OpenStreetMap</li>
   </ul>
 
   <h2>Documentation</h2>
@@ -221,15 +221,6 @@ geo_maybe_refresh();   // (the country file, when that option is on: a look at o
 send_viewer_aware_cache_headers();
 ?>
 <!-- Drop-in Photo Gallery v<?= htmlspecialchars(GALLERY_VERSION) ?> — github.com/pcmike -->
-<?php if (!empty($galleryNotices) && notices_visible()): ?>
-<!--
-gallery notices (also shown on the page itself, in a collapsed banner):
-<?php foreach ($galleryNotices as $notice): ?>
-  - <?= htmlspecialchars(str_replace('--', '- -', $notice), ENT_QUOTES, 'UTF-8') ?>
-
-<?php endforeach; ?>
--->
-<?php endif; ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>

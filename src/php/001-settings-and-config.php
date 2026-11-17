@@ -30,14 +30,15 @@
  *     survives replacing this file with a newer version (see
  *     gallery_setting() below and the guide). TRACK_VIEWS,
  *     ENABLE_VIDEO and ENABLE_PHOTO_LOCATION are off by default
- *     (subfolders are on by default since 2.5.0) — this script writes nothing to disk
- *     (apart from thumbnails in .gallery-cache, what the admin saves and,
- *     once, the setup code file when ?admin is first opened with no password),
- *     makes no outbound/third-party requests of its own (a map, which only appears
+ *     (subfolders are on by default since 2.5.0) — this script writes only its own
+ *     files (thumbnails in .gallery-cache, what the admin saves, the setup code
+ *     file when ?admin is first opened with no password and, on a server with
+ *     SQLite, the Changes log's database),
+ *     makes no outbound/third-party requests of its own beyond the daily look at GitHub
+ *     for a newer version (CHECK_FOR_UPDATES, on by default, can be switched off) (a map, which only appears
  *     once photo locations are on, loads its code from a CDN and its tiles
  *     from OpenStreetMap when a visitor opens it; the country file,
- *     COUNTRY_LOOKUP, is the one thing the server fetches, only once
- *     switched on), and doesn't show a single
+ *     COUNTRY_LOOKUP, is fetched only once switched on), and doesn't show a single
  *     video file or photo location unless you turn one on; subfolders
  *     show as albums unless you switch them off.
  *     (With AUTO_GROUP_BY_FOLDER off it still peeks into subfolders, read-
@@ -313,8 +314,8 @@ function loose_media_in_roots() {
 function count_loose_media_in_roots() { return count(loose_media_in_roots()); }
 
 // Turn photo/group/page view tracking on or off. Off by default — this
-// script writes nothing to the folder's disk unless you turn something
-// on. Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
+// script writes no view counts unless you turn this on (it still keeps its
+// thumbnails, its settings and, with SQLite, the Changes log). Turning this on writes .gallery-stats.php or .gallery-stats.sqlite
 // into the folder, and is what enables the live view-count badges. See
 // the guide for details.
 define('TRACK_VIEWS', gallery_setting('TRACK_VIEWS', false));
@@ -331,8 +332,8 @@ define('SHOW_VIEW_COUNTS_PUBLICLY', gallery_setting('SHOW_VIEW_COUNTS_PUBLICLY',
 // has the button. Where the gallery doesn't show a photo's location, a visitor who isn't signed in is given the file
 // with the location blanked out (see location_scrub_plan).
 // 2.4.0: the same question a share link answers, minus what does not apply to a stranger (they only ever see public photos, and they get no
-// ZIP): off, everything, or only some folders. A settings file from before has the old on/off switch; on reads as Everything until the
-// new setting is chosen (then the old line is dropped, see site_settings_save()).
+// ZIP). A settings file from before has the old on/off switch and "all"; since 2.6.5 both read as off until a folder's own switch is used
+// (then the old line is replaced, see site_settings_save()).
 define('PUBLIC_DOWNLOAD_MODE', (function () {
     $legacy = gallery_setting('ENABLE_PUBLIC_DOWNLOAD', false);
     $mode = gallery_setting('PUBLIC_DOWNLOAD_MODE', 'off', ['off', 'all', 'some']);

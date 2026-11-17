@@ -2,14 +2,12 @@
 
 This started as a personal tool, so there's no formal process yet — just a few notes if you're poking around the code or opening a PR.
 
-## Local testing
-
 ## Where the code lives
 
 `index.php` is what people download and drop into a folder: one file, no dependencies. It is **built from the parts in `src/`**, so the source is in pieces you can find your way around:
 
 - `src/php/NNN-name.php`: the PHP and the HTML around it, in the order they appear in the file (settings, data files, sign-in, share links, the admin, the public page, ...). A part is a stretch of the file, not a PHP file of its own: it can begin or end inside a function, so `php -l` is for the built `index.php`.
-- `src/js/*.js` and `src/css/*.css`: scripts and styles as plain files (the build pastes them back between the `<script>` / `<style>` tags). A script or style that needs nothing from PHP is one file (`login-page-script.js`, `shell-script.js`, `admin-page-script.js`, `setup-script.js`, the `*-styles.css` files) that a linter can read as it is. The gallery page's script, the map's and the Files panel's have PHP values written into them (the photo list, the owner's state, an on/off flag), so they are cut into pieces at those places (`gallery-script-*.js`, `map-script-pins.js`, `files-made-script-*.js`); the small `php/*-glue-*.php` parts between them hold the lines with the PHP in them. A piece is not a program on its own: `tests/tools/js/run_js_checks.py` checks the whole script as the page renders it.
+- `src/js/*.js` and `src/css/*.css`: scripts and styles as plain files (the build pastes them back between the `<script>` / `<style>` tags). A script or style that needs nothing from PHP is one file (`015-login-page-script.js`, `042-shell-script.js`, `046-admin-page-script.js`, the setup page's script, the `*-styles.css` files; every file carries its place in the order as a number) that a linter can read as it is. The gallery page's script, the map's and the Files panel's have PHP values written into them (the photo list, the owner's state, an on/off flag), so they are cut into pieces at those places (`062-gallery-script-*.js` and on, `023-map-script-pins.js`, `037-files-made-script-*.js`); the small `php/*-glue-*.php` parts between them hold the lines with the PHP in them. A piece is not a program on its own: `tests/tools/js/run_js_checks.py` checks the whole script as the page renders it.
 - `src/manifest.txt`: the order. The build is the plain concatenation of the parts, byte for byte.
 
 **Edit the parts, then run `php build.php`** (it rewrites `index.php`; `php build.php --check` says whether it is up to date). Commit both `src/` and the built `index.php`: the release ships the built file, and `tests/run.php` stops at once if `index.php` is not what `src/` builds. Never edit `index.php` directly.
@@ -25,13 +23,13 @@ php -S localhost:8000 -t /path/to/test-folder
 Then visit `http://localhost:8000/`. Useful endpoints while testing:
 - `/?about` — short in-app pitch, links to the repo (the manual is `docs/guide/`)
 - `/?download` — redirects to the GitHub repo (it used to serve the script itself; see CHANGELOG)
-- `/?img=somefile.jpg&size=thumb` — the resize/cache endpoint directly (set `ENABLE_THUMBNAIL_CACHE` to `true` to actually exercise caching/resizing)
+- `/?img=somefile.jpg&size=thumb` — the resize/cache endpoint directly (thumbnails are on by default; the folder must be writable)
 - `/?track=somefile.jpg` — the view-tracking ping, returns JSON (set `TRACK_VIEWS` to `true` to see it actually track)
 - `/?folder=Europe/France` — a folder's own page (subfolders are on by default; works at any depth)
 - `/?map` — the gallery page with the map overlay open (needs `ENABLE_PHOTO_LOCATION`, plus photos with a visible location); `/?map&folder=Europe` does the same for a folder
 - `/?admin` and `/?reveal` — a password form (set `ADMIN_PASSWORD` / `PRIVATE_VIEW_PASSWORD` in your test copy; both are allowed over plain HTTP on `localhost`)
 
-Remember most of these are off by default — if you're testing view stats or thumbnail caching specifically, flip the relevant constant near the top of your test copy of `index.php` first.
+Remember most features are off by default. To try one, put the setting in `.gallery-config.php` beside your test copy (see `gallery-config.example.php`, for example `{"TRACK_VIEWS": true}`), or switch it on in the admin. Never edit the defaults in `index.php`: it is built from `src/`.
 
 Always run `php -l index.php` before committing — it catches syntax errors instantly.
 
@@ -57,13 +55,17 @@ The minimum is **PHP 8.3**, and it's a tested claim: the whole suite and every t
 
 ## Optional tools: fuzzing and JavaScript checks
 
-Five extra checks live in [`tests/tools/`](tests/tools/README.md), outside the main suite because they need a bit more (python3, plus Chromium for the browser one and QuickJS for the JavaScript one): a **fuzzer** that sends thousands of hostile requests at every endpoint with PHP reporting every error, a **cross-site-scripting canary** (`xss.py`) that plants payloads in every input and fails if any comes back unescaped in a dangerous context, a **real-browser run** (headless Chromium: clicks, key presses, layout, the map, a real admin form under its CSP, screenshots), a **JavaScript runner** that executes the page scripts against a fake DOM and a fake Leaflet, and a small **reference QR encoder and decoder** that the browser run uses to check the gallery's own QR code. Both are worth running after touching request handling, the admin, or any inline script — the fuzzer is what found the `?size[]=` fatal error and the admin NUL-byte crash that the main suite hadn't thought to try.
+Nine extra checks live in [`tests/tools/`](tests/tools/README.md), outside the main suite because they need a bit more (python3, plus Chromium for the browser one and QuickJS for the JavaScript one): a **fuzzer** that sends thousands of hostile requests at every endpoint with PHP reporting every error, a **cross-site-scripting canary** (`xss.py`) that plants payloads in every input and fails if any comes back unescaped in a dangerous context, a **real-browser run** (headless Chromium: clicks, key presses, layout, the map, a real admin form under its CSP, screenshots), a **JavaScript runner** that executes the page scripts against a fake DOM and a fake Leaflet, a small **reference QR encoder and decoder** that the browser run uses to check the gallery's own QR code, a **Health-list browser run** (`health_checks.py`), a **video run** (`video_checks.py`, real clips through ffmpeg), the **web-server rules** check (`web_server_rules.py`: the nginx and Apache rules against real servers) and the **skeleton self-test** (`skeleton/selftest.py`). They are worth running after touching request handling, the admin, or any inline script — the fuzzer is what found the `?size[]=` fatal error and the admin NUL-byte crash that the main suite hadn't thought to try.
 
 ```
 python3 tests/tools/fuzz/fuzz.py
 python3 tests/tools/fuzz/xss.py
 python3 tests/tools/qr/qr_reference.py
 python3 tests/tools/browser/browser_checks.py --shots /tmp/gallery-shots
+python3 tests/tools/browser/health_checks.py
+FFMPEG=/path/to/ffmpeg python3 tests/tools/browser/video_checks.py
+python3 -I tests/tools/web_server_rules.py
+python3 tests/tools/skeleton/selftest.py
 QJS=/path/to/qjs python3 tests/tools/js/run_js_checks.py
 ```
 
