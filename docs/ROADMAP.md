@@ -65,3 +65,10 @@ Let the owner see how many galleries run which version.
 - **Today:** the update check asks GitHub, and the request carries `User-Agent: Drop-in Photo Gallery <version>`. GitHub does not show the owner those requests, so there is no way to count them.
 - **Sketch:** `UPDATE_FEED_URL` can already point at a feed on your own server; a feed there that mirrors the GitHub release and keeps its own access log would show each install's address and version. It would need a plain disclosure in Settings and an off switch.
 
+
+## Test suite: stop each test server when its section is done
+*A maybe, not a plan: the chain runs fine as it is.*
+
+- **Today:** the server suite starts about 200 small web servers (one per test setup) and stops 16 of them as it goes; the rest run until the suite ends. On the static PHP 8.5 build that is about 300 processes and 12.6 GB of a 16 GB machine, so a suite has to run alone.
+- **Sketch:** stop each server when its section is done. Later sections reuse earlier servers, so each reuse has to be found first; a section would start its own server when it needs one.
+- **Note:** held back because it touches the whole suite (about 3,100 checks) for no change in what the gallery does. Worth doing only if the suite keeps growing or the machine gets smaller.
