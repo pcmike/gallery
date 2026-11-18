@@ -19,7 +19,7 @@ Changed in **Settings** (no Save button: each change saves as you make it) or in
 | `ENABLE_VIDEO_THUMBNAILS` | on | Real video pictures (needs ffmpeg) |
 | `ENABLE_VIDEO_PREVIEWS` | on | Hover clips and scrubbing (needs ffmpeg) |
 | `FFMPEG_PATH` | none | Full path, if ffmpeg is somewhere unusual (file only) |
-| `ENABLE_THUMBNAIL_CACHE` | on | Thumbnails, and what the files say about themselves (capture date, location), in `.gallery-cache`; off = originals, no HEIC, and nothing is read ahead of time |
+| `ENABLE_THUMBNAIL_CACHE` | on | Thumbnails, and what the files say about themselves (capture date, location), in `.gallery-cache`; off = originals, no HEIC, nothing is read ahead of time, and no dates are kept (the date order reads the files on every look) |
 | `PHOTO_SORT_ORDER` | `taken`, or `filename` when `AUTO_GROUP_BY_FILENAME` is on | `taken` (date taken, else the file's date; oldest first) or `filename` (the older `mtime` still works) |
 | `PHOTO_SORT_DESC` | off | Last first (Z to A, newest first) |
 | `SORT_VIDEOS_FIRST` / `SORT_LOCATED_FIRST` / `SORT_PRIVATE_FIRST` | off | What goes first, whatever the order; they stack |

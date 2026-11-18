@@ -380,6 +380,8 @@ define('ENABLE_THUMBNAIL_CACHE', gallery_setting('ENABLE_THUMBNAIL_CACHE', true)
 // column: about 350), so 560 is right for an ordinary screen and 1080 for a 3x phone.
 /** The thumbnail cache's file of what the gallery has read from each file (when taken, where): see media_meta_read_file(). */
 const MEDIA_META_FILE = 'meta1.php';
+/** The thumbnail cache's file of the capture dates found for sorting (by file name, size and modified time): see media_taken_times(). A guarded file, because it holds file names. */
+const MEDIA_TAKEN_FILE = 'taken4.php';
 
 const TILE_SIZES = ['tile' => [560, 82], 'tilehd' => [1080, 80]];
 

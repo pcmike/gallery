@@ -407,12 +407,22 @@ function media_capture_time($path) {
 }
 
 /** When each photo of a folder was taken, as a number to sort by: the capture date in the file (see media_capture_time), else
- *  its modified time. Reading dates out of many files is slow, so what is found is kept (by file name, size and modified
- *  time) in the folder's cache. */
+ *  its modified time. Reading dates out of many files is slow, so with the thumbnail cache on what is found is kept (by file name,
+ *  size and modified time) in the folder's .gallery-cache, in a guarded file (it holds file names, so a request for it by its address is answered 404,
+ *  like meta1.php); with the cache off the dates are read from the files each time and nothing is written. The plain files earlier versions made
+ *  (taken3.json in every release up to 2.6.4; taken.json and taken2.json before it; taken4.json only on the development branch of 2.6.5) hold the same
+ *  names and can be read by their address, so they are taken away whenever a folder of this gallery is looked at, whatever the switch says. */
 function media_taken_times($folderReal, $names) {
-    $cachePath = $folderReal . '/.gallery-cache/taken4.json';
+    $cacheDir = $folderReal . '/.gallery-cache';
+    $cacheOk = !is_link($cacheDir);
+    $ownRoot = rtrim((string) (realpath(__DIR__) ?: __DIR__), '/') . '/';
+    if ($cacheOk && strpos(rtrim((string) (realpath($folderReal) ?: $folderReal), '/') . '/', $ownRoot) === 0) {   // (a place from elsewhere on the server may be shown by another gallery that still uses its files: left alone, as the thumbnail clean-up does)
+        foreach (['taken.json', 'taken2.json', 'taken3.json', 'taken4.json'] as $plain) if (is_file("$cacheDir/$plain") && !is_link("$cacheDir/$plain")) @unlink("$cacheDir/$plain");
+    }
+    $cachePath = $cacheDir . '/' . MEDIA_TAKEN_FILE;
+    $useCache = ENABLE_THUMBNAIL_CACHE && $cacheOk;
     $known = [];
-    $raw = is_file($cachePath) ? json_decode((string) @file_get_contents($cachePath), true) : null;
+    $raw = $useCache && is_file($cachePath) && !is_link($cachePath) ? json_decode(data_file_strip_guard((string) @file_get_contents($cachePath)), true) : null;
     if (is_array($raw)) $known = $raw;
     $out = []; $changed = false; $budget = 20000;
     foreach ($names as $name) {
@@ -430,14 +440,11 @@ function media_taken_times($folderReal, $names) {
         $known[$name] = [$mtime, $size, $when];
         $changed = true;
     }
-    if ($changed) {
+    if ($changed && $useCache) {
         $live = array_filter(array_intersect_key($known, array_flip($names)), 'name_is_text', ARRAY_FILTER_USE_KEY);   // (a name that is not valid text can't be written as JSON: it is left out, never allowed to empty the whole file)
-        $encoded = json_encode($live);
-        $dirOk = is_dir($folderReal . '/.gallery-cache') || @mkdir($folderReal . '/.gallery-cache', 0755);
-        if ($dirOk && $encoded !== false) {
-            $tmp = $cachePath . '.tmp' . bin2hex(random_bytes(3));
-            if (@file_put_contents($tmp, $encoded) !== false && !@rename($tmp, $cachePath)) @unlink($tmp);
-        }
+        $encoded = data_file_encode($live);
+        $dirOk = is_dir($cacheDir) || @mkdir($cacheDir, 0755);
+        if ($dirOk && $encoded !== false && !is_link($cachePath)) file_write_whole($cachePath, $encoded, '.php');   // (a half-written copy is a .php file with the guard line first, answered 404 like the real one)
     }
     return $out;
 }

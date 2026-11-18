@@ -380,6 +380,8 @@ define('ENABLE_THUMBNAIL_CACHE', gallery_setting('ENABLE_THUMBNAIL_CACHE', true)
 // column: about 350), so 560 is right for an ordinary screen and 1080 for a 3x phone.
 /** The thumbnail cache's file of what the gallery has read from each file (when taken, where): see media_meta_read_file(). */
 const MEDIA_META_FILE = 'meta1.php';
+/** The thumbnail cache's file of the capture dates found for sorting (by file name, size and modified time): see media_taken_times(). A guarded file, because it holds file names. */
+const MEDIA_TAKEN_FILE = 'taken4.php';
 
 const TILE_SIZES = ['tile' => [560, 82], 'tilehd' => [1080, 80]];
 
@@ -2773,10 +2775,10 @@ function image_cache_path($cacheDir, $filename, $variant, $srcPath) {
 }
 
 /** Is this the name of a file the gallery makes in a .gallery-cache (or made in an earlier version)? A picture or clip (32 hex digits and .jpg or .mp4), the capture
- *  dates (taken.json, taken2.json, taken3.json, taken4.json), which files are no picture (nopic1.php), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
+ *  dates (plain taken.json, taken2.json, taken3.json, taken4.json, and the guarded taken4.php now), which files are no picture (nopic1.php), what was read from the files (meta1.php), each with the note of a failed try or the temporary name of one being
  *  written. Nothing else in a folder of that name is the gallery's, so nothing else is ever deleted from it. */
 function cache_entry_is_gallery_made($name) {
-    return preg_match('/^(?:[0-9a-f]{32}\.(?:jpg|mp4)|taken[0-9]*\.json|nopic[0-9]*\.php|meta[0-9]*\.php)(?:\.failed|\.tmp[0-9a-f]+|\.[0-9a-f]{8}\.php)?$/D', (string) $name) === 1;
+    return preg_match('/^(?:[0-9a-f]{32}\.(?:jpg|mp4)|taken[0-9]*\.(?:json|php)|nopic[0-9]*\.php|meta[0-9]*\.php)(?:\.failed|\.tmp[0-9a-f]+|\.[0-9a-f]{8}\.php)?$/D', (string) $name) === 1;
 }
 
 /** The folders (as the gallery names them) whose .gallery-cache is a link: not used, not swept (see image_cache_path). */
@@ -2797,7 +2799,7 @@ function image_cache_expected_names($dir, $folderFiles, $imagickAvailable) {
         $variants = $isHeic ? ['thumb', 'tile', 'tilehd', 'share', 'full', 'cover', 'coverlg'] : ['thumb', 'tile', 'tilehd', 'share', 'cover', 'coverlg'];
         if (is_video_file($file)) { $variants[] = 'poster'; $variants[] = 'strip2'; }   // the frame taken from a video, and its sprite of frames
         $mtime = @filemtime(resolve_real_path($dir, $file));
-        $valid['taken4.json'] = true;   // the capture dates found for sorting (see media_taken_times)
+        $valid[MEDIA_TAKEN_FILE] = true;   // the capture dates found for sorting (see media_taken_times; the plain taken*.json files are not valid any more: they are swept)
         $valid['nopic1.php'] = true;   // which files with a picture's name are no picture (see scan_not_a_picture)
         $valid[MEDIA_META_FILE] = true;   // what was read from the files: when taken, where (see media_meta_ensure)
         if (is_video_file($file)) { $valid[cache_name($file, 'preview2', $mtime) . '.mp4'] = true; $renamed[md5($file . '|preview2|' . $mtime) . '.mp4'] = cache_name($file, 'preview2', $mtime) . '.mp4'; }   // and its short clip (see video_preview_path)
@@ -8907,12 +8909,22 @@ function media_capture_time($path) {
 }
 
 /** When each photo of a folder was taken, as a number to sort by: the capture date in the file (see media_capture_time), else
- *  its modified time. Reading dates out of many files is slow, so what is found is kept (by file name, size and modified
- *  time) in the folder's cache. */
+ *  its modified time. Reading dates out of many files is slow, so with the thumbnail cache on what is found is kept (by file name,
+ *  size and modified time) in the folder's .gallery-cache, in a guarded file (it holds file names, so a request for it by its address is answered 404,
+ *  like meta1.php); with the cache off the dates are read from the files each time and nothing is written. The plain files earlier versions made
+ *  (taken3.json in every release up to 2.6.4; taken.json and taken2.json before it; taken4.json only on the development branch of 2.6.5) hold the same
+ *  names and can be read by their address, so they are taken away whenever a folder of this gallery is looked at, whatever the switch says. */
 function media_taken_times($folderReal, $names) {
-    $cachePath = $folderReal . '/.gallery-cache/taken4.json';
+    $cacheDir = $folderReal . '/.gallery-cache';
+    $cacheOk = !is_link($cacheDir);
+    $ownRoot = rtrim((string) (realpath(__DIR__) ?: __DIR__), '/') . '/';
+    if ($cacheOk && strpos(rtrim((string) (realpath($folderReal) ?: $folderReal), '/') . '/', $ownRoot) === 0) {   // (a place from elsewhere on the server may be shown by another gallery that still uses its files: left alone, as the thumbnail clean-up does)
+        foreach (['taken.json', 'taken2.json', 'taken3.json', 'taken4.json'] as $plain) if (is_file("$cacheDir/$plain") && !is_link("$cacheDir/$plain")) @unlink("$cacheDir/$plain");
+    }
+    $cachePath = $cacheDir . '/' . MEDIA_TAKEN_FILE;
+    $useCache = ENABLE_THUMBNAIL_CACHE && $cacheOk;
     $known = [];
-    $raw = is_file($cachePath) ? json_decode((string) @file_get_contents($cachePath), true) : null;
+    $raw = $useCache && is_file($cachePath) && !is_link($cachePath) ? json_decode(data_file_strip_guard((string) @file_get_contents($cachePath)), true) : null;
     if (is_array($raw)) $known = $raw;
     $out = []; $changed = false; $budget = 20000;
     foreach ($names as $name) {
@@ -8930,14 +8942,11 @@ function media_taken_times($folderReal, $names) {
         $known[$name] = [$mtime, $size, $when];
         $changed = true;
     }
-    if ($changed) {
+    if ($changed && $useCache) {
         $live = array_filter(array_intersect_key($known, array_flip($names)), 'name_is_text', ARRAY_FILTER_USE_KEY);   // (a name that is not valid text can't be written as JSON: it is left out, never allowed to empty the whole file)
-        $encoded = json_encode($live);
-        $dirOk = is_dir($folderReal . '/.gallery-cache') || @mkdir($folderReal . '/.gallery-cache', 0755);
-        if ($dirOk && $encoded !== false) {
-            $tmp = $cachePath . '.tmp' . bin2hex(random_bytes(3));
-            if (@file_put_contents($tmp, $encoded) !== false && !@rename($tmp, $cachePath)) @unlink($tmp);
-        }
+        $encoded = data_file_encode($live);
+        $dirOk = is_dir($cacheDir) || @mkdir($cacheDir, 0755);
+        if ($dirOk && $encoded !== false && !is_link($cachePath)) file_write_whole($cachePath, $encoded, '.php');   // (a half-written copy is a .php file with the guard line first, answered 404 like the real one)
     }
     return $out;
 }
@@ -13221,7 +13230,7 @@ function owned_verify($path, $folderReal, $kind, $isTop) {
     if (dirname($path) !== $folderReal) return false;
     if (is_link($path) || !is_file($path)) return false;
     if ($kind === 'thumbs') return owned_is_thumb_name($name) && basename($folderReal) === '.gallery-cache';
-    if ($kind === 'meta') return basename($folderReal) === '.gallery-cache' && (($name === MEDIA_META_FILE || $name === 'nopic1.php') && owned_head_ok($path, true));
+    if ($kind === 'meta') return basename($folderReal) === '.gallery-cache' && (($name === MEDIA_META_FILE || $name === MEDIA_TAKEN_FILE || $name === 'nopic1.php') && owned_head_ok($path, true));
     if (owned_kind_of_name($name, $isTop) !== $kind) return false;
     if ($kind === 'stats' && !owned_stats_file_ok($path, $name)) return false;
     if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings' && $kind !== 'leftovers');
@@ -13276,7 +13285,7 @@ function owned_plan($dir, $files) {
                     if ($cn === '.' || $cn === '..') continue;
                     $cp = $path . '/' . $cn;
                     if (owned_is_thumb_name($cn)) { if (owned_verify($cp, $path, 'thumbs', $top)) { $c['thumbs']++; $c['bytes'] += (int) @filesize($cp); } continue; }
-                    if (($cn === MEDIA_META_FILE || $cn === 'nopic1.php') && owned_verify($cp, $path, 'meta', $top)) $entries[] = ['rel' => $c['rel'] . '/' . $cn, 'path' => $cp, 'kind' => 'meta', 'size' => (int) @filesize($cp), 'mtime' => (int) @filemtime($cp), 'folder' => $path, 'top' => $top];
+                    if (($cn === MEDIA_META_FILE || $cn === MEDIA_TAKEN_FILE || $cn === 'nopic1.php') && owned_verify($cp, $path, 'meta', $top)) $entries[] = ['rel' => $c['rel'] . '/' . $cn, 'path' => $cp, 'kind' => 'meta', 'size' => (int) @filesize($cp), 'mtime' => (int) @filemtime($cp), 'folder' => $path, 'top' => $top];
                 }
                 $caches[] = $c;
                 continue;

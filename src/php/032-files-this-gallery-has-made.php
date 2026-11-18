@@ -75,7 +75,7 @@ function owned_verify($path, $folderReal, $kind, $isTop) {
     if (dirname($path) !== $folderReal) return false;
     if (is_link($path) || !is_file($path)) return false;
     if ($kind === 'thumbs') return owned_is_thumb_name($name) && basename($folderReal) === '.gallery-cache';
-    if ($kind === 'meta') return basename($folderReal) === '.gallery-cache' && (($name === MEDIA_META_FILE || $name === 'nopic1.php') && owned_head_ok($path, true));
+    if ($kind === 'meta') return basename($folderReal) === '.gallery-cache' && (($name === MEDIA_META_FILE || $name === MEDIA_TAKEN_FILE || $name === 'nopic1.php') && owned_head_ok($path, true));
     if (owned_kind_of_name($name, $isTop) !== $kind) return false;
     if ($kind === 'stats' && !owned_stats_file_ok($path, $name)) return false;
     if (substr($name, -4) === '.php') return owned_head_ok($path, $kind !== 'settings' && $kind !== 'leftovers');
@@ -130,7 +130,7 @@ function owned_plan($dir, $files) {
                     if ($cn === '.' || $cn === '..') continue;
                     $cp = $path . '/' . $cn;
                     if (owned_is_thumb_name($cn)) { if (owned_verify($cp, $path, 'thumbs', $top)) { $c['thumbs']++; $c['bytes'] += (int) @filesize($cp); } continue; }
-                    if (($cn === MEDIA_META_FILE || $cn === 'nopic1.php') && owned_verify($cp, $path, 'meta', $top)) $entries[] = ['rel' => $c['rel'] . '/' . $cn, 'path' => $cp, 'kind' => 'meta', 'size' => (int) @filesize($cp), 'mtime' => (int) @filemtime($cp), 'folder' => $path, 'top' => $top];
+                    if (($cn === MEDIA_META_FILE || $cn === MEDIA_TAKEN_FILE || $cn === 'nopic1.php') && owned_verify($cp, $path, 'meta', $top)) $entries[] = ['rel' => $c['rel'] . '/' . $cn, 'path' => $cp, 'kind' => 'meta', 'size' => (int) @filesize($cp), 'mtime' => (int) @filemtime($cp), 'folder' => $path, 'top' => $top];
                 }
                 $caches[] = $c;
                 continue;

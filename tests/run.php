@@ -1477,7 +1477,7 @@ $soStored = json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo
 check('[sort] saved, the folder keeps only what was chosen (order, direction, videos on, private off; "the site\'s" choices are not stored)', ($soStored['photoSort'] ?? null) == ['order' => 'taken', 'desc' => true, 'video' => true, 'private' => false] && isset($soStored['items']['z-located.jpg']) && true && $soStored['locationEnabled'] === true, json_encode($soStored));
 check('[sort] ...and it is the order visitors get in that folder', $soOrder() === ['m.mp4', 'z-located.jpg', 'b-late.jpg', 'c-mid.jpg', 'a-early.jpg'], json_encode($soOrder()));
 check('[sort] ...but a visitor\'s own choice still beats the folder\'s', $soOrder('?sort=name') === ['a-early.jpg', 'b-late.jpg', 'c-mid.jpg', 'm.mp4', 'z-located.jpg']);
-check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken4.json") && count(json_decode(file_get_contents("$fxSo/.gallery-cache/taken4.json"), true)) >= 5);
+check('[sort] the dates found are kept in the folder\'s cache (and removed with it), so they are read from the photos only once', is_file("$fxSo/.gallery-cache/taken4.php") && count(json_decode(data_file_strip_guard_for_tests(file_get_contents("$fxSo/.gallery-cache/taken4.php")), true)) >= 5);
 [, $soPage] = http_get("$baseSo/");
 check('[sort] the page has the sort button, with only the toggles that apply here (videos, located; private only for the owner)', str_contains($soPage, 'id="sort-menu-btn"') && str_contains($soPage, 'data-flag="video"') && str_contains($soPage, 'data-flag="located"') && !str_contains($soPage, 'data-flag="private"'));
 [, $soPageOwner] = http_get("$baseSo/", ["Cookie: $soSess"]);
@@ -4643,7 +4643,7 @@ $after = array_diff(scandir($fxPlain), ['.', '..']); sort($after);
 check('[plain] a copy of index.php with no settings changed shows the root photos and the subfolder as a cover card (subfolders are on by default)', str_contains($plain, 'alt="one.jpg"') && str_contains($plain, 'alt="two.jpg"') && str_contains($plain, 'Subfolder') && str_contains($plain, '?folder=Subfolder'));
 $newEntries = array_values(array_filter(array_diff($after, $before), fn ($f) => !preg_match('/^\.gallery-visits-[0-9a-f]{24}\.sqlite(-wal|-shm)?$/', $f)));   // (the log of disk activity is made by the first page, with the visitor log's name)
 $plainCache = is_dir("$fxPlain/.gallery-cache") ? array_diff(scandir("$fxPlain/.gallery-cache"), ['.', '..']) : [];
-check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', (array_diff($newEntries, ['.gallery-cache', '.gallery-ffmpeg.php']) === []) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken4.json', 'nopic1.php', 'meta1.php'], true)));
+check('[plain] ...writes only thumbnails and what is found in the photos, their dates and locations (a .gallery-cache folder) into the folder, whatever is requested: no stats, data or settings files', (array_diff($newEntries, ['.gallery-cache', '.gallery-ffmpeg.php']) === []) && !array_filter($plainCache, fn($f) => !preg_match('/\.(jpe?g|png|webp)$/i', $f) && !in_array($f, ['taken4.php', 'nopic1.php', 'meta1.php'], true)));
 http_get("$basePlain/?admin");
 check('[plain] ...asking for ?admin before any password exists is the one request that writes more: the set-up code file beside index.php (gallery-setup-code.php, a guard line and the code), and nothing else', array_values(array_diff(array_diff(scandir($fxPlain), ['.', '..']), $after)) === ['gallery-setup-code.php']);
 @unlink("$fxPlain/gallery-setup-code.php");
@@ -5611,7 +5611,7 @@ check('[files made] the delete reports what it did and removes only the gallery\
 $fNotOurs = ['/one.jpg', '/Pics/a.jpg', '/Pics/b.jpg', '/Notes/n.jpg', '/Notes/gallery.md', '/Linked/l.jpg', '/NoGuard/g.jpg', '/index.php', '/.gallery-items.php.bak', '/.gallery-config.php.old', '/.gallery-linklog-zz.php', '/.gallery-signin-0123456789ab.php.bak', '/.gallery-signin-notahexid1234.php', '/.gallery-signin-0123456789cd.php', '/Pics/my.gallery-items.php', '/NoGuard/.gallery-items.php', '/deep/.gallery-items.php', '/.gallery-setup', '/Pics/.gallery-cache/notes.txt'];
 $fSame = true; foreach ($fNotOurs as $k) if (($fBefore[$k] ?? null) !== ($fAfter[$k] ?? 'gone')) { $fSame = false; echo "    changed or gone: $k\n"; }
 check('[files made] every photo, note, decoy, lookalike and index.php is exactly as it was (checksums before and after), the symlink still points where it did, and the file outside is untouched', $fSame && ($fAfter['/Linked/.gallery-items.php'] ?? '') === 'link:' . "$fxFOut/important.txt" && file_get_contents("$fxFOut/important.txt") === 'a file outside the gallery that a link points at' && ($fMapAfter['/m.jpg'] ?? '') === ($fMapBefore['/m.jpg'] ?? 'x'));
-check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !glob("$fxF/.gallery-visits-*.sqlite") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-(?:signin-[0-9a-f]{12}\.php|visits-[0-9a-f]{24}\.sqlite|backup-[0-9a-f]{24}\.zip|backup\.(?:php|lock)|health-cache\.php|archive-[12]\.lock|ffmpeg\.(?:php|lock))$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php', '/Pics/.gallery-cache/nopic1.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
+check('[files made] a .gallery-cache folder that holds something else stays, an emptied one goes, and nothing else disappears: the only things gone are the gallery\'s own files', is_dir("$fxF/Pics/.gallery-cache") && !is_dir("$fxFMap/.gallery-cache") && !glob("$fxF/.gallery-visits-*.sqlite") && !array_diff(array_filter(array_keys($fGone), fn ($k) => !preg_match('~^/\.gallery-(?:signin-[0-9a-f]{12}\.php|visits-[0-9a-f]{24}\.sqlite|backup-[0-9a-f]{24}\.zip|backup\.(?:php|lock)|health-cache\.php|archive-[12]\.lock|ffmpeg\.(?:php|lock))$~', $k)), ['/.gallery-config.php', '/.gallery-links.php', '/.gallery-secret.php', '/.gallery-stay.php', '/.gallery-browsers.php', '/.gallery-browsers-log.php', '/.gallery-signin-0123456789ab.php', '/.gallery-login-attempts.php', '/.gallery-health.php', '/Pics/.gallery-items.php', '/Pics/.gallery-stats.php', '/Pics/.gallery-items.before-tidy-20261001-120000.php', '/Pics/.gallery-cache/' . $fThumbA, '/Pics/.gallery-cache/meta1.php', '/Pics/.gallery-cache/nopic1.php', '/Pics/.gallery-cache/taken4.php']) && !array_filter(array_keys($fGone), fn ($k) => preg_match('/\.(jpg|md|bak|old|txt)$/', $k) && !str_contains($k, '/.gallery-cache/')), json_encode(array_keys($fGone)) . ' ' . json_encode(array_keys($fGoneMap)));
 @unlink("$fxF/.gallery-setup");   // (the owner's own marker file is left by the delete; here it is removed by hand to see the plain state)
 check('[files made] afterwards the gallery has no admin (only the set-up page, which asks for a code), the old sign-in cookie opens nothing, and the gallery itself is plain and public', !str_contains(http_get("$baseF/?admin", [])[1], 'Gallery Admin') && str_contains(http_get("$baseF/?admin", [])[1], 'Set up your gallery') && !str_contains(http_get("$baseF/?admin", ["Cookie: $fCookie"])[1], 'Gallery Admin') && http_get("$baseF/")[0] === 200);
 @unlink("$fxF/gallery-setup-code.php");
@@ -11042,10 +11042,10 @@ check('[names] a Latin-1 name given to the ZIP naming function comes out as UTF-
 
 // the "taken times" cache: a failed encode must never leave an empty file
 mkdir("$g2Dir/taken", 0777, true); make_jpeg("$g2Dir/taken/a.jpg", 20, 20, 1, 2, 3);
-$g2Out = $g2Run('function media_capture_time($p) { return null; }' . "\n" . $g2Fn('name_is_text') . "\n" . $g2Fn('media_taken_times') . "\n" . 'media_taken_times(' . var_export("$g2Dir/taken", true) . ', ["a.jpg", "caf\\xE9.jpg"]); echo "done";');
-$g2Cache = @file_get_contents("$g2Dir/taken/.gallery-cache/taken4.json"); $g2Dec = $g2Cache === false ? null : json_decode($g2Cache, true);
+$g2Out = $g2Run('function media_capture_time($p) { return null; }' . "\n" . "const ENABLE_THUMBNAIL_CACHE = true; const MEDIA_TAKEN_FILE = 'taken4.php'; function file_write_whole(\$p, \$c, \$e = '') { return file_put_contents(\$p, \$c) !== false; }\n" . $g2Fn('data_file_guard_line') . "\n" . $g2Fn('data_file_encode') . "\n" . $g2Fn('data_file_strip_guard') . "\n" . $g2Fn('name_is_text') . "\n" . $g2Fn('media_taken_times') . "\n" . 'media_taken_times(' . var_export("$g2Dir/taken", true) . ', ["a.jpg", "caf\\xE9.jpg"]); echo "done";');
+$g2Cache = @file_get_contents("$g2Dir/taken/.gallery-cache/taken4.php"); $g2Dec = $g2Cache === false ? null : json_decode(data_file_strip_guard_for_tests($g2Cache), true);
 check('[names] the folder\'s "taken times" cache is still written (with the usable names) when the folder holds a name that isn\'t valid text; it used to be an empty file, so every page view read every file again', str_ends_with($g2Out, 'done') && is_array($g2Dec) && array_keys($g2Dec) === ['a.jpg'], $g2Out . ' ' . var_export($g2Cache, true));
-$g2Taken = (string) @file_get_contents("$fxN/.gallery-cache/taken4.json");
+$g2Taken = data_file_strip_guard_for_tests((string) @file_get_contents("$fxN/.gallery-cache/taken4.php"));
 check('[names] ...and on the real gallery (photos in date order, one top folder holding a bad name) the cache is not empty and holds the usable photos', is_array($g2TakenDec = json_decode($g2Taken, true)) && isset($g2TakenDec['ok.jpg'], $g2TakenDec['b.jpg']) && count(array_filter(array_keys($g2TakenDec), fn ($k) => str_contains((string) $k, "\xE9"))) === 0, var_export($g2Taken, true));
 
 // the same with Show folders off (a flat scan of the top folder)
@@ -11270,8 +11270,9 @@ file_put_contents("$out5/victim/thesis.docx", 'report'); file_put_contents("$out
 make_jpeg("$fx5/loose1.jpg", 80, 60, 200, 60, 60); make_jpeg("$fx5/Decoy/p.jpg", 80, 60, 150, 60, 60); make_jpeg("$fx5/Asia/a.jpg", 80, 60, 60, 60, 150);
 make_jpeg("$out5/Mapped/m1.jpg", 80, 60, 60, 150, 60); touch("$out5/Mapped/m1.jpg", strtotime('2001-01-01'));
 foreach (['IMG_0001.jpg', 'notes.txt'] as $n) file_put_contents("$fx5/Decoy/.gallery-cache/$n", 'the owner\'s own file'); file_put_contents("$fx5/Decoy/.gallery-cache/sub/x.jpg", 'x');
-foreach (['taken.json', 'taken2.json'] as $n) file_put_contents("$fx5/Decoy/.gallery-cache/$n", '{}');   // (what versions before this one kept there)
+foreach (['taken.json', 'taken2.json', 'taken3.json', 'taken4.json'] as $n) file_put_contents("$fx5/Decoy/.gallery-cache/$n", '{}');   // (what versions before this one kept there)
 file_put_contents("$fx5/Decoy/.gallery-cache/meta1.php", data_file_guard_line_for_tests() . '{}');
+file_put_contents("$fx5/Decoy/.gallery-cache/taken4.php", data_file_guard_line_for_tests() . '{}');
 symlink("$out5/victim", "$fx5/Asia/.gallery-cache");
 file_put_contents("$fx5/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'g5-admin-pw-1', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_FOLDERS' => ['Mapped' => "$out5/Mapped"]]));
 copy($indexSrc, "$fx5/index.php");
@@ -11301,7 +11302,7 @@ http_get("$base5/"); http_get("$base5/?folder=Decoy"); http_get("$base5/?folder=
 $g5After = $g5Ls("$fx5/Decoy/.gallery-cache");
 check('[cache sweep] a page view still sweeps this gallery\'s own leftovers: the pictures of the photo as it was before it was replaced are gone, the new one is kept', count(array_intersect_key($g5Old, array_flip($g5Made("$fx5/.gallery-cache")))) < count($g5Old) && count($g5Made("$fx5/.gallery-cache")) >= 1, json_encode($g5Made("$fx5/.gallery-cache")));
 check('[cache sweep] ...and files that are not the gallery\'s (the owner\'s IMG_0001.jpg and notes.txt, a folder with a file in it) are left alone in a folder called .gallery-cache (they were all deleted by anyone\'s first page view)', in_array('IMG_0001.jpg', $g5After, true) && in_array('notes.txt', $g5After, true) && is_file("$fx5/Decoy/.gallery-cache/sub/x.jpg"), json_encode($g5After));
-check('[cache sweep] ...what versions before this one left there (taken.json, taken2.json) is still cleaned up, and the file of what was read from the photos stays', !in_array('taken.json', $g5After, true) && !in_array('taken2.json', $g5After, true) && in_array('meta1.php', $g5After, true), json_encode($g5After));
+check('[cache sweep] ...what versions before this one left there (taken.json, taken2.json, taken3.json, and taken4.json from the development branch) is still cleaned up, and the file of what was read from the photos and the guarded file of dates stay', !in_array('taken.json', $g5After, true) && !in_array('taken2.json', $g5After, true) && !in_array('taken3.json', $g5After, true) && !in_array('taken4.json', $g5After, true) && in_array('meta1.php', $g5After, true) && in_array('taken4.php', $g5After, true), json_encode($g5After));
 check('[cache sweep] a .gallery-cache that is a link is not swept, whatever it leads to: the files behind it (outside the gallery) are all still there', $g5Ls("$out5/victim") === ['dir', 'id_rsa', 'thesis.docx'] && is_file("$out5/victim/dir/z"), json_encode($g5Ls("$out5/victim")));
 $g5Health = html_entity_decode(http_get("$base5/?admin&health=1", $g5Own)[1], ENT_QUOTES);
 check('[cache sweep] ...and the Health check says that folder\'s thumbnail folder is a link, so not used, and what to do', str_contains($g5Health, 'Asia') && str_contains($g5Health, 'is a link') && stripos($g5Health, 'thumbnail') !== false && stripos($g5Health, 'delete the link') !== false, substr((string) strstr($g5Health, 'is a link'), 0, 200));
@@ -13299,6 +13300,58 @@ echo "== chunk 9 follow-up N6: description and dates limits, the classic cookie,
         $n6Health2 = json_decode(http_post("$n6Base2/?admin", ['csrf_token' => $n6Csrf2, 'action' => 'health_panel', 'recheck' => '1'], array_merge($n6Own2, ['X-Requested-With: gallery-fetch']), false)[1] ?? '', true)['html'] ?? '';
         check('[N6] ...and once the folder has counted a view the file holds counts and the row is gone', filesize("$n6Fx2/Alpha/.gallery-stats.sqlite") > 0 && !str_contains($n6Health2, 'A view-count database is empty'), filesize("$n6Fx2/Alpha/.gallery-stats.sqlite") . ' ' . substr(strip_tags($n6Health2), 0, 100));
     }
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up X10 and X11: the file of capture dates is a guarded file (it holds file names, so asking for it by its address must be answered 404, like meta1.php),
+// a leftover plain one is removed, and with the thumbnail cache off nothing of it is written
+echo "== chunk 9 follow-up X10 and X11: the capture-dates file ==\n";
+{
+    $x10Make = function (string $label, array $cfg) use ($indexSrc) {
+        $fx = new_fixture_dir($label); mkdir("$fx/Alpha", 0777, true);
+        make_jpeg("$fx/Alpha/zz-first.jpg", 40, 30, 20, 90, 160); make_jpeg("$fx/Alpha/aa-second.jpg", 40, 30, 120, 90, 60); make_jpeg("$fx/Alpha/mm-third.jpg", 40, 30, 60, 160, 90);
+        touch("$fx/Alpha/zz-first.jpg", time() - 3000); touch("$fx/Alpha/mm-third.jpg", time() - 2000); touch("$fx/Alpha/aa-second.jpg", time() - 1000);   // (oldest first by date: zz, mm, aa)
+        file_put_contents("$fx/.gallery-config.php", cfg_text($cfg + ['ADMIN_PASSWORD' => 'x10-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+        copy($indexSrc, "$fx/index.php"); @touch("$fx/index.php", time() - 3600);
+        $port = find_free_port(); start_server($fx, $port);
+        return [$fx, "http://127.0.0.1:$port"];
+    };
+    $x10Order = fn (string $base) => (function () use ($base) { preg_match_all('#alt="([^"]+\.jpg)"#', http_get("$base/?folder=Alpha")[1], $m); return array_values(array_unique($m[1])); })();
+    [$x10Fx, $x10Base] = $x10Make('x10-on', []);
+    // a plain file an earlier version left (the names of the folder's files, readable by its address)
+    mkdir("$x10Fx/Alpha/.gallery-cache", 0755, true);
+    foreach (['taken3.json', 'taken4.json'] as $x10Plain) file_put_contents("$x10Fx/Alpha/.gallery-cache/$x10Plain", json_encode(['zz-first.jpg' => [1, 2, 3]]));
+    $x10Seen = $x10Order($x10Base);
+    check('[X10] with the cache on, the folder is in date order (oldest first) and the capture dates are kept in .gallery-cache/taken4.php', $x10Seen === ['zz-first.jpg', 'mm-third.jpg', 'aa-second.jpg'] && is_file("$x10Fx/Alpha/.gallery-cache/taken4.php"), json_encode([$x10Seen, @scandir("$x10Fx/Alpha/.gallery-cache")]));
+    $x10Raw = (string) @file_get_contents("$x10Fx/Alpha/.gallery-cache/taken4.php");
+    $x10Json = json_decode(data_file_strip_guard_for_tests($x10Raw), true);
+    check('[X10] ...it starts with the guard line, and holds the dates of the three files', str_starts_with($x10Raw, '<?php http_response_code(404); exit; ?>') && is_array($x10Json) && count($x10Json) === 3 && isset($x10Json['zz-first.jpg']), substr($x10Raw, 0, 200));
+    [$x10St, $x10Body] = http_get("$x10Base/Alpha/.gallery-cache/taken4.php");
+    check('[X10] ...and asking for it by its address answers 404 and shows no file name', $x10St === 404 && !str_contains($x10Body, 'zz-first'), json_encode([$x10St, substr($x10Body, 0, 80)]));
+    check('[X10] the plain taken3.json that every release up to 2.6.4 made (and taken4.json from the development branch) is removed: it held the names and could be read by its address', !file_exists("$x10Fx/Alpha/.gallery-cache/taken3.json") && !file_exists("$x10Fx/Alpha/.gallery-cache/taken4.json"), json_encode(@scandir("$x10Fx/Alpha/.gallery-cache")));
+    $x10Again = $x10Order($x10Base);
+    check('[X10] a second view reads the kept dates and gives the same order', $x10Again === $x10Seen);
+    // the cache off: read each time, nothing kept
+    [$x11Fx, $x11Base] = $x10Make('x11-off', ['ENABLE_THUMBNAIL_CACHE' => false]);
+    mkdir("$x11Fx/Alpha/.gallery-cache", 0755, true);
+    file_put_contents("$x11Fx/Alpha/.gallery-cache/taken3.json", json_encode(['zz-first.jpg' => [1, 2, 3]]));
+    $x11Seen = $x10Order($x11Base);
+    $x11Left = is_dir("$x11Fx/Alpha/.gallery-cache") ? array_values(array_diff((array) scandir("$x11Fx/Alpha/.gallery-cache"), ['.', '..'])) : [];
+    check('[X11] with the thumbnail cache off the folder is still in date order (the dates are read from the files each time)', $x11Seen === ['zz-first.jpg', 'mm-third.jpg', 'aa-second.jpg'], json_encode($x11Seen));
+    [$x11bFx, $x11bBase] = $x10Make('x11-off-clean', ['ENABLE_THUMBNAIL_CACHE' => false]);
+    $x10Order($x11bBase);
+    $x11bLeft = is_dir("$x11bFx/Alpha/.gallery-cache") ? array_values(array_diff((array) scandir("$x11bFx/Alpha/.gallery-cache"), ['.', '..'])) : [];
+    check('[X11] ...and no dates are written: a folder that never had a cache gets no taken file of any kind (and no .gallery-cache at all)', !preg_grep('/^taken/', $x11bLeft) && !in_array('taken4.php', $x11Left, true) && !is_dir("$x11bFx/Alpha/.gallery-cache"), json_encode([$x11bLeft, $x11Left]));
+    check('[X11] ...and the plain taken3.json an earlier version left is removed here too (it can be read by its address whatever the switch says)', !in_array('taken3.json', $x11Left, true), json_encode($x11Left));
+    // a place from elsewhere on the server (another gallery may still keep its own files there): the plain file is not taken away there, as the thumbnail clean-up leaves it alone
+    $x10Place = new_fixture_dir('x10-place'); make_jpeg("$x10Place/p1.jpg", 40, 30, 20, 90, 160); make_jpeg("$x10Place/p2.jpg", 40, 30, 120, 90, 60);
+    mkdir("$x10Place/.gallery-cache", 0755, true); file_put_contents("$x10Place/.gallery-cache/taken3.json", json_encode(['p1.jpg' => [1, 2, 3]]));
+    $x10Fx2 = new_fixture_dir('x10-elsewhere'); mkdir("$x10Fx2/Own", 0777, true); make_jpeg("$x10Fx2/Own/o.jpg", 40, 30, 90, 40, 40);
+    file_put_contents("$x10Fx2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'x10-admin-pw-2', 'AUTO_GROUP_BY_FOLDER' => true, 'EXTRA_FOLDERS' => ['Elsewhere' => $x10Place], 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$x10Fx2/index.php"); @touch("$x10Fx2/index.php", time() - 3600);
+    $x10Port2 = find_free_port(); start_server($x10Fx2, $x10Port2);
+    $x10Page = http_get("http://127.0.0.1:$x10Port2/?folder=Elsewhere")[1];
+    check('[X10] in a place from elsewhere on the server the plain taken3.json is left alone (another gallery may use it), and this gallery keeps its own dates in taken4.php there', str_contains($x10Page, 'p1.jpg') && is_file("$x10Place/.gallery-cache/taken3.json") && is_file("$x10Place/.gallery-cache/taken4.php"), json_encode(@scandir("$x10Place/.gallery-cache")));
 }
 
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
