@@ -853,11 +853,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $updates['displayName'] = $displayName !== '' ? $displayName : null;
         }
         if (array_key_exists('description', $_POST)) {
-            $text = admin_clean_description($_POST['description'], 1000);
+            $text = admin_clean_description($_POST['description'], 1000000);   // (not cut here: a text past its limit is refused below, never saved cut short while saying "saved")
+            $tooLong = text_limit_refusal([['description', $text, items_read($adminFolderReal)['description'] ?? '', 'description']]);
+            if ($tooLong !== '') { if ($isFetch) admin_json_exit(['ok' => false, 'text' => $tooLong]); return ['type' => 'error', 'text' => $tooLong]; }
             $updates['description'] = $text !== '' ? $text : null;
         }
         if (array_key_exists('dates', $_POST)) {
-            $text = admin_clean_text($_POST['dates'], 80);
+            $text = admin_clean_text($_POST['dates'], 1000000);   // (not cut here: refused below when past its limit)
+            $tooLong = text_limit_refusal([['dates', $text, items_read($adminFolderReal)['dates'] ?? '', 'dates']]);
+            if ($tooLong !== '') { if ($isFetch) admin_json_exit(['ok' => false, 'text' => $tooLong]); return ['type' => 'error', 'text' => $tooLong]; }
             $updates['dates'] = $text !== '' ? $text : null;
         }
         if ($adminFolderPath !== null && array_key_exists('sort_order', $_POST)) {   // no position at the root

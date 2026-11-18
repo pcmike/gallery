@@ -10275,11 +10275,15 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             $updates['displayName'] = $displayName !== '' ? $displayName : null;
         }
         if (array_key_exists('description', $_POST)) {
-            $text = admin_clean_description($_POST['description'], 1000);
+            $text = admin_clean_description($_POST['description'], 1000000);   // (not cut here: a text past its limit is refused below, never saved cut short while saying "saved")
+            $tooLong = text_limit_refusal([['description', $text, items_read($adminFolderReal)['description'] ?? '', 'description']]);
+            if ($tooLong !== '') { if ($isFetch) admin_json_exit(['ok' => false, 'text' => $tooLong]); return ['type' => 'error', 'text' => $tooLong]; }
             $updates['description'] = $text !== '' ? $text : null;
         }
         if (array_key_exists('dates', $_POST)) {
-            $text = admin_clean_text($_POST['dates'], 80);
+            $text = admin_clean_text($_POST['dates'], 1000000);   // (not cut here: refused below when past its limit)
+            $tooLong = text_limit_refusal([['dates', $text, items_read($adminFolderReal)['dates'] ?? '', 'dates']]);
+            if ($tooLong !== '') { if ($isFetch) admin_json_exit(['ok' => false, 'text' => $tooLong]); return ['type' => 'error', 'text' => $tooLong]; }
             $updates['dates'] = $text !== '' ? $text : null;
         }
         if ($adminFolderPath !== null && array_key_exists('sort_order', $_POST)) {   // no position at the root
@@ -16761,6 +16765,7 @@ function health_heavy($dir, $files, $force) {
         if ($e['kind'] !== 'stats') continue;
         if (substr($e['path'], -7) === '.sqlite') {
             if (!visitlog_driver_ok()) { $r['stats']['nodriver'][] = $e['rel']; continue; }   // (this PHP can't open it: the counts are in it, not lost)
+            if (@filesize($e['path']) === 0) { $r['stats']['empty'][] = $e['rel']; continue; }   // (SQLite takes a file of no bytes for a new database, so the counts began again from nothing without a word)
             $r['stats']['n']++;
             $w = backup_sqlite_check($e['path']);
             if ($w !== '') { $r['stats']['bad'][] = [$e['rel'], $w]; continue; }
@@ -16846,6 +16851,11 @@ function health_database_rows($add, $dir, $files) {
         $why = ['missing' => 'its key file (.gallery-stats-key.php) is missing', 'mismatch' => 'its key file is not the one the counts were made with', 'broken' => 'its key file can\'t be read'];
         $add($G, 'warn', 'View counts can\'t be read in ' . $kn . ' folder' . ($kn === 1 ? '' : 's'), $statsNames(array_map(function ($b) use ($why) { return [$b[0] . ' (' . ($why[$b[1]] ?? $b[1]) . ')']; }, $statsKey))
             . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again. Or press the button below: it does exactly that deletion for one folder.', null, health_stats_afresh_buttons($statsKey));
+    }
+    $statsEmpty = $heavy['stats']['empty'] ?? [];
+    if ($statsEmpty) {   // (a view-count database of no bytes: its counts are gone and counting has started again from zero)
+        $en = count($statsEmpty);
+        $add($G, 'warn', 'A view-count database is empty in ' . $en . ' folder' . ($en === 1 ? '' : 's'), $statsNames($statsEmpty) . '. ' . ($en === 1 ? 'The file is' : 'The files are') . ' 0 bytes, so ' . ($en === 1 ? 'its' : 'their') . ' counts are gone and counting has started again from zero (a copy that failed, a disk that filled up, or the file was emptied). If you have the file in a backup or an earlier copy, put it back beside its .gallery-stats-key.php; if not, nothing needs doing, and this row goes away once the folder has counted a view.');
     }
     if ($statsRo) {
         $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');
@@ -18437,7 +18447,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
 <meta name="robots" content="noindex, nofollow">
 <?php if (!$inframe): ?>
 <script>(function () {   // on a computer the admin is the shell (this page is what the shell frames, and what a phone gets); ?classic=1 stays on this page
-  try { if (/[?&]classic=1/.test(location.search)) document.cookie = 'galleryClassic=1; path=' + <?= json_encode(gallery_cookie_path(), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?> + '; max-age=31536000; SameSite=Lax'; if (document.cookie.indexOf('galleryClassic=1') >= 0) return; } catch (e) {}
+  try { if (/[?&]classic=1/.test(location.search)) document.cookie = 'galleryClassic=1; path=' + <?= json_encode(gallery_cookie_path(), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?> + '; SameSite=Lax'; if (document.cookie.indexOf('galleryClassic=1') >= 0) return; } catch (e) {}
   if (window.matchMedia && window.matchMedia('(min-width: 801px)').matches) {
     var h = (location.hash || '').slice(1);
     location.replace(location.search.replace(/[?&]classic=1/, '') + '&shell=1' + (/^(settings|notes|features|hidden|links|collections|site)$/.test(h) ? '&tab=' + h : ''));

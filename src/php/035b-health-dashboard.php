@@ -69,6 +69,7 @@ function health_heavy($dir, $files, $force) {
         if ($e['kind'] !== 'stats') continue;
         if (substr($e['path'], -7) === '.sqlite') {
             if (!visitlog_driver_ok()) { $r['stats']['nodriver'][] = $e['rel']; continue; }   // (this PHP can't open it: the counts are in it, not lost)
+            if (@filesize($e['path']) === 0) { $r['stats']['empty'][] = $e['rel']; continue; }   // (SQLite takes a file of no bytes for a new database, so the counts began again from nothing without a word)
             $r['stats']['n']++;
             $w = backup_sqlite_check($e['path']);
             if ($w !== '') { $r['stats']['bad'][] = [$e['rel'], $w]; continue; }
@@ -154,6 +155,11 @@ function health_database_rows($add, $dir, $files) {
         $why = ['missing' => 'its key file (.gallery-stats-key.php) is missing', 'mismatch' => 'its key file is not the one the counts were made with', 'broken' => 'its key file can\'t be read'];
         $add($G, 'warn', 'View counts can\'t be read in ' . $kn . ' folder' . ($kn === 1 ? '' : 's'), $statsNames(array_map(function ($b) use ($why) { return [$b[0] . ' (' . ($why[$b[1]] ?? $b[1]) . ')']; }, $statsKey))
             . '. Each folder keeps its view counts under a key of its own, in .gallery-stats-key.php beside the database. A folder copied or moved without that file (some FTP programs and tools skip files that start with a dot) can\'t read what it brought, so nothing is counted there, and the gallery will not start new counts behind the old ones. Put the key file back (from where the folder came from, or from the backup), or, to count afresh, delete .gallery-stats.sqlite and its -wal and -shm files in that folder (the counts in them are lost), then press Check again. Or press the button below: it does exactly that deletion for one folder.', null, health_stats_afresh_buttons($statsKey));
+    }
+    $statsEmpty = $heavy['stats']['empty'] ?? [];
+    if ($statsEmpty) {   // (a view-count database of no bytes: its counts are gone and counting has started again from zero)
+        $en = count($statsEmpty);
+        $add($G, 'warn', 'A view-count database is empty in ' . $en . ' folder' . ($en === 1 ? '' : 's'), $statsNames($statsEmpty) . '. ' . ($en === 1 ? 'The file is' : 'The files are') . ' 0 bytes, so ' . ($en === 1 ? 'its' : 'their') . ' counts are gone and counting has started again from zero (a copy that failed, a disk that filled up, or the file was emptied). If you have the file in a backup or an earlier copy, put it back beside its .gallery-stats-key.php; if not, nothing needs doing, and this row goes away once the folder has counted a view.');
     }
     if ($statsRo) {
         $add($G, 'warn', 'View counts can\'t be written in ' . count($statsRo) . ' folder' . (count($statsRo) === 1 ? '' : 's'), $statsNames($statsRo) . '. The database is there but the web server can\'t write to it, so views are not being counted there (the pages carry on without the numbers). Make the file, and its two side files `.gallery-stats.sqlite-shm` and `.gallery-stats.sqlite-wal`, writable by the web server (the same owner as the folder), then press Check again. SQLite makes the side files read-only itself while the main file is, so mending only the main file is not always enough.');

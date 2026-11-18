@@ -29,6 +29,8 @@
  *    setup-notices banner to sit in — covers its other placement.
  *
  * Run with: php tests/run.php
+ *   The real-ffmpeg checks run only with FFMPEG_TEST_BIN=/path/to/ffmpeg set (or an ffmpeg on the PATH); without one they are
+ *   counted as skipped at the end, with the others that need something this PHP or machine lacks.
  * Requires: the GD extension, to synthesize tiny fixture JPEGs.
  * Exits 0 if every check passes, 1 otherwise.
  */
@@ -106,7 +108,14 @@ function check($description, $condition, $detail = null) {
 function skip($description, $why) {
     global $skipCount;
     $skipCount++;
-    echo "  skip  $description  ($why)\n";
+    skip_note("$description  ($why)");
+}
+
+/** A skip said as one line (counted like skip()): for the places that print their own words. */
+function skip_note($text) {
+    global $skipCount;
+    $skipCount++;
+    echo "  skip  $text\n";
 }
 
 function count_occurrences($haystack, $needle, $expected, $label) {
@@ -2945,7 +2954,7 @@ foreach (['json' => true, 'sqlite' => false] as $upgradeMode => $forceJsonMode) 
         $legacyPdo->exec("INSERT INTO photo_views VALUES ('old-photo.jpg', 7), ('other.jpg', 3)");
         $legacyPdo = null;
     } else {
-        echo "  skip  SQLite upgrade fixture (no pdo_sqlite)\n";
+        skip_note("SQLite upgrade fixture (no pdo_sqlite)");
         continue;
     }
     $portUp = find_free_port();
@@ -2990,7 +2999,7 @@ if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
 echo "== upgrade from the real v1.1.1 script ==\n";
 $v1Source = (string) @shell_exec('git -C ' . escapeshellarg(dirname(__DIR__)) . ' show v1.1.1:index.php 2>/dev/null');
 if (strlen($v1Source) < 1000) {
-    echo "  skip  real v1.1.1 upgrade (the v1.1.1 tag isn't available in this checkout)\n";
+    skip_note("real v1.1.1 upgrade (the v1.1.1 tag isn't available in this checkout)");
 } else {
     foreach (['sqlite', 'json'] as $v1Flavour) {
         $fxReal = new_fixture_dir("upgrade-real-$v1Flavour");
@@ -3058,7 +3067,7 @@ check('a JPEG with no GPS block gets no pre-filled location', str_contains($gpsC
 if ($heicOk) {
     check('a HEIC\'s EXIF GPS pre-fills the admin\'s location fields too', str_contains($gpsCard($gpsAdmin, 'phone.heic'), '48.8584') && str_contains($gpsCard($gpsAdmin, 'phone.heic'), '2.2945'));
 } else {
-    echo "  skip  HEIC GPS auto-fill (this PHP's Imagick can't write HEIC to build a fixture)\n";
+    skip_note("HEIC GPS auto-fill (this PHP's Imagick can't write HEIC to build a fixture)");
 }
 
 // The editor in the viewer saves as it is typed: a caption saved with keep_loc leaves a place that was only read from the photo's GPS unsaved.
@@ -4659,7 +4668,7 @@ if (class_exists('Imagick') && count(Imagick::queryFormats('HEIC')) > 0) {
         }
     }
 } else {
-    echo "  skip  HEIC recipe (this PHP's Imagick can't write HEIC)\n";
+    skip_note("HEIC recipe (this PHP's Imagick can't write HEIC)");
 }
 
 /* ======================================================================= *
@@ -5170,7 +5179,7 @@ if ($realFf !== '' && is_executable($realFf)) {
     check('[video previews] with the real ffmpeg the clip is a small silent MP4 (an ftyp box at the start, under 400 KB for a 3-second 640-pixel clip)', $rpSt === 200 && substr($rpBody, 4, 4) === 'ftyp' && strlen($rpBody) < 400000 && strlen($rpBody) > 1000 && !str_contains($rpBody, 'mp4a'));
     check('[video pictures] with the real ffmpeg: a 640x360 clip gives a 480x270 thumbnail that is a picture of the video (not the placeholder)', is_file("$rfDir/real.mp4") && $rf !== null && $rf[3] === 480 && $rf[4] === 270 && $rf[0] > 150 && $rf[1] > 150);
 } else {
-    echo "  (no ffmpeg on this machine: the real-ffmpeg check was skipped; set FFMPEG_TEST_BIN to run it)\n";
+    skip_note("[video] the real-ffmpeg checks (sprite, clip, thumbnail from a real video): no ffmpeg on this machine; set FFMPEG_TEST_BIN=/path/to/ffmpeg to run them");
 }
 
 /* --------------------------------------------------------------------- */
@@ -10417,7 +10426,7 @@ $dkOther = null;   // a place on another disk than the temp folder (a second tmp
 foreach (['/dev/shm', '/var/tmp', getenv('HOME') ?: ''] as $dkTry) {
     if ($dkTry !== '' && is_dir($dkTry) && is_writable($dkTry) && @stat($dkTry)['dev'] !== @stat(sys_get_temp_dir())['dev']) { $dkOther = $dkTry; break; }
 }
-if ($dkOther === null) { echo "  skip  [disks] no second disk to map here\n"; }
+if ($dkOther === null) { skip_note("[disks] no second disk to map here"); }
 else {
     $dkFx = new_fixture_dir('disks');
     $dkMap = $dkOther . '/gallery-tests-disks-' . bin2hex(random_bytes(4)); $cleanupDirs[] = $dkMap;
@@ -10477,7 +10486,7 @@ $mmPage = function ($base) { [, , $h] = http_post("$base/?admin", ['access_code'
 $mmProbe = tempnam(sys_get_temp_dir(), 'gdp'); file_put_contents($mmProbe, '<?php $d = file_get_contents($argv[1]); echo @imagecreatefromstring($d) ? "fits" : "fails";');
 $mmLimited = trim((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n ' . (extension_loaded('gd') && is_file(ini_get('extension_dir') . '/gd.so') ? '-d extension=gd ' : '') . '-d memory_limit=64M -d display_errors=0 ' . escapeshellarg($mmProbe) . ' ' . escapeshellarg("$mmFx/big.jpg") . ' 2>/dev/null')) !== 'fits';
 @unlink($mmProbe);
-if (!$mmLimited) echo "  skip  [memory] this PHP's GD takes its memory outside PHP's limit, so a low limit can't be made to matter here (the check runs on the static PHP builds)\n";
+if (!$mmLimited) skip_note("[memory] this PHP's GD takes its memory outside PHP's limit, so a low limit can't be made to matter here (the check runs on the static PHP builds)");
 [$mmP1, $mmB1] = $mmServer([]);
 [$mmSt, $mmBody, $mmHd] = http_get("$mmB1/?img=" . rawurlencode('big.jpg') . '&size=thumb');
 if ($mmLimited) check('[memory] with PHP limited to 64M and only GD to resize with, a 24-megapixel photo still gets its thumbnail (the gallery raised the limit itself)', $mmSt === 200 && str_starts_with((string) $mmBody, "\xFF\xD8"), "status $mmSt");
@@ -10519,11 +10528,11 @@ if (!is_writable("$hwFx/Locked")) check('[how to fix] a folder the web server ca
 check('[how to fix] a row with nothing for the owner to do on the server has no fold (the passed ones, the plain information)', $hwRowHow($hwPg1, 'Folder data files all read fine') === '' && $hwRowHow($hwPg1, 'Sign-in key') === '');
 proc_terminate($hwP1);
 [$hwP2, $hwB2, $hwDropped] = $hwServe(['pdo_sqlite', 'sqlite3', 'curl']);
-if (!$hwDropped && extension_loaded('pdo_sqlite')) echo "  skip  [how to fix] this PHP keeps SQLite and curl built in, so a server without them can't be made here\n";
+if (!$hwDropped && extension_loaded('pdo_sqlite')) skip_note("[how to fix] this PHP keeps SQLite and curl built in, so a server without them can't be made here");
 else {
     $hwPg2 = $hwPage($hwB2);
     if (in_array('pdo_sqlite', $hwDropped, true)) check('[how to fix] without SQLite the visitor log row has a fold with the package to install and what to switch on at a host', str_contains((string) $hwRowHow($hwPg2, 'Visitor log: needs SQLite'), 'php-sqlite3') && str_contains((string) $hwRowHow($hwPg2, 'Visitor log: needs SQLite'), 'pdo_sqlite'));
-    if (!str_contains($hwPg2, 'lets PHP fetch no web addresses')) echo "  skip  [how to fix] this PHP has curl built in, so the row about fetching web addresses can't be made to show here\n";
+    if (!str_contains($hwPg2, 'lets PHP fetch no web addresses')) skip_note("[how to fix] this PHP has curl built in, so the row about fetching web addresses can't be made to show here");
     else check('[how to fix] with neither curl nor allow_url_fopen the row has a fold (php-curl, or allow_url_fopen)', str_contains((string) $hwRowHow($hwPg2, 'lets PHP fetch no web addresses'), 'php-curl') && str_contains((string) $hwRowHow($hwPg2, 'lets PHP fetch no web addresses'), 'allow_url_fopen'));
 }
 proc_terminate($hwP2);
@@ -10536,7 +10545,7 @@ check('[how to fix] ...and with a visitor log and a backup there, both rows carr
 // colour: a wide-gamut photo keeps what its colours mean in every picture the gallery makes from it, and a HEIC is sent as itself to a browser that shows HEIC
 echo "== colour profiles and HEIC originals ==\n";
 if (!class_exists('Imagick')) {
-    echo "  skip  colour profile and HEIC original checks (this PHP has no Imagick; the Imagick runs cover them)\n";
+    skip_note("colour profile and HEIC original checks (this PHP has no Imagick; the Imagick runs cover them)");
 } else {
 $fxCol = new_fixture_dir('colour');
 // a matrix/curve ICC profile built here (not by the gallery's code): $prim = the red, green and blue colorants as D50 XYZ; $extra pads it past 8 KB
@@ -10592,7 +10601,7 @@ if ($colHeic) {
     $hg = http_get("$baseCol/", []);
     check('[heic] the viewer asks for size=orig only when the browser can show a HEIC (a two-pixel HEIC is decoded once to find out), and falls back to the converted copy if the original fails', str_contains($hg[1], "data:image/heic;base64,") && str_contains($hg[1], "'&size=' + (asOriginal ? 'orig' : 'full')") && str_contains($hg[1], "lightboxImg.onerror = asOriginal"));
 } else {
-    echo "  skip  HEIC colour and original checks (this PHP's Imagick can't write HEIC to build a fixture)\n";
+    skip_note("HEIC colour and original checks (this PHP's Imagick can't write HEIC to build a fixture)");
 }
 }
 
@@ -10810,10 +10819,10 @@ check('[data writer] a caption that is not valid text is refused naming the fiel
 $wrDates = 'Июль 2026 — Август 2026, Москва и Санкт-Петербург';
 $wrR = $wrAdmin(['action' => 'save_folder_identity', 'dates' => $wrDates], '&folder=Asia'); $wrStored = json_decode(data_file_strip_guard_for_tests(file_get_contents($wrItems)), true);
 check('[data writer] a 50-letter Cyrillic Dates text is saved whole (on a PHP without mbstring it was cut inside a letter and emptied the folder\'s file), with the folder\'s other settings kept', ($wrR['ok'] ?? null) === true && ($wrStored['dates'] ?? null) === $wrDates && ($wrStored['displayName'] ?? null) === 'Asia trip' && ($wrStored['items']['a.jpg']['caption'] ?? null) === 'Tokyo' && filesize($wrItems) > 100, json_encode($wrR) . ' / ' . filesize($wrItems));
-$wrDesc = str_repeat('Schöne Grüße aus München. ', 60);
+$wrDesc = str_repeat('Schöne Grüße aus München. ', 37);   // (962 letters: under the 1,000 limit, but over 1,000 bytes, so a cut by bytes would land inside a letter)
 foreach ([0, 1, 2, 3] as $wrShift) { $wrR = $wrAdmin(['action' => 'save_folder_identity', 'description' => str_repeat('ü', $wrShift) . $wrDesc], '&folder=Asia'); if (($wrR['ok'] ?? null) !== true) break; }
 $wrStored = json_decode(data_file_strip_guard_for_tests(file_get_contents($wrItems)), true);
-check('[data writer] a long German description is saved at any offset of the cut (never cut inside a letter), and the file keeps its other settings', ($wrR['ok'] ?? null) === true && ($wrStored['displayName'] ?? null) === 'Asia trip' && (int) preg_match('//u', (string) ($wrStored['description'] ?? '')) === 1 && preg_match_all('/./su', (string) ($wrStored['description'] ?? '')) <= 1000 && strlen((string) ($wrStored['description'] ?? '')) > 900, json_encode($wrR));
+check('[data writer] a long German description (over 1,000 bytes, under 1,000 letters) is saved whole at any offset (never cut inside a letter), and the file keeps its other settings', ($wrR['ok'] ?? null) === true && ($wrStored['description'] ?? null) === rtrim(str_repeat('ü', 3) . $wrDesc) && ($wrStored['displayName'] ?? null) === 'Asia trip' && (int) preg_match('//u', (string) ($wrStored['description'] ?? '')) === 1 && preg_match_all('/./su', (string) ($wrStored['description'] ?? '')) <= 1000 && strlen((string) ($wrStored['description'] ?? '')) > 900, json_encode($wrR));
 // D12 over HTTP
 $wrVictim = file_get_contents("$wrOutside/victim.php");
 http_get("$baseW/", []); http_get("$baseW/?folder=Linked", []); http_get("$baseW/?folder=Linked", $wrOwn);
@@ -12780,8 +12789,8 @@ echo "== audit group 15: framing, the classic cookie ==\n";
     $sport = find_free_port(); start_server($parent, $sport); $sb = "http://127.0.0.1:$sport/kb";
     [, , $hs] = http_post("$sb/?admin", ['access_code' => 'g15-admin-pw-1'], [], false); $sown = ['Cookie: ' . extract_cookie_header($hs)];
     $sub = http_get("$sb/?admin&classic=1", $sown)[1]; $root = http_get("$base/?admin&classic=1", $own)[1];
-    check('[classic cookie] the admin page for a gallery in /kb/ keeps the "classic" preference to /kb (it was kept to the whole domain, shared with every other site and gallery on it)', str_contains($sub, "galleryClassic=1; path=' + \"/kb\" + '; max-age") && !str_contains($sub, "path=' + \"/\" + '"), json_encode(preg_match("/galleryClassic=1; path=[^;]*;/", $sub, $mm) ? $mm[0] : 'not found'));
-    check('[classic cookie] and for a gallery at the top of its site it is the whole site, as before', str_contains($root, "galleryClassic=1; path=' + \"/\" + '; max-age"));
+    check('[classic cookie] the admin page for a gallery in /kb/ keeps the "classic" preference to /kb (it was kept to the whole domain, shared with every other site and gallery on it)', str_contains($sub, "galleryClassic=1; path=' + \"/kb\" + '; SameSite") && !str_contains($sub, "path=' + \"/\" + '"), json_encode(preg_match("/galleryClassic=1; path=[^;]*;/", $sub, $mm) ? $mm[0] : 'not found'));
+    check('[classic cookie] and for a gallery at the top of its site it is the whole site, as before', str_contains($root, "galleryClassic=1; path=' + \"/\" + '; SameSite"));
 }
 
 /* --------------------------------------------------------------------- */
@@ -13012,7 +13021,7 @@ echo "== audit group 17: dead code removed, one copy of the GD opener ==\n";
     // Turned, it is 20 wide and 40 tall with the red half on top. This passes on the build before the change too: it is the proof that
     // moving the code changed nothing.
     if (!extension_loaded('exif')) {
-        echo "  skip  [one copy] this PHP has no exif extension, so a photo's turn can't be read here\n";
+        skip_note("[one copy] this PHP has no exif extension, so a photo's turn can't be read here");
     } else {
         $g17Fx = new_fixture_dir('g17-gd');
         $g17Im = imagecreatetruecolor(40, 20); imagefilledrectangle($g17Im, 0, 0, 19, 19, imagecolorallocate($g17Im, 220, 20, 20)); imagefilledrectangle($g17Im, 20, 0, 39, 19, imagecolorallocate($g17Im, 20, 20, 220));
@@ -13156,7 +13165,7 @@ exit 0
     check('[N3] Files-made lists the note and the locks, and none of them is "unknown"', $n3Miss === [], json_encode([$n3Miss, $n3Paths, $n3Unknown]));
     // a folder that can't hold a lock (not writable): the work is still held to its turns, with a lock in the old place, and the ZIP still comes
     if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
-        echo "  skip  [N3] running as root, a folder can't be made unwritable here\n";
+        skip_note("[N3] running as root, a folder can't be made unwritable here");
     } else {
         @unlink("$n3Fx/.gallery-archive-1.lock"); @unlink("$n3Fx/.gallery-archive-2.lock"); @unlink("$n3Fx/.gallery-ffmpeg.lock");
         chmod($n3Fx, 0555);
@@ -13239,6 +13248,54 @@ echo "== chunk 9 follow-up N2: files that are no pictures ==\n";
         file_put_contents("$n2Fx2/Alpha/locked.jpg", "text"); chmod("$n2Fx2/Alpha/locked.jpg", 0000);
         $n2Shown4 = $n2Names(http_get("$n2Base2/?folder=Alpha")[1]); chmod("$n2Fx2/Alpha/locked.jpg", 0644);
         check('[N2] a file the web server can\'t read is not judged: it stays on the page as before', in_array('locked.jpg', $n2Shown4, true), json_encode($n2Shown4));
+    }
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N6: a Description or Dates past its limit is refused (not cut and "saved"); ?classic=1 is for this browser session only; an empty view-count database is named in Health
+echo "== chunk 9 follow-up N6: description and dates limits, the classic cookie, an empty view-count database ==\n";
+{
+    $n6Fx = new_fixture_dir('n6'); mkdir("$n6Fx/Alpha", 0777, true); make_jpeg("$n6Fx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    file_put_contents("$n6Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n6-admin-pw-1', 'TRACK_VIEWS' => true, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$n6Fx/index.php");
+    $n6Port = find_free_port(); start_server($n6Fx, $n6Port); $n6Base = "http://127.0.0.1:$n6Port";
+    [, , $n6H] = http_post("$n6Base/?admin", ['access_code' => 'n6-admin-pw-1'], [], false); $n6Own = ['Cookie: ' . extract_cookie_header($n6H)];
+    $n6Csrf = admin_token($n6Base, $n6Own);
+    $n6Post = fn (array $f) => json_decode(http_post("$n6Base/?admin&folder=Alpha", $f + ['csrf_token' => $n6Csrf, 'action' => 'save_folder_identity'], array_merge($n6Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $n6Saved = fn () => (array) (json_decode(data_file_strip_guard_for_tests((string) @file_get_contents("$n6Fx/Alpha/.gallery-items.php")), true) ?: []);
+    $n6Long = str_repeat('x', 1200); $n6Fit = str_repeat('y', 1000);
+    $r1 = $n6Post(['description' => $n6Long]);
+    check('[N6] a Description of 1,200 characters is refused with the number and the limit, and nothing is saved (it was cut to 1,000 and answered "saved")', ($r1['ok'] ?? null) === false && str_contains((string) ($r1['text'] ?? ''), '1,200') && str_contains((string) ($r1['text'] ?? ''), '1,000') && !isset($n6Saved()['description']), json_encode($r1));
+    $r2 = $n6Post(['description' => $n6Fit]);
+    check('[N6] ...and exactly 1,000 characters is saved whole', ($r2['ok'] ?? null) === true && ($n6Saved()['description'] ?? '') === $n6Fit, json_encode($r2));
+    $r3 = $n6Post(['dates' => str_repeat('d', 81)]);
+    check('[N6] Dates past 80 characters are refused the same way, and 80 are saved whole', ($r3['ok'] ?? null) === false && str_contains((string) ($r3['text'] ?? ''), '81') && ($n6Saved()['dates'] ?? null) === null && ($n6Post(['dates' => str_repeat('d', 80)])['ok'] ?? null) === true && ($n6Saved()['dates'] ?? '') === str_repeat('d', 80));
+    // a text kept from before the limit is not locked out: saving the folder with that very text again works and keeps it whole
+    $n6Old = str_repeat('z', 1500); $n6Items = $n6Saved(); $n6Items['description'] = $n6Old;
+    file_put_contents("$n6Fx/Alpha/.gallery-items.php", data_file_guard_line_for_tests() . json_encode($n6Items));
+    $r4 = $n6Post(['description' => $n6Old, 'dates' => 'June 2026']);
+    check('[N6] a description that was saved before the limit (1,500 characters) can be saved again unchanged, and is kept whole', ($r4['ok'] ?? null) === true && ($n6Saved()['description'] ?? '') === $n6Old, json_encode($r4));
+
+    // the "classic" preference lasts for the browser session, not a year
+    $n6Page = http_get("$n6Base/?admin&classic=1", $n6Own)[1];
+    check('[N6] ?classic=1 sets its cookie for this browser session only (no max-age: it used to be kept for a year, and nothing ever cleared it)', str_contains($n6Page, 'galleryClassic=1; path=') && !preg_match("/galleryClassic=1;[^\\n]*max-age/", $n6Page));
+
+    // a view-count database of no bytes is named in Health
+    if (!extension_loaded('pdo_sqlite')) {
+        skip_note("[N6] an empty view-count database: this PHP has no pdo_sqlite");
+    } else {
+        $n6Fx2 = new_fixture_dir('n6-empty'); mkdir("$n6Fx2/Alpha", 0777, true); make_jpeg("$n6Fx2/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+        file_put_contents("$n6Fx2/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n6-admin-pw-1', 'TRACK_VIEWS' => true, 'LOG_PUBLIC_VISITS' => false]));
+        file_put_contents("$n6Fx2/Alpha/.gallery-stats.sqlite", '');
+        copy($indexSrc, "$n6Fx2/index.php"); $n6Port2 = find_free_port(); start_server($n6Fx2, $n6Port2); $n6Base2 = "http://127.0.0.1:$n6Port2";
+        [, , $n6H2] = http_post("$n6Base2/?admin", ['access_code' => 'n6-admin-pw-1'], [], false); $n6Own2 = ['Cookie: ' . extract_cookie_header($n6H2)];
+        $n6Csrf2 = admin_token($n6Base2, $n6Own2);
+        $n6Health = json_decode(http_post("$n6Base2/?admin", ['csrf_token' => $n6Csrf2, 'action' => 'health_panel', 'recheck' => '1'], array_merge($n6Own2, ['X-Requested-With: gallery-fetch']), false)[1] ?? '', true)['html'] ?? '';
+        check('[N6] Health names a view-count database of 0 bytes ("A view-count database is empty"), with the folder and what to do', str_contains($n6Health, 'A view-count database is empty') && str_contains($n6Health, 'Alpha/.gallery-stats.sqlite') && str_contains($n6Health, '0 bytes'), substr(strip_tags($n6Health), 0, 200));
+        // after a view is counted the file holds counts again and the row goes
+        http_get("$n6Base2/?folder=Alpha"); http_get("$n6Base2/?photo=a1.jpg&folder=Alpha"); http_get("$n6Base2/?track=" . rawurlencode('Alpha/a1.jpg'));
+        $n6Health2 = json_decode(http_post("$n6Base2/?admin", ['csrf_token' => $n6Csrf2, 'action' => 'health_panel', 'recheck' => '1'], array_merge($n6Own2, ['X-Requested-With: gallery-fetch']), false)[1] ?? '', true)['html'] ?? '';
+        check('[N6] ...and once the folder has counted a view the file holds counts and the row is gone', filesize("$n6Fx2/Alpha/.gallery-stats.sqlite") > 0 && !str_contains($n6Health2, 'A view-count database is empty'), filesize("$n6Fx2/Alpha/.gallery-stats.sqlite") . ' ' . substr(strip_tags($n6Health2), 0, 100));
     }
 }
 
