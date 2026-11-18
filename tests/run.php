@@ -13221,7 +13221,9 @@ echo "== chunk 9 follow-up N2: files that are no pictures ==\n";
     $n2Page = http_get("$n2Base/?folder=Alpha")[1];
     $n2Shown = $n2Names($n2Page);
     check('[N2] a folder\'s page shows the pictures, and not the empty file, the text file, the web page, the PostScript file or the SVG that have a picture\'s name', in_array('good.jpg', $n2Shown, true) && in_array('also.jpg', $n2Shown, true) && !array_intersect($n2Shown, ['empty.jpg', 'fake.jpg', 'page.png', 'ps.jpeg', 'image.svg.jpg']), json_encode($n2Shown));
-    check('[N2] ...and keeps what is no mistake of a broken upload: a HEIC, a TIFF named .jpg, a JPEG whose body is damaged, and a PNG named .jpg', !array_diff(['phone.heic', 'scan.jpg', 'cut.jpg', 'really-a-png.jpg'], $n2Shown), json_encode($n2Shown));
+    // (a HEIC is listed at all only where Imagick can make its thumbnail: on a PHP without it the gallery never showed one, before or after this change)
+    $n2Keep = ['scan.jpg', 'cut.jpg', 'really-a-png.jpg']; if (extension_loaded('imagick')) $n2Keep[] = 'phone.heic';
+    check('[N2] ...and keeps what is no mistake of a broken upload: a TIFF named .jpg, a JPEG whose body is damaged, and a PNG named .jpg (and a HEIC where Imagick is here to show it)', !array_diff($n2Keep, $n2Shown), json_encode($n2Shown));
     $n2Home = http_get("$n2Base/")[1];
     check('[N2] the front page counts only the pictures (Alpha says ' . count($n2Shown) . ' photos)', str_contains(preg_replace('/\s+/', ' ', strip_tags($n2Home)), count($n2Shown) . ' photos') && !str_contains(strip_tags($n2Home), '11 photos'), substr(preg_replace('/\s+/', ' ', strip_tags($n2Home)), -300));
     [, , $n2H] = http_post("$n2Base/?admin", ['access_code' => 'n2-admin-pw-1'], [], false); $n2Own = ['Cookie: ' . extract_cookie_header($n2H)];
