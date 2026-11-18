@@ -351,6 +351,18 @@ function admin_notes_fingerprint($value) {
     return is_string($value) && preg_match('/^[0-9a-f]{32}$/', $value) === 1 ? $value : '';
 }
 
+/** A new note's file name ("....md") with every dot but the one before the final "md" turned into _ (the page's script does the same as you type). */
+function admin_notes_name_without_dots($name) {
+    $name = (string) $name;
+    if (strlen($name) < 3 || strcasecmp(substr($name, -3), '.md') !== 0) return str_replace('.', '_', $name) . '.md';
+    return str_replace('.', '_', substr($name, 0, -3)) . substr($name, -3);
+}
+
+/** What the answer adds when a note's name was changed because it had a dot in it ('' when it was not). */
+function admin_notes_renamed_say($from) {
+    return $from === '' ? '' : ' (a dot in a note\'s name becomes _, because a web server can take a name with ".php" in it for a script: "' . $from . '" would have been one)';
+}
+
 /** A function, not a const: the admin route runs before execution ever
  *  reaches this point in the file, and only functions are hoisted. */
 function admin_stale_message() {
@@ -1179,6 +1191,13 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
         }
+        // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so
+        // shell.php.md would run what was typed in it. The dots become _ (and the answer says so). A note that is already there keeps the name it has.
+        $renamedFrom = '';
+        if (!is_file($adminFolderReal . '/' . $target)) {
+            $clean = admin_notes_name_without_dots($target);
+            if ($clean !== $target) { $renamedFrom = $target; $target = $clean; }
+        }
         $targetPath = $adminFolderReal . '/' . $target;
         $tooLong = text_limit_refusal([['notes text', $content, is_file($targetPath) ? (string) @file_get_contents($targetPath) : '', 'notes']]);
         if ($tooLong !== '') {
@@ -1200,9 +1219,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
         }
         if (!has_gallery_marker($content)) {
-            return ['type' => 'ok', 'text' => 'Saved to "' . $target . '", but it is not active: its first line is not {gallery}, so the gallery ignores it. Put {gallery} on the first line to switch it on.'];
+            return ['type' => 'ok', 'text' => 'Saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . ', but it is not active: its first line is not {gallery}, so the gallery ignores it. Put {gallery} on the first line to switch it on.'];
         }
-        return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '".'];
+        return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . '.'];
     }
 
     if ($action === 'delete_notes') {

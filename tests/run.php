@@ -13064,5 +13064,63 @@ echo "== chunk 9 follow-up N7: a hostile fingerprint in a refused notes save ==\
     check('[N7] a real fingerprint (32 hex digits) of an older version is still handed back as it was, so the refusal still works', str_contains($n7Real, 'name="loaded_hash" value="' . $n7Good . '"') && str_contains($n7Real, 'was changed somewhere else'));
 }
 
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N1: a settings file with nothing in it is not "no settings" (that is {}); it is refused like any other file that can't be used
+echo "== chunk 9 follow-up N1: an empty settings file ==\n";
+{
+    $n1Fx = new_fixture_dir('n1'); mkdir("$n1Fx/Alpha", 0777, true); make_jpeg("$n1Fx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    copy($indexSrc, "$n1Fx/index.php"); @touch("$n1Fx/index.php", time() - 3600);
+    $n1Closed = cfg_text(['ADMIN_PASSWORD' => 'n1-admin-pw-1', 'ENABLE_SHARE_LINKS' => true, 'CLOSE_PUBLIC_GALLERY' => true, 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]);
+    file_put_contents("$n1Fx/.gallery-config.php", $n1Closed);
+    $n1Port = find_free_port(); start_server($n1Fx, $n1Port); $n1Base = "http://127.0.0.1:$n1Port";
+    $n1Get = fn ($u) => http_get($n1Base . $u);
+    check('[N1] a gallery closed with CLOSE_PUBLIC_GALLERY answers 404 on its front page and on a picture (the starting point)', $n1Get('/')[0] === 404 && $n1Get('/?img=' . rawurlencode('Alpha/a1.jpg') . '&size=thumb')[0] === 404);
+    $n1States = ['zero bytes' => '', 'the guard line alone' => data_file_guard_line_for_tests(), 'the guard line and blanks' => data_file_guard_line_for_tests() . "\n  \n", 'the guard line and a comment' => data_file_guard_line_for_tests() . "// nothing here\n"];
+    foreach ($n1States as $label => $text) {
+        file_put_contents("$n1Fx/.gallery-config.php", $text);
+        [$s1, $b1] = $n1Get('/'); [$s2] = $n1Get('/?img=' . rawurlencode('Alpha/a1.jpg') . '&size=thumb'); [$s3] = $n1Get('/?admin');
+        check("[N1] a settings file with $label answers 503 on the front page, a picture and the admin (a closed gallery is not opened), and the page says the file is empty", $s1 === 503 && $s2 === 503 && $s3 === 503 && str_contains($b1, 'is empty') && !str_contains($b1, 'Alpha'), json_encode([$s1, $s2, $s3]));
+    }
+    file_put_contents("$n1Fx/.gallery-config.php", data_file_guard_line_for_tests() . "{}\n");
+    check('[N1] {} is still the way to say "no settings": the gallery opens on its defaults', $n1Get('/')[0] === 200);
+    @unlink("$n1Fx/.gallery-config.php");
+    check('[N1] ...and with no settings file at all (a first visit) the gallery opens, as before', $n1Get('/')[0] === 200);
+}
+
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N8: a new note's name has no dot in it but the one before .md (a dot becomes _), so a web server that hands any name with ".php" in it to PHP never gets a note
+echo "== chunk 9 follow-up N8: dots in a new note's name ==\n";
+{
+    $n8Fx = new_fixture_dir('n8'); mkdir("$n8Fx/Alpha", 0777, true); make_jpeg("$n8Fx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    file_put_contents("$n8Fx/Alpha/forsale.md", "{gallery}\nThe first text.\n");
+    file_put_contents("$n8Fx/Alpha/v1.2.md", "{gallery}\nA note that already has a dot.\n");
+    file_put_contents("$n8Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n8-admin-pw-1', 'TRACK_VIEWS' => false, 'LOG_PUBLIC_VISITS' => false]));
+    copy($indexSrc, "$n8Fx/index.php");
+    $n8Port = find_free_port(); start_server($n8Fx, $n8Port); $n8Base = "http://127.0.0.1:$n8Port";
+    [, , $n8H] = http_post("$n8Base/?admin", ['access_code' => 'n8-admin-pw-1'], [], false); $n8Own = ['Cookie: ' . extract_cookie_header($n8H)];
+    $n8Csrf = admin_token($n8Base, $n8Own);
+    $n8Save = fn (array $f) => json_decode(http_post("$n8Base/?admin&folder=Alpha", $f + ['csrf_token' => $n8Csrf, 'action' => 'save_notes', 'md_file' => 'forsale.md', 'new_name' => ''], array_merge($n8Own, ['X-Requested-With: gallery-fetch']))[1], true) ?: [];
+    $n8Txt = "{gallery}\nbody\n";
+    $r1 = $n8Save(['new_name' => 'shell.php.md', 'content' => $n8Txt]);
+    check('[N8] a new note named shell.php.md is saved as shell_php.md, and the answer says the dots became _ and why', ($r1['ok'] ?? false) === true && is_file("$n8Fx/Alpha/shell_php.md") && !file_exists("$n8Fx/Alpha/shell.php.md") && str_contains((string) ($r1['text'] ?? ''), 'shell_php.md') && str_contains((string) ($r1['text'] ?? ''), 'dot'), json_encode($r1));
+    $r2 = $n8Save(['new_name' => 'v2.5', 'content' => $n8Txt]);
+    check('[N8] a name typed without .md that has a dot ("v2.5") becomes v2_5.md', ($r2['ok'] ?? false) === true && is_file("$n8Fx/Alpha/v2_5.md") && !file_exists("$n8Fx/Alpha/v2.5.md"), json_encode($r2));
+    $r3 = $n8Save(['new_name' => 'x.phtml.md', 'content' => $n8Txt]); $r4 = $n8Save(['new_name' => '.hidden.md', 'content' => $n8Txt]); $r5 = $n8Save(['new_name' => 'a.php5', 'content' => $n8Txt]);
+    check('[N8] ...so do x.phtml.md, a name starting with a dot, and a.php5: none of them is written with a dot in it', is_file("$n8Fx/Alpha/x_phtml.md") && is_file("$n8Fx/Alpha/_hidden.md") && is_file("$n8Fx/Alpha/a_php5.md") && !glob("$n8Fx/Alpha/*.php*") && !file_exists("$n8Fx/Alpha/.hidden.md"), json_encode([$r3, $r4, $r5]));
+    $r6 = $n8Save(['new_name' => 'plain', 'content' => $n8Txt]);
+    check('[N8] an ordinary name is untouched and says nothing about dots', ($r6['ok'] ?? false) === true && is_file("$n8Fx/Alpha/plain.md") && !str_contains((string) ($r6['text'] ?? ''), 'dot'), json_encode($r6));
+    // the note that was already there with a dot in its name keeps it: it opens and saves under its own name
+    $pg = http_get("$n8Base/?admin&classic=1&folder=Alpha", $n8Own)[1];
+    $r7 = $n8Save(['md_file' => 'v1.2.md', 'content' => "{gallery}\nEdited in place.\n"]);
+    check('[N8] a note that already has a dot in its name (v1.2.md) is still listed, and saving it without a new name keeps its own name', str_contains($pg, 'v1.2.md') && ($r7['ok'] ?? false) === true && file_get_contents("$n8Fx/Alpha/v1.2.md") === "{gallery}\nEdited in place.\n" && !file_exists("$n8Fx/Alpha/v1_2.md"), json_encode($r7));
+    // naming a file that is not there yet through the "existing note" field is the same as a new name
+    $r8 = $n8Save(['md_file' => 'evil.php.md', 'new_name' => '', 'content' => $n8Txt]);
+    check('[N8] posting a note\'s own name that does not exist yet (md_file=evil.php.md, no new name) is a new name too: it is saved as evil_php.md', is_file("$n8Fx/Alpha/evil_php.md") && !file_exists("$n8Fx/Alpha/evil.php.md"), json_encode($r8));
+    // the changed name is not allowed to replace a file that is there
+    file_put_contents("$n8Fx/Alpha/taken_name.md", "{gallery}\nmine\n");
+    $r9 = $n8Save(['new_name' => 'taken.name', 'content' => $n8Txt]);
+    check('[N8] a name that becomes one something already has is refused, and that file is untouched', ($r9['ok'] ?? true) === false && file_get_contents("$n8Fx/Alpha/taken_name.md") === "{gallery}\nmine\n", json_encode($r9));
+}
+
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

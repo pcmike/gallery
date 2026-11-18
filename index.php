@@ -179,6 +179,16 @@ function gallery_config_parse($raw) {
     return ['ok', $decoded];
 }
 
+/** gallery_config_parse() for the text of a settings file that IS there. A file with nothing in it (zero bytes, only the guard line, blanks or comments) is not
+ *  "no settings" ({} says that): it is what a cut-off upload, an editor that failed while saving or a restore leaves, and reading it as the defaults would open a
+ *  gallery that was closed. So it is refused like a file that is not valid JSON, with the reason 'empty'. (gallery_config_parse() itself is also given '' for a file
+ *  that does not exist yet, by the first-time setup and the saves, and answers ok there.) */
+function gallery_config_parse_existing($raw) {
+    $parsed = gallery_config_parse($raw);
+    if ($parsed[0] === 'ok' && trim(gallery_config_clean(data_file_strip_guard((string) $raw))) === '') return ['broken', [], 'empty'];
+    return $parsed;
+}
+
 function gallery_config_load() {
     static $state = null;
     if ($state !== null) return $state;
@@ -191,14 +201,16 @@ function gallery_config_load() {
         $state['status'] = 'unreadable';
         return $state;
     }
-    $parsed = gallery_config_parse($raw);
+    $parsed = gallery_config_parse_existing($raw);
     [$status, $cfg] = $parsed;
     if ($status === 'ok') {
         $state = ['status' => 'ok', 'cfg' => $cfg];
     } else {
-        $GLOBALS['__gallery_config_problems'][] = $status === 'broken'
+        $GLOBALS['__gallery_config_problems'][] = $status === 'broken' && ($parsed[2] ?? '') === 'empty'
+            ? ".gallery-config.php is empty (nothing in it, not even {}) — nothing is shown until that is fixed."
+            : ($status === 'broken'
             ? ".gallery-config.php couldn't be read (it isn't valid JSON — a stray comma or a missing quote?) — nothing is shown until that is fixed."
-            : ".gallery-config.php must hold an object of settings, like {\"NAME\": value} — nothing is shown until that is fixed.";
+            : ".gallery-config.php must hold an object of settings, like {\"NAME\": value} — nothing is shown until that is fixed.");
         $state['status'] = $status;
         $state['reason'] = (string) ($parsed[2] ?? '');
     }
@@ -213,10 +225,11 @@ function gallery_config_refuse_if_unusable() {
     if (PHP_SAPI === 'cli') return;
     $st = gallery_config_load();
     if (!in_array($st['status'], ['broken', 'invalid', 'unreadable'], true)) return;
-    $why = $st['status'] === 'broken' && ($st['reason'] ?? '') === 'bom' ? 'it starts with a byte-order mark (three invisible bytes that some Windows editors add), which makes it answer a direct request in a way it should not; save it again as UTF-8 without a BOM'
+    $why = $st['status'] === 'broken' && ($st['reason'] ?? '') === 'empty' ? 'it is empty (there is nothing in it, not even {}), which is what a cut-off upload or an editor that failed while saving leaves (restore it from a backup; a file that is meant to hold no settings holds {}); reading it as "no settings" would open a gallery that was closed'
+        : ($st['status'] === 'broken' && ($st['reason'] ?? '') === 'bom' ? 'it starts with a byte-order mark (three invisible bytes that some Windows editors add), which makes it answer a direct request in a way it should not; save it again as UTF-8 without a BOM'
         : ($st['status'] === 'broken' ? 'it is not valid JSON (' . ($st['reason'] !== '' ? $st['reason'] : 'the parser could not read it') . '): a stray comma or a missing quote is the usual cause'
         : ($st['status'] === 'invalid' ? 'it must hold an object of settings, like {"NAME": value}, and it holds something else'
-        : 'the web server is not allowed to read it (check the file\'s permissions)'));
+        : 'the web server is not allowed to read it (check the file\'s permissions)')));
     $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     if (!headers_sent()) {
         http_response_code(503);
@@ -9676,6 +9689,18 @@ function admin_notes_fingerprint($value) {
     return is_string($value) && preg_match('/^[0-9a-f]{32}$/', $value) === 1 ? $value : '';
 }
 
+/** A new note's file name ("....md") with every dot but the one before the final "md" turned into _ (the page's script does the same as you type). */
+function admin_notes_name_without_dots($name) {
+    $name = (string) $name;
+    if (strlen($name) < 3 || strcasecmp(substr($name, -3), '.md') !== 0) return str_replace('.', '_', $name) . '.md';
+    return str_replace('.', '_', substr($name, 0, -3)) . substr($name, -3);
+}
+
+/** What the answer adds when a note's name was changed because it had a dot in it ('' when it was not). */
+function admin_notes_renamed_say($from) {
+    return $from === '' ? '' : ' (a dot in a note\'s name becomes _, because a web server can take a name with ".php" in it for a script: "' . $from . '" would have been one)';
+}
+
 /** A function, not a const: the admin route runs before execution ever
  *  reaches this point in the file, and only functions are hoisted. */
 function admin_stale_message() {
@@ -10504,6 +10529,13 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         if (strtolower(pathinfo($target, PATHINFO_EXTENSION)) !== 'md') {
             $target .= '.md';
         }
+        // A name for a note that is not there yet has no dot in it but the one before "md": a web server set up the old way hands any name with ".php" in it to PHP, so
+        // shell.php.md would run what was typed in it. The dots become _ (and the answer says so). A note that is already there keeps the name it has.
+        $renamedFrom = '';
+        if (!is_file($adminFolderReal . '/' . $target)) {
+            $clean = admin_notes_name_without_dots($target);
+            if ($clean !== $target) { $renamedFrom = $target; $target = $clean; }
+        }
         $targetPath = $adminFolderReal . '/' . $target;
         $tooLong = text_limit_refusal([['notes text', $content, is_file($targetPath) ? (string) @file_get_contents($targetPath) : '', 'notes']]);
         if ($tooLong !== '') {
@@ -10525,9 +10557,9 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
             return ['type' => 'error', 'text' => 'Could not write to "' . $target . '".'];
         }
         if (!has_gallery_marker($content)) {
-            return ['type' => 'ok', 'text' => 'Saved to "' . $target . '", but it is not active: its first line is not {gallery}, so the gallery ignores it. Put {gallery} on the first line to switch it on.'];
+            return ['type' => 'ok', 'text' => 'Saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . ', but it is not active: its first line is not {gallery}, so the gallery ignores it. Put {gallery} on the first line to switch it on.'];
         }
-        return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '".'];
+        return ['type' => 'ok', 'text' => 'Notes saved to "' . $target . '"' . admin_notes_renamed_say($renamedFrom) . '.'];
     }
 
     if ($action === 'delete_notes') {
@@ -15033,7 +15065,7 @@ function backup_copy_sqlite($src, $dest) {
 function backup_check_file($path, $kind, $rel = '') {
     $raw = (string) @file_get_contents($path);
     if ($raw === '') return 'is empty';
-    if ($kind === 'settings') return gallery_config_parse($raw)[0] === 'ok' ? '' : 'can\'t be read as settings';
+    if ($kind === 'settings') return gallery_config_parse_existing($raw)[0] === 'ok' ? '' : 'can\'t be read as settings';
     if ($kind === 'secret') return preg_match('/^[0-9a-f]{64}$/m', $raw) ? '' : 'does not hold the key';
     if ($kind === 'notes') return trim((string) strtok($raw, "\n")) === '{gallery}' ? '' : 'is not a note';
     if ($kind === 'lockouts') return '';
@@ -23154,6 +23186,23 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
     }
     return true;
   }
+
+// A new note's file name has no dot in it but the one before "md" (a web server set up the old way can take a name with ".php" in it for a script, and the server turns such
+// dots into _ as well): a dot typed in the name box becomes _ at once, so the change is seen as it happens. A trailing "." or ".m" is left while you may still be typing ".md",
+// and goes when you leave the box.
+(function () {
+  function fix(v, done) {
+    var m = (done ? /\.md$/i : /\.(m|md)?$/i).exec(v), tail = m ? m[0] : '';
+    return (tail ? v.slice(0, v.length - tail.length) : v).replace(/\./g, '_') + tail;
+  }
+  function apply(e, done) {
+    var el = e.target; if (!el || !el.classList || !el.classList.contains('adm-newname')) return;
+    var f = fix(el.value, done); if (f === el.value) return;
+    var a = el.selectionStart, z = el.selectionEnd; el.value = f; try { el.setSelectionRange(a, z); } catch (x) {}
+  }
+  document.addEventListener('input', function (e) { apply(e, false); });
+  document.addEventListener('focusout', function (e) { apply(e, true); });
+})();
 
 // A text field that has a limit shows how much of it is used as you type (n / limit): data-count holds the limit, the counter is made when the field is first touched.
 (function () {

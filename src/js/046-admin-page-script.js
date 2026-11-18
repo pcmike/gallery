@@ -3344,6 +3344,23 @@
     return true;
   }
 
+// A new note's file name has no dot in it but the one before "md" (a web server set up the old way can take a name with ".php" in it for a script, and the server turns such
+// dots into _ as well): a dot typed in the name box becomes _ at once, so the change is seen as it happens. A trailing "." or ".m" is left while you may still be typing ".md",
+// and goes when you leave the box.
+(function () {
+  function fix(v, done) {
+    var m = (done ? /\.md$/i : /\.(m|md)?$/i).exec(v), tail = m ? m[0] : '';
+    return (tail ? v.slice(0, v.length - tail.length) : v).replace(/\./g, '_') + tail;
+  }
+  function apply(e, done) {
+    var el = e.target; if (!el || !el.classList || !el.classList.contains('adm-newname')) return;
+    var f = fix(el.value, done); if (f === el.value) return;
+    var a = el.selectionStart, z = el.selectionEnd; el.value = f; try { el.setSelectionRange(a, z); } catch (x) {}
+  }
+  document.addEventListener('input', function (e) { apply(e, false); });
+  document.addEventListener('focusout', function (e) { apply(e, true); });
+})();
+
 // A text field that has a limit shows how much of it is used as you type (n / limit): data-count holds the limit, the counter is made when the field is first touched.
 (function () {
   function show(el) {

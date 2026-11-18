@@ -127,7 +127,7 @@ function backup_copy_sqlite($src, $dest) {
 function backup_check_file($path, $kind, $rel = '') {
     $raw = (string) @file_get_contents($path);
     if ($raw === '') return 'is empty';
-    if ($kind === 'settings') return gallery_config_parse($raw)[0] === 'ok' ? '' : 'can\'t be read as settings';
+    if ($kind === 'settings') return gallery_config_parse_existing($raw)[0] === 'ok' ? '' : 'can\'t be read as settings';
     if ($kind === 'secret') return preg_match('/^[0-9a-f]{64}$/m', $raw) ? '' : 'does not hold the key';
     if ($kind === 'notes') return trim((string) strtok($raw, "\n")) === '{gallery}' ? '' : 'is not a note';
     if ($kind === 'lockouts') return '';

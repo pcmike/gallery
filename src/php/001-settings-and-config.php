@@ -179,6 +179,16 @@ function gallery_config_parse($raw) {
     return ['ok', $decoded];
 }
 
+/** gallery_config_parse() for the text of a settings file that IS there. A file with nothing in it (zero bytes, only the guard line, blanks or comments) is not
+ *  "no settings" ({} says that): it is what a cut-off upload, an editor that failed while saving or a restore leaves, and reading it as the defaults would open a
+ *  gallery that was closed. So it is refused like a file that is not valid JSON, with the reason 'empty'. (gallery_config_parse() itself is also given '' for a file
+ *  that does not exist yet, by the first-time setup and the saves, and answers ok there.) */
+function gallery_config_parse_existing($raw) {
+    $parsed = gallery_config_parse($raw);
+    if ($parsed[0] === 'ok' && trim(gallery_config_clean(data_file_strip_guard((string) $raw))) === '') return ['broken', [], 'empty'];
+    return $parsed;
+}
+
 function gallery_config_load() {
     static $state = null;
     if ($state !== null) return $state;
@@ -191,14 +201,16 @@ function gallery_config_load() {
         $state['status'] = 'unreadable';
         return $state;
     }
-    $parsed = gallery_config_parse($raw);
+    $parsed = gallery_config_parse_existing($raw);
     [$status, $cfg] = $parsed;
     if ($status === 'ok') {
         $state = ['status' => 'ok', 'cfg' => $cfg];
     } else {
-        $GLOBALS['__gallery_config_problems'][] = $status === 'broken'
+        $GLOBALS['__gallery_config_problems'][] = $status === 'broken' && ($parsed[2] ?? '') === 'empty'
+            ? ".gallery-config.php is empty (nothing in it, not even {}) — nothing is shown until that is fixed."
+            : ($status === 'broken'
             ? ".gallery-config.php couldn't be read (it isn't valid JSON — a stray comma or a missing quote?) — nothing is shown until that is fixed."
-            : ".gallery-config.php must hold an object of settings, like {\"NAME\": value} — nothing is shown until that is fixed.";
+            : ".gallery-config.php must hold an object of settings, like {\"NAME\": value} — nothing is shown until that is fixed.");
         $state['status'] = $status;
         $state['reason'] = (string) ($parsed[2] ?? '');
     }
@@ -213,10 +225,11 @@ function gallery_config_refuse_if_unusable() {
     if (PHP_SAPI === 'cli') return;
     $st = gallery_config_load();
     if (!in_array($st['status'], ['broken', 'invalid', 'unreadable'], true)) return;
-    $why = $st['status'] === 'broken' && ($st['reason'] ?? '') === 'bom' ? 'it starts with a byte-order mark (three invisible bytes that some Windows editors add), which makes it answer a direct request in a way it should not; save it again as UTF-8 without a BOM'
+    $why = $st['status'] === 'broken' && ($st['reason'] ?? '') === 'empty' ? 'it is empty (there is nothing in it, not even {}), which is what a cut-off upload or an editor that failed while saving leaves (restore it from a backup; a file that is meant to hold no settings holds {}); reading it as "no settings" would open a gallery that was closed'
+        : ($st['status'] === 'broken' && ($st['reason'] ?? '') === 'bom' ? 'it starts with a byte-order mark (three invisible bytes that some Windows editors add), which makes it answer a direct request in a way it should not; save it again as UTF-8 without a BOM'
         : ($st['status'] === 'broken' ? 'it is not valid JSON (' . ($st['reason'] !== '' ? $st['reason'] : 'the parser could not read it') . '): a stray comma or a missing quote is the usual cause'
         : ($st['status'] === 'invalid' ? 'it must hold an object of settings, like {"NAME": value}, and it holds something else'
-        : 'the web server is not allowed to read it (check the file\'s permissions)'));
+        : 'the web server is not allowed to read it (check the file\'s permissions)')));
     $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
     if (!headers_sent()) {
         http_response_code(503);

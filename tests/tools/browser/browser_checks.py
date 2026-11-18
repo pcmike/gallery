@@ -1104,6 +1104,18 @@ try:
                 al = b.js("""(() => { const row = document.querySelector('.md-actions'); const i = row.querySelector('input[type=text]').getBoundingClientRect(), bt = row.querySelector('button').getBoundingClientRect();
                     return {inputBottom: i.bottom, buttonBottom: bt.bottom, inputH: i.height, buttonH: bt.height}; })()""")
                 ok(abs(al["inputBottom"] - al["buttonBottom"]) <= 1.5, "[notes] the Create button lines up with the filename box beside it", str(al))
+                # a dot typed in a new note's name becomes _ as it is typed (a name with ".php" in it can be taken for a script by some web servers); a trailing ".md" is left
+                nf = "document.querySelector('.md-actions input[type=text]')"
+                def typed(text):
+                    b.js(nf + ".value = ''; " + nf + ".focus()")
+                    for ch in text:
+                        b.call("Input.insertText", {"text": ch}); b.drain(0.05)
+                    return b.js(nf + ".value")
+                got = {t: typed(t) for t in ("v1.2", "shell.php.md", "notes.md", "notes.m", "a.b")}
+                b.js(nf + ".blur()"); got["a.b blurred"] = b.js(nf + ".value")
+                got["notes.m blurred"] = typed("notes.m"); b.js(nf + ".blur()"); got["notes.m blurred"] = b.js(nf + ".value")
+                ok(got["v1.2"] == "v1_2" and got["shell.php.md"] == "shell_php.md" and got["notes.md"] == "notes.md" and got["notes.m"] == "notes.m" and got["a.b blurred"] == "a_b" and got["notes.m blurred"] == "notes_m", "[notes] a dot typed in a new note's name becomes _ as you type (a trailing .md stays; a loose . or .m goes when you leave the box)", str(got))
+                b.js(nf + ".value = ''")
                 ok(b.js("document.querySelector('.admin-tabs a[data-tab=export]') === null") and b.js("document.querySelector('.tab-panel[data-tab=export]') === null"), "[export] there is no Export tab any more: a folder's tabs are Folder settings and Notes")
                 tabgo("site")
                 nm = b.js("""(() => { const n = document.querySelector('.site-settings-form input[type=number]'), cs = n ? getComputedStyle(n) : null; const sp = document.querySelector('.seg > label span'); return {appearance: cs ? (cs.appearance || cs.webkitAppearance) : 'textfield', width: cs ? cs.width : '80px', pill: parseFloat(getComputedStyle(sp).borderTopLeftRadius)}; })()""")
