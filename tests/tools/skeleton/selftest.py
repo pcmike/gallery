@@ -49,7 +49,7 @@ def case(name, make, expect_files, expect_thumbs, expect_folders):
             return
         b = subprocess.run([sys.executable, "-I", HERE + "/build_fixture.py", out + "/" + tar[0]], capture_output=True, text=True)
         m = re.search(r"plan: (\d+) files and (\d+) thumbnails \((\d+) folders\); left alone: (\d+)", b.stdout)
-        ok(b.returncode == 0 and "RESULT: PASSED" in b.stdout, "the round trip passes (nothing but the gallery's own files goes; the copy restores everything)", b.stdout[-400:] + b.stderr[-200:])
+        ok(b.returncode == 0 and "RESULT: PASSED" in b.stdout and b.stdout.count("-- Delete ") == 2, "the round trip passes, with the Delete as it runs by default (what another gallery shares stays) and with the shared box ticked (nothing but the gallery's own files goes; the copy restores everything)", b.stdout[-400:] + b.stderr[-200:])
         got = tuple(int(x) for x in m.groups()) if m else None
         ok(got is not None and got[0] == expect_files and got[1] == expect_thumbs and got[2] == expect_folders, "the plan finds exactly the mapped places' own files: %d files, %d thumbnails, %d folders (the gallery folder counts as one)" % (expect_files, expect_thumbs, expect_folders), str(got))
     finally:

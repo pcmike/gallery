@@ -24,8 +24,8 @@ python3 -I tests/tools/skeleton/build_fixture.py gallery-skeleton-<date>.tar.gz
 It rebuilds the same folders and file names with small stand-in files (a tiny valid JPEG for pictures), puts the gallery's own files back, drops this repository's `index.php` in, and points the mapped folders at the rebuilt places. Then it:
 
 1. takes a checksum of everything;
-2. builds the plan with the gallery's own code, makes the ZIP from it (thumbnails included) and runs the delete;
-3. checks that every file that is not on the plan is byte for byte the same, that only planned files went, and that no link was followed;
+2. builds the plan with the gallery's own code, makes the ZIP from it (thumbnails included) and runs the delete, twice from the same starting tree: as the page runs it by default (the data files in places from elsewhere on the server, which another gallery may share, stay) and with the "also those" box ticked (they go too);
+3. checks, each time, that every file that is not on the plan is byte for byte the same, that only planned files went, and that no link was followed;
 4. unzips the copy over the result and checks the whole tree is byte for byte what it was.
 
 It prints `RESULT: PASSED` or says what differed. `--keep` leaves the scratch folder for a look.

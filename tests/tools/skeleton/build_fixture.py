@@ -123,10 +123,15 @@ def main():
                 print("could not read the settings file:", e); sys.exit(1)
         src0 = open(os.path.join(REPO, "index.php")).read()
         ma = src0.index("function gallery_mounts() {"); mb = src0.index("\n}\n", ma) + 3
+        # what gallery_mounts() leans on (cut out the same way, so a new helper of the gallery's does not make this tool fail with a PHP "undefined"):
+        # the folders a scan skips, the "is this name text" check and the note a left-out name leaves for Health
+        def cut_function(sig):
+            fa = src0.index(sig); return src0[fa:src0.index("\n}\n", fa) + 3]
+        support = (re.search(r"^const SCAN_SKIP_FOLDERS = \[.*?\];$", src0, re.M).group(0) + "\n" + cut_function("function name_is_text(") + "\n" + cut_function("function scan_odd_name_note(") + "\n")
         def phpj(obj):
             return "json_decode('" + json.dumps(obj).replace("\\", "\\\\").replace("'", "\\'") + "', true)"
         mphp = os.path.join(work, "mounts.php")
-        open(mphp, "w").write("<?php\ndefine('EXTRA_FOLDERS', " + phpj(cfg.get("EXTRA_FOLDERS") or {}) + "); define('EXTRA_ROOTS', " + phpj(cfg.get("EXTRA_ROOTS") or []) + ");\n" + src0[ma:mb] + "\necho json_encode((object) gallery_mounts());\n")
+        open(mphp, "w").write("<?php\ndefine('EXTRA_FOLDERS', " + phpj(cfg.get("EXTRA_FOLDERS") or {}) + "); define('EXTRA_ROOTS', " + phpj(cfg.get("EXTRA_ROOTS") or []) + ");\n" + support + src0[ma:mb] + "\necho json_encode((object) gallery_mounts());\n")
         mounts = json.loads(subprocess.run(["php", mphp], check=True, capture_output=True, text=True).stdout or "{}")
         if not mounts:
             print("note: the settings name no mapped folders, so only the gallery folder is tested")
@@ -155,11 +160,11 @@ def main():
                "function data_file_guard_line() { return \"<?php http_response_code(404); exit; ?>\\n\"; }\n"
                "$MAP = " + phpjson(folders) + ";\nfunction all_folder_paths($f) { global $MAP; return array_keys($MAP); }\n"
                "function resolve_real_path($d, $r) { global $MAP; return $MAP[$r] ?? null; }\n"
-               "define('EXTRA_FOLDERS', " + phpjson(cfg.get("EXTRA_FOLDERS") or {}) + "); define('EXTRA_ROOTS', " + phpjson(cfg.get("EXTRA_ROOTS") or []) + ");\n" + src0[ma:mb] + "\n" + code +
+               "define('EXTRA_FOLDERS', " + phpjson(cfg.get("EXTRA_FOLDERS") or {}) + "); define('EXTRA_ROOTS', " + phpjson(cfg.get("EXTRA_ROOTS") or []) + ");\n" + support + src0[ma:mb] + "\n" + code +
                "\n$plan = owned_plan(" + phpjson(roots["root0"]) + ", []);\n"
-               "$out = ['entries' => array_map(fn ($e) => ['rel' => $e['rel'], 'path' => $e['path'], 'kind' => $e['kind']], $plan['entries']), 'caches' => $plan['caches'], 'unknown' => $plan['unknown'], 'summary' => owned_summary($plan)];\n"
+               "$out = ['entries' => array_map(fn ($e) => ['rel' => $e['rel'], 'path' => $e['path'], 'kind' => $e['kind'], 'shared' => !empty($e['shared'])], $plan['entries']), 'caches' => $plan['caches'], 'unknown' => $plan['unknown'], 'summary' => owned_summary($plan)];\n"
                "file_put_contents(" + phpjson(os.path.join(work, "plan.json")) + ", json_encode($out));\n"
-               "if (($argv[1] ?? '') === 'delete') { $r = owned_delete($plan); file_put_contents(" + phpjson(os.path.join(work, "delete.json")) + ", json_encode($r)); }\n")
+               "if (in_array($argv[1] ?? '', ['delete', 'delete-shared'], true)) { $r = owned_delete($plan, $argv[1] === 'delete-shared'); file_put_contents(" + phpjson(os.path.join(work, "delete.json")) + ", json_encode($r)); }\n")
         open(harness, "w").write(php)
         subprocess.run(["php", harness], check=True)
         plan = json.load(open(os.path.join(work, "plan.json")))
@@ -180,49 +185,55 @@ def main():
                 for n in sorted(os.listdir(c["path"])):
                     if re.fullmatch(r"[0-9a-f]{32}\.(jpg|mp4)(\.tmp[0-9a-f]{6})?", n):
                         z.write(os.path.join(c["path"], n), c["rel"] + "/" + n); planned.add(os.path.join(c["path"], n))
-        subprocess.run(["php", harness, "delete"], check=True)
-        res = json.load(open(os.path.join(work, "delete.json")))
-        print("delete:", res["text"])
-        after = tree(roots)
-        bad = []
-        planned_rel = set()
-        for label, root in roots.items():
-            for p in planned:
-                if p.startswith(root + "/"):
-                    planned_rel.add(label + "/" + os.path.relpath(p, root))
-        for k, v in before.items():
-            if k in planned_rel:
-                if k in after:
-                    bad.append("still there: " + k)
-            elif after.get(k) != v:
-                if v == "dir" and k not in after and k.endswith(".gallery-cache"):
-                    continue   # (an emptied .gallery-cache folder goes)
-                bad.append("changed or gone and not on the plan: " + k)
-        for k in after:
-            if k not in before:
-                bad.append("appeared: " + k)
-        print("every file that is not on the plan is exactly as it was, and only planned files went:", "YES" if not bad else "NO")
-        for x in bad[:20]:
-            print("   ", x)
-        # put it back: unzip over the places each name belongs to
-        with zipfile.ZipFile(zpath) as z:
-            for n in z.namelist():
-                first = n.split("/", 1)[0]
-                dest_root = roots["root0"]
-                rel = n
-                # a folder that is really in the gallery folder wins; otherwise the name is a mapped folder
-                if first in mounts and not os.path.isdir(os.path.join(roots["root0"], first)):
-                    dest_root = mounts[first]; rel = n.split("/", 1)[1] if "/" in n else n
-                dest = os.path.join(dest_root, rel)
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, "wb") as f:
-                    f.write(z.read(n))
-        again = tree(roots)
-        diff = [k for k in set(before) | set(again) if before.get(k) != again.get(k)]
-        print("after unzipping the copy over the result, the whole tree is byte for byte what it was:", "YES" if not diff else "NO (%d differences)" % len(diff))
-        for x in sorted(diff)[:20]:
-            print("   ", x)
-        ok = not bad and not diff and res["ok"]
+        # the Delete as the page runs it: what another gallery showing the same folder shares (the data files in a place from elsewhere) stays unless
+        # the owner ticks the box. Both ways are tried, each from the tree as it was, and each is put back from the copy
+        shared_paths = {e["path"] for e in plan["entries"] if e.get("shared")}
+        ok = True
+        for mode, ticked in (("delete", False), ("delete-shared", True)):
+            print("-- Delete %s" % ("with the box for shared files ticked" if ticked else "as it runs by default (shared files stay)"))
+            subprocess.run(["php", harness, mode], check=True)
+            res = json.load(open(os.path.join(work, "delete.json")))
+            print("delete:", res["text"])
+            after = tree(roots)
+            bad = []
+            planned_rel = set()
+            for label, root in roots.items():
+                for p in planned:
+                    if p.startswith(root + "/") and (ticked or p not in shared_paths):
+                        planned_rel.add(label + "/" + os.path.relpath(p, root))
+            for k, v in before.items():
+                if k in planned_rel:
+                    if k in after:
+                        bad.append("still there: " + k)
+                elif after.get(k) != v:
+                    if v == "dir" and k not in after and k.endswith(".gallery-cache"):
+                        continue   # (an emptied .gallery-cache folder goes)
+                    bad.append("changed or gone and not on the plan: " + k)
+            for k in after:
+                if k not in before:
+                    bad.append("appeared: " + k)
+            print("every file that is not on the plan is exactly as it was, and only planned files went:", "YES" if not bad else "NO")
+            for x in bad[:20]:
+                print("   ", x)
+            # put it back: unzip over the places each name belongs to
+            with zipfile.ZipFile(zpath) as z:
+                for n in z.namelist():
+                    first = n.split("/", 1)[0]
+                    dest_root = roots["root0"]
+                    rel = n
+                    # a folder that is really in the gallery folder wins; otherwise the name is a mapped folder
+                    if first in mounts and not os.path.isdir(os.path.join(roots["root0"], first)):
+                        dest_root = mounts[first]; rel = n.split("/", 1)[1] if "/" in n else n
+                    dest = os.path.join(dest_root, rel)
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    with open(dest, "wb") as f:
+                        f.write(z.read(n))
+            again = tree(roots)
+            diff = [k for k in set(before) | set(again) if before.get(k) != again.get(k)]
+            print("after unzipping the copy over the result, the whole tree is byte for byte what it was:", "YES" if not diff else "NO (%d differences)" % len(diff))
+            for x in sorted(diff)[:20]:
+                print("   ", x)
+            ok = ok and not bad and not diff and res["ok"]
         print("RESULT:", "PASSED" if ok else "FAILED")
         sys.exit(0 if ok else 1)
     finally:

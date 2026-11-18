@@ -16,8 +16,11 @@ def ok(cond, msg, detail=""):
 G = "<?php http_response_code(404); exit; ?>\n"
 W = tempfile.mkdtemp(prefix="gallery-health-"); S = W + "/photos"; srv = None
 PW = subprocess.run(["php", "-r", "echo password_hash($argv[1], PASSWORD_BCRYPT);", "hc-pw-1234"], capture_output=True, text=True).stdout   # (once: a new hash would sign the browser out)
+KEEP = (".gallery-browsers.php", ".gallery-secret.php")   # what keeps the browser signed in: since an admin session is only good while its browser is in this file, a rebuild must not remove them
 def site():
+    kept = {n: open(S + "/" + n, "rb").read() for n in KEEP if os.path.isfile(S + "/" + n)}
     shutil.rmtree(S, ignore_errors=True); os.makedirs(S + "/Rome")
+    for n, raw in kept.items(): open(S + "/" + n, "wb").write(raw)
     subprocess.run(["php", "-r", '$i=imagecreatetruecolor(300,200); imagejpeg($i,$argv[1]);', S + "/Rome/a.jpg"], check=True)
     shutil.copy(HERE + "/../../../index.php", S + "/index.php"); os.utime(S + "/index.php", (time.time() - 3600,) * 2)
     open(S + "/.gallery-config.php", "w").write(G + json.dumps({"ADMIN_PASSWORD": PW, "AUTO_GROUP_BY_FOLDER": True, "ENABLE_SHARE_LINKS": True}) + "\n")

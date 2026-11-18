@@ -9670,6 +9670,12 @@ function folder_identity_record($data) {
     ];
 }
 
+/** The fingerprint of a notes file as the editor was opened on it (32 hex digits), or nothing when what was posted is not that: it is printed back into the
+ *  form when a save is refused, so only a real fingerprint is kept. */
+function admin_notes_fingerprint($value) {
+    return is_string($value) && preg_match('/^[0-9a-f]{32}$/', $value) === 1 ? $value : '';
+}
+
 /** A function, not a const: the admin route runs before execution ever
  *  reaches this point in the file, and only functions are hoisted. */
 function admin_stale_message() {
@@ -10501,7 +10507,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         $targetPath = $adminFolderReal . '/' . $target;
         $tooLong = text_limit_refusal([['notes text', $content, is_file($targetPath) ? (string) @file_get_contents($targetPath) : '', 'notes']]);
         if ($tooLong !== '') {
-            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => (string) ($_POST['loaded_hash'] ?? '')];   // (what was typed goes back into the box, so nothing is lost)
+            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => admin_notes_fingerprint($_POST['loaded_hash'] ?? '')];   // (what was typed goes back into the box, so nothing is lost)
             return ['type' => 'error', 'text' => $tooLong];
         }
         // The editor was opened on the file as it was then (loaded_hash, from the page). Saving over a file that has changed since would put
@@ -10509,7 +10515,7 @@ function handle_admin_post($dir, $adminFolderPath, $adminFolderReal, $files, $gr
         // fingerprint, from an older page, skips the check, as the other forms do; a save under another name overwrites nothing.)
         $loadedHash = isset($_POST['loaded_hash']) && is_string($_POST['loaded_hash']) ? $_POST['loaded_hash'] : null;
         if ($target === $existing && $loadedHash !== null && is_file($targetPath) && !hash_equals(md5((string) @file_get_contents($targetPath)), $loadedHash)) {
-            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => $loadedHash];
+            $GLOBALS['__notes_stale'] = ['file' => $existing, 'content' => $content, 'hash' => admin_notes_fingerprint($loadedHash)];
             return ['type' => 'error', 'text' => '"' . $target . '"' . admin_stale_message() . ' What you typed is still in the box below, so you can copy it first.'];
         }
         if ($target !== $existing && file_exists($targetPath)) {   // a different name that something already has (a README, another note): saving would replace it
@@ -19751,7 +19757,7 @@ function render_admin_page($dir, $files, $adminFolderPath, $adminFolderReal, $ad
           <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
           <input type="hidden" name="action" value="save_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
-          <input type="hidden" name="loaded_hash" value="<?= $loadedHash ?>">
+          <input type="hidden" name="loaded_hash" value="<?= htmlspecialchars((string) $loadedHash, ENT_QUOTES, 'UTF-8') ?>">
           <textarea name="content" class="adm-textarea" aria-label="Contents of this notes file" maxlength="<?= text_limit('notes') ?>" data-count="<?= text_limit('notes') ?>"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
           <div class="field-row md-actions">
             <div class="field">

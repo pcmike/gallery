@@ -13041,5 +13041,28 @@ echo "== audit group 17: dead code removed, one copy of the GD opener ==\n";
     }
 }
 
+/* --------------------------------------------------------------------- */
+// chunk-9 follow-up N7: the fingerprint a notes save posts is printed back into the form only when it is a fingerprint
+echo "== chunk 9 follow-up N7: a hostile fingerprint in a refused notes save ==\n";
+{
+    $n7Fx = new_fixture_dir('n7'); mkdir("$n7Fx/Alpha", 0777, true); make_jpeg("$n7Fx/Alpha/a1.jpg", 40, 30, 20, 90, 160);
+    file_put_contents("$n7Fx/Alpha/forsale.md", "{gallery}\nThe first text.\n");
+    file_put_contents("$n7Fx/.gallery-config.php", cfg_text(['ADMIN_PASSWORD' => 'n7-admin-pw-1']));
+    copy($indexSrc, "$n7Fx/index.php");
+    $n7Port = find_free_port(); start_server($n7Fx, $n7Port); $n7Base = "http://127.0.0.1:$n7Port";
+    [, , $n7H] = http_post("$n7Base/?admin", ['access_code' => 'n7-admin-pw-1'], [], false); $n7Own = ['Cookie: ' . extract_cookie_header($n7H)];
+    $n7Csrf = admin_token($n7Base, $n7Own);
+    $n7Save = fn (array $f) => http_post("$n7Base/?admin&folder=Alpha", $f + ['csrf_token' => $n7Csrf, 'action' => 'save_notes', 'md_file' => 'forsale.md', 'new_name' => ''], $n7Own)[1];
+    $n7Pay = '"><i id=audit-n7 onmouseover=1>';
+    $n7Page = $n7Save(['content' => "{gallery}\nTyped by the owner.\n", 'loaded_hash' => $n7Pay]);
+    check('[N7] a refused notes save (the file is not the one the page was opened on) with a made-up fingerprint: the page says so, holds what was typed, and the made-up text is not in the page as markup', str_contains($n7Page, 'was changed somewhere else') && str_contains($n7Page, 'Typed by the owner.') && !str_contains($n7Page, '<i id=audit-n7') && !str_contains($n7Page, $n7Pay) && file_get_contents("$n7Fx/Alpha/forsale.md") === "{gallery}\nThe first text.\n");
+    check('[N7] ...and a fingerprint that is not 32 hex digits is kept as nothing (the form still refuses a second Save, because nothing equals it)', preg_match('/name="loaded_hash" value="">\s*<textarea/', $n7Page) === 1);
+    $n7Long = $n7Save(['content' => "{gallery}\n" . str_repeat('x', 50010), 'loaded_hash' => $n7Pay]);
+    check('[N7] a note over the limit with a made-up fingerprint: refused naming the limit, nothing of the made-up text is in the page as markup', str_contains(html_entity_decode($n7Long, ENT_QUOTES), 'limit is 50,000') && !str_contains($n7Long, '<i id=audit-n7') && !str_contains($n7Long, $n7Pay));
+    $n7Good = md5("{gallery}\nsome older text.\n");
+    $n7Real = $n7Save(['content' => "{gallery}\nTyped again.\n", 'loaded_hash' => $n7Good]);
+    check('[N7] a real fingerprint (32 hex digits) of an older version is still handed back as it was, so the refusal still works', str_contains($n7Real, 'name="loaded_hash" value="' . $n7Good . '"') && str_contains($n7Real, 'was changed somewhere else'));
+}
+
 echo "\n$passCount passed, $failCount failed" . (($skipCount ?? 0) > 0 ? ", $skipCount skipped" : "") . "\n";
 exit($failCount > 0 ? 1 : 0);

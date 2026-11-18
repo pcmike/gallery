@@ -189,7 +189,7 @@
           <input type="hidden" name="csrf_token" value="<?= $csrfToken ?>">
           <input type="hidden" name="action" value="save_notes">
           <input type="hidden" name="md_file" value="<?= htmlspecialchars($mdFile, ENT_QUOTES, 'UTF-8') ?>">
-          <input type="hidden" name="loaded_hash" value="<?= $loadedHash ?>">
+          <input type="hidden" name="loaded_hash" value="<?= htmlspecialchars((string) $loadedHash, ENT_QUOTES, 'UTF-8') ?>">
           <textarea name="content" class="adm-textarea" aria-label="Contents of this notes file" maxlength="<?= text_limit('notes') ?>" data-count="<?= text_limit('notes') ?>"><?= htmlspecialchars($editable, ENT_QUOTES, 'UTF-8') ?></textarea>
           <div class="field-row md-actions">
             <div class="field">
